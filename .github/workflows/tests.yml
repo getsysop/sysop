@@ -1,0 +1,40 @@
+name: tests
+
+# Runs Sysop's own test suite on every PR + push to main.
+# Hardened shape: SHA-pinned actions, concurrency group, contents:read
+# permissions, scoped pull_request.types so draft / fork PRs do not
+# over-trigger.
+#
+# Branch protection on `main` requires this `pytest` check
+# (see tests/README.md "Branch protection").
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.13'
+          cache: 'pip'
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install dev dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Run tests
+        run: pytest -v

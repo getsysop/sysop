@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+# ──────────────────────────────────────────────────────────────
+# pre-merge-commit — Runs before a merge completes on the
+# protected branch (default: main). If tests or builds fail,
+# the merge is BLOCKED.
+#
+# Bypass (not recommended): git merge --no-verify
+#
+# This is a skeleton. Each project fills in its own backend-test
+# and frontend-build commands based on the conventions in
+# CLAUDE.md and convention_map.md.
+# See core/companion/git-hooks/examples/pre-merge-commit-python.example
+# for a worked example (Python web service + Next.js frontend).
+#
+# SECURITY: this hook intentionally does NOT source .env (or any
+# other secret file). Sourcing .env (a) exports every variable
+# into the test process whether the tests need it or not, and
+# (b) executes shell metacharacters in .env (e.g., $(curl …) or
+# backticks) on every merge commit. If the tests legitimately
+# need a secret, plumb it through pytest fixtures / conftest.py
+# (or the equivalent for your test framework) so the surface is
+# scoped to the test that asked for it.
+# ──────────────────────────────────────────────────────────────
+set -euo pipefail
+
+# Adjust to your project's protected branch name if not "main".
+PROTECTED_BRANCH="main"
+
+TARGET_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+if [[ "$TARGET_BRANCH" != "$PROTECTED_BRANCH" ]]; then
+  exit 0
+fi
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+CHANGED=$(git diff --cached --name-only 2>/dev/null || git diff HEAD~1 --name-only 2>/dev/null || echo "")
+if [[ -z "$CHANGED" ]]; then
+  exit 0
+fi
+
+echo ""
+echo "🔒 pre-merge-commit: Running checks before merging to ${PROTECTED_BRANCH}..."
+echo ""
+
+FAILED=false
+
+# === BLOCKING CHECKS ===
+
+# Backend tests — uncomment and adapt to your stack.
+# if echo "$CHANGED" | grep -q '\.py$'; then
+#   echo "🐍 Python files changed — running pytest..."
+#   if [[ -f "$REPO_ROOT/.venv/bin/activate" ]]; then
+#     # shellcheck disable=SC1091
+#     source "$REPO_ROOT/.venv/bin/activate"
+#   fi
+#   if (cd "$REPO_ROOT" && APP_ENV=test python3 -m pytest -q 2>&1); then
+#     echo "✅ pytest passed."
+#   else
+#     echo "❌ pytest FAILED. Merge blocked."
+#     FAILED=true
+#   fi
+#   echo ""
+# fi
+
+# Frontend build — uncomment and adapt to your stack.
+# if echo "$CHANGED" | grep -q '^<frontend dir>/'; then
+#   echo "🏗️  Frontend files changed — running build check..."
+#   if (cd "$REPO_ROOT/<frontend dir>" && npm run build 2>&1); then
+#     echo "✅ Frontend build passed."
+#   else
+#     echo "❌ Frontend build FAILED. Merge blocked."
+#     FAILED=true
+#   fi
+#   echo ""
+# fi
+
+# === ADVISORY (warning only, never blocks) ===
+
+# Test co-change advisory — uncomment and adapt globs to your project.
+# WARN_MSGS=()
+#
+# BACKEND_SRC=$(echo "$CHANGED" | grep -E '^<backend dir>/.*\.py$' || true)
+# BACKEND_TESTS=$(echo "$CHANGED" | grep -E '^tests/test_.*\.py$' || true)
+# if [[ -n "$BACKEND_SRC" && -z "$BACKEND_TESTS" ]]; then
+#   WARN_MSGS+=("  ⚠  Backend source changed but no test files changed (tests/test_*.py)")
+# fi
+#
+# if [[ ${#WARN_MSGS[@]} -gt 0 ]]; then
+#   echo "╔══════════════════════════════════════════════════════════╗"
+#   echo "║        Test Co-Change Advisory (not blocking)           ║"
+#   echo "╚══════════════════════════════════════════════════════════╝"
+#   for MSG in "${WARN_MSGS[@]}"; do
+#     echo "$MSG"
+#   done
+#   echo ""
+#   echo "  Informational only — proceed if no test update is needed."
+#   echo ""
+# fi
+
+if $FAILED; then
+  echo "════════════════════════════════════════════════════"
+  echo "  ❌  MERGE BLOCKED — fix the errors above first."
+  echo "════════════════════════════════════════════════════"
+  exit 1
+fi
+
+echo "✅ All pre-merge checks passed."

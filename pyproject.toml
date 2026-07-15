@@ -1,0 +1,9 @@
+[tool.pytest.ini_options]
+minversion = "9.0"
+testpaths = ["tests"]
+pythonpath = ["core/companion/scripts", "scripts"]
+addopts = "-ra --strict-markers"
+markers = [
+    "requires_node: skip when npx/eslint not on PATH",
+    "requires_pip_audit: skip when pip-audit not on PATH",
+]

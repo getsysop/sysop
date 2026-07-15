@@ -1,0 +1,69 @@
+# Sysop — Consumer CI template (GitHub Actions).
+#
+# WHAT THIS IS: a required-check workflow that makes Phase 63's `pr` merge
+# policy enforceable — a protected `main` needs a CI check to require, and Sysop's
+# git hooks are local-only (an agent can bypass them with `--no-verify`). This
+# runs the Sysop blocking-findings gate + your own test suite on every PR.
+#
+# HOW TO ENABLE (it does NOT run until you do — the `.example` suffix keeps
+# GitHub from picking it up):
+#   1. Copy it into place:  cp scripts/ci/sysop-checks.yml.example .github/workflows/sysop-checks.yml
+#   2. Edit the two TODO steps below (install your deps; run your tests).
+#   3. Commit + push, let it run green once, then in your repo's branch-protection
+#      rules for `main` mark the `sysop-checks` check as *required*.
+# See WORKFLOW.md § Merge policy → "Protecting main with CI".
+
+name: sysop-checks
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main]   # adjust if your repo's default branch isn't `main`
+
+# One in-flight run per ref; a new push cancels the stale one.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least privilege: this workflow only reads the checkout.
+permissions:
+  contents: read
+
+jobs:
+  sysop-checks:
+    runs-on: ubuntu-latest
+    steps:
+      # fetch-depth: 0 — the coverage/diff stages of run_checks compare changed
+      # lines against `main`, which needs full history in a PR checkout.
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      # run_checks.sh is Python-based (config parsing needs PyYAML) regardless of
+      # your project's own stack.
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.13'
+
+      # TODO: PyYAML is the floor for run_checks itself. Add the tools your
+      # .claude/checks.yml actually invokes (semgrep, diff-cover, pip-audit) and
+      # your project's own dependencies here.
+      - name: Install check tooling
+        run: pip install pyyaml
+
+      # The Sysop gate: exits non-zero if any check marked `blocking: true` reports
+      # a finding not in the baseline (Phase 61b's crown-jewel coverage gate is
+      # blocking-and-non-baselineable). Inert-but-valid on a fresh install
+      # (placeholder globs are no-ops); meaningful as you configure checks.yml.
+      - name: Sysop blocking-findings gate
+        run: bash scripts/run_checks.sh --fail-on-blocking
+
+      # TODO: replace with your project's test command (pytest, npm test,
+      # go test, cargo test, …). Left failing on purpose so an unedited copy of
+      # this template can never become a green — and therefore meaningless —
+      # required check.
+      - name: Tests
+        run: |
+          echo "Replace this step with your project's test command." >&2
+          exit 1

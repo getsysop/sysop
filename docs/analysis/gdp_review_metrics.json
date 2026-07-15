@@ -1,0 +1,822 @@
+{
+  "source": "gdp-query-system review_tasks.md + review_tasks_archive.md + CLAUDE.md git history",
+  "rounds": [
+    {
+      "round": 1,
+      "date": "2026-02-23",
+      "findings": 16,
+      "critical": 5,
+      "medium": 5,
+      "low": 6,
+      "type": "other"
+    },
+    {
+      "round": 2,
+      "date": "2026-02-25",
+      "findings": 63,
+      "critical": 14,
+      "medium": 35,
+      "low": 14,
+      "type": "security"
+    },
+    {
+      "round": 3,
+      "date": "2026-02-25",
+      "findings": 41,
+      "critical": 15,
+      "medium": 20,
+      "low": 6,
+      "type": "other"
+    },
+    {
+      "round": 4,
+      "date": "2026-02-26",
+      "findings": 40,
+      "critical": 5,
+      "medium": 17,
+      "low": 18,
+      "type": "security"
+    },
+    {
+      "round": 5,
+      "date": "2026-02-26",
+      "findings": 29,
+      "critical": 6,
+      "medium": 16,
+      "low": 7,
+      "type": "security"
+    },
+    {
+      "round": 6,
+      "date": "2026-02-27",
+      "findings": 90,
+      "critical": 16,
+      "medium": 62,
+      "low": 12,
+      "type": "mixed"
+    },
+    {
+      "round": 7,
+      "date": "2026-02-27",
+      "findings": 6,
+      "critical": 0,
+      "medium": 5,
+      "low": 1,
+      "type": "other"
+    },
+    {
+      "round": 8,
+      "date": "2026-03-03",
+      "findings": 3,
+      "critical": 0,
+      "medium": 0,
+      "low": 0,
+      "type": "other"
+    },
+    {
+      "round": 9,
+      "date": "2026-03-02",
+      "findings": 30,
+      "critical": 4,
+      "medium": 11,
+      "low": 3,
+      "type": "quality"
+    },
+    {
+      "round": 10,
+      "date": "2026-03-03",
+      "findings": 44,
+      "critical": 2,
+      "medium": 27,
+      "low": 15,
+      "type": "mixed"
+    },
+    {
+      "round": 12,
+      "date": "2026-03-03",
+      "findings": 5,
+      "critical": 0,
+      "medium": 0,
+      "low": 5,
+      "type": "other"
+    },
+    {
+      "round": 13,
+      "date": "2026-03-03",
+      "findings": 38,
+      "critical": 4,
+      "medium": 23,
+      "low": 11,
+      "type": "quality"
+    },
+    {
+      "round": 14,
+      "date": "2026-03-03",
+      "findings": 22,
+      "critical": 3,
+      "medium": 13,
+      "low": 6,
+      "type": "security"
+    },
+    {
+      "round": 15,
+      "date": "2026-03-03",
+      "findings": 8,
+      "critical": 0,
+      "medium": 3,
+      "low": 5,
+      "type": "security"
+    },
+    {
+      "round": 16,
+      "date": "2026-03-03",
+      "findings": 105,
+      "critical": 6,
+      "medium": 34,
+      "low": 65,
+      "type": "quality"
+    },
+    {
+      "round": 17,
+      "date": "2026-03-04",
+      "findings": 47,
+      "critical": 5,
+      "medium": 22,
+      "low": 20,
+      "type": "security"
+    },
+    {
+      "round": 18,
+      "date": "2026-03-04",
+      "findings": 54,
+      "critical": 8,
+      "medium": 34,
+      "low": 12,
+      "type": "quality"
+    },
+    {
+      "round": 19,
+      "date": "2026-03-04",
+      "findings": 10,
+      "critical": 0,
+      "medium": 4,
+      "low": 6,
+      "type": "security"
+    },
+    {
+      "round": 20,
+      "date": "2026-03-05",
+      "findings": 36,
+      "critical": 8,
+      "medium": 21,
+      "low": 7,
+      "type": "mixed"
+    },
+    {
+      "round": 21,
+      "date": "2026-03-05",
+      "findings": 14,
+      "critical": 0,
+      "medium": 11,
+      "low": 3,
+      "type": "security"
+    },
+    {
+      "round": 22,
+      "date": "2026-03-07",
+      "findings": 50,
+      "critical": 0,
+      "medium": 29,
+      "low": 21,
+      "type": "quality"
+    },
+    {
+      "round": 23,
+      "date": "2026-03-08",
+      "findings": 17,
+      "critical": 1,
+      "medium": 11,
+      "low": 5,
+      "type": "quality"
+    },
+    {
+      "round": 24,
+      "date": "2026-03-12",
+      "findings": 19,
+      "critical": 1,
+      "medium": 8,
+      "low": 10,
+      "type": "mixed"
+    },
+    {
+      "round": 25,
+      "date": "2026-03-12",
+      "findings": 13,
+      "critical": 1,
+      "medium": 7,
+      "low": 2,
+      "type": "quality"
+    },
+    {
+      "round": 26,
+      "date": "2026-03-13",
+      "findings": 29,
+      "critical": 2,
+      "medium": 12,
+      "low": 15,
+      "type": "mixed"
+    },
+    {
+      "round": 27,
+      "date": "2026-03-16",
+      "findings": 41,
+      "critical": 6,
+      "medium": 33,
+      "low": 2,
+      "type": "quality"
+    },
+    {
+      "round": 28,
+      "date": "2026-03-16",
+      "findings": 21,
+      "critical": 1,
+      "medium": 7,
+      "low": 13,
+      "type": "security"
+    },
+    {
+      "round": 29,
+      "date": "2026-03-17",
+      "findings": 24,
+      "critical": 3,
+      "medium": 13,
+      "low": 8,
+      "type": "security"
+    },
+    {
+      "round": 30,
+      "date": "2026-03-17",
+      "findings": 75,
+      "critical": 7,
+      "medium": 55,
+      "low": 13,
+      "type": "quality"
+    },
+    {
+      "round": 31,
+      "date": "2026-03-17",
+      "findings": 11,
+      "critical": 3,
+      "medium": 8,
+      "low": 0,
+      "type": "security"
+    },
+    {
+      "round": 32,
+      "date": "2026-03-17",
+      "findings": 5,
+      "critical": 2,
+      "medium": 2,
+      "low": 1,
+      "type": "security"
+    },
+    {
+      "round": 33,
+      "date": "2026-03-17",
+      "findings": 45,
+      "critical": 2,
+      "medium": 36,
+      "low": 2,
+      "type": "quality"
+    },
+    {
+      "round": 34,
+      "date": "2026-03-18",
+      "findings": 4,
+      "critical": 0,
+      "medium": 4,
+      "low": 0,
+      "type": "other"
+    },
+    {
+      "round": 35,
+      "date": "2026-03-18",
+      "findings": 66,
+      "critical": 6,
+      "medium": 57,
+      "low": 3,
+      "type": "quality"
+    },
+    {
+      "round": 36,
+      "date": "2026-03-18",
+      "findings": 28,
+      "critical": 9,
+      "medium": 16,
+      "low": 3,
+      "type": "security"
+    },
+    {
+      "round": 37,
+      "date": "2026-03-19",
+      "findings": 131,
+      "critical": 8,
+      "medium": 84,
+      "low": 39,
+      "type": "quality"
+    },
+    {
+      "round": 38,
+      "date": "2026-03-19",
+      "findings": 73,
+      "critical": 4,
+      "medium": 50,
+      "low": 19,
+      "type": "quality"
+    },
+    {
+      "round": 39,
+      "date": "2026-03-20",
+      "findings": 2,
+      "critical": 0,
+      "medium": 2,
+      "low": 0,
+      "type": "quality"
+    },
+    {
+      "round": 40,
+      "date": "2026-03-20",
+      "findings": 37,
+      "critical": 2,
+      "medium": 12,
+      "low": 23,
+      "type": "security"
+    },
+    {
+      "round": 41,
+      "date": "2026-03-20",
+      "findings": 80,
+      "critical": 17,
+      "medium": 53,
+      "low": 10,
+      "type": "quality"
+    },
+    {
+      "round": 42,
+      "date": "2026-03-20",
+      "findings": 10,
+      "critical": 2,
+      "medium": 4,
+      "low": 4,
+      "type": "security"
+    },
+    {
+      "round": 43,
+      "date": "2026-03-20",
+      "findings": 78,
+      "critical": 19,
+      "medium": 44,
+      "low": 15,
+      "type": "quality"
+    },
+    {
+      "round": 44,
+      "date": "2026-03-21",
+      "findings": 50,
+      "critical": 4,
+      "medium": 18,
+      "low": 28,
+      "type": "quality"
+    },
+    {
+      "round": 46,
+      "date": "2026-03-23",
+      "findings": 59,
+      "critical": 5,
+      "medium": 30,
+      "low": 24,
+      "type": "quality"
+    },
+    {
+      "round": 47,
+      "date": "2026-03-23",
+      "findings": 8,
+      "critical": 0,
+      "medium": 2,
+      "low": 6,
+      "type": "security"
+    },
+    {
+      "round": 48,
+      "date": "2026-03-25",
+      "findings": 4,
+      "critical": 1,
+      "medium": 1,
+      "low": 2,
+      "type": "quality"
+    },
+    {
+      "round": 49,
+      "date": "2026-03-25",
+      "findings": 4,
+      "critical": 0,
+      "medium": 1,
+      "low": 3,
+      "type": "security"
+    },
+    {
+      "round": 50,
+      "date": "2026-03-26",
+      "findings": 47,
+      "critical": 7,
+      "medium": 32,
+      "low": 8,
+      "type": "quality"
+    },
+    {
+      "round": 51,
+      "date": "2026-03-26",
+      "findings": 3,
+      "critical": 0,
+      "medium": 1,
+      "low": 2,
+      "type": "security"
+    },
+    {
+      "round": 52,
+      "date": "2026-03-27",
+      "findings": 44,
+      "critical": 5,
+      "medium": 37,
+      "low": 2,
+      "type": "quality"
+    },
+    {
+      "round": 54,
+      "date": "2026-03-29",
+      "findings": 22,
+      "critical": 3,
+      "medium": 18,
+      "low": 1,
+      "type": "quality"
+    },
+    {
+      "round": 55,
+      "date": "2026-03-29",
+      "findings": 1,
+      "critical": 0,
+      "medium": 1,
+      "low": 0,
+      "type": "security"
+    },
+    {
+      "round": 56,
+      "date": "2026-03-31",
+      "findings": 29,
+      "critical": 2,
+      "medium": 27,
+      "low": 0,
+      "type": "quality"
+    },
+    {
+      "round": 57,
+      "date": "2026-03-31",
+      "findings": 3,
+      "critical": 0,
+      "medium": 3,
+      "low": 0,
+      "type": "security"
+    },
+    {
+      "round": 58,
+      "date": "2026-04-04",
+      "findings": 30,
+      "critical": 4,
+      "medium": 25,
+      "low": 1,
+      "type": "quality"
+    },
+    {
+      "round": 59,
+      "date": "2026-04-04",
+      "findings": 10,
+      "critical": 1,
+      "medium": 4,
+      "low": 5,
+      "type": "security"
+    },
+    {
+      "round": 60,
+      "date": "2026-04-08",
+      "findings": 30,
+      "critical": 2,
+      "medium": 14,
+      "low": 14,
+      "type": "quality"
+    },
+    {
+      "round": 61,
+      "date": "2026-04-08",
+      "findings": 9,
+      "critical": 1,
+      "medium": 3,
+      "low": 5,
+      "type": "security"
+    },
+    {
+      "round": 62,
+      "date": "2026-04-09",
+      "findings": 68,
+      "critical": 10,
+      "medium": 49,
+      "low": 9,
+      "type": "quality"
+    },
+    {
+      "round": 63,
+      "date": "2026-04-09",
+      "findings": 18,
+      "critical": 4,
+      "medium": 7,
+      "low": 7,
+      "type": "security"
+    },
+    {
+      "round": 64,
+      "date": "2026-04-10",
+      "findings": 48,
+      "critical": 7,
+      "medium": 11,
+      "low": 30,
+      "type": "quality"
+    },
+    {
+      "round": 65,
+      "date": "2026-04-10",
+      "findings": 9,
+      "critical": 0,
+      "medium": 2,
+      "low": 7,
+      "type": "security"
+    },
+    {
+      "round": 66,
+      "date": "2026-04-16",
+      "findings": 148,
+      "critical": 4,
+      "medium": 62,
+      "low": 82,
+      "type": "quality"
+    },
+    {
+      "round": 67,
+      "date": "2026-04-18",
+      "findings": 422,
+      "critical": 15,
+      "medium": 131,
+      "low": 276,
+      "type": "other"
+    },
+    {
+      "round": 68,
+      "date": "2026-04-18",
+      "findings": 7,
+      "critical": 1,
+      "medium": 4,
+      "low": 2,
+      "type": "other"
+    },
+    {
+      "round": 69,
+      "date": "2026-04-25",
+      "findings": 290,
+      "critical": 10,
+      "medium": 78,
+      "low": 202,
+      "type": "mixed"
+    },
+    {
+      "round": 70,
+      "date": "2026-05-12",
+      "findings": 210,
+      "critical": 45,
+      "medium": 95,
+      "low": 70,
+      "type": "quality"
+    },
+    {
+      "round": 71,
+      "date": "2026-05-12",
+      "findings": 60,
+      "critical": 0,
+      "medium": 14,
+      "low": 46,
+      "type": "security"
+    },
+    {
+      "round": 72,
+      "date": "2026-06-08",
+      "findings": 23,
+      "critical": 0,
+      "medium": 5,
+      "low": 18,
+      "type": "quality"
+    },
+    {
+      "round": 73,
+      "date": "2026-06-30",
+      "findings": 45,
+      "critical": 0,
+      "medium": 12,
+      "low": 33,
+      "type": "quality"
+    },
+    {
+      "round": 74,
+      "date": "2026-07-10",
+      "findings": 37,
+      "critical": 2,
+      "medium": 11,
+      "low": 24,
+      "type": "quality"
+    }
+  ],
+  "monthly": [
+    {
+      "month": "2026-02",
+      "rounds": 7,
+      "findings": 285,
+      "critical": 61,
+      "medium": 160,
+      "low": 64,
+      "commits": 390,
+      "effective_lines_changed": 82125,
+      "median_lines_per_commit": 65,
+      "critical_per_100_commits": 15.64,
+      "critical_per_10k_lines": 7.43,
+      "findings_per_100_commits": 73.1,
+      "critical_share_pct": 21.4,
+      "low_share_pct": 22.5
+    },
+    {
+      "month": "2026-03",
+      "rounds": 47,
+      "findings": 1549,
+      "critical": 163,
+      "medium": 921,
+      "low": 442,
+      "commits": 1534,
+      "effective_lines_changed": 166335,
+      "median_lines_per_commit": 21,
+      "critical_per_100_commits": 10.63,
+      "critical_per_10k_lines": 9.8,
+      "findings_per_100_commits": 101.0,
+      "critical_share_pct": 10.5,
+      "low_share_pct": 28.5
+    },
+    {
+      "month": "2026-04",
+      "rounds": 12,
+      "findings": 1089,
+      "critical": 59,
+      "medium": 390,
+      "low": 640,
+      "commits": 913,
+      "effective_lines_changed": 119216,
+      "median_lines_per_commit": 22,
+      "critical_per_100_commits": 6.46,
+      "critical_per_10k_lines": 4.95,
+      "findings_per_100_commits": 119.3,
+      "critical_share_pct": 5.4,
+      "low_share_pct": 58.8
+    },
+    {
+      "month": "2026-05",
+      "rounds": 2,
+      "findings": 270,
+      "critical": 45,
+      "medium": 109,
+      "low": 116,
+      "commits": 479,
+      "effective_lines_changed": 146290,
+      "median_lines_per_commit": 13,
+      "critical_per_100_commits": 9.39,
+      "critical_per_10k_lines": 3.08,
+      "findings_per_100_commits": 56.4,
+      "critical_share_pct": 16.7,
+      "low_share_pct": 43.0
+    },
+    {
+      "month": "2026-06",
+      "rounds": 2,
+      "findings": 68,
+      "critical": 0,
+      "medium": 17,
+      "low": 51,
+      "commits": 373,
+      "effective_lines_changed": 286111,
+      "median_lines_per_commit": 16,
+      "critical_per_100_commits": 0.0,
+      "critical_per_10k_lines": 0.0,
+      "findings_per_100_commits": 18.2,
+      "critical_share_pct": 0.0,
+      "low_share_pct": 75.0
+    },
+    {
+      "month": "2026-07",
+      "rounds": 1,
+      "findings": 37,
+      "critical": 2,
+      "medium": 11,
+      "low": 24,
+      "commits": 99,
+      "effective_lines_changed": 47599,
+      "median_lines_per_commit": 236,
+      "critical_per_100_commits": 2.02,
+      "critical_per_10k_lines": 0.42,
+      "findings_per_100_commits": 37.4,
+      "critical_share_pct": 5.4,
+      "low_share_pct": 64.9
+    }
+  ],
+  "convention_count": 78,
+  "conventions_dated": 78,
+  "convention_accretion": [
+    {
+      "date": "2026-03-04",
+      "cumulative_conventions": 10
+    },
+    {
+      "date": "2026-03-05",
+      "cumulative_conventions": 26
+    },
+    {
+      "date": "2026-03-10",
+      "cumulative_conventions": 33
+    },
+    {
+      "date": "2026-03-16",
+      "cumulative_conventions": 44
+    },
+    {
+      "date": "2026-03-17",
+      "cumulative_conventions": 49
+    },
+    {
+      "date": "2026-03-19",
+      "cumulative_conventions": 52
+    },
+    {
+      "date": "2026-03-20",
+      "cumulative_conventions": 54
+    },
+    {
+      "date": "2026-03-21",
+      "cumulative_conventions": 56
+    },
+    {
+      "date": "2026-03-22",
+      "cumulative_conventions": 65
+    },
+    {
+      "date": "2026-04-04",
+      "cumulative_conventions": 66
+    },
+    {
+      "date": "2026-04-08",
+      "cumulative_conventions": 67
+    },
+    {
+      "date": "2026-04-09",
+      "cumulative_conventions": 70
+    },
+    {
+      "date": "2026-04-16",
+      "cumulative_conventions": 72
+    },
+    {
+      "date": "2026-04-22",
+      "cumulative_conventions": 73
+    },
+    {
+      "date": "2026-04-25",
+      "cumulative_conventions": 75
+    },
+    {
+      "date": "2026-05-12",
+      "cumulative_conventions": 77
+    },
+    {
+      "date": "2026-05-14",
+      "cumulative_conventions": 78
+    }
+  ],
+  "caveats": [
+    "Reworded conventions get a later-than-true first-appearance date.",
+    "Findings-per-round has no size denominator; the codebase grew throughout.",
+    "Round type from section titles; untitled rounds classified 'other'.",
+    "Late rounds file one task per call site (earlier rounds bundled), inflating late-period counts.",
+    "Commit size shrank ~6x over the period (median_lines_per_commit), inflating per-commit rates \u2014 prefer critical_share_pct / low_share_pct (denominator-free) with critical_per_10k_lines as the activity-normalized check.",
+    "First month (2026-02) is the repo bootstrap; the last month is partial \u2014 anchor rate claims on interior full months."
+  ]
+}

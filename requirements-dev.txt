@@ -1,0 +1,14 @@
+# Dev dependencies for Sysop's own test suite.
+#
+# Sysop ships NO runtime requirements.txt by design — it is a
+# meta-repo, not an installable Python package. Consumers provide
+# their own runtime deps in their own venv. Scripts in
+# core/companion/scripts/ use try/except imports (e.g.,
+# validate_tasks.py:30) to tolerate the absence of pyyaml at
+# consumer-side install time.
+#
+# The runtime-vs-dev split is filed as a separate REVIEW_CHECKLIST
+# entry — do not add a runtime requirements.txt without resolving
+# that question first.
+pytest==9.0.3
+pyyaml==6.0.2

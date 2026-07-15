@@ -1,0 +1,68 @@
+{
+  "name": "sysop",
+  "description": "Self-improving workflow for AI-assisted development. Lifecycle skills, convention promotion, deterministic checks.",
+  "owner": { "name": "getsysop", "email": "wade@gdpquery.ai" },
+  "homepage": "https://github.com/getsysop/sysop",
+  "plugins": [
+    {
+      "name": "sysop",
+      "source": "./core",
+      "description": "Lifecycle skills, scripts, hooks, and docs for AI-assisted development. Required by all packs."
+    },
+    {
+      "name": "sysop-python",
+      "source": "./packs/python",
+      "description": "Python conventions: logger %s formatting, regex compilation, scripts/shared_cli.py CLI bootstrap, env-var validation."
+    },
+    {
+      "name": "sysop-postgres",
+      "source": "./packs/postgres",
+      "description": "Postgres + SQLAlchemy conventions: SQL safety, parameterized queries, role-engine separation, sensitive-table GRANT discipline."
+    },
+    {
+      "name": "sysop-nextjs-react",
+      "source": "./packs/nextjs-react",
+      "description": "Next.js + React + TypeScript conventions: hooks rules, AbortController cleanup, fetch redirects, accessibility, ReactMarkdown safety."
+    },
+    {
+      "name": "sysop-llm",
+      "source": "./packs/llm",
+      "description": "LLM integration conventions for multi-tenant web APIs (Anthropic / Gemini): cost bounds, prompt boundary escaping, JSON parse guards."
+    },
+    {
+      "name": "sysop-mcp-server",
+      "source": "./packs/mcp-server",
+      "description": "MCP server conventions: tool-arg validation, server-config secret handling, read-only-by-default boundaries, stdio-vs-HTTP/SSE transport (placeholder — populates from real-project use)."
+    },
+    {
+      "name": "sysop-streamlit",
+      "source": "./packs/streamlit",
+      "description": "Streamlit conventions (placeholder — populates from real-project use)."
+    },
+    {
+      "name": "sysop-pandas",
+      "source": "./packs/pandas",
+      "description": "Pandas conventions (placeholder — populates from real-project use)."
+    },
+    {
+      "name": "sysop-beancount",
+      "source": "./packs/beancount",
+      "description": "Beancount plain-text accounting conventions (placeholder — populates from real-project use)."
+    },
+    {
+      "name": "sysop-kotlin",
+      "source": "./packs/kotlin",
+      "description": "Kotlin / Android native conventions (placeholder — populates from real-project use)."
+    },
+    {
+      "name": "sysop-swift-ios",
+      "source": "./packs/swift-ios",
+      "description": "Swift / iOS native conventions (placeholder — populates from real-project use)."
+    },
+    {
+      "name": "sysop-flutter",
+      "source": "./packs/flutter",
+      "description": "Flutter / Dart conventions (placeholder — populates from real-project use)."
+    }
+  ]
+}

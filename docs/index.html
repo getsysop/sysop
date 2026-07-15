@@ -1,0 +1,582 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Sysop — an open-source, self-improving development workflow for Claude Code. Recurring review findings become rules it enforces for you.">
+<meta name="theme-color" content="#0e0d0a" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f6f1e6" media="(prefers-color-scheme: light)">
+<meta property="og:title" content="Sysop — recurring review findings become rules it enforces for you">
+<meta property="og:description" content="A full team's engineering rigor for one builder and an AI, from first plan to merge. Open source, portable, whole-lifecycle. MIT.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://getsysop.com">
+<meta name="twitter:card" content="summary">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='12' fill='%230e0d0a'/%3E%3Ctext x='50' y='72' font-size='64' font-family='Georgia,serif' font-style='italic' text-anchor='middle' fill='%23ff5722'%3ES%3C/text%3E%3C/svg%3E">
+<title>Sysop · recurring review findings become rules it enforces for you</title>
+<script>
+  /* Set theme before first paint — saved choice wins, else system preference. */
+  (function () {
+    try {
+      var saved = localStorage.getItem('sysop-theme');
+      var t = saved || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+      document.documentElement.setAttribute('data-theme', t);
+    } catch (e) { document.documentElement.setAttribute('data-theme', 'dark'); }
+  })();
+</script>
+<style>
+  /* ============================================================
+     Sysop landing page. Same warm-paper identity as the monograph
+     (docs/workflow.html): near-black paper, cream ink, one signal
+     hue — the wax-stamp orange. Dark default; light is opt-in.
+     ============================================================ */
+  :root {
+    color-scheme: dark;
+    --paper:      #0e0d0a;
+    --paper-rise: #14130f;
+    --paper-deep: #080705;
+    --ink:        #ece5d5;
+    --ink-dim:    #a39d8a;
+    --ink-faint:  #8a8472;
+    --rule:       rgba(236, 229, 213, .12);
+    --rule-soft:  rgba(236, 229, 213, .06);
+    --accent:     #ff5722;
+    --accent-ink: #ff8c5a;
+    --accent-soft: rgba(255, 87, 34, .10);
+    --steel:      #7da3c2;
+    --glow-warm:  rgba(255, 87, 34, .05);
+    --glow-cool:  rgba(125, 163, 194, .04);
+    --paper-fade: rgba(14, 13, 10, .85);
+    --plate-fill: rgba(236, 229, 213, .04);
+    /* chart marks — validated against paper #0e0d0a (dataviz) */
+    --c-conv: #ff5722;
+    --c-crit: #5aa9e0;
+
+    --serif: "Iowan Old Style", "Palatino", "Palatino Linotype", "Hoefler Text",
+             "Sitka Text", "Cambria", Georgia, serif;
+    --mono:  ui-monospace, "SF Mono", "Cascadia Code", "Roboto Mono",
+             Menlo, Consolas, monospace;
+  }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --paper:      #f6f1e6;
+    --paper-rise: #fdfaf2;
+    --paper-deep: #ece5d3;
+    --ink:        #2a2620;
+    --ink-dim:    #5f5949;
+    --ink-faint:  #6e6653;
+    --rule:       rgba(42, 38, 32, .14);
+    --rule-soft:  rgba(42, 38, 32, .07);
+    --accent:     #ff5722;
+    --accent-ink: #b83e17;
+    --accent-soft: rgba(255, 87, 34, .12);
+    --steel:      #3f6d90;
+    --glow-warm:  rgba(255, 87, 34, .06);
+    --glow-cool:  rgba(63, 109, 144, .05);
+    --paper-fade: rgba(246, 241, 230, .85);
+    --plate-fill: rgba(42, 38, 32, .05);
+    /* chart marks — validated against cream #f6f1e6 (dataviz, all-pass) */
+    --c-conv: #c8451c;
+    --c-crit: #1f6da8;
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--serif);
+    font-size: 18px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    font-feature-settings: "kern", "liga", "onum", "pnum";
+  }
+  /* Page atmosphere — warm vignette + barely-there paper grain (matches monograph) */
+  body::before {
+    content: ""; position: fixed; inset: 0; z-index: 0; pointer-events: none;
+    background:
+      radial-gradient(ellipse 1200px 800px at 80% -10%, var(--glow-warm), transparent 60%),
+      radial-gradient(ellipse 900px 600px at 0% 110%, var(--glow-cool), transparent 60%);
+  }
+  body::after {
+    content: ""; position: fixed; inset: 0; z-index: 0; pointer-events: none;
+    opacity: .55; mix-blend-mode: overlay;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.93  0 0 0 0 0.90  0 0 0 0 0.84  0 0 0 0.025 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+  }
+
+  a { color: var(--ink); text-decoration: none;
+    background-image: linear-gradient(currentColor, currentColor);
+    background-position: 0 100%; background-repeat: no-repeat; background-size: 100% 1px;
+    transition: background-size .2s, color .2s; }
+  a:hover { color: var(--accent-ink); background-size: 100% 2px; }
+  ::selection { background: var(--accent); color: var(--paper); }
+
+  code { font-family: var(--mono); font-size: .85em; color: var(--ink);
+    background: transparent; padding: 0 .15em; border-bottom: 1px dotted var(--rule); }
+  pre code { border: 0; padding: 0; }
+
+  .page { max-width: 1080px; margin: 0 auto; padding: 0 32px; position: relative; z-index: 1; }
+  @media (max-width: 720px) { .page { padding: 0 22px; } body { font-size: 17px; } }
+
+  /* ---------------- Masthead ---------------- */
+  .masthead {
+    position: sticky; top: 0; z-index: 20;
+    background: linear-gradient(180deg, var(--paper) 70%, var(--paper-fade));
+    backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--rule);
+  }
+  .masthead-inner {
+    max-width: 1080px; margin: 0 auto; padding: 13px 32px;
+    display: flex; align-items: baseline; gap: 24px;
+    font-family: var(--mono); font-size: 12px; color: var(--ink-dim); letter-spacing: .04em;
+  }
+  @media (max-width: 720px) { .masthead-inner { padding: 12px 22px; gap: 16px; } }
+  .mh-title { font-family: var(--serif); font-style: italic; font-size: 19px; color: var(--ink); letter-spacing: -.01em; }
+  .mh-title a, .mh-title a:hover { background: none; color: inherit; }
+  .mh-tag { color: var(--ink-faint); }
+  @media (max-width: 560px) { .mh-tag { display: none; } }
+  .mh-spacer { flex: 1; }
+  .masthead-inner nav { display: flex; gap: 20px; align-items: baseline; }
+  .masthead-inner nav a { color: var(--ink-dim); background: none; }
+  .masthead-inner nav a:hover { color: var(--accent-ink); }
+  .theme-toggle {
+    font-family: var(--mono); font-size: 12px; color: var(--ink-dim);
+    background: none; border: 1px solid var(--rule); border-radius: 4px;
+    padding: 3px 9px; cursor: pointer; letter-spacing: .04em; transition: border-color .2s, color .2s;
+  }
+  .theme-toggle:hover { color: var(--accent-ink); border-color: var(--accent); }
+
+  /* ---------------- Section scaffolding ---------------- */
+  section { position: relative; z-index: 1; }
+  .sec-mark {
+    font-family: var(--mono); font-size: 11.5px; letter-spacing: .18em; text-transform: uppercase;
+    color: var(--accent-ink); margin: 0 0 18px;
+    display: flex; align-items: center; gap: 14px;
+  }
+  .sec-mark::after { content: ""; flex: 1; height: 1px; background: var(--rule); }
+  h2 { font-family: var(--serif); font-weight: 600; font-size: clamp(26px, 4vw, 38px);
+    line-height: 1.12; letter-spacing: -.015em; margin: 0 0 20px; }
+  .lede { color: var(--ink-dim); font-size: 1.06rem; max-width: 62ch; }
+
+  /* ---------------- Hero ---------------- */
+  .hero { padding: 68px 0 40px; }
+  @media (max-width: 720px) { .hero { padding: 44px 0 28px; } }
+  .hero-eyebrow {
+    font-family: var(--mono); font-size: 12px; letter-spacing: .18em; text-transform: uppercase;
+    color: var(--ink-faint); margin: 0 0 26px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  }
+  .hero-eyebrow .dot { width: 4px; height: 4px; border-radius: 50%; background: var(--accent); display: inline-block; }
+  .hero-top { display: flex; gap: 40px; align-items: flex-start; }
+  .hero-body { flex: 1; min-width: 0; }
+  .hero h1 {
+    font-family: var(--serif); font-weight: 600;
+    font-size: clamp(34px, 6.4vw, 62px); line-height: 1.04; letter-spacing: -.022em;
+    margin: 0 0 26px; max-width: 16ch;
+  }
+  .hero h1 em { font-style: italic; color: var(--accent-ink); }
+  .hero-lede { color: var(--ink-dim); font-size: clamp(1rem, 1.6vw, 1.18rem); max-width: 56ch; margin: 0 0 32px; }
+  .hero-lede strong { color: var(--ink); font-weight: 600; }
+
+  /* wax seal */
+  .seal { flex-shrink: 0; width: 92px; height: 92px; margin-top: 6px; }
+  @media (max-width: 820px) { .seal { display: none; } }
+  .seal-ring, .seal-dash, .seal-inner { stroke: var(--accent); }
+  .seal-fill { fill: var(--accent); }
+  .seal-dot { fill: var(--accent); }
+  .seal-txt { fill: var(--accent); font-family: var(--mono); font-weight: 600;
+    text-transform: uppercase; }
+  .seal-letter { fill: var(--accent-ink); font-family: var(--serif); font-style: italic; }
+
+  /* install block */
+  .install {
+    background: var(--paper-deep); border: 1px solid var(--rule); border-radius: 8px;
+    font-family: var(--mono); font-size: 13.5px; line-height: 1.75; color: var(--ink);
+    padding: 16px 46px 16px 18px; margin: 0 0 26px; position: relative; max-width: 640px;
+    white-space: pre-wrap; word-break: normal; overflow-wrap: normal; tab-size: 2;
+  }
+  .install .prompt { color: var(--accent-ink); user-select: none; }
+  .install .cmt { color: var(--ink-faint); }
+  .copy-btn {
+    position: absolute; top: 10px; right: 10px;
+    font-family: var(--mono); font-size: 11px; letter-spacing: .06em;
+    color: var(--ink-dim); background: var(--paper-rise); border: 1px solid var(--rule);
+    border-radius: 4px; padding: 3px 8px; cursor: pointer; transition: color .2s, border-color .2s;
+  }
+  .copy-btn:hover { color: var(--accent-ink); border-color: var(--accent); }
+
+  .cta-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+  .btn {
+    font-family: var(--mono); font-size: 13px; letter-spacing: .03em;
+    padding: 10px 18px; border-radius: 6px; border: 1px solid var(--rule);
+    color: var(--ink); background: var(--paper-rise); cursor: pointer;
+    transition: border-color .2s, color .2s, background .2s; display: inline-flex; align-items: center; gap: 8px;
+  }
+  .btn:hover { color: var(--accent-ink); border-color: var(--accent); background: var(--accent-soft); }
+  .btn-primary { background: var(--accent); border-color: var(--accent); color: #14100c; font-weight: 600; }
+  .btn-primary:hover { background: var(--accent-ink); border-color: var(--accent-ink); color: #14100c; }
+  .btn .arr { transition: transform .2s; }
+  .btn:hover .arr { transform: translateX(3px); }
+
+  /* ---------------- Stat band ---------------- */
+  .stats {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px;
+    background: var(--rule); border: 1px solid var(--rule); border-radius: 8px; overflow: hidden;
+    margin: 48px 0 8px;
+  }
+  @media (max-width: 640px) { .stats { grid-template-columns: repeat(2, 1fr); } }
+  .stat { background: var(--paper); padding: 22px 20px; }
+  .stat .num { font-family: var(--serif); font-size: clamp(28px, 4.5vw, 40px); font-weight: 600;
+    letter-spacing: -.02em; color: var(--ink); line-height: 1; }
+  .stat .num .u { color: var(--accent-ink); font-style: italic; font-size: .62em; }
+  .stat .lbl { font-family: var(--mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--ink-faint); margin-top: 9px; }
+
+  /* ---------------- Generic section rhythm ---------------- */
+  .band { padding: 72px 0; border-top: 1px solid var(--rule-soft); }
+  @media (max-width: 720px) { .band { padding: 52px 0; } }
+
+  /* three moves */
+  .moves { display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px; margin-top: 40px; }
+  @media (max-width: 820px) { .moves { grid-template-columns: 1fr; gap: 22px; } }
+  .move { border-top: 2px solid var(--accent); padding-top: 16px; }
+  .move h3 { font-family: var(--serif); font-size: 1.28rem; font-weight: 600; margin: 0 0 8px; letter-spacing: -.01em; }
+  .move p { color: var(--ink-dim); font-size: .98rem; margin: 0; }
+  .move .n { font-family: var(--mono); font-size: 11px; letter-spacing: .1em; color: var(--ink-faint); display: block; margin-bottom: 10px; }
+
+  .pull {
+    font-family: var(--serif); font-style: italic; font-size: clamp(20px, 3vw, 28px);
+    line-height: 1.4; color: var(--ink); max-width: 24ch; margin: 44px auto 0; text-align: center;
+    text-wrap: balance;
+  }
+  .pull b { font-style: normal; color: var(--accent-ink); font-weight: 600; }
+
+  /* ---------------- Chart ---------------- */
+  .figure { margin-top: 40px; border: 1px solid var(--rule); border-radius: 10px;
+    background: var(--paper-deep); padding: 26px 26px 18px; }
+  .figure svg { width: 100%; height: auto; display: block; }
+  .fig-panel-title { font-family: var(--mono); font-size: 12px; letter-spacing: .04em; fill: var(--ink-dim); }
+  .fig-val { font-family: var(--mono); font-size: 12.5px; font-weight: 600; }
+  .fig-axis { font-family: var(--mono); font-size: 11.5px; fill: var(--ink-faint); letter-spacing: .03em; }
+  .fig-conv-line { fill: none; stroke: var(--c-conv); stroke-width: 2.5; stroke-linejoin: round; stroke-linecap: round; }
+  .fig-conv-area { fill: var(--c-conv); opacity: .12; }
+  .fig-dot { fill: var(--c-conv); stroke: var(--paper-deep); stroke-width: 2; }
+  .fig-bar { fill: var(--c-crit); transition: opacity .15s; }
+  .fig-bar:hover, .fig-dot:hover { opacity: .78; }
+  .fig-baseline { stroke: var(--rule); stroke-width: 1; }
+  .fig-convval { fill: var(--c-conv); }
+  .fig-critval { fill: var(--c-crit); }
+  .figcap { color: var(--ink-faint); font-size: .84rem; margin: 16px 2px 0; max-width: 74ch; line-height: 1.5; }
+  .figcap a { color: var(--ink-dim); }
+  details.data { margin: 14px 2px 0; }
+  details.data summary { font-family: var(--mono); font-size: 11.5px; letter-spacing: .05em; color: var(--ink-dim); cursor: pointer; }
+  details.data table { border-collapse: collapse; margin-top: 12px; font-family: var(--mono); font-size: 12.5px; width: 100%; }
+  details.data th, details.data td { text-align: right; padding: 5px 12px; border-bottom: 1px solid var(--rule-soft); color: var(--ink-dim); }
+  details.data th:first-child, details.data td:first-child { text-align: left; color: var(--ink); }
+  details.data thead th { color: var(--ink-faint); font-weight: 400; }
+  .limits { margin-top: 34px; border: 1px solid var(--rule); border-left: 3px solid var(--accent); border-radius: 10px;
+    padding: 20px 24px 10px; background: var(--paper-rise); }
+  .limits h3 { font-family: var(--mono); font-size: 11.5px; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--ink-dim); margin: 0 0 4px; font-weight: 600; }
+  .limits p { color: var(--ink-dim); font-size: .92rem; line-height: 1.6; max-width: 74ch; margin: 12px 0; }
+  .limits p b { color: var(--ink); font-weight: 600; }
+
+  /* ---------------- Lifecycle strip ---------------- */
+  .flow { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 36px; align-items: stretch; }
+  .flow-step { flex: 1 1 130px; border: 1px solid var(--rule); border-radius: 7px; padding: 14px 15px; background: var(--paper-rise); position: relative; }
+  .flow-step .k { font-family: var(--mono); font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--accent-ink); }
+  .flow-step h4 { font-family: var(--serif); font-size: 1.05rem; margin: 6px 0 4px; font-weight: 600; }
+  .flow-step p { margin: 0; color: var(--ink-faint); font-size: .82rem; font-family: var(--mono); }
+  .loop-note { margin-top: 20px; color: var(--ink-dim); font-size: .96rem; max-width: 64ch; }
+  .loop-note b { color: var(--accent-ink); font-weight: 600; }
+
+  /* ---------------- Start / read-next ---------------- */
+  .readnext { display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px; margin-top: 36px; }
+  @media (max-width: 640px) { .readnext { grid-template-columns: 1fr; } }
+  .rn { border: 1px solid var(--rule); border-radius: 8px; padding: 20px 22px; background: var(--paper-rise);
+    transition: border-color .2s, background .2s; }
+  .rn:hover { border-color: var(--accent); background: var(--accent-soft); }
+  .rn a { background: none; }
+  .rn .rn-k { font-family: var(--mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-faint); }
+  .rn h4 { font-family: var(--serif); font-size: 1.18rem; margin: 8px 0 6px; font-weight: 600; }
+  .rn p { margin: 0; color: var(--ink-dim); font-size: .92rem; }
+
+  /* ---------------- Footer ---------------- */
+  footer.colophon { border-top: 1px solid var(--rule); margin-top: 24px; padding: 44px 0 64px;
+    font-family: var(--mono); font-size: 12.5px; color: var(--ink-faint); line-height: 1.9; }
+  footer.colophon .row { display: flex; flex-wrap: wrap; gap: 8px 26px; align-items: baseline; }
+  footer.colophon a { color: var(--ink-dim); background: none; }
+  footer.colophon a:hover { color: var(--accent-ink); }
+  footer .cf-mark { font-family: var(--serif); font-style: italic; font-size: 16px; color: var(--ink-dim); }
+  footer .sp { flex: 1; }
+</style>
+</head>
+<body>
+
+<header class="masthead">
+  <div class="masthead-inner">
+    <span class="mh-title"><a href="/">Sysop</a></span>
+    <span class="mh-tag">· a self-improving dev workflow</span>
+    <span class="mh-spacer"></span>
+    <nav>
+      <a href="./workflow.html">Monograph</a>
+      <a href="https://github.com/getsysop/sysop">GitHub</a>
+      <button class="theme-toggle" id="themeToggle" aria-label="Toggle light / dark theme">◑ theme</button>
+    </nav>
+  </div>
+</header>
+
+<main class="page">
+
+  <!-- ============ HERO ============ -->
+  <section class="hero">
+    <p class="hero-eyebrow"><span class="dot"></span> Open source <span class="dot"></span> Claude Code <span class="dot"></span> MIT-licensed</p>
+    <div class="hero-top">
+      <div class="hero-body">
+        <h1>Recurring review findings become <em>rules it enforces for you.</em></h1>
+        <p class="hero-lede">Sysop brings a <strong>full team's engineering rigor to one builder and an AI</strong> — from first plan to merge. You bring the idea worth building; Sysop brings the discipline: a complete development lifecycle, plus a feedback loop that turns the mistakes your reviews keep catching into checks the computer runs on every future task.</p>
+
+        <div class="install" id="install"><button class="copy-btn" id="copyBtn" aria-label="Copy install commands">copy</button><span class="prompt">$</span> git clone https://github.com/getsysop/sysop.git
+<span class="prompt">$</span> bash sysop/install.sh <span class="cmt">/path/to/your/project</span> --packs python,postgres</div>
+
+        <div class="cta-row">
+          <a class="btn btn-primary" href="https://github.com/getsysop/sysop/blob/main/docs/getting-started.md">Get started <span class="arr">→</span></a>
+          <a class="btn" href="./workflow.html">Read the monograph</a>
+          <a class="btn" href="https://github.com/getsysop/sysop">View on GitHub</a>
+        </div>
+      </div>
+
+      <!-- notary seal — the promotion loop stamped: finding · rule · enforced -->
+      <svg class="seal" viewBox="0 0 100 100" role="img" aria-label="Sysop seal — finding becomes rule becomes enforced">
+        <defs>
+          <path id="sealTop" fill="none" d="M13,50 A37,37 0 0 1 87,50"/>
+          <path id="sealBot" fill="none" d="M13,50 A37,37 0 0 0 87,50"/>
+        </defs>
+        <circle class="seal-ring" cx="50" cy="50" r="46.5" fill="none" stroke-width="1.8" opacity=".7"/>
+        <circle class="seal-dash" cx="50" cy="50" r="44" fill="none" stroke-width="2" stroke-dasharray="0.6 3.05" opacity=".7"/>
+        <circle class="seal-inner" cx="50" cy="50" r="26.5" fill="none" stroke-width="0.8" opacity=".4"/>
+        <circle class="seal-fill" cx="50" cy="50" r="26.5" opacity=".05"/>
+        <text class="seal-txt" font-size="6" letter-spacing="0.8"><textPath href="#sealTop" startOffset="50%" text-anchor="middle">FINDING · RULE · ENFORCED</textPath></text>
+        <text class="seal-txt" font-size="7" letter-spacing="2.6"><textPath href="#sealBot" startOffset="50%" text-anchor="middle">SYSOP</textPath></text>
+        <circle class="seal-dot" cx="13" cy="50" r="1.4"/>
+        <circle class="seal-dot" cx="87" cy="50" r="1.4"/>
+        <text class="seal-letter" x="50" y="61" font-size="30" text-anchor="middle">S</text>
+      </svg>
+    </div>
+
+    <!-- stat band: the real proof numbers -->
+    <div class="stats">
+      <div class="stat"><div class="num">71</div><div class="lbl">Review rounds</div></div>
+      <div class="stat"><div class="num">3,298</div><div class="lbl">Findings mined</div></div>
+      <div class="stat"><div class="num">78</div><div class="lbl">Promoted conventions</div></div>
+      <div class="stat"><div class="num">110</div><div class="lbl">Documented phases</div></div>
+    </div>
+  </section>
+
+  <!-- ============ THE DISTINCTION ============ -->
+  <section class="band">
+    <p class="sec-mark">§ I · The distinction</p>
+    <h2>Advice a model is asked to remember,<br>versus checks the computer runs.</h2>
+    <p class="lede">Every AI coding tool can collect house rules and paste them into a prompt. Prompts are advice — the model may or may not apply them, and the pile only grows. Sysop takes the recurring finding, promotes it to a written convention, and — when it's mechanically checkable — compiles it to something deterministic: a grep rule, a Semgrep AST rule, a language-server pass, a coverage gate on the paths you mark critical. Enforced identically on every run, no model in the loop.</p>
+
+    <div class="moves">
+      <div class="move">
+        <span class="n">MOVE 01</span>
+        <h3>It notices the pattern</h3>
+        <p>A finding that survives across review rounds isn't a one-off — it's a convention. Dual-mode review (quality + security) surfaces it; a cross-round gate promotes it into a written map consulted automatically on every future task.</p>
+      </div>
+      <div class="move">
+        <span class="n">MOVE 02</span>
+        <h3>It compiles the checkable ones</h3>
+        <p>The conventions a computer can verify stop being prose. They become grep + Semgrep rules in a shared registry, a <code>pyright</code>/<code>tsc</code> pass, and a diff-coverage gate — a deterministic floor under every change, with no LLM asked to remember.</p>
+      </div>
+      <div class="move">
+        <span class="n">MOVE 03</span>
+        <h3>It retires the stale ones</h3>
+        <p>Rules aren't write-only. A false-positive ledger tracks checks that fire wrongly across rounds and flags them for demotion — so the enforced set stays sharp instead of accreting alert-fatigue forever.</p>
+      </div>
+    </div>
+
+    <p class="pull">The pile of prompt text never gets smaller. <b>The set of things the computer proves for you does.</b></p>
+  </section>
+
+  <!-- ============ THE EVIDENCE ============ -->
+  <section class="band">
+    <p class="sec-mark">§ II · The evidence</p>
+    <h2>As the convention map grew, the reviews got calmer.</h2>
+    <p class="lede">This isn't a projection. Sysop was extracted from a real project that ran 71 review rounds between February and July 2026. As its rule set climbed from zero to 78, the critical share of findings fell from one in five to low single digits — and, one language-server sweep aside, held there while the codebase kept changing underneath it. It is also, plainly, a correlation on one project, graded by its own author — so the limits are printed right under the chart, along with what would prove the claim wrong.</p>
+
+    <figure class="figure">
+      <svg viewBox="0 0 760 470" role="img" aria-labelledby="figtitle figdesc">
+        <title id="figtitle">Convention growth against critical-finding share, by month, Feb–Jul 2026</title>
+        <desc id="figdesc">Top panel: cumulative promoted conventions rise from 0 at end of February to 78 by May and plateau. Bottom panel: critical findings as a share of all findings fall from 21% in February to 5% in April and stay in low single-to-mid digits through July.</desc>
+
+        <!-- ===== Panel A: cumulative conventions ===== -->
+        <text class="fig-panel-title" x="48" y="18">Convention map — cumulative rules promoted</text>
+        <line class="fig-baseline" x1="48" y1="180" x2="712" y2="180"/>
+        <!-- area + line: pts Feb(105.3,180) Mar(220,50) Apr(334.7,30) May(449.3,24) Jun(564,24) Jul(678.7,24) -->
+        <path class="fig-conv-area" d="M105.3,180 L105.3,180 L220,50 L334.7,30 L449.3,24 L564,24 L678.7,24 L678.7,180 Z"/>
+        <polyline class="fig-conv-line" points="105.3,180 220,50 334.7,30 449.3,24 564,24 678.7,24"/>
+        <circle class="fig-dot" cx="105.3" cy="180" r="4.5"><title>End of Feb — 0 conventions</title></circle>
+        <circle class="fig-dot" cx="220" cy="50" r="4.5"><title>End of Mar — 65 conventions</title></circle>
+        <circle class="fig-dot" cx="334.7" cy="30" r="4.5"><title>End of Apr — 75 conventions</title></circle>
+        <circle class="fig-dot" cx="449.3" cy="24" r="4.5"><title>End of May — 78 conventions</title></circle>
+        <circle class="fig-dot" cx="564" cy="24" r="4.5"><title>End of Jun — 78 conventions</title></circle>
+        <circle class="fig-dot" cx="678.7" cy="24" r="4.5"><title>End of Jul — 78 conventions</title></circle>
+        <text class="fig-val fig-convval" x="105.3" y="172" text-anchor="middle">0</text>
+        <text class="fig-val fig-convval" x="228" y="45" text-anchor="start">65</text>
+        <text class="fig-val fig-convval" x="449.3" y="16" text-anchor="middle">78 — plateau</text>
+
+        <!-- ===== Panel B: critical share ===== -->
+        <text class="fig-panel-title" x="48" y="248">Critical findings — share of all findings</text>
+        <line class="fig-baseline" x1="48" y1="420" x2="712" y2="420"/>
+        <!-- bars, baseline y=420, w=56, centered on month -->
+        <rect class="fig-bar" x="77.3"  y="277.3" width="56" height="142.7" rx="4"><title>February — 21.4% critical</title></rect>
+        <rect class="fig-bar" x="192"   y="350"   width="56" height="70"    rx="4"><title>March — 10.5% critical</title></rect>
+        <rect class="fig-bar" x="306.7" y="384"   width="56" height="36"    rx="4"><title>April — 5.4% critical</title></rect>
+        <rect class="fig-bar" x="421.3" y="308.7" width="56" height="111.3" rx="4"><title>May — 16.7% (language-server call-site sweep, see note)</title></rect>
+        <rect class="fig-bar" x="650.7" y="384"   width="56" height="36"    rx="4"><title>July — 5.4% critical</title></rect>
+        <text class="fig-val fig-critval" x="105.3" y="270" text-anchor="middle">21%</text>
+        <text class="fig-val fig-critval" x="220"   y="343" text-anchor="middle">11%</text>
+        <text class="fig-val fig-critval" x="334.7" y="377" text-anchor="middle">5%</text>
+        <text class="fig-val fig-critval" x="449.3" y="301" text-anchor="middle">17%*</text>
+        <text class="fig-val fig-critval" x="564"   y="414" text-anchor="middle">0%</text>
+        <text class="fig-val fig-critval" x="678.7" y="377" text-anchor="middle">5%</text>
+
+        <!-- shared x axis -->
+        <text class="fig-axis" x="105.3" y="440" text-anchor="middle">Feb</text>
+        <text class="fig-axis" x="220"   y="440" text-anchor="middle">Mar</text>
+        <text class="fig-axis" x="334.7" y="440" text-anchor="middle">Apr</text>
+        <text class="fig-axis" x="449.3" y="440" text-anchor="middle">May</text>
+        <text class="fig-axis" x="564"   y="440" text-anchor="middle">Jun</text>
+        <text class="fig-axis" x="678.7" y="440" text-anchor="middle">Jul</text>
+        <text class="fig-axis" x="48" y="462">2026 · critical share is denominator-free; * May = one finding per call site, enforcement not new defects</text>
+      </svg>
+
+      <details class="data">
+        <summary>View the data</summary>
+        <table>
+          <thead><tr><th>Month</th><th>Cumulative conventions</th><th>Findings</th><th>Critical share</th></tr></thead>
+          <tbody>
+            <tr><td>Feb 2026</td><td>0</td><td>285</td><td>21.4%</td></tr>
+            <tr><td>Mar 2026</td><td>65</td><td>1,549</td><td>10.5%</td></tr>
+            <tr><td>Apr 2026</td><td>75</td><td>1,089</td><td>5.4%</td></tr>
+            <tr><td>May 2026</td><td>78</td><td>270</td><td>16.7%</td></tr>
+            <tr><td>Jun 2026</td><td>78</td><td>68</td><td>0.0%</td></tr>
+            <tr><td>Jul 2026</td><td>78</td><td>37</td><td>5.4%</td></tr>
+          </tbody>
+        </table>
+      </details>
+
+      <p class="figcap">
+        Mined from the upstream project's review archive — 71 rounds, 3,298 findings, Feb–Jul 2026. Critical <em>share</em> is used because it needs no size denominator; raw counts mostly track the rubric, not the code — as conventions are promoted, later rounds file one finding per call site where early rounds bundled. May's uptick is exactly that: more than half of its criticals are already-promoted rules enforced one-per-call-site across legacy code, not new defects. Per-line normalized rates agree on direction from the March peak. Full method and the per-round chart are in <a href="./workflow.html">the monograph, Fig. 7</a>.
+      </p>
+    </figure>
+
+    <div class="limits">
+      <h3>What this chart doesn't prove</h3>
+      <p><b>One project, one grader.</b> n&nbsp;=&nbsp;1, and the same person built the tool, ran the project, and adjudicated every review — severity is self-graded. The labels have moved at least once: June's only critical was reclassified out during a later archive consolidation. Counted, June reads ~1.5%, not 0%.</p>
+      <p><b>Maturation is a live rival.</b> Young codebases surface their worst findings early — the naive auth, the wrong schema — and the critical rate falls as they harden, with or without a convention loop. Nothing in this chart separates the loop's contribution from ordinary maturation.</p>
+      <p><b>The tail is thin.</b> June is 68 findings and July is 37. At those sizes one bad round moves the share by double digits — "held low" is three quiet months and one excused sweep, not a stable estimate.</p>
+      <p><b>What would settle it.</b> Finding classes already covered by a promoted convention should stop recurring in <em>new</em> code while uncovered classes keep arriving at their old rate — maturation depresses both, the loop selectively suppresses the covered ones. That test is specified in the method notes shipped with the dataset (<a href="https://github.com/getsysop/sysop/blob/main/docs/analysis/REPORT.md"><code>docs/analysis/REPORT.md</code></a>) and hasn't been run yet: it needs the upstream project's private per-finding archive — a question the published round-level dataset can't answer. If covered classes recur in new code at the uncovered rate, the claim is wrong.</p>
+    </div>
+  </section>
+
+  <!-- ============ THE LIFECYCLE ============ -->
+  <section class="band">
+    <p class="sec-mark">§ III · The whole lifecycle</p>
+    <h2>Not a reviewer bolted on at the end.<br>A process from intent to merge.</h2>
+    <p class="lede">Most tools in this space review a diff. Sysop is the loop around the diff — it plans the work, isolates it, documents it, reviews it two ways, and learns from what it finds. Composable skills, each one a slash command in Claude Code and a documented step for any agent.</p>
+
+    <div class="flow">
+      <div class="flow-step"><span class="k">Plan</span><h4>Intake</h4><p>brain-dump or existing repo → validated task queue</p></div>
+      <div class="flow-step"><span class="k">Plan</span><h4>Adversarial review</h4><p>the plan is attacked before it's built</p></div>
+      <div class="flow-step"><span class="k">Build</span><h4>Isolated worktrees</h4><p>parallel work, no stepping on each other</p></div>
+      <div class="flow-step"><span class="k">Record</span><h4>Deferred docs</h4><p>documentation written from the real diff</p></div>
+      <div class="flow-step"><span class="k">Review</span><h4>Quality + security</h4><p>dual-mode, against the convention map</p></div>
+      <div class="flow-step"><span class="k">Learn</span><h4>The promotion loop</h4><p>findings → conventions → deterministic checks</p></div>
+    </div>
+    <p class="loop-note"><b>The loop closes on itself.</b> What the review keeps finding this month becomes what the checker enforces next month — so the same mistake has to get past a standing check, not a memory, to happen twice.</p>
+  </section>
+
+  <!-- ============ START ============ -->
+  <section class="band">
+    <p class="sec-mark">§ IV · Start</p>
+    <h2>Two commands into your project.</h2>
+    <p class="lede">Point the installer at any repo. It writes the workflow docs, the skills, the convention maps, the checks, and a permission allow-list — layered so nothing you already have is clobbered. Run without <code>--packs</code> and it detects your stack. Requires bash 4+ (on Windows, run under WSL).</p>
+
+    <div class="install" id="install2" style="margin-top:30px; max-width:720px;"><button class="copy-btn" id="copyBtn2" aria-label="Copy install commands">copy</button><span class="prompt">$</span> git clone https://github.com/getsysop/sysop.git
+<span class="prompt">$</span> bash sysop/install.sh <span class="cmt">/path/to/your/project</span> --packs python,postgres
+<span class="prompt">$</span> cd <span class="cmt">/path/to/your/project</span> &amp;&amp; git add .claude/ scripts/ WORKFLOW.md WORKFLOW_GUIDE.md tasks/ SYSOP_ISSUES.md &amp;&amp; git commit -m <span class="cmt">"chore: install Sysop"</span></div>
+
+    <p class="lede" style="margin-top:4px;">Claude Code users can also add the slash commands as a plugin: <code>/plugin marketplace add getsysop/sysop</code>, then <code>/plugin install sysop@sysop</code>.</p>
+
+    <div class="readnext">
+      <div class="rn"><a href="https://github.com/getsysop/sysop/blob/main/docs/getting-started.md">
+        <div class="rn-k">Tutorial</div><h4>Getting started →</h4>
+        <p>Hands-on from install to your first shipped change: intake → claim → review-close.</p></a></div>
+      <div class="rn"><a href="./workflow.html">
+        <div class="rn-k">Explanation</div><h4>The monograph →</h4>
+        <p>Why it's built this way — the lifecycle, the parallel orchestrator, the convention loop.</p></a></div>
+      <div class="rn"><a href="https://github.com/getsysop/sysop/blob/main/core/companion/docs/WORKFLOW.md">
+        <div class="rn-k">Reference</div><h4>The process spec →</h4>
+        <p>The authoritative WORKFLOW.md — every step, invariant, and gate, in full.</p></a></div>
+      <div class="rn"><a href="https://github.com/getsysop/sysop/blob/main/PHASE_LOG.md">
+        <div class="rn-k">History</div><h4>How it got here →</h4>
+        <p>One entry per development phase — the full build narrative ships with the repo.</p></a></div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="colophon">
+  <div class="page">
+    <div class="row">
+      <span class="cf-mark">Sysop</span>
+      <span>· MIT-licensed · built and used daily by <a href="https://github.com/getsysop">Wade Petty</a></span>
+      <span class="sp"></span>
+      <a href="https://github.com/getsysop/sysop">GitHub</a>
+      <a href="./workflow.html">Monograph</a>
+      <a href="https://github.com/getsysop/sysop/blob/main/docs/getting-started.md">Getting started</a>
+    </div>
+    <div class="row" style="margin-top:10px; color:var(--ink-faint);">
+      <span>Maintained casually, as-is — issues and PRs welcome, no SLA. Extracted from a real project (GDP Query System) that ran 71 review rounds and 3,298 findings; that provenance is the evidence, not a slogan.</span>
+    </div>
+  </div>
+</footer>
+
+<script>
+  /* Theme toggle */
+  (function () {
+    var btn = document.getElementById('themeToggle');
+    if (btn) btn.addEventListener('click', function () {
+      var cur = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+      var next = cur === 'light' ? 'dark' : 'light';
+      document.documentElement.setAttribute('data-theme', next);
+      try { localStorage.setItem('sysop-theme', next); } catch (e) {}
+    });
+  })();
+
+  /* Copy-install buttons */
+  (function () {
+    function wire(btnId, blockId) {
+      var btn = document.getElementById(btnId);
+      var block = document.getElementById(blockId);
+      if (!btn || !block) return;
+      btn.addEventListener('click', function () {
+        // read the command text without the button label, then drop the "$ " prompts
+        var clone = block.cloneNode(true);
+        var b = clone.querySelector('.copy-btn'); if (b) b.remove();
+        var text = clone.innerText.replace(/^\s*\$\s?/gm, '').trim();
+        navigator.clipboard.writeText(text).then(function () {
+          var old = btn.textContent; btn.textContent = 'copied ✓';
+          setTimeout(function () { btn.textContent = old; }, 1600);
+        }).catch(function () {});
+      });
+    }
+    wire('copyBtn', 'install');
+    wire('copyBtn2', 'install2');
+  })();
+</script>
+</body>
+</html>

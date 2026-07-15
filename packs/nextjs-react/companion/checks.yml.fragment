@@ -1,0 +1,178 @@
+# Grep Check Registry — nextjs-react pack fragment
+#
+# React / Next.js / TypeScript checks. The Phase 3 installer
+# concatenates this fragment with core/companion/checks.yml.fragment
+# (and any other selected pack fragments) into the project-side
+# .claude/checks.yml. Path globs use placeholder vocabulary
+# that the installer substitutes per project from convention_map.md.
+#
+# Helper names referenced in patterns and descriptions
+# (e.g., getDisplayError, useAbortableFetch, BrandingControl.tsx)
+# are placeholders for the equivalent helpers in the consuming
+# project's convention_map.md. Override pattern strings post-install
+# if your project uses different helper names.
+#
+# Format docs: WORKFLOW.md §6.5
+
+checks:
+  # ── XSS / link safety ──────────────────────────────────────────
+
+  - id: window-open-noopener
+    name: "window.open without noopener"
+    category: security
+    severity: medium
+    paths: ["<frontend>/"]
+    include: ["*.tsx", "*.ts"]
+    pattern: 'window\.open'
+    negative_pattern: 'noopener'
+    description: "window.open must include noopener,noreferrer in features string"
+    convention: "window.open"
+    used_by: [codebase-review, security-audit]
+    blocking: true
+
+  - id: dangerous-inner-html
+    name: "dangerouslySetInnerHTML"
+    category: security
+    severity: critical
+    paths: ["<frontend>/"]
+    include: ["*.tsx", "*.ts"]
+    pattern: 'dangerouslySetInnerHTML'
+    description: "dangerouslySetInnerHTML usage detected — XSS risk"
+    convention: "XSS prevention"
+    used_by: [security-audit]
+
+  # ── Error display ──────────────────────────────────────────────
+
+  - id: error-display-jsx
+    name: "Raw err.message in JSX"
+    category: convention
+    severity: medium
+    paths: ["<components dir>/", "<hooks dir>/"]
+    include: ["*.tsx", "*.ts"]
+    exclude: ["*__tests__*", "*.d.ts"]
+    pattern: '(err\.message|error\.message)'
+    negative_pattern: 'getDisplayError'
+    description: "Raw error.message rendered in UI — use getDisplayError() from lib/errorMessages.ts"
+    convention: "Error display"
+    notes: "Needs LLM triage: only flag if rendered in UI, not just logged or thrown"
+    used_by: [codebase-review]
+
+  # ── URL handling / fetch hygiene ───────────────────────────────
+
+  - id: missing-encode-uri
+    name: "Missing encodeURIComponent in Fetch URLs"
+    category: convention
+    severity: medium
+    paths: ["<hooks dir>/", "<components dir>/"]
+    include: ["*.ts", "*.tsx"]
+    pattern: 'fetch\(`'
+    negative_pattern: 'encodeURIComponent'
+    description: "Template literal in fetch() without encodeURIComponent on dynamic path segments"
+    convention: "URL encoding"
+    notes: "Needs LLM triage: only flag if template interpolates dynamic values into URL path segments"
+    used_by: [codebase-review]
+
+  # ── Test conventions ───────────────────────────────────────────
+
+  - id: to-be-defined-dom
+    name: "toBeDefined() on DOM Queries"
+    category: testing
+    severity: low
+    paths: ["<app dir>/"]
+    include: ["*.ts", "*.tsx"]
+    pattern: '\.toBeDefined\(\)'
+    description: "toBeDefined() on DOM query is a no-op — use toBeInTheDocument() or not.toBeNull()"
+    convention: "Assertion specificity"
+    notes: "Needs LLM triage: only flag if preceded by querySelector, getByText, getByRole, or similar DOM queries"
+    used_by: [codebase-review]
+
+  - id: missing-mock-cleanup
+    name: "Missing Mock Cleanup"
+    category: testing
+    severity: medium
+    paths: ["<app dir>/"]
+    include: ["*.ts", "*.tsx"]
+    pattern: 'vi\.(mock|spyOn)\('
+    negative_pattern: 'restoreAllMocks'
+    invert_file_check: true
+    description: "Test file uses vi.mock/vi.spyOn without afterEach(vi.restoreAllMocks())"
+    convention: "Mock cleanup"
+    used_by: [codebase-review]
+
+  # ── Memory hygiene ─────────────────────────────────────────────
+
+  - id: createobjecturl-leak
+    name: "createObjectURL without revokeObjectURL"
+    category: correctness
+    severity: medium
+    paths: ["<app dir>/"]
+    include: ["*.ts", "*.tsx"]
+    exclude: ["*__tests__*", "*.test.ts", "*.test.tsx"]
+    pattern: 'URL\.createObjectURL\('
+    negative_pattern: 'URL\.revokeObjectURL\('
+    invert_file_check: true
+    description: "URL.createObjectURL() without paired URL.revokeObjectURL() in same file — blob stays pinned in memory indefinitely. See 'Object URL revocation' convention; canonical pattern in BrandingControl.tsx."
+    convention: "Object URL revocation"
+    notes: "Files that delegate revocation to a helper imported from another module would FP. None today; manual triage needed if a future refactor extracts URL lifecycle into a util."
+    used_by: [codebase-review]
+    blocking: false
+
+  # ── LSP / tsc diagnostics ──────────────────────────────────────
+  # No `pattern` field — populated by run_lsp_diagnostics() in
+  # scripts/run_checks_impl.py. Starts blocking: false because CI
+  # does not run `npm ci` before invoking run_checks.sh.
+
+  - id: tsc-type-error
+    name: "TypeScript type error (tsc --noEmit)"
+    category: correctness
+    severity: high
+    paths: ["<frontend>/"]
+    description: "tsc --noEmit reports a type error"
+    convention: "Typechecker: TypeScript"
+    used_by: [codebase-review]
+    blocking: false
+
+  # ── Semgrep / AST diagnostics ──────────────────────────────────
+  # No `pattern` field — populated by `_run_semgrep()` in
+  # scripts/run_checks_impl.py from the pack's semgrep/*.yaml rules.
+
+  - id: semgrep-error-display-jsx
+    name: "Raw error.message in JSX (semgrep)"
+    category: security
+    severity: medium
+    paths: ["<frontend>/"]
+    description: "err.message / error.message rendered directly in JSX"
+    convention: "Error display"
+    used_by: [codebase-review, security-audit]
+    blocking: false
+
+  - id: semgrep-missing-encode-uri
+    name: "Missing encodeURIComponent in fetch() (semgrep)"
+    category: security
+    severity: medium
+    paths: ["<frontend>/"]
+    description: "fetch() template literal interpolation without encodeURIComponent"
+    convention: "URL encoding"
+    used_by: [codebase-review, security-audit]
+    blocking: false
+
+  - id: semgrep-abort-error-setstate
+    name: "AbortError setState in useEffect (semgrep)"
+    category: correctness
+    severity: medium
+    paths: ["<frontend>/"]
+    description: "setState in isAbortError() branch inside useEffect with cancelled guard — races next mount/run"
+    convention: "AbortError loading state cleanup"
+    used_by: [codebase-review]
+    blocking: false
+
+  - id: semgrep-missing-fetch-redirect
+    name: "Missing redirect: 'error' in fetch() (semgrep)"
+    category: security
+    severity: medium
+    paths: ["<frontend>/"]
+    description: "fetch() options literal does not include redirect: 'error' — client-side fetches with Authorization headers can leak via open redirects to attacker-controlled hosts. Pre-set in useAbortableFetch wrapper for hook consumers."
+    convention: "Fetch redirect guard"
+    notes: "Variable-passed options (const opts = {...}; fetch(url, opts)) will FP. None today; manual triage if introduced."
+    used_by: [codebase-review, security-audit]
+    blocking: false

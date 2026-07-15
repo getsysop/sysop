@@ -1,0 +1,65 @@
+# Sysop model roles — the single source of truth for "which model does what."
+#
+# Skills do not hard-pin a model name. They pin a ROLE (see the `<!-- sysop:model-roles … -->`
+# marker at the top of each SKILL.md). At install/update time, scripts/resolve_skill_models.py
+# rewrites every marked `model:` value to the model this file maps the role to. So swapping
+# the model behind a role — a sunset, a cost trade, a better model shipping — is a one-line
+# edit here, not a sweep across the skills tree.
+#
+# ── roles ─────────────────────────────────────────────────────────────────────
+# reasoning  — deep/adversarial/audit/judge work + review-skill frontmatter.
+#              Worth full reasoning depth; cost is secondary.
+# mechanical — prescriptive, scoped fix agents (e.g. /auto-fix). Pinned, not
+#              inherited, so cost is deterministic regardless of the session model.
+# quick      — trivial read-only surveys (e.g. /next-task). Latency over depth.
+#
+# Skills that carry no pin (and no marker) inherit the session model. That is
+# deliberate — roles govern pinned skills only; an un-pinned skill rides whatever
+# model the human picked for the session.
+roles:
+  reasoning:  opus
+  mechanical: sonnet
+  quick:      haiku
+
+# ── served ────────────────────────────────────────────────────────────────────
+# The models the roles above are allowed to resolve to. scripts/check_skill_models.py
+# fails (exit 1) if any role resolves to a model NOT listed here — that is what turns a
+# sunset LOUD instead of silent. On a sunset: change the role's model above AND this list
+# in the same edit, then re-run check_skill_models.py to confirm green.
+served:
+  - opus
+  - sonnet
+  - haiku
+  - fable    # served but unmapped by default — remap a role to it in
+             # served_models.local.yml (see below). Pre-listed here so that
+             # override stays one key AND still goes loud if fable is ever
+             # dropped from this list on a sunset.
+
+# ── overriding for your project (without losing sunset updates) ────────────────
+# This file is Sysop-owned: `sysop-update.sh` overwrites it so sunset fixes keep flowing.
+# Do NOT edit the roles above to pick your own models — your edits would be clobbered.
+# Instead create `.claude/served_models.local.yml` with just the keys you want to change.
+# The common case is one key — e.g. run the deep-reasoning skills on Claude Fable 5
+# (`fable` is already in `served:` above, so no `served:` addition is needed; the harness
+# needs Claude Code >= 2.1.170 for fable, and where a pinned model is unavailable the
+# session silently keeps its current model):
+#
+#     roles:
+#       reasoning: fable
+#
+# For any value NOT in the default `served:` list, extend it in the same file:
+#
+#     roles:
+#       reasoning: best              # meta-value: Fable 5 where your org has access,
+#       mechanical: inherit          #   else latest Opus; `inherit` follows the session
+#     served:
+#       - best                       # list EVERY non-default value you map a role to,
+#       - inherit                    #   INCLUDING meta-values (inherit/best/…) —
+#                                    #   check_skill_models.py requires each role to
+#                                    #   resolve to a served entry, with no exemptions.
+#
+# The local file is never overwritten and layers on top (local keys win). A role's value
+# is an opaque string the harness understands — a short alias (opus/sonnet/haiku/fable),
+# a full model id (claude-opus-4-8), a provider-specific id (Bedrock ARN, Vertex name),
+# or a meta-value (best / inherit / opusplan). Sysop does not constrain it to Claude; only
+# the default mapping above happens to be Claude. That is the seam for non-Claude models.

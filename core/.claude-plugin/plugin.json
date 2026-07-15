@@ -1,0 +1,10 @@
+{
+  "name": "sysop",
+  "description": "Self-improving workflow lifecycle skills for AI-assisted development. Required by all Sysop packs.",
+  "author": {
+    "name": "Wade Petty",
+    "email": "wade@gdpquery.ai"
+  },
+  "homepage": "https://github.com/getsysop/sysop",
+  "skills": "./skills/"
+}

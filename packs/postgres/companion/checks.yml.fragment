@@ -1,0 +1,129 @@
+# Grep Check Registry — postgres pack fragment
+#
+# SQL / SQLAlchemy / Postgres-migration checks. The Phase 3
+# installer concatenates this fragment with core/companion/
+# checks.yml.fragment (and any other selected pack fragments)
+# into the project-side .claude/checks.yml. Path globs use
+# placeholder vocabulary that the installer substitutes per
+# project from convention_map.md.
+#
+# Helper names referenced in patterns (e.g., _latest_obs_sql,
+# writer_engine, admin_engine, reader_engine) and table names
+# (users, subscriptions, payments) are placeholders for the
+# equivalent identifiers in the consuming project's
+# convention_map.md / migrations. Override pattern strings
+# post-install if your project uses different names.
+#
+# Format docs: WORKFLOW.md §6.5
+
+checks:
+  # ── Database role / GRANT defense-in-depth ─────────────────────
+
+  - id: grant-sensitive-table
+    name: "GRANT on sensitive PII table to non-admin role"
+    category: security
+    severity: critical
+    paths: ["<migrations dir>/"]
+    include: ["*.sql"]
+    pattern: '^\s*GRANT\s+.*\s+ON\s+(users|subscriptions|stripe_events|payments|stripe_subscriptions)\s+TO\s+app_'
+    description: "GRANT on sensitive PII table targeting app_reader/app_writer — erodes the DB role defense-in-depth. Use a dedicated view (v_public_*) or keep the access on admin_engine."
+    convention: "GRANTs on sensitive tables"
+    used_by: [codebase-review, security-audit]
+    blocking: true
+
+  # ── SQL safety / engine selection ──────────────────────────────
+
+  - id: raw-row-number
+    name: "Bypassed Helpers — Raw ROW_NUMBER()"
+    category: correctness
+    severity: high
+    paths: ["<api module>/"]
+    include: ["*.py"]
+    exclude: ["*helpers.py"]
+    pattern: 'ROW_NUMBER\(\)'
+    description: "Raw ROW_NUMBER() — verify if vintage dedup pattern; if so, use _latest_obs_sql() helper"
+    convention: "Vintage deduplication helper"
+    notes: "Needs LLM triage: non-vintage uses of ROW_NUMBER() (e.g., ranking by date) are false positives"
+    used_by: [codebase-review]
+
+  - id: sql-fstring
+    name: "f-string SQL"
+    category: correctness
+    severity: critical
+    paths: ["<api module>/", "<scripts dir>/"]
+    include: ["*.py"]
+    exclude: ["*test*"]
+    pattern: 'f"(SELECT|INSERT|UPDATE|DELETE|ALTER|DROP)'
+    description: "f-string SQL detected — use parameterized queries"
+    convention: "SQL safety"
+    used_by: [codebase-review]
+
+  - id: wrong-engine
+    name: "Wrong Engine for Reads"
+    category: correctness
+    severity: high
+    paths: ["<api module>/routes/", "<api module>/tools/"]
+    include: ["*.py"]
+    pattern: '(admin_engine|writer_engine)'
+    negative_pattern: '(import|#)'
+    description: "admin_engine/writer_engine used — verify if SELECT (should use reader_engine)"
+    convention: "Engine selection"
+    notes: "Needs LLM triage: write operations (INSERT/UPDATE/DELETE) correctly use writer_engine"
+    used_by: [codebase-review]
+
+  - id: missing-writer-engine-guard
+    name: "Missing writer_engine null guard"
+    category: correctness
+    severity: critical
+    paths: ["<api module>/"]
+    include: ["*.py"]
+    exclude: ["*test*"]
+    pattern: 'writer_engine\.(begin|connect)\(\)'
+    description: "writer_engine.begin()/connect() call — verify enclosing function has 'if not db_config.writer_engine:' guard at entry"
+    convention: "Engine null guards"
+    notes: "Needs LLM triage: verify each call site's enclosing function starts with 'if not db_config.writer_engine: logger.warning(...); return <safe default>'. Bugs in this category tend to be silent failures — a missing guard typically only surfaces when DB_PASS_WRITER is unset (e.g., dev environments without write credentials), so the check is most valuable as a deterministic preventive."
+    used_by: [codebase-review]
+
+  # ── Semgrep suppression hygiene ────────────────────────────────
+
+  - id: nosemgrep-sqlalchemy-pair
+    name: "nosemgrep names only one sqlalchemy sibling rule"
+    category: correctness
+    severity: medium
+    paths: ["<api module>/", "<scripts dir>/", "<datajobs dir>/"]
+    include: ["*.py"]
+    exclude: ["*test*"]
+    pattern: 'nosemgrep:.*(sqlalchemy-execute-raw-query|avoid-sqlalchemy-text)'
+    negative_pattern: 'sqlalchemy-execute-raw-query.*avoid-sqlalchemy-text|avoid-sqlalchemy-text.*sqlalchemy-execute-raw-query'
+    description: "nosemgrep suppression for sqlalchemy.text(variable) names only one of the two sibling rules. Both fire on the same pattern; suppressing one lets the other block every future edit. Name BOTH on the same line: # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query,python.sqlalchemy.security.audit.avoid-sqlalchemy-text.avoid-sqlalchemy-text"
+    convention: "Semgrep nosemgrep rule IDs"
+    used_by: [codebase-review, security-audit]
+    blocking: false
+
+  # ── Semgrep / AST diagnostics ──────────────────────────────────
+  # These entries have no `pattern:` field. Findings are populated
+  # by `_run_semgrep()` in scripts/run_checks_impl.py, which scans
+  # the pack's semgrep/*.yaml rules. All start `blocking: false` —
+  # CI does not install semgrep yet.
+
+  - id: semgrep-missing-writer-engine-guard
+    name: "Missing writer_engine null-guard (semgrep)"
+    category: correctness
+    severity: medium
+    paths: ["<api module>/", "<scripts dir>/", "<datajobs dir>/"]
+    description: >
+      writer_engine.begin()/.connect() called in a function without
+      an 'if not writer_engine:' null-guard at entry
+    convention: "Engine null guards"
+    used_by: [codebase-review]
+    blocking: false
+
+  - id: semgrep-sql-fstring
+    name: "F-string SQL in execute() (semgrep)"
+    category: security
+    severity: high
+    paths: ["<api module>/", "<scripts dir>/", "<datajobs dir>/"]
+    description: "f-string SQL passed to conn.execute() or sqlalchemy.text()"
+    convention: "SQL injection prevention"
+    used_by: [codebase-review, security-audit]
+    blocking: false

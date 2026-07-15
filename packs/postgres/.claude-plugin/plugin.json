@@ -1,0 +1,13 @@
+{
+  "name": "sysop-postgres",
+  "description": "Postgres + SQLAlchemy conventions for Sysop.",
+  "author": {
+    "name": "Wade Petty",
+    "email": "wade@gdpquery.ai"
+  },
+  "homepage": "https://github.com/getsysop/sysop",
+  "dependencies": [
+    "sysop",
+    "sysop-python"
+  ]
+}

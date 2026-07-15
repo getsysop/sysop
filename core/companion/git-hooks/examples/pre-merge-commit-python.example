@@ -1,0 +1,125 @@
+#!/usr/bin/env bash
+# ──────────────────────────────────────────────────────────────
+# pre-merge-commit — Runs before a merge completes on main.
+# If tests or builds fail, the merge is BLOCKED.
+#
+# Bypass (not recommended): git merge --no-verify
+#
+# ──────────────────────────────────────────────────────────────
+# Worked example (Python web service + Next.js frontend).
+#
+# This file is the original gdp-shaped pre-merge-commit preserved
+# verbatim for reference. The shipped skeleton lives one directory
+# up at core/companion/git-hooks/pre-merge-commit. Helper conventions
+# in this file (agent/*.py, frontend/app/, migrations/*.sql,
+# __tests__/, npm run build) reflect the source project's layout —
+# substitute your project's equivalents when adapting.
+#
+# SECURITY NOTE: the `source "$REPO_ROOT/.env"` line below is
+# RETAINED in this example to show the historical pattern, but it
+# is NOT recommended for adoption. Sourcing .env (a) exports every
+# secret in the file into the pytest process (broader blast radius
+# than the tests need), and (b) executes any shell metacharacters
+# in .env (e.g., $(curl …) or backticks) on every merge commit —
+# RCE if .env is ever populated from an untrusted source. Prefer
+# explicit pytest fixtures / conftest.py for secrets the tests
+# actually need. The shipped skeleton omits the source entirely.
+# ──────────────────────────────────────────────────────────────
+set -euo pipefail
+
+TARGET_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+
+# Only gate merges INTO main
+if [[ "$TARGET_BRANCH" != "main" ]]; then
+  exit 0
+fi
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+CHANGED=$(git diff --cached --name-only 2>/dev/null || git diff HEAD~1 --name-only 2>/dev/null || echo "")
+
+if [[ -z "$CHANGED" ]]; then
+  exit 0
+fi
+
+echo ""
+echo "🔒 pre-merge-commit: Running checks before merging to main..."
+echo ""
+
+FAILED=false
+
+# ── Backend tests (if any .py files changed) ─────────────────
+if echo "$CHANGED" | grep -q '\.py$'; then
+  echo "🐍 Python files changed — running pytest..."
+  # Activate venv if available (degrades gracefully if absent)
+  if [[ -f "$REPO_ROOT/.venv/bin/activate" ]]; then
+    # shellcheck disable=SC1091
+    source "$REPO_ROOT/.venv/bin/activate"
+  fi
+  # Load DB_PASS and other secrets required for DB-dependent tests
+  # shellcheck disable=SC1091
+  source "$REPO_ROOT/.env" 2>/dev/null || true
+  if (cd "$REPO_ROOT" && APP_ENV=test python3 -m pytest -q 2>&1); then
+    echo "✅ pytest passed."
+  else
+    echo "❌ pytest FAILED. Merge blocked."
+    FAILED=true
+  fi
+  echo ""
+fi
+
+# ── Frontend build (if any frontend/ files changed) ──────────
+if echo "$CHANGED" | grep -q '^frontend/'; then
+  echo "🏗️  Frontend files changed — running build check..."
+  if (cd "$REPO_ROOT/frontend" && npm run build 2>&1); then
+    echo "✅ Frontend build passed."
+  else
+    echo "❌ Frontend build FAILED. Merge blocked."
+    FAILED=true
+  fi
+  echo ""
+fi
+
+# ── Test co-change advisory (warning only, never blocks) ─────
+WARN_MSGS=()
+
+# Backend: agent/*.py changed but no tests/test_*.py changed
+BACKEND_SRC=$(echo "$CHANGED" | grep -E '^agent/.*\.py$' || true)
+BACKEND_TESTS=$(echo "$CHANGED" | grep -E '^tests/test_.*\.py$' || true)
+if [[ -n "$BACKEND_SRC" && -z "$BACKEND_TESTS" ]]; then
+  WARN_MSGS+=("  ⚠  Backend source changed (agent/*.py) but no test files changed (tests/test_*.py)")
+fi
+
+# Migrations: broad warning since they can affect any test's assertions
+if echo "$CHANGED" | grep -qE '^migrations/.*\.sql$'; then
+  if [[ -z "$BACKEND_TESTS" ]]; then
+    WARN_MSGS+=("  ⚠  Migration files changed — check tests/ for stale assertions on defaults/constraints")
+  fi
+fi
+
+# Frontend: non-test source changed but no test files changed
+FRONTEND_SRC=$(echo "$CHANGED" | grep -E '^frontend/app/.*\.(ts|tsx)$' | grep -vE '__tests__/' || true)
+FRONTEND_TESTS=$(echo "$CHANGED" | grep -E '__tests__/.*\.test\.tsx?$' || true)
+if [[ -n "$FRONTEND_SRC" && -z "$FRONTEND_TESTS" ]]; then
+  WARN_MSGS+=("  ⚠  Frontend source changed but no test files changed (check __tests__/ directories)")
+fi
+
+if [[ ${#WARN_MSGS[@]} -gt 0 ]]; then
+  echo "╔══════════════════════════════════════════════════════════╗"
+  echo "║        Test Co-Change Advisory (not blocking)           ║"
+  echo "╚══════════════════════════════════════════════════════════╝"
+  for MSG in "${WARN_MSGS[@]}"; do
+    echo "$MSG"
+  done
+  echo ""
+  echo "  Informational only — proceed if no test update is needed."
+  echo ""
+fi
+
+if $FAILED; then
+  echo "════════════════════════════════════════════════════"
+  echo "  ❌  MERGE BLOCKED — fix the errors above first."
+  echo "════════════════════════════════════════════════════"
+  exit 1
+fi
+
+echo "✅ All pre-merge checks passed."

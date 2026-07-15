@@ -1,0 +1,13 @@
+{
+  "name": "sysop-pandas",
+  "description": "Pandas conventions for sysop (placeholder \u2014 populates from real-project use).",
+  "author": {
+    "name": "Wade Petty",
+    "email": "wade@gdpquery.ai"
+  },
+  "homepage": "https://github.com/getsysop/sysop",
+  "dependencies": [
+    "sysop",
+    "sysop-python"
+  ]
+}

@@ -1,0 +1,25 @@
+rules:
+  - id: missing-fetch-redirect
+    message: >
+      fetch() call missing redirect: 'error'. Client-side fetches that
+      carry Authorization headers (e.g., third-party OAuth bearer tokens)
+      can leak credentials via open redirects to attacker-controlled hosts.
+      Add redirect: 'error' to the options object — if the project provides
+      a fetch wrapper (e.g., useAbortableFetch) that pre-sets it, prefer
+      that wrapper for new client-side fetches.
+    severity: WARNING
+    languages: [typescript]
+    # Matches fetch() calls whose 2nd-arg options literal does NOT include
+    # `redirect: 'error'`. One-arg fetch(url) is also flagged (no options
+    # = no redirect). Variable-passed options (`fetch(url, opts)` where
+    # opts is a name reference) will FP — the convention text directs
+    # callers to a project fetch wrapper (e.g., useAbortableFetch) for
+    # hook fetches.
+    patterns:
+      - pattern-either:
+          - pattern: "fetch($URL)"
+          - pattern: "fetch($URL, {...})"
+      - pattern-not: 'fetch($URL, {..., redirect: "error", ...})'
+      - pattern-not: "fetch($URL, {..., redirect: 'error', ...})"
+    # paths: intentionally omitted. Path scoping is declared in the pack's
+    # checks.yml.fragment stub entry (see core/companion/semgrep/README.md).
