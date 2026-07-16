@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# ──────────────────────────────────────────────────────────────
+# pre-commit fragment — skill model pins reference only served aliases
+#
+# Drop-in block to add to your project's pre-commit hook. Runs
+# scripts/check_skill_models.py only when the staged diff touches
+# .claude/skills/ or a .claude/served_models*.yml config, so non-skill
+# commits pay no cost.
+#
+# WHY: skills pin a ROLE (reasoning / mechanical / quick), not a model
+# name; served_models.yml maps each role to a model. When a model is
+# sunset you repoint the role in one place — but a stale role mapping, an
+# undefined role, or a missing marker fails ONLY when the skill is next
+# run (a silent breakage found at the worst time). This check makes that
+# LOUD: drop the retired model from served_models.yml `served:` and the
+# next commit touching .claude/ goes red. Fix by repointing the role (one
+# line in served_models.yml); the bulk-rewrite migrator is only for the
+# rare role-vocabulary change:
+#     python scripts/migrate_skill_model.py --from <old> --to <new> --apply
+#
+# Python resolution order (same pattern as pre-commit-tasks-validate.example):
+#   1. <main-repo-root>/.venv/bin/python3, resolved via
+#      `git rev-parse --git-common-dir` so worktrees inherit the main
+#      repo's venv automatically.
+#   2. System python3 as a fallback. NOTE: this check imports PyYAML (via
+#      _model_roles), so the fallback works only where PyYAML is installed
+#      — the .venv path is preferred for exactly that reason (it carries
+#      the same PyYAML run_checks already needs).
+#
+# Wiring:
+#   1. Copy this block into your existing pre-commit hook (e.g., next to
+#      the BLOCKING checks in pre-commit-python.example).
+#   2. Smoke-test by staging a .claude/skills/ change and running
+#      `git commit --dry-run`.
+# ──────────────────────────────────────────────────────────────
+
+# ── B7. skill model pins resolve to served models ────────────
+# Resolves <main-repo-root>/.venv/bin/python3 via git-common-dir (so
+# worktrees inherit the main repo's venv), then falls back to system
+# python3. check_skill_models.py defaults to .claude/skills/ +
+# .claude/served_models.yml (+ served_models.local.yml), so no arguments
+# are needed.
+STAGED_CLAUDE=$(echo "$STAGED" | grep -E '^\.claude/(skills/|served_models)' || true)
+if [[ -n "$STAGED_CLAUDE" ]]; then
+  # Resolve the main repo's git dir (worktrees: .git/worktrees/<name>/
+  # has a commondir file pointing back at the main .git/).
+  GIT_COMMON_DIR=$(git rev-parse --git-common-dir 2>/dev/null || true)
+  MAIN_REPO_ROOT=""
+  if [[ -n "$GIT_COMMON_DIR" ]]; then
+    if [[ "$GIT_COMMON_DIR" = /* ]]; then
+      MAIN_REPO_ROOT="$(dirname "$GIT_COMMON_DIR")"
+    else
+      MAIN_REPO_ROOT="$(dirname "$(cd "$GIT_COMMON_DIR" && pwd)")"
+    fi
+  fi
+
+  PYTHON3=""
+  if [[ -n "$MAIN_REPO_ROOT" ]] && [[ -x "$MAIN_REPO_ROOT/.venv/bin/python3" ]]; then
+    PYTHON3="$MAIN_REPO_ROOT/.venv/bin/python3"
+  elif command -v python3 >/dev/null 2>&1; then
+    PYTHON3="$(command -v python3)"
+  fi
+
+  if [[ -z "$PYTHON3" ]]; then
+    block "skills: no python3 found (need <main-repo-root>/.venv/bin/python3 or system python3)"
+  elif [[ ! -f scripts/check_skill_models.py ]]; then
+    block "skills: scripts/check_skill_models.py missing (re-run install.sh?)"
+  else
+    MODELS_OUT=$("$PYTHON3" scripts/check_skill_models.py 2>&1) || {
+      block "skills: a model pin's role does not resolve to a served model:"
+      echo "$MODELS_OUT" | sed 's/^/    /'
+    }
+  fi
+fi

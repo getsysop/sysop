@@ -1,0 +1,65 @@
+#!/bin/bash
+# Pre-commit hook: two-tier convention checks
+# Blocking checks (B1-BN): reject commit on match
+# Advisory checks (A1-AN): warn but allow commit
+#
+# Escape hatch: PRE_COMMIT_ADVISORY_ONLY=1 git commit ...
+#
+# This is a skeleton. Each project populates its own B*/A* checks
+# based on the conventions in CLAUDE.md and convention_map.md.
+# See core/companion/git-hooks/examples/pre-commit-python.example for
+# a worked example (Python web service: 5 blocking + 9 advisory checks).
+
+STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACM)
+[ -z "$STAGED_FILES" ] && exit 0
+
+# Separate by file type — adjust filters for your project's languages
+STAGED_PY=$(echo "$STAGED_FILES" | grep '\.py$' || true)
+STAGED_TS=$(echo "$STAGED_FILES" | grep -E '\.(ts|tsx)$' || true)
+STAGED_TESTS=$(echo "$STAGED_FILES" | grep -E '(__tests__|tests/)' || true)
+
+BLOCKING_FAILED=0
+ADVISORY_NOTES=""
+
+# === BLOCKING CHECKS ===
+
+# B1: <description>
+# if [ -n "$STAGED_PY" ]; then
+#     HITS=$(echo "$STAGED_PY" | xargs grep -ln '<anti-pattern>' 2>/dev/null || true)
+#     if [ -n "$HITS" ]; then
+#         echo "❌ B1: <description>"
+#         echo "$HITS"
+#         BLOCKING_FAILED=1
+#     fi
+# fi
+
+# === ADVISORY CHECKS ===
+
+# A1: <description>
+# if [ -n "$STAGED_TS" ]; then
+#     HITS=$(echo "$STAGED_TS" | xargs grep -ln '<anti-pattern>' 2>/dev/null || true)
+#     if [ -n "$HITS" ]; then
+#         ADVISORY_NOTES+="⚠️  A1: <description>\n"
+#         ADVISORY_NOTES+="$HITS\n\n"
+#     fi
+# fi
+
+# === OUTPUT ===
+
+if [ -n "$ADVISORY_NOTES" ]; then
+    echo ""
+    echo "Advisory warnings (commit proceeds):"
+    echo -e "$ADVISORY_NOTES"
+fi
+
+if [ "$BLOCKING_FAILED" -eq 1 ]; then
+    if [ "$PRE_COMMIT_ADVISORY_ONLY" = "1" ]; then
+        echo "⚠️  Blocking checks failed but PRE_COMMIT_ADVISORY_ONLY=1 — proceeding"
+        exit 0
+    fi
+    echo ""
+    echo "Commit blocked. Fix the issues above or use PRE_COMMIT_ADVISORY_ONLY=1 to bypass."
+    exit 1
+fi
+
+exit 0

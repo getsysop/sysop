@@ -1,0 +1,207 @@
+# Grep Check Registry — python pack fragment
+#
+# Python-specific deterministic pattern checks. The Phase 3
+# installer concatenates this fragment with core/companion/
+# checks.yml.fragment (and any other selected pack fragments)
+# into the project-side .claude/checks.yml. Path globs use
+# placeholder vocabulary that the installer substitutes per
+# project from convention_map.md.
+#
+# Helper names referenced in patterns (e.g., _sanitize_log) and
+# in description/notes fields are placeholders for the equivalent
+# helpers in the consuming project's convention_map.md. Override
+# pattern strings post-install if your project uses different
+# helper names.
+#
+# Format docs: WORKFLOW.md §6.5
+
+checks:
+  # ── Logging / exception handling ───────────────────────────────
+
+  - id: exception-logging
+    name: "Exception Logging Pattern"
+    category: correctness
+    severity: medium
+    paths: ["<api module>/", "<scripts dir>/", "<data seed dir>/"]
+    include: ["*.py"]
+    pattern: '_sanitize_log\(e\)'
+    negative_pattern: 'str\(e\)'
+    description: "_sanitize_log(e) passes raw exception — use _sanitize_log(str(e)[:500])"
+    convention: "Logging"
+    used_by: [codebase-review, security-audit]
+    blocking: true
+
+  - id: logger-fstring
+    name: "f-string Logger Calls"
+    category: convention
+    severity: low
+    paths: ["<api module>/", "<scripts dir>/", "<datajobs dir>/"]
+    include: ["*.py"]
+    exclude: ["*test*"]
+    pattern: 'logger\.(debug|info|warning|error|critical)\(f[''"]'
+    description: "logger.*(f\"...\") bypasses lazy formatting — use logger.*(\"msg %s\", val). Security impact: f-strings interpolate even when log level is disabled, which can leak sensitive values at filtered levels."
+    convention: "Logger formatting"
+    used_by: [codebase-review, security-audit]
+
+  # ── APP_ENV consistency ────────────────────────────────────────
+
+  - id: app-env-default-prod
+    name: "APP_ENV Defaults to prod"
+    category: correctness
+    severity: medium
+    paths: ["<api module>/", "<scripts dir>/", "<datajobs dir>/"]
+    include: ["*.py"]
+    pattern: 'getenv\("APP_ENV",\s*"prod"\)'
+    description: "APP_ENV defaults to 'prod' — should default to 'dev' (except env_validation.py). Security impact: prod-defaulting gates fail-closed behavior in dev tooling, causing inconsistent security guard activation across modules."
+    convention: "APP_ENV default consistency"
+    notes: "Needs LLM triage: env_validation.py intentionally defaults to 'prod' (fail-closed)"
+    used_by: [codebase-review, security-audit]
+
+  - id: app-env-prod-without-staging
+    name: 'APP_ENV == "prod" without "staging"'
+    category: security
+    severity: medium
+    paths: ["<api module>/", "<scripts dir>/", "<datajobs dir>/"]
+    include: ["*.py"]
+    exclude: ["*test*"]
+    pattern: 'APP_ENV.*(==|!=).*["'']prod["'']'
+    negative_pattern: 'staging'
+    description: 'APP_ENV equality on "prod" without "staging" — if the project runs a staging environment as APP_ENV=staging, security guards must use APP_ENV in ("prod", "staging"). See "Staging = production" convention.'
+    convention: "Staging = production"
+    notes: "Line-level negative_pattern: multi-line forms where 'staging' is on a different line will FP. Manual triage needed for those."
+    used_by: [codebase-review, security-audit]
+    blocking: false
+
+  # ── Test isolation ─────────────────────────────────────────────
+
+  - id: test-app-env-before-syspath
+    name: "Test file inserts sys.path before setting APP_ENV"
+    category: correctness
+    severity: medium
+    paths: ["<tests dir>/"]
+    include: ["*.py"]
+    position_check:
+      earlier: 'os\.environ\.setdefault\("APP_ENV"'
+      later: 'sys\.path\.insert\('
+    description: "sys.path.insert() runs before os.environ.setdefault('APP_ENV', 'test') — APP_ENV must be set first or imported modules (db_config, env_validation) capture the wrong env at import time."
+    convention: "Test isolation"
+    notes: "Multi-line setdefault forms (split across two lines) would FN. None today. Comment-only lines are skipped to avoid spoofing."
+    used_by: [codebase-review]
+    blocking: false
+
+  # ── YAML safety ────────────────────────────────────────────────
+
+  - id: yaml-unsafe-load
+    name: "yaml.load / yaml.full_load instead of yaml.safe_load"
+    category: security
+    severity: high
+    paths: ["<api module>/", "<scripts dir>/", "<datajobs dir>/", "<tests dir>/"]
+    include: ["*.py"]
+    pattern: 'yaml\.(load|full_load)\('
+    negative_pattern: 'yaml\.safe_load\(|Loader\s*=\s*yaml\.SafeLoader'
+    description: "yaml.load() and yaml.full_load() can instantiate arbitrary Python objects from !!python/object tags (A03 deserialization). Use yaml.safe_load() exclusively. Codified when YAML became load-bearing for tasks/index.yml under Phase 16."
+    convention: "YAML safe load"
+    used_by: [codebase-review, security-audit]
+    blocking: false
+
+  # ── LSP / pyright diagnostics ──────────────────────────────────
+  # These entries have no `pattern` field — they are populated by
+  # run_lsp_diagnostics() in scripts/run_checks_impl.py, not by grep.
+  # The entries exist so baseline matching, --mode filtering, and
+  # --fail-on-blocking work uniformly across grep and LSP findings.
+  # All start `blocking: false` because CI does not install pyright
+  # before invoking run_checks.sh — pyright is unavailable and
+  # findings are silently skipped. Flip to `blocking: true` only
+  # after adding a CI job that installs the typechecker (e.g., via
+  # `pip install pyright` or your project's dev extras).
+
+  - id: pyright-missing-imports
+    name: "Missing import (pyright)"
+    category: correctness
+    severity: high
+    paths: ["<api module>/", "<scripts dir>/", "<data seed dir>/", "<datajobs dir>/"]
+    description: "pyright reports an unresolved import"
+    convention: "Typechecker: missing imports"
+    used_by: [codebase-review]
+    blocking: false
+
+  - id: pyright-undefined-variable
+    name: "Undefined variable (pyright)"
+    category: correctness
+    severity: high
+    paths: ["<api module>/", "<scripts dir>/", "<data seed dir>/", "<datajobs dir>/"]
+    description: "pyright reports an undefined name"
+    convention: "Typechecker: undefined variables"
+    used_by: [codebase-review]
+    blocking: false
+
+  - id: pyright-unused-import
+    name: "Unused import (pyright)"
+    category: cleanliness
+    severity: low
+    paths: ["<api module>/", "<scripts dir>/", "<data seed dir>/", "<datajobs dir>/"]
+    description: "pyright reports an unused import"
+    convention: "Typechecker: unused imports"
+    used_by: [codebase-review]
+    blocking: false
+
+  - id: pyright-unused-variable
+    name: "Unused variable (pyright)"
+    category: cleanliness
+    severity: low
+    paths: ["<api module>/", "<scripts dir>/", "<data seed dir>/", "<datajobs dir>/"]
+    description: "pyright reports an unused variable"
+    convention: "Typechecker: unused variables"
+    used_by: [codebase-review]
+    blocking: false
+
+  - id: pyright-general-warning
+    name: "Pyright general warning"
+    category: correctness
+    severity: medium
+    paths: ["<api module>/", "<scripts dir>/", "<data seed dir>/", "<datajobs dir>/"]
+    description: "pyright warning (non-categorized)"
+    convention: "Typechecker: general warnings"
+    notes: "Needs LLM triage: catch-all for non-categorized pyright warnings; read each match before recording"
+    used_by: [codebase-review]
+    blocking: false
+
+  # ── Semgrep / AST diagnostics ──────────────────────────────────
+  # These entries have no `pattern:` field. Findings are populated by
+  # `_run_semgrep()` in scripts/run_checks_impl.py, which scans the
+  # pack's semgrep/*.yaml rules and maps each result to
+  # `semgrep-<rule_id>`. All start `blocking: false` — CI does not
+  # install semgrep yet. Flip to `blocking: true` only after adding
+  # a CI job that installs semgrep. See semgrep/README.md for rule
+  # authoring conventions.
+
+  - id: semgrep-logger-fstring
+    name: "Logger f-string (semgrep)"
+    category: correctness
+    severity: low
+    paths: ["<api module>/", "<scripts dir>/", "<datajobs dir>/"]
+    description: "logger.<method>(f'...') uses f-string instead of %-style formatting"
+    convention: "Logger formatting"
+    used_by: [codebase-review, security-audit]
+    blocking: false
+
+  - id: semgrep-http-client-redirect
+    name: "HTTP Client Redirect Following (semgrep)"
+    category: security
+    severity: high
+    paths: ["<api module>/", "<scripts dir>/", "<datajobs dir>/"]
+    description: "httpx.Client/AsyncClient constructor without follow_redirects= — defense-in-depth for open-redirect leakage"
+    convention: "Outbound HTTP security"
+    used_by: [security-audit]
+    blocking: false
+
+  - id: semgrep-recompile-inside-def
+    name: "re.compile() inside def (semgrep)"
+    category: correctness
+    severity: low
+    paths: ["<api module>/", "<scripts dir>/", "<datajobs dir>/"]
+    description: "re.compile() called inside a def body — hot-path code should hoist the pattern to module scope as a _PATTERN constant. Memoization helpers (parameterized regex cached in a module-level dict) are a legitimate exception; see _HEADER_RE_CACHE in orchestrator.py."
+    convention: "Module-scope regex compilation"
+    notes: "Manual triage: parameterized memoization helpers are a legitimate exception. Two known sites baselined as accepted tech debt (TECH-CHECKS-EXPAND)."
+    used_by: [codebase-review]
+    blocking: false

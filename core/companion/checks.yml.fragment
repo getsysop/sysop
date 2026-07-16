@@ -1,0 +1,133 @@
+# Grep Check Registry — core fragment
+#
+# Universal checks that apply regardless of language or framework.
+# The Phase 3 installer concatenates this fragment with each
+# selected pack's checks.yml.fragment into the project-side
+# .claude/checks.yml. Path globs use placeholder vocabulary
+# (<api module>, <frontend>, <scripts dir>, etc.) that the
+# installer substitutes per project from the project's
+# convention_map.md.
+#
+# Format docs: WORKFLOW.md §6.5
+# Run via: bash scripts/run_checks.sh [--mode quality|security|both]
+
+checks:
+  # ── Universal naming convention ────────────────────────────────
+
+  - id: todo-vs-deferred
+    name: "TODO vs Deferred"
+    category: convention
+    severity: low
+    paths: ["<frontend>/", "<api module>/", "<scripts dir>/"]
+    include: ["*.ts", "*.tsx", "*.py"]
+    pattern: '(// TODO:|# TODO:)'
+    description: "Project convention requires // Deferred: or # Deferred: instead of TODO"
+    convention: "Naming conventions"
+    used_by: [codebase-review]
+
+  # ── ESLint diagnostics (Phase 47b backport of gdp 2fdca506) ────────────
+  # These entries have no `pattern:` field. Findings are populated by
+  # `_run_eslint()` in scripts/run_checks_impl.py, which invokes
+  # `eslint --format json .` from the discovered frontend dir and maps
+  # each message to `lint-error` (single catch-all check_id with the
+  # original ESLint rule_id embedded in the message text). Skips silently
+  # if eslint or node_modules/eslint is missing.
+  # used_by: both — frontend a11y findings (jsx-a11y/*) map to OWASP A07
+  # (auth) and A05 (misconfiguration), so the security audit also benefits
+  # from the same ESLint output.
+
+  - id: lint-error
+    name: "ESLint finding (catch-all)"
+    category: correctness
+    severity: medium
+    paths: ["<frontend>/"]
+    description: "ESLint reports a rule violation. Original rule_id is embedded in the message text; group by file-area batch per the codebase-review skill."
+    convention: "Typechecker: ESLint"
+    notes: "Needs LLM triage: a single catch-all check_id covers all ESLint rules; reviewers must read the rule_id in the message to decide severity and grouping."
+    used_by: [codebase-review, security-audit]
+    blocking: false
+
+  # ── pip-audit diagnostics (Phase 47b backport of gdp 2fdca506) ─────────
+  # These entries have no `pattern:` field. Findings are populated by
+  # `_run_pip_audit()` in scripts/run_checks_impl.py, which invokes
+  # `pip-audit --strict --format json` against the active venv. Findings
+  # are anchored at the first discoverable requirements*.txt file (via
+  # `_find_requirements_files()`); falls back to `requirements.txt:1`
+  # when no requirements file is present.
+
+  - id: pip-audit-vuln
+    name: "Python dependency vulnerability (pip-audit)"
+    category: security
+    severity: high
+    paths: ["requirements.txt"]
+    description: "pip-audit reports a known vulnerability in an installed Python package. Bump to the fix_version listed in the message, regenerate the requirements file via the project's lockfile-compile flow, and verify the audit clears."
+    convention: "Dependency management"
+    notes: "Anchored at the first sorted requirements*.txt match because pip-audit reports per-package, not per-line. Original vuln ID (CVE / GHSA) and fix_version are in the message text."
+    used_by: [security-audit]
+    blocking: false
+
+  # ── Diff-coverage crown-jewel gate (Phase 61a measurement + 61b gate) ──
+  # These entries have no `pattern:` field. Findings are populated by
+  # `_run_coverage()` in scripts/run_checks/coverage.py, which shells out to
+  # `diff-cover` against the coverage report named in each entry's `report:`
+  # field and reports *changed* lines that lack test coverage — filtered to
+  # the entry's `critical_path:` globs so only crown-jewel paths are gated
+  # (keeping consumer-CI weight small).
+  #
+  # The `id:` MUST start with `coverage-` — that prefix is what routes the
+  # entry to the coverage stage. A coverage check named anything else falls
+  # through to the grep loop, where (having no `pattern:`) it is a silent
+  # no-op: `critical_path:`/`report:` are ignored and nothing is gated.
+  #
+  # `critical_path:` is the schema capability that scopes the gate (parallel
+  # to `blocking:`): it is consumer-authored and is NOT installer-substituted
+  # (substitution touches `paths:` only — which is why these entries omit
+  # `paths:` and use `critical_path:` as their sole scope field). Replace the
+  # placeholder globs below with your project's crown-jewel paths (billing,
+  # auth, the data-integrity path, etc.). A bare directory glob ("billing/")
+  # matches everything beneath it.
+  #
+  # Both legs route through `diff-cover` — it reads Cobertura XML from
+  # pytest-cov and lcov from c8/istanbul alike — so the result is uniform
+  # *diff* coverage; the language-native tools are the report *producers*,
+  # run by your CI before this stage (pytest --cov --cov-report=xml -> the
+  # python entry's report; c8/istanbul -> the frontend entry's lcov.info).
+  # The stage skips silently when `diff-cover` is absent or the `report:`
+  # file is missing, so these entries are inert until you replace the
+  # placeholder globs AND your CI produces a report.
+  #
+  # THE GATE (Phase 61b). These ship `blocking: true`: an uncovered changed
+  # line inside a `critical_path` glob fails `--fail-on-blocking`. Unlike
+  # every other blocking check, coverage findings NEVER baseline-suppress —
+  # `--update-baseline` will not accept a crown-jewel coverage gap, because a
+  # diff-relative line number can't stand as tech debt and the carve-out
+  # exists precisely so these paths are never "caught later". A line that is
+  # genuinely untestable is excluded with a coverage pragma
+  # (`# pragma: no cover`, `/* istanbul ignore */`) at the report-producer
+  # layer — that drops it from the report so it is not a violation; the task's
+  # `## Test decision` record documents *why*. To run measurement only instead
+  # of gating (e.g. while you calibrate the globs), set `blocking: false`.
+
+  - id: coverage-diff-python
+    name: "Diff coverage — Python critical path (diff-cover)"
+    category: testing
+    severity: medium
+    critical_path: ["<critical path module>/"]
+    report: "coverage.xml"
+    description: "A changed line inside a crown-jewel Python path is not covered by tests. Cover the new/changed line with a test, or — if it is genuinely untestable — exclude it with `# pragma: no cover` (the gate reads only the report, so a pragma'd line is not a violation) and record why in the task's `## Test decision`. A `## Test decision` note alone does NOT clear this blocking gate. Coverage report produced by `pytest --cov --cov-report=xml`."
+    convention: "Critical-path test coverage"
+    notes: "Crown-jewel hard gate (blocking: true) — never baseline-suppresses. critical_path globs are consumer-authored (not installer-substituted); fill with your crown-jewel paths. Set blocking: false for measurement only."
+    used_by: [codebase-review]
+    blocking: true
+
+  - id: coverage-diff-frontend
+    name: "Diff coverage — frontend critical path (diff-cover)"
+    category: testing
+    severity: medium
+    critical_path: ["<critical components>/"]
+    report: "coverage/lcov.info"
+    description: "A changed line inside a crown-jewel frontend path is not covered by tests. Cover the new/changed line with a test, or — if it is genuinely untestable — exclude it with `/* istanbul ignore */` (the gate reads only the report, so an ignored line is not a violation) and record why in the task's `## Test decision`. A `## Test decision` note alone does NOT clear this blocking gate. Coverage report (lcov) produced by `c8` / `istanbul`."
+    convention: "Critical-path test coverage"
+    notes: "Crown-jewel hard gate (blocking: true) — never baseline-suppresses. critical_path globs are consumer-authored (not installer-substituted); fill with your crown-jewel paths. Set blocking: false for measurement only."
+    used_by: [codebase-review]
+    blocking: true

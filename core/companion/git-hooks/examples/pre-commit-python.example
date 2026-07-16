@@ -1,0 +1,367 @@
+#!/usr/bin/env bash
+# ──────────────────────────────────────────────────────────────
+# pre-commit — Two-tier pattern checks on staged files.
+#
+# BLOCKING checks (exit 1) catch high-confidence anti-patterns
+# that have caused real bugs. ADVISORY checks (exit 0) flag
+# patterns worth reviewing but with higher false-positive rates.
+#
+# Escape hatch: PRE_COMMIT_ADVISORY_ONLY=1 git commit ...
+#   → treats blocking checks as advisory (no exit 1)
+#
+# BLOCKING:
+#   B1. f-string SQL in Python files (requires DML + structural keyword)
+#   B2. Raw exception details in API responses
+#   B3. Raw exception in log/print without _sanitize_log
+#   B4. _sanitize_log with raw exception variable (use str(e)[:500])
+#   B5. Inline AbortError check instead of isAbortError()
+#
+# ADVISORY:
+#   A1. Hardcoded prod database name in scripts
+#   A2. fetch() without AbortController (advisory)
+#   A3. Bare window.open without noopener
+#   A4. vi.mock/vi.spyOn without afterEach(vi.restoreAllMocks)
+#   A5. load_dotenv or hand-rolled --env in scripts (use shared_cli)
+#   A6. toBeDefined() after getByRole/getByText (no-op assertion)
+#   A7. APP_ENV check for 'prod' without 'staging'
+#   A8. Raw error variable rendered in TSX without getDisplayError
+#   A9. redact_api_keys() with raw exception (use str(e)[:500])
+#   A10. f-string in logger call (use %s-style lazy formatting)
+#   A11. APP_ENV defaults to "prod" (should be "dev")
+#   A12. tests/*.py APP_ENV setdefault must precede sys.path.insert
+#   A13. logger.* with exc_info=True (bypasses _sanitize_log + redact_api_keys)
+#   A14. client-side fetch() without redirect: 'error' (header/body leak on 30x)
+#   A12. tests/*.py: APP_ENV setdefault must come before sys.path.insert
+# ──────────────────────────────────────────────────────────────
+# NOTE: -e is intentionally omitted from `set -uo pipefail`. Each check increments
+# BLOCK_COUNT/WARN_COUNT and continues so the developer sees ALL findings in one
+# pass. Adding -e would bail on the first non-zero grep/match and hide subsequent
+# violations — defeating the aggregate report at the bottom of the script.
+set -uo pipefail
+
+RED='\033[0;31m'
+YELLOW='\033[0;33m'
+RESET='\033[0m'
+BLOCK_COUNT=0
+WARN_COUNT=0
+
+block() {
+  BLOCK_COUNT=$((BLOCK_COUNT + 1))
+  echo -e "${RED}  error: $1${RESET}"
+}
+
+warn() {
+  WARN_COUNT=$((WARN_COUNT + 1))
+  echo -e "${YELLOW}  warning: $1${RESET}"
+}
+
+# Get list of staged files (added/modified only)
+STAGED=$(git diff --cached --name-only --diff-filter=ACM 2>/dev/null || true)
+if [[ -z "$STAGED" ]]; then
+  exit 0
+fi
+
+STAGED_PY=$(echo "$STAGED" | grep '\.py$' | grep -v '\.claude/semgrep/fixtures/' || true)
+STAGED_TS=$(echo "$STAGED" | grep -E '\.(ts|tsx)$' | grep -v '\.claude/semgrep/fixtures/' || true)
+STAGED_TSX=$(echo "$STAGED" | grep '\.tsx$' | grep -v '\.claude/semgrep/fixtures/' || true)
+STAGED_TESTS=$(echo "$STAGED" | grep -E '(__tests__/.*\.(ts|tsx)$|\.test\.(ts|tsx)$)' || true)
+STAGED_SCRIPTS_PY=$(echo "$STAGED" | grep -E '^scripts/.*\.py$' | grep -v 'shared_cli\.py' || true)
+
+# ══════════════════════════════════════════════════════════════
+# BLOCKING CHECKS — high-confidence patterns that cause real bugs
+# ══════════════════════════════════════════════════════════════
+
+# ── B1. f-string SQL (requires DML keyword + structural keyword) ──
+if [[ -n "$STAGED_PY" ]]; then
+  while IFS= read -r FILE; do
+    [[ -f "$FILE" ]] || continue
+    # Get added lines from the diff
+    ADDED=$(git diff --cached -U0 "$FILE" | grep '^+' | grep -v '^+++' || true)
+    # Require BOTH a DML keyword AND a structural keyword on the same line
+    # inside an f-string. This eliminates false positives like f"SELECT your plan".
+    while IFS= read -r LINE; do
+      [[ -z "$LINE" ]] && continue
+      if echo "$LINE" | grep -qiE 'f"[^"]*\b(SELECT|INSERT|UPDATE|DELETE|DROP)\b' && \
+         echo "$LINE" | grep -qiE '\b(FROM|WHERE|JOIN|SET|INTO|VALUES|TABLE|LIMIT|GROUP BY|ORDER BY)\b'; then
+        block "$FILE — f-string SQL detected (use parameterized queries)"
+        break
+      fi
+    done <<< "$ADDED"
+  done <<< "$STAGED_PY"
+fi
+
+# ── B2. Raw exception exposure in API responses ──────────────
+if [[ -n "$STAGED_PY" ]]; then
+  while IFS= read -r FILE; do
+    [[ -f "$FILE" ]] || continue
+    DIFF=$(git diff --cached -U0 "$FILE" | grep '^+' | grep -v '^+++' || true)
+    # Check for str(e) in return/yield or detail=str( — exclude lines already wrapped in redact_api_keys
+    if echo "$DIFF" | grep -vE 'redact_api_keys' | grep -qE '(return.*str\(e\)|yield.*str\(e\)|detail=str\()'; then
+      block "$FILE — raw exception in response (use generic error messages)"
+    fi
+  done <<< "$STAGED_PY"
+fi
+
+# ── B3. Raw exception in log/print without _sanitize_log ─────
+# Per-LINE check: each added line with a raw exception must also
+# contain _sanitize_log. A sanitized line elsewhere doesn't help.
+if [[ -n "$STAGED_PY" ]]; then
+  while IFS= read -r FILE; do
+    [[ -f "$FILE" ]] || continue
+    ADDED=$(git diff --cached -U0 "$FILE" | grep '^+' | grep -v '^+++' || true)
+    FOUND=0
+    while IFS= read -r LINE; do
+      [[ -z "$LINE" ]] && continue
+      # Match logger.warning/error/info/debug/exception or print() containing {e}, {err}, str(e), str(err)
+      if echo "$LINE" | grep -qE '(logger\.(warning|error|info|debug|exception)|print)\(.*(\{e\}|\{err\}|str\(e\)|str\(err\))'; then
+        if ! echo "$LINE" | grep -qE '(_sanitize_log|redact_api_keys)'; then
+          FOUND=1
+          break
+        fi
+      fi
+    done <<< "$ADDED"
+    if [[ $FOUND -eq 1 ]]; then
+      block "$FILE — raw exception in log/print without _sanitize_log (wrap in _sanitize_log(str(e)[:500]))"
+    fi
+  done <<< "$STAGED_PY"
+fi
+
+# ── B4. _sanitize_log with raw exception variable ────────────
+# Catches _sanitize_log(e) / _sanitize_log(err) without str() wrapping.
+# Correct form: _sanitize_log(str(e)[:500])
+if [[ -n "$STAGED_PY" ]]; then
+  while IFS= read -r FILE; do
+    [[ -f "$FILE" ]] || continue
+    ADDED=$(git diff --cached -U0 "$FILE" | grep '^+' | grep -v '^+++' || true)
+    # Match _sanitize_log(e) or _sanitize_log(err) but NOT _sanitize_log(str(
+    if echo "$ADDED" | grep -qE '_sanitize_log\((e|err)\)'; then
+      if ! echo "$ADDED" | grep -qE '_sanitize_log\(str\('; then
+        block "$FILE — _sanitize_log() with raw exception (use _sanitize_log(str(e)[:500]))"
+      fi
+    fi
+  done <<< "$STAGED_PY"
+fi
+
+# ── B5. Inline AbortError check instead of isAbortError() ────
+if [[ -n "$STAGED_TS" ]]; then
+  while IFS= read -r FILE; do
+    [[ -f "$FILE" ]] || continue
+    # Skip the isAbortError definition file itself
+    [[ "$FILE" == *useAbortableFetch* ]] && continue
+    DIFF=$(git diff --cached -U0 "$FILE" | grep '^+' | grep -v '^+++' || true)
+    if echo "$DIFF" | grep -qE "\.name\s*===?\s*['\"]AbortError['\"]"; then
+      block "$FILE — inline AbortError check (use isAbortError() from hooks/useAbortableFetch.ts)"
+    fi
+  done <<< "$STAGED_TS"
+fi
+
+# ══════════════════════════════════════════════════════════════
+# ADVISORY CHECKS — useful signals with higher false-positive rates
+# ══════════════════════════════════════════════════════════════
+
+# ── A1. Hardcoded prod database name ─────────────────────────
+STAGED_SCRIPTS=$(echo "$STAGED" | grep -E '^(scripts/|skills/)' | grep -v '\.md$' || true)
+if [[ -n "$STAGED_SCRIPTS" ]]; then
+  while IFS= read -r FILE; do
+    [[ -f "$FILE" ]] || continue
+    # Replace 'myapp_prod' with your project's hardcoded-prod-DB identifier.
+    MATCHES=$(git diff --cached -U0 "$FILE" | grep '^+' | grep -v '^+++' | grep 'myapp_prod' || true)
+    if [[ -n "$MATCHES" ]]; then
+      warn "$FILE — hardcoded prod database name (use --env flag / APP_ENV)"
+    fi
+  done <<< "$STAGED_SCRIPTS"
+fi
+
+# ── A2. fetch() without AbortController (advisory) ───────────
+if [[ -n "$STAGED_TS" ]]; then
+  while IFS= read -r FILE; do
+    [[ -f "$FILE" ]] || continue
+    DIFF=$(git diff --cached -U3 "$FILE" | grep '^+' | grep -v '^+++' || true)
+    if echo "$DIFF" | grep -qE '\bfetch\('; then
+      if ! echo "$DIFF" | grep -qE '(AbortController|signal|useAbortableFetch)'; then
+        warn "$FILE — fetch() without AbortController (consider useAbortableFetch hook)"
+      fi
+    fi
+  done <<< "$STAGED_TS"
+fi
+
+# ── A3. window.open without noopener ─────────────────────────
+if [[ -n "$STAGED_TSX" ]]; then
+  while IFS= read -r FILE; do
+    [[ -f "$FILE" ]] || continue
+    DIFF=$(git diff --cached -U0 "$FILE" | grep '^+' | grep -v '^+++' || true)
+    if echo "$DIFF" | grep -qE 'window\.open\(' && ! echo "$DIFF" | grep -qE 'noopener'; then
+      warn "$FILE — window.open() without noopener (add 'noopener,noreferrer')"
+    fi
+  done <<< "$STAGED_TSX"
+fi
+
+# ── A4. vi.mock/vi.spyOn without afterEach(vi.restoreAllMocks) ─
+if [[ -n "$STAGED_TESTS" ]]; then
+  while IFS= read -r FILE; do
+    [[ -f "$FILE" ]] || continue
+    # Check the FULL file (not just diff) for mocks without cleanup
+    if grep -qE 'vi\.(mock|spyOn)\(' "$FILE"; then
+      if ! grep -q 'restoreAllMocks' "$FILE"; then
+        warn "$FILE — vi.mock/vi.spyOn without afterEach(vi.restoreAllMocks) (add file-level cleanup)"
+      fi
+    fi
+  done <<< "$STAGED_TESTS"
+fi
+
+# ── A5. load_dotenv or hand-rolled --env in scripts ──────────
+if [[ -n "$STAGED_SCRIPTS_PY" ]]; then
+  while IFS= read -r FILE; do
+    [[ -f "$FILE" ]] || continue
+    DIFF=$(git diff --cached -U0 "$FILE" | grep '^+' | grep -v '^+++' || true)
+    if echo "$DIFF" | grep -qE '(load_dotenv|add_argument.*--env)'; then
+      if ! echo "$DIFF" | grep -qE 'shared_cli'; then
+        warn "$FILE — load_dotenv or hand-rolled --env parsing (use shared_cli.py: create_env_parser, confirm_production, setup_env)"
+      fi
+    fi
+  done <<< "$STAGED_SCRIPTS_PY"
+fi
+
+# ── A6. toBeDefined() after getByRole/getByText (no-op) ──────
+if [[ -n "$STAGED_TESTS" ]]; then
+  while IFS= read -r FILE; do
+    [[ -f "$FILE" ]] || continue
+    DIFF=$(git diff --cached -U0 "$FILE" | grep '^+' | grep -v '^+++' || true)
+    # Catch both: getByRole(...).toBeDefined() and expect(screen.getByRole(...)).toBeDefined()
+    if echo "$DIFF" | grep -qE 'getBy(Role|Text).*toBeDefined\(\)'; then
+      warn "$FILE — toBeDefined() after getByRole/getByText is a no-op (use toBeInTheDocument() or remove assertion)"
+    fi
+  done <<< "$STAGED_TESTS"
+fi
+
+# ── A7. APP_ENV == "prod" without staging ────────────────────
+if [[ -n "$STAGED_PY" ]]; then
+  while IFS= read -r FILE; do
+    [[ -f "$FILE" ]] || continue
+    DIFF=$(git diff --cached -U0 "$FILE" || true)
+    # Find added lines referencing APP_ENV == "prod" or APP_ENV == 'prod'
+    PROD_LINES=$(echo "$DIFF" | grep '^+' | grep -v '^+++' | grep -nE "APP_ENV.*(==|!=).*[\"']prod[\"']" || true)
+    if [[ -n "$PROD_LINES" ]]; then
+      # Check if the diff also contains "staging" nearby (simple heuristic)
+      if ! echo "$DIFF" | grep '^+' | grep -v '^+++' | grep -qE 'staging'; then
+        warn "$FILE — APP_ENV check for 'prod' without 'staging' (use APP_ENV in ('prod', 'staging') per convention)"
+      fi
+    fi
+  done <<< "$STAGED_PY"
+fi
+
+# ── A8. Raw error rendered in TSX without getDisplayError ────
+if [[ -n "$STAGED_TSX" ]]; then
+  while IFS= read -r FILE; do
+    [[ -f "$FILE" ]] || continue
+    DIFF=$(git diff --cached -U0 "$FILE" | grep '^+' | grep -v '^+++' || true)
+    # Match JSX rendering of error variables: {error}, {error.message}, {err.message}, {err}
+    if echo "$DIFF" | grep -qE '\{error(\.message)?\}|\{err(\.message)?\}'; then
+      if ! echo "$DIFF" | grep -qE 'getDisplayError'; then
+        warn "$FILE — error variable rendered directly (use getDisplayError() from lib/errorMessages.ts)"
+      fi
+    fi
+  done <<< "$STAGED_TSX"
+fi
+
+# ── A9. redact_api_keys() with raw exception variable ─────────
+if [[ -n "$STAGED_PY" ]]; then
+  while IFS= read -r FILE; do
+    [[ -f "$FILE" ]] || continue
+    ADDED=$(git diff --cached -U0 "$FILE" | grep '^+' | grep -v '^+++' || true)
+    # Match redact_api_keys(e) or redact_api_keys(err) without str() wrapping
+    if echo "$ADDED" | grep -qE 'redact_api_keys\((e|err)\)'; then
+      warn "$FILE — redact_api_keys() with raw exception (use redact_api_keys(str(e)[:500]) to pre-truncate)"
+    fi
+  done <<< "$STAGED_PY"
+fi
+
+# ── A10. f-string logger calls ────────────────────────────────
+if [[ -n "$STAGED_PY" ]]; then
+  while IFS= read -r FILE; do
+    [[ -f "$FILE" ]] || continue
+    DIFF=$(git diff --cached -U0 "$FILE" | grep '^+' | grep -v '^+++' || true)
+    if echo "$DIFF" | grep -qE 'logger\.(debug|info|warning|error|critical)\(f['"'"'"]'; then
+      warn "$FILE — f-string in logger call (use logger.info(\"msg %s\", val) for lazy formatting)"
+    fi
+  done <<< "$STAGED_PY"
+fi
+
+# ── A11. APP_ENV defaults to "prod" ──────────────────────────
+if [[ -n "$STAGED_PY" ]]; then
+  while IFS= read -r FILE; do
+    [[ -f "$FILE" ]] || continue
+    # Skip env_validation.py where "prod" default is intentional
+    [[ "$FILE" == *env_validation* ]] && continue
+    DIFF=$(git diff --cached -U0 "$FILE" | grep '^+' | grep -v '^+++' || true)
+    if echo "$DIFF" | grep -qE 'getenv\("APP_ENV",\s*"prod"\)'; then
+      warn "$FILE — APP_ENV defaults to 'prod' (should default to 'dev' per convention; only env_validation.py uses 'prod')"
+    fi
+  done <<< "$STAGED_PY"
+fi
+
+# ── A12. tests/*.py APP_ENV before sys.path ─────────────────
+if [[ -n "$STAGED_PY" ]]; then
+  while IFS= read -r FILE; do
+    [[ -f "$FILE" ]] || continue
+    case "$FILE" in tests/*.py) ;; *) continue ;; esac
+    SP_LINE=$(grep -n "sys\.path\.insert" "$FILE" 2>/dev/null | head -1 | cut -d: -f1)
+    AE_LINE=$(grep -n "os\.environ\.setdefault\([\"']APP_ENV\|os\.environ\[[\"']APP_ENV" "$FILE" 2>/dev/null | head -1 | cut -d: -f1)
+    if [[ -n "$SP_LINE" ]] && [[ -n "$AE_LINE" ]] && [[ "$AE_LINE" -gt "$SP_LINE" ]]; then
+      warn "$FILE — os.environ.setdefault('APP_ENV', 'test') (line $AE_LINE) must come BEFORE sys.path.insert (line $SP_LINE). See CLAUDE.md § Test isolation."
+    fi
+  done <<< "$STAGED_PY"
+fi
+
+# ── A13. logger.* exc_info=True ──────────────────────────────
+if [[ -n "$STAGED_PY" ]]; then
+  while IFS= read -r FILE; do
+    [[ -f "$FILE" ]] || continue
+    DIFF=$(git diff --cached -U0 "$FILE" | grep '^+' | grep -v '^+++' || true)
+    if echo "$DIFF" | grep -qE 'logger\.(debug|info|warning|error|critical)\(.*exc_info\s*=\s*True'; then
+      warn "$FILE — logger.* with exc_info=True bypasses _sanitize_log + redact_api_keys (same as logger.exception). Use traceback.format_exception + redact_api_keys + truncate, log at DEBUG."
+    fi
+    if echo "$DIFF" | grep -qE 'logger\.(debug|info|warning|error|critical)\(' | grep -B1 'exc_info=True'; then
+      warn "$FILE — multi-line logger.* with exc_info=True"
+    fi
+  done <<< "$STAGED_PY"
+fi
+
+# ── A14. client-side fetch() without redirect: 'error' ───────
+if [[ -n "$STAGED_TS" ]]; then
+  while IFS= read -r FILE; do
+    [[ -f "$FILE" ]] || continue
+    # Scope: hooks, lib, components — skip server-side route handlers (already covered by other guards)
+    case "$FILE" in
+      frontend/app/hooks/*|frontend/app/lib/*|frontend/app/components/*) ;;
+      *) continue ;;
+    esac
+    DIFF=$(git diff --cached -U0 "$FILE" | grep '^+' | grep -v '^+++' || true)
+    # Look for fetch( in the diff that is not followed by redirect: anywhere in the same file's full options block.
+    # Simple heuristic: flag if the diff has fetch(...) AND the file does not contain 'redirect:' on a +/context window
+    if echo "$DIFF" | grep -qE '\bfetch\('; then
+      if ! grep -q "redirect:" "$FILE"; then
+        warn "$FILE — fetch() without redirect: 'error' option. Pre-set redirect: 'error' in the options object (or use useAbortableFetch wrapper which defaults it). Convention: CLAUDE.md § Fetch redirect guard."
+      fi
+    fi
+  done <<< "$STAGED_TS"
+fi
+
+# ── Summary ──────────────────────────────────────────────────
+if [[ $BLOCK_COUNT -gt 0 ]] || [[ $WARN_COUNT -gt 0 ]]; then
+  echo ""
+  if [[ $BLOCK_COUNT -gt 0 ]]; then
+    echo -e "${RED}  $BLOCK_COUNT blocking error(s) — must fix before committing.${RESET}"
+  fi
+  if [[ $WARN_COUNT -gt 0 ]]; then
+    echo -e "${YELLOW}  $WARN_COUNT advisory warning(s) — review before committing.${RESET}"
+  fi
+  echo ""
+fi
+
+# Exit 1 only on blocking errors, unless escape hatch is set
+if [[ $BLOCK_COUNT -gt 0 ]] && [[ "${PRE_COMMIT_ADVISORY_ONLY:-0}" != "1" ]]; then
+  exit 1
+fi
+
+exit 0

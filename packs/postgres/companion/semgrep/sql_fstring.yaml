@@ -1,0 +1,17 @@
+rules:
+  - id: sql-fstring
+    message: >
+      f-string SQL passed to $CONN.execute() or sqlalchemy.text(). Use
+      parameterized queries: conn.execute(sqlalchemy.text("... :param ..."),
+      {"param": val}). F-strings bypass SQL parameterization and risk SQL
+      injection.
+    severity: ERROR
+    languages: [python]
+    # Matches f-string SQL in conn.execute() or conn.execute(sqlalchemy.text()).
+    # Regex version (sql-fstring) misses lowercase SQL keywords and multi-line
+    # constructs. This AST rule catches the call regardless of SQL content.
+    pattern-either:
+      - pattern: $CONN.execute(f"...", ...)
+      - pattern: $CONN.execute(sqlalchemy.text(f"..."), ...)
+    # paths: intentionally omitted. Path scoping is declared in the pack's
+    # checks.yml.fragment stub entry (see core/companion/semgrep/README.md).

@@ -1,0 +1,21 @@
+rules:
+  - id: recompile-inside-def
+    message: >
+      re.compile(...) inside a function body. For request handlers and
+      hot-path code this re-compiles on every call and wastes CPU. Hoist
+      the pattern to module scope as a `_PATTERN = re.compile(...)`
+      constant. If the regex genuinely depends on a parameter, memoize
+      it via a module-level dict (parameterized regex cached in a
+      module-level dict is a legitimate exception).
+    severity: WARNING
+    languages: [python]
+    # Matches re.compile() inside any def or async def. Memoization
+    # helpers (parameterized regex cached in a module-level dict) are
+    # legitimate exceptions.
+    patterns:
+      - pattern: re.compile(...)
+      - pattern-inside: |
+          def $F(...):
+              ...
+    # paths: intentionally omitted. Path scoping is declared in the pack's
+    # checks.yml.fragment stub entry (see core/companion/semgrep/README.md).

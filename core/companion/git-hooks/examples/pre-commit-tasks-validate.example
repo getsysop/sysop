@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# ──────────────────────────────────────────────────────────────
+# pre-commit fragment — validate tasks/index.yml on touch
+#
+# Drop-in block to add to your project's pre-commit hook. Runs
+# scripts/validate_tasks.py only when the staged diff touches
+# tasks/ or .locks/, so non-tasks commits pay no cost.
+#
+# Python resolution order (Phase 16 carryover from gdp@abcfe3d0):
+#   1. <main-repo-root>/.venv/bin/python3
+#      Resolved via `git rev-parse --git-common-dir`, so a worktree
+#      inherits the main repo's venv automatically (worktrees have
+#      their own .git file pointing at the main .git/).
+#   2. System python3 as a fallback (only useful on fresh clones
+#      before the venv is created; the validator imports pyyaml,
+#      so this will fail loudly with ModuleNotFoundError if the
+#      system python3 doesn't have pyyaml installed).
+#
+# Without this resolution, every developer who hadn't activated
+# .venv before `git commit` would hit:
+#     ModuleNotFoundError: No module named 'yaml'
+# which the original gdp pre-commit hit on the first non-activated
+# fresh shell after Phase 16 landed there.
+#
+# Wiring:
+#   1. Copy this block into your existing pre-commit hook (e.g.,
+#      next to the BLOCKING checks in pre-commit-python.example).
+#   2. Ensure pyyaml is in your dev dependencies (`pyyaml >= 6`).
+#   3. Smoke-test by staging a tasks/ change and running
+#      `git commit --dry-run`.
+# ──────────────────────────────────────────────────────────────
+
+# ── B6. tasks/ validator (Phase 16) ──────────────────────────
+# Resolves <main-repo-root>/.venv/bin/python3 via git-common-dir
+# (so worktrees inherit the main repo's venv), then falls back to
+# system python3.
+STAGED_TASKS=$(echo "$STAGED" | grep -E '^(tasks/|\.locks/)' || true)
+if [[ -n "$STAGED_TASKS" ]]; then
+  # Resolve the main repo's git dir (worktrees: .git/worktrees/<name>/
+  # has a commondir file pointing back at the main .git/).
+  GIT_COMMON_DIR=$(git rev-parse --git-common-dir 2>/dev/null || true)
+  MAIN_REPO_ROOT=""
+  if [[ -n "$GIT_COMMON_DIR" ]]; then
+    # git-common-dir returns a path relative to PWD for the main repo,
+    # or absolute for worktrees. Canonicalize either case.
+    if [[ "$GIT_COMMON_DIR" = /* ]]; then
+      MAIN_REPO_ROOT="$(dirname "$GIT_COMMON_DIR")"
+    else
+      MAIN_REPO_ROOT="$(dirname "$(cd "$GIT_COMMON_DIR" && pwd)")"
+    fi
+  fi
+
+  PYTHON3=""
+  if [[ -n "$MAIN_REPO_ROOT" ]] && [[ -x "$MAIN_REPO_ROOT/.venv/bin/python3" ]]; then
+    PYTHON3="$MAIN_REPO_ROOT/.venv/bin/python3"
+  elif command -v python3 >/dev/null 2>&1; then
+    PYTHON3="$(command -v python3)"
+  fi
+
+  if [[ -z "$PYTHON3" ]]; then
+    block "tasks/: no python3 found (need <main-repo-root>/.venv/bin/python3 or system python3)"
+  elif [[ ! -f scripts/validate_tasks.py ]]; then
+    block "tasks/: scripts/validate_tasks.py missing (re-run install.sh?)"
+  else
+    if ! "$PYTHON3" scripts/validate_tasks.py --quiet; then
+      block "tasks/: validate_tasks.py rejected the staged tree (see above)"
+    fi
+  fi
+fi

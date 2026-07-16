@@ -1,0 +1,13 @@
+{
+  "name": "sysop-beancount",
+  "description": "Beancount plain-text accounting (vendor-ingest) conventions for Sysop; overlays the python pack.",
+  "author": {
+    "name": "Wade Petty",
+    "email": "wade@gdpquery.ai"
+  },
+  "homepage": "https://github.com/getsysop/sysop",
+  "dependencies": [
+    "sysop",
+    "sysop-python"
+  ]
+}

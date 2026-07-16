@@ -1,0 +1,12 @@
+{
+  "name": "sysop-python",
+  "description": "Python conventions for Sysop.",
+  "author": {
+    "name": "Wade Petty",
+    "email": "wade@gdpquery.ai"
+  },
+  "homepage": "https://github.com/getsysop/sysop",
+  "dependencies": [
+    "sysop"
+  ]
+}

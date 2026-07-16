@@ -1,0 +1,264 @@
+"""Grep-based check runner (the dispatcher for the ``checks.yml`` registry)."""
+import fnmatch
+import os
+import re
+import subprocess
+import sys
+
+from _log import _sanitize_log
+
+from .config import _SKIP_DIRS
+
+
+def run_grep(pattern, paths, includes, excludes, repo_root):
+    """Run grep -rn with the given pattern, paths, includes, and excludes."""
+    cmd = ["grep", "-rn", "-E", pattern]
+    for inc in includes:
+        cmd.extend(["--include", inc])
+    # Always exclude common non-source directories
+    for d in _SKIP_DIRS:
+        cmd.extend(["--exclude-dir", d])
+    # Per-check excludes (file globs like "*test*", "*helpers.py")
+    for exc in excludes:
+        cmd.extend(["--exclude", exc])
+
+    # Resolve paths relative to repo root; collect only those that exist.
+    # If none resolve (e.g., a fresh install where placeholder vocabulary
+    # like `<api module>/` hasn't been substituted yet), return empty —
+    # never fall through to a CWD-wide scan, since that surfaces noise
+    # findings on every file in the tree.
+    valid_paths = []
+    for p in paths:
+        full = os.path.join(repo_root, p)
+        if os.path.exists(full):
+            valid_paths.append(full)
+    if not valid_paths:
+        return []
+    cmd.extend(valid_paths)
+
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, cwd=repo_root, timeout=30
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return []
+
+    # grep exit codes: 0 = matches, 1 = no matches (expected), 2+ = a real
+    # error (unreadable file, malformed regex). Treat 2+ as a noisy warn —
+    # silently swallowing it hides a broken check behind a clean "0 findings".
+    if result.returncode >= 2:
+        err = _sanitize_log(result.stderr) if result.stderr else "(no stderr)"
+        print(
+            f"warn: grep failed (rc={result.returncode}): {err}",
+            file=sys.stderr,
+        )
+        return []
+    lines = [l for l in result.stdout.strip().split("\n") if l]
+    return lines
+
+
+def strip_repo_prefix(line, repo_root):
+    """Remove repo root prefix from file paths in grep output."""
+    prefix = repo_root.rstrip("/") + "/"
+    if line.startswith(prefix):
+        return line[len(prefix):]
+    return line
+
+
+def _iter_check_files(paths, includes, excludes, repo_root):
+    """Yield absolute paths of files in `paths` matching `includes` and not `excludes`.
+
+    Mirrors the filter semantics of `run_grep` (without invoking grep). Used by
+    file-walk-based checks like `position_check` that need full-file context
+    rather than per-line hits.
+    """
+    skip_dirs = set(_SKIP_DIRS)
+    for p in paths:
+        full = os.path.join(repo_root, p)
+        if not os.path.exists(full):
+            continue
+        for dirpath, dirnames, filenames in os.walk(full):
+            dirnames[:] = [d for d in dirnames if d not in skip_dirs]
+            for fn in filenames:
+                if includes and not any(fnmatch.fnmatch(fn, inc) for inc in includes):
+                    continue
+                if excludes and any(fnmatch.fnmatch(fn, exc) for exc in excludes):
+                    continue
+                yield os.path.join(dirpath, fn)
+
+
+def _first_match_line(content_lines, regex):
+    """Return the 1-indexed line number of the first match, or None.
+
+    Skips comment-only lines (a leading `#` after optional whitespace) so that
+    a commented-out `# sys.path.insert(...)` at the top of a file doesn't
+    spoof the position check.
+    """
+    for idx, line in enumerate(content_lines, start=1):
+        stripped = line.lstrip()
+        if stripped.startswith("#"):
+            continue
+        if regex.search(line):
+            return idx
+    return None
+
+
+_POSITION_CHECK_RE_CACHE: dict[str, "re.Pattern[str]"] = {}
+
+
+def _cached_compile(src):
+    """Module-level memoization to avoid per-call re.compile overhead.
+
+    Keeps the position_check helper from being a dogfood violation of
+    `recompile-inside-def`.
+    """
+    if src not in _POSITION_CHECK_RE_CACHE:
+        # Parameterized regex memoized in a module-level dict; rule message
+        # names this exact pattern as a legitimate exception. Inline nosemgrep
+        # is required because pattern-inside `def $F(...)` matches the whole
+        # body, not just this line.
+        _POSITION_CHECK_RE_CACHE[src] = re.compile(src)  # nosemgrep: recompile-inside-def
+    return _POSITION_CHECK_RE_CACHE[src]
+
+
+def _run_position_check(
+    check_id, spec, paths, includes, excludes,
+    severity, description, repo_root,
+):
+    """Fire when `later` precedes `earlier` in the same file.
+
+    `spec` is a dict {earlier: <regex>, later: <regex>}. Both regexes are
+    matched per non-comment line. If either is absent in a file, no
+    finding (out of scope — missing-X is a separate convention).
+    """
+    earlier_re_src = spec.get("earlier", "")
+    later_re_src = spec.get("later", "")
+    if not earlier_re_src or not later_re_src:
+        return []
+    try:
+        earlier_re = _cached_compile(earlier_re_src)
+        later_re = _cached_compile(later_re_src)
+    except re.error:
+        return []
+
+    findings = []
+    for fpath in sorted(_iter_check_files(paths, includes, excludes, repo_root)):
+        try:
+            with open(fpath, encoding="utf-8", errors="replace") as f:
+                lines = f.readlines()
+        except (OSError, IOError):
+            continue
+        e_line = _first_match_line(lines, earlier_re)
+        l_line = _first_match_line(lines, later_re)
+        if e_line is None or l_line is None:
+            continue
+        if l_line < e_line:
+            rel = fpath.replace(repo_root.rstrip("/") + "/", "")
+            file_line = f"{rel}:{l_line}"
+            findings.append(
+                (check_id, file_line,
+                 f"[{check_id}] {severity} {file_line} — {description}")
+            )
+    return findings
+
+
+def run_check(check, repo_root):
+    """Run a single check and return a list of (check_id, file_line, message) tuples.
+
+    file_line is "<path>:<lineno>" (or bare "<path>" for file-level checks)
+    and serves as the baseline key. message is the full "[id] SEV path:line —
+    description" line displayed to the user.
+    """
+    pattern = check.get("pattern", "")
+    paths = check.get("paths", [])
+    includes = check.get("include", [])
+    excludes = check.get("exclude", [])
+    neg_pattern = check.get("negative_pattern", "")
+    invert = check.get("invert_file_check", False)
+    position_check = check.get("position_check", None)
+    severity = check.get("severity", "medium").upper()
+    check_id = check.get("id", "unknown")
+    description = check.get("description", "")
+
+    # position_check is an alternative dispatch — no `pattern:` is required.
+    # Schema: {earlier: <regex>, later: <regex>}. Fires when both patterns
+    # match in the same file AND `later`'s first occurrence precedes
+    # `earlier`'s first occurrence (i.e., wrong order).
+    if position_check and paths:
+        return _run_position_check(
+            check_id, position_check, paths, includes, excludes,
+            severity, description, repo_root,
+        )
+
+    if not pattern or not paths:
+        return []
+
+    hits = run_grep(pattern, paths, includes, excludes, repo_root)
+    if not hits:
+        return []
+
+    findings = []
+
+    if invert and neg_pattern:
+        # File-level check: find files with pattern but WITHOUT neg_pattern
+        files_with_pattern = set()
+        for hit in hits:
+            parts = hit.split(":", 2)
+            if len(parts) >= 2:
+                fpath = strip_repo_prefix(parts[0], repo_root)
+                files_with_pattern.add(os.path.join(repo_root, fpath)
+                                       if not os.path.isabs(fpath)
+                                       else fpath)
+
+        repo_root_real = os.path.realpath(repo_root) + os.sep
+        for fpath in sorted(files_with_pattern):
+            # Path containment: grep output is trusted by the framework, but a
+            # symlink under one of the scanned `paths` could point outside the
+            # repo. Reject anything that doesn't resolve inside repo_root
+            # before opening.
+            resolved = os.path.realpath(fpath)
+            if not resolved.startswith(repo_root_real):
+                continue
+            try:
+                with open(fpath, encoding="utf-8", errors="replace") as f:
+                    content = f.read()
+                if not re.search(neg_pattern, content):
+                    rel = fpath.replace(repo_root.rstrip("/") + "/", "")
+                    findings.append(
+                        (check_id, rel, f"[{check_id}] {severity} {rel} — {description}")
+                    )
+            except (OSError, IOError):
+                pass
+
+    elif neg_pattern:
+        # Per-line filter: keep hits that do NOT match negative_pattern
+        for hit in hits:
+            hit_clean = strip_repo_prefix(hit, repo_root)
+            parts = hit_clean.split(":", 2)
+            if len(parts) >= 3:
+                content_part = parts[2]
+                if not re.search(neg_pattern, content_part):
+                    file_line = f"{parts[0]}:{parts[1]}"
+                    findings.append(
+                        (check_id, file_line,
+                         f"[{check_id}] {severity} {file_line} — {description}")
+                    )
+            else:
+                findings.append(
+                    (check_id, hit_clean,
+                     f"[{check_id}] {severity} {hit_clean} — {description}")
+                )
+
+    else:
+        # Simple pattern match — all hits are findings
+        for hit in hits:
+            hit_clean = strip_repo_prefix(hit, repo_root)
+            parts = hit_clean.split(":", 2)
+            if len(parts) >= 2:
+                file_line = f"{parts[0]}:{parts[1]}"
+                findings.append(
+                    (check_id, file_line,
+                     f"[{check_id}] {severity} {file_line} — {description}")
+                )
+
+    return findings

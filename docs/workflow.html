@@ -1,0 +1,2369 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Sysop — a self-improving development workflow for Claude Code. A monograph on lifecycle, parallel orchestration, hook layer, and the convention promotion loop.">
+<meta name="theme-color" content="#0e0d0a">
+<meta property="og:title" content="Sysop · a monograph">
+<meta property="og:description" content="A self-improving development workflow for Claude Code — lifecycle, parallel orchestration, hook layer, and the convention promotion loop.">
+<meta property="og:type" content="article">
+<meta name="twitter:card" content="summary">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='12' fill='%230e0d0a'/%3E%3Ctext x='50' y='72' font-size='64' font-family='Georgia,serif' font-style='italic' text-anchor='middle' fill='%23ff5722'%3ES%3C/text%3E%3C/svg%3E">
+<title>Sysop · a monograph</title>
+<style>
+  /* ------------------------------------------------------------
+     PALETTE — warm near-black paper, cream ink, one signal hue.
+     A deliberate move away from cool-slate "default tech docs."
+  ------------------------------------------------------------ */
+  :root {
+    color-scheme: dark;
+    --paper:      #0e0d0a;        /* near-black, warm */
+    --paper-rise: #14130f;        /* slightly raised surface */
+    --paper-deep: #080705;        /* recessed surface */
+    --ink:        #ece5d5;        /* warm cream */
+    --ink-dim:    #a39d8a;        /* secondary text */
+    --ink-faint:  #8a8472;        /* tertiary / marginalia — 5.20:1 on paper, clears WCAG AA */
+    --rule:       rgba(236, 229, 213, .12);
+    --rule-soft:  rgba(236, 229, 213, .06);
+    --accent:     #ff5722;        /* signal orange — wax-stamp red */
+    --accent-ink: #ff8c5a;        /* lighter accent for text on dark */
+    --accent-soft: rgba(255, 87, 34, .10);
+    --steel:      #7da3c2;        /* cool counter for diagrams */
+    --steel-soft: rgba(125, 163, 194, .12);
+    --glow-warm:  rgba(255, 87, 34, .05);   /* accent page-atmosphere wash */
+    --glow-cool:  rgba(125, 163, 194, .04); /* steel page-atmosphere wash */
+    --paper-fade: rgba(14, 13, 10, .85);    /* masthead gradient tail */
+    --plate-fill: rgba(236, 229, 213, .04); /* diagram plate wash */
+
+    --serif: "Iowan Old Style", "Palatino", "Palatino Linotype", "Hoefler Text",
+             "Sitka Text", "Cambria", Georgia, serif;
+    --mono:  ui-monospace, "SF Mono", "Cascadia Code", "Roboto Mono",
+             Menlo, Consolas, monospace;
+  }
+
+  /* ------------------------------------------------------------
+     LIGHT THEME — the same warm-paper identity, inverted: aged
+     cream paper, dark warm ink, the wax-stamp accent held constant.
+     Opt-in via the masthead toggle; dark stays the default.
+  ------------------------------------------------------------ */
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --paper:      #f6f1e6;        /* warm ivory paper */
+    --paper-rise: #fdfaf2;        /* raised / cleaner surface */
+    --paper-deep: #ece5d3;        /* recessed surface */
+    --ink:        #2a2620;        /* warm near-black ink — 13.3:1 on paper */
+    --ink-dim:    #5f5949;        /* secondary text — 6.2:1 on paper */
+    --ink-faint:  #6e6653;        /* tertiary / marginalia — 5.0:1 on paper, clears WCAG AA */
+    --rule:       rgba(42, 38, 32, .14);
+    --rule-soft:  rgba(42, 38, 32, .07);
+    --accent:     #ff5722;        /* wax-stamp red — constant across themes */
+    --accent-ink: #b83e17;        /* darker accent for text on light — 5.0:1 */
+    --accent-soft: rgba(255, 87, 34, .12);
+    --steel:      #3f6d90;        /* deeper steel to read on cream */
+    --steel-soft: rgba(63, 109, 144, .14);
+    --glow-warm:  rgba(255, 87, 34, .06);
+    --glow-cool:  rgba(63, 109, 144, .05);
+    --paper-fade: rgba(246, 241, 230, .85);
+    --plate-fill: rgba(42, 38, 32, .05);
+  }
+
+  /* ------------------------------------------------------------
+     RESET + GLOBAL TYPE
+  ------------------------------------------------------------ */
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--serif);
+    font-size: 18px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    font-feature-settings: "kern", "liga", "onum", "pnum";
+  }
+
+  /* Page atmosphere — barely-there paper grain via SVG noise + a warm vignette */
+  body::before {
+    content: "";
+    position: fixed; inset: 0;
+    background:
+      radial-gradient(ellipse 1200px 800px at 80% -10%, var(--glow-warm), transparent 60%),
+      radial-gradient(ellipse 900px 600px at 0% 110%, var(--glow-cool), transparent 60%);
+    pointer-events: none;
+    z-index: 0;
+  }
+  body::after {
+    content: "";
+    position: fixed; inset: 0;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.93  0 0 0 0 0.90  0 0 0 0 0.84  0 0 0 0.025 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+    opacity: .55;
+    mix-blend-mode: overlay;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  a {
+    color: var(--ink);
+    text-decoration: none;
+    background-image: linear-gradient(currentColor, currentColor);
+    background-position: 0 100%;
+    background-repeat: no-repeat;
+    background-size: 100% 1px;
+    transition: background-size .2s, color .2s;
+  }
+  a:hover { color: var(--accent-ink); background-size: 100% 2px; }
+
+  ::selection { background: var(--accent); color: var(--paper); }
+
+  /* Inline code reads like a printed listing, not a button */
+  code {
+    font-family: var(--mono);
+    font-size: .85em;
+    color: var(--ink);
+    background: transparent;
+    padding: 0 .15em;
+    border-bottom: 1px dotted var(--rule);
+  }
+  pre code { border: 0; padding: 0; }
+
+  /* ------------------------------------------------------------
+     LAYOUT GRID — asymmetric: wide left margin for marginalia,
+     body column at comfortable reading width.
+  ------------------------------------------------------------ */
+  .page {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 0 32px;
+    position: relative;
+    z-index: 1;
+  }
+
+  /* On wide screens, sections use a 3-column grid: margin, body, gutter */
+  .article {
+    display: grid;
+    grid-template-columns: 88px minmax(0, 1fr);
+    gap: 48px;
+  }
+  @media (max-width: 880px) {
+    .article { grid-template-columns: 1fr; gap: 0; }
+    .page { padding: 0 24px; }
+  }
+
+  /* ------------------------------------------------------------
+     MASTHEAD — sticky, editorial: title-mark + section dots.
+     Not a SaaS topnav.
+  ------------------------------------------------------------ */
+  .masthead {
+    position: sticky; top: 0; z-index: 20;
+    background: linear-gradient(180deg, var(--paper) 70%, var(--paper-fade));
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--rule);
+  }
+  .masthead-inner {
+    max-width: 1180px; margin: 0 auto;
+    padding: 14px 32px;
+    display: flex; align-items: baseline; flex-wrap: wrap; gap: 10px 32px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--ink-dim);
+    letter-spacing: .04em;
+  }
+  .masthead-title {
+    font-family: var(--serif);
+    font-style: italic;
+    font-size: 18px;
+    color: var(--ink);
+    letter-spacing: -.01em;
+  }
+  .masthead-title::before {
+    content: "❦  ";
+    color: var(--accent-ink);
+    font-style: normal;
+  }
+  .masthead-meta {
+    margin-left: auto;
+    display: flex; gap: 24px;
+  }
+  .masthead-meta a { color: var(--ink-dim); }
+  .masthead-meta a:hover { color: var(--ink); }
+  .masthead-toggle {
+    margin-left: auto;
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: .04em;
+    color: var(--ink-dim);
+    background: transparent;
+    border: 0;
+    padding: 0;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: baseline;
+    gap: .5em;
+    line-height: inherit;
+    transition: color .2s;
+  }
+  .masthead-toggle:hover { color: var(--ink); }
+  .masthead-toggle .tt-icon { font-style: normal; }
+  @media (max-width: 700px) {
+    .masthead-meta { display: none; }
+    .masthead-inner { padding: 14px 24px; }
+  }
+
+  /* ------------------------------------------------------------
+     HERO — periodical masthead vibe.
+     Italic display serif. Tabular figures for stats.
+  ------------------------------------------------------------ */
+  .hero {
+    padding: 96px 0 64px;
+    border-bottom: 1px solid var(--rule);
+  }
+  .hero-grid {
+    display: grid;
+    grid-template-columns: 88px minmax(0, 1fr);
+    gap: 48px;
+    align-items: start;
+  }
+  @media (max-width: 880px) { .hero-grid { grid-template-columns: 1fr; gap: 0; } }
+
+  .hero-margin {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--ink-faint);
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    line-height: 1.6;
+    padding-top: 12px;
+  }
+  .hero-margin .line { display: block; }
+  .hero-margin .accent { color: var(--accent-ink); }
+
+  .hero-eyebrow {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--ink-faint);
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    display: block;
+    margin-bottom: 28px;
+  }
+  .hero-eyebrow .dot { color: var(--accent); padding: 0 .5em; }
+
+  .hero h1 {
+    font-family: var(--serif);
+    font-style: italic;
+    font-weight: 400;
+    font-size: clamp(48px, 8.5vw, 108px);
+    line-height: .96;
+    letter-spacing: -.025em;
+    margin: 0 0 32px;
+    color: var(--ink);
+  }
+  .hero h1 .stress {
+    color: var(--accent-ink);
+    font-style: italic;
+  }
+  .hero h1 .swash {
+    font-style: italic;
+    position: relative;
+  }
+  .hero h1 .swash::after {
+    content: "";
+    position: absolute;
+    left: 0; right: 0; bottom: .08em;
+    height: 8px;
+    background: var(--accent);
+    z-index: -1;
+    opacity: .25;
+  }
+
+  .hero-sub {
+    font-family: var(--serif);
+    font-size: clamp(19px, 1.6vw, 22px);
+    line-height: 1.55;
+    color: var(--ink-dim);
+    max-width: 620px;
+    margin: 0 0 56px;
+  }
+  .hero-sub em { color: var(--ink); font-style: italic; }
+
+  .hero-stats {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    border-top: 1px solid var(--rule);
+    border-bottom: 1px solid var(--rule);
+  }
+  .hero-stat {
+    padding: 24px 0 20px;
+    position: relative;
+  }
+  .hero-stat + .hero-stat::before {
+    content: "";
+    position: absolute;
+    left: 0; top: 20%; bottom: 20%;
+    width: 1px;
+    background: var(--rule);
+  }
+  .hero-stat-fig {
+    font-family: var(--serif);
+    font-size: 56px;
+    font-weight: 400;
+    line-height: 1;
+    letter-spacing: -.03em;
+    color: var(--ink);
+    font-variant-numeric: oldstyle-nums tabular-nums;
+    margin-bottom: 8px;
+  }
+  .hero-stat-label {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+  }
+  @media (max-width: 700px) {
+    .hero-stats { grid-template-columns: repeat(2, 1fr); }
+    .hero-stat + .hero-stat:nth-child(3)::before { display: none; }
+  }
+
+  /* ------------------------------------------------------------
+     SECTIONS — roman numerals in the margin, italic titles.
+  ------------------------------------------------------------ */
+  section.s {
+    padding: 96px 0 64px;
+    border-bottom: 1px solid var(--rule);
+    scroll-margin-top: 64px;
+  }
+  section.s.spotlight {
+    background:
+      radial-gradient(ellipse 1100px 700px at 50% 30%, var(--glow-warm), transparent 65%),
+      var(--paper-deep);
+    box-shadow: inset 0 1px 0 var(--rule), inset 0 -1px 0 var(--rule);
+    position: relative;
+  }
+  section.s.spotlight::before {
+    content: "";
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 2px;
+    background: linear-gradient(180deg, transparent, var(--accent) 30%, var(--accent) 70%, transparent);
+    opacity: .55;
+  }
+
+  .s-numeral {
+    font-family: var(--serif);
+    font-style: italic;
+    font-weight: 400;
+    font-size: 48px;
+    line-height: 1;
+    color: var(--accent-ink);
+    font-variant-numeric: oldstyle-nums;
+    letter-spacing: -.02em;
+  }
+  /* Word-form marker for the prologue — fits the 88px column */
+  .s-numeral.word {
+    font-size: 22px;
+    line-height: 1.2;
+    letter-spacing: 0;
+  }
+  .s-numeral.word::before {
+    content: "§ ";
+    font-style: normal;
+    color: var(--accent);
+  }
+  .s-tag {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin-top: 12px;
+    display: block;
+  }
+  .s-body { min-width: 0; }
+
+  h2.s-title {
+    font-family: var(--serif);
+    font-style: italic;
+    font-weight: 400;
+    font-size: clamp(34px, 4.2vw, 52px);
+    line-height: 1.1;
+    letter-spacing: -.02em;
+    color: var(--ink);
+    margin: 0 0 28px;
+    max-width: 18ch;
+  }
+  h2.s-title .stress { color: var(--accent-ink); }
+
+  h3 {
+    font-family: var(--serif);
+    font-style: italic;
+    font-weight: 400;
+    font-size: 24px;
+    color: var(--ink);
+    margin: 48px 0 14px;
+    letter-spacing: -.01em;
+  }
+  h3::before {
+    content: "§ ";
+    color: var(--accent-ink);
+    font-style: normal;
+  }
+
+  p {
+    margin: 0 0 18px;
+    color: var(--ink);
+    max-width: 65ch;
+  }
+  p.muted { color: var(--ink-dim); }
+  p.lede {
+    font-family: var(--serif);
+    font-size: 21px;
+    line-height: 1.55;
+    color: var(--ink-dim);
+    max-width: 38em;
+    margin: 0 0 40px;
+  }
+  p.lede em { color: var(--ink); font-style: italic; }
+
+  /* ------------------------------------------------------------
+     PULL QUOTE — replaces the "callout box" pattern.
+     Editorial: hanging quote mark, hairline rules, italic body.
+  ------------------------------------------------------------ */
+  .pullquote {
+    margin: 40px 0;
+    padding: 32px 0 32px 60px;
+    position: relative;
+    border-top: 1px solid var(--rule);
+    border-bottom: 1px solid var(--rule);
+    max-width: 60em;
+  }
+  .pullquote::before {
+    content: "❝";
+    position: absolute;
+    left: 0; top: 14px;
+    font-family: var(--serif);
+    font-size: 64px;
+    line-height: 1;
+    color: var(--accent);
+    font-style: normal;
+  }
+  .pullquote p {
+    font-family: var(--serif);
+    font-style: italic;
+    font-size: 21px;
+    line-height: 1.5;
+    color: var(--ink);
+    margin: 0;
+    max-width: none;
+  }
+  .pullquote p + p { margin-top: 14px; }
+  .pullquote .attr {
+    font-family: var(--mono);
+    font-style: normal;
+    font-size: 11px;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin-top: 18px;
+    display: block;
+  }
+  .pullquote strong { color: var(--ink); font-weight: 400; font-style: normal; border-bottom: 2px solid var(--accent); padding-bottom: 1px; }
+
+  /* ------------------------------------------------------------
+     FIGURE — wraps each SVG diagram. Hairline rule above/below,
+     "Fig. N — caption" treatment, slight bleed outside reading column.
+  ------------------------------------------------------------ */
+  figure.fig {
+    margin: 48px 0;
+    padding: 0;
+  }
+  figure.fig .fig-frame {
+    position: relative;
+    padding: 36px 8px 8px;
+    border-top: 1px solid var(--rule);
+    border-bottom: 1px solid var(--rule);
+    background:
+      linear-gradient(180deg, transparent 0, transparent 6px, var(--rule-soft) 6px, var(--rule-soft) 7px, transparent 7px),
+      var(--paper-rise);
+  }
+  figure.fig svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+  figure.fig figcaption {
+    margin-top: 14px;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    letter-spacing: .04em;
+    color: var(--ink-faint);
+  }
+  figure.fig figcaption .fig-num {
+    color: var(--accent-ink);
+    margin-right: 10px;
+    text-transform: uppercase;
+  }
+  figure.fig figcaption .fig-cap {
+    color: var(--ink-dim);
+  }
+
+  /* ------------------------------------------------------------
+     SVG DIAGRAM STYLING — restrict palette to ink + accent + steel.
+     Frame each node as a hairline-stroked plate, not a colorful pill.
+  ------------------------------------------------------------ */
+  .node rect, .node circle, .node ellipse {
+    stroke-width: 1.25;
+    transition: filter .2s;
+  }
+  .node text {
+    font-family: var(--serif);
+    font-size: 14px;
+    fill: var(--ink);
+    text-anchor: middle;
+    dominant-baseline: middle;
+    font-style: italic;
+    pointer-events: none;
+  }
+  .node text.code {
+    font-family: var(--mono);
+    font-size: 13px;
+    font-style: normal;
+    letter-spacing: -.01em;
+  }
+  .node text.small {
+    font-family: var(--mono);
+    font-size: 10px;
+    fill: var(--ink-faint);
+    font-style: normal;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+  }
+  .node text.smallserif {
+    font-family: var(--serif);
+    font-size: 12px;
+    fill: var(--ink-dim);
+    font-style: italic;
+  }
+
+  /* Variant fills — restricted palette */
+  .fill-primary   { fill: var(--paper-deep); stroke: var(--ink); }
+  .fill-accent    { fill: var(--accent-soft); stroke: var(--accent); }
+  .fill-steel     { fill: var(--steel-soft); stroke: var(--steel); }
+  .fill-ghost     { fill: transparent; stroke: var(--ink-faint); stroke-dasharray: 3 3; }
+  .fill-plate     { fill: var(--plate-fill); stroke: var(--ink-faint); }
+
+  .arrow      { stroke: var(--ink-dim); stroke-width: 1.2; fill: none; }
+  .arrow-head { fill: var(--ink-dim); }
+  .arrow.accent { stroke: var(--accent); }
+  .arrow.steel  { stroke: var(--steel); }
+  .arrow.dashed { stroke-dasharray: 4 4; }
+
+  text.diag-caption {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: .06em;
+    fill: var(--ink-faint);
+    text-anchor: middle;
+  }
+  text.diag-caption.italic {
+    font-family: var(--serif);
+    font-style: italic;
+    font-size: 12px;
+    letter-spacing: 0;
+    fill: var(--ink-dim);
+    text-transform: none;
+  }
+  text.diag-marker {
+    font-family: var(--serif);
+    font-style: italic;
+    font-size: 14px;
+    fill: var(--accent-ink);
+  }
+
+  /* Loop diagram — trace animation on the accent arrows */
+  .arrow.trace {
+    stroke-dasharray: 1000;
+    stroke-dashoffset: 1000;
+  }
+  .traced .arrow.trace {
+    animation: trace 2.4s ease-out forwards;
+  }
+  .traced .arrow.trace:nth-of-type(2) { animation-delay: .25s; }
+  .traced .arrow.trace:nth-of-type(3) { animation-delay: .50s; }
+  .traced .arrow.trace:nth-of-type(4) { animation-delay: .75s; }
+  .traced .arrow.trace:nth-of-type(5) { animation-delay: 1.00s; }
+  .traced .arrow.trace:nth-of-type(6) { animation-delay: 1.25s; }
+  .traced .arrow.trace:nth-of-type(7) { animation-delay: 1.50s; }
+  @keyframes trace {
+    to { stroke-dashoffset: 0; }
+  }
+
+  /* ------------------------------------------------------------
+     GLOSSARY ENTRIES — replaces "skill cards" with definition-list
+     style: tighter, more book-like.
+  ------------------------------------------------------------ */
+  dl.glossary {
+    margin: 32px 0 8px;
+    padding: 0;
+    border-top: 1px solid var(--rule);
+  }
+  dl.glossary > .entry {
+    display: grid;
+    grid-template-columns: 220px 1fr;
+    gap: 32px;
+    padding: 22px 0;
+    border-bottom: 1px solid var(--rule);
+  }
+  @media (max-width: 760px) {
+    dl.glossary > .entry { grid-template-columns: 1fr; gap: 8px; }
+  }
+  .entry dt {
+    font-family: var(--mono);
+    font-size: 14px;
+    color: var(--ink);
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .entry .model-tag {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+  }
+  .entry .model-tag.opus   { color: var(--accent-ink); }
+  .entry .model-tag.sonnet { color: var(--steel); }
+  .entry .model-tag.haiku  { color: var(--ink-dim); }
+  .entry dd {
+    margin: 0;
+    font-family: var(--serif);
+    font-size: 17px;
+    line-height: 1.5;
+    color: var(--ink-dim);
+  }
+  .entry dd em { color: var(--ink); font-style: italic; }
+
+  /* ------------------------------------------------------------
+     LISTING — for the convention_map sample and the file tree.
+     Looks like a printed code excerpt, not a github block.
+  ------------------------------------------------------------ */
+  .listing {
+    margin: 32px 0;
+    padding: 24px 28px;
+    background: var(--paper-deep);
+    border-left: 2px solid var(--accent);
+    border-top: 1px solid var(--rule);
+    border-bottom: 1px solid var(--rule);
+    border-right: 1px solid var(--rule);
+    position: relative;
+  }
+  .listing::before {
+    content: attr(data-label);
+    position: absolute;
+    top: -10px; left: 24px;
+    background: var(--paper);
+    padding: 0 10px;
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+  }
+  .listing pre {
+    margin: 0;
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.7;
+    color: var(--ink);
+    white-space: pre;
+    overflow-x: auto;
+  }
+  .listing .key { color: var(--accent-ink); }
+  .listing .cm  { color: var(--ink-faint); font-style: italic; }
+  .listing .dim { color: var(--ink-dim); }
+  .listing .em  { color: var(--ink); }
+  .listing .ph  { color: var(--steel); }
+
+  /* ------------------------------------------------------------
+     TWO COLUMN
+  ------------------------------------------------------------ */
+  .two {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 48px;
+    margin: 32px 0;
+  }
+  @media (max-width: 760px) { .two { grid-template-columns: 1fr; gap: 24px; } }
+
+  /* Pack tag chip */
+  .pack {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: 11px;
+    padding: 3px 10px;
+    border: 1px solid var(--rule);
+    border-radius: 999px;
+    color: var(--ink-dim);
+    margin: 4px 6px 0 0;
+  }
+  .pack.live { color: var(--accent-ink); border-color: var(--accent); }
+
+  /* ------------------------------------------------------------
+     COLOPHON
+  ------------------------------------------------------------ */
+  footer.colophon {
+    padding: 64px 0 80px;
+    border-top: 1px solid var(--rule);
+  }
+  .col-grid {
+    display: grid;
+    grid-template-columns: 88px minmax(0, 1fr);
+    gap: 48px;
+  }
+  @media (max-width: 880px) { .col-grid { grid-template-columns: 1fr; gap: 24px; } }
+  .col-rule {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+  }
+  .col-body {
+    font-family: var(--serif);
+    font-size: 15px;
+    color: var(--ink-dim);
+    line-height: 1.65;
+    max-width: 60ch;
+  }
+  .col-body em { color: var(--ink); }
+  .col-meta {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 32px;
+    margin-top: 36px;
+    padding-top: 24px;
+    border-top: 1px solid var(--rule);
+  }
+  @media (max-width: 760px) { .col-meta { grid-template-columns: 1fr; gap: 18px; } }
+  .col-meta h4 {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin: 0 0 12px;
+    font-weight: 400;
+  }
+  .col-meta ul { list-style: none; margin: 0; padding: 0; }
+  .col-meta li {
+    font-family: var(--serif);
+    font-size: 15px;
+    color: var(--ink-dim);
+    margin: 5px 0;
+  }
+
+  /* ------------------------------------------------------------
+     ENTRANCE ANIMATION — single page-load stagger.
+  ------------------------------------------------------------ */
+  .rise {
+    opacity: 0;
+    transform: translateY(12px);
+    animation: rise .9s cubic-bezier(.16,.84,.30,1) forwards;
+  }
+  .rise.d1 { animation-delay: .08s; }
+  .rise.d2 { animation-delay: .16s; }
+  .rise.d3 { animation-delay: .24s; }
+  .rise.d4 { animation-delay: .32s; }
+  .rise.d5 { animation-delay: .40s; }
+  @keyframes rise {
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  /* Reveal sections on scroll — subtle, once each */
+  .reveal {
+    opacity: 0;
+    transform: translateY(14px);
+    transition: opacity .8s ease, transform .8s cubic-bezier(.16,.84,.30,1);
+  }
+  .reveal.in { opacity: 1; transform: translateY(0); }
+
+  @media (prefers-reduced-motion: reduce) {
+    .rise, .reveal { opacity: 1; transform: none; animation: none; transition: none; }
+    .arrow.trace { stroke-dasharray: 0; stroke-dashoffset: 0; }
+  }
+
+  /* Tiny screens cleanup */
+  @media (max-width: 540px) {
+    .hero { padding: 56px 0 40px; }
+    section.s { padding: 64px 0 40px; }
+    .pullquote { padding-left: 44px; }
+  }
+</style>
+<script>
+  /* No-flash theme init — honor the saved choice before first paint.
+     Default is dark (the branded first impression). A saved choice wins;
+     with no saved choice, an OS light preference flips the root before
+     the body renders. */
+  (function () {
+    try {
+      var saved = localStorage.getItem("sysop-theme");
+      if (saved === "light" ||
+          (!saved && window.matchMedia &&
+           window.matchMedia("(prefers-color-scheme: light)").matches)) {
+        document.documentElement.setAttribute("data-theme", "light");
+      }
+    } catch (e) {}
+  })();
+</script>
+</head>
+<body>
+
+<header class="masthead">
+  <div class="masthead-inner">
+    <span class="masthead-title">Sysop</span>
+    <span>a monograph</span>
+    <span class="masthead-meta">
+      <a href="#preface">Preface</a>
+      <a href="#audience">Audience</a>
+      <a href="#day-one">Day one</a>
+      <a href="#arc">The arc</a>
+      <a href="#i">I · Lifecycle</a>
+      <a href="#ii">II · Parallel</a>
+      <a href="#iii">III · Quality</a>
+      <a href="#iv">IV · Convention</a>
+      <a href="#v">V · Hooks</a>
+    </span>
+    <button type="button" class="masthead-toggle" id="theme-toggle" aria-label="Switch to light theme">
+      <span class="tt-icon" aria-hidden="true">◐</span>
+      <span class="tt-label">Light</span>
+    </button>
+  </div>
+</header>
+
+<!-- ============================================================
+     HERO
+============================================================ -->
+<section class="hero">
+  <div class="page">
+    <div class="hero-grid">
+      <aside class="hero-margin rise">
+        <span class="line">Vol. <span class="accent">I</span></span>
+        <span class="line">Issue 86</span>
+        <span class="line">2026.07.07</span>
+        <span class="line" style="margin-top:22px">An essay on</span>
+        <span class="line">software workflow</span>
+      </aside>
+      <div>
+        <span class="hero-eyebrow rise d1">Sysop <span class="dot">·</span> a self-improving workflow for Claude Code</span>
+        <h1 class="rise d2">
+          The workflow<br>
+          gets <span class="swash">quieter</span><br>
+          <em class="stress">over time.</em>
+        </h1>
+        <p class="hero-sub rise d3">
+          Twenty-three skills that carry a project from a brain-dump to a merged PR — and beyond it, to the release notes — turning every code review into a
+          <em>permanent convention</em> along the way.
+          Extracted from a real production codebase, dogfooded one phase at a time,
+          and refusing to forget what it has already learned.
+        </p>
+        <div class="hero-stats rise d4">
+          <div class="hero-stat">
+            <div class="hero-stat-fig">23</div>
+            <div class="hero-stat-label">Skills</div>
+          </div>
+          <div class="hero-stat">
+            <div class="hero-stat-fig">113</div>
+            <div class="hero-stat-label">Shipped phases</div>
+          </div>
+          <div class="hero-stat">
+            <div class="hero-stat-fig">78</div>
+            <div class="hero-stat-label">Promoted conventions</div>
+          </div>
+          <div class="hero-stat">
+            <div class="hero-stat-fig">2</div>
+            <div class="hero-stat-label">Install paths</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     PREFACE — from the author
+============================================================ -->
+<section id="preface" class="s reveal">
+  <div class="page">
+    <div class="article">
+      <aside>
+        <div class="s-numeral word">preface</div>
+        <div class="s-tag">From the author</div>
+      </aside>
+      <div class="s-body">
+        <h2 class="s-title">Why this <span class="stress">page</span><br>exists.</h2>
+        <p class="lede">
+          Sysop is a self-improving development workflow for Claude Code. Its core idea is simple: when a code review keeps
+          catching the same mistake, that finding stops being one-off feedback and becomes a written convention the workflow
+          consults automatically on every future task. To be precise about the term: <em>promoting</em> a finding to a convention
+          is a human judgment call — what's self-improving is the enforcement, which from that point on is automatic and
+          permanent. Reviews get cheaper over time because the workflow stops re-finding what
+          it already knows. So far that loop has distilled <em>nearly 3,300 review findings</em> into
+          <em>78 enforceable conventions</em> across two codebases — and § IV shows what the archive measures, and, just as carefully, what it can't.
+        </p>
+        <p>
+          I built it to solve a problem. I was shipping a production app solo, generating far more code than I could review
+          line by line. So instead of inspecting every line, I built a system where the review is structural: deterministic
+          gates plus adversarial plan review. Agents, like staff, make mistakes — so you need a process that catches
+          them when the code is written and again before it deploys. Adversarial plan review is handing a colleague
+          your spec and asking them to tear apart your assumptions — a review rigorous enough to come back with the
+          line numbers that need to change. Recurring defects get rarer by design, not because
+          I'm eyeballing every line.
+        </p>
+        <p>
+          The instinct comes from running a team that shipped real systems: analysts and economists building SQL and
+          front-end tools, plus contract developers. You can't read every line your people write, so you put a process in
+          place that lets you ship anyway.
+        </p>
+        <p>
+          There's a quieter design constraint underneath all of it: the context window. It turned out to be the most
+          precious resource in this whole system. Even when you stay comfortably inside the limits, an instruction given
+          early in a session has to compete with everything generated since. The model predicts one token at a time, and the
+          more context that has piled up between that instruction and the work happening now, the less it weighs on what
+          comes next. The rule is still in the window; it's just too far from the work to carry much signal. Piling every
+          rule into one standing document makes this worse, not better.
+        </p>
+        <p>
+          So the workflow is built to <em>nurture</em> the window rather than fill it. Conventions live in glob-keyed maps,
+          and only the entries matching the files a task actually touches get pulled in, at the two moments they matter:
+          during planning and after implementation. Skills load when invoked, not as permanent preamble. Hooks inject their
+          guidance at the instant of the event they handle, not a thousand turns earlier. The principle throughout: don't
+          tell the model everything up front and hope it remembers. Hand it the applicable instruction when and where it
+          applies, so it's actually applied.
+        </p>
+        <aside class="pullquote">
+          <p>I didn't hand-write the monograph below. I directed it, generated through the same workflow it describes.</p>
+          <span class="attr">— Wade Petty</span>
+        </aside>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     OVERVIEW
+============================================================ -->
+<section id="overview" class="s reveal">
+  <div class="page">
+    <div class="article">
+      <aside>
+        <div class="s-numeral word">prologue</div>
+        <div class="s-tag">Overview</div>
+      </aside>
+      <div class="s-body">
+        <h2 class="s-title">What it <span class="stress">is,</span><br>and why it matters.</h2>
+        <p class="lede">
+          Most teams treat code review as a checkpoint — gate-keep the PR, ship it, move on. Sysop treats every review as a
+          <em>data point.</em> When the same finding recurs across PRs, it gets promoted from "feedback on this change" to a
+          written convention that future planning and implementation steps consult automatically.
+        </p>
+        <div class="two">
+          <div>
+            <h3>The shape</h3>
+            <p>
+              A planning front door — <code>/intake</code> (Phase 60) — turns a brain-dump into a populated, validated
+              <code>tasks/index.yml</code>. From there, four lifecycle skills — <code>/next-task</code>, <code>/claim-task</code>,
+              <code>/document-work</code>, <code>/review-close</code> — carry a single task from queued to merged. Two quality skills
+              (<code>/codebase-review</code>, <code>/security-audit</code>) generate work back into the queue; a third
+              (<code>/test-audit</code>) assesses the test suite's standing health. One orchestrator
+              (<code>/auto-build</code>) fans the same lifecycle across N tasks in parallel. A read-side pair answers a
+              project's two standing questions — <code>/roadmap</code> (what's left, in what order) and
+              <code>/daily-summary</code> (what happened) — and <code>/release</code> bundles the merges since the last
+              tag into a changelog entry, a semver bump, and an annotated tag. Two hooks
+              (<code>PermissionDenied</code>, <code>SubagentStop</code>) handle the boring mechanics so the skills can stay short.
+            </p>
+          </div>
+          <div>
+            <h3>The differentiator</h3>
+            <p>
+              Per-pack <code>convention_map.md</code> files are the persistent memory of the workflow. Each entry traces back to
+              the review round where the pattern was first observed. <code>/claim-task</code> consults them before planning and
+              after implementation; <code>/codebase-review</code> uses them as the rubric. Promotion into the map is a human
+              decision; everything after it is enforcement. And the loop reaches past one repo.
+              <code>/contribute-convention</code> takes a locally-promoted convention, strips your project's fingerprints
+              down to placeholder vocabulary, and files it upstream as a pack proposal — one of three give-back channels,
+              alongside <code>/report-issues</code> (friction that became a fix) and <code>/share-wins</code> (what worked
+              well enough to protect from a future change).
+            </p>
+            <p>
+              That give-back is the reason the project is open. Every pack convention is a documented, generalized
+              failure mode of an AI coding agent — earned from recurring findings on a real project, not drafted from
+              a style guide — so the corpus can compound across consumers in a way a closed tool structurally can't offer.
+              And because convention prose is read by review agents in privileged contexts, contributions land as
+              issues, never auto-merged: a maintainer authors every map change under a published trust policy
+              (CONTRIBUTING.md). The floor is shared; the curation is not crowdsourced.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     AUDIENCE — who this is for, who it isn't
+============================================================ -->
+<section id="audience" class="s reveal">
+  <div class="page">
+    <div class="article">
+      <aside>
+        <div class="s-numeral word">audience</div>
+        <div class="s-tag">Who this is for</div>
+      </aside>
+      <div class="s-body">
+        <h2 class="s-title">Three readers,<br>and one who should <span class="stress">close the tab.</span></h2>
+        <p class="lede">
+          Sysop isn't a productivity skin you sprinkle on any repo. It pays for itself in three specific situations, and
+          asks more than it's worth in a fourth. Name yours before going further.
+        </p>
+        <p>
+          <strong>You, shipping a real product alone.</strong> The case the workflow was built for. You're a competent
+          engineer producing more code than you can review line by line, and you can't add reviewers. The review has to
+          become <em>structural</em> — deterministic gates, written conventions, adversarial plan critique — instead of
+          eyeball-by-eyeball. The compounding payoff (§ IV) is the reason a solo builder can hold the line on quality at
+          team velocity.
+        </p>
+        <p>
+          <strong>A team shipping via agentic tools.</strong> Agents generate diffs faster than reviewers can read them.
+          The workflow puts gates between generation and merge — convention checks, plan critique, batched cleanup — so
+          autonomous code doesn't reach main unread. The value here is risk posture as much as throughput: same speed,
+          fewer of the predictable failure modes (schema drift, naive auth, silent data loss, half-applied fixes) sneaking
+          through. One boundary to name up front: the coordination Sysop provides is between parallel <em>sessions</em> —
+          locks and worktrees keep concurrent agent work from colliding — under a single human reviewer. Two people
+          sharing one queue (assignment, review handoff, who runs <code>/review-close</code>) is out of scope today: a
+          deliberate non-goal, not an oversight.
+        </p>
+        <p>
+          <strong>A builder growing into the judgment the workflow assumes.</strong> Sysop's gates ask for calls —
+          approve this plan, promote this convention, accept this risk — that presume review experience. <em>Guided
+          mode</em> (Phase 76; opt-in via one section in your project's <code>CLAUDE.md</code>) re-shapes those gates
+          for someone still building that judgment: the skill states the decision plainly, stress-tests its own
+          recommendation, and hands you only the calls that are genuinely yours. An honest tradeoff gets pros and cons;
+          a false choice — a security hole dressed as an option — gets collapsed, not offered as a peer; a call you
+          couldn't fairly weigh gets a conservative default and a note explaining why. The review bar doesn't move —
+          the deterministic gates are unchanged. What changes is how much of the reasoning you get to see.
+        </p>
+        <p>
+          <strong>Not a fit: anything you can hold in your head.</strong> Side projects, quick scripts, prototypes,
+          weekend tooling — anything where reviewing your own diff costs less than running the process. Sysop assumes
+          the codebase is big enough that structural review pays for itself. If it's small enough to keep in your head,
+          you don't need this; the overhead won't earn its keep.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     DAY ONE — how you use it
+============================================================ -->
+<section id="day-one" class="s reveal">
+  <div class="page">
+    <div class="article">
+      <aside>
+        <div class="s-numeral word">day one</div>
+        <div class="s-tag">How you use it</div>
+      </aside>
+      <div class="s-body">
+        <h2 class="s-title">Before any of this<br>runs, you need a <span class="stress">queue.</span></h2>
+        <p class="lede">
+          Everything in this document — the lifecycle, the parallel orchestrator, the convention loop — assumes a populated
+          <code>tasks/index.yml</code>. For most of Sysop's life you filed that by hand. Phase 60 added
+          <code>/intake</code>: a planning front door that runs the brain-dump-to-queue loop <em>with</em> you, writes the
+          tasks, and validates them — while leaving every judgment call that matters to you.
+        </p>
+        <p>
+          <strong>Ask it more than you think.</strong> The strongest move most people miss with these tools is using them
+          upstream of code: as a sounding board for scope, business model, tech stack, schema, pricing — the whole shape
+          of the thing before any of it gets built. The trick is <em>how</em> you ask. Propose an idea and tell the LLM
+          to tear it apart. Read the critique, keep what's real, drop what's reflexive, decide. The LLM can pressure-test
+          the structure of an idea; it can't tell you whether the idea is worth building. That judgment is yours, and the
+          workflow doesn't pretend otherwise — <code>/intake</code> is built around exactly this boundary: it argues its
+          own decomposition calls, but it will not adjudicate whether the venture is worth pursuing. The same adversarial
+          primitive the workflow applies to <em>plans</em> (§ I) you apply to the <em>premise</em>, one layer up.
+        </p>
+        <p>
+          <strong>What <code>/intake</code> does.</strong> A few rich turns, not a wizard. You brain-dump; it plays the idea
+          back so you can catch where it misheard you; it acts as a sounding board, arguing the weak spots; then it proposes
+          phases, sorts them by priority, and <em>emits a phase-one slice</em> into <code>tasks/index.yml</code> with body
+          files alongside. Decomposition follows a calibrated rubric (<code>_shared/decomposition-rubric.md</code>, Phase 60b)
+          — one-sentence done-conditions, <code>effort</code> kept independent of <code>blast_radius</code>,
+          <code>depends_on</code> reserved for physical impossibility. The skill is re-enterable: later phases stay coarse
+          until you come back to sharpen them.
+        </p>
+        <p>
+          <strong>Two legs of done.</strong> The floor is mechanical — <code>validate_tasks.py</code> passes in pre-commit,
+          so a malformed queue can't land. The ceiling is human — you read the slice and confirm it's the work you meant.
+          Intent that should outlive a single session lives in two optional, consumer-owned files at the <code>tasks/</code>
+          root: <code>vision.md</code> (what this is) and <code>decisions.md</code> (what you've ratified and why), so the
+          next <code>/intake</code> pass re-checks itself against them instead of relitigating settled calls.
+        </p>
+        <p>
+          And when the project predates Sysop entirely — code shipped, a <code>ROADMAP.md</code> or an issue tracker full
+          of backlog, no intent layer — <code>/onboard</code> (Phase 88) runs the adoption: with consent it reads the
+          repo's own evidence and <em>drafts</em> <code>vision.md</code> + <code>decisions.md</code> for you to confirm
+          (observations recorded as fact; inferred rationales explicitly marked, never asserted), and/or imports the
+          existing backlog — a roadmap file or open GitHub issues — into the queue, each task provenance-marked <code>surfaced_by: [imported]</code> so
+          downstream batching treats its effort numbers as the archaeological guesses they are — then hands off to
+          <code>/intake</code> for everything after.
+        </p>
+        <p>
+          Between planning sessions, single tasks arrive constantly — a bug spotted in a screenshot, an idea mid-review.
+          <code>/add-task</code> (Phase 89) is the thirty-second capture for that moment: one thought in, a validated,
+          deduplicated queue entry out, uncommitted for your sign-off. It never creates phases or touches the intent
+          layer — a phase-shaped thought gets routed back to <code>/intake</code>.
+        </p>
+        <aside class="pullquote">
+          <p>From here, the rest of the document applies. <code>/next-task</code> picks the first claimable entry;
+            the lifecycle (§ I) takes over.</p>
+        </aside>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     THE ARC — three-phase project narrative
+============================================================ -->
+<section id="arc" class="s reveal">
+  <div class="page">
+    <div class="article">
+      <aside>
+        <div class="s-numeral word">the arc</div>
+        <div class="s-tag">Plan · Execute · Maintain</div>
+      </aside>
+      <div class="s-body">
+        <h2 class="s-title">Three phases of a<br>project's <span class="stress">life.</span></h2>
+        <p class="lede">
+          You don't use Sysop once. You use it across the arc of a project — <em>plan</em>, <em>execute</em>,
+          <em>maintain</em> — and the value compounds across all three.
+        </p>
+
+        <figure class="fig">
+          <div class="fig-frame">
+            <svg viewBox="0 0 1000 380" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Arc of a project: plan, execute, maintain">
+              <defs>
+                <marker id="ah-arc" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                  <path d="M 0 0 L 10 5 L 0 10 z" class="arrow-head"/>
+                </marker>
+                <marker id="ah-arc-accent" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                  <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff5722"/>
+                </marker>
+              </defs>
+
+              <!-- PLAN -->
+              <g class="node" transform="translate(40, 60)">
+                <rect width="280" height="210" rx="2" class="fill-plate"/>
+                <text x="20" y="34" class="code" style="text-anchor:start; font-size:18px">PLAN</text>
+                <text x="20" y="54" class="small" style="text-anchor:start">what gets built</text>
+                <line x1="20" y1="72" x2="260" y2="72" stroke="var(--rule)"/>
+                <text x="20" y="100" class="smallserif" style="text-anchor:start; fill:var(--ink)">— /intake · brain-dump → queue</text>
+                <text x="20" y="124" class="smallserif" style="text-anchor:start; fill:var(--ink)">— /roadmap · order of attack</text>
+                <text x="20" y="148" class="smallserif" style="text-anchor:start; fill:var(--ink)">— a populated, validated queue</text>
+                <text x="20" y="186" class="small" style="text-anchor:start">tasks/index.yml</text>
+                <text x="20" y="204" class="small" style="text-anchor:start">tasks/open/&lt;ID&gt;.md</text>
+              </g>
+
+              <!-- EXECUTE -->
+              <g class="node" transform="translate(360, 60)">
+                <rect width="280" height="210" rx="2" class="fill-accent"/>
+                <text x="20" y="34" class="code" style="text-anchor:start; font-size:18px; fill:var(--accent-ink)">EXECUTE</text>
+                <text x="20" y="54" class="small" style="text-anchor:start">how it gets built</text>
+                <line x1="20" y1="72" x2="260" y2="72" stroke="var(--rule)"/>
+                <text x="20" y="100" class="smallserif" style="text-anchor:start; fill:var(--ink)">— single: /next-task → close</text>
+                <text x="20" y="124" class="smallserif" style="text-anchor:start; fill:var(--ink)">— parallel: /auto-build batch</text>
+                <text x="20" y="148" class="smallserif" style="text-anchor:start; fill:var(--ink)">— convention checks gate both</text>
+                <text x="20" y="186" class="small" style="text-anchor:start">slower than reckless —</text>
+                <text x="20" y="204" class="small" style="text-anchor:start">faster than reckless + fallout</text>
+              </g>
+
+              <!-- MAINTAIN -->
+              <g class="node" transform="translate(680, 60)">
+                <rect width="280" height="210" rx="2" class="fill-plate"/>
+                <text x="20" y="34" class="code" style="text-anchor:start; font-size:18px">MAINTAIN</text>
+                <text x="20" y="54" class="small" style="text-anchor:start">what stays clean</text>
+                <line x1="20" y1="72" x2="260" y2="72" stroke="var(--rule)"/>
+                <text x="20" y="100" class="smallserif" style="text-anchor:start; fill:var(--ink)">— /codebase-review · /security-audit</text>
+                <text x="20" y="124" class="smallserif" style="text-anchor:start; fill:var(--ink)">— /test-audit · /pr-dependabot</text>
+                <text x="20" y="148" class="smallserif" style="text-anchor:start; fill:var(--ink)">— /auto-fix · /auto-judge</text>
+                <text x="20" y="186" class="small" style="text-anchor:start">review_tasks.md</text>
+                <text x="20" y="204" class="small" style="text-anchor:start">parallel batch · --merge sequential</text>
+              </g>
+
+              <!-- Arrows between phases -->
+              <path d="M 320 165 L 356 165" class="arrow" marker-end="url(#ah-arc)"/>
+              <path d="M 640 165 L 676 165" class="arrow" marker-end="url(#ah-arc)"/>
+
+              <!-- Wraparound loop: maintain → execute (new tasks) -->
+              <path d="M 820 270 Q 820 325 690 325 L 480 325 Q 360 325 360 290 L 360 270" class="arrow accent" marker-end="url(#ah-arc-accent)"/>
+              <text x="500" y="350" class="diag-caption italic" style="fill:var(--accent-ink); font-size:13px">new findings feed back into the queue — the cycle continues</text>
+            </svg>
+          </div>
+          <figcaption>
+            <span class="fig-num">Fig. 1</span>
+            <span class="fig-cap">The arc of a project. The maintenance loop returns new work to execution; the workflow repeats with sharper conventions each time.</span>
+          </figcaption>
+        </figure>
+
+        <dl class="glossary">
+          <div class="entry">
+            <dt>Plan<span class="model-tag">you · spec'd intent</span></dt>
+            <dd>The judgment Sysop can't replace. You carry the product intent, the scope, the priorities; the queue is the artifact those choices produce. <em>See <a href="#day-one">Day one</a> for the procedure.</em></dd>
+          </div>
+          <div class="entry">
+            <dt>Execute<span class="model-tag opus">opus · sonnet · haiku</span></dt>
+            <dd>The lifecycle (§ I) runs single tasks; the orchestrator (§ II) runs batches. Both consult the <code>convention_map.md</code> (§ IV) before and after every implementation, so the gates aren't friction — they're how the workflow ships clean without a human reading every line.</dd>
+          </div>
+          <div class="entry">
+            <dt>Maintain<span class="model-tag opus">opus + parallel agents</span></dt>
+            <dd>Periodic <code>/codebase-review</code> and <code>/security-audit</code> generate batches in <code>review_tasks.md</code>. <code>/auto-fix</code> handles mechanical fixes <em>in parallel</em> (default 4 agents); <code>/auto-judge</code> handles flagged batches with Opus judgment. Both accept a <code>--merge</code> flag that runs overlapping batches <em>sequentially</em> — same-file work waits its turn so the second batch sees the first batch's fixes already in place. <code>/pr-dependabot</code> (§ III) handles dependency upkeep on the same cadence, and <code>/test-audit</code> assesses the standing health of the test suite itself — coverage the diff-scoped gates never look at, and existing tests worth retiring.</dd>
+          </div>
+          <div class="entry">
+            <dt>Report &amp; release<span class="model-tag">read-side · person-gated tag</span></dt>
+            <dd>The arc's backward glance. <code>/daily-summary</code> reads the git log and the queue and answers <em>what happened</em> — yesterday in detail, the week in shape. <code>/roadmap</code> answers <em>what's left and in what order</em>, computing 1–3 orderings from the queue's own signals. When enough has merged, <code>/release</code> bundles the commits since the last tag into a proposed semver bump, a changelog entry, and an annotated tag — dry-run by default, person-gated like every merge.</dd>
+          </div>
+        </dl>
+
+        <aside class="pullquote">
+          <p><strong>The trade-off, said plainly.</strong> Slower than letting agents run wild on main. Faster than letting agents run wild on main <em>and then fixing the fallout.</em></p>
+          <p>The gates exist because the things they catch — convention drift, security regressions, half-applied fixes, silent-data-loss merges — cost more downstream than they cost upstream. The workflow doesn't optimize for the next commit; it optimizes for the next quarter.</p>
+        </aside>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     I — SINGLE-TASK LIFECYCLE
+============================================================ -->
+<section id="i" class="s reveal">
+  <div class="page">
+    <div class="article">
+      <aside>
+        <div class="s-numeral">I</div>
+        <div class="s-tag">Lifecycle</div>
+      </aside>
+      <div class="s-body">
+        <h2 class="s-title">One task, four skills,<br>one <span class="stress">merge.</span></h2>
+        <p class="lede">
+          The happy path for a developer working on a single feature or fix. Each skill hands off to the next via the filesystem
+          (<code>tasks/index.yml</code>, <code>.locks/</code>, <code>.pending-docs/</code>) so any step can be re-run independently.
+        </p>
+
+        <figure class="fig">
+          <div class="fig-frame">
+            <svg viewBox="0 0 1000 360" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Single-task lifecycle diagram">
+              <defs>
+                <marker id="ah1" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                  <path d="M 0 0 L 10 5 L 0 10 z" class="arrow-head"/>
+                </marker>
+              </defs>
+
+              <!-- Tasks/index.yml at top -->
+              <g class="node">
+                <rect x="380" y="20" width="240" height="44" rx="2" class="fill-plate"/>
+                <text x="500" y="42" class="code">tasks/index.yml</text>
+              </g>
+              <text x="500" y="80" class="diag-caption italic">— source of truth for the queue —</text>
+
+              <!-- Lifecycle row -->
+              <g class="node" transform="translate(40,140)">
+                <rect width="170" height="100" rx="2" class="fill-primary"/>
+                <text x="85" y="34" class="code">/next-task</text>
+                <text x="85" y="54" class="small">role · quick (haiku)</text>
+                <text x="85" y="80" class="smallserif">pick claimable</text>
+              </g>
+              <g class="node" transform="translate(260,140)">
+                <rect width="170" height="100" rx="2" class="fill-accent"/>
+                <text x="85" y="34" class="code">/claim-task</text>
+                <text x="85" y="54" class="small">role · reasoning (opus)</text>
+                <text x="85" y="80" class="smallserif">lock + plan + execute</text>
+              </g>
+              <g class="node" transform="translate(480,140)">
+                <rect width="170" height="100" rx="2" class="fill-primary"/>
+                <text x="85" y="34" class="code">/document-work</text>
+                <text x="85" y="54" class="small">model · inherits</text>
+                <text x="85" y="80" class="smallserif">commit + pending-doc</text>
+              </g>
+              <g class="node" transform="translate(700,140)">
+                <rect width="170" height="100" rx="2" class="fill-accent"/>
+                <text x="85" y="34" class="code">/review-close</text>
+                <text x="85" y="54" class="small">role · reasoning (opus)</text>
+                <text x="85" y="80" class="smallserif">verify + merge + archive</text>
+              </g>
+
+              <!-- Arrows between skills -->
+              <path d="M 210 190 L 256 190" class="arrow" marker-end="url(#ah1)"/>
+              <path d="M 430 190 L 476 190" class="arrow" marker-end="url(#ah1)"/>
+              <path d="M 650 190 L 696 190" class="arrow" marker-end="url(#ah1)"/>
+
+              <!-- Source: queue → first skill -->
+              <path d="M 440 64 Q 200 90 125 140" class="arrow dashed" marker-end="url(#ah1)"/>
+              <!-- Sink: last skill → queue (archive) -->
+              <path d="M 785 140 Q 800 90 560 64" class="arrow dashed" marker-end="url(#ah1)"/>
+
+              <!-- Sub-agent annotation under claim-task -->
+              <g class="node" transform="translate(260,272)">
+                <rect width="170" height="56" rx="2" class="fill-ghost"/>
+                <text x="85" y="24" class="small" style="fill:var(--accent-ink)">reviewer-executor</text>
+                <text x="85" y="42" class="smallserif">sub-agent · phase 29</text>
+              </g>
+              <path d="M 345 240 L 345 272" class="arrow accent"/>
+
+              <!-- Pending-doc annotation under document-work -->
+              <g class="node" transform="translate(480,272)">
+                <rect width="170" height="56" rx="2" class="fill-ghost"/>
+                <text x="85" y="24" class="small">.pending-docs/</text>
+                <text x="85" y="42" class="smallserif">handoff to senior review</text>
+              </g>
+              <path d="M 565 240 L 565 272" class="arrow dashed"/>
+
+              <!-- Lock annotation under next-task -->
+              <g class="node" transform="translate(40,272)">
+                <rect width="170" height="56" rx="2" class="fill-ghost"/>
+                <text x="125" y="24" class="small">.locks/</text>
+                <text x="125" y="42" class="smallserif">prevents double-claim</text>
+              </g>
+              <path d="M 125 240 L 125 272" class="arrow dashed"/>
+            </svg>
+          </div>
+          <figcaption>
+            <span class="fig-num">Fig. 2</span>
+            <span class="fig-cap">The single-task lifecycle. Solid arrows: skill handoff. Dashed: filesystem coordination. Pinned skills declare <em>roles</em> — reasoning, mechanical, quick — not models (Phase 69); the parenthesized model is the default mapping, remappable per project (§ VI). Un-pinned skills (like <code>/document-work</code>) inherit the session model.</span>
+          </figcaption>
+        </figure>
+
+        <dl class="glossary">
+          <div class="entry">
+            <dt>/next-task<span class="model-tag haiku">haiku · selection</span></dt>
+            <dd>Single claimable task with effort + blockers. Anchored on <code>current_focus: true</code>, sorted by effort low→high.</dd>
+          </div>
+          <div class="entry">
+            <dt>/claim-task<span class="model-tag opus">opus · planning + exec</span></dt>
+            <dd>Creates lock + worktree, builds a plan, runs adversarial review, then a sub-agent owns implementation, verification, and the commit.</dd>
+          </div>
+          <div class="entry">
+            <dt>/document-work<span class="model-tag">inherits · narration</span></dt>
+            <dd>Boy-scout simplify pass, follow-up-stub <em>HARD-FAIL</em> gate, then writes <code>.pending-docs/&lt;branch&gt;.md</code> for senior review.</dd>
+          </div>
+          <div class="entry">
+            <dt>/review-close<span class="model-tag opus">opus · gate</span></dt>
+            <dd>Worktree-state classification; project pre-merge gates — including a <em>crown-jewel coverage gate</em> (Phase 61) that fails the merge when a critical path loses test coverage, with no baseline escape hatch; a verify-the-record check (Phase 59) that reads back the task's <code>## Test decision</code> and confirms it against the actual diff; the manual-smoke gate; merge to main; archive the task; clean up branches.</dd>
+          </div>
+        </dl>
+
+        <aside class="pullquote">
+          <p><strong>The sub-agent fan-out.</strong> Since Phase 29, <code>/claim-task</code> spawns a single reviewer-executor sub-agent that reads the plan, runs adversarial review, self-classifies as <code>fixable</code> or <code>blocker</code>, halts on blockers via a sealed <code>STATUS: BLOCKED</code> envelope, otherwise implements + verifies + commits.</p>
+          <p>The parent reads the envelope — now structurally parsed by the <code>SubagentStop</code> hook — and prints the handoff.</p>
+          <span class="attr">— Internal note, on the reviewer-executor collapse</span>
+        </aside>
+
+        <aside class="pullquote">
+          <p><strong>The test claim has to survive to merge.</strong> Plan-time, the task body records a <em>test decision</em> — &ldquo;test X proves Y&rdquo; or &ldquo;no test because Z&rdquo; (Phase 58b). Close-time, <code>/review-close</code> reads it back and verifies it against the diff that's actually shipping (Phase 59).</p>
+          <p>An assertion made during planning doesn't get to coast into main unchecked — the record is verified, not trusted.</p>
+        </aside>
+
+        <h3>Adjacent skills</h3>
+        <p class="muted">
+          Two skills that sit next to the lifecycle rather than inside it — useful for ad-hoc planning and for surveying state
+          when multiple branches are in flight (typically after an <code>/auto-build</code> batch — § II).
+        </p>
+        <dl class="glossary">
+          <div class="entry">
+            <dt>/plan-review<span class="model-tag opus">opus · adversarial pass</span></dt>
+            <dd>Adversarial pass on an ad-hoc plan from conversation or a file. Uses the same prompt template as <code>/claim-task</code> Step 7 (<code>_shared/adversarial-review.md</code>); surfaces findings, presents a revised plan for approval before any execution. Phase 58a added a source-verification dimension: external SDK or framework calls with no in-repo precedent get flagged <code>unverified</code> rather than trusted on faith.</dd>
+          </div>
+          <div class="entry">
+            <dt>/sitrep<span class="model-tag">inherits · orientation</span></dt>
+            <dd>Read-only survey across worktrees, locks, branches, the index, and pending review batches. Reports lifecycle position per task — queued, claimed, in-progress, documented, awaiting close — and recommends a single next move. Phase 40 introduced the <code>Doc-Work:</code> git trailer that lets it classify documented vs undocumented branches without grepping prose. Phase 54 made the read-only guarantee structural — a <code>disallowed-tools</code> guard (Claude Code 2.1.152) on both <code>/sitrep</code> and <code>/next-task</code> so neither can mutate state even when asked.</dd>
+          </div>
+        </dl>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     II — PARALLEL BATCH
+============================================================ -->
+<section id="ii" class="s reveal">
+  <div class="page">
+    <div class="article">
+      <aside>
+        <div class="s-numeral">II</div>
+        <div class="s-tag">Parallel</div>
+      </aside>
+      <div class="s-body">
+        <h2 class="s-title">One orchestrator,<br>N tasks, three <span class="stress">phases</span> each.</h2>
+        <p class="lede">
+          When the queue holds several independent tasks, <code>/auto-build</code> runs the same lifecycle in batched parallelism.
+          Architectural tasks solo, migrations solo, cross-module capped, complexity-sum ceiling, and a <em>heavy-solo invariant</em>
+          (any single task with weight &gt; K = 6 runs alone, never alongside siblings — Phase 42a). Default N&nbsp;=&nbsp;4.
+        </p>
+
+        <figure class="fig">
+          <div class="fig-frame">
+            <svg viewBox="0 0 1000 510" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Parallel batch orchestration diagram">
+              <defs>
+                <marker id="ah2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                  <path d="M 0 0 L 10 5 L 0 10 z" class="arrow-head"/>
+                </marker>
+              </defs>
+
+              <!-- Orchestrator -->
+              <g class="node">
+                <rect x="380" y="20" width="240" height="68" rx="2" class="fill-accent"/>
+                <text x="500" y="46" class="code">/auto-build</text>
+                <text x="500" y="70" class="small">orchestrator · phase 29</text>
+              </g>
+
+              <!-- Pre-claim band -->
+              <g class="node">
+                <rect x="200" y="124" width="600" height="40" rx="2" class="fill-plate"/>
+                <text x="500" y="148" class="smallserif">Step 5 · sequential pre-claim on main · <tspan font-family="var(--mono)" font-size="11" font-style="normal">yaml round-trip + claim_task.sh --lock</tspan></text>
+              </g>
+              <path d="M 500 88 L 500 124" class="arrow" marker-end="url(#ah2)"/>
+
+              <!-- Three task columns -->
+              <g class="node" transform="translate(100,200)">
+                <rect width="180" height="40" rx="2" class="fill-primary"/>
+                <text x="90" y="24" class="code">Task A</text>
+              </g>
+              <g class="node" transform="translate(410,200)">
+                <rect width="180" height="40" rx="2" class="fill-primary"/>
+                <text x="90" y="24" class="code">Task B</text>
+              </g>
+              <g class="node" transform="translate(720,200)">
+                <rect width="180" height="40" rx="2" class="fill-primary"/>
+                <text x="90" y="24" class="code">Task C</text>
+              </g>
+
+              <!-- 6a plan -->
+              <g class="node" transform="translate(100,266)">
+                <rect width="180" height="40" rx="2" class="fill-steel"/>
+                <text x="90" y="24" class="small" style="fill:var(--steel)">6a · plan-only opus</text>
+              </g>
+              <g class="node" transform="translate(410,266)">
+                <rect width="180" height="40" rx="2" class="fill-steel"/>
+                <text x="90" y="24" class="small" style="fill:var(--steel)">6a · plan-only opus</text>
+              </g>
+              <g class="node" transform="translate(720,266)">
+                <rect width="180" height="40" rx="2" class="fill-steel"/>
+                <text x="90" y="24" class="small" style="fill:var(--steel)">6a · plan-only opus</text>
+              </g>
+
+              <!-- 6b reviewer -->
+              <g class="node" transform="translate(100,322)">
+                <rect width="180" height="40" rx="2" class="fill-steel"/>
+                <text x="90" y="24" class="small" style="fill:var(--steel)">6b · adversarial review</text>
+              </g>
+              <g class="node" transform="translate(410,322)">
+                <rect width="180" height="40" rx="2" class="fill-steel"/>
+                <text x="90" y="24" class="small" style="fill:var(--steel)">6b · adversarial review</text>
+              </g>
+              <g class="node" transform="translate(720,322)">
+                <rect width="180" height="40" rx="2" class="fill-steel"/>
+                <text x="90" y="24" class="small" style="fill:var(--steel)">6b · adversarial review</text>
+              </g>
+
+              <!-- Halt or absorb -->
+              <text x="500" y="394" class="diag-caption italic">6c · orchestrator classifies — halt on blocker, or absorb fixable findings</text>
+
+              <!-- 6e exec -->
+              <g class="node" transform="translate(100,410)">
+                <rect width="180" height="44" rx="2" class="fill-accent"/>
+                <text x="90" y="26" class="small" style="fill:var(--accent-ink)">6e · execute + commit</text>
+              </g>
+              <g class="node" transform="translate(410,410)">
+                <rect width="180" height="44" rx="2" class="fill-accent"/>
+                <text x="90" y="26" class="small" style="fill:var(--accent-ink)">6e · execute + commit</text>
+              </g>
+              <g class="node" transform="translate(720,410)">
+                <rect width="180" height="44" rx="2" class="fill-accent"/>
+                <text x="90" y="26" class="small" style="fill:var(--accent-ink)">6e · execute + commit</text>
+              </g>
+
+              <!-- Vertical connectors -->
+              <path d="M 190 240 L 190 266" class="arrow" marker-end="url(#ah2)"/>
+              <path d="M 500 240 L 500 266" class="arrow" marker-end="url(#ah2)"/>
+              <path d="M 810 240 L 810 266" class="arrow" marker-end="url(#ah2)"/>
+              <path d="M 190 306 L 190 322" class="arrow"/>
+              <path d="M 500 306 L 500 322" class="arrow"/>
+              <path d="M 810 306 L 810 322" class="arrow"/>
+              <path d="M 190 362 L 190 410" class="arrow" marker-end="url(#ah2)"/>
+              <path d="M 500 362 L 500 410" class="arrow" marker-end="url(#ah2)"/>
+              <path d="M 810 362 L 810 410" class="arrow" marker-end="url(#ah2)"/>
+
+              <!-- Fan-out from pre-claim band -->
+              <path d="M 280 164 Q 200 184 190 200" class="arrow" marker-end="url(#ah2)"/>
+              <path d="M 500 164 L 500 200" class="arrow" marker-end="url(#ah2)"/>
+              <path d="M 720 164 Q 800 184 810 200" class="arrow" marker-end="url(#ah2)"/>
+
+              <text x="500" y="488" class="diag-caption italic">— human runs /review-close per branch; the merge remains person-gated —</text>
+            </svg>
+          </div>
+          <figcaption>
+            <span class="fig-num">Fig. 3</span>
+            <span class="fig-cap">Batched fan-out. Steel-blue phases are sub-agent work; orange phases execute and commit. The orchestrator never recurses; it owns the classification seam.</span>
+          </figcaption>
+        </figure>
+
+        <aside class="pullquote">
+          <p><strong>Why this isn't just "spawn N agents."</strong> The orchestrator sits between phases — it does the classification step (Phase 6c) itself, in-process, because adversarial-review findings need a single judgment call before execution starts.</p>
+          <p>Without the orchestrator-side seam, fixable findings get re-reviewed indefinitely and blockers slip through. The shape is borrowed from the upstream <code>gdp-query-system</code> project where it ran ~150 batches before being ported here.</p>
+        </aside>
+
+        <p>Fig. 3 is the <em>process</em>. The question it doesn't answer — the one every newcomer eventually
+          asks — is <em>where</em> all of that runs, and what you can safely do beside it. The build never happens
+          on <code>main</code>: your clone stays put while each task gets its own worktree, and two coordination
+          files (<code>.locks/</code>, <code>tasks/index.yml</code>) keep every session honest about what's claimed.</p>
+
+        <figure class="fig">
+          <div class="fig-frame">
+            <svg viewBox="0 0 1000 374" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Where the work lives: one clone stays on main holding the locks directory and the task index; each task builds in its own sibling worktree. claim-task and auto-build create worktrees; review-close merges them back to main. From another session, add-task appends to the queue and claim-task starts new work, both only ever creating more worktrees.">
+              <defs>
+                <marker id="ah8" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                  <path d="M 0 0 L 10 5 L 0 10 z" class="arrow-head"/>
+                </marker>
+              </defs>
+
+              <!-- Primary checkout plate -->
+              <g class="node">
+                <rect x="70" y="48" width="330" height="212" rx="2" class="fill-plate"/>
+                <text x="235" y="74" class="smallserif">Primary checkout</text>
+                <text x="235" y="96" class="code" font-size="12">~/Projects/app/ · main</text>
+                <rect x="92" y="112" width="286" height="40" rx="2" class="fill-primary"/>
+                <text x="235" y="137" class="small">.locks/ — who owns what</text>
+                <rect x="92" y="160" width="286" height="46" rx="2" class="fill-primary"/>
+                <text x="235" y="180" class="small">tasks/index.yml</text>
+                <text x="235" y="197" class="small" font-size="10">open · in_progress · done</text>
+                <text x="235" y="236" class="small" font-style="italic">orchestrator runs here · merges land here</text>
+              </g>
+
+              <!-- Worktrees -->
+              <text x="785" y="42" class="diag-caption italic" text-anchor="middle">worktrees — isolated build dirs</text>
+              <g class="node" transform="translate(630,58)">
+                <rect width="310" height="60" rx="2" class="fill-primary"/>
+                <text x="155" y="26" class="code" font-size="12">app-feat-a/ · feat/feat-a</text>
+                <text x="155" y="46" class="small" font-size="10">agent builds here</text>
+              </g>
+              <g class="node" transform="translate(630,138)">
+                <rect width="310" height="60" rx="2" class="fill-primary"/>
+                <text x="155" y="26" class="code" font-size="12">app-tech-b/ · tech/tech-b</text>
+                <text x="155" y="46" class="small" font-size="10">agent builds here</text>
+              </g>
+
+              <!-- create arrow: primary -> worktrees -->
+              <path d="M 400 104 Q 515 84 630 88" class="arrow" marker-end="url(#ah8)"/>
+              <text x="515" y="74" class="code" font-size="12" text-anchor="middle">/claim-task · /auto-build</text>
+
+              <!-- merge arrow: worktrees -> primary -->
+              <path d="M 630 172 Q 515 188 400 184" class="arrow" marker-end="url(#ah8)"/>
+              <text x="515" y="206" class="code" font-size="12" text-anchor="middle">/review-close</text>
+
+              <!-- Second-session band -->
+              <rect x="70" y="288" width="870" height="76" rx="2" class="fill-plate"/>
+              <text x="505" y="311" class="smallserif" text-anchor="middle" style="fill:var(--ink-dim)">From another session, while a build runs —</text>
+              <text x="505" y="333" class="smallserif" text-anchor="middle" style="fill:var(--ink-dim)">/add-task appends to the queue · /claim-task starts new work in its own worktree</text>
+              <text x="505" y="351" class="smallserif" text-anchor="middle" style="fill:var(--ink)">never edit main by hand — it skips the lock and can hijack a running build's HEAD</text>
+            </svg>
+          </div>
+          <figcaption>
+            <span class="fig-num">Fig. 8</span>
+            <span class="fig-cap">Where the work lives. One clone stays on <code>main</code> (holding <code>.locks/</code> and the task index); each task builds in its own sibling worktree. <code>/claim-task</code> and <code>/auto-build</code> create worktrees; <code>/review-close</code> merges them back. Adding tasks or claiming new work from another session is safe — it only ever creates more worktrees.</span>
+          </figcaption>
+        </figure>
+
+        <p>So a second session is free to brainstorm, <code>/add-task</code> into the queue, or <code>/claim-task</code>
+          fresh work — all of it lands in new worktrees, never on top of a running build. The one rule: start work
+          through <code>/claim-task</code>, never by editing <code>main</code> by hand.</p>
+
+        <p>The coordination goes one level past the lock. Before you claim, <code>/claim-task</code> checks whether the
+          task's likely files overlap what's already building, and the selectors — <code>/next-task</code>,
+          <code>/auto-build</code>, <code>/roadmap</code> — can weigh that same overlap when they pick the next task. It's
+          advisory, not a gate: worktree isolation makes a collision recoverable rework at review time, not a corrupt tree,
+          so the workflow warns and lets you decide rather than refusing the claim.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     III — QUALITY SKILLS
+============================================================ -->
+<section id="iii" class="s reveal">
+  <div class="page">
+    <div class="article">
+      <aside>
+        <div class="s-numeral">III</div>
+        <div class="s-tag">Quality</div>
+      </aside>
+      <div class="s-body">
+        <h2 class="s-title">Reviews and audits<br><span class="stress">write tasks,</span><br>they don't open PRs.</h2>
+        <p class="lede">
+          <code>/codebase-review</code> and <code>/security-audit</code> are the workflow's task generators. Their output isn't a comment
+          thread or a checklist — it's structured entries in <code>review_tasks.md</code>. <code>/triage</code> classifies each batch
+          as <em>auto</em> or <em>flag</em>; <code>/auto-fix</code> and <code>/auto-judge</code> drain the two pools in parallel.
+          Findings <em>have to survive</em> the same gates as feature work.
+        </p>
+        <p>
+          Neither generator opens with the model. A review's first pass is deterministic — the shared check
+          registry (<code>checks.yml</code>): grep rules for the mechanical convention violations, a
+          language-server pass (<code>pyright</code>/<code>tsc</code> diagnostics), Semgrep AST rules for the
+          patterns grep can't express, lint and dependency-audit stages riding the same plumbing. One finding
+          shape, one baseline, one blocking gate — those findings file themselves, no model in the loop. The
+          model reviews on top of that floor, and the language server arms it a second time on the way out:
+          each novel finding is amplified across the codebase, symbol-anchored ones through
+          <em>find-references</em> — which resolves imports, aliases, and renames — so a promoted convention
+          lands as a task at every call site, not just the one place an agent happened to look. Judgment gets
+          spent where tools can't see; enumeration goes to the tools.
+        </p>
+
+        <figure class="fig">
+          <div class="fig-frame">
+            <svg viewBox="0 0 1000 320" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Quality skills feeding the queue">
+              <defs>
+                <marker id="ah3" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                  <path d="M 0 0 L 10 5 L 0 10 z" class="arrow-head"/>
+                </marker>
+              </defs>
+
+              <g class="node" transform="translate(60,80)">
+                <rect width="220" height="80" rx="2" class="fill-steel"/>
+                <text x="110" y="34" class="code">/codebase-review</text>
+                <text x="110" y="60" class="smallserif">reuse · quality · drift</text>
+              </g>
+              <g class="node" transform="translate(60,200)">
+                <rect width="220" height="80" rx="2" class="fill-steel"/>
+                <text x="110" y="34" class="code">/security-audit</text>
+                <text x="110" y="60" class="smallserif">OWASP-aligned threat scan</text>
+              </g>
+
+              <g class="node">
+                <rect x="400" y="140" width="220" height="56" rx="2" class="fill-plate"/>
+                <text x="510" y="166" class="code">review_tasks.md</text>
+                <text x="510" y="184" class="smallserif">batched, threat-categorized</text>
+              </g>
+
+              <g class="node">
+                <rect x="400" y="216" width="220" height="48" rx="2" class="fill-steel"/>
+                <text x="510" y="238" class="code" style="fill:var(--steel)">/triage</text>
+                <text x="510" y="256" class="smallserif">auto vs flag · Phase 44</text>
+              </g>
+
+              <g class="node">
+                <rect x="740" y="80" width="220" height="80" rx="2" class="fill-accent"/>
+                <text x="850" y="112" class="code">/auto-fix</text>
+                <text x="850" y="138" class="smallserif">parallel · mechanical fixes</text>
+              </g>
+              <g class="node">
+                <rect x="740" y="200" width="220" height="80" rx="2" class="fill-accent"/>
+                <text x="850" y="232" class="code">/auto-judge</text>
+                <text x="850" y="258" class="smallserif">parallel · opus judgment</text>
+              </g>
+
+              <path d="M 280 120 Q 340 130 400 160" class="arrow" marker-end="url(#ah3)"/>
+              <path d="M 280 240 Q 340 230 400 200" class="arrow" marker-end="url(#ah3)"/>
+              <path d="M 510 196 L 510 216" class="arrow" marker-end="url(#ah3)"/>
+              <path d="M 620 232 Q 700 180 740 130" class="arrow" marker-end="url(#ah3)"/>
+              <path d="M 620 248 Q 700 240 740 240" class="arrow" marker-end="url(#ah3)"/>
+
+              <text x="510" y="44" class="diag-caption italic">findings become work — work goes through the same gates as feature PRs</text>
+              <text x="850" y="306" class="diag-caption" style="font-size:10px">— or /claim-task for one-off manual review —</text>
+            </svg>
+          </div>
+          <figcaption>
+            <span class="fig-num">Fig. 4</span>
+            <span class="fig-cap">Quality skills funnel into <code>review_tasks.md</code>; <code>/triage</code> splits the pile into <em>auto</em> and <em>flag</em>; <code>/auto-fix</code> and <code>/auto-judge</code> drain the two pools in parallel (or sequentially via <code>--merge</code> when batches share files).</span>
+          </figcaption>
+        </figure>
+
+        <dl class="glossary">
+          <div class="entry">
+            <dt>/codebase-review<span class="model-tag opus">opus · rubric pass</span></dt>
+            <dd>Runs the deterministic pre-scan, then walks the codebase against <code>convention_map.md</code>, files findings as batched tasks (Batch&nbsp;1 / Batch&nbsp;2 / …) with effort + blast_radius pre-populated. Drained by <code>/auto-fix</code>.</dd>
+          </div>
+          <div class="entry">
+            <dt>/security-audit<span class="model-tag opus">opus · OWASP pass</span></dt>
+            <dd>Threat-categorized OWASP pass against <code>security_map.md</code>. Pack-aware (python / postgres / nextjs-react / llm) so findings cite the right CWE and remediation pattern.</dd>
+          </div>
+          <div class="entry">
+            <dt>/test-audit<span class="model-tag opus">opus · suite health</span></dt>
+            <dd>Phase 80 — the standing counterpart to the diff-scoped coverage gate. Crown-jewel-first assessment of the whole test suite: modules that never show up in a diff but carry no tests, covered-but-hollow tests a coverage number can't see, and existing tests worth retiring (provably dead, redundant, brittle). Read-only — it ranks recommendations and offers to route the accepted ones to <code>/intake</code>; it never writes a test or claims a task itself.</dd>
+          </div>
+          <div class="entry">
+            <dt>/triage<span class="model-tag">inherits · classifier</span></dt>
+            <dd>Phase 44 split this out of <code>/auto-fix</code>: read each pending batch, classify as <em>auto</em> (fully mechanical) or <em>flag</em> (needs judgment), persist the verdict back into <code>review_tasks.md</code>. Idempotent, so it's safe to re-run. Prerequisite for the two drainers below.</dd>
+          </div>
+          <div class="entry">
+            <dt>/auto-fix<span class="model-tag">parallel · mechanical</span></dt>
+            <dd>Drains the <em>auto</em> pool. Claims each batch via an <em>isolated parallel sub-agent</em> (default 4), fixes, verifies, pushes. <code>--merge</code> handles file-overlapping batches sequentially so the second batch sees the first's fixes.</dd>
+          </div>
+          <div class="entry">
+            <dt>/auto-judge<span class="model-tag opus">opus · judgment</span></dt>
+            <dd>Drains the <em>flag</em> pool. Same parallel + <code>--merge</code> shape, but each sub-agent is Opus and can FIX, DROP, or FAIL a task after adversarial re-reading. The two drainers run concurrently against disjoint pools.</dd>
+          </div>
+        </dl>
+
+        <h3>The one sweep that does touch PRs</h3>
+        <p class="muted">
+          Phase 53 added the workflow's first GitHub-touching skill — the exception to this section's title, scoped
+          to bot-authored dependency PRs only.
+        </p>
+        <dl class="glossary">
+          <div class="entry">
+            <dt>/pr-dependabot<span class="model-tag opus">opus · github sweep</span></dt>
+            <dd>Sweeps open Dependabot PRs: classifies each by ecosystem + semver, merges patch/minor updates on green CI, holds majors (even from trusted publishers), closes pip and open-set-superseded PRs. Dry-run by default; <code>--execute</code> to act. A client-side replacement for native auto-merge, which Free-plan private repos don't get. Classifier validated against ~50 real PRs.</dd>
+          </div>
+        </dl>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     IV — CONVENTION PROMOTION  (centerpiece — spotlight section)
+============================================================ -->
+<section id="iv" class="s spotlight reveal">
+  <div class="page">
+    <div class="article">
+      <aside>
+        <div class="s-numeral">IV</div>
+        <div class="s-tag">The loop</div>
+      </aside>
+      <div class="s-body">
+        <h2 class="s-title">The loop that makes it<br><span class="stress">self-improving.</span></h2>
+        <p class="lede">
+          This is the thing. Every other section is plumbing for this one. When a finding from <code>/review-close</code> recurs across
+          two review rounds, it gets promoted into the relevant pack's <code>convention_map.md</code>. From that moment on,
+          <code>/claim-task</code> consults it during planning <em>and</em> after implementation, and <code>/codebase-review</code>
+          uses it as a rubric on future passes. <em>The workflow forgets nothing.</em>
+        </p>
+
+        <figure class="fig" id="loop-fig">
+          <div class="fig-frame">
+            <svg viewBox="0 0 1000 560" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Convention promotion loop">
+              <defs>
+                <marker id="ah-loop" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+                  <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff5722"/>
+                </marker>
+              </defs>
+
+              <!-- Concentric guide rings -->
+              <circle cx="500" cy="278" r="240" fill="none" stroke="var(--rule)" stroke-dasharray="2 6"/>
+              <circle cx="500" cy="278" r="190" fill="none" stroke="var(--rule-soft)"/>
+
+              <!-- Central convention_map node -->
+              <g class="node">
+                <ellipse cx="500" cy="278" rx="170" ry="58" class="fill-accent"/>
+                <text x="500" y="262" class="code" style="font-size:18px">convention_map.md</text>
+                <text x="500" y="288" class="smallserif" style="font-size:11px">per-pack: python · postgres · nextjs-react · llm</text>
+                <text x="500" y="306" class="smallserif" style="font-size:11px">core: bash · skill markdown</text>
+              </g>
+
+              <!-- 1. /review-close finds finding (top) -->
+              <g class="node">
+                <rect x="380" y="50" width="240" height="60" rx="2" class="fill-primary"/>
+                <text x="500" y="74" class="code">/review-close finds finding</text>
+                <text x="500" y="96" class="smallserif">round N</text>
+              </g>
+
+              <!-- 2. Fix this round (right) -->
+              <g class="node">
+                <rect x="750" y="148" width="220" height="60" rx="2" class="fill-plate"/>
+                <text x="860" y="172" class="smallserif" style="font-size:14px">fix in this PR</text>
+                <text x="860" y="192" class="small">noted in review_tasks.md</text>
+              </g>
+
+              <!-- 3. Pattern recurs (right-bottom) -->
+              <g class="node">
+                <rect x="750" y="352" width="220" height="60" rx="2" class="fill-plate"/>
+                <text x="860" y="376" class="smallserif" style="font-size:14px">same pattern again</text>
+                <text x="860" y="396" class="small">round N+1 · N+2</text>
+              </g>
+
+              <!-- 4. Promoted (bottom) -->
+              <g class="node">
+                <rect x="380" y="450" width="240" height="60" rx="2" class="fill-accent"/>
+                <text x="500" y="474" class="code" style="font-size:15px">promoted to map</text>
+                <text x="500" y="494" class="smallserif">attributed to round N</text>
+              </g>
+
+              <!-- 5. Consulted (left-bottom) -->
+              <g class="node">
+                <rect x="30" y="352" width="240" height="78" rx="2" class="fill-primary"/>
+                <text x="150" y="374" class="code">/claim-task</text>
+                <text x="150" y="394" class="small">step 2 · pre-impl check</text>
+                <text x="150" y="412" class="small">step 7 · post-impl re-check</text>
+              </g>
+
+              <!-- 6. Enforced (left-top) -->
+              <g class="node">
+                <rect x="30" y="148" width="240" height="60" rx="2" class="fill-steel"/>
+                <text x="150" y="172" class="code">/codebase-review</text>
+                <text x="150" y="192" class="smallserif">uses map as rubric</text>
+              </g>
+
+              <!-- Loop arrows: clockwise (animated trace) -->
+              <path d="M 620 76 Q 720 90 770 148" class="arrow accent trace" marker-end="url(#ah-loop)"/>
+              <path d="M 860 208 L 860 352" class="arrow accent trace" marker-end="url(#ah-loop)"/>
+              <path d="M 760 412 Q 660 442 620 478" class="arrow accent trace" marker-end="url(#ah-loop)"/>
+              <path d="M 500 450 L 500 336" class="arrow accent trace" marker-end="url(#ah-loop)"/>
+              <path d="M 360 300 Q 290 326 270 372" class="arrow accent trace" marker-end="url(#ah-loop)"/>
+              <path d="M 360 256 Q 290 224 270 196" class="arrow accent trace" marker-end="url(#ah-loop)"/>
+              <path d="M 270 168 Q 320 100 380 78" class="arrow accent trace" marker-end="url(#ah-loop)"/>
+
+              <!-- Labels along arrows -->
+              <text x="720" y="118" class="diag-marker">apply</text>
+              <text x="888" y="282" class="diag-marker">repeat?</text>
+              <text x="708" y="452" class="diag-marker">promote</text>
+              <text x="146" y="296" class="diag-marker">consult</text>
+              <text x="144" y="240" class="diag-marker">enforce</text>
+              <text x="358" y="116" class="diag-marker">next round</text>
+            </svg>
+          </div>
+          <figcaption>
+            <span class="fig-num">Fig. 5 — centerpiece</span>
+            <span class="fig-cap">The convention loop. Findings travel clockwise; the map ages forward, the patterns get cheaper to enforce.</span>
+          </figcaption>
+        </figure>
+
+        <aside class="pullquote">
+          <p><strong>Why this beats a wiki page.</strong> A wiki page rots — nobody reads it before opening a PR. The <code>convention_map.md</code> is read on <em>every</em> <code>/claim-task</code> Step 2 because the skill <em>requires</em> it, and again on Step 7 as a post-impl boy-scout pass.</p>
+          <p>The map's entries also flow downstream: once a pattern is generalizable across projects, it gets promoted from a project's local map into a Sysop pack, where it ships to every consumer on the next <code>bash scripts/sysop-update.sh</code>.</p>
+        </aside>
+
+        <h3>What's in a map entry</h3>
+        <p>
+          Each entry is a glob pattern, a one-line rule, and an attribution: the review round where the pattern was first surfaced. The
+          round attribution is load-bearing. When an entry later turns out to be wrong, you can find the review that promoted it and
+          learn what changed.
+        </p>
+        <div class="listing" data-label="excerpt · packs/python/companion/convention_map.md">
+<pre><span class="key">**/*.py</span>
+  <span class="cm">·</span> Use <span class="em">yaml.safe_load</span>, never <span class="em">yaml.load</span> without a Loader  <span class="cm">(Round 12)</span>
+  <span class="cm">·</span> Subprocess calls go through <span class="em">shared_cli.run()</span>, not raw <span class="em">subprocess.run</span>  <span class="cm">(Round 23)</span>
+  <span class="cm">·</span> No bare <span class="em">except:</span> — catch a specific exception or re-raise  <span class="cm">(Round 7)</span>
+
+<span class="key">tests/**/*.py</span>
+  <span class="cm">·</span> Integration tests use a real database, never mocks  <span class="cm">(Round 4 — burned by mock/prod divergence)</span></pre>
+        </div>
+        <p class="muted">
+          The promotion history <em>is</em> the workflow's audit trail.
+        </p>
+        <p>
+          The flip side of forgetting nothing: entries can become wrong. A convention that was right at round 12 can be
+          stale by round 60 — the codebase moved, the library fixed the footgun, the rule outlived its reason. The round
+          attribution is the first concession to that: a bad entry traces back to the review that promoted it, so it can be
+          retired deliberately rather than worked around forever. The second is a backward sweep that runs every review
+          round, alongside the forward coverage audit: it flags the statically detectable staleness — a map section whose
+          glob no longer matches any file (a removed category), and a bullet citing a helper that has since been renamed or
+          deleted (a dead reference) — at the moment the code moves out from under the rule. What stays manual is the
+          <em>decision</em>: both halves surface candidates, a human adjudicates them. And the harder, judgment-driven
+          demotion — a blocking rule that keeps firing false positives long after it stopped catching real ones — is now
+          built too: each false positive a reviewer triages away is recorded as a stale-verdict in a per-rule ledger, and
+          once a rule accrues them across two or more rounds, the review session prompts to retire it, demote it to advisory,
+          tighten it, or keep it. Anyone who has maintained a lint config for five years knows how that debt accrues; the map
+          differs in keeping the receipts and, now, in both noticing out loud when an entry's referent disappears and
+          retiring the rules that have quietly gone wrong.
+        </p>
+
+        <h3>Does it actually get quieter?</h3>
+        <p>
+          Measured, not asserted — 71 review rounds and 3,298 findings from the upstream project's review archive,
+          February through July 2026. The honest version first: <em>raw findings per round go up,</em> not down. The
+          rubric grows with every promoted convention, and later rounds file one task per call site where early rounds
+          bundled. Many findings are process-induced — total findings track the rubric's size, not the code's health.
+        </p>
+        <p>
+          What falls is severity — and then it <em>stays</em> down. The cleanest metrics need no denominator at
+          all: the <em>critical share</em> of findings fell from 21% in February to 5% in April — the last full month
+          before Round 70's retro-application sweep — and then, that sweep aside, held in the low single digits
+          through partial July (17% in May during the sweep, 0% in June, 5% in July) while the rubric kept growing. It is not a monotonic
+          decline; the point of the claim is that the <em>severe</em> share dropped from roughly one-in-five to the
+          low single digits and has stayed there. The share of low-severity findings mirrors it, rising from 22% in
+          February to a 75% peak in June, 65% in July. Activity-normalized rates agree on direction: criticals per
+          10,000 effective lines changed fell roughly 3× from the March peak to May, lower still through June and
+          partial July. Reviews don't get smaller; they stop finding things that matter.
+        </p>
+        <p>
+          Two confounds were checked rather than assumed. Commit size shrank ~5× across the interior of the period
+          (median 65 → 13 lines per commit by May), which inflates any per-commit rate — hence the headline rests on
+          denominator-free shares, corroborated per-line. And severity labels are the reviewer's own; the rubric is impact-categorical
+          (security, data integrity, crash potential), and the late rounds labeled map-enforcement findings critical
+          rather than discounting them as known — but the direction of any labeling drift can't be fully pinned, so
+          treat the shares as the primary evidence and the rates as the check.
+        </p>
+        <p>
+          And the limits, plainly — stated because they bound how much the chart can carry. This is one project, and
+          the loop's author ran it, ran the reviews, and adjudicated every severity — n&nbsp;=&nbsp;1 and self-graded,
+          which no re-analysis of the same archive can fix. The labels have moved at least once: June's lone critical
+          was reclassified out during a later archive consolidation, so June's 0% is one bookkeeping decision away
+          from ~1.5%. The tail is thin — 68 findings in June, 37 in partial July — so a single bad round would move the
+          late shares by double digits. And the strongest rival explanation is ordinary maturation: young codebases
+          surface their worst findings early and harden over time with or without a convention loop, so some of the
+          21% → 5% fall was coming anyway. Nothing in Fig. 7 separates the two hypotheses.
+        </p>
+        <p>
+          What would separate them is specified in the method notes (<code>docs/analysis/REPORT.md</code>) and has now
+          been run (Phase 112): partition findings into classes covered by an already-promoted convention at the time of the round
+          versus classes nothing covered, separate new-code findings from retro-application backfill (Round 70 files
+          covered-class findings <em>by design</em>), and track both per line of diff. Maturation depresses both
+          classes together; the loop selectively suppresses the covered ones. That analysis needs the upstream
+          per-finding archive, which is private — the round-level dataset that ships here cannot answer it. The result
+          is mixed and leaves this section's claim unchanged: the rate comparison is inconclusive (the review
+          instrument changed twice mid-history, inflating then collapsing every class), the mechanized-convention
+          signal confirms the claim but is partly true by construction, and prose-only conventions show no separable
+          effect from maturation. The claim this section makes stays the narrow, defensible one: the severe share fell
+          early and stayed low while the rubric grew, and where a convention is mechanized, its machine check makes
+          silent recurrence of that finding class structurally harder — a prose-only convention's gate is the reviewer
+          re-armed with the map. What would falsify it: covered classes recurring in new code at the uncovered
+          classes' rate, or a fresh project that starts with the map pre-loaded and still produces February's
+          one-in-five critical share.
+        </p>
+
+        <figure class="fig">
+          <div class="fig-frame">
+            <svg viewBox="0 0 1000 440" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Critical share of findings falls from 21 percent in February to 5 percent in April, bumps to 17 percent in May during Round 70's convention retro-application sweep, drops to 0 percent in June, and sits at 5 percent in partial July; the share of low-severity findings rises from 22 percent in February to a 75 percent peak in June and 65 percent in partial July.">
+              <!-- legend -->
+              <rect x="120" y="28" width="14" height="14" class="fill-accent" style="stroke:var(--accent)"/>
+              <text x="144" y="39" class="diag-caption" style="text-anchor:start">critical share of findings (%)</text>
+              <line x1="480" y1="35" x2="520" y2="35" stroke="var(--steel)" stroke-width="2"/>
+              <circle cx="500" cy="35" r="4" fill="var(--steel)"/>
+              <text x="532" y="39" class="diag-caption" style="text-anchor:start">share of low-severity findings</text>
+
+              <!-- baseline -->
+              <line x1="100" y1="330" x2="940" y2="330" stroke="var(--rule)"/>
+
+              <!-- both series share ONE scale: 3.2px per percentage point from the y=330 baseline -->
+              <!-- bars: critical share of findings (%) — Jun is 0%, no bar -->
+              <g class="node">
+                <rect x="140" y="263" width="70" height="67" class="fill-accent"/>
+                <rect x="280" y="298" width="70" height="32" class="fill-accent"/>
+                <rect x="420" y="314" width="70" height="16" class="fill-accent"/>
+                <rect x="560" y="276" width="70" height="54" class="fill-accent"/>
+                <rect x="840" y="314" width="70" height="16" class="fill-accent"/>
+              </g>
+              <text x="175" y="251" class="diag-caption" style="fill:var(--accent-ink)">21%</text>
+              <text x="315" y="286" class="diag-caption" style="fill:var(--accent-ink)">10%</text>
+              <text x="455" y="302" class="diag-caption" style="fill:var(--accent-ink)">5%</text>
+              <text x="595" y="264" class="diag-caption" style="fill:var(--accent-ink)">17% *</text>
+              <text x="735" y="320" class="diag-caption" style="fill:var(--accent-ink)">0%</text>
+              <text x="875" y="302" class="diag-caption" style="fill:var(--accent-ink)">5%</text>
+
+              <!-- line: low-severity share, same 3.2px-per-point scale as the bars -->
+              <polyline points="175,260 315,237 455,141 595,192 735,90 875,122"
+                        fill="none" stroke="var(--steel)" stroke-width="2"/>
+              <circle cx="175" cy="260" r="4" fill="var(--steel)"/>
+              <circle cx="315" cy="237" r="4" fill="var(--steel)"/>
+              <circle cx="455" cy="141" r="4" fill="var(--steel)"/>
+              <circle cx="595" cy="192" r="4" fill="var(--steel)"/>
+              <circle cx="735" cy="90" r="4" fill="var(--steel)"/>
+              <circle cx="875" cy="122" r="4" fill="var(--steel)"/>
+              <text x="214" y="250" class="diag-caption" style="fill:var(--steel); text-anchor:start">22%</text>
+              <text x="354" y="235" class="diag-caption" style="fill:var(--steel); text-anchor:start">29%</text>
+              <text x="455" y="129" class="diag-caption" style="fill:var(--steel)">59%</text>
+              <text x="634" y="190" class="diag-caption" style="fill:var(--steel); text-anchor:start">43%</text>
+              <text x="735" y="78" class="diag-caption" style="fill:var(--steel)">75%</text>
+              <text x="875" y="110" class="diag-caption" style="fill:var(--steel)">65%</text>
+
+              <!-- month labels -->
+              <text x="175" y="354" class="diag-caption">Feb 2026</text>
+              <text x="315" y="354" class="diag-caption">Mar</text>
+              <text x="455" y="354" class="diag-caption">Apr</text>
+              <text x="595" y="354" class="diag-caption">May</text>
+              <text x="735" y="354" class="diag-caption">Jun</text>
+              <text x="875" y="354" class="diag-caption">Jul (partial)</text>
+
+              <!-- May annotation -->
+              <text x="500" y="400" class="diag-caption italic">* May's bump is Round 70, the first broad sweep after /codebase-review became language-server-driven (LSP): ~25 of its</text>
+              <text x="500" y="420" class="diag-caption italic">45 criticals are promoted conventions amplified one task per call site — a sharper instrument, not a Feb-level defect rate.</text>
+            </svg>
+          </div>
+          <figcaption>
+            <span class="fig-num">Fig. 7</span>
+            <span class="fig-cap">Severity fell, then held low, while the rubric grew — a correlation on one self-graded project; limits in the text. Bars are denominator-free shares; activity-normalized rates (per-commit, per-line) agree on direction — see <code>docs/analysis/REPORT.md</code>. Mined from the upstream project's <code>review_tasks</code> archive (71 rounds, 3,298 findings) and its convention history (78 entries, all dated). The mined dataset ships alongside (<code>docs/analysis/gdp_review_metrics.json</code>), and the miner that produced it is included for provenance — re-mining needs the upstream repo's private archive, so verify against the dataset.</span>
+          </figcaption>
+        </figure>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     V — HOOK LAYER
+============================================================ -->
+<section id="v" class="s reveal">
+  <div class="page">
+    <div class="article">
+      <aside>
+        <div class="s-numeral">V</div>
+        <div class="s-tag">Hooks</div>
+      </aside>
+      <div class="s-body">
+        <h2 class="s-title">Boring mechanics,<br>handled <span class="stress">outside</span> the skills.</h2>
+        <p class="lede">
+          Claude Code 2.1.x added two hook points that Sysop leans on heavily. The hooks let skill prose stay short — instead of
+          writing escape instructions inline for every possible permission denial, the hook injects them automatically.
+          Neither hook can authorize anything. The real gate is the human invoking the skill and, for protected operations,
+          typing the escape — the hooks only remove the re-explaining.
+        </p>
+
+        <figure class="fig">
+          <div class="fig-frame">
+            <svg viewBox="0 0 1000 470" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Hook layer diagram">
+              <defs>
+                <marker id="ah5" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                  <path d="M 0 0 L 10 5 L 0 10 z" class="arrow-head"/>
+                </marker>
+                <marker id="ah5a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                  <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff5722"/>
+                </marker>
+              </defs>
+
+              <!-- LEFT — PermissionDenied -->
+              <text x="240" y="28" class="diag-caption" style="fill:var(--accent-ink); font-size:11px; letter-spacing:.18em">PERMISSIONDENIED · 2.1.89</text>
+
+              <g class="node">
+                <rect x="80" y="56" width="320" height="56" rx="2" class="fill-primary"/>
+                <text x="240" y="80" class="code">skill emits Bash call</text>
+                <text x="240" y="100" class="smallserif">e.g. <tspan font-family="var(--mono)" font-size="12" font-style="normal">git push origin main</tspan></text>
+              </g>
+
+              <g class="node">
+                <rect x="80" y="142" width="320" height="56" rx="2" class="fill-plate"/>
+                <text x="240" y="166" class="smallserif" style="font-size:14px">classifier blocks</text>
+                <text x="240" y="186" class="small">protected-branch policy</text>
+              </g>
+
+              <g class="node">
+                <rect x="80" y="228" width="320" height="80" rx="2" class="fill-accent"/>
+                <text x="240" y="254" class="code">permission_denied_hook.py</text>
+                <text x="240" y="276" class="small">matches pattern · emits ! escape</text>
+                <text x="240" y="294" class="small">via additionalContext</text>
+              </g>
+
+              <g class="node">
+                <rect x="80" y="338" width="320" height="56" rx="2" class="fill-primary"/>
+                <text x="240" y="362" class="smallserif" style="font-size:14px">model relays the escape to the human</text>
+                <text x="240" y="382" class="small">ask user to type: ! git push origin main</text>
+              </g>
+
+              <g class="node">
+                <rect x="80" y="420" width="320" height="42" rx="2" class="fill-plate"/>
+                <text x="240" y="444" class="smallserif">human types it — push succeeds</text>
+              </g>
+
+              <path d="M 240 112 L 240 142" class="arrow" marker-end="url(#ah5)"/>
+              <path d="M 240 198 L 240 228" class="arrow accent" marker-end="url(#ah5a)"/>
+              <path d="M 240 308 L 240 338" class="arrow accent" marker-end="url(#ah5a)"/>
+              <path d="M 240 394 L 240 420" class="arrow" marker-end="url(#ah5)"/>
+
+              <!-- RIGHT — SubagentStop -->
+              <text x="760" y="28" class="diag-caption" style="fill:var(--accent-ink); font-size:11px; letter-spacing:.18em">SUBAGENTSTOP · 2.1.47</text>
+
+              <g class="node">
+                <rect x="600" y="56" width="320" height="56" rx="2" class="fill-accent"/>
+                <text x="760" y="80" class="smallserif" style="font-size:14px">reviewer-executor sub-agent finishes</text>
+                <text x="760" y="100" class="small">emits envelope at top of message</text>
+              </g>
+
+              <g class="node">
+                <rect x="600" y="142" width="320" height="56" rx="2" class="fill-plate"/>
+                <text x="760" y="166" class="smallserif" style="font-size:14px">SubagentStop fires</text>
+                <text x="760" y="186" class="small">last_assistant_message in stdin</text>
+              </g>
+
+              <g class="node">
+                <rect x="600" y="228" width="320" height="80" rx="2" class="fill-accent"/>
+                <text x="760" y="254" class="code">parse_subagent_envelope.py</text>
+                <text x="760" y="276" class="small">finds last yaml block w/ task+status</text>
+                <text x="760" y="294" class="small">writes .subagent-envelopes/&lt;id&gt;.json</text>
+              </g>
+
+              <g class="node">
+                <rect x="600" y="338" width="320" height="56" rx="2" class="fill-primary"/>
+                <text x="760" y="362" class="smallserif" style="font-size:14px">parent skill reads JSON</text>
+                <text x="760" y="382" class="small">fall back to regex if race lost</text>
+              </g>
+
+              <g class="node">
+                <rect x="600" y="420" width="320" height="42" rx="2" class="fill-plate"/>
+                <text x="760" y="444" class="smallserif">structured handoff · no regex on prose</text>
+              </g>
+
+              <path d="M 760 112 L 760 142" class="arrow" marker-end="url(#ah5)"/>
+              <path d="M 760 198 L 760 228" class="arrow accent" marker-end="url(#ah5a)"/>
+              <path d="M 760 308 L 760 338" class="arrow accent" marker-end="url(#ah5a)"/>
+              <path d="M 760 394 L 760 420" class="arrow" marker-end="url(#ah5)"/>
+
+              <!-- Divider -->
+              <line x1="500" y1="50" x2="500" y2="462" stroke="var(--rule)" stroke-width="1" stroke-dasharray="2 6"/>
+            </svg>
+          </div>
+          <figcaption>
+            <span class="fig-num">Fig. 6</span>
+            <span class="fig-cap">Two hook points. The accent flow is the hook itself; the rest is the surrounding mechanism. Note the final actor on the left: the push lands only when the human types the escape — the <code>!</code>-prefix is a user-side control the model cannot emit.</span>
+          </figcaption>
+        </figure>
+
+        <dl class="glossary">
+          <div class="entry">
+            <dt>PermissionDenied<span class="model-tag">claude code · 2.1.89</span></dt>
+            <dd>Hook can't bypass the classifier — it injects <code>additionalContext</code> showing the exact <code>!</code>-shell-escape <em>for the human to type</em> at the next prompt. It grants nothing; the person typing the escape remains the actor — and is expected to read the command before typing it; the relay is a request, not an instruction. Scoped to three matchers (protected-branch push, <code>--delete</code> push, protected-branch commit), each one a command already in the settings.json allow-list that the classifier overrides anyway; unmatched denials pass through untouched. Collapsed four paragraphs of <code>/review-close</code> escape prose into pointers.</dd>
+          </div>
+          <div class="entry">
+            <dt>SubagentStop<span class="model-tag">claude code · 2.1.47</span></dt>
+            <dd>Fires when a sub-agent finishes. Parses the structured envelope (<code>TASK:</code> / <code>STATUS:</code> / <code>WORKTREE:</code> / …) into JSON so the parent skill doesn't have to grep the return text. Phase 54 added an <code>agent_transcript_path</code> fallback and <code>message_source</code> provenance, retiring the earlier timing caveat — the parser no longer depends on winning a race against the sub-agent's final message.</dd>
+          </div>
+        </dl>
+
+        <aside class="pullquote">
+          <p><strong>Additive, never load-bearing.</strong> Both hooks are JSON-first with regex fallback. If a hook crashes, loses a race, or is missing entirely, the skill still works — it just falls back to the older parse path.</p>
+          <p>Phase 7 envelope-recovery (filesystem cross-check) is the deepest fallback for <code>/auto-build</code> when no parser sees the envelope at all.</p>
+        </aside>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     VI — ARCHITECTURE (appendix)
+============================================================ -->
+<section id="vi" class="s reveal">
+  <div class="page">
+    <div class="article">
+      <aside>
+        <div class="s-numeral">VI</div>
+        <div class="s-tag">Appendix</div>
+      </aside>
+      <div class="s-body">
+        <h2 class="s-title">Two install paths,<br>one source of <span class="stress">truth.</span></h2>
+        <div class="two">
+          <div>
+            <h3>Claude Code plugin</h3>
+            <p class="muted">
+              <code>/plugin marketplace add getsysop/sysop</code> then
+              <code>/plugin install sysop@sysop</code> plus any packs. Delivers namespaced slash commands like
+              <code>/sysop:claim-task</code>.
+            </p>
+            <div style="margin-top:14px;">
+              <span class="pack live">core</span>
+              <span class="pack live">python</span>
+              <span class="pack live">postgres</span>
+              <span class="pack live">nextjs-react</span>
+              <span class="pack live">llm</span>
+              <span class="pack live">beancount</span>
+              <span class="pack">streamlit</span>
+              <span class="pack">pandas</span>
+              <span class="pack">mcp-server</span>
+              <span class="pack">kotlin</span>
+              <span class="pack">swift-ios</span>
+              <span class="pack">flutter</span>
+            </div>
+          </div>
+          <div>
+            <h3>Bash installer</h3>
+            <p class="muted">
+              <code>bash install.sh &lt;target&gt; --packs python,postgres</code> works with any agent (or none) —
+              or <code>--packs auto</code> to detect the stack from the target's own markers (Phase 75). Writes scripts, git hooks,
+              permission settings, and per-pack convention maps. Updates via <code>bash scripts/sysop-update.sh</code> from the consumer
+              side once <code>$SYSOP_SRC</code> is set.
+            </p>
+          </div>
+        </div>
+
+        <h3>Model roles, not model pins</h3>
+        <p class="muted">
+          Since Phase 69, skills that pin a model declare a <em>role</em> — <code>reasoning</code>, <code>mechanical</code>, or
+          <code>quick</code> — rather than a model id (skills without a pin simply inherit the session model). Install resolves roles through
+          <code>.claude/served_models.yml</code> (default mapping: opus · sonnet · haiku); a consumer remaps any role in
+          <code>served_models.local.yml</code>, which is never overwritten and layered on top — so an upstream model
+          sunset and a local preference both survive the next update. The default <code>served:</code> allowlist
+          also pre-lists <code>fable</code> — nothing maps to it by default, but opting the deep-reasoning tier into
+          Claude Fable 5 is a one-key local override (<code>reasoning: fable</code>).
+        </p>
+
+        <h3>Where things live in a consumer repo</h3>
+        <div class="listing" data-label="consumer repo · filesystem layout">
+<pre><span class="key">consumer-repo/</span>
+├── <span class="key">tasks/</span>                          <span class="cm"># queue lives here</span>
+│   ├── index.yml                  <span class="cm"># source of truth · validated on every commit</span>
+│   ├── vision.md                  <span class="cm"># optional intent layer · /intake-authored, consumer-owned (Phase 60a)</span>
+│   ├── decisions.md               <span class="cm"># ratified product decisions · re-checked on re-intake (Phase 60a)</span>
+│   ├── open/                      <span class="cm"># task body files for status: open</span>
+│   └── archive/                   <span class="cm"># completed task bodies (git mv from open/)</span>
+├── <span class="key">.claude/</span>
+│   ├── settings.json              <span class="cm"># permission allow-list + hooks</span>
+│   ├── convention_map.md          <span class="cm"># core + per-pack content concatenated</span>
+│   ├── security_map.md            <span class="cm"># OWASP map · pack-extended</span>
+│   ├── checks.yml                 <span class="cm"># concat of pack check fragments</span>
+│   ├── served_models.yml          <span class="cm"># role → model mapping · override via served_models.local.yml (Phase 69)</span>
+│   └── <span class="ph">*.project.{md,yml}</span>          <span class="cm"># consumer-authored extensions (Phase 24a) · promotion writes land here (Phase 78)</span>
+├── <span class="key">scripts/</span>
+│   ├── claim_task.sh              <span class="cm"># lock + worktree + branch creation</span>
+│   ├── close_batch.sh             <span class="cm"># review_tasks.md batch closure</span>
+│   ├── validate_tasks.py          <span class="cm"># schema enforcement · runs in pre-commit</span>
+│   ├── permission_denied_hook.py  <span class="cm"># Phase 36 · classifier escape injection</span>
+│   ├── parse_subagent_envelope.py <span class="cm"># Phase 37 · structured envelope parsing</span>
+│   ├── <span class="key">run_checks/</span>                <span class="cm"># Phase 49 split · Phase 61 coverage.py crown-jewel gate</span>
+│   └── sysop-update.sh              <span class="cm"># the consumer-side update entry point</span>
+├── SYSOP_ISSUES.md                  <span class="cm"># friction log · seeded once, project-owned · /report-issues files upstream</span>
+├── <span class="key">.locks/</span>                        <span class="cm"># lives in main repo · git-common-dir resolved (Phase 32)</span>
+├── <span class="key">.pending-docs/</span>                 <span class="cm"># /document-work writes here · /review-close consumes</span>
+└── <span class="key">.subagent-envelopes/</span>           <span class="cm"># Phase 37 · SubagentStop hook writes JSON here</span></pre>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     COLOPHON
+============================================================ -->
+<footer class="colophon">
+  <div class="page">
+    <div class="col-grid">
+      <aside class="col-rule">Colophon</aside>
+      <div>
+        <p class="col-body">
+          A monograph on <em>Sysop</em>, as of <em>Phase 113</em> · 2026-07-15. Phase numbers throughout are iterations
+          of the workflow's own development — each one planned, adversarially reviewed, and shipped through the process it
+          extends; <a href="https://github.com/getsysop/sysop/blob/main/PHASE_LOG.md">PHASE_LOG.md</a> carries one entry per phase. Set in the reader's native serif —
+          Iowan Old Style where available, Palatino otherwise — paired with ui-monospace for listings and figure labels.
+          No webfont loads, no third-party scripts, no telemetry. The page is a single HTML file; view source if curious.
+        </p>
+        <div class="col-meta">
+          <div>
+            <h4>Skills shown</h4>
+            <ul>
+              <li>/intake</li>
+              <li>/onboard</li>
+              <li>/add-task</li>
+              <li>/next-task</li>
+              <li>/claim-task</li>
+              <li>/plan-review</li>
+              <li>/document-work</li>
+              <li>/review-close</li>
+              <li>/auto-build</li>
+              <li>/codebase-review</li>
+              <li>/security-audit</li>
+              <li>/auto-fix</li>
+              <li>/auto-judge</li>
+              <li>/sitrep</li>
+              <li>/triage</li>
+              <li>/pr-dependabot</li>
+              <li>/roadmap</li>
+              <li>/daily-summary</li>
+              <li>/test-audit</li>
+              <li>/release</li>
+              <li>/report-issues</li>
+              <li>/contribute-convention</li>
+              <li>/share-wins</li>
+            </ul>
+          </div>
+          <div>
+            <h4>Source</h4>
+            <ul>
+              <li>Extracted from <em>gdp-query-system</em></li>
+              <li>First consumer · BeanRider</li>
+              <li>Phase 113 · 2026-07-15</li>
+            </ul>
+          </div>
+          <div>
+            <h4>Caveat</h4>
+            <ul>
+              <li>Static snapshot</li>
+              <li>Authoritative: <em>WORKFLOW.md</em></li>
+              <li>Regenerated by hand</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<script>
+  // Reveal sections on scroll — once each, then disconnect.
+  (function () {
+    const targets = document.querySelectorAll(".reveal");
+    if (!("IntersectionObserver" in window)) {
+      targets.forEach(t => t.classList.add("in"));
+      return;
+    }
+    const io = new IntersectionObserver((entries, obs) => {
+      entries.forEach(e => {
+        if (e.isIntersecting) {
+          e.target.classList.add("in");
+          obs.unobserve(e.target);
+        }
+      });
+    }, { rootMargin: "0px 0px -10% 0px", threshold: 0.1 });
+    targets.forEach(t => io.observe(t));
+  })();
+
+  // Trigger loop trace animation only when Fig. 4 enters view, once.
+  (function () {
+    const fig = document.getElementById("loop-fig");
+    if (!fig || !("IntersectionObserver" in window)) {
+      if (fig) fig.classList.add("traced");
+      return;
+    }
+    const io = new IntersectionObserver((entries, obs) => {
+      entries.forEach(e => {
+        if (e.isIntersecting) {
+          fig.classList.add("traced");
+          obs.disconnect();
+        }
+      });
+    }, { threshold: 0.3 });
+    io.observe(fig);
+  })();
+</script>
+
+<script>
+  /* Theme toggle — dark is the default; a click flips to light and the
+     choice is remembered in localStorage. The no-flash init in <head>
+     applies a saved 'light' choice before first paint. */
+  (function () {
+    var root = document.documentElement;
+    var btn = document.getElementById("theme-toggle");
+    if (!btn) return;
+    var icon = btn.querySelector(".tt-icon");
+    var label = btn.querySelector(".tt-label");
+    var meta = document.querySelector('meta[name="theme-color"]');
+    var CHROME = { dark: "#0e0d0a", light: "#f6f1e6" };
+
+    function mode() {
+      return root.getAttribute("data-theme") === "light" ? "light" : "dark";
+    }
+    function paint() {
+      var now = mode();
+      var next = now === "light" ? "dark" : "light";
+      if (icon) icon.textContent = now === "light" ? "◑" : "◐";
+      if (label) label.textContent = next === "light" ? "Light" : "Dark";
+      btn.setAttribute("aria-label", "Switch to " + next + " theme");
+      if (meta) meta.setAttribute("content", CHROME[now]);
+    }
+    btn.addEventListener("click", function () {
+      var next = mode() === "light" ? "dark" : "light";
+      if (next === "light") root.setAttribute("data-theme", "light");
+      else root.removeAttribute("data-theme");
+      try { localStorage.setItem("sysop-theme", next); } catch (e) {}
+      paint();
+    });
+    paint();
+  })();
+</script>
+
+</body>
+</html>
