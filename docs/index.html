@@ -220,11 +220,14 @@
 
   /* ---------------- Stat band ---------------- */
   .stats {
-    display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px;
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px;
     background: var(--rule); border: 1px solid var(--rule); border-radius: 8px; overflow: hidden;
     margin: 48px 0 8px;
   }
-  @media (max-width: 640px) { .stats { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 640px) {
+    .stats { grid-template-columns: repeat(2, 1fr); }
+    .stats .stat:last-child { grid-column: 1 / -1; }
+  }
   .stat { background: var(--paper); padding: 22px 20px; }
   .stat .num { font-family: var(--serif); font-size: clamp(28px, 4.5vw, 40px); font-weight: 600;
     letter-spacing: -.02em; color: var(--ink); line-height: 1; }
@@ -369,7 +372,6 @@
       <div class="stat"><div class="num">71</div><div class="lbl">Review rounds</div></div>
       <div class="stat"><div class="num">3,298</div><div class="lbl">Findings mined</div></div>
       <div class="stat"><div class="num">78</div><div class="lbl">Promoted conventions</div></div>
-      <div class="stat"><div class="num">117</div><div class="lbl">Documented phases</div></div>
     </div>
   </section>
 
