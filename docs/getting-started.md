@@ -7,7 +7,10 @@ planning conversation in step 2, which is as long or short as you want.
 By the end you'll have done the whole cycle once: a task queue you planned *with* the
 agent, one task built in an isolated worktree behind an adversarial plan review, and that
 change reviewed and merged to `main`. That's the same loop Sysop runs every day — this guide
-just walks you through it the first time.
+just walks you through it the first time. In the [monograph](./workflow.html)'s frame — a
+project's arc of *plan · execute · maintain* — this walkthrough is the first two phases:
+`/intake` plans, `/claim-task` through `/review-close` executes. The third, *maintain*,
+enters at the end, once there's merged code to keep clean.
 
 > **Want the "why" first?** This is the *tutorial* (learn by doing). For what Sysop is and
 > why it's shaped this way, skim [`workflow.html`](./workflow.html) (a 5-minute visual
@@ -219,7 +222,8 @@ When it finishes, that change is shipped. **You just ran the whole loop.**
 ## What just happened — and where to go next
 
 You planned a queue, built a task behind an adversarial plan review, and merged it — solo,
-but with a full team's review discipline standing in. The part that compounds is the
+but with a full team's review discipline standing in. That was *plan* and *execute*; the
+arc's third phase — *maintain* — is where the compounding lives, in the
 **convention loop**: as you run `/codebase-review` and `/security-audit` over time, findings
 that recur across rounds get promoted into written conventions, which the convention map
 then surfaces automatically on every future `/claim-task`. Reviews shift from catching the

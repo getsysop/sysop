@@ -4,6 +4,8 @@
 > Use during planning (before writing code) and review (before committing).
 > Full rules live in `CLAUDE.md` — these are actionable reminders.
 
+> **Provenance:** these rules were promoted from recurring review findings on the data layer of a hosted subscription web app — SQLAlchemy with separate reader/writer/admin engines and Alembic migrations. They apply to most SQLAlchemy/Postgres projects; the engine-role bullets assume that explicit engine split.
+
 > **Helper names** (e.g., `_latest_obs_sql()`, `validate_identifier()`, `_escape_like()`) are placeholders — use whatever your project names these helpers. The convention is to *have* them.
 >
 > **Directory and instance placeholders** referenced in this pack: `<sql module>` (Python module owning SQL queries / data-access helpers), `<db config module>` (the file housing the engine instances — typically `db_config.py`), `<db config instance>` (the imported instance whose `.reader_engine` / `.writer_engine` / `.admin_engine` attributes are read at runtime), `<engine>` (one of `reader_engine` / `writer_engine` / `admin_engine`), `<migrations dir>` (Alembic / raw SQL migration scripts directory), `<log sanitizer>` (the project-defined log-redaction helper).

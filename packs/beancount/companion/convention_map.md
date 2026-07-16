@@ -5,6 +5,10 @@
 > any "raw vendor dump → normalized double-entry" pipeline).
 > Use during planning (before writing code) and review (before committing).
 
+> **Provenance:** these rules were promoted from recurring review findings on BeanRider, a
+> personal-finance pipeline ingesting raw vendor exports into a Beancount ledger. They assume
+> local, single-user data rather than a hosted service.
+
 > **Directory placeholders** referenced in this pack: `<vendor data dir>` (the
 > repo's top-level directory for raw downloads from external sources — usually
 > `data/`; gitignored), `<parsers dir>` (the directory housing per-vendor
