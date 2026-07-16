@@ -4,6 +4,8 @@
 > Use during planning (before writing code) and review (before committing).
 > Full rules live in `CLAUDE.md` — these are actionable reminders.
 
+> **Provenance:** these rules were promoted from recurring review findings on the frontend of a hosted subscription web app — Next.js App Router, React, TypeScript. They assume little beyond the framework itself, so they are the most directly portable of Sysop's packs.
+
 > **Helper names** (e.g., `useAbortableFetch()`, `getDisplayError()`, `isSafeHref()`, `useFocusTrap()`, `isAbortError()`) are placeholders for whatever your project names these helpers. The convention is to *have* them.
 >
 > **Directory placeholders** referenced in this pack and in `checks.yml.fragment`: `<components dir>` (React component files), `<hooks dir>` (custom React hooks), `<app dir>` (Next.js App Router root — `app/` or equivalent), `<frontend lib>` (shared frontend utility modules — `lib/` or equivalent), `<next config>` (Next.js config file — `next.config.ts` / `next.config.js`), `<frontend>` (the frontend project root, e.g., `frontend/` or repo root for single-app projects).

@@ -4,7 +4,11 @@
 > Use during planning (before writing code) and review (before committing).
 > Full rules live in `CLAUDE.md` — these are actionable reminders.
 
-> **Helper names** (e.g., `_sanitize_log()`, `redact_api_keys()`, `_escape_like()`, `validate_identifier()`) are placeholders for whatever your project names these helpers — the convention is to *have* them. Glob patterns like `<api module>/server.py` should be replaced with your project's actual paths.
+> **Provenance:** these rules were promoted from recurring review findings on a hosted, multi-user subscription web app (FastAPI + Postgres, LLM-backed, third-party auth and payments). The API-boundary, logging, and input-validation rules travel widely; the tier-enforcement and payments-adjacent bullets assume a tiered SaaS and are safe to ignore if yours isn't one.
+
+> **Helper names** (e.g., `_sanitize_log()`, `redact_api_keys()`, `_escape_like()`, `validate_identifier()`) are placeholders for whatever your project names these helpers — the convention is to *have* them.
+>
+> **Glob patterns** like `<api module>/server.py` name your real paths only once you localize them. Do not edit them into the assembled `.claude/convention_map.md` — that file is regenerated on every update. Localized sections belong in the never-managed `.claude/convention_map.project.md` overlay, which is also where `/codebase-review` writes them when its coverage sweep proposes them. (Full explanation: `docs/packs.md` in the Sysop repo.)
 >
 > **Directory placeholders** referenced in this pack and in `checks.yml.fragment`: `<api module>` (web framework module, e.g., FastAPI app dir), `<auth module>` (auth/user-session code), `<utility modules>` (shared backend utilities), `<payments service module>` (payment-provider integration), `<numeric library module>` (resource-bounded compute helpers — security-only concern, no convention bullets in this pack; declared here so cross-references from `security_map.md` resolve), `<data pipeline>` (ingestion/ETL code), `<scripts dir>` (one-shot CLI scripts), `<datajobs dir>` (long-running batch jobs / scheduled jobs), `<datajobs entrypoint>` (the entry-point file inside `<datajobs dir>`), `<data seed dir>` (initial-data seed scripts), `<tests dir>` (test files).
 >

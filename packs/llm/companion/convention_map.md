@@ -3,6 +3,8 @@
 > Maps file patterns to relevant LLM-integration conventions from `CLAUDE.md` § Prevention Conventions.
 > These conventions are language-agnostic in principle — examples shown in Python (`google.generativeai` / `anthropic` SDKs), but the patterns apply to TypeScript/Node, Go, etc.
 
+> **Provenance:** these rules were promoted from recurring review findings on a hosted LLM-backed product serving many users on paid tiers. The pack is shaped for **multi-tenant LLM APIs** — rate limiting, tier enforcement, prompt-boundary guards, response filtering. A single-user, local-model, or personal MCP-server integration will find much of it inapplicable.
+
 > **Helper names** (e.g., `_sanitize_log()`, `redact_api_keys()`) are placeholders — use whatever your project names these helpers.
 >
 > **Directory placeholders** referenced in this pack: `<api module>` (web framework module hosting LLM-using endpoints), `<evals module>` (LLM eval runner code), `<data pipeline>` (ingestion / batch pipeline code that calls LLM APIs), `<prompts dir>` (Markdown prompt templates loaded at runtime), `<llm utility modules>` (shared LLM-call helpers, response parsers, redaction utilities), `<post-LLM helper module>` (sanitization / output-shaping helpers applied after raw LLM response), `<log sanitizer>` (the project-defined log-redaction helper).
