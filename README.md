@@ -40,7 +40,7 @@ Sysop pays for itself in specific situations and asks more than it's worth in ot
 - **Deterministic enforcement** — recurring findings become grep and Semgrep AST rules in a shared registry, alongside a language-server pass (`pyright`/`tsc`) and a diff-coverage gate on the paths you mark critical — enforced identically on every run, with a false-positive ledger that flags stale rules for demotion.
 - **Parallel building under one reviewer** — locks and worktrees let `/auto-build` build batches of tasks concurrently while you stay the only merge gate.
 - **A feedback loop you control** — every install seeds `SYSOP_ISSUES.md`, a friction log; `/report-issues` files the pain upstream and `/share-wins` shares what worked, each entry only with your explicit consent.
-- **Reversible by design** — everything lands as tracked files plus two git hooks; see [Backing out](#backing-out).
+- **Reversible by design** — everything lands as tracked files plus two git hooks, and the hooks ship as skeletons that block nothing until your project fills in its checks ([what the hooks do](./docs/install-and-update.md#what-the-git-hooks-do)); see [Backing out](#backing-out).
 
 ## Quickstart
 
@@ -50,7 +50,7 @@ bash sysop/install.sh /path/to/your/project --packs auto
 cd /path/to/your/project && git add .claude/ scripts/ WORKFLOW.md WORKFLOW_GUIDE.md tasks/ SYSOP_ISSUES.md && git commit -m "chore: install Sysop"
 ```
 
-> **macOS:** the stock `/bin/bash` is 3.2; the installer needs bash 4+. Run `brew install bash` first (Homebrew's bash lands on your PATH ahead of the system one). Windows: run under WSL.
+> **Prerequisites:** git, bash 4+, and Python 3 with PyYAML (`pip install pyyaml`) — Sysop's own check runner and task validator are Python scripts, whatever your project's stack. **macOS:** the stock `/bin/bash` is 3.2 — run `brew install bash` first (Homebrew's bash lands on your PATH ahead of the system one). **Windows:** run under WSL.
 
 `--packs auto` detects your stack (`pyproject.toml` → python, `next.config.js` → nextjs-react, and so on) and installs the matching convention packs; omit `--packs` for an interactive picker, or add `--dry-run` to preview without writing. The commit matters: `/claim-task` builds in git worktrees, which only see committed files. Claude Code users can additionally install the slash commands as a plugin — `/plugin marketplace add getsysop/sysop`, then `/plugin install sysop@sysop`. Updating, pinning to a release, plugin mechanics, permissions: [docs/install-and-update.md](./docs/install-and-update.md).
 
@@ -65,7 +65,7 @@ cd /path/to/your/project && git add .claude/ scripts/ WORKFLOW.md WORKFLOW_GUIDE
 
 ## Status
 
-113 phases shipped; in daily use by its first consumers (BeanRider and the project it was extracted from). Five convention packs are populated from real projects (python, postgres, nextjs-react, llm, beancount); six more are placeholders that populate from real use. Per-phase history and rationale live in [`PHASE_LOG.md`](./PHASE_LOG.md); the full repo layout is in [docs/install-and-update.md](./docs/install-and-update.md#repo-layout).
+In daily use by its first consumers (BeanRider and the project it was extracted from). Five convention packs are populated from real projects — each pack's convention map is the full rule list, browsable before you install: [python](./packs/python/companion/convention_map.md), [postgres](./packs/postgres/companion/convention_map.md), [nextjs-react](./packs/nextjs-react/companion/convention_map.md), [llm](./packs/llm/companion/convention_map.md), [beancount](./packs/beancount/companion/convention_map.md); six more are placeholders that populate from real use. Development history is public in [`PHASE_LOG.md`](./PHASE_LOG.md) — 117 phases so far, one entry each; the full repo layout is in [docs/install-and-update.md](./docs/install-and-update.md#repo-layout).
 
 ## Backing out
 
