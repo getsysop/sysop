@@ -65,7 +65,7 @@ cd /path/to/your/project && git add .claude/ scripts/ WORKFLOW.md WORKFLOW_GUIDE
 
 ## Status
 
-In daily use by its first consumers (BeanRider and the project it was extracted from). Five convention packs are populated from real projects — each pack's convention map is the full rule list, browsable before you install: [python](./packs/python/companion/convention_map.md), [postgres](./packs/postgres/companion/convention_map.md), [nextjs-react](./packs/nextjs-react/companion/convention_map.md), [llm](./packs/llm/companion/convention_map.md), [beancount](./packs/beancount/companion/convention_map.md); six more are placeholders that populate from real use. Development history is public in [`PHASE_LOG.md`](./PHASE_LOG.md) — 117 phases so far, one entry each; the full repo layout is in [docs/install-and-update.md](./docs/install-and-update.md#repo-layout).
+In daily use by its first consumers (BeanRider and the project it was extracted from). Five convention packs are populated from real projects — each pack's convention map is the full rule list, browsable before you install: [python](./packs/python/companion/convention_map.md), [postgres](./packs/postgres/companion/convention_map.md), [nextjs-react](./packs/nextjs-react/companion/convention_map.md), [llm](./packs/llm/companion/convention_map.md), [beancount](./packs/beancount/companion/convention_map.md); six more are placeholders that populate from real use. Development history is public in [`PHASE_LOG.md`](./PHASE_LOG.md) — one entry per phase; the full repo layout is in [docs/install-and-update.md](./docs/install-and-update.md#repo-layout).
 
 ## Backing out
 

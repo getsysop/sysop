@@ -1,26 +1,32 @@
-"""Doc-currency guard — public stat sites must track PHASE_LOG.md.
+"""Doc-currency guard — phase-count claims are retired from current-state surfaces.
 
-Promoted from a recurring review finding: Phase 109.1 fixed a stale phase
-count on the landing page, and by Phase 116 the same drift class had
-re-accreted across README.md and docs/index.html (caught by a zero-context
-cold-read exercise, Phase 117). Second recurrence -> deterministic check,
-per the workflow's own promotion semantics.
+History of this guard, in the workflow's own terms:
+- Phase 109.1 fixed a stale phase count on the landing page (first occurrence).
+- Phase 117: the same drift class had re-accreted across README.md and
+  docs/index.html (caught by a zero-context cold-read exercise). Second
+  recurrence -> promoted to a deterministic check that forced the counts
+  current on every phase close.
+- Phase 118: the stat itself was demoted. Two cold-read rounds showed the
+  raw count is a non-signal to outsiders (round 2 readers anchored maturity
+  on the release date and consumer count instead), so the number was removed
+  from current-state surfaces and this check inverted into a ratchet: a
+  phase count must NOT reappear on README or the landing page. That is the
+  workflow's demotion pattern — retire the rule, keep a regression guard.
 
-PHASE_LOG.md is the anchor because it is the canonical public history and
-is present in every distribution of the repo (the other place phases are
-indexed is not).
-
-Two tiers, on purpose:
-- README.md and docs/index.html are current-state surfaces — their phase
-  count must equal the max phase in PHASE_LOG.md.
-- docs/workflow.html is a dated snapshot ("as of Phase N"), refreshed by
-  deliberate currency passes (Phases 86, 109) — its own phase stamps must
-  agree with each other and never run ahead of PHASE_LOG.md, but may lag.
+The monograph (docs/workflow.html) is different in kind: it is a dated
+snapshot ("as of Phase N"), refreshed by deliberate currency passes
+(Phases 86, 109). Its stamp dates the document rather than counting
+progress, so it stays — checked for internal self-consistency and for
+never running ahead of PHASE_LOG.md (the canonical public history).
 """
 import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# Matches a numeric phase-count claim: "117 phases", "117 documented phases",
+# "117 shipped phases" — the shapes the stat appeared in before retirement.
+PHASE_COUNT_CLAIM = re.compile(r"\b\d+\s+(?:documented\s+|shipped\s+)?phases\b", re.I)
 
 
 def _read(rel):
@@ -33,22 +39,21 @@ def _max_phase():
     return max(nums)
 
 
-def test_readme_phase_count_is_current():
-    hits = re.findall(r"(\d+) phases", _read("README.md"))
-    assert len(hits) == 1, f"expected exactly one 'N phases' claim in README.md, found {hits}"
-    assert int(hits[0]) == _max_phase(), (
-        f"README.md claims {hits[0]} phases; PHASE_LOG.md is at {_max_phase()}"
+def test_readme_has_no_phase_count_claim():
+    hits = PHASE_COUNT_CLAIM.findall(_read("README.md"))
+    assert not hits, (
+        f"README.md has re-grown a phase-count claim {hits}; the stat was "
+        "retired by Phase 118 (a non-signal that drifts) — point at "
+        "PHASE_LOG.md instead of counting it"
     )
 
 
-def test_index_phase_tile_is_current():
-    m = re.search(
-        r'<div class="num">(\d+)</div><div class="lbl">Documented phases</div>',
-        _read("docs/index.html"),
-    )
-    assert m, "landing-page 'Documented phases' stat tile not found"
-    assert int(m.group(1)) == _max_phase(), (
-        f"docs/index.html tile says {m.group(1)}; PHASE_LOG.md is at {_max_phase()}"
+def test_index_has_no_phase_count_tile():
+    text = _read("docs/index.html")
+    assert "Documented phases" not in text and not PHASE_COUNT_CLAIM.search(text), (
+        "docs/index.html has re-grown a phase-count stat; the tile was "
+        "retired by Phase 118 — the stat band is the three evidence-corpus "
+        "numbers only"
     )
 
 
@@ -68,6 +73,6 @@ def test_monograph_is_self_consistent_and_never_ahead():
         f"monograph phase stamps disagree with each other: {sorted(sites)} "
         "(hero stat + colophon must be bumped together in a currency pass)"
     )
-    assert sites <= {n for n in range(_max_phase() + 1)}, (
+    assert max(sites) <= _max_phase(), (
         f"monograph claims Phase {max(sites)}, ahead of PHASE_LOG.md ({_max_phase()})"
     )
