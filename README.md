@@ -2,7 +2,7 @@
 
 **Recurring review findings become rules it enforces for you.**
 
-Sysop brings a full team's engineering rigor to one builder and an AI — from first plan to merge. You bring the idea worth building; Sysop brings the discipline. It's a self-improving development workflow, extracted from the GDP Query System project (71 review rounds, 3,298 findings, 78 promoted conventions as of 2026-07).
+Sysop brings a full team's engineering rigor to one builder and an AI — from first plan to merge. You bring the idea worth building; Sysop brings the discipline. It's a self-improving development workflow — where "self-improving" means recurring review findings are promoted into written conventions and compiled to machine checks, with you adjudicating every promotion; nothing learns autonomously — extracted from the GDP Query System project (71 review rounds, 3,298 findings, 78 promoted conventions as of 2026-07).
 
 ## The loop
 
@@ -52,7 +52,7 @@ cd /path/to/your/project && git add .claude/ scripts/ WORKFLOW.md WORKFLOW_GUIDE
 
 > **Prerequisites:** git, bash 4+, and Python 3 with PyYAML (`pip install pyyaml`) — Sysop's own check runner and task validator are Python scripts, whatever your project's stack. **macOS:** the stock `/bin/bash` is 3.2 — run `brew install bash` first (Homebrew's bash lands on your PATH ahead of the system one). **Windows:** run under WSL.
 
-`--packs auto` detects your stack (`pyproject.toml` → python, `next.config.js` → nextjs-react, and so on) and installs the matching convention packs; omit `--packs` for an interactive picker, or add `--dry-run` to preview without writing. The commit matters: `/claim-task` builds in git worktrees, which only see committed files. Claude Code users can additionally install the slash commands as a plugin — `/plugin marketplace add getsysop/sysop`, then `/plugin install sysop@sysop`. Updating, pinning to a release, plugin mechanics, permissions: [docs/install-and-update.md](./docs/install-and-update.md).
+`--packs auto` detects your stack (`pyproject.toml` → python, `next.config.js` → nextjs-react, and so on) and installs the matching convention packs; omit `--packs` for an interactive picker, or add `--dry-run` to preview without writing. The commit matters: `/claim-task` builds in git worktrees, which only see committed files. Claude Code users can additionally install the slash commands as a plugin — `/plugin marketplace add getsysop/sysop`, then `/plugin install sysop@sysop`. The two paths are a pair, not alternatives: the plugin delivers only the slash commands, and everything they operate on — scripts, checks, maps, hooks — arrives via the bash installer above, so on Claude Code you run both. Updating, pinning to a release, plugin mechanics, permissions: [docs/install-and-update.md](./docs/install-and-update.md).
 
 ## Documentation
 
@@ -61,7 +61,8 @@ cd /path/to/your/project && git add .claude/ scripts/ WORKFLOW.md WORKFLOW_GUIDE
 - **Install, update, pin, remove** — [`docs/install-and-update.md`](./docs/install-and-update.md): both install paths in full, the update contract, `--ref` release pinning, required permissions, backing out.
 - **Customize** — [`docs/configuration.md`](./docs/configuration.md): behavior via `CLAUDE.md`, the never-managed overlay files (conventions, checks, substitutions), model role mapping.
 - **The process spec** — [`core/companion/docs/WORKFLOW.md`](./core/companion/docs/WORKFLOW.md) (authoritative), [`WORKFLOW_GUIDE.md`](./core/companion/docs/WORKFLOW_GUIDE.md) (human-readable).
-- **How it got here** — [`PHASE_LOG.md`](./PHASE_LOG.md), one entry per development phase.
+- **How it got here** — [`docs/history.md`](./docs/history.md), the short outsider-legible version; [`PHASE_LOG.md`](./PHASE_LOG.md) is the unabridged per-phase log.
+- **The evidence, sampled** — [`docs/one-rule.md`](./docs/one-rule.md): one rule traced end to end, from recurring review finding to a compiled check you can run before installing anything.
 
 ## Status
 
@@ -87,3 +88,5 @@ Sysop is built for my own daily use and published in that spirit. Issues and PRs
 ## Provenance
 
 Extracted from `gdp-query-system` (private) via `git filter-repo` on 2026-04-30; the source commit is tagged there as `wade-flow-extract-base`. The public repository is a fresh-history snapshot of a private development repo — the private history's commit messages and preserved file history reference the production application the workflow was extracted from, and stay private. [`PHASE_LOG.md`](./PHASE_LOG.md) is the public development history; the review-round provenance of individual conventions is carried in the convention maps themselves.
+
+The public history therefore advances in **squash snapshots**, not granular commits — a policy, not neglect. Each public commit is titled `sysop public snapshot (private <hash>)`, naming the private commit it mirrors; one lands when a development phase (or a small bundle of them) closes, which is several a week while development is active. Before every push the mirrored tree is re-scanned for private-history identifiers — that leak-scan discipline is what the commit granularity is traded for. The public pulse is [`PHASE_LOG.md`](./PHASE_LOG.md), one dated entry per phase; and for the evidence trail behind a single rule — review-round finding → promoted convention → the compiled check you can run yourself — see [One rule, end to end](./docs/one-rule.md).

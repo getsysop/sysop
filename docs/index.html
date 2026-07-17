@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="Sysop — an open-source, self-improving development workflow for Claude Code. Recurring review findings become rules it enforces for you.">
+<meta name="description" content="Sysop — an open-source, self-improving development workflow for Claude Code. Recurring review findings become rules — promoted by you, enforced deterministically by the machine.">
 <meta name="theme-color" content="#0e0d0a" media="(prefers-color-scheme: dark)">
 <meta name="theme-color" content="#f6f1e6" media="(prefers-color-scheme: light)">
 <meta property="og:title" content="Sysop — recurring review findings become rules it enforces for you">
@@ -337,7 +337,7 @@
     <div class="hero-top">
       <div class="hero-body">
         <h1>Recurring review findings become <em>rules it enforces for you.</em></h1>
-        <p class="hero-lede">Sysop brings a <strong>full team's engineering rigor to one builder and an AI</strong> — from first plan to merge. You bring the idea worth building; Sysop brings the discipline: a complete development lifecycle, plus a feedback loop that turns the mistakes your reviews keep catching into checks the computer runs on every future task.</p>
+        <p class="hero-lede">Sysop brings a <strong>full team's engineering rigor to one builder and an AI</strong> — from first plan to merge. You bring the idea worth building; Sysop brings the discipline: a complete development lifecycle, plus a feedback loop that turns the mistakes your reviews keep catching into checks the computer runs on every future task. Self-improving in a narrow, deliberate sense: you ratify every rule it promotes — nothing learns autonomously.</p>
 
         <div class="install" id="install"><button class="copy-btn" id="copyBtn" aria-label="Copy install commands">copy</button><span class="prompt">$</span> git clone https://github.com/getsysop/sysop.git
 <span class="prompt">$</span> bash sysop/install.sh <span class="cmt">/path/to/your/project</span> --packs python,postgres</div>
@@ -406,12 +406,12 @@
   <section class="band">
     <p class="sec-mark">§ II · The evidence</p>
     <h2>As the convention map grew, the reviews got calmer.</h2>
-    <p class="lede">This isn't a projection. Sysop was extracted from a real project that ran 71 review rounds between February and July 2026. As its rule set climbed from zero to 78, the critical share of findings fell from one in five to low single digits — and, one language-server sweep aside, held there while the codebase kept changing underneath it. It is also, plainly, a correlation on one project, graded by its own author — so the limits are printed right under the chart, along with what would prove the claim wrong.</p>
+    <p class="lede">This isn't a projection. Sysop was extracted from a real project that ran 71 review rounds between February and July 2026. As its rule set climbed from zero to 78, the critical share of findings fell from one in five in February to about one in twenty by April, spiked back to one in six in May — an enforcement sweep filing already-promoted rules one-per-call-site, explained under the chart — and ran low through the thin summer tail. Fell, then held low, spike included; the full table is below. It is also, plainly, a correlation on one project, graded by its own author — so the limits are printed right under the chart, along with what would prove the claim wrong.</p>
 
     <figure class="figure">
       <svg viewBox="0 0 760 470" role="img" aria-labelledby="figtitle figdesc">
         <title id="figtitle">Convention growth against critical-finding share, by month, Feb–Jul 2026</title>
-        <desc id="figdesc">Top panel: cumulative promoted conventions rise from 0 at end of February to 78 by May and plateau. Bottom panel: critical findings as a share of all findings fall from 21% in February to 5% in April and stay in low single-to-mid digits through July.</desc>
+        <desc id="figdesc">Top panel: cumulative promoted conventions rise from 0 at end of February to 78 by May and plateau. Bottom panel: critical findings as a share of all findings fall from 21% in February to 5% in April, spike to 17% in May on an enforcement sweep, and run low through July.</desc>
 
         <!-- ===== Panel A: cumulative conventions ===== -->
         <text class="fig-panel-title" x="48" y="18">Convention map — cumulative rules promoted</text>
@@ -523,9 +523,9 @@
       <div class="rn"><a href="https://github.com/getsysop/sysop/blob/main/core/companion/docs/WORKFLOW.md">
         <div class="rn-k">Reference</div><h4>The process spec →</h4>
         <p>The authoritative WORKFLOW.md — every step, invariant, and gate, in full.</p></a></div>
-      <div class="rn"><a href="https://github.com/getsysop/sysop/blob/main/PHASE_LOG.md">
+      <div class="rn"><a href="https://github.com/getsysop/sysop/blob/main/docs/history.md">
         <div class="rn-k">History</div><h4>How it got here →</h4>
-        <p>One entry per development phase — the full build narrative ships with the repo.</p></a></div>
+        <p>The short version — from a real project's review rounds to a public tool — with the full per-phase narrative linked from it.</p></a></div>
     </div>
   </section>
 
@@ -542,7 +542,7 @@
       <a href="https://github.com/getsysop/sysop/blob/main/docs/getting-started.md">Getting started</a>
     </div>
     <div class="row" style="margin-top:10px; color:var(--ink-faint);">
-      <span>Maintained casually, as-is — issues and PRs welcome, no SLA. Extracted from a real project (GDP Query System) that ran 71 review rounds and 3,298 findings; that provenance is the evidence, not a slogan.</span>
+      <span>Maintained casually, as-is — issues and PRs welcome, no SLA. Extracted from a real project (GDP Query System) that ran 71 review rounds and 3,298 findings. The public repo is a squash-snapshot mirror of a private history — a policy, explained in <a href="https://github.com/getsysop/sysop#provenance">README § Provenance</a> — so the evidence ships where you can check it: <a href="https://github.com/getsysop/sysop/blob/main/docs/one-rule.md">one rule traced end to end</a>, from recurring finding to a check you can run yourself.</span>
     </div>
   </div>
 </footer>

@@ -126,7 +126,9 @@ anything is sent.
 ## Where each pack came from
 
 Packs populate from real projects, which is the point — and also the honest limit on how well they
-transfer. Nothing here was hand-written from a best-practices article.
+transfer. Nothing here was hand-written from a best-practices article. For one rule's full paper
+trail — the review rounds that kept finding it, the promotion, the compiled check you can run —
+see [One rule, end to end](./one-rule.md).
 
 | Pack | Mined from | What that means for transfer |
 |---|---|---|
