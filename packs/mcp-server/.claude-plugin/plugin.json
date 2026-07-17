@@ -1,6 +1,6 @@
 {
   "name": "sysop-mcp-server",
-  "description": "Conventions for building MCP (Model Context Protocol) servers — tool-arg validation, server-config secret handling, read-only-by-default boundaries, stdio-vs-HTTP/SSE transport concerns (placeholder — populates from real-project use, starting with BeanRider's MCP server).",
+  "description": "Conventions for building MCP (Model Context Protocol) servers — tool-arg validation, server-config secret handling, read-only-by-default boundaries, stdio-vs-HTTP/SSE transport concerns (placeholder — populates from real-project use).",
   "author": {
     "name": "Wade Petty",
     "email": "wade@gdpquery.ai"

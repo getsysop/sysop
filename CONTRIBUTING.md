@@ -156,4 +156,6 @@ Be decent and assume good faith. This project follows the [Contributor Covenant]
 
 ## Questions
 
-Open-ended questions, ideas, and show-and-tell are best in **Discussions** (if enabled). Bugs and concrete proposals go in **Issues** using the templates.
+Open-ended questions, ideas, and show-and-tell are best in **[Discussions](https://github.com/getsysop/sysop/discussions)**. Bugs and concrete proposals go in **Issues** using the templates.
+
+**On what gets built next.** Planning for this project is maintained privately, so there's no public backlog to read — and per the README, no roadmap commitment. What there *is* is the **[Ideas](https://github.com/getsysop/sysop/discussions/categories/ideas)** category: things that have been considered and deliberately parked, published with an honest note on why each isn't built, so you can 👍 the ones you want. It's prioritization signal, not a promise. Proposing a new one is welcome there too — a real use case beats a vote.
