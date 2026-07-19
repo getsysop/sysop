@@ -64,10 +64,13 @@ git commit -m "chore: install Sysop"
   pack, `next.config.js` the `nextjs-react` pack, and so on). Omit `--packs` entirely for
   an interactive picker, or name them explicitly: `--packs python,postgres`. Add
   `--dry-run` first if you want to preview without writing anything.
-- **Want just the convention loop?** Add `--mode loop` — it installs only the review and
-  audit skills, the maps, and the checks, with no task queue or merge gate. That install
-  has its own walkthrough, [`docs/loop-mode.md`](./loop-mode.md); the guide you're reading
-  assumes the full install.
+- **Started with `--mode loop`?** (The README quickstart's recommended first install for an
+  existing codebase.) This guide is the graduation path: grow the install in place with
+  `bash sysop/install.sh /path/to/your/project --update --mode full` — purely additive,
+  nothing the loop has learned is touched — commit what it added
+  (`git add .claude/ sysop/ tasks/ .gitignore`), then skip step 1 and continue from step 2.
+  Loop mode's own day-one walkthrough is [`docs/loop-mode.md`](./loop-mode.md); the guide
+  you're reading assumes the full install.
 - **What landed:** a `.claude/` directory (the lifecycle skills, the convention and
   security maps, the deterministic checks, and a permission allow-list), a `sysop/` vendor
   directory (`sysop/scripts/` — the check runner and the claim/close/validate machinery —

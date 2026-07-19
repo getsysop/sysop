@@ -1,11 +1,13 @@
 # Loop mode — the convention loop on its own
 
 Sysop's full install is a workflow: planning, a task queue, isolated worktrees, a single human
-merge gate. **Loop mode is the other door.** `--mode loop` installs only the convention loop —
+merge gate. **Loop mode is the front door.** `--mode loop` installs only the convention loop —
 the review and audit skills, the convention and security maps, and the compiled checks — into a
-repo where you keep your own planning, branching, and merge workflow. It exists for one reader
-in particular: you want the rules-and-checks engine running against your project, and the full
-workflow reads as more than you want to adopt today.
+repo where you keep your own planning, branching, and merge workflow. It's the recommended
+first install for an existing codebase: the smallest honest slice of the system, the cheapest
+to walk back, and the mechanism the published evidence measures — evidence gathered, to be
+plain, inside full-workflow use on the source project. The full workflow is a one-flag
+graduation when the loop has earned its keep.
 
 This page is the day-one walkthrough for that install. The reference for the flag itself —
 exactly what's included, switching modes, how updates behave — is
@@ -100,10 +102,14 @@ The lock's `mode: loop` means an update re-applies the loop shape — it won't q
 task queue.
 
 If the loop earns its keep and you want the rest — planning, the queue, parallel builds under
-one merge gate — the upgrade is one flag: `bash install.sh <target> --update --mode full`. It's
-purely additive (lifecycle skills, scripts, and the `tasks/` scaffold are added; nothing the
-loop has learned is touched), and [getting-started.md](./getting-started.md) walks the full
-workflow from there. The reverse direction (full → loop) is a fresh reinstall, not an update.
+one merge gate — the upgrade is one flag: `bash sysop/install.sh <target> --update --mode full`
+(run from wherever your Sysop clone lives). It's purely additive: lifecycle skills, scripts,
+and the `tasks/` scaffold are added; nothing the loop has learned is touched. Then review and
+commit what it added — `git add .claude/ sysop/ tasks/ .gitignore && git commit -m "chore: grow
+Sysop to full mode"` — worktree builds only see committed files.
+[getting-started.md](./getting-started.md) walks the full workflow from there; you've already
+installed, so skip its step 1 and start at step 2 (`/intake`). The reverse direction
+(full → loop) is a fresh reinstall, not an update.
 
 ## Has this actually been run?
 
