@@ -9,13 +9,20 @@ import os
 import subprocess
 import sys
 
+from .config import check_paths_by_id, finding_in_scope
+
 
 def _run_semgrep(repo_root, included_ids):
     """Run semgrep against .claude/semgrep/, return findings as (check_id, file_line, msg) tuples.
 
-    `included_ids` is the set of semgrep-* check IDs that the caller has
-    already filtered for the active mode.  Any finding whose mapped check_id
-    is not in `included_ids` is dropped.
+    `included_ids` is the collection of semgrep-* check IDs that the caller
+    has already filtered for the active mode — a dict of id → check dict from
+    `_classify_checks` (legacy callers may still pass a plain id set). Any
+    finding whose mapped check_id is not in `included_ids` is dropped, and —
+    when the check declares `paths:` — so is any finding outside those roots
+    (Phase 133: semgrep scans the whole tree in one subprocess, so per-check
+    `paths:` scoping is applied by post-filtering; see
+    config.path_in_scope).
 
     Returns early (empty list) when:
     - included_ids is empty (nothing to scan for this mode)
@@ -63,14 +70,17 @@ def _run_semgrep(repo_root, included_ids):
         return out
 
     _sev_map = {"ERROR": "HIGH", "WARNING": "MEDIUM", "INFO": "LOW"}
+    paths_by_id = check_paths_by_id(included_ids)
     for result in data.get("results", []):
         # Rule IDs in semgrep JSON are fully-qualified; take the last segment.
         raw_id = result.get("check_id", "")
         rule_id = raw_id.split(".")[-1]
         check_id = f"semgrep-{rule_id}"
-        if check_id not in included_ids:
+        if check_id not in paths_by_id:
             continue
         path = os.path.relpath(result.get("path", ""), repo_root)
+        if not finding_in_scope(path, paths_by_id[check_id]):
+            continue
         line = result.get("start", {}).get("line", 0)
         file_line = f"{path}:{line}"
         msg_text = result.get("extra", {}).get("message", "").replace("\n", " ")[:300]

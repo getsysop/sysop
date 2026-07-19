@@ -101,6 +101,17 @@ and the installer rewrites `paths:` values in `.claude/checks.yml` so the checks
 tree. This applies to `paths:` values in that one file — nothing else. Full details in
 [configuration.md § Placeholder substitution](./configuration.md#placeholder-substitution-phase-25).
 
+**Granularity matters: map tokens to source dirs, not a package root.** The substitution value
+sweeps *everything* beneath it into every check that uses the token. If your "api module" is a leaf
+directory of handlers, `"<api module>": "api"` is right. If it's a package that also contains
+generated or excluded trees — Alembic migrations, vendored code, fixtures — a root-level mapping
+drags those into every check (a real dogfood run produced 17 false criticals exactly this way,
+from `alembic/**` inside the mapped package). Two fixes: enumerate the real source dirs
+(`"<api module>": "app/routes"` plus overlay entries for siblings), or keep the broad mapping and
+add `exclude_dir: ["alembic", "migrations"]` to the affected checks via a
+`.claude/checks.project.yml` override (Phase 133; `exclude_dir` matches directory basenames at any
+depth, grep `--exclude-dir` semantics).
+
 So: **checks are concretized mechanically from a file you author; maps are localized through use** —
 by inference for the security audit, and by naming your real globs for the code review.
 

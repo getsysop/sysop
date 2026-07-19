@@ -29,6 +29,12 @@ else
   MAIN_REPO_ROOT="$REPO_ROOT"
 fi
 VENV_BIN="${MAIN_REPO_ROOT}/.venv/bin"
+# A plain `venv/` layout (no dot) is the other common in-repo venv home —
+# probe it when `.venv/` is absent (Phase 133; matches install.sh's
+# pick_python_with_yaml order). Out-of-repo venvs (poetry default) are
+# covered separately: the pip-audit stage falls back to `python -m pip_audit`
+# via whichever interpreter runs the checks.
+[[ ! -d "$VENV_BIN" ]] && VENV_BIN="${MAIN_REPO_ROOT}/venv/bin"
 FRONTEND_BIN="${REPO_ROOT}/frontend/node_modules/.bin"
 # Worktrees typically lack frontend/node_modules — fall back to the main
 # repo's install so `tsc` is at least resolvable. Note: _run_tsc will still

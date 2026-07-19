@@ -180,7 +180,9 @@ bash sysop/scripts/run_checks.sh --mode security
 
 The `--mode security` invocation runs four stages: grep (checks.yml registry), LSP/lint (`pyright`, `eslint`), Semgrep AST, and dependency audit (`pip-audit`). All four share the same `(check_id, file_line, msg)` shape so baseline matching, `--mode` filtering, and `--fail-on-blocking` apply uniformly.
 
-**pip-audit specifics.** Invoked as `pip-audit --strict --format json` against the active venv. Findings are tagged `[pip-audit]`; the single catch-all check_id is `pip-audit-vuln`. Each finding's message text embeds the package name, installed version, CVE/GHSA ID, fix version (when available), and the first 200 chars of the advisory description. Findings anchor at the first discoverable `requirements*.txt` (sorted) because pip-audit reports per-package, not per-line — falls back to `requirements.txt:1` when no requirements file is present. If `pip-audit` is missing the stage skips with an install hint (`pip install pip-audit`).
+**Localizing placeholder `paths:` — the substitutions map, not overlay restatement (consumer installs).** Shipped check entries scope via placeholder vocabulary (`<api module>/`, `<scripts dir>/`) that resolves to nothing until localized, so on a never-localized install most grep checks are inert. The sanctioned localization is **one token mapping in `.claude/substitutions.project.yml`** (`substitutions: {"<api module>": "src/app"}`) — the installer re-applies it to every `paths:` line of the assembled `checks.yml` on install and every update (Phase 25/55), localizing all entries at once, durably. When the pre-scan is suspiciously empty or you find yourself recommending path fixes (in a finding's remediation text, a filed task, or an inline fix), point at the substitutions map — do NOT recommend restating shipped entries in `.claude/checks.project.yml` with concrete paths just to localize them (that duplicates every entry and loses upstream pattern updates — the verbose path install.sh's own comments warn against). Reserve `checks.project.yml` overrides for genuinely *changing* an entry: narrowing with `exclude_dir:`, disabling via `paths: ["__disabled_no_op__"]`, or a consumer-authored new check. Granularity note: map each token to the real *source* dirs, not a package root that contains excluded trees (`<api module>` → `pkg` sweeps `pkg/alembic/**` into every check; enumerate `pkg/routes`, `pkg/services`, … or add `exclude_dir: ["alembic", "migrations"]` in an override). See `sysop/docs/WORKFLOW.md` § 8.2b "Phase 25 — placeholder substitution" (loop installs ship no WORKFLOW.md — use the public `docs/configuration.md` § Placeholder substitution).
+
+**pip-audit specifics.** Invoked as `pip-audit --skip-editable --format json` against the active venv (falling back to `python -m pip_audit` when the console script isn't on PATH — a venv-installed pip-audit resolves either way). The stage audits installed packages, so it runs for every requirements layout (requirements.txt, pyproject/uv, poetry). Findings are tagged `[pip-audit]`; the single catch-all check_id is `pip-audit-vuln`. Each finding's message text embeds the package name, installed version, CVE/GHSA ID, fix version (when available), and the first 200 chars of the advisory description. Findings anchor at the first discoverable `requirements*.txt` (sorted) because pip-audit reports per-package, not per-line — falls back to `pyproject.toml:1` for manifest-only consumers, then `requirements.txt:1`. If `pip-audit` is missing both ways the stage skips with an install hint (`pip install pip-audit`).
 
 **ESLint specifics.** Same single catch-all (`lint-error`) used by the codebase-review skill. Frontend findings include `jsx-a11y/*` rules that map to OWASP A07 (auth) and A05 (misconfiguration); they surface here as well so the security audit benefits from them. The original ESLint rule_id is embedded in the message text — read it to triage which OWASP category to file the finding under.
 
@@ -317,7 +319,7 @@ This structure ensures every category is checked by a dedicated agent with a nar
 
 ### Agent 6: Dependencies (A06)
 
-Dependency scanning runs through `run_checks.sh`: the local pre-scan in Step 2b already runs `pip-audit --strict --format json` against the active venv — **consume those `[pip-audit]`-tagged findings rather than re-running**. (The same scan runs in CI when the consumer adds `pip-audit` to the shipped gate template `sysop/scripts/ci/sysop-checks.yml.example` — see WORKFLOW.md § 6.1 "Protecting `main` with CI".) If Step 2b reported `pip-audit not available`, follow the install hint (`pip install pip-audit`) and re-run `bash sysop/scripts/run_checks.sh --mode security` before continuing.
+Dependency scanning runs through `run_checks.sh`: the local pre-scan in Step 2b already runs `pip-audit --skip-editable --format json` against the active venv — **consume those `[pip-audit]`-tagged findings rather than re-running**. (The same scan runs in CI when the consumer adds `pip-audit` to the shipped gate template `sysop/scripts/ci/sysop-checks.yml.example` — see WORKFLOW.md § 6.1 "Protecting `main` with CI".) If Step 2b reported `pip-audit not available`, follow the install hint (`pip install pip-audit`) and re-run `bash sysop/scripts/run_checks.sh --mode security` before continuing.
 
 Run the supplementary `npm audit` scan (not yet pre-scanned):
 - `cd "$(git rev-parse --show-toplevel)/<frontend>" && npm audit --production 2>/dev/null || echo "npm audit not available"`
@@ -556,7 +558,7 @@ After writing all tasks, scan the findings for patterns that could become new Pr
    - Reference the specific utility, validation function, or security control
    - Match the style of the existing bullets in `CLAUDE.md` § Prevention Conventions
 3. For each candidate, also draft a one-line convention map entry and list the `.claude/convention_map.md` sections it should be added to
-4. Write candidates to `.pending-docs/convention-candidates.md` using this format (append if the file already exists from a `/codebase-review` run in the same Round):
+4. Write candidates to `sysop/runtime/pending-docs/convention-candidates.md` using this format (append if the file already exists from a `/codebase-review` run in the same Round):
 
 ```markdown
 # Convention Candidates — Round N (YYYY-MM-DD)
@@ -573,7 +575,7 @@ After writing all tasks, scan the findings for patterns that could become new Pr
 
 ## Step 9: Convention Promotion (Interactive)
 
-If Step 8 produced convention candidates in `.pending-docs/convention-candidates.md`, promote them now rather than deferring to `/review-close`.
+If Step 8 produced convention candidates in `sysop/runtime/pending-docs/convention-candidates.md`, promote them now rather than deferring to `/review-close`.
 
 > **Where these writes land — read `_shared/promotion-write-target.md` first.** In a **consumer install** (detected by `.claude/sysop.lock`), the base maps `.claude/convention_map.md` / `.claude/security_map.md` / `.claude/checks.yml` are regenerated from upstream on every `sysop-update.sh`, so a promotion written only to a base file is silently lost on the consumer's next update. Dual-write to the `.project.*` overlay per that partial (the mechanism-by-mechanism table). In the **source repo** (no lock) the overlay does not exist; write the base files exactly as below.
 
@@ -634,7 +636,7 @@ If Step 8 produced convention candidates in `.pending-docs/convention-candidates
 
 3. **Emit promotion summary** before deleting the candidates file: print one line of the form `Promotion summary: <N> total (<M> mechanical / <K> prose)` and include the same line in the commit message body (step 5). Future reviewers can grep ratios with `git log --grep "Promotion summary"`.
 
-4. **Delete** `.pending-docs/convention-candidates.md` after processing all candidates.
+4. **Delete** `sysop/runtime/pending-docs/convention-candidates.md` after processing all candidates.
 
 5. **Commit** any changes (the `.project.*` overlay paths are the consumer-install dual-write targets from `_shared/promotion-write-target.md`; `2>/dev/null` tolerates their absence in the source repo):
    ```bash
@@ -668,7 +670,7 @@ This is the **FP-driven** half of convention demotion. Tier 1 (Step 2a-3) static
       - `pre-commit`: delete the `sysop/scripts/hooks/pre-commit` check, update the header-comment letter listing; remove the matching `> pre-commit: <letter>` reminder lines.
       - If the rule had also become a **prose** convention bullet, remove that `CLAUDE.md § Prevention Conventions` bullet — the deliberate, human prose-retirement that Tier 1 (Step 2a-4) routes here.
       - Optional hygiene: drop any now-orphaned `<rule-id>` lines from `.claude/checks_baseline.txt` (inert once the check id is gone, but tidy).
-      - **Consumer install** (per `_shared/promotion-write-target.md`): retire the rule where it durably lives — a **locally-promoted** rule is in the `.project.*` overlay, so delete it from `.claude/checks.project.yml` / `.claude/convention_map.project.md` / `.claude/security_map.project.md` (editing only the base leaves the overlay to re-supply it on the next update); a **core/pack-shipped** rule can't be deleted from a consumer install (the concat re-supplies it), so suppress a `checks.yml`-mechanism one via an override entry in `.claude/checks.project.yml` (`paths: ["__disabled_no_op__"]`) — a core semgrep/pre-commit rule has no consumer-side suppression and routes genuine retirement upstream (see the partial).
+      - **Consumer install** (per `_shared/promotion-write-target.md`): retire the rule where it durably lives — a **locally-promoted** rule is in the `.project.*` overlay, so delete it from `.claude/checks.project.yml` / `.claude/convention_map.project.md` / `.claude/security_map.project.md` (editing only the base leaves the overlay to re-supply it on the next update); a **core/pack-shipped** rule can't be deleted from a consumer install (the concat re-supplies it), so suppress a `checks.yml`-mechanism one — including a semgrep rule, via its `semgrep-*` registry entry (Phase 133) — with an override entry in `.claude/checks.project.yml` (`paths: ["__disabled_no_op__"]`); a core pre-commit rule has no consumer-side suppression and routes genuine retirement upstream (see the partial).
    - **demote-to-advisory** — the rule still catches a real issue sometimes, but the false-positive halt is not worth it. Flip `blocking: true → false` in `.claude/checks.yml` (or move a `pre-commit` letter from the B-tier blocking range to the A-tier advisory range). The signal survives; the commit-halt does not. The lower-regret middle option when "retire" feels premature.
    - **tighten** — the rule is **over-broad from birth** (staleness Mode G), not genuinely moot: it has flagged non-issues since it shipped because its `pattern`/`paths` are too wide. Narrow the regex or glob instead of retiring. Not a retirement; the rule stays, scoped better.
    - **keep** — override the signal: the rule is still valuable despite the false positives. Log the reason in the demotion report.

@@ -597,9 +597,12 @@ class TestPreflightGatedOnRealMoves:
         (root / "scripts").mkdir(exist_ok=True)
         (root / "scripts" / "claim_task.sh").write_text("# leftover flat duplicate\n")
         _git(root, "add", "-A"); _git(root, "commit", "-q", "-m", "leftover flat dup")
-        # An active task lock — the routine workflow state the preflight over-blocked.
-        (root / ".locks").mkdir(exist_ok=True)
-        (root / ".locks" / "FEAT-1.lock").write_text("owner: x\n")
+        # An active task lock — the routine workflow state the preflight
+        # over-blocked. Lives at the POST-133 canonical location: a lock still
+        # at .locks/ is a pending runtime-dir consolidation, which correctly
+        # refuses on an active claim (its own preflight).
+        (root / "sysop" / "runtime" / "locks").mkdir(parents=True, exist_ok=True)
+        (root / "sysop" / "runtime" / "locks" / "FEAT-1.lock").write_text("owner: x\n")
         r = _run_update(root)
         assert r.returncode == 0, \
             f"routine --update blocked despite no real moves:\n{r.stdout}\n{r.stderr}"
@@ -852,3 +855,29 @@ class TestFreshInstallSingleCollisionProceeds:
         assert (root / ".claude" / "sysop.lock").exists()
         # The consumer's own flat file is left untouched by the fresh install.
         assert (root / "scripts" / "run_checks.sh").read_text() == "#!/bin/sh\n# my own runner\n"
+
+
+class TestMigrationNumstatNonMovedPaths:
+    """Phase 133 (leg G — the Phase-128 post-open review's PLAUSIBLE finding).
+    Migration mode used to suppress the ENTIRE post-overwrite numstat table; in
+    the ancestor-unreachable fallback (DIVERGED_PATHS empty — exactly what
+    _build_old_consumer's UNREACHABLE anchor produces) that removed the last
+    per-file signal for committed edits to NON-moved managed paths. The
+    narrowed suppression keeps mass-mv rows out while non-moved paths
+    (.claude/* concat outputs) keep their rows."""
+
+    def test_non_moved_managed_path_row_survives_migration(self, tmp_path):
+        root, _ = _build_old_consumer(
+            tmp_path / "c", diverge=".claude/convention_map.md")
+        r = _run_update(root)
+        assert r.returncode == 0, r.stdout + r.stderr
+        # The migration itself happened.
+        assert (root / "sysop" / "scripts" / "claim_task.sh").is_file()
+        # The delta table printed and names the non-moved, committed-edited
+        # managed path — the per-file signal the blanket early-return dropped.
+        assert "post-overwrite delta" in r.stdout, r.stdout
+        delta = r.stdout.split("post-overwrite delta", 1)[1]
+        assert ".claude/convention_map.md" in delta, delta
+        # Moved paths stay out of the table (the wall-of-adds noise the
+        # Phase-128 suppression existed to prevent).
+        assert "sysop/scripts/claim_task.sh" not in delta.split("namespace migration summary")[0], delta

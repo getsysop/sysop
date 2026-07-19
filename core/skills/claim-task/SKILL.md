@@ -113,16 +113,16 @@ Hard-fail (exit and report) if the script exits non-zero. Surface the stderr mes
 
 - `2` — `tasks/index.yml` itself missing (consumer not bootstrapped, or wrong cwd).
 - `3` — task ID not found. The user mistyped the ID, or the task lives in `deferred/` / `archive/`. Suggest `/next-task` to find a claimable one.
-- `4` — status not `open`. If `in_progress`, check `.locks/<TASK_ID>.lock` for owner info before suggesting takeover. If `done` / `deferred`, the task is closed; stop.
+- `4` — status not `open`. If `in_progress`, check `sysop/runtime/locks/<TASK_ID>.lock` for owner info before suggesting takeover. If `done` / `deferred`, the task is closed; stop.
 - `5` / `6` — `body:` field missing or the body file doesn't exist on disk. The index entry is broken — `validate_tasks.py` will reject it; fix the entry before re-claiming.
 
-Also list `.locks/*.lock` files to surface concurrent claims:
+Also list `sysop/runtime/locks/*.lock` files to surface concurrent claims:
 
 ```bash
-ls .locks/*.lock 2>/dev/null
+ls sysop/runtime/locks/*.lock 2>/dev/null
 ```
 
-If `.locks/<TASK_ID>.lock` already exists, hard-fail with the file contents — another session owns this task. Do not overwrite.
+If `sysop/runtime/locks/<TASK_ID>.lock` already exists, hard-fail with the file contents — another session owns this task. Do not overwrite.
 
 Read the body file `tasks/open/<TASK_ID>.md` in full so it's loaded as context for Step 6 plan mode.
 
@@ -143,7 +143,7 @@ Read the body file `tasks/open/<TASK_ID>.md` in full so it's loaded as context f
 - Verify the batch number exists
 - Check its status (the backtick-wrapped status after the batch title):
   - `Pending` → available, proceed
-  - `In Progress` → check for `.locks/BATCH-<N>.lock`. If locked, report "already claimed" and stop. If no lock, it may be resumable — proceed (the script handles this).
+  - `In Progress` → check for `sysop/runtime/locks/BATCH-<N>.lock`. If locked, report "already claimed" and stop. If no lock, it may be resumable — proceed (the script handles this).
   - `Merged`, `Complete`, `Ready for Review` → report current status and stop
 
 ## Step 3: Generate Branch Name
@@ -217,7 +217,7 @@ PY
 
 ### 4b. Run the claim script with `--lock` to create the worktree and lock file
 
-The lock file is **required** by the schema for `in_progress` tasks (see `tasks/schema.md` § lock invariant). The script creates `.locks/<TASK_ID>.lock` under the **main** repo's `.locks/` via `git rev-parse --git-common-dir`, so the validator resolves the same path from any working tree. Always pass `--lock`:
+The lock file is **required** by the schema for `in_progress` tasks (see `tasks/schema.md` § lock invariant). The script creates `sysop/runtime/locks/<TASK_ID>.lock` under the **main** repo's `sysop/runtime/locks/` via `git rev-parse --git-common-dir`, so the validator resolves the same path from any working tree. Always pass `--lock`:
 
 ```bash
 bash sysop/scripts/claim_task.sh --lock <TASK_ID> <BRANCH_NAME>
@@ -371,7 +371,7 @@ implementation + Steps 9/10 + single commit all run inside it. This may take
 
 **START OF REVIEWER-EXECUTOR PROMPT**
 
-You are executing roadmap task `<TASK_ID>`. The parent session has already claimed the task (worktree at `<WORKTREE_PATH>`, lock at `.locks/<TASK_ID>.lock`, branch `<BRANCH_NAME>`, `tasks/index.yml` flipped to `in_progress` on main) and produced the plan below. Your job, in one cold-context pass:
+You are executing roadmap task `<TASK_ID>`. The parent session has already claimed the task (worktree at `<WORKTREE_PATH>`, lock at `sysop/runtime/locks/<TASK_ID>.lock`, branch `<BRANCH_NAME>`, `tasks/index.yml` flipped to `in_progress` on main) and produced the plan below. Your job, in one cold-context pass:
 
 1. Adversarially review the plan.
 2. Self-classify findings per `_shared/adversarial-review.md`.
@@ -441,7 +441,7 @@ You are executing roadmap task `<TASK_ID>`. The parent session has already claim
    Doc-Work: <TASK_ID>
    ```
 
-   Do NOT push. Do NOT write to `.pending-docs/`. Do NOT invoke `/document-work`. The trailer eliminates the need for `/document-work` to amend later just to add the marker; the subsequent `/document-work` run will find the trailer already present and proceed straight to Step 3 documentation.
+   Do NOT push. Do NOT write to `sysop/runtime/pending-docs/`. Do NOT invoke `/document-work`. The trailer eliminates the need for `/document-work` to amend later just to add the marker; the subsequent `/document-work` run will find the trailer already present and proceed straight to Step 3 documentation.
 
 10. **Emit the EXECUTED envelope** (see below).
 
@@ -479,12 +479,12 @@ A malformed envelope (missing keys, content after the closing backticks, status 
 
 After the reviewer-executor sub-agent returns, get the envelope. Read in this order — first hit wins; never go past a clean hit to the next source:
 
-1. **JSON file** (preferred, Phase 37). Try to read `.subagent-envelopes/<TASK_ID>.json` (resolved against the main repo root via `git rev-parse --git-common-dir` if you're in a worktree). The `SubagentStop` hook (`sysop/scripts/parse_subagent_envelope.py`) parses the sub-agent's final message on the harness's terms and writes structured JSON keyed by the `TASK:` field. Keys you'll need: `status`, `worktree`, `branch`, `error`, `blocker_question`, `review_report_raw`. If the file is missing (hook didn't fire, fired after this read, or crashed) OR `parsed: false` (envelope wasn't found in the agent's final message), continue to (2).
+1. **JSON file** (preferred, Phase 37). Try to read `sysop/runtime/subagent-envelopes/<TASK_ID>.json` (resolved against the main repo root via `git rev-parse --git-common-dir` if you're in a worktree). The `SubagentStop` hook (`sysop/scripts/parse_subagent_envelope.py`) parses the sub-agent's final message on the harness's terms and writes structured JSON keyed by the `TASK:` field. Keys you'll need: `status`, `worktree`, `branch`, `error`, `blocker_question`, `review_report_raw`. If the file is missing (hook didn't fire, fired after this read, or crashed) OR `parsed: false` (envelope wasn't found in the agent's final message), continue to (2).
 2. **Regex parse of the sub-agent's return text** (existing behavior). Parse the YAML envelope from the LAST content block of the sub-agent's final message. Validate that the envelope has the required keys (`TASK`, `STATUS`, `WORKTREE`, `BRANCH`, `ERROR`). Multiple envelopes → last-wins (matches the prompt's "LAST content" instruction).
 
 The `REVIEW_REPORT:` block at the TOP of the sub-agent's response is read from the response body (or from `review_report_raw` in the JSON if path (1) hit).
 
-**After consuming (1)**, delete the JSON file: `rm -f .subagent-envelopes/<TASK_ID>.json`. The dir is for in-flight handoff only; leftover files accumulate stale state across cycles. Do NOT delete `_unparseable_*.json` diagnostics — those persist intentionally for inspection.
+**After consuming (1)**, delete the JSON file: `rm -f sysop/runtime/subagent-envelopes/<TASK_ID>.json`. The dir is for in-flight handoff only; leftover files accumulate stale state across cycles. Do NOT delete `_unparseable_*.json` diagnostics — those persist intentionally for inspection.
 
 **On `STATUS: EXECUTED`:**
 

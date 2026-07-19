@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Deterministic /next-task replacement.
 
-Reads ``tasks/index.yml`` + ``review_tasks.md`` + ``.locks/`` and prints the
+Reads ``tasks/index.yml`` + ``review_tasks.md`` + ``sysop/runtime/locks/`` and prints the
 same user-facing markdown that ``core/skills/next-task/SKILL.md`` produced
 when it was an LLM (haiku) call. Runs in ~100 ms; no model cost.
 
@@ -19,7 +19,7 @@ Exit codes:
 Algorithm (mirrors the legacy SKILL.md prose so the source-of-truth lives
 with the implementation):
 
-  Step 1   read tasks/index.yml, review_tasks.md, list .locks/*.lock
+  Step 1   read tasks/index.yml, review_tasks.md, list sysop/runtime/locks/*.lock
   Step 2a  (skipped if --review) — locate the single current_focus phase, then
            among phase=focus tasks with status="open", drop those with a lock,
            drop those with on_hold_until set, drop those with any incomplete
@@ -30,7 +30,7 @@ with the implementation):
            doesn't touch any in-flight worktree is preferred, and annotate the
            chosen task with its overlap verdict.
   Step 2b  scan review_tasks.md for the FIRST ``### Batch N — Title `Pending` ``
-           heading whose ``.locks/BATCH-<N>.lock`` is absent; capture branch /
+           heading whose ``sysop/runtime/locks/BATCH-<N>.lock`` is absent; capture branch /
            scope / verify / tasks / severity breakdown.
   Step 3   load the selected task's body file (relative to tasks/ or repo
            root) and extract ## Context / ## Requirements / ## User ops.
@@ -167,7 +167,7 @@ _REVIEW_PATH = _REPO_ROOT / "review_tasks.md"
 # ---------------------------------------------------------------------------
 # Lock directory resolution — mirror of validate_tasks.py:_resolve_canonical_locks_dir
 # so the two stay in sync. See that function for the rationale on
-# `git rev-parse --git-common-dir` (worktree-shared .locks/).
+# `git rev-parse --git-common-dir` (worktree-shared sysop/runtime/locks/).
 # ---------------------------------------------------------------------------
 def _git_discovery_env() -> dict[str, str]:
     """`os.environ` minus git's discovery vars (BeanRider ISSUE-0048).
@@ -186,7 +186,7 @@ def _git_discovery_env() -> dict[str, str]:
 
 
 def _resolve_canonical_locks_dir(project_root: Path) -> Path:
-    """Resolve the canonical ``.locks/`` directory shared across worktrees.
+    """Resolve the canonical ``sysop/runtime/locks/`` directory shared across worktrees.
 
     Mirror of ``validate_tasks.py:_resolve_canonical_locks_dir``. Kept as an
     intentional zero-dependency duplicate (this script must remain importable
@@ -203,16 +203,16 @@ def _resolve_canonical_locks_dir(project_root: Path) -> Path:
             env=_git_discovery_env(),
         )
     except (FileNotFoundError, subprocess.SubprocessError):
-        return project_root / ".locks"
+        return project_root / "sysop/runtime/locks"
     if completed.returncode != 0:
-        return project_root / ".locks"
+        return project_root / "sysop/runtime/locks"
     common_dir = completed.stdout.strip()
     if not common_dir:
-        return project_root / ".locks"
+        return project_root / "sysop/runtime/locks"
     common_path = Path(common_dir)
     if not common_path.is_absolute():
         common_path = (project_root / common_path).resolve()
-    return common_path.parent / ".locks"
+    return common_path.parent / "sysop/runtime/locks"
 
 
 # ---------------------------------------------------------------------------
@@ -304,7 +304,7 @@ def list_locks(project_root: Path | None = None) -> set[str]:
     """Return the set of task / batch IDs that have an active lock file.
 
     Strips the ``.lock`` suffix and basenames to leave just the ID
-    (``TECH-FOO`` or ``BATCH-42``). Uses the worktree-shared ``.locks/`` via
+    (``TECH-FOO`` or ``BATCH-42``). Uses the worktree-shared ``sysop/runtime/locks/`` via
     ``_resolve_canonical_locks_dir`` so a /next-task running in worktree A
     still sees a claim made in worktree B.
 

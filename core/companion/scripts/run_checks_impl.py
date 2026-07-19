@@ -29,8 +29,11 @@ from run_checks.cli import _classify_checks, main  # noqa: F401
 from run_checks.config import (  # noqa: F401
     _SKIP_DIRS,
     _validate_check,
+    check_paths_by_id,
     filter_checks,
+    finding_in_scope,
     parse_checks_yml,
+    path_in_scope,
 )
 from run_checks.coverage import (  # noqa: F401
     _path_in_critical,

@@ -50,19 +50,22 @@ checks:
   # ── pip-audit diagnostics (Phase 47b backport of gdp 2fdca506) ─────────
   # These entries have no `pattern:` field. Findings are populated by
   # `_run_pip_audit()` in sysop/scripts/run_checks/pip_audit.py, which invokes
-  # `pip-audit --strict --format json` against the active venv. Findings
-  # are anchored at the first discoverable requirements*.txt file (via
-  # `_find_requirements_files()`); falls back to `requirements.txt:1`
-  # when no requirements file is present.
+  # `pip-audit --skip-editable --format json` against the active venv (falling
+  # back to `python -m pip_audit` when the console script isn't on PATH). The
+  # stage audits installed packages, so it runs for EVERY requirements layout —
+  # requirements.txt, pyproject/uv, poetry — with no `paths:` gate (Phase 133;
+  # a `paths:` here would be misleading, the field scopes file-scanning stages
+  # only). Findings are anchored at the first discoverable requirements*.txt
+  # (via `_find_requirements_files()`), then `pyproject.toml:1`, then
+  # `requirements.txt:1` as the layout-less stable key.
 
   - id: pip-audit-vuln
     name: "Python dependency vulnerability (pip-audit)"
     category: security
     severity: high
-    paths: ["requirements.txt"]
-    description: "pip-audit reports a known vulnerability in an installed Python package. Bump to the fix_version listed in the message, regenerate the requirements file via the project's lockfile-compile flow, and verify the audit clears."
+    description: "pip-audit reports a known vulnerability in an installed Python package. Bump to the fix_version listed in the message, regenerate the dependency manifest via the project's lockfile-compile flow, and verify the audit clears."
     convention: "Dependency management"
-    notes: "Anchored at the first sorted requirements*.txt match because pip-audit reports per-package, not per-line. Original vuln ID (CVE / GHSA) and fix_version are in the message text."
+    notes: "Audits the active venv — runs regardless of requirements layout (requirements.txt, pyproject/uv, poetry). Anchored at the first sorted requirements*.txt match (pyproject.toml for manifest-only consumers) because pip-audit reports per-package, not per-line. Original vuln ID (CVE / GHSA) and fix_version are in the message text."
     used_by: [security-audit]
     blocking: false
 

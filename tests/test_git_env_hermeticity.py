@@ -54,14 +54,16 @@ def test_git_discovery_env_strips_discovery_vars(mod, monkeypatch):
 @pytest.mark.parametrize("mod", MODULES, ids=MODULE_IDS)
 def test_locks_dir_ignores_ambient_git_dir(mod, tmp_path, monkeypatch):
     """With an absolute ``GIT_DIR`` pointing at an unrelated repo, resolution must
-    fall back to the probed ``project_root``'s ``.locks/``, not the leaked repo's.
+    fall back to the probed ``project_root``'s ``sysop/runtime/locks/``, not the
+    leaked repo's.
 
     This is the ISSUE-0048 shape as a unit test: ``project_root`` is a non-git
     tmpdir, so a correct (env-stripped) probe fails to resolve and returns
-    ``<project_root>/.locks``. A *leaking* probe honors the ambient ``GIT_DIR``
-    and returns the other repo's ``.locks`` instead. An **absolute** ``GIT_DIR``
-    is load-bearing — git sets it relative for a normal checkout (fails to resolve,
-    passes for the wrong reason) and absolute for a worktree (the real failure).
+    ``<project_root>/sysop/runtime/locks``. A *leaking* probe honors the ambient
+    ``GIT_DIR`` and returns the other repo's locks dir instead. An **absolute**
+    ``GIT_DIR`` is load-bearing — git sets it relative for a normal checkout
+    (fails to resolve, passes for the wrong reason) and absolute for a worktree
+    (the real failure).
     """
     other = tmp_path / "other_repo"
     other.mkdir()
@@ -75,7 +77,7 @@ def test_locks_dir_ignores_ambient_git_dir(mod, tmp_path, monkeypatch):
 
     resolved = mod._resolve_canonical_locks_dir(project_root)
 
-    assert resolved == project_root / ".locks", (
+    assert resolved == project_root / "sysop/runtime/locks", (
         f"{mod.__name__}._resolve_canonical_locks_dir resolved {resolved} — "
         f"ambient GIT_DIR ({leaked_git_dir}) leaked past `-C`"
     )

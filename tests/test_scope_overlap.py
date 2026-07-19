@@ -26,12 +26,12 @@ def _build_repo(
     bodies: dict[str, str],
     locks: dict[str, str] | None = None,
 ) -> Path:
-    """Synthetic repo: tasks/index.yml + open/ bodies + .locks/ files."""
+    """Synthetic repo: tasks/index.yml + open/ bodies + sysop/runtime/locks/ files."""
     tasks_dir = tmp_path / "tasks"
     open_dir = tasks_dir / "open"
     open_dir.mkdir(parents=True)
-    locks_dir = tmp_path / ".locks"
-    locks_dir.mkdir()
+    locks_dir = tmp_path / "sysop/runtime/locks"
+    locks_dir.mkdir(parents=True)
     (locks_dir / ".gitkeep").write_text("", encoding="utf-8")
     (tasks_dir / "index.yml").write_text(index_yaml, encoding="utf-8")
     for name, body in bodies.items():
@@ -436,7 +436,7 @@ def test_assess_no_locks_reports_zero_in_flight(tmp_path):
 
 
 def test_assess_missing_index_notes_and_does_not_raise(tmp_path):
-    (tmp_path / ".locks").mkdir()
+    (tmp_path / "sysop/runtime/locks").mkdir(parents=True)
     a = so.assess(
         "FEAT-CAND",
         index_path=tmp_path / "nope.yml",
@@ -584,7 +584,7 @@ def test_main_json_returns_zero_and_valid_json(monkeypatch, capsys, tmp_path):
 
 def test_main_missing_index_still_returns_zero(monkeypatch, capsys, tmp_path):
     # Advisory-non-blocking: a broken/missing index must not break the caller.
-    (tmp_path / ".locks").mkdir()
+    (tmp_path / "sysop/runtime/locks").mkdir(parents=True)
     monkeypatch.setattr(so, "_REPO_ROOT", tmp_path)
     monkeypatch.setattr(so, "_TASKS_DIR", tmp_path / "tasks")
     monkeypatch.setattr(so, "_INDEX_PATH", tmp_path / "tasks" / "index.yml")

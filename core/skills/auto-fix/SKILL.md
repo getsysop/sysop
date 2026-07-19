@@ -431,9 +431,9 @@ If an Opus verify agent itself fails (e.g., crashes, returns malformed output), 
 
 If the agent reported PASS, create a pending-docs file in the worktree so `/review-close` can consolidate documentation.
 
-Use the Write tool to create `<WORKTREE_PATH>/.pending-docs/<sanitized-branch>.md`:
+Use the Write tool to create `<WORKTREE_PATH>/sysop/runtime/pending-docs/<sanitized-branch>.md`:
 
-1. `mkdir -p <WORKTREE_PATH>/.pending-docs` (via Bash)
+1. `mkdir -p <WORKTREE_PATH>/sysop/runtime/pending-docs` (via Bash)
 2. Write the file:
 
 ```yaml

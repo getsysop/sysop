@@ -197,3 +197,70 @@ def test_run_grep_empty_valid_paths_returns_without_scanning(tmp_path, monkeypat
     out = grep_mod.run_grep(r"eval\(", ["does_not_exist/"], ["*.py"], [], str(tmp_path))
     assert out == []
     assert calls == [], "run_grep shelled out despite no resolvable paths"
+
+
+# ── Phase 133: exclude_dir subtree exclusion ────────────────────────────────
+# The file-glob `exclude:` cannot drop a whole subtree, so a broad `paths:`
+# root (a package with migrations/ inside it) couldn't be narrowed — the
+# leg-5 dogfood's 17 false CRITICALs. `exclude_dir:` maps to grep
+# --exclude-dir (directory-BASENAME globs, any depth) and is mirrored in the
+# _iter_check_files walk used by position_check.
+
+
+def _write_pkg_with_migrations(tmp_path):
+    (tmp_path / "pkg" / "migrations").mkdir(parents=True)
+    (tmp_path / "pkg" / "main.py").write_text('q = f"SELECT {x}"\n')
+    (tmp_path / "pkg" / "migrations" / "0001_init.py").write_text(
+        'q = f"SELECT {x}"\n')
+
+
+def test_exclude_dir_drops_subtree_from_grep(tmp_path):
+    _write_pkg_with_migrations(tmp_path)
+    check = {
+        "id": "sql-fstring",
+        "paths": ["pkg/"],
+        "include": ["*.py"],
+        "exclude_dir": ["migrations"],
+        "pattern": 'f"SELECT',
+        "severity": "critical",
+        "description": "f-string SQL",
+    }
+    findings = rci.run_check(check, str(tmp_path))
+    hit_paths = [fl for _, fl, _ in findings]
+    assert any("pkg/main.py" in p for p in hit_paths), findings
+    assert not any("migrations" in p for p in hit_paths), findings
+
+
+def test_without_exclude_dir_subtree_still_scanned(tmp_path):
+    """Non-tautological control: the same check minus exclude_dir DOES hit the
+    migrations file — proving the flag (not path resolution) does the work."""
+    _write_pkg_with_migrations(tmp_path)
+    check = {
+        "id": "sql-fstring",
+        "paths": ["pkg/"],
+        "include": ["*.py"],
+        "pattern": 'f"SELECT',
+        "severity": "critical",
+        "description": "f-string SQL",
+    }
+    findings = rci.run_check(check, str(tmp_path))
+    assert any("migrations" in fl for _, fl, _ in findings), findings
+
+
+def test_iter_check_files_honors_exclude_dirs(tmp_path):
+    _write_pkg_with_migrations(tmp_path)
+    got = sorted(rci._iter_check_files(
+        ["pkg/"], ["*.py"], [], str(tmp_path), exclude_dirs=["migrations"]))
+    assert any(p.endswith("pkg/main.py") for p in got)
+    assert not any("migrations" in p for p in got)
+
+
+def test_iter_check_files_skips_root_whose_basename_matches_exclude_dir(tmp_path):
+    """Adversarial-review fix (2026-07-19): grep --exclude-dir also skips a
+    command-line directory whose own basename matches; the walk must mirror
+    that or the position-check half of a check scans what grep skipped."""
+    _write_pkg_with_migrations(tmp_path)
+    got = list(rci._iter_check_files(
+        ["pkg/migrations"], ["*.py"], [], str(tmp_path),
+        exclude_dirs=["migrations"]))
+    assert got == []

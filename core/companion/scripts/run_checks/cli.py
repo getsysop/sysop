@@ -66,14 +66,18 @@ def _classify_checks(checks, active_token=None):
       - grep_checks / coverage_checks: full check dicts (``run_check`` and
         ``_run_coverage`` need fields beyond the id — coverage needs
         ``critical_path`` / ``report``).
-      - lsp_ids / semgrep_ids / lint_ids / pip_audit_ids: sets of check ids,
-        keyed off the id prefix the corresponding stage dispatches on.
+      - lsp_ids / semgrep_ids: dicts of check id → full check dict (Phase 133:
+        the tool-shelling stages post-filter findings through each check's
+        ``paths:``, so they need the spec, not just the id — membership tests
+        on the dict behave exactly like the old sets).
+      - lint_ids / pip_audit_ids: sets of check ids, keyed off the id prefix
+        the corresponding stage dispatches on.
       - blocking_ids: every ``blocking: true`` check id across all buckets that
         passed the ``active_token`` filter.
     """
     grep_checks = []
-    lsp_ids = set()
-    semgrep_ids = set()
+    lsp_ids = {}
+    semgrep_ids = {}
     lint_ids = set()
     pip_audit_ids = set()
     coverage_checks = []
@@ -84,9 +88,9 @@ def _classify_checks(checks, active_token=None):
         if active_token is not None and active_token not in used:
             continue
         if cid.startswith("pyright-") or cid.startswith("tsc-"):
-            lsp_ids.add(cid)
+            lsp_ids[cid] = c
         elif cid.startswith("semgrep-"):
-            semgrep_ids.add(cid)
+            semgrep_ids[cid] = c
         elif cid.startswith("lint-"):
             lint_ids.add(cid)
         elif cid.startswith("pip-audit-"):

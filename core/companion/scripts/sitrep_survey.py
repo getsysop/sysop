@@ -165,7 +165,7 @@ class Discrepancy:
 
 
 def _read_locks(main_root: Path) -> list[Lock]:
-    locks_dir = main_root / ".locks"
+    locks_dir = main_root / "sysop/runtime/locks"
     if not locks_dir.is_dir():
         return []
     out: list[Lock] = []
@@ -682,7 +682,7 @@ def _find_discrepancies(
                 kind="index drift (in_progress without lock)",
                 detail=(
                     f"{tid}: tasks/index.yml status=in_progress but no lock "
-                    "at <main-repo>/.locks/"
+                    "at <main-repo>/sysop/runtime/locks/"
                 ),
                 suggestion=(
                     f"recreate lock or flip {tid} status back to open"

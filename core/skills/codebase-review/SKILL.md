@@ -187,6 +187,8 @@ Before launching LLM agents, run the shared check registry to find mechanical co
 bash sysop/scripts/run_checks.sh --mode quality
 ```
 
+**Localizing placeholder `paths:` — the substitutions map, not overlay restatement (consumer installs).** Shipped check entries scope via placeholder vocabulary (`<api module>/`, `<scripts dir>/`) that resolves to nothing until localized, so on a never-localized install most grep checks are inert. The sanctioned localization is **one token mapping in `.claude/substitutions.project.yml`** (`substitutions: {"<api module>": "src/app"}`) — the installer re-applies it to every `paths:` line of the assembled `checks.yml` on install and every update (Phase 25/55), localizing all entries at once, durably. When the pre-scan is suspiciously empty or you find yourself recommending path fixes (in a finding's remediation text, a filed task, or an inline fix), point at the substitutions map — do NOT recommend restating shipped entries in `.claude/checks.project.yml` with concrete paths just to localize them (that duplicates every entry and loses upstream pattern updates — the verbose path install.sh's own comments warn against). Reserve `checks.project.yml` overrides for genuinely *changing* an entry: narrowing with `exclude_dir:`, disabling via `paths: ["__disabled_no_op__"]`, or a consumer-authored new check. Granularity note: map each token to the real *source* dirs, not a package root that contains excluded trees (`<api module>` → `pkg` sweeps `pkg/alembic/**` into every check; enumerate `pkg/routes`, `pkg/services`, … or add `exclude_dir: ["alembic", "migrations"]` in an override). See `sysop/docs/WORKFLOW.md` § 8.2b "Phase 25 — placeholder substitution" (loop installs ship no WORKFLOW.md — use the public `docs/configuration.md` § Placeholder substitution).
+
 Collect all output lines as "pre-scan findings." Mark each with `[grep]` source tag in your notes to distinguish from LLM findings — this helps track coverage improvement over time.
 
 Checks with a `notes: "Needs LLM triage"` field in `.claude/checks.yml` require manual verification before recording as findings — the script outputs all matches including potential false positives for those checks. **Triage each flagged match yourself (the skill runner) — do not delegate to a subagent.** Read the `notes` field in the YAML to understand the false-positive shape, read the surrounding code at each match site, and record only confirmed findings. Subagents spawned in Step 3 get scoped convention bullets, not raw pre-scan matches; triage here keeps that boundary clean.
@@ -553,7 +555,7 @@ After writing all tasks, scan the findings for patterns that could become new Pr
    - Reference the specific utility or helper if one exists or should be created
    - Match the style of the existing bullets in `CLAUDE.md` § Prevention Conventions
 3. For each candidate, also draft a one-line convention map entry and list the `.claude/convention_map.md` sections it should be added to
-4. Write candidates to `.pending-docs/convention-candidates.md`. If the file already exists (e.g., from a `/security-audit` run earlier in the same Round), **append** a new `## Source: /codebase-review` section below the existing content rather than overwriting. Keep the top-level `# Convention Candidates — Round N (YYYY-MM-DD)` heading unchanged when appending. Use this format:
+4. Write candidates to `sysop/runtime/pending-docs/convention-candidates.md`. If the file already exists (e.g., from a `/security-audit` run earlier in the same Round), **append** a new `## Source: /codebase-review` section below the existing content rather than overwriting. Keep the top-level `# Convention Candidates — Round N (YYYY-MM-DD)` heading unchanged when appending. Use this format:
 
 ```markdown
 # Convention Candidates — Round N (YYYY-MM-DD)
@@ -570,7 +572,7 @@ After writing all tasks, scan the findings for patterns that could become new Pr
 
 ## Step 9: Convention Promotion (Interactive)
 
-If Step 8 produced convention candidates in `.pending-docs/convention-candidates.md`, promote them now rather than deferring to `/review-close`.
+If Step 8 produced convention candidates in `sysop/runtime/pending-docs/convention-candidates.md`, promote them now rather than deferring to `/review-close`.
 
 > **Where these writes land — read `_shared/promotion-write-target.md` first.** In a **consumer install** (detected by `.claude/sysop.lock`), the base maps `.claude/convention_map.md` / `.claude/checks.yml` are regenerated from upstream on every `sysop-update.sh`, so a promotion written only to a base file is silently lost on the consumer's next update. Dual-write to the `.project.*` overlay per that partial (the mechanism-by-mechanism table). In the **source repo** (no lock — Sysop's own tree, or a project authoring maps in place) the overlay does not exist; write the base files exactly as below.
 
@@ -631,7 +633,7 @@ If Step 8 produced convention candidates in `.pending-docs/convention-candidates
 
 3. **Emit promotion summary** before deleting the candidates file: print one line of the form `Promotion summary: <N> total (<M> mechanical / <K> prose)` and include the same line in the commit message body (step 5). Future reviewers can grep ratios with `git log --grep "Promotion summary"`.
 
-4. **Delete** `.pending-docs/convention-candidates.md` after processing all candidates.
+4. **Delete** `sysop/runtime/pending-docs/convention-candidates.md` after processing all candidates.
 
 5. **Commit** any changes (the `.project.*` overlay paths are the consumer-install dual-write targets from `_shared/promotion-write-target.md`; `2>/dev/null` tolerates their absence in the source repo):
    ```bash
@@ -665,7 +667,7 @@ This is the **FP-driven** half of convention demotion. Tier 1 (Step 2a-4) static
       - `pre-commit`: delete the `sysop/scripts/hooks/pre-commit` check, update the header-comment letter listing; remove the matching `> pre-commit: <letter>` reminder lines.
       - If the rule had also become a **prose** convention bullet (rare), remove that `CLAUDE.md § Prevention Conventions` bullet — this is the deliberate, human prose-retirement that Tier 1 (Step 2a-5) routes here.
       - Optional hygiene: drop any now-orphaned `<rule-id>` lines from `.claude/checks_baseline.txt` (inert once the check id is gone, but tidy).
-      - **Consumer install** (per `_shared/promotion-write-target.md`): retire the rule where it durably lives — a **locally-promoted** rule is in the `.project.*` overlay, so delete it from `.claude/checks.project.yml` / `.claude/convention_map.project.md` (editing only the base leaves the overlay to re-supply it on the next update); a **core/pack-shipped** rule can't be deleted from a consumer install (the concat re-supplies it), so suppress a `checks.yml`-mechanism one via an override entry in `.claude/checks.project.yml` (`paths: ["__disabled_no_op__"]`) — a core semgrep/pre-commit rule has no consumer-side suppression and routes genuine retirement upstream (see the partial).
+      - **Consumer install** (per `_shared/promotion-write-target.md`): retire the rule where it durably lives — a **locally-promoted** rule is in the `.project.*` overlay, so delete it from `.claude/checks.project.yml` / `.claude/convention_map.project.md` (editing only the base leaves the overlay to re-supply it on the next update); a **core/pack-shipped** rule can't be deleted from a consumer install (the concat re-supplies it), so suppress a `checks.yml`-mechanism one — including a semgrep rule, via its `semgrep-*` registry entry (Phase 133) — with an override entry in `.claude/checks.project.yml` (`paths: ["__disabled_no_op__"]`); a core pre-commit rule has no consumer-side suppression and routes genuine retirement upstream (see the partial).
    - **demote-to-advisory** — the rule still catches a real issue sometimes, but the false-positive halt is not worth it. Flip `blocking: true → false` in `.claude/checks.yml` (or move a `pre-commit` letter from the B-tier blocking range to the A-tier advisory range). The signal survives; the commit-halt does not. The lower-regret middle option when "retire" feels premature.
    - **tighten** — the rule is **over-broad from birth** (staleness Mode G), not genuinely moot: it has flagged non-violations since it shipped because its `pattern`/`paths` are too wide. Narrow the regex or glob instead of retiring. Not a retirement; the rule stays, scoped better.
    - **keep** — override the signal: the rule is still valuable despite the false positives (the cost of a missed true positive outweighs the triage cost). Log the reason in the demotion report.

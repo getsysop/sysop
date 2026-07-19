@@ -148,7 +148,7 @@ def _git_discovery_env() -> dict[str, str]:
 
 
 def _resolve_canonical_locks_dir(project_root: Path) -> Path:
-    """Resolve the worktree-shared ``.locks/`` (main repo via git-common-dir,
+    """Resolve the worktree-shared ``sysop/runtime/locks/`` (main repo via git-common-dir,
     Phase 32). Mirror of ``next_task.py:_resolve_canonical_locks_dir`` — kept a
     zero-dependency duplicate so this tool needs no path-shuffling to run."""
     try:
@@ -161,16 +161,16 @@ def _resolve_canonical_locks_dir(project_root: Path) -> Path:
             env=_git_discovery_env(),
         )
     except (FileNotFoundError, subprocess.SubprocessError):
-        return project_root / ".locks"
+        return project_root / "sysop/runtime/locks"
     if completed.returncode != 0:
-        return project_root / ".locks"
+        return project_root / "sysop/runtime/locks"
     common_dir = completed.stdout.strip()
     if not common_dir:
-        return project_root / ".locks"
+        return project_root / "sysop/runtime/locks"
     common_path = Path(common_dir)
     if not common_path.is_absolute():
         common_path = (project_root / common_path).resolve()
-    return common_path.parent / ".locks"
+    return common_path.parent / "sysop/runtime/locks"
 
 
 # ---------------------------------------------------------------------------
@@ -371,7 +371,7 @@ def _parse_lock_file(path: Path) -> dict[str, Any]:
 
 
 def _read_locks(project_root: Path) -> list[dict[str, Any]]:
-    """Return the parsed lock dicts (id-bearing) under the canonical .locks/."""
+    """Return the parsed lock dicts (id-bearing) under the canonical sysop/runtime/locks/."""
     locks_dir = _resolve_canonical_locks_dir(project_root)
     if not locks_dir.is_dir():
         return []

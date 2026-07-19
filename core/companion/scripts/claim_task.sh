@@ -28,7 +28,7 @@
 #                validate_tasks.py and prints the commit command; never commits.
 #
 # Options:
-#   --lock           Also create a .locks/<TASK_ID>.lock file for multi-agent
+#   --lock           Also create a sysop/runtime/locks/<TASK_ID>.lock file for multi-agent
 #                    coordination. Off by default for solo workflows.
 #   --delete-branch  (--release only) Also delete the feature branch. Off by
 #                    default — a claim leaves the branch, so un-claim does too.
@@ -37,7 +37,7 @@
 #                    it, a dirty worktree aborts the release untouched.
 #
 # Lock location (Phase 32, 2026-05-22):
-#   Lock files always live under the main repo's .locks/ — resolved via
+#   Lock files always live under the main repo's sysop/runtime/locks/ — resolved via
 #   `git rev-parse --git-common-dir`, so the path is canonical whether the
 #   script is invoked from the main checkout or from any worktree. The
 #   validator (sysop/scripts/validate_tasks.py) uses the same resolution, so
@@ -95,10 +95,10 @@ if $RELEASE; then
     exit 1
   }
 
-  # Resolve the canonical .locks/ under the main repo (same as the claim path).
+  # Resolve the canonical sysop/runtime/locks/ under the main repo (same as the claim path).
   GIT_COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null)"
   if [[ -z "$GIT_COMMON_DIR" ]]; then
-    echo "❌ git rev-parse --git-common-dir failed; cannot resolve canonical .locks/ location." >&2
+    echo "❌ git rev-parse --git-common-dir failed; cannot resolve canonical sysop/runtime/locks/ location." >&2
     exit 1
   fi
   if [[ "$GIT_COMMON_DIR" = /* ]]; then
@@ -106,7 +106,7 @@ if $RELEASE; then
   else
     MAIN_REPO_ROOT="$(dirname "$(cd "$GIT_COMMON_DIR" && pwd)")"
   fi
-  LOCKS_DIR="${MAIN_REPO_ROOT}/.locks"
+  LOCKS_DIR="${MAIN_REPO_ROOT}/sysop/runtime/locks"
   LOCK_FILE="${LOCKS_DIR}/${TASK_ID}.lock"
 
   if [[ ! -f "$LOCK_FILE" ]]; then
@@ -278,13 +278,13 @@ TASK_LOWER=$(echo "$TASK_ID" | tr '[:upper:]' '[:lower:]')
 WORKTREE_DIR="${REPO_ROOT}/../${WORKTREE_PREFIX:-$(basename "$REPO_ROOT")}-${TASK_LOWER}"
 
 # ── Lock: guard against already-locked task ──────────────────
-# Locks live under the main repo's .locks/, resolved via git-common-dir so
+# Locks live under the main repo's sysop/runtime/locks/, resolved via git-common-dir so
 # the canonical location is the same whether this script runs from the main
 # checkout or from a worktree. The validator uses the same resolution.
 if $USE_LOCK; then
   GIT_COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null)"
   if [[ -z "$GIT_COMMON_DIR" ]]; then
-    echo "❌ git rev-parse --git-common-dir failed; cannot resolve canonical .locks/ location." >&2
+    echo "❌ git rev-parse --git-common-dir failed; cannot resolve canonical sysop/runtime/locks/ location." >&2
     exit 1
   fi
   if [[ "$GIT_COMMON_DIR" = /* ]]; then
@@ -292,7 +292,7 @@ if $USE_LOCK; then
   else
     MAIN_REPO_ROOT="$(dirname "$(cd "$GIT_COMMON_DIR" && pwd)")"
   fi
-  LOCKS_DIR="${MAIN_REPO_ROOT}/.locks"
+  LOCKS_DIR="${MAIN_REPO_ROOT}/sysop/runtime/locks"
   LOCK_FILE="${LOCKS_DIR}/${TASK_ID}.lock"
 
   if [[ -f "$LOCK_FILE" ]]; then
