@@ -25,8 +25,8 @@ gives you a channel built for exactly this:
 - **Log friction as it happens.** When something Sysop-shipped misbehaves — a skill
   step that referenced a path your project doesn't have, an installer prompt that
   failed, a permission rule the allow-list didn't cover — append it to
-  `SYSOP_ISSUES.md` at your project root (the installer seeds this file; the
-  template is inside it). Tell your agent to log Sysop friction there *the moment
+  `sysop/SYSOP_ISSUES.md` (the installer seeds this file — on a loop-mode
+  install it's created at your first capture; the template is inside it). Tell your agent to log Sysop friction there *the moment
   you hit it* — the details are freshest before the session moves on. Don't wait
   for a review cycle; `/review-close` Step 7 also captures friction, but a
   tester's densest friction (install, first permission setup, first `/intake`)

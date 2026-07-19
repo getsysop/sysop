@@ -38,8 +38,11 @@ You'll need:
   default — run `bash --version`, and if it's 3.x, `brew install bash` first. On Windows,
   run the installer and scripts under WSL (Git Bash may work, but its worktree/symlink
   support is flakier and unverified); native Windows isn't supported.
-- **Python 3 with PyYAML.** The check runner (`sysop/scripts/run_checks.sh`) needs it. If your
-  project has a virtualenv, activate it (or `pip install pyyaml`) before running checks.
+- **Python 3 with PyYAML.** The check runner (`sysop/scripts/run_checks.sh`) needs it. Install
+  it in your project's venv (`python3 -m venv .venv && .venv/bin/pip install pyyaml`) — the
+  check runner resolves the repo's `.venv` on its own, no activation needed. Note that a bare
+  `pip install pyyaml` refuses on externally-managed Pythons (PEP 668 — modern Homebrew
+  macOS and Debian included); the venv is the path of least resistance.
 
 Everything you "send" below is a slash command you type to Claude Code while it's open in
 your project.
