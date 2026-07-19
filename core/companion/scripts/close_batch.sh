@@ -3,9 +3,9 @@
 # close_batch.sh — Mark merged review batches as closed in review_tasks.md.
 #
 # Usage:
-#   bash scripts/close_batch.sh <N> [<N2> ...]     # Close specific batches
-#   bash scripts/close_batch.sh --dry-run <N>       # Preview changes
-#   bash scripts/close_batch.sh --force <N>         # Skip merge verification (for cherry-picked branches)
+#   bash sysop/scripts/close_batch.sh <N> [<N2> ...]     # Close specific batches
+#   bash sysop/scripts/close_batch.sh --dry-run <N>       # Preview changes
+#   bash sysop/scripts/close_batch.sh --force <N>         # Skip merge verification (for cherry-picked branches)
 #
 # For each batch:
 #   1. Verifies the batch branch is merged into main (or already deleted)
@@ -54,7 +54,7 @@ if [[ ${#BATCH_NUMS[@]} -eq 0 ]]; then
   exit 1
 fi
 
-INDEX_SCRIPT="${REPO_ROOT}/scripts/review_index.py"
+INDEX_SCRIPT="${REPO_ROOT}/sysop/scripts/review_index.py"
 
 # ── Helper: find batch section boundaries ─────────────────────
 # Sets BATCH_START, BATCH_END (line numbers) for a given batch number.
@@ -271,7 +271,7 @@ if ! $DRY_RUN && [[ ${#CLOSED[@]} -gt 0 ]]; then
     echo "   Inspect git status and the pre-commit-hook output above; common causes:" >&2
     echo "     • pre-commit hook missing a venv-installed CLI (re-run with PATH=.venv/bin:\$PATH)" >&2
     echo "     • commit signing failure" >&2
-    echo "   Re-run \`bash scripts/close_batch.sh ${CLOSED[*]}\` after fixing." >&2
+    echo "   Re-run \`bash sysop/scripts/close_batch.sh ${CLOSED[*]}\` after fixing." >&2
     exit 1
   fi
   echo ""

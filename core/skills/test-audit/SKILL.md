@@ -94,11 +94,11 @@ This emits nothing to disk and points at no maintainer-internal file — it is a
 
 Close with **one** routing offer — never actuate without explicit confirmation (the read-only contract: `/test-audit` informs; the human decides which findings become work):
 
-- Accepted Tier-1 / Tier-2 recommendations → offer to route them into `/intake` as tasks (the same one actuation path `/roadmap` uses), **one at a time or as a small batch the human confirms** — never auto-file. A recommended test becomes a `FEAT-`/`TECH-` task; a retirement becomes a small cleanup task.
+- Accepted Tier-1 / Tier-2 recommendations → offer to route them into `/intake` as tasks (the same one actuation path `/roadmap` uses), **one at a time or as a small batch the human confirms** — never auto-file. A recommended test becomes a `FEAT-`/`TECH-` task; a retirement becomes a small cleanup task. On a **loop-mode install** (`.claude/sysop.lock` has `mode: loop` — `/intake` and the task queue are not installed), offer the accepted recommendations as copy-pasteable entries for the project's own tracker instead; never point at a skill this install doesn't ship.
 - A recurring *pattern* of the same gap across many surfaces → note it may be worth promoting into a convention the review skills enforce (a `convention_map.md` entry), rather than filing N one-off tasks.
 - Crown-jewel signal was absent (placeholder globs) → suggest the human designate crown jewels by filling `critical_path:` in `.claude/checks.yml`, which both sharpens this audit and arms the coverage gate.
 
-Close with one line: `Read-only test audit — no code or tests changed. Actuator: /intake (route accepted recommendations into tasks).`
+Close with one line: `Read-only test audit — no code or tests changed. Actuator: /intake (route accepted recommendations into tasks).` — on a loop-mode install, swap the actuator clause for `Actuator: your own tracker (/intake is not part of a loop-mode install).`
 
 ## Output shape (reference)
 

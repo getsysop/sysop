@@ -1,7 +1,7 @@
 """Tests for the Consumer CI template (Phase 92).
 
 `core/companion/ci/sysop-checks.yml.example` is a hardened, unarmed GitHub Actions
-workflow shipped to a consumer's `scripts/ci/` (like the git-hook templates —
+workflow shipped to a consumer's `sysop/scripts/ci/` (like the git-hook templates —
 delivered but not activated). A consumer copies it into `.github/workflows/`,
 fills the two TODO steps, and marks the `sysop-checks` check required in branch
 protection to make Phase 63's `pr` merge policy enforceable.
@@ -10,7 +10,7 @@ Two things worth locking: the template's hardened shape (valid YAML, the
 run_checks gate, SHA-pinned actions, least-privilege permissions, and a
 placeholder test step that fails so an unedited copy can't become a
 meaningless green required check), and that install.sh actually ships it
-unarmed (into scripts/ci/, recorded in the lock, NOT dropped into
+unarmed (into sysop/scripts/ci/, recorded in the lock, NOT dropped into
 .github/workflows/).
 """
 import os
@@ -100,13 +100,13 @@ class TestInstallShipsTemplate:
     def test_ships_unarmed_into_scripts_ci_and_records_it(self, tmp_path):
         target = _seed_consumer(tmp_path / "consumer")
         _install(target, "--packs", "", "--no-arm-hooks")
-        shipped = target / "scripts" / "ci" / "sysop-checks.yml.example"
-        assert shipped.is_file(), "CI template not shipped to scripts/ci/"
+        shipped = target / "sysop" / "scripts" / "ci" / "sysop-checks.yml.example"
+        assert shipped.is_file(), "CI template not shipped to sysop/scripts/ci/"
         # Parses after shipping (no placeholder substitution mangled it).
         yaml.safe_load(shipped.read_text(encoding="utf-8"))
         # Recorded in the lock so --update / uninstall track it.
         lock = (target / ".claude" / "sysop.lock").read_text(encoding="utf-8")
-        assert "scripts/ci/sysop-checks.yml.example" in lock, "not in lock managed_paths"
+        assert "sysop/scripts/ci/sysop-checks.yml.example" in lock, "not in lock managed_paths"
         # UNARMED: install must never drop an active workflow into the
         # consumer's .github/workflows/ (that would run on their Actions
         # minutes without consent).

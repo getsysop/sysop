@@ -135,7 +135,10 @@ semgrep --config packs/python/companion/semgrep/http_client_redirect.yaml /tmp/d
 ```
 
 That's the whole claim, executed on your machine: a rule earned from five hand-found defects in
-March, firing deterministically in front of you now, with no model anywhere in the loop. The
+March, firing deterministically in front of you now, with no model anywhere in the loop. And the
+machinery this page traces — the maps, the checks, the promotion loop that maintains them — is
+the part of Sysop that installs on its own: [loop mode](./loop-mode.md), for running exactly
+this against your project without adopting the full workflow. The
 same convention ships as prose in
 [`convention_map.md`](../packs/python/companion/convention_map.md) ("Outbound HTTP security"),
 as OWASP-mapped guidance in

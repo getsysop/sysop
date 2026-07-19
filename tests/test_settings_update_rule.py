@@ -20,8 +20,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 INSTALL_SH = REPO_ROOT / "install.sh"
 TEMPLATE = REPO_ROOT / "core/companion/.claude/settings.json"
 RULES = (
-    "Bash(bash scripts/sysop-update.sh)",
-    "Bash(bash scripts/sysop-update.sh:*)",
+    "Bash(bash sysop/scripts/sysop-update.sh)",
+    "Bash(bash sysop/scripts/sysop-update.sh:*)",
 )
 
 

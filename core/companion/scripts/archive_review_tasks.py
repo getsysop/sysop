@@ -3,8 +3,8 @@ Automate archival of completed review batches from review_tasks.md
 to review_tasks_archive.md.
 
 Usage:
-    python scripts/archive_review_tasks.py              # Archive all merged batches
-    python scripts/archive_review_tasks.py --dry-run    # Preview without writing
+    python sysop/scripts/archive_review_tasks.py              # Archive all merged batches
+    python sysop/scripts/archive_review_tasks.py --dry-run    # Preview without writing
 """
 
 import argparse
@@ -13,18 +13,19 @@ import re
 import sys
 from pathlib import Path
 
-# Single-sourced via scripts/_log.py (Phase 68) — `scripts/` is on sys.path[0]
-# when this runs directly and on pythonpath under the test suite.
+# Single-sourced via sysop/scripts/_log.py (Phase 68) — `sysop/scripts/` is on
+# sys.path[0] when this runs directly and on pythonpath under the test suite.
 from _log import _sanitize_log  # noqa: E402
 
 
-# Resolve against the repo root (the parent of scripts/), not CWD. A bare
+# Resolve against the repo root (the parent of sysop/), not CWD. A bare
 # relative path opens against the caller's CWD, which from a worktree
 # subdirectory or a caller that doesn't `cd` first either FileNotFoundErrors
 # or — worse — opens an unrelated file with the same name. review_index.py
 # solves the same CWD-independence goal with a git-root walk-up; this script
-# is always installed at <repo-root>/scripts/, so parent-of-scripts is exact.
-_REPO_ROOT = str(Path(__file__).resolve().parent.parent)
+# is always installed at <repo-root>/sysop/scripts/ (Phase 128), so the
+# great-grandparent (parents[2]) is the repo root, exactly.
+_REPO_ROOT = str(Path(__file__).resolve().parents[2])
 REVIEW_FILE = os.path.join(_REPO_ROOT, "review_tasks.md")
 ARCHIVE_FILE = os.path.join(_REPO_ROOT, "review_tasks_archive.md")
 
@@ -59,7 +60,7 @@ def _atomic_write_pair(path_a, content_a, path_b, content_b):
     ``os.replace`` calls can still leave duplicated state. Recovery
     procedure: ``git status`` will show the duplicated rows in both
     files; revert one with ``git checkout -- <path>`` and re-run
-    ``python scripts/archive_review_tasks.py``. The helper documents
+    ``python sysop/scripts/archive_review_tasks.py``. The helper documents
     rather than prevents the residual risk.
     """
     tmp_a = path_a + ".tmp"
@@ -647,7 +648,7 @@ def main():
     # and the shadow index auto-rebuilds on the next read, so no failure here
     # may crash a run whose file writes already succeeded. The broad catch is
     # deliberate: `review_index` resolves the markdown via a git-root walk-up
-    # while this script resolves it via parent-of-scripts, so an environmental
+    # while this script resolves it via parents[2] (parent of sysop/), so an environmental
     # mismatch can raise a non-ImportError (e.g. FileNotFoundError) that must
     # still degrade to a printed note, not a traceback. A persistent failure
     # is visible in the note (not silent) and investigable.

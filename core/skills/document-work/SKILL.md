@@ -142,7 +142,7 @@ summary: <one-sentence description of the work, including key files affected>
 **Two ID namespaces — each independently optional.** `roadmap_ids` and `review_task_ids` capture distinct lifecycles and have different consumers; either or both may be `[]`.
 
 - **`roadmap_ids`** — IDs that live in `tasks/index.yml` (typically `FEAT-NNNN`, `TECH-NNNN`, `BUG-NNNN`). Consumed by `/review-close` Step 4c: each ID is round-tripped through `yaml.safe_load` to flip `status: done`, and its body file is `git mv`'d from `open/` (or `deferred/`) to `archive/`. An ID that doesn't match an entry in `tasks/index.yml` is silently skipped — so misclassifying review-task IDs here makes them invisible.
-- **`review_task_ids`** — IDs that live in `review_tasks.md` (typically `TASK-NNNN` from `/codebase-review` or `/security-audit`). **Documentary only** — never consulted programmatically by `/review-close`. Their actual closure happens in `/review-close` Step 4b via `bash scripts/close_batch.sh`, which reads `review_tasks.md` directly. The field exists so the PROJECT_STATUS entry can mention which review-queue tasks the work touched, and so a human reader can grep for the ID later.
+- **`review_task_ids`** — IDs that live in `review_tasks.md` (typically `TASK-NNNN` from `/codebase-review` or `/security-audit`). **Documentary only** — never consulted programmatically by `/review-close`. Their actual closure happens in `/review-close` Step 4b via `bash sysop/scripts/close_batch.sh`, which reads `review_tasks.md` directly. The field exists so the PROJECT_STATUS entry can mention which review-queue tasks the work touched, and so a human reader can grep for the ID later.
 
 If the work closes both kinds of IDs (e.g., a feature that also resolves a review-queue task), populate both. If it closes neither (an adhoc commit), both stay `[]`.
 
@@ -206,16 +206,26 @@ Run this check on the just-written pending-docs file. The source of truth is `ta
 **Reference implementation** (copy-pasteable; run from repo root after writing the pending-docs file):
 
 ```bash
-PENDING=".pending-docs/$(git branch --show-current | tr / -).md"
-python3 - "$PENDING" <<'PY'
-import os, re, sys
+# `python3` command word (not `.venv/bin/python3`, no PATH prefix, no `&&` compound) so
+# the allow-rule `Bash(python3 -:*)` matches as a single simple command. PyYAML — which
+# this heredoc imports — is resolved for venv-only consumers by the bootstrap below; the
+# pending-docs path (formerly a shell $PENDING assignment) is computed in-process too, so
+# the whole block is one command (BeanRider ISSUE-0049; Sysop Phase 126).
+python3 - <<'PY'
+import os, re, sys, subprocess
 try:
     import yaml
-except ImportError:
-    print("ERROR: Step 3b requires PyYAML. Install: pip install pyyaml", file=sys.stderr)
-    sys.exit(2)
+except ImportError:  # PyYAML lives only in the project venv (BeanRider ISSUE-0049)
+    import glob
+    sys.path[:0] = glob.glob(".venv/lib/python*/site-packages")
+    try:
+        import yaml
+    except ImportError:
+        print("ERROR: Step 3b requires PyYAML. Install: pip install pyyaml", file=sys.stderr)
+        sys.exit(2)
 
-pending_path = sys.argv[1]
+branch = subprocess.check_output(["git", "branch", "--show-current"], text=True).strip()
+pending_path = f".pending-docs/{branch.replace('/', '-')}.md"
 with open(pending_path) as f:
     raw = f.read()
 

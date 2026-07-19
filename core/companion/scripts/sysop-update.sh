@@ -12,7 +12,7 @@
 # commit + pre/post-overwrite divergence checks + delta table) runs unchanged.
 #
 # To pin an update to a reviewed release instead of the source clone's HEAD:
-#   bash scripts/sysop-update.sh --ref v0.1.0
+#   bash sysop/scripts/sysop-update.sh --ref v0.1.0
 # (the tag must exist in your $SYSOP_SRC clone — release tags:
 #  git -C "$SYSOP_SRC" fetch --tags). Omit --ref to track HEAD (the default).
 #
@@ -67,6 +67,20 @@ fi
 if ! consumer_root="$(git rev-parse --show-toplevel)"; then
   echo "Hint: run this script from inside a git repo's working tree" >&2
   echo "      (the consumer project that has Sysop installed)." >&2
+  exit 1
+fi
+
+# (2b) T6 (Phase 128): refuse to run a Sysop source clone that predates the
+# sysop/ vendor namespace. An old installer reinstalls flat scripts/ with no
+# preservation and `git rm`s every sysop/* path — silently reverting a migrated
+# consumer (T1's data-loss class, in reverse). Detect via a marker only the
+# post-namespace installer carries; a fresh consumer (no migration yet) is
+# unaffected because that installer will simply migrate them.
+if ! grep -q 'sysop/scripts' "$SYSOP_SRC/install.sh" 2>/dev/null; then
+  echo "❌ Your Sysop source clone predates the sysop/ vendor namespace (Phase 128)." >&2
+  echo "   Updating from it would revert your layout and delete migrated files." >&2
+  echo "   Pull your Sysop source clone first, then re-run this update:" >&2
+  echo "     git -C \"$SYSOP_SRC\" pull" >&2
   exit 1
 fi
 

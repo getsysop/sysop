@@ -8,7 +8,7 @@ model: opus
 
 The planning front door. `/intake` turns a brain-dump or a written brief into a **populated, validated** task queue — the one thing no other Sysop skill does. `install.sh` seeds an *empty* scaffold; `/codebase-review` and `/security-audit` write to a separate `review_tasks.md`; every other lifecycle skill (`/next-task`, `/claim-task`, `/document-work`, `/review-close`) operates on a queue that already has entries. Before `/intake`, the first real task was authored by hand.
 
-`/intake` is also Sysop's **first instructional skill** — it runs a conversation, not a procedure — and its **first bulk task-writer**: it owns its write path into `tasks/index.yml` + the per-task bodies, anchored on `scripts/validate_tasks.py` as its one structural gate.
+`/intake` is also Sysop's **first instructional skill** — it runs a conversation, not a procedure — and its **first bulk task-writer**: it owns its write path into `tasks/index.yml` + the per-task bodies, anchored on `sysop/scripts/validate_tasks.py` as its one structural gate.
 
 > **Not `/plan-review`.** `/plan-review` takes an *existing* ad-hoc plan and runs an adversarial pass on it. `/intake` builds the queue from nothing. Different front doors: use `/intake` when there is no queue yet (or a new phase needs decomposing); use `/plan-review` when you already have a plan and want it stress-tested.
 
@@ -149,10 +149,10 @@ ID format: `^[A-Z][A-Z0-9-]{2,80}$` (e.g. `FEAT-LEDGER-IMPORT`, `TECH-DB-BOOTSTR
 **Floor (mechanical).** Run the validator and make it pass:
 
 ```bash
-.venv/bin/python3 scripts/validate_tasks.py
+.venv/bin/python3 sysop/scripts/validate_tasks.py
 ```
 
-(Use bare `python3 scripts/validate_tasks.py` if the project has no `.venv`.) Exit 0 proves the queue is *well-formed* — IDs match the pattern, every body exists with the right first heading, references resolve, exactly one phase is current-focus. If it fails, fix the data and re-run; **do not** hand off on a red validator. What the validator **cannot** judge is whether the decomposition is any *good*: a single 40-hour `FEAT-EVERYTHING` task passes it cleanly.
+(Use bare `python3 sysop/scripts/validate_tasks.py` if the project has no `.venv`.) Exit 0 proves the queue is *well-formed* — IDs match the pattern, every body exists with the right first heading, references resolve, exactly one phase is current-focus. If it fails, fix the data and re-run; **do not** hand off on a red validator. What the validator **cannot** judge is whether the decomposition is any *good*: a single 40-hour `FEAT-EVERYTHING` task passes it cleanly.
 
 **Ceiling (judgment).** Print a scannable summary — the phases, the emitted phase-one tasks with `effort` / `blast_radius`, and a pointer to two or three sample bodies — and hand off:
 

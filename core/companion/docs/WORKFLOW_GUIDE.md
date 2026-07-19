@@ -11,6 +11,12 @@
 > an AI assistant, the same step is described in plain terms alongside the
 > skill name (e.g. "the senior reviewer merges and consolidates docs" is
 > what `/review-close` automates). The whole workflow can be run by hand.
+>
+> A slimmer install also exists: `--mode loop` delivers only the convention system
+> and review machinery (the "Convention System Explained" and "Running a Code Review"
+> halves of this guide's world) with none of the 7-step lifecycle. Its guide is the
+> public [docs/loop-mode.md](https://github.com/getsysop/sysop/blob/main/docs/loop-mode.md);
+> this document ships with full installs only.
 
 ---
 
@@ -28,7 +34,7 @@ Mid-project, most planning events are smaller than a phase: a bug spotted in a s
 
 How big should each task be? Decomposition follows the shared rubric in `_shared/decomposition-rubric.md` — one-sentence done-condition litmus, `effort` ⊥ `blast_radius` (size of the work vs. size of the surface are independent), `depends_on` = physical impossibility, and so on.
 
-Doing this by hand? Author `tasks/index.yml` entries directly against `tasks/schema.md` and validate with `.venv/bin/python scripts/validate_tasks.py` — or say `/add-task <what you want>` and let the skill do the schema bookkeeping.
+Doing this by hand? Author `tasks/index.yml` entries directly against `tasks/schema.md` and validate with `.venv/bin/python sysop/scripts/validate_tasks.py` — or say `/add-task <what you want>` and let the skill do the schema bookkeeping.
 
 ### 1. Find Work
 
@@ -47,10 +53,10 @@ Create a git worktree so you have an isolated filesystem:
 git worktree add ../gdp-feat-studio feat/feat-studio
 
 # Install hooks in the worktree:
-cd ../gdp-feat-studio && bash scripts/install_hooks.sh
+cd ../gdp-feat-studio && bash sysop/scripts/install_hooks.sh
 
 # For a review batch (automated claim + worktree):
-bash scripts/batch_work.sh 270
+bash sysop/scripts/batch_work.sh 270
 ```
 
 Mark the task as in-progress via `/claim-task <TASK-ID>` — it flips `status: open → in_progress` in `tasks/index.yml` and creates `.locks/<TASK-ID>.lock` (the validator's `in_progress` invariant requires both).
@@ -136,7 +142,7 @@ Example: when working on `<hooks dir>/*.ts`, check only the "Custom Hooks" secti
 
 ### Project-specific extensions to convention/security/checks (Phase 24a)
 
-The three concat-style configs above (`convention_map.md`, `security_map.md`, `.claude/checks.yml`) regenerate from Sysop's core + selected packs on every `bash scripts/sysop-update.sh`. To add project-specific sections that *survive every update*, author a sibling `*.project.<ext>` file: `.claude/convention_map.project.md`, `.claude/security_map.project.md`, or `.claude/checks.project.yml`. The installer appends (markdown) or YAML-merges (checks) it AFTER the regenerated body. These files are consumer-authored and consumer-owned — Sysop never writes them, so `--update` cannot touch them. See WORKFLOW.md § 8.2c for the full contract.
+The three concat-style configs above (`convention_map.md`, `security_map.md`, `.claude/checks.yml`) regenerate from Sysop's core + selected packs on every `bash sysop/scripts/sysop-update.sh`. To add project-specific sections that *survive every update*, author a sibling `*.project.<ext>` file: `.claude/convention_map.project.md`, `.claude/security_map.project.md`, or `.claude/checks.project.yml`. The installer appends (markdown) or YAML-merges (checks) it AFTER the regenerated body. These files are consumer-authored and consumer-owned — Sysop never writes them, so `--update` cannot touch them. See WORKFLOW.md § 8.2c for the full contract.
 
 **Placeholder substitution (Phase 25, scope narrowed Phase 55).** Pack `checks.yml.fragment` files ship `paths:` lists with placeholder tokens (`<api module>/`, `<scripts dir>/`, etc.) that name your project layout abstractly. Author `.claude/substitutions.project.yml` with a top-level `substitutions:` map (e.g., `"<api module>": "parsers"`) and the installer substitutes `paths:` values in the upstream `.claude/checks.yml` body BEFORE the suffix file is appended — so checks resolve on disk and actually fire. Substitution touches `paths:` lines only; the markdown maps (`convention_map.md`, `security_map.md`) keep their placeholder tokens verbatim as documentation. Same consumer-owned, never-overwritten property as the suffix files. Stale-token report at end of install catches typos.
 
@@ -158,13 +164,13 @@ This cycle repeats each review round, making the system progressively smarter.
 
 ```bash
 # Run all convention checks:
-bash scripts/run_checks.sh --mode both
+bash sysop/scripts/run_checks.sh --mode both
 
 # Quality checks only:
-bash scripts/run_checks.sh --mode quality
+bash sysop/scripts/run_checks.sh --mode quality
 
 # Security checks only:
-bash scripts/run_checks.sh --mode security
+bash sysop/scripts/run_checks.sh --mode security
 ```
 
 `run_checks.sh` runs six stages in one invocation:
@@ -216,7 +222,7 @@ A section that omits both sub-headings is treated as a flat `### Always` list �
 
 **Boy-scout consequence.** Editing a file with pre-existing lint or type findings causes the ratchet to fire on those findings too — touched files get cleaned, even when the regression isn't yours. Full-tree backlog cleanups stay as separate tasks (e.g. `TECH-LINT-BACKLOG-FIX`), so the ratchet doesn't force a clean-everything-first dependency on a project with an existing backlog. The full template lives in WORKFLOW.md § 6.1.
 
-**Venv-aware invocation.** The agent's tool shell starts cold. If a verification command depends on a tool installed in a project venv (`pytest`, project-specific CLIs, linters), spell out the venv path in the section (`.venv/bin/pytest`, `.venv/bin/python scripts/validate_tasks.py`) — bare command names hit the system PATH and either fail or, worse, succeed against the wrong interpreter. The same rule applies to git hooks in `scripts/hooks/`: prepend `${REPO_ROOT}/.venv/bin` to `PATH` at the top of each hook. Sysop does not auto-detect venv paths.
+**Venv-aware invocation.** The agent's tool shell starts cold. If a verification command depends on a tool installed in a project venv (`pytest`, project-specific CLIs, linters), spell out the venv path in the section (`.venv/bin/pytest`, `.venv/bin/python sysop/scripts/validate_tasks.py`) — bare command names hit the system PATH and either fail or, worse, succeed against the wrong interpreter. The same rule applies to git hooks in `sysop/scripts/hooks/`: prepend `${REPO_ROOT}/.venv/bin` to `PATH` at the top of each hook. Sysop does not auto-detect venv paths.
 
 ---
 
@@ -224,7 +230,7 @@ A section that omits both sub-headings is treated as a flat `### Always` list �
 
 `/review-close` has been hardened across many phases as real downstream cycles surfaced papercuts; PHASE_LOG.md carries the full trail (Phases 23, 30–35, 43a, 59, …). The most recent addition is the **verify-the-record** step (Phase 59) described in step 3 of the Merge Process above. The original five-papercut slice (Phase 23, BeanRider ISSUE-0018 through -0022) remains a good illustration of the kind of issue this skill absorbs:
 
-- **Pending-doc namespace clarity:** `/document-work` now writes `roadmap_ids:` (consumed by Step 4c's `tasks/index.yml` round-trip) and `review_task_ids:` (documentary-only — actual closure happens via `bash scripts/close_batch.sh`). The old single `task_ids:` field silently no-op'd review-task IDs.
+- **Pending-doc namespace clarity:** `/document-work` now writes `roadmap_ids:` (consumed by Step 4c's `tasks/index.yml` round-trip) and `review_task_ids:` (documentary-only — actual closure happens via `bash sysop/scripts/close_batch.sh`). The old single `task_ids:` field silently no-op'd review-task IDs.
 - **Step 1b atomic archive-rotation commit:** when both `review_tasks.md` and a sibling `*_archive.md` are dirty and `review_tasks.md` has net deletions, both files land in one atomic `docs: archive …` commit. Splitting them across two commits left the archive file untracked.
 - **Step 1c drain warning:** a soft pre-rebase warning fires when any in-scope feature branch was cut before an archive rotation on main. The actual conflict resolution still happens at Step 4a (keep main's structure, re-apply the branch's intent).
 - **Step 4a rebase-conflict prose:** the old "feature branches don't modify review_tasks.md" disclaimer was wrong (batch checkbox flips do, and rebases conflict after archive rotations). Rewritten with concrete resolution guidance.
@@ -252,7 +258,7 @@ A few read-mostly skills help you orient without changing state:
 
 `/auto-build` is the optional parallel-batch orchestrator (see WORKFLOW.md § 2.4b). Invoke when you have ≥ 2 independently-claimable tasks in your current-focus phase and want to walk away while a batch executes.
 
-The orchestrator picks the batch (effort × `blast_radius` weights under a K=6 sum ceiling, max N=4 tasks). Pass explicit task IDs — `/auto-build FEAT-A TECH-B`, e.g. the `Run it:` line a `/roadmap` ordering emits — to narrow the pool to a chosen subset; the eligibility filters and ceilings still apply, and requested IDs that don't survive them are reported with per-ID reasons, never silently dropped. It then pre-claims each task on `main`, then per task fans out plan-only → adversarial-reviewer → execution Opus sub-agents at the orchestrator layer (the orchestrator does all fan-out itself — a deliberate flat-hierarchy design; see `_shared/adversarial-review.md` § "Harness constraint"). Tasks that the orchestrator's classification step marks as `blocker` are parked with their plan + verdict written to `<worktree>/.auto-build/` for the human to resume. Tasks classified `fixable` continue to execution; each execution agent invokes `/document-work --non-interactive` to commit + write pending docs but does NOT push. The orchestrator prints a status table when done; the human runs `/review-close` on each EXECUTED branch to merge.
+The orchestrator picks the batch (effort × `blast_radius` weights under a K=12 sum ceiling, max N=4 tasks, up to two cross-module tasks). Pass explicit task IDs — `/auto-build FEAT-A TECH-B`, e.g. the `Run it:` line a `/roadmap` ordering emits — to narrow the pool to a chosen subset; the eligibility filters and ceilings still apply, and requested IDs that don't survive them are reported with per-ID reasons, never silently dropped. It then pre-claims each task on `main`, then per task fans out plan-only → adversarial-reviewer → execution Opus sub-agents at the orchestrator layer (the orchestrator does all fan-out itself — a deliberate flat-hierarchy design; see `_shared/adversarial-review.md` § "Harness constraint"). Tasks that the orchestrator's classification step marks as `blocker` are parked with their plan + verdict written to `<worktree>/.auto-build/` for the human to resume. Tasks classified `fixable` continue to execution; each execution agent invokes `/document-work --non-interactive` to commit + write pending docs but does NOT push. The orchestrator prints a status table when done; the human runs `/review-close` on each EXECUTED branch to merge.
 
 **Skip `/auto-build` when:**
 

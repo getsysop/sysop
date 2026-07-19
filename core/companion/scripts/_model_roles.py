@@ -41,7 +41,8 @@ from migrate_skill_model import (  # noqa: E402  (path set above)
 )
 
 # Config lives beside the installed skills tree. In a consumer project the
-# scripts ship to <repo>/scripts/, so parent.parent == repo root and these
+# scripts ship to <repo>/sysop/scripts/ (Phase 128), so REPO_ROOT (imported from
+# migrate_skill_model.py, resolved via parents[2]) is the repo root and these
 # resolve to <repo>/.claude/. In the Sysop source tree pass --config explicitly.
 DEFAULT_CONFIG = REPO_ROOT / ".claude" / "served_models.yml"
 LOCAL_CONFIG = REPO_ROOT / ".claude" / "served_models.local.yml"

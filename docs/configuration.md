@@ -1,6 +1,6 @@
 # Configuring and customizing Sysop
 
-Everything the installer writes sorts into three tiers on `--update` (update mechanics in [docs/install-and-update.md](./install-and-update.md)): **fully managed** — regenerated or overwritten every update (skills, workflow docs, the assembled base maps); **preserve-if-modified** — `scripts/*` and `scripts/hooks/*`, where your hand-edits survive automatically (Phase 24b, covered there); and **never-managed** — consumer-owned files the installer reads but never writes. Each tier has a matching customization surface. Rule of thumb: *behavior in `CLAUDE.md`, config in an overlay file, shipped skill bodies stay upstream-owned.*
+Everything the installer writes sorts into three tiers on `--update` (update mechanics in [docs/install-and-update.md](./install-and-update.md)): **fully managed** — regenerated or overwritten every update (skills, workflow docs, the assembled base maps); **preserve-if-modified** — `sysop/scripts/*` and `sysop/scripts/hooks/*`, where your hand-edits survive automatically (Phase 24b, covered there); and **never-managed** — consumer-owned files the installer reads but never writes. Each tier has a matching customization surface. Rule of thumb: *behavior in `CLAUDE.md`, config in an overlay file, shipped skill bodies stay upstream-owned.* The customization surfaces on this page are identical in both [install modes](./install-and-update.md#install-modes-full-and-loop) — a [loop-mode](./loop-mode.md) install customizes through exactly these files, though examples naming lifecycle skills (guided mode's decision gates, a `/review-close` rule) apply only to full installs.
 
 ## Behavior — `CLAUDE.md` prose
 
@@ -26,7 +26,7 @@ The three concat-style managed configs regenerate from upstream + pack sources o
 | `.claude/security_map.md` | `.claude/security_map.project.md` | text-appended (blank-line separator) |
 | `.claude/checks.yml` | `.claude/checks.project.yml` | YAML-merged by `checks[*].id` (consumer wins on collision) |
 
-The suffix files are **never written** by the installer and are **never in `managed_paths`** — same protection property as `tasks/index.yml` and `SYSOP_ISSUES.md`. Author them by hand (or let `/codebase-review` + `/security-audit` Step 9 promote recurring findings into them), commit them normally, and `--update` is incapable of touching them.
+The suffix files are **never written** by the installer and are **never in `managed_paths`** — same protection property as `tasks/index.yml` and `sysop/SYSOP_ISSUES.md`. Author them by hand (or let `/codebase-review` + `/security-audit` Step 9 promote recurring findings into them), commit them normally, and `--update` is incapable of touching them.
 
 Because these overlay files are where a project's *locally-grown* conventions accumulate, they're also the give-back source: **`/contribute-convention`** reads them, strips your project's fingerprints down to placeholder vocabulary, and files the promotion-grade ones upstream to the Sysop repo as pack/convention proposals (per-pack consent, dry-run by default) — the convention counterpart to `/report-issues`.
 
@@ -39,7 +39,7 @@ Because these overlay files are where a project's *locally-grown* conventions ac
 - Reject negative amounts in expense postings
 ```
 
-After `bash scripts/sysop-update.sh`, `.claude/convention_map.md` ends with `<core+pack content>` then a blank line then the section above.
+After `bash sysop/scripts/sysop-update.sh`, `.claude/convention_map.md` ends with `<core+pack content>` then a blank line then the section above.
 
 **YAML example** — `.claude/checks.project.yml` (must be a self-contained YAML doc with top-level `checks:`, NOT a `.fragment`-shaped file):
 
@@ -92,7 +92,7 @@ roles:
   reasoning: fable   # or `best`: Fable 5 where your org has access, else latest Opus
 ```
 
-Local keys win, updates never touch the file, and sunset fixes keep flowing through the managed default map. The mapping is applied by the install-time resolver — after creating or changing the file, run `bash scripts/sysop-update.sh` (or `install.sh <target> --update`) to rewrite the skills' pins. (`fable` needs Claude Code ≥ 2.1.170; where a pinned model isn't available, the session silently keeps its current model.)
+Local keys win, updates never touch the file, and sunset fixes keep flowing through the managed default map. The mapping is applied by the install-time resolver — after creating or changing the file, run `bash sysop/scripts/sysop-update.sh` (or `install.sh <target> --update`) to rewrite the skills' pins. (`fable` needs Claude Code ≥ 2.1.170; where a pinned model isn't available, the session silently keeps its current model.)
 
 ## Skills — direct edits do not persist, by design
 

@@ -7,12 +7,12 @@ the JSON index for reliable parsing and write mutations back to the Markdown,
 then rebuild the index.
 
 Usage:
-    python scripts/review_index.py                 # Rebuild index (or verify fresh)
-    python scripts/review_index.py --rebuild       # Force rebuild
-    python scripts/review_index.py --check         # Exit 0 if fresh, 1 if stale
-    python scripts/review_index.py --list          # Tab-separated batch list
-    python scripts/review_index.py --batch 293     # Single batch details
-    python scripts/review_index.py --range 293     # Line range for sed operations
+    python sysop/scripts/review_index.py                 # Rebuild index (or verify fresh)
+    python sysop/scripts/review_index.py --rebuild       # Force rebuild
+    python sysop/scripts/review_index.py --check         # Exit 0 if fresh, 1 if stale
+    python sysop/scripts/review_index.py --list          # Tab-separated batch list
+    python sysop/scripts/review_index.py --batch 293     # Single batch details
+    python sysop/scripts/review_index.py --range 293     # Line range for sed operations
 """
 
 import argparse

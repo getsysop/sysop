@@ -35,8 +35,8 @@ Two classes of match get different treatment:
 Dry-run by default; pass ``--apply`` to write.
 
 Paths default to the **installed** layout (``.claude/skills/`` +
-``.claude/served_models.yml`` resolved from the script's grandparent dir), which
-is correct when this script ships into a consumer project under ``scripts/``.
+``.claude/served_models.yml`` resolved from the script's great-grandparent dir), which
+is correct when this script ships into a consumer project under ``sysop/scripts/``.
 To run against the Sysop source tree itself, pass
 ``--root core/skills`` (and ``--config core/companion/.claude/served_models.yml``
 to check_skill_models.py).
@@ -45,12 +45,12 @@ This script touches no database and takes no ``--env``; it intentionally does
 NOT use the shared CLI helper (that helper is for DB-targeting scripts).
 
 Usage:
-    python scripts/migrate_skill_model.py --from fable --to opus            # preview
-    python scripts/migrate_skill_model.py --from fable --to opus --apply    # write
+    python sysop/scripts/migrate_skill_model.py --from fable --to opus            # preview
+    python sysop/scripts/migrate_skill_model.py --from fable --to opus --apply    # write
 
 After applying, the script prints a checklist of the things it deliberately
 does NOT touch (the tier rationale, downstream consumer copies, the flagged
-prose). Re-run scripts/check_skill_models.py to confirm no stale pins remain.
+prose). Re-run sysop/scripts/check_skill_models.py to confirm no stale pins remain.
 """
 from __future__ import annotations
 
@@ -61,12 +61,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 # Installed-layout defaults: when this script ships into a consumer project it
-# lives at ``<repo>/scripts/migrate_skill_model.py``, so ``parent.parent`` is the
+# lives at ``<repo>/sysop/scripts/migrate_skill_model.py`` (Phase 128), so
+# ``parents[2]`` is the
 # consumer repo root and ``.claude/skills`` / ``.claude/served_models.yml`` are
 # the installed skill tree + allowlist. In the Sysop source tree the same
 # expression points at ``core/companion/`` (which has neither) — run there with
 # an explicit ``--root core/skills``.
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parents[2]
 SKILLS_DIR = REPO_ROOT / ".claude" / "skills"
 
 # Alias charset: short aliases (opus) and full IDs (claude-opus-4-8) alike.

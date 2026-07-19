@@ -121,7 +121,7 @@ For a large backlog (tens of items), **emit in chunks** — one phase (or ~15 ta
 Run the validator and make it pass:
 
 ```bash
-.venv/bin/python3 scripts/validate_tasks.py
+.venv/bin/python3 sysop/scripts/validate_tasks.py
 ```
 
 (Bare `python3` if the project has no `.venv`.) Then print the summary and hand off:
@@ -160,4 +160,4 @@ Same two hard lines as `/intake` Step 4, plus one of its own:
 
 ## Permissions
 
-`/onboard` needs **no new permission rules.** Writes go through `Write`/`Edit` (file-level, not Bash-gated); `scripts/validate_tasks.py` has allow-rules in the default template (bare + `.venv/bin/python3`); `gh issue list` has a rule (shipped for `/report-issues`); `git log`/`ls`/glob presence checks are read-only ops that need no rules per `_shared/permission-guard.md` § Notes for skill authors. It does not commit, push, or call any external API beyond the optional, consented `gh issue list`.
+`/onboard` needs **no new permission rules.** Writes go through `Write`/`Edit` (file-level, not Bash-gated); `sysop/scripts/validate_tasks.py` has allow-rules in the default template (bare + `.venv/bin/python3`); `gh issue list` has a rule (shipped for `/report-issues`); `git log`/`ls`/glob presence checks are read-only ops that need no rules per `_shared/permission-guard.md` § Notes for skill authors. It does not commit, push, or call any external API beyond the optional, consented `gh issue list`.

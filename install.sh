@@ -5,8 +5,10 @@
 # Installs the Sysop workflow (core + selected packs) into a
 # target project. Companion content (docs, scripts, git hooks,
 # convention maps, security maps, checks registry, semgrep rules)
-# lands under <target>/.claude/, <target>/scripts/, and
-# <target>/scripts/hooks/ per WORKFLOW.md § 8.
+# lands under <target>/.claude/ and the <target>/sysop/ vendor dir
+# (sysop/scripts/, sysop/scripts/hooks/, sysop/docs/) per WORKFLOW.md § 8.
+# The teachable boundary (Phase 128): sysop/ is Sysop's; everything else
+# (tasks/, CLAUDE.md, .gitignore) is the consumer's.
 #
 # Modes:
 #   (default)        Fresh install. Refuses if the target tree has
@@ -68,6 +70,30 @@ ADOPT_MODE=0
 CHECK_MODE=0
 CHECK_SOURCE=""
 ANCHOR_OVERRIDE=""
+
+# Phase 123: install shape. `full` (default) ships the whole workflow (planning,
+# task queue, worktrees, merge gate). `loop` ships only the convention loop
+# (audit/review skills + maps + checks + the review_tasks.md ledger) into a repo
+# whose owner keeps their own branching/merge workflow — no tasks/ scaffold, no
+# root workflow docs, a filtered skill/script/permission set. Recorded in the
+# lock; --update re-resolves the recorded mode (upgrade loop→full via
+# `--update --mode full`; full→loop downgrade is out of scope — reinstall fresh).
+# The exclude lists below are asserted exact by tests/test_install_loop_mode.py:
+# a new lifecycle skill/script must be added here or the test fails.
+INSTALL_MODE="full"
+MODE_PROVIDED=0
+# Skills excluded from loop mode (the lifecycle set). The loop bundle is the
+# complement: codebase-review, security-audit, test-audit, report-issues,
+# contribute-convention (+ _shared, partial-filtered below).
+LOOP_EXCLUDE_SKILLS="intake add-task claim-task auto-build auto-fix auto-judge next-task roadmap sitrep triage plan-review document-work review-close onboard daily-summary release share-wins pr-dependabot"
+# _shared/ partials NOT in the five loop skills' closure (leg-1 audit). Kept:
+# adversarial-review, permission-guard, promotion-write-target, test-assessment-rubric.
+LOOP_EXCLUDE_SHARED="decomposition-rubric guided-mode main-push-guard ui-verify"
+# Companion scripts excluded from loop mode (lifecycle-coupled). Kept: run_checks*
+# (+ run_checks/ dir), _log.py, review_index.py, archive_review_tasks.py,
+# install_hooks.sh, sysop-update.sh, and the model-role set (_model_roles.py,
+# resolve/check/migrate_skill_model.py — mode-agnostic; operate on shipped skills).
+LOOP_EXCLUDE_SCRIPTS="backfill_completed_dates.py batch_work.sh claim_task.sh cleanup_worktrees.sh close_batch.sh next_task.py parse_subagent_envelope.py permission_denied_hook.py pr_dependabot.py scope_overlap.py sitrep_survey.py validate_tasks.py"
 # Phase 111: --ref pins the install/update source to a git tag/rev (a reviewed
 # release) instead of the source clone's live HEAD. REF_WORKTREE holds the
 # materialised-rev worktree; SYSOP_SRC_CLONE holds the original clone (needed to
@@ -84,6 +110,12 @@ LOCK_VERSION=1
 # Paths are stored relative to <target>. Drives lock-file `managed_paths` and
 # the --update mode's snapshot + deletion logic.
 MANAGED_PATHS=()
+
+# Resolved pack list. Declared empty here (not just inside resolve_selected_packs)
+# so it is always a set-but-empty array: the lockless-fresh old-layout guard reads
+# it via _ns_vendor_basenames BEFORE resolve_selected_packs runs, and an unset
+# array would trip `set -u`. resolve_selected_packs fully reassigns it later.
+SELECTED_PACKS=()
 
 # Phase 24a: pick a python3 that can `import yaml`. Tries the consumer's
 # project venv first (`.venv/bin/python3`) since that's where pyyaml lives
@@ -146,6 +178,23 @@ DIVERGENCE_SHADOW=""
 OLD_COMMIT=""
 PRESERVED_PATHS=()
 declare -A ACCEPT_UPSTREAM=()
+# Phase 128: sysop/ namespace migration state. MIGRATION_MODE is set when the
+# --update flow detects an old-layout tree OR an old-spelled lock. NS_MOVE_OLD/NEW
+# hold the FULL old→new move map (index-aligned) — every moved-prefix path in the
+# new managed set, independent of on-disk state, so _ns_move_tree's per-file guards
+# stay idempotent and a crash-resume shadow move can realign an already-moved tree.
+# NS_MOVE_PENDING counts the moves that still have real working-tree work (old
+# present, new absent); it gates the migration preflight. NS_STALE_REFS accumulates
+# the T4 stale-reference findings.
+MIGRATION_MODE=0
+NS_MOVE_OLD=()
+NS_MOVE_NEW=()
+NS_MOVE_PENDING=0
+NS_STALE_REFS=()
+NS_SWEPT_COUNT=0
+# Phase 123: temp file holding the loop-mode-filtered settings.json template
+# (cleaned by _cleanup_install_temp on the EXIT trap).
+LOOP_SETTINGS_TMP=""
 
 usage() {
   cat <<'EOF'
@@ -162,11 +211,19 @@ Options:
                         or '' for core only. If omitted, runs the interactive pack picker
                         (fresh install, which offers the detected stack as the default) or
                         reads packs from .claude/sysop.lock (--update / --adopt).
+  --mode loop|full      Install shape (default full). 'full' is the whole workflow
+                        (planning, task queue, worktrees, merge gate). 'loop' installs
+                        only the convention loop — audit/review skills, maps, checks,
+                        and the review_tasks.md ledger — into a repo whose owner keeps
+                        their own branching/merge workflow (no tasks/ scaffold, no root
+                        workflow docs). Recorded in the lock; --update re-applies it.
+                        Upgrade loop→full: --update --mode full (additive). Downgrade:
+                        reinstall fresh. Not valid with --adopt/--check.
   --dry-run             Print planned operations without writing.
   --force               Fresh install: allow uncommitted changes in the target tree.
                         --update: skip the pre-update snapshot step (overwrite directly).
   --no-arm-hooks        Don't copy hook templates into .git/hooks/. (Templates still land
-                        in <target>/scripts/hooks/; run scripts/install_hooks.sh later.)
+                        in <target>/sysop/scripts/hooks/; run sysop/scripts/install_hooks.sh later.)
   --update              Upgrade a tracked install. Reads .claude/sysop.lock, snapshots
                         any dirty managed paths into a commit (so the user can git-diff
                         against it later), overwrites managed files with this checkout's
@@ -194,7 +251,7 @@ Options:
                         (Phase 24b, --update only) Take upstream content for the
                         target-relative PATH even if it has been modified by the
                         consumer since the lock's sysop_commit. Repeatable.
-                        Out-of-scope paths (not under scripts/* or scripts/hooks/*)
+                        Out-of-scope paths (not under sysop/scripts/* or sysop/scripts/hooks/*)
                         ignore the flag — they always overwrite anyway.
   --accept-upstream-list FILE
                         (Phase 24b) Same as --accept-upstream, but reads one
@@ -214,9 +271,13 @@ Examples:
   bash install.sh ~/Projects/myapp                       # interactive picker (offers detected stack)
   bash install.sh                                        # interactive everything
   bash install.sh ~/Projects/myapp --packs python --dry-run
+  # Smallest install — just the convention loop (audit/review + checks + ledger):
+  bash install.sh ~/Projects/myapp --packs python --mode loop
 
   # Update an existing install to this checkout's version:
   bash install.sh ~/Projects/myapp --update
+  # Upgrade a loop install to the full workflow (additive):
+  bash install.sh ~/Projects/myapp --update --mode full
   # Pin a fresh install (or update) to a reviewed release tag instead of HEAD:
   bash install.sh ~/Projects/myapp --packs python --ref v0.1.0
   bash install.sh ~/Projects/myapp --update --ref v0.1.0
@@ -227,8 +288,8 @@ Examples:
 
 After install:
   cd <target>
-  bash scripts/install_hooks.sh        # arm git hooks (skipped if --no-arm-hooks)
-  bash scripts/run_checks.sh           # smoke-test the check registry
+  bash sysop/scripts/install_hooks.sh        # arm git hooks (skipped if --no-arm-hooks)
+  bash sysop/scripts/run_checks.sh           # smoke-test the check registry
 EOF
 }
 
@@ -284,6 +345,12 @@ while [[ $# -gt 0 ]]; do
     -y|--yes)      ASSUME_YES=1; shift ;;
     --packs)       PACKS_ARG="${2:-}"; PACKS_PROVIDED=1; shift 2 ;;
     --packs=*)     PACKS_ARG="${1#--packs=}"; PACKS_PROVIDED=1; shift ;;
+    --mode)        # Guard a missing value / flag-shaped next token.
+                   if [[ -z "${2:-}" || "${2:-}" == -* ]]; then
+                     echo "❌ --mode requires a value: loop or full" >&2; exit 2
+                   fi
+                   INSTALL_MODE="$2"; MODE_PROVIDED=1; shift 2 ;;
+    --mode=*)      INSTALL_MODE="${1#--mode=}"; MODE_PROVIDED=1; shift ;;
     --)            shift; break ;;
     -*)            echo "❌ Unknown option: $1" >&2; usage >&2; exit 2 ;;
     *)
@@ -321,11 +388,30 @@ if [[ -n "$REF_OVERRIDE" ]] && (( ADOPT_MODE == 1 || CHECK_MODE == 1 )); then
   exit 2
 fi
 
+# Phase 123: --mode value + applicability. loop|full only; a fresh-install /
+# --update choice. --check is read-only; --adopt backfills a lock for a pre-loop
+# install (always full), so --mode is rejected there.
+if [[ "$INSTALL_MODE" != "loop" && "$INSTALL_MODE" != "full" ]]; then
+  echo "❌ --mode must be 'loop' or 'full' (got: '$INSTALL_MODE')." >&2
+  exit 2
+fi
+if [[ "$MODE_PROVIDED" -eq 1 ]] && (( ADOPT_MODE == 1 || CHECK_MODE == 1 )); then
+  echo "❌ --mode is only valid for a fresh install or --update (not --adopt/--check)." >&2
+  exit 2
+fi
+
 # ─── helpers ──────────────────────────────────────────────────
 say()  { printf '%s\n' "$*"; }
 note() { printf '  • %s\n' "$*"; }
 err()  { printf '❌ %s\n' "$*" >&2; }
 hdr()  { printf '\n── %s ──\n' "$*"; }
+
+# Phase 123: word-in-space-separated-list membership (loop-mode filters).
+_loop_excludes() {  # $1=word  $2=space-separated list → exit 0 if word ∈ list
+  local w="$1" x
+  for x in $2; do [[ "$w" == "$x" ]] && return 0; done
+  return 1
+}
 
 # Run a command unless --dry-run is set. Echoes the action regardless.
 do_or_say() {
@@ -342,6 +428,7 @@ do_or_say() {
 # main(); a single trap avoids the two sites clobbering each other's trap.
 _cleanup_install_temp() {
   [[ -n "$DIVERGENCE_SHADOW" ]] && rm -rf "$DIVERGENCE_SHADOW"
+  [[ -n "$LOOP_SETTINGS_TMP" ]] && rm -f "$LOOP_SETTINGS_TMP"
   if [[ -n "$REF_WORKTREE" ]] && [[ -n "$SYSOP_SRC_CLONE" ]]; then
     git -C "$SYSOP_SRC_CLONE" worktree remove --force "$REF_WORKTREE" >/dev/null 2>&1 || true
   fi
@@ -672,8 +759,8 @@ ensure_dir() {
 }
 
 # Phase 24b: scope filter for the copy_file preservation block. Returns 0 iff
-# the absolute target path falls under scripts/<file> (depth-1) or
-# scripts/hooks/<file> (depth-2). Skills, workflow docs, semgrep rules, and
+# the absolute target path falls under sysop/scripts/<file> (depth-1) or
+# sysop/scripts/hooks/<file> (depth-2). Skills, workflow docs, semgrep rules, and
 # tasks-scaffold templates are explicitly OUT of scope so that hand-edits to
 # those paths still get overwritten by the standard pipeline (a silent prompt-
 # fork channel for skills would accumulate divergence from upstream
@@ -683,18 +770,146 @@ ensure_dir() {
 # and silently drop upstream improvements.
 #
 # Cases (one per line, in-scope vs out-of-scope):
-#   scripts/foo.py            → in     (depth-1 file under scripts/)
-#   scripts/hooks/pre-commit  → in     (depth-2 file under scripts/hooks/)
-#   scripts/foo/bar.py        → out    (depth-2 not under hooks/)
-#   scripts/hooks/sub/bar     → out    (depth-3 under hooks/)
+#   sysop/scripts/foo.py            → in     (depth-1 file under sysop/scripts/)
+#   sysop/scripts/hooks/pre-commit  → in     (depth-2 file under sysop/scripts/hooks/)
+#   sysop/scripts/foo/bar.py        → out    (depth-2 not under hooks/)
+#   sysop/scripts/hooks/sub/bar     → out    (depth-3 under hooks/)
 #   .claude/skills/X/SKILL.md → out
 #   WORKFLOW.md               → out
 _phase_24b_in_scope() {
   local relp="${1#"$TARGET"/}"
-  # scripts/<file> at depth 1 — must contain no further `/`.
-  if [[ "$relp" == scripts/* ]] && [[ "$relp" != scripts/*/* ]]; then return 0; fi
-  # scripts/hooks/<file> at depth 2 — must contain exactly one `/` after `scripts/hooks/`.
-  if [[ "$relp" == scripts/hooks/* ]] && [[ "$relp" != scripts/hooks/*/* ]]; then return 0; fi
+  # sysop/scripts/<file> at depth 1 — must contain no further `/`.
+  if [[ "$relp" == sysop/scripts/* ]] && [[ "$relp" != sysop/scripts/*/* ]]; then return 0; fi
+  # sysop/scripts/hooks/<file> at depth 2 — must contain exactly one `/` after `sysop/scripts/hooks/`.
+  if [[ "$relp" == sysop/scripts/hooks/* ]] && [[ "$relp" != sysop/scripts/hooks/*/* ]]; then return 0; fi
+  return 1
+}
+
+# ─── Phase 128: sysop/ vendor-namespace migration (tools/SYSOP_NAMESPACE_SPEC.md) ───
+# One consumer-install layout change: the vendor footprint moves out of the
+# consumer's shared namespaces (flat scripts/ + root docs) into a labelled
+# sysop/ dir. These helpers map a relpath between the OLD (flat) and NEW
+# (sysop/) spellings. The move is a pure prefix remap over three managed
+# prefixes; everything else (.claude/, tasks/, CLAUDE.md, review_tasks*.md,
+# runtime dirs) is unmoved. Both maps are total and idempotent — a path already
+# in the target spelling passes through unchanged (so resume is a no-op re-run).
+_ns_old_to_new() {
+  case "$1" in
+    scripts/*)         printf 'sysop/%s' "$1" ;;
+    WORKFLOW.md)       printf 'sysop/docs/WORKFLOW.md' ;;
+    WORKFLOW_GUIDE.md) printf 'sysop/docs/WORKFLOW_GUIDE.md' ;;
+    SYSOP_ISSUES.md)   printf 'sysop/SYSOP_ISSUES.md' ;;
+    *)                 printf '%s' "$1" ;;
+  esac
+}
+_ns_new_to_old() {
+  case "$1" in
+    sysop/scripts/*)              printf '%s' "${1#sysop/}" ;;
+    sysop/docs/WORKFLOW.md)       printf 'WORKFLOW.md' ;;
+    sysop/docs/WORKFLOW_GUIDE.md) printf 'WORKFLOW_GUIDE.md' ;;
+    sysop/SYSOP_ISSUES.md)        printf 'SYSOP_ISSUES.md' ;;
+    *)                            printf '%s' "$1" ;;
+  esac
+}
+
+# Basenames of the vendor scripts Sysop installs at scripts/ (OLD layout) /
+# sysop/scripts/ (NEW). Core companion scripts always; installed-pack scripts too
+# (they land in the same flat scripts/ dir — packs/<p>/companion/scripts/*). One
+# per line, __pycache__ skipped. Single source for the migration tree-probe, the
+# T4 stale-ref scan, and the lockless-fresh old-layout guard, so all three see the
+# same managed surface (a pack script left at flat scripts/ must re-trigger too).
+# SELECTED_PACKS is empty when called before resolve_selected_packs (the fresh
+# guard) → core-only, which is enough there since a real install always ships core.
+_ns_vendor_basenames() {
+  local f b pd pack
+  for f in "$REPO_ROOT/core/companion/scripts"/*; do
+    [[ -e "$f" ]] || continue
+    b="$(basename "$f")"
+    [[ "$b" == "__pycache__" ]] && continue
+    printf '%s\n' "$b"
+  done
+  for pack in "${SELECTED_PACKS[@]}"; do
+    pd="$REPO_ROOT/packs/$pack/companion/scripts"
+    [[ -d "$pd" ]] || continue
+    for f in "$pd"/*; do
+      [[ -f "$f" ]] || continue
+      b="$(basename "$f")"
+      [[ "$b" == "__pycache__" ]] && continue
+      printf '%s\n' "$b"
+    done
+  done
+}
+
+# Cheap tree-probe (T3): does an OLD-layout vendor script still sit at the flat
+# scripts/ path? Enumerated from the SOURCE (core + installed packs, via
+# _ns_vendor_basenames) so a partially-migrated (crashed) tree with ANY unmoved
+# vendor file — a leftover pack script included — re-triggers on the next --update.
+# A fully-migrated tree has no old vendor scripts → returns 1. Pairs with
+# _ns_lock_is_old_spelled: this probe catches trees that still hold flat files;
+# that one catches the inverse crash window (tree already moved, lock still old).
+# Docs/issues are NOT probed here (they aren't Phase-24b preserve-scoped, so a
+# docs-only resume gap causes no preservation loss, and a consumer's own
+# WORKFLOW.md must not false-trigger); they ride the move list.
+_ns_migration_pending() {
+  local b
+  while IFS= read -r b; do
+    [[ -z "$b" ]] && continue
+    [[ -e "$TARGET/scripts/$b" ]] && return 0
+  done < <(_ns_vendor_basenames)
+  return 1
+}
+
+# Does the lock's recorded managed set still use OLD (flat) spellings? True even
+# after the working tree has moved to sysop/ — the crash-resume window where a
+# migration relocated the files but died before rewriting the lock (tree NEW, lock
+# OLD). Together with the tree-probe this closes that hole: the tree-probe alone
+# misses it (no flat files remain) so MIGRATION_MODE would stay 0, the shadow move
+# would not run, and copy_file's Phase-24b preservation would silently overwrite
+# consumer edits. NOT true for the adopt-bridge case (lock already sysop/-spelled)
+# — that path is caught by the tree-probe (its tree is still OLD-layout).
+# Args: the lock's managed_paths.
+_ns_lock_is_old_spelled() {
+  local m
+  for m in "$@"; do
+    [[ "$(_ns_old_to_new "$m")" != "$m" ]] && return 0
+  done
+  return 1
+}
+
+# Corroborated old-layout evidence for the lockless-fresh guard: is $TARGET really a
+# lost-lock Sysop install (refuse a plain install), or just a new consumer who owns
+# ONE file at a shipped basename (proceed)? _ns_migration_pending fires on a single
+# match, which a genuine new repo can trip with its own scripts/run_checks.sh. A real
+# lost-lock old-layout install ships MANY vendor scripts plus other Sysop artifacts,
+# so refuse only when the evidence corroborates: 2+ vendor basenames at flat scripts/
+# (the strong signal), OR exactly one basename AND a second Sysop marker — old-layout
+# root docs (WORKFLOW*.md) or .claude/convention_map.md, which a fresh consumer would
+# not have. A tree stripped to a single vendor script with no other marker slips
+# through to the plain install (a vanishing edge, accepted).
+_ns_old_layout_corroborated() {
+  local b n=0
+  while IFS= read -r b; do
+    [[ -z "$b" ]] && continue
+    [[ -e "$TARGET/scripts/$b" ]] && n=$((n + 1))
+    (( n >= 2 )) && return 0
+  done < <(_ns_vendor_basenames)
+  (( n == 0 )) && return 1
+  # Exactly one vendor basename — require a corroborating Sysop artifact.
+  [[ -f "$TARGET/WORKFLOW.md" ]] && return 0
+  [[ -f "$TARGET/WORKFLOW_GUIDE.md" ]] && return 0
+  [[ -f "$TARGET/.claude/convention_map.md" ]] && return 0
+  return 1
+}
+
+# T7: is there a pre-existing $TARGET/sysop entry that this migration/install did
+# not create? Case-insensitive (macOS) probe. On a fresh install any sysop/ is a
+# collision; during migration a sysop/scripts/ from a prior partial run is OURS
+# (resume), so callers pass whether a partial-migration state is expected.
+_ns_foreign_sysop_dir() {
+  local d
+  for d in "$TARGET"/sysop "$TARGET"/Sysop "$TARGET"/SYSOP; do
+    [[ -e "$d" ]] && { printf '%s' "$d"; return 0; }
+  done
   return 1
 }
 
@@ -702,15 +917,35 @@ copy_file() {
   local src="$1" dst="$2"
   ensure_dir "$(dirname "$dst")"
 
-  # Phase 24b: preserve consumer-modified managed paths (scoped to scripts/*
-  # and scripts/hooks/*). Out-of-scope paths take the standard overwrite.
-  # Short-circuits unless: --update mode, shadow tree available, target file
-  # exists, scope filter says yes, and target differs from the ancestor.
+  # Phase 24b: preserve consumer-modified managed paths (scoped to sysop/scripts/*
+  # and sysop/scripts/hooks/*). Out-of-scope paths take the standard overwrite.
+  # Short-circuits unless: --update mode, shadow tree available, scope filter
+  # says yes, the working file exists, and it differs from the ancestor.
   if [[ "$UPDATE_MODE" -eq 1 ]] && [[ -n "$DIVERGENCE_SHADOW" ]] \
-     && [[ -f "$dst" ]] && _phase_24b_in_scope "$dst"; then
+     && _phase_24b_in_scope "$dst"; then
     local _relp="${dst#"$TARGET"/}"
-    local _ancestor="$DIVERGENCE_SHADOW/$_relp"
-    if [[ -f "$_ancestor" ]] && ! cmp -s "$_ancestor" "$dst"; then
+    local _work="$dst" _anc="$DIVERGENCE_SHADOW/$_relp"
+    # Phase 128: on a DRY-RUN migration NEITHER the working tree NOR the shadow has
+    # been moved yet, and either may sit at the OLD or the NEW spelling depending on
+    # the migration state:
+    #   • normal        — tree OLD-layout,  shadow OLD-layout (pre-namespace anchor)
+    #   • adopt-bridge  — tree OLD-layout,  shadow NEW-layout (post-namespace anchor)
+    #   • crash-resume  — tree NEW-layout,  shadow OLD-layout (tree moved pre-crash)
+    # The move is a pure rename, so the preservation DECISION is spelling-independent
+    # (same bytes either side). Resolve _work and _anc INDEPENDENTLY to whichever
+    # spelling actually exists on disk, so the dry-run preview matches the real run in
+    # every state. The earlier code reassigned BOTH from a single `_work missing`
+    # gate: it clobbered a valid NEW-spelled shadow ancestor with a nonexistent
+    # old-spelled one on the adopt-bridge path (preserved → mispreviewed as overwrite),
+    # and never fixed the shadow ancestor at all on crash-resume (Finding 4). Real
+    # runs (DRY_RUN=0) do the actual move first, so _work/_anc already exist and
+    # neither branch fires.
+    if [[ "$MIGRATION_MODE" -eq 1 ]] && [[ "$DRY_RUN" -eq 1 ]] && [[ "$_relp" != "$(_ns_new_to_old "$_relp")" ]]; then
+      local _old; _old="$(_ns_new_to_old "$_relp")"
+      [[ ! -f "$_work" ]] && [[ -f "$TARGET/$_old" ]] && _work="$TARGET/$_old"
+      [[ ! -f "$_anc" ]] && [[ -f "$DIVERGENCE_SHADOW/$_old" ]] && _anc="$DIVERGENCE_SHADOW/$_old"
+    fi
+    if [[ -f "$_work" ]] && [[ -f "$_anc" ]] && ! cmp -s "$_anc" "$_work"; then
       if [[ "${ACCEPT_UPSTREAM[$_relp]:-0}" == "1" ]]; then
         # Consumer explicitly opted to take upstream — record + fall through
         # to the cp below. Mark the accept-upstream slot so post-pipeline
@@ -834,6 +1069,7 @@ write_lock_file() {
   SYSOP_LOCK_VERSION="$LOCK_VERSION" \
   SYSOP_COMMIT="$commit" \
   SYSOP_PACKS="$packs_csv" \
+  SYSOP_MODE="$INSTALL_MODE" \
   SYSOP_INSTALLED_AT="$installed_at" \
   SYSOP_UPDATED_AT="$updated_at" \
   SYSOP_MANAGED_PATHS="$paths_nl" \
@@ -846,6 +1082,7 @@ data = {
     "version": int(os.environ["SYSOP_LOCK_VERSION"]),
     "sysop_commit": os.environ["SYSOP_COMMIT"],
     "packs": packs,
+    "mode": os.environ.get("SYSOP_MODE", "full"),
     "installed_at": os.environ["SYSOP_INSTALLED_AT"],
     "updated_at": os.environ["SYSOP_UPDATED_AT"],
     "managed_paths": managed,
@@ -872,6 +1109,10 @@ snapshot_managed_paths() {
     [[ -z "$line" ]] && continue
     status="${line:0:2}"
     path="${line:3}"
+    # T3 (Phase 128): a staged rename during a resumed namespace migration renders
+    # as `R  old -> new`; ${line:3} then yields the bogus pathspec "old -> new"
+    # which dies under set -e. Take the destination side.
+    [[ "$path" == *" -> "* ]] && path="${path##* -> }"
     dirty+=("$path")
   done < <(git -C "$TARGET" status --porcelain -- "${candidates[@]}" 2>/dev/null)
 
@@ -1093,6 +1334,14 @@ report_post_overwrite_deltas() {
       note "accept-upstream: $_ap_key not in preserved set; ignored"
     done
   fi
+
+  # Phase 128 (§5 step 7): suppress the numstat delta table during a namespace
+  # migration. With --no-renames a mass mv renders as a wall of `+N 0` adds, real
+  # content changes are indistinguishable, the ≥5-deletions heuristic can never
+  # fire, and preserved files double-report. _ns_migration_report replaces it
+  # with an honest moved/preserved/swept summary. The preserved-paths block above
+  # still prints (it's the load-bearing consumer signal).
+  [[ "$MIGRATION_MODE" -eq 1 ]] && return 0
 
   local -a paths=()
   local mp
@@ -1605,9 +1854,9 @@ record() { PLAN_SUMMARY+=("$1"); }
 
 install_workflow_docs() {
   hdr "workflow docs"
-  copy_file "$REPO_ROOT/core/companion/docs/WORKFLOW.md"       "$TARGET/WORKFLOW.md"
-  copy_file "$REPO_ROOT/core/companion/docs/WORKFLOW_GUIDE.md" "$TARGET/WORKFLOW_GUIDE.md"
-  record "workflow docs: WORKFLOW.md, WORKFLOW_GUIDE.md"
+  copy_file "$REPO_ROOT/core/companion/docs/WORKFLOW.md"       "$TARGET/sysop/docs/WORKFLOW.md"
+  copy_file "$REPO_ROOT/core/companion/docs/WORKFLOW_GUIDE.md" "$TARGET/sysop/docs/WORKFLOW_GUIDE.md"
+  record "workflow docs: sysop/docs/WORKFLOW.md, sysop/docs/WORKFLOW_GUIDE.md"
 }
 
 install_skills() {
@@ -1621,24 +1870,39 @@ install_skills() {
   for d in "$src"/*/; do
     [[ -d "$d" ]] || continue
     local name; name="$(basename "$d")"
+    # Loop mode: ship only the convention-loop skills (+ _shared, partial-filtered).
+    if [[ "$INSTALL_MODE" == "loop" ]] && _loop_excludes "$name" "$LOOP_EXCLUDE_SKILLS"; then
+      continue
+    fi
     local f
     for f in "$d"*; do
       [[ -f "$f" ]] || continue
+      # Loop mode: within _shared/, ship only the five skills' partial closure.
+      if [[ "$INSTALL_MODE" == "loop" && "$name" == "_shared" ]] \
+         && _loop_excludes "$(basename "$f" .md)" "$LOOP_EXCLUDE_SHARED"; then
+        continue
+      fi
       copy_file "$f" "$dst/$name/$(basename "$f")"
     done
     skill_count=$((skill_count + 1))
   done
-  record "skills: $skill_count skill dir(s) copied to .claude/skills/"
+  local _mode_note=""; [[ "$INSTALL_MODE" == "loop" ]] && _mode_note=" (loop mode: lifecycle skills excluded)"
+  record "skills: $skill_count skill dir(s) copied to .claude/skills/$_mode_note"
 }
 
 install_companion_scripts() {
   hdr "companion scripts"
-  local dst="$TARGET/scripts"
+  local dst="$TARGET/sysop/scripts"
   ensure_dir "$dst"
   local copied=0
   local f
   for f in "$REPO_ROOT/core/companion/scripts"/*; do
     if [[ -f "$f" ]]; then
+      # Loop mode: skip lifecycle-coupled scripts (run_checks/ dir ships via the
+      # -d branch below; it is not in the exclude list).
+      if [[ "$INSTALL_MODE" == "loop" ]] && _loop_excludes "$(basename "$f")" "$LOOP_EXCLUDE_SCRIPTS"; then
+        continue
+      fi
       copy_file "$f" "$dst/$(basename "$f")"
       copied=$((copied + 1))
     elif [[ -d "$f" ]]; then
@@ -1655,6 +1919,12 @@ install_companion_scripts() {
       local subdir_name
       subdir_name="$(basename "$f")"
       [[ "$subdir_name" == "__pycache__" ]] && continue
+      # Loop mode: filter lifecycle sub-packages too. Today only run_checks/
+      # exists (kept — not in the exclude list); this guards a future lifecycle
+      # subdir from leaking, since the drift test only buckets file-level scripts.
+      if [[ "$INSTALL_MODE" == "loop" ]] && _loop_excludes "$subdir_name" "$LOOP_EXCLUDE_SCRIPTS"; then
+        continue
+      fi
       ensure_dir "$dst/$subdir_name"
       local sub
       for sub in "$f"/*; do
@@ -1677,12 +1947,12 @@ install_companion_scripts() {
       done
     fi
   done
-  record "scripts: $copied file(s) copied to scripts/"
+  record "scripts: $copied file(s) copied to sysop/scripts/"
 }
 
 install_git_hooks() {
   hdr "git hooks (templates)"
-  local dst="$TARGET/scripts/hooks"
+  local dst="$TARGET/sysop/scripts/hooks"
   ensure_dir "$dst"
   local copied=0
   local f
@@ -1692,15 +1962,15 @@ install_git_hooks() {
     copied=$((copied + 1))
   done
   if [[ "$ARM_HOOKS" -eq 1 ]] && [[ "$UPDATE_MODE" -eq 0 ]]; then
-    record "git hooks: $copied template(s) copied to scripts/hooks/ (will be armed at end of install)"
+    record "git hooks: $copied template(s) copied to sysop/scripts/hooks/ (will be armed at end of install)"
   else
-    record "git hooks: $copied template(s) copied to scripts/hooks/ (use scripts/install_hooks.sh to arm)"
+    record "git hooks: $copied template(s) copied to sysop/scripts/hooks/ (use sysop/scripts/install_hooks.sh to arm)"
   fi
 }
 
 install_ci_template() {
   hdr "CI template"
-  local dst="$TARGET/scripts/ci"
+  local dst="$TARGET/sysop/scripts/ci"
   ensure_dir "$dst"
   local copied=0
   local f
@@ -1710,13 +1980,16 @@ install_ci_template() {
   # delivered to the consumer's tree, but not activated. The consumer's live
   # copy lives in .github/workflows/ (fully unmanaged); this .example is a pure
   # upstream reference, so it refreshes on --update by design (unlike the
-  # preserve-consumer-edits scope that covers scripts/ + scripts/hooks/).
+  # preserve-consumer-edits scope that covers sysop/scripts/ + sysop/scripts/hooks/).
   for f in "$REPO_ROOT/core/companion/ci"/*; do
     [[ -f "$f" ]] || continue
     copy_file "$f" "$dst/$(basename "$f")"
     copied=$((copied + 1))
   done
-  record "CI template: $copied file(s) copied to scripts/ci/ (unarmed — copy to .github/workflows/ to enable; see WORKFLOW.md § Merge policy)"
+  # Loop mode ships no WORKFLOW.md — point at the loop enforcement story instead.
+  local _ci_ref="see WORKFLOW.md § Merge policy"
+  [[ "$INSTALL_MODE" == "loop" ]] && _ci_ref="run_checks in the CI job is your merge gate"
+  record "CI template: $copied file(s) copied to sysop/scripts/ci/ (unarmed — copy to .github/workflows/ to enable; $_ci_ref)"
 }
 
 # Absolute path to $TARGET's git hooks dir, worktree-safe. `git -C "$TARGET"
@@ -1737,17 +2010,17 @@ resolve_hook_dst() {
 arm_git_hooks() {
   [[ "$ARM_HOOKS" -eq 1 ]] || return 0
   # Phase 15 / BeanRider ISSUE-0007: --update must NOT auto-arm. The install
-  # pipeline has just overwritten scripts/hooks/* with upstream content; arming
+  # pipeline has just overwritten sysop/scripts/hooks/* with upstream content; arming
   # now would silently swap the consumer's previously-armed (possibly custom)
   # hook body for the upstream skeleton during the reconcile window. The
-  # consumer reconciles scripts/hooks/* via git first, then re-arms explicitly
-  # via scripts/install_hooks.sh. The post-install armed-hook divergence check
+  # consumer reconciles sysop/scripts/hooks/* via git first, then re-arms explicitly
+  # via sysop/scripts/install_hooks.sh. The post-install armed-hook divergence check
   # below (check_armed_hooks_divergence) surfaces any residual mismatch so the
   # re-arm need is loud, not silent.
   if [[ "$UPDATE_MODE" -eq 1 ]]; then
     hdr "arm git hooks"
-    note "skipped in --update mode (ISSUE-0007): reconcile scripts/hooks/ first, then run scripts/install_hooks.sh"
-    record "git hooks: auto-arm skipped (--update mode); use scripts/install_hooks.sh after reconciling scripts/hooks/"
+    note "skipped in --update mode (ISSUE-0007): reconcile sysop/scripts/hooks/ first, then run sysop/scripts/install_hooks.sh"
+    record "git hooks: auto-arm skipped (--update mode); use sysop/scripts/install_hooks.sh after reconciling sysop/scripts/hooks/"
     return 0
   fi
   hdr "arm git hooks"
@@ -1765,7 +2038,7 @@ arm_git_hooks() {
   mkdir -p "$hook_dst"
   local armed=0
   local f
-  for f in "$TARGET/scripts/hooks"/*; do
+  for f in "$TARGET/sysop/scripts/hooks"/*; do
     [[ -f "$f" ]] || continue
     local base; base="$(basename "$f")"
     cp "$f" "$hook_dst/$base"
@@ -1777,14 +2050,14 @@ arm_git_hooks() {
 }
 
 # Phase 15 / BeanRider ISSUE-0007 safety net: after the pipeline + (in --update
-# mode) the consumer's reconcile window, compare every scripts/hooks/<base>
+# mode) the consumer's reconcile window, compare every sysop/scripts/hooks/<base>
 # against .git/hooks/<base>. Differences mean the armed hook body is stale —
 # either because --update intentionally skipped auto-arm (so the consumer must
 # re-arm after reconciling), or because someone hand-edited .git/hooks/ out of
 # band. Read-only signal; never modifies hooks. Skipped silently in dry-run.
 check_armed_hooks_divergence() {
   [[ "$DRY_RUN" -eq 1 ]] && return 0
-  local hooks_src="$TARGET/scripts/hooks"
+  local hooks_src="$TARGET/sysop/scripts/hooks"
   [[ -d "$hooks_src" ]] || return 0
   local hook_dst
   hook_dst="$(resolve_hook_dst)" || return 0
@@ -1805,13 +2078,13 @@ check_armed_hooks_divergence() {
   hdr "armed-hook divergence (ISSUE-0007 safety check)"
   local b
   if (( ${#diverged[@]} > 0 )); then
-    say "  ⚠ scripts/hooks/<base> differs from $(rel "$hook_dst")/<base>:"
+    say "  ⚠ sysop/scripts/hooks/<base> differs from $(rel "$hook_dst")/<base>:"
     for b in "${diverged[@]}"; do
       say "      - $b"
     done
   fi
   if (( ${#missing[@]} > 0 )); then
-    say "  ⚠ scripts/hooks/<base> present but not armed in $(rel "$hook_dst")/:"
+    say "  ⚠ sysop/scripts/hooks/<base> present but not armed in $(rel "$hook_dst")/:"
     for b in "${missing[@]}"; do
       say "      - $b"
     done
@@ -1820,7 +2093,7 @@ check_armed_hooks_divergence() {
   say "  Why this matters: .git/hooks/ is not tracked by git, so a stale armed"
   say "  body fires (or doesn't) on the next commit with no diff to inspect."
   say ""
-  say "  To re-arm after reconciling scripts/hooks/: bash $(rel "$TARGET")/scripts/install_hooks.sh"
+  say "  To re-arm after reconciling sysop/scripts/hooks/: bash $(rel "$TARGET")/sysop/scripts/install_hooks.sh"
 }
 
 install_convention_map() {
@@ -1859,6 +2132,45 @@ install_checks_yml() {
   record "checks.yml: core + ${#SELECTED_PACKS[@]} pack fragment(s) merged"
 }
 
+# Phase 123: build a loop-mode-filtered settings.json template. Sets the global
+# LOOP_SETTINGS_TMP to the temp path (cleaned on EXIT). Call DIRECTLY, not in a
+# command substitution, so the assignment survives in the parent shell. Filters
+# permissions.allow to the loop subset (LOOP_ONLY_SPEC § "Leg 1 findings") and
+# drops the hooks block (both Sysop hooks are lifecycle-only). Non-zero on failure.
+_loop_settings_template() {
+  local src="$1"
+  LOOP_SETTINGS_TMP="$(mktemp "${TMPDIR:-/tmp}/sysop-loop-settings.XXXXXX")" || return 1
+  python3 - "$src" "$LOOP_SETTINGS_TMP" <<'PY' || return 1
+import json, sys
+src, out = sys.argv[1], sys.argv[2]
+# Filtering the master template by this keep-set is fail-closed: if a master rule
+# string is renamed, loop mode drops it and tests/test_install_loop_mode.py catches it.
+LOOP_ALLOW = {
+    "Bash(git add review_tasks.md)",
+    "Bash(git commit -m docs:*)",
+    "Bash(bash sysop/scripts/run_checks.sh)",
+    "Bash(bash sysop/scripts/run_checks.sh:*)",
+    "Bash(bash sysop/scripts/install_hooks.sh)",
+    "Bash(bash sysop/scripts/sysop-update.sh)",
+    "Bash(bash sysop/scripts/sysop-update.sh:*)",
+    "Bash(python sysop/scripts/archive_review_tasks.py:*)",
+    "Bash(python3 sysop/scripts/archive_review_tasks.py:*)",
+    "Bash(.venv/bin/python3 sysop/scripts/archive_review_tasks.py:*)",
+    "Bash(python3 -c:*)",
+    "Bash(python3 -:*)",
+    "Bash(gh issue list:*)",
+    "Bash(gh issue create:*)",
+}
+with open(src) as f:
+    tmpl = json.load(f)
+allow = [r for r in tmpl.get("permissions", {}).get("allow", []) if r in LOOP_ALLOW]
+# hooks intentionally omitted (loop mode: both Sysop hooks are lifecycle-only).
+with open(out, "w") as f:
+    json.dump({"permissions": {"allow": allow}}, f, indent=2)
+    f.write("\n")
+PY
+}
+
 install_permissions() {
   hdr "permissions (.claude/settings.json)"
   local src="$REPO_ROOT/core/companion/.claude/settings.json"
@@ -1868,6 +2180,32 @@ install_permissions() {
     return 0
   fi
   ensure_dir "$(dirname "$dst")"
+
+  # Loop mode: feed the copy/merge paths below a filtered template (loop
+  # allow-subset, no hooks) so the existing logic is reused unchanged.
+  if [[ "$INSTALL_MODE" == "loop" ]]; then
+    # Under --dry-run, report the plan without building the temp (the write
+    # would violate the dry-run contract, and the copy note would render the
+    # raw /tmp path).
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+      note "would write $(rel "$dst") (loop allow-subset: 14 rules, no hooks)"
+      record_managed_path "$dst"
+      record "permissions: would write $(rel "$dst") (loop allow-subset)"
+      return 0
+    fi
+    # Fail CLOSED: if the filter can't be built, do NOT fall back to the full
+    # master — that would over-grant the 55-rule allow-list AND re-add the hooks
+    # block referencing scripts loop mode never installs (broken at runtime).
+    # Skip settings.json instead (the consumer sees more permission prompts, but
+    # no over-grant and no dangling hooks); the loud error keeps it visible.
+    if _loop_settings_template "$src"; then
+      src="$LOOP_SETTINGS_TMP"
+    else
+      err "loop settings-filter failed — NOT writing settings.json (refusing to ship full-mode permissions + hooks pointing at absent scripts in loop mode)."
+      note "re-run the install, or add a minimal .claude/settings.json by hand."
+      return 0
+    fi
+  fi
 
   if [[ ! -f "$dst" ]]; then
     do_or_say "copy: $(rel "$src") → $(rel "$dst")" cp "$src" "$dst"
@@ -1972,7 +2310,7 @@ install_served_models() {
 # shipped defaults), so this can only degrade gracefully — never half-apply.
 resolve_skill_models() {
   hdr "resolve model roles"
-  local script="$TARGET/scripts/resolve_skill_models.py"
+  local script="$TARGET/sysop/scripts/resolve_skill_models.py"
   local skills="$TARGET/.claude/skills"
   local config="$TARGET/.claude/served_models.yml"
   local localcfg="$TARGET/.claude/served_models.local.yml"
@@ -2038,16 +2376,16 @@ install_semgrep() {
 }
 
 # ─── friction log (Phase 13) ──────────────────────────────────
-# Seed <target>/SYSOP_ISSUES.md on fresh install only. The file lives
-# at repo root (not under .claude/) and is intentionally NOT recorded in
-# MANAGED_PATHS — that non-management is the property that protects it
-# from --update overwriting (Phase 8's overwrite gap can't touch what
-# isn't tracked). If the file already exists, skip silently — consumers
-# who hand-rolled one before Phase 13 shipped (BeanRider did) keep their
-# version intact even on re-install.
+# Seed <target>/sysop/SYSOP_ISSUES.md on fresh install only. The file lives
+# under the sysop/ vendor dir (Phase 128; it's a log *about the tool*) and is
+# intentionally NOT recorded in MANAGED_PATHS — that non-management is the
+# property that protects it from --update overwriting (Phase 8's overwrite gap
+# can't touch what isn't tracked). If the file already exists, skip silently —
+# consumers who hand-rolled one before Phase 13 shipped (BeanRider did) keep
+# their version intact even on re-install.
 seed_friction_log() {
   hdr "friction log"
-  local dst="$TARGET/SYSOP_ISSUES.md"
+  local dst="$TARGET/sysop/SYSOP_ISSUES.md"
   if [[ -f "$dst" ]]; then
     note "skip: $(rel "$dst") (already exists — left untouched)"
     return 0
@@ -2135,6 +2473,111 @@ guardrail so the maintainer knows what to protect from a future change.
 EOF
 }
 
+# Phase 123 (loop mode): emit one of the three <project>/CLAUDE.md scope sections
+# the audit skills consume. Shared by the create-fresh and append-if-absent
+# paths of seed_claude_md_stub so there is one source for the section bodies.
+_claude_md_section() {  # $1 = scope | exclusions | security
+  case "$1" in
+    scope)
+      cat <<'EOF'
+
+## Scope mapping
+
+<!-- Seeded by Sysop (loop mode) — fill in globs, then delete this comment.
+     Map each area of the codebase to a glob so a review agent gets the right
+     convention bullets. Example:
+       - API / server code → `src/api/**/*.py`
+       - UI components      → `src/components/**/*.tsx`
+     Until you fill this in, /codebase-review has no scope to map. -->
+EOF
+      ;;
+    exclusions)
+      cat <<'EOF'
+
+## Map coverage exclusions
+
+<!-- Seeded by Sysop (loop mode) — globs the review/audit sweep should NOT flag
+     as unmapped (generated code, vendored dirs, fixtures). Example:
+       - `**/migrations/**`
+       - `**/*.generated.ts` -->
+EOF
+      ;;
+    security)
+      cat <<'EOF'
+
+## Security-critical always-include files
+
+<!-- Seeded by Sysop (loop mode) — files /security-audit must always review even
+     if unchanged (auth, secrets handling, permission checks). Example:
+       - `src/auth/**`
+       - `src/**/permissions.py` -->
+EOF
+      ;;
+  esac
+}
+
+# Phase 123 (loop mode): ensure <project>/CLAUDE.md carries the three sections the
+# audit skills consume — "Scope mapping" (/codebase-review + /security-audit
+# Step 1), "Map coverage exclusions" (Step 2a), "Security-critical always-include
+# files" (/security-audit Step 1). In full mode /intake + a lifecycle bootstrap
+# write CLAUDE.md; loop mode has neither, so without this the audit skills have no
+# scope to map. Two paths: create-fresh with all three when absent; otherwise
+# append ONLY the sections whose header is missing (the ensure_runtime_gitignore
+# append-only contract — never rewrite consumer-authored content). Header match is
+# anchored so a mention in prose doesn't count as present. Fresh-install only
+# (main gates on UPDATE_MODE==0). Not a managed path (project-owned).
+seed_claude_md_stub() {
+  hdr "CLAUDE.md scope sections (loop mode)"
+  local dst="$TARGET/CLAUDE.md"
+
+  if [[ ! -f "$dst" ]]; then
+    note "seed: $(rel "$dst") (scope sections for the audit skills; project-owned)"
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+      return 0
+    fi
+    {
+      cat <<'EOF'
+# CLAUDE.md
+
+> Seeded by Sysop (loop mode). The three sections below tell the convention-loop
+> skills (`/codebase-review`, `/security-audit`) what to review and what to skip.
+> Fill in the globs for your repo, then delete these notes. Everything else in
+> this file is yours.
+EOF
+      _claude_md_section scope
+      _claude_md_section exclusions
+      _claude_md_section security
+    } > "$dst"
+    return 0
+  fi
+
+  # Existing CLAUDE.md — append only the absent sections, never rewriting.
+  # Known v1 edges (documented, not handled — the preconditions are rare and a
+  # fence-aware markdown parser in bash is disproportionate): a `## Scope mapping`
+  # line at column 0 *inside a ``` code fence* reads as present (section skipped);
+  # a header with trailing text (`## Scope mapping (draft)`) reads as absent (a
+  # second stub is appended). If either bites, the consumer edits CLAUDE.md by
+  # hand — the sections are documented in docs/install-and-update.md § Install modes.
+  local added=0 key hdr
+  for key in scope exclusions security; do
+    case "$key" in
+      scope)      hdr="## Scope mapping" ;;
+      exclusions) hdr="## Map coverage exclusions" ;;
+      security)   hdr="## Security-critical always-include files" ;;
+    esac
+    if grep -qE "^${hdr}[[:space:]]*$" "$dst"; then
+      continue
+    fi
+    [[ "$DRY_RUN" -eq 0 ]] && _claude_md_section "$key" >> "$dst"
+    added=$((added + 1))
+  done
+  if (( added > 0 )); then
+    note "append: $added absent scope section(s) → $(rel "$dst") (audit-skill sections; existing content untouched)"
+  else
+    note "skip: $(rel "$dst") already carries the three scope sections"
+  fi
+}
+
 # Scaffold tasks/ hybrid task system (Phase 16). Two separate write modes:
 #   1. tasks/schema.md, tasks/README.md — managed paths (Sysop owns the
 #      shape). Copy on every install/update; `--update` reconcile path
@@ -2169,6 +2612,14 @@ ensure_runtime_gitignore() {
   hdr "runtime-artifact gitignore"
   local gi="$TARGET/.gitignore"
   local -a want=(".subagent-envelopes/" ".auto-build/" ".pending-docs/" ".locks/")
+  if [[ "$INSTALL_MODE" == "loop" ]]; then
+    # Loop mode ships no lifecycle orchestration, so three of the four dirs
+    # can't exist — but the audit skills' Step 8 promotion-deferral still
+    # writes .pending-docs/convention-candidates.md (leg-5 dogfood finding).
+    # Ignore just that dir; dead lifecycle entries would undercut the
+    # enumerated-footprint claim.
+    want=(".pending-docs/")
+  fi
   local -a missing=()
   local entry
   for entry in "${want[@]}"; do
@@ -2178,7 +2629,7 @@ ensure_runtime_gitignore() {
     missing+=("$entry")
   done
   if (( ${#missing[@]} == 0 )); then
-    note "already ignored: .subagent-envelopes/, .auto-build/, .pending-docs/, .locks/"
+    note "already ignored: ${want[*]}"
     return 0
   fi
   note "gitignore: appending ${#missing[@]} Sysop runtime dir(s) → $(rel "$gi")"
@@ -2255,7 +2706,7 @@ phases:
 
 # Tasks — one entry per discrete piece of work.
 # Schema reference: tasks/schema.md
-# Validator:       scripts/validate_tasks.py
+# Validator:       sysop/scripts/validate_tasks.py
 #
 # Example task entry (copy + populate; remove the leading `# `):
 # tasks:
@@ -2277,7 +2728,9 @@ EOF
 
 # Run the install_* sequence. Populates MANAGED_PATHS as a side effect.
 run_install_pipeline() {
-  install_workflow_docs
+  # Loop mode drops the two lifecycle-only steps: root workflow docs and the
+  # tasks/ queue scaffold (LOOP_ONLY_SPEC § The bundle). Everything else ships.
+  [[ "$INSTALL_MODE" == "loop" ]] || install_workflow_docs
   install_skills
   install_companion_scripts
   install_git_hooks
@@ -2286,7 +2739,12 @@ run_install_pipeline() {
   install_security_map
   install_checks_yml
   install_semgrep
-  install_tasks_scaffold
+  [[ "$INSTALL_MODE" == "loop" ]] || install_tasks_scaffold
+  # ensure_runtime_gitignore ignores the runtime orchestration dirs
+  # (.subagent-envelopes/ .auto-build/ .pending-docs/ .locks/). In loop mode it
+  # narrows itself to .pending-docs/ alone — the audit skills' promotion-deferral
+  # writes it (leg-5 dogfood finding); the other three are lifecycle-only and
+  # would be dead ignore rules.
   ensure_runtime_gitignore
   install_permissions
   install_served_models
@@ -2373,9 +2831,21 @@ cmd_adopt() {
     note "anchoring lock at ${resolved_anchor:0:12} (override via --anchor=$ANCHOR_OVERRIDE)"
   fi
   local lock_path="$TARGET/$LOCK_REL"
+  local _readopt=0
   if [[ -f "$lock_path" ]]; then
-    err "Lock already exists at $(rel "$lock_path"). Use --update for upgrades."
-    exit 1
+    # ISSUE-0047 recovery: a lock whose sysop_commit anchor is missing
+    # (empty/"unknown") is malformed — --update fails closed on it (git source),
+    # and its only sanctioned rebuild is here. Adopt's job is to (re)establish
+    # tracking; a lock with no valid anchor has none, so re-adopt in place rather
+    # than dead-ending the user in a --update↔--adopt loop. A lock with a VALID
+    # anchor still routes to --update (unchanged).
+    local _existing_anchor; _existing_anchor="$(lock_field sysop_commit)"
+    if [[ -n "$_existing_anchor" ]] && [[ "$_existing_anchor" != "unknown" ]]; then
+      err "Lock already exists at $(rel "$lock_path"). Use --update for upgrades."
+      exit 1
+    fi
+    _readopt=1
+    note "re-adopting: existing lock has no valid sysop_commit anchor — rebuilding it in place"
   fi
 
   # --adopt only backfills a lock for an install that predates the lock
@@ -2396,10 +2866,22 @@ cmd_adopt() {
   # explicit `--packs ''`/`--packs auto` records core-only without prompting.
   local packs_input="$PACKS_ARG"
   if [[ -z "$packs_input" ]] && [[ "$PACKS_PROVIDED" -eq 0 ]]; then
-    say ""
-    say "Which packs were originally installed? (will be recorded in the lock for"
-    say "future --update runs to know what fragments to re-merge)"
-    packs_input="$(prompt_packs)"
+    if [[ "$_readopt" -eq 1 ]]; then
+      # Re-adopt: recover the pack selection from the existing lock so the
+      # consumer isn't re-prompted for what they already chose.
+      local _pack_line
+      while IFS= read -r _pack_line; do
+        [[ -z "$_pack_line" ]] && continue
+        if [[ -z "$packs_input" ]]; then packs_input="$_pack_line"
+        else packs_input="$packs_input,$_pack_line"; fi
+      done < <(lock_field packs)
+      note "packs recovered from existing lock: ${packs_input:-(core only)}"
+    else
+      say ""
+      say "Which packs were originally installed? (will be recorded in the lock for"
+      say "future --update runs to know what fragments to re-merge)"
+      packs_input="$(prompt_packs)"
+    fi
   fi
   resolve_selected_packs "$packs_input"
 
@@ -2481,6 +2963,399 @@ resolve_selected_packs() {
   SELECTED_PACKS=("${effective[@]}")
 }
 
+# ─── Phase 128: sysop/ namespace migration (§5 algorithm) ─────
+# The migration is a delta on the existing --update flow: divergence detection
+# still runs on OLD paths, then BOTH the working tree and the reconstructed
+# shadow move to the new layout, then the standard pipeline runs layout-blind.
+# All functions are idempotent so a crashed run resumes cleanly on re-invocation.
+
+# §5 step 3: run the pipeline under DRY_RUN to get the authoritative NEW managed
+# set (captures version-bump additions/removals), then derive the FULL old→new
+# move map (every new-set path whose spelling changed) plus NS_MOVE_PENDING (the
+# subset with real working-tree work left). Also clears the global state the
+# DRY_RUN run dirtied
+# (KNOWN_DIRS memoises dir creation even in dry-run; leaving it set would make
+# the REAL pipeline skip every mkdir). DIVERGENCE_SHADOW is blanked for the
+# probe so copy_file's preservation branch can't fire here.
+_ns_precompute_and_derive() {
+  local _saved_dry="$DRY_RUN" _saved_shadow="$DIVERGENCE_SHADOW"
+  local -a _saved_managed=("${MANAGED_PATHS[@]}")
+  # PLAN_SUMMARY is appended by record() throughout the pipeline; without saving
+  # it the dry-run probe's entries survive and the REAL pipeline appends a second
+  # copy, so the whole summary block prints twice (adversarial review Finding).
+  local -a _saved_plan=("${PLAN_SUMMARY[@]}")
+  DRY_RUN=1; DIVERGENCE_SHADOW=""; MANAGED_PATHS=(); KNOWN_DIRS=()
+  run_install_pipeline >/dev/null 2>&1 || true
+  local -a _new=("${MANAGED_PATHS[@]}")
+  # Restore everything the probe touched.
+  DRY_RUN="$_saved_dry"; DIVERGENCE_SHADOW="$_saved_shadow"
+  MANAGED_PATHS=("${_saved_managed[@]}"); KNOWN_DIRS=()
+  PLAN_SUMMARY=("${_saved_plan[@]}")
+
+  # Build the FULL old→new map (every moved-prefix path in the new managed set),
+  # NOT filtered by on-disk state. _ns_move_tree's per-file guards make the working
+  # -tree move idempotent, and the SHADOW move needs the full map to realign an
+  # old-layout ancestor on a crash-resume (working tree already at sysop/). Track
+  # NS_MOVE_PENDING separately = the moves with real working-tree work left (old
+  # present, new absent); it gates the preflight so a pure resume can't demand a
+  # quiet queue (Finding 3), and an empty pending set is legal (Finding 1).
+  NS_MOVE_OLD=(); NS_MOVE_NEW=(); NS_MOVE_PENDING=0
+  local np old
+  for np in "${_new[@]}"; do
+    old="$(_ns_new_to_old "$np")"
+    [[ "$old" == "$np" ]] && continue                 # unmoved prefix
+    NS_MOVE_OLD+=("$old"); NS_MOVE_NEW+=("$np")
+    if [[ -e "$TARGET/$old" ]] && [[ ! -e "$TARGET/$np" ]]; then
+      NS_MOVE_PENDING=$((NS_MOVE_PENDING + 1))
+    fi
+  done
+  (( ${#NS_MOVE_OLD[@]} > 0 ))
+}
+
+# §5 step 4/5: move the derived list under one tree root. Idempotent. $2="git"
+# stages renames in the tracked working tree (plain-mv fallback for untracked);
+# "plain" is for the ephemeral shadow.
+_ns_move_tree() {
+  local root="$1" how="$2" i old new
+  for (( i=0; i<${#NS_MOVE_OLD[@]}; i++ )); do
+    old="${NS_MOVE_OLD[$i]}"; new="${NS_MOVE_NEW[$i]}"
+    [[ -e "$root/$old" ]] || continue        # already moved (resume) / absent in shadow
+    [[ -e "$root/$new" ]] && continue         # dst present — skip
+    mkdir -p "$(dirname "$root/$new")"
+    if [[ "$how" == "git" ]]; then
+      git -C "$root" mv -- "$old" "$new" 2>/dev/null || mv -- "$root/$old" "$root/$new"
+    else
+      mv -- "$root/$old" "$root/$new"
+    fi
+  done
+}
+
+# §5 step 4: move the unmanaged SYSOP_ISSUES.md (working tree only — it carries
+# consumer content, is never in the managed set, so it rides outside the derived
+# list). Loop installs keep it lazy, so absence is a normal no-op.
+_ns_move_issues_log() {
+  local old="SYSOP_ISSUES.md" new="sysop/SYSOP_ISSUES.md"
+  [[ -e "$TARGET/$old" ]] || return 0
+  [[ -e "$TARGET/$new" ]] && return 0
+  mkdir -p "$TARGET/sysop"
+  git -C "$TARGET" mv -- "$old" "$new" 2>/dev/null || mv -- "$TARGET/$old" "$TARGET/$new"
+}
+
+# §5 step 5 tail: remap DIVERGED_PATHS from old→new spelling so the post-overwrite
+# delta report (which runs after the move) joins against new-layout paths, and
+# copy_file's preservation (keyed on the moved shadow ancestor) lines up. Called
+# AFTER report_pre_overwrite_divergence (which needs old spellings for its
+# `git show HEAD:<path>` recovery hints).
+_ns_remap_diverged_paths() {
+  (( ${#DIVERGED_PATHS[@]} == 0 )) && return 0
+  local i entry mp added removed
+  for (( i=0; i<${#DIVERGED_PATHS[@]}; i++ )); do
+    IFS=$'\t' read -r mp added removed <<< "${DIVERGED_PATHS[$i]}"
+    DIVERGED_PATHS[$i]="$(_ns_old_to_new "$mp")"$'\t'"$added"$'\t'"$removed"
+  done
+}
+
+# Finding 2: normalize --accept-upstream keys from the OLD (flat scripts/) spelling
+# to the NEW (sysop/) spelling. A pre-migration consumer names the path that exists
+# in their tree NOW (scripts/run_checks.sh) — the spelling any pre-migration message
+# used — but copy_file keys its preservation lookup on the post-move dst-relative
+# path (sysop/scripts/run_checks.sh), so an old-spelled key never matches: the
+# requested overwrite silently no-ops (file preserved instead) and the run ends with
+# a spurious stale-accept warning. Mirrors _ns_remap_diverged_paths / the managed-path
+# normalization. Idempotent (a NEW-spelled key passes through _ns_old_to_new
+# unchanged); a non-vendor key (.claude/foo) also passes through. Each entry's value
+# is carried over so the post-pipeline stale-accept accounting stays accurate.
+_ns_remap_accept_upstream() {
+  (( ${#ACCEPT_UPSTREAM[@]} == 0 )) && return 0
+  local k nk
+  local -A _remapped=()
+  for k in "${!ACCEPT_UPSTREAM[@]}"; do
+    nk="$(_ns_old_to_new "$k")"
+    _remapped[$nk]="${ACCEPT_UPSTREAM[$k]}"
+  done
+  ACCEPT_UPSTREAM=()
+  for k in "${!_remapped[@]}"; do
+    ACCEPT_UPSTREAM[$k]="${_remapped[$k]}"
+  done
+}
+
+# T2: migrate a consumer settings file — drop the OLD shipped allow-rules (so the
+# now-dead flat-scripts/ rules don't linger and silently auto-approve a future
+# consumer file at that path) and re-path the two hook command strings. The
+# normal install_permissions merge then appends the new sysop/ rules. Applies to
+# BOTH .claude/settings.json and .claude/settings.local.json (the harness writes
+# the latter most often, and it carries shipped-script rules live in GDP).
+# Old-rule source priority: shadow (exact) → git-show OLD → tertiary inverse-map
+# of the current template (loses only upstream-deleted rules; degraded path).
+_ns_migrate_settings() {
+  [[ "$DRY_RUN" -eq 1 ]] && return 0
+  local template="$REPO_ROOT/core/companion/.claude/settings.json"
+  [[ -f "$template" ]] || return 0
+  local old_src=""
+  if [[ -n "$DIVERGENCE_SHADOW" && -f "$DIVERGENCE_SHADOW/.claude/settings.json" ]]; then
+    old_src="$DIVERGENCE_SHADOW/.claude/settings.json"
+  elif [[ -n "$OLD_COMMIT" && "$OLD_COMMIT" != "unknown" ]]; then
+    local _gs; _gs="$(mktemp)"
+    if git -C "$REPO_ROOT" show "${OLD_COMMIT}:core/companion/.claude/settings.json" >"$_gs" 2>/dev/null; then
+      old_src="$_gs"
+    else
+      rm -f "$_gs"
+    fi
+  fi
+  local sf
+  for sf in "$TARGET/.claude/settings.json" "$TARGET/.claude/settings.local.json"; do
+    [[ -f "$sf" ]] || continue
+    python3 - "$sf" "$template" "$old_src" <<'PY' || note "settings migration: skipped $(rel "$sf") (unparseable)"
+import json, re, sys
+target_path, template_path, old_src = sys.argv[1], sys.argv[2], sys.argv[3]
+HOOK_FILES = ("permission_denied_hook.py", "parse_subagent_envelope.py")
+
+def load(p):
+    with open(p) as f:
+        return json.load(f)
+
+try:
+    tgt = load(target_path)
+except Exception:
+    sys.exit(1)  # unparseable target → leave it, note printed by caller
+
+tmpl = load(template_path)
+# The removal set is the OLD (flat scripts/-spelled) shipped VENDOR-PATH rules —
+# the dead spellings this migration retires — and NOTHING else. It is applied to
+# BOTH .claude/settings.json AND the consumer/harness-owned .claude/settings.local.json,
+# so it must never contain a still-valid rule (adversarial review Finding 1). The
+# earlier `r.replace("sysop/scripts/", "scripts/")` over ALL template rules was a
+# no-op for the ~20 non-path rules (Bash(gh pr merge:*), Bash(git checkout:*),
+# Bash(python3 -c:*), …), so those CURRENT-VALID rules entered the removal set
+# verbatim and got stripped from settings.local.json (where install_permissions
+# never re-adds them) and from loop-mode settings.json (only the 14-rule LOOP_ALLOW
+# subset is re-added) — auto-approved commands silently started prompting again.
+# A rule is a movable vendor-path rule iff its flat and sysop/-namespaced spellings
+# differ; only such a rule's flat spelling is dead. Non-path and consumer-authored
+# rules map to themselves and are never included, so they survive.
+#
+# The current template gives the live shipped vendor rules; the shadow / git-show
+# OLD settings is unioned in only to also catch vendor rules deleted upstream since
+# the old install (the same predicate filters its non-vendor rules out). An
+# adopt-bridge shadow is itself sysop/-spelled — taking the flat spelling of each of
+# its vendor rules still yields the dead flat spelling to strip.
+def _flat(r):
+    return r.replace("sysop/scripts/", "scripts/")
+
+def _is_vendor_rule(r):
+    # References a vendor scripts/ path the namespace migration moves (either
+    # spelling). The lookbehind leaves an already-namespaced path untouched, mirroring
+    # the hook-command re-path below.
+    return _flat(r) != re.sub(r"(?<!sysop/)scripts/", "sysop/scripts/", r)
+
+old_allow = {_flat(r) for r in tmpl.get("permissions", {}).get("allow", [])
+             if _is_vendor_rule(r)}
+if old_src:
+    old_allow |= {_flat(r) for r in load(old_src).get("permissions", {}).get("allow", [])
+                  if _is_vendor_rule(r)}
+
+perms = tgt.get("permissions")
+if isinstance(perms, dict) and isinstance(perms.get("allow"), list):
+    perms["allow"] = [r for r in perms["allow"] if r not in old_allow]
+
+# Re-path hook command strings that reference a Sysop hook filename.
+hooks = tgt.get("hooks")
+if isinstance(hooks, dict):
+    for event, entries in hooks.items():
+        for entry in entries or []:
+            for h in entry.get("hooks", []) or []:
+                cmd = h.get("command")
+                if isinstance(cmd, str):
+                    # Re-path ONLY the specific `scripts/<hook filename>` token —
+                    # not every `/scripts/` in the command (a consumer wrapper like
+                    # `cd /opt/scripts/ && … scripts/hook.py` must keep its unrelated
+                    # cd path). The negative lookbehind leaves an already-migrated
+                    # `sysop/scripts/<fn>` untouched (idempotent). Adversarial review.
+                    for fn in HOOK_FILES:
+                        cmd = re.sub(r"(?<!sysop/)scripts/" + re.escape(fn),
+                                     "sysop/scripts/" + fn, cmd)
+                    h["command"] = cmd
+
+with open(target_path, "w") as f:
+    json.dump(tgt, f, indent=2)
+    f.write("\n")
+PY
+  done
+}
+
+# T4: deterministic post-update stale-reference report — files Sysop does NOT own
+# that still name old flat scripts/ paths. Never auto-edited. Scans git-tracked
+# files (excluding sysop/**) plus, regardless of tracking, settings*.json,
+# .git/hooks/*, and .github/workflows/* (armed hooks gate on staged-path trigger
+# regexes like `^scripts/` that carry no shipped basename — after migration they
+# silently stop matching, a quietly-bypassed gate). *.bak* excluded (installer
+# backup noise). Populates NS_STALE_REFS for the reporting step.
+_ns_scan_stale_refs() {
+  NS_STALE_REFS=()
+  local -a bases=()
+  local f b
+  # Same vendor surface the migration tree-probe uses (core + installed packs), so a
+  # consumer file naming a pack script (scripts/shared_cli.py) is flagged too.
+  while IFS= read -r b; do
+    [[ -n "$b" ]] && bases+=("$b")
+  done < <(_ns_vendor_basenames)
+  local base_alt; base_alt="$(IFS='|'; printf '%s' "${bases[*]}")"
+  # POSIX-ERE word boundary that BOTH `git grep -E` and `grep -E` honor — neither
+  # implements `\b` (git grep -E silently matches nothing with it; adversarial
+  # review Finding), so `\bscripts/` left the git-tracked scan dead AND
+  # boundary-matched `sysop/scripts/`, flooding the report with the migrated file.
+  # This matches scripts/ only at line start or after a non-word, non-slash char,
+  # so sysop/scripts/ and companion/scripts/ (slash-preceded) never match.
+  local BND='(^|[^/[:alnum:]_])'
+  local tracked_pat="${BND}scripts/(${base_alt}|hooks/|ci/|run_checks)"
+  local plain_pat="${BND}scripts/"
+
+  # Finding 3 (dry-run fidelity): in a DRY-RUN migration the tree hasn't moved and the
+  # settings/lock haven't been rewritten yet, so a naive scan floods with Sysop's OWN
+  # files (the flat vendor scripts, old skill bodies, ~20 pre-migration allow-rules,
+  # even the lock) — none of which the REAL run reports, because it moved them under
+  # sysop/ (excluded by :!sysop/) and rewrote the settings + lock. Simulate that
+  # post-move reality by excluding every path Sysop owns or refreshes — its charter is
+  # exactly "files Sysop does NOT own". The full move map (both spellings), every
+  # managed path the pipeline rewrites (both spellings — e.g. old .claude/skills bodies
+  # are overwritten with sysop/-spelled refs), the lock, and the two settings files the
+  # migration rewrites. Real runs (DRY_RUN=0) leave this set empty and scan the
+  # already-moved tree directly, so a genuine consumer flat-settings ref is still
+  # surfaced there. NS_MOVE_OLD/NEW + MANAGED_PATHS are populated by the time the
+  # report runs (the dry-run pipeline ran above).
+  local -A _own=()
+  if [[ "$DRY_RUN" -eq 1 && "$MIGRATION_MODE" -eq 1 ]]; then
+    local _p
+    for _p in "${NS_MOVE_OLD[@]}"; do _own[$_p]=1; done
+    for _p in "${NS_MOVE_NEW[@]}"; do _own[$_p]=1; done
+    for _p in "${MANAGED_PATHS[@]}"; do
+      _own[$_p]=1
+      _own["$(_ns_new_to_old "$_p")"]=1
+    done
+    _own[".claude/sysop.lock"]=1
+    _own[".claude/settings.json"]=1
+    _own[".claude/settings.local.json"]=1
+  fi
+
+  local -a scan=()
+  # git-tracked files (excluding sysop/**) matching the basename-scoped pattern.
+  while IFS= read -r f; do
+    [[ -z "$f" ]] && continue
+    [[ "$f" == sysop/* ]] && continue
+    [[ "$f" == *.bak* ]] && continue
+    [[ -n "${_own[$f]:-}" ]] && continue
+    scan+=("$f")
+  done < <(git -C "$TARGET" grep -lIE "$tracked_pat" -- ':!sysop/' 2>/dev/null || true)
+
+  # Always-scan set (may be untracked): settings files, armed hooks, CI workflows.
+  # Armed hooks gate on staged-path trigger regexes (^scripts/…) that carry no
+  # shipped basename, so match with the plain boundary pattern. The producer must
+  # NOT abort under `set -e` — an absent settings.local.json is the common case,
+  # and a leading `ls` of it would exit non-zero and kill the subshell before the
+  # two `find`s ran, silently dropping .git/hooks + CI from the scan (adversarial
+  # review Finding). Hence the if-guarded emission, never `ls`.
+  local extra _er
+  while IFS= read -r extra; do
+    [[ -z "$extra" ]] && continue
+    [[ "$extra" == *.bak* ]] && continue
+    _er="${extra#"$TARGET"/}"
+    [[ -n "${_own[$_er]:-}" ]] && continue
+    if grep -IEl "$plain_pat" "$extra" >/dev/null 2>&1; then
+      scan+=("$_er")
+    fi
+  done < <(
+    for _sf in "$TARGET"/.claude/settings.json "$TARGET"/.claude/settings.local.json; do
+      if [[ -f "$_sf" ]]; then printf '%s\n' "$_sf"; fi
+    done
+    find "$TARGET/.git/hooks" -maxdepth 1 -type f 2>/dev/null
+    find "$TARGET/.github/workflows" -maxdepth 1 -type f 2>/dev/null
+  )
+
+  # Dedup + capture file:line for each hit.
+  local -A seen=()
+  local rel line
+  for rel in "${scan[@]}"; do
+    [[ -n "${seen[$rel]:-}" ]] && continue
+    seen[$rel]=1
+    while IFS= read -r line; do
+      [[ -z "$line" ]] && continue
+      NS_STALE_REFS+=("$rel:$line")
+    done < <(grep -nE "$plain_pat" "$TARGET/$rel" 2>/dev/null | head -20 | cut -d: -f1)
+  done
+}
+
+# §5 step 7 (a)+(b): honest migration summary + the T4 stale-reference report.
+# Replaces the numstat delta table (suppressed in migration mode). Runs after the
+# preserved-paths block report_post_overwrite_deltas already printed.
+_ns_migration_report() {
+  hdr "namespace migration summary (Phase 128)"
+  say ""
+  note "moved:     ${#NS_MOVE_NEW[@]} vendor path(s) into sysop/"
+  note "preserved: ${#PRESERVED_PATHS[@]} consumer-modified path(s) (kept at their new sysop/ location)"
+  note "swept:     ${NS_SWEPT_COUNT} upstream-dropped path(s)"
+  if (( ${#PRESERVED_PATHS[@]} > 0 )); then
+    say ""
+    say "  ⚠ Each preserved script still carries the OLD self-location idiom at its new"
+    say "    path (shell \${REPO_ROOT}/scripts or Python parent.parent). Reconcile those"
+    say "    against upstream (--accept-upstream <path>) or hand-patch the anchor."
+  fi
+
+  _ns_scan_stale_refs
+  say ""
+  if (( ${#NS_STALE_REFS[@]} == 0 )); then
+    note "stale-reference scan: no consumer files reference the old scripts/ paths."
+  else
+    hdr "stale references to old scripts/ paths (Phase 128 — fix by hand)"
+    say ""
+    say "  These consumer-owned files still name flat scripts/ paths. Sysop never edits"
+    say "  them; update them yourself (armed .git/hooks and CI trigger-regexes silently"
+    say "  stop matching after the move):"
+    local ref
+    for ref in "${NS_STALE_REFS[@]}"; do
+      note "$ref"
+    done
+  fi
+}
+
+# T7: refuse a migration that can't complete cleanly. Extra worktrees run armed
+# hooks that reference sysop/scripts/ post-re-arm and would break inside a
+# pre-migration worktree; in_progress claims mean live batch work; a foreign
+# (non-partial-migration) sysop/ dir is the exact collision this phase removes.
+# Refuse-with-guidance (no --force bypass): all three are cheap for the consumer
+# to clear, and half-migrating around them is a foot-gun.
+_ns_migration_preflight() {
+  # Extra worktrees (beyond the main checkout).
+  local wt_count
+  wt_count="$(git -C "$TARGET" worktree list --porcelain 2>/dev/null | grep -c '^worktree ' || true)"
+  if [[ "${wt_count:-1}" -gt 1 ]]; then
+    err "Namespace migration needs a single worktree, but extra git worktrees exist."
+    err "  Armed hooks in those worktrees reference sysop/scripts/ after re-arm and would"
+    err "  break there. Remove them first: bash sysop/scripts/cleanup_worktrees.sh --clean"
+    err "  (or 'git worktree remove'), then re-run the update."
+    exit 1
+  fi
+  # Live task claims. The operational truth of an in-flight claim is a lock file
+  # (Phase 32: locks live under the main checkout's .locks/, and /claim-task
+  # always passes --lock) — grepping tasks/index.yml for `status: in_progress`
+  # false-matches the always-in_progress current-focus PHASE and the commented
+  # example task, so key on the lock instead.
+  local locks_dir="$TARGET/.locks"
+  if [[ -d "$locks_dir" ]] && compgen -G "$locks_dir/*.lock" >/dev/null 2>&1; then
+    err "Namespace migration needs a quiet queue, but active task lock(s) exist in .locks/."
+    err "  Finish or release the claim(s) (bash sysop/scripts/claim_task.sh --release <ID>), then re-run."
+    exit 1
+  fi
+  # A foreign sysop/ dir with no sign of being a prior partial migration of ours.
+  local existing
+  if existing="$(_ns_foreign_sysop_dir)" && [[ ! -d "$TARGET/sysop/scripts" ]] \
+     && [[ ! -f "$TARGET/sysop/docs/WORKFLOW.md" ]] && [[ ! -f "$TARGET/sysop/SYSOP_ISSUES.md" ]]; then
+    err "A '$existing' path already exists and isn't a Sysop layout."
+    err "  Phase 128 installs Sysop's vendor files under sysop/. Rename or remove your"
+    err "  existing sysop/ first, then re-run."
+    exit 1
+  fi
+}
+
 # ─── main ────────────────────────────────────────────────────
 main() {
   hdr "Sysop installer"
@@ -2538,6 +3413,43 @@ main() {
     return 0
   fi
 
+  # T7 (Phase 128): a fresh install writes the sysop/ vendor dir; refuse if a
+  # sysop/ already exists that Sysop did NOT create (no lock present) — a
+  # consumer's own directory we'd clobber with no preserve semantics. A sysop/
+  # from a prior Sysop install (lock present) is a normal re-install and passes
+  # through. No --force bypass for the genuine collision: clobbering is
+  # unrecoverable.
+  if [[ "$UPDATE_MODE" -eq 0 ]] && [[ ! -f "$TARGET/$LOCK_REL" ]]; then
+    local _existing_sysop
+    if _existing_sysop="$(_ns_foreign_sysop_dir)"; then
+      err "A '$_existing_sysop' path already exists and isn't a Sysop install (no lock)."
+      err "  Sysop installs its vendor files under sysop/. Rename or remove your existing"
+      err "  sysop/ directory before installing Sysop."
+      exit 1
+    fi
+    # Phase 128 (Finding 4): a lockless fresh install over a committed OLD-layout
+    # Sysop tree (flat scripts/*, root WORKFLOW*.md) — e.g. an install whose
+    # .claude/sysop.lock was lost. A plain install would write sysop/ ALONGSIDE the
+    # flat tree, stranding it as an unmanaged duplicate (no migration/sweep/
+    # preservation — all UPDATE_MODE-gated) and re-arming hooks over any local
+    # edits. Refuse with guidance: --adopt rebuilds the lost lock, then --update
+    # migrates. Requires CORROBORATED evidence (2+ vendor basenames, or one plus a
+    # Sysop artifact) so a genuinely-new consumer who owns a single colliding
+    # basename isn't false-refused. (SELECTED_PACKS isn't resolved yet, so this is a
+    # core-only probe — enough, since every real install ships core scripts.)
+    if _ns_old_layout_corroborated; then
+      err "Old-layout Sysop files exist at flat scripts/ but there's no lock file."
+      err "  This looks like a Sysop install whose lock was lost. A fresh install would"
+      err "  write sysop/ and strand the old flat scripts/ tree as an unmanaged duplicate"
+      err "  (and re-arm hooks over any local edits). Recover tracking instead:"
+      err "    bash ${SYSOP_SRC_CLONE:-$REPO_ROOT}/install.sh $TARGET --adopt"
+      err "  then run the migration update:"
+      err "    bash ${SYSOP_SRC_CLONE:-$REPO_ROOT}/install.sh $TARGET --update"
+      err "  (Or, if these flat scripts/ are NOT from Sysop, move them aside and re-run.)"
+      exit 1
+    fi
+  fi
+
   # Phase 111: --ref pins the source to a reviewed release tag/rev instead of the
   # clone's live HEAD, so a cautious consumer can install/update from a
   # known-good release rather than tracking whatever HEAD happens to be. There is
@@ -2568,6 +3480,22 @@ main() {
       exit 1
     fi
     REPO_ROOT="$REF_WORKTREE"
+    # Phase 128 (Finding 5): --ref re-points SOURCE content only; destination wiring
+    # stays new-layout (dst=$TARGET/sysop/scripts, …). A ref cut BEFORE the sysop/
+    # namespace ships OLD script bodies (flat SCRIPT_DIR / parent.parent self-
+    # location) into new-layout paths — a silently broken install that still exits 0.
+    # The clone-HEAD T6 shim can't catch this (it greps the live installer, not the
+    # ref). Detect the era from the materialised installer (the same 'sysop/scripts'
+    # marker T6 uses) and hard-refuse a pre-namespace ref.
+    if ! grep -q 'sysop/scripts' "$REF_WORKTREE/install.sh" 2>/dev/null; then
+      err "--ref '$REF_OVERRIDE' predates the sysop/ vendor namespace (Phase 128)."
+      err "  Its scripts self-locate at flat scripts/, but this installer wires them into"
+      err "  sysop/scripts/ — the result would be silently broken. Options:"
+      err "    • pin a newer release tag that post-dates the sysop/ namespace, or"
+      err "    • check out that tag and run ITS OWN installer instead of this one:"
+      err "        git -C ${SYSOP_SRC_CLONE:-$REPO_ROOT} checkout $REF_OVERRIDE && bash install.sh $TARGET"
+      exit 1
+    fi
     say "  → pinned to $REF_OVERRIDE (${_ref_commit:0:12})"
   fi
 
@@ -2583,6 +3511,42 @@ main() {
     fi
     # Load lock fields.
     old_commit="$(lock_field sysop_commit)"
+    # ISSUE-0047: a lock with no sysop_commit anchor cannot anchor Phase 24b's
+    # 3-way divergence detection — reconstruct_old_install() returns 1, and the
+    # clean-tree fallback then overwrites in-scope consumer scripts undetected
+    # (same effect as --force, but silent, exit 0). The read-only --check path
+    # already hard-errors on exactly this; make the *destructive* --update at
+    # least as strict — but ONLY when a real anchor was actually possible:
+    #   • git source → get_sysop_commit yields a real sha, so an empty/"unknown"
+    #     lock anchor is corruption (the jig→sysop migration lost it) → fail
+    #     closed, and --adopt can rebuild it.
+    #   • non-git source (unpacked tarball/zip — an "any agent or none" path) →
+    #     the source itself can only ever yield "unknown", so a "unknown" lock
+    #     anchor is NORMAL, not corruption. Failing closed there would break the
+    #     documented update flow AND advertise a --adopt recovery that provably
+    #     can't help (adopt would just re-write "unknown"). Leave that population
+    #     on the existing Phase-99 fallback (proceed-if-clean, abort-if-dirty).
+    # --force opts out of preservation deliberately, so it is exempt either way.
+    # (ANCHOR_OVERRIDE is empty in --update mode — validated at arg parse — so
+    # get_sysop_commit here only ever takes its HEAD-or-"unknown" branch.)
+    local _src_anchor; _src_anchor="$(get_sysop_commit)"
+    if [[ "$FORCE" -eq 0 ]] && [[ "$_src_anchor" != "unknown" ]] \
+         && { [[ -z "$old_commit" ]] || [[ "$old_commit" == "unknown" ]]; }; then
+      err "Lock at $(rel "$lock_path") has no sysop_commit anchor, so committed-edit"
+      err "preservation (Phase 24b) cannot run — proceeding would overwrite in-scope"
+      err "consumer scripts (sysop/scripts/*, sysop/scripts/hooks/*) undetected (BeanRider ISSUE-0047)."
+      err ""
+      err "  Options:"
+      err "    1. Re-adopt to rebuild the anchor, then re-run the update:"
+      err "         bash ${SYSOP_SRC_CLONE:-$REPO_ROOT}/install.sh $TARGET --adopt"
+      err "       (--adopt rewrites a lock whose anchor is missing — no need to delete"
+      err "        it first; preservation then works on the next --update. Add"
+      err "        --anchor <REV> to pin a specific known rev.)"
+      err "    2. Overwrite ALL managed paths without preservation (only if you have no"
+      err "       local script edits to keep):"
+      err "         bash sysop/scripts/sysop-update.sh --force"
+      exit 1
+    fi
     installed_at="$(lock_field installed_at)"
     local line
     while IFS= read -r line; do
@@ -2601,6 +3565,31 @@ main() {
         fi
       done < <(lock_field packs)
     fi
+
+    # Phase 123: resolve the install mode. Pre-123 locks have no `mode` field →
+    # empty → full (what every pre-loop install was). --update without --mode
+    # re-applies the recorded mode; --update --mode full on a loop install is the
+    # additive loop→full upgrade; --mode loop on a full install (downgrade) is out
+    # of scope — reinstall fresh.
+    local lock_mode; lock_mode="$(lock_field mode)"
+    # Pre-123 locks have no `mode` (empty → full); an unknown/corrupt value (a
+    # hand-edit, or a mode written by a newer installer) also normalizes to full
+    # rather than flowing through as a silent non-loop with the garbage
+    # re-persisted verbatim by write_lock_file.
+    [[ "$lock_mode" =~ ^(loop|full)$ ]] || lock_mode="full"
+    if [[ "$MODE_PROVIDED" -eq 1 ]]; then
+      if [[ "$INSTALL_MODE" == "$lock_mode" ]]; then
+        :
+      elif [[ "$lock_mode" == "loop" && "$INSTALL_MODE" == "full" ]]; then
+        say "  → upgrading loop → full (additive: adds lifecycle skills, scripts, and the tasks/ scaffold)"
+      else
+        err "Downgrade full → loop is out of scope."
+        err "  To switch to loop mode, reinstall fresh: remove .claude/ (and the lock), then re-run with --mode loop."
+        exit 2
+      fi
+    else
+      INSTALL_MODE="$lock_mode"
+    fi
   fi
 
   # Packs (from --packs, lock-derived above, or interactive). PACKS_PROVIDED
@@ -2612,6 +3601,42 @@ main() {
   fi
   resolve_selected_packs "$packs_input"
 
+  # Phase 128 (§5 steps 2–3): detect + prepare a sysop/ namespace migration. Only
+  # relevant in --update (a fresh install already writes the new layout). Fire on
+  # EITHER signal: an old-layout vendor file still at flat scripts/ (tree-probe),
+  # OR an old-spelled lock even though the tree has already moved (the crash-resume
+  # window — a migration that relocated the files but died before rewriting the
+  # lock; Finding 1). Missing that second signal left MIGRATION_MODE=0 on resume, so
+  # the shadow never moved and copy_file silently overwrote consumer edits.
+  if [[ "$UPDATE_MODE" -eq 1 ]] \
+     && { _ns_migration_pending || _ns_lock_is_old_spelled "${old_managed[@]}"; }; then
+    # Derive the full move map + NS_MOVE_PENDING (read-only precompute). Empty
+    # pending is legal: a crash-resume can leave the tree already at sysop/ with the
+    # lock still old-spelled, and this re-entry must still run the shadow move,
+    # settings migration, sweep normalization, and per-file preservation to finish.
+    _ns_precompute_and_derive || true
+    # The T7 preflight hard-refuses on extra worktrees / active locks / a foreign
+    # sysop dir — all normal workflow states. Only demand a quiet queue when real
+    # working-tree moves remain (Finding 3); a pure resume (nothing left to move)
+    # must not block a routine --update, and it now runs AFTER the derive.
+    if (( NS_MOVE_PENDING > 0 )); then
+      _ns_migration_preflight
+    fi
+    # Enter migration mode only when there is real migration WORK: pending
+    # working-tree moves, OR an old-spelled lock still to heal (crash-resume /
+    # adopt-bridge). The tree-probe fires on a SINGLE flat file, so a fully-migrated
+    # consumer who keeps their OWN file at a shipped basename (scripts/run_checks.sh
+    # — scripts/ was the consumer's dir pre-128) trips it on every --update; without
+    # this gate MIGRATION_MODE would latch permanently (pending=0, lock new-spelled),
+    # suppressing the post-overwrite delta report and printing migration noise
+    # forever. pending=0 + new-spelled lock ⇒ plain update. Preservation of the
+    # already-migrated sysop/scripts/* is unaffected — copy_file's Phase-24b path
+    # keys on UPDATE_MODE + the shadow, not MIGRATION_MODE.
+    if (( NS_MOVE_PENDING > 0 )) || _ns_lock_is_old_spelled "${old_managed[@]}"; then
+      MIGRATION_MODE=1
+    fi
+  fi
+
   # Plan summary.
   hdr "plan"
   say "  target:  $TARGET"
@@ -2620,10 +3645,19 @@ main() {
   else
     say "  packs:   (core only)"
   fi
+  if [[ "$INSTALL_MODE" == "loop" ]]; then
+    say "  install: loop  (convention loop only — no task queue / merge gate)"
+  else
+    say "  install: full"
+  fi
   if [[ "$UPDATE_MODE" -eq 1 ]]; then
     say "  mode:    update (was at ${old_commit:0:12})"
   else
     say "  mode:    $([[ "$DRY_RUN" -eq 1 ]] && echo "dry-run" || echo "apply")"
+  fi
+  if [[ "$MIGRATION_MODE" -eq 1 ]]; then
+    say "  layout:  MIGRATING to the sysop/ vendor dir (Phase 128) — ${#NS_MOVE_OLD[@]} path(s) move;"
+    say "           scripts/ → sysop/scripts/, WORKFLOW*.md → sysop/docs/, SYSOP_ISSUES.md → sysop/"
   fi
 
   if [[ "$DRY_RUN" -eq 0 ]]; then
@@ -2646,6 +3680,21 @@ main() {
       [[ "$mp" == ".claude/settings.json" ]] && continue
       snap_candidates+=("$mp")
     done
+    # Phase 128 (adversarial review Finding 1 — HIGH data-loss guard): a migration
+    # can carry a dirty vendor-script edit on EITHER spelling and the lock's
+    # managed_paths above may not name the on-disk one:
+    #   • adopt-bridge — lock NEW-spelled, tree still OLD-layout → the edit lives at
+    #     the OLD spelling (scripts/*), unmatched by the new-spelled entries above.
+    #   • crash-resume — lock OLD-spelled, tree already moved → the edit lives at the
+    #     NEW spelling (sysop/scripts/*), unmatched by the old-spelled entries above.
+    # Add BOTH spellings of every moving path (git status ignores the non-existent
+    # side) so a dirty edit is caught → snapshot commit, or fail-closed — never the
+    # silent Phase-99 clean-tree overwrite. NS_MOVE_OLD/NEW were populated by the
+    # migration precompute above.
+    if [[ "$MIGRATION_MODE" -eq 1 ]]; then
+      (( ${#NS_MOVE_OLD[@]} > 0 )) && snap_candidates+=("${NS_MOVE_OLD[@]}")
+      (( ${#NS_MOVE_NEW[@]} > 0 )) && snap_candidates+=("${NS_MOVE_NEW[@]}")
+    fi
     if (( ${#snap_candidates[@]} > 0 )); then
       snapshot_hash="$(snapshot_managed_paths "$old_commit" "${snap_candidates[@]}")"
     fi
@@ -2662,7 +3711,7 @@ main() {
   # lose (Phase 8 — warn-and-proceed for ALL managed paths). The same shadow
   # tree is then kept alive through run_install_pipeline so copy_file() can
   # per-file-diff against it for Phase 24b's in-scope paths (warn-AND-skip
-  # for scripts/* and scripts/hooks/*). --force skips both steps (same
+  # for sysop/scripts/* and sysop/scripts/hooks/*). --force skips both steps (same
   # semantics as the pre-update snapshot).
   #
   # Decision 11: divergence runs in dry-run too, so the plan output reflects
@@ -2685,7 +3734,32 @@ main() {
       fi
     done
     if reconstruct_old_install "$old_commit" "$DIVERGENCE_SHADOW" "$divergence_packs_csv"; then
-      detect_committed_divergence "$DIVERGENCE_SHADOW" "${old_managed[@]}"
+      # Phase 128 (adversarial review Finding 3): in migration mode the lock's
+      # managed_paths may be NEW-spelled (adopt-bridge) while the consumer's HEAD
+      # is still OLD-layout, so `HEAD:sysop/scripts/X` misses. Normalize each
+      # entry to its on-disk (old) spelling so committed edits are actually
+      # detected + reported (a pre-namespace-anchor shadow is old-layout, so both
+      # sides align; an adopt-reachable shadow is new-layout and simply skips —
+      # copy_file's preservation still covers that case).
+      local -a _dc_managed=()
+      if [[ "$MIGRATION_MODE" -eq 1 ]]; then
+        local _omp _alt
+        for _omp in "${old_managed[@]}"; do
+          if [[ -e "$TARGET/$_omp" ]]; then
+            _dc_managed+=("$_omp")
+          else
+            _alt="$(_ns_new_to_old "$_omp")"
+            if [[ "$_alt" != "$_omp" && -e "$TARGET/$_alt" ]]; then
+              _dc_managed+=("$_alt")
+            else
+              _dc_managed+=("$_omp")
+            fi
+          fi
+        done
+      else
+        _dc_managed=("${old_managed[@]}")
+      fi
+      detect_committed_divergence "$DIVERGENCE_SHADOW" "${_dc_managed[@]}"
       if (( ${#DIVERGED_PATHS[@]} == 0 )); then
         note "no committed local edits detected"
       else
@@ -2711,9 +3785,9 @@ main() {
       note "to managed scripts can't be detected. The working tree is CLEAN for every managed"
       note "path (nothing uncommitted to preserve), so this update proceeds and overwrites"
       note "in-scope scripts from upstream."
-      note "If you COMMITTED edits to scripts/*, they are overwritten here — recover them from"
+      note "If you COMMITTED edits to sysop/scripts/*, they are overwritten here — recover them from"
       note "git history, or re-run after fetching the ancestor by SHA (host/GC permitting):"
-      note "  git -C ${SYSOP_SRC_CLONE:-$REPO_ROOT} fetch origin $old_commit && bash scripts/sysop-update.sh"
+      note "  git -C ${SYSOP_SRC_CLONE:-$REPO_ROOT} fetch origin $old_commit && bash sysop/scripts/sysop-update.sh"
     else
       # Phase 24b fail-closed: in --update without --force, abort if we can't
       # compute per-file ancestors for the in-scope preservation set AND the
@@ -2722,18 +3796,18 @@ main() {
       # silent loss of customizations the consumer thought were safe. The escape
       # hatches are explicit: --force, per-file --accept-upstream, or fetching
       # the missing commit (by SHA) and retrying.
-      err "Phase 24b requires a recoverable ancestor for scripts/* and scripts/hooks/* preservation."
+      err "Phase 24b requires a recoverable ancestor for sysop/scripts/* and sysop/scripts/hooks/* preservation."
       err "  reconstruct_old_install failed — see note: line above for the specific cause,"
       err "  and there are dirty managed paths in the working tree to preserve."
       err ""
       err "  Options:"
-      err "    1. git -C ${SYSOP_SRC_CLONE:-$REPO_ROOT} fetch origin $old_commit && bash scripts/sysop-update.sh"
+      err "    1. git -C ${SYSOP_SRC_CLONE:-$REPO_ROOT} fetch origin $old_commit && bash sysop/scripts/sysop-update.sh"
       err "       (fetch the lock's sysop_commit BY SHA — a plain 'git fetch' cannot restore"
       err "        a force-pushed commit; the by-SHA fetch is best-effort, working only while"
       err "        the host still serves the orphaned object. If it can't be fetched, use 2 or 3.)"
-      err "    2. bash scripts/sysop-update.sh --force"
+      err "    2. bash sysop/scripts/sysop-update.sh --force"
       err "       (skip preservation; overwrite all managed paths)"
-      err "    3. bash scripts/sysop-update.sh --accept-upstream <relpath> [--accept-upstream ...]"
+      err "    3. bash sysop/scripts/sysop-update.sh --accept-upstream <relpath> [--accept-upstream ...]"
       err "       (acceptance-list per script; non-listed in-scope paths will still abort)"
       err ""
       err "  See WORKFLOW.md § 8.2c for the full preservation contract."
@@ -2743,43 +3817,105 @@ main() {
     report_pre_overwrite_divergence
   fi
 
+  # Phase 128 (§5 steps 4–6): with divergence detected + reported on OLD paths,
+  # move BOTH the working tree and the reconstructed shadow to the new layout,
+  # then remap DIVERGED_PATHS and migrate the settings files. After this the
+  # standard pipeline below runs layout-blind: copy_file's Phase-24b preservation
+  # (keyed on the moved shadow ancestor) and the obsolete sweep both operate on
+  # new-layout paths with zero special-casing. Ordering is load-bearing — the
+  # remap runs AFTER report_pre_overwrite_divergence (which needs old spellings
+  # for its `git show HEAD:<path>` hints) and BEFORE report_post_overwrite_deltas.
+  if [[ "$MIGRATION_MODE" -eq 1 ]] && [[ "$DRY_RUN" -eq 0 ]]; then
+    hdr "namespace migration (Phase 128)"
+    note "moving ${#NS_MOVE_OLD[@]} vendor path(s) into sysop/"
+    _ns_move_tree "$TARGET" git
+    _ns_move_issues_log
+    # Prune the now-empty old vendor dirs git mv leaves behind (scripts/,
+    # scripts/hooks/, scripts/ci/, scripts/run_checks/). -empty protects any
+    # consumer-owned files that were living alongside in scripts/.
+    [[ -d "$TARGET/scripts" ]] && find "$TARGET/scripts" -depth -type d -empty -delete 2>/dev/null
+    [[ -n "$DIVERGENCE_SHADOW" && -d "$DIVERGENCE_SHADOW" ]] && _ns_move_tree "$DIVERGENCE_SHADOW" plain
+    _ns_remap_diverged_paths
+    _ns_migrate_settings
+  fi
+
+  # Finding 2: normalize any --accept-upstream keys old→new so copy_file's new-spelled
+  # preservation lookup matches a pre-migration consumer's flat-scripts/ path. Runs in
+  # BOTH dry-run and apply (copy_file's preservation preview consults ACCEPT_UPSTREAM in
+  # dry-run too), and independent of the tree-move above so it fires on every migration.
+  [[ "$MIGRATION_MODE" -eq 1 ]] && _ns_remap_accept_upstream
+
   # Execute install pipeline (populates MANAGED_PATHS; copy_file consumes
   # DIVERGENCE_SHADOW for Phase 24b per-file preservation).
   MANAGED_PATHS=()
   run_install_pipeline
 
-  # Phase 13: seed SYSOP_ISSUES.md at consumer-repo root on fresh install
+  # Phase 13: seed SYSOP_ISSUES.md under sysop/ (Phase 128) on fresh install
   # only. Skip on --update / --adopt / --check (those modes don't reach here:
   # --check + --adopt return early above, and --update treats the friction log
   # as project-owned). Helper itself skips silently if the file exists.
+  # Phase 123: in loop mode, SYSOP_ISSUES.md stays lazy (created by the first
+  # friction capture, not at install — zero-root-footprint); instead seed the
+  # CLAUDE.md scope sections the audit skills need.
   if [[ "$UPDATE_MODE" -eq 0 ]]; then
-    seed_friction_log
+    if [[ "$INSTALL_MODE" == "loop" ]]; then
+      seed_claude_md_stub
+    else
+      seed_friction_log
+    fi
   fi
 
   # Update mode: paths that Sysop used to manage but no longer does should
   # be removed from the consumer's working tree so the working set matches the
   # new lock. Skip settings.json (it's merge-preserved, never dropped).
-  local -a deletions=()
+  #
+  # Phase 128 (§5 step 6): in migration mode the lock's spelling may be old OR new
+  # (cmd_adopt writes current-pipeline locks), so "still managed" is decided by
+  # normalizing each old-managed entry to its NEW spelling and testing membership
+  # — a MOVED path normalizes into MANAGED_PATHS and is never deleted; only a
+  # genuinely upstream-dropped file survives as a deletion. The on-disk spelling
+  # is then resolved via the INVERSE map (never the forward one — that would
+  # relocate onto a live moved file). The header is gated on a real on-disk hit,
+  # not a non-empty candidate list (avoids announcing "obsolete files" when every
+  # candidate was already moved/absent).
   if [[ "$UPDATE_MODE" -eq 1 ]]; then
-    local omp still=0 np
+    local omp still np norm ondisk alt d
+    local -a to_remove=()
     for omp in "${old_managed[@]}"; do
       [[ "$omp" == ".claude/settings.json" ]] && continue
+      # Defensive (adversarial review): never sweep consumer-owned files even if a
+      # corrupted/hand-edited lock lists them — the backlog under tasks/, the
+      # friction log, the review tracker, and the CLAUDE.md/.gitignore appends are
+      # the consumer's, not Sysop's. Real locks never record these; this is a guard
+      # against the blast radius, not a normal path.
+      case "$omp" in
+        tasks/*|CLAUDE.md|.gitignore|review_tasks.md|review_tasks_archive.md|SYSOP_ISSUES.md|sysop/SYSOP_ISSUES.md) continue ;;
+      esac
+      norm="$omp"
+      [[ "$MIGRATION_MODE" -eq 1 ]] && norm="$(_ns_old_to_new "$omp")"
       still=0
       for np in "${MANAGED_PATHS[@]}"; do
-        if [[ "$np" == "$omp" ]]; then still=1; break; fi
+        if [[ "$np" == "$norm" ]]; then still=1; break; fi
       done
-      (( still == 0 )) && deletions+=("$omp")
+      (( still == 1 )) && continue
+      # Genuinely dropped — resolve the surviving on-disk spelling.
+      ondisk=""
+      if [[ -e "$TARGET/$omp" ]]; then
+        ondisk="$omp"
+      elif [[ "$MIGRATION_MODE" -eq 1 ]]; then
+        alt="$(_ns_new_to_old "$omp")"
+        [[ "$alt" != "$omp" && -e "$TARGET/$alt" ]] && ondisk="$alt"
+      fi
+      [[ -n "$ondisk" ]] && to_remove+=("$ondisk")
     done
-    if (( ${#deletions[@]} > 0 )); then
+    NS_SWEPT_COUNT=${#to_remove[@]}
+    if (( ${#to_remove[@]} > 0 )); then
       hdr "obsolete files"
-      local d
-      for d in "${deletions[@]}"; do
-        if [[ -e "$TARGET/$d" ]]; then
-          note "remove: $d"
-          if [[ "$DRY_RUN" -eq 0 ]]; then
-            git -C "$TARGET" rm -f --quiet -- "$d" 2>/dev/null \
-              || rm -f -- "$TARGET/$d"
-          fi
+      for d in "${to_remove[@]}"; do
+        note "remove: $d"
+        if [[ "$DRY_RUN" -eq 0 ]]; then
+          git -C "$TARGET" rm -f --quiet -- "$d" 2>/dev/null \
+            || rm -f -- "$TARGET/$d"
         fi
       done
     fi
@@ -2810,6 +3946,7 @@ main() {
   # delta table self-suppresses; the preserved-paths block does fire).
   if [[ "$UPDATE_MODE" -eq 1 ]]; then
     report_post_overwrite_deltas
+    [[ "$MIGRATION_MODE" -eq 1 ]] && _ns_migration_report
   fi
 
   # Phase 25 (BeanRider ISSUE-0026): post-run stale-substitution report.
@@ -2827,7 +3964,7 @@ main() {
 
   # Phase 15 / ISSUE-0007: armed-hook divergence check. Runs in all modes
   # (fresh install too — catches hand-edits of .git/hooks/). In --update mode,
-  # arm_git_hooks deliberately skipped, so any consumer-customized scripts/hooks/
+  # arm_git_hooks deliberately skipped, so any consumer-customized sysop/scripts/hooks/
   # body that differs from the upstream-overwritten file will show up here.
   check_armed_hooks_divergence
 
@@ -2835,8 +3972,27 @@ main() {
   if [[ "$UPDATE_MODE" -eq 1 ]]; then
     local new_commit; new_commit="$(get_sysop_commit)"
     say "Updated Sysop files in: $TARGET"
-    say "  was:  ${old_commit:0:12}"
+    # ISSUE-0047: only reachable under --force now (a no-anchor --update without
+    # --force fails closed at lock load); label it instead of printing a blank
+    # `was:` that reads as "nothing to report".
+    if [[ -z "$old_commit" ]] || [[ "$old_commit" == "unknown" ]]; then
+      say "  was:  (unknown — lock had no anchor)"
+    else
+      say "  was:  ${old_commit:0:12}"
+    fi
     say "  now:  ${new_commit:0:12}"
+    if [[ "$MIGRATION_MODE" -eq 1 ]]; then
+      say ""
+      say "▶ Namespace migration — commit this as ONE change, in this order:"
+      note "1. stage everything (both sides of every move + the appends):"
+      note "     git -C $TARGET add -A"
+      note "2. re-arm hooks BEFORE committing — your old-path armed hook would otherwise"
+      note "   fire on the migration commit and run checks over now-moved files:"
+      note "     bash $TARGET/sysop/scripts/install_hooks.sh"
+      note "3. commit (or bypass the still-stale hook once with --no-verify):"
+      note "     git -C $TARGET commit -m 'chore(sysop): migrate to sysop/ vendor namespace'"
+      note "Consumer files still naming old scripts/ paths were listed above — fix them by hand."
+    fi
     say ""
     say "The update is uncommitted — review and commit intentionally."
     if (( ${#DIVERGED_PATHS[@]} > 0 )); then
@@ -2846,32 +4002,43 @@ main() {
       note "diff vs pre-update snapshot: git -C $TARGET diff ${snapshot_hash:0:12}..HEAD"
     fi
     note "see what changed: git -C $TARGET diff"
-    note "smoke test:       bash $TARGET/scripts/run_checks.sh"
-    note "re-arm git hooks after reconciling scripts/hooks/: bash $TARGET/scripts/install_hooks.sh"
+    note "smoke test:       bash $TARGET/sysop/scripts/run_checks.sh"
+    note "re-arm git hooks after reconciling sysop/scripts/hooks/: bash $TARGET/sysop/scripts/install_hooks.sh"
   else
     say "Done. Wrote Sysop into: $TARGET"
     say ""
     say "Next steps:"
     note "cd $TARGET"
     if [[ "$ARM_HOOKS" -eq 0 ]]; then
-      note "bash scripts/install_hooks.sh         # arm git hooks (--no-arm-hooks was set)"
+      note "bash sysop/scripts/install_hooks.sh         # arm git hooks (--no-arm-hooks was set)"
     fi
-    note "bash scripts/run_checks.sh            # smoke-test the check registry"
+    note "bash sysop/scripts/run_checks.sh            # smoke-test the check registry"
     note "git status                            # review what landed"
     say ""
-    say "See WORKFLOW.md § 8.7 (Port checklist) for the bootstrap walkthrough."
-    say ""
-    # Phase 71/73: friction is densest at install / first /intake — before any
-    # /review-close cycle (Step 7) exists to prompt for it. Nudge capture now,
-    # while it's fresh, so testers' earliest friction reaches the log.
-    say "Hit Sysop friction (install, permissions, first /intake)? Capture it while it's fresh:"
-    note "log it in SYSOP_ISSUES.md (repo root); /report-issues files the keepers upstream to Sysop"
+    # Phase 71/73/123: friction is densest at install / first round. Nudge
+    # capture now, mode-aware — loop mode ships no WORKFLOW.md and keeps
+    # SYSOP_ISSUES.md lazy, so it routes to the audit skills + a create-on-first
+    # friction log instead.
+    if [[ "$INSTALL_MODE" == "loop" ]]; then
+      say "You're in loop mode — the convention loop only. Run a first round:"
+      note "fill in the three scope sections seeded in CLAUDE.md (what to review / skip)"
+      note "/codebase-review    # scan, promote surviving conventions, bootstrap review_tasks.md"
+      note "/security-audit     # same rhythm, or before releases"
+      say ""
+      say "Hit Sysop friction? Log it in sysop/SYSOP_ISSUES.md (create it under sysop/);"
+      note "/report-issues files the keepers upstream to Sysop"
+    else
+      say "See sysop/docs/WORKFLOW.md § 8.7 (Port checklist) for the bootstrap walkthrough."
+      say ""
+      say "Hit Sysop friction (install, permissions, first /intake)? Capture it while it's fresh:"
+      note "log it in sysop/SYSOP_ISSUES.md; /report-issues files the keepers upstream to Sysop"
+    fi
     say ""
     # Phase 34 / BeanRider ISSUE-0011: print the SYSOP_SRC export line at
     # install time so a fresh agent or contributor doesn't hit the shim's
     # precondition error without knowing where to set the env var.
     say "Future updates (one-line, from the consumer project root):"
-    note "bash scripts/sysop-update.sh      # the recommended update entry point"
+    note "bash sysop/scripts/sysop-update.sh      # the recommended update entry point"
     say ""
     say "The shim requires \$SYSOP_SRC to point at this Sysop source clone."
     say "Add this line to your shell rc (~/.zshrc or ~/.bashrc) and re-source it:"

@@ -509,17 +509,29 @@
 
     <div class="install" id="install2" style="margin-top:30px; max-width:720px;"><button class="copy-btn" id="copyBtn2" aria-label="Copy install commands">copy</button><span class="prompt">$</span> git clone https://github.com/getsysop/sysop.git
 <span class="prompt">$</span> bash sysop/install.sh <span class="cmt">/path/to/your/project</span> --packs python,postgres
-<span class="prompt">$</span> cd <span class="cmt">/path/to/your/project</span> &amp;&amp; git add .claude/ scripts/ WORKFLOW.md WORKFLOW_GUIDE.md tasks/ SYSOP_ISSUES.md &amp;&amp; git commit -m <span class="cmt">"chore: install Sysop"</span></div>
+<span class="prompt">$</span> cd <span class="cmt">/path/to/your/project</span> &amp;&amp; git add .claude/ sysop/ tasks/ CLAUDE.md .gitignore &amp;&amp; git commit -m <span class="cmt">"chore: install Sysop"</span></div>
 
     <p class="lede" style="margin-top:4px;">Claude Code users can also add the slash commands as a plugin: <code>/plugin marketplace add getsysop/sysop</code>, then <code>/plugin install sysop@sysop</code>.</p>
+
+    <p class="lede" style="margin-top:34px;"><b>Or start with just the loop.</b> <code>--mode loop</code> installs only the convention loop — the review and audit skills, the maps, the compiled checks — into a repo where you keep your own branching and merge workflow. No task queue, no worktrees, no merge gate; grow into the full workflow later with a single <code>--update --mode full</code>.</p>
+
+    <div class="install" id="install3" style="margin-top:14px; max-width:720px;"><button class="copy-btn" id="copyBtn3" aria-label="Copy loop-mode install command">copy</button><span class="prompt">$</span> bash sysop/install.sh <span class="cmt">/path/to/your/project</span> --packs auto --mode loop</div>
+
+    <p class="lede" style="margin-top:4px;">It was run once, end-to-end, against a real ~60k-line open-source codebase before it shipped — three review rounds in, a freshly mechanized convention caught an instance no round had filed. <a href="https://github.com/getsysop/sysop/blob/main/docs/loop-mode.md">Loop mode: the walkthrough →</a></p>
 
     <div class="readnext">
       <div class="rn"><a href="https://github.com/getsysop/sysop/blob/main/docs/getting-started.md">
         <div class="rn-k">Tutorial</div><h4>Getting started →</h4>
         <p>Hands-on from install to your first shipped change: intake → claim → review-close.</p></a></div>
+      <div class="rn"><a href="https://github.com/getsysop/sysop/blob/main/docs/loop-mode.md">
+        <div class="rn-k">On-ramp</div><h4>Just the loop →</h4>
+        <p>The <code>--mode loop</code> walkthrough: reviews that remember, rules you ratify, checks the computer runs — your merge workflow stays yours.</p></a></div>
       <div class="rn"><a href="./workflow.html">
         <div class="rn-k">Explanation</div><h4>The monograph →</h4>
         <p>Why it's built this way — the lifecycle, the parallel orchestrator, the convention loop.</p></a></div>
+      <div class="rn"><a href="https://github.com/getsysop/sysop/blob/main/docs/one-rule.md">
+        <div class="rn-k">Evidence</div><h4>One rule, end to end →</h4>
+        <p>A single convention traced from recurring review finding to a compiled check you can run before installing anything.</p></a></div>
       <div class="rn"><a href="https://github.com/getsysop/sysop/blob/main/core/companion/docs/WORKFLOW.md">
         <div class="rn-k">Reference</div><h4>The process spec →</h4>
         <p>The authoritative WORKFLOW.md — every step, invariant, and gate, in full.</p></a></div>
@@ -578,6 +590,7 @@
     }
     wire('copyBtn', 'install');
     wire('copyBtn2', 'install2');
+    wire('copyBtn3', 'install3');
   })();
 </script>
 </body>

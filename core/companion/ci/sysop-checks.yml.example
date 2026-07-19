@@ -7,7 +7,7 @@
 #
 # HOW TO ENABLE (it does NOT run until you do — the `.example` suffix keeps
 # GitHub from picking it up):
-#   1. Copy it into place:  cp scripts/ci/sysop-checks.yml.example .github/workflows/sysop-checks.yml
+#   1. Copy it into place:  cp sysop/scripts/ci/sysop-checks.yml.example .github/workflows/sysop-checks.yml
 #   2. Edit the two TODO steps below (install your deps; run your tests).
 #   3. Commit + push, let it run green once, then in your repo's branch-protection
 #      rules for `main` mark the `sysop-checks` check as *required*.
@@ -57,7 +57,7 @@ jobs:
       # blocking-and-non-baselineable). Inert-but-valid on a fresh install
       # (placeholder globs are no-ops); meaningful as you configure checks.yml.
       - name: Sysop blocking-findings gate
-        run: bash scripts/run_checks.sh --fail-on-blocking
+        run: bash sysop/scripts/run_checks.sh --fail-on-blocking
 
       # TODO: replace with your project's test command (pytest, npm test,
       # go test, cargo test, …). Left failing on purpose so an unedited copy of

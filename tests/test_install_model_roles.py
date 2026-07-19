@@ -67,9 +67,9 @@ def test_default_install_ships_role_layer_as_noop(tmp_path):
 
     # The pieces ship.
     for rel in (".claude/served_models.yml",
-                "scripts/resolve_skill_models.py",
-                "scripts/_model_roles.py",
-                "scripts/check_skill_models.py"):
+                "sysop/scripts/resolve_skill_models.py",
+                "sysop/scripts/_model_roles.py",
+                "sysop/scripts/check_skill_models.py"):
         assert (root / rel).is_file(), f"installer did not ship {rel}"
 
     # Skills keep their shipped literals + their role markers.
@@ -81,7 +81,7 @@ def test_default_install_ships_role_layer_as_noop(tmp_path):
     # The resolver ran (PATH carries pyyaml) and the installed tree validates.
     assert "model-roles" in result.stdout
     check = subprocess.run(
-        [sys.executable, str(root / "scripts/check_skill_models.py"),
+        [sys.executable, str(root / "sysop/scripts/check_skill_models.py"),
          "--root", str(root / ".claude/skills"),
          "--config", str(root / ".claude/served_models.yml")],
         capture_output=True, text=True,

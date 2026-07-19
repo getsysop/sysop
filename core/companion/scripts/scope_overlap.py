@@ -38,8 +38,8 @@ Two asymmetric scope sources — the load-bearing insight:
   when the worktree diff is empty or unreadable.
 
 Usage:
-    python3 scripts/scope_overlap.py <CANDIDATE_ID>            # text advisory
-    python3 scripts/scope_overlap.py <CANDIDATE_ID> --json     # structured
+    python3 sysop/scripts/scope_overlap.py <CANDIDATE_ID>            # text advisory
+    python3 sysop/scripts/scope_overlap.py <CANDIDATE_ID> --json     # structured
 
 Exit codes:
     0   assessment completed (including every "couldn't assess" degrade path)
@@ -127,9 +127,24 @@ def _sanitize_log(value: object, max_len: int = 500) -> str:
 # Repo paths (monkeypatchable via the None-default function args, per the
 # next_task.py pattern — Python snapshots defaults at def-time otherwise).
 # ---------------------------------------------------------------------------
-_REPO_ROOT = Path(__file__).resolve().parent.parent
+_REPO_ROOT = Path(__file__).resolve().parents[2]  # <repo>/sysop/scripts/X.py → <repo> (Phase 128)
 _TASKS_DIR = _REPO_ROOT / "tasks"
 _INDEX_PATH = _TASKS_DIR / "index.yml"
+
+
+def _git_discovery_env() -> dict[str, str]:
+    """`os.environ` minus git's discovery vars (BeanRider ISSUE-0048).
+
+    `GIT_DIR`/`GIT_WORK_TREE`/`GIT_COMMON_DIR`/`GIT_INDEX_FILE` take precedence
+    over `git -C` and git exports them into every hook; stripping them makes
+    `-C` authoritative so a probe against a tmpdir resolves there, not the
+    invoking repo. Verbatim mirror of validate_tasks.py:_git_discovery_env
+    (same zero-dependency-duplicate rationale as _resolve_canonical_locks_dir)."""
+    return {
+        k: v
+        for k, v in os.environ.items()
+        if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE")
+    }
 
 
 def _resolve_canonical_locks_dir(project_root: Path) -> Path:
@@ -143,6 +158,7 @@ def _resolve_canonical_locks_dir(project_root: Path) -> Path:
             text=True,
             timeout=5,
             check=False,
+            env=_git_discovery_env(),
         )
     except (FileNotFoundError, subprocess.SubprocessError):
         return project_root / ".locks"

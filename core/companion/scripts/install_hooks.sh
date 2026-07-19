@@ -3,7 +3,7 @@
 # install_hooks.sh — Copy tracked hook scripts into .git/hooks/
 #
 # Usage:
-#   bash scripts/install_hooks.sh
+#   bash sysop/scripts/install_hooks.sh
 #
 # Run this after cloning or creating a worktree to activate
 # the pre-merge-commit gate that blocks untested merges to main.
@@ -15,11 +15,11 @@ REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || {
   exit 1
 }
 
-HOOKS_SRC="${REPO_ROOT}/scripts/hooks"
+HOOKS_SRC="${REPO_ROOT}/sysop/scripts/hooks"
 HOOKS_DST="$(git rev-parse --git-common-dir)/hooks"
 
 if [[ ! -d "$HOOKS_SRC" ]]; then
-  echo "❌ No hooks found in scripts/hooks/." >&2
+  echo "❌ No hooks found in sysop/scripts/hooks/." >&2
   exit 1
 fi
 

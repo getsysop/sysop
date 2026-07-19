@@ -18,17 +18,16 @@ Read `.claude/settings.json` and confirm `permissions.allow` contains every rule
 - `Bash(git rebase:*)`
 - `Bash(git rebase --abort)`
 - `Bash(git merge --ff-only:*)`
-- `Bash(git worktree list)`
+- `Bash(git worktree list:*)` — Step 1a + Step 3c's `--porcelain` worktree enumeration
 - `Bash(git worktree remove:*)`
 - `Bash(git branch -d:*)`
 - `Bash(git push origin:*)`
-- `Bash(bash scripts/close_batch.sh:*)`
-- `Bash(bash scripts/run_checks.sh)`
-- `Bash(bash scripts/run_checks.sh:*)`
-- `Bash(python3 -:*)` — Step 4c's heredoc'd yaml-round-trip status flip + git mv
-- `Bash(python3 scripts/validate_tasks.py)` — Step 4c's final-guard validator run
-- `Bash(python3 scripts/validate_tasks.py:*)` — same with `--quiet` / `--path`
-- `Bash(.venv/bin/python3 scripts/validate_tasks.py)` / `Bash(.venv/bin/python3 scripts/validate_tasks.py:*)` — venv-prefixed variants (Phase 45b preferred form; the bare entries above remain for non-venv consumers)
+- `Bash(bash sysop/scripts/close_batch.sh:*)`
+- `Bash(bash sysop/scripts/run_checks.sh)`
+- `Bash(bash sysop/scripts/run_checks.sh:*)`
+- `Bash(python3 -:*)` — Step 3c's smoke-gate detection heredoc **and** Step 4c's yaml-round-trip status flip + git mv. Both are single `python3 - <<` commands (literal `python3` command word, no PATH prefix or `&&` compound) so this one rule matches; venv PyYAML is resolved by an in-heredoc `sys.path` bootstrap, not a `.venv/bin/python3` invocation or an env prefix (BeanRider ISSUE-0049; Sysop Phase 126 — a `.venv/bin/python3` command word or a `VAR=… python3` prefix would each bind to no rule)
+- `Bash(python3 sysop/scripts/validate_tasks.py)` — Step 4c's final-guard validator run (bare `python3`; the script self-resolves venv PyYAML via its own `sys.path` bootstrap, so this one form serves both venv-only and non-venv consumers — Sysop Phase 126)
+- `Bash(python3 sysop/scripts/validate_tasks.py:*)` — same with `--quiet` / `--path`
 
 **Additionally, under `pr` merge policy only** (read `<project>/CLAUDE.md § Merge policy`; default is `direct` — see Step 4-pre): the PR-routed flow shells out to `gh` and a few extra git verbs. Require these too **only when the policy is `pr`** — a `direct`-policy consumer does not need them and must not be blocked for their absence:
 
@@ -349,20 +348,67 @@ Some features can't be verified by automated checks — UI flows that need a bro
 
 If Step 3 was skipped (doc-only diff), skip Step 3c too — a smoke gate over a doc-only change is incoherent.
 
-**1. Detect signals.** Run this heredoc from the repo root. Output is either `NO_SMOKE_REQUIRED` (proceed to Step 3b) or `SMOKE_REQUIRED: N signal(s)` followed by one `---SIGNAL---` block per signal:
+**1. Detect signals.** The gate reads pending-docs from **main's `.pending-docs/` and each approved branch's worktree** — a `/claim-task` worktree authors its pending-doc there, and it is not copied to main until Step 3b (merge time). Reading the worktrees *in place* keeps the gate honest without collecting docs early: collecting before the merge would break the invariant Steps 4c/6 depend on — "everything in main's `.pending-docs/` belongs to a just-merged branch" — and a branch SKIP'd at Step 3b (worktree remove-refusal, ISSUE-0016) or a whole-run halt could then leave a stray doc that a later Step 4c consolidates for unmerged work, marking its task `done` with the code never merged (BeanRider ISSUE-0050). List this run's approved branches (the same set Step 3b merges), then run the heredoc from the repo root. Output is either `NO_SMOKE_REQUIRED` (proceed to Step 3b) or `SMOKE_REQUIRED: N signal(s)` followed by one `---SIGNAL---` block per signal:
 
 ```bash
-REPO_ROOT="$(git rev-parse --show-toplevel)" python3 - <<'EOF'
-import os, re, sys
+# Map this run's approved branches → their worktree dirs so the gate can read
+# worktree-authored pending-docs in place (BeanRider ISSUE-0050). One approved branch
+# per line — the same set Step 3b will merge (rejected / SKIP'd branches are excluded:
+# they are not closing this run and must not trip the gate). If no approved branch has a
+# worktree this cycle (e.g. a main-only close), set this to an empty string DELIBERATELY:
+# leaving the placeholder would make the gate silently scan nothing (the very ISSUE-0050
+# blindness this fixes), so an unsubstituted placeholder hard-errors below.
+APPROVED_BRANCHES='<approved-branch-1>
+<approved-branch-2>'
+case "$APPROVED_BRANCHES" in
+  *'<approved-branch'*)
+    echo "ERROR: substitute APPROVED_BRANCHES with this run's approved branch names (or an" \
+         "explicit empty string for a main-only close) before running Step 3c." >&2
+    exit 3 ;;
+esac
+SMOKE_WORKTREE_DIRS=""
+while IFS= read -r _b; do
+  [ -n "$_b" ] || continue
+  _wt=$(git worktree list --porcelain | awk -v br="refs/heads/$_b" '
+    /^worktree /{w=substr($0,10)}
+    /^branch /{if(substr($0,8)==br) print w}')
+  [ -n "$_wt" ] && SMOKE_WORKTREE_DIRS+="$_wt"$'\n'
+done <<BR_LIST
+$APPROVED_BRANCHES
+BR_LIST
+
+# `python3` command word + in-heredoc PyYAML bootstrap (BeanRider ISSUE-0049; Sysop
+# Phase 126) so `Bash(python3 -:*)` matches as a single simple command. The worktree-dir
+# list is passed as one quoted positional arg (env-var *prefixes* don't match the rule);
+# the repo root is CWD (this heredoc runs from the repo root — the same assumption the
+# venv bootstrap's relative glob makes), so the command line carries no env prefix.
+python3 - "$SMOKE_WORKTREE_DIRS" <<'EOF'
+import re, sys
 from pathlib import Path
 try:
     import yaml
-except ImportError:
-    print("ERROR: pyyaml not available — install in the project venv", file=sys.stderr)
-    sys.exit(2)
+except ImportError:  # PyYAML lives only in the project venv (BeanRider ISSUE-0049)
+    import glob
+    sys.path[:0] = glob.glob(".venv/lib/python*/site-packages")
+    try:
+        import yaml
+    except ImportError:
+        print("ERROR: pyyaml not available — install in the project venv", file=sys.stderr)
+        sys.exit(2)
 
-repo = Path(os.environ["REPO_ROOT"]).resolve()
-pending_dir = repo / ".pending-docs"
+repo = Path.cwd().resolve()
+# Search each approved branch's worktree .pending-docs/ AND main's (BeanRider ISSUE-0050
+# — worktree-authored docs aren't copied to main until Step 3b). Worktrees FIRST: if a doc
+# exists in both (a stale copy a prior halted run left in main + the fresher worktree
+# original), the worktree — the authoring source of truth — must win the basename dedup
+# below, so a newly-added smoke heading is never shadowed by the stale main copy.
+search_dirs = []
+for _d in sys.argv[1].splitlines():
+    _d = _d.strip()
+    if _d:
+        search_dirs.append(Path(_d) / ".pending-docs")
+search_dirs.append(repo / ".pending-docs")
+
 heading_re = re.compile(
     r'^(#{1,6})\s+.*(manual\s+smoke|smoke\s+required)',
     re.IGNORECASE | re.MULTILINE,
@@ -378,13 +424,33 @@ def extract_sections(text):
                 end = m.end() + nm.start(); break
         yield text[start:end].rstrip()
 
+def label(md):
+    # main-relative when possible; absolute for a worktree-authored doc
+    try:
+        return str(md.relative_to(repo))
+    except ValueError:
+        return str(md)
+
+# Collect pending-docs across all search dirs; dedup by basename (first wins,
+# worktrees ahead of main) so a doc present in both is counted once, preferring
+# the fresher worktree copy.
+pending_files = []
+seen_names = set()
+for pd in search_dirs:
+    if not pd.is_dir():
+        continue
+    for md in sorted(pd.glob("*.md")):
+        if md.name in seen_names:
+            continue
+        seen_names.add(md.name)
+        pending_files.append(md)
+
 signals = []
-pending_files = sorted(pending_dir.glob("*.md")) if pending_dir.is_dir() else []
 
 # (a) pending-doc body scan
 for md in pending_files:
     for sec in extract_sections(md.read_text(encoding="utf-8")):
-        signals.append((str(md.relative_to(repo)), sec))
+        signals.append((label(md), sec))
 
 # (b) index.yml manual_smoke:true cross-check via pending-doc roadmap_ids
 index_path = repo / "tasks" / "index.yml"
@@ -472,7 +538,15 @@ For each approved feature branch:
       git worktree remove <worktree-path>             # unforced
       ```
 
-      By Step 1a's classification, an `approved` branch passed through Step 2a's clean-state check, so the unforced remove should now succeed. If `git worktree remove` **still** refuses after the strip, that means the worktree carries a genuine untracked/modified file that appeared between Step 1a and now — **stop**, surface the error, downgrade this branch to SKIP for this run (leave its worktree, lock, and branch intact), and continue with the next approved branch. Silent data loss is the failure mode this guard prevents (BeanRider ISSUE-0016) — the strip never touches a real file, so it cannot cause it.
+      By Step 1a's classification, an `approved` branch passed through Step 2a's clean-state check, so the unforced remove should now succeed. If `git worktree remove` **still** refuses after the strip, that means the worktree carries a genuine untracked/modified file that appeared between Step 1a and now — **stop**, surface the error, then **roll back the pending-docs this branch copied in step (a)** so a later Step 4c cannot consolidate an unmerged branch's doc and mark its task `done` with the code never merged:
+
+      ```bash
+      for f in "<worktree-path>"/.pending-docs/*.md; do
+        [ -e "$f" ] && rm -f ".pending-docs/$(basename "$f")"   # re-collected on a later run once mergeable
+      done
+      ```
+
+      Then downgrade this branch to SKIP for this run (leave its worktree, lock, and branch intact), and continue with the next approved branch. Silent data loss is the failure mode this guard prevents (BeanRider ISSUE-0016) — the strip never touches a real file, so it cannot cause it. (The rollback matters because step (a) copies before this remove is attempted; without it, a branch SKIP'd here leaves its doc stranded in main's `.pending-docs/` for the merged branches' Step 4c to consolidate.)
 3. If no worktree exists, the branch is already free for checkout
 
 For **SKIP'd** branches (Step 2a verdict, dirty worktree), do nothing here — the worktree stays.
@@ -531,7 +605,7 @@ Feature branches MAY modify `review_tasks.md` — typically as single-line task-
 After all branches are merged but **before** doc consolidation:
 
 ```bash
-bash scripts/close_batch.sh <N1> <N2> <N3>
+bash sysop/scripts/close_batch.sh <N1> <N2> <N3>
 ```
 
 This script updates `review_tasks.md` on the checked-out branch (`$MERGE_TARGET` — it resolves the repo via `git rev-parse --show-toplevel`, so it commits to whatever branch is current): sets batch headers to `Merged`, marks all task checkboxes `[x]`, updates the Statistics table, and adjusts the Grand Total counts. One commit is created for all closed batches.
@@ -541,7 +615,7 @@ This script updates `review_tasks.md` on the checked-out branch (`$MERGE_TARGET`
 If any branches were cherry-picked instead of rebased+merged (e.g., because worktree removal wasn't possible), use `--force` to skip the merge-base ancestry check:
 
 ```bash
-bash scripts/close_batch.sh --force <N1> <N2> <N3>
+bash sysop/scripts/close_batch.sh --force <N1> <N2> <N3>
 ```
 
 **Verify the close-batch commit landed before proceeding.** The script wraps its `git commit` in explicit failure handling (Phase 33 / BeanRider ISSUE-0015), but trust-but-verify: confirm a `docs: close Batch …` commit is the new tip and the working tree is clean before continuing to Step 4c.
@@ -554,7 +628,7 @@ If the check fails (no `docs: close Batch …` tip, or `review_tasks.md` is stil
 
 1. **Re-run the script** with the same batch list — the rerun is idempotent for review_tasks.md (sed substitutions are no-ops on already-Merged batches) and will re-attempt the commit:
    ```bash
-   bash scripts/close_batch.sh <N1> <N2> <N3> 2>&1 | tee /tmp/close-batch.log
+   bash sysop/scripts/close_batch.sh <N1> <N2> <N3> 2>&1 | tee /tmp/close-batch.log
    ```
    `tee` preserves the full output so a missing terminal line is unambiguously visible.
 
@@ -591,7 +665,7 @@ After all branches are merged but **before** pushing:
 
 4. **Route by type and write to shared docs** (single pass, no conflicts since we're on main post-merge):
 
-   Use this routing table to determine which shared docs to update for each entry. The "Roadmap" column shows which frontmatter field drives the `tasks/index.yml` round-trip; `review_task_ids` is **documentary only** and never consulted here (review-task closure happens in Step 4b via `bash scripts/close_batch.sh`).
+   Use this routing table to determine which shared docs to update for each entry. The "Roadmap" column shows which frontmatter field drives the `tasks/index.yml` round-trip; `review_task_ids` is **documentary only** and never consulted here (review-task closure happens in Step 4b via `bash sysop/scripts/close_batch.sh`).
 
    | Type | PROJECT_STATUS | Changelog | UI_Iterations | Roadmap (`roadmap_ids`) |
    |---|---|---|---|---|
@@ -611,11 +685,20 @@ After all branches are merged but **before** pushing:
 
    **changelog.md** (bugfix type only): Generate entry `- **<Short Title>**: <summary>`. Add under today's date heading (`### YYYY-MM-DD`). Create the heading if it doesn't exist (at the top, under the month heading).
 
-   **tasks/index.yml**: For each ID in `roadmap_ids` (NOT `review_task_ids` — those are documentary, see the note above), round-trip the index through `yaml.safe_load` to set `status: done` + `completed_date: <today's ISO date>` on the entry, then `git mv` the body file from its current location under `open/` or `deferred/` to the corresponding location under `archive/` and update the entry's `body:` field. The heredoc below is prefix-agnostic — it handles both canonical (`body: open/<TASK_ID>.md`) and `tasks/`-prefixed (`body: tasks/open/<TASK_ID>.md`) shapes by locating the `open` / `deferred` path segment and swapping it for `archive`. It also tolerates pending-docs authored before Phase 23a (compat shim — see the **Phase 23a compat shim** block in step 3 above). After all IDs are processed, run `.venv/bin/python3 scripts/validate_tasks.py` — if it exits non-zero, abort the close. The schema invariants for `done` status require: a valid `completed_date`, either a `body:` or an `archive_summary:`, and (ISSUE-0009) the body path must NOT contain an `open/` or `deferred/` segment (a half-migrated state where the status flip wrote but the rename silently no-op'd). Fix any failure before pushing.
+   **tasks/index.yml**: For each ID in `roadmap_ids` (NOT `review_task_ids` — those are documentary, see the note above), round-trip the index through `yaml.safe_load` to set `status: done` + `completed_date: <today's ISO date>` on the entry, then `git mv` the body file from its current location under `open/` or `deferred/` to the corresponding location under `archive/` and update the entry's `body:` field. The heredoc below is prefix-agnostic — it handles both canonical (`body: open/<TASK_ID>.md`) and `tasks/`-prefixed (`body: tasks/open/<TASK_ID>.md`) shapes by locating the `open` / `deferred` path segment and swapping it for `archive`. It also tolerates pending-docs authored before Phase 23a (compat shim — see the **Phase 23a compat shim** block in step 3 above). After all IDs are processed, run the validator (`python3 sysop/scripts/validate_tasks.py` — a single command matching `Bash(python3 sysop/scripts/validate_tasks.py:*)`; Sysop Phase 126 dropped the shared `PATH` prefix this line used to ride on and gave `validate_tasks.py` its own `sys.path` PyYAML bootstrap, so bare `python3` resolves `yaml` for both venv-only and non-venv consumers — BeanRider ISSUE-0049) — if it exits non-zero, abort the close. The schema invariants for `done` status require: a valid `completed_date`, either a `body:` or an `archive_summary:`, and (ISSUE-0009) the body path must NOT contain an `open/` or `deferred/` segment (a half-migrated state where the status flip wrote but the rename silently no-op'd). Fix any failure before pushing.
 
    ```bash
+   # `python3` command word + in-heredoc PyYAML bootstrap (BeanRider ISSUE-0049; Sysop
+   # Phase 126) so `Bash(python3 -:*)` matches as a single simple command — no PATH prefix,
+   # no `&&` compound, no `.venv/bin/python3` (none of which match that rule).
    python3 - <<'PY'
-   import yaml, datetime, subprocess
+   import datetime, subprocess, sys
+   try:
+       import yaml
+   except ImportError:  # PyYAML lives only in the project venv (BeanRider ISSUE-0049)
+       import glob
+       sys.path[:0] = glob.glob(".venv/lib/python*/site-packages")
+       import yaml
    from pathlib import Path
    today = datetime.date.today().isoformat()
    # Populate from this round's pending-doc roadmap_ids (with the Phase 23a
@@ -657,7 +740,7 @@ After all branches are merged but **before** pushing:
        Path(f'.locks/{t["id"]}.lock').unlink(missing_ok=True)
    p.write_text(yaml.safe_dump(d, sort_keys=False, default_flow_style=False, allow_unicode=True, width=120))
    PY
-   .venv/bin/python3 scripts/validate_tasks.py || { echo "validator rejected the index — aborting"; exit 1; }
+   python3 sysop/scripts/validate_tasks.py || { echo "validator rejected the index — aborting"; exit 1; }
    ```
 
    **UI_Iterations.md** (ui-iteration type only): Generate table row `| <name> | <date> | <summary> | <commit-hash> |`. Append to the markdown table.
@@ -684,7 +767,7 @@ Then confirm the push succeeded.
 
 If the push is **rejected because `main` is protected** (`! [remote rejected] main -> main (protected branch hook declined)`, a required status check, or `enforce_admins`), the project's `main` requires the PR flow: set `§ Merge policy: pr` in `<project>/CLAUDE.md` and re-run `/review-close`. This is the exact failure the `pr` policy exists to handle — do not try to force the push.
 
-**If push is silently denied** (auto-mode classifier rejects pushing to a protected branch), the Phase 36 `PermissionDenied` hook surfaces the `! git push origin main` escape command — and the venv-prefix variant (`! PATH=.venv/bin:$PATH git push origin main`) when the consumer's repo has a `.venv/` directory. Follow the hook's guidance and relay to the user. The canonical consumer-side fix is unchanged: the project's `scripts/hooks/pre-push` should prepend `${REPO_ROOT}/.venv/bin` to its `PATH` at the top of the hook (see WORKFLOW.md § 6.1 venv-aware-invocation paragraph). Do **NOT** use `AskUserQuestion` — empirically the classifier does not honor its answer for protected-branch pushes and you'll burn a turn on a dead-end handshake. See WORKFLOW.md § 8.2a for the full rationale.
+**If push is silently denied** (auto-mode classifier rejects pushing to a protected branch), the Phase 36 `PermissionDenied` hook surfaces the `! git push origin main` escape command — and the venv-prefix variant (`! PATH=.venv/bin:$PATH git push origin main`) when the consumer's repo has a `.venv/` directory. Follow the hook's guidance and relay to the user. The canonical consumer-side fix is unchanged: the project's `sysop/scripts/hooks/pre-push` should prepend `${REPO_ROOT}/.venv/bin` to its `PATH` at the top of the hook (see WORKFLOW.md § 6.1 venv-aware-invocation paragraph). Do **NOT** use `AskUserQuestion` — empirically the classifier does not honor its answer for protected-branch pushes and you'll burn a turn on a dead-end handshake. See WORKFLOW.md § 8.2a for the full rationale.
 
 #### `pr` policy
 
@@ -793,7 +876,7 @@ Append-only, never blocks close-out. The point is the *prompt at the right momen
 - Parent-side prompt rewrites (you rewrote a skill's subagent prompt mid-flow because the skill's wording assumed a different project shape)
 - Subagent confusion about `<project>/CLAUDE.md` subsection names (subagent couldn't find the section the parent prompt told it to look in)
 - `!`-shell-escape moments (the user had to run a command themselves because the agent couldn't)
-- Install-step failures (`bash scripts/run_checks.sh` errored on a hint pointing at a file that doesn't exist; `install.sh` wrote to a path that conflicted with project content)
+- Install-step failures (`bash sysop/scripts/run_checks.sh` errored on a hint pointing at a file that doesn't exist; `install.sh` wrote to a path that conflicted with project content)
 - Skill steps that referenced files / paths / commands that don't exist in this project (Step 3 verification pointing at `frontend/` when there isn't one, Step 4 referencing a `pytest` invocation when the project uses something else)
 - Anything Sysop shipped — a skill file, an installer behavior, a documented workflow step, a check rule — that didn't work as documented
 

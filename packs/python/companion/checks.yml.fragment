@@ -106,7 +106,7 @@ checks:
 
   # ── LSP / pyright diagnostics ──────────────────────────────────
   # These entries have no `pattern` field — they are populated by
-  # run_lsp_diagnostics() in scripts/run_checks_impl.py, not by grep.
+  # run_lsp_diagnostics() in sysop/scripts/run_checks/lsp.py, not by grep.
   # The entries exist so baseline matching, --mode filtering, and
   # --fail-on-blocking work uniformly across grep and LSP findings.
   # All start `blocking: false` because CI does not install pyright
@@ -168,7 +168,7 @@ checks:
 
   # ── Semgrep / AST diagnostics ──────────────────────────────────
   # These entries have no `pattern:` field. Findings are populated by
-  # `_run_semgrep()` in scripts/run_checks_impl.py, which scans the
+  # `_run_semgrep()` in sysop/scripts/run_checks/semgrep.py, which scans the
   # pack's semgrep/*.yaml rules and maps each result to
   # `semgrep-<rule_id>`. All start `blocking: false` — CI does not
   # install semgrep yet. Flip to `blocking: true` only after adding

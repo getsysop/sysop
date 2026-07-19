@@ -17,12 +17,12 @@ Verify `.claude/settings.json` carries the allow-rules this skill depends on. Un
 Read `.claude/settings.json` and confirm `permissions.allow` contains:
 
 - `Bash(git checkout:*)` — Step 4 rollback path on 4b/4c failure (`git checkout tasks/index.yml`).
-- `Bash(git worktree add:*)` — transitively invoked by `scripts/claim_task.sh`.
-- `Bash(bash scripts/claim_task.sh:*)` — Step 4b worktree + lock creation.
-- `Bash(bash scripts/batch_work.sh:*)` — Step 4 review-batch path.
+- `Bash(git worktree add:*)` — transitively invoked by `sysop/scripts/claim_task.sh`.
+- `Bash(bash sysop/scripts/claim_task.sh:*)` — Step 4b worktree + lock creation.
+- `Bash(bash sysop/scripts/batch_work.sh:*)` — Step 4 review-batch path.
 - `Bash(python3 -:*)` — Step 2's `tasks/index.yml` lookup + Step 4a's yaml-round-trip status flip (both are `python3 - <<'PY'` heredocs).
-- `Bash(python3 scripts/validate_tasks.py)` / `Bash(python3 scripts/validate_tasks.py:*)` and the `.venv/bin/python3 scripts/validate_tasks.py` / `.venv/bin/python3 scripts/validate_tasks.py:*` venv variants — Step 4c post-claim validator (the venv form is preferred per Phase 45b; the bare form remains for non-venv consumers).
-- `Bash(python3 scripts/scope_overlap.py:*)` (and the `.venv/bin/python3` variant) — Step 2's non-blocking overlap advisory. The `git -C <worktree> diff` it shells out to needs **no** separate rule (it's a subprocess of the permitted python call, and read-only `git` auto-passes per `_shared/permission-guard.md` § Notes). This rule is **not** load-bearing — a missing rule (or any non-zero exit) just means the advisory is skipped; the claim still proceeds.
+- `Bash(python3 sysop/scripts/validate_tasks.py)` / `Bash(python3 sysop/scripts/validate_tasks.py:*)` and the `.venv/bin/python3 sysop/scripts/validate_tasks.py` / `.venv/bin/python3 sysop/scripts/validate_tasks.py:*` venv variants — Step 4c post-claim validator (the venv form is preferred per Phase 45b; the bare form remains for non-venv consumers).
+- `Bash(python3 sysop/scripts/scope_overlap.py:*)` (and the `.venv/bin/python3` variant) — Step 2's non-blocking overlap advisory. The `git -C <worktree> diff` it shells out to needs **no** separate rule (it's a subprocess of the permitted python call, and read-only `git` auto-passes per `_shared/permission-guard.md` § Notes). This rule is **not** load-bearing — a missing rule (or any non-zero exit) just means the advisory is skipped; the claim still proceeds.
 - `Bash(git add tasks/index.yml)` — Step 4d commits the claim.
 - `Bash(git commit -m claim:*)` — Step 4d commit message shape.
 
@@ -54,8 +54,18 @@ If `--branch <name>` appears in `$ARGUMENTS`, extract it as the branch override 
 **For roadmap tasks** — look the task up in `tasks/index.yml` via Python (never grep YAML). Run:
 
 ```bash
+# `python3` command word (not `.venv/bin/python3`, no PATH prefix, no `&&` compound) so
+# the allow-rule `Bash(python3 -:*)` matches as a single simple command. PyYAML — which
+# this heredoc imports — is resolved for venv-only consumers by the bootstrap below, not
+# by the caller's interpreter choice (BeanRider ISSUE-0049; Sysop Phase 126).
 python3 - <<'PY' "$TASK_ID"
-import sys, yaml
+import sys
+try:
+    import yaml
+except ImportError:  # PyYAML lives only in the project venv (BeanRider ISSUE-0049)
+    import glob
+    sys.path[:0] = glob.glob(".venv/lib/python*/site-packages")
+    import yaml
 from pathlib import Path
 
 task_id = sys.argv[1]
@@ -119,7 +129,7 @@ Read the body file `tasks/open/<TASK_ID>.md` in full so it's loaded as context f
 **Overlap advisory (roadmap tasks — non-blocking).** The lock check above only asks "is *this* task claimed?" — it says nothing about whether the task's *files* collide with work already in flight in another worktree. Two claims touching the same files sail through and surface as a merge conflict at `/review-close` — recoverable rework (the worktrees kept the builds isolated), but wasted work the advisory can warn about. Run the shared scope-overlap primitive:
 
 ```bash
-.venv/bin/python3 scripts/scope_overlap.py <TASK_ID>
+.venv/bin/python3 sysop/scripts/scope_overlap.py <TASK_ID>
 ```
 
 (The `.venv/bin/python3` form is preferred per Phase 45b so the advisory still fires for consumers whose PyYAML lives only in the venv; bare `python3` also works where PyYAML is on the system interpreter. Both permission rules exist.) It infers the candidate's likely scope from its `## Key files` + `blast_radius` (a *pre-plan guess*), reads the **actual** changed set of each in-flight worktree (`git diff --name-only main...HEAD` + uncommitted), and prints a per-in-flight verdict — `likely` (exact path match) / `possible` (same directory or glob) / `none`.
@@ -159,8 +169,16 @@ Read the body file `tasks/open/<TASK_ID>.md` in full so it's loaded as context f
 Do NOT edit the YAML by hand with a regex — round-trip through `yaml.safe_load` / `yaml.safe_dump` so the file stays validator-clean. PyYAML round-trip loses inline comments — that's acceptable for `index.yml` (sprint prose lives in block scalars which round-trip fine).
 
 ```bash
+# `python3` command word + in-heredoc PyYAML bootstrap (see Step 2's note; BeanRider
+# ISSUE-0049; Sysop Phase 126) — single simple command, so `Bash(python3 -:*)` matches.
 python3 - <<'PY' "$TASK_ID"
-import sys, yaml
+import sys
+try:
+    import yaml
+except ImportError:  # PyYAML lives only in the project venv (BeanRider ISSUE-0049)
+    import glob
+    sys.path[:0] = glob.glob(".venv/lib/python*/site-packages")
+    import yaml
 from pathlib import Path
 
 task_id = sys.argv[1]
@@ -202,17 +220,17 @@ PY
 The lock file is **required** by the schema for `in_progress` tasks (see `tasks/schema.md` § lock invariant). The script creates `.locks/<TASK_ID>.lock` under the **main** repo's `.locks/` via `git rev-parse --git-common-dir`, so the validator resolves the same path from any working tree. Always pass `--lock`:
 
 ```bash
-bash scripts/claim_task.sh --lock <TASK_ID> <BRANCH_NAME>
+bash sysop/scripts/claim_task.sh --lock <TASK_ID> <BRANCH_NAME>
 ```
 
 This also creates the git worktree at `../<project>-<task-id-lower>/` on `<BRANCH_NAME>` (branched from current HEAD; main if you ran the skill from main).
 
-### 4c. Validate state with `scripts/validate_tasks.py`
+### 4c. Validate state with `sysop/scripts/validate_tasks.py`
 
 This proves the schema invariants hold (status, lock file presence, body existence, ref integrity) before the claim commit lands on `main`:
 
 ```bash
-.venv/bin/python3 scripts/validate_tasks.py
+.venv/bin/python3 sysop/scripts/validate_tasks.py
 ```
 
 If it fails, **do not proceed to 4d**. Report the validator output verbatim and fall through to the rollback below. Common causes: lock file missing (4b silently failed), body file moved, ID collision introduced upstream.
@@ -237,11 +255,11 @@ If 4b's script exits non-zero, or 4c's validator exits non-zero, undo 4a's uncom
 git checkout tasks/index.yml
 ```
 
-If 4b created an orphan worktree before failing, also run `bash scripts/cleanup_worktrees.sh --force` to drop it. Then report the failing step's error output and stop.
+If 4b created an orphan worktree before failing, also run `bash sysop/scripts/cleanup_worktrees.sh --force` to drop it. Then report the failing step's error output and stop.
 
 **Review batches:**
 ```bash
-bash scripts/batch_work.sh <BATCH_NUMBER>
+bash sysop/scripts/batch_work.sh <BATCH_NUMBER>
 ```
 The script handles `Pending` → `In Progress` transition in `review_tasks.md` and commits on main automatically. (Review-batch state still lives in `review_tasks.md` — only roadmap tasks live in `tasks/index.yml`.)
 
@@ -461,7 +479,7 @@ A malformed envelope (missing keys, content after the closing backticks, status 
 
 After the reviewer-executor sub-agent returns, get the envelope. Read in this order — first hit wins; never go past a clean hit to the next source:
 
-1. **JSON file** (preferred, Phase 37). Try to read `.subagent-envelopes/<TASK_ID>.json` (resolved against the main repo root via `git rev-parse --git-common-dir` if you're in a worktree). The `SubagentStop` hook (`scripts/parse_subagent_envelope.py`) parses the sub-agent's final message on the harness's terms and writes structured JSON keyed by the `TASK:` field. Keys you'll need: `status`, `worktree`, `branch`, `error`, `blocker_question`, `review_report_raw`. If the file is missing (hook didn't fire, fired after this read, or crashed) OR `parsed: false` (envelope wasn't found in the agent's final message), continue to (2).
+1. **JSON file** (preferred, Phase 37). Try to read `.subagent-envelopes/<TASK_ID>.json` (resolved against the main repo root via `git rev-parse --git-common-dir` if you're in a worktree). The `SubagentStop` hook (`sysop/scripts/parse_subagent_envelope.py`) parses the sub-agent's final message on the harness's terms and writes structured JSON keyed by the `TASK:` field. Keys you'll need: `status`, `worktree`, `branch`, `error`, `blocker_question`, `review_report_raw`. If the file is missing (hook didn't fire, fired after this read, or crashed) OR `parsed: false` (envelope wasn't found in the agent's final message), continue to (2).
 2. **Regex parse of the sub-agent's return text** (existing behavior). Parse the YAML envelope from the LAST content block of the sub-agent's final message. Validate that the envelope has the required keys (`TASK`, `STATUS`, `WORKTREE`, `BRANCH`, `ERROR`). Multiple envelopes → last-wins (matches the prompt's "LAST content" instruction).
 
 The `REVIEW_REPORT:` block at the TOP of the sub-agent's response is read from the response body (or from `review_report_raw` in the JSON if path (1) hit).

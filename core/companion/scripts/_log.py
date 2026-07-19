@@ -1,4 +1,4 @@
-"""Shared log-sanitization helper for ``scripts/``.
+"""Shared log-sanitization helper for ``sysop/scripts/``.
 
 ``_sanitize_log()`` strips ANSI escape sequences and control characters from
 arbitrary values before they are printed or logged. Workflow scripts surface
@@ -8,9 +8,9 @@ could otherwise embed escape sequences that corrupt the operator's terminal or
 hide warning text. The helper also truncates to ``max_len`` so a runaway error
 message can't flood the log.
 
-Single source of truth for ``scripts/``-internal callers. Import it as
+Single source of truth for ``sysop/scripts/``-internal callers. Import it as
 ``from _log import _sanitize_log`` — every script ships alongside this file in
-the consumer's ``scripts/`` directory, and the directory is on ``sys.path``
+the consumer's ``sysop/scripts/`` directory, and the directory is on ``sys.path``
 whenever a script runs directly (``sys.path[0]``) or under the package
 (``run_checks``'s parent dir).
 

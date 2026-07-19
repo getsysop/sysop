@@ -1416,8 +1416,8 @@
         <h2 class="s-title">One orchestrator,<br>N tasks, three <span class="stress">phases</span> each.</h2>
         <p class="lede">
           When the queue holds several independent tasks, <code>/auto-build</code> runs the same lifecycle in batched parallelism.
-          Architectural tasks solo, migrations solo, cross-module capped, complexity-sum ceiling, and a <em>heavy-solo invariant</em>
-          (any single task with weight &gt; K = 6 runs alone, never alongside siblings — Phase 42a). Default N&nbsp;=&nbsp;4.
+          Architectural tasks solo, migrations solo, cross-module capped (≤ 2 per batch), complexity-sum ceiling, and a <em>heavy-solo invariant</em>
+          (any single task with weight &gt; K = 12 runs alone, never alongside siblings — Phase 42a; the K = 6 → 12 ceiling ramp landed 2026-07). Default N&nbsp;=&nbsp;4.
         </p>
 
         <figure class="fig">
@@ -1849,7 +1849,8 @@
 
         <aside class="pullquote">
           <p><strong>Why this beats a wiki page.</strong> A wiki page rots — nobody reads it before opening a PR. The <code>convention_map.md</code> is read on <em>every</em> <code>/claim-task</code> Step 2 because the skill <em>requires</em> it, and again on Step 7 as a post-impl boy-scout pass.</p>
-          <p>The map's entries also flow downstream: once a pattern is generalizable across projects, it gets promoted from a project's local map into a Sysop pack, where it ships to every consumer on the next <code>bash scripts/sysop-update.sh</code>.</p>
+          <p>The map's entries also flow downstream: once a pattern is generalizable across projects, it gets promoted from a project's local map into a Sysop pack, where it ships to every consumer on the next <code>bash sysop/scripts/sysop-update.sh</code>.</p>
+          <p>The loop is also the smallest way to run Sysop: <code>--mode loop</code> installs just § III's review and audit skills, the maps and checks, and this section's promotion machinery — none of the lifecycle around it (§ VI).</p>
         </aside>
 
         <h3>What's in a map entry</h3>
@@ -2186,11 +2187,26 @@
             <p class="muted">
               <code>bash install.sh &lt;target&gt; --packs python,postgres</code> works with any agent (or none) —
               or <code>--packs auto</code> to detect the stack from the target's own markers (Phase 75). Writes scripts, git hooks,
-              permission settings, and per-pack convention maps. Updates via <code>bash scripts/sysop-update.sh</code> from the consumer
+              permission settings, and per-pack convention maps. Updates via <code>bash sysop/scripts/sysop-update.sh</code> from the consumer
               side once <code>$SYSOP_SRC</code> is set.
             </p>
           </div>
         </div>
+
+        <h3>Two install modes: full and loop</h3>
+        <p class="muted">
+          One more axis: <code>--mode</code> chooses how much of Sysop lands. The default, <code>full</code>, is
+          everything this page describes. <code>--mode loop</code> installs only the convention-loop slice — § III's
+          review and audit skills (<code>/codebase-review</code>, <code>/security-audit</code>, <code>/test-audit</code>, plus the
+          give-back pair <code>/report-issues</code> and <code>/contribute-convention</code>), the
+          convention and security maps, § IV's promotion machinery, and the compiled checks — into a repo whose owner
+          keeps their own planning, branching, and merge workflow. No task queue, no worktrees, no merge gate:
+          enforcement moves to where a bring-your-own-workflow repo expects it — the pre-commit hook's check slots,
+          and CI running <code>run_checks</code>. Packs are entirely loop-side content, so every pack applies in full. The lock
+          records the mode, and <code>--update --mode full</code> later grows a loop install into the full
+          workflow, purely additively. The day-one walkthrough is
+          <a href="https://github.com/getsysop/sysop/blob/main/docs/loop-mode.md">loop mode</a>.
+        </p>
 
         <h3>Model roles, not model pins</h3>
         <p class="muted">
@@ -2219,15 +2235,17 @@
 │   ├── checks.yml                 <span class="cm"># concat of pack check fragments</span>
 │   ├── served_models.yml          <span class="cm"># role → model mapping · override via served_models.local.yml (Phase 69)</span>
 │   └── <span class="ph">*.project.{md,yml}</span>          <span class="cm"># consumer-authored extensions (Phase 24a) · promotion writes land here (Phase 78)</span>
-├── <span class="key">scripts/</span>
-│   ├── claim_task.sh              <span class="cm"># lock + worktree + branch creation</span>
-│   ├── close_batch.sh             <span class="cm"># review_tasks.md batch closure</span>
-│   ├── validate_tasks.py          <span class="cm"># schema enforcement · runs in pre-commit</span>
-│   ├── permission_denied_hook.py  <span class="cm"># Phase 36 · classifier escape injection</span>
-│   ├── parse_subagent_envelope.py <span class="cm"># Phase 37 · structured envelope parsing</span>
-│   ├── <span class="key">run_checks/</span>                <span class="cm"># Phase 49 split · Phase 61 coverage.py crown-jewel gate</span>
-│   └── sysop-update.sh              <span class="cm"># the consumer-side update entry point</span>
-├── SYSOP_ISSUES.md                  <span class="cm"># friction log · seeded once, project-owned · /report-issues files upstream</span>
+├── <span class="key">sysop/</span>                         <span class="cm"># the vendor dir — everything Sysop owns (Phase 128)</span>
+│   ├── <span class="key">scripts/</span>
+│   │   ├── claim_task.sh          <span class="cm"># lock + worktree + branch creation</span>
+│   │   ├── close_batch.sh         <span class="cm"># review_tasks.md batch closure</span>
+│   │   ├── validate_tasks.py      <span class="cm"># schema enforcement · runs in pre-commit</span>
+│   │   ├── permission_denied_hook.py  <span class="cm"># Phase 36 · classifier escape injection</span>
+│   │   ├── parse_subagent_envelope.py <span class="cm"># Phase 37 · structured envelope parsing</span>
+│   │   ├── <span class="key">run_checks/</span>            <span class="cm"># Phase 49 split · Phase 61 coverage.py crown-jewel gate</span>
+│   │   └── sysop-update.sh        <span class="cm"># the consumer-side update entry point</span>
+│   ├── <span class="key">docs/</span>                      <span class="cm"># WORKFLOW.md, WORKFLOW_GUIDE.md</span>
+│   └── SYSOP_ISSUES.md            <span class="cm"># friction log · seeded once, project-owned · /report-issues files upstream</span>
 ├── <span class="key">.locks/</span>                        <span class="cm"># lives in main repo · git-common-dir resolved (Phase 32)</span>
 ├── <span class="key">.pending-docs/</span>                 <span class="cm"># /document-work writes here · /review-close consumes</span>
 └── <span class="key">.subagent-envelopes/</span>           <span class="cm"># Phase 37 · SubagentStop hook writes JSON here</span></pre>

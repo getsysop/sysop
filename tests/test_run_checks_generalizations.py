@@ -134,6 +134,53 @@ def test_run_pip_audit_handles_non_json_output(tmp_path, capsys):
     assert "non-JSON" in capsys.readouterr().err
 
 
+# ── invariant tests: pip-audit invocation + silent-abort guard (ISSUE-0046) ─
+
+
+def test_run_pip_audit_skips_editable_and_drops_strict(tmp_path):
+    """The invocation must use --skip-editable (an editable `pip install -e .`
+    always leaves one unresolvable local package) and must NOT use --strict,
+    which pip-audit treats as fatal on any skip → aborts before emitting JSON,
+    silently reporting zero findings on every editable consumer (ISSUE-0046)."""
+    with patch("run_checks_impl.subprocess.run") as run:
+        run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0,
+            stdout=json.dumps({"dependencies": []}), stderr="",
+        )
+        _run_pip_audit(str(tmp_path), {"pip-audit-vuln"})
+    cmd = run.call_args[0][0]
+    assert "--skip-editable" in cmd, cmd
+    assert "--strict" not in cmd, cmd
+
+
+def test_run_pip_audit_warns_on_nonzero_exit_with_empty_stdout(tmp_path, capsys):
+    """A failed run (non-zero exit, no JSON) must announce itself, not return an
+    empty (== 'all clear') list — the silent-abort path ISSUE-0046 closed."""
+    with patch("run_checks_impl.subprocess.run") as run:
+        run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=2, stdout="",
+            stderr="usage: pip-audit ...\npip-audit: error: unrecognized arguments",
+        )
+        result = _run_pip_audit(str(tmp_path), {"pip-audit-vuln"})
+    err = capsys.readouterr().err
+    assert result == []
+    assert "did NOT run" in err, err
+    assert "unrecognized arguments" in err, err  # stderr tail surfaced
+
+
+def test_run_pip_audit_silent_on_clean_empty_output(tmp_path, capsys):
+    """Guard the guard: exit 0 with empty stdout must NOT emit the failure
+    warning (only a non-zero exit signals an aborted run)."""
+    with patch("run_checks_impl.subprocess.run") as run:
+        run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="", stderr="",
+        )
+        result = _run_pip_audit(str(tmp_path), {"pip-audit-vuln"})
+    err = capsys.readouterr().err
+    assert result == []
+    assert "did NOT run" not in err, err
+
+
 def test_run_eslint_handles_truncated_json(tmp_path, capsys):
     """ESLint killed mid-write — output is valid prefix but invalid JSON."""
     eslint = tmp_path / "frontend" / "node_modules" / "eslint"

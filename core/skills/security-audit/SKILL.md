@@ -12,15 +12,15 @@ Adversarial security audit aligned to the OWASP Top 10. Scans for injection, aut
 
 ## Pre-flight: Permission Guard
 
-Before any work, verify `.claude/settings.json` carries the allow-rules this skill depends on. Under `auto` mode + `skipAutoPermissionPrompt: true`, a missing rule for `bash scripts/run_checks.sh` silently halts the security check stage with no actionable error.
+Before any work, verify `.claude/settings.json` carries the allow-rules this skill depends on. Under `auto` mode + `skipAutoPermissionPrompt: true`, a missing rule for `bash sysop/scripts/run_checks.sh` silently halts the security check stage with no actionable error.
 
 Read `.claude/settings.json` and confirm `permissions.allow` contains:
 
-- `Bash(bash scripts/run_checks.sh)`
-- `Bash(bash scripts/run_checks.sh:*)`
-- `Bash(python scripts/archive_review_tasks.py:*)`
-- `Bash(python3 scripts/archive_review_tasks.py:*)`
-- `Bash(.venv/bin/python3 scripts/archive_review_tasks.py:*)` — Phase 45b venv-prefixed variant (preferred when the consumer has a venv with PyYAML)
+- `Bash(bash sysop/scripts/run_checks.sh)`
+- `Bash(bash sysop/scripts/run_checks.sh:*)`
+- `Bash(python sysop/scripts/archive_review_tasks.py:*)`
+- `Bash(python3 sysop/scripts/archive_review_tasks.py:*)`
+- `Bash(.venv/bin/python3 sysop/scripts/archive_review_tasks.py:*)` — Phase 45b venv-prefixed variant (preferred when the consumer has a venv with PyYAML)
 
 If any are missing, stop with the `_shared/permission-guard.md` § Algorithm step 4 message (one-line reason: "runs the bundled check registry (grep + LSP + Semgrep) against security-relevant files, and may need to archive `review_tasks.md` if it exceeds 125KB"). Do not proceed.
 
@@ -175,7 +175,7 @@ If no (or audit is clean), proceed to Step 2b. Note gaps **and staleness candida
 Before launching LLM agents, run the shared check registry to find mechanical security issues. These produce findings directly — no LLM interpretation needed.
 
 ```bash
-bash scripts/run_checks.sh --mode security
+bash sysop/scripts/run_checks.sh --mode security
 ```
 
 The `--mode security` invocation runs four stages: grep (checks.yml registry), LSP/lint (`pyright`, `eslint`), Semgrep AST, and dependency audit (`pip-audit`). All four share the same `(check_id, file_line, msg)` shape so baseline matching, `--mode` filtering, and `--fail-on-blocking` apply uniformly.
@@ -317,7 +317,7 @@ This structure ensures every category is checked by a dedicated agent with a nar
 
 ### Agent 6: Dependencies (A06)
 
-Dependency scanning runs through `run_checks.sh`: the local pre-scan in Step 2b already runs `pip-audit --strict --format json` against the active venv — **consume those `[pip-audit]`-tagged findings rather than re-running**. (The same scan runs in CI when the consumer adds `pip-audit` to the shipped gate template `scripts/ci/sysop-checks.yml.example` — see WORKFLOW.md § 6.1 "Protecting `main` with CI".) If Step 2b reported `pip-audit not available`, follow the install hint (`pip install pip-audit`) and re-run `bash scripts/run_checks.sh --mode security` before continuing.
+Dependency scanning runs through `run_checks.sh`: the local pre-scan in Step 2b already runs `pip-audit --strict --format json` against the active venv — **consume those `[pip-audit]`-tagged findings rather than re-running**. (The same scan runs in CI when the consumer adds `pip-audit` to the shipped gate template `sysop/scripts/ci/sysop-checks.yml.example` — see WORKFLOW.md § 6.1 "Protecting `main` with CI".) If Step 2b reported `pip-audit not available`, follow the install hint (`pip install pip-audit`) and re-run `bash sysop/scripts/run_checks.sh --mode security` before continuing.
 
 Run the supplementary `npm audit` scan (not yet pre-scanned):
 - `cd "$(git rev-parse --show-toplevel)/<frontend>" && npm audit --production 2>/dev/null || echo "npm audit not available"`
@@ -588,7 +588,7 @@ If Step 8 produced convention candidates in `.pending-docs/convention-candidates
       - **(i) `.claude/checks.yml` regex** — when the anti-pattern is a single-line grep with low false-positive rate, gated at review time (CI/`run_checks.sh`). 4-prompt cycle:
          1. Draft an entry following the format of existing checks in `.claude/checks.yml` (id, name, category, severity, paths, include, pattern, negative_pattern, description, convention, used_by, blocking).
          2. Present to the reviewer: `[yes-blocking / yes-advisory / skip]`.
-         3. On approval: append the entry to `.claude/checks.yml` — and, in a consumer install, add the identical entry to `.claude/checks.project.yml` so it survives `sysop-update.sh` (per `_shared/promotion-write-target.md`). Set `blocking: true` only if zero false positives have been verified against the current codebase via `bash scripts/run_checks.sh`; otherwise `blocking: false` (advisory).
+         3. On approval: append the entry to `.claude/checks.yml` — and, in a consumer install, add the identical entry to `.claude/checks.project.yml` so it survives `sysop-update.sh` (per `_shared/promotion-write-target.md`). Set `blocking: true` only if zero false positives have been verified against the current codebase via `bash sysop/scripts/run_checks.sh`; otherwise `blocking: false` (advisory).
          4. On skip: log the reason in the promotion report.
 
       - **(ii) `.claude/semgrep/*.yaml` AST rule** — when the rule needs structural awareness (function arguments, decorator stacking, control flow) but is still mechanical. 4-prompt cycle:
@@ -597,10 +597,10 @@ If Step 8 produced convention candidates in `.pending-docs/convention-candidates
          3. On approve-with-fixture: write the rule and a matching `.claude/semgrep/fixtures/` file capturing both a triggering example and a negative example.
          4. On skip: log the reason in the promotion report.
 
-      - **(iii) `scripts/hooks/pre-commit` regex** — same regex shape as (i) but fires in the developer's editor cycle, not just at CI gate time. Choose (iii) over (i) when immediate local feedback matters more than CI gating; choose (i) over (iii) when the rule applies to file types not staged in typical edits or when CI is the canonical gate. (Choosing both is acceptable when local feedback and CI gating both add value.) 4-prompt cycle:
-         1. Draft the check following the existing B-tier (blocking) or A-tier (advisory) pattern in `scripts/hooks/pre-commit`. Append the next unused letter; read the header comment listing for the current range rather than assuming a fixed range.
+      - **(iii) `sysop/scripts/hooks/pre-commit` regex** — same regex shape as (i) but fires in the developer's editor cycle, not just at CI gate time. Choose (iii) over (i) when immediate local feedback matters more than CI gating; choose (i) over (iii) when the rule applies to file types not staged in typical edits or when CI is the canonical gate. (Choosing both is acceptable when local feedback and CI gating both add value.) 4-prompt cycle:
+         1. Draft the check following the existing B-tier (blocking) or A-tier (advisory) pattern in `sysop/scripts/hooks/pre-commit`. Append the next unused letter; read the header comment listing for the current range rather than assuming a fixed range.
          2. Present to the reviewer: `[yes-blocking / yes-advisory / skip]`.
-         3. On approval: append to `scripts/hooks/pre-commit`, update the header comment listing.
+         3. On approval: append to `sysop/scripts/hooks/pre-commit`, update the header comment listing.
          4. On skip: log the reason in the promotion report.
 
       - **(iv) Prose fallback in CLAUDE.md** — only when the rule requires semantic reasoning, multi-call context, or judgment that none of (i)–(iii) capture. **Canonical fallback list:** audit-trail symmetry, tier enforcement, response filtering, rate-limit coverage, error caching. OWASP A01/A07 access-control symmetry checks (e.g., tier enforcement, ownership verification across endpoints) typically need semantic reasoning to verify across the route layer and stay prose. If the candidate doesn't match one of these patterns, the reviewer must justify in writing why (i)–(iii) all fail before defaulting to (iv).
@@ -613,7 +613,7 @@ If Step 8 produced convention candidates in `.pending-docs/convention-candidates
       1. Decide the anchor type up-front:
          - **Symbol-anchored convention** (e.g., "all callers of `get_verified_user` must also call X", "every `tools.validate_sql_safety` caller needs Y"): use `LSP.findReferences` on the symbol via Claude Code's built-in `LSP` tool. This catches import aliases and renames that grep misses.
          - **Pattern-anchored convention** (e.g., "all `fetch()` calls with dynamic paths need `encodeURIComponent()`", "`str(e)` not allowed in response bodies"): derive a grep pattern from the anti-pattern. Use the `Map Sections` column to scope the search to relevant directories. Search for the **anti-pattern**, not the correct pattern.
-         - **Already mechanized** (option a.i or a.ii was taken): skip the derive step and use the rule's first-run output as the violation list. `bash scripts/run_checks.sh` for checks.yml; `semgrep --config .claude/semgrep/<rule>.yaml` for semgrep.
+         - **Already mechanized** (option a.i or a.ii was taken): skip the derive step and use the rule's first-run output as the violation list. `bash sysop/scripts/run_checks.sh` for checks.yml; `semgrep --config .claude/semgrep/<rule>.yaml` for semgrep.
          - **Not mechanically searchable** (requires AST analysis, semantic understanding, or multi-file context): skip and note "Sweep skipped — pattern not mechanically searchable."
       2. Exclude files already tracked as open tasks in `review_tasks.md`.
       3. Present the sweep summary:
@@ -638,7 +638,7 @@ If Step 8 produced convention candidates in `.pending-docs/convention-candidates
 
 5. **Commit** any changes (the `.project.*` overlay paths are the consumer-install dual-write targets from `_shared/promotion-write-target.md`; `2>/dev/null` tolerates their absence in the source repo):
    ```bash
-   git add CLAUDE.md .claude/convention_map.md .claude/convention_map.project.md .claude/checks.yml .claude/checks.project.yml .claude/semgrep/ scripts/hooks/pre-commit review_tasks.md 2>/dev/null
+   git add CLAUDE.md .claude/convention_map.md .claude/convention_map.project.md .claude/checks.yml .claude/checks.project.yml .claude/semgrep/ sysop/scripts/hooks/pre-commit review_tasks.md 2>/dev/null
    git commit -m "docs: promote <N> conventions from Round <N>
 
    Promotion summary: <N> total (<M> mechanical / <K> prose)"
@@ -665,7 +665,7 @@ This is the **FP-driven** half of convention demotion. Tier 1 (Step 2a-3) static
    - **retire** — the rule is genuinely moot. Remove it at its mechanism, then strip its mechanized-equivalent reminder from every `.claude/convention_map.md` / `.claude/security_map.md` section that cites it:
       - `checks.yml`: delete the `- id: <rule-id>` entry from `.claude/checks.yml`; remove the matching `> checks.yml: <rule-id>` reminder lines.
       - `semgrep`: delete `.claude/semgrep/<rule>.yaml` **and** its `.claude/semgrep/fixtures/` file; remove the matching `> AST-backed equivalent: <rule-id>` reminder lines.
-      - `pre-commit`: delete the `scripts/hooks/pre-commit` check, update the header-comment letter listing; remove the matching `> pre-commit: <letter>` reminder lines.
+      - `pre-commit`: delete the `sysop/scripts/hooks/pre-commit` check, update the header-comment letter listing; remove the matching `> pre-commit: <letter>` reminder lines.
       - If the rule had also become a **prose** convention bullet, remove that `CLAUDE.md § Prevention Conventions` bullet — the deliberate, human prose-retirement that Tier 1 (Step 2a-4) routes here.
       - Optional hygiene: drop any now-orphaned `<rule-id>` lines from `.claude/checks_baseline.txt` (inert once the check id is gone, but tidy).
       - **Consumer install** (per `_shared/promotion-write-target.md`): retire the rule where it durably lives — a **locally-promoted** rule is in the `.project.*` overlay, so delete it from `.claude/checks.project.yml` / `.claude/convention_map.project.md` / `.claude/security_map.project.md` (editing only the base leaves the overlay to re-supply it on the next update); a **core/pack-shipped** rule can't be deleted from a consumer install (the concat re-supplies it), so suppress a `checks.yml`-mechanism one via an override entry in `.claude/checks.project.yml` (`paths: ["__disabled_no_op__"]`) — a core semgrep/pre-commit rule has no consumer-side suppression and routes genuine retirement upstream (see the partial).
@@ -681,7 +681,7 @@ This is the **FP-driven** half of convention demotion. Tier 1 (Step 2a-3) static
 
 5. **Commit** any changes (fold into the Step 9 promotion commit if that ran this round, otherwise a standalone commit; the `.project.*` overlay paths cover consumer-install retirement per `_shared/promotion-write-target.md`):
    ```bash
-   git add CLAUDE.md .claude/convention_map.md .claude/convention_map.project.md .claude/security_map.md .claude/security_map.project.md .claude/checks.yml .claude/checks.project.yml .claude/checks_baseline.txt .claude/semgrep/ scripts/hooks/pre-commit review_tasks.md 2>/dev/null
+   git add CLAUDE.md .claude/convention_map.md .claude/convention_map.project.md .claude/security_map.md .claude/security_map.project.md .claude/checks.yml .claude/checks.project.yml .claude/checks_baseline.txt .claude/semgrep/ sysop/scripts/hooks/pre-commit review_tasks.md 2>/dev/null
    git commit -m "docs: retire <N> conventions from Round <N>
 
    Demotion summary: <N> retired (<B> blocking / <A> advisory-or-prose)"

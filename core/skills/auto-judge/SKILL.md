@@ -29,7 +29,7 @@ Read `.claude/settings.json` and confirm `permissions.allow` contains:
 - `Bash(git push -u origin:*)`
 - `Bash(git push origin:*)`
 - `Bash(git push --force-with-lease:*)` _(used only when a subagent amends a commit and re-pushes — conditional path; consumers can omit from settings.json if they don't run amend-based fixes)_
-- `Bash(bash scripts/batch_work.sh:*)`
+- `Bash(bash sysop/scripts/batch_work.sh:*)`
 
 If any are missing, stop with the `_shared/permission-guard.md` § Algorithm step 4 message (one-line reason: "spawns isolated Opus subagents that judge flagged tasks, fix or drop them, and push the resulting branches"). Do not proceed.
 
@@ -51,7 +51,7 @@ If every pending batch already carries a `Flag:` tag (or no pending batches exis
 
 ## Step 1: Read Queue
 
-Read `review_tasks.md` in full (or re-read after Step 0.5). If over 125KB, stop and tell the user to run `.venv/bin/python3 scripts/archive_review_tasks.py`.
+Read `review_tasks.md` in full (or re-read after Step 0.5). If over 125KB, stop and tell the user to run `.venv/bin/python3 sysop/scripts/archive_review_tasks.py`.
 
 Find all batches with status **`Pending`** that have a `> **Flag:**` tag. For each, extract:
 - Batch number and title
@@ -136,7 +136,7 @@ Determine eligible batches:
 To claim a batch:
 
 ```bash
-bash scripts/batch_work.sh <BATCH_NUMBER>
+bash sysop/scripts/batch_work.sh <BATCH_NUMBER>
 ```
 
 Parse the output for the **Worktree path** (`Path:`) and **Branch name** (`Branch:`). If the script exits non-zero, report the error, **skip this batch**, and continue.

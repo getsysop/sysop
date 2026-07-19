@@ -7,7 +7,7 @@
 
 ---
 
-## `scripts/*.sh`, `scripts/hooks/*` — Shell Scripts & Git Hooks
+## `scripts/*.sh`, `scripts/hooks/*`, `sysop/scripts/*.sh`, `sysop/scripts/hooks/*` — Shell Scripts & Git Hooks
 
 - **`set -euo pipefail`**: All shell scripts must start with `set -euo pipefail` to fail fast on errors, undefined variables, and pipe failures
 - **Argument validation**: Validate required arguments early with clear usage messages; never silently default missing args

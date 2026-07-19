@@ -29,7 +29,7 @@ Source of truth for the project's task queue. Replaces the single-file `product_
 ## Rules
 
 1. **`index.yml` is the source of truth for metadata.** Never duplicate status, effort, or `user_action` as frontmatter in a body file.
-2. **Never edit `status:` by hand.** Use the skills. A misedit can desync `.locks/`, leave a phantom in-progress task, or break `/next-task`. To *un-claim* a task you changed your mind about (`in_progress → open` + release the lock + drop the worktree, in one consistent pass), run `bash scripts/claim_task.sh --release <TASK-ID>` from the main checkout — the sanctioned inverse of a claim.
+2. **Never edit `status:` by hand.** Use the skills. A misedit can desync `.locks/`, leave a phantom in-progress task, or break `/next-task`. To *un-claim* a task you changed your mind about (`in_progress → open` + release the lock + drop the worktree, in one consistent pass), run `bash sysop/scripts/claim_task.sh --release <TASK-ID>` from the main checkout — the sanctioned inverse of a claim.
 3. **`validate_tasks.py` is authoritative.** If you can't get the validator to pass, fix the data — don't bypass the hook.
 4. **Adding a task:** run `/add-task` — it appends the `index.yml` entry, writes `open/<TASK-ID>.md`, dedups against the queue, and validates. (By hand is fine too: add the entry + body yourself; the ID must match `^[A-Z][A-Z0-9-]{2,80}$`.)
 5. **Renaming a task:** `git mv` the body file AND change `id:` in `index.yml` AND update any `depends_on:` / `surfaced_by:` references. The validator catches stragglers.
@@ -50,8 +50,8 @@ If your project still has a single-file `product_roadmap.md`:
 1. Scaffold the directory tree: `mkdir -p tasks/open tasks/deferred tasks/archive`.
 2. Hand-author `tasks/index.yml` — every phase heading becomes a `phases:` entry; every task becomes a `tasks:` entry.
 3. For each open/deferred task, create the per-task body at `tasks/{open,deferred}/<TASK-ID>.md`. The first heading must be `# <TASK-ID>`.
-4. Run `scripts/backfill_completed_dates.py --source-file product_roadmap.md --id-pattern '<your-ID-regex>'` to reconstruct `completed_date` for already-completed (`[x]`) items via git history. Inspect the output for plausibility before accepting.
-5. `python3 scripts/validate_tasks.py` — must exit 0.
+4. Run `sysop/scripts/backfill_completed_dates.py --source-file product_roadmap.md --id-pattern '<your-ID-regex>'` to reconstruct `completed_date` for already-completed (`[x]`) items via git history. Inspect the output for plausibility before accepting.
+5. `python3 sysop/scripts/validate_tasks.py` — must exit 0.
 6. Delete `product_roadmap.md` (or move it to an archive location). Add a `DEPRECATED.md` pointer if other tooling still references the old path.
 
 Migrating ~10–15 tasks by hand is usually faster than scripting it.

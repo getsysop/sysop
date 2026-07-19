@@ -6,10 +6,10 @@ pre-commit and from the migration script (via --path) for atomic-staging
 validation.
 
 Usage:
-    python scripts/validate_tasks.py
-    python scripts/validate_tasks.py --path tasks/
-    python scripts/validate_tasks.py --quiet            # pre-commit mode
-    python scripts/validate_tasks.py --self-test       # internal consistency check
+    python sysop/scripts/validate_tasks.py
+    python sysop/scripts/validate_tasks.py --path tasks/
+    python sysop/scripts/validate_tasks.py --quiet            # pre-commit mode
+    python sysop/scripts/validate_tasks.py --self-test       # internal consistency check
 
 Exits 0 on success, non-zero on any ERROR finding. Warnings (e.g., suspected
 secrets) never affect exit code.
@@ -28,12 +28,24 @@ from pathlib import Path
 try:
     import yaml
 except ImportError:
-    print(
-        "ERROR: validate_tasks.py requires PyYAML. "
-        "Install: pip install pyyaml  (or activate the project venv).",
-        file=sys.stderr,
-    )
-    sys.exit(2)
+    # PyYAML lives only in the project venv on some consumers (BeanRider ISSUE-0049).
+    # Resolve it from a CWD-relative venv before giving up, so a bare
+    # `python3 sysop/scripts/validate_tasks.py` (the permission-clean, no-prefix invocation
+    # that matches `Bash(python3 sysop/scripts/validate_tasks.py:*)`) works for venv-only
+    # consumers too — mirrors the in-heredoc bootstrap the lifecycle skills use, and
+    # frees callers from needing a `.venv/bin/python3` command word (Sysop Phase 126).
+    import glob
+
+    sys.path[:0] = glob.glob(".venv/lib/python*/site-packages")
+    try:
+        import yaml
+    except ImportError:
+        print(
+            "ERROR: validate_tasks.py requires PyYAML. "
+            "Install: pip install pyyaml  (or activate the project venv).",
+            file=sys.stderr,
+        )
+        sys.exit(2)
 
 
 # ---------------------------------------------------------------------------
@@ -137,6 +149,22 @@ class Finding:
         return f"[{self.severity}] {self.location}: {self.message}"
 
 
+def _git_discovery_env() -> dict[str, str]:
+    """`os.environ` minus git's discovery vars (BeanRider ISSUE-0048).
+
+    `GIT_DIR`/`GIT_WORK_TREE`/`GIT_COMMON_DIR`/`GIT_INDEX_FILE` take precedence
+    over `git -C`, and git exports them into every hook — stripping them makes
+    `-C` authoritative so a probe against a tmpdir resolves there, not the
+    invoking repo. Duplicated verbatim in next_task.py and scope_overlap.py
+    (same zero-dependency-duplicate rationale as _resolve_canonical_locks_dir).
+    """
+    return {
+        k: v
+        for k, v in os.environ.items()
+        if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE")
+    }
+
+
 def _resolve_canonical_locks_dir(project_root: Path) -> Path:
     """Resolve the canonical .locks/ directory.
 
@@ -149,6 +177,17 @@ def _resolve_canonical_locks_dir(project_root: Path) -> Path:
     (e.g., `--self-test` synthetic fixtures, atomic-staging callers running
     against a tmpdir outside any working tree). This preserves backward
     compatibility for non-git callers.
+
+    Strips git's discovery env vars (BeanRider ISSUE-0048) so `-C
+    <project_root>` is authoritative: `GIT_DIR`/`GIT_WORK_TREE` take
+    precedence over `-C`, and git exports them (absolute, from a worktree)
+    into every hook. Left inherited, the probe resolves against the invoking
+    repo regardless of `project_root` — so `--self-test`'s tmpdir fixtures
+    would resolve to the real repo's `.locks/` and the documented fallback
+    would never fire. Stripping them restores the fallback without changing
+    the answer for real callers (discovery proceeds from `project_root`,
+    which is what `-C` already intends; the Phase-32 cross-worktree
+    guarantee is preserved).
     """
     try:
         result = subprocess.run(
@@ -157,6 +196,7 @@ def _resolve_canonical_locks_dir(project_root: Path) -> Path:
             text=True,
             timeout=5,
             check=False,
+            env=_git_discovery_env(),
         )
     except (FileNotFoundError, subprocess.SubprocessError):
         return project_root / ".locks"
@@ -448,7 +488,7 @@ def _validate_tasks(
                     f"status=in_progress but lock file missing at {lock_path}. "
                     "The canonical .locks/ lives under the main repo root "
                     "(resolved via 'git rev-parse --git-common-dir'); re-run "
-                    "`bash scripts/claim_task.sh --lock <TASK_ID> <BRANCH>` to "
+                    "`bash sysop/scripts/claim_task.sh --lock <TASK_ID> <BRANCH>` to "
                     "recreate it, or flip the task back to status=open.",
                 )
 
@@ -480,7 +520,7 @@ def _check_status_consistency(task: dict, status: object, loc: str, report: Repo
     if status == "done":
         # completed_date is RECOMMENDED but not REQUIRED — migration imports
         # historical tasks whose completion dates have to be reconstructed via
-        # git-blame backfill (scripts/backfill_completed_dates.py). New
+        # git-blame backfill (sysop/scripts/backfill_completed_dates.py). New
         # completions written by /review-close MUST set a date; that contract
         # is enforced at the skill layer, not here.
         if has_completed_date and not _ISO_DATE_RE.match(task["completed_date"]):
@@ -1562,7 +1602,8 @@ def _self_test() -> int:
 # Entry point
 # ---------------------------------------------------------------------------
 def _default_tasks_dir() -> Path:
-    return Path(__file__).resolve().parent.parent / "tasks"
+    # <repo>/sysop/scripts/validate_tasks.py → <repo>/tasks (Phase 128).
+    return Path(__file__).resolve().parents[2] / "tasks"
 
 
 def main(argv: list[str] | None = None) -> int:

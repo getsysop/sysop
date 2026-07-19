@@ -526,10 +526,12 @@ def test_atomic_write_pair_cleans_up_tmp_on_replace_failure(tmp_path, monkeypatc
 
 
 def test_review_and_archive_files_resolve_to_repo_root_not_cwd():
-    """Paths anchor to <repo-root>/ (the parent of scripts/), never the
-    caller's CWD — a bare relative path would open against whatever dir the
-    invoker happened to be in (a worktree subdir, etc.)."""
-    root = Path(str(art.__file__)).resolve().parent.parent
+    """Paths anchor to <repo-root>/ (the great-grandparent of the script, i.e.
+    parent of sysop/ in a consumer install), never the caller's CWD — a bare
+    relative path would open against whatever dir the invoker happened to be in
+    (a worktree subdir, etc.). Phase 128: scripts moved to sysop/scripts/, so the
+    anchor is parents[2] (was parent.parent)."""
+    root = Path(str(art.__file__)).resolve().parents[2]
     assert os.path.isabs(art.REVIEW_FILE)
     assert os.path.isabs(art.ARCHIVE_FILE)
     assert art.REVIEW_FILE == str(root / "review_tasks.md")

@@ -1,7 +1,7 @@
 """Integration tests for install.sh's Phase-24b managed-path preservation
 (copy_file), Phase 105.
 
-On `--update`, a managed path under `scripts/` or `scripts/hooks/` that the
+On `--update`, a managed path under `sysop/scripts/` or `sysop/scripts/hooks/` that the
 consumer has modified since the last install is *preserved* (not overwritten) —
 unless the consumer passes `--accept-upstream <relpath>`, which takes the new
 upstream version. This is the mechanism that lets a consumer harden a shipped
@@ -12,7 +12,7 @@ These drive a real fresh-install → modify → `--update` round-trip. The insta
 reconstructs the previous install into a shadow tree (a detached worktree of the
 Sysop repo at the lock's recorded commit) to diff against, so these exercise the
 real divergence machinery. The out-of-scope companion is the non-tautological
-guard: preservation must be *scoped* to scripts/*, not universal.
+guard: preservation must be *scoped* to sysop/scripts/*, not universal.
 """
 import os
 import subprocess
@@ -76,21 +76,21 @@ def _fresh_install_then_modify(consumer, rel_path):
 
 def test_update_preserves_consumer_modified_managed_script(tmp_path):
     consumer = tmp_path / "consumer"
-    f = _fresh_install_then_modify(consumer, "scripts/run_checks.sh")
+    f = _fresh_install_then_modify(consumer, "sysop/scripts/run_checks.sh")
 
     r = _install(consumer, "--update", "--packs", "")
-    assert "preserved: scripts/run_checks.sh" in r.stdout, r.stdout
+    assert "preserved: sysop/scripts/run_checks.sh" in r.stdout, r.stdout
     # Load-bearing: the consumer's edit survived the update.
     assert f.read_text() == _SENTINEL, "consumer-modified managed script was overwritten"
 
 
 def test_accept_upstream_overwrites_consumer_modified_managed_script(tmp_path):
     consumer = tmp_path / "consumer"
-    f = _fresh_install_then_modify(consumer, "scripts/run_checks.sh")
+    f = _fresh_install_then_modify(consumer, "sysop/scripts/run_checks.sh")
 
     r = _install(consumer, "--update", "--packs", "",
-                 "--accept-upstream", "scripts/run_checks.sh")
-    assert "accept-upstream: scripts/run_checks.sh" in r.stdout, r.stdout
+                 "--accept-upstream", "sysop/scripts/run_checks.sh")
+    assert "accept-upstream: sysop/scripts/run_checks.sh" in r.stdout, r.stdout
     # The sentinel is gone — upstream was taken. (Don't assert byte-equality vs
     # the source: REPO_ROOT working-tree drift is possible; sentinel absence is
     # the robust signal.)
@@ -98,10 +98,10 @@ def test_accept_upstream_overwrites_consumer_modified_managed_script(tmp_path):
 
 
 def test_out_of_scope_path_is_overwritten_on_update(tmp_path):
-    """Preservation is scoped to scripts/* — an out-of-scope managed path
+    """Preservation is scoped to sysop/scripts/* — an out-of-scope managed path
     (WORKFLOW.md) is overwritten on update regardless of consumer edits."""
     consumer = tmp_path / "consumer"
-    f = _fresh_install_then_modify(consumer, "WORKFLOW.md")
+    f = _fresh_install_then_modify(consumer, "sysop/docs/WORKFLOW.md")
 
     _install(consumer, "--update", "--packs", "")
     assert _SENTINEL not in f.read_text(), (

@@ -14,17 +14,17 @@ This is a one-time migration helper. After the source file is deleted and
 
 Usage:
     # Preview only — no writes:
-    python3 scripts/backfill_completed_dates.py --dry-run
+    python3 sysop/scripts/backfill_completed_dates.py --dry-run
 
     # Write inferred dates back to tasks/index.yml:
-    python3 scripts/backfill_completed_dates.py
+    python3 sysop/scripts/backfill_completed_dates.py
 
     # Custom source file (default: product_roadmap.md):
-    python3 scripts/backfill_completed_dates.py --source-file ROADMAP.md
+    python3 sysop/scripts/backfill_completed_dates.py --source-file ROADMAP.md
 
     # Custom task-ID pattern (default: project's task-prefix family,
     # extracted from index.yml so the regex matches your IDs):
-    python3 scripts/backfill_completed_dates.py --id-pattern '^(FEAT|TECH|FIX)-'
+    python3 sysop/scripts/backfill_completed_dates.py --id-pattern '^(FEAT|TECH|FIX)-'
 
 Strategy:
 - For each task with status=done AND no completed_date, run `git log -S`
@@ -70,8 +70,8 @@ from pathlib import Path
 
 import yaml
 
-# Single-sourced via scripts/_log.py (Phase 68) — `scripts/` is on sys.path[0]
-# when this runs directly and on pythonpath under the test suite. The name is
+# Single-sourced via sysop/scripts/_log.py (Phase 68) — `sysop/scripts/` is on
+# sys.path[0] when this runs directly and on pythonpath under the test suite. The name is
 # bound into this module's namespace, so `backfill_completed_dates._sanitize_log`
 # (the test patch path) keeps resolving.
 from _log import _sanitize_log  # noqa: E402

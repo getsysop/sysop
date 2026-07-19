@@ -12,7 +12,7 @@
 checks:
   # ── Semgrep / AST diagnostics ──────────────────────────────────
   # No `pattern` field — populated by `_run_semgrep()` in
-  # scripts/run_checks_impl.py from the pack's semgrep/*.yaml rules.
+  # sysop/scripts/run_checks/semgrep.py from the pack's semgrep/*.yaml rules.
   # Starts blocking: false — CI does not install semgrep yet.
 
   - id: semgrep-llm-cost-abuse

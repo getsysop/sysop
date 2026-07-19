@@ -33,10 +33,19 @@ def _run_pip_audit(repo_root, included_ids):
     when no requirements file is present (still useful as a stable key
     even if the consumer ships only a pyproject.toml).
 
-    --strict: fail dependency collection if any package can't be resolved
+    --skip-editable: skip editable installs during dependency resolution.
+        An editable install (`pip install -e .`, the documented Python-pack
+        shape) always leaves one local package pip-audit can't resolve; the
+        prior `--strict` treated that as fatal and aborted the whole audit
+        *before emitting JSON*, so the stage silently reported zero findings on
+        every editable consumer (BeanRider ISSUE-0046). `--strict --skip-editable`
+        is also broken (a skip is still a skip, which --strict then fails on), so
+        --strict had to go entirely.
     --format json: parseable output
 
-    Skips with a stderr warning if pip-audit is missing or times out.
+    Skips with a stderr warning if pip-audit is missing, times out, or aborts
+    without emitting findings (non-zero exit + empty stdout — a failed run, not
+    a clean one).
     """
     if not included_ids:
         return []
@@ -44,7 +53,7 @@ def _run_pip_audit(repo_root, included_ids):
     out = []
     try:
         r = subprocess.run(
-            ["pip-audit", "--strict", "--format", "json"],
+            ["pip-audit", "--skip-editable", "--format", "json"],
             capture_output=True, text=True, cwd=repo_root, timeout=300,
         )
     except FileNotFoundError:
@@ -57,6 +66,16 @@ def _run_pip_audit(repo_root, included_ids):
         return out
 
     if not r.stdout:
+        # A non-zero exit with no JSON means pip-audit aborted before it could
+        # audit anything (a bad flag, or an unresolvable dependency under a
+        # stricter mode) — NOT a clean run. Surface it instead of returning an
+        # empty (== "all clear") finding list, so a broken invocation announces
+        # itself rather than reporting a silent zero for months (ISSUE-0046).
+        if r.returncode != 0:
+            tail = (r.stderr or "").strip().splitlines()
+            detail = tail[-1] if tail else "no stderr"
+            print(f"warn: pip-audit exited {r.returncode} with no output — "
+                  f"dependency audit did NOT run: {detail}", file=sys.stderr)
         return out
     try:
         data = json.loads(r.stdout)

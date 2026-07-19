@@ -73,7 +73,7 @@ def test_unreachable_ancestor_dirty_managed_path_aborts(tmp_path):
     """Non-tautological guard: the fallback does NOT blanket-skip preservation.
     A dirty in-scope managed path with an unreachable ancestor still aborts."""
     target = _installed_with_unreachable_ancestor(tmp_path / "c")
-    script = target / "scripts/run_checks.sh"
+    script = target / "sysop/scripts/run_checks.sh"
     script.write_text(script.read_text() + "\n# local edit\n")  # uncommitted
     r = _install(target, "--update")
     combined = r.stdout + r.stderr
