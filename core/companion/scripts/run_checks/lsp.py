@@ -11,13 +11,20 @@ import re
 import subprocess
 import sys
 
+from .config import check_paths_by_id, finding_in_scope
+
 
 def run_lsp_diagnostics(repo_root, included_ids):
     """Run pyright and tsc, return findings in the same shape as run_check.
 
-    `included_ids` is the set of pyright-*/tsc-* check IDs that the caller
-    has already filtered for the active mode. Any finding whose mapped
-    check_id is not in `included_ids` is dropped.
+    `included_ids` is the collection of pyright-*/tsc-* check IDs that the
+    caller has already filtered for the active mode — a dict of id → check
+    dict from `_classify_checks` (legacy callers may still pass a plain id
+    set). Any finding whose mapped check_id is not in `included_ids` is
+    dropped, and — when the check declares `paths:` — so is any finding
+    outside those roots (Phase 133: pyright/tsc scan whole projects in one
+    subprocess, so per-check `paths:` scoping is applied by post-filtering;
+    see config.path_in_scope).
 
     Returns (check_id, file_line, message) tuples. Emits a stderr warning
     and returns partial results when a binary is missing or times out.
@@ -56,13 +63,16 @@ def _run_pyright(repo_root, included_ids):
               file=sys.stderr)
         return out
 
+    paths_by_id = check_paths_by_id(included_ids)
     for diag in data.get("generalDiagnostics", []):
         severity = diag.get("severity", "information")
         rule = diag.get("rule", "")
         check_id = _pyright_rule_to_check_id(rule, severity)
-        if not check_id or check_id not in included_ids:
+        if not check_id or check_id not in paths_by_id:
             continue
         file_path = os.path.relpath(diag.get("file", ""), repo_root)
+        if not finding_in_scope(file_path, paths_by_id[check_id]):
+            continue
         line = diag.get("range", {}).get("start", {}).get("line", 0) + 1
         file_line = f"{file_path}:{line}"
         msg_text = diag.get("message", "").replace("\n", " ")[:300]
@@ -127,11 +137,14 @@ def _emit_tsc_finding(current, frontend_dir, repo_root, included_ids, out):
         return
     m, continuations = current
     check_id = "tsc-type-error"
-    if check_id not in included_ids:
+    paths_by_id = check_paths_by_id(included_ids)
+    if check_id not in paths_by_id:
         return
     file_rel = os.path.relpath(
         os.path.join(frontend_dir, m.group(1)), repo_root
     )
+    if not finding_in_scope(file_rel, paths_by_id[check_id]):
+        return
     file_line = f"{file_rel}:{m.group(2)}"
     head = m.group(6)
     tail = " ".join(c.strip() for c in continuations if c.strip())

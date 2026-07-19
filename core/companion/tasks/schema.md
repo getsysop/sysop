@@ -67,7 +67,7 @@ tasks:
 | Status | Requires `body` | Requires `archive_summary` | Requires `completed_date` | Requires lock file |
 |---|---|---|---|---|
 | `open` | yes | no | no | no |
-| `in_progress` | yes | no | no | yes (`<main-repo-root>/.locks/<TASK-ID>.lock`) |
+| `in_progress` | yes | no | no | yes (`<main-repo-root>/sysop/runtime/locks/<TASK-ID>.lock`) |
 | `done` | no (use `archive_summary` if no body) | yes if no `body` | yes | no |
 | `deferred` | yes | no | no | no |
 
@@ -92,11 +92,11 @@ At `schema_version: 1`, `blast_radius` is **optional** (validator accepts absenc
 
 Some features can't be fully verified by automated tests — UI flows that need a browser, commands with external side effects, LLM round-trips whose output a human must eyeball. `manual_smoke: true` declares that this task's `/review-close` cycle must halt before merge so the human can run, confirm, or waive the procedure.
 
-**Where the procedure lives.** Author the smoke steps in the task body file (`tasks/open/<TASK-ID>.md`) under a heading whose text contains `manual smoke` or `smoke required` (case-insensitive — `## Manual smoke required`, `### Manual smoke`, `## Smoke required before review-close` all match). `/review-close` Step 3c also scans `.pending-docs/*.md` bodies for the same pattern, so a hotfix branch with no `tasks/index.yml` entry can still declare a smoke by including the heading in its pending-doc.
+**Where the procedure lives.** Author the smoke steps in the task body file (`tasks/open/<TASK-ID>.md`) under a heading whose text contains `manual smoke` or `smoke required` (case-insensitive — `## Manual smoke required`, `### Manual smoke`, `## Smoke required before review-close` all match). `/review-close` Step 3c also scans `sysop/runtime/pending-docs/*.md` bodies for the same pattern, so a hotfix branch with no `tasks/index.yml` entry can still declare a smoke by including the heading in its pending-doc.
 
 **Validator behavior** (warn-only): when `manual_smoke: true`, the validator warns (does NOT block) if the body file lacks a smoke-matching heading. This keeps task authoring fluid — a stub task can be filed with `manual_smoke: true` before the procedure is fully written, and the validator surfaces the gap without halting commits. The actual merge-gate lives in `/review-close` Step 3c.
 
-**Skill behavior** (`/review-close` Step 3c, Phase 35, 2026-05-22): scans `.pending-docs/*.md` bodies AND cross-checks `tasks/index.yml` for any task whose ID appears in a pending-doc's `roadmap_ids:` frontmatter AND carries `manual_smoke: true`. Either signal fires the gate. For each signal the skill calls `AskUserQuestion` with three options: (a) agent drives the smoke end-to-end via available MCP tools; (b) human confirms they already ran it; (c) skip with waiver (logged in Step 8 report). Waivers don't block merge; agent-drive failures do.
+**Skill behavior** (`/review-close` Step 3c, Phase 35, 2026-05-22): scans `sysop/runtime/pending-docs/*.md` bodies AND cross-checks `tasks/index.yml` for any task whose ID appears in a pending-doc's `roadmap_ids:` frontmatter AND carries `manual_smoke: true`. Either signal fires the gate. For each signal the skill calls `AskUserQuestion` with three options: (a) agent drives the smoke end-to-end via available MCP tools; (b) human confirms they already ran it; (c) skip with waiver (logged in Step 8 report). Waivers don't block merge; agent-drive failures do.
 
 Field is purely optional. Tasks without `manual_smoke:` and pending-docs without the heading proceed through Step 3c without any prompt.
 
@@ -163,7 +163,7 @@ Conventional section layout:
 6. **Reference integrity** — every ID in any `depends_on:`, `surfaced_by:`, or `whitelist:` resolves to a known task ID (or for `whitelist:`, to a permanent external prefix like `BATCH-*`; or for `surfaced_by:`, the literal `imported` provenance sentinel).
 7. **Unique IDs** — no duplicates across phases.
 8. **Valid status values** — exactly one of `open | in_progress | done | deferred`.
-9. **`in_progress` requires a lock** — `<main-repo-root>/.locks/<TASK-ID>.lock` must exist. The lock lives under the **main** repo root (resolved via `git rev-parse --git-common-dir`) so a single canonical location is visible from any worktree (Phase 32, 2026-05-22 — closes BeanRider ISSUE-0028 / 0030 / 0032 / 0013). `claim_task.sh --lock` writes the lock there regardless of cwd; the validator resolves the same path. Catches stale state where `/claim-task` was invoked without `--lock` or the lock was hand-deleted.
+9. **`in_progress` requires a lock** — `<main-repo-root>/sysop/runtime/locks/<TASK-ID>.lock` must exist. The lock lives under the **main** repo root (resolved via `git rev-parse --git-common-dir`) so a single canonical location is visible from any worktree (Phase 32, 2026-05-22 — closes BeanRider ISSUE-0028 / 0030 / 0032 / 0013). `claim_task.sh --lock` writes the lock there regardless of cwd; the validator resolves the same path. Catches stale state where `/claim-task` was invoked without `--lock` or the lock was hand-deleted.
 10. **Status-field consistency** — `done` requires `completed_date`; `done` without `body` requires `archive_summary`; `done` with `body` rejects `open/` or `deferred/` path segments (catches the silent half-migration from ISSUE-0009 when Step 4c's status flip wrote but the rename skipped); `blast_radius` is required on `open`/`in_progress` at `schema_version >= 2`, and its enum is enforced whenever the field is present at any version; etc. (See tables above.)
 11. **Secret-pattern scan** — warn (not block) on long hex strings, `sk-`-prefixed tokens, AWS-style access keys in any `tasks/**/*.md` body. False-positive prone, so non-blocking.
 12. **Manual-smoke documentation (warn-only)** — when `manual_smoke: true`, the body should contain a heading whose text matches `manual\s+smoke|smoke\s+required` (case-insensitive). Warn-not-block: keeps task authoring fluid; the actual merge gate lives in `/review-close` Step 3c (Phase 35, 2026-05-22).

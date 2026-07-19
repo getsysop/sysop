@@ -166,14 +166,14 @@ def _git_discovery_env() -> dict[str, str]:
 
 
 def _resolve_canonical_locks_dir(project_root: Path) -> Path:
-    """Resolve the canonical .locks/ directory.
+    """Resolve the canonical sysop/runtime/locks/ directory.
 
-    Phase 32 (2026-05-22): locks always live under the main repo's `.locks/`,
+    Phase 32 (2026-05-22): locks always live under the main repo's `sysop/runtime/locks/`,
     discoverable via `git rev-parse --git-common-dir`. When invoked inside a
-    worktree, this still returns the MAIN repo's `.locks/` so callers from any
+    worktree, this still returns the MAIN repo's `sysop/runtime/locks/` so callers from any
     working tree agree on one location (closes BeanRider ISSUE-0032).
 
-    Falls back to `project_root / ".locks"` when we cannot resolve git state
+    Falls back to `project_root / "sysop/runtime/locks"` when we cannot resolve git state
     (e.g., `--self-test` synthetic fixtures, atomic-staging callers running
     against a tmpdir outside any working tree). This preserves backward
     compatibility for non-git callers.
@@ -183,7 +183,7 @@ def _resolve_canonical_locks_dir(project_root: Path) -> Path:
     precedence over `-C`, and git exports them (absolute, from a worktree)
     into every hook. Left inherited, the probe resolves against the invoking
     repo regardless of `project_root` — so `--self-test`'s tmpdir fixtures
-    would resolve to the real repo's `.locks/` and the documented fallback
+    would resolve to the real repo's `sysop/runtime/locks/` and the documented fallback
     would never fire. Stripping them restores the fallback without changing
     the answer for real callers (discovery proceeds from `project_root`,
     which is what `-C` already intends; the Phase-32 cross-worktree
@@ -199,17 +199,17 @@ def _resolve_canonical_locks_dir(project_root: Path) -> Path:
             env=_git_discovery_env(),
         )
     except (FileNotFoundError, subprocess.SubprocessError):
-        return project_root / ".locks"
+        return project_root / "sysop/runtime/locks"
     if result.returncode != 0:
-        return project_root / ".locks"
+        return project_root / "sysop/runtime/locks"
     raw = result.stdout.strip()
     if not raw:
-        return project_root / ".locks"
+        return project_root / "sysop/runtime/locks"
     common_dir = Path(raw)
     if not common_dir.is_absolute():
         common_dir = (project_root / common_dir).resolve()
     main_repo_root = common_dir.parent
-    return main_repo_root / ".locks"
+    return main_repo_root / "sysop/runtime/locks"
 
 
 @dataclass
@@ -236,7 +236,7 @@ class Report:
 def validate(base_dir: Path, project_root: Path | None = None) -> Report:
     """Validate the tasks tree rooted at *base_dir*.
 
-    *project_root* is the directory containing `.locks/` (for in-progress lock
+    *project_root* is the directory containing `sysop/runtime/locks/` (for in-progress lock
     checks). Defaults to the parent of *base_dir*.
     """
     report = Report()
@@ -486,7 +486,7 @@ def _validate_tasks(
                 report.error(
                     loc_id,
                     f"status=in_progress but lock file missing at {lock_path}. "
-                    "The canonical .locks/ lives under the main repo root "
+                    "The canonical sysop/runtime/locks/ lives under the main repo root "
                     "(resolved via 'git rev-parse --git-common-dir'); re-run "
                     "`bash sysop/scripts/claim_task.sh --lock <TASK_ID> <BRANCH>` to "
                     "recreate it, or flip the task back to status=open.",
@@ -1263,7 +1263,7 @@ def _build_valid_fixture(root: Path) -> Path:
     _write(tasks_dir / "open" / "FEAT-ALPHA.md", _VALID_BODY_ALPHA)
     _write(tasks_dir / "open" / "TECH-BETA.md", _VALID_BODY_BETA)
     _write(tasks_dir / "archive" / "_phase_1.md", _VALID_PHASE_SUMMARY)
-    (root / ".locks").mkdir(exist_ok=True)
+    (root / "sysop/runtime/locks").mkdir(parents=True, exist_ok=True)
     return tasks_dir
 
 
@@ -1271,7 +1271,7 @@ def _build_bad_fixture(root: Path) -> Path:
     tasks_dir = root / "tasks"
     _write(tasks_dir / "index.yml", _BAD_INDEX)
     _write(tasks_dir / "open" / "FEAT-DUP.md", _BAD_BODY)
-    (root / ".locks").mkdir(exist_ok=True)
+    (root / "sysop/runtime/locks").mkdir(parents=True, exist_ok=True)
     return tasks_dir
 
 
@@ -1280,7 +1280,7 @@ def _build_drifted_status_fixture(root: Path) -> Path:
     tasks_dir = root / "tasks"
     _write(tasks_dir / "index.yml", _DRIFTED_STATUS_INDEX)
     _write(tasks_dir / "open" / "FEAT-DRIFT.md", _DRIFTED_STATUS_BODY)
-    (root / ".locks").mkdir(exist_ok=True)
+    (root / "sysop/runtime/locks").mkdir(parents=True, exist_ok=True)
     return tasks_dir
 
 
@@ -1290,7 +1290,7 @@ def _build_blast_radius_v1_optional_fixture(root: Path) -> Path:
     _write(tasks_dir / "index.yml", _BLAST_RADIUS_V1_OPTIONAL_INDEX)
     _write(tasks_dir / "open" / "FEAT-WITH-BR.md", _BLAST_RADIUS_V1_BODY_WITH)
     _write(tasks_dir / "open" / "FEAT-NO-BR.md", _BLAST_RADIUS_V1_BODY_WITHOUT)
-    (root / ".locks").mkdir(exist_ok=True)
+    (root / "sysop/runtime/locks").mkdir(parents=True, exist_ok=True)
     return tasks_dir
 
 
@@ -1299,7 +1299,7 @@ def _build_blast_radius_v2_required_fixture(root: Path) -> Path:
     tasks_dir = root / "tasks"
     _write(tasks_dir / "index.yml", _BLAST_RADIUS_V2_REQUIRED_INDEX)
     _write(tasks_dir / "open" / "FEAT-V2.md", _BLAST_RADIUS_V2_BODY)
-    (root / ".locks").mkdir(exist_ok=True)
+    (root / "sysop/runtime/locks").mkdir(parents=True, exist_ok=True)
     return tasks_dir
 
 
@@ -1308,7 +1308,7 @@ def _build_blast_radius_v2_missing_fixture(root: Path) -> Path:
     tasks_dir = root / "tasks"
     _write(tasks_dir / "index.yml", _BLAST_RADIUS_V2_MISSING_INDEX)
     _write(tasks_dir / "open" / "FEAT-MISSING-BR.md", _BLAST_RADIUS_V2_MISSING_BODY)
-    (root / ".locks").mkdir(exist_ok=True)
+    (root / "sysop/runtime/locks").mkdir(parents=True, exist_ok=True)
     return tasks_dir
 
 
@@ -1317,7 +1317,7 @@ def _build_blast_radius_bad_value_fixture(root: Path) -> Path:
     tasks_dir = root / "tasks"
     _write(tasks_dir / "index.yml", _BLAST_RADIUS_BAD_VALUE_INDEX)
     _write(tasks_dir / "open" / "FEAT-BAD-BR.md", _BLAST_RADIUS_BAD_BODY)
-    (root / ".locks").mkdir(exist_ok=True)
+    (root / "sysop/runtime/locks").mkdir(parents=True, exist_ok=True)
     return tasks_dir
 
 
@@ -1328,7 +1328,7 @@ def _build_manual_smoke_fixture(root: Path) -> Path:
     _write(tasks_dir / "open" / "FEAT-SMOKE-WITH.md", _MANUAL_SMOKE_BODY_WITH)
     _write(tasks_dir / "open" / "FEAT-SMOKE-WITHOUT.md", _MANUAL_SMOKE_BODY_WITHOUT)
     _write(tasks_dir / "open" / "FEAT-NO-SMOKE.md", _MANUAL_SMOKE_BODY_PLAIN)
-    (root / ".locks").mkdir(exist_ok=True)
+    (root / "sysop/runtime/locks").mkdir(parents=True, exist_ok=True)
     return tasks_dir
 
 
@@ -1337,7 +1337,7 @@ def _build_manual_smoke_bad_type_fixture(root: Path) -> Path:
     tasks_dir = root / "tasks"
     _write(tasks_dir / "index.yml", _MANUAL_SMOKE_BAD_TYPE_INDEX)
     _write(tasks_dir / "open" / "FEAT-SMOKE-BADTYPE.md", _MANUAL_SMOKE_BAD_TYPE_BODY)
-    (root / ".locks").mkdir(exist_ok=True)
+    (root / "sysop/runtime/locks").mkdir(parents=True, exist_ok=True)
     return tasks_dir
 
 
@@ -1345,7 +1345,7 @@ def _build_test_decision_fixture(root: Path) -> Path:
     """Phase 58b: test-decision warn-only check fires only for in_progress.
 
     Two in_progress tasks need locks (invariant 9 is resolved against
-    root/.locks since the tmpdir is not a git repo — see
+    root/sysop/runtime/locks since the tmpdir is not a git repo — see
     _resolve_canonical_locks_dir's fallback). The open task needs none.
     """
     tasks_dir = root / "tasks"
@@ -1353,8 +1353,8 @@ def _build_test_decision_fixture(root: Path) -> Path:
     _write(tasks_dir / "open" / "FEAT-TD-WITH.md", _TEST_DECISION_BODY_WITH)
     _write(tasks_dir / "open" / "FEAT-TD-WITHOUT.md", _TEST_DECISION_BODY_WITHOUT)
     _write(tasks_dir / "open" / "FEAT-TD-OPEN.md", _TEST_DECISION_BODY_OPEN)
-    locks = root / ".locks"
-    locks.mkdir(exist_ok=True)
+    locks = root / "sysop/runtime/locks"
+    locks.mkdir(parents=True, exist_ok=True)
     _write(locks / "FEAT-TD-WITH.lock", "lock\n")
     _write(locks / "FEAT-TD-WITHOUT.lock", "lock\n")
     return tasks_dir
@@ -1367,7 +1367,7 @@ def _build_forward_compat_fixture(root: Path) -> Path:
     _write(tasks_dir / "open" / "FEAT-ALPHA.md", _VALID_BODY_ALPHA)
     _write(tasks_dir / "open" / "TECH-BETA.md", _VALID_BODY_BETA)
     _write(tasks_dir / "archive" / "_phase_1.md", _VALID_PHASE_SUMMARY)
-    (root / ".locks").mkdir(exist_ok=True)
+    (root / "sysop/runtime/locks").mkdir(parents=True, exist_ok=True)
     return tasks_dir
 
 
@@ -1638,7 +1638,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     # By convention, project_root is the parent of tasks/, but when --path is
-    # used for atomic staging, the .locks/ check would not apply (the staged
+    # used for atomic staging, the sysop/runtime/locks/ check would not apply (the staged
     # tree has no lock state). We still try to resolve relative to the parent.
     project_root = base_dir.parent
 

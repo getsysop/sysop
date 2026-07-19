@@ -84,8 +84,8 @@ def test_read_locks_returns_empty_when_no_locks_dir(tmp_path):
 
 
 def test_read_locks_skips_gitkeep_and_returns_one_lock_per_file(tmp_path):
-    locks_dir = tmp_path / ".locks"
-    locks_dir.mkdir()
+    locks_dir = tmp_path / "sysop/runtime/locks"
+    locks_dir.mkdir(parents=True)
     (locks_dir / ".gitkeep").write_text("", encoding="utf-8")
     (locks_dir / "FEAT-1.lock").write_text(
         "task_id: FEAT-1\nbranch: feat/1\nworkspace: /tmp/wf\n", encoding="utf-8"
@@ -103,8 +103,8 @@ def test_read_locks_skips_gitkeep_and_returns_one_lock_per_file(tmp_path):
 
 
 def test_read_locks_falls_back_to_filename_stem_when_task_id_missing(tmp_path):
-    locks_dir = tmp_path / ".locks"
-    locks_dir.mkdir()
+    locks_dir = tmp_path / "sysop/runtime/locks"
+    locks_dir.mkdir(parents=True)
     (locks_dir / "FEAT-X.lock").write_text("branch: feat/x\n", encoding="utf-8")
     locks = ss._read_locks(tmp_path)
     assert len(locks) == 1
@@ -331,7 +331,7 @@ _CUTOFF = datetime(2026, 5, 23, tzinfo=timezone.utc)
 
 def _lock(task_id: str = "FEAT-1", started: str = "") -> ss.Lock:
     return ss.Lock(
-        task_id=task_id, path=Path(f".locks/{task_id}.lock"),
+        task_id=task_id, path=Path(f"sysop/runtime/locks/{task_id}.lock"),
         status="active", branch=f"feat/{task_id.lower()}",
         workspace="/tmp/wt", started=started,
     )
@@ -670,7 +670,7 @@ def test_p6_planning_wins_over_p7_roadmap():
 def _dlock(task_id, branch="", workspace="", path=None):
     return ss.Lock(
         task_id=task_id,
-        path=path or Path(f".locks/{task_id}.lock"),
+        path=path or Path(f"sysop/runtime/locks/{task_id}.lock"),
         status="active",
         branch=branch,
         workspace=workspace,

@@ -1,4 +1,6 @@
 """Checks-registry parsing and mode filtering."""
+import fnmatch
+import os
 import sys
 
 try:
@@ -98,7 +100,7 @@ def _validate_check(check, idx):
             f"Invalid check at index {idx}: missing or empty 'id' field"
         )
 
-    for fld in ("paths", "include", "exclude", "used_by"):
+    for fld in ("paths", "include", "exclude", "exclude_dir", "used_by"):
         if fld in check and check[fld] is not None and not isinstance(
             check[fld], list
         ):
@@ -106,6 +108,102 @@ def _validate_check(check, idx):
                 f"Invalid check '{cid}': field '{fld}' must be a list, "
                 f"got {type(check[fld]).__name__}"
             )
+
+
+def path_in_scope(rel_path, paths):
+    """True when ``rel_path`` falls under any checks.yml ``paths:`` entry.
+
+    The tool-shelling stages (semgrep, pyright/tsc) scan the whole tree in one
+    subprocess, so their per-check ``paths:`` scoping is applied by
+    post-filtering each finding through this helper (Phase 133 — narrowing a
+    semgrep/pyright check's ``paths:`` in the overlay used to be a silent
+    no-op; the leg-5 dogfood hit exactly that). Entries are literal
+    file-or-directory roots, not globs; an absent/empty list means whole-tree
+    (backward compatible). A sentinel entry that matches nothing
+    (``__disabled_no_op__``) therefore silences the check — the same overlay
+    disabling shape the grep stage already supports.
+
+    Callers pass the SCOPING list from ``check_paths_by_id`` — unlocalized
+    ``<placeholder>`` entries are stripped there, so a shipped-but-not-yet-
+    localized entry keeps its pre-133 whole-tree behavior rather than
+    silently disabling the stage on every fresh install.
+    """
+    if not paths:
+        return True
+    rp = str(rel_path).replace(os.sep, "/")
+    for p in paths:
+        p = str(p).strip()
+        if p.startswith("./"):
+            p = p[2:]
+        p = p.rstrip("/")
+        if p in ("", "."):
+            # A repo-root entry ("." / "./" / "/") is a valid whole-tree root
+            # to the grep stage — treat it the same here rather than silently
+            # matching nothing (a natural substitution value for a small repo
+            # whose whole tree is source).
+            return True
+        if rp == p or rp.startswith(p + "/"):
+            return True
+    return False
+
+
+def finding_in_scope(rel_path, scope):
+    """True when a finding at ``rel_path`` survives a check's scope filters.
+
+    ``scope`` is one value from ``check_paths_by_id``: ``paths`` roots are
+    applied via ``path_in_scope``, then ``exclude_dir`` directory-basename
+    globs drop findings under a matching path component at any depth — the
+    same grep ``--exclude-dir`` semantics the grep stage applies, so an
+    overlay ``exclude_dir:`` narrows every stage uniformly, not just grep.
+    """
+    rp = str(rel_path).replace(os.sep, "/")
+    if not path_in_scope(rp, scope.get("paths") or []):
+        return False
+    exclude_dirs = scope.get("exclude_dir") or []
+    if exclude_dirs:
+        for seg in rp.split("/")[:-1]:  # directory components only
+            if any(fnmatch.fnmatch(seg, xd) for xd in exclude_dirs):
+                return False
+    return True
+
+
+def check_paths_by_id(included):
+    """Normalize a stage's ``included`` collection to {check_id: scope}.
+
+    Each scope is ``{"paths": scoping_paths, "exclude_dir": globs}`` for
+    ``finding_in_scope``. ``_classify_checks`` hands the tool-shelling stages
+    full check dicts keyed by id (so ``paths:``/``exclude_dir:`` scoping is
+    available); the legacy public surface (``run_checks_impl`` re-exports,
+    older tests) still passes plain id sets. Membership tests work on both;
+    a set normalizes to "no scoping declared" (whole-tree), preserving the
+    pre-133 behavior for legacy callers.
+
+    Unlocalized angle-bracket placeholders (``<api module>/`` — shipped pack
+    vocabulary the consumer hasn't substituted yet) are STRIPPED from the
+    scoping list: they mean "not yet localized", not "match nothing". With
+    them stripped, a fully-placeholder list stays whole-tree, a partially
+    localized list scopes to its localized entries, and the deliberate
+    ``__disabled_no_op__`` sentinel — no angle brackets — still scopes the
+    check to nothing (the disable shape). This is the difference from the
+    grep stage, which skips a check whose paths resolve to nothing on disk:
+    grep checks are BORN placeholder-scoped and inert until localized, but
+    the tool-shelling stages have always scanned whole-tree, and going inert
+    on unlocalized installs would silently kill their findings everywhere.
+    """
+    def _scope(spec):
+        if not isinstance(spec, dict):
+            return {"paths": [], "exclude_dir": []}
+        return {
+            "paths": [
+                p for p in (spec.get("paths") or [])
+                if "<" not in str(p) and ">" not in str(p)
+            ],
+            "exclude_dir": list(spec.get("exclude_dir") or []),
+        }
+
+    if isinstance(included, dict):
+        return {cid: _scope(spec) for cid, spec in included.items()}
+    return {cid: {"paths": [], "exclude_dir": []} for cid in included}
 
 
 def filter_checks(checks, mode):

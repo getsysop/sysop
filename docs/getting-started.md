@@ -55,6 +55,7 @@ Clone Sysop once, then install it into your project:
 git clone https://github.com/getsysop/sysop.git
 bash sysop/install.sh /path/to/your/project --packs auto
 cd /path/to/your/project
+bash sysop/scripts/self_check.sh                        # one-command prereq check: bash, PyYAML, hooks
 git status                                              # review everything Sysop wrote
 git add .claude/ sysop/ tasks/ CLAUDE.md .gitignore
 git commit -m "chore: install Sysop"

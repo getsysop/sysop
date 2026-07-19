@@ -122,11 +122,11 @@ If there are no uncommitted changes, apply the trailer-placement rule above to t
 
 ## Step 3: Write Pending Documentation
 
-Instead of modifying shared documentation files directly (which causes merge conflicts when parallel branches merge), write a structured file to `.pending-docs/`. The `/review-close` skill will consolidate these into the shared docs after merging.
+Instead of modifying shared documentation files directly (which causes merge conflicts when parallel branches merge), write a structured file to `sysop/runtime/pending-docs/`. The `/review-close` skill will consolidate these into the shared docs after merging.
 
-1. Create the `.pending-docs/` directory if it doesn't exist: `mkdir -p .pending-docs`
+1. Create the `sysop/runtime/pending-docs/` directory if it doesn't exist: `mkdir -p sysop/runtime/pending-docs`
 2. Sanitize the branch name for the filename (replace `/` with `-`)
-3. Write `.pending-docs/<sanitized-branch-name>.md` with YAML frontmatter:
+3. Write `sysop/runtime/pending-docs/<sanitized-branch-name>.md` with YAML frontmatter:
 
 ```yaml
 ---
@@ -225,7 +225,7 @@ except ImportError:  # PyYAML lives only in the project venv (BeanRider ISSUE-00
         sys.exit(2)
 
 branch = subprocess.check_output(["git", "branch", "--show-current"], text=True).strip()
-pending_path = f".pending-docs/{branch.replace('/', '-')}.md"
+pending_path = f"sysop/runtime/pending-docs/{branch.replace('/', '-')}.md"
 with open(pending_path) as f:
     raw = f.read()
 
@@ -320,7 +320,7 @@ Both bypass paths are visible in code review and intentional. `review_task_ids:`
 
 **Interactive invocation (default):** the pending docs file is untracked (gitignored). No docs commit is needed.
 
-1. Verify `.pending-docs/<sanitized-branch-name>.md` exists
+1. Verify `sysop/runtime/pending-docs/<sanitized-branch-name>.md` exists
 2. Display its full contents to the user for review
 3. Confirm the proposed entries look correct before proceeding
 
@@ -351,11 +351,11 @@ Work committed and ready for review.
 
 Code commit:    <hash> <message>
 Branch:         <branch name>
-Pending docs:   .pending-docs/<sanitized-branch-name>.md
+Pending docs:   sysop/runtime/pending-docs/<sanitized-branch-name>.md
 Type:           <type>
 Roadmap IDs:    <roadmap_ids or "none">       (consumed by /review-close Step 4c)
 Review tasks:   <review_task_ids or "none">   (documentary only)
 Summary:        <summary text>
 ```
 
-End with: "Start a fresh session (`/clear`, or a new terminal), then run `/review-close` to merge, consolidate docs, and push. `/review-close` is designed context-independent — it reconstructs from the committed branch, the `## Test decision` records, and `.pending-docs/` — so a clean session reviews this branch (and any others awaiting close) even-handedly, without this implementation session's context biasing the merge gate with the implementer's own rationalizations."
+End with: "Start a fresh session (`/clear`, or a new terminal), then run `/review-close` to merge, consolidate docs, and push. `/review-close` is designed context-independent — it reconstructs from the committed branch, the `## Test decision` records, and `sysop/runtime/pending-docs/` — so a clean session reviews this branch (and any others awaiting close) even-handedly, without this implementation session's context biasing the merge gate with the implementer's own rationalizations."

@@ -29,6 +29,8 @@ Read `.claude/settings.json` and confirm `permissions.allow` contains every rule
 - `Bash(python3 sysop/scripts/validate_tasks.py)` — Step 4c's final-guard validator run (bare `python3`; the script self-resolves venv PyYAML via its own `sys.path` bootstrap, so this one form serves both venv-only and non-venv consumers — Sysop Phase 126)
 - `Bash(python3 sysop/scripts/validate_tasks.py:*)` — same with `--quiet` / `--path`
 
+**One deliberate non-entry:** Step 3b's pending-docs collect (`mkdir -p sysop/runtime/pending-docs && cp …`) ships with **no** allow-rule — the compound splits into `mkdir` + `cp` command words (Phase 126 matcher facts) and neither binds a rule here. On purpose: both are plain intra-repo file writes the auto-classifier has allowed in every live run to date (the bare `cp` shipped ruleless for as long as the step has existed), and a `Bash(cp:*)`-class rule would pre-authorize far more than this one copy. If the collect ever *does* halt there, the Phase 36 `PermissionDenied` hook surfaces the `!`-escape form — run it before continuing; Step 3b itself forbids proceeding to the worktree remove with the docs uncollected.
+
 **Additionally, under `pr` merge policy only** (read `<project>/CLAUDE.md § Merge policy`; default is `direct` — see Step 4-pre): the PR-routed flow shells out to `gh` and a few extra git verbs. Require these too **only when the policy is `pr`** — a `direct`-policy consumer does not need them and must not be blocked for their absence:
 
 - `Bash(git fetch origin:*)` — Step 4-pre cuts the integration branch off fresh `origin/main`
@@ -125,7 +127,7 @@ The three classes are:
 
 - **`clean-merged`** — tip is an ancestor of main AND `git status --porcelain` is empty. Either a never-touched claim branch or an already-merged-but-not-cleaned-up branch. Safe to remove in Step 6.
 - **`clean-ahead`** — tip has commits ahead of main AND `git status --porcelain` is empty. Normal review path; proceed to Step 2a's commit-based inspection.
-- **`dirty`** — after the symlink downgrade above, the *significant* set (`git status --porcelain` minus the downgraded lines) is still non-empty. **Paused mid-implementation work.** Step 2a will produce an automatic SKIP verdict for this branch and Step 6 must refuse to touch the worktree. Two classes of noise are already excluded so they don't false-positive into `dirty`: gitignored `.locks/` and `.pending-docs/` never appear in `--porcelain` without `--ignored`; and an untracked symlink whose target is gitignored in the main repo (a `.venv`-into-the-main-venv tooling convenience) is downgraded out of the significant set (BeanRider ISSUE-0043). Everything with reviewable content — modified tracked files, real untracked files, and any symlink whose target is not provably ignored — stays significant, so the silent-data-loss guard is unweakened.
+- **`dirty`** — after the symlink downgrade above, the *significant* set (`git status --porcelain` minus the downgraded lines) is still non-empty. **Paused mid-implementation work.** Step 2a will produce an automatic SKIP verdict for this branch and Step 6 must refuse to touch the worktree. Two classes of noise are already excluded so they don't false-positive into `dirty`: gitignored `sysop/runtime/locks/` and `sysop/runtime/pending-docs/` never appear in `--porcelain` without `--ignored` (this assumes the branch's checked-out `.gitignore` carries the installer's `sysop/runtime/` append — a worktree honors only *committed* ignore rules, so a branch cut before that append was committed will show `?? sysop/runtime/` until it's rebased/merged in; the installer's migration output says to commit the append before claiming); and an untracked symlink whose target is gitignored in the main repo (a `.venv`-into-the-main-venv tooling convenience) is downgraded out of the significant set (BeanRider ISSUE-0043). Everything with reviewable content — modified tracked files, real untracked files, and any symlink whose target is not provably ignored — stays significant, so the silent-data-loss guard is unweakened.
 
 Carry each branch's classification into Steps 2a, 3b, and 6 — they all consult it.
 
@@ -276,7 +278,7 @@ If main is ahead of origin:
 1. `git log --oneline origin/main..HEAD` — list the unpushed commits
 2. Review each commit's changes: `git show --stat <hash>` for each
 3. Verify the changes look intentional and complete (no half-finished work, no debug code left in)
-4. Check that documentation is accounted for: either `docs:` prefixed commits exist (legacy) or `.pending-docs/*.md` files are present (current workflow)
+4. Check that documentation is accounted for: either `docs:` prefixed commits exist (legacy) or `sysop/runtime/pending-docs/*.md` files are present (current workflow)
 
 ### 2d. Test-Decision Verification (verify the record — Phase 59, C1)
 
@@ -344,11 +346,11 @@ If any command fails, report the failure and **stop**. Do not push with failing 
 
 ## Step 3c: Manual Smoke Gate (BeanRider ISSUE-0008, Phase 35)
 
-Some features can't be verified by automated checks — UI flows that need a browser, commands with external side effects, LLM round-trips whose output a human must eyeball. The contract: a task in `tasks/index.yml` may carry `manual_smoke: true`, and/or a `.pending-docs/*.md` body may contain a heading matching `manual smoke` / `smoke required` (case-insensitive). Either signal halts this step until the human runs, confirms, or waives the procedure.
+Some features can't be verified by automated checks — UI flows that need a browser, commands with external side effects, LLM round-trips whose output a human must eyeball. The contract: a task in `tasks/index.yml` may carry `manual_smoke: true`, and/or a `sysop/runtime/pending-docs/*.md` body may contain a heading matching `manual smoke` / `smoke required` (case-insensitive). Either signal halts this step until the human runs, confirms, or waives the procedure.
 
 If Step 3 was skipped (doc-only diff), skip Step 3c too — a smoke gate over a doc-only change is incoherent.
 
-**1. Detect signals.** The gate reads pending-docs from **main's `.pending-docs/` and each approved branch's worktree** — a `/claim-task` worktree authors its pending-doc there, and it is not copied to main until Step 3b (merge time). Reading the worktrees *in place* keeps the gate honest without collecting docs early: collecting before the merge would break the invariant Steps 4c/6 depend on — "everything in main's `.pending-docs/` belongs to a just-merged branch" — and a branch SKIP'd at Step 3b (worktree remove-refusal, ISSUE-0016) or a whole-run halt could then leave a stray doc that a later Step 4c consolidates for unmerged work, marking its task `done` with the code never merged (BeanRider ISSUE-0050). List this run's approved branches (the same set Step 3b merges), then run the heredoc from the repo root. Output is either `NO_SMOKE_REQUIRED` (proceed to Step 3b) or `SMOKE_REQUIRED: N signal(s)` followed by one `---SIGNAL---` block per signal:
+**1. Detect signals.** The gate reads pending-docs from **main's `sysop/runtime/pending-docs/` and each approved branch's worktree** — a `/claim-task` worktree authors its pending-doc there, and it is not copied to main until Step 3b (merge time). Reading the worktrees *in place* keeps the gate honest without collecting docs early: collecting before the merge would break the invariant Steps 4c/6 depend on — "everything in main's `sysop/runtime/pending-docs/` belongs to a just-merged branch" — and a branch SKIP'd at Step 3b (worktree remove-refusal, ISSUE-0016) or a whole-run halt could then leave a stray doc that a later Step 4c consolidates for unmerged work, marking its task `done` with the code never merged (BeanRider ISSUE-0050). List this run's approved branches (the same set Step 3b merges), then run the heredoc from the repo root. Output is either `NO_SMOKE_REQUIRED` (proceed to Step 3b) or `SMOKE_REQUIRED: N signal(s)` followed by one `---SIGNAL---` block per signal:
 
 ```bash
 # Map this run's approved branches → their worktree dirs so the gate can read
@@ -397,7 +399,7 @@ except ImportError:  # PyYAML lives only in the project venv (BeanRider ISSUE-00
         sys.exit(2)
 
 repo = Path.cwd().resolve()
-# Search each approved branch's worktree .pending-docs/ AND main's (BeanRider ISSUE-0050
+# Search each approved branch's worktree sysop/runtime/pending-docs/ AND main's (BeanRider ISSUE-0050
 # — worktree-authored docs aren't copied to main until Step 3b). Worktrees FIRST: if a doc
 # exists in both (a stale copy a prior halted run left in main + the fresher worktree
 # original), the worktree — the authoring source of truth — must win the basename dedup
@@ -406,8 +408,8 @@ search_dirs = []
 for _d in sys.argv[1].splitlines():
     _d = _d.strip()
     if _d:
-        search_dirs.append(Path(_d) / ".pending-docs")
-search_dirs.append(repo / ".pending-docs")
+        search_dirs.append(Path(_d) / "sysop/runtime/pending-docs")
+search_dirs.append(repo / "sysop/runtime/pending-docs")
 
 heading_re = re.compile(
     r'^(#{1,6})\s+.*(manual\s+smoke|smoke\s+required)',
@@ -508,7 +510,7 @@ Ask signals one at a time; track per-signal decisions in a structured tally (sou
 - Waivers do NOT halt; they accumulate for Step 8.
 - "Already ran it manually" is trusted at face value — the entire point of the gate is letting the human assert "yes, I did the thing."
 
-**4. Record outcomes for Step 8.** The tally drives the "Manual smoke" line in the final report (e.g., `Manual smoke: 1 confirmed, 1 waived (.pending-docs/feat-foo.md)`).
+**4. Record outcomes for Step 8.** The tally drives the "Manual smoke" line in the final report (e.g., `Manual smoke: 1 confirmed, 1 waived (sysop/runtime/pending-docs/feat-foo.md)`).
 
 > **For new projects:** declare `manual_smoke: true` on `tasks/index.yml` entries whose verification needs a human (browser flow, side-effect-bearing command, LLM round-trip). Author the procedure under a `## Manual smoke required` heading in the task body file. The validator warns (not blocks) when the field is set but the heading is missing — see `tasks/schema.md § Manual smoke`.
 
@@ -519,7 +521,7 @@ Feature branches created by `/claim-task` or `batch_work.sh` live in worktrees. 
 For each approved feature branch:
 1. Check if it has a worktree: `git worktree list` and match the branch name
 2. If a worktree exists:
-   a. **Collect pending-docs**: Copy `.pending-docs/*.md` from the worktree to main's `.pending-docs/` (these are untracked files that would be lost when the worktree is removed): `cp <worktree>/.pending-docs/*.md .pending-docs/ 2>/dev/null`
+   a. **Collect pending-docs**: Copy `sysop/runtime/pending-docs/*.md` from the worktree to main's `sysop/runtime/pending-docs/` (these are untracked files that would be lost when the worktree is removed): `mkdir -p sysop/runtime/pending-docs && cp <worktree>/sysop/runtime/pending-docs/*.md sysop/runtime/pending-docs/ 2>/dev/null`. The `mkdir -p` is load-bearing: main's `sysop/runtime/pending-docs/` often does not exist (it is gitignored — absent from any fresh clone — authored lazily by `/document-work` in the *worktree*, and removed-when-empty by Step 4c's pending-docs cleanup step), so a bare `cp <file> sysop/runtime/pending-docs/` silently fails with the dest-missing error masked by `2>/dev/null`, and the very next `git worktree remove` then deletes the gitignored pending-doc for good — losing the doc metadata with no warning, and invalidating the rollback guard below (which assumes the copy happened). For the same reason, if the collect itself could not run (e.g. a permission halt on the `mkdir`/`cp` — see the pre-flight guard's deliberate-non-entry note), do **NOT** proceed to (b): removing the worktree with the docs uncollected is exactly the data loss this command exists to prevent.
    b. **Strip the non-work symlinks Step 1a downgraded**, then **remove the worktree** — **never `--force`**. Step 1a can now classify a worktree `clean-ahead` while a downgraded tooling symlink (an untracked `.venv`-into-the-main-venv, BeanRider ISSUE-0043) is still physically present, and that lone symlink is enough to make an *unforced* `git worktree remove` refuse (`contains modified or untracked files`). So before removing, re-apply the same downgrade rule and delete just those symlinks — removing a symlink deletes only the pointer, never its (gitignored) target, and we stay unforced, so any *real* untracked or modified file still blocks the remove:
 
       ```bash
@@ -541,12 +543,12 @@ For each approved feature branch:
       By Step 1a's classification, an `approved` branch passed through Step 2a's clean-state check, so the unforced remove should now succeed. If `git worktree remove` **still** refuses after the strip, that means the worktree carries a genuine untracked/modified file that appeared between Step 1a and now — **stop**, surface the error, then **roll back the pending-docs this branch copied in step (a)** so a later Step 4c cannot consolidate an unmerged branch's doc and mark its task `done` with the code never merged:
 
       ```bash
-      for f in "<worktree-path>"/.pending-docs/*.md; do
-        [ -e "$f" ] && rm -f ".pending-docs/$(basename "$f")"   # re-collected on a later run once mergeable
+      for f in "<worktree-path>"/sysop/runtime/pending-docs/*.md; do
+        [ -e "$f" ] && rm -f "sysop/runtime/pending-docs/$(basename "$f")"   # re-collected on a later run once mergeable
       done
       ```
 
-      Then downgrade this branch to SKIP for this run (leave its worktree, lock, and branch intact), and continue with the next approved branch. Silent data loss is the failure mode this guard prevents (BeanRider ISSUE-0016) — the strip never touches a real file, so it cannot cause it. (The rollback matters because step (a) copies before this remove is attempted; without it, a branch SKIP'd here leaves its doc stranded in main's `.pending-docs/` for the merged branches' Step 4c to consolidate.)
+      Then downgrade this branch to SKIP for this run (leave its worktree, lock, and branch intact), and continue with the next approved branch. Silent data loss is the failure mode this guard prevents (BeanRider ISSUE-0016) — the strip never touches a real file, so it cannot cause it. (The rollback matters because step (a) copies before this remove is attempted; without it, a branch SKIP'd here leaves its doc stranded in main's `sysop/runtime/pending-docs/` for the merged branches' Step 4c to consolidate.)
 3. If no worktree exists, the branch is already free for checkout
 
 For **SKIP'd** branches (Step 2a verdict, dirty worktree), do nothing here — the worktree stays.
@@ -644,7 +646,7 @@ If the check fails (no `docs: close Batch …` tip, or `review_tasks.md` is stil
 
 After all branches are merged but **before** pushing:
 
-1. **Scan for pending docs**: `ls .pending-docs/*.md 2>/dev/null`
+1. **Scan for pending docs**: `ls sysop/runtime/pending-docs/*.md 2>/dev/null`
 
 2. **If none found**: check merged history for `docs:` commits (backward compatibility with branches that wrote docs directly). If present, skip doc consolidation — the docs are already in the shared files.
 
@@ -661,7 +663,7 @@ After all branches are merged but **before** pushing:
    review_task_ids = pending.get('review_task_ids') or []
    ```
 
-   The fallback covers in-flight pending-docs authored before the `task_ids` → `roadmap_ids` rename (Phase 23a). Treat any IDs read via the fallback as `roadmap_ids` — that matches the pre-rename consumer behavior (Step 4c's heredoc was already treating them as roadmap IDs, just silently no-op'ing on the non-matches). **Removal trigger:** drop the `or pending.get('task_ids')` clause in any subsequent phase that touches Step 4c, once BeanRider has run one full `/review-close` cycle on a pending-doc authored after the 23a absorption (confirmable via `git log -p .pending-docs/` or via the merged consolidation commit). Pending-docs are minutes-to-hours lived; the shim's exposure window is one absorption cycle.
+   The fallback covers in-flight pending-docs authored before the `task_ids` → `roadmap_ids` rename (Phase 23a). Treat any IDs read via the fallback as `roadmap_ids` — that matches the pre-rename consumer behavior (Step 4c's heredoc was already treating them as roadmap IDs, just silently no-op'ing on the non-matches). **Removal trigger:** drop the `or pending.get('task_ids')` clause in any subsequent phase that touches Step 4c, once BeanRider has run one full `/review-close` cycle on a pending-doc authored after the 23a absorption (confirmable via `git log -p sysop/runtime/pending-docs/` or via the merged consolidation commit). Pending-docs are minutes-to-hours lived; the shim's exposure window is one absorption cycle.
 
 4. **Route by type and write to shared docs** (single pass, no conflicts since we're on main post-merge):
 
@@ -675,7 +677,7 @@ After all branches are merged but **before** pushing:
    | infrastructure | Yes | — | — | if populated |
    | adhoc | Yes | — | — | if populated |
 
-   The Roadmap column is **informational only** — `if populated` means the `tasks/index.yml` round-trip below runs unconditionally for every ID in `roadmap_ids`, regardless of `type`. This is intentional: the round-trip is mechanical (status flip + body move + lock cleanup), driven by data presence, not by type. A pending-doc with `roadmap_ids: []` simply skips the round-trip naturally. (BeanRider ISSUE-0034: tracked-bug close-outs use `type: bugfix` with a populated `roadmap_ids: [BUG-NNNN]` and need the round-trip; the prior `—` reading would have left the BUG entry stuck `in_progress` with the body orphaned under `open/`.)
+   The Roadmap column is **informational only** — `if populated` means the `tasks/index.yml` round-trip below runs unconditionally for every ID in `roadmap_ids`, regardless of `type`. This is intentional: the round-trip is mechanical (status flip + body move + lock/parked-marker cleanup), driven by data presence, not by type. A pending-doc with `roadmap_ids: []` simply skips the round-trip naturally. (BeanRider ISSUE-0034: tracked-bug close-outs use `type: bugfix` with a populated `roadmap_ids: [BUG-NNNN]` and need the round-trip; the prior `—` reading would have left the BUG entry stuck `in_progress` with the body orphaned under `open/`.)
 
    For each entry, generate the doc content from `type` + `summary` + `roadmap_ids` + `review_task_ids` + `date`:
 
@@ -707,11 +709,13 @@ After all branches are merged but **before** pushing:
    ids = ["<ROADMAP_ID_1>", "<ROADMAP_ID_2>"]
    p = Path('tasks/index.yml')
    d = yaml.safe_load(p.read_text())
+   closed = []
    for t in d.get('tasks', []):
        if t['id'] not in ids:
            continue
        t['status'] = 'done'
        t['completed_date'] = today
+       closed.append(t['id'])
        body = t.get('body', '')
        if not body:
            continue  # no body to move (archive_summary case)
@@ -731,14 +735,31 @@ After all branches are merged but **before** pushing:
        dst = new_body if new_body.startswith('tasks/') else f'tasks/{new_body}'
        subprocess.run(['git', 'mv', src, dst], check=True)
        t['body'] = new_body
+   p.write_text(yaml.safe_dump(d, sort_keys=False, default_flow_style=False, allow_unicode=True, width=120))
+   # Working-tree cleanup, deferred until every git mv landed and the index wrote:
+   # an abort mid-loop must not have already destroyed an earlier task's records
+   # (the parked marker below is unrecreatable — plan + verdict, never committed).
+   # Keyed on the task id, not the body shape, so archive_summary and flat-layout
+   # closes — which `continue` past the move above — are still cleaned up.
+   for tid in closed:
        # Drop the per-task lock file (BeanRider ISSUE-0035). The lock's lifecycle
        # is open → in_progress (claim_task --lock creates it) → done (here). Leaving
-       # it behind clutters .locks/ and confuses the "is anyone working on this?"
-       # signal. `.locks/` is .gitignored, so this is a working-tree-only operation
+       # it behind clutters sysop/runtime/locks/ and confuses the "is anyone working on this?"
+       # signal. `sysop/runtime/locks/` is .gitignored, so this is a working-tree-only operation
        # — no stage, no commit. `missing_ok=True` tolerates pre-Phase-32 tasks
        # whose locks already got cleaned up by hand.
-       Path(f'.locks/{t["id"]}.lock').unlink(missing_ok=True)
-   p.write_text(yaml.safe_dump(d, sort_keys=False, default_flow_style=False, allow_unicode=True, width=120))
+       Path(f'sysop/runtime/locks/{tid}.lock').unlink(missing_ok=True)
+       # Also drop any parked marker(s) for the task. /auto-build Phase 6d mirrors a
+       # parked task's plan + verdict to the durable project-root archive
+       # sysop/runtime/auto-build/parked/<TASK_ID>__<TS>.md; the close path historically
+       # never removed them, so markers for done tasks accumulated — the parked/ dir a
+       # human lists when hunting resumable work over-reports a done task as still
+       # parked. Same timing + working-tree-only semantics as the lock above (see the
+       # `pr`-policy invariant note in Step 4-pre for why pre-merge death is accepted).
+       # A task that never parked has no markers, and Path.glob on a missing parked/
+       # dir yields nothing — both no-op cleanly.
+       for marker in Path('sysop/runtime/auto-build/parked').glob(f'{tid}__*.md'):
+           marker.unlink(missing_ok=True)
    PY
    python3 sysop/scripts/validate_tasks.py || { echo "validator rejected the index — aborting"; exit 1; }
    ```
@@ -749,7 +770,7 @@ After all branches are merged but **before** pushing:
 
    <!-- Convention promotion moved to /codebase-review and /security-audit Step 9 -->
 
-6. **Clean up pending-docs**: Delete all remaining `.pending-docs/*.md` files. Remove the `.pending-docs/` directory if empty.
+6. **Clean up pending-docs**: Delete all remaining `sysop/runtime/pending-docs/*.md` files. Remove the `sysop/runtime/pending-docs/` directory if empty.
 
 7. **Commit**: `docs: consolidate documentation for <N> merged branches`
 
@@ -806,7 +827,7 @@ gh pr merge "$PR_URL" --squash --delete-branch
 The PR is **not mergeable** if a required check failed (`gh pr checks` reports a failing check), `gh pr view` shows `mergeStateStatus: BLOCKED`/`DIRTY`, or `gh pr merge` refuses. When that happens:
 
 - **Report** the PR URL and the failing check name(s), then **STOP** — do not force-merge, do not fall back to a direct `git push origin main`, do not loop. Authority to merge belongs to the PR's required checks, not this skill.
-- Leave the integration branch, the feature branches, the worktrees, and the `.locks/` **in place**. **Skip Step 6 entirely** this run — its cleanup is gated on a confirmed merge (see Step 6's merge-policy gate). The human (or a follow-up `/review-close`) fixes the check and re-runs.
+- Leave the integration branch, the feature branches, the worktrees, and the `sysop/runtime/locks/` **in place**. **Skip Step 6 entirely** this run — its cleanup is gated on a confirmed merge (see Step 6's merge-policy gate). The human (or a follow-up `/review-close`) fixes the check and re-runs.
 - Re-running is safe and idempotent: the next `pr`-policy run cuts a **new** integration branch from `origin/main` and re-sweeps the same still-unpushed local-`main` commits, so nothing is double-applied. The stuck branch is left orphaned but harmless — delete it by hand (`git branch -D <branch>` + `git push origin --delete <branch>`) once its replacement merges.
 
 On a confirmed merge (`gh pr merge` exits 0 / `gh pr view` shows `state: MERGED`), continue to Step 5, then Step 6 cleanup.
@@ -829,7 +850,7 @@ Skip this step only if the pushed changes are docs/config only with no code or s
 
 **Merge-policy gate (Step 4-pre).**
 - **`direct` policy** — Step 4d already pushed `main`; run the cleanup below as usual.
-- **`pr` policy** — run cleanup **only if Step 4d confirmed the integration PR `MERGED`.** If 4d-1 reported a stuck PR (red check / `BLOCKED`), **skip Step 6 entirely** — the feature branches, worktrees, and `.locks/` must survive so the work is recoverable once the check is fixed. When the PR did merge, first re-sync local `main` and drop the integration branch, then run the `pr` per-branch cleanup below:
+- **`pr` policy** — run cleanup **only if Step 4d confirmed the integration PR `MERGED`.** If 4d-1 reported a stuck PR (red check / `BLOCKED`), **skip Step 6 entirely** — the feature branches, worktrees, and `sysop/runtime/locks/` must survive so the work is recoverable once the check is fixed. When the PR did merge, first re-sync local `main` and drop the integration branch, then run the `pr` per-branch cleanup below:
   ```bash
   git checkout main
   git fetch origin main
@@ -839,7 +860,7 @@ Skip this step only if the pushed changes are docs/config only with no code or s
   git branch -D "$INTEGRATION_BRANCH" 2>/dev/null || true
   ```
 
-> **Lock-as-real-time-signal invariant (`pr` policy).** Step 4c removes each closed task's `.locks/<TASK-ID>.lock` from disk on the integration branch, before the PR merges — so there is a brief window where, on `main`, the task is still `in_progress` (the `done` flip rides the unmerged PR) with no lock. This does **not** reopen the task: `/auto-build` and `next_task` only ever claim `status: open` tasks, and an `in_progress` task is never claimable regardless of its lock. The only visible effect is a transient `/sitrep` "in_progress without lock" drift flag during the in-flight (or stuck-PR) window, which clears when the PR merges and the `done` flip lands. No action needed.
+> **Lock-as-real-time-signal invariant (`pr` policy).** Step 4c removes each closed task's `sysop/runtime/locks/<TASK-ID>.lock` from disk on the integration branch, before the PR merges — so there is a brief window where, on `main`, the task is still `in_progress` (the `done` flip rides the unmerged PR) with no lock. This does **not** reopen the task: `/auto-build` and `next_task` only ever claim `status: open` tasks, and an `in_progress` task is never claimable regardless of its lock. The only visible effect is a transient `/sitrep` "in_progress without lock" drift flag during the in-flight (or stuck-PR) window, which clears when the PR merges and the `done` flip lands. No action needed. The same pre-merge timing applies to the task's **parked marker(s)** (`sysop/runtime/auto-build/parked/<TASK-ID>__*.md`, removed by the same Step 4c cleanup) — with one honest asymmetry: a lock is trivially recreatable (`claim_task.sh --lock`), but a marker's content (the park's plan + adversarial verdict, never committed) is not. Accepted anyway: by the time Step 4c runs, the park was already resolved — the resume that produced this close consumed the verdict — so a stuck PR needs the *code* recoverable (the integration + feature branches Step 4d-1 leaves in place), not the historical park record. A consumer who wants park history durably should copy `parked/` entries somewhere tracked before closing.
 
 **`direct` policy — per-branch cleanup.** For each merged feature branch (worktrees already removed in Step 3b):
 1. Delete the **remote** branch first: `git push origin --delete <branch>` (if it exists remotely).
@@ -854,7 +875,7 @@ Skip this step only if the pushed changes are docs/config only with no code or s
 2. Delete the **remote** branch **only if it was pushed**: `git push origin --delete <branch>`. Feature branches created by `/claim-task` are usually local-only under `pr` policy (the integration branch is the only thing pushed), so skip this when the branch has no remote tracking ref.
 
 For each **SKIP'd** branch (Step 2a verdict — Step 1a classified the worktree as `dirty`):
-1. Leave the worktree, the `.locks/<TASK_ID>.lock` file, and the branch fully in place — do NOT touch anything.
+1. Leave the worktree, the `sysop/runtime/locks/<TASK_ID>.lock` file, and the branch fully in place — do NOT touch anything.
 2. Carry the SKIP entry into Step 8's report so the user sees the paused-work list with its file count and worktree path.
 
 For each **rejected** branch that still has a worktree:
@@ -862,7 +883,7 @@ For each **rejected** branch that still has a worktree:
 
 **Hard guard against worktree removal in this step (BeanRider ISSUE-0016).** Step 6's flow as documented does not call `git worktree remove` — worktrees for merged branches are gone after Step 3b, and worktrees for SKIP'd / rejected branches are explicitly preserved. If a future evolution of this skill adds a worktree-cleanup pass here, that pass MUST refuse to remove any worktree Step 1a classified as `dirty` AND MUST NOT use `--force`. The current shape avoids the trap structurally; this note exists to keep it that way as the skill evolves.
 
-Remove `.pending-docs/` directory if it still exists and is empty: `rmdir .pending-docs 2>/dev/null`
+Remove `sysop/runtime/pending-docs/` directory if it still exists and is empty: `rmdir sysop/runtime/pending-docs 2>/dev/null`
 
 ## Step 7: Friction Capture
 
@@ -914,6 +935,7 @@ Manual smoke:  <N confirmed, N driven, N waived> (or "none required")
 Test decisions: <N verified, N waived, N held-for-fix, N doc-only> (or "none to verify")
 Staging:       <verified / skipped / broken>
 Locks cleaned: <list> (or "none")
+Parked markers: <removed TASK-ID list> (or "none")
 Friction:      <N entries appended to SYSOP_ISSUES.md> (or "none" / "log missing")
 Signal:        <N [good] entries appended> (or "none")
 

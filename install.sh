@@ -1335,18 +1335,25 @@ report_post_overwrite_deltas() {
     done
   fi
 
-  # Phase 128 (§5 step 7): suppress the numstat delta table during a namespace
-  # migration. With --no-renames a mass mv renders as a wall of `+N 0` adds, real
-  # content changes are indistinguishable, the ≥5-deletions heuristic can never
-  # fire, and preserved files double-report. _ns_migration_report replaces it
-  # with an honest moved/preserved/swept summary. The preserved-paths block above
-  # still prints (it's the load-bearing consumer signal).
-  [[ "$MIGRATION_MODE" -eq 1 ]] && return 0
-
+  # Phase 128 (§5 step 7): suppress the numstat rows for MOVED paths during a
+  # namespace migration. With --no-renames a mass mv renders as a wall of
+  # `+N 0` adds, real content changes are indistinguishable, the ≥5-deletions
+  # heuristic can never fire, and preserved files double-report.
+  # _ns_migration_report replaces those rows with an honest
+  # moved/preserved/swept summary. Phase 133 narrows the suppression to the
+  # move set only: NON-moved managed paths (`.claude/*` concat outputs stay
+  # put, so their numstat rows are still meaningful) keep their rows — in the
+  # Phase-99 ancestor-unreachable fallback and the adopt-bridge path this
+  # table is the LAST per-file signal for committed edits to those files, and
+  # the blanket early-return removed it exactly when pre-overwrite detection
+  # wasn't possible (the residual gap the Phase-128 post-open review filed).
   local -a paths=()
   local mp
   for mp in "${MANAGED_PATHS[@]}"; do
     [[ "$mp" == ".claude/settings.json" ]] && continue
+    if [[ "$MIGRATION_MODE" -eq 1 ]] && [[ "$(_ns_new_to_old "$mp")" != "$mp" ]]; then
+      continue   # moved path — reported by _ns_migration_report instead
+    fi
     paths+=("$mp")
   done
   (( ${#paths[@]} == 0 )) && return 0
@@ -2605,37 +2612,35 @@ EOF
 #   3. tasks/{open,deferred,archive}/ — directory shells with .gitkeep so
 #      the layout exists from day one. The .gitkeep files are managed
 #      paths but contain no semantic content; they're safe to overwrite.
-# Ensure the consumer .gitignore ignores Sysop's runtime-artifact dirs
-# (Phase 99, tester round). These hold transient orchestration state that a stray
-# `git add -A` would otherwise commit into project history:
-#   .subagent-envelopes/  in-flight SubagentStop envelope JSON (Phase 37)
-#   .auto-build/          parked-task plan + adversarial-verdict archive (Phase 65a)
-#   .pending-docs/        deferred documentation drafts (/document-work Step 3)
-#   .locks/               in-progress task locks (claim_task.sh; Phase 32)
-# The set must stay complete: /review-close Step 2a derives its `dirty` verdict
-# from `git status --porcelain`, so an un-ignored `.locks/<TASK>.lock` or
-# `.pending-docs/<branch>.md` makes a clean branch read dirty → auto-SKIP → the
-# close silently refuses (Phase 99.1 / tester issue #10). A drift-guard test
+# Ensure the consumer .gitignore ignores Sysop's runtime-artifact home
+# (Phase 99, tester round; consolidated Phase 133). Runtime dirs hold transient
+# orchestration state that a stray `git add -A` would otherwise commit into
+# project history. As of Phase 133 all four live under ONE vendor-namespaced
+# home, so a single ignore entry covers them:
+#   sysop/runtime/subagent-envelopes/  in-flight SubagentStop envelope JSON (Phase 37)
+#   sysop/runtime/auto-build/          parked-task plan + adversarial-verdict archive (Phase 65a)
+#   sysop/runtime/pending-docs/        deferred documentation drafts (/document-work Step 3)
+#   sysop/runtime/locks/               in-progress task locks (claim_task.sh; Phase 32)
+# The guarantee must hold: /review-close Step 2a derives its `dirty` verdict
+# from `git status --porcelain`, so an un-ignored lock or pending-doc makes a
+# clean branch read dirty → auto-SKIP → the close silently refuses (Phase 99.1
+# / tester issue #10). A drift-guard test
 # (tests/test_install_runtime_gitignore.py) greps the skills for every dir they
-# assert is gitignored and fails if this list doesn't cover it.
+# assert is gitignored and fails if this entry doesn't cover it.
+# Loop mode uses the same entry: the audit skills' Step 8 promotion-deferral
+# writes sysop/runtime/pending-docs/ (leg-5 dogfood finding), and the single
+# sysop/runtime/ line adds no dead per-dir entries to the enumerated footprint.
 # Idempotent + update-safe: append-only, one full-line entry each, skip any
 # already present. .gitignore is CONSUMER-OWNED, so we NEVER rewrite existing
-# entries — only append missing ones. Runs on fresh install AND --update, so a
-# .gitignore that pre-dates the install (or was hand-edited later) still gets
-# the guarantee. (The old fresh-install-only append this replaces never existed
-# — the dangling reference in parse_subagent_envelope.py is corrected there.)
+# entries — only append missing ones (a pre-133 install's four old dot-dir
+# entries are left in place: dead but harmless, and removing consumer-file
+# lines would break the append-only contract). Runs on fresh install AND
+# --update, so a .gitignore that pre-dates the install (or was hand-edited
+# later) still gets the guarantee.
 ensure_runtime_gitignore() {
   hdr "runtime-artifact gitignore"
   local gi="$TARGET/.gitignore"
-  local -a want=(".subagent-envelopes/" ".auto-build/" ".pending-docs/" ".locks/")
-  if [[ "$INSTALL_MODE" == "loop" ]]; then
-    # Loop mode ships no lifecycle orchestration, so three of the four dirs
-    # can't exist — but the audit skills' Step 8 promotion-deferral still
-    # writes .pending-docs/convention-candidates.md (leg-5 dogfood finding).
-    # Ignore just that dir; dead lifecycle entries would undercut the
-    # enumerated-footprint claim.
-    want=(".pending-docs/")
-  fi
+  local -a want=("sysop/runtime/")
   local -a missing=()
   local entry
   for entry in "${want[@]}"; do
@@ -2756,11 +2761,11 @@ run_install_pipeline() {
   install_checks_yml
   install_semgrep
   [[ "$INSTALL_MODE" == "loop" ]] || install_tasks_scaffold
-  # ensure_runtime_gitignore ignores the runtime orchestration dirs
-  # (.subagent-envelopes/ .auto-build/ .pending-docs/ .locks/). In loop mode it
-  # narrows itself to .pending-docs/ alone — the audit skills' promotion-deferral
-  # writes it (leg-5 dogfood finding); the other three are lifecycle-only and
-  # would be dead ignore rules.
+  # ensure_runtime_gitignore ignores the consolidated runtime home
+  # (sysop/runtime/ — subagent-envelopes, auto-build, pending-docs, locks;
+  # Phase 133). One entry serves both modes: loop mode's audit skills write
+  # sysop/runtime/pending-docs/ via the promotion-deferral (leg-5 dogfood
+  # finding), and the single line adds no dead per-dir entries.
   ensure_runtime_gitignore
   install_permissions
   install_served_models
@@ -3372,6 +3377,133 @@ _ns_migration_preflight() {
   fi
 }
 
+# ─── Phase 133: runtime-dir consolidation (sysop/runtime/) ────────────────
+# The four gitignored runtime dirs move under one vendor-namespaced home
+# (SYSOP_NAMESPACE_SPEC § 10, the deliberately-cut Phase 128 leg):
+#   .subagent-envelopes/ → sysop/runtime/subagent-envelopes/
+#   .auto-build/         → sysop/runtime/auto-build/
+#   .pending-docs/       → sysop/runtime/pending-docs/
+#   .locks/              → sysop/runtime/locks/
+# The dirs are gitignored (untracked), so the move is plain mv — no git mv,
+# no lock managed_paths involvement. Phase 32 semantics are preserved: locks
+# still resolve via `git rev-parse --git-common-dir` relative to the MAIN
+# checkout; only the leaf path under that root changes.
+RT_OLD_DIRS=(".subagent-envelopes" ".auto-build" ".pending-docs" ".locks")
+RT_NEW_BASE="sysop/runtime"
+RT_MOVE_PENDING=0
+RT_PENDING_DIRS=()
+
+_rt_new_name() {  # ".auto-build" → "auto-build"
+  printf '%s\n' "${1#.}"
+}
+
+_rt_compute_pending() {
+  RT_PENDING_DIRS=()
+  local d
+  for d in "${RT_OLD_DIRS[@]}"; do
+    [[ -d "$TARGET/$d" ]] && RT_PENDING_DIRS+=("$d")
+  done
+  RT_MOVE_PENDING=${#RT_PENDING_DIRS[@]}
+}
+
+# Mixed-version split-brain guard (spec § 10 v2 — the leg must not ship
+# without it): while any pre-migration worktree exists, its checked-out script
+# copies write <main>/.locks/ while the migrated main checkout writes
+# <main>/sysop/runtime/locks/ — two lock registries, and every "is anyone
+# working on this?" answer becomes wrong. Same refuse-with-guidance posture as
+# _ns_migration_preflight (no --force bypass; both states are cheap to clear).
+_rt_migration_preflight() {
+  local wt_count
+  wt_count="$(git -C "$TARGET" worktree list --porcelain 2>/dev/null | grep -c '^worktree ' || true)"
+  if [[ "${wt_count:-1}" -gt 1 ]]; then
+    err "Runtime-dir consolidation needs a single worktree, but extra git worktrees exist."
+    err "  Script copies checked out in those worktrees still write .locks/ at the main"
+    err "  checkout while the migrated main writes sysop/runtime/locks/ — a split-brain"
+    err "  lock registry. Merge or remove the worktrees first"
+    err "  (bash sysop/scripts/cleanup_worktrees.sh --clean, or 'git worktree remove'),"
+    err "  then re-run the update."
+    exit 1
+  fi
+  # Live task claims — same "quiet queue" rule as the namespace preflight:
+  # a lock moved mid-claim strands the claim's tooling on the old path.
+  if [[ -d "$TARGET/.locks" ]] && compgen -G "$TARGET/.locks/*.lock" >/dev/null 2>&1; then
+    err "Runtime-dir consolidation needs a quiet queue, but active task lock(s) exist in .locks/."
+    err "  Finish or release the claim(s) (bash sysop/scripts/claim_task.sh --release <ID>), then re-run."
+    exit 1
+  fi
+}
+
+# Merge src dir into dst dir: move-if-absent per entry, recurse on dir/dir
+# collisions (so .auto-build/parked/ archive content survives a crash-resume
+# where both sides already have a parked/ — Phase 65a durability requirement),
+# and never clobber an existing destination entry.
+_rt_merge_dir() {
+  local src="$1" dst="$2"
+  local child base
+  for child in "$src"/* "$src"/.[!.]* "$src"/..?*; do
+    [[ -e "$child" || -L "$child" ]] || continue
+    base="$(basename "$child")"
+    if [[ ! -e "$dst/$base" && ! -L "$dst/$base" ]]; then
+      mv "$child" "$dst/$base"
+    elif [[ -d "$child" && -d "$dst/$base" && ! -L "$child" && ! -L "$dst/$base" ]]; then
+      _rt_merge_dir "$child" "$dst/$base"
+      rmdir "$child" 2>/dev/null || true
+    fi
+    # else: same-named non-dir entry on both sides — leave the old copy in
+    # place; the caller reports the leftover for hand reconciliation.
+  done
+}
+
+# Move-if-exists, resumable from any partial state: whole-dir mv when the
+# destination is absent, recursive no-clobber merge when both sides exist
+# (crash-resume), silent no-op when nothing is pending. A completed
+# consolidation re-probes as "no old dirs present" → normal update.
+migrate_runtime_dirs() {
+  (( RT_MOVE_PENDING == 0 )) && return 0
+  hdr "runtime-dir consolidation (Phase 133)"
+  local d name new
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    for d in "${RT_PENDING_DIRS[@]}"; do
+      note "would move: $d/ → $RT_NEW_BASE/$(_rt_new_name "$d")/"
+    done
+    return 0
+  fi
+  ensure_dir "$TARGET/$RT_NEW_BASE"
+  for d in "${RT_PENDING_DIRS[@]}"; do
+    name="$(_rt_new_name "$d")"
+    new="$TARGET/$RT_NEW_BASE/$name"
+    if [[ ! -e "$new" ]]; then
+      mv "$TARGET/$d" "$new"
+      note "moved: $d/ → $RT_NEW_BASE/$name/"
+    else
+      _rt_merge_dir "$TARGET/$d" "$new"
+      rmdir "$TARGET/$d" 2>/dev/null || true
+      if [[ -d "$TARGET/$d" ]]; then
+        note "merged: $d/ → $RT_NEW_BASE/$name/ — ⚠ $d/ NOT removed: same-named"
+        note "  entries exist on both sides; reconcile the leftovers by hand."
+      else
+        note "merged: $d/ → $RT_NEW_BASE/$name/ (crash-resume: destination already existed)"
+      fi
+    fi
+  done
+  # .gitignore hygiene: the old dot-dir entries a pre-133 install appended
+  # (all four in full mode; just .pending-docs/ in loop mode) are now dead.
+  # They are consumer-file lines, so we never rewrite them (append-only
+  # contract) — just say so once.
+  if [[ -f "$TARGET/.gitignore" ]] \
+     && grep -qxE '\.(locks|pending-docs|auto-build|subagent-envelopes)/' "$TARGET/.gitignore" 2>/dev/null; then
+    note "note: the old .gitignore entries (.subagent-envelopes/ .auto-build/"
+    note "      .pending-docs/ .locks/) are now unused — safe to delete by hand."
+  fi
+  # Worktree ignore lag: a worktree only honors the COMMITTED .gitignore of
+  # its checked-out branch, so until the consumer commits the sysop/runtime/
+  # append, runtime writes inside a fresh worktree show up in `git status
+  # --porcelain` and /review-close's dirty classifier auto-SKIPs the branch.
+  note "commit the updated .gitignore before claiming new tasks — worktrees"
+  note "  only see committed ignore rules (a pre-existing branch's worktree"
+  note "  needs the entry rebased/merged in before its close runs clean)."
+}
+
 # ─── main ────────────────────────────────────────────────────
 main() {
   hdr "Sysop installer"
@@ -3653,6 +3785,24 @@ main() {
     fi
   fi
 
+  # Phase 133: detect the runtime-dir consolidation. Fires on --update AND on
+  # a plain re-install over an existing install (lock present — the T7 guard
+  # deliberately lets that path through, and it installs post-133 writers, so
+  # skipping the move there would strand live locks/parked archives at the old
+  # paths while every new resolver reads sysop/runtime/ — the exact split-brain
+  # the preflight exists to refuse; adversarial-review finding, 2026-07-19).
+  # Never on a genuinely fresh target: a lock-less repo's .locks/ or
+  # .pending-docs/ would be some OTHER tool's directory — not ours to move.
+  # The preflight hard-refuses on extra worktrees / active locks BEFORE the
+  # confirm, mirroring the namespace T7 ordering, and only when real moves
+  # are pending.
+  if [[ "$UPDATE_MODE" -eq 1 ]] || [[ -f "$TARGET/$LOCK_REL" ]]; then
+    _rt_compute_pending
+    if (( RT_MOVE_PENDING > 0 )); then
+      _rt_migration_preflight
+    fi
+  fi
+
   # Plan summary.
   hdr "plan"
   say "  target:  $TARGET"
@@ -3674,6 +3824,9 @@ main() {
   if [[ "$MIGRATION_MODE" -eq 1 ]]; then
     say "  layout:  MIGRATING to the sysop/ vendor dir (Phase 128) — ${#NS_MOVE_OLD[@]} path(s) move;"
     say "           scripts/ → sysop/scripts/, WORKFLOW*.md → sysop/docs/, SYSOP_ISSUES.md → sysop/"
+  fi
+  if (( RT_MOVE_PENDING > 0 )); then
+    say "  runtime: consolidating ${RT_MOVE_PENDING} runtime dir(s) → sysop/runtime/ (Phase 133)"
   fi
 
   if [[ "$DRY_RUN" -eq 0 ]]; then
@@ -3861,6 +4014,12 @@ main() {
   # dry-run too), and independent of the tree-move above so it fires on every migration.
   [[ "$MIGRATION_MODE" -eq 1 ]] && _ns_remap_accept_upstream
 
+  # Phase 133: consolidate the runtime dirs. Runs after the namespace move (a
+  # pre-128 consumer gets both waves in one --update) and before the pipeline
+  # (whose ensure_runtime_gitignore appends the new sysop/runtime/ entry).
+  # Handles its own dry-run plan; no-op when nothing is pending.
+  migrate_runtime_dirs
+
   # Execute install pipeline (populates MANAGED_PATHS; copy_file consumes
   # DIVERGENCE_SHADOW for Phase 24b per-file preservation).
   MANAGED_PATHS=()
@@ -4019,6 +4178,7 @@ main() {
       note "diff vs pre-update snapshot: git -C $TARGET diff ${snapshot_hash:0:12}..HEAD"
     fi
     note "see what changed: git -C $TARGET diff"
+    note "self-check:       bash $TARGET/sysop/scripts/self_check.sh"
     note "smoke test:       bash $TARGET/sysop/scripts/run_checks.sh"
     note "re-arm git hooks after reconciling sysop/scripts/hooks/: bash $TARGET/sysop/scripts/install_hooks.sh"
   else
@@ -4029,6 +4189,7 @@ main() {
     if [[ "$ARM_HOOKS" -eq 0 ]]; then
       note "bash sysop/scripts/install_hooks.sh         # arm git hooks (--no-arm-hooks was set)"
     fi
+    note "bash sysop/scripts/self_check.sh            # verify prereqs: bash, PyYAML, hooks (Phase 133)"
     note "bash sysop/scripts/run_checks.sh            # smoke-test the check registry"
     note "git status                            # review what landed"
     say ""

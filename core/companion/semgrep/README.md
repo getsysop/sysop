@@ -32,7 +32,7 @@ Both run every scan. Use the A/B hit-count comparison across `/codebase-review` 
 | `INFO` | LOW |
 
 ### Paths
-`paths:` in the YAML is **optional**. The Python caller (`run_checks_impl.py`) filters results by `included_ids`; path scoping is declared in the pack's `checks.yml.fragment` stub entry, not in the rule YAML. Omit `paths:` from new rules — `paths.include` in the YAML causes semgrep to skip fixture files during `semgrep scan --config <rule>.yaml fixtures/` testing because the fixture paths don't match the rule's include patterns.
+`paths:` in the YAML is **optional**. The Python caller (`run_checks_impl.py`) filters results by `included_ids`, and — as of Phase 133 — the pack's `checks.yml.fragment` stub entry's `paths:` post-filters the rule's findings, so path scoping belongs in the stub entry, not in the rule YAML. Omit `paths:` from new rules — `paths.include` in the YAML causes semgrep to skip fixture files during `semgrep scan --config <rule>.yaml fixtures/` testing because the fixture paths don't match the rule's include patterns (the loop-mode dogfood hit exactly this: a path-restricted rule whose positive/negative fixtures never matched). If a rule genuinely must carry its own `paths.include`, add the fixtures glob (`**/fixtures/**`) to that include so the fixture run still exercises it.
 
 Existing rules carry `paths:` for historical documentation reasons; do not add it to new rules.
 

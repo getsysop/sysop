@@ -64,16 +64,16 @@ def _make_tasks_tree(root: Path) -> Path:
 
 
 def test_locks_dir_falls_back_when_not_a_git_repo(tmp_path):
-    """`tmp_path` has no `.git/`; helper must return `<root>/.locks`."""
+    """`tmp_path` has no `.git/`; helper must return `<root>/sysop/runtime/locks`."""
     resolved = vt._resolve_canonical_locks_dir(tmp_path)
-    assert resolved == tmp_path / ".locks"
+    assert resolved == tmp_path / "sysop/runtime/locks"
 
 
 def test_locks_dir_falls_back_when_git_binary_missing(tmp_path):
     """If `git` is not on PATH, helper must still return the safe default."""
     with mock.patch.object(vt.subprocess, "run", side_effect=FileNotFoundError("git not found")):
         resolved = vt._resolve_canonical_locks_dir(tmp_path)
-    assert resolved == tmp_path / ".locks"
+    assert resolved == tmp_path / "sysop/runtime/locks"
 
 
 def test_locks_dir_falls_back_on_timeout(tmp_path):
@@ -84,7 +84,7 @@ def test_locks_dir_falls_back_on_timeout(tmp_path):
         side_effect=subprocess.TimeoutExpired(cmd="git", timeout=5),
     ):
         resolved = vt._resolve_canonical_locks_dir(tmp_path)
-    assert resolved == tmp_path / ".locks"
+    assert resolved == tmp_path / "sysop/runtime/locks"
 
 
 def test_locks_dir_falls_back_on_os_error(tmp_path):
@@ -108,7 +108,7 @@ def test_locks_dir_falls_back_on_os_error(tmp_path):
 
 
 def test_locks_dir_resolves_from_real_git_repo(tmp_path):
-    """Initialize a real git repo and confirm helper returns `<repo>/.locks`."""
+    """Initialize a real git repo and confirm helper returns `<repo>/sysop/runtime/locks`."""
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
     subprocess.run(
@@ -118,11 +118,11 @@ def test_locks_dir_resolves_from_real_git_repo(tmp_path):
         capture_output=True,
     )
     resolved = vt._resolve_canonical_locks_dir(repo_root)
-    assert resolved == (repo_root / ".locks").resolve()
+    assert resolved == (repo_root / "sysop/runtime/locks").resolve()
 
 
 def test_locks_dir_resolves_main_locks_from_worktree(tmp_path):
-    """End-to-end: validator invoked from a linked worktree finds main's .locks/."""
+    """End-to-end: validator invoked from a linked worktree finds main's sysop/runtime/locks/."""
     main_root = tmp_path / "main"
     main_root.mkdir()
     subprocess.run(
@@ -146,8 +146,8 @@ def test_locks_dir_resolves_main_locks_from_worktree(tmp_path):
     )
 
     _make_tasks_tree(main_root)
-    main_locks = main_root / ".locks"
-    main_locks.mkdir(exist_ok=True)
+    main_locks = main_root / "sysop/runtime/locks"
+    main_locks.mkdir(parents=True, exist_ok=True)
     (main_locks / "FEAT-LOCKED.lock").write_text("lock\n", encoding="utf-8")
 
     worktree_root = tmp_path / "worktree"
@@ -158,7 +158,7 @@ def test_locks_dir_resolves_main_locks_from_worktree(tmp_path):
         capture_output=True,
     )
 
-    assert not (worktree_root / ".locks").exists()
+    assert not (worktree_root / "sysop/runtime/locks").exists()
 
     resolved = vt._resolve_canonical_locks_dir(worktree_root)
     assert resolved == main_locks.resolve()
@@ -174,11 +174,11 @@ def test_locks_dir_treats_empty_git_output_as_failure(tmp_path):
     completed = subprocess.CompletedProcess(args=["git"], returncode=0, stdout="", stderr="")
     with mock.patch.object(vt.subprocess, "run", return_value=completed):
         resolved = vt._resolve_canonical_locks_dir(tmp_path)
-    assert resolved == tmp_path / ".locks"
+    assert resolved == tmp_path / "sysop/runtime/locks"
 
 
 def test_locks_dir_resolves_inside_repo_for_staging_path(tmp_path):
-    """Staging dir under a real repo resolves to the same `.locks/` as the repo root."""
+    """Staging dir under a real repo resolves to the same `sysop/runtime/locks/` as the repo root."""
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
     subprocess.run(
@@ -192,8 +192,8 @@ def test_locks_dir_resolves_inside_repo_for_staging_path(tmp_path):
 
     resolved_root = vt._resolve_canonical_locks_dir(repo_root)
     resolved_staging = vt._resolve_canonical_locks_dir(staging)
-    assert resolved_root == (repo_root / ".locks").resolve()
-    assert resolved_staging == (repo_root / ".locks").resolve()
+    assert resolved_root == (repo_root / "sysop/runtime/locks").resolve()
+    assert resolved_staging == (repo_root / "sysop/runtime/locks").resolve()
 
 
 # === Section 2: Sysop-original tests ==================================
@@ -236,8 +236,8 @@ def _seed_repo_with_lock(tmp_path: Path, index_yaml: str = _VALID_INDEX) -> Path
     (tasks_dir / "open").mkdir(parents=True)
     (tasks_dir / "index.yml").write_text(index_yaml, encoding="utf-8")
     (tasks_dir / "open" / "FEAT-LOCKED.md").write_text(_VALID_BODY, encoding="utf-8")
-    locks = repo / ".locks"
-    locks.mkdir()
+    locks = repo / "sysop/runtime/locks"
+    locks.mkdir(parents=True)
     (locks / "FEAT-LOCKED.lock").write_text("lock\n", encoding="utf-8")
     return repo
 
@@ -291,16 +291,16 @@ def test_blast_radius_optional_at_schema_v1_for_legacy_tasks(tmp_path):
 
 
 def test_in_progress_without_lock_file_errors(tmp_path):
-    """status=in_progress + missing lock file under canonical .locks/ → error."""
+    """status=in_progress + missing lock file under canonical sysop/runtime/locks/ → error."""
     repo = _seed_repo_with_lock(tmp_path)
-    (repo / ".locks" / "FEAT-LOCKED.lock").unlink()
+    (repo / "sysop/runtime/locks" / "FEAT-LOCKED.lock").unlink()
     report = vt.validate(repo / "tasks", project_root=repo)
     messages = [f.format() for f in report.errors]
     assert any("lock file missing" in m for m in messages), messages
 
 
 def test_in_progress_with_lock_file_passes(tmp_path):
-    """status=in_progress + lock file present at canonical .locks/ → no lock error."""
+    """status=in_progress + lock file present at canonical sysop/runtime/locks/ → no lock error."""
     repo = _seed_repo_with_lock(tmp_path)
     report = vt.validate(repo / "tasks", project_root=repo)
     lock_errors = [f for f in report.errors if "lock file missing" in f.format()]
@@ -510,8 +510,8 @@ def _p88_repo(tmp_path: Path, depends_on: str, surfaced_by: str) -> Path:
         encoding="utf-8",
     )
     (tasks_dir / "open" / "FEAT-LOCKED.md").write_text(_VALID_BODY, encoding="utf-8")
-    locks = repo / ".locks"
-    locks.mkdir()
+    locks = repo / "sysop/runtime/locks"
+    locks.mkdir(parents=True)
     (locks / "FEAT-LOCKED.lock").write_text("lock\n", encoding="utf-8")
     return repo
 

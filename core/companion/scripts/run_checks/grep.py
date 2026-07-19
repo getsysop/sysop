@@ -10,7 +10,7 @@ from _log import _sanitize_log
 from .config import _SKIP_DIRS
 
 
-def run_grep(pattern, paths, includes, excludes, repo_root):
+def run_grep(pattern, paths, includes, excludes, repo_root, exclude_dirs=()):
     """Run grep -rn with the given pattern, paths, includes, and excludes."""
     cmd = ["grep", "-rn", "-E", pattern]
     for inc in includes:
@@ -21,6 +21,13 @@ def run_grep(pattern, paths, includes, excludes, repo_root):
     # Per-check excludes (file globs like "*test*", "*helpers.py")
     for exc in excludes:
         cmd.extend(["--exclude", exc])
+    # Per-check subtree excludes (Phase 133, leg-5 dogfood finding 4): the
+    # file-glob `exclude:` cannot drop a whole subtree, so a broad `paths:`
+    # root (e.g. a package that contains migrations/) couldn't be narrowed —
+    # `exclude_dir:` maps to grep --exclude-dir, which matches DIRECTORY
+    # BASENAMES (globs) at any depth, exactly grep's semantics.
+    for exc_dir in exclude_dirs:
+        cmd.extend(["--exclude-dir", exc_dir])
 
     # Resolve paths relative to repo root; collect only those that exist.
     # If none resolve (e.g., a fresh install where placeholder vocabulary
@@ -65,20 +72,33 @@ def strip_repo_prefix(line, repo_root):
     return line
 
 
-def _iter_check_files(paths, includes, excludes, repo_root):
+def _iter_check_files(paths, includes, excludes, repo_root, exclude_dirs=()):
     """Yield absolute paths of files in `paths` matching `includes` and not `excludes`.
 
-    Mirrors the filter semantics of `run_grep` (without invoking grep). Used by
-    file-walk-based checks like `position_check` that need full-file context
-    rather than per-line hits.
+    Mirrors the filter semantics of `run_grep` (without invoking grep) —
+    including `exclude_dirs` basename-glob pruning, kept in lockstep with the
+    --exclude-dir flags run_grep passes. Used by file-walk-based checks like
+    `position_check` that need full-file context rather than per-line hits.
     """
     skip_dirs = set(_SKIP_DIRS)
     for p in paths:
         full = os.path.join(repo_root, p)
         if not os.path.exists(full):
             continue
+        # grep --exclude-dir also skips a command-line directory whose own
+        # basename matches — mirror that so a `paths:` root caught by
+        # exclude_dir behaves identically in both scan paths.
+        root_base = os.path.basename(os.path.normpath(full))
+        if os.path.isdir(full) and any(
+            fnmatch.fnmatch(root_base, xd) for xd in exclude_dirs
+        ):
+            continue
         for dirpath, dirnames, filenames in os.walk(full):
-            dirnames[:] = [d for d in dirnames if d not in skip_dirs]
+            dirnames[:] = [
+                d for d in dirnames
+                if d not in skip_dirs
+                and not any(fnmatch.fnmatch(d, xd) for xd in exclude_dirs)
+            ]
             for fn in filenames:
                 if includes and not any(fnmatch.fnmatch(fn, inc) for inc in includes):
                     continue
@@ -123,7 +143,7 @@ def _cached_compile(src):
 
 def _run_position_check(
     check_id, spec, paths, includes, excludes,
-    severity, description, repo_root,
+    severity, description, repo_root, exclude_dirs=(),
 ):
     """Fire when `later` precedes `earlier` in the same file.
 
@@ -142,7 +162,9 @@ def _run_position_check(
         return []
 
     findings = []
-    for fpath in sorted(_iter_check_files(paths, includes, excludes, repo_root)):
+    for fpath in sorted(
+        _iter_check_files(paths, includes, excludes, repo_root, exclude_dirs)
+    ):
         try:
             with open(fpath, encoding="utf-8", errors="replace") as f:
                 lines = f.readlines()
@@ -173,6 +195,7 @@ def run_check(check, repo_root):
     paths = check.get("paths", [])
     includes = check.get("include", [])
     excludes = check.get("exclude", [])
+    exclude_dirs = check.get("exclude_dir", []) or []
     neg_pattern = check.get("negative_pattern", "")
     invert = check.get("invert_file_check", False)
     position_check = check.get("position_check", None)
@@ -187,13 +210,13 @@ def run_check(check, repo_root):
     if position_check and paths:
         return _run_position_check(
             check_id, position_check, paths, includes, excludes,
-            severity, description, repo_root,
+            severity, description, repo_root, exclude_dirs,
         )
 
     if not pattern or not paths:
         return []
 
-    hits = run_grep(pattern, paths, includes, excludes, repo_root)
+    hits = run_grep(pattern, paths, includes, excludes, repo_root, exclude_dirs)
     if not hits:
         return []
 

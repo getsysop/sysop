@@ -4,7 +4,7 @@
 #
 # Drop-in block to add to your project's pre-commit hook. Runs
 # sysop/scripts/validate_tasks.py only when the staged diff touches
-# tasks/ or .locks/, so non-tasks commits pay no cost.
+# tasks/ or sysop/runtime/locks/, so non-tasks commits pay no cost.
 #
 # Python resolution order (Phase 16 carryover from gdp@abcfe3d0):
 #   1. <main-repo-root>/.venv/bin/python3
@@ -34,7 +34,7 @@
 # Resolves <main-repo-root>/.venv/bin/python3 via git-common-dir
 # (so worktrees inherit the main repo's venv), then falls back to
 # system python3.
-STAGED_TASKS=$(echo "$STAGED" | grep -E '^(tasks/|\.locks/)' || true)
+STAGED_TASKS=$(echo "$STAGED" | grep -E '^(tasks/|sysop/runtime/locks/)' || true)
 if [[ -n "$STAGED_TASKS" ]]; then
   # Resolve the main repo's git dir (worktrees: .git/worktrees/<name>/
   # has a commondir file pointing back at the main .git/).

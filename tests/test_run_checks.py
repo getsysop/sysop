@@ -27,6 +27,7 @@ Generalization adjustments versus gdp:
 import json
 import os
 import subprocess
+import sys
 from unittest.mock import patch
 
 import run_checks_impl as rci
@@ -401,3 +402,74 @@ def test_pip_audit_mode_filter_via_filter_checks():
     security_ids = {c["id"] for c in security_filtered}
     assert "pip-audit-vuln" not in quality_ids
     assert "pip-audit-vuln" in security_ids
+
+
+# ── Phase 133: pip-audit module fallback + manifest anchor ──────────────────
+
+
+def test_pip_audit_falls_back_to_module_invocation(tmp_path):
+    """The console script isn't on PATH (venv at a non-.venv home) but the
+    running python has pip_audit installed — the stage must fall back to
+    `sys.executable -m pip_audit` instead of warning 'not on PATH' (the leg-5
+    dogfood sibling finding)."""
+    canned = {"dependencies": [{"name": "idna", "version": "3.11", "vulns": [
+        {"id": "CVE-X", "aliases": [], "fix_versions": [], "description": "d"}]}]}
+    ok = subprocess.CompletedProcess(args=[], returncode=0,
+                                     stdout=json.dumps(canned), stderr="")
+    with patch("run_checks_impl.subprocess.run",
+               side_effect=[FileNotFoundError(), ok]) as mock_run:
+        findings = rci._run_pip_audit(str(tmp_path), {"pip-audit-vuln"})
+    assert len(findings) == 1
+    assert mock_run.call_count == 2
+    second_argv = mock_run.call_args_list[1][0][0]
+    assert second_argv[0] == sys.executable
+    assert second_argv[1:3] == ["-m", "pip_audit"]
+
+
+def test_pip_audit_warns_when_missing_both_ways(tmp_path, capsys):
+    """Binary absent AND the module fallback's python lacks pip_audit → the
+    friendly install-hint warn, not a cryptic module traceback."""
+    module_missing = subprocess.CompletedProcess(
+        args=[], returncode=1, stdout="",
+        stderr="/usr/bin/python3: No module named pip_audit")
+    with patch("run_checks_impl.subprocess.run",
+               side_effect=[FileNotFoundError(), module_missing]):
+        findings = rci._run_pip_audit(str(tmp_path), {"pip-audit-vuln"})
+    assert findings == []
+    captured = capsys.readouterr()
+    assert "pip-audit not on PATH" in captured.err
+    assert "pip install pip-audit" in captured.err
+
+
+def test_pip_audit_anchors_at_pyproject_for_manifest_only_consumers(tmp_path):
+    """pyproject/uv consumers (no requirements*.txt) anchor findings at
+    pyproject.toml:1 — the manifest that owns the dependency set (leg-5
+    dogfood finding 8)."""
+    (tmp_path / "pyproject.toml").write_text("[project]\nname = 'x'\n")
+    canned = {"dependencies": [{"name": "idna", "version": "3.11", "vulns": [
+        {"id": "CVE-X", "aliases": [], "fix_versions": [], "description": "d"}]}]}
+    with patch("run_checks_impl.subprocess.run") as mock_run:
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=json.dumps(canned), stderr="")
+        findings = rci._run_pip_audit(str(tmp_path), {"pip-audit-vuln"})
+    assert len(findings) == 1
+    assert findings[0][1] == "pyproject.toml:1"
+
+
+def test_pip_audit_console_crash_surfaces_real_error_not_path_warn(tmp_path, capsys):
+    """Adversarial-review fix (2026-07-19): a console-script pip-audit that
+    crashes internally (ModuleNotFoundError in its OWN dep tree) must surface
+    via the exited-N warn with its real stderr — not be misread as
+    not-installed (which would also waste a second full attempt)."""
+    crash = subprocess.CompletedProcess(
+        args=[], returncode=1, stdout="",
+        stderr="ModuleNotFoundError: No module named 'pip_audit._vendor.x'")
+    with patch("run_checks_impl.subprocess.run",
+               return_value=crash) as mock_run:
+        findings = rci._run_pip_audit(str(tmp_path), {"pip-audit-vuln"})
+    assert findings == []
+    assert mock_run.call_count == 1, "crash must not trigger the module fallback"
+    captured = capsys.readouterr()
+    assert "dependency audit did NOT run" in captured.err
+    assert "pip_audit._vendor.x" in captured.err
+    assert "not on PATH" not in captured.err

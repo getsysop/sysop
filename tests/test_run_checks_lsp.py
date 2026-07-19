@@ -182,3 +182,56 @@ class TestDispatch:
             out = lsp.run_lsp_diagnostics(str(tmp_path), set())
         assert out == []
         assert mock_run.call_count == 0
+
+
+# ── Phase 133: per-check paths: scoping (post-filter) ───────────────────────
+
+class TestPathsScoping:
+    """When a pyright-*/tsc-* registry entry declares real `paths:`, findings
+    outside them are dropped; unlocalized `<placeholder>` entries contribute
+    no scoping and the `__disabled_no_op__` sentinel disables the check."""
+
+    def _run_pyright(self, tmp_path, included):
+        with patch("run_checks.lsp.subprocess.run",
+                   return_value=_completed(_pyright_json(tmp_path))):
+            return lsp._run_pyright(str(tmp_path), included)
+
+    def test_pyright_in_scope_kept(self, tmp_path):
+        out = self._run_pyright(tmp_path, {
+            "pyright-missing-imports": {"id": "pyright-missing-imports",
+                                        "paths": ["app/"]}})
+        assert len(out) == 1
+
+    def test_pyright_out_of_scope_dropped(self, tmp_path):
+        out = self._run_pyright(tmp_path, {
+            "pyright-missing-imports": {"id": "pyright-missing-imports",
+                                        "paths": ["other/"]}})
+        assert out == []
+
+    def test_pyright_placeholder_paths_do_not_scope(self, tmp_path):
+        out = self._run_pyright(tmp_path, {
+            "pyright-missing-imports": {"id": "pyright-missing-imports",
+                                        "paths": ["<api module>/"]}})
+        assert len(out) == 1, "unlocalized placeholder must not disable the check"
+
+    def test_pyright_sentinel_disables_check(self, tmp_path):
+        out = self._run_pyright(tmp_path, {
+            "pyright-missing-imports": {"id": "pyright-missing-imports",
+                                        "paths": ["__disabled_no_op__"]}})
+        assert out == []
+
+    def test_tsc_paths_scope_findings(self, tmp_path):
+        m = lsp._TSC_HEADER_RE.match(
+            "components/App.tsx(5,3): error TS2322: Bad type")
+        assert m
+        out_in, out_out = [], []
+        lsp._emit_tsc_finding(
+            (m, []), str(tmp_path / "frontend"), str(tmp_path),
+            {"tsc-type-error": {"id": "tsc-type-error", "paths": ["frontend/"]}},
+            out_in)
+        lsp._emit_tsc_finding(
+            (m, []), str(tmp_path / "frontend"), str(tmp_path),
+            {"tsc-type-error": {"id": "tsc-type-error", "paths": ["backend/"]}},
+            out_out)
+        assert len(out_in) == 1
+        assert out_out == []

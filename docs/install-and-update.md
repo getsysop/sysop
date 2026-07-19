@@ -22,9 +22,11 @@ Two install paths; they layer rather than conflict.
 bash install.sh <target> --packs python --mode loop
 ```
 
-Loop mode drops the lifecycle: no `tasks/` queue, no worktrees, no `/claim-task` or `/review-close` merge gate, no root `WORKFLOW.md`. It also leaves `sysop/SYSOP_ISSUES.md` lazy — created on your first friction capture, not at install — so a loop install's root footprint is just `.claude/`, the `sysop/` vendor dir, a `CLAUDE.md`, and a one-line `.gitignore` append (`.pending-docs/`, the audit skills' deferral scratch). Enforcement is the checks the computer runs, not a Sysop merge gate: promoted mechanical rules compile into `checks.yml` / semgrep (run by the shipped CI template) or into the pre-commit hook's own check slots (armed automatically at install; re-arm with `sysop/scripts/install_hooks.sh` after edits), and you merge however you already merge.
+Loop mode drops the lifecycle: no `tasks/` queue, no worktrees, no `/claim-task` or `/review-close` merge gate, no root `WORKFLOW.md`. It also leaves `sysop/SYSOP_ISSUES.md` lazy — created on your first friction capture, not at install — so a loop install's root footprint is just `.claude/`, the `sysop/` vendor dir, a `CLAUDE.md`, and a one-line `.gitignore` append (`sysop/runtime/` — the gitignored home of the audit skills' deferral scratch, `sysop/runtime/pending-docs/`). Enforcement is the checks the computer runs, not a Sysop merge gate: promoted mechanical rules compile into `checks.yml` / semgrep (run by the shipped CI template) or into the pre-commit hook's own check slots (armed automatically at install; re-arm with `sysop/scripts/install_hooks.sh` after edits), and you merge however you already merge.
 
 The audit skills read three sections from your project's `CLAUDE.md` — `## Scope mapping`, `## Map coverage exclusions`, `## Security-critical always-include files` — so the installer ensures they're present: it creates `CLAUDE.md` with commented stubs if the file is absent, or appends only the sections you don't already have (never rewriting your content).
+
+**Verify the install in one command** — `bash sysop/scripts/self_check.sh` (either mode) reports the lock + install mode, bash version, whether a python3 with PyYAML is reachable (the check runner's one dependency), which git hooks are armed, and which optional scanners (semgrep, pip-audit, pyright) will actually run. Exit 0 means the hard prereqs are all present.
 
 **Switching modes.** The mode is recorded in `.claude/sysop.lock`, and `--update` re-applies it. To grow a loop install into the full workflow, run `bash install.sh <target> --update --mode full` — purely additive (it adds the lifecycle skills, scripts, and the `tasks/` scaffold). The other direction (full → loop) is a fresh reinstall, not an `--update`.
 
@@ -162,7 +164,7 @@ Everything Sysop writes is a tracked file plus one set of git hooks, so reversin
 
 ### Reversing a task claim
 
-`/claim-task` does three things: flips the task to `in_progress` in `tasks/index.yml`, takes a lock at `.locks/<TASK-ID>.lock` (under the main repo), and creates a worktree on a feature branch. To reverse all three, run the un-claim flag from the **main checkout** (not from inside the task's worktree):
+`/claim-task` does three things: flips the task to `in_progress` in `tasks/index.yml`, takes a lock at `sysop/runtime/locks/<TASK-ID>.lock` (under the main repo), and creates a worktree on a feature branch. To reverse all three, run the un-claim flag from the **main checkout** (not from inside the task's worktree):
 
 ```bash
 bash sysop/scripts/claim_task.sh --release <TASK-ID>
@@ -182,7 +184,7 @@ The status flip goes through a PyYAML round-trip, never a hand-edit, so the queu
 ```bash
 git worktree remove <worktree-path>        # add --force if it has uncommitted work you're discarding
 git branch -D <feature-branch>             # optional — drop the branch too
-rm .locks/<TASK-ID>.lock                   # release the lock
+rm sysop/runtime/locks/<TASK-ID>.lock      # release the lock
 # then flip that task's `status:` from in_progress back to open in tasks/index.yml
 .venv/bin/python3 sysop/scripts/validate_tasks.py   # confirm the queue is consistent
 git commit -am "chore: release <TASK-ID>"

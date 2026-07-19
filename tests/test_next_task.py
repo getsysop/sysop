@@ -34,8 +34,8 @@ def _build_repo(tmp_path: Path, index_yaml: str, bodies: dict[str, str]) -> Path
     tasks_dir = tmp_path / "tasks"
     open_dir = tasks_dir / "open"
     open_dir.mkdir(parents=True)
-    (tmp_path / ".locks").mkdir()
-    (tmp_path / ".locks" / ".gitkeep").write_text("", encoding="utf-8")
+    (tmp_path / "sysop/runtime/locks").mkdir(parents=True)
+    (tmp_path / "sysop/runtime/locks" / ".gitkeep").write_text("", encoding="utf-8")
     (tasks_dir / "index.yml").write_text(index_yaml, encoding="utf-8")
     for name, body in bodies.items():
         (open_dir / name).write_text(body, encoding="utf-8")
@@ -868,7 +868,7 @@ def test_main_default_mode_falls_back_to_batch(
 ) -> None:
     repo = _build_repo(tmp_path, _BASE_INDEX, _BASE_BODIES)
     (repo / "review_tasks.md").write_text(_REVIEW_FIXTURE, encoding="utf-8")
-    locks_dir = repo / ".locks"
+    locks_dir = repo / "sysop/runtime/locks"
     for tid in ("FEAT-EASY", "FEAT-MEDIUM", "TECH-HARD"):
         (locks_dir / f"{tid}.lock").write_text("", encoding="utf-8")
     _patch_repo(monkeypatch, repo)

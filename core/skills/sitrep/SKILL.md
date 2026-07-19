@@ -12,7 +12,7 @@ Designed for cold-context resumption: run after a restart, after stepping away, 
 
 ## Pre-flight: Permission Guard
 
-This skill shells out to `git`, `python3`, and reads under `<main-repo>/.locks/`, `tasks/index.yml`, and `review_tasks.md`. It writes nothing.
+This skill shells out to `git`, `python3`, and reads under `<main-repo>/sysop/runtime/locks/`, `tasks/index.yml`, and `review_tasks.md`. It writes nothing.
 
 Read `.claude/settings.json` and confirm `permissions.allow` contains:
 
@@ -90,7 +90,7 @@ The survey script classifies each discovered task into exactly one state. Listed
 
 | State | Deterministic signal |
 |---|---|
-| **Claimed, no branch** | Lock present at `<git-common-dir>/.locks/<TASK_ID>.lock`; no matching `task/*` or `review/*` branch exists |
+| **Claimed, no branch** | Lock present at `<git-common-dir>/sysop/runtime/locks/<TASK_ID>.lock`; no matching `task/*` or `review/*` branch exists |
 | **Planning** | Lock + branch present; branch has 0 commits ahead of main |
 | **In progress** | Branch has ≥1 commits ahead of main; no commit on the branch carries a `Doc-Work:` trailer |
 | **Ready for `/review-close`** | At least one commit ahead of main carries `Doc-Work: <TASK_ID>`; branch pushed to origin |
@@ -108,7 +108,7 @@ The survey flags every mismatch between filesystem reality and the state files. 
 | Stale lock | Lock exists, no worktree on disk | Investigate, then `rm <lock-path>` if dead |
 | Orphan worktree | Worktree exists, no matching lock | Check uncommitted work, then `git worktree remove` |
 | Orphan branch | `task/*` or `review/*` branch with no lock + no index entry | Investigate, delete if dead |
-| Index drift (in_progress without lock) | `tasks/index.yml` says `in_progress`, no `.locks/<id>.lock` | Resync index or recreate lock |
+| Index drift (in_progress without lock) | `tasks/index.yml` says `in_progress`, no `sysop/runtime/locks/<id>.lock` | Resync index or recreate lock |
 | Abandoned claim | Lock + worktree exist, no commits + claimed ≥ stale-days ago | Confirm dead with human, release lock |
 | Uncommitted work in stale worktree | Dirty status + no commits in N days | DO NOT cleanup — likely user's parked work |
 

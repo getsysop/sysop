@@ -3,7 +3,7 @@
 these tests extract its Python body and exercise the worktree-in-place scan + the
 worktree-first basename dedup, so the fix — which is otherwise prose with no runtime
 surface — has CI coverage. Guards against silent regression to the original bug (the
-gate reading an empty main `.pending-docs/` and returning NO_SMOKE_REQUIRED).
+gate reading an empty main `sysop/runtime/pending-docs/` and returning NO_SMOKE_REQUIRED).
 """
 from __future__ import annotations
 
@@ -54,7 +54,7 @@ def _seed_main(tmp_path: Path) -> Path:
     main = tmp_path / "main"
     (main / "tasks").mkdir(parents=True)
     (main / "tasks" / "index.yml").write_text("schema_version: 1\ntasks: []\n", encoding="utf-8")
-    (main / ".pending-docs").mkdir()
+    (main / "sysop/runtime/pending-docs").mkdir(parents=True)
     return main
 
 
@@ -68,10 +68,10 @@ def _write_pending(dir_: Path, name: str, *, with_heading: bool) -> None:
 
 def test_worktree_authored_smoke_doc_is_detected(tmp_path):
     """The ISSUE-0050 fix: a smoke doc that lives only in the worktree (main's
-    `.pending-docs/` empty) must still trip the gate."""
+    `sysop/runtime/pending-docs/` empty) must still trip the gate."""
     main = _seed_main(tmp_path)
     wt = tmp_path / "wt"
-    _write_pending(wt / ".pending-docs", "feat-x.md", with_heading=True)
+    _write_pending(wt / "sysop/runtime/pending-docs", "feat-x.md", with_heading=True)
 
     out = _run(main, [wt])
     assert out.startswith("SMOKE_REQUIRED"), out
@@ -88,7 +88,7 @@ def test_empty_worktree_set_and_empty_main_is_no_smoke(tmp_path):
 def test_main_authored_doc_still_detected(tmp_path):
     """Non-worktree flow (doc authored directly on main) is unaffected."""
     main = _seed_main(tmp_path)
-    _write_pending(main / ".pending-docs", "feat-x.md", with_heading=True)
+    _write_pending(main / "sysop/runtime/pending-docs", "feat-x.md", with_heading=True)
     out = _run(main, [])
     assert out.startswith("SMOKE_REQUIRED"), out
 
@@ -98,9 +98,9 @@ def test_fresh_worktree_doc_not_shadowed_by_stale_main_copy(tmp_path):
     fresher worktree copy WITH the heading. Worktree-first ordering makes the worktree
     win the basename dedup; main-first ordering (the bug) would miss the signal."""
     main = _seed_main(tmp_path)
-    _write_pending(main / ".pending-docs", "feat-x.md", with_heading=False)  # stale
+    _write_pending(main / "sysop/runtime/pending-docs", "feat-x.md", with_heading=False)  # stale
     wt = tmp_path / "wt"
-    _write_pending(wt / ".pending-docs", "feat-x.md", with_heading=True)     # fresh
+    _write_pending(wt / "sysop/runtime/pending-docs", "feat-x.md", with_heading=True)     # fresh
 
     out = _run(main, [wt])
     assert out.startswith("SMOKE_REQUIRED"), (

@@ -6,7 +6,7 @@ model: opus
 ---
 <!-- sysop:model-roles frontmatter=reasoning inline=reasoning -->
 
-Read `tasks/index.yml`, pick a batch of N independent claimable tasks under a complexity ceiling, sequentially claim each on `main` (mirroring `/auto-fix`'s `batch_work.sh` pattern), then per task run three Opus phases at the orchestrator layer: plan-only agent → adversarial-reviewer agent → execution agent. Findings classified by the orchestrator itself (spawned sessions do not nest further agents — a deliberate design choice, see Step 6). Tasks with `blocker` findings park (worktree + lock intact, plan + verdict written to `.auto-build/` scratch dir); the rest auto-execute. The human resumes parked tasks manually and runs `/review-close` on executed branches.
+Read `tasks/index.yml`, pick a batch of N independent claimable tasks under a complexity ceiling, sequentially claim each on `main` (mirroring `/auto-fix`'s `batch_work.sh` pattern), then per task run three Opus phases at the orchestrator layer: plan-only agent → adversarial-reviewer agent → execution agent. Findings classified by the orchestrator itself (spawned sessions do not nest further agents — a deliberate design choice, see Step 6). Tasks with `blocker` findings park (worktree + lock intact, plan + verdict written to `sysop/runtime/auto-build/` scratch dir); the rest auto-execute. The human resumes parked tasks manually and runs `/review-close` on executed branches.
 
 This skill does NOT merge anything. It batches the front of the pipeline (claim + plan + execute) up to the point where the human re-engages.
 
@@ -91,7 +91,7 @@ active_phase = active.get("number")
 
 tasks = data.get("tasks", []) or []
 by_id = {t["id"]: t for t in tasks}
-locks = {os.path.basename(p)[:-5] for p in glob.glob(".locks/*.lock")}
+locks = {os.path.basename(p)[:-5] for p in glob.glob("sysop/runtime/locks/*.lock")}
 
 order = {"Low": 0, "Medium": 1, "High": 2}
 
@@ -138,7 +138,7 @@ if subset:
         elif t.get("on_hold_until"):
             reason = f"on hold until: {t.get('on_hold_until')}"
         elif tid in locks:
-            reason = "active lock in .locks/ — already claimed"
+            reason = "active lock in sysop/runtime/locks/ — already claimed"
         elif t.get("phase") != active_phase:
             reason = (f"phase {t.get('phase')} is outside the current-focus phase "
                       f"{active_phase} — flip current_focus in tasks/index.yml § phases "
@@ -443,9 +443,9 @@ When each plan-only agent returns, extract the plan text from the fenced ```` ``
 NEW_HEAD=$(git -C "$WORKTREE_PATH" rev-parse HEAD)
 if [ "$NEW_HEAD" != "$PRE_PLAN_HEAD" ]; then
   echo "PLAN-ONLY-VIOLATION: $TASK_ID committed during plan phase; parking"
-  mkdir -p "$WORKTREE_PATH/.auto-build"
+  mkdir -p "$WORKTREE_PATH/sysop/runtime/auto-build"
   echo "PLAN_PHASE_VIOLATION: plan-only agent committed $(git -C "$WORKTREE_PATH" log --oneline "$PRE_PLAN_HEAD..HEAD")" \
-    > "$WORKTREE_PATH/.auto-build/review.md"
+    > "$WORKTREE_PATH/sysop/runtime/auto-build/review.md"
   # Mark this task PARKED and skip Phases 6b-6e for it.
 fi
 ```
@@ -480,19 +480,19 @@ For each task:
 - **If any finding is `blocker`** → mark the task `PARKED`. Skip Phase 6e for it. Write the verdict and plan to a scratch directory in the worktree so the human picking up the parked task can resume:
 
   ```bash
-  mkdir -p "$WORKTREE_PATH/.auto-build"
-  printf '%s\n' "$PLAN_TEXT" > "$WORKTREE_PATH/.auto-build/plan.md"
-  printf '%s\n' "$RAW_FINDINGS" > "$WORKTREE_PATH/.auto-build/review.md"
+  mkdir -p "$WORKTREE_PATH/sysop/runtime/auto-build"
+  printf '%s\n' "$PLAN_TEXT" > "$WORKTREE_PATH/sysop/runtime/auto-build/plan.md"
+  printf '%s\n' "$RAW_FINDINGS" > "$WORKTREE_PATH/sysop/runtime/auto-build/review.md"
   ```
 
   The orchestrator does NOT commit these files — they are scratch for the human. Step 8 references the paths in the final report.
 
-  **Mirror the verdict to a central archive so it survives worktree cleanup.** The per-worktree `plan.md`/`review.md` above are the *only* record of why the task parked — and they are destroyed the moment the worktree is removed (`cleanup_worktrees.sh --force` removes the worktree wholesale). A parked task is by definition resumed *later*, often after that cleanup has run, so the worktree scratch alone loses the verdict exactly when the human comes back for it. Write a second copy at the **project root** — where the orchestrator runs, so it outlives any worktree — gitignored under `.auto-build/`:
+  **Mirror the verdict to a central archive so it survives worktree cleanup.** The per-worktree `plan.md`/`review.md` above are the *only* record of why the task parked — and they are destroyed the moment the worktree is removed (`cleanup_worktrees.sh --force` removes the worktree wholesale). A parked task is by definition resumed *later*, often after that cleanup has run, so the worktree scratch alone loses the verdict exactly when the human comes back for it. Write a second copy at the **project root** — where the orchestrator runs, so it outlives any worktree — gitignored under `sysop/runtime/auto-build/`:
 
   ```bash
-  mkdir -p .auto-build/parked
+  mkdir -p sysop/runtime/auto-build/parked
   TS=$(date -u +%Y%m%dT%H%M%SZ)
-  ARCHIVE=".auto-build/parked/${TASK_ID}__${TS}.md"
+  ARCHIVE="sysop/runtime/auto-build/parked/${TASK_ID}__${TS}.md"
   {
     printf '# %s — PARKED %s\n\n' "$TASK_ID" "$TS"
     printf '## Plan (verbatim)\n\n%s\n\n' "$PLAN_TEXT"
@@ -500,7 +500,7 @@ For each task:
   } > "$ARCHIVE"
   ```
 
-  The UTC timestamp keys the filename: a task parks at most once per cycle and cycles run minutes apart, so `<TASK_ID>__<timestamp>` is unique per park. This archive is the **durable** record — worktree cleanup never touches the project-root `.auto-build/parked/`. (No telemetry is emitted here; this is the standalone park-archive fix, not the `parked_reason`/`task_outcome` instrumentation it was extracted from.)
+  The UTC timestamp keys the filename: a task parks at most once per cycle and cycles run minutes apart, so `<TASK_ID>__<timestamp>` is unique per park. This archive is the **durable** record — worktree cleanup never touches the project-root `sysop/runtime/auto-build/parked/`. Closed work does not accumulate here: when a parked task is later resumed and closed, `/review-close` Step 4c removes its marker(s) alongside the lock — historically nothing did, so markers for done tasks piled up and this dir over-reported them as still parked. (A `claim_task.sh --release` of a parked task deliberately leaves its markers — a released park's verdict may still serve the next claimant.) (No telemetry is emitted here; this is the standalone park-archive fix, not the `parked_reason`/`task_outcome` instrumentation it was extracted from.)
 
 - **If all findings are `fixable` (or zero findings)** → the orchestrator builds a `REVISED_PLAN` from `PLAN_TEXT` + `RAW_FINDINGS` by passing both into the Phase-6e execution agent's prompt (one-shot inline absorption). No separate plan-revise agent in v1 — see "Out of scope for v1" below.
 
@@ -532,7 +532,7 @@ Phase 7 (below) uses this value to distinguish "agent omitted the envelope but t
 
 When a background agent's completion notification arrives in any phase:
 
-1. Collect that agent's result. For Phase 6e, get the envelope by trying — in this order, first hit wins — (a) read `.subagent-envelopes/<TASK_ID>.json` (Phase 37 `SubagentStop` hook output; resolve `<repo>/.subagent-envelopes/` against the main repo root via `git rev-parse --git-common-dir`); (b) regex-parse the YAML envelope from the LAST fenced block of the agent's return text (existing behavior — see Step 7c). After consuming the JSON file, `rm -f .subagent-envelopes/<TASK_ID>.json` to keep the dir clean for in-flight handoff; leave `_unparseable_*.json` diagnostics in place.
+1. Collect that agent's result. For Phase 6e, get the envelope by trying — in this order, first hit wins — (a) read `sysop/runtime/subagent-envelopes/<TASK_ID>.json` (Phase 37 `SubagentStop` hook output; resolve `<repo>/sysop/runtime/subagent-envelopes/` against the main repo root via `git rev-parse --git-common-dir`); (b) regex-parse the YAML envelope from the LAST fenced block of the agent's return text (existing behavior — see Step 7c). After consuming the JSON file, `rm -f sysop/runtime/subagent-envelopes/<TASK_ID>.json` to keep the dir clean for in-flight handoff; leave `_unparseable_*.json` diagnostics in place.
 2. If the queue still has unstarted batch tasks at the same phase, spawn one more agent with the same shape in a single new message.
 3. No polling, no sleeping — the harness delivers completion notifications.
 
@@ -550,7 +550,7 @@ Three distinct prompts, one per phase. Each is verbatim with placeholders filled
 
 You are planning roadmap task `<TASK_ID>` for the `/auto-build` orchestrator. Your **only** job is to produce a structured plan in the format below and emit it in your final message. Do NOT execute, do NOT call `ExitPlanMode`, do NOT spawn sub-agents, do NOT commit or modify files.
 
-The worktree at `<WORKTREE_PATH>` is already claimed — lock at `.locks/<TASK_ID>.lock`, branch `<BRANCH_NAME>`, `tasks/index.yml` flipped to `in_progress` on main by the orchestrator.
+The worktree at `<WORKTREE_PATH>` is already claimed — lock at `sysop/runtime/locks/<TASK_ID>.lock`, branch `<BRANCH_NAME>`, `tasks/index.yml` flipped to `in_progress` on main by the orchestrator.
 
 **Working directory:** `<WORKTREE_PATH>` (cd here first).
 
@@ -609,7 +609,7 @@ No additional wrapper text — the shared template already supplies the framing.
 
 You are executing roadmap task `<TASK_ID>`. The orchestrator has already:
 
-- Claimed the task: worktree at `<WORKTREE_PATH>`, lock at `.locks/<TASK_ID>.lock`, branch `<BRANCH_NAME>`, `tasks/index.yml` flipped to `in_progress` on main.
+- Claimed the task: worktree at `<WORKTREE_PATH>`, lock at `sysop/runtime/locks/<TASK_ID>.lock`, branch `<BRANCH_NAME>`, `tasks/index.yml` flipped to `in_progress` on main.
 - Produced an implementation plan (`<PLAN_TEXT>` below).
 - Run a fresh-eyes adversarial review of that plan (`<RAW_FINDINGS>` below) and classified all findings as `fixable`. No `blocker` findings remain — if any had existed, this agent would not have been spawned.
 
@@ -643,7 +643,7 @@ You are executing roadmap task `<TASK_ID>`. The orchestrator has already:
 
    Treat any non-zero exit like an implementation finding: fix the underlying issue, do not silence it without a `# type: ignore[...]` or `// eslint-disable-next-line <rule> -- <reason>` justified inline. If the gate exits non-zero and you cannot fix it (e.g., missing toolchain dependency in the worktree), emit `STATUS: FAILED` with the stderr in `ERROR`.
 5. **Post-fix UI verification** (the same gate `/claim-task` Step 7's reviewer-executor runs internally) only if any `frontend/` files changed — invoke `.claude/skills/_shared/ui-verify.md`.
-5b. **Invoke `/document-work --non-interactive`** via the `Skill` tool to commit your work, write `.pending-docs/<sanitized-branch>.md`, and enforce the follow-up stub check.
+5b. **Invoke `/document-work --non-interactive`** via the `Skill` tool to commit your work, write `sysop/runtime/pending-docs/<sanitized-branch>.md`, and enforce the follow-up stub check.
 
    The `--non-interactive` flag (see `/document-work` Step 0) tells the skill to:
    - Derive the commit message from `tasks/index.yml § tasks[]` `title:` + `<TASK_ID>` rather than prompting the human (Step 2).
@@ -678,7 +678,7 @@ ERROR: <error description if FAILED, else "none">
 
 If the consuming project wires up sub-agent cost attribution, also emit `SPEND_USD: <float>` on a line BEFORE the closing envelope. Otherwise omit it — `_shared/adversarial-review.md § Caller contract` documents the opt-in pattern.
 
-Execution agents never emit `STATUS: PARKED_ON_QUESTION` — parking happens at the orchestrator layer in Phase 6d before the execution agent is spawned. A malformed envelope (missing keys, content after the closing backticks, status not in {EXECUTED, FAILED}) causes the orchestrator to classify your run as `FAILED` with reason `envelope parse error` — subject to the **Phase 7: Envelope Recovery** filesystem check below, which can reclassify an envelope-parse miss back to `EXECUTED` when the commit landed and `.pending-docs/<branch>.md` exists. The valid envelope STATUS enum remains `{EXECUTED, FAILED}`; `EXECUTED (envelope-recovered)` is an orchestrator-synthesized rendering annotation used only in the Step 8 report — execution agents must not emit it.
+Execution agents never emit `STATUS: PARKED_ON_QUESTION` — parking happens at the orchestrator layer in Phase 6d before the execution agent is spawned. A malformed envelope (missing keys, content after the closing backticks, status not in {EXECUTED, FAILED}) causes the orchestrator to classify your run as `FAILED` with reason `envelope parse error` — subject to the **Phase 7: Envelope Recovery** filesystem check below, which can reclassify an envelope-parse miss back to `EXECUTED` when the commit landed and `sysop/runtime/pending-docs/<branch>.md` exists. The valid envelope STATUS enum remains `{EXECUTED, FAILED}`; `EXECUTED (envelope-recovered)` is an orchestrator-synthesized rendering annotation used only in the Step 8 report — execution agents must not emit it.
 
 **END OF EXECUTION AGENT PROMPT**
 
@@ -686,7 +686,7 @@ Execution agents never emit `STATUS: PARKED_ON_QUESTION` — parking happens at 
 
 ## Phase 7: Envelope Recovery
 
-**Why this exists.** Execution agents sometimes complete their work cleanly (commit landed on the worktree branch AND `.pending-docs/<branch>.md` written by `/document-work`) but omit the required Step 7c YAML envelope. Strict envelope-only classification would FAIL these runs as `envelope parse error` despite the substantive work being correct. Phase 7 cross-checks the filesystem so an envelope-discipline miss does not become a false-positive FAIL — while remaining observed-state-only (it never synthesizes an EXECUTED claim where work did not actually land).
+**Why this exists.** Execution agents sometimes complete their work cleanly (commit landed on the worktree branch AND `sysop/runtime/pending-docs/<branch>.md` written by `/document-work`) but omit the required Step 7c YAML envelope. Strict envelope-only classification would FAIL these runs as `envelope parse error` despite the substantive work being correct. Phase 7 cross-checks the filesystem so an envelope-discipline miss does not become a false-positive FAIL — while remaining observed-state-only (it never synthesizes an EXECUTED claim where work did not actually land).
 
 **Scope.** Phase 7 fires ONLY for tasks whose Phase-6e envelope failed to parse via BOTH the Phase 37 `SubagentStop` JSON path AND the existing regex-parse-the-return-text path. Tasks resolved via either of those two upstream paths pass through Phase 7 untouched (no extra git invocations). With the Phase 37 hook in place, Phase 7 moves from "expected sometimes-fires" to "rare-edge-case-only" — fires only when the sub-agent never emitted any envelope at all (e.g., crashed mid-write) or both parsers genuinely missed the envelope's existence.
 
@@ -702,7 +702,7 @@ BRANCH_NAME=$(git -C "$WORKTREE_PATH" branch --show-current | tr / -)
 
 # Filesystem check: did the work actually land?
 NEW_COMMITS=$(git -C "$WORKTREE_PATH" log --oneline "$PRE_EXEC_HEAD..HEAD" | wc -l | tr -d ' ')
-PENDING_DOC_EXISTS=$(test -f "$WORKTREE_PATH/.pending-docs/$BRANCH_NAME.md" && echo true || echo false)
+PENDING_DOC_EXISTS=$(test -f "$WORKTREE_PATH/sysop/runtime/pending-docs/$BRANCH_NAME.md" && echo true || echo false)
 
 # Load-bearing AND-check: BOTH conditions must hold for recovery. Either one
 # alone is insufficient — commits without a pending-doc means /document-work
@@ -730,7 +730,7 @@ Tasks reclassified to `EXECUTED (envelope-recovered)` MUST appear in the Step 8 
 
 A deliberately broken envelope test — return only the literal text `done.` from the execution agent — should:
 
-- Recover to `EXECUTED (envelope-recovered)` in Step 8 if both the commit and `.pending-docs/<branch>.md` landed.
+- Recover to `EXECUTED (envelope-recovered)` in Step 8 if both the commit and `sysop/runtime/pending-docs/<branch>.md` landed.
 - Stay `FAILED` with reason `envelope parse error AND no committed work found` if either is missing.
 
 ## Step 8: Final Report
@@ -746,32 +746,32 @@ Print the result table:
 
 | Task        | Status                          | Worktree                            | Branch        | Spend (plan+rev+exec) | Notes                                            |
 |-------------|---------------------------------|-------------------------------------|---------------|-----------------------|--------------------------------------------------|
-| TECH-X      | EXECUTED                        | ../<project>-tech-x/                | tech/tech-x   | $X.XX                 | .pending-docs/<branch>.md written; ready for /review-close |
+| TECH-X      | EXECUTED                        | ../<project>-tech-x/                | tech/tech-x   | $X.XX                 | sysop/runtime/pending-docs/<branch>.md written; ready for /review-close |
 | TECH-W      | EXECUTED (envelope-recovered)   | ../<project>-tech-w/                | tech/tech-w   | $X.XX                 | envelope omitted; recovered via Phase 7 filesystem check (N commits, pending-doc found) |
-| TECH-Y      | PARKED                          | ../<project>-tech-y/                | tech/tech-y   | $X.XX                 | <one-line summary>; verdict at .auto-build/review.md |
+| TECH-Y      | PARKED                          | ../<project>-tech-y/                | tech/tech-y   | $X.XX                 | <one-line summary>; verdict at sysop/runtime/auto-build/review.md |
 | TECH-Z      | FAILED                          | ../<project>-tech-z/                | tech/tech-z   | $X.XX                 | <error from ERROR>                               |
 
 Cumulative orchestrator + agent spend: $X.XX  (logged only; no enforcement in v1)
 
 Next steps:
   - Resume PARKED tasks: cd into the listed worktree. The orchestrator wrote
-    the plan-only agent's raw plan to `.auto-build/plan.md` and the adversarial
-    verdict to `.auto-build/review.md` (parking happens BEFORE inline absorption,
+    the plan-only agent's raw plan to `sysop/runtime/auto-build/plan.md` and the adversarial
+    verdict to `sysop/runtime/auto-build/review.md` (parking happens BEFORE inline absorption,
     so plan.md is the unrevised plan). Read both, resolve the blocker (answer
     the question, add the missing source data, etc.), then continue the work
     manually — call `ExitPlanMode` yourself and implement, or invoke `/claim-task`
-    to re-enter plan mode against the revised context. The `.auto-build/` scratch
+    to re-enter plan mode against the revised context. The `sysop/runtime/auto-build/` scratch
     directory is not committed by the orchestrator; clean it up before
     `/document-work`. If the worktree was already cleaned up (e.g. via
     `cleanup_worktrees.sh --force`), the same plan + verdict survive at the
-    project root under `.auto-build/parked/<TASK_ID>__<timestamp>.md` — the
+    project root under `sysop/runtime/auto-build/parked/<TASK_ID>__<timestamp>.md` — the
     durable copy the orchestrator mirrored in Phase 6d.
   - For EXECUTED tasks: start a fresh session (`/clear`, or a new terminal),
     then run /review-close to merge each branch — `/review-close` is
     context-independent (it reconstructs from the committed branches, the
-    `## Test decision` records, and `.pending-docs/`), so a clean session
+    `## Test decision` records, and `sysop/runtime/pending-docs/`), so a clean session
     reviews every pending branch even-handedly instead of inheriting one
-    task's implementation context. It discovers the `.pending-docs/<branch>.md`
+    task's implementation context. It discovers the `sysop/runtime/pending-docs/<branch>.md`
     each execution agent wrote and consolidates per the consumer's
     `## Pending documentation routing` in `<project>/CLAUDE.md`. The human
     stays the merge gate.
@@ -786,7 +786,7 @@ After printing the table, the orchestrator's job is done. It does NOT run `/revi
 
 - `/auto-build` selects a batch using the Step 2 batch-sizing rule and presents per-task math to the human (Step 4).
 - After confirmation, the orchestrator pre-claims each task on `main` (Step 5), then runs the three-phase per-task pipeline: Phase 6a plan-only agents → Phase 6b adversarial-reviewer agents → Phase 6c orchestrator classification → Phase 6d halt-or-revise → Phase 6e execution agents (Steps 6-7).
-- Phase-6d `blocker` classification parks the task (lock + worktree intact, `plan.md` + `review.md` written to `<worktree>/.auto-build/`, and the plan + verdict mirrored to the durable project-root archive `.auto-build/parked/<TASK_ID>__<timestamp>.md` so they survive worktree cleanup); other tasks continue.
+- Phase-6d `blocker` classification parks the task (lock + worktree intact, `plan.md` + `review.md` written to `<worktree>/sysop/runtime/auto-build/`, and the plan + verdict mirrored to the durable project-root archive `sysop/runtime/auto-build/parked/<TASK_ID>__<timestamp>.md` so they survive worktree cleanup); other tasks continue.
 - Unparked tasks reach Phase 6e and execute. Final report (Step 8) prints `EXECUTED` / `PARKED` / `FAILED` with worktree paths.
 - One full cycle on a 2-task batch of Low-effort + single-file tasks from the consumer's `tasks/open/` completes end-to-end, and the human runs `/review-close` cleanly on each resulting branch.
 - A deliberately-broken plan (task body that mentions a non-existent file) causes Phase 6c to classify a `blocker` and Phase 6d to park the task — visible in the final report and via the scratch files.

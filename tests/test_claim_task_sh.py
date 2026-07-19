@@ -1,13 +1,13 @@
 """Integration tests for core/companion/scripts/claim_task.sh (Phase 84).
 
 `claim_task.sh` creates an isolated workspace (worktree / branch / clone) for a
-task and optionally writes a `.locks/<TASK_ID>.lock`. These tests drive the
+task and optionally writes a `sysop/runtime/locks/<TASK_ID>.lock`. These tests drive the
 real script against scratch git repos and lock: the arg/flag guards (which fire
 before the git check), the already-locked refusal (never overwrite a live
 lock), the lock-body schema (a populated `expires:` — the anti-malformed-lock
 invariant), the `--branch` and default worktree happy paths, and the Phase-32
 canonical-lock-location invariant (a lock created from inside a worktree lands
-under the *main* repo's `.locks/`, resolved via `git rev-parse --git-common-dir`).
+under the *main* repo's `sysop/runtime/locks/`, resolved via `git rev-parse --git-common-dir`).
 """
 import os
 import re
@@ -124,7 +124,7 @@ class TestRelease:
         r = _run(repo, "--lock", "FEAT-X", "feat/x", env={"WORKTREE_PREFIX": "wt"})
         assert r.returncode == 0, r.stderr
         assert (tmp_path / "wt-feat-x").is_dir()
-        assert (repo / ".locks" / "FEAT-X.lock").is_file()
+        assert (repo / "sysop/runtime/locks" / "FEAT-X.lock").is_file()
         return repo
 
     def test_full_reversal(self, tmp_path):
@@ -134,7 +134,7 @@ class TestRelease:
         r = _run(repo, "--release", "FEAT-X", env=_path_env(py))
         assert r.returncode == 0, r.stderr + r.stdout
         assert not wt.exists(), "worktree not removed"
-        assert not (repo / ".locks" / "FEAT-X.lock").exists(), "lock not removed"
+        assert not (repo / "sysop/runtime/locks" / "FEAT-X.lock").exists(), "lock not removed"
         idx = (repo / "tasks" / "index.yml").read_text()
         assert "status: open" in idx
         assert "in_progress" not in idx
@@ -172,8 +172,8 @@ class TestRelease:
         tasks.mkdir()
         (tasks / "index.yml").write_text(
             "schema_version: 1\ntasks:\n  - id: FEAT-X\n    status: in_progress\n")
-        locks = repo / ".locks"
-        locks.mkdir()
+        locks = repo / "sysop/runtime/locks"
+        locks.mkdir(parents=True)
         (locks / "FEAT-X.lock").write_text(
             f"task_id: FEAT-X\nstatus: in_progress\nbranch: feat/x\nworkspace: {repo}\n")
         r = _run(repo, "--release", "FEAT-X", env=_path_env(py))
@@ -192,13 +192,13 @@ class TestRelease:
         r = _run(repo, "--release", "FEAT-X", env=_path_env(py))
         assert r.returncode == 1
         assert wt.is_dir(), "worktree removed despite dirty state"
-        assert (repo / ".locks" / "FEAT-X.lock").is_file(), "lock cleared on abort"
+        assert (repo / "sysop/runtime/locks" / "FEAT-X.lock").is_file(), "lock cleared on abort"
         assert "status: in_progress" in (repo / "tasks" / "index.yml").read_text()
         # With --force: the reversal completes.
         r2 = _run(repo, "--release", "--force", "FEAT-X", env=_path_env(py))
         assert r2.returncode == 0, r2.stderr
         assert not wt.exists()
-        assert not (repo / ".locks" / "FEAT-X.lock").exists()
+        assert not (repo / "sysop/runtime/locks" / "FEAT-X.lock").exists()
         assert "status: open" in (repo / "tasks" / "index.yml").read_text()
 
     def test_refuses_when_run_from_inside_the_worktree(self, tmp_path):
@@ -209,7 +209,7 @@ class TestRelease:
         assert r.returncode == 1
         assert "inside the worktree" in r.stderr
         assert wt.is_dir(), "worktree removed from under the caller"
-        assert (repo / ".locks" / "FEAT-X.lock").is_file()
+        assert (repo / "sysop/runtime/locks" / "FEAT-X.lock").is_file()
         assert "status: in_progress" in (repo / "tasks" / "index.yml").read_text()
 
     def test_no_pyyaml_degrades_without_mutating(self, tmp_path):
@@ -222,7 +222,7 @@ class TestRelease:
         assert r.returncode == 1
         assert "PyYAML" in r.stderr
         assert wt.is_dir()
-        assert (repo / ".locks" / "FEAT-X.lock").is_file()
+        assert (repo / "sysop/runtime/locks" / "FEAT-X.lock").is_file()
         assert "status: in_progress" in (repo / "tasks" / "index.yml").read_text()
 
     def test_no_index_still_releases_worktree_and_lock(self, tmp_path):
@@ -236,7 +236,7 @@ class TestRelease:
         r = _run(repo, "--release", "FEAT-X", env=_path_env(py))
         assert r.returncode == 0, r.stderr
         assert not wt.exists()
-        assert not (repo / ".locks" / "FEAT-X.lock").exists()
+        assert not (repo / "sysop/runtime/locks" / "FEAT-X.lock").exists()
 
     def test_already_open_clears_stale_lock(self, tmp_path):
         # index says open but a lock lingers (a stale claim): --release clears it.
@@ -246,8 +246,8 @@ class TestRelease:
         tasks.mkdir()
         (tasks / "index.yml").write_text(
             "schema_version: 1\ntasks:\n  - id: FEAT-X\n    status: open\n")
-        locks = repo / ".locks"
-        locks.mkdir()
+        locks = repo / "sysop/runtime/locks"
+        locks.mkdir(parents=True)
         (locks / "FEAT-X.lock").write_text(
             "task_id: FEAT-X\nstatus: in_progress\nbranch: feat/x\nworkspace: \n")
         r = _run(repo, "--release", "FEAT-X", env=_path_env(py))
@@ -266,8 +266,8 @@ class TestRelease:
         tasks.mkdir()
         (tasks / "index.yml").write_text(
             "schema_version: 1\ntasks:\n  - id: FEAT-X\n    status: done\n")
-        locks = repo / ".locks"
-        locks.mkdir()
+        locks = repo / "sysop/runtime/locks"
+        locks.mkdir(parents=True)
         (locks / "FEAT-X.lock").write_text(
             "task_id: FEAT-X\nstatus: in_progress\nbranch: feat/x\nworkspace: \n")
         r = _run(repo, "--release", "FEAT-X", env=_path_env(py))
@@ -283,8 +283,8 @@ class TestRelease:
         tasks.mkdir()
         (tasks / "index.yml").write_text(
             "schema_version: 1\ntasks:\n  - id: OTHER\n    status: open\n")
-        locks = repo / ".locks"
-        locks.mkdir()
+        locks = repo / "sysop/runtime/locks"
+        locks.mkdir(parents=True)
         (locks / "FEAT-X.lock").write_text(
             "task_id: FEAT-X\nstatus: in_progress\nbranch: feat/x\nworkspace: \n")
         r = _run(repo, "--release", "FEAT-X", env=_path_env(py))
@@ -298,7 +298,7 @@ class TestRelease:
         assert r.returncode == 1
         assert "before <TASK_ID>" in r.stderr
         assert (tmp_path / "wt-feat-x").is_dir(), "worktree touched despite the guard"
-        assert (repo / ".locks" / "FEAT-X.lock").is_file()
+        assert (repo / "sysop/runtime/locks" / "FEAT-X.lock").is_file()
 
     def test_leaves_validator_consistent_state(self, tmp_path):
         # The core no-desync proof: after --release, validate_tasks.py is clean.
@@ -350,8 +350,8 @@ class TestArgGuards:
 class TestLockRefusal:
     def test_already_locked_refuses(self, tmp_path):
         repo = _repo(tmp_path / "repo")
-        locks = repo / ".locks"
-        locks.mkdir()
+        locks = repo / "sysop/runtime/locks"
+        locks.mkdir(parents=True)
         (locks / "T-1.lock").write_text(
             "task_id: T-1\nstatus: in_progress\nagent: someone-else\nbranch: feat/held\n"
         )
@@ -389,7 +389,7 @@ class TestLockSchema:
         repo = _repo(tmp_path / "repo")
         r = _run(repo, "--branch", "--lock", "T-1", "feat/x", "Agent-7")
         assert r.returncode == 0, r.stderr
-        lock = (repo / ".locks" / "T-1.lock").read_text()
+        lock = (repo / "sysop/runtime/locks" / "T-1.lock").read_text()
         assert "status: in_progress" in lock
         assert "agent: Agent-7" in lock
         assert "branch: feat/x" in lock
@@ -416,12 +416,12 @@ class TestWorktreeMode:
 
     def test_lock_from_worktree_lands_in_main_repo(self, tmp_path):
         # Phase 32 canonical-location invariant: a lock created while cwd is a
-        # linked worktree resolves .locks/ under the MAIN repo via
+        # linked worktree resolves sysop/runtime/locks/ under the MAIN repo via
         # git-common-dir — not under the worktree.
         main = _repo(tmp_path / "main")
         wt = tmp_path / "wt"
         _git(main, "worktree", "add", "-q", "-b", "feat/w", str(wt))
         r = _run(wt, "--branch", "--lock", "T-3", "feat/z")
         assert r.returncode == 0, r.stderr
-        assert (main / ".locks" / "T-3.lock").is_file(), "lock did not land in main repo"
-        assert not (wt / ".locks" / "T-3.lock").exists(), "lock leaked into the worktree"
+        assert (main / "sysop/runtime/locks" / "T-3.lock").is_file(), "lock did not land in main repo"
+        assert not (wt / "sysop/runtime/locks" / "T-3.lock").exists(), "lock leaked into the worktree"

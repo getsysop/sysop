@@ -206,8 +206,13 @@ def test_classify_buckets_by_prefix():
         _MIXED_CHECKS, active_token=None
     )
     assert {c["id"] for c in grep_checks} == {"grep-a", "grep-b"}
-    assert lsp_ids == {"pyright-x", "tsc-y"}
-    assert semgrep_ids == {"semgrep-z"}
+    # Phase 133: lsp/semgrep buckets are dicts of id → full check dict (the
+    # tool-shelling stages post-filter findings by each check's paths:), so
+    # compare membership on keys — set-like usage is the preserved contract.
+    assert set(lsp_ids) == {"pyright-x", "tsc-y"}
+    assert lsp_ids["pyright-x"]["id"] == "pyright-x"
+    assert set(semgrep_ids) == {"semgrep-z"}
+    assert semgrep_ids["semgrep-z"]["id"] == "semgrep-z"
     assert lint_ids == {"lint-error"}
     assert pip_audit_ids == {"pip-audit-vuln"}
     assert {c["id"] for c in coverage_checks} == {"coverage-diff-python"}
@@ -229,7 +234,7 @@ def test_classify_active_token_filters():
     res_quality = rci._classify_checks(_MIXED_CHECKS, active_token="codebase-review")
     grep_q = {c["id"] for c in res_quality[0]}
     assert grep_q == {"grep-a"}              # grep-b is security-only
-    assert res_quality[2] == set()           # semgrep-z is security-only
+    assert not res_quality[2]                # semgrep-z is security-only (empty dict)
     assert res_quality[4] == set()           # pip-audit-vuln is security-only
     # security-only pip-audit excluded → not in blocking_ids under quality
     assert "pip-audit-vuln" not in res_quality[-1]

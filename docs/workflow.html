@@ -1266,7 +1266,7 @@
         <h2 class="s-title">One task, four skills,<br>one <span class="stress">merge.</span></h2>
         <p class="lede">
           The happy path for a developer working on a single feature or fix. Each skill hands off to the next via the filesystem
-          (<code>tasks/index.yml</code>, <code>.locks/</code>, <code>.pending-docs/</code>) so any step can be re-run independently.
+          (<code>tasks/index.yml</code>, <code>sysop/runtime/locks/</code>, <code>sysop/runtime/pending-docs/</code>) so any step can be re-run independently.
         </p>
 
         <figure class="fig">
@@ -1332,7 +1332,7 @@
               <!-- Pending-doc annotation under document-work -->
               <g class="node" transform="translate(480,272)">
                 <rect width="170" height="56" rx="2" class="fill-ghost"/>
-                <text x="85" y="24" class="small">.pending-docs/</text>
+                <text x="85" y="24" class="small">sysop/runtime/pending-docs/</text>
                 <text x="85" y="42" class="smallserif">handoff to senior review</text>
               </g>
               <path d="M 565 240 L 565 272" class="arrow dashed"/>
@@ -1340,7 +1340,7 @@
               <!-- Lock annotation under next-task -->
               <g class="node" transform="translate(40,272)">
                 <rect width="170" height="56" rx="2" class="fill-ghost"/>
-                <text x="125" y="24" class="small">.locks/</text>
+                <text x="125" y="24" class="small">sysop/runtime/locks/</text>
                 <text x="125" y="42" class="smallserif">prevents double-claim</text>
               </g>
               <path d="M 125 240 L 125 272" class="arrow dashed"/>
@@ -1363,7 +1363,7 @@
           </div>
           <div class="entry">
             <dt>/document-work<span class="model-tag">inherits · narration</span></dt>
-            <dd>Boy-scout simplify pass, follow-up-stub <em>HARD-FAIL</em> gate, then writes <code>.pending-docs/&lt;branch&gt;.md</code> for senior review.</dd>
+            <dd>Boy-scout simplify pass, follow-up-stub <em>HARD-FAIL</em> gate, then writes <code>sysop/runtime/pending-docs/&lt;branch&gt;.md</code> for senior review.</dd>
           </div>
           <div class="entry">
             <dt>/review-close<span class="model-tag opus">opus · gate</span></dt>
@@ -1535,7 +1535,7 @@
         <p>Fig. 3 is the <em>process</em>. The question it doesn't answer — the one every newcomer eventually
           asks — is <em>where</em> all of that runs, and what you can safely do beside it. The build never happens
           on <code>main</code>: your clone stays put while each task gets its own worktree, and two coordination
-          files (<code>.locks/</code>, <code>tasks/index.yml</code>) keep every session honest about what's claimed.</p>
+          files (<code>sysop/runtime/locks/</code>, <code>tasks/index.yml</code>) keep every session honest about what's claimed.</p>
 
         <figure class="fig">
           <div class="fig-frame">
@@ -1552,7 +1552,7 @@
                 <text x="235" y="74" class="smallserif">Primary checkout</text>
                 <text x="235" y="96" class="code" font-size="12">~/Projects/app/ · main</text>
                 <rect x="92" y="112" width="286" height="40" rx="2" class="fill-primary"/>
-                <text x="235" y="137" class="small">.locks/ — who owns what</text>
+                <text x="235" y="137" class="small">sysop/runtime/locks/ — who owns what</text>
                 <rect x="92" y="160" width="286" height="46" rx="2" class="fill-primary"/>
                 <text x="235" y="180" class="small">tasks/index.yml</text>
                 <text x="235" y="197" class="small" font-size="10">open · in_progress · done</text>
@@ -1589,7 +1589,7 @@
           </div>
           <figcaption>
             <span class="fig-num">Fig. 8</span>
-            <span class="fig-cap">Where the work lives. One clone stays on <code>main</code> (holding <code>.locks/</code> and the task index); each task builds in its own sibling worktree. <code>/claim-task</code> and <code>/auto-build</code> create worktrees; <code>/review-close</code> merges them back. Adding tasks or claiming new work from another session is safe — it only ever creates more worktrees.</span>
+            <span class="fig-cap">Where the work lives. One clone stays on <code>main</code> (holding <code>sysop/runtime/locks/</code> and the task index); each task builds in its own sibling worktree. <code>/claim-task</code> and <code>/auto-build</code> create worktrees; <code>/review-close</code> merges them back. Adding tasks or claiming new work from another session is safe — it only ever creates more worktrees.</span>
           </figcaption>
         </figure>
 
@@ -2098,7 +2098,7 @@
                 <rect x="600" y="228" width="320" height="80" rx="2" class="fill-accent"/>
                 <text x="760" y="254" class="code">parse_subagent_envelope.py</text>
                 <text x="760" y="276" class="small">finds last yaml block w/ task+status</text>
-                <text x="760" y="294" class="small">writes .subagent-envelopes/&lt;id&gt;.json</text>
+                <text x="760" y="294" class="small">writes sysop/runtime/subagent-envelopes/&lt;id&gt;.json</text>
               </g>
 
               <g class="node">
@@ -2245,10 +2245,12 @@
 │   │   ├── <span class="key">run_checks/</span>            <span class="cm"># Phase 49 split · Phase 61 coverage.py crown-jewel gate</span>
 │   │   └── sysop-update.sh        <span class="cm"># the consumer-side update entry point</span>
 │   ├── <span class="key">docs/</span>                      <span class="cm"># WORKFLOW.md, WORKFLOW_GUIDE.md</span>
-│   └── SYSOP_ISSUES.md            <span class="cm"># friction log · seeded once, project-owned · /report-issues files upstream</span>
-├── <span class="key">.locks/</span>                        <span class="cm"># lives in main repo · git-common-dir resolved (Phase 32)</span>
-├── <span class="key">.pending-docs/</span>                 <span class="cm"># /document-work writes here · /review-close consumes</span>
-└── <span class="key">.subagent-envelopes/</span>           <span class="cm"># Phase 37 · SubagentStop hook writes JSON here</span></pre>
+│   ├── <span class="key">runtime/</span>                   <span class="cm"># gitignored orchestration state — one ignore entry covers it (Phase 133)</span>
+│   │   ├── locks/                 <span class="cm"># lives in main repo · git-common-dir resolved (Phase 32)</span>
+│   │   ├── pending-docs/          <span class="cm"># /document-work writes here · /review-close consumes</span>
+│   │   ├── auto-build/            <span class="cm"># parked-task plan + verdict archive (Phase 65a)</span>
+│   │   └── subagent-envelopes/    <span class="cm"># Phase 37 · SubagentStop hook writes JSON here</span>
+│   └── SYSOP_ISSUES.md            <span class="cm"># friction log · seeded once, project-owned · /report-issues files upstream</span></pre>
         </div>
       </div>
     </div>

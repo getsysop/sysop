@@ -60,7 +60,7 @@ LOOP_SCRIPTS = {
     "_log.py", "_model_roles.py", "archive_review_tasks.py",
     "check_skill_models.py", "install_hooks.sh", "migrate_skill_model.py",
     "resolve_skill_models.py", "review_index.py", "run_checks_impl.py",
-    "run_checks.sh", "sysop-update.sh",
+    "run_checks.sh", "self_check.sh", "sysop-update.sh",
 }
 EXCLUDED_SCRIPTS = {
     "backfill_completed_dates.py", "batch_work.sh", "claim_task.sh",
@@ -294,15 +294,17 @@ class TestLoopFootprint:
 
     def test_gitignore_covers_pending_docs_and_nothing_lifecycle(self, tmp_path):
         # The audit skills' Step 8 promotion-deferral writes
-        # .pending-docs/convention-candidates.md even in loop mode (leg-5 dogfood
-        # finding), so that one dir must be ignored — while the three
-        # lifecycle-only dirs must NOT appear as dead entries (the enumerated
-        # footprint claim depends on this).
+        # sysop/runtime/pending-docs/convention-candidates.md even in loop mode
+        # (leg-5 dogfood finding), so the consolidated sysop/runtime/ entry must
+        # be present (Phase 133: one entry covers all runtime dirs in both
+        # modes) — while the pre-133 per-dir dot entries must NOT appear (the
+        # enumerated footprint claim depends on the single-line append).
         root = _fresh_loop(tmp_path)
         lines = (root / ".gitignore").read_text().splitlines()
-        assert lines.count(".pending-docs/") == 1, lines
-        for dead in (".subagent-envelopes/", ".auto-build/", ".locks/"):
-            assert dead not in lines, f"lifecycle-dead entry {dead} in loop gitignore"
+        assert lines.count("sysop/runtime/") == 1, lines
+        for dead in (".subagent-envelopes/", ".auto-build/", ".locks/",
+                     ".pending-docs/"):
+            assert dead not in lines, f"legacy per-dir entry {dead} in loop gitignore"
 
     def test_composes_with_packs(self, tmp_path):
         root = _make_consumer(

@@ -130,3 +130,72 @@ class TestGracefulSkips:
         with patch("run_checks.semgrep.subprocess.run", return_value=_completed("")):
             out = semgrep._run_semgrep(str(tmp_path), {"semgrep-dangerous-eval"})
         assert out == []
+
+
+# ── Phase 133: per-check paths: scoping (post-filter) ───────────────────────
+
+class TestPathsScoping:
+    """`_classify_checks` hands this stage id → check dict; when the check
+    declares real `paths:`, findings outside them are dropped. Unlocalized
+    `<placeholder>` entries contribute no scoping (the pre-133 whole-tree
+    behavior — a fresh, never-substituted install must not go silently
+    findings-free), and the `__disabled_no_op__` sentinel scopes the check to
+    nothing (the overlay disable shape, now working for semgrep)."""
+
+    def _run(self, tmp_path, included):
+        _semgrep_dir(tmp_path)
+        with patch("run_checks.semgrep.subprocess.run",
+                   return_value=_completed(_semgrep_json(tmp_path))):
+            return semgrep._run_semgrep(str(tmp_path), included)
+
+    def test_in_scope_finding_kept(self, tmp_path):
+        out = self._run(tmp_path, {
+            "semgrep-dangerous-eval": {"id": "semgrep-dangerous-eval",
+                                       "paths": ["app/"]}})
+        assert len(out) == 1
+
+    def test_out_of_scope_finding_dropped(self, tmp_path):
+        out = self._run(tmp_path, {
+            "semgrep-dangerous-eval": {"id": "semgrep-dangerous-eval",
+                                       "paths": ["other/"]}})
+        assert out == []
+
+    def test_placeholder_paths_do_not_scope(self, tmp_path):
+        out = self._run(tmp_path, {
+            "semgrep-dangerous-eval": {"id": "semgrep-dangerous-eval",
+                                       "paths": ["<api module>/"]}})
+        assert len(out) == 1, "unlocalized placeholder must not disable the rule"
+
+    def test_sentinel_disables_rule(self, tmp_path):
+        out = self._run(tmp_path, {
+            "semgrep-dangerous-eval": {"id": "semgrep-dangerous-eval",
+                                       "paths": ["__disabled_no_op__"]}})
+        assert out == []
+
+    def test_legacy_id_set_still_accepted_unscoped(self, tmp_path):
+        out = self._run(tmp_path, {"semgrep-dangerous-eval"})
+        assert len(out) == 1
+
+    def test_exclude_dir_drops_finding_under_matching_component(self, tmp_path):
+        """Adversarial-review fix (2026-07-19): the docs recommend exclude_dir
+        as a general narrowing mechanism, so the tool-shelling post-filter must
+        honor it too — not just grep."""
+        out = self._run(tmp_path, {
+            "semgrep-dangerous-eval": {"id": "semgrep-dangerous-eval",
+                                       "paths": [], "exclude_dir": ["app"]}})
+        assert out == []
+
+    def test_repo_root_dot_path_means_whole_tree(self, tmp_path):
+        """Adversarial-review fix (2026-07-19): '.' / './' are valid whole-tree
+        roots to the grep stage — the post-filter must not treat them as
+        match-nothing (a natural substitution value for small repos)."""
+        out = self._run(tmp_path, {
+            "semgrep-dangerous-eval": {"id": "semgrep-dangerous-eval",
+                                       "paths": ["."]}})
+        assert len(out) == 1
+
+    def test_dot_slash_prefixed_path_scopes_normally(self, tmp_path):
+        out = self._run(tmp_path, {
+            "semgrep-dangerous-eval": {"id": "semgrep-dangerous-eval",
+                                       "paths": ["./app/"]}})
+        assert len(out) == 1

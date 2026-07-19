@@ -59,7 +59,7 @@ cd ../gdp-feat-studio && bash sysop/scripts/install_hooks.sh
 bash sysop/scripts/batch_work.sh 270
 ```
 
-Mark the task as in-progress via `/claim-task <TASK-ID>` — it flips `status: open → in_progress` in `tasks/index.yml` and creates `.locks/<TASK-ID>.lock` (the validator's `in_progress` invariant requires both).
+Mark the task as in-progress via `/claim-task <TASK-ID>` — it flips `status: open → in_progress` in `tasks/index.yml` and creates `sysop/runtime/locks/<TASK-ID>.lock` (the validator's `in_progress` invariant requires both).
 
 ### 3. Plan
 
@@ -86,8 +86,8 @@ git commit -m "feat: add payment-provider webhook endpoint"
 
 Write a deferred documentation file (prevents merge conflicts):
 ```bash
-mkdir -p .pending-docs
-cat > .pending-docs/feat-feat-studio.md << 'EOF'
+mkdir -p sysop/runtime/pending-docs
+cat > sysop/runtime/pending-docs/feat-feat-studio.md << 'EOF'
 ---
 branch: feat/feat-studio
 date: 2026-03-20
@@ -205,7 +205,7 @@ This whole process is what `/review-close` automates; run it by hand when no AI 
 3. **Verify the test-decision record** — read the branch's `## Test decision` back against the diff ("plan said test X — is it here?" / "no-test-because-Z — does Z still hold?"). Halt for a human decision on a mismatch. This *verifies the record*; it does not re-judge whether the test strategy was right (that was the plan-time reviewer's job).
 4. Run full verification: `pytest` + `npm run build`
 5. Merge: `git merge --ff-only <branch>`
-6. Consolidate `.pending-docs/*.md` into shared documentation files
+6. Consolidate `sysop/runtime/pending-docs/*.md` into shared documentation files
 7. Push and verify staging deployment
 8. Clean up: delete merged branches and worktrees
 
@@ -258,7 +258,7 @@ A few read-mostly skills help you orient without changing state:
 
 `/auto-build` is the optional parallel-batch orchestrator (see WORKFLOW.md § 2.4b). Invoke when you have ≥ 2 independently-claimable tasks in your current-focus phase and want to walk away while a batch executes.
 
-The orchestrator picks the batch (effort × `blast_radius` weights under a K=12 sum ceiling, max N=4 tasks, up to two cross-module tasks). Pass explicit task IDs — `/auto-build FEAT-A TECH-B`, e.g. the `Run it:` line a `/roadmap` ordering emits — to narrow the pool to a chosen subset; the eligibility filters and ceilings still apply, and requested IDs that don't survive them are reported with per-ID reasons, never silently dropped. It then pre-claims each task on `main`, then per task fans out plan-only → adversarial-reviewer → execution Opus sub-agents at the orchestrator layer (the orchestrator does all fan-out itself — a deliberate flat-hierarchy design; see `_shared/adversarial-review.md` § "Harness constraint"). Tasks that the orchestrator's classification step marks as `blocker` are parked with their plan + verdict written to `<worktree>/.auto-build/` for the human to resume. Tasks classified `fixable` continue to execution; each execution agent invokes `/document-work --non-interactive` to commit + write pending docs but does NOT push. The orchestrator prints a status table when done; the human runs `/review-close` on each EXECUTED branch to merge.
+The orchestrator picks the batch (effort × `blast_radius` weights under a K=12 sum ceiling, max N=4 tasks, up to two cross-module tasks). Pass explicit task IDs — `/auto-build FEAT-A TECH-B`, e.g. the `Run it:` line a `/roadmap` ordering emits — to narrow the pool to a chosen subset; the eligibility filters and ceilings still apply, and requested IDs that don't survive them are reported with per-ID reasons, never silently dropped. It then pre-claims each task on `main`, then per task fans out plan-only → adversarial-reviewer → execution Opus sub-agents at the orchestrator layer (the orchestrator does all fan-out itself — a deliberate flat-hierarchy design; see `_shared/adversarial-review.md` § "Harness constraint"). Tasks that the orchestrator's classification step marks as `blocker` are parked with their plan + verdict written to `<worktree>/sysop/runtime/auto-build/` for the human to resume. Tasks classified `fixable` continue to execution; each execution agent invokes `/document-work --non-interactive` to commit + write pending docs but does NOT push. The orchestrator prints a status table when done; the human runs `/review-close` on each EXECUTED branch to merge.
 
 **Skip `/auto-build` when:**
 

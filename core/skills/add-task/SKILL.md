@@ -99,7 +99,7 @@ This is one conversational turn, not a review gate. The human's real sign-off is
 ## What this skill never does
 
 - Creates or edits `phases:`, `tasks/vision.md`, or `tasks/decisions.md` — that's `/intake`.
-- Changes any existing task's `status:`, touches `.locks/`, or edits an existing entry — capture only appends.
+- Changes any existing task's `status:`, touches `sysop/runtime/locks/`, or edits an existing entry — capture only appends.
 - Imports backlogs or scans the repo for work — that's `/onboard`.
 - Commits, pushes, or merges anything.
 

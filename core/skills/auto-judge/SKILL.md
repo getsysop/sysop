@@ -320,9 +320,9 @@ For each agent, extract FIX/DROP/FAIL counts and any errors. If STATUS is FAIL, 
 
 ### 4d. Create Pending Docs (on any PASS with pushed commits)
 
-If STATUS is PASS and commits were pushed, create a pending-docs file in the worktree. Use Write to create `<WORKTREE_PATH>/.pending-docs/<sanitized-branch>.md`:
+If STATUS is PASS and commits were pushed, create a pending-docs file in the worktree. Use Write to create `<WORKTREE_PATH>/sysop/runtime/pending-docs/<sanitized-branch>.md`:
 
-1. `mkdir -p <WORKTREE_PATH>/.pending-docs` (via Bash)
+1. `mkdir -p <WORKTREE_PATH>/sysop/runtime/pending-docs` (via Bash)
 2. Write the file:
 
 ```yaml
