@@ -18,7 +18,7 @@ git clone https://github.com/getsysop/sysop.git
 bash sysop/install.sh /path/to/your/project --packs auto --mode loop
 cd /path/to/your/project
 git status                                   # review everything Sysop wrote
-git add .claude/ sysop/ CLAUDE.md
+git add .claude/ sysop/ CLAUDE.md .gitignore
 git commit -m "chore: install Sysop (loop mode)"
 ```
 

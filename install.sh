@@ -2181,6 +2181,20 @@ install_permissions() {
   fi
   ensure_dir "$(dirname "$dst")"
 
+  # Phase 131 (round-4 cold read): say the allow-list's blast radius out loud at
+  # install time — both cold readers flagged discovering the `git push` grants
+  # only by reading the shipped JSON. Emitted on every path (fresh, merge,
+  # dry-run) so no install applies the grant silently.
+  if [[ "$INSTALL_MODE" == "loop" ]]; then
+    note "allow-list: a small check/read-only subset, no hooks — no push, merge, or rebase grants."
+    note "  It is yours to trim: review .claude/settings.json and delete any rule you don't want."
+  else
+    note "allow-list: pre-authorizes the agent for Sysop's lifecycle git flow WITHOUT further"
+    note "  prompts — including 'git push origin' and 'git push --force-with-lease' (the"
+    note "  worktree close path). Review .claude/settings.json and delete any rule you don't"
+    note "  want; '--mode loop' ships a small check/read-only subset instead."
+  fi
+
   # Loop mode: feed the copy/merge paths below a filtered template (loop
   # allow-subset, no hooks) so the existing logic is reused unchanged.
   if [[ "$INSTALL_MODE" == "loop" ]]; then
@@ -2516,18 +2530,20 @@ EOF
   esac
 }
 
-# Phase 123 (loop mode): ensure <project>/CLAUDE.md carries the three sections the
+# Phase 123 (loop mode), both modes since Phase 131 (round-4 cold read: the
+# full-mode quickstart's `git add ... CLAUDE.md` hard-failed on bare repos, and
+# the audit skills consume the same sections in full mode — /intake + the §6.1
+# bootstrap append their own sections later and compose with this):
+# ensure <project>/CLAUDE.md carries the three sections the
 # audit skills consume — "Scope mapping" (/codebase-review + /security-audit
 # Step 1), "Map coverage exclusions" (Step 2a), "Security-critical always-include
-# files" (/security-audit Step 1). In full mode /intake + a lifecycle bootstrap
-# write CLAUDE.md; loop mode has neither, so without this the audit skills have no
-# scope to map. Two paths: create-fresh with all three when absent; otherwise
+# files" (/security-audit Step 1). Two paths: create-fresh with all three when absent; otherwise
 # append ONLY the sections whose header is missing (the ensure_runtime_gitignore
 # append-only contract — never rewrite consumer-authored content). Header match is
 # anchored so a mention in prose doesn't count as present. Fresh-install only
 # (main gates on UPDATE_MODE==0). Not a managed path (project-owned).
 seed_claude_md_stub() {
-  hdr "CLAUDE.md scope sections (loop mode)"
+  hdr "CLAUDE.md scope sections"
   local dst="$TARGET/CLAUDE.md"
 
   if [[ ! -f "$dst" ]]; then
@@ -2539,8 +2555,8 @@ seed_claude_md_stub() {
       cat <<'EOF'
 # CLAUDE.md
 
-> Seeded by Sysop (loop mode). The three sections below tell the convention-loop
-> skills (`/codebase-review`, `/security-audit`) what to review and what to skip.
+> Seeded by Sysop. The three sections below tell the review skills
+> (`/codebase-review`, `/security-audit`) what to review and what to skip.
 > Fill in the globs for your repo, then delete these notes. Everything else in
 > this file is yours.
 EOF
@@ -3855,14 +3871,15 @@ main() {
   # --check + --adopt return early above, and --update treats the friction log
   # as project-owned). Helper itself skips silently if the file exists.
   # Phase 123: in loop mode, SYSOP_ISSUES.md stays lazy (created by the first
-  # friction capture, not at install — zero-root-footprint); instead seed the
-  # CLAUDE.md scope sections the audit skills need.
+  # friction capture, not at install — zero-root-footprint).
+  # Phase 131 (round-4 cold read): seed_claude_md_stub now runs in BOTH modes —
+  # the full-mode quickstart's `git add ... CLAUDE.md` hard-failed on bare repos
+  # (exit 128, nothing staged), and the audit skills consume the same three
+  # sections in full mode. The stub is section-level append-if-absent, so the
+  # §6.1 bootstrap / /intake compose with it (their sections just append later).
   if [[ "$UPDATE_MODE" -eq 0 ]]; then
-    if [[ "$INSTALL_MODE" == "loop" ]]; then
-      seed_claude_md_stub
-    else
-      seed_friction_log
-    fi
+    seed_claude_md_stub
+    [[ "$INSTALL_MODE" == "loop" ]] || seed_friction_log
   fi
 
   # Update mode: paths that Sysop used to manage but no longer does should

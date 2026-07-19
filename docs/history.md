@@ -18,7 +18,7 @@ that it's a working log written for the project's own continuity, not an introdu
   that records where each rule came from.
 - **May 2026** — A second private project installs it. Real consumer friction drives the
   installer, updater, and permission machinery through dozens of fixes.
-- **Jun–Jul 2026** — Test suite built out (750+ tests), the evidence dataset is mined and
+- **Jun–Jul 2026** — Test suite built out (900+ tests by mid-July), the evidence dataset is mined and
   published with its limits stated, and the project is renamed twice (wade-flow → jig → sysop)
   after name collisions.
 - **2026-07-13** — Public cut as [getsysop/sysop](https://github.com/getsysop/sysop), MIT.
