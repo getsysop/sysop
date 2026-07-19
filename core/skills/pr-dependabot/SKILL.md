@@ -34,7 +34,7 @@ This skill shells out to `gh` and `python3`. It writes nothing to the filesystem
 
 Read `.claude/settings.json` and confirm `permissions.allow` contains:
 
-- `Bash(python3 scripts/pr_dependabot.py:*)` — the classifier/executor itself
+- `Bash(python3 sysop/scripts/pr_dependabot.py:*)` — the classifier/executor itself
 - `Bash(gh pr list:*)` — enumerate open Dependabot PRs
 - `Bash(gh pr view:*)` — resolve `mergeable` + CI status per PR
 - `Bash(gh pr merge:*)` — merge safe updates (only reached under `--execute`)
@@ -71,7 +71,7 @@ Run the planner read-only, regardless of whether the human asked for
 `--execute`:
 
 ```bash
-python3 scripts/pr_dependabot.py [--repo owner/name]
+python3 sysop/scripts/pr_dependabot.py [--repo owner/name]
 ```
 
 Print the plan verbatim. It lists each open Dependabot PR with its classified
@@ -86,7 +86,7 @@ the plan looks right before running it — merges are hard to walk back. Only
 after confirmation:
 
 ```bash
-python3 scripts/pr_dependabot.py --execute [--repo owner/name]
+python3 sysop/scripts/pr_dependabot.py --execute [--repo owner/name]
 ```
 
 The executor re-checks each merge candidate at merge time: it polls `gh pr view`
@@ -106,7 +106,7 @@ knows what to look at next. Do not merge them.
 ## Classification policy (reference)
 
 Validated against ~50 real Dependabot PRs (see Phase 53 in `PHASE_LOG.md`). The
-rules live in `scripts/pr_dependabot.py`; this table is the human-readable map.
+rules live in `sysop/scripts/pr_dependabot.py`; this table is the human-readable map.
 
 | Class | Action | Rule |
 |---|---|---|

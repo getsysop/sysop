@@ -77,7 +77,7 @@ def write_baseline(path, all_findings, blocking_ids):
         f.write(
             "# Pre-scan baseline — known findings accepted as tech debt.\n"
             "# Format: check_id|path:line  (one per line)\n"
-            "# Regenerate: bash scripts/run_checks.sh --mode both --update-baseline\n"
+            "# Regenerate: bash sysop/scripts/run_checks.sh --mode both --update-baseline\n"
             "# New findings NOT in this file will fail CI when the check is "
             "marked `blocking: true`.\n"
             "# (coverage-* findings are never baselined — see write_baseline.)\n"

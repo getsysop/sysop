@@ -9,9 +9,9 @@ reality and the state files; emits a scannable text report.
 Never mutates state. Read-only by design.
 
 Usage:
-    python3 scripts/sitrep_survey.py             # text report
-    python3 scripts/sitrep_survey.py --json      # JSON output (reserved)
-    python3 scripts/sitrep_survey.py --stale-days 14
+    python3 sysop/scripts/sitrep_survey.py             # text report
+    python3 sysop/scripts/sitrep_survey.py --json      # JSON output (reserved)
+    python3 sysop/scripts/sitrep_survey.py --stale-days 14
 """
 
 from __future__ import annotations
@@ -1144,7 +1144,7 @@ def _recommended_next(s: Survey) -> Recommendation | None:
             command="/auto-build",
             reason=(
                 f"{n} open roadmap task(s) in tasks/index.yml; /auto-build picks "
-                f"a batch under the K=6 weight ceiling and orchestrates plan + execute"
+                f"a batch under the K=12 weight ceiling and orchestrates plan + execute"
             ),
             detail_lines=[f"open: {sample_str}"],
             clear_nudge=True,

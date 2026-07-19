@@ -85,9 +85,11 @@ class TestConsumerGuard:
 
 class TestHandoff:
     def test_forwards_argv_and_propagates_exit_code(self, tmp_path):
-        # A fake install.sh (in a git repo) echoes its argv and exits 7.
+        # A fake install.sh (in a git repo) echoes its argv and exits 7. The
+        # `sysop/scripts` marker satisfies the Phase-128 T6 source-freshness
+        # guard (a real post-namespace installer contains it).
         src = _git_repo(tmp_path / "sysop")
-        (src / "install.sh").write_text('echo "FAKE_INSTALL: $*"\nexit 7\n')
+        (src / "install.sh").write_text('# sysop/scripts\necho "FAKE_INSTALL: $*"\nexit 7\n')
         _git(src, "add", "-A")
         _git(src, "commit", "-qm", "seed")
         consumer = _git_repo(tmp_path / "consumer")

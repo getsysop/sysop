@@ -31,7 +31,7 @@ If `$ARGUMENTS` contains `--skip-permission-guard`, print a one-line warning and
 
 ## Step 1: Read Queue
 
-Read `review_tasks.md` in full. If it exceeds 125KB, stop and tell the user to run `.venv/bin/python3 scripts/archive_review_tasks.py` first.
+Read `review_tasks.md` in full. If it exceeds 125KB, stop and tell the user to run `.venv/bin/python3 sysop/scripts/archive_review_tasks.py` first.
 
 Find all batches with status **`Pending`**. For each, extract:
 

@@ -102,7 +102,7 @@ checks:
 
   # ── Semgrep / AST diagnostics ──────────────────────────────────
   # These entries have no `pattern:` field. Findings are populated
-  # by `_run_semgrep()` in scripts/run_checks_impl.py, which scans
+  # by `_run_semgrep()` in sysop/scripts/run_checks/semgrep.py, which scans
   # the pack's semgrep/*.yaml rules. All start `blocking: false` —
   # CI does not install semgrep yet.
 

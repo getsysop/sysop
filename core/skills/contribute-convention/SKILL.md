@@ -243,7 +243,7 @@ it gets the same fingerprint-strip before it reaches the Step 6 body.
 Apply, per candidate:
 
 - **Real paths → placeholder globs.** `parsers/*.py` → `<data parser dir>/*.py`;
-  `scripts/*.py` → `<scripts dir>/*.py`. Reuse an existing pack placeholder when
+  `sysop/scripts/*.py` → `<scripts dir>/*.py`. Reuse an existing pack placeholder when
   one fits; coin a descriptive one (`<foo module>`) when none does, and list any
   coined placeholders so the maintainer can reconcile vocabulary.
 - **Real helper / symbol names → placeholder or canonical-example.**

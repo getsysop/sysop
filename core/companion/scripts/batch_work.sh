@@ -3,9 +3,9 @@
 # batch_work.sh — Create an isolated worktree for a review_tasks.md batch.
 #
 # Usage:
-#   bash scripts/batch_work.sh <BATCH_NUMBER>    # Create worktree for batch
-#   bash scripts/batch_work.sh --list            # Show pending/in-progress batches
-#   bash scripts/batch_work.sh --list-all        # Show all batches including complete
+#   bash sysop/scripts/batch_work.sh <BATCH_NUMBER>    # Create worktree for batch
+#   bash sysop/scripts/batch_work.sh --list            # Show pending/in-progress batches
+#   bash sysop/scripts/batch_work.sh --list-all        # Show all batches including complete
 #
 # Creates a git worktree at ../<project basename>-batch-<N>/ with the
 # branch specified in review_tasks.md. Override the prefix by exporting
@@ -30,10 +30,10 @@ if [[ ! -f "$TASKS_FILE" ]]; then
 fi
 
 # ── Helper: parse all batches ─────────────────────────────────
-# Uses the shadow JSON index (scripts/review_index.py) for reliable parsing.
+# Uses the shadow JSON index (sysop/scripts/review_index.py) for reliable parsing.
 # Falls back to inline bash regex if Python is unavailable.
 # Output: tab-separated lines: NUMBER<tab>TITLE<tab>STATUS<tab>BRANCH<tab>SCOPE<tab>VERIFY
-INDEX_SCRIPT="${REPO_ROOT}/scripts/review_index.py"
+INDEX_SCRIPT="${REPO_ROOT}/sysop/scripts/review_index.py"
 
 parse_batches() {
   # Try the JSON index first (auto-rebuilds if stale)
@@ -247,7 +247,7 @@ done < <(parse_batches)
 
 if [[ -z "$BATCH_LINE" ]]; then
   echo "❌ Batch ${BATCH_NUM} not found in review_tasks.md" >&2
-  echo "   Run: bash scripts/batch_work.sh --list-all" >&2
+  echo "   Run: bash sysop/scripts/batch_work.sh --list-all" >&2
   exit 1
 fi
 
@@ -287,10 +287,10 @@ else
 fi
 
 # ── Install hooks (non-fatal) ────────────────────────────────
-if [[ -f "${REPO_ROOT}/scripts/install_hooks.sh" ]]; then
+if [[ -f "${REPO_ROOT}/sysop/scripts/install_hooks.sh" ]]; then
   # Surface stderr so a real install failure (missing .git/hooks, permission
   # error, hook source corruption) is visible — symmetric with claim_task.sh.
-  (cd "$WORKTREE_DIR" && bash "${REPO_ROOT}/scripts/install_hooks.sh") || \
+  (cd "$WORKTREE_DIR" && bash "${REPO_ROOT}/sysop/scripts/install_hooks.sh") || \
     echo "⚠️  Hook installation failed (non-fatal)."
 fi
 
@@ -316,4 +316,4 @@ echo "   2. Review the batch tasks in review_tasks.md"
 echo "   3. Start working!"
 echo ""
 echo "   When done: git push -u origin ${BATCH_BRANCH}"
-echo "   Cleanup:   bash scripts/cleanup_worktrees.sh --clean"
+echo "   Cleanup:   bash sysop/scripts/cleanup_worktrees.sh --clean"

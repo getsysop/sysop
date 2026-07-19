@@ -6,10 +6,10 @@
 # See WORKFLOW.md §6.5 for format documentation.
 #
 # Usage:
-#   bash scripts/run_checks.sh                    # Run all checks
-#   bash scripts/run_checks.sh --mode quality     # Codebase-review checks only
-#   bash scripts/run_checks.sh --mode security    # Security-audit checks only
-#   bash scripts/run_checks.sh --mode both        # All checks (default)
+#   bash sysop/scripts/run_checks.sh                    # Run all checks
+#   bash sysop/scripts/run_checks.sh --mode quality     # Codebase-review checks only
+#   bash sysop/scripts/run_checks.sh --mode security    # Security-audit checks only
+#   bash sysop/scripts/run_checks.sh --mode both        # All checks (default)
 # ──────────────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -38,7 +38,7 @@ FRONTEND_BIN="${REPO_ROOT}/frontend/node_modules/.bin"
 [[ -d "$VENV_BIN" ]] && export PATH="${VENV_BIN}:${PATH}"
 [[ -d "$FRONTEND_BIN" ]] && export PATH="${FRONTEND_BIN}:${PATH}"
 
-SCRIPT_DIR="${REPO_ROOT}/scripts"
+SCRIPT_DIR="${REPO_ROOT}/sysop/scripts"
 # Prefer the main repo's venv python (resolves for worktrees too); fall back
 # to the current checkout's .venv, then to whatever is on PATH.
 if [[ -x "${MAIN_REPO_ROOT}/.venv/bin/python3" ]]; then

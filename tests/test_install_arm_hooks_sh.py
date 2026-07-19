@@ -99,9 +99,9 @@ class TestArmHooksLandInTarget:
             assert armed.is_file(), f"{base} not armed into target/.git/hooks/"
             assert os.access(armed, os.X_OK), f"{base} armed but not executable"
             # It's the real template, not an empty/placeholder file.
-            template = target / "scripts" / "hooks" / base
+            template = target / "sysop" / "scripts" / "hooks" / base
             assert armed.read_bytes() == template.read_bytes(), \
-                f"{base} armed body differs from scripts/hooks/{base}"
+                f"{base} armed body differs from sysop/scripts/hooks/{base}"
 
     def test_no_stray_git_hooks_in_non_repo_launch_dir(self, tmp_path):
         launch = tmp_path / "launchdir"

@@ -1,7 +1,7 @@
 """Integration tests for core/companion/scripts/install_hooks.sh (Phase 84).
 
 `install_hooks.sh` copies the tracked git hooks (`pre-commit`,
-`pre-merge-commit`, `pre-push`) from `scripts/hooks/` into `.git/hooks/`. The
+`pre-merge-commit`, `pre-push`) from `sysop/scripts/hooks/` into `.git/hooks/`. The
 logic is pure bash + filesystem, so these tests drive the real script against a
 scratch git repo in tmp_path and assert on exit code / stdout / stderr / the
 files that land in `.git/hooks/`.
@@ -9,7 +9,7 @@ files that land in `.git/hooks/`.
 The load-bearing case is the **allowlist** (SKILL/script comment: "only these
 tracked filenames are ever copied … so stray files cannot get installed and
 executed on git events"): a `.DS_Store` / `README.md` / arbitrary `evil` file
-dropped into `scripts/hooks/` must never reach `.git/hooks/`. The backup-on-
+dropped into `sysop/scripts/hooks/` must never reach `.git/hooks/`. The backup-on-
 differ / no-backup-on-identical behavior and the atomic executable install are
 the other invariants worth locking.
 
@@ -40,8 +40,8 @@ def _init_repo(root):
 
 
 def _seed_hooks(root, contents):
-    """contents: {basename: file text}. Writes them under scripts/hooks/."""
-    src = root / "scripts" / "hooks"
+    """contents: {basename: file text}. Writes them under sysop/scripts/hooks/."""
+    src = root / "sysop" / "scripts" / "hooks"
     src.mkdir(parents=True, exist_ok=True)
     for name, text in contents.items():
         (src / name).write_text(text)
@@ -66,7 +66,7 @@ class TestGuards:
         repo = _init_repo(tmp_path / "repo")
         r = _run(repo)
         assert r.returncode == 1
-        assert "No hooks found in scripts/hooks/" in r.stderr
+        assert "No hooks found in sysop/scripts/hooks/" in r.stderr
 
 
 class TestInstall:
@@ -109,7 +109,7 @@ class TestInstall:
 
 class TestAllowlist:
     """Only the three tracked basenames are ever copied — stray files dropped
-    into scripts/hooks/ must not land in .git/hooks/ and become executable on
+    into sysop/scripts/hooks/ must not land in .git/hooks/ and become executable on
     git events. This is the script's stated security invariant."""
 
     def test_stray_files_are_not_installed(self, tmp_path):

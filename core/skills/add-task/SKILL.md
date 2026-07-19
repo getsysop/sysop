@@ -76,7 +76,7 @@ This is one conversational turn, not a review gate. The human's real sign-off is
 3. **Validate (the floor):**
 
    ```bash
-   .venv/bin/python3 scripts/validate_tasks.py
+   .venv/bin/python3 sysop/scripts/validate_tasks.py
    ```
 
    (Bare `python3` if the project has no `.venv`.) Exit 0 or fix the data and re-run — never hand off on a red validator.

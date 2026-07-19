@@ -119,7 +119,7 @@ checks:
 
   # ── LSP / tsc diagnostics ──────────────────────────────────────
   # No `pattern` field — populated by run_lsp_diagnostics() in
-  # scripts/run_checks_impl.py. Starts blocking: false because CI
+  # sysop/scripts/run_checks/lsp.py. Starts blocking: false because CI
   # does not run `npm ci` before invoking run_checks.sh.
 
   - id: tsc-type-error
@@ -134,7 +134,7 @@ checks:
 
   # ── Semgrep / AST diagnostics ──────────────────────────────────
   # No `pattern` field — populated by `_run_semgrep()` in
-  # scripts/run_checks_impl.py from the pack's semgrep/*.yaml rules.
+  # sysop/scripts/run_checks/semgrep.py from the pack's semgrep/*.yaml rules.
 
   - id: semgrep-error-display-jsx
     name: "Raw error.message in JSX (semgrep)"

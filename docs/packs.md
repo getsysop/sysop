@@ -10,6 +10,10 @@ If you browsed a pack's convention map from the README and thought *"these aren'
 I get for free — I'd have to map them onto my codebase myself"*: that reading is correct, and
 this page explains who does the mapping and when.
 
+One scoping fact worth knowing up front: packs are entirely convention-loop content — maps,
+checks, semgrep rules, and their support files. Nothing in a pack depends on the task queue or
+merge gate, so every pack applies in full under the smallest install, [loop mode](./loop-mode.md).
+
 ## How a rule is born
 
 A rule starts concrete. Here are two rules from the API-endpoint section of the convention map of

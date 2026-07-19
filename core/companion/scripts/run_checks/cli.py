@@ -6,7 +6,7 @@ Used by /codebase-review and /security-audit for pre-scan.
 See WORKFLOW.md §6.5 for format documentation.
 
 Usage (via wrapper):
-    bash scripts/run_checks.sh [--mode quality|security|both]
+    bash sysop/scripts/run_checks.sh [--mode quality|security|both]
                                [--fail-on-blocking]
                                [--update-baseline]
 
@@ -291,7 +291,7 @@ def main():
         print(
             f"\nerror: {new_blocking_hits} new blocking finding(s) — failing CI.\n"
             "   If a finding is known tech debt, regenerate the baseline with:\n"
-            "     bash scripts/run_checks.sh --mode both --update-baseline\n"
+            "     bash sysop/scripts/run_checks.sh --mode both --update-baseline\n"
             "   (Review the diff before committing — baseline entries bypass CI.)",
             file=sys.stderr,
         )

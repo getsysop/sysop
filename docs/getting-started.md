@@ -38,7 +38,7 @@ You'll need:
   default — run `bash --version`, and if it's 3.x, `brew install bash` first. On Windows,
   run the installer and scripts under WSL (Git Bash may work, but its worktree/symlink
   support is flakier and unverified); native Windows isn't supported.
-- **Python 3 with PyYAML.** The check runner (`scripts/run_checks.sh`) needs it. If your
+- **Python 3 with PyYAML.** The check runner (`sysop/scripts/run_checks.sh`) needs it. If your
   project has a virtualenv, activate it (or `pip install pyyaml`) before running checks.
 
 Everything you "send" below is a slash command you type to Claude Code while it's open in
@@ -53,7 +53,7 @@ git clone https://github.com/getsysop/sysop.git
 bash sysop/install.sh /path/to/your/project --packs auto
 cd /path/to/your/project
 git status                                              # review everything Sysop wrote
-git add .claude/ scripts/ WORKFLOW.md WORKFLOW_GUIDE.md tasks/ SYSOP_ISSUES.md
+git add .claude/ sysop/ tasks/ CLAUDE.md .gitignore
 git commit -m "chore: install Sysop"
 ```
 
@@ -61,12 +61,17 @@ git commit -m "chore: install Sysop"
   pack, `next.config.js` the `nextjs-react` pack, and so on). Omit `--packs` entirely for
   an interactive picker, or name them explicitly: `--packs python,postgres`. Add
   `--dry-run` first if you want to preview without writing anything.
+- **Want just the convention loop?** Add `--mode loop` — it installs only the review and
+  audit skills, the maps, and the checks, with no task queue or merge gate. That install
+  has its own walkthrough, [`docs/loop-mode.md`](./loop-mode.md); the guide you're reading
+  assumes the full install.
 - **What landed:** a `.claude/` directory (the lifecycle skills, the convention and
-  security maps, the deterministic checks, and a permission allow-list), a `scripts/`
-  directory (the check runner and the claim/close/validate machinery), `WORKFLOW.md` +
-  `WORKFLOW_GUIDE.md`, a `tasks/` scaffold, and a `SYSOP_ISSUES.md` friction log. Commit them
-  all — the workflow uses git worktrees, and an isolated worktree only sees files you've
-  committed, so an uncommitted `scripts/` would be missing exactly where later steps need it.
+  security maps, the deterministic checks, and a permission allow-list), a `sysop/` vendor
+  directory (`sysop/scripts/` — the check runner and the claim/close/validate machinery —
+  `sysop/docs/` with `WORKFLOW.md` + `WORKFLOW_GUIDE.md`, and a `sysop/SYSOP_ISSUES.md` friction
+  log), and a `tasks/` scaffold. Commit them all — the workflow uses git worktrees, and an
+  isolated worktree only sees files you've committed, so an uncommitted `sysop/` would be
+  missing exactly where later steps need it.
 
 > **Command names.** After a bash install the skills are available under their bare names —
 > `/intake`, `/claim-task`, and so on. If you *also* add the Claude Code plugin
@@ -211,7 +216,7 @@ Both policies are documented in [`WORKFLOW.md`](../core/companion/docs/WORKFLOW.
 
 For `pr` to actually *enforce* anything, `main` needs a required CI check (local git
 hooks can be bypassed with `--no-verify`). Sysop ships one ready to go —
-`cp scripts/ci/sysop-checks.yml.example .github/workflows/sysop-checks.yml`, fill its two
+`cp sysop/scripts/ci/sysop-checks.yml.example .github/workflows/sysop-checks.yml`, fill its two
 `TODO` steps, then mark the `sysop-checks` check required in your branch-protection rules.
 See [`WORKFLOW.md`](../core/companion/docs/WORKFLOW.md) §6.1 "Protecting `main` with CI".
 
@@ -227,7 +232,8 @@ arc's third phase — *maintain* — is where the compounding lives, in the
 **convention loop**: as you run `/codebase-review` and `/security-audit` over time, findings
 that recur across rounds get promoted into written conventions, which the convention map
 then surfaces automatically on every future `/claim-task`. Reviews shift from catching the
-same defects again to catching new, subtler ones.
+same defects again to catching new, subtler ones. (This loop is also the part of Sysop that
+installs on its own — `--mode loop`, walked through in [`docs/loop-mode.md`](./loop-mode.md).)
 
 A few skills worth knowing once you're past the first loop:
 
@@ -254,7 +260,7 @@ human-readable process guide is
 [`WORKFLOW_GUIDE.md`](../core/companion/docs/WORKFLOW_GUIDE.md), and the authoritative spec
 is [`WORKFLOW.md`](../core/companion/docs/WORKFLOW.md).
 
-**Hit friction?** Jot it in `SYSOP_ISSUES.md` at your repo root the moment you hit it — it's
+**Hit friction?** Jot it in `sysop/SYSOP_ISSUES.md` the moment you hit it — it's
 freshest before the session moves on. On Claude Code, `/report-issues` turns those notes
 into GitHub issues (showing you each one before it files). That feedback is how Sysop improves.
 
@@ -289,7 +295,7 @@ at a time. The full model — where work lives, what's safe, and the parallelism
 
 Changed your mind — on one task, or on Sysop entirely? Both undo cleanly, because everything
 Sysop writes is a tracked file (plus one set of git hooks). To reverse a single `/claim-task`,
-run `bash scripts/claim_task.sh --release <TASK-ID>` from the main checkout — it releases the
+run `bash sysop/scripts/claim_task.sh --release <TASK-ID>` from the main checkout — it releases the
 lock, removes the worktree, and flips the task back to `open` in one consistent pass. To remove
 Sysop from the project altogether (revert the install commit or `git rm` the payload, then disarm
 the hooks), the exact steps are in [*Backing out*](../README.md#backing-out) in the README.

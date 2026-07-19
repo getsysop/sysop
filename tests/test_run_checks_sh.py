@@ -2,7 +2,7 @@
 
 `run_checks.sh` is a thin wrapper: it refuses outside a git repo, resolves the
 toolchain PATH (worktree-aware `.venv`/node fallback), picks an interpreter,
-then `exec`s `<repo>/scripts/run_checks_impl.py --repo-root <toplevel> "$@"`.
+then `exec`s `<repo>/sysop/scripts/run_checks_impl.py --repo-root <toplevel> "$@"`.
 The Python impl is already covered by the `test_run_checks*.py` suite — these
 tests lock the *bash wrapper's* contract only: the git guard, the
 `--repo-root` injection + verbatim arg pass-through, and the repo-`.venv`
@@ -32,8 +32,8 @@ def _repo_with_stub(root):
     _git(root, "init", "-q")
     _git(root, "config", "user.email", "test@test")
     _git(root, "config", "user.name", "test")
-    (root / "scripts").mkdir()
-    (root / "scripts" / "run_checks_impl.py").write_text(STUB_IMPL)
+    (root / "sysop" / "scripts").mkdir(parents=True)
+    (root / "sysop" / "scripts" / "run_checks_impl.py").write_text(STUB_IMPL)
     return root
 
 

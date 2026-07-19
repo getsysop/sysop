@@ -2,7 +2,7 @@
 
 This README documents the universal authoring conventions for Semgrep rules used in the Sysop check pipeline. **Rule YAMLs and fixtures live in each pack's `companion/semgrep/` directory**, not here — the Phase 3 installer collects rules from the selected packs into the project-side `.claude/semgrep/`.
 
-Rules augment the regex-based checks in each pack's `companion/checks.yml.fragment` (concatenated into the project-side `.claude/checks.yml`). They are invoked by `scripts/run_checks_impl.py` (`_run_semgrep()`) alongside the grep and LSP passes whenever `bash scripts/run_checks.sh` runs.
+Rules augment the regex-based checks in each pack's `companion/checks.yml.fragment` (concatenated into the project-side `.claude/checks.yml`). They are invoked by `sysop/scripts/run_checks_impl.py` (`_run_semgrep()`) alongside the grep and LSP passes whenever `bash sysop/scripts/run_checks.sh` runs.
 
 ## When to add a Semgrep rule vs a regex check
 

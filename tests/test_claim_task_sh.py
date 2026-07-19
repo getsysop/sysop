@@ -309,8 +309,8 @@ class TestRelease:
         (tasks / "index.yml").write_text(_VALID_INDEX_INPROGRESS, encoding="utf-8")
         (tasks / "open" / "FEAT-LOCKED.md").write_text(
             "# FEAT-LOCKED\n\n## Context\nx\n", encoding="utf-8")
-        (repo / "scripts").mkdir(exist_ok=True)
-        shutil.copy(VALIDATE, repo / "scripts" / "validate_tasks.py")
+        (repo / "sysop" / "scripts").mkdir(parents=True, exist_ok=True)
+        shutil.copy(VALIDATE, repo / "sysop" / "scripts" / "validate_tasks.py")
         _git(repo, "add", "-A")
         _git(repo, "commit", "-qm", "tasks")
         r0 = _run(repo, "--lock", "FEAT-LOCKED", "feat/locked", env={"WORKTREE_PREFIX": "wt"})

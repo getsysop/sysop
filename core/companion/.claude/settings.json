@@ -19,35 +19,35 @@
       "Bash(git commit -m claim:*)",
       "Bash(git commit -m rollback:*)",
       "Bash(git commit -m docs:*)",
-      "Bash(bash scripts/claim_task.sh:*)",
-      "Bash(bash scripts/batch_work.sh:*)",
-      "Bash(bash scripts/close_batch.sh:*)",
-      "Bash(bash scripts/run_checks.sh)",
-      "Bash(bash scripts/run_checks.sh:*)",
-      "Bash(bash scripts/install_hooks.sh)",
-      "Bash(bash scripts/sysop-update.sh)",
-      "Bash(bash scripts/sysop-update.sh:*)",
-      "Bash(python scripts/archive_review_tasks.py:*)",
-      "Bash(python3 scripts/archive_review_tasks.py:*)",
+      "Bash(bash sysop/scripts/claim_task.sh:*)",
+      "Bash(bash sysop/scripts/batch_work.sh:*)",
+      "Bash(bash sysop/scripts/close_batch.sh:*)",
+      "Bash(bash sysop/scripts/run_checks.sh)",
+      "Bash(bash sysop/scripts/run_checks.sh:*)",
+      "Bash(bash sysop/scripts/install_hooks.sh)",
+      "Bash(bash sysop/scripts/sysop-update.sh)",
+      "Bash(bash sysop/scripts/sysop-update.sh:*)",
+      "Bash(python sysop/scripts/archive_review_tasks.py:*)",
+      "Bash(python3 sysop/scripts/archive_review_tasks.py:*)",
       "Bash(python3 -c:*)",
       "Bash(python3 -:*)",
-      "Bash(python3 scripts/validate_tasks.py)",
-      "Bash(python3 scripts/validate_tasks.py:*)",
-      "Bash(.venv/bin/python3 scripts/validate_tasks.py)",
-      "Bash(.venv/bin/python3 scripts/validate_tasks.py:*)",
-      "Bash(.venv/bin/python3 scripts/archive_review_tasks.py:*)",
-      "Bash(python3 scripts/sitrep_survey.py)",
-      "Bash(python3 scripts/sitrep_survey.py:*)",
-      "Bash(python3 scripts/next_task.py)",
-      "Bash(python3 scripts/next_task.py:*)",
-      "Bash(.venv/bin/python3 scripts/next_task.py)",
-      "Bash(.venv/bin/python3 scripts/next_task.py:*)",
-      "Bash(python3 scripts/scope_overlap.py)",
-      "Bash(python3 scripts/scope_overlap.py:*)",
-      "Bash(.venv/bin/python3 scripts/scope_overlap.py)",
-      "Bash(.venv/bin/python3 scripts/scope_overlap.py:*)",
-      "Bash(python3 scripts/pr_dependabot.py:*)",
-      "Bash(.venv/bin/python3 scripts/pr_dependabot.py:*)",
+      "Bash(python3 sysop/scripts/validate_tasks.py)",
+      "Bash(python3 sysop/scripts/validate_tasks.py:*)",
+      "Bash(.venv/bin/python3 sysop/scripts/validate_tasks.py)",
+      "Bash(.venv/bin/python3 sysop/scripts/validate_tasks.py:*)",
+      "Bash(.venv/bin/python3 sysop/scripts/archive_review_tasks.py:*)",
+      "Bash(python3 sysop/scripts/sitrep_survey.py)",
+      "Bash(python3 sysop/scripts/sitrep_survey.py:*)",
+      "Bash(python3 sysop/scripts/next_task.py)",
+      "Bash(python3 sysop/scripts/next_task.py:*)",
+      "Bash(.venv/bin/python3 sysop/scripts/next_task.py)",
+      "Bash(.venv/bin/python3 sysop/scripts/next_task.py:*)",
+      "Bash(python3 sysop/scripts/scope_overlap.py)",
+      "Bash(python3 sysop/scripts/scope_overlap.py:*)",
+      "Bash(.venv/bin/python3 sysop/scripts/scope_overlap.py)",
+      "Bash(.venv/bin/python3 sysop/scripts/scope_overlap.py:*)",
+      "Bash(python3 sysop/scripts/pr_dependabot.py:*)",
+      "Bash(.venv/bin/python3 sysop/scripts/pr_dependabot.py:*)",
       "Bash(gh pr list:*)",
       "Bash(gh pr view:*)",
       "Bash(gh pr merge:*)",
@@ -65,7 +65,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 $CLAUDE_PROJECT_DIR/scripts/permission_denied_hook.py"
+            "command": "python3 $CLAUDE_PROJECT_DIR/sysop/scripts/permission_denied_hook.py"
           }
         ]
       }
@@ -75,7 +75,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 $CLAUDE_PROJECT_DIR/scripts/parse_subagent_envelope.py"
+            "command": "python3 $CLAUDE_PROJECT_DIR/sysop/scripts/parse_subagent_envelope.py"
           }
         ]
       }

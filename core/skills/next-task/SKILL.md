@@ -12,11 +12,11 @@ Run the deterministic resolver and print its output verbatim.
 > **Structural read-only guard (Phase 54):** the `disallowed-tools` frontmatter (Claude Code 2.1.152+) removes the file-write tools while this skill is active. Partial by design — `Bash` stays allowed for the resolver invocation, so the guard covers the dedicated write tools, not shell redirects. Non-Claude-Code harnesses ignore the key.
 
 ```bash
-.venv/bin/python3 scripts/next_task.py $ARGUMENTS
+.venv/bin/python3 sysop/scripts/next_task.py $ARGUMENTS
 ```
 
 The script is the source of truth for the selection algorithm — see the module
-docstring in `scripts/next_task.py` for the Step 1–7 spec that used to live in
+docstring in `sysop/scripts/next_task.py` for the Step 1–7 spec that used to live in
 this file. The selection logic is unchanged from the LLM version; only the
 implementation moved (Phase 45a, 2026-05-27, gdp commit `e9b53c4e` backport).
 
@@ -30,7 +30,7 @@ implementation moved (Phase 45a, 2026-05-27, gdp commit `e9b53c4e` backport).
 
 The body is a single Bash call that the harness wraps in a haiku turn to print
 stdout back to the user. The LLM is no longer involved in selection logic
-(that's now in `scripts/next_task.py`), but the skill envelope still follows the
+(that's now in `sysop/scripts/next_task.py`), but the skill envelope still follows the
 same model-frontmatter pattern every read-only lifecycle skill uses. Removing it
 would diverge from the convention without precedent.
 
@@ -44,7 +44,7 @@ through `/next-task` preserves three properties:
 2. Argument forwarding — `$ARGUMENTS` lets `/next-task --review` (only pending
    review batches) and `/next-task --avoid-inflight` (prefer a task whose likely
    scope won't collide with a worktree building right now, via
-   `scripts/scope_overlap.py`; the selected task is annotated with its overlap
+   `sysop/scripts/scope_overlap.py`; the selected task is annotated with its overlap
    verdict — Phase 103) work without teaching every caller the script path.
 3. Future flexibility — if a future phase re-introduces LLM logic on top of
    the script's output (e.g., natural-language reformatting for chat surfaces),

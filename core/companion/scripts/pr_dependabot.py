@@ -25,11 +25,11 @@ auto-closes its own superseded PRs ("Looks like X is up-to-date now"), so this
 handler is a safety net for the race window, not a primary job.
 
 Usage:
-    python3 scripts/pr_dependabot.py                 # dry-run plan (open PRs)
-    python3 scripts/pr_dependabot.py --execute       # act on the plan
-    python3 scripts/pr_dependabot.py --json          # structured plan to stdout
-    python3 scripts/pr_dependabot.py --repo owner/n  # override repo autodetect
-    python3 scripts/pr_dependabot.py --validate      # replay vs closed history
+    python3 sysop/scripts/pr_dependabot.py                 # dry-run plan (open PRs)
+    python3 sysop/scripts/pr_dependabot.py --execute       # act on the plan
+    python3 sysop/scripts/pr_dependabot.py --json          # structured plan to stdout
+    python3 sysop/scripts/pr_dependabot.py --repo owner/n  # override repo autodetect
+    python3 sysop/scripts/pr_dependabot.py --validate      # replay vs closed history
 
 `gh` must be installed and authenticated (`gh auth status`). Repo is taken from
 the current directory's git remote unless `--repo` is given.
@@ -45,8 +45,8 @@ import sys
 import time
 from dataclasses import dataclass, field
 
-# Single-sourced via scripts/_log.py (Phase 68) — `scripts/` is on sys.path[0]
-# when this runs directly and on pythonpath under the test suite.
+# Single-sourced via sysop/scripts/_log.py (Phase 68) — `sysop/scripts/` is on
+# sys.path[0] when this runs directly and on pythonpath under the test suite.
 from _log import _sanitize_log
 
 # ── Policy constants ─────────────────────────────────────────────

@@ -3,9 +3,9 @@
 # cleanup_worktrees.sh — List and clean up git worktrees.
 #
 # Usage:
-#   bash scripts/cleanup_worktrees.sh            # List all worktrees with status
-#   bash scripts/cleanup_worktrees.sh --clean    # Remove merged/stale worktrees
-#   bash scripts/cleanup_worktrees.sh --force    # Remove ALL non-main worktrees
+#   bash sysop/scripts/cleanup_worktrees.sh            # List all worktrees with status
+#   bash sysop/scripts/cleanup_worktrees.sh --clean    # Remove merged/stale worktrees
+#   bash sysop/scripts/cleanup_worktrees.sh --force    # Remove ALL non-main worktrees
 #
 # Classification:
 #   MAIN   — primary worktree (never touched)

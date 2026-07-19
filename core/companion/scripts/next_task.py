@@ -6,9 +6,9 @@ same user-facing markdown that ``core/skills/next-task/SKILL.md`` produced
 when it was an LLM (haiku) call. Runs in ~100 ms; no model cost.
 
 Usage:
-    .venv/bin/python3 scripts/next_task.py                   # default (Step 2a then 2b)
-    .venv/bin/python3 scripts/next_task.py --review          # only pending review batches
-    .venv/bin/python3 scripts/next_task.py --avoid-inflight  # prefer non-colliding tasks
+    .venv/bin/python3 sysop/scripts/next_task.py                   # default (Step 2a then 2b)
+    .venv/bin/python3 sysop/scripts/next_task.py --review          # only pending review batches
+    .venv/bin/python3 sysop/scripts/next_task.py --avoid-inflight  # prefer non-colliding tasks
 
 Exit codes:
     0   success (including the "no tasks found" paths)
@@ -26,7 +26,7 @@ with the implementation):
            dependency, prefer user_action:false, sort unblocker-first (most
            open same-phase dependents), then effort (Low<Med<High), then id,
            return the first. With --avoid-inflight, prepend a collision-rank
-           key (via scripts/scope_overlap.py) so a task whose likely scope
+           key (via sysop/scripts/scope_overlap.py) so a task whose likely scope
            doesn't touch any in-flight worktree is preferred, and annotate the
            chosen task with its overlap verdict.
   Step 2b  scan review_tasks.md for the FIRST ``### Batch N — Title `Pending` ``
@@ -158,7 +158,7 @@ def _sanitize_log(value: object, max_len: int = 500) -> str:
 # ---------------------------------------------------------------------------
 # Repo paths
 # ---------------------------------------------------------------------------
-_REPO_ROOT = Path(__file__).resolve().parent.parent
+_REPO_ROOT = Path(__file__).resolve().parents[2]  # <repo>/sysop/scripts/X.py → <repo> (Phase 128)
 _TASKS_DIR = _REPO_ROOT / "tasks"
 _INDEX_PATH = _TASKS_DIR / "index.yml"
 _REVIEW_PATH = _REPO_ROOT / "review_tasks.md"
@@ -169,13 +169,29 @@ _REVIEW_PATH = _REPO_ROOT / "review_tasks.md"
 # so the two stay in sync. See that function for the rationale on
 # `git rev-parse --git-common-dir` (worktree-shared .locks/).
 # ---------------------------------------------------------------------------
+def _git_discovery_env() -> dict[str, str]:
+    """`os.environ` minus git's discovery vars (BeanRider ISSUE-0048).
+
+    `GIT_DIR`/`GIT_WORK_TREE`/`GIT_COMMON_DIR`/`GIT_INDEX_FILE` take precedence
+    over `git -C` and git exports them into every hook; stripping them makes
+    `-C` authoritative so a probe against a tmpdir resolves there, not the
+    invoking repo. Verbatim mirror of validate_tasks.py:_git_discovery_env
+    (same zero-dependency-duplicate rationale as _resolve_canonical_locks_dir).
+    """
+    return {
+        k: v
+        for k, v in os.environ.items()
+        if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE")
+    }
+
+
 def _resolve_canonical_locks_dir(project_root: Path) -> Path:
     """Resolve the canonical ``.locks/`` directory shared across worktrees.
 
     Mirror of ``validate_tasks.py:_resolve_canonical_locks_dir``. Kept as an
     intentional zero-dependency duplicate (this script must remain importable
     from a minimal environment — no path-shuffling to reach
-    scripts/validate_tasks.py).
+    sysop/scripts/validate_tasks.py).
     """
     try:
         completed = subprocess.run(
@@ -184,6 +200,7 @@ def _resolve_canonical_locks_dir(project_root: Path) -> Path:
             text=True,
             timeout=5,
             check=False,
+            env=_git_discovery_env(),
         )
     except (FileNotFoundError, subprocess.SubprocessError):
         return project_root / ".locks"
@@ -276,7 +293,7 @@ def find_focus_phase(data: dict[str, Any]) -> dict[str, Any]:
     if len(matches) != 1:
         print(
             f"ERROR: exactly one phase must have current_focus: true "
-            f"(found {len(matches)}). Run scripts/validate_tasks.py for details.",
+            f"(found {len(matches)}). Run sysop/scripts/validate_tasks.py for details.",
             file=sys.stderr,
         )
         raise SystemExit(1)
@@ -976,7 +993,7 @@ def main(argv: list[str] | None = None) -> int:
         help=(
             "Rank candidates by collision risk against work in flight, preferring "
             "tasks whose likely file scope won't conflict with an in-progress "
-            "worktree at /review-close. Advisory; needs scripts/scope_overlap.py."
+            "worktree at /review-close. Advisory; needs sysop/scripts/scope_overlap.py."
         ),
     )
     args = parser.parse_args(argv)

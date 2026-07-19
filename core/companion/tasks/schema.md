@@ -2,7 +2,7 @@
 
 This document specifies the schema for `tasks/index.yml` and the per-task `.md` body files. It replaces the format-rules section that used to live at the top of a single-file `product_roadmap.md`.
 
-`scripts/validate_tasks.py` enforces every invariant in this document. If something is documented here but not validated, that's a bug — file it.
+`sysop/scripts/validate_tasks.py` enforces every invariant in this document. If something is documented here but not validated, that's a bug — file it.
 
 ## File layout
 
@@ -184,7 +184,7 @@ The starter `index.yml` shipped by `install.sh` stays at `schema_version: 1` unt
 
 1. Backfilling `blast_radius` on every `open`/`in_progress` task in their `index.yml`.
 2. Bumping `schema_version: 1 → 2` in their `index.yml`.
-3. Confirming `python3 scripts/validate_tasks.py` exits 0.
+3. Confirming `python3 sysop/scripts/validate_tasks.py` exits 0.
 
 A future **breaking** schema change bumps to `3` AND requires a new per-version code path in the validator. Until that happens, new fields land as forward-compatible additions following the same v1-optional / vN-required pattern Phase 19 used.
 

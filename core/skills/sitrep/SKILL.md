@@ -16,13 +16,13 @@ This skill shells out to `git`, `python3`, and reads under `<main-repo>/.locks/`
 
 Read `.claude/settings.json` and confirm `permissions.allow` contains:
 
-- `Bash(python3 scripts/sitrep_survey.py:*)` — the survey script itself
+- `Bash(python3 sysop/scripts/sitrep_survey.py:*)` — the survey script itself
 - `Bash(git rev-parse:*)` — git-common-dir resolution
 - `Bash(git worktree list:*)` — worktree enumeration
 - `Bash(git log:*)`, `Bash(git status:*)`, `Bash(git branch:*)` — branch + commit + status reads
 - `Bash(git rev-list:*)` — commits-ahead counts
 
-If any are missing, stop with the `_shared/permission-guard.md` § Algorithm step 4 message (one-line reason: "read-only survey of active Sysop tasks; shells `git` plumbing + `python3 scripts/sitrep_survey.py` to classify lifecycle states"). Do not proceed.
+If any are missing, stop with the `_shared/permission-guard.md` § Algorithm step 4 message (one-line reason: "read-only survey of active Sysop tasks; shells `git` plumbing + `python3 sysop/scripts/sitrep_survey.py` to classify lifecycle states"). Do not proceed.
 
 If `$ARGUMENTS` contains `--skip-permission-guard`, print a one-line warning and continue.
 
@@ -40,7 +40,7 @@ No positional arguments. `/sitrep` always surveys the entire Sysop surface; per-
 Invoke from the repo root (the script resolves `git rev-parse --git-common-dir` itself, so it works from any worktree):
 
 ```bash
-python3 scripts/sitrep_survey.py [--json] [--stale-days N]
+python3 sysop/scripts/sitrep_survey.py [--json] [--stale-days N]
 ```
 
 The script is idempotent and read-only. It exits 0 on a successful survey regardless of how many discrepancies it finds — discrepancies are reported in the body, not via exit code. Exit 1 means the script itself failed (corrupt YAML, missing repo, etc.); surface the error to the human and stop.

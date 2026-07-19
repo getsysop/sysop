@@ -9,7 +9,7 @@
 # convention_map.md.
 #
 # Format docs: WORKFLOW.md §6.5
-# Run via: bash scripts/run_checks.sh [--mode quality|security|both]
+# Run via: bash sysop/scripts/run_checks.sh [--mode quality|security|both]
 
 checks:
   # ── Universal naming convention ────────────────────────────────
@@ -27,7 +27,7 @@ checks:
 
   # ── ESLint diagnostics (Phase 47b backport of gdp 2fdca506) ────────────
   # These entries have no `pattern:` field. Findings are populated by
-  # `_run_eslint()` in scripts/run_checks_impl.py, which invokes
+  # `_run_eslint()` in sysop/scripts/run_checks/lint.py, which invokes
   # `eslint --format json .` from the discovered frontend dir and maps
   # each message to `lint-error` (single catch-all check_id with the
   # original ESLint rule_id embedded in the message text). Skips silently
@@ -49,7 +49,7 @@ checks:
 
   # ── pip-audit diagnostics (Phase 47b backport of gdp 2fdca506) ─────────
   # These entries have no `pattern:` field. Findings are populated by
-  # `_run_pip_audit()` in scripts/run_checks_impl.py, which invokes
+  # `_run_pip_audit()` in sysop/scripts/run_checks/pip_audit.py, which invokes
   # `pip-audit --strict --format json` against the active venv. Findings
   # are anchored at the first discoverable requirements*.txt file (via
   # `_find_requirements_files()`); falls back to `requirements.txt:1`
@@ -68,7 +68,7 @@ checks:
 
   # ── Diff-coverage crown-jewel gate (Phase 61a measurement + 61b gate) ──
   # These entries have no `pattern:` field. Findings are populated by
-  # `_run_coverage()` in scripts/run_checks/coverage.py, which shells out to
+  # `_run_coverage()` in sysop/scripts/run_checks/coverage.py, which shells out to
   # `diff-cover` against the coverage report named in each entry's `report:`
   # field and reports *changed* lines that lack test coverage — filtered to
   # the entry's `critical_path:` globs so only crown-jewel paths are gated

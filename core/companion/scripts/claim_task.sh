@@ -3,11 +3,11 @@
 # claim_task.sh — Create an isolated workspace for an agent task.
 #
 # Usage:
-#   bash scripts/claim_task.sh <TASK_ID> <BRANCH_NAME> [AGENT_NAME]
-#   bash scripts/claim_task.sh --branch <TASK_ID> <BRANCH_NAME> [AGENT_NAME]
-#   bash scripts/claim_task.sh --clone <TASK_ID> <BRANCH_NAME> [AGENT_NAME]
-#   bash scripts/claim_task.sh --lock <TASK_ID> <BRANCH_NAME> [AGENT_NAME]
-#   bash scripts/claim_task.sh --release [--delete-branch] [--force] <TASK_ID>
+#   bash sysop/scripts/claim_task.sh <TASK_ID> <BRANCH_NAME> [AGENT_NAME]
+#   bash sysop/scripts/claim_task.sh --branch <TASK_ID> <BRANCH_NAME> [AGENT_NAME]
+#   bash sysop/scripts/claim_task.sh --clone <TASK_ID> <BRANCH_NAME> [AGENT_NAME]
+#   bash sysop/scripts/claim_task.sh --lock <TASK_ID> <BRANCH_NAME> [AGENT_NAME]
+#   bash sysop/scripts/claim_task.sh --release [--delete-branch] [--force] <TASK_ID>
 #
 # Modes:
 #   (default)    Create a git worktree at ../<project basename>-<TASK_ID>
@@ -40,13 +40,13 @@
 #   Lock files always live under the main repo's .locks/ — resolved via
 #   `git rev-parse --git-common-dir`, so the path is canonical whether the
 #   script is invoked from the main checkout or from any worktree. The
-#   validator (scripts/validate_tasks.py) uses the same resolution, so
+#   validator (sysop/scripts/validate_tasks.py) uses the same resolution, so
 #   callers from any cwd see the same lock state.
 #
 # Examples:
-#   bash scripts/claim_task.sh FEAT-STRIPE feat/stripe "Agent-7"
-#   bash scripts/claim_task.sh --lock FEAT-STRIPE feat/stripe "Agent-7"
-#   bash scripts/claim_task.sh --branch FEAT-STRIPE feat/stripe "Agent-7"
+#   bash sysop/scripts/claim_task.sh FEAT-STRIPE feat/stripe "Agent-7"
+#   bash sysop/scripts/claim_task.sh --lock FEAT-STRIPE feat/stripe "Agent-7"
+#   bash sysop/scripts/claim_task.sh --branch FEAT-STRIPE feat/stripe "Agent-7"
 # ──────────────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -140,7 +140,7 @@ if $RELEASE; then
       echo "     git worktree remove ${LOCK_WORKSPACE:-<worktree>}   # add --force to discard uncommitted work" >&2
       echo "     rm ${LOCK_FILE}" >&2
       echo "     # then flip ${TASK_ID}'s status: in_progress → open in tasks/index.yml" >&2
-      echo "     .venv/bin/python3 scripts/validate_tasks.py" >&2
+      echo "     .venv/bin/python3 sysop/scripts/validate_tasks.py" >&2
       exit 1
     fi
   fi
@@ -250,8 +250,8 @@ PY
 
   # ── Validate + commit hint (never commit) ──
   echo ""
-  if [[ -f "${MAIN_REPO_ROOT}/scripts/validate_tasks.py" && -f "$INDEX" ]]; then
-    if (cd "$MAIN_REPO_ROOT" && python3 scripts/validate_tasks.py); then
+  if [[ -f "${MAIN_REPO_ROOT}/sysop/scripts/validate_tasks.py" && -f "$INDEX" ]]; then
+    if (cd "$MAIN_REPO_ROOT" && python3 sysop/scripts/validate_tasks.py); then
       echo "✅ Queue validates."
     else
       echo "⚠️  validate_tasks.py reported issues (see above) — resolve before committing."
@@ -348,9 +348,9 @@ if [[ "$MODE" == "worktree" ]]; then
   WORKSPACE_PATH="$WORKTREE_DIR"
 
   # Install git hooks in the new worktree (non-fatal)
-  if [[ -f "${REPO_ROOT}/scripts/install_hooks.sh" ]]; then
-    (cd "$WORKTREE_DIR" && bash "${REPO_ROOT}/scripts/install_hooks.sh") || \
-      echo "⚠️  Hook installation failed (non-fatal). Run manually: cd ${WORKTREE_DIR} && bash scripts/install_hooks.sh"
+  if [[ -f "${REPO_ROOT}/sysop/scripts/install_hooks.sh" ]]; then
+    (cd "$WORKTREE_DIR" && bash "${REPO_ROOT}/sysop/scripts/install_hooks.sh") || \
+      echo "⚠️  Hook installation failed (non-fatal). Run manually: cd ${WORKTREE_DIR} && bash sysop/scripts/install_hooks.sh"
   fi
 
 elif [[ "$MODE" == "clone" ]]; then

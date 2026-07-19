@@ -23,6 +23,12 @@ that it's a working log written for the project's own continuity, not an introdu
   after name collisions.
 - **2026-07-13** — Public cut as [getsysop/sysop](https://github.com/getsysop/sysop), MIT.
   71 review rounds and 3,298 findings behind it; 78 promoted conventions shipping as packs.
+- **Jul 2026** — Cold-read exercises (fresh-context model readers simulating first-time
+  adopters) consistently name adoption weight as the reason to pass,
+  so the convention loop becomes separately installable: `--mode loop`, the smallest install
+  ([loop mode](./loop-mode.md)). Before shipping, it was run end-to-end against a real
+  ~60k-line open-source codebase — the loop closed on code the model didn't write, and a
+  freshly mechanized convention caught an instance no review round had filed.
 
 Where to go next: [the monograph](./workflow.html) for why it's built this way,
 [one rule, end to end](./one-rule.md) for the evidence trail behind a single rule, and

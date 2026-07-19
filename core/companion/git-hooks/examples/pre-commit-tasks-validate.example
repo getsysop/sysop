@@ -3,7 +3,7 @@
 # pre-commit fragment — validate tasks/index.yml on touch
 #
 # Drop-in block to add to your project's pre-commit hook. Runs
-# scripts/validate_tasks.py only when the staged diff touches
+# sysop/scripts/validate_tasks.py only when the staged diff touches
 # tasks/ or .locks/, so non-tasks commits pay no cost.
 #
 # Python resolution order (Phase 16 carryover from gdp@abcfe3d0):
@@ -59,10 +59,10 @@ if [[ -n "$STAGED_TASKS" ]]; then
 
   if [[ -z "$PYTHON3" ]]; then
     block "tasks/: no python3 found (need <main-repo-root>/.venv/bin/python3 or system python3)"
-  elif [[ ! -f scripts/validate_tasks.py ]]; then
-    block "tasks/: scripts/validate_tasks.py missing (re-run install.sh?)"
+  elif [[ ! -f sysop/scripts/validate_tasks.py ]]; then
+    block "tasks/: sysop/scripts/validate_tasks.py missing (re-run install.sh?)"
   else
-    if ! "$PYTHON3" scripts/validate_tasks.py --quiet; then
+    if ! "$PYTHON3" sysop/scripts/validate_tasks.py --quiet; then
       block "tasks/: validate_tasks.py rejected the staged tree (see above)"
     fi
   fi

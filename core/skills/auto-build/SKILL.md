@@ -18,15 +18,15 @@ Verify `.claude/settings.json` carries the allow-rules this skill depends on. Un
 
 Read `.claude/settings.json` and confirm `permissions.allow` contains:
 
-- `Bash(bash scripts/claim_task.sh:*)` — Step 5.2 sequential pre-claim (also invoked transitively by every spawned execution agent's local context).
-- `Bash(python3 -:*)` — Step 2's batch-sizing math heredoc and Step 5.1's yaml-round-trip status flip.
-- `Bash(python3 scripts/validate_tasks.py)` / `Bash(python3 scripts/validate_tasks.py:*)` and the `.venv/bin/python3 scripts/validate_tasks.py` / `.venv/bin/python3 scripts/validate_tasks.py:*` venv variants — Step 5.3 post-claim validator (the venv form is preferred per Phase 45b; the bare form remains for non-venv consumers).
+- `Bash(bash sysop/scripts/claim_task.sh:*)` — Step 5.2 sequential pre-claim (also invoked transitively by every spawned execution agent's local context).
+- `Bash(python3 -:*)` — Step 1's queue-read/readiness-filter heredoc and Step 5.1's yaml-round-trip status flip (both single `python3 - <<` commands; venv PyYAML is resolved by an in-heredoc `sys.path` bootstrap, not a `.venv/bin/python3` command word or an env prefix — either of which would bind to no rule; Sysop Phase 126).
+- `Bash(python3 sysop/scripts/validate_tasks.py)` / `Bash(python3 sysop/scripts/validate_tasks.py:*)` and the `.venv/bin/python3 sysop/scripts/validate_tasks.py` / `.venv/bin/python3 sysop/scripts/validate_tasks.py:*` venv variants — Step 5.3 post-claim validator (the venv form is preferred per Phase 45b; the bare form remains for non-venv consumers).
 - `Bash(git add tasks/index.yml)` — Step 5.4 commits each claim.
 - `Bash(git commit -m claim:*)` — Step 5.4 commit message shape.
 - `Bash(git commit -m rollback:*)` — Step 5 rollback path on pre-claim failure.
 - `Bash(git checkout:*)` — Step 5 rollback path (`git checkout tasks/index.yml`).
 
-Read-only git operations (`git rev-parse`, `git log`, `git branch --show-current`) used by Phase 6a/6e HEAD capture and Phase 7 envelope recovery are auto-passed by the classifier and do not require allow-rules; they are documented here for completeness. The Step 1 heredoc's in-flight overlap check (Leg B, Phase 103) imports `scripts/scope_overlap.py` **in-process** — it runs inside the same already-permitted `.venv/bin/python3 -` heredoc, and its `git -C <worktree> diff --name-only` reads are read-only subprocesses inside that process — so it adds **no** new permission rule.
+Read-only git operations (`git rev-parse`, `git log`, `git branch --show-current`) used by Phase 6a/6e HEAD capture and Phase 7 envelope recovery are auto-passed by the classifier and do not require allow-rules; they are documented here for completeness. The Step 1 heredoc's in-flight overlap check (Leg B, Phase 103) imports `sysop/scripts/scope_overlap.py` **in-process** — it runs inside the same already-permitted `python3 -` heredoc, and its `git -C <worktree> diff --name-only` reads are read-only subprocesses inside that process — so it adds **no** new permission rule.
 
 If any required rule is missing, stop with the `_shared/permission-guard.md` § Algorithm step 4 message (one-line reason: "pre-claims a batch of tasks on `main` via heredoc'd python + `claim_task.sh`, then spawns parallel Opus agents per task — silent denial mid-batch would leave half-claimed state in `tasks/index.yml`"). Do not proceed.
 
@@ -52,7 +52,7 @@ Parse `$ARGUMENTS`:
 
 ## Step 1: Read Queue & Filter Claimable
 
-Single pass through `tasks/index.yml` only — do not open any per-task body files yet. Use `.venv/bin/python3` with `yaml.safe_load` (per convention).
+Single pass through `tasks/index.yml` only — do not open any per-task body files yet. Use `python3` with `yaml.safe_load`; venv PyYAML is resolved by the heredoc's in-process `sys.path` bootstrap (per convention; Sysop Phase 126).
 
 **Launch-lane filter:** only tasks in the project's currently-active phase are eligible. The active phase is the one with `current_focus: true` in `tasks/index.yml § phases` (Phase 16 invariant — exactly one phase carries the flag; the validator enforces this). Tasks in any other phase are excluded — they belong to a past launch lane or a future one and shouldn't be batched against the current focus.
 
@@ -61,16 +61,23 @@ Single pass through `tasks/index.yml` only — do not open any per-task body fil
 > **Subset vs. lane shift.** Pass IDs when a deadline or a `/roadmap` ordering picks *these tasks first* out of the current lane — an ephemeral execution preference. If the deadline genuinely re-prioritizes the project (the important work lives in another phase, or deserves its own), that's a **lane shift**: reshape `phases:` via `/intake` re-entry and flip `current_focus` instead. Don't restructure phases just to steer one batch — phases are launch lanes with history, not sprint buckets.
 
 ```bash
-# SUBSET_IDS = the space-separated Step 0 task-ID list ("" when no subset was
-# given). Passed via the environment, not argv — argv word-splitting of an
-# unquoted $var is shell-dependent (zsh doesn't split it; bash does), the
-# environment is not.
-SUBSET_IDS="$SUBSET_IDS" .venv/bin/python3 - <<'PY'
-import os, yaml, glob
+# SUBSET_IDS = the space-separated Step 0 task-ID list ("" when no subset was given).
+# Passed as ONE quoted positional arg: "$SUBSET_IDS" is a single argv element (spaces and
+# all) that Python splits — quoting sidesteps the shell word-splitting that argued for
+# env-passing before (unquoted $var splits in bash, not zsh; a quoted arg never splits).
+# `python3` command word (not `.venv/bin/python3`) + in-heredoc PyYAML bootstrap so
+# `Bash(python3 -:*)` matches as a single simple command (BeanRider ISSUE-0049; Phase 126).
+python3 - "$SUBSET_IDS" <<'PY'
+import os, sys, glob
+try:
+    import yaml
+except ImportError:  # PyYAML lives only in the project venv (BeanRider ISSUE-0049)
+    sys.path[:0] = glob.glob(".venv/lib/python*/site-packages")
+    import yaml
 from pathlib import Path
 
 # Step 0 explicit subset; empty set = no restriction.
-subset = set(os.environ.get("SUBSET_IDS", "").split())
+subset = set(sys.argv[1].split())
 
 with open("tasks/index.yml", encoding="utf-8") as f:
     data = yaml.safe_load(f)
@@ -158,8 +165,8 @@ inflight_overlaps = {}   # tid -> [(in_flight_task_id, [shared_paths]), ...]
 inflight_count = 0
 try:
     import sys as _sys
-    if "scripts" not in _sys.path:
-        _sys.path.insert(0, "scripts")
+    if "sysop/scripts" not in _sys.path:
+        _sys.path.insert(0, "sysop/scripts")
     import scope_overlap as _so
     _wt_cache = {}
     def _reader(ws):
@@ -229,7 +236,9 @@ open frontier.
 
 ## Step 2: Apply Batch-Sizing Rule
 
-Inline math (no standalone script in v1 — promote to `scripts/select_batch.py` after 3-5 cycles when the shape stabilizes). The walk below is identical whether Step 1 produced the full frontier or an explicit subset — the solo invariants and ceilings never loosen because a task was named; a subset can shrink a batch, never inflate one.
+Inline math (no standalone script in v1 — promote to `sysop/scripts/select_batch.py` after 3-5 cycles when the shape stabilizes). The walk below is identical whether Step 1 produced the full frontier or an explicit subset — the solo invariants and ceilings never loosen because a task was named; a subset can shrink a batch, never inflate one.
+
+> **K=12 sum ceiling + cross-module cap 2 — adopted 2026-07-17 from gdp's settled `TECH-AUTO-CLAIM-LOOSEN-GATE-EXPERIMENT` (permanent "keep" 2026-07-13).** gdp validated the ramp over 23 K=12 cycles against a 61-cycle K=8 baseline: executed/cycle **+78%** (1.34 → 2.39), $/executed down ($6.40 → $5.14), **zero reopened/abandoned merges** in either bucket, and the conflict-rate rise (2.82% → 7.89%) statistically indistinguishable from baseline (Fisher two-sided p = 0.28). The architectural/migration solo invariants (`a.`, `b.`) are **unchanged** — they guard genuine serialization, not conflict probability. Raising K is **parity/headroom, not a speed lever**: the real throughput ceiling is `/review-close` (human-paced), so this mainly cuts forced-solo batches rather than accelerating the pipeline. **Revert trigger:** a telemetry review (in a consumer running `/auto-build` at scale) showing sustained non-trivial `conflict_pre` growth *plus* a first reopened/abandoned merge → revert `K=12 → 8` and cross-module cap `2 → 1` in the rules and worked examples below. Prior ramps: K=6 → K=8 (2026-05-27), K=8 → K=12 experimental (2026-06-27). Sysop ships no telemetry stack (no consumer runs `/auto-build` at gdp's cadence yet), so the figures above are gdp's; the values are adopted on that evidence.
 
 ```
 weight = effort_weight × blast_radius_weight
@@ -245,22 +254,30 @@ Iterate candidates in sorted order. For each, BEFORE adding to batch, check:
    a. blast_radius == "architectural"
    b. body file contains "migrations/" or "ALTER TABLE" (case-insensitive)
       [open the body file ONLY when checking this candidate, not all candidates]
-   c. candidate.weight > K=6 (heavier than the entire batch ceiling)
+   c. candidate.weight > K=12 (heavier than the entire batch ceiling)
       [no other in-batch task could possibly fit; running alone is the
       only viable shape. Same Solo-invariants semantics: batch empty
       → ADD alone, STOP. This preempts rule 3's STOP-with-empty-batch
-      path so single heavy tasks (High + cross-module = weight 10.0)
-      remain auto-buildable instead of being silently dropped.]
+      path for any task that does exceed K. NOTE: since the K=6→K=12
+      ramp (2026-07-17, see the provenance note above), the max
+      non-architectural weight is High × cross-module = 10.0 ≤ 12, so
+      this invariant is now DORMANT for non-architectural tasks — none
+      can be heavier than the ceiling. Only a High-effort architectural
+      task (weight 16) exceeds it, and all architectural tasks already
+      solo via `a.` regardless of weight. Retained for
+      correctness/headroom, and it re-arms if K is ever reverted.]
    [High-effort tasks are NOT solo — dropped per gdp 04cc2c84 (2026-05-21).
    Six weeks of mined data showed zero conflicts attributable to High-effort
    pairings while the gate was the binding parallelism constraint. High
-   contributes weight 4 under the K=6 sum ceiling, which is the real
+   contributes weight 4 under the K=12 sum ceiling, which is the real
    conflict-throttle.]
 
 2. Cross-module cap — if blast_radius == "cross-module" and the batch already
-   contains a cross-module task → SKIP
+   contains 2 cross-module tasks → SKIP
+   [cap raised 1 → 2 in the 2026-07-17 K=6→K=12 ramp — up to two
+   cross-module tasks may share a batch]
 
-3. Sum ceiling — if sum(weight) + candidate.weight > K=6 → STOP
+3. Sum ceiling — if sum(weight) + candidate.weight > K=12 → STOP
 
 4. Count ceiling — if raw_count + 1 > N (default 4, from Step 0) → STOP
 
@@ -269,7 +286,7 @@ Otherwise ADD candidate to batch and continue.
 
 **Bounded body reads:** body files are opened only for candidates the Step 2 rules actually check — each add *or* skip is one read (the solo-invariant 1b check needs the body) — a handful per `/auto-build` invocation, not 35; the STOP rules bound the iteration.
 
-**In-flight overlap is a soft signal, not a Step 2 gate (Leg B, Phase 103).** The `inflight=<verdict>` field from Step 1 already did its job: it reordered candidates so a non-colliding task is preferred among equally-foundational ones. The Step 2 rules above (solo invariants, cross-module cap, K=6/N ceilings) reason only about the tasks *within this batch* and are **unchanged** — a fresh candidate that overlaps an in-flight worktree is still eligible; it was just sorted a little lower and will be flagged for the human at Step 4. This is deliberate: worktree isolation makes an overlap a recoverable merge conflict at `/review-close`, not corruption, so the human owns the call (the guided-mode "genuine tradeoff" branch). The more aggressive option — extending the cross-module cap to *hard-exclude* against the in-flight set (an in-flight cross-module task touching module X blocks a fresh cross-module candidate touching X) — is **deferred** per `tools/COLLISION_AWARENESS_SPEC.md` § Leg B: it would silently drop legitimately-claimable work, so it ships only if the soft flag proves too weak in real use.
+**In-flight overlap is a soft signal, not a Step 2 gate (Leg B, Phase 103).** The `inflight=<verdict>` field from Step 1 already did its job: it reordered candidates so a non-colliding task is preferred among equally-foundational ones. The Step 2 rules above (solo invariants, cross-module cap, K=12/N ceilings) reason only about the tasks *within this batch* and are **unchanged** — a fresh candidate that overlaps an in-flight worktree is still eligible; it was just sorted a little lower and will be flagged for the human at Step 4. This is deliberate: worktree isolation makes an overlap a recoverable merge conflict at `/review-close`, not corruption, so the human owns the call (the guided-mode "genuine tradeoff" branch). The more aggressive option — extending the cross-module cap to *hard-exclude* against the in-flight set (an in-flight cross-module task touching module X blocks a fresh cross-module candidate touching X) — is **deferred** per `tools/COLLISION_AWARENESS_SPEC.md` § Leg B: it would silently drop legitimately-claimable work, so it ships only if the soft flag proves too weak in real use.
 
 **Imported-provenance re-estimate:** a candidate whose `surfaced_by` contains the literal `imported` sentinel was brought in from a pre-Sysop backlog by `/onboard` — its recorded `effort`/`blast_radius` are archaeological guesses, not design-time signal. When such a candidate comes up for the checks above, its body is being opened anyway (the same single read the solo-invariant check budgets); re-estimate both fields from the body and the surface it names, and run rules 1–4 on the **heavier** of recorded vs. re-estimated, per field — never the lighter, so the discount can only tighten the gate. Show any change in the Step 4 table (`Medium→High (re-est)`), and do not rewrite `index.yml` — the human corrects the record, not the gate.
 
@@ -277,13 +294,13 @@ Otherwise ADD candidate to batch and continue.
 
 > Examples A–G assume no candidate unblocks another (every `unlock_count` = 0), so the Step 1 sort reduces to effort-ascending then id — the pre-unblocker-first order — and "first candidate" reads as before. Example H shows how a non-zero `unlock_count` reorders the pool.
 
-- **Example A** — 4× Low + single-file → batch of 4 (sum = 4.0, under K=6). Take all four; count ceiling N=4 stops further additions.
-- **Example B** — 2× Medium + single-module → batch of 2 (sum = 6.0, exactly at K=6). Take both; any further candidate would exceed K.
+- **Example A** — 4× Low + single-file → batch of 4 (sum = 4.0, under K=12). Take all four; the N=4 count ceiling stops further additions (the sum ceiling is slack here — N binds first).
+- **Example B** — 2× Medium + single-module (each weight 3.0) → sum = 6.0, under K=12. Subsequent Low + single-file candidates keep fitting under the sum ceiling until the N=4 count ceiling binds: +Low (7.0, batch 3), +Low (8.0, batch 4 → N=4 STOP). At K=12 the count ceiling, not the sum ceiling, is the binding gate for small-weight tasks. (Under the old K=6 ceiling this example STOPped at sum 6.0 with just the two Mediums.)
 - **Example C** — First candidate is High + architectural → batch size 1 (architectural solo invariant fires; takes the task alone regardless of effort). The High effort itself does not solo — see Example F.
-- **Example D** — First candidate is Medium + cross-module (weight 5.0, under K=6). Take it. Next candidate must NOT be cross-module (cross-module cap, rule 2). A subsequent Low + single-file (weight 1.0) would fit (5.0 + 1.0 = 6.0 = K). A subsequent Medium + single-module (weight 3.0) would not (5.0 + 3.0 = 8.0 > K → STOP).
+- **Example D** — First candidate is Medium + cross-module (weight 5.0, under K=12). Take it. Under the raised cross-module cap of 2, a *second* cross-module task may now join: another Medium + cross-module (5.0) fits (5.0 + 5.0 = 10.0, under K=12) and is allowed (2 cross-module ≤ cap). A *third* cross-module candidate hits the cap → SKIP. A subsequent Low + single-file (weight 1.0) still fits under the sum ceiling (10.0 + 1.0 = 11.0, under K=12). (Under the old cap of 1, that second cross-module task was SKIPped and this batch stayed at one cross-module task.)
 - **Example E** — First candidate's body contains `migrations/` → batch of 1 (migration serialization).
-- **Example F** — First candidate is High + single-file (weight 4 × 1 = 4.0, under K=6). No solo invariant fires (architectural rule does not match single-file; migrations rule does not match the body). Take it. A subsequent Low + single-file (weight 1.0) fits cleanly (4.0 + 1.0 = 5.0, under K=6) — the High task pairs with the Low task. The K=6 sum ceiling, not a per-effort solo gate, throttles further additions: another Low + single-file (4.0 + 1.0 + 1.0 = 6.0 = K) would just hit the ceiling; a Medium + single-module (weight 3.0) would exceed it (5.0 + 3.0 = 8.0 > K → STOP).
-- **Example G** — First candidate is High + cross-module (weight 4 × 2.5 = 10.0). No architectural-solo (`a.`) or migration-solo (`b.`) invariant fires, but the heavy-solo invariant (`c.`) does because 10.0 > K=6 and the batch is empty. Take the task alone; STOP. Without rule `c`, the candidate would be rejected by rule 3 (sum exceeds K with an empty batch) and `/auto-build` would refuse to run, forcing a manual `/claim-task` on a task that is itself fine to run — it just doesn't fit with anything else.
+- **Example F** — First candidate is High + single-file (weight 4 × 1 = 4.0, under K=12). No solo invariant fires (architectural rule does not match single-file; migrations rule does not match the body; heavy-solo `c.` needs weight > 12). Take it. A subsequent Low + single-file (weight 1.0) fits cleanly (4.0 + 1.0 = 5.0, under K=12) — the High task pairs with the Low task. Further additions are throttled by the **N=4 count ceiling** before the K=12 sum ceiling: another Low + single-file (5.0 + 1.0 = 6.0, batch 3) still fits; a Medium + single-module after that (6.0 + 3.0 = 9.0, under K=12, batch 4 → N=4 STOP). At K=12 the count ceiling binds first for this mix. (Under the old K=6 ceiling the sum reached the ceiling first and STOPped on weight, not count.)
+- **Example G** — First candidate is High + cross-module (weight 4 × 2.5 = 10.0). At K=12 this **no longer trips the heavy-solo invariant `c.`** (10.0 ≤ 12), so — unlike under the old K=6 ceiling, where `c.` forced it solo — the task is taken and can pair: a subsequent Low + single-file (1.0) fits (10.0 + 1.0 = 11.0, under K=12). The cross-module cap (rule 2) would permit a second cross-module task, but here the **sum ceiling binds first** — even the lightest cross-module task (Low + cross-module = 2.5) would push the sum to 12.5 > 12 → STOP — so this batch pairs the heavy task with a single-file Low only. This is the loosened gate's intended change: High × cross-module tasks were the single largest source of forced-solo batches under K=6 (historically, weight 10.0 > K=6 tripped `c.` and forced this shape solo; before rule `c` existed it hit rule 3's STOP-with-empty-batch and `/auto-build` refused to run).
 - **Example H (unblocker-first ordering)** — Active-phase open candidates: `TECH-A` (Low + single-file, weight 1.0, **unlocks 0**), `TECH-B` (Low + single-file, weight 1.0, **unlocks 0**), `TECH-C` (Medium + single-module, weight 3.0, **unlocks 3** — three open same-phase tasks list `TECH-C` in `depends_on`). The Step 1 sort key `(unlock_count desc, effort asc, id)` orders them **`TECH-C`, `TECH-A`, `TECH-B`** — `TECH-C` leads on `unlocks=3` despite being the heaviest and highest-effort; the two leaves tie at `unlocks=0` and fall through to effort-then-id. (Pre-unblocker-first the order was `TECH-A`, `TECH-B`, `TECH-C`.) At the default N=4 all three fit (sum 3.0 + 1.0 + 1.0 = 5.0 < K, count 3 ≤ 4) → same batch *set*, only the claim order differs, so nothing observable changes downstream. **The reorder changes which tasks get claimed only when a ceiling binds:** force `N=2` and the new order claims **`TECH-C` + `TECH-A`** (the unblocker + one leaf; sum 4.0, count 2 stops the rest), leaving `TECH-B`; the old order claimed **`TECH-A` + `TECH-B`** (both leaves), leaving the unblocker `TECH-C` for a later cycle. Claiming `TECH-C` now makes its three dependents eligible next cycle — the pool-enlarging lookahead the sort exists for. **Tradeoff:** unblocker-first spent part of this batch's budget on a heavier task (weight 3.0) ahead of a 1.0 leaf to widen the *next* cycle's pool. When the unblocker is itself a heavy-solo (weight > K, rule `1c`), unblocker-first only changes the order it is *considered* — it still claims alone; the solo invariants and ceilings are unchanged by the sort.
 
 ## Step 3: Surface DB-Contention Warning
@@ -303,14 +320,14 @@ Print the batch composition table:
 |-----------------------------|--------|-----------------|---------|--------|
 | <TASK-ID>                   | <eff>  | <br>            | <u>     | <w>    |
 | ...                         | ...    | ...             | ...     | ...    |
-|                                                        Total: <sum> / 6.0
+|                                                        Total: <sum> / 12.0
 
 The **Unlocks** column is each task's `unlock_count` from Step 1 — how many open same-phase tasks `depends_on` it. It explains the row order (unblocker-first) and does not enter the weight math. For an imported-provenance task whose fields were re-estimated (Step 2), render the changed cell as `recorded→re-estimated (re-est)` so the human sees the gate ran on the heavier value.
 
 On a subset run, append a **Requested but not batched** list under the table — the fate of every ID the human asked for, before they confirm:
 
 - each `EXCLUDED <id> <reason>` line from Step 1, verbatim;
-- each subset task that survived the Step 1 filters but was cut by the Step 2 walk, with the **Step 2 rule** that cut it — a solo invariant, the cross-module cap, or the K=6 / N ceilings (e.g. `TECH-B — claimable, but exceeded this batch's K=6 / N=<N> ceilings — re-run /auto-build TECH-B after this batch merges`; `TECH-DB — claimable, but architectural tasks solo — re-run /auto-build TECH-DB alone`).
+- each subset task that survived the Step 1 filters but was cut by the Step 2 walk, with the **Step 2 rule** that cut it — a solo invariant, the cross-module cap, or the K=12 / N ceilings (e.g. `TECH-B — claimable, but exceeded this batch's K=12 / N=<N> ceilings — re-run /auto-build TECH-B after this batch merges`; `TECH-DB — claimable, but architectural tasks solo — re-run /auto-build TECH-DB alone`).
 
 Shown-equals-dropped: never let a requested ID vanish between the argument list and the confirmation gate.
 
@@ -342,9 +359,16 @@ Pre-create worktrees on `main` for the confirmed batch, mirroring `/claim-task` 
 For each task in the confirmed batch:
 
 ```bash
-# 5.1 — flip index.yml status open → in_progress
-.venv/bin/python3 - <<'PY' "$TASK_ID"
-import sys, yaml
+# 5.1 — flip index.yml status open → in_progress. `python3` command word + in-heredoc
+# PyYAML bootstrap so `Bash(python3 -:*)` matches as a single simple command (Phase 126).
+python3 - <<'PY' "$TASK_ID"
+import sys
+try:
+    import yaml
+except ImportError:  # PyYAML lives only in the project venv (BeanRider ISSUE-0049)
+    import glob
+    sys.path[:0] = glob.glob(".venv/lib/python*/site-packages")
+    import yaml
 from pathlib import Path
 task_id = sys.argv[1]
 index_path = Path("tasks/index.yml")
@@ -367,13 +391,13 @@ with index_path.open("w", encoding="utf-8") as f:
 PY
 
 # 5.2 — create worktree + lock
-bash scripts/claim_task.sh --lock "$TASK_ID" "$BRANCH_NAME"
+bash sysop/scripts/claim_task.sh --lock "$TASK_ID" "$BRANCH_NAME"
 # If non-zero exit: roll back the index.yml flip with `git checkout tasks/index.yml`,
 # commit the rollback with `git commit -m "rollback: <TASK_ID> claim failed"`,
 # and abort the batch (don't leave half-claimed). Report which task failed.
 
 # 5.3 — validate schema invariants
-.venv/bin/python3 scripts/validate_tasks.py
+.venv/bin/python3 sysop/scripts/validate_tasks.py
 # If non-zero: report validator output verbatim; abort the batch.
 
 # 5.4 — commit the claim (Rule A: assert HEAD is still main before each loop commit —
@@ -386,9 +410,9 @@ git add tasks/index.yml && git commit -m "claim: mark $TASK_ID as in-progress"
 
 Branch-name generation (matches `/claim-task` Step 3): lowercase task ID with prefix `feat/` / `tech/` / `data/` / `ux/` / `fix/` based on the ID prefix; or honour `branch:` field in `index.yml` if present.
 
-Collect `(task_id, worktree_path, branch_name)` tuples. Worktree path is `../$(basename "$REPO_ROOT")-<task-id-lowercase>/` relative to the project root — the path is computed by `scripts/claim_task.sh` itself (see `claim_task.sh:55`), so the orchestrator just records what the script printed rather than recomputing.
+Collect `(task_id, worktree_path, branch_name)` tuples. Worktree path is `../$(basename "$REPO_ROOT")-<task-id-lowercase>/` relative to the project root — the path is computed by `sysop/scripts/claim_task.sh` itself (see `claim_task.sh:55`), so the orchestrator just records what the script printed rather than recomputing.
 
-**Abort handling:** if any pre-claim step fails, roll back the partial state for that task (`git checkout tasks/index.yml` then `git commit -m "rollback: <TASK_ID> claim failed"`, plus `bash scripts/cleanup_worktrees.sh --force` on the orphan if created) and report which task failed. Tasks already pre-claimed earlier in the batch stay claimed — the human can either run `/auto-build` again to spawn agents for them, or `/document-work` / `/review-close` them manually.
+**Abort handling:** if any pre-claim step fails, roll back the partial state for that task (`git checkout tasks/index.yml` then `git commit -m "rollback: <TASK_ID> claim failed"`, plus `bash sysop/scripts/cleanup_worktrees.sh --force` on the orphan if created) and report which task failed. Tasks already pre-claimed earlier in the batch stay claimed — the human can either run `/auto-build` again to spawn agents for them, or `/document-work` / `/review-close` them manually.
 
 ## Step 6: Per-Task Plan → Review → Execute (orchestrator-driven, three sequential phases)
 
@@ -752,7 +776,7 @@ Next steps:
     `## Pending documentation routing` in `<project>/CLAUDE.md`. The human
     stays the merge gate.
   - For FAILED tasks: cd into the worktree, inspect git status and recent logs,
-    then either fix-and-resume or roll back via `bash scripts/cleanup_worktrees.sh --force`
+    then either fix-and-resume or roll back via `bash sysop/scripts/cleanup_worktrees.sh --force`
     (which removes the worktree and clears the lock).
 ```
 
@@ -777,7 +801,7 @@ Deferred to v2+:
 - **Timeout-and-release on parked agents.** Default is parked-forever — the human resumes manually.
 - **Auto-merge of clean batches.** Human stays the merge gate.
 - **`/parked-agents` companion or resume helper.** Manual `cd` into the worktree.
-- **Standalone `scripts/select_batch.py`.** Promote after 3-5 cycles when the batch-math shape stabilizes.
+- **Standalone `sysop/scripts/select_batch.py`.** Promote after 3-5 cycles when the batch-math shape stabilizes.
 - **Auto-detecting DB-contention from task bodies.** The verbatim warning at Step 3 is the bake-in.
 - **Separate plan-revise agent in Phase 6d.** v1 absorbs `fixable` findings inline by passing `PLAN_TEXT + RAW_FINDINGS` into the execution agent's prompt. A cleaner alternative is a third sub-agent that produces an explicit `REVISED_PLAN` text the execution agent consumes verbatim. Promote when the inline-absorption shape shows drift in practice.
 - **Reviewer-executor collapse for `/auto-build` Phase 6b-6e.** `/claim-task` collapses adversarial review + classification + plan revision + implementation into one cold-context reviewer-executor sub-agent (see `_shared/adversarial-review.md § "Reviewer-executor variant"`). The handoff guidance there is "validate the interactive shape under `/claim-task` first; the auto-build port is a follow-up after several `/claim-task` runs prove out the prompt discipline." Bundle the collapse only into `/claim-task` for now; `/auto-build` keeps the three-phase (plan-only → adversarial-reviewer → execution) shape.
