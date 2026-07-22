@@ -51,6 +51,7 @@ EXCLUDED_SKILLS = {
 LOOP_SHARED_STEMS = {
     "adversarial-review", "permission-guard",
     "promotion-write-target", "test-assessment-rubric",
+    "fanout-evidence",
 }
 EXCLUDED_SHARED_STEMS = {
     "decomposition-rubric", "guided-mode", "main-push-guard", "ui-verify",

@@ -83,9 +83,13 @@ Record:
 
 Before launching any review agents, cross-reference both maps against the actual codebase and CLAUDE.md Prevention Conventions to find coverage gaps. This is a deterministic check — no LLM needed.
 
+**What this audit is scoped to.** The `<project>/CLAUDE.md` § "Map coverage exclusions" list (used in 2a-1 and 2a-2 below) scopes **this map-coverage audit only** — it names paths *expected* to be unmatched by the maps so they are not reported as coverage gaps. It does **not** change the Step 1 file manifest, and it is **not a review-exclusion mechanism**. Whether a given path is actually reviewed is decided separately by convention/security-map section membership at Step 3 dispatch (which is map-keyed), not by this list.
+
 ### 2a-1. Files not matched by any convention_map section
 
 Parse the `## ` section headers from `.claude/convention_map.md` to extract the file globs for each section (the section header format is `## <glob list> — <Section Name>`). Derive the unique top-level path roots from those section globs (e.g., `<api module>/`, `<frontend>/`, `<scripts dir>/`, `<tests dir>/`). Then run `git ls-files -- <derived roots>` and check each code file against the extracted globs. Collect files that don't match any section.
+
+**Glob-matching caveat.** Interpret `**/` in a section glob as **zero or more** path components — `<api module>/routes/**/*.py` must count files sitting directly in `<api module>/routes/` (e.g. `<api module>/routes/foo.py`), not only files in a sub-directory. Match by derived-root **prefix + extension**; do not hand a raw `**/*.py` section glob to `git ls-files` as a pathspec, whose default matching omits those direct-children files and would false-flag them as unmatched coverage gaps. (Prefix+extension is coarser than the exact glob — acceptable for a coverage audit.)
 
 **Exclude from the gap report** (these are expected to be unmatched):
 - Config-only files: `Dockerfile`, deploy configs (e.g., `firebase.json`, `apphosting.yaml`, `vercel.json`), `*.yml`, `*.yaml`, `*.json`, `*.sql`
@@ -187,6 +191,8 @@ Before launching LLM agents, run the shared check registry to find mechanical co
 bash sysop/scripts/run_checks.sh --mode quality
 ```
 
+**The runner resolves its own interpreter and tools — run it as written.** `run_checks.sh` locates its Python interpreter and tool PATH from the repository's own `.venv` (it prepends `<main-repo>/.venv/bin`, prefers that venv's `python3`, and probes a plain `venv/` layout too), so you pass it no interpreter and prepend no PATH. Running the script itself **installs nothing** — a standing "do not install anything" instruction is no reason to decline to *run* it. Do **not** read the script, infer that `pyright`/`eslint`/`semgrep` are missing, and fall back to hand-rolled `grep`: that silently discards the entire deterministic pre-scan — the exact silent-degradation failure this stage exists to prevent. A missing *optional* scanner degrades only its own stage (recorded as `skipped`/`failed` in the accounting block below), never the whole run. The runner's one **hard** dependency is PyYAML, which a proper Sysop install's venv already carries; only if the script exits with `requires PyYAML` does a one-time `pip install pyyaml` (or activating the project venv) restore the pre-scan — never infer that preemptively from reading the script. And if you did not actually execute the script, you have **no** pre-scan — report that as a coverage gap, never as a clean scan.
+
 **Read the pre-scan accounting block — do not just count findings.** The invocation's stderr summary reports `checks: E executed / S skipped / F failed of N selected`, not a bare finding total: a stage that skipped its precondition (unlocalized paths, no coverage report) or crashed (a semgrep trust-store failure, a timeout) contributes zero findings *without lowering the check count*, so `0 findings from 13 checks` is the exact output of a genuinely clean scan **and** of a run where nothing executed. Carry the block into the round summary — state it as *pre-scan emitted N findings from E of S selected checks*, and carry **every `failed` stage and every `⚠ BLOCKING CHECK DID NOT RUN` line verbatim** with its reason; unchanged repeat skips may compress to *pre-scan environment unchanged since Round N-1* after their first recording. A `failed` stage means the deterministic layer you are about to trust ran incomplete — treat it as a coverage gap to close (fix the tool/environment and re-run), never as a clean bill.
 
 **Localizing placeholder `paths:` — the substitutions map, not overlay restatement (consumer installs).** Shipped check entries scope via placeholder vocabulary (`<api module>/`, `<scripts dir>/`) that resolves to nothing until localized, so on a never-localized install most grep checks are inert. The sanctioned localization is **one token mapping in `.claude/substitutions.project.yml`** (`substitutions: {"<api module>": "src/app"}`) — the installer re-applies it to every `paths:` line of the assembled `checks.yml` on install and every update (Phase 25/55), localizing all entries at once, durably. When the pre-scan is suspiciously empty or you find yourself recommending path fixes (in a finding's remediation text, a filed task, or an inline fix), point at the substitutions map — do NOT recommend restating shipped entries in `.claude/checks.project.yml` with concrete paths just to localize them (that duplicates every entry and loses upstream pattern updates — the verbose path install.sh's own comments warn against). Reserve `checks.project.yml` overrides for genuinely *changing* an entry: narrowing with `exclude_dir:`, disabling via `paths: ["__disabled_no_op__"]`, or a consumer-authored new check. Granularity note: map each token to the real *source* dirs, not a package root that contains excluded trees (`<api module>` → `pkg` sweeps `pkg/alembic/**` into every check; enumerate `pkg/routes`, `pkg/services`, … or add `exclude_dir: ["alembic", "migrations"]` in an override). See `sysop/docs/WORKFLOW.md` § 8.2b "Phase 25 — placeholder substitution" (loop installs ship no WORKFLOW.md — use the public `docs/configuration.md` § Placeholder substitution).
@@ -277,6 +283,8 @@ When constructing each agent's prompt:
 
 If a file group spans multiple convention_map sections (e.g., "Pages & API Routes" + "Frontend Utilities"), include bullets from ALL matching sections — the combined set is still much smaller than 52.
 
+**Sub-agent return contract (`_shared/fanout-evidence.md`).** The bullets above tell each agent what to *check*; the return contract tells it what to *return*. Instruct every review agent to (1) tag each finding with a `file:line` anchor **and** a `[verified]`/`[reported]` self-tag — `[verified]` only when it opened that exact site, `[reported]` when the finding rests on a grep hit / pattern match it did not open — and (2) end its report with the **evidence footer** (files opened vs. assigned + tool mix). **Copy the footer template from `_shared/fanout-evidence.md` verbatim into each agent's prompt** — the spawned agent never reads that file, so paste the block in exactly as you copy the scoped convention bullets. That footer is what Step 3c audits before merging: a batch that opened 8 of 82 assigned files is a coverage gap to flag loudly, not a clean pass to merge silently.
+
 ### 3a. General Quality Checks (ALL agents)
 
 These universal checks apply to every file regardless of convention_map section:
@@ -365,6 +373,12 @@ For files >600 lines, review the **last third first**, then the middle, then the
 
 ## Step 3c: Post-Scan (Amplification)
 
+**First, audit the fan-out per `_shared/fanout-evidence.md` § orchestrator merge discipline — do this before amplifying or writing any batch:**
+- **Row provenance (mandatory):** a fan-out finding the orchestrator did **not** itself re-read carries `[reported]` — do **not** copy a sub-agent's self-`[verified]` onto the row unchallenged (the agent that opened 8 of 82 files self-tags `[verified]` too). Only the sample re-read below upgrades a finding to `[verified]`.
+- **Low-opened-ratio flag (mandatory, cheap):** from each agent's evidence footer, flag a batch that **opened + grepped < ~⅓ of its assigned files**, or that self-tagged a `[verified]` finding on a file absent from its `Opened` list — record it as a **loud coverage-gap line in this round's summary**, not a clean pass. Do not flag an honestly sparse scope (few relevant files, the rest grepped).
+- **Sample re-read (advisory):** re-read **2–3 of each agent's claimed `file:line` findings** against source, reading *inward* to confirm the claim — distinct from the amplification below, which reads *outward* for siblings. A finding that survives carries `[verified]` into its batch row; one that doesn't is dropped or downgraded with a note.
+- **Provenance class in the summary (mandatory):** the round summary states the verified/reported split and per-batch opened/assigned ratios — never a bare coverage percentage.
+
 After all LLM agents complete, amplify each novel finding across the codebase. LLM agents are good at contextual analysis but unreliable at exhaustive enumeration — they tend to find one instance per pattern and move on. **Route each finding by anchor type:**
 
 | Anchor type | Method | Example |
@@ -394,6 +408,8 @@ For each finding:
 Report post-scan results:
 ```
 Post-scan amplification: <N> patterns grepped → <N> new siblings found
+Fan-out coverage: <opened/assigned per batch>; <B> batch(es) flagged low-opened
+Provenance: <V> verified (orchestrator-read + sampled) · <R> reported
 ```
 
 ## Step 4: Deduplicate and Organize
@@ -480,11 +496,13 @@ For each batch:
 > **Overlap:** <none | batch-M, batch-P>
 
 - [ ] **TASK-N**: <Imperative title> <severity emoji>
-  `<file:line>` — <1-2 sentence description with concrete suggested fix>
+  `<file:line>` `[verified|reported]` — <1-2 sentence description with concrete suggested fix>
 
 - [ ] **TASK-N+1**: <Imperative title> <severity emoji>
-  `<file:line>` — <Description with suggested fix>
+  `<file:line>` `[verified|reported]` — <Description with suggested fix>
 ```
+
+**Every task row carries a provenance tag** — `[verified]` (this site was opened and the claim confirmed against source) or `[reported]` (asserted from a grep/pattern/pre-scan hit, not opened) — per `_shared/fanout-evidence.md` § Tier 1. It is a **self-declared honesty label, not a machine-checked guarantee**, and it is orthogonal to the severity emoji. Actuators (`/auto-fix`, `/claim-task`) must **re-read the site before applying a fix to a `[reported]` task** — never auto-apply blind; a `[verified]` task is safe to act on at its stated severity.
 
 ### 5d. Statistics Update
 
