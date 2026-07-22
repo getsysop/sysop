@@ -873,3 +873,35 @@ def test_security_audit_documents_no_pyright_in_security_mode():
     """The 'why is security mode's selected count lower' surprise, documented."""
     text = (_SKILLS / "security-audit" / "SKILL.md").read_text(encoding="utf-8")
     assert "no `pyright` entries" in text
+
+
+_SELF_BOOTSTRAP_ANCHOR = "The runner resolves its own interpreter and tools — run it as written."
+
+
+def test_both_review_skills_state_the_runner_self_bootstraps_at_step_2b():
+    """A cautious agent that reads run_checks.sh, infers it must `pip install`,
+    and declines on a 'do not install anything' instruction silently loses the
+    entire deterministic pre-scan (cross-harness cell-1, 2026-07-19: 24 findings
+    vs the reference cell's 372). Both review skills must state at the point of
+    invocation that the runner resolves its own toolchain, and warn that
+    hand-rolled grep is not a substitute — placed BEFORE the accounting block so
+    it is read before the agent decides whether it can run the command at all.
+
+    The PyYAML clause is asserted separately because it is the correctness crux
+    (Phase 136 adversarial review): PyYAML is the runner's one *hard* dependency
+    — its absence is a total-run `sys.exit(2)` with no accounting block, not a
+    per-stage skip — so it must never be grouped with the optional scanners that
+    'degrade only their own stage'."""
+    for skill in ("codebase-review", "security-audit"):
+        text = (_SKILLS / skill / "SKILL.md").read_text(encoding="utf-8")
+        assert _SELF_BOOTSTRAP_ANCHOR in text, f"{skill} lost the self-bootstrap statement"
+        assert "hand-rolled `grep`" in text, (
+            f"{skill} lost the hand-rolled-grep anti-pattern warning"
+        )
+        assert "one **hard** dependency is PyYAML" in text, (
+            f"{skill} must call PyYAML a hard dependency, not group it with optional scanners"
+        )
+        assert text.index(_SELF_BOOTSTRAP_ANCHOR) < text.index(_ACCOUNTING_ANCHOR), (
+            f"{skill}: self-bootstrap statement must precede the accounting block "
+            "(it must be read at the point of invocation)"
+        )

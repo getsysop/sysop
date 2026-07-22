@@ -9,7 +9,7 @@ disallowed-tools: Edit, Write, NotebookEdit
 
 A read-only **standing test-quality audit**. Every other test mechanism in Sysop is forward-facing and anchored to the change in flight — `## Test decision` covers the current task, adversarial-review #7 judges the current plan, `/review-close` Step 2d verifies the current diff, and the coverage gate (`run_checks/coverage.py`) measures **only changed crown-jewel lines** by design. Two questions have no home anywhere: *where is the codebase structurally exposed on tests* (a module untested for a year but never in a diff produces zero findings), and *which existing tests have gone dead, redundant, or hollow*. `/test-audit` answers both. It reads the source and test trees, applies the calibrated `_shared/test-assessment-rubric.md`, and emits a ranked report of recommendations. **It never writes a test, never claims a task, and never mutates the queue** — every finding is a recommendation the human gates.
 
-> **Structural read-only guard (Phase 54):** the `disallowed-tools` frontmatter (Claude Code 2.1.152+) removes the file-write tools while this skill is active. Partial by design — `Bash` stays allowed for read-only `git grep` / `Grep` scans, so the guard covers the dedicated write tools, not shell redirects. Non-Claude-Code harnesses ignore the key. This skill mutates nothing: it reads code and prints a report.
+> **Read-only guard (Phase 54) — structural only when Claude Code *invokes* this as a skill.** The `disallowed-tools` frontmatter (Claude Code 2.1.152+) removes the file-write tools, but **only when the harness activates the skill** — a `/test-audit` call or a `Skill` invocation. When an agent is instead told to *read this `SKILL.md` and follow it* (path-based invocation — the **only** option on non-Claude-Code harnesses, and a common one inside Claude Code too), the frontmatter never fires: the write tools (`Write`/`Edit`/`NotebookEdit`) stay available, and read-only-ness rests entirely on the agent honoring the contract below, not on a structural guard. Even when the guard *is* active it is partial by design — `Bash` stays allowed for read-only `git grep` / `Grep` scans, so it covers the dedicated write tools, not shell redirects. This skill mutates nothing: it reads code and prints a report. (That the guarantee is narrower than "removes the write tools" sounds is portability evidence, not only a doc nit — it is what a non-Claude-Code harness actually gets.)
 
 ## Not the coverage gate, `/codebase-review`, or the deferred coverage signal
 
@@ -25,7 +25,7 @@ The base path is **LLM judgment over source + test files** — pure `Read` / `Gr
 
 ## Pre-flight: Permission Guard
 
-**No new permission rules; no Step 0 guard.** Every operation on the base path is read-only: `Read` on source, test, `checks.yml`, `CLAUDE.md`, and any coverage artifact; `Grep` / read-only `git grep` for referent scans. Per `_shared/permission-guard.md` § Notes, read-only ops are auto-approved under `auto` mode and are **not** listed as allow-rules. The optional coverage-artifact read is a *file read*, not a shell call. The skill runs no scripts and writes nothing on any path documented here. It is portable to any project on any agent.
+**No new permission rules; no Step 0 guard.** Every operation on the base path is read-only: `Read` on source, test, `checks.yml`, `security_map.md`, `CLAUDE.md`, and any coverage artifact; `Grep` / read-only `git grep` for referent scans. Per `_shared/permission-guard.md` § Notes, read-only ops are auto-approved under `auto` mode and are **not** listed as allow-rules. The optional coverage-artifact read is a *file read*, not a shell call. The skill runs no scripts and writes nothing on any path documented here. It is portable to any project on any agent.
 
 *(If a future tier shells out to `diff-cover` for whole-repo enrichment, gate that behind an explicit opt-in flag that degrades when the rule or artifact is absent — never on the base path. No such tier ships today.)*
 
@@ -44,15 +44,16 @@ Parse `$ARGUMENTS`:
 Read these, tolerating absence (a consumer may have run `install.sh` but not filled every signal):
 
 1. **The source tree and the test tree** (`Read` / `Grep`). Identify the test tree by convention (`tests/`, `__tests__/`, `*_test.*`, `*.test.*`, `*.spec.*`) and the source it exercises.
-2. **The crown-jewel globs — the authoritative "audit this hardest" signal.** Parse the `critical_path:` lists of the `coverage-*` checks in `.claude/checks.yml` (the same globs that arm the diff-coverage gate — *not* `CLAUDE.md`). **Guard for the placeholder state:** the shipped fragment carries placeholder globs (`<critical path module>/`, `<critical components>/`); if the only `critical_path:` values are angle-bracket placeholders, treat the crown-jewel signal as **absent** (the consumer hasn't designated crown jewels yet, so the gate is inert too) and fall back to the `CLAUDE.md § Scope mapping` / `convention_map.md` sources (item 3 below).
-3. **`<project>/CLAUDE.md § Scope mapping`** *if present* — for the broader source path-sets when crown-jewel globs are absent/placeholder. If it too is absent, fall back to `convention_map.md` section headers, exactly as `/codebase-review` does to bound its review surface.
-4. **A whole-repo coverage artifact** *if one already exists on disk* (`coverage.xml`, `coverage/lcov.info`) — optional enrichment only (§ "Judgment first"). Read it to *narrow* candidates (a line the report already marks uncovered is a strong Tier-1 candidate); never require it; note in one line whether it was found and used.
+2. **The crown-jewel globs — the authoritative "audit this hardest" signal.** Parse the `critical_path:` lists of the `coverage-*` checks in `.claude/checks.yml` (the same globs that arm the diff-coverage gate — *not* `CLAUDE.md`). **Guard for the placeholder state:** the shipped fragment carries placeholder globs (`<critical path module>/`, `<critical components>/`); if the only `critical_path:` values are angle-bracket placeholders, treat the crown-jewel signal as **absent** (the consumer hasn't designated crown jewels yet, so the gate is inert too) and fall back to the `CLAUDE.md § Scope mapping` / `convention_map.md` sources (item 4 below).
+3. **`.claude/security_map.md`** (plus its `.claude/security_map.project.md` overlay, if present) — the *second* "audit this hardest" signal, alongside the crown-jewel globs. Its listed surfaces are security-critical, the class the rubric ranks top-tier ("anything a `security_map.md` … note calls out" — `_shared/test-assessment-rubric.md`, load-bearing invariants). Pull the surfaces it flags into the candidate set (Step 2) and weight them in the Tier-1 ranking (Step 4). **The shipped map is half-concrete** — maps are never installer-substituted, so its *pack* sections stay in placeholder form (`<api module>/…`, `<auth module>/…`) until the consumer localizes them, while its *core* workflow-meta sections (`scripts/*.sh`, CI YAML, `.claude/skills/**`) ship concrete. So — on the same placeholder-detection principle as the crown-jewel guard — treat any section still in `<...>` form as absent, and let the Tier-1 **negative discipline** govern the concrete sections (infra/config/meta don't become test candidates just because the map lists them). The genuine top-tier targets (app auth, payments, SQL) light up only once the pack globs are localized. Tolerate whole-file absence like every other signal — a consumer may not have populated it.
+4. **`<project>/CLAUDE.md § Scope mapping`** *if present* — for the broader source path-sets when crown-jewel globs are absent/placeholder. If it too is absent, fall back to `convention_map.md` section headers, exactly as `/codebase-review` does to bound its review surface.
+5. **A whole-repo coverage artifact** *if one already exists on disk* (`coverage.xml`, `coverage/lcov.info`) — optional enrichment only (§ "Judgment first"). Read it to *narrow* candidates (a line the report already marks uncovered is a strong Tier-1 candidate); never require it; note in one line whether it was found and used.
 
 **Absence handling:** no source tree, or a tree with no identifiable code surfaces → report that plainly and stop; do not fabricate findings. No test tree at all → that is itself the headline Tier-1 finding (the whole load-bearing surface is unguarded); report the highest-exposure surfaces to seed first.
 
 ## Step 2 — Scope the candidate surfaces
 
-- **Default (no `--all`, no `--path`): crown-jewel-first.** Start with the `critical_path:` paths from step 1.2 — the same signal that says "gate this path" says "audit this path hardest" — then expand outward by *exposure* (highest call-site count / broadest `blast_radius` / most-depended-on modules) until the context budget is spent.
+- **Default (no `--all`, no `--path`): crown-jewel-first.** Start with the `critical_path:` paths from step 1.2 **and any surfaces `security_map.md` flags (step 1.3)** — both signals say "audit this hardest" — then expand outward by *exposure* (highest call-site count / broadest `blast_radius` / most-depended-on modules) until the context budget is spent.
 - **`--path <glob>`:** restrict to that subtree.
 - **`--all`:** whole tree, **per-module-chunked**. Announce the chunking and, at the end, state explicitly which modules were audited and which were not reached — a standing audit that silently stops halfway reads as "clean" when it isn't (the no-silent-caps discipline).
 
@@ -69,7 +70,7 @@ This is the skill's judgment core. For each candidate surface (a function, class
 
 ## Step 4 — Rank and report
 
-Rank Tier-1 recommendations by **load-bearingness × exposure** (invariant severity × how much depends on it — crown-jewel membership, call-site count, `blast_radius`); rank Tier-2 findings dead-first (2a, immediate/high-confidence) then judgment (2b) ordered by confidence. Emit the report in the shape below.
+Rank Tier-1 recommendations by **load-bearingness × exposure** (invariant severity — a `security_map.md`-flagged surface ranks high here — × how much depends on it: crown-jewel membership, call-site count, `blast_radius`); rank Tier-2 findings dead-first (2a, immediate/high-confidence) then judgment (2b) ordered by confidence. Emit the report in the shape below.
 
 ## Step 4b — Emit Tier-2b findings as calibration rows (only if any)
 
@@ -110,21 +111,23 @@ Crown-jewel paths: billing/, ledger/import/   ·   plus 4 highest-exposure modul
 Not reached this pass: reporting/, admin/ (context budget) — re-run with --path to cover.
 
 TIER 1 — recommend a new test
-[high]  billing/settle.py:refund_split()  — data-integrity: splits a refund across
-        payees; no test pins the sum-invariant (Σparts == total). Recommend a golden
-        test over the boundary cases (0, single payee, rounding remainder).
-[med]   ledger/import/ofx.py:_parse_amount() — parser contract; covered-but-hollow
-        (test asserts only `is not None`). Recommend asserting the parsed Decimal.
+[high] [verified]  billing/settle.py:refund_split() — data-integrity: splits a refund
+        across payees; no test pins the sum-invariant (Σparts == total). Recommend a
+        golden test over the boundary cases (0, single payee, rounding remainder).
+[med] [verified]  ledger/import/ofx.py:_parse_amount() — parser contract; covered-but-
+        hollow (test asserts only `is not None`). Recommend asserting the parsed Decimal.
+[low] [reported]  billing/refunds.py — coverage.xml flags this crown-jewel module thinly
+        covered; a lead from the artifact, not opened this pass. Confirm by reading first.
 
 TIER 2a — retire (provably dead)
-[high]  test_legacy_router.py::test_v1_dispatch — production `v1_dispatch` is gone
-        (`git grep -nw v1_dispatch` finds it only in this test). Referent deleted.
+[high] [verified]  test_legacy_router.py::test_v1_dispatch — production `v1_dispatch`
+        is gone (`git grep -nw v1_dispatch` finds it only in this test). Referent deleted.
 
 TIER 2b — retire (judgment)
-[med]   test_settle.py::test_refund_rounds_down — redundant with
+[med] [verified]  test_settle.py::test_refund_rounds_down — redundant with
         ::test_refund_rounding (same input, same assertion). Retire the narrower one.
-[low]   test_import.py::test_calls_parser_once — brittle: asserts a mock call count,
-        not observable output. Leaning keep; rewrite to assert the imported rows.
+[low] [verified]  test_import.py::test_calls_parser_once — brittle: asserts a mock call
+        count, not observable output. Leaning keep; rewrite to assert the imported rows.
 
 CALIBRATION — Tier-2b decisions (optional)   [only when Tier-2b findings exist; see Step 4b]
 | Date | Suite/repo | Finding | Dimension | Confidence | Verdict | Note |
@@ -137,6 +140,10 @@ Read-only test audit — no code or tests changed. Actuator: /intake (route acce
 ```
 
 Adapt the shape to the tree; omit empty tiers; render only the findings that survive the rubric's keep-when-unsure discipline.
+
+**Every row carries two independent brackets** (per `_shared/fanout-evidence.md` § Tier 1). The first is **confidence** — how sure the recommendation is (`[high]`/`[med]`/`[low]`). The second is **provenance** — `[verified]` when you opened the cited `path:symbol` and confirmed the claim against source, `[reported]` when the finding rests on something you did *not* open (most often a coverage artifact flagging a module, or a `security_map.md`/`critical_path:` surface pulled in without reading it). They are orthogonal: a `[high] [reported]` is a strong lead you haven't yet confirmed by reading. Because this skill's base path *is* reading the source (`Read`/`Grep`), most findings are `[verified]`; `[reported]` is the honest tag for anything inferred from an artifact rather than the code. It is a **self-declared honesty label, not a machine-checked guarantee** — never route a `[reported]` recommendation into `/intake` without confirming it at the source first.
+
+**If you fan out** — if an invocation dispatches sub-auditors (one per module) instead of reading inline, as the cross-harness reference run was observed to do — the full fan-out contract applies: each sub-auditor returns the **evidence footer** (files opened vs. assigned + tool mix), and you audit it before merging (row-provenance default + low-opened-ratio flag + sample re-read), per `_shared/fanout-evidence.md` § Tier 2. Merging sub-auditor reports without that check is the blind-merge this contract exists to stop. The shipped base path does **not** fan out — `--all` chunks per module *within one agent*, it does not spawn sub-auditors — so the single-agent base path above has no fan-out, and only the Tier-1 marker applies there.
 
 ## Design notes
 

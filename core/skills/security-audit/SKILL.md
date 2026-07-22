@@ -95,9 +95,13 @@ Record:
 
 Before launching any audit agents, cross-reference both maps against the actual codebase to find coverage gaps. This is a deterministic check — no LLM needed.
 
+**What this audit is scoped to.** The `<project>/CLAUDE.md` § "Map coverage exclusions" list (used in 2a-1 and 2a-2 below) scopes **this map-coverage audit only** — it names paths *expected* to be unmatched by the maps so they are not reported as coverage gaps. It does **not** change the Step 1 scan manifest, and it is **not a scan-exclusion mechanism**. Whether a given path is actually scanned is decided separately by security-map section membership at Step 3 dispatch (map-keyed) plus the § "Security-critical always-include files" set, not by this list.
+
 ### 2a-1. Files not matched by any security_map section
 
 Parse the `## ` section headers from `.claude/security_map.md` to extract the file globs for each section (the section header format is `## <glob list> — <Section Name>`). Derive the unique top-level path roots from those section globs. Then run `git ls-files -- <derived roots>` and check each code file against the extracted globs. Collect files that don't match any section.
+
+**Glob-matching caveat.** Interpret `**/` in a section glob as **zero or more** path components — `<api module>/routes/**/*.py` must count files sitting directly in `<api module>/routes/` (e.g. `<api module>/routes/foo.py`), not only files in a sub-directory. Match by derived-root **prefix + extension**; do not hand a raw `**/*.py` section glob to `git ls-files` as a pathspec, whose default matching omits those direct-children files and would false-flag them as unmatched coverage gaps. (Prefix+extension is coarser than the exact glob — acceptable for a coverage audit.)
 
 **Exclude from the gap report** (these have negligible security surface):
 - Config-only files: `Dockerfile`, deploy configs (e.g., `firebase.json`, `apphosting.yaml`, `vercel.json`), `*.yml`, `*.yaml`, `*.json`, `*.sql`
@@ -178,6 +182,8 @@ Before launching LLM agents, run the shared check registry to find mechanical se
 bash sysop/scripts/run_checks.sh --mode security
 ```
 
+**The runner resolves its own interpreter and tools — run it as written.** `run_checks.sh` locates its Python interpreter and tool PATH from the repository's own `.venv` (it prepends `<main-repo>/.venv/bin`, prefers that venv's `python3`, and probes a plain `venv/` layout too), so you pass it no interpreter and prepend no PATH. Running the script itself **installs nothing** — a standing "do not install anything" instruction is no reason to decline to *run* it. Do **not** read the script, infer that `semgrep`/`pip-audit`/`eslint` are missing, and fall back to hand-rolled `grep`: that silently discards the entire deterministic pre-scan — the exact silent-degradation failure this stage exists to prevent. A missing *optional* scanner degrades only its own stage — recorded as `skipped`/`failed` in the accounting block below (and if a no-install policy blocks re-adding one, e.g. the `pip install pip-audit` hint below, that stage simply stays `skipped`), never the whole run. The runner's one **hard** dependency is PyYAML, which a proper Sysop install's venv already carries; only if the script exits with `requires PyYAML` does a one-time `pip install pyyaml` (or activating the project venv) restore the pre-scan — never infer that preemptively from reading the script. And if you did not actually execute the script, you have **no** pre-scan — report that as a coverage gap, never as a clean scan.
+
 **Read the pre-scan accounting block — do not just count findings.** The invocation's stderr summary reports `checks: E executed / S skipped / F failed of N selected`, not a bare finding total: a stage that skipped its precondition (unlocalized paths, no coverage report) or crashed (a semgrep trust-store failure, a timeout) contributes zero findings *without lowering the check count*, so `0 findings from 13 checks` is the exact output of a genuinely clean scan **and** of a run where nothing executed. Carry the block into the round summary — state it as *pre-scan emitted N findings from E of S selected checks*, and carry **every `failed` stage and every `⚠ BLOCKING CHECK DID NOT RUN` line verbatim** with its reason; unchanged repeat skips may compress to *pre-scan environment unchanged since Round N-1* after their first recording. A `failed` stage means the deterministic layer you are about to trust ran incomplete — treat it as a coverage gap to close (fix the tool/environment and re-run), never as a clean bill.
 
 The `--mode security` invocation runs grep (checks.yml registry), `eslint`, Semgrep AST, and dependency audit (`pip-audit`). All share the same `(check_id, file_line, msg)` shape so baseline matching, `--mode` filtering, and `--fail-on-blocking` apply uniformly. **Security mode's registry deliberately contains no `pyright` entries** — every `pyright-*` check is marked `used_by: [codebase-review]`, so a security run reports fewer selected checks than a quality run, and the type/undefined-name analysis lives in the codebase-review pass. That is by design, not a missing stage; the accounting block's `selected` count reflects it.
@@ -217,6 +223,8 @@ Launch agents **per OWASP category** (not per file area). Each agent receives:
 4. Instructions to **SKIP** checks the map says are irrelevant
 
 This structure ensures every category is checked by a dedicated agent with a narrow, focused mandate.
+
+**Sub-agent return contract (`_shared/fanout-evidence.md`).** The per-agent lists below say what each agent *checks*; the return contract says what it *returns*. Instruct every audit agent to (1) tag each finding with a `file:line` anchor **and** a `[verified]`/`[reported]` self-tag — `[verified]` only when it opened that exact site, `[reported]` when the finding rests on a grep/pre-scan hit it did not open — and (2) end its report with the **evidence footer** (files opened vs. assigned + tool mix). **Copy the footer template from `_shared/fanout-evidence.md` verbatim into each agent's prompt** — the spawned agent never reads that file, so paste the block in exactly as you hand it the map-scoped checks. That footer is what Step 3b audits before merging: an OWASP agent that opened 8 of 82 assigned files is a coverage gap to flag loudly, not a clean pass to merge silently.
 
 ### Agent 1: Injection & Prompt Safety (A03)
 
@@ -353,6 +361,12 @@ For files >300 lines, review in ~200-line chunks. For files >600 lines, review t
 
 ## Step 3b: Post-Scan (Pattern Amplification)
 
+**First, audit the fan-out per `_shared/fanout-evidence.md` § orchestrator merge discipline — do this before amplifying or writing any batch:**
+- **Row provenance (mandatory):** a fan-out finding the orchestrator did **not** itself re-read carries `[reported]` — do **not** copy an OWASP agent's self-`[verified]` onto the row unchallenged (the agent that opened 8 of 82 files self-tags `[verified]` too). Only the sample re-read below upgrades a finding to `[verified]`.
+- **Low-opened-ratio flag (mandatory, cheap):** from each agent's evidence footer, flag an OWASP agent that **opened + grepped < ~⅓ of its assigned files**, or that self-tagged a `[verified]` finding on a file absent from its `Opened` list — record it as a **loud coverage-gap line in this round's summary**, not a clean pass. A silently-absent category is the same silent-degradation shape a security audit exists to prevent. Do not flag an honestly sparse scope (few relevant files, the rest grepped).
+- **Sample re-read (advisory):** re-read **2–3 of each agent's claimed `file:line` findings** against source, reading *inward* to confirm the claim — distinct from the amplification below, which reads *outward* for siblings. A finding that survives carries `[verified]` into its batch row; one that doesn't is dropped or downgraded with a note.
+- **Provenance class in the summary (mandatory):** the round summary states the verified/reported split and per-batch opened/assigned ratios — never a bare coverage percentage.
+
 After all LLM agents complete, extract the **underlying pattern** from each novel finding and grep the full codebase for sibling instances the agents may have missed. LLM agents are good at contextual analysis but unreliable at exhaustive enumeration — they tend to find one instance per pattern and move on.
 
 For each LLM agent finding:
@@ -374,6 +388,8 @@ For each LLM agent finding:
 Report post-scan results:
 ```
 Post-scan amplification: <N> patterns grepped → <N> new siblings found
+Fan-out coverage: <opened/assigned per OWASP agent>; <B> agent(s) flagged low-opened
+Provenance: <V> verified (orchestrator-read + sampled) · <R> reported
 ```
 
 ## Step 4: Deduplicate and Organize
@@ -462,11 +478,13 @@ For each batch, include the `> **OWASP:**` line to distinguish security batches 
 > **Overlap:** <none | batch-M, batch-P>
 
 - [ ] **TASK-N**: <Imperative title> 🔴
-  `<file:line>` — **Exploit scenario:** <how an attacker could exploit this>. **Remediation:** <concrete fix with code suggestion>.
+  `<file:line>` `[verified|reported]` — **Exploit scenario:** <how an attacker could exploit this>. **Remediation:** <concrete fix with code suggestion>.
 
 - [ ] **TASK-N+1**: <Imperative title> 🔴
-  `<file:line>` — **Exploit scenario:** <description>. **Remediation:** <fix>.
+  `<file:line>` `[verified|reported]` — **Exploit scenario:** <description>. **Remediation:** <fix>.
 ```
+
+**Every task row carries a provenance tag** — `[verified]` (this site was opened and the finding confirmed against source) or `[reported]` (asserted from a grep/pre-scan hit or a fan-out agent's claim the orchestrator did not re-read) — per `_shared/fanout-evidence.md` § Tier 1. It is a **self-declared honesty label, not a machine-checked guarantee**, orthogonal to the severity emoji. A `[reported]` security finding must be **re-read at the site before any fix is applied** (`/auto-fix`, `/claim-task`) — never auto-apply blind; a `[verified]` finding is safe to act on at its stated severity. A `[reported]` High still ships loudly — it just hasn't been confirmed by a read.
 
 Each security task must include:
 1. **Exploit scenario** — how an attacker would exploit the finding
