@@ -173,6 +173,22 @@ def test_eslint_parser_emits_finding_per_message(tmp_path):
     assert "missing dependency" in msg
 
 
+def test_eslint_invocation_never_uses_exit_on_fatal_error(tmp_path):
+    """Drift guard (Phase 135 follow-up, deliverable 04): the rc≠0 + empty-stdout
+    crash discriminator in lint.py is only sound because the invocation omits
+    `--exit-on-fatal-error`. That flag makes a formatted fatal parse result exit
+    2 while KEEPING valid JSON, so exit 2 would no longer imply a crash and real
+    findings would be misread as a failed run. Forbid the flag in the argv."""
+    _make_eslint_frontend(tmp_path)
+    with patch("run_checks_impl.subprocess.run") as mock_run:
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="[]", stderr=""
+        )
+        rci._run_eslint(str(tmp_path), {"lint-error"})
+    argv = mock_run.call_args.args[0]
+    assert "--exit-on-fatal-error" not in argv, argv
+
+
 def test_eslint_skips_when_binary_missing(tmp_path, capsys):
     """FileNotFoundError from subprocess.run → empty list + stderr warning."""
     _make_eslint_frontend(tmp_path)

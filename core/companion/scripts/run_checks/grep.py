@@ -7,11 +7,38 @@ import sys
 
 from _log import _sanitize_log
 
+from .accounting import (
+    EXECUTED,
+    FAILED,
+    SKIPPED,
+    Outcome,
+    is_placeholder_token,
+    stderr_excerpt,
+)
 from .config import _SKIP_DIRS
 
 
-def run_grep(pattern, paths, includes, excludes, repo_root, exclude_dirs=()):
-    """Run grep -rn with the given pattern, paths, includes, and excludes."""
+def _paths_unresolved_detail(paths):
+    """Human detail for a grep check whose ``paths:`` resolved to nothing.
+
+    Distinguishes the fresh-install case (every entry is still placeholder
+    vocabulary) from a localized entry that has since vanished from disk — the
+    two read very differently to a consumer scanning the summary.
+    """
+    entries = list(paths or [])
+    if entries and all(is_placeholder_token(p) for p in entries):
+        return "paths unresolved: placeholder globs not yet localized"
+    return "paths unresolved: no configured path resolved on disk"
+
+
+def _run_grep_status(pattern, paths, includes, excludes, repo_root, exclude_dirs=()):
+    """Run grep -rn and return ``(Outcome, lines)``.
+
+    The Outcome carries the terminal state (executed / skipped / failed) so the
+    single per-check record point in ``run_check`` can account for the stage —
+    grep itself has no check id at this call site (spec §5). ``run_grep`` (the
+    original list-returning name) is a thin wrapper over this.
+    """
     cmd = ["grep", "-rn", "-E", pattern]
     for inc in includes:
         cmd.extend(["--include", inc])
@@ -31,37 +58,60 @@ def run_grep(pattern, paths, includes, excludes, repo_root, exclude_dirs=()):
 
     # Resolve paths relative to repo root; collect only those that exist.
     # If none resolve (e.g., a fresh install where placeholder vocabulary
-    # like `<api module>/` hasn't been substituted yet), return empty —
-    # never fall through to a CWD-wide scan, since that surfaces noise
-    # findings on every file in the tree.
+    # like `<api module>/` hasn't been substituted yet), skip — never fall
+    # through to a CWD-wide scan, since that surfaces noise findings on every
+    # file in the tree.
     valid_paths = []
     for p in paths:
         full = os.path.join(repo_root, p)
         if os.path.exists(full):
             valid_paths.append(full)
     if not valid_paths:
-        return []
+        return Outcome(SKIPPED, "paths-unresolved", _paths_unresolved_detail(paths)), []
     cmd.extend(valid_paths)
 
     try:
         result = subprocess.run(
             cmd, capture_output=True, text=True, cwd=repo_root, timeout=30
         )
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        return []
+    except subprocess.TimeoutExpired:
+        # A timeout is lost work, not a declined precondition — `failed`.
+        return Outcome(FAILED, "timeout", "grep timed out after 30s"), []
+    except FileNotFoundError:
+        # grep is a hard dependency, but a truly missing binary is a skip
+        # (precondition absent), not a crash — consistent with §1's tool-missing.
+        return Outcome(SKIPPED, "tool-missing", "grep not on PATH"), []
 
     # grep exit codes: 0 = matches, 1 = no matches (expected), 2+ = a real
-    # error (unreadable file, malformed regex). Treat 2+ as a noisy warn —
-    # silently swallowing it hides a broken check behind a clean "0 findings".
+    # error (unreadable file, malformed regex). Treat 2+ as a noisy warn AND a
+    # `failed` record — silently swallowing it hides a broken check behind a
+    # clean "0 findings" (the whole point of the accounting layer).
     if result.returncode >= 2:
         err = _sanitize_log(result.stderr) if result.stderr else "(no stderr)"
         print(
             f"warn: grep failed (rc={result.returncode}): {err}",
             file=sys.stderr,
         )
-        return []
+        return (
+            Outcome(FAILED, "grep-error",
+                    f"grep error (rc={result.returncode}): {stderr_excerpt(result.stderr)}"),
+            [],
+        )
     lines = [l for l in result.stdout.strip().split("\n") if l]
-    return lines
+    return Outcome(EXECUTED, None, None), lines
+
+
+def run_grep(pattern, paths, includes, excludes, repo_root, exclude_dirs=()):
+    """Run grep -rn and return the match lines (back-compat wrapper).
+
+    Retained as stable public API on the ``run_checks_impl`` re-export surface
+    and for existing direct callers/tests. New accounting-aware code calls
+    ``_run_grep_status`` for the ``(Outcome, lines)`` pair it needs to record
+    the stage's terminal state.
+    """
+    return _run_grep_status(
+        pattern, paths, includes, excludes, repo_root, exclude_dirs
+    )[1]
 
 
 def strip_repo_prefix(line, repo_root):
@@ -184,12 +234,18 @@ def _run_position_check(
     return findings
 
 
-def run_check(check, repo_root):
+def run_check(check, repo_root, report=None):
     """Run a single check and return a list of (check_id, file_line, message) tuples.
 
     file_line is "<path>:<lineno>" (or bare "<path>" for file-level checks)
     and serves as the baseline key. message is the full "[id] SEV path:line —
     description" line displayed to the user.
+
+    ``report`` is the optional accounting collector (``accounting.RunReport``);
+    when provided, this is the single record point for the grep stage — every
+    terminal branch records the check's state exactly once. ``report=None``
+    preserves the original behavior for legacy/direct callers and existing
+    tests (spec §2).
     """
     pattern = check.get("pattern", "")
     paths = check.get("paths", [])
@@ -203,21 +259,47 @@ def run_check(check, repo_root):
     check_id = check.get("id", "unknown")
     description = check.get("description", "")
 
+    def _record(status, reason=None, detail=None):
+        if report is not None:
+            report.record([check_id], status, "grep", reason, detail)
+
     # position_check is an alternative dispatch — no `pattern:` is required.
     # Schema: {earlier: <regex>, later: <regex>}. Fires when both patterns
     # match in the same file AND `later`'s first occurrence precedes
     # `earlier`'s first occurrence (i.e., wrong order).
     if position_check and paths:
-        return _run_position_check(
+        earlier_src = position_check.get("earlier", "")
+        later_src = position_check.get("later", "")
+        if not earlier_src or not later_src:
+            _record(SKIPPED, "not-configured",
+                    "position_check missing earlier/later regex")
+            return []
+        try:
+            _cached_compile(earlier_src)
+            _cached_compile(later_src)
+        except re.error as e:
+            _record(SKIPPED, "misconfigured",
+                    f"invalid position_check regex: {stderr_excerpt(str(e))}")
+            return []
+        if not any(os.path.exists(os.path.join(repo_root, p)) for p in paths):
+            _record(SKIPPED, "paths-unresolved", _paths_unresolved_detail(paths))
+            return []
+        findings = _run_position_check(
             check_id, position_check, paths, includes, excludes,
             severity, description, repo_root, exclude_dirs,
         )
+        _record(EXECUTED)
+        return findings
 
     if not pattern or not paths:
+        _record(SKIPPED, "not-configured", "no pattern/paths configured")
         return []
 
-    hits = run_grep(pattern, paths, includes, excludes, repo_root, exclude_dirs)
-    if not hits:
+    outcome, hits = _run_grep_status(
+        pattern, paths, includes, excludes, repo_root, exclude_dirs
+    )
+    _record(outcome.status, outcome.reason, outcome.detail)
+    if outcome.status != EXECUTED or not hits:
         return []
 
     findings = []

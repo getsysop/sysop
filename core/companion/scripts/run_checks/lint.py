@@ -13,6 +13,7 @@ import sys
 
 from _log import _sanitize_log
 
+from .accounting import EXECUTED, FAILED, SKIPPED, stderr_excerpt
 from .config import _SKIP_DIRS
 
 
@@ -48,7 +49,7 @@ class FrontendDirAmbiguous(RuntimeError):
     """Raised when _find_frontend_dir finds >1 node_modules/eslint candidate."""
 
 
-def _run_eslint(repo_root, included_ids):
+def _run_eslint(repo_root, included_ids, report=None):
     """Run ESLint against the frontend dir, return findings as (check_id, file_line, msg).
 
     The frontend dir is discovered via `_find_frontend_dir()` — the first
@@ -59,23 +60,38 @@ def _run_eslint(repo_root, included_ids):
     returncode (same as pyright/tsc/semgrep). Do NOT call
     r.check_returncode() — it would hide all real findings as an error.
 
-    Skips with a stderr warning if:
-    - the eslint binary is missing (subprocess raises FileNotFoundError)
-    - no node_modules/eslint found anywhere under repo_root
+    ``report`` is the optional accounting collector; every terminal branch
+    records the outcome for the selected lint ids.
+
+    Skips (no findings) when:
+    - no node_modules/eslint found anywhere under repo_root — recorded as
+      skipped(input-missing). **This path is silent by design** (not every
+      project has a frontend), so there is no stderr warning here.
+    - a discovery ambiguity (>1 node_modules/eslint) — warns, skipped
     - node_modules/eslint-config-next is missing alongside (when present
       in the discovered frontend dir, the project's eslint config likely
-      depends on it; absence would crash eslint at startup)
+      depends on it; absence would crash eslint at startup) — warns, skipped
+    - the eslint binary is missing (FileNotFoundError) — warns, skipped
+    Fails when eslint times out or crashes without emitting JSON.
     """
     if not included_ids:
         return []
+
+    lint_ids = list(included_ids)
+
+    def _record(status, reason=None, detail=None):
+        if report is not None and lint_ids:
+            report.record(lint_ids, status, "eslint", reason, detail)
 
     try:
         frontend_dir = _find_frontend_dir(repo_root)
     except FrontendDirAmbiguous as e:
         print(f"warn: {_sanitize_log(e)} — skipping ESLint", file=sys.stderr)
+        _record(SKIPPED, "misconfigured", "multiple node_modules/eslint candidates")
         return []
 
     if frontend_dir is None:
+        _record(SKIPPED, "input-missing", "no node_modules/eslint under repo root")
         return []
 
     eslint_config_next = os.path.join(
@@ -87,10 +103,14 @@ def _run_eslint(repo_root, included_ids):
             f"(install: cd {os.path.relpath(frontend_dir, repo_root)} && npm ci)",
             file=sys.stderr,
         )
+        _record(SKIPPED, "input-missing", "node_modules/eslint-config-next absent")
         return []
 
     out = []
     try:
+        # Keep this invocation `--exit-on-fatal-error`-free: the empty-stdout
+        # crash discriminator below depends on it (see the comment there and
+        # deliverable 04). A drift-guard test forbids the flag in this argv.
         r = subprocess.run(
             ["eslint", "--format", "json", "."],
             capture_output=True, text=True, cwd=frontend_dir, timeout=300,
@@ -101,20 +121,46 @@ def _run_eslint(repo_root, included_ids):
             f"(install: cd {os.path.relpath(frontend_dir, repo_root)} && npm ci)",
             file=sys.stderr,
         )
+        _record(SKIPPED, "tool-missing", "eslint not on PATH")
         return out
     except subprocess.TimeoutExpired:
         print("warn: eslint exceeded 300s timeout — skipping ESLint "
               "(findings may be incomplete)", file=sys.stderr)
+        _record(FAILED, "timeout", "eslint timed out after 300s")
         return out
 
     if not r.stdout:
+        # eslint --format json prints `[]` for a clean run, so empty stdout with
+        # a nonzero exit is a crash before it produced output — `failed`.
+        #
+        # This discriminator is only sound because the invocation above omits
+        # `--exit-on-fatal-error`. Deliverable 04
+        # (codex-sysop-integration/deliverables/04-eslint-exit2-verification.md)
+        # verified that under the stock `eslint --format json .` every crash
+        # class (bad config, unreadable target, broken/throwing plugin) exits
+        # >=2 with EMPTY stdout, while a parse diagnostic exits 1 WITH JSON — so
+        # rc≠0 + no-stdout cleanly means "crashed before output". Adding
+        # `--exit-on-fatal-error` would promote a formatted fatal parse result to
+        # exit 2 while KEEPING its JSON, so exit 2 would no longer imply empty
+        # stdout and this branch would misread real findings as a crash. A
+        # drift-guard test forbids that flag in the eslint argv.
+        if r.returncode != 0:
+            print(f"warn: eslint exited {r.returncode} with no output — lint "
+                  f"did NOT run: {stderr_excerpt(r.stderr)}", file=sys.stderr)
+            _record(FAILED, "nonzero-no-output",
+                    f"exit {r.returncode}: {stderr_excerpt(r.stderr)}")
+        else:
+            _record(EXECUTED)
         return out
     try:
         data = json.loads(r.stdout)
     except json.JSONDecodeError:
         print("warn: eslint produced non-JSON output — skipping",
               file=sys.stderr)
+        _record(FAILED, "non-json", "eslint produced non-JSON output")
         return out
+
+    _record(EXECUTED)
 
     # Single catch-all check_id keeps the registry minimal; the original
     # ESLint rule_id is embedded in msg_text so reviewers can group/triage

@@ -52,18 +52,27 @@ jobs:
       - name: Install check tooling
         run: pip install pyyaml
 
-      # The Sysop gate: exits non-zero if any check marked `blocking: true` reports
-      # a finding not in the baseline (Phase 61b's crown-jewel coverage gate is
-      # blocking-and-non-baselineable). Inert-but-valid on a fresh install
-      # (placeholder globs are no-ops); meaningful as you configure checks.yml.
-      - name: Sysop blocking-findings gate
-        run: bash sysop/scripts/run_checks.sh --fail-on-blocking
-
       # TODO: replace with your project's test command (pytest, npm test,
       # go test, cargo test, …). Left failing on purpose so an unedited copy of
       # this template can never become a green — and therefore meaningless —
       # required check.
+      #
+      # This step runs BEFORE the gate on purpose: the crown-jewel coverage gate
+      # (Phase 61b) reads a coverage report your tests produce (e.g.
+      # `pytest --cov --cov-report=xml`). Run the tests first so `coverage.xml`
+      # exists when the gate measures it — otherwise the gate finds no report and
+      # reports the coverage check as skipped (a ⚠ line, non-fatal) rather than
+      # actually gating. If your project has no coverage gate, the order is moot.
       - name: Tests
         run: |
           echo "Replace this step with your project's test command." >&2
           exit 1
+
+      # The Sysop gate: exits non-zero if any check marked `blocking: true` reports
+      # a finding not in the baseline (Phase 61b's crown-jewel coverage gate is
+      # blocking-and-non-baselineable), or if a blocking check's tool crashed
+      # (a blocking stage that fails to run can't be trusted green). Inert-but-valid
+      # on a fresh install (placeholder globs are no-ops); meaningful as you
+      # configure checks.yml.
+      - name: Sysop blocking-findings gate
+        run: bash sysop/scripts/run_checks.sh --fail-on-blocking

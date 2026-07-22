@@ -18,6 +18,16 @@ focused modules (``config`` / ``grep`` / ``lsp`` / ``lint`` / ``pip_audit`` /
 # preserve that attribute path.
 import subprocess  # noqa: F401
 
+from run_checks.accounting import (  # noqa: F401
+    EXECUTED,
+    FAILED,
+    SKIPPED,
+    Outcome,
+    RunReport,
+    check_is_localized,
+    is_placeholder_token,
+    stderr_excerpt,
+)
 from run_checks.baseline import (  # noqa: F401
     _is_coverage,
     finding_key,
@@ -25,7 +35,12 @@ from run_checks.baseline import (  # noqa: F401
     load_baseline,
     write_baseline,
 )
-from run_checks.cli import _classify_checks, main  # noqa: F401
+from run_checks.cli import (  # noqa: F401
+    _classify_checks,
+    _run_all_stages,
+    _run_update_baseline,
+    main,
+)
 from run_checks.config import (  # noqa: F401
     _SKIP_DIRS,
     _validate_check,

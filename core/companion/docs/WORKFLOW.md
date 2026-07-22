@@ -1115,6 +1115,25 @@ bash sysop/scripts/run_checks.sh --mode both \
 
 **CI integration.** Sysop ships a GitHub Actions template — `sysop/scripts/ci/sysop-checks.yml.example` — that runs `run_checks.sh --fail-on-blocking` on every PR (enable it per § 6.1 "Protecting `main` with CI"). Checks marked `blocking: true` fail the job when they produce a finding that is NOT present in `.claude/checks_baseline.txt`. Baseline-matched findings are printed with a `[baseline]` tag so the tech debt stays visible without blocking progress. To accept a new finding as baseline debt, regenerate with `--update-baseline` and commit the diff — but only after review, since baseline entries bypass CI.
 
+**Execution accounting (the summary block).** Every check the mode filter *selects* ends the run in exactly one of three states, so the summary can never again pass off a dead scan as a clean one:
+
+- **`executed`** — the tool ran to completion over its inputs. A zero-findings executed check is a real zero.
+- **`skipped(reason)`** — a precondition was absent; the tool never ran. Reasons include `paths-unresolved` (placeholder globs not yet localized), `tool-missing`, `input-missing` (no coverage report, no `node_modules/eslint`), `not-installed` (`.claude/semgrep/` absent), `not-configured`, `misconfigured`.
+- **`failed(reason)`** — the tool started and broke: a nonzero exit with no parseable output (e.g. semgrep's X.509 trust-store crash in a sandbox), a timeout, non-JSON output, grep rc≥2, or a caught exception.
+
+The stderr summary reports all three as distinct counts, and enumerates every non-`executed` stage with its reason:
+
+```
+--- 890 finding(s) · checks: 5 executed / 16 skipped / 4 failed of 25 selected (mode: quality; baseline-matched: 0; new blocking: 0) ---
+    failed: semgrep (4 checks) — exit 2: Fatal error: Failed to create system store X509 authenticator …
+    skipped: grep (13 checks) — paths unresolved: placeholder globs not yet localized
+    skipped: eslint (1 check) — no node_modules/eslint under repo root
+    skipped: coverage (2 checks) — critical_path not yet configured (placeholder globs); gate unarmed
+    executed with 0 findings: 3 pyright checks (pyright-undefined-variable, pyright-unused-import, pyright-unused-variable)
+```
+
+This means a bare finding total is no longer trustworthy on its own: `0 findings from N checks` is the exact output of a genuinely clean scan **and** of a run where nothing executed — the E/S/F split is what tells them apart. Two consequences: `--fail-on-blocking` fails not only on a new blocking finding but also when a **`blocking: true` check's tool crashed** (a `failed` blocking stage — a green gate over a stage that never ran would be a lie), and `--update-baseline` **refuses** (writes nothing) when any blocking check failed, since a crashed tool is not a state to snapshot. A `skipped` blocking check is loud — a `⚠ BLOCKING CHECK DID NOT RUN` line when the check is *localized* (its gate is armed and now dead) — but never fatal: gating on `skipped` would redden every armed consumer whose coverage report is produced after the gate step, and every fresh install whose blocking checks still carry placeholder globs (those render as a calm "gate unarmed" line, no ⚠).
+
 **Format** (`.claude/checks.yml`):
 
 ```yaml
