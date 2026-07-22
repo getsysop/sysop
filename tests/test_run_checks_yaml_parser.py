@@ -162,6 +162,24 @@ checks:
         rci.parse_checks_yml(path)
 
 
+def test_scalar_critical_path_raises(tmp_path):
+    """`critical_path:` is consumer-authored and hand-edited, so the "forgot the
+    YAML list" mistake is expected. A scalar must noisy-fail at parse — left
+    unvalidated a scalar string char-splits into single-char globs that the
+    accounting layer reads as a *localized* scope (spurious ⚠), and a scalar int
+    crashes RunReport construction outright."""
+    path = _write_checks(tmp_path, """\
+checks:
+  - id: coverage-diff-python
+    critical_path: billing/
+    report: coverage.xml
+    description: d
+    blocking: true
+""")
+    with pytest.raises(ValueError, match="field 'critical_path' must be a list"):
+        rci.parse_checks_yml(path)
+
+
 def test_malformed_yaml_raises_valueerror(tmp_path):
     """A YAML syntax error surfaces as a ValueError, not a raw YAMLError."""
     path = _write_checks(tmp_path, "checks:\n  - id: x\n   bad: indent\n")

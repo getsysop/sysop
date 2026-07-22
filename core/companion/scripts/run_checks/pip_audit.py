@@ -11,6 +11,8 @@ import re
 import subprocess
 import sys
 
+from .accounting import EXECUTED, FAILED, SKIPPED, stderr_excerpt
+
 
 def _find_requirements_files(repo_root):
     """Return sorted list of requirements*.txt files at repo root.
@@ -24,7 +26,7 @@ def _find_requirements_files(repo_root):
     return [os.path.relpath(m, repo_root) for m in matches if os.path.isfile(m)]
 
 
-def _run_pip_audit(repo_root, included_ids):
+def _run_pip_audit(repo_root, included_ids, report=None):
     """Run pip-audit against the active venv, return findings as tuples.
 
     Audits the currently-installed venv rather than parsing requirements.txt
@@ -61,6 +63,12 @@ def _run_pip_audit(repo_root, included_ids):
     if not included_ids:
         return []
 
+    pip_audit_ids = list(included_ids)
+
+    def _record(status, reason=None, detail=None):
+        if report is not None and pip_audit_ids:
+            report.record(pip_audit_ids, status, "pip-audit", reason, detail)
+
     out = []
     args = ["--skip-editable", "--format", "json"]
     try:
@@ -81,8 +89,18 @@ def _run_pip_audit(repo_root, included_ids):
                 [sys.executable, "-m", "pip_audit", *args],
                 capture_output=True, text=True, cwd=repo_root, timeout=300,
             )
-        except (FileNotFoundError, subprocess.TimeoutExpired):
+        except FileNotFoundError:
             r = None
+        except subprocess.TimeoutExpired:
+            # A timeout is lost work, not a declined precondition — `failed`,
+            # same as the primary invocation's timeout. Folding it into the
+            # `r is None` → tool-missing branch would mislabel a crash as a skip.
+            print("warn: pip-audit (module fallback) exceeded 300s timeout — "
+                  "skipping dependency audit (findings may be incomplete)",
+                  file=sys.stderr)
+            _record(FAILED, "timeout",
+                    "pip-audit (module fallback) timed out after 300s")
+            return out
         if r is not None and r.returncode != 0 and not r.stdout and re.search(
             r"No module named '?pip_audit'?(\s|$)", r.stderr or ""
         ):
@@ -91,10 +109,12 @@ def _run_pip_audit(repo_root, included_ids):
             print("warn: pip-audit not on PATH — skipping dependency audit "
                   "(install: pip install pip-audit — into the project venv is "
                   "enough; the venv's python resolves it via -m)", file=sys.stderr)
+            _record(SKIPPED, "tool-missing", "pip-audit not on PATH")
             return out
     except subprocess.TimeoutExpired:
         print("warn: pip-audit exceeded 300s timeout — skipping dependency audit "
               "(findings may be incomplete)", file=sys.stderr)
+        _record(FAILED, "timeout", "pip-audit timed out after 300s")
         return out
 
     if not r.stdout:
@@ -108,13 +128,20 @@ def _run_pip_audit(repo_root, included_ids):
             detail = tail[-1] if tail else "no stderr"
             print(f"warn: pip-audit exited {r.returncode} with no output — "
                   f"dependency audit did NOT run: {detail}", file=sys.stderr)
+            _record(FAILED, "nonzero-no-output",
+                    f"exit {r.returncode}: {stderr_excerpt(r.stderr)}")
+        else:
+            _record(EXECUTED)
         return out
     try:
         data = json.loads(r.stdout)
     except json.JSONDecodeError:
         print("warn: pip-audit produced non-JSON output — skipping",
               file=sys.stderr)
+        _record(FAILED, "non-json", "pip-audit produced non-JSON output")
         return out
+
+    _record(EXECUTED)
 
     check_id = "pip-audit-vuln"
     if check_id not in included_ids:

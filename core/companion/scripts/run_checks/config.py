@@ -93,6 +93,14 @@ def _validate_check(check, idx):
     instead of a list — e.g. a misindentation collapsing a block list — would
     make `run_check` silently no-op. Assert the shape so future regressions
     noisy-fail rather than silent-skip.
+
+    ``critical_path`` is validated alongside the other scope fields: it is
+    consumer-authored (never installer-substituted) and hand-edited, so the
+    "forgot the YAML list" mistake (`critical_path: billing/`) is an expected
+    input. Left unvalidated, a scalar string char-splits into single-character
+    globs — which the pre-scan accounting layer then reads as a *localized*
+    scope and marks with a spurious `⚠ BLOCKING CHECK DID NOT RUN`, and a
+    scalar int crashes `RunReport` construction outright. Noisy-fail at parse.
     """
     cid = check.get("id", "")
     if not cid:
@@ -100,7 +108,8 @@ def _validate_check(check, idx):
             f"Invalid check at index {idx}: missing or empty 'id' field"
         )
 
-    for fld in ("paths", "include", "exclude", "exclude_dir", "used_by"):
+    for fld in ("paths", "include", "exclude", "exclude_dir", "used_by",
+                "critical_path"):
         if fld in check and check[fld] is not None and not isinstance(
             check[fld], list
         ):

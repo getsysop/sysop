@@ -41,6 +41,19 @@ class TestTemplateShape:
         assert any("run_checks.sh --fail-on-blocking" in r for r in runs), \
             "the Sysop blocking-findings gate step is missing"
 
+    def test_gate_runs_after_the_tests_step(self):
+        # The crown-jewel coverage gate reads a report the test step produces,
+        # so the gate must run AFTER Tests (spec §4 — otherwise a fully
+        # configured consumer's coverage.xml is absent at gate time and the
+        # gate skips instead of gating).
+        steps = self._load()["jobs"]["sysop-checks"]["steps"]
+        names = [s.get("name") for s in steps]
+        gate_idx = next(i for i, s in enumerate(steps)
+                        if "run_checks.sh --fail-on-blocking" in s.get("run", ""))
+        tests_idx = names.index("Tests")
+        assert gate_idx > tests_idx, \
+            "the blocking-findings gate must run after the Tests step"
+
     def test_least_privilege_permissions(self):
         # A required check should not carry write scopes.
         assert self._load()["permissions"] == {"contents": "read"}

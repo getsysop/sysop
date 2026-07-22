@@ -29,6 +29,7 @@ import sys
 
 from _log import _sanitize_log
 
+from .accounting import FAILED, RunReport, stderr_excerpt
 from .baseline import (
     _is_coverage,
     is_baseline_suppressed,
@@ -165,6 +166,15 @@ def main():
 
     all_checks = parse_checks_yml(checks_file)
 
+    # --update-baseline short-circuits BEFORE the mode-filtered pass and runs
+    # ONLY the all-checks pass (spec §2). The old code ran the mode-filtered
+    # pass, discarded its findings, then re-ran every stage a second time over
+    # all checks — double execution and a double-record ambiguity for the
+    # accounting layer. One pass, one RunReport.
+    if args.update_baseline:
+        _run_update_baseline(repo_root, all_checks, baseline_file)
+        return
+
     # Map --mode to the used_by token, then classify every check by stage in
     # one pass (see _classify_checks). The mode values don't match used_by
     # values directly, so the mapping is the single translation point.
@@ -172,96 +182,24 @@ def main():
                        "security": "security-audit",
                        "both": None}
     active_token = _mode_token_map.get(args.mode)
-    (grep_checks, lsp_included, semgrep_included, lint_included,
-     pip_audit_included, coverage_checks, blocking_ids) = _classify_checks(
-        all_checks, active_token=active_token
-    )
+    classified = _classify_checks(all_checks, active_token=active_token)
+    blocking_ids = classified[6]  # stages run via _run_all_stages(classified)
 
-    total_checks = (len(grep_checks) + len(lsp_included) + len(semgrep_included)
-                    + len(lint_included) + len(pip_audit_included)
-                    + len(coverage_checks))
+    # The selected set is every check that passed the mode filter — the same
+    # filter _classify_checks applies, re-derived here as the full dict list so
+    # the accounting report can see each check's `blocking` flag and scope
+    # (needed for the localized-vs-placeholder ⚠ decision).
+    selected_checks = [
+        c for c in all_checks
+        if active_token is None or active_token in (c.get("used_by") or [])
+    ]
+    total_checks = len(selected_checks)
     if total_checks == 0:
         print(f"No checks found for mode: {args.mode}")
         sys.exit(0)
 
-    # Collect findings across checks, preserving order.
-    # Each run_check is wrapped so one bad check (e.g. an invalid regex in a
-    # position_check, an unexpected grep return) cannot kill the whole run.
-    all_findings = []          # [(check_id, file_line, msg), ...]
-    for check in grep_checks:
-        try:
-            all_findings.extend(run_check(check, repo_root))
-        except Exception as e:
-            # _sanitize_log strips ANSI/control chars — a subprocess or regex
-            # exception may carry escape sequences that corrupt the terminal.
-            print(
-                f"warn: check {check.get('id')} failed: {_sanitize_log(e)}",
-                file=sys.stderr,
-            )
-
-    # LSP / typechecker diagnostics.
-    if lsp_included:
-        all_findings.extend(run_lsp_diagnostics(repo_root, lsp_included))
-
-    # Semgrep / AST diagnostics.
-    all_findings.extend(_run_semgrep(repo_root, semgrep_included))
-
-    # ESLint diagnostics. lint-* findings are emitted by _run_eslint under a
-    # single catch-all check_id ("lint-error") with the original ESLint
-    # rule_id embedded in the message text.
-    all_findings.extend(_run_eslint(repo_root, lint_included))
-
-    # pip-audit diagnostics.
-    all_findings.extend(_run_pip_audit(repo_root, pip_audit_included))
-
-    # Coverage diff gate (Phase 61a measurement + Phase 61b hard gate).
-    # Scoped to each check's `critical_path` globs; routed through diff-cover
-    # for both the Python and frontend reports. A `blocking: true` coverage
-    # check is the crown-jewel gate — its findings count toward
-    # --fail-on-blocking and (unlike every other stage) never baseline-suppress
-    # (see is_baseline_suppressed). A consumer who wants measurement only keeps
-    # `blocking: false`. Unlike the id-set stages, the coverage stage needs
-    # each check's `critical_path` / `report` fields, so _classify_checks
-    # hands it the full check dicts.
-    all_findings.extend(_run_coverage(repo_root, coverage_checks))
-
-    # --update-baseline: regenerate the baseline file and exit.
-    # Run against ALL checks (active_token=None) so the baseline covers every
-    # blocking check regardless of which mode created it.
-    if args.update_baseline:
-        (all_mode_grep, all_mode_lsp, all_mode_semgrep, all_mode_lint,
-         all_mode_pip_audit, all_mode_coverage, all_mode_blocking) = (
-            _classify_checks(all_checks, active_token=None)
-        )
-        all_mode_findings = []
-        for check in all_mode_grep:
-            try:
-                all_mode_findings.extend(run_check(check, repo_root))
-            except Exception as e:
-                print(
-                    f"warn: check {check.get('id')} failed: {_sanitize_log(e)}",
-                    file=sys.stderr,
-                )
-        if all_mode_lsp:
-            all_mode_findings.extend(run_lsp_diagnostics(repo_root, all_mode_lsp))
-        all_mode_findings.extend(_run_semgrep(repo_root, all_mode_semgrep))
-        all_mode_findings.extend(_run_eslint(repo_root, all_mode_lint))
-        all_mode_findings.extend(_run_pip_audit(repo_root, all_mode_pip_audit))
-        all_mode_findings.extend(_run_coverage(repo_root, all_mode_coverage))
-        write_baseline(baseline_file, all_mode_findings, all_mode_blocking)
-        baseline_rel = baseline_file.replace(repo_root.rstrip("/") + "/", "")
-        # Count only what write_baseline actually persisted — coverage findings
-        # are never baselined (Phase 61b), so exclude them to keep the printed
-        # tally honest.
-        blocking_count = sum(
-            1 for cid, _, _ in all_mode_findings
-            if cid in all_mode_blocking and not _is_coverage(cid)
-        )
-        print(
-            f"Wrote {blocking_count} baseline finding(s) to {baseline_rel}",
-            file=sys.stderr,
-        )
-        sys.exit(0)
+    report = RunReport(selected_checks)
+    all_findings = _run_all_stages(repo_root, classified, report)
 
     baseline = load_baseline(baseline_file)
 
@@ -283,36 +221,162 @@ def main():
                 if _is_coverage(check_id):
                     new_coverage_hits += 1
 
-    # Summary to stderr — keeps stdout clean for grep/wc piping.
-    print(
-        f"\n--- {len(all_findings)} finding(s) from {total_checks} checks "
-        f"(mode: {args.mode}; baseline-matched: {baseline_hits}; "
-        f"new blocking: {new_blocking_hits}) ---",
-        file=sys.stderr,
-    )
+    # Accounting summary block to stderr — keeps stdout clean for grep/wc
+    # piping. Reports checks *executed* vs *skipped* vs *failed*, not just
+    # selected, so a stage that skipped its precondition or crashed is visible
+    # instead of hiding behind a bare "N findings from M checks".
+    print("\n" + report.render(all_findings, mode=args.mode,
+                               baseline_matched=baseline_hits,
+                               new_blocking=new_blocking_hits),
+          file=sys.stderr)
 
-    if args.fail_on_blocking and new_blocking_hits > 0:
-        print(
-            f"\nerror: {new_blocking_hits} new blocking finding(s) — failing CI.\n"
-            "   If a finding is known tech debt, regenerate the baseline with:\n"
-            "     bash sysop/scripts/run_checks.sh --mode both --update-baseline\n"
-            "   (Review the diff before committing — baseline entries bypass CI.)",
-            file=sys.stderr,
-        )
-        if new_coverage_hits > 0:
-            # Coverage findings are NOT baselineable (Phase 61b crown-jewel
-            # gate) — steer the consumer away from the dead-end --update-baseline
-            # path the generic message above suggests.
+    # Gate: a new non-baselined blocking finding OR a blocking check whose
+    # stage crashed (`failed`). A blocking tool that dies produces zero
+    # findings and would otherwise pass silently — the accounting layer closes
+    # that corner (spec §4). A *skipped* blocking check is loud (⚠ in the
+    # summary) but non-fatal — gate-on-skipped would redden every armed CI
+    # consumer whose coverage report is produced after the gate step.
+    blocking_failures = report.blocking_failures()
+    if args.fail_on_blocking and (new_blocking_hits > 0 or blocking_failures):
+        if new_blocking_hits > 0:
             print(
-                f"\n   {new_coverage_hits} of these are crown-jewel coverage gaps "
-                "— these are NOT baselineable.\n"
-                "   Cover the changed line with a test, or (if genuinely "
-                "untestable) exclude it\n"
-                "   with a coverage pragma (# pragma: no cover / "
-                "/* istanbul ignore */).",
+                f"\nerror: {new_blocking_hits} new blocking finding(s) — failing CI.\n"
+                "   If a finding is known tech debt, regenerate the baseline with:\n"
+                "     bash sysop/scripts/run_checks.sh --mode both --update-baseline\n"
+                "   (Review the diff before committing — baseline entries bypass CI.)",
+                file=sys.stderr,
+            )
+            if new_coverage_hits > 0:
+                # Coverage findings are NOT baselineable (Phase 61b crown-jewel
+                # gate) — steer the consumer away from the dead-end
+                # --update-baseline path the generic message above suggests.
+                print(
+                    f"\n   {new_coverage_hits} of these are crown-jewel coverage gaps "
+                    "— these are NOT baselineable.\n"
+                    "   Cover the changed line with a test, or (if genuinely "
+                    "untestable) exclude it\n"
+                    "   with a coverage pragma (# pragma: no cover / "
+                    "/* istanbul ignore */).",
+                    file=sys.stderr,
+                )
+        if blocking_failures:
+            names = "; ".join(
+                f"{cid} ({stage}: {reason})"
+                for cid, stage, reason, _ in blocking_failures
+            )
+            print(
+                f"\nerror: {len(blocking_failures)} blocking check(s) FAILED to run "
+                "— failing CI.\n"
+                f"   {names}\n"
+                "   A blocking check that crashed produces zero findings; a green\n"
+                "   gate would be a lie. Fix the tool/environment, then re-run.",
                 file=sys.stderr,
             )
         sys.exit(1)
+
+
+def _run_all_stages(repo_root, classified, report):
+    """Run every pre-scan stage over a classified check set, recording outcomes.
+
+    ``classified`` is the 7-tuple from ``_classify_checks``; ``report`` is the
+    ``RunReport`` each stage records into. Shared by the normal run and the
+    ``--update-baseline`` pass so the two can never drift in which stages they
+    invoke or how findings are collected. Returns the concatenated findings.
+    """
+    (grep_checks, lsp_included, semgrep_included, lint_included,
+     pip_audit_included, coverage_checks, _blocking_ids) = classified
+
+    all_findings = []
+    # Each run_check is wrapped so one bad check (an invalid regex in a
+    # position_check, an unexpected grep return) cannot kill the whole run —
+    # and the escape is recorded `failed` so it is not an unaccounted hole.
+    for check in grep_checks:
+        try:
+            all_findings.extend(run_check(check, repo_root, report))
+        except Exception as e:
+            # _sanitize_log strips ANSI/control chars — a subprocess or regex
+            # exception may carry escape sequences that corrupt the terminal.
+            print(
+                f"warn: check {check.get('id')} failed: {_sanitize_log(e)}",
+                file=sys.stderr,
+            )
+            if check.get("id"):
+                report.record([check.get("id")], FAILED, "grep",
+                              "exception", stderr_excerpt(str(e)))
+
+    # LSP / typechecker diagnostics.
+    if lsp_included:
+        all_findings.extend(run_lsp_diagnostics(repo_root, lsp_included, report))
+
+    # Semgrep / AST diagnostics.
+    all_findings.extend(_run_semgrep(repo_root, semgrep_included, report))
+
+    # ESLint diagnostics. lint-* findings are emitted by _run_eslint under a
+    # single catch-all check_id ("lint-error") with the original ESLint
+    # rule_id embedded in the message text.
+    all_findings.extend(_run_eslint(repo_root, lint_included, report))
+
+    # pip-audit diagnostics.
+    all_findings.extend(_run_pip_audit(repo_root, pip_audit_included, report))
+
+    # Coverage diff gate (Phase 61a measurement + Phase 61b hard gate).
+    # Scoped to each check's `critical_path` globs; routed through diff-cover
+    # for both the Python and frontend reports. A `blocking: true` coverage
+    # check is the crown-jewel gate — its findings count toward
+    # --fail-on-blocking and (unlike every other stage) never baseline-suppress
+    # (see is_baseline_suppressed). A consumer who wants measurement only keeps
+    # `blocking: false`. Unlike the id-set stages, the coverage stage needs
+    # each check's `critical_path` / `report` fields, so _classify_checks
+    # hands it the full check dicts.
+    all_findings.extend(_run_coverage(repo_root, coverage_checks, report))
+    return all_findings
+
+
+def _run_update_baseline(repo_root, all_checks, baseline_file):
+    """Single-pass ``--update-baseline`` (spec §2).
+
+    Runs every stage ONCE over all checks (active_token=None so the baseline
+    covers both modes' blocking checks), then writes the baseline — unless a
+    blocking check FAILED, in which case it refuses and writes nothing: a
+    crashed tool is not a state to snapshot (spec §4).
+    """
+    classified = _classify_checks(all_checks, active_token=None)
+    blocking_ids = classified[6]
+    report = RunReport(all_checks)  # selected == every check
+    all_findings = _run_all_stages(repo_root, classified, report)
+
+    # Show what actually ran before deciding whether to persist it.
+    print("\n" + report.render(all_findings, mode="both"), file=sys.stderr)
+
+    blocking_failures = report.blocking_failures()
+    if blocking_failures:
+        names = "; ".join(
+            f"{cid} ({stage}: {reason})"
+            for cid, stage, reason, _ in blocking_failures
+        )
+        print(
+            f"\nerror: refusing to write baseline — {len(blocking_failures)} "
+            f"blocking check(s) FAILED to run: {names}\n"
+            "   A crashed tool is not a state to snapshot. Fix the failure, "
+            "then re-run --update-baseline.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    write_baseline(baseline_file, all_findings, blocking_ids)
+    baseline_rel = baseline_file.replace(repo_root.rstrip("/") + "/", "")
+    # Count only what write_baseline actually persisted — coverage findings
+    # are never baselined (Phase 61b), so exclude them to keep the printed
+    # tally honest.
+    blocking_count = sum(
+        1 for cid, _, _ in all_findings
+        if cid in blocking_ids and not _is_coverage(cid)
+    )
+    print(
+        f"Wrote {blocking_count} baseline finding(s) to {baseline_rel}",
+        file=sys.stderr,
+    )
+    sys.exit(0)
 
 
 if __name__ == "__main__":
