@@ -871,7 +871,7 @@
             <div class="hero-stat-label">Skills</div>
           </div>
           <div class="hero-stat">
-            <div class="hero-stat-fig">113</div>
+            <div class="hero-stat-fig">146</div>
             <div class="hero-stat-label">Shipped phases</div>
           </div>
           <div class="hero-stat">
@@ -1390,7 +1390,7 @@
         <dl class="glossary">
           <div class="entry">
             <dt>/plan-review<span class="model-tag opus">opus · adversarial pass</span></dt>
-            <dd>Adversarial pass on an ad-hoc plan from conversation or a file. Uses the same prompt template as <code>/claim-task</code> Step 7 (<code>_shared/adversarial-review.md</code>); surfaces findings, presents a revised plan for approval before any execution. Phase 58a added a source-verification dimension: external SDK or framework calls with no in-repo precedent get flagged <code>unverified</code> rather than trusted on faith.</dd>
+            <dd>Adversarial pass on an ad-hoc plan from conversation or a file. Uses the same prompt template as <code>/claim-task</code> Step 7 (<code>_shared/adversarial-review.md</code>); surfaces findings, presents a revised plan for approval before any execution. Phase 58a added a source-verification dimension: external SDK or framework calls with no in-repo precedent get flagged <code>unverified</code> rather than trusted on faith. Phase 140 added decompose-before-reject — the same rule &sect; III applies at review merges, here at its source: refuting one clause of a compound finding never rejects the finding, and a High or security rejection owes a second independent pass. Where the shape can't spawn one (the reviewer-executor leaf, a consumer agent that doesn't nest), the rejection is never silently absorbed — the per-clause rationale is sealed into the plan for the next independent reader.</dd>
           </div>
           <div class="entry">
             <dt>/sitrep<span class="model-tag">inherits · orientation</span></dt>
@@ -1708,7 +1708,7 @@
           </div>
           <div class="entry">
             <dt>/test-audit<span class="model-tag opus">opus · suite health</span></dt>
-            <dd>Phase 80 — the standing counterpart to the diff-scoped coverage gate. Crown-jewel-first assessment of the whole test suite: modules that never show up in a diff but carry no tests, covered-but-hollow tests a coverage number can't see, and existing tests worth retiring (provably dead, redundant, brittle). Read-only — it ranks recommendations and offers to route the accepted ones to <code>/intake</code>; it never writes a test or claims a task itself.</dd>
+            <dd>Phase 80 — the standing counterpart to the diff-scoped coverage gate. Crown-jewel-first assessment of the whole test suite: modules that never show up in a diff but carry no tests, covered-but-hollow tests a coverage number can't see, and existing tests worth retiring (provably dead, redundant, brittle). Two signals decide what gets audited hardest — the <code>critical_path</code> globs behind the coverage gate, and any surface <code>security_map.md</code> calls out (Phase 137 — the rubric had cited that second signal since Phase 80 while the skill never opened the file; it is worth what your localized sections are worth, since a fresh install's app-layer sections are still placeholder globs). Every recommendation carries the same <code>[verified]</code>/<code>[reported]</code> provenance marker the two review skills use — it is universal, not a fan-out artifact. Read-only by contract: it ranks recommendations and offers to route the accepted ones to <code>/intake</code>, and it never writes a test or claims a task. The frontmatter behind that removes the dedicated write tools, and only when a harness <em>invokes</em> the skill — never on a path-based invocation, which is the only option off Claude Code — and never <code>Bash</code>. So even at its strongest the guard is partial, and the contract carries the rest.</dd>
           </div>
           <div class="entry">
             <dt>/triage<span class="model-tag">inherits · classifier</span></dt>
@@ -1723,6 +1723,159 @@
             <dd>Drains the <em>flag</em> pool. Same parallel + <code>--merge</code> shape, but each sub-agent is Opus and can FIX, DROP, or FAIL a task after adversarial re-reading. The two drainers run concurrently against disjoint pools.</dd>
           </div>
         </dl>
+
+        <h3 id="clean-result">The failure that looks like a clean result</h3>
+        <p>
+          Everything above assumes the review <em>ran</em>. The hardest defect class in a review system is the one
+          where it didn't — because a review that dies produces the same artifact as a review that found nothing:
+          no findings, no error, a queue that looks drained. Four shapes of that silence turned up in real runs
+          during July 2026, and each got its own answer.
+        </p>
+        <p>
+          <strong>A stage that died.</strong> The pre-scan used to report how many checks it <em>selected</em>. In a
+          cross-harness trial, one install reported <code>890 finding(s) from 25 checks</code> while five of those
+          twenty-five had actually executed; a security-mode run on the same install reported
+          <code>0 findings from 13 checks</code> with every stage dead — output byte-indistinguishable from a
+          genuinely clean scan. Every selected check now ends in exactly one of three states: <em>executed</em>
+          (ran to completion — a zero here is a real zero), <em>skipped</em> (a precondition was absent, so the tool
+          never ran), or <em>failed</em> (it started and broke). The summary reports all three numbers and names
+          each non-executed stage with its reason. A <em>failed</em> blocking check fails the gate outright: a
+          crashed tool produces zero findings, and a green gate on top of that is a lie. <em>Skipped</em> is loud
+          but never fatal, and warns only when the check is actually armed — a warning that fires from the first
+          install forever just teaches people to ignore warnings. The gate is a backstop here rather than the fix:
+          no shipped security check is blocking, so the case that motivated all this would not have tripped it under
+          any rule. What closes that case is the summary contract itself, plus both review skills now being told to
+          read it and carry every dead stage into the round. Where the cause is a missing trust store — the crash
+          that motivated all this — the runner now resolves an existing CA bundle for the scanner's subprocess
+          rather than only reporting the death, supplying the trust anchors it needs without ever weakening
+          certificate verification.
+        </p>
+        <p>
+          <strong>A runner that never started.</strong> Same trial, different agent: it read the runner script,
+          inferred that the tools needed installing, declined on a standing no-install instruction, and hand-rolled
+          grep instead — reporting 24 tasks where the reference run reported 372. The capability had been there the
+          whole time; the runner resolves its own interpreter and tool path from the project's virtualenv. That is a
+          documentation defect and it is fixed as one: both review skills now state that at the point of invocation —
+          along with the fact that running the script installs nothing, and that <em>not</em> having run it is a
+          coverage gap rather than a clean scan.
+        </p>
+        <p>
+          <strong>A round that never finished.</strong> On one frontier non-Claude model,
+          <code>/security-audit</code> was refused outright on repeated attempts — once immediately, once after a
+          minute of genuine work. A round now opens a marker when it starts and clears it only once findings are
+          written, so a round that dies partway leaves a trace the next pre-scan surfaces. The shape that
+          <em>can't</em> leave a trace — a refusal before anything runs — is caught from outside instead, by
+          <code>self_check.sh</code> noticing an asymmetric history: quality rounds recorded, no security round ever
+          completed. That one is advisory on purpose. It is indistinguishable from "you haven't run the audit here
+          yet," and a check that reddens every mid-adoption project is a check people switch off.
+        </p>
+        <p>
+          <strong>A subtree nothing looks at.</strong> The maps in &sect; IV are <em>authored</em>, not derived — so a
+          top-level directory no map section names is not reviewed, is never reported as unreviewed, and its silence
+          is indistinguishable from a clean result on every round, forever. A head-to-head against Anthropic's
+          <code>claude-security</code> plugin — 2026-07-23, one production codebase at one pinned commit — made that
+          concrete: three of the six findings only the plugin found sat
+          in subtrees the security map did not cover at all. Those misses were a map problem, not a reasoning
+          problem. Step 2a in both review skills now opens with an inventory check that enumerates the repository
+          <em>independently of the maps</em> — every top-level entry holding tracked code must be covered by a
+          section, excluded with a stated reason, or named as a placeholder section still waiting to be localized.
+          It composes with the map-driven coverage audit rather than replacing it: that one finds files no
+          section matches inside territory some section already reaches; this one finds the territory nothing
+          reaches.
+        </p>
+
+        <h3 id="provenance">What it takes to file a finding — and to kill one</h3>
+        <p>
+          Every finding any of the three generators files carries its provenance in the row: <code>[verified]</code> —
+          its author opened the cited <code>file:line</code> and confirmed it against source — or
+          <code>[reported]</code>, asserted from a grep, a pattern, a pre-scan, or an upstream claim without opening
+          it. The marker is universal, single-agent <code>/test-audit</code> included. It is a self-declared honesty
+          label, not a machine-checked guarantee, and it says so everywhere it appears. What it buys is a routing
+          decision for the reader and an obligation for the fixer: re-read before applying, never act on a
+          <code>[reported]</code> row blind.
+        </p>
+        <p>
+          A second tier applies wherever a review <em>fans out</em> — dispatching sub-agents across slices of the
+          codebase and merging what comes back. The measured failure in that merge: one sub-agent reported a
+          completed review of its whole assigned surface having opened eight of its eighty-two assigned files.
+          Merged blind, that ships a clean verdict over a real hole. So each sub-agent returns an evidence footer —
+          files opened versus assigned, plus the tool mix — and that is the load-bearing half, because
+          <em>opened 8 / assigned 82</em> is falsifiable in a way that "reviewed everything" is not. Provenance on a
+          merged row is then written from the orchestrator's vantage, so a sub-agent's own <code>[verified]</code>
+          is never copied through unchallenged.
+        </p>
+        <p>
+          Killing a finding is the harder direction, deliberately. A blind grading pass over the pooled findings
+          from that same cross-harness comparison found that a same-family adversarial reviewer systematically under-catches
+          <em>compound</em> findings: one clause of a multi-part finding gets refuted, the remaining clauses are
+          silently dropped, and the whole finding is dismissed. The error is directional — it only ever turns a real
+          finding into an apparent false positive, never the reverse. Of six audited dismissals, half concealed a
+          real finding, one of them a High-severity security issue. Hence decompose-before-reject: refuting one
+          clause does not reject the finding, surviving clauses classify on their own merits, and a rejection has to
+          name every clause. It binds on downgrades and de-duplication too — a High quietly demoted to Low on one
+          refuted clause is the same laundering as a drop.
+        </p>
+        <p>
+          The adjudication rule underneath is asymmetric, and the asymmetry is the point. A falsified premise refutes
+          a finding outright — that is the ordinary death, and it is what keeps a fabricated finding from being
+          unkillable. Beyond that: kill or downgrade only on a mitigation you located and read at a
+          <code>file:line</code>; keep or escalate only on a path you actually traced; and when neither can be
+          established, <em>the finding survives</em>, with the gap recorded. That inverts the default-to-false-positive
+          stance the plugin's own verifier takes, for a reason specific to this queue — a filed task gets another reader (the
+          fixer, the reviewer, the merge gate), while a dismissal gets none. An unverified finding costs a review
+          cycle. An unverified dismissal is silent and permanent.
+        </p>
+        <p>
+          That rule has a sharp edge on dependency advisories, where the gap between <em>installed</em> and
+          <em>reachable</em> is where audits go wrong. In the same round, three of five dependency narratives were
+          materially wrong — two inflating severity by asserting a call chain that did not exist, one understating
+          how many call sites were affected. So: trace the chain and cite it, or file
+          <code>Reachability: unassessed</code> at the advisory's own severity. The finding is still filed; only the
+          <em>asserted</em> chain is the defect. Alongside it sits a remediation-blast-radius rule, earned the hard
+          way — one refuted finding's fix, applied exactly as filed, would have caused a production outage, and it
+          was an ignore-file change rather than a version bump.
+        </p>
+
+        <h3 id="outside-scanner">Folding in an outside scanner</h3>
+        <p>
+          The same head-to-head produced a sharper result than the coverage gap. On one production codebase at one
+          pinned commit, the two tools' findings did not overlap at all: six of the audit's nine were pass-through of
+          machinery already promoted into the deterministic layer, while all six of the plugin's were novel code
+          reasoning that no promoted rule would have caught at commit time. That is one run on one codebase — not a
+          general property. But it points somewhere useful. An outside
+          scanner finds what a convention loop structurally can't, precisely because the loop's deterministic floor is
+          built from patterns somebody already ratified.
+        </p>
+        <p>
+          So <code>/security-audit</code> reads one in. If a <code>claude-security</code> report is sitting on disk,
+          the audit folds its in-scope findings into <code>review_tasks.md</code> under their own batch, buckets the
+          out-of-scope ones visibly rather than dropping them, and says so loudly when the scan it is reading was
+          truncated or was taken at an older commit. Three properties are worth naming. The first was locked before
+          any code was written and survived the adversarial pass; the other two are corrections it forced.
+        </p>
+        <p>
+          <strong>It reads; it never launches.</strong> Sysop cannot run the plugin — the orchestration tool the
+          plugin's own agent depends on is stripped from every sub-agent, with no override — and reading a file off
+          disk needs no harness detection, so nothing in the ingest's mechanism depends on which harness you are
+          running. The human runs the scanner on their own cadence; the audit folds in whatever report is present.
+        </p>
+        <p>
+          <strong>The parser is a sanitization boundary.</strong> Finding text is a model's summary of scanned code,
+          which makes it attacker-reachable. Written verbatim into a task file it could forge a provenance tag or
+          plant an instruction for the automated fixer that later drains the queue. Nothing from the report reaches
+          the queue unsanitized — and the attacker-controlled source snippet is never emitted at all.
+        </p>
+        <p>
+          <strong>Ingested findings stay <code>[reported]</code>.</strong> The plugin runs its own verification
+          panel; that verdict is recorded in the row as data and never promotes onto the provenance tag. Somebody
+          local still has to open the file.
+        </p>
+        <p class="muted">
+          The honest ceiling: these are code-reasoning findings, so most will never become a <code>checks.yml</code>
+          rule — they fail the review's systemic-pattern and cross-round recurrence gates, landing as a prose map
+          entry at best rather than a mechanical one. What the ingest buys is that they become <em>tracked work</em>
+          instead of evaporating with the scanner session that found them.
+        </p>
 
         <h3>The one sweep that does touch PRs</h3>
         <p class="muted">
@@ -2208,6 +2361,34 @@
           <a href="https://github.com/getsysop/sysop/blob/main/docs/loop-mode.md">loop mode</a>.
         </p>
 
+        <h3>One concrete step off Claude Code</h3>
+        <p class="muted">
+          The companion layer — checks, hooks, maps, scripts, workflow docs — has always been plain files with no
+          Claude dependency. The <em>skills</em> are the part that was Claude-Code-shaped, and portability there was
+          design intent rather than a track record. Phase 142 made two of them natively selectable in a second
+          harness: on install, Sysop registers the review skills with Codex as two relative symlinks.
+        </p>
+        <div class="listing" data-label="consumer repo &middot; codex registration">
+<pre>.agents/skills/codebase-review <span class="cm">-&gt;</span> ../../.claude/skills/codebase-review
+.agents/skills/security-audit  <span class="cm">-&gt;</span> ../../.claude/skills/security-audit</pre>
+        </div>
+        <p class="muted">
+          Links, not copies and not conversions — one source of truth per skill and no drift surface, plus the
+          native selectors no instruction-file prose can provide. In a verification run, a fresh isolated Codex
+          session given an ordinary request — no Sysop filename, no kickoff phrasing — selected the right installed
+          workflow on its own. That run was against a loop-mode install; full mode links the same two paths, so the
+          same behavior is expected rather than measured. The ownership boundary is narrow on purpose: Sysop owns exactly two directory
+          entries, so a consumer's root <code>AGENTS.md</code>, other <code>.agents/</code> content, and sibling
+          skills all survive install, update, and uninstall untouched. A path Sysop does not own is never adopted,
+          a collision is a hard error rather than a silent skip, and <code>--no-codex-links</code> opts out
+          permanently (the choice is recorded in the lock, so it survives later updates).
+        </p>
+        <p class="muted">
+          The honest limit, stated here as it is in the README: one step is not a track record. Claude Code is where
+          this has been driven day to day, and portability has at least one measured hard edge — the security-audit
+          refusal &sect; III describes. Treat the two review skills as portable to different degrees, not equally.
+        </p>
+
         <h3>Model roles, not model pins</h3>
         <p class="muted">
           Since Phase 69, skills that pin a model declare a <em>role</em> — <code>reasoning</code>, <code>mechanical</code>, or
@@ -2235,19 +2416,25 @@
 │   ├── checks.yml                 <span class="cm"># concat of pack check fragments</span>
 │   ├── served_models.yml          <span class="cm"># role → model mapping · override via served_models.local.yml (Phase 69)</span>
 │   └── <span class="ph">*.project.{md,yml}</span>          <span class="cm"># consumer-authored extensions (Phase 24a) · promotion writes land here (Phase 78)</span>
+├── <span class="key">.agents/skills/</span>                <span class="cm"># Phase 142 · two relative symlinks into .claude/skills/</span>
+│   ├── codebase-review            <span class="cm"># → ../../.claude/skills/codebase-review</span>
+│   └── security-audit             <span class="cm"># → ../../.claude/skills/security-audit</span>
 ├── <span class="key">sysop/</span>                         <span class="cm"># the vendor dir — everything Sysop owns (Phase 128)</span>
 │   ├── <span class="key">scripts/</span>
 │   │   ├── claim_task.sh          <span class="cm"># lock + worktree + branch creation</span>
 │   │   ├── close_batch.sh         <span class="cm"># review_tasks.md batch closure</span>
 │   │   ├── validate_tasks.py      <span class="cm"># schema enforcement · runs in pre-commit</span>
+│   │   ├── self_check.sh          <span class="cm"># Phase 133 · install health probes · Phase 143 abandoned-round probe</span>
+│   │   ├── ingest_security_report.py  <span class="cm"># Phase 144 · claude-security parse + sanitize boundary</span>
 │   │   ├── permission_denied_hook.py  <span class="cm"># Phase 36 · classifier escape injection</span>
 │   │   ├── parse_subagent_envelope.py <span class="cm"># Phase 37 · structured envelope parsing</span>
-│   │   ├── <span class="key">run_checks/</span>            <span class="cm"># Phase 49 split · Phase 61 coverage.py crown-jewel gate</span>
+│   │   ├── <span class="key">run_checks/</span>            <span class="cm"># Phase 49 split · Phase 61 coverage.py · Phase 135 accounting.py</span>
 │   │   └── sysop-update.sh        <span class="cm"># the consumer-side update entry point</span>
 │   ├── <span class="key">docs/</span>                      <span class="cm"># WORKFLOW.md, WORKFLOW_GUIDE.md</span>
 │   ├── <span class="key">runtime/</span>                   <span class="cm"># gitignored orchestration state — one ignore entry covers it (Phase 133)</span>
 │   │   ├── locks/                 <span class="cm"># lives in main repo · git-common-dir resolved (Phase 32)</span>
 │   │   ├── pending-docs/          <span class="cm"># /document-work writes here · /review-close consumes</span>
+│   │   ├── pending-rounds/        <span class="cm"># Phase 143 · round-open markers · a survivor means a round died</span>
 │   │   ├── auto-build/            <span class="cm"># parked-task plan + verdict archive (Phase 65a)</span>
 │   │   └── subagent-envelopes/    <span class="cm"># Phase 37 · SubagentStop hook writes JSON here</span>
 │   └── SYSOP_ISSUES.md            <span class="cm"># friction log · seeded once, project-owned · /report-issues files upstream</span></pre>
@@ -2266,7 +2453,7 @@
       <aside class="col-rule">Colophon</aside>
       <div>
         <p class="col-body">
-          A monograph on <em>Sysop</em>, as of <em>Phase 113</em> · 2026-07-15. Phase numbers throughout are iterations
+          A monograph on <em>Sysop</em>, as of <em>Phase 146</em> · 2026-07-24. Phase numbers throughout are iterations
           of the workflow's own development — each one planned, adversarially reviewed, and shipped through the process it
           extends; <a href="https://github.com/getsysop/sysop/blob/main/PHASE_LOG.md">PHASE_LOG.md</a> carries one entry per phase. Set in the reader's native serif —
           Iowan Old Style where available, Palatino otherwise — paired with ui-monospace for listings and figure labels.
@@ -2306,7 +2493,7 @@
             <ul>
               <li>Extracted from <em>gdp-query-system</em></li>
               <li>First consumer · BeanRider</li>
-              <li>Phase 113 · 2026-07-15</li>
+              <li>Phase 146 · 2026-07-24</li>
             </ul>
           </div>
           <div>
@@ -2342,7 +2529,7 @@
     targets.forEach(t => io.observe(t));
   })();
 
-  // Trigger loop trace animation only when Fig. 4 enters view, once.
+  // Trigger loop trace animation only when Fig. 5 enters view, once.
   (function () {
     const fig = document.getElementById("loop-fig");
     if (!fig || !("IntersectionObserver" in window)) {

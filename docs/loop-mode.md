@@ -68,6 +68,20 @@ day's Round (or open the next one).
 `/test-audit` assesses the test suite — gaps worth filling, dead weight worth retiring — and
 only recommends; it never writes tests or gates anything.
 
+**Optional — folding in an outside scanner.** If you separately run Anthropic's `claude-security`
+plugin, your next `/security-audit` folds its findings into the same ledger. The order of operations:
+run `/claude-security` yourself as a top-level action (a deep, expensive, occasional pass — quarterly is
+a reasonable cadence, and it may not finish in one session), let it write its `CLAUDE-SECURITY-<timestamp>/`
+report to your repo root, then run `/security-audit`. In-scope findings land under their own batch tagged
+`[reported]` — filed from someone else's read, so confirm at the source before acting on one. Sysop only
+ever *reads* such a report; it cannot launch the plugin, and when no report is present this step is
+silent and nothing degrades.
+
+Why bother: in one head-to-head — 2026-07-23, a single production codebase at one pinned commit — the
+two tools' findings did not overlap at all. One run, not a general property, but it fits the mechanism:
+a convention loop's deterministic floor is built from patterns somebody already ratified, and an outside
+scanner isn't.
+
 A freshly installed pack isn't fully wired to your tree yet — shipped rules use placeholder
 vocabulary (`<api module>`) that you localize as you go. The review's coverage sweep is what
 drives that: it names the unmatched files and proposes real globs. How localization works, and
