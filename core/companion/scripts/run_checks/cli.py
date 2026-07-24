@@ -26,6 +26,7 @@ import argparse
 import os
 import subprocess
 import sys
+import time
 
 from _log import _sanitize_log
 
@@ -104,6 +105,66 @@ def _classify_checks(checks, active_token=None):
             blocking_ids.add(cid)
     return (grep_checks, lsp_ids, semgrep_ids, lint_ids,
             pip_audit_ids, coverage_checks, blocking_ids)
+
+
+def _pending_rounds_note(repo_root, stale_seconds=2 * 3600):
+    """Return a one-line note about review rounds that never completed, or None.
+
+    A review round writes a nonce-keyed marker under
+    ``sysop/runtime/pending-rounds/`` and clears it once ``review_tasks.md`` is
+    written. A marker that outlives its round is evidence the round died
+    mid-flight — a refusal after starting, a crash, quota exhaustion, context
+    death — none of which currently produce an error or an empty result set to
+    notice.
+
+    Markers are anchored to the MAIN checkout (``--git-common-dir``), so a
+    pre-scan run from inside a worktree still sees them. Fresh markers are
+    ignored: a concurrent session mid-round is normal, and alarming on it would
+    train consumers to tune the signal out.
+
+    Never raises. A probe that breaks the pre-scan would be a worse defect than
+    the silence it reports on.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--git-common-dir"],
+            capture_output=True, text=True, timeout=10, cwd=repo_root,
+        )
+        common = result.stdout.strip()
+        if result.returncode == 0 and common:
+            # An absolute common-dir (the worktree case) wins the join; a bare
+            # ".git" (main checkout) resolves against repo_root.
+            root = os.path.dirname(
+                os.path.abspath(os.path.join(repo_root, common))
+            )
+        else:
+            root = repo_root
+        marker_dir = os.path.join(root, "sysop", "runtime", "pending-rounds")
+        if not os.path.isdir(marker_dir):
+            return None
+        now = time.time()
+        stale = []
+        for name in sorted(os.listdir(marker_dir)):
+            if not name.endswith(".pending"):
+                continue
+            try:
+                age = now - os.stat(os.path.join(marker_dir, name)).st_mtime
+            except OSError:
+                continue
+            if age >= stale_seconds:
+                stale.append(name)
+        if not stale:
+            return None
+        shown = ", ".join(stale[:3])
+        more = f" (+{len(stale) - 3} more)" if len(stale) > 3 else ""
+        return (
+            f"    ⚠ {len(stale)} review round(s) started and never completed: "
+            f"{shown}{more}\n"
+            "      their findings are absent or partial — re-run the skill; "
+            "markers live in sysop/runtime/pending-rounds/"
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
 
 
 def main():
@@ -225,10 +286,19 @@ def main():
     # piping. Reports checks *executed* vs *skipped* vs *failed*, not just
     # selected, so a stage that skipped its precondition or crashed is visible
     # instead of hiding behind a bare "N findings from M checks".
-    print("\n" + report.render(all_findings, mode=args.mode,
-                               baseline_matched=baseline_hits,
-                               new_blocking=new_blocking_hits),
-          file=sys.stderr)
+    summary = report.render(all_findings, mode=args.mode,
+                            baseline_matched=baseline_hits,
+                            new_blocking=new_blocking_hits)
+    # One layer up from check accounting: a review ROUND that started and never
+    # finished. The pre-scan is the one surface a loop-mode consumer re-reads
+    # every round (self_check.sh is a one-shot probe nothing re-runs during
+    # operation), so the never-completed signal is appended here to give it
+    # real reach. Not added to --update-baseline: that path is a maintenance
+    # snapshot, not a review round.
+    note = _pending_rounds_note(repo_root)
+    if note:
+        summary += "\n" + note
+    print("\n" + summary, file=sys.stderr)
 
     # Gate: a new non-baselined blocking finding OR a blocking check whose
     # stage crashed (`failed`). A blocking tool that dies produces zero

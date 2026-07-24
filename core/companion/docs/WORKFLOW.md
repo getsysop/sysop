@@ -787,7 +787,7 @@ It should NOT contain **process** (that's this document) or **convention scoping
 | Section | Read by | Purpose |
 |---------|---------|---------|
 | `## Scope mapping` | codebase-review, security-audit, test-audit | Maps each `--scope` value (e.g. `backend`, `frontend`) to a project path set, so a scoped run limits to those paths. Absent → scan roots parsed from `.claude/convention_map.md` (or `security_map.md`) section headers. |
-| `## Map coverage exclusions` | codebase-review, security-audit | Globs the Step 2a map-coverage audit should **not** flag as unmapped (generated code, vendored dirs, fixtures). **Scopes that audit only — it does not change the review/scan manifest and is not a review-exclusion knob.** A listed path is still reviewed/scanned iff a convention/security-map section matches it (Step 3 dispatch is map-keyed). |
+| `## Map coverage exclusions` | codebase-review, security-audit | Globs the Step 2a map-coverage audit should **not** flag as unmapped (generated code, vendored dirs, fixtures). **Scopes that audit only — it does not change the review/scan manifest and is not a review-exclusion knob.** A listed path is still reviewed/scanned iff a convention/security-map section matches it (Step 3 dispatch is map-keyed). **Give each entry a one-line reason** (`` - `vendor/` — third-party code, not ours to change ``): Step 2a-0 asserts every top-level entry holding tracked code is either map-covered or excluded-with-a-reason, and reports reasonless entries — an unexplained exclusion is how a whole subtree gets silenced by accident. Only lockfiles, generated/vendored output and binary assets are out of 2a-0's scope: a config-only or docs-only *subtree* (a `.github/` of workflows, a `migrations/` of SQL) is still reported, because "negligible surface" is a claim about one file inside a mapped area, not about a whole unmapped tree. Existing reasonless entries are surfaced, never blocking. |
 | `## Security-critical always-include files` | security-audit | Paths always pulled into the scan regardless of `--scope` or scan mode (auth, secrets handling, permission checks). |
 | `## High-value files for review` | codebase-review | Large or security-concentrating files to give a dedicated review agent instead of bundling with many others. |
 
@@ -1372,6 +1372,8 @@ This is the complete list of artifacts a new project needs to replicate the work
 | `.claude/security_map.project.md` | consumer-authored (optional) | Phase 24a: project-specific security map sections. Same append-after-concat semantics + protection property as `convention_map.project.md`. See § 8.2c. |
 | `.claude/checks.project.yml` | consumer-authored (optional) | Phase 24a: project-specific grep checks. Must be a self-contained YAML doc with a top-level `checks:` list (NOT a `.fragment`-shaped file — pack fragments rely on the awk header strip). When present, `install.sh` merges it into `.claude/checks.yml` by `checks[*].id` — consumer wins on collision with a `⚠ id-collision: <id>` warn line so the substitution surfaces in the post-update delta. See § 8.2c. |
 
+Two further installer-written paths live **outside** `.claude/` and so aren't in the table above — the Codex skill links at `.agents/skills/codebase-review` and `.agents/skills/security-audit` (§ 8.2d). They enter `managed_paths` when Sysop actually owns them, which is the normal case; the three deliberate exceptions (opted out, probe failed, or the path is consumer-owned) are in § 8.2d.
+
 ### 8.2a Required permissions (`.claude/settings.json`)
 
 In agent harnesses like Claude Code, several skills perform git operations that the harness's `auto` permission classifier treats as needing approval (e.g., `git merge --ff-only` into `main`, `git worktree remove`, `git push origin --delete`). When the user configures the harness to skip permission prompts (Claude Code: `permissions.defaultMode: "auto"` + `skipAutoPermissionPrompt: true` in `~/.claude/settings.json`), missing allow-rules surface as **silent halts** — worst-case mid-merge, with worktrees half-applied.
@@ -1506,20 +1508,24 @@ When Sysop itself changes upstream (new convention, fixed skill, new pack conten
 
 **Design contract.** The consumer's git repo is the version-control mechanism. The installer doesn't try to preserve inline edits via marker comments or diffs — its job is to ensure a clean snapshot of pre-update state exists in git history before any overwrite, so the consumer can reconcile via normal `git diff` / cherry-pick afterward. Think "vendored dependency": snapshot → bump version → diff → re-apply local deltas.
 
-**`.claude/sysop.lock`.** Installer-managed manifest the consumer commits. JSON, with five top-level keys:
+**`.claude/sysop.lock`.** Installer-managed manifest the consumer commits. JSON, with these top-level keys:
 
 ```json
 {
   "version": 1,
   "sysop_commit": "<sha of the Sysop source HEAD at install/update time>",
   "packs": ["python", "postgres"],
+  "mode": "full",
+  "codex_links": true,
   "installed_at": "2026-05-12T22:04:54Z",
   "updated_at": "2026-05-12T22:04:54Z",
   "managed_paths": [".claude/checks.yml", ".claude/convention_map.md", ...]
 }
 ```
 
-`managed_paths` is the explicit list of every path the installer wrote (workflow docs, `.claude/`, `sysop/scripts/`, `sysop/scripts/hooks/`, `sysop/scripts/ci/`). It's the contract that future `--update` and `--check` runs honour — files outside this list are user-owned and never touched.
+`mode` records the install shape (`full` / `loop`) and `codex_links` the Codex-registration choice (§ 8.2d); `--update` re-reads both, so a consumer's prior decision survives a bare `sysop-update.sh` with no retyped flags. A lock predating either field reads as the default (`full` / `true`).
+
+`managed_paths` is the explicit list of every path the installer wrote (workflow docs, `.claude/`, `.agents/skills/`, `sysop/scripts/`, `sysop/scripts/hooks/`, `sysop/scripts/ci/`). It's the contract that future `--update` and `--check` runs honour — files outside this list are user-owned and never touched.
 
 **`bash install.sh <target> --update`** — upgrade flow:
 
@@ -1633,6 +1639,33 @@ Phase 24b closes BeanRider ISSUE-0024 (⊂ ISSUE-0005 Option 2) and ISSUE-0025. 
 
 **Boundary: `.claude/settings.json` is not affected by 24b.** It's not routed through `copy_file()` — `install_permissions()` runs Phase 6's set-union JSON merge instead. The existing Phase 8 exclusion at `detect_committed_divergence` is unchanged.
 
+### 8.2d Codex-native skill registration (`.agents/skills/`, Phase 142)
+
+The two review skills are exposed to the Codex CLI by relative symlink, in both install modes:
+
+```
+.agents/skills/codebase-review -> ../../.claude/skills/codebase-review
+.agents/skills/security-audit  -> ../../.claude/skills/security-audit
+```
+
+Links, not copies — one source of truth per skill, so a skill-body update flows through the link with no second file to drift. Only these two skills are exposed; the rest of the installed set stays unlinked under `.claude/skills/`.
+
+**Evidence boundary.** Ordinary-request selection under Codex was measured against a **loop-mode** install. Full mode links the same two directories at the same paths, and only linked directories register, so the registered set is expected to be identical — *derived from the documented scan rule, not measured*. The end-to-end acceptance run (a fresh Codex session against a shipped install) is a separate gate from the installer's own tests.
+
+**A link's identity is its raw target string, never the bytes it resolves to.** Every ownership decision (create, leave alone, sweep, refuse) compares `readlink` output against the expected relative target. A link the consumer repointed is consumer data even if it happens to resolve to the same skill.
+
+**Collision is a hard error, before any target mutation.** A pre-existing entry at either path that isn't exactly Sysop's link stops the install (or `--update`) before the pre-update snapshot, the namespace migration, and the pipeline — so a refused run leaves the tree byte-identical. The check covers the parent components too (`.agents` present as a file, or a parent Sysop can't write into): left to the creation step, those surface as a bare `mkdir`/`ln` failure that `set -e` turns into a mid-pipeline abort — a half-applied target with a stale lock. The reasoning is the same silent-divergence argument as § 2's promotion discipline: a consumer-owned `.agents/skills/codebase-review` would capture ordinary Codex requests while the install reported success. The consumer acknowledges (move it aside, or `--no-codex-links`) rather than discovers.
+
+**Capability probe, after the confirm and before creating anything.** The installer probes the *target's* filesystem with a throwaway relative symlink (target-local, so it tests the consumer's mount rather than `/tmp`). It is the one part of this preflight that writes, so it runs after the plan is confirmed — a declined run must not have touched the repo. Failure disables link **creation** for that run, warns loudly, and lets the install proceed — a default-on convenience must not brick an install on a filesystem that can't symlink. Links that already exist and are still ours are unaffected by a probe failure: they stay recorded and managed, so a transient failure mid-`--update` can never feed a consumer's working links to the obsolete-path sweep. The probe never runs under `--dry-run` (which promises no writes).
+
+**Opt-out is recorded, not per-run.** `--no-codex-links` writes `codex_links: false` to the lock; `--update` re-reads it like `mode` and `packs`, so the documented one-line update honours it forever. Opting out on a tree that has the links removes them: under `--update` via the normal obsolete-path sweep, and on a plain re-install (which never reaches the sweep) via the install step itself — otherwise the links would sit on disk dropped from `managed_paths` yet still registering, which is the opposite of what was asked. Both removals are guarded by raw target, so an entry that is no longer Sysop's exact link is reported and left in place.
+
+Because a managed link can be *broken* (its target retired upstream), the sweep's on-disk resolution tests `-e || -L`; a broken link that is still ours is swept, a broken link that isn't is spared. The guard defaults to **deny** for everything else under `.agents/` — a lock entry naming a path *through* one of our links would otherwise be resolved by `-e` (which follows symlinks) and removed by `rm -f`, deleting the real skill body out of `.claude/skills/`. Only a corrupt or hand-edited lock produces such an entry, which is precisely what the sweep's sibling consumer-path guard exists for.
+
+**Uninstall is manual** (§ "Backing out" in `docs/install-and-update.md`): remove the two entries only after checking `-L` plus the expected raw target, never recursively remove `.agents/` or `.agents/skills/`, and leave emptied parent dirs alone — they may not be Sysop's.
+
+No `AGENTS.md` block is emitted, by default or otherwise. Prose routes but does not register, competes for the project-instruction budget, and is shadowed by a consumer `AGENTS.override.md`; the manual recipe is documented for consumers whose filesystem failed the probe, and it is theirs to maintain.
+
 ### 8.3 Skills (agent execution, one file per phase)
 
 Each skill maps to a lifecycle phase in § 2. Skills are the step-by-step execution files. In the reference implementation they are Claude Code slash-commands; port their content into whatever mechanism your agent uses (or into a human runbook).
@@ -1660,7 +1693,7 @@ Each skill maps to a lifecycle phase in § 2. Skills are the step-by-step execut
 - `guided-mode.md` — decision-gate protocol for guided (teaching) mode (Phase 76): at each human decision point, state the choice plainly, adversarially review the recommendation, and triage it (own it / collapse a false choice / default an un-weighable one), with the load-bearing "allowed to conclude *this isn't your call*" rule. **Inert until a consumer opts in** via a `## Guided mode` activation stanza in CLAUDE.md (§ 6.1). Unlike the other partials it is not yet cited from inside the skills — the thin slice activates it via always-loaded CLAUDE.md prose; per-skill citation is the deferred build.
 - `promotion-write-target.md` — canonical rule (Phase 78) for **where** convention promotion (`/codebase-review` + `/security-audit` Step 9) and demotion (Step 9b) writes land: in a consumer install (`.claude/sysop.lock` present) the base maps are regenerated on every `sysop-update.sh`, so promoted content is dual-written to the never-managed `.project.*` overlay to survive; in the source repo (no lock) the base writes stand alone. Consumed by both review skills' Step 9 / 9b and the Step 2a map-coverage commit via prose citation. See § 3.5.
 - `test-assessment-rubric.md` — calibrated rubric (Phase 80) for the two standing test-quality questions: where load-bearing surfaces lack tests (Tier 1) and which existing tests are provably-dead (Tier 2a) or judgment-retireable (Tier 2b, confidence-labeled). Consumed by `/test-audit` as its whole judgment layer, and cited by `/codebase-review`'s "Test Coverage Gaps" dimension so the in-diff and standing test-worth judgments share one home. Ships **provisional** — only the Tier-2b dimensions calibrate over runs; Tier 1 + 2a fire on the first run. See § 6.5 (the coverage gate it complements).
-- `fanout-evidence.md` — fan-out evidence & finding-provenance contract (Phase 138). **Tier 1** (universal): every finding carries a `[verified]` / `[reported]` provenance marker — a self-declared honesty label, not a machine-checked guarantee. **Tier 2** (fan-out only): the sub-agent evidence footer (files-opened-vs-assigned + tool mix) plus orchestrator merge discipline — a hollow batch is flagged loudly, an un-re-read fan-out finding defaults to `[reported]` (only the orchestrator's sample re-read upgrades it), and the round summary carries a provenance class, never a bare coverage %. Consumed by `/codebase-review` (Step 3 dispatch + Step 3c merge) and `/security-audit` (Step 3 dispatch + Step 3b merge) via prose citation; `/test-audit` cites the Tier-1 marker always, the Tier-2 contract only if it fans out.
+- `fanout-evidence.md` — fan-out evidence & finding-provenance contract (Phase 138). **Tier 1** (universal): every finding carries a `[verified]` / `[reported]` provenance marker — a self-declared honesty label, not a machine-checked guarantee. **Tier 2** (fan-out only): the sub-agent evidence footer (files-opened-vs-assigned + tool mix) plus orchestrator merge discipline — a hollow batch is flagged loudly, an un-re-read fan-out finding defaults to `[reported]` (only the orchestrator's sample re-read upgrades it), and the round summary carries a provenance class, never a bare coverage %. **§ Adjudication** (universal, Phase 141): what evidence a *judgement* requires — a falsified premise refutes outright; beyond that, kill/downgrade only on a mitigation located and read at a `file:line`, keep/escalate only on a traced path, and when neither can be established the finding survives with the gap recorded (a filed task gets another reader; a dismissal gets none). Consumed by `/codebase-review` (Step 3 dispatch + Step 3c merge + Step 4 dedup) and `/security-audit` (Step 3 dispatch + Step 3b merge + Step 4 dedup) via prose citation; `/test-audit` cites the Tier-1 marker and § Adjudication always, the Tier-2 contract only if it fans out.
 
 ### 8.4 Scripts (`sysop/scripts/`)
 

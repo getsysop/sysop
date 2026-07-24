@@ -2,7 +2,7 @@
 
 Both round-4 readers install-tested the public repo and hit the same wall:
 the README quickstart's first post-install command —
-  git add .claude/ sysop/ tasks/ CLAUDE.md .gitignore
+  git add .claude/ .agents/ sysop/ tasks/ CLAUDE.md .gitignore
 — died with `fatal: pathspec 'CLAUDE.md'` (exit 128, nothing staged) on any
 repo without a pre-existing CLAUDE.md, because seed_claude_md_stub() was
 loop-gated. Both also flagged discovering the allow-list's `git push` grants
@@ -71,7 +71,7 @@ class TestFullModeClaudeMdStub:
             assert hdr in text, f"stub missing section {hdr!r}"
 
         add = subprocess.run(
-            ["git", "add", ".claude/", "sysop/", "tasks/", "CLAUDE.md", ".gitignore"],
+            ["git", "add", ".claude/", ".agents/", "sysop/", "tasks/", "CLAUDE.md", ".gitignore"],
             cwd=target, capture_output=True, text=True,
         )
         assert add.returncode == 0, f"quickstart git add failed: {add.stderr}"

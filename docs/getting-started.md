@@ -57,7 +57,7 @@ bash sysop/install.sh /path/to/your/project --packs auto
 cd /path/to/your/project
 bash sysop/scripts/self_check.sh                        # one-command prereq check: bash, PyYAML, hooks
 git status                                              # review everything Sysop wrote
-git add .claude/ sysop/ tasks/ CLAUDE.md .gitignore
+git add .claude/ .agents/ sysop/ tasks/ CLAUDE.md .gitignore
 git commit -m "chore: install Sysop"
 ```
 
@@ -69,7 +69,7 @@ git commit -m "chore: install Sysop"
   existing codebase.) This guide is the graduation path: grow the install in place with
   `bash sysop/install.sh /path/to/your/project --update --mode full` — purely additive,
   nothing the loop has learned is touched — commit what it added
-  (`git add .claude/ sysop/ tasks/ .gitignore`), then skip step 1 and continue from step 2.
+  (`git add .claude/ .agents/ sysop/ tasks/ .gitignore`), then skip step 1 and continue from step 2.
   Loop mode's own day-one walkthrough is [`docs/loop-mode.md`](./loop-mode.md); the guide
   you're reading assumes the full install.
 - **What landed:** a `.claude/` directory (the lifecycle skills, the convention and

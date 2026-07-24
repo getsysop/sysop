@@ -511,14 +511,14 @@
 
     <div class="install" id="install3" style="margin-top:30px; max-width:720px;"><button class="copy-btn" id="copyBtn3" aria-label="Copy loop-mode install commands">copy</button><span class="prompt">$</span> git clone https://github.com/getsysop/sysop.git
 <span class="prompt">$</span> bash sysop/install.sh <span class="cmt">/path/to/your/project</span> --packs auto --mode loop
-<span class="prompt">$</span> cd <span class="cmt">/path/to/your/project</span> &amp;&amp; git add .claude/ sysop/ CLAUDE.md .gitignore &amp;&amp; git commit -m <span class="cmt">"chore: install Sysop (loop mode)"</span></div>
+<span class="prompt">$</span> cd <span class="cmt">/path/to/your/project</span> &amp;&amp; git add .claude/ .agents/ sysop/ CLAUDE.md .gitignore &amp;&amp; git commit -m <span class="cmt">"chore: install Sysop (loop mode)"</span></div>
 
     <p class="lede" style="margin-top:4px;">It was run once, end-to-end, against a real ~60k-line open-source codebase before it shipped — three review rounds in, a freshly mechanized convention caught an instance no round had filed. <a href="https://github.com/getsysop/sysop/blob/main/docs/loop-mode.md">Loop mode: the day-one walkthrough →</a></p>
 
     <p class="lede" style="margin-top:34px;"><b>The whole lifecycle — where the loop grows.</b> Planning, the task queue, worktree-isolated builds, the single human merge gate — everything § III describes. Drop <code>--mode loop</code> to start there directly (the natural door for a greenfield project — <code>/intake</code> wants a project to plan), or grow a loop install in place later with a single <code>--update --mode full</code>: purely additive, and nothing the loop has learned is touched.</p>
 
     <div class="install" id="install2" style="margin-top:14px; max-width:720px;"><button class="copy-btn" id="copyBtn2" aria-label="Copy full install commands">copy</button><span class="prompt">$</span> bash sysop/install.sh <span class="cmt">/path/to/your/project</span> --packs auto
-<span class="prompt">$</span> cd <span class="cmt">/path/to/your/project</span> &amp;&amp; git add .claude/ sysop/ tasks/ CLAUDE.md .gitignore &amp;&amp; git commit -m <span class="cmt">"chore: install Sysop"</span></div>
+<span class="prompt">$</span> cd <span class="cmt">/path/to/your/project</span> &amp;&amp; git add .claude/ .agents/ sysop/ tasks/ CLAUDE.md .gitignore &amp;&amp; git commit -m <span class="cmt">"chore: install Sysop"</span></div>
 
     <p class="lede" style="margin-top:4px;">Claude Code users on the full lifecycle can also add the slash commands as a plugin: <code>/plugin marketplace add getsysop/sysop</code>, then <code>/plugin install sysop@sysop</code>. (A loop install needs no plugin — the plugin's extra commands are the lifecycle skills, whose supporting scripts a loop install deliberately doesn't have.)</p>
 
