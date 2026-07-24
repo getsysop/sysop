@@ -46,6 +46,8 @@
       "Bash(python3 sysop/scripts/scope_overlap.py:*)",
       "Bash(.venv/bin/python3 sysop/scripts/scope_overlap.py)",
       "Bash(.venv/bin/python3 sysop/scripts/scope_overlap.py:*)",
+      "Bash(python3 sysop/scripts/ingest_security_report.py:*)",
+      "Bash(.venv/bin/python3 sysop/scripts/ingest_security_report.py:*)",
       "Bash(python3 sysop/scripts/pr_dependabot.py:*)",
       "Bash(.venv/bin/python3 sysop/scripts/pr_dependabot.py:*)",
       "Bash(gh pr list:*)",

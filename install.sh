@@ -2498,6 +2498,8 @@ LOOP_ALLOW = {
     "Bash(python sysop/scripts/archive_review_tasks.py:*)",
     "Bash(python3 sysop/scripts/archive_review_tasks.py:*)",
     "Bash(.venv/bin/python3 sysop/scripts/archive_review_tasks.py:*)",
+    "Bash(python3 sysop/scripts/ingest_security_report.py:*)",
+    "Bash(.venv/bin/python3 sysop/scripts/ingest_security_report.py:*)",
     "Bash(python3 -c:*)",
     "Bash(python3 -:*)",
     "Bash(gh issue list:*)",
@@ -2544,13 +2546,13 @@ install_permissions() {
     # would violate the dry-run contract, and the copy note would render the
     # raw /tmp path).
     if [[ "$DRY_RUN" -eq 1 ]]; then
-      note "would write $(rel "$dst") (loop allow-subset: 14 rules, no hooks)"
+      note "would write $(rel "$dst") (loop allow-subset: 16 rules, no hooks)"
       record_managed_path "$dst"
       record "permissions: would write $(rel "$dst") (loop allow-subset)"
       return 0
     fi
     # Fail CLOSED: if the filter can't be built, do NOT fall back to the full
-    # master — that would over-grant the 55-rule allow-list AND re-add the hooks
+    # master — that would over-grant the 57-rule allow-list AND re-add the hooks
     # block referencing scripts loop mode never installs (broken at runtime).
     # Skip settings.json instead (the consumer sees more permission prompts, but
     # no over-grant and no dangling hooks); the loud error keeps it visible.
@@ -3490,7 +3492,7 @@ tmpl = load(template_path)
 # no-op for the ~20 non-path rules (Bash(gh pr merge:*), Bash(git checkout:*),
 # Bash(python3 -c:*), …), so those CURRENT-VALID rules entered the removal set
 # verbatim and got stripped from settings.local.json (where install_permissions
-# never re-adds them) and from loop-mode settings.json (only the 14-rule LOOP_ALLOW
+# never re-adds them) and from loop-mode settings.json (only the 16-rule LOOP_ALLOW
 # subset is re-added) — auto-approved commands silently started prompting again.
 # A rule is a movable vendor-path rule iff its flat and sysop/-namespaced spellings
 # differ; only such a rule's flat spelling is dead. Non-path and consumer-authored
