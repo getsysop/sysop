@@ -22,6 +22,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -45,6 +46,10 @@ except ImportError:
 # fallback is dead code and can be removed.
 PHASE_40_CUTOFF_ISO = "2026-05-23T00:00:00Z"
 DEFAULT_STALE_DAYS = 7
+# A review-round marker younger than this is treated as a live concurrent
+# session, not an abandoned round (Phase 143). First-guess threshold — tune on
+# real use; erring long keeps the signal trustworthy rather than chatty.
+STALE_ROUND_HOURS = 2
 TASK_BRANCH_PREFIXES = ("task/", "feat/", "tech/", "data/", "ux/", "fix/", "bug/")
 REVIEW_BRANCH_PREFIXES = ("review/", "batch/")
 TASK_ID_RE = re.compile(r"^([A-Z][A-Z0-9]*)-([A-Z0-9][A-Z0-9-]+)$")
@@ -692,6 +697,38 @@ def _find_discrepancies(
 
     # Abandoned-claim discrepancies already surface as state='stale' above; no
     # duplicate entry needed.
+
+    # Abandoned review round (Phase 143): a marker under pending-rounds/ that
+    # outlived its round. The review skills write one at round-open and clear it
+    # once review_tasks.md is written, so a survivor means the round died
+    # mid-flight — a refusal after starting, a crash, quota exhaustion, context
+    # death — none of which otherwise produce an error or a visible gap. Fresh
+    # markers are skipped: a concurrent session mid-round is normal. This is the
+    # full-lifecycle surface; loop mode has no /sitrep and reads the same signal
+    # from self_check.sh and the pre-scan summary note instead.
+    marker_dir = main_root / "sysop" / "runtime" / "pending-rounds"
+    if marker_dir.is_dir():
+        now = time.time()
+        for m in sorted(marker_dir.glob("*.pending")):
+            try:
+                age_h = (now - m.stat().st_mtime) / 3600
+            except OSError:
+                continue
+            if age_h < STALE_ROUND_HOURS:
+                continue
+            out.append(
+                Discrepancy(
+                    kind="abandoned review round",
+                    detail=(
+                        f"{m.name}: round opened {age_h:.0f}h ago and never "
+                        "completed — its findings are absent or partial"
+                    ),
+                    suggestion=(
+                        "re-run the skill; delete the marker once you have "
+                        "confirmed the round is dead"
+                    ),
+                )
+            )
 
     return out
 

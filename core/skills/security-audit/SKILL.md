@@ -26,6 +26,80 @@ If any are missing, stop with the `_shared/permission-guard.md` § Algorithm ste
 
 If `$ARGUMENTS` contains `--skip-permission-guard`, print a one-line warning and continue.
 
+## Pre-flight: Round Marker (abandonment evidence)
+
+A round that dies mid-flight leaves **no trace**: no `review_tasks.md` entries, no error, nothing to distinguish "audited, found nothing" from "never actually audited." This step writes a marker that a later reader can find.
+
+**Why this skill in particular.** A measured case exists: on one frontier non-Claude model, `/security-audit` was **refused outright, 2/2 on identical prompts** — once before doing any work, and once after ~1 minute of genuine effort (reading the prior round, running the pre-scan, dispatching four OWASP-scoped sub-agents) before declining. The second shape is exactly what this marker catches. Refusal is a legitimate model behavior; a *silent* refusal is the problem.
+
+**The honest limit, stated up front:** a skill cannot detect a refusal that *precedes* compliance. If the model declines before executing this step, nothing here fires — that world is caught only by the outer absence checks (`self_check.sh`, the pre-scan summary note), which run independently of the thing that refused. Nothing here attempts a refusal *workaround*; rephrasing past a model's safety refusal is out of scope on principle.
+
+Run this once, before Step 1. It reports any **prior** markers and then writes this round's:
+
+```bash
+python3 - <<'PY' "security-audit" "$ARGUMENTS"
+import os, subprocess, sys, time
+from pathlib import Path
+
+skill, flags = sys.argv[1], (sys.argv[2] if len(sys.argv) > 2 else "")
+
+# Anchor to the MAIN checkout via --git-common-dir (the Phase 32 lock precedent,
+# reaffirmed by Phase 65a): a marker written inside a worktree is invisible to
+# every reader and is destroyed by `git worktree remove`.
+cd = subprocess.run(["git", "rev-parse", "--git-common-dir"],
+                    capture_output=True, text=True)
+if cd.returncode != 0 or not cd.stdout.strip():
+    print("round-marker: not a git repository — skipping (layer 1 disarmed)")
+    raise SystemExit(0)
+root = Path(cd.stdout.strip()).resolve().parent
+d = root / "sysop" / "runtime" / "pending-rounds"
+
+# Report PRIOR markers before writing ours, so this round never detects itself.
+now = time.time()
+LIVE = 2 * 3600  # threshold is a first guess — tune on real use
+found = 0
+if d.is_dir():
+    for f in sorted(d.glob("*.pending")):
+        age = now - f.stat().st_mtime
+        hrs = age / 3600
+        found += 1
+        if age < LIVE:
+            print(f"round-marker: live  {f.name} ({hrs:.1f}h) — possibly a "
+                  "concurrent session mid-round; do not delete")
+        else:
+            print(f"round-marker: STALE {f.name} ({hrs:.1f}h) — a prior round "
+                  "started and never completed; its results are absent or partial")
+if not found:
+    print("round-marker: no prior markers")
+
+# Gitignore fail-safe: a marker that dirties the tree breaks /review-close's
+# dirty-worktree classification. On a stale pre-Phase-133 install missing the
+# sysop/runtime/ entry, skip the write — evidence is not worth corrupting the
+# thing it evidences.
+rel = "sysop/runtime/pending-rounds/probe.pending"
+if subprocess.run(["git", "-C", str(root), "check-ignore", "-q", rel],
+                  capture_output=True).returncode != 0:
+    print("round-marker: sysop/runtime/ is not gitignored here — skipping the "
+          "write (layer 1 disarmed; re-run the installer to refresh .gitignore)")
+    raise SystemExit(0)
+
+d.mkdir(parents=True, exist_ok=True)
+nonce = f"{int(now)}-{os.getpid()}"
+p = d / f"{skill}.{nonce}.pending"
+p.write_text(f"skill: {skill}\n"
+             f"started: {time.strftime('%Y-%m-%dT%H:%M:%S', time.localtime(now))}\n"
+             f"nonce: {nonce}\n"
+             f"flags: {flags}\n", encoding="utf-8")
+print(f"ROUND_MARKER={p}")
+PY
+```
+
+**Carry the printed `ROUND_MARKER=` path to Step 5f** — that step removes it. If you lose the path, do not guess: leave the marker and let it surface as stale (the safe direction).
+
+**This step is best-effort and must never block the round.** It depends on the `Bash(python3 -:*)` allow-rule, which ships in both the master `settings.json` template and the 14-rule loop-mode subset — but it is deliberately **not** in the Pre-flight permission guard's hard-stop list. A consumer on an older `settings.json` should lose the *marker*, not the ability to run an audit. If the command is denied or errors, print one line noting the round is running without abandonment evidence, and continue to Step 1.
+
+Report any prior markers this step surfaced in the Step 6 summary.
+
 ## Step 1: Determine Scope (Smart Hybrid)
 
 Parse `$ARGUMENTS` for flags:
@@ -97,6 +171,51 @@ Before launching any audit agents, cross-reference both maps against the actual 
 
 **What this audit is scoped to.** The `<project>/CLAUDE.md` § "Map coverage exclusions" list (used in 2a-1 and 2a-2 below) scopes **this map-coverage audit only** — it names paths *expected* to be unmatched by the maps so they are not reported as coverage gaps. It does **not** change the Step 1 scan manifest, and it is **not a scan-exclusion mechanism**. Whether a given path is actually scanned is decided separately by security-map section membership at Step 3 dispatch (map-keyed) plus the § "Security-critical always-include files" set, not by this list.
 
+### 2a-0. Top-level inventory completeness (unmapped subtrees)
+
+**Run this before 2a-1 — it is the only check in Step 2a that does not start from the map.** 2a-1 and 2a-2 derive their enumeration roots *from the maps' own section globs*, so they can only ever report gaps inside territory some section already names. But the map is **authored, not derived**: a top-level entry no section mentions is never enumerated, never reported, and so is invisible on every round — permanently, and its silence is indistinguishable from a clean result. This check closes that blind spot by enumerating the repository independently of the map.
+
+**Runs every round — the inventory question is scan-mode-independent.** A subtree nobody ever mapped is a slow-moving structural defect, which is exactly what a cadence check catches; gating this on scan mode would be self-defeating, because Step 1 auto-detects **incremental** at ≤7 days, so a project running the loop weekly would never reach a full scan and never run this check at all. Two adjustments keep it quiet instead of skipping it:
+- On a **`--scope`-restricted** round, assert only over the top-level entries that scope touches — a scoped round narrows deliberately.
+- Otherwise assert over the whole tree, and when the result is **unchanged from the previous round**, compress to one line (`Inventory completeness: unchanged since Round N-1 — <P> entries still unresolved`) — the same repeat-compression convention Step 2b uses for unchanged pre-scan skips. Never omit it silently.
+
+**The enumeration** — deterministic, whole-repo, independent of the map:
+
+```bash
+git ls-files | awk -F/ '{print $1}' | sort -u
+```
+
+That yields **both directories and root-level files**. They are judged differently below, so partition them first.
+
+**Un-localized sections — check per entry, not globally.** A consumer install is typically *partly* localized: sections for the stack in use resolve, sections for unused areas are still placeholder globs (`<api module>/`, `<frontend>/`). So before reporting an entry, check whether some section's **placeholder token plausibly names it** (an unlocalized `<frontend>/` section with a `frontend/`-shaped entry present). If so, report it as **`section exists but is unlocalized`** — a third disposition, not a gap. **The fix there is localizing that section's glob (or its `substitutions.project.yml` token) — never a new duplicate section**, which would permanently double-cover the subtree. This is the forward-pass counterpart of 2a-3(a)'s placeholder rule and must agree with it. If **no** section glob resolves to any tracked path, the map is wholly unlocalized: report `Inventory completeness: security_map.md not localized for this project` once and skip the per-entry assertion.
+
+**The invariant.** Every top-level entry holding tracked code (see the scoping note below) must be either:
+
+- **(a) covered** — for a **directory**, at least one `security_map.md` section glob resolves beneath it; for a **root-level file**, at least one section glob **matches it directly** (the shipped `security_map.md` keys sections on root files this way — e.g. `Dockerfile`, `.gitignore`), or
+- **(b) explicitly excluded** — named in `<project>/CLAUDE.md` § "Map coverage exclusions" **with a stated one-line reason** (e.g. `` - `vendor/` — third-party code, not ours to change ``), or
+- **(c) unlocalized** — a placeholder section plausibly covers it, per the guard above.
+
+An entry in none of the three is an **unmapped top-level entry** — report it as its own class, above the unmatched-file report, distinguishing an unmapped **directory** (an entire subtree has never been audited and nothing has ever said so) from an unmapped **root-level file**. Both are worth reporting; only the first is a subtree claim. This is the higher-severity coverage finding of the two checks.
+
+An exclusion entry carrying **no stated reason** is also reported, as `reason not stated` — an unexplained exclusion is how a subtree gets permanently silenced by accident. It is a note, not a gap: surface it, don't block on it (existing consumer lists predate the reason convention).
+
+**What counts as tracked code here — do NOT inherit 2a-1's per-file exclusions wholesale.** 2a-1 excludes `*.yml`/`*.yaml`/`*.json`/`*.sql`/`*.md` and config-only files because an individual such file *inside an already-mapped area* has negligible surface. That reasoning does **not** transfer to a whole subtree: a top-level `.github/` (all `*.yml`), `migrations/` (all `*.sql`), or `deploy/` (all `*.yaml`) that no section covers is a real and high-value blind spot — CI/supply-chain integrity and database privilege grants live in exactly those shapes. So a top-level entry consisting *only* of such files is **still reported**, at note severity. Exclude from 2a-0 only what carries no reviewable content at any granularity: lockfiles, generated or vendored output, and binary assets.
+
+**Granularity is deliberately coarse, and composes with 2a-1.** A top-level entry counts as covered if *any* section glob resolves beneath it — so a partly-mapped subtree passes here. That is the intended division of labour: **2a-0 finds subtrees no section reaches at all; 2a-1 finds files no section matches inside the subtrees sections do reach.** Neither check subsumes the other, and only 2a-0 can see a subtree that was never mapped in the first place. One matching caveat: a section glob with **no directory root** (`**/*.py`) has nothing to resolve beneath and does **not** establish coverage for 2a-0 — report the entry, noting that its covering section is root-less (the fix is a rooted glob, not a new section).
+
+Report:
+```
+Inventory Completeness — Unmapped Top-Level Entries:
+  <N> top-level entries with tracked code, matched by no security_map.md section
+    and not listed under CLAUDE.md § "Map coverage exclusions"
+  <directory list, with the tracked-file count for each>
+  <root-level file list>
+  Unlocalized (placeholder section exists): <entry list, or "none">
+  Exclusions without a stated reason: <entry list, or "none">
+```
+
+*(`/codebase-review` runs the mirror of this check against `convention_map.md` — the map that keys **its** dispatch. Running both skills audits both maps; running only one leaves the other map's subtree coverage unasserted.)*
+
 ### 2a-1. Files not matched by any security_map section
 
 Parse the `## ` section headers from `.claude/security_map.md` to extract the file globs for each section (the section header format is `## <glob list> — <Section Name>`). Derive the unique top-level path roots from those section globs. Then run `git ls-files -- <derived roots>` and check each code file against the extracted globs. Collect files that don't match any section.
@@ -160,6 +279,7 @@ Map Staleness — Retirement / Refresh Candidates:
 If any check finds gaps or staleness:
 
 ```
+Unmapped top-level entries: <P>  (whole subtrees the security map never reaches)
 Security map has <N> file coverage gaps.
 Convention map has <M> file coverage gaps.
 Map staleness: <Q> stale sections, <R> dead citations.
@@ -167,6 +287,7 @@ Fix these before launching audit agents? [y/N]
 ```
 
 If yes:
+- For **unmapped top-level entries** (2a-0): resolve each one deliberately — either propose a new `security_map.md` section covering it (with the OWASP Check/Skip lists that subtree warrants) **or** add it to `<project>/CLAUDE.md` § "Map coverage exclusions" **with its one-line reason**. Do not leave one unresolved silently: an entry that is neither mapped nor reasoned-away returns to being invisible next round, which is the exact condition this check exists to end. Deferring is fine — say so in the summary and it recurs next full round
 - For unmatched files: propose new sections or glob expansions for the relevant map and apply them
 - For **dead citations** and **relocated sections**: refresh the citation or update the glob in place — low-stakes map hygiene, apply directly (default to refresh for any security helper). In a **consumer install** (`.claude/sysop.lock` present), edit hygiene that targets a **locally-authored `.project.*` overlay section** in the overlay file, not the regenerated base copy (per `_shared/promotion-write-target.md`); hygiene on a **core/pack-shipped** section refreshes from upstream on the next update, so a base-only edit is transient
 - For **stale sections reflecting a genuinely removed category** (a promoted security convention with no code left to govern): **do not delete the CLAUDE.md § Prevention Conventions bullet here.** Record it as a retirement candidate in the final summary report and route the decision to the deliberate, human retirement step (the interactive **Step 9b: Convention Demotion** prompt — symmetric to promotion, and the Tier 2 home where Step 9b also retires the blocking-mechanical rules whose false-positive cost this static map sweep cannot see; for security rules it confirms the protection moved elsewhere before retiring). Tier 1 detects and reports; the retirement *decision* stays human.
@@ -225,6 +346,15 @@ Launch agents **per OWASP category** (not per file area). Each agent receives:
 This structure ensures every category is checked by a dedicated agent with a narrow, focused mandate.
 
 **Sub-agent return contract (`_shared/fanout-evidence.md`).** The per-agent lists below say what each agent *checks*; the return contract says what it *returns*. Instruct every audit agent to (1) tag each finding with a `file:line` anchor **and** a `[verified]`/`[reported]` self-tag — `[verified]` only when it opened that exact site, `[reported]` when the finding rests on a grep/pre-scan hit it did not open — and (2) end its report with the **evidence footer** (files opened vs. assigned + tool mix). **Copy the footer template from `_shared/fanout-evidence.md` verbatim into each agent's prompt** — the spawned agent never reads that file, so paste the block in exactly as you hand it the map-scoped checks. That footer is what Step 3b audits before merging: an OWASP agent that opened 8 of 82 assigned files is a coverage gap to flag loudly, not a clean pass to merge silently.
+
+**Also paste the § Adjudication kill/keep pair** (`_shared/fanout-evidence.md`) into each agent's prompt — agents assign their own severity, so an agent that quietly downgrades its own finding on a control it assumed rather than read has already destroyed the evidence before your merge ever sees it. The two lines to paste: *kill or downgrade only on a mitigation you located and read at a specific `file:line`; keep or escalate only on a path you actually traced — otherwise mark it unassessed and report it anyway.* This is an adjudication instruction, **not** a licence to report less: report every candidate you cannot dispose of on evidence.
+
+**Do-not-report list (dispatch-side FP guard — paste into every agent's prompt).** The orchestrator's triage guards fire *after* agents spend attention; the cheapest false positive is the one never reported. Tell each agent NOT to report:
+
+- **Patterns the pre-scan already covers deterministically** — paste the ids of the checks the pre-scan **actually executed this round** (the Step 2b accounting's `executed` set — never a check it reported `skipped` or `failed`; a scanner that didn't run covered nothing, and suppressing agents on its behalf is the silent-degradation shape Phase 135's accounting exists to surface). The deterministic layer reports executed checks itself; this is the same rule Step 3b applies to amplification, stated at dispatch so agents stop hand-reporting what a machine check already caught.
+- **Issues explicitly silenced in code** — a `# nosemgrep` / `# noqa` with a stated rationale is a recorded decision; don't re-report the silenced issue. If the *rationale itself* is plainly wrong, report the suppression as the finding.
+- **Checks the security map's "Skip" list excludes for that file area** — the map's Skip entries are prior rounds' recorded triage, not an oversight; a skipped-check finding re-litigates settled scope. (If the Skip entry looks wrong for a file, say so as a *map* finding, not a code finding.)
+- **On incremental rounds only: pre-existing issues in untouched code.** An incremental round audits the delta, but agents receive whole files — so the orchestrator **states the last-round date in the prompt**, and agents establish what changed (`git log --since="<date>" -p -- <file>`, or `git diff <last-round-ref> -- <file>`) before applying this exclusion: don't report issues wholly contained in code the round's changes didn't touch and don't interact with. (A finding *in* a changed region may still implicate untouched code — radial expansion from a finding, per the Locality Rule, stays sanctioned.) **A full scan has no such exclusion — whole-repo rounds exist to find pre-existing issues.**
 
 ### Agent 1: Injection & Prompt Safety (A03)
 
@@ -341,10 +471,17 @@ Also check (manual inspection, not pre-scanned):
 
 Report findings grouped by severity. If tools aren't installed, note this as a gap.
 
-**Severity assignment:**
+**State the reachability chain, or mark it unassessed.** An advisory tells you a vulnerable version is *installed* — not that your code reaches the vulnerable API. The audit's incremental value over the scanner is exactly this narrative, which makes it the part most worth getting right — and it is measurably hard: in an independent re-verification of one real audit round, **three of that round's five dependency narratives were materially wrong** — two of them inflating severity by asserting runtime reachability that did not exist, and one *understating* how many call sites were affected. (Small n, one round: treat inflation as the **dominant** error, not the only one — the narrative can be wrong in either direction.) So before filing a dependency finding above the severity the advisory alone supports, trace the chain and cite it: which of *our* call sites reaches the vulnerable API, at `file:line`, and how many. If you cannot trace it, file the finding with **`Reachability: unassessed`** and the advisory's own severity. Both halves matter — an unassessed dependency finding is still worth filing (it is real, and the next reader can trace it); an *asserted* one is a fabricated attack path wearing a severity it did not earn.
+
+**Check the remediation against current usage before recommending it.** Read what currently depends on the thing you propose to change (`git grep` the symbol, the package, the path) *before* proposing it; a remediation that is correct in the abstract can break a live path. This binds **any** remediation, not just version bumps — in that same re-verification, one refuted finding would have caused a **production outage** had its fix been applied as filed, and it was an *ignore-file* change, not an upgrade. (That finding was a container-config item rather than a dependency one, which is precisely the point: the class is remediation blast radius, wherever it appears.) If you cannot establish the blast radius, say so in the task rather than omitting it — the fixer inherits whatever you leave unstated.
+
+### Severity assignment
+
+Applies to **every** agent above, not only Agent 6 — it is skill-global.
+
 - 🔴 **High** — default for all security findings (exploitable vulnerability, auth bypass, data exposure)
-- 🟡 **Medium** — downgrade only when clearly mitigated by another control (e.g., defense-in-depth gap where the primary control is solid)
-- 🟢 **Low** — informational, best practice improvement, defense-in-depth hardening
+- 🟡 **Medium** — downgrade only when clearly mitigated by another control **you located and read at a specific `file:line`** (e.g., defense-in-depth gap where the primary control is solid). An assumed, inferred, or "the framework surely does this" control is not a mitigation — if you cannot point at where the protection lives, the finding **stays at its filed severity and is not downgraded on that basis** (`_shared/fanout-evidence.md` § Adjudication)
+- 🟢 **Low** — informational, best practice improvement, defense-in-depth hardening. **Low is a *kind*, not a downgrade**: a hardening suggestion is Low on its own merits and needs no located control. Do not file a would-be-Medium as Low to sidestep the evidence bar above — that routes a real finding to the bottom of the queue on no evidence at all
 
 ### Locality Rule (Radial Expansion)
 
@@ -364,7 +501,9 @@ For files >300 lines, review in ~200-line chunks. For files >600 lines, review t
 **First, audit the fan-out per `_shared/fanout-evidence.md` § orchestrator merge discipline — do this before amplifying or writing any batch:**
 - **Row provenance (mandatory):** a fan-out finding the orchestrator did **not** itself re-read carries `[reported]` — do **not** copy an OWASP agent's self-`[verified]` onto the row unchallenged (the agent that opened 8 of 82 files self-tags `[verified]` too). Only the sample re-read below upgrades a finding to `[verified]`.
 - **Low-opened-ratio flag (mandatory, cheap):** from each agent's evidence footer, flag an OWASP agent that **opened + grepped < ~⅓ of its assigned files**, or that self-tagged a `[verified]` finding on a file absent from its `Opened` list — record it as a **loud coverage-gap line in this round's summary**, not a clean pass. A silently-absent category is the same silent-degradation shape a security audit exists to prevent. Do not flag an honestly sparse scope (few relevant files, the rest grepped).
-- **Sample re-read (advisory):** re-read **2–3 of each agent's claimed `file:line` findings** against source, reading *inward* to confirm the claim — distinct from the amplification below, which reads *outward* for siblings. A finding that survives carries `[verified]` into its batch row; one that doesn't is dropped or downgraded with a note.
+- **Sample re-read (advisory):** re-read **2–3 of each agent's claimed `file:line` findings** against source, reading *inward* to confirm the claim — distinct from the amplification below, which reads *outward* for siblings. A finding that survives carries `[verified]` into its batch row; one that doesn't is dropped or downgraded with a note — **decomposing compound findings first (binds on every drop *and every downgrade*):** if the finding asserts several independent clauses or cites several sites, a failed re-read refutes *that clause only* — adjudicate its remaining clauses (re-checking its other cited sites where they exist) before the row is dropped or downgraded, and record which clauses survived. Partial refutation — refute one clause, silently drop the rest — is the measured way real findings get dismissed as false positives, and it only fires in that direction (real → apparent-FP; `_shared/adversarial-review.md` § Compound findings). On a security round this is doubly load-bearing: the one High-severity finding recovered in the motivating experiment was a compound security claim dismissed by refuting one clause while the clause carrying the vulnerability was silently dropped.
+- **Adjudicate on read evidence, both directions (mandatory — `_shared/fanout-evidence.md` § Adjudication):** the sample re-read above **is** the premise check — if the cited site does not contain what the finding claims, that read refutes it and the clause is dropped. Beyond that, when the premise holds: kill or downgrade only on a mitigation you **located and read** at a specific `file:line`, never an assumed one ("the framework escapes that", "that path is unreachable in production"); and keep or escalate only on an attack path you actually traced — otherwise mark the reachability **unassessed** and say so. When neither can be established, **the finding survives** with the open question recorded: a filed task gets another reader, a dismissal gets none. Decompose compound findings first (above), then hold each surviving clause to this standard separately; on a High or security-relevant dismissal the compound rule's second leg also binds (an independent re-adjudication, or a per-clause record in the summary).
+- **Verify the cited rule (mandatory, cheap):** for any finding that flags code *because a security_map or convention bullet says so*, re-open the cited map section and confirm the bullet actually states that rule, specifically — don't trust the agent's paraphrase. A mis-cited rule finding files a bogus task in that rule's name and mis-records what the map actually requires — corrupting the round evidence the promotion/demotion machinery reasons from, and burning the human review cycle scoped dispatch exists to protect.
 - **Provenance class in the summary (mandatory):** the round summary states the verified/reported split and per-batch opened/assigned ratios — never a bare coverage percentage.
 
 After all LLM agents complete, extract the **underlying pattern** from each novel finding and grep the full codebase for sibling instances the agents may have missed. LLM agents are good at contextual analysis but unreliable at exhaustive enumeration — they tend to find one instance per pattern and move on.
@@ -394,7 +533,7 @@ Provenance: <V> verified (orchestrator-read + sampled) · <R> reported
 
 ## Step 4: Deduplicate and Organize
 
-**Deduplication:** For each finding (from both grep pre-scan, LLM agents, and post-scan siblings), check if `open_task_index` already contains a task at the same `file:line`. If so, skip the finding. Track skipped count for the summary.
+**Deduplication:** For each finding (from both grep pre-scan, LLM agents, and post-scan siblings), check if `open_task_index` already contains a task at the same `file:line`. If so, skip the finding. Track skipped count for the summary. *(A dedup skip is not a dismissal — the finding survives as the matched open task — so `_shared/fanout-evidence.md` § Adjudication's default-to-survival is not in tension here; what it binds is the match judgement: skip only on a match you can point at, never on an assumed one.)* **Compound findings dedup clause-by-clause:** a finding citing several sites is matched per site — a match on one cited site skips *that clause only*; the unmatched clauses/sites remain a live finding (dedup is a drop path, and the § Compound-findings rule binds here exactly as at the Step 3b merge).
 
 **Batch grouping by threat category:**
 
@@ -429,6 +568,8 @@ After organizing batches, compute file-level overlap between all batches in this
 This tag is written into the batch header in Step 5c and used by `/auto-fix` to determine which batches can be processed in parallel.
 
 ## Step 5: Write to `review_tasks.md`
+
+**Do not skip this step, even with zero findings.** A clean audit is a *result*: write the Round header (5b) so the run is on the record, then reach 5f to clear this round's marker. Jumping straight to Step 6 on an empty finding set strands the marker and makes the next `self_check`/pre-scan report a healthy audit as an abandoned one — the cry-wolf failure the marker design is built to avoid.
 
 ### 5a. File Bootstrap (if `review_tasks.md` doesn't exist)
 
@@ -514,6 +655,46 @@ If Step 2b triage recorded any **stale-verdicts** (mechanical checks that fired 
 
 One row per (rule, round): a rule fires many times in a round but earns at most **one** stale-verdict row per round — this mirrors promotion's "recurred across rounds," not "fired N times this round." Do not add a second row for a rule that already has one for this Round. (When both `/codebase-review` and `/security-audit` run in the same Round, share the one ledger section — append, do not duplicate.)
 
+### 5f. Clear the round marker
+
+**Removal is pinned here — immediately after the `review_tasks.md` write completes, and before the report-summary and interactive promotion steps.** The accepted profile, stated plainly: a death during Steps 6–9b leaves a stranded marker, which is correct, because by then the round's results are already durably written; what the marker protects is *the audit itself*. Removing it at the true final step would strand a marker on every unattended loop run that skips interactive promotion — a chronic false alarm trains consumers to ignore the signal, which is worse than no signal.
+
+Pass the `ROUND_MARKER=` path from the Pre-flight step:
+
+```bash
+python3 - <<'PY' "<ROUND_MARKER path from Pre-flight>"
+import sys
+from pathlib import Path
+
+p = Path(sys.argv[1])
+if not p.is_file():
+    print(f"round-marker: nothing to clear at {p}")
+    raise SystemExit(0)
+# Ownership rests on passing the ROUND_MARKER= path THIS session captured at
+# round-open — that is what keeps a concurrent session's marker safe. The
+# filename/body nonce cross-check below is a secondary integrity guard: it
+# refuses to delete a marker whose name and contents disagree (a hand-built or
+# corrupted file), but it cannot tell one valid marker from another. So: only
+# ever pass your own captured path here.
+want = p.name.split(".")[-2] if p.name.endswith(".pending") else ""
+got = ""
+for line in p.read_text(encoding="utf-8").splitlines():
+    if line.startswith("nonce:"):
+        got = line.split(":", 1)[1].strip()
+        break
+if want and got and want != got:
+    print(f"round-marker: REFUSING to remove {p.name} — nonce mismatch "
+          f"(file says {got}, path says {want}); not this session's marker")
+    raise SystemExit(0)
+p.unlink()
+print(f"round-marker: cleared {p.name}")
+PY
+```
+
+**A round that found nothing still clears its marker.** Zero findings is a *result*, not a reason to skip Step 5 — write the Round header, then clear. Leaving the marker on a clean round would report every healthy audit as an abandoned one, and a signal that cries wolf on the good case is worse than no signal.
+
+Never delete a marker you did not write. Stale markers belonging to other sessions are **surfaced, never swept** — removing them is the human's call.
+
 ## Step 6: Report Summary
 
 Print an OWASP coverage table and batch summary:
@@ -527,6 +708,7 @@ Files audited: <N>
 Map coverage audit:  security map <N> file gaps, convention map <M> file gaps (fixed inline: yes/no)
 Pre-scan (grep):     <N> findings (deterministic)
 LLM agents:          <N> findings (contextual)
+Prior round markers: <none | N live (concurrent?) | N STALE — prior round(s) never completed>
 
 OWASP Coverage:
 

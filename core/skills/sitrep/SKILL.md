@@ -111,6 +111,7 @@ The survey flags every mismatch between filesystem reality and the state files. 
 | Index drift (in_progress without lock) | `tasks/index.yml` says `in_progress`, no `sysop/runtime/locks/<id>.lock` | Resync index or recreate lock |
 | Abandoned claim | Lock + worktree exist, no commits + claimed ≥ stale-days ago | Confirm dead with human, release lock |
 | Uncommitted work in stale worktree | Dirty status + no commits in N days | DO NOT cleanup — likely user's parked work |
+| Abandoned review round | `sysop/runtime/pending-rounds/*.pending` older than 2h | Re-run the skill; delete the marker only once the round is confirmed dead |
 
 ## Deferred features
 

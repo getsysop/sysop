@@ -102,6 +102,33 @@ REF_OVERRIDE=""
 REF_WORKTREE=""
 SYSOP_SRC_CLONE=""
 
+# Phase 142: Codex-native skill registration. The installer emits two RELATIVE
+# symlinks under <target>/.agents/skills/ pointing at the shipped review-skill
+# dirs, so a Codex CLI session discovers and selects them natively (and gets the
+# $codebase-review / $security-audit selectors) with no converted or duplicated
+# files — one source of truth, zero drift surface. Both install modes: full mode
+# installs the same two skill dirs at the same paths, so splitting on mode would
+# buy nothing.
+#
+# Default on; --no-codex-links opts out and the choice is PERSISTED in the lock
+# (codex_links), so the documented one-line `sysop/scripts/sysop-update.sh`
+# honors a prior opt-out without retyping the flag. CODEX_LINKS_PROVIDED
+# distinguishes "a flag was given this run" from "inherit the lock".
+CODEX_LINKS=1
+CODEX_LINKS_PROVIDED=0
+# Set by preflight_codex_links when the capability probe fails: link CREATION is
+# disabled for this run, but links that already exist and are still ours stay
+# recorded and managed. That asymmetry is load-bearing — a transient mid-update
+# probe failure must not drop the paths from MANAGED_PATHS and feed a consumer's
+# working links to the obsolete sweep.
+CODEX_LINKS_CREATE_DISABLED=0
+# Target-local probe dir; cleaned inline and by the EXIT trap.
+CODEX_PROBE_TMP=""
+# The skills exposed natively. Deliberately just the two review skills: the other
+# loop-mode skills have no Codex activation/runtime evidence, and adding one is a
+# separate decision, not a default.
+CODEX_SKILLS=(codebase-review security-audit)
+
 # Location of the install manifest, relative to <target>.
 LOCK_REL=".claude/sysop.lock"
 LOCK_VERSION=1
@@ -224,6 +251,15 @@ Options:
                         --update: skip the pre-update snapshot step (overwrite directly).
   --no-arm-hooks        Don't copy hook templates into .git/hooks/. (Templates still land
                         in <target>/sysop/scripts/hooks/; run sysop/scripts/install_hooks.sh later.)
+  --no-codex-links      Skip the two .agents/skills/ symlinks that register the review
+                        skills natively with the Codex CLI. They are created by default
+                        in both modes (they point at .claude/skills/, so there are no
+                        duplicated files). The choice is RECORDED IN THE LOCK, so a later
+                        plain `sysop/scripts/sysop-update.sh` honors it without the flag.
+                        Use --codex-links to turn them back on. If a path already exists
+                        there and isn't ours, the install stops rather than clobber it.
+  --codex-links         Re-enable the Codex skill links after a prior --no-codex-links
+                        (the links reappear on the next install/update).
   --update              Upgrade a tracked install. Reads .claude/sysop.lock, snapshots
                         any dirty managed paths into a commit (so the user can git-diff
                         against it later), overwrites managed files with this checkout's
@@ -342,6 +378,8 @@ while [[ $# -gt 0 ]]; do
                    done < "$2"
                    unset _line
                    shift 2 ;;
+    --no-codex-links) CODEX_LINKS=0; CODEX_LINKS_PROVIDED=1; shift ;;
+    --codex-links)    CODEX_LINKS=1; CODEX_LINKS_PROVIDED=1; shift ;;
     -y|--yes)      ASSUME_YES=1; shift ;;
     --packs)       PACKS_ARG="${2:-}"; PACKS_PROVIDED=1; shift 2 ;;
     --packs=*)     PACKS_ARG="${1#--packs=}"; PACKS_PROVIDED=1; shift ;;
@@ -429,6 +467,10 @@ do_or_say() {
 _cleanup_install_temp() {
   [[ -n "$DIVERGENCE_SHADOW" ]] && rm -rf "$DIVERGENCE_SHADOW"
   [[ -n "$LOOP_SETTINGS_TMP" ]] && rm -f "$LOOP_SETTINGS_TMP"
+  # Phase 142: the Codex symlink probe writes a dir INSIDE the target (it must
+  # test the consumer's filesystem, not /tmp's). A mid-probe crash would
+  # otherwise strand it and trip the next install's dirty-tree check.
+  [[ -n "$CODEX_PROBE_TMP" ]] && rm -rf "$CODEX_PROBE_TMP"
   if [[ -n "$REF_WORKTREE" ]] && [[ -n "$SYSOP_SRC_CLONE" ]]; then
     git -C "$SYSOP_SRC_CLONE" worktree remove --force "$REF_WORKTREE" >/dev/null 2>&1 || true
   fi
@@ -1064,7 +1106,12 @@ write_lock_file() {
   if (( ${#MANAGED_PATHS[@]} > 0 )); then
     paths_nl="$(printf '%s\n' "${MANAGED_PATHS[@]}")"
   fi
+  # Phase 142: persist the Codex-links choice so a --no-codex-links opt-out
+  # survives into the plain one-line `sysop-update.sh` (no retyped flag).
+  local codex_links_json="true"
+  [[ "$CODEX_LINKS" -eq 1 ]] || codex_links_json="false"
 
+  SYSOP_CODEX_LINKS="$codex_links_json" \
   SYSOP_LOCK_PATH="$lock_path" \
   SYSOP_LOCK_VERSION="$LOCK_VERSION" \
   SYSOP_COMMIT="$commit" \
@@ -1083,6 +1130,7 @@ data = {
     "sysop_commit": os.environ["SYSOP_COMMIT"],
     "packs": packs,
     "mode": os.environ.get("SYSOP_MODE", "full"),
+    "codex_links": os.environ.get("SYSOP_CODEX_LINKS", "true") == "true",
     "installed_at": os.environ["SYSOP_INSTALLED_AT"],
     "updated_at": os.environ["SYSOP_UPDATED_AT"],
     "managed_paths": managed,
@@ -1897,6 +1945,293 @@ install_skills() {
   record "skills: $skill_count skill dir(s) copied to .claude/skills/$_mode_note"
 }
 
+# ─── Phase 142: Codex-native skill links (tools/CODEX_INTEGRATION_SPEC.md) ───
+# Identity of a link is its RAW target string, never the bytes it resolves to: a
+# *different* link is consumer data even when it happens to resolve to the same
+# skill. Every comparison below reads `readlink` output, never the file content.
+_codex_link_want() { printf '../../.claude/skills/%s' "$1"; }
+_codex_link_rel()  { printf '.agents/skills/%s' "$1"; }
+
+# 0 = the entry at <target>/$1 is exactly Sysop's link. Non-zero for absent,
+# foreign symlink, file, or directory.
+_codex_link_is_ours() {
+  local relp="$1" name want
+  name="${relp#.agents/skills/}"
+  want="$(_codex_link_want "$name")"
+  [[ -L "$TARGET/$relp" ]] || return 1
+  [[ "$(readlink "$TARGET/$relp" 2>/dev/null || true)" == "$want" ]]
+}
+
+# Sweep guard for the .agents/ namespace. Returns 0 ("leave it alone") for
+# everything there EXCEPT one case: a depth-1 `.agents/skills/<name>` entry that
+# is still exactly Sysop's link, which returns 1 and sweeps normally (including
+# a BROKEN link carrying our raw target — its skill was retired upstream).
+#
+# Default-deny is load-bearing, not caution. The sweep resolves its candidate
+# with `-e`, which follows symlinks, and removes with `rm -f` — so a lock entry
+# naming a path THROUGH one of our links (`.agents/skills/codebase-review/
+# SKILL.md`) would delete the real skill body out of `.claude/skills/`. Only a
+# hand-edited or corrupted lock produces such an entry, which is exactly the
+# threat model the sibling consumer-path guard in the sweep exists for.
+_codex_link_not_ours() {
+  local relp="$1" name
+  # Outside .agents/ entirely — not our namespace, normal sweep rules apply.
+  [[ "$relp" == .agents/* ]] || return 1
+  name="${relp#.agents/skills/}"
+  # Anything that is not exactly a depth-1 .agents/skills/<name> entry — a path
+  # through a link, `.agents/skills` itself, `.agents/anything-else` — is not
+  # ours to delete.
+  [[ "$relp" == ".agents/skills/$name" ]] || return 0
+  [[ -n "$name" && "$name" != */* ]] || return 0
+  _codex_link_is_ours "$relp" && return 1
+  return 0
+}
+
+# Create (or verify) one relative skill link. NEVER exits under DRY_RUN — it runs
+# inside cmd_adopt's managed-paths computation and _ns_precompute_and_derive's
+# `run_install_pipeline >/dev/null 2>&1`, where a bash `exit` kills --update with
+# zero output (the `|| true` catches a non-zero return, not an exit).
+ensure_relative_symlink() {
+  local name="$1"
+  local relp; relp="$(_codex_link_rel "$name")"
+  local dst="$TARGET/$relp"
+  local want; want="$(_codex_link_want "$name")"
+
+  # 1. DRY_RUN (--dry-run, adopt's compute pass, the migration precompute):
+  #    classify + record only — no creation, no verification, no error.
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    if _codex_link_is_ours "$relp"; then
+      note "link: $relp → $want (unchanged)"
+      record_managed_path "$dst"
+    elif [[ -L "$dst" || -e "$dst" ]]; then
+      # Consumer-owned. Deliberately NOT recorded: a path Sysop doesn't own must
+      # never enter managed_paths, where a later sweep would put consumer data in
+      # the deletion blast radius. This is what makes `--adopt` of a genuine
+      # Codex user safe — adopt records reality and moves on, and the collision
+      # surfaces as a hard error the next time emission actually runs.
+      note "⚠ $relp is not Sysop's link — leaving it unmanaged"
+    else
+      note "link: $relp → $want (capability probed at apply time)"
+      record_managed_path "$dst"
+    fi
+    return 0
+  fi
+
+  # 3. Already ours → unchanged, but still recorded: the lock must stay accurate
+  #    on re-install, and this is what makes a --force full re-apply a genuine
+  #    no-op rather than a delete/recreate (inode churn).
+  if _codex_link_is_ours "$relp"; then
+    note "link: $relp → $want (unchanged)"
+    record_managed_path "$dst"
+    return 0
+  fi
+
+  # 4. Anything else present → defense in depth only. preflight_codex_links owns
+  #    this failure and has already fired in every normal flow; reaching here
+  #    means a direct/scripted call that bypassed it.
+  if [[ -L "$dst" || -e "$dst" ]]; then
+    err "Refusing to replace $relp — it is not Sysop's link."
+    err "  Move it aside, or re-run with --no-codex-links."
+    exit 1
+  fi
+
+  # Probe said this filesystem can't do relative dir symlinks. Nothing to create;
+  # nothing recorded (there is no path to manage).
+  if [[ "$CODEX_LINKS_CREATE_DISABLED" -eq 1 ]]; then
+    return 0
+  fi
+
+  # 2. Absent → create. Both writes carry a guided error rather than letting
+  #    `set -e` abort the pipeline on a bare mkdir/ln failure — preflight (a0)
+  #    catches the reachable causes, so this is the unreachable-cause net
+  #    (a race, an exotic mount) and it must still say what to do.
+  note "link: $relp → $want"
+  if ! mkdir -p "$(dirname "$dst")" 2>/dev/null; then
+    err "Could not create $(dirname "$relp")/ for the Codex skill links."
+    err "  Re-run with --no-codex-links to install without them."
+    exit 1
+  fi
+  if ! ln -s "$want" "$dst" 2>/dev/null; then
+    err "Could not create the symlink $relp."
+    err "  Re-run with --no-codex-links to install without them."
+    exit 1
+  fi
+
+  # 5. Post-write verify — the one chance to catch a filesystem that passed the
+  #    probe but lies about real links. Reading SKILL.md THROUGH the link is the
+  #    assertion that matters: it proves traversal, not just the entry.
+  if ! _codex_link_is_ours "$relp" || [[ ! -r "$dst/SKILL.md" ]]; then
+    err "Codex link verification failed for $relp."
+    err "  The link was created but does not resolve to a readable"
+    err "  .claude/skills/$name/SKILL.md. Re-run with --no-codex-links to skip."
+    exit 1
+  fi
+  record_managed_path "$dst"
+}
+
+install_codex_links() {
+  if [[ "$CODEX_LINKS" -eq 0 ]]; then
+    # Opt-out on a tree that still carries the links. Under --update the
+    # obsolete-path sweep owns this (it has the old lock to diff against), but a
+    # plain re-install never reaches the sweep — so without this the links would
+    # sit on disk forever, dropped from managed_paths yet still registering with
+    # Codex: exactly the state the consumer opted out of, now unmanaged.
+    # Guarded by raw target, so only ever our own link is removed.
+    if [[ "$DRY_RUN" -eq 0 ]] && [[ "$UPDATE_MODE" -eq 0 ]]; then
+      local _n _relp _removed=0
+      for _n in "${CODEX_SKILLS[@]}"; do
+        _relp="$(_codex_link_rel "$_n")"
+        _codex_link_is_ours "$_relp" || continue
+        (( _removed == 0 )) && hdr "codex skill links"
+        _removed=1
+        note "remove: $_relp (codex links disabled)"
+        git -C "$TARGET" rm -f --quiet -- "$_relp" 2>/dev/null || rm -f -- "$TARGET/$_relp"
+      done
+      (( _removed == 1 )) && record "Codex: native skill links removed (--no-codex-links)"
+    fi
+    return 0
+  fi
+  hdr "codex skill links"
+  local name
+  for name in "${CODEX_SKILLS[@]}"; do
+    ensure_relative_symlink "$name"
+  done
+  if [[ "$DRY_RUN" -eq 0 ]] && [[ "$CODEX_LINKS_CREATE_DISABLED" -eq 1 ]]; then
+    record "Codex: skipped (no symlink support — see docs/install-and-update.md § Codex)"
+  elif [[ "$DRY_RUN" -eq 1 ]]; then
+    # The house dry-run annotation: the capability probe is apply-time, so this
+    # is a plan, not an outcome — both links may still be skipped at apply time.
+    record "Codex: ${#CODEX_SKILLS[@]} native skill links (.agents/skills/) (planned; probed at apply time)"
+  else
+    record "Codex: ${#CODEX_SKILLS[@]} native skill links (.agents/skills/)"
+  fi
+}
+
+# Pinned in main() immediately after the T7 guard and strictly BEFORE the
+# Phase-128 migration block — which puts it ahead of _ns_precompute_and_derive's
+# hidden DRY_RUN pipeline run, the pre-update snapshot commit, the namespace tree
+# moves, and the runtime-dir migration: i.e. before EVERY target mutation, in
+# both fresh and update mode. Deliberately NOT --force-gated (house precedent:
+# T7's genuine collision has no --force bypass; the adjacent snapshot/divergence
+# steps are FORCE-gated and must not be pattern-matched here).
+preflight_codex_links() {
+  [[ "$CODEX_LINKS" -eq 1 ]] || return 0
+  local name relp
+
+  # (a0) Parent-component check. The leaf checks in (a) cannot see a consumer
+  # FILE at .agents, or an .agents/skills we can't write into. Left to (b) and
+  # the pipeline, both surface as a bare `mkdir`/`ln` failure that `set -e`
+  # turns into a mid-pipeline abort — AFTER install_skills has written and,
+  # under --update, after the pre-update snapshot commit: a half-applied target
+  # with a stale lock. Refusing here costs nothing, and keeps the § 8.2d promise
+  # ("a refused run leaves the tree byte-identical") true for parents too.
+  local parent
+  for parent in ".agents" ".agents/skills"; do
+    [[ -e "$TARGET/$parent" || -L "$TARGET/$parent" ]] || continue
+    if [[ ! -d "$TARGET/$parent" ]]; then
+      err "$parent exists and is not a directory."
+      err "  Sysop needs to create $parent/ to register its review skills with Codex."
+      err "  Move your $parent aside, or re-run with --no-codex-links."
+      exit 1
+    fi
+  done
+  # Writability of the deepest existing ancestor — a read-only or 555 parent
+  # is the other way `ln` dies mid-pipeline.
+  local anchor="$TARGET"
+  [[ -d "$TARGET/.agents" ]] && anchor="$TARGET/.agents"
+  [[ -d "$TARGET/.agents/skills" ]] && anchor="$TARGET/.agents/skills"
+  if [[ ! -w "$anchor" ]]; then
+    err "$(rel "$anchor") is not writable, so the Codex skill links can't be created."
+    err "  Fix its permissions, or re-run with --no-codex-links."
+    exit 1
+  fi
+
+  # (a) Collision check — the SOLE owner of the collision hard-error, because
+  # ensure_relative_symlink runs in three DRY_RUN contexts where an error would
+  # be invisible or fatal. Read-only, so it runs under --dry-run too.
+  #
+  # Hard-fail rather than skip-with-a-warning is deliberate: a consumer-owned
+  # .agents/skills/codebase-review means ordinary requests route to THEIR
+  # workflow while a skipped install still claims Sysop is set up — the silent-
+  # divergence shape the fan-out and pre-scan work exists to kill. The consumer
+  # must acknowledge it, not discover it later.
+  for name in "${CODEX_SKILLS[@]}"; do
+    relp="$(_codex_link_rel "$name")"
+    _codex_link_is_ours "$relp" && continue          # already ours
+    [[ -L "$TARGET/$relp" || -e "$TARGET/$relp" ]] || continue   # absent
+    err "$relp already exists and isn't Sysop's link."
+    err "  Sysop registers its two review skills for Codex by linking:"
+    err "    $relp → $(_codex_link_want "$name")"
+    err "  Leaving your entry in place would route ordinary Codex requests to it"
+    err "  while this install reported success. Pick one:"
+    err "    • move or rename your $relp, then re-run; or"
+    err "    • re-run with --no-codex-links (recorded in the lock, so you only"
+    err "      say it once — future sysop-update.sh runs honor it)."
+    exit 1
+  done
+
+}
+
+# (b) Capability probe. Split out of the preflight and called AFTER the plan is
+# confirmed, because unlike the checks above this one WRITES (a throwaway dir
+# inside the target — target-local on purpose, so it tests the consumer's own
+# filesystem rather than /tmp's). A run the user declines at the Proceed? prompt
+# must not have touched their repo. Apply-time only, and only when a link
+# actually needs creating: if both entries already exist and are ours there is
+# nothing to probe, and a probe failure must never be inferred for them.
+probe_codex_link_capability() {
+  [[ "$CODEX_LINKS" -eq 1 ]] || return 0
+  [[ "$DRY_RUN" -eq 1 ]] && return 0
+  local name need=0
+  for name in "${CODEX_SKILLS[@]}"; do
+    _codex_link_is_ours "$(_codex_link_rel "$name")" || { need=1; break; }
+  done
+  (( need == 1 )) || return 0
+
+  # Target-local so the probe tests the CONSUMER's filesystem (the WSL / /mnt/c /
+  # exotic-mount case), not the temp dir's. Registered with the EXIT trap.
+  if ! CODEX_PROBE_TMP="$(mktemp -d "$TARGET/.sysop-codex-probe.XXXXXX" 2>/dev/null)"; then
+    CODEX_PROBE_TMP=""
+    CODEX_LINKS_CREATE_DISABLED=1
+  else
+    local probe_ok=1
+    mkdir -p "$CODEX_PROBE_TMP/real" 2>/dev/null || probe_ok=0
+    # `touch`, not `: > path`: bash applies redirections left-to-right, so a
+    # failing `>` reports to the real stderr before `2>/dev/null` takes effect.
+    touch "$CODEX_PROBE_TMP/real/probe" 2>/dev/null || probe_ok=0
+    # Bare `ln` on purpose (not /bin/ln): the probe must exercise whatever ln the
+    # environment actually resolves, and the test suite substitutes a failing one.
+    if (( probe_ok == 1 )); then
+      if ! ln -s "./real" "$CODEX_PROBE_TMP/link" 2>/dev/null; then
+        probe_ok=0
+      elif [[ ! -L "$CODEX_PROBE_TMP/link" ]]; then
+        probe_ok=0
+      elif [[ "$(readlink "$CODEX_PROBE_TMP/link" 2>/dev/null || true)" != "./real" ]]; then
+        probe_ok=0
+      elif [[ ! -f "$CODEX_PROBE_TMP/link/probe" ]]; then
+        probe_ok=0
+      fi
+    fi
+    rm -rf "$CODEX_PROBE_TMP"
+    CODEX_PROBE_TMP=""
+    (( probe_ok == 1 )) || CODEX_LINKS_CREATE_DISABLED=1
+  fi
+
+  # Warn loudly and keep going. A default-on garnish must not brick an install on
+  # a filesystem that can't symlink — but it must never be silent either.
+  if [[ "$CODEX_LINKS_CREATE_DISABLED" -eq 1 ]]; then
+    hdr "⚠  Codex skill links skipped"
+    note "this filesystem rejected a relative directory symlink, so the two"
+    note "  .agents/skills/ entries can't be created here."
+    note "What is lost: native Codex discovery of the two review skills (and"
+    note "  their \$codebase-review / \$security-audit selectors). The rest of the"
+    note "  install is unaffected, and Claude Code reads .claude/skills/ directly."
+    note "Because .agents/ was NOT created, drop it from the documented install"
+    note "  commit line — 'git add .agents/' fails on a path that doesn't exist."
+    note "Manual alternative: the AGENTS.md recipe in docs/install-and-update.md § Codex"
+  fi
+}
+
 install_companion_scripts() {
   hdr "companion scripts"
   local dst="$TARGET/sysop/scripts"
@@ -2504,7 +2839,7 @@ _claude_md_section() {  # $1 = scope | exclusions | security
 
 ## Scope mapping
 
-<!-- Seeded by Sysop (loop mode) — fill in globs, then delete this comment.
+<!-- Seeded by Sysop — fill in globs, then delete this comment.
      Map each area of the codebase to a glob so a review agent gets the right
      convention bullets. Example:
        - API / server code → `src/api/**/*.py`
@@ -2517,10 +2852,13 @@ EOF
 
 ## Map coverage exclusions
 
-<!-- Seeded by Sysop (loop mode) — globs the review/audit sweep should NOT flag
-     as unmapped (generated code, vendored dirs, fixtures). Example:
-       - `**/migrations/**`
-       - `**/*.generated.ts` -->
+<!-- Seeded by Sysop — globs the review/audit sweep should NOT flag
+     as unmapped (generated code, vendored dirs, fixtures). Give each entry a
+     one-line reason: Step 2a-0 checks that every top-level entry holding
+     tracked code is either covered by a map section or excluded here WITH a
+     reason, and reports the ones that aren't. Example:
+       - `**/migrations/**` — generated by the ORM, reviewed at the model layer
+       - `**/*.generated.ts` — codegen output, edit the schema instead -->
 EOF
       ;;
     security)
@@ -2528,7 +2866,7 @@ EOF
 
 ## Security-critical always-include files
 
-<!-- Seeded by Sysop (loop mode) — files /security-audit must always review even
+<!-- Seeded by Sysop — files /security-audit must always review even
      if unchanged (auth, secrets handling, permission checks). Example:
        - `src/auth/**`
        - `src/**/permissions.py` -->
@@ -2753,6 +3091,9 @@ run_install_pipeline() {
   # tasks/ queue scaffold (LOOP_ONLY_SPEC § The bundle). Everything else ships.
   [[ "$INSTALL_MODE" == "loop" ]] || install_workflow_docs
   install_skills
+  # Phase 142: strictly after install_skills — the link targets must exist before
+  # the read-SKILL.md-through-the-link verification can pass. Both modes.
+  install_codex_links
   install_companion_scripts
   install_git_hooks
   install_ci_template
@@ -3738,6 +4079,24 @@ main() {
     else
       INSTALL_MODE="$lock_mode"
     fi
+
+  fi
+
+  # Phase 142: re-read the Codex-links choice from the lock. Precedence is
+  # CLI flag > lock > default true, with NO --update scoping — a plain
+  # re-install over an existing install is a supported path (see the runtime-
+  # migration comment below), and ignoring the field there would silently
+  # resurrect the links, or worse, hard-error on a collision the consumer
+  # already acknowledged with --no-codex-links. Pre-Codex locks have no field →
+  # empty → true, so the links arrive on the next run (the intended migration).
+  if [[ "$CODEX_LINKS_PROVIDED" -eq 0 ]] && [[ -f "$TARGET/$LOCK_REL" ]]; then
+    local lock_codex; lock_codex="$(lock_field codex_links)"
+    # lock_field renders JSON booleans through python, so it yields True/False.
+    if [[ "$lock_codex" == "False" || "$lock_codex" == "false" ]]; then
+      CODEX_LINKS=0
+    else
+      CODEX_LINKS=1
+    fi
   fi
 
   # Packs (from --packs, lock-derived above, or interactive). PACKS_PROVIDED
@@ -3748,6 +4107,15 @@ main() {
     packs_input="$(prompt_packs)"
   fi
   resolve_selected_packs "$packs_input"
+
+  # Phase 142: Codex-link preflight, PINNED HERE. It must run after the lock load
+  # above (which resolves CODEX_LINKS from a prior opt-out) and strictly before
+  # the Phase-128 migration block below — that ordering is what puts it ahead of
+  # _ns_precompute_and_derive's hidden DRY_RUN pipeline, the pre-update snapshot
+  # commit, the namespace moves, and the runtime migration, i.e. before every
+  # target mutation on both the fresh and update paths. Moving it later would
+  # leave a consumer with a half-mutated tree behind a collision error.
+  preflight_codex_links
 
   # Phase 128 (§5 steps 2–3): detect + prepare a sysop/ namespace migration. Only
   # relevant in --update (a fresh install already writes the new layout). Fire on
@@ -3835,6 +4203,13 @@ main() {
       exit 0
     fi
   fi
+
+  # Phase 142: the Codex symlink capability probe. Deliberately AFTER the
+  # confirm — it is the one part of the Codex preflight that WRITES (a throwaway
+  # dir inside the target), and a run the user declines must leave their repo
+  # untouched. Still ahead of the snapshot commit and the pipeline, so its
+  # verdict is settled by the time install_codex_links runs.
+  probe_codex_link_capability
 
   # Update mode: snapshot dirty managed paths into a commit before overwriting.
   # settings.json is intentionally excluded — install_permissions merges
@@ -4075,14 +4450,28 @@ main() {
       done
       (( still == 1 )) && continue
       # Genuinely dropped — resolve the surviving on-disk spelling.
+      # Phase 142: `-e` alone is false for a BROKEN symlink, which would strand a
+      # managed Codex link whose target went away. `-e || -L` covers both. (The
+      # migration-spelling probe below stays `-e`: it resolves an old/new rename,
+      # never a link.)
       ondisk=""
-      if [[ -e "$TARGET/$omp" ]]; then
+      if [[ -e "$TARGET/$omp" || -L "$TARGET/$omp" ]]; then
         ondisk="$omp"
       elif [[ "$MIGRATION_MODE" -eq 1 ]]; then
         alt="$(_ns_new_to_old "$omp")"
         [[ "$alt" != "$omp" && -e "$TARGET/$alt" ]] && ondisk="$alt"
       fi
-      [[ -n "$ondisk" ]] && to_remove+=("$ondisk")
+      if [[ -n "$ondisk" ]]; then
+        # Phase 142: a lock-listed Codex link is swept only while it is still
+        # OURS (raw target match — a broken link with our target still counts).
+        # A consumer who repointed or replaced it owns that entry now: warn and
+        # leave it rather than deleting their data on an opt-out or a drop.
+        if _codex_link_not_ours "$ondisk"; then
+          note "⚠ keep: $ondisk (no longer Sysop's link — yours to remove)"
+        else
+          to_remove+=("$ondisk")
+        fi
+      fi
     done
     NS_SWEPT_COUNT=${#to_remove[@]}
     if (( ${#to_remove[@]} > 0 )); then

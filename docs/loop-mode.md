@@ -20,7 +20,7 @@ git clone https://github.com/getsysop/sysop.git
 bash sysop/install.sh /path/to/your/project --packs auto --mode loop
 cd /path/to/your/project
 git status                                   # review everything Sysop wrote
-git add .claude/ sysop/ CLAUDE.md .gitignore
+git add .claude/ .agents/ sysop/ CLAUDE.md .gitignore
 git commit -m "chore: install Sysop (loop mode)"
 ```
 
@@ -105,7 +105,7 @@ If the loop earns its keep and you want the rest — planning, the queue, parall
 one merge gate — the upgrade is one flag: `bash sysop/install.sh <target> --update --mode full`
 (run from wherever your Sysop clone lives). It's purely additive: lifecycle skills, scripts,
 and the `tasks/` scaffold are added; nothing the loop has learned is touched. Then review and
-commit what it added — `git add .claude/ sysop/ tasks/ .gitignore && git commit -m "chore: grow
+commit what it added — `git add .claude/ .agents/ sysop/ tasks/ .gitignore && git commit -m "chore: grow
 Sysop to full mode"` — worktree builds only see committed files.
 [getting-started.md](./getting-started.md) walks the full workflow from there; you've already
 installed, so skip its step 1 and start at step 2 (`/intake`). The reverse direction
@@ -119,6 +119,32 @@ review rounds, promotion, mechanization: the loop closed on foreign code, and on
 mechanized convention then caught an instance no review round had filed — the pitch of the
 whole design, observed rather than claimed. That's one run on one project: evidence the
 mechanism works end to end, not a benchmark.
+
+## What loop mode does not promise
+
+**On some models, half of loop mode does not run.** The two review skills are prose, and a model
+is free to decline the work: on one frontier non-Claude model, `/security-audit` was refused
+outright on repeated attempts — once before doing anything, and once after a minute of real work.
+A refused round is not a failure you can see. It writes no `review_tasks.md` entries and raises
+no error, so it looks exactly like a clean round.
+
+Sysop's answer is to make the absence visible rather than to talk a model past its own refusal
+(which would no longer be measuring the skill). A refusal shows up in one of two shapes, and each
+has its own surface:
+
+- **Died partway** (refused after starting, crashed, ran out of context). Each round opens a
+  marker under `sysop/runtime/pending-rounds/` and clears it only once findings are written, so a
+  marker that outlives its round is the trace. The pre-scan summary repeats that stale-marker line
+  every round — so this shape reaches you during ordinary work, not only when you go looking.
+- **Refused before starting** (declined the task class outright). This writes no marker — nothing
+  ran to write one — so the only trace is an **asymmetric history**: quality rounds recorded but no
+  security audit ever completed. `bash sysop/scripts/self_check.sh` reports it. It is advisory, not
+  a failure, because that trace is identical to "you simply haven't run the audit here yet" — run
+  or schedule `self_check.sh` to catch this shape.
+
+The honest limit that shapes both: nothing running *inside* a round can detect a refusal that
+happens before the round starts. That is precisely why these checks live outside it — and why the
+before-start shape is caught by a probe you run, not by the every-round pre-scan line.
 
 ## What loop mode is not
 
