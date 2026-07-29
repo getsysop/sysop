@@ -20,7 +20,8 @@ git clone https://github.com/getsysop/sysop.git
 bash sysop/install.sh /path/to/your/project --packs auto --mode loop
 cd /path/to/your/project
 git status                                   # review everything Sysop wrote
-git add .claude/ .agents/ sysop/ CLAUDE.md .gitignore
+git add .claude/ sysop/ CLAUDE.md .gitignore
+git add .agents/ 2>/dev/null   # only present when the Codex skill links were installed
 git commit -m "chore: install Sysop (loop mode)"
 ```
 
@@ -108,6 +109,32 @@ template**, which runs the full `run_checks` suite. You merge however you alread
 hooks ship as skeletons that block nothing on day one; they gain teeth exactly as fast as your
 project promotes mechanical rules.
 
+## If you send friction upstream, check where it lands first
+
+Loop mode ships two skills that file *outward*, to the Sysop repo rather than yours:
+`/report-issues` (friction from `sysop/SYSOP_ISSUES.md`) and `/contribute-convention`
+(conventions your project promoted locally). Both default to **`getsysop/sysop`, which is
+public** — and friction entries have a habit of quoting the security context that produced the
+friction.
+
+If anything in your log or overlay should not land in a public repo, name your own target in
+your project's `CLAUDE.md`:
+
+```markdown
+## Sysop upstream repo
+
+`your-org/sysop`
+```
+
+That is the durable setting — a per-run `--repo owner/name` still overrides it, and with no
+section at all the public default applies. Both skills check the resolved target's visibility
+before filing and warn when security-sounding content is headed somewhere public, or somewhere
+they could not verify. They are prompts, not enforcement: they warn and ask, they never redact
+for you, and nothing is filed without your per-item consent. Full reference:
+`.claude/skills/_shared/upstream-repo.md`, shipped with your install.
+
+(The third give-back skill, `/share-wins`, is full-mode only — you will not have it here.)
+
 ## Updating — and growing into the full workflow
 
 Updates work the same as any install: `bash sysop/scripts/sysop-update.sh` (after setting
@@ -119,7 +146,7 @@ If the loop earns its keep and you want the rest — planning, the queue, parall
 one merge gate — the upgrade is one flag: `bash sysop/install.sh <target> --update --mode full`
 (run from wherever your Sysop clone lives). It's purely additive: lifecycle skills, scripts,
 and the `tasks/` scaffold are added; nothing the loop has learned is touched. Then review and
-commit what it added — `git add .claude/ .agents/ sysop/ tasks/ .gitignore && git commit -m "chore: grow
+commit what it added — `git add .claude/ sysop/ tasks/ .gitignore; git add .agents/ 2>/dev/null; git commit -m "chore: grow
 Sysop to full mode"` — worktree builds only see committed files.
 [getting-started.md](./getting-started.md) walks the full workflow from there; you've already
 installed, so skip its step 1 and start at step 2 (`/intake`). The reverse direction
@@ -156,9 +183,21 @@ has its own surface:
   a failure, because that trace is identical to "you simply haven't run the audit here yet" — run
   or schedule `self_check.sh` to catch this shape.
 
-The honest limit that shapes both: nothing running *inside* a round can detect a refusal that
-happens before the round starts. That is precisely why these checks live outside it — and why the
-before-start shape is caught by a probe you run, not by the every-round pre-scan line.
+- **Ran, but barely** (completed normally, having looked at almost nothing). The quietest shape, and
+  the one that reads cleanest: a round that opens a handful of files on a large repository still
+  produces real findings, a normal-looking round, and no error. Every round therefore records a
+  **coverage ledger** — `manifest`, `opened`, `grepped`, `workers` — in its `review_tasks.md` round
+  header, so the denominator always sits beside the numerator. `self_check.sh` reports the last
+  round's line, and calls out a round that declared a *full* pass while reaching under a third of
+  its own declared scope. A thin round that says it was thin is correct and passes silently — what
+  gets reported is a round whose numbers contradict its own label.
+
+The honest limit that shapes all three: nothing running *inside* a round can detect a refusal that
+happens before the round starts, and the coverage numbers are self-reported — nothing counts file
+reads for you. That is precisely why these checks live outside the round — and why the before-start
+shape is caught by a probe you run, not by the every-round pre-scan line. What the ledger buys is
+that the count must now exist beside its denominator, where `opened 13 · manifest 1,477` refutes
+itself on sight.
 
 ## What loop mode is not
 

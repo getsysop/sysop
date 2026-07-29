@@ -89,13 +89,33 @@ case "$HOOKS_DIR" in
   /*) : ;;
   *) HOOKS_DIR="$REPO_ROOT/$HOOKS_DIR" ;;
 esac
+# Phase 150: this check is the designated backstop now that no lifecycle script
+# arms hooks, so its remedy has to be one that actually works. Under a
+# configured core.hooksPath, `install_hooks.sh` deliberately skips — pointing at
+# it would leave the reader unarmed with no next step. Key-set, not non-empty:
+# an empty core.hooksPath means git runs no hooks at all.
+HOOKS_PATH_CFG=""
+HOOKS_PATH_SET=0
+if HOOKS_PATH_CFG="$(git -C "$REPO_ROOT" config --get core.hooksPath 2>/dev/null)"; then
+  HOOKS_PATH_SET=1
+fi
+if [[ "$HOOKS_PATH_SET" -eq 1 && -z "$HOOKS_PATH_CFG" ]]; then
+  info "core.hooksPath is set to the empty string — git runs NO hooks at all"
+fi
 ARMED=0
 for tmpl in "$REPO_ROOT/sysop/scripts/hooks/"*; do
   [[ -f "$tmpl" ]] || continue
   name="$(basename "$tmpl")"
   if [[ -x "$HOOKS_DIR/$name" ]]; then
-    ok "hook armed: $name"
+    if [[ "$HOOKS_PATH_SET" -eq 1 ]]; then
+      # Present, but Sysop neither wrote nor compares it — don't claim credit.
+      ok "hook present: $name  (your core.hooksPath dir — yours, not Sysop-managed)"
+    else
+      ok "hook armed: $name"
+    fi
     ARMED=$((ARMED + 1))
+  elif [[ "$HOOKS_PATH_SET" -eq 1 ]]; then
+    info "hook not present: $name  (core.hooksPath='${HOOKS_PATH_CFG}' — copy sysop/scripts/hooks/$name there yourself; install_hooks.sh skips by design)"
   else
     info "hook not armed: $name  (arm: bash sysop/scripts/install_hooks.sh)"
   fi
@@ -207,6 +227,57 @@ else
     else
       info "asymmetric round history: security audits exist (last $SEC_LAST), no code-quality round has completed"
       info "    either /codebase-review has not been run here yet, or it is failing silently"
+    fi
+  fi
+fi
+
+# Tier-0 round coverage (_shared/fanout-evidence.md). The probes above ask
+# whether a round ran; this asks how much of the codebase it actually opened.
+# Loop mode ships no /sitrep, so this is the only surface where a loop-mode
+# consumer sees a round that finished having covered ~1% of its own declared
+# scope. The line itself is always printed (it is the number a consumer came
+# here for); the FAILURE is raised only on a self-contradiction — a round that
+# labelled itself thin is correct and must not be reddened for it.
+RECEIPT_DIR="$MAIN_ROOT/sysop/runtime/round-receipts"
+if [[ -d "$RECEIPT_DIR" ]]; then
+  # Newest by MTIME, not by name. Receipts are `<skill>.<epoch>-<pid>.json`, so a
+  # lexical sort ranks by skill name first and would report the older skill's
+  # round as "last" whenever both have run — reporting a stale round as current
+  # is worse than reporting none. `ls -t` is the portable mtime sort (BSD + GNU).
+  LATEST="$(cd "$RECEIPT_DIR" 2>/dev/null && ls -t -- *.json 2>/dev/null | head -1)"
+  if [[ -n "$LATEST" ]]; then
+    R="$RECEIPT_DIR/$LATEST"
+    _rfield() { sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p" "$R" 2>/dev/null | head -1; }
+    _rstr()   { sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\"\(.*\)\".*/\1/p"     "$R" 2>/dev/null | head -1; }
+    LINE="$(_rstr line)"; KIND="$(_rstr kind)"; DONE_AT="$(_rstr completed)"
+    R_MAN="$(_rfield manifest)"; R_OPEN="$(_rfield opened)"; R_GREP="$(_rfield grepped)"
+    R_TRACK="$(_rfield tracked)"
+    if [[ -n "$LINE" ]]; then
+      info "last round coverage: $LINE${DONE_AT:+  (closed $DONE_AT)}"
+    else
+      info "last round closed with no coverage line recorded — see $LATEST"
+    fi
+    # The anchor: `manifest` is the round's own claim, `tracked` was counted at
+    # close. Shown, never judged — a scoped round legitimately speaks for a
+    # fraction of the repo, and so does a full round with real exclusions. It is
+    # here so the reader can see which.
+    if [[ -n "$R_TRACK" ]]; then
+      info "    repository had $R_TRACK tracked files at close (counted, not self-reported)"
+    fi
+    if [[ -z "$R_OPEN" || -z "$R_MAN" ]]; then
+      info "    coverage is unreported for that round — an absent number reads as a clean pass"
+    elif [[ "$KIND" == Full* ]]; then
+      # The self-contradiction check, matched to /sitrep's: a round that
+      # declared a FULL pass but reached under a third of its own declared
+      # scope. Loop mode ships no /sitrep, so without this the only loop-mode
+      # surface would print the collapsed round's own self-flattering line and
+      # say nothing. A Scoped/Sampled round declared its narrowness and is
+      # exempt — a check that fires on the honest case gets ignored.
+      if [[ "$(( ( R_OPEN + ${R_GREP:-0} ) * 3 ))" -lt "$R_MAN" ]]; then
+        bad "last review round declared Full over $R_MAN files but reached $(( R_OPEN + ${R_GREP:-0} ))"
+        info "    opened $R_OPEN — re-run with sub-agent dispatch, or relabel the round"
+        info "    Sampled and name the basis; a Full label over 1/3 coverage overstates it"
+      fi
     fi
   fi
 fi

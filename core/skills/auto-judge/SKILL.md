@@ -19,19 +19,18 @@ Two-pass workflow mirrors `/auto-fix`:
 
 ## Pre-flight: Permission Guard
 
-Before parsing arguments, verify `.claude/settings.json` carries the allow-rules this skill depends on. Same failure mode as `/auto-fix`: under `auto` mode + `skipAutoPermissionPrompt: true`, a missing rule silently halts Opus subagents mid-fix.
+Before parsing arguments, verify `.claude/settings.json` carries the allow-rules this skill depends on. Same failure mode as `/auto-fix`: under `dontAsk` mode a missing rule is auto-denied with no prompt, halting Opus subagents mid-fix.
 
 Read `.claude/settings.json` and confirm `permissions.allow` contains:
 
 - `Bash(git checkout:*)`
 - `Bash(git worktree add:*)`
-- `Bash(git worktree list)`
 - `Bash(git push -u origin:*)`
 - `Bash(git push origin:*)`
 - `Bash(git push --force-with-lease:*)` _(used only when a subagent amends a commit and re-pushes — conditional path; consumers can omit from settings.json if they don't run amend-based fixes)_
 - `Bash(bash sysop/scripts/batch_work.sh:*)`
 
-If any are missing, stop with the `_shared/permission-guard.md` § Algorithm step 4 message (one-line reason: "spawns isolated Opus subagents that judge flagged tasks, fix or drop them, and push the resulting branches"). Do not proceed.
+If any are missing, stop with the `_shared/permission-guard.md` § Algorithm step 5 message (one-line reason: "spawns isolated Opus subagents that judge flagged tasks, fix or drop them, and push the resulting branches"). Do not proceed — unless the guard's step 3 mode check applies.
 
 If `$ARGUMENTS` contains `--skip-permission-guard`, print a one-line warning and continue.
 
@@ -215,7 +214,13 @@ You have three verdicts per task:
 
    The `> Dropped:` annotation signals to future readers that the task was resolved as a false positive rather than patched.
 
-3. **FAIL** — the task premise is valid but the fix requires decisions outside this batch's scope (e.g., changing a function signature that affects uncited callers). Report FAIL and continue. Do not half-fix.
+3. **FAIL** — the task premise is valid but the fix requires decisions outside this batch's scope (e.g., changing a function signature that affects uncited callers). Do not half-fix.
+
+   When failing, update `review_tasks.md` in the worktree:
+   - **Leave the checkbox exactly as you found it** — do not mark `[x]`. The task was not done, and `close_batch.sh` reads the annotation below to leave it open at merge time instead of closing it with the rest of the batch.
+   - Append a new line immediately below the task: `  > Failed: <one-sentence reason>`
+
+   The `> Failed:` annotation is the **only durable record** that this task was attempted and left unfinished — the verdict summary in step 7 is terminal output that disappears with the session. Without it, a merged batch reads as fully resolved.
 
 ## Convention Awareness
 
@@ -237,8 +242,8 @@ All file paths in tasks are relative to the project root. Prepend `<WORKTREE_PAT
 For each task, decide FIX / DROP / FAIL:
 
 - **FIX**: read the file, apply the change using Edit. Include a short inline comment only if the WHY is non-obvious — otherwise no comment (per CLAUDE.md).
-- **DROP**: edit `<WORKTREE_PATH>/review_tasks.md` to mark `[x]` and append `  > Dropped: <reason>` under the task line.
-- **FAIL**: do not edit. Record the reason for the verdict summary.
+- **DROP**: edit `<WORKTREE_PATH>/review_tasks.md` to **leave the checkbox as `[ ]`** and append `  > Dropped: <reason>` under the task line (see § Verdicts). Do **not** pre-mark `[x]` — `close_batch.sh` flips it at merge, and a pre-marked task is invisible to that count, so the Grand Total drifts by one.
+- **FAIL**: make no code edit. Edit `<WORKTREE_PATH>/review_tasks.md` to **leave the checkbox unchanged** and append `  > Failed: <reason>` under the task line (see § Verdicts). Also record the reason for the verdict summary.
 
 **Idempotency**: If Edit fails with "old_string not found", read the file and check if `new_string` is already present. If so, the fix is already applied — treat as FIXED and continue.
 
@@ -248,21 +253,23 @@ For each file you edited, scan the rest of the file for sibling violations of th
 
 ### 3. Commit all changes
 
-Single commit covering FIX edits, DROP annotations in review_tasks.md, and sibling fixes:
+Single commit covering FIX edits, DROP and FAIL annotations in review_tasks.md, and sibling fixes:
 
 ```bash
 cd <WORKTREE_PATH> && git add -A && git diff --cached --quiet && echo "Nothing to commit" || git commit -m "fix: <batch title, lowercase>"
 ```
 
-If all verdicts were DROP with no code change, commit with:
+If no verdict produced a code change (all DROP and/or FAIL), commit the annotations alone with:
 
 ```bash
 cd <WORKTREE_PATH> && git commit -m "docs(batch-<N>): drop <count> false-positive tasks"
 ```
 
+**Never skip this commit because the batch produced no code change.** The `> Dropped:` and `> Failed:` annotations are the batch's entire durable output in that case; an uncommitted worktree edit is discarded with the worktree.
+
 ### 4. Run verify (skip if no code changes)
 
-If your commit touched only `review_tasks.md` (all drops, no FIX edits), skip verify.
+If your commit touched only `review_tasks.md` (only DROP/FAIL annotations, no FIX edits), skip verify.
 
 Otherwise:
 
@@ -362,6 +369,8 @@ After all batches are processed:
 | Batch | Task | Reason |
 |-------|------|--------|
 | 421   | TASK-2285 | requires cross-module return-shape change |
+
+Each row above is also recorded durably in `review_tasks.md` as a `> Failed:` annotation, and `close_batch.sh` leaves those tasks open when the batch merges — so the batch closes as "shipped, minus these" rather than as fully resolved.
 
 Next steps:
   <if no --merge>

@@ -110,6 +110,52 @@ def test_unarmed_hooks_reported_advisory_not_failing(tmp_path):
     assert "install_hooks.sh" in r.stdout
 
 
+def _with_hookspath(tmp_path, name, value="myhooks", make_dir=True):
+    root = _consumer(tmp_path / name)
+    assert _install(root, "--packs", "", "--no-arm-hooks").returncode == 0
+    if make_dir and value:
+        (root / value).mkdir(parents=True, exist_ok=True)
+    _git(root, "config", "core.hooksPath", value)
+    return root
+
+
+def test_hookspath_remedy_is_one_that_actually_works(tmp_path):
+    # Phase 150: self_check is the designated backstop now that no lifecycle
+    # script arms hooks, so its remedy has to work. Under a configured
+    # core.hooksPath, install_hooks.sh deliberately skips — naming it as the
+    # fix would leave the reader unarmed with no next step.
+    root = _with_hookspath(tmp_path, "hp1")
+    r = _self_check(root)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "hook not present:" in r.stdout
+    assert "skips by design" in r.stdout, "pointed at a remedy that no-ops"
+    assert "hook not armed:" not in r.stdout, "used the .git/hooks wording under core.hooksPath"
+
+
+def test_hookspath_does_not_claim_credit_for_the_consumers_own_hooks(tmp_path):
+    # A hook found in the consumer's own core.hooksPath dir was neither written
+    # nor compared by Sysop; reporting it as "armed" is a false attribution the
+    # phase's own "your hooks are yours" framing makes worse.
+    root = _with_hookspath(tmp_path, "hp2")
+    for n in ("pre-commit", "pre-merge-commit"):
+        p = root / "myhooks" / n
+        p.write_text("#!/bin/sh\nexit 0\n")
+        p.chmod(0o755)
+    r = _self_check(root)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "hook present:" in r.stdout
+    assert "not Sysop-managed" in r.stdout
+    assert "hook armed:" not in r.stdout, \
+        "claimed credit for a hook Sysop neither wrote nor compares"
+
+
+def test_empty_hookspath_is_surfaced_as_no_hooks_at_all(tmp_path):
+    root = _with_hookspath(tmp_path, "hp3", value="", make_dir=False)
+    r = _self_check(root)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "NO hooks at all" in r.stdout
+
+
 def test_source_and_installed_copies_match():
     """self_check.sh ships via install_companion_scripts — drift guard that the
     source copy is executable bash (a syntax error would break every consumer's

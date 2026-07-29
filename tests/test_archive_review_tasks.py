@@ -702,3 +702,139 @@ def test_main_malformed_archive_total_degrades_without_none_in_file(
     assert "(200 tasks)" in ref
     # The malformed row was reported on stderr.
     assert "missing numeric cells" in capsys.readouterr().err
+
+
+# === Phase 157: archiving must not silently swallow an unfinished task ======
+#
+# `parse_archivable_batches` keys on the batch HEADER (`Merged`/`Complete`), and
+# `TASK_RE` counts only `[x]` lines. After Phase 157 a batch can legitimately
+# reach `Merged` still holding an open task — `close_batch.sh` leaves a task
+# annotated `> Failed:` unflipped, because a FAIL verdict means the work was
+# attempted and not finished. Archiving then moves it out of `review_tasks.md`,
+# the file every open-task reader consults, which would restore one lifecycle
+# step later exactly the invisibility Phase 157 removed. So the run names it
+# before the human answers the confirmation prompt.
+#
+# Warn, never block: archiving is the pressure valve for the 125KB read limit,
+# and the task is not lost — it moves with its annotation intact.
+
+_ARCHIVABLE_WITH_FAILURE = """\
+# Review Tasks
+
+> **Archive:** Rounds 1 are in [review_tasks_archive.md](review_tasks_archive.md).
+
+## Round 2 (2026-07-27) — Code Quality Review
+
+### Batch 1 — Mixed verdicts `Merged`
+
+- [x] **TASK-1**: fixed thing
+- [ ] **TASK-3**: failed thing
+  > Failed: needs a cross-module signature change
+"""
+
+
+def _installed_script(tmp_path):
+    """Lay the script out the way install.sh does: <root>/sysop/scripts/.
+
+    The script resolves REVIEW_FILE from its own location (`parents[2]`), not
+    CWD, so a copy is the only honest way to point it at a scratch tree.
+    """
+    scripts = tmp_path / "sysop" / "scripts"
+    scripts.mkdir(parents=True)
+    src = Path(__file__).resolve().parents[1] / "core/companion/scripts"
+    for name in ("archive_review_tasks.py", "_log.py"):
+        (scripts / name).write_bytes((src / name).read_bytes())
+    return scripts / "archive_review_tasks.py"
+
+
+def test_dry_run_warns_about_still_open_tasks(tmp_path):
+    import subprocess
+
+    script = _installed_script(tmp_path)
+    (tmp_path / "review_tasks.md").write_text(_ARCHIVABLE_WITH_FAILURE, encoding="utf-8")
+
+    r = subprocess.run([sys.executable, str(script), "--dry-run"],
+                       capture_output=True, text=True)
+
+    assert r.returncode == 0, r.stderr
+    assert "1 task(s) in these batches are still open" in r.stdout, r.stdout
+    # Scope the id assertions to the warning block itself — the dry-run also
+    # prints an archive-block preview containing every task line verbatim, so a
+    # whole-stdout search would pass no matter what the warning listed.
+    warn_block = r.stdout.split("are still open")[1].split("Finish them")[0]
+    # It must name the task, not just count it — an unnamed count is not
+    # actionable, and the point is that the human can go finish or re-file it.
+    assert "TASK-3" in warn_block, warn_block
+    # ...and must not name the task that is genuinely done.
+    assert "TASK-1" not in warn_block, warn_block
+
+
+def test_dry_run_is_silent_when_every_archivable_task_is_done(tmp_path):
+    import subprocess
+
+    script = _installed_script(tmp_path)
+    clean = _ARCHIVABLE_WITH_FAILURE.replace(
+        "- [ ] **TASK-3**: failed thing\n  > Failed: needs a cross-module signature change\n",
+        "- [x] **TASK-3**: finished thing\n",
+    )
+    (tmp_path / "review_tasks.md").write_text(clean, encoding="utf-8")
+
+    r = subprocess.run([sys.executable, str(script), "--dry-run"],
+                       capture_output=True, text=True)
+
+    assert r.returncode == 0, r.stderr
+    assert "still open" not in r.stdout, r.stdout
+
+
+def test_warning_fires_on_the_real_run_not_only_dry_run(tmp_path):
+    """The warning's whole purpose is to inform the confirmation prompt.
+
+    Phase 157's round mutated the guard to `if unfinished and args.dry_run:` and
+    it SURVIVED, because both of the original tests passed `--dry-run`. That left
+    the branch that actually removes the task from the live queue — the one right
+    before `input("Archive N tasks? [y/N] ")` — completely untested.
+
+    Answering `n` aborts after the warning has printed, so this exercises the
+    real path without mutating the fixture.
+    """
+    import subprocess
+
+    script = _installed_script(tmp_path)
+    (tmp_path / "review_tasks.md").write_text(_ARCHIVABLE_WITH_FAILURE, encoding="utf-8")
+
+    r = subprocess.run([sys.executable, str(script)], input="n\n",
+                       capture_output=True, text=True)
+
+    assert r.returncode == 0, r.stderr
+    assert "1 task(s) in these batches are still open" in r.stdout, r.stdout
+    assert "TASK-3" in r.stdout
+    # The warning must precede the prompt, or it cannot inform the answer.
+    assert r.stdout.index("still open") < r.stdout.index("Archive"), r.stdout
+    assert "Aborted." in r.stdout
+    # Aborting changed nothing.
+    assert (tmp_path / "review_tasks.md").read_text(encoding="utf-8") == _ARCHIVABLE_WITH_FAILURE
+
+
+def test_unbolded_open_task_is_detected(tmp_path):
+    """`close_batch.sh` holds `- [ ] task one` open; the archive must see it too.
+
+    The round found `UNFINISHED_TASK_RE` requiring a `**bold**` id while
+    `close_batch.sh`'s `is_open_task` requires only `^- [ ]` — so this shape (the
+    one `tests/test_close_batch_sh.py`'s own `BASE_TASKS` fixture uses) was
+    protected by one script and swept out silently by the other.
+    """
+    import subprocess
+
+    script = _installed_script(tmp_path)
+    tasks = _ARCHIVABLE_WITH_FAILURE.replace(
+        "- [ ] **TASK-3**: failed thing", "- [ ] plain unbolded failed thing"
+    )
+    assert "plain unbolded" in tasks, "fixture anchor drifted"
+    (tmp_path / "review_tasks.md").write_text(tasks, encoding="utf-8")
+
+    r = subprocess.run([sys.executable, str(script), "--dry-run"],
+                       capture_output=True, text=True)
+
+    assert r.returncode == 0, r.stderr
+    assert "1 task(s) in these batches are still open" in r.stdout, r.stdout
+    assert "plain unbolded failed thing" in r.stdout, r.stdout

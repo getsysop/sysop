@@ -14,7 +14,7 @@ This skill does NOT merge anything. It batches the front of the pipeline (claim 
 
 ## Pre-flight: Permission Guard
 
-Verify `.claude/settings.json` carries the allow-rules this skill depends on. Under `auto` mode with `skipAutoPermissionPrompt: true`, a missing rule will silently halt mid-batch — worst case after Step 5 has pre-claimed several tasks on main.
+Verify `.claude/settings.json` carries the allow-rules this skill depends on. Under `dontAsk` mode a missing rule is auto-denied with no prompt, halting mid-batch — worst case after Step 5 has pre-claimed several tasks on main.
 
 Read `.claude/settings.json` and confirm `permissions.allow` contains:
 
@@ -28,7 +28,7 @@ Read `.claude/settings.json` and confirm `permissions.allow` contains:
 
 Read-only git operations (`git rev-parse`, `git log`, `git branch --show-current`) used by Phase 6a/6e HEAD capture and Phase 7 envelope recovery are auto-passed by the classifier and do not require allow-rules; they are documented here for completeness. The Step 1 heredoc's in-flight overlap check (Leg B, Phase 103) imports `sysop/scripts/scope_overlap.py` **in-process** — it runs inside the same already-permitted `python3 -` heredoc, and its `git -C <worktree> diff --name-only` reads are read-only subprocesses inside that process — so it adds **no** new permission rule.
 
-If any required rule is missing, stop with the `_shared/permission-guard.md` § Algorithm step 4 message (one-line reason: "pre-claims a batch of tasks on `main` via heredoc'd python + `claim_task.sh`, then spawns parallel Opus agents per task — silent denial mid-batch would leave half-claimed state in `tasks/index.yml`"). Do not proceed.
+If any required rule is missing, stop with the `_shared/permission-guard.md` § Algorithm step 5 message (one-line reason: "pre-claims a batch of tasks on `main` via heredoc'd python + `claim_task.sh`, then spawns parallel Opus agents per task — silent denial mid-batch would leave half-claimed state in `tasks/index.yml`"). Do not proceed — unless the guard's step 3 mode check applies.
 
 If `$ARGUMENTS` contains `--skip-permission-guard`, print a one-line warning and continue.
 
@@ -487,12 +487,12 @@ For each task:
 
   The orchestrator does NOT commit these files — they are scratch for the human. Step 8 references the paths in the final report.
 
-  **Mirror the verdict to a central archive so it survives worktree cleanup.** The per-worktree `plan.md`/`review.md` above are the *only* record of why the task parked — and they are destroyed the moment the worktree is removed (`cleanup_worktrees.sh --force` removes the worktree wholesale). A parked task is by definition resumed *later*, often after that cleanup has run, so the worktree scratch alone loses the verdict exactly when the human comes back for it. Write a second copy at the **project root** — where the orchestrator runs, so it outlives any worktree — gitignored under `sysop/runtime/auto-build/`:
+  **Mirror the verdict to a central archive so it survives worktree cleanup.** The per-worktree `plan.md`/`review.md` above are the *only* record of why the task parked — and they are destroyed the moment the worktree is removed (`cleanup_worktrees.sh --force` removes the worktree wholesale). A parked task is by definition resumed *later*, often after that cleanup has run, so the worktree scratch alone loses the verdict exactly when the human comes back for it. Write a second copy at the **project root** — where the orchestrator runs, so it outlives any worktree — gitignored under `sysop/runtime/`. Note the archive is **not** under `sysop/runtime/auto-build/`: that dir is the per-worktree scratch home, and `/claim-task` parks here too, so the path carries no owning-skill name (renamed Phase 159b):
 
   ```bash
-  mkdir -p sysop/runtime/auto-build/parked
+  mkdir -p sysop/runtime/parked
   TS=$(date -u +%Y%m%dT%H%M%SZ)
-  ARCHIVE="sysop/runtime/auto-build/parked/${TASK_ID}__${TS}.md"
+  ARCHIVE="sysop/runtime/parked/${TASK_ID}__${TS}.md"
   {
     printf '# %s — PARKED %s\n\n' "$TASK_ID" "$TS"
     printf '## Plan (verbatim)\n\n%s\n\n' "$PLAN_TEXT"
@@ -500,7 +500,7 @@ For each task:
   } > "$ARCHIVE"
   ```
 
-  The UTC timestamp keys the filename: a task parks at most once per cycle and cycles run minutes apart, so `<TASK_ID>__<timestamp>` is unique per park. This archive is the **durable** record — worktree cleanup never touches the project-root `sysop/runtime/auto-build/parked/`. Closed work does not accumulate here: when a parked task is later resumed and closed, `/review-close` Step 4c removes its marker(s) alongside the lock — historically nothing did, so markers for done tasks piled up and this dir over-reported them as still parked. (A `claim_task.sh --release` of a parked task deliberately leaves its markers — a released park's verdict may still serve the next claimant.) (No telemetry is emitted here; this is the standalone park-archive fix, not the `parked_reason`/`task_outcome` instrumentation it was extracted from.)
+  The UTC timestamp keys the filename: a task parks at most once per cycle and cycles run minutes apart, so `<TASK_ID>__<timestamp>` is unique per park. This archive is the **durable** record — worktree cleanup never touches the project-root `sysop/runtime/parked/`. Closed work does not accumulate here: when a parked task is later resumed and closed, `/review-close` Step 4c removes its marker(s) alongside the lock — historically nothing did, so markers for done tasks piled up and this dir over-reported them as still parked. (A `claim_task.sh --release` of a parked task deliberately leaves its markers — a released park's verdict may still serve the next claimant.) (No telemetry is emitted here; this is the standalone park-archive fix, not the `parked_reason`/`task_outcome` instrumentation it was extracted from.)
 
 - **If all findings are `fixable` (or zero findings)** → the orchestrator builds a `REVISED_PLAN` from `PLAN_TEXT` + `RAW_FINDINGS` by passing both into the Phase-6e execution agent's prompt (one-shot inline absorption). No separate plan-revise agent in v1 — see "Out of scope for v1" below.
 
@@ -764,7 +764,7 @@ Next steps:
     directory is not committed by the orchestrator; clean it up before
     `/document-work`. If the worktree was already cleaned up (e.g. via
     `cleanup_worktrees.sh --force`), the same plan + verdict survive at the
-    project root under `sysop/runtime/auto-build/parked/<TASK_ID>__<timestamp>.md` — the
+    project root under `sysop/runtime/parked/<TASK_ID>__<timestamp>.md` — the
     durable copy the orchestrator mirrored in Phase 6d.
   - For EXECUTED tasks: start a fresh session (`/clear`, or a new terminal),
     then run /review-close to merge each branch — `/review-close` is
@@ -786,7 +786,7 @@ After printing the table, the orchestrator's job is done. It does NOT run `/revi
 
 - `/auto-build` selects a batch using the Step 2 batch-sizing rule and presents per-task math to the human (Step 4).
 - After confirmation, the orchestrator pre-claims each task on `main` (Step 5), then runs the three-phase per-task pipeline: Phase 6a plan-only agents → Phase 6b adversarial-reviewer agents → Phase 6c orchestrator classification → Phase 6d halt-or-revise → Phase 6e execution agents (Steps 6-7).
-- Phase-6d `blocker` classification parks the task (lock + worktree intact, `plan.md` + `review.md` written to `<worktree>/sysop/runtime/auto-build/`, and the plan + verdict mirrored to the durable project-root archive `sysop/runtime/auto-build/parked/<TASK_ID>__<timestamp>.md` so they survive worktree cleanup); other tasks continue.
+- Phase-6d `blocker` classification parks the task (lock + worktree intact, `plan.md` + `review.md` written to `<worktree>/sysop/runtime/auto-build/`, and the plan + verdict mirrored to the durable project-root archive `sysop/runtime/parked/<TASK_ID>__<timestamp>.md` so they survive worktree cleanup); other tasks continue.
 - Unparked tasks reach Phase 6e and execute. Final report (Step 8) prints `EXECUTED` / `PARKED` / `FAILED` with worktree paths.
 - One full cycle on a 2-task batch of Low-effort + single-file tasks from the consumer's `tasks/open/` completes end-to-end, and the human runs `/review-close` cleanly on each resulting branch.
 - A deliberately-broken plan (task body that mentions a non-existent file) causes Phase 6c to classify a `blocker` and Phase 6d to park the task — visible in the final report and via the scratch files.

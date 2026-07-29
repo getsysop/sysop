@@ -25,7 +25,8 @@ that gap.
 (permission guard → `gh auth` → resolve upstream repo → render → per-entry
 consent → post → annotate the source → report). Like them — and unlike
 `/pr-dependabot`, which operates on *your own* repo — it sends **upstream to the
-Sysop repo** (`getsysop/sysop` by default). That direction is the whole point.
+Sysop repo** (the public `getsysop/sysop` unless you've configured otherwise —
+Step 0.6). That direction is the whole point.
 
 **Why a Discussion, not an Issue.** A win is not a defect or a proposal — it has
 no open/close lifecycle and creates no work item. It is social proof plus a
@@ -46,7 +47,7 @@ entry you didn't explicitly pick.
 ## Pre-flight: Permission Guard
 
 This skill shells out to `gh api graphql` (both to resolve the target Discussion
-and to post the comment) and edits `SYSOP_ISSUES.md` in place. Its only network
+and to post the comment) and edits `sysop/SYSOP_ISSUES.md` in place. Its only network
 side effect is posting a Discussion comment (and, once, creating the standing
 Wins thread if it doesn't exist yet) — and only under `--execute` after you pick
 which entries.
@@ -59,18 +60,24 @@ Read `.claude/settings.json` and confirm `permissions.allow` contains:
   permission classifier cannot tell them apart, so the write path the documented
   happy path requires needs this rule listed.
 
-If it is missing, stop with the `_shared/permission-guard.md` § Algorithm step 4
-message (one-line reason: "shares SYSOP_ISSUES.md `[good]` entries upstream as a
-Sysop Discussion comment; shells `gh api graphql` against the Sysop repo"). Do
-not proceed.
+If it is unsatisfied, stop with the `_shared/permission-guard.md` § Algorithm
+step 5 message (one-line reason: "shares SYSOP_ISSUES.md `[good]` entries
+upstream as a Sysop Discussion comment; shells `gh api graphql` against the Sysop
+repo"). Do not proceed — unless the guard's step 3 mode check applies.
 
-`gh auth status` is read-only and auto-approved under `auto` mode — it is not
-listed here (per `_shared/permission-guard.md` § Notes: don't list read-only
-ops). The skill's own read queries *are* `gh api graphql` calls (resolving the
+`gh auth status` and the `gh repo view` visibility probe are **not** listed as
+required rules — their absence must not stop the run. Both ship in the template
+allow-list (`Bash(gh auth status)`, `Bash(gh repo view:*)`), because `gh` is not
+in Claude Code's built-in read-only set and every `gh` call therefore needs a
+rule; under `dontAsk` an unlisted one is auto-denied. They stay off the required
+list because each fails loudly on its own terms — a denied auth check reads the
+same as not-logged-in and stops the skill with a visible message, and a denied
+visibility probe degrades per `_shared/upstream-repo.md` § B rather than
+halting. The skill's own read queries *are* `gh api graphql` calls (resolving the
 repo/thread), but they share that command with the write mutation, so the single
 `Bash(gh api graphql:*)` rule above already covers them — there is no separate
-read-only rule to add. Editing `SYSOP_ISSUES.md` uses the `Edit` tool, not Bash,
-so it needs no allow-rule.
+read-only rule to add. Editing `sysop/SYSOP_ISSUES.md` uses the `Edit` tool, not
+Bash, so it needs no allow-rule.
 
 If `$ARGUMENTS` contains `--skip-permission-guard`, print a one-line warning and
 continue.
@@ -82,10 +89,13 @@ Parse `$ARGUMENTS`:
 - **`--execute`** — actually post the comment for the entries you consent to.
   **Without it, the skill is read-only** (reads + renders + prints the plan,
   posts nothing, edits nothing).
-- **`--repo owner/name`** — override the upstream target repo. Default:
-  `getsysop/sysop`. Use this if you forked Sysop, or you're a tester on a private
-  Sysop mirror and want wins on that repo (both `getsysop/sysop` and the tester
-  mirror have Discussions enabled).
+- **`--repo owner/name`** — override the upstream target repo for this run.
+  Beats every other source. Absent, the target comes from `<project>/CLAUDE.md
+  § Sysop upstream repo` if that section exists, else the shipped default
+  `getsysop/sysop`. Use the flag for one-off exceptions and a fork; use the
+  CLAUDE.md section for a standing default (see Step 0.6) — e.g. a tester on a
+  private Sysop mirror who wants every win on that repo (both `getsysop/sysop`
+  and the tester mirror have Discussions enabled).
 
 There is no `--include-resolved` analog (`/report-issues` has one): a win has
 only two states — `Good — keep` (eligible) and `Shared` (already sent) — so
@@ -100,26 +110,38 @@ with the `repo` (or `public_repo`) scope — the default `gh auth login` grant
 covers it; if a mutation later fails with a scope error, tell the human to run
 `gh auth refresh -s repo` rather than looping.
 
-## Step 0.6: Resolve the target repo
+## Step 0.6: Resolve the target repo and its visibility
 
-Default target is **`getsysop/sysop`** — the upstream Sysop repo, *not* the current
-project's own repo. Override with `--repo owner/name`. Print the target once,
-plainly, so the human sees where the win lands before anything is posted:
-`Target repo for wins: <owner/name>`. Every `gh api graphql` call in this skill
-passes the resolved `<owner>`/`<name>` explicitly — never rely on the current
-directory's remote, which is the consumer's project, not Sysop.
+Follow `_shared/upstream-repo.md` — the shared protocol for all three give-back
+skills. In short: `--repo` beats `<project>/CLAUDE.md § Sysop upstream repo`
+beats the shipped default `getsysop/sysop` (which is **public**); a present-but
+-unparseable section is a hard stop, never a silent fall-back to the default.
+Print the target and its source once, plainly, before anything is posted:
+`Target repo for wins: <owner/name>   (source: ...)`. Then probe visibility
+(`gh repo view ... --json visibility`), carrying `[verified]` or `[assumed]` per
+that partial's § B. Every `gh api graphql` call in this skill passes the
+resolved `<owner>`/`<name>` explicitly — never rely on the current directory's
+remote, which is the consumer's project, not Sysop.
 
-If `getsysop/sysop` isn't reachable from where you are (e.g. the GitHub rename
-hasn't propagated, or you're filing against a fork), the first resolve query will
-return a null repository — stop and tell the human the target repo isn't
-reachable (pass `--repo` with the correct slug) rather than looping.
+**The sensitivity nudge runs later, not here.** It needs the exact rendered payload, which does not exist yet at this step; it fires at the consent gate (Step 2, just before Step 3) per `_shared/upstream-repo.md` § C. Carry this step's resolved target and visibility forward to it.
+
+A win is the least sensitive of the three corpora, but "the security audit finally
+caught X" is a perfectly ordinary win to write down, so the corpus is not exempt.
+
+Reachability is separate from visibility. If the resolved target isn't reachable
+from where you are (a fork slug typo, a private repo you lack access to), the
+first resolve query returns a null repository — stop and tell the human the
+target repo isn't reachable rather than looping. The visibility probe failing is
+*not* proof of that and never triggers this stop on its own.
 
 ## Step 1: Read and classify the `[good]` entries
 
-Read `SYSOP_ISSUES.md` at the **consumer-repo root** (NOT under `.claude/`). If
-it's missing, stop with one line: `note: SYSOP_ISSUES.md not present — no wins to
-share. (Re-run bash install.sh to seed it, or capture wins via /review-close
-Step 7 first.)` and stop.
+Read `sysop/SYSOP_ISSUES.md` — inside the `sysop/` vendor dir at the consumer-repo
+root (Phase 128; NOT under `.claude/`, and no longer at the bare repo root). If a
+pre-Phase-128 install left it at the root, read that instead rather than
+reporting nothing. If neither exists, stop with one line: `note:
+sysop/SYSOP_ISSUES.md not present — no wins to share. (Re-run bash install.sh to
+seed it, or capture wins via /review-close Step 7 first.)` and stop.
 
 The file mixes friction (`ISSUE-NNNN`) and wins (`GOOD-NNNN`). **This skill
 handles only the wins** — the `[good]` entries. An entry is a win if its heading
@@ -187,13 +209,17 @@ Shared from <consumer> via /review-close Step 7 + /share-wins. Sysop commit/inst
 Omit the `<consumer>` bits if no consumer name was found.
 
 **Redaction is the human's call, done by editing the log first.** Before the
-consent step, print one reminder — substituting the **resolved target** (the
-default `getsysop/sysop`, or the `--repo` override): *"This comment is exactly what
-will be posted to `<target>`'s Wins discussion — visible to anyone who can see
-that repo. If any of it names a path, secret, or detail you don't want exposed
-there, edit `SYSOP_ISSUES.md` to redact it and re-run — I will not auto-redact."*
-(Don't hardcode "publicly" — with `--repo` pointed at a private fork or tester
-mirror, the discussion is visible only to that repo's collaborators.)
+consent step, print one reminder — substituting the **resolved target** from
+Step 0.6: *"This comment is exactly what will be posted to `<target>`'s Wins
+discussion — visible to anyone who can see that repo. If any of it names a path,
+secret, or detail you don't want exposed there, edit `sysop/SYSOP_ISSUES.md` to
+redact it and re-run — I will not auto-redact."* (Don't hardcode "publicly" —
+with the target pointed at a private fork or tester mirror, the discussion is
+visible only to that repo's collaborators.)
+
+**Then run the sensitivity nudge** (`_shared/upstream-repo.md` § C) over the
+rendered comment — every line of it, including each win's heading — printing it
+when the Step 0.6 visibility is `PUBLIC`, `INTERNAL`, or `UNKNOWN`.
 
 If `--execute` was **not** passed, stop here: print `Dry-run. Re-run with
 --execute to choose which wins to share.` and stop. Nothing is posted or edited.
@@ -306,7 +332,7 @@ Only under `--execute`, with ≥1 consented entry.
    exact hazard `/report-issues` Step 4 fixed. So:
 
    - Write the exact assembled body to a temporary file **outside the repo**
-     (e.g. `"$TMPDIR/sysop-wins-<date>.md"`) using the `Write` tool — never echo
+     (e.g. `"${TMPDIR:-/tmp}/sysop-wins-<date>.md"`) using the `Write` tool — never echo
      it through the shell. It must be **byte-identical** to what you print next.
    - Print the final body once — `Posting this comment to <thread url>:` followed
      by the body — so the human sees the exact consented payload immediately
@@ -320,7 +346,7 @@ Only under `--execute`, with ≥1 consented entry.
      ```bash
      gh api graphql \
        -f discussionId='<discussionId>' \
-       -F body=@"$TMPDIR/sysop-wins-<date>.md" \
+       -F body=@"${TMPDIR:-/tmp}/sysop-wins-<date>.md" \
        -f query='mutation($discussionId:ID!,$body:String!){
          addDiscussionComment(input:{discussionId:$discussionId,body:$body}){
            comment{ url }
@@ -396,9 +422,11 @@ human reviews and commits the status flips intentionally.
   number — the "constant" is the category (`Show and tell`) + the canonical title.
   It self-heals: the first tester to run `/share-wins` establishes the thread; the
   oldest-match rule converges a rare create race onto one thread.
-- **Upstream, not local.** Posts to `getsysop/sysop` by default; `--repo` covers
-  forks and the tester mirror. The give-back only works if the win reaches the
-  maintainer.
+- **Upstream, not local.** Posts to `getsysop/sysop` by default; the give-back
+  only works if the win reaches the maintainer. That default is *public*, so the
+  target is a first-class consumer config (`CLAUDE.md § Sysop upstream repo`,
+  durable — a tester mirror, a private fork) with `--repo` as the per-run
+  override on top.
 - **v1 scope.** Resolve/create the thread + post **one aggregated comment** +
   flip the source entries. **Out:** reactions automation, filing issues, opening
   PRs, any write to the Sysop repo beyond the Wins discussion + its comment.

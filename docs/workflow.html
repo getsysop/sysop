@@ -848,7 +848,7 @@
       <aside class="hero-margin rise">
         <span class="line">Vol. <span class="accent">I</span></span>
         <span class="line">Issue 86</span>
-        <span class="line">2026.07.07</span>
+        <span class="line">2026.07.28</span>
         <span class="line" style="margin-top:22px">An essay on</span>
         <span class="line">software workflow</span>
       </aside>
@@ -871,7 +871,7 @@
             <div class="hero-stat-label">Skills</div>
           </div>
           <div class="hero-stat">
-            <div class="hero-stat-fig">146</div>
+            <div class="hero-stat-fig">159</div>
             <div class="hero-stat-label">Shipped phases</div>
           </div>
           <div class="hero-stat">
@@ -991,7 +991,11 @@
               <code>/contribute-convention</code> takes a locally-promoted convention, strips your project's fingerprints
               down to placeholder vocabulary, and files it upstream as a pack proposal — one of three give-back channels,
               alongside <code>/report-issues</code> (friction that became a fix) and <code>/share-wins</code> (what worked
-              well enough to protect from a future change).
+              well enough to protect from a future change). Where all three file is your call, not the tool's: they resolve
+              a target from <code>&sect; Sysop upstream repo</code> in your own <code>CLAUDE.md</code>, and the shipped
+              default is the <em>public</em> Sysop repo — which is worth knowing before a friction log quoting your
+              production context goes anywhere. They probe the resolved target's visibility and say so before filing, but
+              the check warns; it never redacts, and per-item consent stays the actual gate.
             </p>
             <p>
               That give-back is the reason the project is open. Every pack convention is a documented, generalized
@@ -1355,11 +1359,11 @@
         <dl class="glossary">
           <div class="entry">
             <dt>/next-task<span class="model-tag haiku">haiku · selection</span></dt>
-            <dd>Single claimable task with effort + blockers. Anchored on <code>current_focus: true</code>, sorted by effort low→high.</dd>
+            <dd>Single claimable task with effort + blockers. Anchored on <code>current_focus: true</code>, ranked <em>unblocker-first</em> — how many other tasks it unblocks, then effort ascending, then id (Phase 74). <code>--avoid-inflight</code> prepends a collision tier, so an exact-path clash with work already running sorts out of the way even ahead of an unblocker (Phase 103).</dd>
           </div>
           <div class="entry">
             <dt>/claim-task<span class="model-tag opus">opus · planning + exec</span></dt>
-            <dd>Creates lock + worktree, builds a plan, runs adversarial review, then a sub-agent owns implementation, verification, and the commit.</dd>
+            <dd>Adjudicates the claim before it creates anything — <code>--entry-state</code> answers <code>claimable</code> / <code>resumable</code> / <code>held</code> / <code>closed</code> / <code>absent</code>, and <code>resumable</code> <em>stops and asks</em> rather than resuming (Phase 159b). Then creates lock + worktree and builds a plan; a single sub-agent owns the adversarial review, the implementation, the verification, and the commit.</dd>
           </div>
           <div class="entry">
             <dt>/document-work<span class="model-tag">inherits · narration</span></dt>
@@ -1367,7 +1371,7 @@
           </div>
           <div class="entry">
             <dt>/review-close<span class="model-tag opus">opus · gate</span></dt>
-            <dd>Worktree-state classification; project pre-merge gates — including a <em>crown-jewel coverage gate</em> (Phase 61) that fails the merge when a critical path loses test coverage, with no baseline escape hatch; a verify-the-record check (Phase 59) that reads back the task's <code>## Test decision</code> and confirms it against the actual diff; the manual-smoke gate; merge to main; archive the task; clean up branches.</dd>
+            <dd>Worktree-state classification; project pre-merge gates — including a <em>crown-jewel coverage gate</em> (Phase 61) that fails the merge when a critical path loses test coverage, with no baseline escape hatch; a verify-the-record check (Phase 59) that reads back the task's <code>## Test decision</code> and confirms it against the actual diff; the manual-smoke gate; the merge; archive the task; clean up branches. <em>How</em> it merges is the project's call — <code>§ Merge policy</code> in your <code>CLAUDE.md</code> selects <code>direct</code> (push <code>main</code>) or <code>pr</code>, which never writes <code>main</code> <em>directly</em> — work routes through an integration branch and one squash PR, making GitHub the sole serialized writer (Phase 63; PR-state-as-verdict and PR reuse, Phase 151).</dd>
           </div>
         </dl>
 
@@ -1380,6 +1384,7 @@
         <aside class="pullquote">
           <p><strong>The test claim has to survive to merge.</strong> Plan-time, the task body records a <em>test decision</em> — &ldquo;test X proves Y&rdquo; or &ldquo;no test because Z&rdquo; (Phase 58b). Close-time, <code>/review-close</code> reads it back and verifies it against the diff that's actually shipping (Phase 59).</p>
           <p>An assertion made during planning doesn't get to coast into main unchecked — the record is verified, not trusted.</p>
+          <p><strong>What that doesn't buy.</strong> Verifying a record is not the same as the verification being any good, and this project has the receipts against itself. Six consecutive phase records put independent reviewers on the phase's own new tests, and every one of them found the guards weaker than the phase had just claimed. In the first, 41 of 53 mutations survived. In the next, a reviewer's 83 mutations left 28 alive against a build that had reported 33 of 33 killed. Then 32 of 80. Then 28 across two reviewers' 67, where 22 of 32 tests still passed with all four changed files blanked — one defect explained nearly all of that one: every assertion checked that a token was <em>present</em>, never what the token <em>claimed</em>. In the last two, an author's own sweep reported a perfect score and an independent sweep found survivors anyway — the second time in a phase that had already written that exact lesson into its own record. The transferable finding is not &ldquo;run more mutations.&rdquo; It is that an author-chosen mutation set measures the author's model of the code rather than the tests, so the score is only worth what the <em>independence</em> of the set is worth.</p>
         </aside>
 
         <h3>Adjacent skills</h3>
@@ -1716,11 +1721,11 @@
           </div>
           <div class="entry">
             <dt>/auto-fix<span class="model-tag">parallel · mechanical</span></dt>
-            <dd>Drains the <em>auto</em> pool. Claims each batch via an <em>isolated parallel sub-agent</em> (default 4), fixes, verifies, pushes. <code>--merge</code> handles file-overlapping batches sequentially so the second batch sees the first's fixes.</dd>
+            <dd>Drains the <em>auto</em> pool. Claims each batch via an <em>isolated parallel sub-agent</em> (default 4), fixes, verifies, pushes. <code>--merge</code> handles file-overlapping batches sequentially so the second batch sees the first's fixes. A batch claim writes a real lock — <code>sysop/runtime/locks/BATCH-&lt;N&gt;.lock</code>, same directory and shape as a task's (Phase 156) — which is what keeps <code>/next-task</code>, <code>/sitrep</code> and the collision advisories from handing the same batch to a second agent.</dd>
           </div>
           <div class="entry">
             <dt>/auto-judge<span class="model-tag opus">opus · judgment</span></dt>
-            <dd>Drains the <em>flag</em> pool. Same parallel + <code>--merge</code> shape, but each sub-agent is Opus and can FIX, DROP, or FAIL a task after adversarial re-reading. The two drainers run concurrently against disjoint pools.</dd>
+            <dd>Drains the <em>flag</em> pool. Same parallel + <code>--merge</code> shape, but each sub-agent is Opus and can FIX, DROP, or FAIL a task after adversarial re-reading. A FAIL now writes an indented <code>&gt; Failed:</code> line under the task and <code>close_batch.sh</code> leaves that task open — until Phase 157 a FAIL existed only as terminal output that died with the session, and the close checked the box anyway. The two drainers run concurrently against disjoint pools.</dd>
           </div>
         </dl>
 
@@ -1728,7 +1733,7 @@
         <p>
           Everything above assumes the review <em>ran</em>. The hardest defect class in a review system is the one
           where it didn't — because a review that dies produces the same artifact as a review that found nothing:
-          no findings, no error, a queue that looks drained. Four shapes of that silence turned up in real runs
+          no findings, no error, a queue that looks drained. Five shapes of that silence turned up in real runs
           during July 2026, and each got its own answer.
         </p>
         <p>
@@ -1783,6 +1788,22 @@
           section matches inside territory some section already reaches; this one finds the territory nothing
           reaches.
         </p>
+        <p>
+          <strong>A round nobody ran — by an agent that knew it should.</strong> The fifth shape is the least
+          comfortable, because this project found it in itself. The rule that a phase is not finished until an
+          adversarial round has run existed, and was loaded into every session, as a standing note to the assistant.
+          It failed three times anyway: once by being skipped outright, and twice — this is the interesting part — by
+          <em>firing correctly</em>. The agent raised the round, said out loud that it had not yet run, and then waited for
+          permission the convention had already granted. So the diagnosis that matters is not that anyone forgot.
+          A reminder cannot fix a case where the reminder worked; what was missing was <em>authority</em>. The rule
+          was promoted out of a standing note and into the project's own always-loaded instructions, rewritten to say
+          that running the round is not a decision to bring to the human, and that skipping is
+          per-phase and must be recorded with its reason — no standing exemptions, no size threshold, because the
+          small changes are exactly where a wrong claim ships unchallenged. The same class shows up from outside
+          too: in a scale trial, two ordinary requests against a 1,561-file repository opened 13 and 27 files —
+          roughly 0.8% and 1.7% — while reporting 1,477 and 955 files as their scope. Neither run failed. Both
+          reported a scope they never read.
+        </p>
 
         <h3 id="provenance">What it takes to file a finding — and to kill one</h3>
         <p>
@@ -1803,6 +1824,21 @@
           <em>opened 8 / assigned 82</em> is falsifiable in a way that "reviewed everything" is not. Provenance on a
           merged row is then written from the orchestrator's vantage, so a sub-agent's own <code>[verified]</code>
           is never copied through unchallenged.
+        </p>
+        <p>
+          Both of those tiers measure work <em>inside</em> the dispatch path, which leaves the obvious hole: a round
+          that never dispatched is never measured. Worse, it looks <em>better</em> than an honest one — a solo agent's
+          findings are all legitimately <code>[verified]</code>, while merge discipline forces <code>[reported]</code>
+          defaults on a real fan-out. The cleaner provenance split is the tell. So a tier sits underneath both, and it
+          fires on every round, solo or not: one line in the durable round header reading
+          <code>Coverage: &lt;kind&gt; · manifest &lt;N&gt; · opened &lt;M&gt; · grepped &lt;G&gt; · workers &lt;K&gt;</code>.
+          <em>Manifest</em> is the round's own declared scope after exclusions, never the repository total;
+          <em>opened</em> counts bodies actually read, with <em>grepped</em> kept separate so the two can never be
+          quietly summed; <em>workers 0</em> means solo, and solo becomes a declared decision with a stated reason
+          rather than a default nobody notices. A round that cannot open its whole scope is <code>Sampled</code>, not
+          <code>Full</code>. The numbers are still self-reported — nothing counts file reads for you — and the honest
+          claim is narrow: what this buys is that the count must now exist and sit beside its denominator, where a
+          reader can see <em>opened 13</em> against <em>manifest 1,477</em> and ask.
         </p>
         <p>
           Killing a finding is the harder direction, deliberately. A blind grading pass over the pooled findings
@@ -1965,7 +2001,7 @@
               <g class="node">
                 <rect x="30" y="352" width="240" height="78" rx="2" class="fill-primary"/>
                 <text x="150" y="374" class="code">/claim-task</text>
-                <text x="150" y="394" class="small">step 2 · pre-impl check</text>
+                <text x="150" y="394" class="small">step 6 · pre-impl check</text>
                 <text x="150" y="412" class="small">step 7 · post-impl re-check</text>
               </g>
 
@@ -2001,7 +2037,7 @@
         </figure>
 
         <aside class="pullquote">
-          <p><strong>Why this beats a wiki page.</strong> A wiki page rots — nobody reads it before opening a PR. The <code>convention_map.md</code> is read on <em>every</em> <code>/claim-task</code> Step 2 because the skill <em>requires</em> it, and again on Step 7 as a post-impl boy-scout pass.</p>
+          <p><strong>Why this beats a wiki page.</strong> A wiki page rots — nobody reads it before opening a PR. The <code>convention_map.md</code> is read on <em>every</em> <code>/claim-task</code> Step 6 because the plan cannot be written without it — the map read is what produces the plan's <code>## Constraints &amp; Risks</code> block, which must precede any implementation step — and again on Step 7 as a post-impl boy-scout pass.</p>
           <p>The map's entries also flow downstream: once a pattern is generalizable across projects, it gets promoted from a project's local map into a Sysop pack, where it ships to every consumer on the next <code>bash sysop/scripts/sysop-update.sh</code>.</p>
           <p>The loop is also the smallest way to run Sysop: <code>--mode loop</code> installs just § III's review and audit skills, the maps and checks, and this section's promotion machinery — none of the lifecycle around it (§ VI).</p>
         </aside>
@@ -2251,13 +2287,13 @@
                 <rect x="600" y="228" width="320" height="80" rx="2" class="fill-accent"/>
                 <text x="760" y="254" class="code">parse_subagent_envelope.py</text>
                 <text x="760" y="276" class="small">finds last yaml block w/ task+status</text>
-                <text x="760" y="294" class="small">writes sysop/runtime/subagent-envelopes/&lt;id&gt;.json</text>
+                <text x="760" y="294" class="small">writes subagent-envelopes/&lt;id&gt;[.&lt;phase&gt;].json</text>
               </g>
 
               <g class="node">
                 <rect x="600" y="338" width="320" height="56" rx="2" class="fill-primary"/>
                 <text x="760" y="362" class="smallserif" style="font-size:14px">parent skill reads JSON</text>
-                <text x="760" y="382" class="small">fall back to regex if race lost</text>
+                <text x="760" y="382" class="small">regex fallback · defense in depth</text>
               </g>
 
               <g class="node">
@@ -2292,7 +2328,7 @@
         </dl>
 
         <aside class="pullquote">
-          <p><strong>Additive, never load-bearing.</strong> Both hooks are JSON-first with regex fallback. If a hook crashes, loses a race, or is missing entirely, the skill still works — it just falls back to the older parse path.</p>
+          <p><strong>Additive, never load-bearing.</strong> Both hooks are JSON-first with regex fallback. If a hook crashes, is unregistered, or is missing entirely, the skill still works — it just falls back to the older parse path.</p>
           <p>Phase 7 envelope-recovery (filesystem cross-check) is the deepest fallback for <code>/auto-build</code> when no parser sees the envelope at all.</p>
         </aside>
       </div>
@@ -2424,7 +2460,7 @@
 │   │   ├── claim_task.sh          <span class="cm"># lock + worktree + branch creation</span>
 │   │   ├── close_batch.sh         <span class="cm"># review_tasks.md batch closure</span>
 │   │   ├── validate_tasks.py      <span class="cm"># schema enforcement · runs in pre-commit</span>
-│   │   ├── self_check.sh          <span class="cm"># Phase 133 · install health probes · Phase 143 abandoned-round probe</span>
+│   │   ├── self_check.sh          <span class="cm"># Phase 133 · install health probes · Phase 143 abandoned-round probe · Phase 149 coverage ledger</span>
 │   │   ├── ingest_security_report.py  <span class="cm"># Phase 144 · claude-security parse + sanitize boundary</span>
 │   │   ├── permission_denied_hook.py  <span class="cm"># Phase 36 · classifier escape injection</span>
 │   │   ├── parse_subagent_envelope.py <span class="cm"># Phase 37 · structured envelope parsing</span>
@@ -2435,8 +2471,10 @@
 │   │   ├── locks/                 <span class="cm"># lives in main repo · git-common-dir resolved (Phase 32)</span>
 │   │   ├── pending-docs/          <span class="cm"># /document-work writes here · /review-close consumes</span>
 │   │   ├── pending-rounds/        <span class="cm"># Phase 143 · round-open markers · a survivor means a round died</span>
-│   │   ├── auto-build/            <span class="cm"># parked-task plan + verdict archive (Phase 65a)</span>
-│   │   └── subagent-envelopes/    <span class="cm"># Phase 37 · SubagentStop hook writes JSON here</span>
+│   │   ├── round-receipts/        <span class="cm"># Phase 149 · closed rounds' Tier-0 coverage ledgers · newest 50</span>
+│   │   ├── auto-build/            <span class="cm"># /auto-build per-worktree plan + review scratch</span>
+│   │   ├── parked/                <span class="cm"># parked-task plan + verdict archive (Phase 65a; Phase 159b moved it out of auto-build/)</span>
+│   │   └── subagent-envelopes/    <span class="cm"># Phase 37 · SubagentStop hook writes JSON here · Phase 159a keys it per stage</span>
 │   └── SYSOP_ISSUES.md            <span class="cm"># friction log · seeded once, project-owned · /report-issues files upstream</span></pre>
         </div>
       </div>
@@ -2453,7 +2491,7 @@
       <aside class="col-rule">Colophon</aside>
       <div>
         <p class="col-body">
-          A monograph on <em>Sysop</em>, as of <em>Phase 146</em> · 2026-07-24. Phase numbers throughout are iterations
+          A monograph on <em>Sysop</em>, as of <em>Phase 159</em> · 2026-07-28. Phase numbers throughout are iterations
           of the workflow's own development — each one planned, adversarially reviewed, and shipped through the process it
           extends; <a href="https://github.com/getsysop/sysop/blob/main/PHASE_LOG.md">PHASE_LOG.md</a> carries one entry per phase. Set in the reader's native serif —
           Iowan Old Style where available, Palatino otherwise — paired with ui-monospace for listings and figure labels.
@@ -2493,7 +2531,7 @@
             <ul>
               <li>Extracted from <em>gdp-query-system</em></li>
               <li>First consumer · BeanRider</li>
-              <li>Phase 146 · 2026-07-24</li>
+              <li>Phase 159 · 2026-07-28</li>
             </ul>
           </div>
           <div>

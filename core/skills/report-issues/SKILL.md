@@ -21,8 +21,9 @@ upstream ever sees. This skill closes that gap.
 **This is a GitHub-touching skill** — the second in the `pr-*`/reporting family
 after `/pr-dependabot`. It shells out to `gh` (the GitHub CLI) and therefore
 requires `gh` installed + authenticated. Unlike `/pr-dependabot`, which operates
-on *your own* repo, this one files **upstream to the Sysop repo** (`getsysop/sysop`
-by default) — that direction is the whole point.
+on *your own* repo, this one files **upstream to the Sysop repo** (the public
+`getsysop/sysop` unless you've configured otherwise — Step 0.6) — that direction
+is the whole point.
 
 **The privacy being spent is yours.** Friction entries quote your error text and
 your file paths. So: **per-entry consent is mandatory**, **dry-run is the
@@ -33,23 +34,29 @@ pick.
 
 ## Pre-flight: Permission Guard
 
-This skill shells out to `gh` and edits `SYSOP_ISSUES.md` in place. Its only
+This skill shells out to `gh` and edits `sysop/SYSOP_ISSUES.md` in place. Its only
 network side effect is creating GitHub issues, and only under `--execute` after
 you pick which entries.
 
-Read `.claude/settings.json` and confirm `permissions.allow` contains:
+Read `.claude/settings.json` (and `.claude/settings.local.json` if present) and confirm `permissions.allow` satisfies:
 
 - `Bash(gh issue create:*)` — file the consented entries (only reached under `--execute`)
 - `Bash(gh issue list:*)` — pre-file duplicate check (soft, read-only)
 
-If either is missing, stop with the `_shared/permission-guard.md` § Algorithm
-step 4 message (one-line reason: "files SYSOP_ISSUES.md friction entries upstream
+If either is unsatisfied, stop with the `_shared/permission-guard.md` § Algorithm
+step 5 message (one-line reason: "files SYSOP_ISSUES.md friction entries upstream
 as GitHub issues; shells `gh issue create` against the Sysop repo"). Do not
-proceed.
+proceed — unless the guard's step 3 mode check applies.
 
-`gh auth status` and `gh repo view` are read-only and auto-approved under `auto`
-mode — they are not listed here (per `_shared/permission-guard.md` § Notes:
-don't list read-only ops). Editing `SYSOP_ISSUES.md` uses the `Edit` tool, not
+`gh auth status` and the `gh repo view` visibility probe are **not** listed as
+required rules — their absence must not stop the run. Both ship in the template
+allow-list (`Bash(gh auth status)`, `Bash(gh repo view:*)`), because `gh` is not
+in Claude Code's built-in read-only set and every `gh` call therefore needs a
+rule; under `dontAsk` an unlisted one is auto-denied. They stay off the required
+list because each fails loudly on its own terms — a denied auth check reads the
+same as not-logged-in and stops the skill with a visible message, and a denied
+visibility probe degrades per `_shared/upstream-repo.md` § B rather than
+halting. Editing `sysop/SYSOP_ISSUES.md` uses the `Edit` tool, not
 Bash, so it needs no allow-rule.
 
 If `$ARGUMENTS` contains `--skip-permission-guard`, print a one-line warning and
@@ -62,8 +69,11 @@ Parse `$ARGUMENTS`:
 - **`--execute`** — actually create issues for the entries you consent to.
   **Without it, the skill is read-only** (reads + renders + prints the plan,
   files nothing, edits nothing).
-- **`--repo owner/name`** — override the upstream target repo. Default:
-  `getsysop/sysop`. Use this if you forked Sysop and want issues on your fork.
+- **`--repo owner/name`** — override the upstream target repo for this run.
+  Beats every other source. Absent, the target comes from `<project>/CLAUDE.md
+  § Sysop upstream repo` if that section exists, else the shipped default
+  `getsysop/sysop`. Use the flag for one-off exceptions and a fork; use the
+  CLAUDE.md section for a standing default (see Step 0.6).
 - **`--include-resolved`** — also surface entries marked `Fixed in <consumer>
   <date>` (friction you fixed locally mid-cycle). Off by default; those are
   still upstream signal — Sysop's seeded ruleset/templates were incomplete — but
@@ -75,28 +85,36 @@ Run `gh auth status`. If it reports not-logged-in, stop and tell the human to
 run `gh auth login` (suggest the `! gh auth login` in-session form). Do not
 attempt to authenticate on their behalf.
 
-## Step 0.6: Resolve the target repo
+## Step 0.6: Resolve the target repo and its visibility
 
-Default target is **`getsysop/sysop`** — the upstream Sysop repo, *not* the current
-project's own repo. Override with `--repo owner/name` (forks). Print the target
-once, plainly, so the human sees where issues will land before any are filed:
-`Target repo for new issues: <owner/name>`. Every `gh issue` call in this skill
-passes `--repo <target>` explicitly — never rely on the current directory's
-remote, which is the consumer's project, not Sysop.
+Follow `_shared/upstream-repo.md` — the shared protocol for all three give-back
+skills. In short: `--repo` beats `<project>/CLAUDE.md § Sysop upstream repo`
+beats the shipped default `getsysop/sysop` (which is **public**); a present-but
+-unparseable section is a hard stop, never a silent fall-back to the default.
+Print the target and its source once, plainly, before anything is filed:
+`Target repo for new issues: <owner/name>   (source: ...)`. Then probe
+visibility (`gh repo view ... --json visibility`), carrying `[verified]` or
+`[assumed]` per that partial's § B. Every `gh issue` call in this skill passes
+`--repo <target>` explicitly — never rely on the current directory's remote,
+which is the consumer's project, not Sysop.
 
-The default assumes the Sysop repo is reachable at `getsysop/sysop`. If that repo
-doesn't exist yet from where you are (e.g. the GitHub rename hasn't propagated,
-or you're filing against a fork), a `gh issue create` will 404 — pass `--repo`
-with the correct slug. If the very first `gh issue list` in Step 4 fails with a
-not-found error, stop and tell the human the target repo isn't reachable rather
-than looping.
+**The sensitivity nudge runs later, not here.** It needs the exact rendered payload, which does not exist yet at this step; it fires at the consent gate (Step 2, just before Step 3) per `_shared/upstream-repo.md` § C. Carry this step's resolved target and visibility forward to it.
+
+Reachability is separate from visibility. If the resolved target doesn't exist
+from where you are (a fork slug typo, a private repo you lack access to), a `gh
+issue create` will 404 — the visibility probe failing is *not* proof of that, so
+it never stops the run on its own. If the very first `gh issue list` in Step 4
+fails with a not-found error, stop and tell the human the target repo isn't
+reachable rather than looping.
 
 ## Step 1: Read and classify the friction log
 
-Read `SYSOP_ISSUES.md` at the **consumer-repo root** (NOT under `.claude/`). If
-it's missing, stop with one line: `note: SYSOP_ISSUES.md not present — nothing to
-report. (Re-run bash install.sh to seed it, or capture friction via /review-close
-Step 7 first.)` and stop.
+Read `sysop/SYSOP_ISSUES.md` — inside the `sysop/` vendor dir at the consumer-repo
+root (Phase 128; NOT under `.claude/`, and no longer at the bare repo root). If a
+pre-Phase-128 install left it at the root, read that instead rather than
+reporting nothing. If neither exists, stop with one line: `note:
+sysop/SYSOP_ISSUES.md not present — nothing to report. (Re-run bash install.sh to
+seed it, or capture friction via /review-close Step 7 first.)` and stop.
 
 Read the entry blocks (each begins `## ISSUE-NNNN — <title> (<date>)`). **This
 file is deliberately loose, consumer-restructurable markdown** — the seed
@@ -175,13 +193,27 @@ Do not invent content. Keep the reporter's words; don't rewrite their diagnosis
 into your own.
 
 **Redaction is the human's call, done by editing the log first.** Before the
-consent step, print one reminder — substituting the **resolved target** (the
-default `getsysop/sysop`, or the `--repo` override from Step 0): *"These bodies
-are exactly what will be filed to `<target>` — visible to anyone who can see
-that repo. If any contains a path, secret, or data you don't want exposed there,
-edit `SYSOP_ISSUES.md` to redact it and re-run — I will not auto-redact."*
-(Don't hardcode "publicly" — with `--repo` pointed at a private fork or tester
-repo, the issues are visible only to that repo's collaborators, not the public.)
+consent step, print one reminder — substituting the **resolved target** from
+Step 0.6: *"These bodies are exactly what will be filed to `<target>` — visible
+to anyone who can see that repo. If any contains a path, secret, or data you
+don't want exposed there, edit `sysop/SYSOP_ISSUES.md` to redact it and re-run —
+I will not auto-redact."* (Don't hardcode "publicly" — with the target pointed
+at a private repo, the issues are visible only to that repo's collaborators.)
+
+**Then run the sensitivity nudge** (`_shared/upstream-repo.md` § C) against the
+rendered bodies above, and print it when the Step 0.6 visibility is `PUBLIC`,
+`INTERNAL`, or `UNKNOWN`. This is the step that catches the trap this skill is
+most exposed to: friction entries routinely quote the security context that
+produced the friction (an unfixed scrub gap, the contents of an open review
+batch), and the shipped default target is public. The nudge names which entries
+matched and why, states `[verified]`/`[assumed]`, and points at both remedies —
+redact the log, or retarget via `§ Sysop upstream repo` / `--repo`. It filters
+nothing; per-entry consent below is still the gate.
+
+**Scan the issue *titles* too, not only the bodies.** Titles are composed
+separately in Step 2 and are the most-read field on a GitHub issue — a body that
+reads as a routine tooling complaint can sit under a title that names the system,
+the data, or the customer.
 
 If `--execute` was **not** passed, stop here: print `Dry-run. Re-run with
 --execute to choose which of these to file.` and stop. Nothing is filed or
@@ -200,6 +232,15 @@ an option label. Ask per entry (a single yes/no "File this one?"), or batch at
 most **4 entries per question** with a short option label (the `ISSUE-NNNN` id)
 and the full title in the option description. Nothing is filed unless the human
 explicitly picks it; an unselected entry is skipped, never defaulted-in.
+
+**Carry the destination into each question, not just the Step 2 preamble.** When
+the Step 0.6 visibility is `PUBLIC`, `INTERNAL`, or `UNKNOWN`, every consent
+question restates the target and its visibility in the question text
+(`Filing to <owner/name> — PUBLIC [verified]. File this one?`), and any entry the
+Step 2 nudge flagged carries a marker in its own option label
+(`ISSUE-0008 ⚠ security context`). With batches of 4, a single warning printed
+before a ten-entry run is two questions upstream by the time the entry it was
+about comes up for approval — which is the same as not having warned.
 
 If the human consents to none, print `Nothing selected. No issues filed.` and
 stop.
@@ -226,8 +267,12 @@ For each selected entry, in order:
    a shell command. So:
 
    - Write the exact rendered body (identical to what Step 2 printed) to a
-     temporary file **outside the repo** (e.g. `"$TMPDIR/sysop-issue-<id>.md"`)
-     using the `Write` tool — never echo it through the shell.
+     temporary file **outside the repo** (e.g. `"${TMPDIR:-/tmp}/sysop-issue-<id>.md"`)
+     using the `Write` tool — never echo it through the shell. Keep the
+     `:-/tmp` fallback: macOS sets `TMPDIR`, most Linux shells do not, and a bare
+     `"$TMPDIR/…"` collapses to `/sysop-issue-<id>.md` — an unwritable root path,
+     so the filing fails on the consumers least likely to have `TMPDIR` set
+     (Phase 153). Every Sysop skill that stages a body file uses this form.
    - Keep the `--title` a plain one-line summary and pass it **single-quoted**;
      if the source title contains a backtick, `$`, or a single quote, render a
      clean equivalent for the title (the full original text still rides in the
@@ -235,7 +280,7 @@ For each selected entry, in order:
      redaction.
    - Then:
      ```bash
-     gh issue create --repo <target> --title '<title>' --label bug --body-file "$TMPDIR/sysop-issue-<id>.md"
+     gh issue create --repo <target> --title '<title>' --label bug --body-file "${TMPDIR:-/tmp}/sysop-issue-<id>.md"
      ```
    - Delete the temp file after the call returns (success or failure).
 
@@ -291,9 +336,13 @@ human reviews and commits the status flips intentionally.
   volume makes the manual render tedious, a `report_issues.py` that emits a
   structured plan is the escape hatch — filed as a revisit, not built now.
 - **Upstream, not local.** Files to `getsysop/sysop` by default because the whole
-  purpose is getting a tester's friction to the maintainer. `--repo` covers
-  forks. This is the one place a `pr-*`-family skill points away from the
-  current repo on purpose.
+  purpose is getting a tester's friction to the maintainer. This is the one place
+  a `pr-*`-family skill points away from the current repo on purpose. That
+  default is *public*, though, and friction entries carry consumer security
+  context — so the target is a first-class consumer config (`CLAUDE.md § Sysop
+  upstream repo`, durable) with `--repo` as the per-run override on top, and a
+  sensitivity nudge fires before consent when the resolved target isn't a
+  verified-private repo.
 - **Earlier capture is nudged, not a separate mechanism.** The primary capture
   point is `/review-close` Step 7, but a tester's densest friction (install,
   first permission-rule setup, first `/intake`) happens before any review-close

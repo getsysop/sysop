@@ -87,7 +87,8 @@ MODE_PROVIDED=0
 # contribute-convention (+ _shared, partial-filtered below).
 LOOP_EXCLUDE_SKILLS="intake add-task claim-task auto-build auto-fix auto-judge next-task roadmap sitrep triage plan-review document-work review-close onboard daily-summary release share-wins pr-dependabot"
 # _shared/ partials NOT in the five loop skills' closure (leg-1 audit). Kept:
-# adversarial-review, permission-guard, promotion-write-target, test-assessment-rubric.
+# adversarial-review, permission-guard, promotion-write-target, test-assessment-rubric,
+# fanout-evidence (Phase 138), upstream-repo (Phase 147).
 LOOP_EXCLUDE_SHARED="decomposition-rubric guided-mode main-push-guard ui-verify"
 # Companion scripts excluded from loop mode (lifecycle-coupled). Kept: run_checks*
 # (+ run_checks/ dir), _log.py, review_index.py, archive_review_tasks.py,
@@ -1069,10 +1070,24 @@ lock_field() {
   local key="$1"
   local lock_path="$TARGET/$LOCK_REL"
   [[ -f "$lock_path" ]] || return 0
+  # Phase 148: a truncated or hand-mangled lock used to abort the whole install
+  # with a raw Python traceback (`json.load` raising, or `.get` on a non-object).
+  # Read it the way the rest of the installer already treats a missing lock —
+  # yield nothing, warn once, and let the callers' existing guards decide. That
+  # keeps --update fail-closed: an empty sysop_commit still trips the ISSUE-0047
+  # no-anchor check rather than silently overwriting managed paths.
   python3 - "$lock_path" "$key" <<'PY'
 import json, sys
-with open(sys.argv[1]) as f:
-    data = json.load(f)
+try:
+    with open(sys.argv[1]) as f:
+        data = json.load(f)
+except (OSError, ValueError):
+    print(f"lock: {sys.argv[1]} is unreadable — treating it as absent", file=sys.stderr)
+    raise SystemExit(0)
+if not isinstance(data, dict):
+    print(f"lock: {sys.argv[1]} is not a JSON object — treating it as absent",
+          file=sys.stderr)
+    raise SystemExit(0)
 val = data.get(sys.argv[2])
 if val is None:
     pass
@@ -1125,6 +1140,7 @@ import json, os
 packs = [p for p in os.environ.get("SYSOP_PACKS", "").split(",") if p]
 managed = [p for p in os.environ.get("SYSOP_MANAGED_PATHS", "").splitlines() if p]
 managed.sort()
+lock_path = os.environ["SYSOP_LOCK_PATH"]
 data = {
     "version": int(os.environ["SYSOP_LOCK_VERSION"]),
     "sysop_commit": os.environ["SYSOP_COMMIT"],
@@ -1135,7 +1151,44 @@ data = {
     "updated_at": os.environ["SYSOP_UPDATED_AT"],
     "managed_paths": managed,
 }
-with open(os.environ["SYSOP_LOCK_PATH"], "w") as f:
+
+# Phase 148: both timestamps are anchored to lock *content*, not to the clock,
+# so a no-op re-install/update leaves a clean consumer tree clean. Before this,
+# every plain re-install reset installed_at to now and every --update advanced
+# updated_at, producing a lock-only working-tree diff on operations a consumer
+# reasonably expects to be idempotent (found by the Codex integration eval,
+# cell D5). Both rules are content-derived and need no caller cooperation:
+#
+#   installed_at — "first time this lock existed" (the semantics WORKFLOW.md
+#     § 8.2b already documents). A re-install over an existing lock never
+#     restarts it; only a lock that isn't there yet gets today's date. The
+#     --update path also passes the preserved value, so this agrees with it.
+#   updated_at   — advances only when some other field actually changed. An
+#     install that writes an otherwise-identical lock is not an update.
+#
+# A missing, unreadable, or non-object lock falls through to the caller's
+# values, which is the fresh-install path.
+prev = None
+try:
+    with open(lock_path) as f:
+        prev = json.load(f)
+except (OSError, ValueError):
+    prev = None
+
+if isinstance(prev, dict):
+    prev_installed = prev.get("installed_at")
+    if isinstance(prev_installed, str) and prev_installed:
+        data["installed_at"] = prev_installed
+    prev_updated = prev.get("updated_at")
+    if isinstance(prev_updated, str) and prev_updated:
+        stamps = ("installed_at", "updated_at")
+        unchanged = {k: v for k, v in prev.items() if k not in stamps} == {
+            k: v for k, v in data.items() if k not in stamps
+        }
+        if unchanged:
+            data["updated_at"] = prev_updated
+
+with open(lock_path, "w") as f:
     json.dump(data, f, indent=2)
     f.write("\n")
 PY
@@ -2351,6 +2404,38 @@ resolve_hook_dst() {
 
 arm_git_hooks() {
   [[ "$ARM_HOOKS" -eq 1 ]] || return 0
+  # Phase 150: core.hooksPath is checked FIRST — before the --update branch —
+  # so an --update run states the real reason it is not arming instead of the
+  # Phase-15 reconcile story, whose remedy ("then run install_hooks.sh") is a
+  # deliberate no-op under this config. Guard on the key being SET, not on a
+  # non-empty value: `core.hooksPath = ""` makes git run no hooks at all while
+  # resolve_hook_dst answers "$TARGET/./", so a value test would fall through
+  # and copy three executables into the root of the consumer's working tree.
+  local hooks_path_cfg hooks_path_scope
+  if hooks_path_cfg="$(git -C "$TARGET" config --get core.hooksPath 2>/dev/null)"; then
+    hooks_path_scope="$(git -C "$TARGET" config --get --show-scope core.hooksPath 2>/dev/null \
+                        | awk 'NR==1 {print $1}' || true)"
+    hdr "arm git hooks"
+    if [[ -n "$hooks_path_cfg" ]]; then
+      note "skipping: core.hooksPath='$hooks_path_cfg' — git reads hooks from there, not .git/hooks/"
+    else
+      note "skipping: core.hooksPath is set to the empty string — git runs no hooks at all"
+    fi
+    # Scope changes the advice, not the decision. A shared per-machine setting
+    # must not receive this project's checks — they would apply to every repo,
+    # and a second project would silently overwrite the first.
+    case "$hooks_path_scope" in
+      global|system)
+        note "that is a $hooks_path_scope setting shared by every repo on this machine; Sysop's hook templates are per-project, so it will not write there"
+        record "git hooks: auto-arm skipped ($hooks_path_scope core.hooksPath); Sysop does not write into a machine-wide hooks dir"
+        ;;
+      *)
+        note "that directory is yours to manage; to adopt Sysop's templates, copy sysop/scripts/hooks/* into it and chmod +x"
+        record "git hooks: auto-arm skipped (core.hooksPath=${hooks_path_cfg:-<empty>}); copy sysop/scripts/hooks/* there to adopt them"
+        ;;
+    esac
+    return 0
+  fi
   # Phase 15 / BeanRider ISSUE-0007: --update must NOT auto-arm. The install
   # pipeline has just overwritten sysop/scripts/hooks/* with upstream content; arming
   # now would silently swap the consumer's previously-armed (possibly custom)
@@ -2403,6 +2488,29 @@ check_armed_hooks_divergence() {
   [[ -d "$hooks_src" ]] || return 0
   local hook_dst
   hook_dst="$(resolve_hook_dst)" || return 0
+  # Phase 150: under a configured core.hooksPath the consumer has deliberately
+  # taken hooks out of Sysop's hands, so this check's premise ("the armed copy
+  # drifted from the template") does not hold and its remedy (run
+  # install_hooks.sh) is now a documented no-op. Report the arrangement instead
+  # of nagging with an instruction that would do nothing — a gate a careful
+  # reader should knowingly ignore is mis-specified, not merely noisy.
+  #
+  # Probed BEFORE the `-d "$hook_dst"` guard below: a core.hooksPath pointing at
+  # a directory that does not exist is the state where git runs no hooks at all,
+  # i.e. exactly when the consumer most needs to be told — and the -d guard
+  # would otherwise return silently. Key-set, not non-empty, for the same
+  # empty-string reason as arm_git_hooks.
+  local hooks_path_cfg
+  if hooks_path_cfg="$(git -C "$TARGET" config --get core.hooksPath 2>/dev/null)"; then
+    hdr "armed-hook divergence (ISSUE-0007 safety check)"
+    if [[ -n "$hooks_path_cfg" ]]; then
+      note "not compared: core.hooksPath='$hooks_path_cfg' — your hooks are yours, not Sysop-managed"
+      [[ -d "$hook_dst" ]] || note "⚠ that path does not exist — git is running NO hooks"
+    else
+      note "not compared: core.hooksPath is set to the empty string — git is running NO hooks"
+    fi
+    return 0
+  fi
   [[ -d "$hook_dst" ]] || return 0
   local -a missing=() diverged=()
   local f base
@@ -2488,6 +2596,17 @@ src, out = sys.argv[1], sys.argv[2]
 # Filtering the master template by this keep-set is fail-closed: if a master rule
 # string is renamed, loop mode drops it and tests/test_install_loop_mode.py catches it.
 LOOP_ALLOW = {
+    # Phase 152. Required by BOTH loop-mode review skills at Step 7:
+    # `git add review_tasks_archive.md 2>/dev/null` is a plain add of a path no
+    # literal rule covers (its sibling `review_tasks.md` has its own rule).
+    # Phase 153 extended what this rule actually buys: the Step 2a coverage
+    # commit and the Step 9/9b promotion+demotion staging all used to sit inside
+    # `for … done` loops — `for`/`done` are not documented command separators, so
+    # no rule matched those invocations whatever was seeded — and each is now one
+    # plain `git add -A -- <path>` per candidate path. This rule covers them too.
+    # It does NOT cover the `cd … && git add …` compounds in the lifecycle-only
+    # skills, which loop mode does not ship anyway.
+    "Bash(git add:*)",
     "Bash(git add review_tasks.md)",
     "Bash(git commit -m docs:*)",
     "Bash(bash sysop/scripts/run_checks.sh)",
@@ -2502,8 +2621,17 @@ LOOP_ALLOW = {
     "Bash(.venv/bin/python3 sysop/scripts/ingest_security_report.py:*)",
     "Bash(python3 -c:*)",
     "Bash(python3 -:*)",
+    # The give-back skills' auth gate. `gh` is NOT in Claude Code's built-in
+    # read-only set (that set is `ls`/`cat`/… plus read-only forms of `git`), so
+    # every gh invocation needs a rule — including this one (Phase 152).
+    "Bash(gh auth status)",
     "Bash(gh issue list:*)",
     "Bash(gh issue create:*)",
+    # Read-only visibility probe for the give-back skills' target repo
+    # (_shared/upstream-repo.md § B). Shipped as an explicit rule rather than
+    # relying on read-only auto-approval, so the primary path works under a
+    # restricted permission set instead of silently degrading to the fallback.
+    "Bash(gh repo view:*)",
 }
 with open(src) as f:
     tmpl = json.load(f)
@@ -2530,13 +2658,16 @@ install_permissions() {
   # only by reading the shipped JSON. Emitted on every path (fresh, merge,
   # dry-run) so no install applies the grant silently.
   if [[ "$INSTALL_MODE" == "loop" ]]; then
-    note "allow-list: a small check/read-only subset, no hooks — no push, merge, or rebase grants."
+    note "allow-list: a small check/read-only subset, no hooks — no push, merge, or rebase"
+    note "  grants; it does include 'git add' (the review skills stage their ledger)."
     note "  It is yours to trim: review .claude/settings.json and delete any rule you don't want."
   else
     note "allow-list: pre-authorizes the agent for Sysop's lifecycle git flow WITHOUT further"
     note "  prompts — including 'git push origin' and 'git push --force-with-lease' (the"
-    note "  worktree close path). Review .claude/settings.json and delete any rule you don't"
-    note "  want; '--mode loop' ships a small check/read-only subset instead."
+    note "  worktree close path), 'git add' (the review skills stage runtime-built paths),"
+    note "  and 'git branch -D' + 'git reset --hard origin/main' (the pr-policy close)."
+    note "  Review .claude/settings.json and delete any rule you don't want;"
+    note "  '--mode loop' ships a small check/read-only subset instead."
   fi
 
   # Loop mode: feed the copy/merge paths below a filtered template (loop
@@ -2546,13 +2677,13 @@ install_permissions() {
     # would violate the dry-run contract, and the copy note would render the
     # raw /tmp path).
     if [[ "$DRY_RUN" -eq 1 ]]; then
-      note "would write $(rel "$dst") (loop allow-subset: 16 rules, no hooks)"
+      note "would write $(rel "$dst") (loop allow-subset: 19 rules, no hooks)"
       record_managed_path "$dst"
       record "permissions: would write $(rel "$dst") (loop allow-subset)"
       return 0
     fi
     # Fail CLOSED: if the filter can't be built, do NOT fall back to the full
-    # master — that would over-grant the 57-rule allow-list AND re-add the hooks
+    # master — that would over-grant the 65-rule allow-list AND re-add the hooks
     # block referencing scripts loop mode never installs (broken at runtime).
     # Skip settings.json instead (the consumer sees more permission prompts, but
     # no over-grant and no dangling hooks); the loud error keeps it visible.
@@ -2955,12 +3086,17 @@ EOF
 # Ensure the consumer .gitignore ignores Sysop's runtime-artifact home
 # (Phase 99, tester round; consolidated Phase 133). Runtime dirs hold transient
 # orchestration state that a stray `git add -A` would otherwise commit into
-# project history. As of Phase 133 all four live under ONE vendor-namespaced
-# home, so a single ignore entry covers them:
+# project history. As of Phase 133 they all live under ONE vendor-namespaced
+# home, so a single ignore entry covers them. The list has grown past the
+# original four: Phase 143 added pending-rounds/, 149 round-receipts/, and
+# 159b split parked/ out of auto-build/.
 #   sysop/runtime/subagent-envelopes/  in-flight SubagentStop envelope JSON (Phase 37)
-#   sysop/runtime/auto-build/          parked-task plan + adversarial-verdict archive (Phase 65a)
+#   sysop/runtime/auto-build/          /auto-build per-worktree plan + review scratch
+#   sysop/runtime/parked/              parked-task plan + adversarial-verdict archive (Phase 65a, renamed Phase 159b)
 #   sysop/runtime/pending-docs/        deferred documentation drafts (/document-work Step 3)
 #   sysop/runtime/locks/               in-progress task locks (claim_task.sh; Phase 32)
+#   sysop/runtime/pending-rounds/      open review-round markers (Phase 143)
+#   sysop/runtime/round-receipts/      closed rounds' Tier-0 coverage ledgers (Phase 149)
 # The guarantee must hold: /review-close Step 2a derives its `dirty` verdict
 # from `git status --porcelain`, so an un-ignored lock or pending-doc makes a
 # clean branch read dirty → auto-SKIP → the close silently refuses (Phase 99.1
@@ -3492,7 +3628,7 @@ tmpl = load(template_path)
 # no-op for the ~20 non-path rules (Bash(gh pr merge:*), Bash(git checkout:*),
 # Bash(python3 -c:*), …), so those CURRENT-VALID rules entered the removal set
 # verbatim and got stripped from settings.local.json (where install_permissions
-# never re-adds them) and from loop-mode settings.json (only the 16-rule LOOP_ALLOW
+# never re-adds them) and from loop-mode settings.json (only the 19-rule LOOP_ALLOW
 # subset is re-added) — auto-approved commands silently started prompting again.
 # A rule is a movable vendor-path rule iff its flat and sysop/-namespaced spellings
 # differ; only such a rule's flat spelling is dead. Non-path and consumer-authored
@@ -3845,6 +3981,111 @@ migrate_runtime_dirs() {
   note "commit the updated .gitignore before claiming new tasks — worktrees"
   note "  only see committed ignore rules (a pre-existing branch's worktree"
   note "  needs the entry rebased/merged in before its close runs clean)."
+}
+
+# ─── Phase 159b: park-namespace rename (sysop/runtime/parked/) ────────────
+# The park archive stops living under an /auto-build-shaped name:
+#   sysop/runtime/auto-build/parked/ → sysop/runtime/parked/
+# /claim-task parks tasks too once it becomes an orchestrator, so the
+# owning-skill name in the path is a lie about who writes there. The dir is
+# gitignored (untracked), so this is a plain mv — same class as Phase 133.
+#
+# NOTE the sibling that does NOT move: sysop/runtime/auto-build/ survives as
+# /auto-build's per-worktree plan.md/review.md scratch home. Only parked/
+# comes out.
+PARK_OLD_REL="sysop/runtime/auto-build/parked"
+PARK_NEW_REL="sysop/runtime/parked"
+PARK_MOVE_PENDING=0
+
+# Probes the PRE-133 path too, and only that is why --dry-run is honest for a
+# pre-133 consumer: their archive is still at .auto-build/parked/ while the
+# preview runs, because migrate_runtime_dirs returned early without moving
+# anything, so a post-133-only probe would report nothing pending and then
+# really move something on apply.
+#
+# Both probes can be live at once — a wave-1 merge that hits a same-named
+# collision leaves .auto-build/ in place — so "only the first can hit in a real
+# run" would be wrong.
+#
+# Gated the same way _rt_compute_pending is (UPDATE_MODE, or a Sysop lock file
+# present), and for the same reason: on a target that is not a Sysop consumer,
+# `.auto-build/` belongs to some OTHER tool and is not ours to read, let alone
+# announce a move for. Ungated, this printed a "would move" for a stranger's
+# directory that the apply run then correctly declined to touch.
+_park_compute_pending() {
+  PARK_MOVE_PENDING=0
+  [[ "$UPDATE_MODE" -eq 1 ]] || [[ -f "$TARGET/$LOCK_REL" ]] || return 0
+  if [[ -d "$TARGET/$PARK_OLD_REL" ]] || [[ -d "$TARGET/.auto-build/parked" ]]; then
+    PARK_MOVE_PENDING=1
+  fi
+  return 0
+}
+
+# Deliberately NOT guarded by _rt_migration_preflight. Recorded here because
+# the omission looks like one and is not:
+#
+#   1. That preflight's stated rationale (see its header) is a split-brain
+#      *lock registry* — two registries make every "is anyone working on
+#      this?" answer wrong. parked/ is not a registry; it is an archive that
+#      only /review-close Step 4c touches, at close (it unlinks a closed
+#      task's markers there).
+#   2. The cost/benefit is lopsided. A refusal here is clean and
+#      side-effect-free — the preflight runs before `hdr "plan"` and long
+#      before run_install_pipeline, so nothing is repointed and nothing is
+#      half-migrated — but it turns a routine `--update` into a hard stop for
+#      any consumer with a second worktree open, which is the normal state of
+#      this workflow. Paying that toll to protect an archive rename, when the
+#      failure it prevents is marker accumulation rather than a wrong claim
+#      answer, is the wrong trade.
+#   3. Its lock arm is unreachable from here, though NOT for the reason it
+#      looks like. It globs $TARGET/.locks/ — the PRE-133 path — which a
+#      stale pre-133 worktree CAN recreate on an otherwise-migrated main (see
+#      _rt_migration_preflight's own header). What makes it unreachable is
+#      ordering: if .locks/ exists at all, _rt_compute_pending counts it, the
+#      preflight fires, and the run exits before migrate_parked_dir is ever
+#      called.
+#
+# Residual risk, accepted, and it has two sides:
+#   - WRITE: a worktree on an older branch carries an older auto-build/SKILL.md
+#     that still writes the old path, so a park raised from it lands in a dead
+#     dir and is never cleaned.
+#   - READ: a /review-close run from such a worktree globs the dead path, so a
+#     closed task's markers are left behind at the NEW path.
+# Both degrade to marker accumulation, not to a wrong claim answer. Note this
+# is the INVERSE of the symptom review-close/SKILL.md describes (that one is
+# over-reporting a done task as parked, which Phase 134 fixed); here a human
+# hunting resumable work under-reports, because the marker is in a dir nothing
+# lists. The merge below is no-clobber for the same reason Phase 133's is: a
+# crash-resume must not lose a verdict.
+migrate_parked_dir() {
+  (( PARK_MOVE_PENDING == 0 )) && return 0
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    hdr "park-namespace rename (Phase 159b)"
+    note "would move: $PARK_OLD_REL/ → $PARK_NEW_REL/"
+    return 0
+  fi
+  local old="$TARGET/$PARK_OLD_REL" new="$TARGET/$PARK_NEW_REL"
+  # PARK_MOVE_PENDING can be set by the pre-133 probe alone, so re-confirm the
+  # real source BEFORE announcing anything — printing the header first left a
+  # bare section with nothing under it whenever this returned here.
+  [[ -d "$old" ]] || return 0
+  hdr "park-namespace rename (Phase 159b)"
+  ensure_dir "$TARGET/$RT_NEW_BASE"
+  if [[ ! -e "$new" ]]; then
+    mv "$old" "$new"
+    note "moved: $PARK_OLD_REL/ → $PARK_NEW_REL/"
+  else
+    _rt_merge_dir "$old" "$new"
+    rmdir "$old" 2>/dev/null || true
+    if [[ -d "$old" ]]; then
+      note "merged: $PARK_OLD_REL/ → $PARK_NEW_REL/ — ⚠ NOT removed: same-named"
+      note "  entries exist on both sides; reconcile the leftovers by hand."
+    else
+      note "merged: $PARK_OLD_REL/ → $PARK_NEW_REL/ (crash-resume: destination existed)"
+    fi
+  fi
+  # Leave sysop/runtime/auto-build/ itself in place even if now empty — it is
+  # still /auto-build's scratch home, not a leftover.
 }
 
 # ─── main ────────────────────────────────────────────────────
@@ -4396,6 +4637,13 @@ main() {
   # (whose ensure_runtime_gitignore appends the new sysop/runtime/ entry).
   # Handles its own dry-run plan; no-op when nothing is pending.
   migrate_runtime_dirs
+
+  # Phase 159b: park-namespace rename. MUST run after migrate_runtime_dirs —
+  # a pre-133 consumer's parked archive arrives as .auto-build/parked/ and is
+  # only at sysop/runtime/auto-build/parked/ once that wave has run, so
+  # computing pending before it would miss the two-wave case entirely.
+  _park_compute_pending
+  migrate_parked_dir
 
   # Execute install pipeline (populates MANAGED_PATHS; copy_file consumes
   # DIVERGENCE_SHADOW for Phase 24b per-file preservation).

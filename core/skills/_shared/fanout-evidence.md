@@ -1,12 +1,38 @@
 # Fan-out evidence & finding provenance — shared contract
 
-Canonical contract for **how findings declare what was actually checked**, and **what standard of evidence judging one requires**. Two tiers plus a universal adjudication rule:
+Canonical contract for **what a round actually covered**, **how findings declare what was checked**, and **what standard of evidence judging one requires**. Three tiers plus a universal adjudication rule, ordered coarsest-first:
 
+- **Tier 0 — the round coverage ledger.** Universal. Every round states what it covered — manifest, opened, workers. Fires on **every** round, fan-out or solo.
 - **Tier 1 — the provenance marker.** Universal. Every finding a review skill emits carries `[verified]` or `[reported]`. Fires on **every** run, inline or fan-out.
 - **Tier 2 — the fan-out evidence footer + orchestrator merge discipline.** Fan-out only. Attaches when a skill dispatches sub-agents; never fires on a run that doesn't fan out.
 - **Adjudication — evidence in both directions.** Universal. Governs every keep, downgrade, and dismissal, whoever makes it.
 
-Consumed by `/codebase-review` (Step 3 dispatch + Step 3c merge), `/security-audit` (Step 3 dispatch + Step 3b merge), and — Tier 1 and adjudication always, Tier 2 only if it fans out — `/test-audit`. Maintain the contract here; do not duplicate it into the skills (they cite it).
+Consumed by `/codebase-review` (Step 3 dispatch + Step 3c merge), `/security-audit` (Step 3 dispatch + Step 3b merge), and — Tier 0, Tier 1 and adjudication always, Tier 2 only if it fans out — `/test-audit`. Maintain the contract here; do not duplicate it into the skills (they cite it).
+
+---
+
+## Tier 0 — the round coverage ledger (UNIVERSAL, every round, fan-out or solo)
+
+**Why it exists.** Tier 2 measures coverage *inside* the dispatch path, so a round that never dispatches is never measured at all — and the failure mode that produced this tier was exactly that: two rounds on a 1,561-file repository narrated a fan-out, ran solo, opened 13 and 27 files, and reported the *dispatch-set* sizes (1,477 "reviewable", 955 "to audit") in the round header, making a ~1% pass read as a full scan. Nothing was dishonest per-finding; every row was correctly `[verified]`. The round simply had no coverage measure of its own. **A file nobody opened is not a reviewed file** — the same rule Step 2b's accounting applies to an un-run check, one layer up.
+
+Every round records five fields. The canonical one-line rendering, which is what lands in the durable round header:
+
+```
+Coverage: <kind> · manifest <N> · opened <M> · grepped <G> · workers <K><, solo: reason>
+```
+
+- **Kind** — what the round *actually was*, not what was requested: `Full` (the whole declared scope), `Scoped (<area>)` (a named subtree), or `Sampled (<basis>)` (a subset, with the basis that chose it — "highest-exposure modules", "changed files since <date>"). A round that sampled says `Sampled`; relabelling is the cheapest honesty this tier buys.
+- **Manifest `<N>`** — the round's **own declared scope** after exclusions, never the repository total unless the round is a full scan. An incremental round over 4 changed files has a manifest of 4, not 1,477; measuring it against the repo would make every honest incremental round look like a collapse.
+- **Opened `<M>`** — files whose **bodies were read**. Same strict meaning as the Tier-2 footer's `Opened`: a body retrieved via a read tool, `sed`/`cat`/`nl`, or a file-specific `git show`. Directory listings, `git ls-files`, and search hits are **not** opens.
+- **Grepped `<G>`** — files a **reviewer** reached by search: a query *you* wrote while reviewing, to answer a question the review raised. **Reported separately, never folded into `opened`**: grep is legitimate looking (Tier 2 says so explicitly) but it is not a read, and reporting one number where there were two is how a sparse pass inflates itself. A *reader* may sum them — the low-look test is Tier 2's `opened + grepped`, unchanged — but that is the reader's arithmetic on two stated figures, not the round's licence to report one.
+  - **The deterministic pre-scan does not count toward `grepped`.** Step 2b sweeps the whole declared scope with grep/LSP/Semgrep and reports its own coverage in its own accounting line (executed / skipped / failed). Counting that sweep here would let a round truthfully write `grepped ≈ manifest` while no reviewer looked at anything — retiring the low-look test permanently with an honest number, which is the most dangerous kind. Tier 2's `grepped` is one worker's targeted searching over its own batch; keep the round-level figure to the same meaning. If the pre-scan is the only thing that touched a file, that file is **unlooked-at** for this ledger's purposes.
+- **Workers `<K>`** — sub-agents dispatched. **`0` means solo, and solo is a declared decision, never a silent default** — state the reason in the same line (`workers 0, solo: no sub-agent primitive on this harness` / `…, solo: scope is 6 files, dispatch overhead exceeds the work`). An unexplained `workers 0` on a `Full` round is the defect this tier reports.
+
+**This is NOT the evidence footer, and a solo run must never write one.** Tier 2 stays fan-out-only on purpose: an evidence footer is a *sub-agent return contract* — `Assigned`/`Opened`/`Tools` is one worker's account of the scope it was handed — and a solo session that emits one is fabricating a worker that never existed. Tier 0 borrows Tier 2's **measure** (the same `opened` definition, the same "grep counts as looking, separately") and none of its **artifact**. Where they coexist on a fan-out round they nest: the per-worker footers report the batches, the round ledger reports the round, and `workers <K>` is what ties them together.
+
+**Where it lands — the durable artifact first.** A printed summary dies with the terminal; the round header in `review_tasks.md` is committed, and is what `/review-close`, `/auto-fix`, `/sitrep` and the next reviewer actually read. The ledger goes in **all three**: the round header (durable), the printed round summary, and the round receipt the skill's marker-clear step writes (machine-readable, so `self_check.sh` and `/sitrep` can surface a collapse without anyone re-reading the artifact). A skill that has no durable round artifact — `/test-audit` — states the ledger in its report and writes no receipt.
+
+**Honest limit, same as every other signal here:** the numbers are self-reported. Nothing counts file reads for you. What Tier 0 buys is that the count must now *exist and sit beside its denominator*, where `opened 13 · manifest 1,477` refutes itself on sight — the same falsifiability argument the footer rests on, applied to the round.
 
 ---
 
@@ -53,6 +79,8 @@ Provenance governs how a finding is **asserted**. This governs how it is **judge
 
 Applies whenever the skill dispatches fan-out sub-agents (one per scope cluster, OWASP category, module, etc.). This is the **sub-agent return contract** — dispatch prompts state *what to check*; this states *what to return*.
 
+**A run that does not fan out writes no footer.** That is deliberate and is not a gap to be closed: there is no worker to account for, and a solo session emitting an `Assigned`/`Opened` footer would be inventing one. The solo case is covered by **Tier 0**, which measures the round rather than a worker. Do not "fix" a silent solo round by making this footer fire on it.
+
 Every fan-out sub-agent's report MUST:
 
 1. Tag **every finding** with a `file:line` anchor **and** its Tier-1 `[verified]`/`[reported]` self-tag.
@@ -83,4 +111,4 @@ When the orchestrator collects the fan-out reports, **before** merging them into
 
 ## Honest limit
 
-Every attestation signal here — marker, footer, opened/assigned — is **self-reported**: this contract makes dishonesty *visible and falsifiable*, not impossible. (§ Adjudication is the exception in kind: it does not ask anyone to attest, it sets what evidence a judgement requires.) What actually upgrades a `[reported]` finding to checked is a *reader* opening the site — the orchestrator's sample re-read or the actuator's pre-fix re-read. Keep that reader in the loop; the marker is a routing hint toward it, not a substitute.
+Every attestation signal here — ledger, marker, footer, opened/assigned — is **self-reported**: this contract makes dishonesty *visible and falsifiable*, not impossible. (§ Adjudication is the exception in kind: it does not ask anyone to attest, it sets what evidence a judgement requires.) What actually upgrades a `[reported]` finding to checked is a *reader* opening the site — the orchestrator's sample re-read or the actuator's pre-fix re-read. Keep that reader in the loop; the marker is a routing hint toward it, not a substitute.

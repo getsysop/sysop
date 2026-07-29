@@ -659,7 +659,7 @@ class TestSettingsRemovalSetScoping:
     whole template — a NO-OP for the ~20 non-path rules (Bash(gh pr merge:*), …), so
     those CURRENT-VALID rules entered the removal set verbatim and were stripped from
     the consumer/harness-owned settings.local.json (never re-added) and from loop-mode
-    settings.json (only the 14-rule LOOP_ALLOW subset is re-added). Only genuinely-dead
+    settings.json (only the LOOP_ALLOW subset is re-added). Only genuinely-dead
     old flat vendor-path spellings may ever be removed."""
 
     def test_non_path_rule_survives_in_settings_local(self, tmp_path):
@@ -680,7 +680,7 @@ class TestSettingsRemovalSetScoping:
             "dead flat vendor rule not stripped from settings.local.json"
 
     def test_loop_mode_settings_json_keeps_non_subset_rule(self, tmp_path):
-        # In loop mode install_permissions only re-adds the 14-rule LOOP_ALLOW subset,
+        # In loop mode install_permissions only re-adds the LOOP_ALLOW subset,
         # so a full-template rule wrongly stripped from settings.json is lost for good.
         root, _ = _build_old_consumer(tmp_path / "c", mode="loop")
         sj = json.loads((root / ".claude" / "settings.json").read_text())["permissions"]["allow"]

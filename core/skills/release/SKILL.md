@@ -29,7 +29,7 @@ The write path requires rules **conditionally**, mirroring `/review-close`'s pol
 - **When `--github-release` is passed** (additionally):
   - `Bash(gh release create:*)` — create the public GitHub Release
 
-If a required rule for the requested path is missing, stop with the `_shared/permission-guard.md` § Algorithm step 4 message (one-line reason: "cuts a release — creates and pushes a git tag, and optionally a GitHub Release"). `gh auth status`, `gh release view`, and `git fetch` are read-only and auto-approved under `auto` mode — they are **not** listed here (per `_shared/permission-guard.md` § Notes: don't list read-only ops). Editing `CHANGELOG.md` uses the `Edit`/`Write` tool, not Bash, so it needs no allow-rule.
+If a required rule for the requested path is unsatisfied, stop with the `_shared/permission-guard.md` § Algorithm step 5 message (one-line reason: "cuts a release — creates and pushes a git tag, and optionally a GitHub Release"), unless the guard's step 3 mode check applies. `gh auth status`, `gh release view` and `git fetch origin` are **not** listed here, but not because they are auto-approved — `gh` is outside Claude Code's built-in read-only set, so `Bash(gh auth status)` and `Bash(git fetch origin:*)` ship in the template allow-list instead (Phase 152 corrected the earlier claim that these were auto-approved read-only ops; `gh release view` is the one with no rule, and a denial there reads the same as "no such release", which this skill already handles). Editing `CHANGELOG.md` uses the `Edit`/`Write` tool, not Bash, so it needs no allow-rule.
 
 If `$ARGUMENTS` contains `--skip-permission-guard`, print a one-line warning and continue.
 
@@ -163,7 +163,7 @@ Use today's date for the entry: a plain `date +%Y-%m-%d` is portable on both BSD
    # Rule A + tip check at the actual write site (use the project's release branch if its CLAUDE.md names one, not literally `main`)
    test "$(git rev-parse --abbrev-ref HEAD)" = "main" || { echo "HEAD moved off main since Step 2 — STOP"; exit 1; }
    git merge-base --is-ancestor HEAD origin/main || { echo "HEAD advanced to unpushed work — run /review-close first, then re-run"; exit 1; }
-   git tag -a "<prefix><new version>" -F "$TMPDIR/sysop-tag-<version>.md"
+   git tag -a "<prefix><new version>" -F "${TMPDIR:-/tmp}/sysop-tag-<version>.md"
    ```
    Delete the temp file after the call returns. If the tag already exists (`git rev-parse --verify "<tag>"` succeeds), **stop** — do not overwrite an existing release tag; tell the human to pick a different version or delete the old tag deliberately.
 
@@ -177,10 +177,10 @@ Use today's date for the entry: a plain `date +%Y-%m-%d` is portable on both BSD
 
 Requires `--execute` and `gh`. Confirm `gh auth status` first (if not logged in, tell the human to run `! gh auth login` and stop — never authenticate on their behalf). Then, after a final confirmation (this is the one action that creates a public, outward-facing artifact):
 
-1. Write the Step 7 release notes to a temp file **outside the repo** (e.g. `"$TMPDIR/sysop-release-<version>.md"`) via `Write` — never echo release notes through the shell (they contain backticks, `$`, and quotes by design; inlining risks shell substitution altering or executing the approved text, the same hazard `/report-issues` fixed).
+1. Write the Step 7 release notes to a temp file **outside the repo** (e.g. `"${TMPDIR:-/tmp}/sysop-release-<version>.md"`) via `Write` — never echo release notes through the shell (they contain backticks, `$`, and quotes by design; inlining risks shell substitution altering or executing the approved text, the same hazard `/report-issues` fixed).
 2. Create the release against the **current repo** (gh uses the current directory's default remote — this is *your own* repo, unlike `/report-issues`/`/contribute-convention` which target upstream):
    ```bash
-   gh release create "<prefix><new version>" --title "<prefix><new version>" --notes-file "$TMPDIR/sysop-release-<version>.md"
+   gh release create "<prefix><new version>" --title "<prefix><new version>" --notes-file "${TMPDIR:-/tmp}/sysop-release-<version>.md"
    ```
    Add `--latest` for a normal release; add `--prerelease` if the version carries a pre-release suffix (`-rc.1`, `-beta`). Delete the temp file after the call returns (success or failure).
 3. If `gh release create` fails (auth lapse, tag not yet on origin, network), surface it plainly; the tag and changelog already exist locally, so the human can retry `gh release create` by hand.

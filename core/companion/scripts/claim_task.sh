@@ -56,6 +56,7 @@ USE_LOCK=false
 RELEASE=false
 DELETE_BRANCH=false
 FORCE=false
+ENTRY_STATE=false
 while [[ "${1:-}" == --* ]]; do
   case "$1" in
     --worktree)      MODE="worktree"; shift ;;
@@ -63,11 +64,152 @@ while [[ "${1:-}" == --* ]]; do
     --clone)         MODE="clone"; shift ;;
     --lock)          USE_LOCK=true; shift ;;
     --release)       RELEASE=true; shift ;;
+    --entry-state)   ENTRY_STATE=true; shift ;;
     --delete-branch) DELETE_BRANCH=true; shift ;;
     --force)         FORCE=true; shift ;;
     *) echo "❌ Unknown flag: $1" >&2; exit 1 ;;
   esac
 done
+
+# ── Entry state (read-only claim triage) ─────────────────────
+# Answers ONE question — "what happens if I claim <TASK_ID> right now?" — and
+# mutates nothing. It exists so the decision lives in testable, allow-ruled
+# code instead of in /claim-task Step 2's prose. Two of the four roadmap-side
+# re-entry guards lived in that prose (the metadata heredoc's status check and
+# Step 2's lock check); the other two are Step 4a's flip refusal and this
+# script's own lock refusal. Only the two STATUS guards blocked re-entry for a
+# task with no lock — the two lock guards cannot fire in that state at all.
+#
+# Prints exactly one token on stdout:
+#   claimable      status: open, no lock            → an ordinary fresh claim
+#   resumable      status: in_progress, NO lock     → AMBIGUOUS, see below
+#   held           status open/in_progress + lock   → something holds it
+#   closed:<s>     status: done / deferred / …      → not claimable at all
+#   absent         no such id in tasks/index.yml
+#
+# `resumable` is NOT an identity claim, and it is NOT "safe to resume".
+# AGENT_NAME defaults to "anonymous" (see the positional parse below), so the
+# lock records no usable owner and nothing here can tell "my abandoned claim"
+# from "a colleague's". Worse, the same signature is produced by a task that is
+# FINISHED: under `pr` merge policy /review-close Step 4c unlinks the lock on
+# the integration branch before the PR merges, while the `done` flip rides that
+# PR — so on main the task reads in_progress with no lock for the PR's whole
+# life (review-close/SKILL.md § Lock-as-real-time-signal invariant). The caller
+# must treat `resumable` as a question, not an answer; /claim-task Step 2 stops
+# and asks. Note also that validate_tasks.py Invariant 9 treats this state as a
+# blocking error and sitrep_survey.py reports it as index drift.
+#
+# Exit 0 on every RESOLVED state (read the token). Non-zero only when the
+# question could not be answered at all.
+if $ENTRY_STATE; then
+  TASK_ID="${1:?Usage: claim_task.sh --entry-state <TASK_ID>}"
+
+  # Review batches: refused on purpose, mirroring --release. A batch's claim
+  # state is two-part — `review_tasks.md`'s status plus the lock — and that file
+  # is not tasks/index.yml, so answering from here would report `absent` for
+  # every batch that exists. batch_work.sh owns both halves.
+  # Both spellings: the normalised `BATCH-<N>` form AND the bare integer a
+  # human types (`/claim-task 116`). Step 1 normalises the latter, but this
+  # script is also called directly, and a bare integer is precisely the
+  # claim-kind confusion the <CLAIM_ID> vocabulary exists to remove — returning
+  # `absent` for it would be the same "reads as not claimed" answer for every
+  # batch that Phase 156 fixed elsewhere.
+  if [[ "$TASK_ID" =~ ^[Bb][Aa][Tt][Cc][Hh]-([0-9]+)$ ]] || [[ "$TASK_ID" =~ ^([0-9]+)$ ]]; then
+    echo "❌ ${TASK_ID} is a review batch; its claim state lives in review_tasks.md, not tasks/index.yml." >&2
+    echo "   Read the batch's status there (and sysop/runtime/locks/BATCH-${BASH_REMATCH[1]}.lock) instead;" >&2
+    echo "   /claim-task Step 2's review-batch branch already does exactly that." >&2
+    exit 1
+  fi
+
+  REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || {
+    echo "❌ Not inside a git repository." >&2
+    exit 1
+  }
+  GIT_COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null)"
+  if [[ -z "$GIT_COMMON_DIR" ]]; then
+    echo "❌ git rev-parse --git-common-dir failed; cannot resolve canonical sysop/runtime/locks/ location." >&2
+    exit 1
+  fi
+  if [[ "$GIT_COMMON_DIR" = /* ]]; then
+    MAIN_REPO_ROOT="$(dirname "$GIT_COMMON_DIR")"
+  else
+    MAIN_REPO_ROOT="$(dirname "$(cd "$GIT_COMMON_DIR" && pwd)")"
+  fi
+
+  HAS_LOCK=false
+  [[ -f "${MAIN_REPO_ROOT}/sysop/runtime/locks/${TASK_ID}.lock" ]] && HAS_LOCK=true
+
+  # The index is canonical for CLOSED states even when a lock is present: a
+  # done/deferred task with a leftover lock is stale-lock cleanup, not a live
+  # claim, and reporting `held` there sends the operator to takeover instead.
+  # For every other state the lock wins — including a task absent from the
+  # index, where a lock is the only evidence there is.
+  #
+  # Resolved against the MAIN checkout, not $REPO_ROOT: claims are committed on
+  # main (Step 4d) and locks resolve via git-common-dir, so a worktree asking
+  # "can I claim this?" must get main's answer or two branches' index copies
+  # adjudicate one claim.
+  INDEX="${MAIN_REPO_ROOT}/tasks/index.yml"
+  if [[ ! -f "$INDEX" ]]; then
+    echo "❌ ${INDEX} not found — consumer not bootstrapped, or wrong repo." >&2
+    exit 2
+  fi
+  if ! command -v python3 >/dev/null 2>&1 || ! python3 -c "import yaml" >/dev/null 2>&1; then
+    echo "❌ python3 + PyYAML is required to read tasks/index.yml." >&2
+    exit 3
+  fi
+
+  # stderr goes to its OWN file, never merged into the captured stdout. The
+  # contract is "exactly one token on stdout", and a consumer sitecustomize.py,
+  # a printing .pth, a conda/mise shim or a future PyYAML DeprecationWarning
+  # would otherwise be prepended to the token and break every caller.
+  ES_ERR="$(mktemp -t claim_es_err.XXXXXX)" || {
+    echo "❌ Could not create a temp file for entry-state diagnostics." >&2
+    exit 4
+  }
+  ES_OUT=$(HAS_LOCK="$HAS_LOCK" TASK_ID="$TASK_ID" INDEX_PATH="$INDEX" python3 - 2>"$ES_ERR" <<'PY'
+import os, sys, yaml
+try:
+    with open(os.environ["INDEX_PATH"], encoding="utf-8") as fh:
+        data = yaml.safe_load(fh) or {}
+    tid = os.environ["TASK_ID"]
+    has_lock = os.environ.get("HAS_LOCK") == "true"
+    for t in (data.get("tasks") or []):
+        if t.get("id") == tid:
+            status = str(t.get("status", "")).strip()
+            if status in ("open", "in_progress"):
+                # A live status plus a lock means something holds it.
+                if has_lock:
+                    print("held")
+                else:
+                    print("claimable" if status == "open" else "resumable")
+            else:
+                # Closed wins over a leftover lock — that is stale-lock
+                # cleanup, not a live claim.
+                print(f"closed:{status or 'unknown'}")
+            break
+    else:
+        # Not in the index at all. A lock is then the only evidence there is.
+        print("held" if has_lock else "absent")
+except Exception as exc:  # noqa: BLE001 — any parse failure is unresolvable
+    print(f"ERROR: {exc}", file=sys.stderr)
+    sys.exit(1)
+PY
+  ) || {
+    echo "❌ Could not read ${INDEX}:" >&2
+    cat "$ES_ERR" >&2
+    rm -f "$ES_ERR"
+    exit 4
+  }
+  # Succeeded, but do not swallow whatever the interpreter said on the way —
+  # a printing sitecustomize.py or a deprecation warning is exactly the kind of
+  # thing that should stay visible (Phase 135: a silent abort and a clean run
+  # must not look identical). It goes to stderr, so the stdout contract holds.
+  [[ -s "$ES_ERR" ]] && cat "$ES_ERR" >&2
+  rm -f "$ES_ERR"
+  echo "$ES_OUT"
+  exit 0
+fi
 
 # ── Release (un-claim) ───────────────────────────────────────
 # The sanctioned inverse of a claim. Mutations are ordered so any early exit
@@ -87,6 +229,19 @@ if $RELEASE; then
   if [[ "${1:-}" == --* ]]; then
     echo "❌ Flags must come before <TASK_ID> (e.g. claim_task.sh --release --force ${TASK_ID})." >&2
     echo "   Saw trailing flag: $1" >&2
+    exit 1
+  fi
+
+  # A batch claim has a second half this script does not own. `batch_work.sh`
+  # committed `Pending` → `In Progress` in review_tasks.md, and releasing the
+  # lock without reverting that would leave the batch reading as claimed with
+  # nothing holding it — the half-revert that strands a batch. Refuse and point
+  # at the script that owns both halves. (Phase 156.)
+  if [[ "$TASK_ID" =~ ^[Bb][Aa][Tt][Cc][Hh]-([0-9]+)$ ]]; then
+    echo "❌ ${TASK_ID} is a review batch, and its claim lives in review_tasks.md, not tasks/index.yml." >&2
+    echo "   Releasing only the lock here would leave the batch marked 'In Progress' forever." >&2
+    echo "   Use the script that owns both halves:" >&2
+    echo "     bash sysop/scripts/batch_work.sh --release ${BASH_REMATCH[1]}" >&2
     exit 1
   fi
 
@@ -347,11 +502,22 @@ if [[ "$MODE" == "worktree" ]]; then
   fi
   WORKSPACE_PATH="$WORKTREE_DIR"
 
-  # Install git hooks in the new worktree (non-fatal)
-  if [[ -f "${REPO_ROOT}/sysop/scripts/install_hooks.sh" ]]; then
-    (cd "$WORKTREE_DIR" && bash "${REPO_ROOT}/sysop/scripts/install_hooks.sh") || \
-      echo "⚠️  Hook installation failed (non-fatal). Run manually: cd ${WORKTREE_DIR} && bash sysop/scripts/install_hooks.sh"
-  fi
+  # Deliberately NO hook install here (Phase 150 / upstream #202).
+  #
+  # Worktrees share the main repo's hooks directory ($GIT_COMMON_DIR/hooks), so
+  # a worktree never needs its own arm — it already runs whatever the main
+  # checkout has armed. Arming from here was worse than redundant:
+  # install_hooks.sh resolves its SOURCE from the worktree's toplevel, so this
+  # pushed the claimed branch's sysop/scripts/hooks/* into the MAIN checkout's
+  # hooks — silently replacing a consumer's armed checks with the shipped
+  # skeletons, outside the worktree the claim was supposed to be isolated to.
+  #
+  # Every case where this call could still change something is a case where it
+  # must not: after a fresh install the hooks are already armed; --no-arm-hooks
+  # means the consumer opted out on purpose; and during an --update reconcile
+  # window Phase 15 / ISSUE-0007 skips arming on purpose. Arm explicitly from
+  # the main checkout with `bash sysop/scripts/install_hooks.sh` — the unarmed
+  # state is reported by `bash sysop/scripts/self_check.sh`.
 
 elif [[ "$MODE" == "clone" ]]; then
   REMOTE_URL=$(git remote get-url origin 2>/dev/null) || {
@@ -406,7 +572,7 @@ workspace: ${WORKSPACE_PATH}
 started: ${TIMESTAMP}
 expires: ${EXPIRES_TIMESTAMP}
 files_impacted:
-  - (update manually or via git diff --name-only main)
+  - (update manually or via git diff --name-only main...HEAD)
 plan_summary: (update with a one-line description of the work)
 notes:
 EOF

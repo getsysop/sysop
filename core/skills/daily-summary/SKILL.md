@@ -21,7 +21,7 @@ These three read the same project through three different time horizons; `/daily
 
 ## Pre-flight: Permission Guard
 
-**No new permission rules; no Step 0 guard.** Every operation this skill performs is read-only: `git log` (and read-only pipe tools like `wc` / `sort`), `date` arithmetic, and `Read` on `tasks/index.yml` and any changelog/status docs. Per `_shared/permission-guard.md` § Notes, read-only ops are auto-approved under `auto` mode and are **not** listed as allow-rules. It runs no scripts and writes nothing. It is portable to any git-backed project on any agent.
+**No new permission rules; no Step 0 guard.** Every operation this skill performs is read-only: `git log` (and read-only pipe tools like `wc` / `sort`), `date` arithmetic, and `Read` on `tasks/index.yml` and any changelog/status docs. Per `_shared/permission-guard.md` § Notes, read-only forms of `git` and the built-in read-only command set are auto-approved in **every** permission mode and are **not** listed as allow-rules. It runs no scripts and writes nothing. It is portable to any git-backed project on any agent.
 
 ## Step 0 — Parse arguments
 

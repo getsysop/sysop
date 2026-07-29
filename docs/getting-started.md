@@ -57,7 +57,8 @@ bash sysop/install.sh /path/to/your/project --packs auto
 cd /path/to/your/project
 bash sysop/scripts/self_check.sh                        # one-command prereq check: bash, PyYAML, hooks
 git status                                              # review everything Sysop wrote
-git add .claude/ .agents/ sysop/ tasks/ CLAUDE.md .gitignore
+git add .claude/ sysop/ tasks/ CLAUDE.md .gitignore
+git add .agents/ 2>/dev/null   # only present when the Codex skill links were installed
 git commit -m "chore: install Sysop"
 ```
 
@@ -69,7 +70,8 @@ git commit -m "chore: install Sysop"
   existing codebase.) This guide is the graduation path: grow the install in place with
   `bash sysop/install.sh /path/to/your/project --update --mode full` — purely additive,
   nothing the loop has learned is touched — commit what it added
-  (`git add .claude/ .agents/ sysop/ tasks/ .gitignore`), then skip step 1 and continue from step 2.
+  (`git add .claude/ sysop/ tasks/ .gitignore; git add .agents/ 2>/dev/null`), then skip step 1
+  and continue from step 2.
   Loop mode's own day-one walkthrough is [`docs/loop-mode.md`](./loop-mode.md); the guide
   you're reading assumes the full install.
 - **What landed:** a `.claude/` directory (the lifecycle skills, the convention and
@@ -147,6 +149,10 @@ Open `tasks/index.yml` and pick a task ID to build first (they look like `FEAT-�
 
 Here's what it does, and why each part matters:
 
+- **Checks whether the task is actually claimable** — before it creates anything, it asks
+  whether the task is open, already locked by someone else, already closed, or in the
+  half-state a finished-but-unmerged task sits in. On that last one it stops and asks rather
+  than guessing, so a re-run never silently re-claims work that was already reviewed.
 - **Claims the task** — flips it to `in_progress` and takes a lock so parallel sessions
   don't collide.
 - **Creates an isolated worktree** — a sibling checkout at `../<your-project>-feat-…` on a
@@ -270,6 +276,20 @@ is [`WORKFLOW.md`](../core/companion/docs/WORKFLOW.md).
 **Hit friction?** Jot it in `sysop/SYSOP_ISSUES.md` the moment you hit it — it's
 freshest before the session moves on. On Claude Code, `/report-issues` turns those notes
 into GitHub issues (showing you each one before it files). That feedback is how Sysop improves.
+
+By default those issues land on the **public** `getsysop/sysop`. Friction notes quote whatever
+you were doing at the time, so if yours shouldn't go somewhere public, name your own target once
+and all three give-back skills honor it:
+
+```markdown
+## Sysop upstream repo
+
+`your-org/sysop`
+```
+
+The skills check the resolved target's visibility before filing and warn you when
+security-sounding content is headed somewhere public — but the warning never redacts anything,
+and you still approve each item one at a time.
 
 ## Working alongside a build
 

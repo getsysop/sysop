@@ -9,7 +9,7 @@ The "I'm done" skill. Commits code changes, writes documentation to the right fi
 
 ## Pre-flight: Permission Guard
 
-This skill ends with `git push -u origin HEAD`. Under `auto` mode with `skipAutoPermissionPrompt: true`, a missing push allow-rule will halt the session after work is committed locally but before it reaches the remote — confusing because everything *looks* successful until the push step.
+This skill ends with `git push -u origin HEAD`. Under `dontAsk` mode a missing push allow-rule halts the session after work is committed locally but before it reaches the remote — confusing because everything *looks* successful until the push step.
 
 Read `.claude/settings.json` and confirm `permissions.allow` contains:
 
@@ -17,7 +17,7 @@ Read `.claude/settings.json` and confirm `permissions.allow` contains:
 - `Bash(git push origin:*)`
 - `Bash(python3 -:*)` — required by Step 3b's heredoc'd follow-up-stub check (shipped in Phase 16.1)
 
-If any are missing, stop with the `_shared/permission-guard.md` § Algorithm step 4 message (one-line reason: "pushes the documented branch upstream as the final step before `/review-close`, after Step 3b's `python3` heredoc verifies named follow-up task IDs resolve in `tasks/index.yml`"). Do not proceed.
+If any are missing, stop with the `_shared/permission-guard.md` § Algorithm step 5 message (one-line reason: "pushes the documented branch upstream as the final step before `/review-close`, after Step 3b's `python3` heredoc verifies named follow-up task IDs resolve in `tasks/index.yml`"). Do not proceed — unless the guard's step 3 mode check applies.
 
 If `$ARGUMENTS` contains `--skip-permission-guard`, print a one-line warning and continue.
 
