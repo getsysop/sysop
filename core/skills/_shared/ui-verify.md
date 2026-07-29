@@ -11,11 +11,17 @@ Playwright MCP, and checks the browser console + network for regressions.
 
 Run:
 ```bash
-git diff --name-only main -- frontend/
+git diff --name-only "$(git merge-base main HEAD)" -- frontend/
 ```
 
-This covers both committed and uncommitted changes relative to `main`. If the
-output is empty, emit:
+This covers both committed and uncommitted changes relative to the point this
+branch was cut. **Diff against the merge-base, not `main`** (upstream #241): a
+bare `git diff --name-only main` compares `main`'s *tip* to the working tree, so
+frontend files `main` gained after the branch was cut are reported as this
+branch's changes and drive a browser verification of work it never did. Three
+dots is not the fix here — `main...HEAD` would drop the uncommitted changes this
+step exists to catch; the merge-base form keeps them. If the output is empty,
+emit:
 
 ```
 UI verify: no frontend changes, skipping.

@@ -12,7 +12,7 @@ Adversarial security audit aligned to the OWASP Top 10. Scans for injection, aut
 
 ## Pre-flight: Permission Guard
 
-Before any work, verify `.claude/settings.json` carries the allow-rules this skill depends on. Under `auto` mode + `skipAutoPermissionPrompt: true`, a missing rule for `bash sysop/scripts/run_checks.sh` silently halts the security check stage with no actionable error.
+Before any work, verify `.claude/settings.json` carries the allow-rules this skill depends on. Under `dontAsk` mode a missing rule for `bash sysop/scripts/run_checks.sh` is auto-denied with no prompt, halting the security check stage with no actionable error.
 
 Read `.claude/settings.json` and confirm `permissions.allow` contains:
 
@@ -21,8 +21,13 @@ Read `.claude/settings.json` and confirm `permissions.allow` contains:
 - `Bash(python sysop/scripts/archive_review_tasks.py:*)`
 - `Bash(python3 sysop/scripts/archive_review_tasks.py:*)`
 - `Bash(.venv/bin/python3 sysop/scripts/archive_review_tasks.py:*)` — Phase 45b venv-prefixed variant (preferred when the consumer has a venv with PyYAML)
+- `Bash(git add review_tasks.md)` — Step 7's task-loss protection commit
+- `Bash(git add:*)` — Step 7 also stages `review_tasks_archive.md`, whose own name no literal rule covers (it is staged as its **own** command precisely because `git add` is all-or-nothing across pathspecs)
+- `Bash(git commit -m docs:*)` — the `docs:` commit Step 7 and the Step 9 promotion/demotion commits use
 
-If any are missing, stop with the `_shared/permission-guard.md` § Algorithm step 4 message (one-line reason: "runs the bundled check registry (grep + LSP + Semgrep) against security-relevant files, and may need to archive `review_tasks.md` if it exceeds 125KB"). Do not proceed.
+These four were undeclared until Phase 152 — the skill has staged and committed since long before, so the pre-flight was under-reporting what it needs. Note what the `git add:*` rule still does **not** buy: Step 9 stages inside a `for … done` loop, and `for`/`done` are not among the matcher's command separators, so that invocation binds no rule whatever is seeded (`WORKFLOW.md` § 8.2a *Invocation shapes*).
+
+If any are missing, stop with the `_shared/permission-guard.md` § Algorithm step 5 message (one-line reason: "runs the bundled check registry (grep + LSP + Semgrep) against security-relevant files, and may need to archive `review_tasks.md` if it exceeds 125KB"). Do not proceed — unless the guard's step 3 mode check applies.
 
 If `$ARGUMENTS` contains `--skip-permission-guard`, print a one-line warning and continue.
 
@@ -76,12 +81,19 @@ if not found:
 # dirty-worktree classification. On a stale pre-Phase-133 install missing the
 # sysop/runtime/ entry, skip the write — evidence is not worth corrupting the
 # thing it evidences.
-rel = "sysop/runtime/pending-rounds/probe.pending"
-if subprocess.run(["git", "-C", str(root), "check-ignore", "-q", rel],
-                  capture_output=True).returncode != 0:
-    print("round-marker: sysop/runtime/ is not gitignored here — skipping the "
-          "write (layer 1 disarmed; re-run the installer to refresh .gitignore)")
-    raise SystemExit(0)
+# BOTH runtime dirs this lifecycle writes are probed. Checking only the marker
+# dir would pass on a hand-narrowed .gitignore that lists `pending-rounds/`
+# alone, and the round-close receipt would then dirty the tree — the same
+# Phase-99.1 chain (un-ignored runtime file -> /review-close Step 2a reads
+# `dirty` -> auto-SKIP -> the close silently refuses).
+for rel in ("sysop/runtime/pending-rounds/probe.pending",
+            "sysop/runtime/round-receipts/probe.json"):
+    if subprocess.run(["git", "-C", str(root), "check-ignore", "-q", rel],
+                      capture_output=True).returncode != 0:
+        print(f"round-marker: {rel.rsplit('/', 1)[0]}/ is not gitignored here "
+              "— skipping the write (layer 1 disarmed; re-run the installer to "
+              "refresh .gitignore)")
+        raise SystemExit(0)
 
 d.mkdir(parents=True, exist_ok=True)
 nonce = f"{int(now)}-{os.getpid()}"
@@ -96,7 +108,7 @@ PY
 
 **Carry the printed `ROUND_MARKER=` path to Step 5f** — that step removes it. If you lose the path, do not guess: leave the marker and let it surface as stale (the safe direction).
 
-**This step is best-effort and must never block the round.** It depends on the `Bash(python3 -:*)` allow-rule, which ships in both the master `settings.json` template and the 14-rule loop-mode subset — but it is deliberately **not** in the Pre-flight permission guard's hard-stop list. A consumer on an older `settings.json` should lose the *marker*, not the ability to run an audit. If the command is denied or errors, print one line noting the round is running without abandonment evidence, and continue to Step 1.
+**This step is best-effort and must never block the round.** It depends on the `Bash(python3 -:*)` allow-rule, which ships in both the master `settings.json` template and the loop-mode subset — but it is deliberately **not** in the Pre-flight permission guard's hard-stop list. A consumer on an older `settings.json` should lose the *marker*, not the ability to run an audit. If the command is denied or errors, print one line noting the round is running without abandonment evidence, and continue to Step 1.
 
 Report any prior markers this step surfaced in the Step 6 summary.
 
@@ -149,6 +161,8 @@ Scan mode:   Full / Incremental (since YYYY-MM-DD)
 Scope:       <area or "all">
 Files:       <N> files to audit (+<N> security-critical always-include)
 ```
+
+**That `Files:` count is this round's `manifest`** — carry it verbatim into the Tier-0 coverage line at Step 5b. It is a scope size, not a coverage claim, and it means nothing until `opened` sits beside it. Stating a *smaller* manifest later is the one way to make a thin round look complete without anyone being able to tell, so if the round's real scope narrows after this point, say so as `Scoped`/`Sampled` with the basis rather than by quietly shrinking the denominator.
 
 ## Step 2: Collect Existing Task Context
 
@@ -291,7 +305,15 @@ If yes:
 - For unmatched files: propose new sections or glob expansions for the relevant map and apply them
 - For **dead citations** and **relocated sections**: refresh the citation or update the glob in place — low-stakes map hygiene, apply directly (default to refresh for any security helper). In a **consumer install** (`.claude/sysop.lock` present), edit hygiene that targets a **locally-authored `.project.*` overlay section** in the overlay file, not the regenerated base copy (per `_shared/promotion-write-target.md`); hygiene on a **core/pack-shipped** section refreshes from upstream on the next update, so a base-only edit is transient
 - For **stale sections reflecting a genuinely removed category** (a promoted security convention with no code left to govern): **do not delete the CLAUDE.md § Prevention Conventions bullet here.** Record it as a retirement candidate in the final summary report and route the decision to the deliberate, human retirement step (the interactive **Step 9b: Convention Demotion** prompt — symmetric to promotion, and the Tier 2 home where Step 9b also retires the blocking-mechanical rules whose false-positive cost this static map sweep cannot see; for security rules it confirms the protection moved elsewhere before retiring). Tier 1 detects and reports; the retirement *decision* stays human.
-- Commit: `git add .claude/convention_map.md .claude/convention_map.project.md .claude/security_map.md .claude/security_map.project.md && git commit -m "docs: update convention_map.md and security_map.md coverage"` (the `.project.*` overlay paths pick up any consumer-install hygiene edits; they no-op in the source repo where the overlays don't exist)
+- Commit: give **each** path its own `git add`, and run all four — an absent one costs only its own line:
+  ```bash
+  git add -A -- .claude/convention_map.md
+  git add -A -- .claude/convention_map.project.md
+  git add -A -- .claude/security_map.md
+  git add -A -- .claude/security_map.project.md
+  git commit -m "docs: update convention_map.md and security_map.md coverage"
+  ```
+  Both the base maps and the `.project.*` overlays are listed because either can carry this step's hygiene edits: per the bullet above, hygiene on a **locally-authored overlay section** goes to the overlay, while hygiene on a **core/pack-shipped section** edits the base copy. The overlays do not exist in the source repo, so those two lines will report `fatal: pathspec … did not match any files` there — expected, read past it. **One path per invocation** is the load-bearing part: `git add` is all-or-nothing across its pathspecs, so a single unmatched pathspec aborts the whole invocation and stages *none* of the others. Write these out as plain commands — **not** a `for … done` loop. `for` and `done` are not documented command separators, so no allow-rule matches a looped invocation and `dontAsk` auto-denies the entire staging step; `-A` so a path a later step *deleted* stages as a deletion, `--` so a path beginning with `-` is never read as a flag (Phase 153).
 
 If no (or audit is clean), proceed to Step 2b. Note gaps **and staleness candidates** in the final summary report either way.
 
@@ -332,6 +354,16 @@ This capture also applies to the Semgrep (Step 2b) and pip-audit stages — any 
 <!-- Check definitions: .claude/checks.yml — see WORKFLOW.md §6.5 -->
 
 ## Step 3: Audit by OWASP Category (Map-Guided Agents)
+
+### 3-0. Dispatch decision (STATE IT — this step has an output)
+
+**Decide, out loud, before reading the map: dispatch per-category agents, or run solo.** This is a recorded decision, not an implicit consequence of the agent roster below — an audit that narrates a fan-out and then audits inline is indistinguishable from one that legitimately ran solo, and that silence is what Tier 0 exists to end (`_shared/fanout-evidence.md`).
+
+- **Dispatch is the default** whenever the scope is larger than one context can actually read. Count the manifest first (Step 1 already bounded it); if you cannot open those files yourself, per-category agents are the mechanism that covers them.
+- **Solo is legitimate in exactly two cases, and both must be *stated*:** (a) the harness offers no sub-agent primitive, or (b) the scope is small enough to open in full. Nothing else. "I'll just audit it myself" on a scope you cannot read is case (c) — and case (c) does not exist.
+- **A solo audit still owes every OWASP category its pass.** The roster below is the *coverage* contract, not merely a dispatch layout: running solo means you work the categories in sequence yourself, and any category you did not reach is named in the ledger. A silently-unaudited category is the exact failure an OWASP audit exists to prevent.
+- **If you run solo on a scope you cannot open in full, the round is `Sampled`, not `Full`.** Name the sampling basis (map-flagged surfaces, pre-scan hits, highest-exposure modules) and carry it into the ledger. **Never report the manifest size as though it were coverage** — "955 files to audit" beside 27 opened is the exact misread this rule forbids.
+- Carry the decision into the Tier-0 ledger as `workers <K>` (with `solo: <reason>` when `K` is 0), rendered in Step 5b's round header and Step 6's summary.
 
 **CRITICAL: Read `.claude/security_map.md` before launching agents.** The security map specifies which OWASP checks apply to which file areas and which to SKIP. Agents must respect both the "Check" and "Skip" lists.
 
@@ -632,15 +664,18 @@ Create the file with the standard header:
 ### 5b. Round Header
 
 Check if a Round with today's date already exists (e.g., from a `/codebase-review` run earlier today):
-- **If yes:** append new batches inside that Round (after the last batch, before the next `---` separator or `## Statistics`)
+- **If yes:** append new batches inside that Round (after the last batch, before the next `---` separator or `## Statistics`). **Add your own coverage line beside the existing one — never edit or replace it:** a merged round has two coverage stories and each audit type owns its own, so a shared header would attribute one skill's coverage to the other.
 - **If no:** create a new Round section:
 
 ```markdown
 ## Round N (YYYY-MM-DD) — OWASP Security Audit
 
+> **Coverage (security):** <Full | Scoped (<area>) | Sampled (<basis>)> · manifest <N> · opened <M> · grepped <G> · workers <K><, solo: <reason>>
 ```
 
 Use the next Round number (last Round N + 1).
+
+**The coverage line is MANDATORY and is the round's Tier-0 ledger** (`_shared/fanout-evidence.md` § Tier 0) — the durable half of it, and the one that outlives the session. Fill every field from what this round actually did: `manifest` = the scope *this round declared* after exclusions (not the repo total unless this was a full audit), `opened` = files whose bodies you read, `grepped` = files reached by search only (kept separate — grep is looking, not reading), `workers` = the Step 3-0 dispatch count with the stated reason when it is 0. **A round that cannot fill a field writes `unreported` in it, never a guess and never a blank** — an absent number reads as a clean pass, which is the failure this ledger exists to prevent. If any OWASP category went unaudited, name it here too.
 
 ### 5c. Batch Format
 
@@ -694,18 +729,18 @@ If Step 2b triage recorded any **stale-verdicts** (mechanical checks that fired 
 
 One row per (rule, round): a rule fires many times in a round but earns at most **one** stale-verdict row per round — this mirrors promotion's "recurred across rounds," not "fired N times this round." Do not add a second row for a rule that already has one for this Round. (When both `/codebase-review` and `/security-audit` run in the same Round, share the one ledger section — append, do not duplicate.)
 
-### 5f. Clear the round marker
+### 5f. Clear the round marker and write the round receipt
 
 **Removal is pinned here — immediately after the `review_tasks.md` write completes, and before the report-summary and interactive promotion steps.** The accepted profile, stated plainly: a death during Steps 6–9b leaves a stranded marker, which is correct, because by then the round's results are already durably written; what the marker protects is *the audit itself*. Removing it at the true final step would strand a marker on every unattended loop run that skips interactive promotion — a chronic false alarm trains consumers to ignore the signal, which is worse than no signal.
 
-Pass the `ROUND_MARKER=` path from the Pre-flight step:
+Pass the `ROUND_MARKER=` path from the Pre-flight step. **The coverage line is not an argument** — the step reads it back out of the round header you just wrote. That is deliberate on two counts: model-authored prose interpolated into a shell argument is a command-substitution hazard (the class `/report-issues` Step 4 and `/share-wins` already fixed), and reading the committed artifact makes receipt-and-header agreement *structural* rather than something you have to remember to do.
 
 ```bash
 python3 - <<'PY' "<ROUND_MARKER path from Pre-flight>"
-import sys
+import json, os, re, subprocess, sys, time
 from pathlib import Path
 
-p = Path(sys.argv[1])
+p = Path(sys.argv[1]).resolve()
 if not p.is_file():
     print(f"round-marker: nothing to clear at {p}")
     raise SystemExit(0)
@@ -716,15 +751,150 @@ if not p.is_file():
 # corrupted file), but it cannot tell one valid marker from another. So: only
 # ever pass your own captured path here.
 want = p.name.split(".")[-2] if p.name.endswith(".pending") else ""
-got = ""
-for line in p.read_text(encoding="utf-8").splitlines():
-    if line.startswith("nonce:"):
-        got = line.split(":", 1)[1].strip()
-        break
+fields = {}
+for ln in p.read_text(encoding="utf-8").splitlines():
+    if ":" in ln:
+        k, v = ln.split(":", 1)
+        fields.setdefault(k.strip(), v.strip())
+got = fields.get("nonce", "")
 if want and got and want != got:
     print(f"round-marker: REFUSING to remove {p.name} — nonce mismatch "
           f"(file says {got}, path says {want}); not this session's marker")
     raise SystemExit(0)
+
+
+# Tier-0 round receipt (_shared/fanout-evidence.md § Tier 0): the machine
+# readable copy of the coverage line, so self_check.sh and /sitrep can surface a
+# collapsed round without re-reading review_tasks.md. Written ONLY on the
+# successful clear path — a receipt asserts "a round closed here". Every failure
+# below is swallowed: evidence must never cost the cleanup it rides on.
+def read_coverage(root, skill):
+    """Pull this round's coverage line out of the round header just written.
+
+    Scans the LAST `## Round` section and takes the `> ... Coverage ...` lines
+    above its first batch. A merged same-day round carries one line per audit
+    type, so the line is selected by this skill's tag; an ambiguous set yields
+    nothing rather than the wrong round's numbers.
+    """
+    f = root / "review_tasks.md"
+    if not f.is_file():
+        return ""
+    found, cur = [], None
+    for ln in f.read_text(encoding="utf-8", errors="replace").splitlines():
+        if ln.startswith("## Round "):
+            cur = []
+            found.append(cur)
+        elif cur is not None:
+            if ln.startswith("## ") or ln.startswith("### "):
+                cur = None
+            elif ln.lstrip().startswith(">") and "Coverage" in ln:
+                cur.append(ln)
+    lines = found[-1] if found else []
+    if not lines:
+        return ""
+    tag = "security" if "security" in skill else "quality"
+    hit = [ln for ln in lines if tag in ln.lower()]
+    if len(hit) == 1:
+        return hit[0]
+    return lines[0] if len(lines) == 1 else ""
+
+
+def parse_coverage(line):
+    """Parse PER SEGMENT, matching each value whole.
+
+    A whole-line regex is not safe here: a sampling basis is free text the
+    author is told to write, so `Sampled (opened 3 entrypoints)` would hijack
+    `opened`, and a loose numeric class truncates `manifest 1.477` to `1`. Both
+    yield a confidently WRONG number, which is strictly worse than `unreported`
+    — a shrunken denominator silences the very alarm this ledger exists to
+    raise. Anything that is not exactly `<name> <digits>` is unreported.
+    """
+    body = line.split(":**", 1)[-1] if ":**" in line else line
+    out = {k: "unreported" for k in ("manifest", "opened", "grepped", "workers")}
+    out["kind"], out["solo_reason"] = "unreported", ""
+    segs = [s.strip() for s in body.split("\u00b7")]
+    for s in segs:
+        head, sep, tail = s.partition(", solo:")
+        if sep:
+            out["solo_reason"] = tail.strip()
+        m = re.fullmatch(r"(manifest|opened|grepped|workers)\s+([0-9][0-9,_]*)",
+                         head.strip())
+        if m:
+            out[m.group(1)] = int(m.group(2).replace(",", "").replace("_", ""))
+    if segs:
+        # Kind is read from the FIRST segment only, so a `Full` occurring later
+        # (in a solo reason, say) cannot relabel a round, and the unfilled
+        # template placeholder stays `unreported` instead of asserting `Full`.
+        m = re.fullmatch(r"(Full|Scoped|Sampled)(\s*\([^)]*\))?", segs[0].strip())
+        if m:
+            out["kind"] = m.group(0).strip()
+    return out
+
+
+try:
+    skill = fields.get("skill", "unknown")
+    receipt = {"skill": skill, "nonce": got or want,
+               "started": fields.get("started", "unreported"),
+               "completed": time.strftime("%Y-%m-%dT%H:%M:%S")}
+    # parents: [0] pending-rounds, [1] runtime, [2] sysop, [3] repo root.
+    line = read_coverage(p.parents[3], skill)
+    receipt.update(parse_coverage(line))
+    # The one number in this receipt that is NOT self-reported. `manifest` is
+    # the round's own claim, and shrinking it is the one way to make a thin
+    # round look complete with no visible tell — so record a fact beside it.
+    # This is a RAW tracked-file count, deliberately not scope- or exclusion-
+    # aware: `manifest < tracked` is normal and is not a defect. It exists so a
+    # reader can see what fraction of the repository the round spoke for, the
+    # same trick as putting `opened` beside `manifest` one level down.
+    # MUST stay ahead of "line": self_check.sh extracts the coverage line with a
+    # greedy sed that relies on "line" being the last key in the object.
+    receipt["tracked"] = "unreported"  # set first: no path may leave it unset,
+    try:                               # or the summary print below KeyErrors
+        ls = subprocess.run(["git", "-C", str(p.parents[3]), "ls-files"],
+                            capture_output=True, text=True)
+        if ls.returncode == 0:
+            receipt["tracked"] = len(ls.stdout.splitlines())
+    except Exception:
+        pass
+    receipt["line"] = line.strip()
+    d = p.parent.parent / "round-receipts"
+    d.mkdir(parents=True, exist_ok=True)
+    # Both components are sanitized before they build a path: `skill` comes from
+    # the marker BODY, which the nonce guard above already treats as possibly
+    # hand-built, and an unsanitized `../..` there would land the receipt
+    # outside the gitignored runtime dir and dirty the tree.
+    safe = lambda s: (re.sub(r"[^A-Za-z0-9._-]", "_", str(s))[:64] or "unknown")
+    dst = d / f"{safe(receipt['skill'])}.{safe(receipt['nonce'])}.json"
+    tmp = d / (dst.name + ".tmp")
+    tmp.write_text(json.dumps(receipt, indent=2, ensure_ascii=False) + "\n",
+                   encoding="utf-8")
+    os.replace(tmp, dst)  # atomic: a concurrent reader never sees a torn file
+    try:  # bounded history: keep the newest 50, prune the rest
+        def age(f):
+            try:
+                return f.stat().st_mtime
+            except OSError:
+                return 0.0
+        for old in sorted(d.glob("*.json"), key=age)[:-50]:
+            try:  # per-file, so one unreadable entry cannot disable the bound
+                old.unlink()
+            except OSError:
+                pass
+    except OSError:
+        pass
+    miss = [k for k in ("kind", "manifest", "opened", "grepped", "workers")
+            if receipt[k] == "unreported"]
+    if miss:
+        print("round-receipt: unreported field(s): " + ", ".join(miss)
+              + " — this round's coverage is NOT on the record"
+              + ("" if line else "; no coverage line found in the round header"))
+    else:
+        print(f"round-receipt: {receipt['kind']} — opened {receipt['opened']}"
+              f"/{receipt['manifest']} of {receipt['tracked']} tracked, "
+              f"{receipt['workers']} worker(s)")
+except Exception as exc:
+    print(f"round-receipt: skipped ({exc.__class__.__name__}) — clearing anyway")
+
 p.unlink()
 print(f"round-marker: cleared {p.name}")
 PY
@@ -742,8 +912,8 @@ Print an OWASP coverage table and batch summary:
 OWASP Security Audit — Round N (YYYY-MM-DD)
 Scan: Full / Incremental (since YYYY-MM-DD)
 Scope: <area or "all">
-Files audited: <N>
 
+Coverage (Tier 0): <kind> · manifest <N> · opened <M> · grepped <G> · workers <K><, solo: <reason>>
 Map coverage audit:  security map <N> file gaps, convention map <M> file gaps (fixed inline: yes/no)
 Pre-scan (grep):     <N> findings (deterministic)
 LLM agents:          <N> findings (contextual)
@@ -779,16 +949,21 @@ Task IDs: TASK-<first> through TASK-<last>
 Dependency scan: <summary or "pip-audit/npm audit not available — install for coverage">
 ```
 
+**The `Coverage (Tier 0)` line carries the same values as the round header written in Step 5b** — the header is the durable copy, this is the one the operator sees now. There is exactly one number in it that is *not* a coverage claim: `manifest` is the size of the set this round was responsible for, and stating it alone — as "N files audited" or "N files to audit" — is how a ~2% pass gets read as a full audit. It only means anything beside `opened`. The OWASP coverage table above says which *categories* were worked; the ledger says how much of the code was actually opened while working them, and a table of ten categories over 27 opened files is a thin audit however complete the table looks.
+
 ## Step 7: Commit Generated Tasks
 
 After writing to `review_tasks.md`, **always commit the changes** so they survive branch merges and stash operations during `/review-close`:
 
 ```bash
-git add review_tasks.md review_tasks_archive.md 2>/dev/null
+git add review_tasks.md
+git add review_tasks_archive.md 2>/dev/null   # may not exist yet — its OWN command on purpose
 git commit -m "docs: add Round <N> security audit tasks to review_tasks.md"
 ```
 
 This prevents task loss when `/review-close` later stashes uncommitted changes for branch merges.
+
+> **Why the optional file gets its own `git add`.** `git add` is **all-or-nothing across its pathspecs**: one pathspec matching nothing aborts the entire invocation (`fatal: pathspec '<path>' did not match any files`) and stages **none** of the others. `2>/dev/null` hides that message — it does **not** make the add tolerant. So the older single-command form, `git add review_tasks.md review_tasks_archive.md 2>/dev/null`, staged **nothing at all** on any project that had not yet rotated an archive (the sibling file does not exist until `archive_review_tasks.py` first writes it) — and the `git commit` on the next line then had nothing to record — it exits 1 with `no changes added to commit`, so the round's tasks simply never got committed and the task-loss protection this step exists for silently did not happen. (Unlike `/review-close` Step 4c, nothing here had already staged something, so this one fails loudly rather than producing a wrong commit — the outcome is still an uncommitted round.) Splitting the optional path into its own command confines a miss to that one line; the redirect is now only cosmetic.
 
 ## Step 8: Convention Candidate Extraction
 
@@ -880,13 +1055,29 @@ If Step 8 produced convention candidates in `sysop/runtime/pending-docs/conventi
 
 4. **Delete** `sysop/runtime/pending-docs/convention-candidates.md` after processing all candidates.
 
-5. **Commit** any changes (the `.project.*` overlay paths are the consumer-install dual-write targets from `_shared/promotion-write-target.md`; `2>/dev/null` tolerates their absence in the source repo):
+5. **Commit** any changes. Run **every** line below, in order — the `.project.*` overlay paths are the consumer-install dual-write targets from `_shared/promotion-write-target.md` and are **absent in the source repo**, so some of these will report `fatal: pathspec … did not match any files`. That is expected; read past it. Staging the whole candidate set unconditionally is what makes the overlay write mechanically guaranteed rather than dependent on the agent remembering it:
    ```bash
-   git add CLAUDE.md .claude/convention_map.md .claude/convention_map.project.md .claude/checks.yml .claude/checks.project.yml .claude/semgrep/ sysop/scripts/hooks/pre-commit review_tasks.md 2>/dev/null
+   # One plain `git add` per candidate path. `git add` is all-or-nothing ACROSS pathspecs —
+   # one missing pathspec aborts the whole invocation and stages NOTHING (`2>/dev/null`
+   # only hides the message) — so a single command listing them all stages nothing whenever
+   # any one is absent, which in the source repo is always. Per-path invocations confine a
+   # miss to its own line. It is not a `for … done` loop either: `for`/`done` are not
+   # documented command separators, so a looped invocation matches no allow-rule at all and
+   # `dontAsk` auto-denies the whole staging step (Phase 153).
+   git add -A -- CLAUDE.md
+   git add -A -- .claude/convention_map.md
+   git add -A -- .claude/convention_map.project.md
+   git add -A -- .claude/checks.yml
+   git add -A -- .claude/checks.project.yml
+   git add -A -- .claude/semgrep/
+   git add -A -- sysop/scripts/hooks/pre-commit
+   git add -A -- review_tasks.md
    git commit -m "docs: promote <N> conventions from Round <N>
 
    Promotion summary: <N> total (<M> mechanical / <K> prose)"
    ```
+
+   > **`.claude/security_map.md` is deliberately NOT in this list, and adding it would be wrong.** Both review skills write their Step 9 mechanized-equivalent reminders to `convention_map.md` — **including this one**; a security rule's reminder still lands in the convention map. `_shared/promotion-write-target.md` states it directly: `.claude/security_map.project.md` "is **not** a Step 9 reminder target," because the security map's overlay is the durable home for consumer-authored *security-map sections*, which are written during Step 2a hygiene and retired at Step 9b. Staging it here would sweep an unrelated Step 2a edit into a commit titled `docs: promote <N> conventions`. The promotion/demotion asymmetry is the design, not an oversight.
 
 This closes the feedback loop: audits find recurring issues → conventions are proposed → convention map is updated → future code is checked against scoped conventions → fewer audit findings over time.
 
@@ -925,7 +1116,21 @@ This is the **FP-driven** half of convention demotion. Tier 1 (Step 2a-3) static
 
 5. **Commit** any changes (fold into the Step 9 promotion commit if that ran this round, otherwise a standalone commit; the `.project.*` overlay paths cover consumer-install retirement per `_shared/promotion-write-target.md`):
    ```bash
-   git add CLAUDE.md .claude/convention_map.md .claude/convention_map.project.md .claude/security_map.md .claude/security_map.project.md .claude/checks.yml .claude/checks.project.yml .claude/checks_baseline.txt .claude/semgrep/ sysop/scripts/hooks/pre-commit review_tasks.md 2>/dev/null
+   # One plain `git add` per candidate path — never a loop, never `|| true` (Step 9 note).
+   # Run them all; an absent path costs only its own line. Demotion's candidate set is
+   # wider than promotion's: it includes the security map (whose overlay IS a Step 9b
+   # target, unlike at Step 9) and `checks_baseline.txt` orphaned-rule-id hygiene.
+   git add -A -- CLAUDE.md
+   git add -A -- .claude/convention_map.md
+   git add -A -- .claude/convention_map.project.md
+   git add -A -- .claude/security_map.md
+   git add -A -- .claude/security_map.project.md
+   git add -A -- .claude/checks.yml
+   git add -A -- .claude/checks.project.yml
+   git add -A -- .claude/checks_baseline.txt
+   git add -A -- .claude/semgrep/
+   git add -A -- sysop/scripts/hooks/pre-commit
+   git add -A -- review_tasks.md
    git commit -m "docs: retire <N> conventions from Round <N>
 
    Demotion summary: <N> retired (<B> blocking / <A> advisory-or-prose)"

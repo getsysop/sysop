@@ -39,6 +39,21 @@ their final envelope in this YAML shape):
   WORKTREE: <abs path>
   BRANCH: <branch name>
   ERROR: <if FAILED, else "none">
+  PHASE: <stage name, optional — see below>
+
+Output filename (Phase 159a). Envelopes are keyed by the ``TASK:`` field, so
+one claim could only ever hold one envelope: a second enveloping sub-agent
+under the same claim overwrote the first. The optional ``PHASE:`` field keys
+the file per stage instead — ``<TASK_ID>.<phase>.json`` when present,
+``<TASK_ID>.json`` when absent or set to the documented "none" sentinel. In the
+absent case the *filename* is byte-identical to pre-159a; the *payload* is not —
+it gains a ``"phase"`` key set to null. No shipped consumer asserts on the
+payload's key set (both read only the keys they name), so both current producers
+(/claim-task Step 7, /auto-build Phase 6e) and both current consumers (their
+respective read-then-``rm -f`` steps) are unaffected — but "byte-identical" is
+true of the filename only, and saying it of the behaviour would be false. This
+exists for the orchestrator reshape (tools/CLAIM_TASK_ORCHESTRATOR_SPEC.md),
+where one claim spawns a planner, a reviewer and an executor.
 
 Plus the reviewer-executor's REVIEW_REPORT YAML at the TOP of its response
 (see _shared/adversarial-review.md § Reviewer-executor variant). The hook
@@ -104,6 +119,7 @@ _ENVELOPE_FIELDS = (
     "ERROR",
     "BLOCKER_QUESTION",
     "PARKED_REASON",
+    "PHASE",
 )
 
 _FIELD_REGEXES = {
@@ -111,7 +127,34 @@ _FIELD_REGEXES = {
     for name in _ENVELOPE_FIELDS
 }
 
-_TASK_ID_SHAPE_RE = re.compile(r"^[A-Z][A-Z0-9]*-[A-Z0-9][A-Z0-9-]*$")
+# Same grammar as validate_tasks.py's _TASK_ID_RE and tasks/schema.md § Task ID.
+# Deliberate duplicate rather than an import: this file is a hook, executed by the
+# harness independently of the validator, so a hook that fails because a sibling
+# script was missing from a partial install is worse than the duplication — the
+# same reasoning the git-common-dir resolution carries in claim_task.sh /
+# batch_work.sh / close_batch.sh / next_task.py / validate_tasks.py /
+# scope_overlap.py. Keep the two in step: tests/test_parse_subagent_envelope.py
+# asserts they are character-identical.
+#
+# Phase 159a widened this from `^[A-Z][A-Z0-9]*-[A-Z0-9][A-Z0-9-]*$`, which was
+# narrower than the schema in one direction and looser in another. Narrower: it
+# required an interior hyphen (rejecting `FEAT001`, `ABC`) AND a non-empty
+# [A-Z0-9] immediately after that hyphen (rejecting `FEAT--0001`, `FEAT-`) — two
+# distinct causes, all four schema-valid, all four silently downgraded here to an
+# _unparseable_ diagnostic plus the parent's regex fallback. Looser: it was
+# unbounded in length, where the schema caps at 81. Both
+# grammars admit only uppercase, digits and hyphens — neither is a path risk, and
+# _sanitize_for_filename still runs on the value regardless.
+_TASK_ID_SHAPE_RE = re.compile(r"^[A-Z][A-Z0-9-]{2,80}$")
+
+# Optional envelope field naming which stage of a multi-agent claim emitted this
+# envelope. Absent (or the documented "none" sentinel) reproduces the pre-159a
+# filename exactly — `<TASK_ID>.json` — so every current producer and consumer is
+# unaffected. When present the file becomes `<TASK_ID>.<phase>.json`, which is
+# what lets a claim spawn more than one enveloping sub-agent without the second
+# overwriting the first. Sanitized and length-capped before it reaches a path;
+# `TASK:` keeps its own shape check above, so this adds no new injection surface.
+_PHASE_MAX_LEN = 32
 
 
 def _main_repo_root(cwd: str) -> str:
@@ -316,9 +359,34 @@ def main() -> int:
         })
         return 0
 
+    # Optional per-phase key. Absent → the historical `<TASK_ID>.json` filename,
+    # byte-for-byte; present → `<TASK_ID>.<phase>.json`. `_extract_field` already
+    # maps the documented "none" sentinel to None, so `PHASE: none` takes the
+    # historical path too. A phase that sanitizes away to nothing also falls back
+    # rather than producing a stray dot in the filename.
+    # Lower-cased before it becomes a path component. Without this, `PHASE: Plan`
+    # and `PHASE: plan` are two files on Linux and ONE file on macOS/APFS — a
+    # silent cross-platform split in the very mechanism that exists to keep two
+    # sub-agents' envelopes apart. Truncation runs before the outer strip on
+    # purpose: `[:N]` can re-expose a separator that _sanitize_for_filename had
+    # already cleaned, and stripping first would leave `<TASK_ID>.foo..json`.
+    phase_raw = envelope.get("phase")
+    safe_phase = ""
+    if phase_raw:
+        safe_phase = _sanitize_for_filename(
+            phase_raw.lower(), ""
+        )[:_PHASE_MAX_LEN].strip("._")
+
     payload: dict[str, Any] = {
         "parsed": True,
         "task_id": task_id,
+        # `phase` is the component that actually names the file, so a consumer can
+        # rebuild the path from the payload; `phase_raw` preserves what the agent
+        # literally wrote. They diverge whenever sanitizing, lower-casing or
+        # truncation changed anything, and a reader that needs the path must use
+        # `phase` — recording only the raw value made those two disagree silently.
+        "phase": safe_phase or None,
+        "phase_raw": phase_raw or None,
         "status": envelope.get("status"),
         "worktree": envelope.get("worktree"),
         "branch": envelope.get("branch"),
@@ -331,7 +399,8 @@ def main() -> int:
         "agent_transcript_path": transcript_path,
         "message_source": message_source,
     }
-    out_path = os.path.join(envelopes_dir, f"{safe_task_id}.json")
+    filename = f"{safe_task_id}.{safe_phase}.json" if safe_phase else f"{safe_task_id}.json"
+    out_path = os.path.join(envelopes_dir, filename)
     _write_json(out_path, payload)
     return 0
 

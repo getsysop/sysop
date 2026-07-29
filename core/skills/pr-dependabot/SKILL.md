@@ -40,10 +40,10 @@ Read `.claude/settings.json` and confirm `permissions.allow` contains:
 - `Bash(gh pr merge:*)` — merge safe updates (only reached under `--execute`)
 - `Bash(gh pr close:*)` — close pip + superseded PRs (only under `--execute`)
 
-If any are missing, stop with the `_shared/permission-guard.md` § Algorithm
-step 4 message (one-line reason: "client-side Dependabot PR sweep; shells `gh`
+If any are unsatisfied, stop with the `_shared/permission-guard.md` § Algorithm
+step 5 message (one-line reason: "client-side Dependabot PR sweep; shells `gh`
 to merge/close bot PRs because native auto-merge is unavailable on Free-plan
-private repos"). Do not proceed.
+private repos"). Do not proceed — unless the guard's step 3 mode check applies.
 
 If `$ARGUMENTS` contains `--skip-permission-guard`, print a one-line warning and
 continue.

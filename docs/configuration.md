@@ -6,6 +6,17 @@ Everything the installer writes sorts into three tiers on `--update` (update mec
 
 Your project's `CLAUDE.md` is always in context, and every Sysop skill honors it. A section like `## Guided mode` (WORKFLOW.md § 6.1) changes how every skill handles decision gates without touching a single skill file — and the same pattern works for any standing per-project rule ("when running `/review-close`, also check the staging deploy"). This is the sanctioned way to change how a skill *behaves*, and it survives every update because `CLAUDE.md` is yours.
 
+Several sections are read as structured input rather than prose. Four are pure configuration — all optional, each consumed by a named skill (three by the lifecycle, one by the give-back family):
+
+| Section | Effect |
+|---|---|
+| `## Merge policy` | `direct` (default) or `pr` — how `/review-close` lands work on `main`. Use `pr` when `main` is push-protected. |
+| `## Sysop upstream repo` | A bare `owner/name` slug naming where the give-back skills (`/report-issues`, `/contribute-convention`, `/share-wins`) file. Default is the **public** `getsysop/sysop`; set it if your friction log or convention overlay carries anything that shouldn't land in a public repo. `--repo` stays the per-run override. |
+| `## Post-deploy verification` | A smoke command `/review-close` runs *after* the merge lands — a Playwright run against staging, a curl on a health endpoint, a synthetic monitor check. Absent → the step is a no-op. |
+| `## Pending documentation routing` | Where `/auto-build` consolidates the per-task pending-docs it accumulates across a batch, so a multi-task run doesn't hand you a pile of unrouted fragments. |
+
+Templates are in WORKFLOW.md § 6.1, which also documents `## Pre-merge verification` (the commands `/review-close` Step 3 runs before pushing), the sections the review/audit skills read as run inputs (`## Scope mapping`, `## Map coverage exclusions`, `## Security-critical always-include files`, `## High-value files for review`) and the `## Guided mode` toggle. The give-back skills additionally check the resolved target's visibility before filing and warn when security-sounding content is headed somewhere public — or somewhere they could not verify.
+
 ## Config — never-managed overlay files
 
 Each shipped config has a consumer-owned sibling that survives every update:

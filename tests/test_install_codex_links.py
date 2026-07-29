@@ -834,7 +834,13 @@ class TestDocumentedCommitLine:
         for rel in self.DOC_SITES:
             text = (REPO_ROOT / rel).read_text()
             for m in pattern.finditer(text):
-                if ".agents/" not in m.group(0):
+                # Phase 151: `.agents/` is staged by its OWN `git add`, not listed inside
+                # the payload command — it is conditional (`--no-codex-links`, or a failed
+                # symlink capability probe), and `git add` aborts its whole invocation on
+                # one unmatched pathspec, staging nothing. So look for it in the same
+                # command *region* rather than the same argument list.
+                region = text[m.start():m.start() + 320]
+                if ".agents/" not in region:
                     offenders.append(f"{rel}: {m.group(0)}")
         assert not offenders, (
             "install commit line(s) missing .agents/ — a Codex-links install "
@@ -847,10 +853,15 @@ class TestDocumentedCommitLine:
         _install_ok(target, "--mode", "loop")
 
         add = subprocess.run(
-            ["git", "add", ".claude/", ".agents/", "sysop/", "CLAUDE.md", ".gitignore"],
+            ["git", "add", ".claude/", "sysop/", "CLAUDE.md", ".gitignore"],
             cwd=target, capture_output=True, text=True,
         )
         assert add.returncode == 0, f"documented line failed: {add.stderr}"
+        # …and the conditional path as its own command, exactly as documented (Phase 151).
+        add_agents = subprocess.run(
+            ["git", "add", ".agents/"], cwd=target, capture_output=True, text=True
+        )
+        assert add_agents.returncode == 0, f"documented .agents/ line failed: {add_agents.stderr}"
         _git(target, "commit", "-qm", "chore: install Sysop (loop mode)")
         # The links are tracked, and tracked AS links (mode 120000), not as
         # copies of the skill bodies.

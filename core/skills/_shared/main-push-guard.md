@@ -1,7 +1,7 @@
 # Shared guard: safe commit + push to `main`
 
-Any skill that **commits to, or pushes, `main` (or an integration branch destined for
-`main`) from the shared _primary_ worktree** MUST follow this guard. Git keeps **one
+Any skill that **commits to, or pushes, `main` — or any branch a squash PR will write
+`main` from — from the shared _primary_ worktree** MUST follow this guard. Git keeps **one
 `HEAD` per worktree**, and Sysop runs concurrent loops (`/auto-build`'s parallel
 batch, separate `/claim-task` sessions) against a `main` that — on an unprotected repo —
 can also advance on its own. So a commit or push made without re-asserting the branch can
@@ -12,9 +12,11 @@ Sites in Sysop that this guard covers:
 | Site | Operation | Expected `HEAD` |
 |---|---|---|
 | `/review-close` Step 4a–4c (`direct` policy) | feature merges, batch close, doc-consolidation commits | `main` |
-| `/review-close` Step 4a–4c (`pr` policy) | the same commits, on the integration branch | `$INTEGRATION_BRANCH` |
+| `/review-close` Step 4a–4c (`pr` policy, integration-branch shape) | the same commits, on the integration branch | `$INTEGRATION_BRANCH` |
+| `/review-close` Step 4a–4c (`pr` policy, PR-reuse shape) | the same commits, on the approved branch whose PR is being reused | the literal approved branch name |
 | `/review-close` Step 4d (`direct` policy) | safe push to `main` (Rule B) | `main` |
-| `/review-close` Step 4d (`pr` policy) | push the integration branch + open the PR | `$INTEGRATION_BRANCH` |
+| `/review-close` Step 4d (`pr` policy, integration-branch shape) | push the integration branch + open the PR | `$INTEGRATION_BRANCH` |
+| `/review-close` Step 4d (`pr` policy, PR-reuse shape) | push onto the existing PR's head branch | the literal approved branch name |
 | `/claim-task` Step 4d | claim-flip commit (`open → in_progress`) | `main` |
 | `/auto-build` Step 5.4 | per-task claim-flip commit (in a loop) | `main` |
 | `/document-work` Step 5 | `git push -u origin HEAD` (a feature branch) | **not** `main` |
@@ -61,6 +63,13 @@ case "$(git rev-parse --abbrev-ref HEAD)" in
 esac
 ```
 
+**When there is no pattern to match** — `/review-close`'s `pr`-policy **PR-reuse shape**, where
+the merge target is an ordinary feature branch whose name follows no convention — assert against
+the **literal** branch name, written out from wherever the decision was made (there, the Step 2a
+approval verdict). The requirement is not "use a pattern"; it is that the expected value must
+originate somewhere **other than `HEAD`**. A literal from an upstream decision satisfies that; a
+value re-read from `HEAD` never does, whatever syntax surrounds it.
+
 If the assert fails: do NOT commit/push. Reconcile via `git reflog` — cherry-pick your
 stranded commits onto the expected branch, reset the hijack branch to only its own commit,
 then resume. Never bundle another actor's un-reviewed commits into your push.
@@ -100,9 +109,10 @@ git merge-base --is-ancestor "${PUSHED_SHA}" origin/main || {
   echo "pushed SHA is not on origin/main — investigate before continuing"; exit 1; }
 ```
 
-## Rule C — NEVER force-push `main` (or an integration branch destined for it)
+## Rule C — NEVER force-push `main` (or any branch a squash PR will write it from)
 
 A non-fast-forward rejection on `main` means an **auto-merged commit** is on `origin/main`
 that your local `main` lacks. `git push --force` / `--force-with-lease` would silently
 delete it. Always fetch + rebase + re-push (Rule B) instead. The same prohibition covers
-the `pr`-policy integration branch — it is the PR's source of truth; never force it.
+the `pr`-policy merge target, whether that is a throwaway integration branch or a reused
+PR head branch — it is the PR's source of truth; never force it.

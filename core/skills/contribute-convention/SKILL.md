@@ -26,8 +26,9 @@ after `/pr-dependabot` and `/report-issues`, and it mirrors `/report-issues`'
 transport shape closely (permission guard → `gh auth` → resolve upstream repo →
 render → per-item consent → `gh issue create` → annotate the source → report).
 Like `/report-issues` — and unlike `/pr-dependabot`, which operates on your own
-repo — it files **upstream to the Sysop repo** (`getsysop/sysop` by default). That
-direction is the whole point.
+repo — it files **upstream to the Sysop repo** (the public `getsysop/sysop`
+unless you've configured otherwise — Step 0.6). That direction is the whole
+point.
 
 **The privacy being spent is your project's fingerprints.** A locally-grown
 convention quotes your real paths, helper names, and sometimes your threat model.
@@ -53,14 +54,21 @@ Read `.claude/settings.json` and confirm `permissions.allow` contains:
 
 These are the **same two rules `/report-issues` requires** — a project set up for
 that skill already has them. If either is missing, stop with the
-`_shared/permission-guard.md` § Algorithm step 4 message (one-line reason:
+`_shared/permission-guard.md` § Algorithm step 5 message (one-line reason:
 "files locally-grown conventions upstream as pack/convention proposals; shells
-`gh issue create` against the Sysop repo"). Do not proceed.
+`gh issue create` against the Sysop repo"). Do not proceed — unless the guard's
+step 3 mode check applies.
 
-`gh auth status` and `gh repo view` are read-only and auto-approved under `auto`
-mode — they are not listed here (per `_shared/permission-guard.md` § Notes:
-don't list read-only ops). Editing the overlay uses the `Edit` tool, not Bash,
-so it needs no allow-rule.
+`gh auth status` and the `gh repo view` visibility probe are **not** listed as
+required rules — their absence must not stop the run. Both ship in the template
+allow-list (`Bash(gh auth status)`, `Bash(gh repo view:*)`), because `gh` is not
+in Claude Code's built-in read-only set and every `gh` call therefore needs a
+rule; under `dontAsk` an unlisted one is auto-denied. They stay off the required
+list because each fails loudly on its own terms — a denied auth check reads the
+same as not-logged-in and stops the skill with a visible message, and a denied
+visibility probe degrades per `_shared/upstream-repo.md` § B rather than
+halting. Editing the overlay uses the `Edit` tool, not Bash, so it
+needs no allow-rule.
 
 If `$ARGUMENTS` contains `--skip-permission-guard`, print a one-line warning and
 continue.
@@ -72,8 +80,11 @@ Parse `$ARGUMENTS`:
 - **`--execute`** — actually create issues for the pack groups you consent to.
   **Without it, the skill is read-only** (reads + generalizes + prints the
   proposals, files nothing, edits nothing).
-- **`--repo owner/name`** — override the upstream target repo. Default:
-  `getsysop/sysop`. Use this if you forked Sysop and want proposals on your fork.
+- **`--repo owner/name`** — override the upstream target repo for this run.
+  Beats every other source. Absent, the target comes from `<project>/CLAUDE.md
+  § Sysop upstream repo` if that section exists, else the shipped default
+  `getsysop/sysop`. Use the flag for one-off exceptions and a fork; use the
+  CLAUDE.md section for a standing default (see Step 0.6).
 - **`--include-security`** — also surface entries from
   `.claude/security_map.project.md` (a project's security conventions). Off by
   default because a security map can encode threat-model detail that wants a
@@ -86,20 +97,34 @@ Run `gh auth status`. If it reports not-logged-in, stop and tell the human to
 run `gh auth login` (suggest the `! gh auth login` in-session form). Do not
 attempt to authenticate on their behalf.
 
-## Step 0.6: Resolve the target repo
+## Step 0.6: Resolve the target repo and its visibility
 
-Default target is **`getsysop/sysop`** — the upstream Sysop repo, *not* the current
-project's own repo. Override with `--repo owner/name` (forks). Print the target
-once, plainly, so the human sees where proposals will land before any are filed:
-`Target repo for new proposals: <owner/name>`. Every `gh issue` call in this
-skill passes `--repo <target>` explicitly — never rely on the current
-directory's remote, which is the consumer's project, not Sysop.
+Follow `_shared/upstream-repo.md` — the shared protocol for all three give-back
+skills. In short: `--repo` beats `<project>/CLAUDE.md § Sysop upstream repo`
+beats the shipped default `getsysop/sysop` (which is **public**); a present-but
+-unparseable section is a hard stop, never a silent fall-back to the default.
+Print the target and its source once, plainly, before anything is filed:
+`Target repo for new proposals: <owner/name>   (source: ...)`. Then probe
+visibility (`gh repo view ... --json visibility`), carrying `[verified]` or
+`[assumed]` per that partial's § B. Every `gh issue` call in this skill passes
+`--repo <target>` explicitly — never rely on the current directory's remote,
+which is the consumer's project, not Sysop.
 
-If `getsysop/sysop` isn't reachable from where you are (e.g. the GitHub rename
-hasn't propagated, or you're filing against a fork), a `gh issue create` will
-404 — pass `--repo` with the correct slug. If the first `gh issue list` in
-Step 8 fails with a not-found error, stop and tell the human the target repo
-isn't reachable rather than looping.
+**The sensitivity nudge runs later, not here.** It needs the exact rendered payload, which does not exist yet at this step; it fires at the consent gate (Step 6, just before Step 7) per `_shared/upstream-repo.md` § C. Carry this step's resolved target and visibility forward to it.
+
+Note for that step: this skill's corpus needs § C's **substituted question**, not
+its keyword list. Under `--include-security` the source is
+`.claude/security_map.project.md`, whose *subject* is security vocabulary — the
+keyword pass would match every item and warn about nothing. Scan instead for what
+survived generalization: real paths, hostnames, service names, env var names,
+person or customer names, version strings, incident ids.
+
+Reachability is separate from visibility. If the resolved target isn't reachable
+from where you are (a fork slug typo, a private repo you lack access to), a `gh
+issue create` will 404 — the visibility probe failing is *not* proof of that, so
+it never stops the run on its own. If the first `gh issue list` in Step 8 fails
+with a not-found error, stop and tell the human the target repo isn't reachable
+rather than looping.
 
 ## Step 1: Confirm this is a consumer install with a locally-grown overlay
 
@@ -344,11 +369,24 @@ Include only the sub-parts a group actually has. Do not invent content. **Show
 every character** — this is the no-fingerprints contract: the human's chance to
 catch a leaked path or an over-generalized rule before it's public.
 
-Before consent, print one reminder: *"These bodies are exactly what will be
-filed publicly on `<target>`. If any still contains a real path, name, or
-identifier you don't want public, or a rule that reads too vaguely to act on,
-tell me to revise it or edit the overlay and re-run — I will not file anything
-you haven't reviewed."*
+Before consent, print one reminder — substituting the **resolved target** from
+Step 0.6: *"These bodies are exactly what will be filed to `<target>` — visible
+to anyone who can see that repo. If any still contains a real path, name, or
+identifier you don't want exposed there, or a rule that reads too vaguely to act
+on, tell me to revise it or edit the overlay and re-run — I will not file
+anything you haven't reviewed."* (Don't hardcode "publicly" — with the target
+pointed at a private repo, the issues are visible only to that repo's
+collaborators.)
+
+**Then run the sensitivity nudge** (`_shared/upstream-repo.md` § C) over these
+generalized bodies and their titles, printing it when the Step 0.6 visibility is `PUBLIC`,
+`INTERNAL`, or `UNKNOWN`. Use § C's **substituted question** for this corpus, not
+its keyword list: a security map's subject *is* security vocabulary, so the
+keyword pass matches everything and warns about nothing. Generalization strips
+*fingerprints*, not *subject matter* — so the residue to look for is what survived
+it: real paths, hostnames, service names, env var names, person or customer
+names, version strings, incident ids. A rule can be perfectly placeholder-ized
+and still tell a reader which class of vulnerability this project keeps having.
 
 If `--execute` was **not** passed, stop here: print `Dry-run. Re-run with
 --execute to choose which pack proposals to file.` and stop. Nothing is filed or
@@ -395,14 +433,14 @@ For each selected pack group, in order:
    exact hazard `/report-issues` Step 4 fixed. So:
 
    - Write the exact rendered body (identical to Step 6) to a temporary file
-     **outside the repo** (e.g. `"$TMPDIR/sysop-pack-<pack>.md"`) using the `Write`
+     **outside the repo** (e.g. `"${TMPDIR:-/tmp}/sysop-pack-<pack>.md"`) using the `Write`
      tool — never echo it through the shell.
    - Keep the `--title` a plain one-line summary and pass it **single-quoted**;
      if the title contains a backtick, `$`, or a single quote, render a clean
      equivalent (the full text still rides in the body file).
    - Then:
      ```bash
-     gh issue create --repo <target> --title '<title>' --label enhancement --body-file "$TMPDIR/sysop-pack-<pack>.md"
+     gh issue create --repo <target> --title '<title>' --label enhancement --body-file "${TMPDIR:-/tmp}/sysop-pack-<pack>.md"
      ```
    - Delete the temp file after the call returns (success or failure).
 
@@ -475,8 +513,11 @@ the human reviews and commits the annotations intentionally.
   cross-round evidence directly when it exists, and asks for an honest one-line
   attestation when it doesn't — never fabricating a recurrence count. That is the
   earn-their-way bar, mechanized.
-- **Upstream, not local.** Files to `getsysop/sysop` by default; `--repo` covers
-  forks. The give-back only works if it reaches the maintainer.
+- **Upstream, not local.** Files to `getsysop/sysop` by default; the give-back
+  only works if it reaches the maintainer. That default is *public* and a
+  security-map overlay can carry threat-model detail, so the target is a
+  first-class consumer config (`CLAUDE.md § Sysop upstream repo`, durable) with
+  `--repo` as the per-run override on top.
 - **v1 scope.** Generalize + provenance + file a *proposal issue* (per
   CONTRIBUTING's "open an issue before a large PR"). **Out:** auto-opening PRs,
   auto-editing `packs/`, any write to the Sysop repo beyond an issue.

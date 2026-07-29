@@ -730,6 +730,150 @@ def _find_discrepancies(
                 )
             )
 
+    out.extend(_round_coverage_discrepancies(main_root))
+    return out
+
+
+# Tier-0 round coverage (_shared/fanout-evidence.md). The marker above catches a
+# round that DIED; this catches one that FINISHED without covering anything —
+# the measured failure being that both review skills reviewed a 1,561-file repo
+# solo, opened ~1%, and reported the dispatch-set size as though it were
+# coverage. Only the newest receipt per skill is examined: older ones are
+# history, not an open problem.
+#
+# Every check here is a SELF-CONTRADICTION, never a quality bar. A thin round is
+# perfectly legitimate when it says so — a `Sampled` round is exempt by
+# construction, and an incremental round's manifest is its own small scope. What
+# is reported is a round whose own numbers refute its own label, or one that
+# closed with no numbers at all.
+LOW_LOOK_RATIO = 3  # Tier 2's `opened + grepped < ~1/3 of assigned`, applied to
+                    # the round. Deliberately not a new constant: the round-level
+                    # and batch-level measures share one vocabulary.
+
+
+def _round_coverage_discrepancies(main_root: Path) -> list[Discrepancy]:
+    d = main_root / "sysop" / "runtime" / "round-receipts"
+    if not d.is_dir():
+        return []
+    newest: dict[str, tuple[float, dict[str, Any]]] = {}
+    for f in d.glob("*.json"):
+        try:
+            r = json.loads(f.read_text(encoding="utf-8"))
+            mtime = f.stat().st_mtime
+        except (OSError, ValueError):
+            continue
+        if not isinstance(r, dict):
+            continue
+        skill = str(r.get("skill", "unknown"))
+        if skill not in newest or mtime > newest[skill][0]:
+            newest[skill] = (mtime, r)
+
+    out: list[Discrepancy] = []
+    for skill, (_, r) in sorted(newest.items()):
+        # `tracked` is counted by the receipt writer at close, not claimed by
+        # the round — the only non-self-reported number here. It is folded into
+        # the details below rather than judged: /sitrep reports problems, and a
+        # narrow manifest is not itself one. self_check.sh is where it displays
+        # unconditionally.
+        tracked = r.get("tracked")
+        of_repo = (f" of {tracked} tracked" if isinstance(tracked, int) else "")
+        kind = str(r.get("kind", "unreported"))
+        # A field is "present" only if it is the RIGHT TYPE. Checking for the
+        # literal "unreported" alone would let any other non-int (a quoted
+        # "13", a null, a future format change) reach the arithmetic below and
+        # raise — and _find_discrepancies is called unguarded, so that
+        # traceback takes the whole of /sitrep down, not just this line. A
+        # probe that breaks the report is worse than the silence it reports on.
+        missing = [k for k in ("manifest", "opened", "workers")
+                   if not isinstance(r.get(k), int)]
+        # `kind` is present only if it is one of the three labels the writer can
+        # emit. Anything else — "unreported", a blank, a number from a
+        # hand-edited receipt — is a round that declared nothing, and must be
+        # reported as such rather than fall through to the narrowness checks
+        # (which would judge a round on a label nobody wrote).
+        if not kind.startswith(("Full", "Scoped", "Sampled")):
+            missing.insert(0, "kind")
+        if missing:
+            out.append(
+                Discrepancy(
+                    kind="round coverage unreported",
+                    detail=(
+                        f"{skill}: last round closed without recording "
+                        + ", ".join(missing)
+                        + " — how much of the scope it covered is unknown"
+                    ),
+                    suggestion=(
+                        "fill the Tier-0 coverage line in the round header "
+                        "(_shared/fanout-evidence.md § Tier 0)"
+                    ),
+                )
+            )
+            continue
+
+        manifest, opened, workers = r["manifest"], r["opened"], r["workers"]
+        solo_reason = str(r.get("solo_reason", "")).strip()
+
+        # `workers 0` is legitimate — it is the base path for /test-audit and
+        # the only path on a harness with no sub-agent primitive — but ONLY as a
+        # declared decision. This check sits OUTSIDE the Full gate on purpose:
+        # scoping it to Full rounds would make bare `Sampled` a free escape
+        # hatch, turning every check off at once.
+        if workers == 0 and not solo_reason:
+            out.append(
+                Discrepancy(
+                    kind="solo round with no stated reason",
+                    detail=(
+                        f"{skill}: last round ran solo (workers 0) with no "
+                        f"reason recorded (kind: {kind})"
+                    ),
+                    suggestion=(
+                        "solo is a declared decision — state why (no sub-agent "
+                        "primitive, or scope small enough to open in full)"
+                    ),
+                )
+            )
+
+        # A narrowed round is exempt from the look-ratio only if it says what it
+        # narrowed to. `Sampled (highest-exposure modules)` declared its own
+        # narrowness; a bare `Sampled` declared nothing and would otherwise buy
+        # silence for free — the basis is the entire content of the claim.
+        if not kind.startswith("Full"):
+            if not re.search(r"\([^)]*\w[^)]*\)", kind):
+                out.append(
+                    Discrepancy(
+                        kind="narrowed round with no stated basis",
+                        detail=(
+                            f"{skill}: last round declared `{kind}` without "
+                            "naming what it covered — opened "
+                            f"{opened} of {manifest}{of_repo}"
+                        ),
+                        suggestion=(
+                            "name the subtree or the sampling basis, e.g. "
+                            "`Sampled (highest-exposure modules)`"
+                        ),
+                    )
+                )
+            continue
+
+        grepped = r.get("grepped")
+        looked = opened + (grepped if isinstance(grepped, int) else 0)
+        if manifest > 0 and looked * LOW_LOOK_RATIO < manifest:
+            pct = 100.0 * looked / manifest
+            out.append(
+                Discrepancy(
+                    kind="full round covered a fraction of its scope",
+                    detail=(
+                        f"{skill}: declared Full over {manifest} files"
+                        f"{of_repo} but looked at {looked} ({pct:.1f}%) — "
+                        f"opened {opened}, workers {r['workers']}"
+                    ),
+                    suggestion=(
+                        "re-run with sub-agent dispatch, or relabel the round "
+                        "Sampled and name the basis — a Full label over 1/3 "
+                        "coverage overstates what was reviewed"
+                    ),
+                )
+            )
     return out
 
 

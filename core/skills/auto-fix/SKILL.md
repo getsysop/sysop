@@ -16,19 +16,18 @@ Two-pass workflow:
 
 ## Pre-flight: Permission Guard
 
-Before parsing arguments or doing any work, verify `.claude/settings.json` carries the allow-rules this skill depends on. Under `auto` mode with `skipAutoPermissionPrompt: true`, a missing rule for `git worktree add`, `git push -u origin`, or `bash sysop/scripts/batch_work.sh` will silently halt subagents mid-fix.
+Before parsing arguments or doing any work, verify `.claude/settings.json` carries the allow-rules this skill depends on. Under `dontAsk` mode a missing rule for `git worktree add`, `git push -u origin`, or `bash sysop/scripts/batch_work.sh` is auto-denied with no prompt, halting subagents mid-fix.
 
 Read `.claude/settings.json` and confirm `permissions.allow` contains:
 
 - `Bash(git checkout:*)`
 - `Bash(git worktree add:*)`
-- `Bash(git worktree list)`
 - `Bash(git push -u origin:*)`
 - `Bash(git push origin:*)`
 - `Bash(git push --force-with-lease:*)` _(used only when a subagent amends a commit and re-pushes — conditional path; consumers can omit from settings.json if they don't run amend-based fixes)_
 - `Bash(bash sysop/scripts/batch_work.sh:*)`
 
-If any are missing, stop with the `_shared/permission-guard.md` § Algorithm step 4 message (one-line reason: "spawns isolated subagents that claim batch worktrees, fix tasks, and push the resulting branches"). Do not proceed.
+If any are missing, stop with the `_shared/permission-guard.md` § Algorithm step 5 message (one-line reason: "spawns isolated subagents that claim batch worktrees, fix tasks, and push the resulting branches"). Do not proceed — unless the guard's step 3 mode check applies.
 
 If `$ARGUMENTS` contains `--skip-permission-guard`, print a one-line warning and continue.
 
@@ -448,7 +447,7 @@ summary: "Batch <N> complete: <Title>. <Scope>."
 
 This file is **untracked** (gitignored). It will be copied to main by `/review-close` Step 3b before the worktree is removed.
 
-**Note:** `/review-close` discovers branches via `git branch -a`, not via lock files. No lock file is needed for review batches.
+**Note:** `/review-close` discovers branches via `git branch -a`, not via lock files — so nothing here waits on a lock. A batch claim *does* write one (`sysop/runtime/locks/BATCH-<N>.lock`, Phase 156): it is the in-flight signal `/next-task`, `/sitrep` and `scope_overlap.py` read, not a gate on this skill. `batch_work.sh` writes it idempotently, so claiming batches in a loop is unaffected, and `close_batch.sh` releases it at `/review-close` Step 4b.
 
 ## Step 5: Summary Report
 

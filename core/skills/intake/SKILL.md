@@ -223,7 +223,7 @@ When a re-entry supersedes a decision, **don't delete the old entry** — append
 
 ## Permissions
 
-`/intake` needs **no new permission rules.** It writes via the `Write` / `Edit` tools (file-level, not Bash-gated) and runs only `validate_tasks.py`, which the default `.claude/settings.json` already allows (bare + `.venv/bin/python3` variants). It does not commit, push, or merge. If a consumer's `settings.json` is missing the `validate_tasks.py` allow-rule, the validator step will prompt once under `auto` mode — not silently halt — because a human is present for the whole interactive session.
+`/intake` needs **no new permission rules.** It writes via the `Write` / `Edit` tools (file-level, not Bash-gated) and runs only `validate_tasks.py`, which the default `.claude/settings.json` already allows (bare + `.venv/bin/python3` variants). It does not commit, push, or merge. If a consumer's `settings.json` is missing the `validate_tasks.py` allow-rule, the validator step costs a prompt under the interactive modes rather than a halt, because a human is present for the whole session. (Under `dontAsk` it is auto-denied like any unlisted call; report that and continue — `/intake` writes through `Write`/`Edit`, so the validator is a check, not the deliverable.)
 
 ## Two-leg done, restated
 

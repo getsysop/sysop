@@ -131,3 +131,107 @@ class TestArmHooksLandInTarget:
         after = _non_sample_hooks(other / ".git" / "hooks")
         assert after == before, \
             "install armed hooks into the launch-dir git repo instead of the target"
+
+
+class TestConfiguredHooksPathIsNotWritten:
+    """Phase 150. ``resolve_hook_dst`` honors core.hooksPath — correctly, since
+    that IS where git reads hooks. But arming then ``mkdir -p``'d and copied
+    into a directory the consumer owns and usually *tracks* (keeping hooks under
+    version control being the whole reason to set it), clobbering tracked files.
+    That is strictly worse than the untracked-.git/hooks case #202 describes.
+    Skip instead — and keep it skipped-not-failed so install still exits 0."""
+
+    # NB: the sentinel hook must `exit 0`. Once core.hooksPath points at it, git
+    # runs it as the real pre-commit — a failing sentinel blocks the fixture's
+    # own commit and leaves a dirty tree, which install.sh then refuses. (That
+    # mishap is itself a live demonstration that the config takes effect.)
+    SENTINEL = "#!/bin/sh\n# the consumer's real checks\nexit 0\n"
+
+    def _consumer_with_hookspath(self, tmp_path, value="scripts/hooks", hook=None):
+        """Consumer repo whose hooks are tracked in-tree and wired via config."""
+        target = _seed_consumer(tmp_path / "consumer")
+        hooks_dir = target / value
+        hooks_dir.mkdir(parents=True, exist_ok=True)
+        if hook is not None:
+            real = hooks_dir / "pre-commit"
+            real.write_text(hook)
+            real.chmod(0o755)
+            _git(target, "add", "-A")
+            _git(target, "commit", "-qm", "track our own hooks")
+        # Set the config only after committing, so the sentinel never gates the
+        # fixture's own commit regardless of what it does.
+        _git(target, "config", "core.hooksPath", value)
+        return target, hooks_dir
+
+    def test_install_does_not_write_into_configured_hookspath(self, tmp_path):
+        launch = tmp_path / "launchdir"
+        launch.mkdir()
+        target, hooks_dir = self._consumer_with_hookspath(tmp_path)
+
+        r = _install(target, "--packs", "", cwd=launch)
+
+        assert _non_sample_hooks(hooks_dir) == set(), \
+            "install wrote Sysop's templates into the consumer's core.hooksPath dir"
+        # Assert the ARM step's own line. A bare "core.hooksPath" in stdout is
+        # too weak — the divergence check prints that string too, so this test
+        # would survive deleting the arm skip entirely.
+        assert "skipping: core.hooksPath" in r.stdout, "the arm skip was silent"
+
+    def test_dry_run_predicts_the_skip(self, tmp_path):
+        # The skip is deliberately probed before the --dry-run branch so a
+        # preview does not promise a write that the real run will decline.
+        # Nothing else asserts that ordering.
+        launch = tmp_path / "launchdir"
+        launch.mkdir()
+        target, _ = self._consumer_with_hookspath(tmp_path)
+
+        r = _install(target, "--packs", "", "--dry-run", cwd=launch)
+
+        assert "skipping: core.hooksPath" in r.stdout, "--dry-run hid the skip"
+        assert "would arm hooks" not in r.stdout, \
+            "--dry-run predicted an arm that the real run will skip"
+
+    def test_update_mode_reports_hookspath_not_the_phase15_reconcile_story(self, tmp_path):
+        # The hooksPath probe sits BEFORE the --update branch: under --update
+        # the Phase-15 message would tell the consumer to run install_hooks.sh,
+        # which now deliberately skips for the same reason — a remedy that
+        # cannot work.
+        launch = tmp_path / "launchdir"
+        launch.mkdir()
+        target, _ = self._consumer_with_hookspath(tmp_path)
+        _install(target, "--packs", "", cwd=launch)
+        _git(target, "add", "-A")
+        _git(target, "commit", "-qm", "install sysop")
+
+        r = _install(target, "--update", cwd=launch)
+
+        assert "skipping: core.hooksPath" in r.stdout
+        assert "reconcile sysop/scripts/hooks/ first" not in r.stdout, \
+            "--update prescribed a re-arm that install_hooks.sh will skip"
+
+    def test_tracked_consumer_hook_survives_install(self, tmp_path):
+        launch = tmp_path / "launchdir"
+        launch.mkdir()
+        target, hooks_dir = self._consumer_with_hookspath(tmp_path, hook=self.SENTINEL)
+        real = hooks_dir / "pre-commit"
+
+        _install(target, "--packs", "", cwd=launch)
+
+        assert "the consumer's real checks" in real.read_text(), \
+            "install overwrote a tracked consumer hook"
+        assert _non_sample_hooks(hooks_dir) == {"pre-commit"}, \
+            "install added files to the consumer's hooks dir"
+
+    def test_divergence_check_reports_the_arrangement_not_a_dead_remedy(self, tmp_path):
+        # The Phase-15 divergence check would otherwise compare the shipped
+        # skeletons against the consumer's own hooks, call them "diverged", and
+        # prescribe install_hooks.sh — which now deliberately does nothing.
+        launch = tmp_path / "launchdir"
+        launch.mkdir()
+        target, _ = self._consumer_with_hookspath(tmp_path, hook=self.SENTINEL)
+
+        r = _install(target, "--packs", "", cwd=launch)
+
+        assert "not compared" in r.stdout, "divergence check did not acknowledge core.hooksPath"
+        assert "differs from" not in r.stdout, \
+            "still nagging about divergence against hooks Sysop does not manage"

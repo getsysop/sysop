@@ -106,6 +106,25 @@ ANY_BATCH_HEADER_RE = re.compile(r"^### (Batch \d+) — .+ `(\w[\w ]*)`")
 # Matches task lines "- [x] **TASK-653**: ..."
 TASK_RE = re.compile(r"^- \[x\] \*\*TASK-\d+\*\*")
 
+# Matches a still-open task line — "- [ ] **TASK-653**: ..." or "- [/] ...".
+# A `Merged` batch can legitimately hold one: close_batch.sh leaves a task
+# annotated `> Failed:` unflipped, because a FAIL verdict means the work was
+# attempted and not finished. Such a task is archivable but not *done*, and
+# archiving moves it out of the live queue every open-task reader consults —
+# so the run names it before the human confirms. Deliberately more permissive
+# than TASK_RE about the id: for a warning, over-reporting beats missing one.
+#
+# The bold wrapper is OPTIONAL, and that is load-bearing rather than cosmetic.
+# Phase 157's adversarial round found this regex requiring `**id**` while
+# `close_batch.sh`'s `is_open_task` requires only `^- [ ]` — so an unbolded task
+# (the shape `tests/test_close_batch_sh.py`'s own fixture uses) was held open by
+# one script and swept out of the live queue silently by the other. Two regexes
+# with different notions of "a task line" is exactly the desync the shared
+# `CLOSE_AWK` program exists to prevent, reintroduced across a file boundary.
+UNFINISHED_TASK_RE = re.compile(
+    r"^- \[[ /]\][ \t]*(?:\*\*(?P<bold>[^*\n]+)\*\*|(?P<plain>[^\n]+))"
+)
+
 # Matches the archive reference line (line ~14)
 ARCHIVE_REF_RE = re.compile(
     r"^> \*\*Archive:\*\* Rounds .+ are in "
@@ -174,6 +193,16 @@ def parse_archivable_batches(lines):
                 rounds.append(current_round)
             current_round = {
                 "header": line,
+                # Round-level metadata written between the `## Round` header and
+                # the first `### Batch` — today the Tier-0 coverage ledger
+                # (Phase 149), one line per audit type on a merged round. It
+                # belongs to the ROUND, not to any batch, so it is captured
+                # here and re-emitted by build_archive_block(). Without this it
+                # falls in the gap between the header and the batches: deleted
+                # from review_tasks.md with the round's line range and absent
+                # from the archive, which would silently destroy the one
+                # durable record of how much of the codebase a round opened.
+                "preamble": [],
                 "batches": [],
                 "start_line": i,
                 "end_line": None,
@@ -255,6 +284,15 @@ def parse_archivable_batches(lines):
             if ANY_BATCH_HEADER_RE.match(line):
                 round_total_batches += 1
 
+            # Round-level metadata: blockquote lines between the `## Round`
+            # header and the round's first batch (round_total_batches is still
+            # 0 there). Today that is the Tier-0 coverage ledger. Captured so
+            # build_archive_block() can re-emit it — the round's line range is
+            # removed from review_tasks.md wholesale, so anything not collected
+            # here is destroyed rather than relocated.
+            elif round_total_batches == 0 and line.lstrip().startswith(">"):
+                current_round["preamble"].append(line)
+
         i += 1
 
     # Close any trailing batch/round
@@ -291,6 +329,18 @@ def build_archive_block(rounds):
             blocks.append("---")
             blocks.append("")
         blocks.append(r["header"])
+        # Round-level metadata (the Tier-0 coverage ledger) rides with its
+        # round into the archive, outside the <details> fold: how much of the
+        # codebase a round actually opened is the first thing a later reader
+        # needs in order to know what the findings below are worth.
+        # Only when the whole round is leaving the live file. A partially
+        # merged round keeps its header (and its coverage line) in
+        # review_tasks.md — apply_removals() takes only the merged batch
+        # ranges — so emitting it here too would duplicate the ledger now and
+        # again when the round later archives in full.
+        if r.get("preamble") and r.get("all_merged"):
+            blocks.append("")
+            blocks.extend(line.rstrip("\n") for line in r["preamble"])
         blocks.append("")
         blocks.append("<details>")
         blocks.append(f"<summary>{total_tasks}/{total_tasks} tasks completed</summary>")
@@ -521,6 +571,7 @@ def main():
     # Summarize what we found
     total_tasks = 0
     all_batch_numbers = []
+    unfinished = []
     for r in rounds:
         round_tasks = sum(b["task_count"] for b in r["batches"])
         total_tasks += round_tasks
@@ -531,8 +582,49 @@ def main():
             m = re.search(r"Batch (\d+)", b["lines"][0])
             if m:
                 all_batch_numbers.append(int(m.group(1)))
+            for line in b["lines"]:
+                tm = UNFINISHED_TASK_RE.match(line)
+                if tm:
+                    label = tm.group("bold") or tm.group("plain") or line
+                    unfinished.append((batch_name, label.strip()[:60]))
 
     print(f"\nTotal: {total_tasks} tasks across {len(rounds)} round(s)")
+
+    # Warn, never block. Blocking would jam archiving, which is the pressure
+    # valve for the 125KB read limit, on work that is legitimately unfinished.
+    # Printed to stdout, not stderr, so it cannot be separated from the
+    # confirmation prompt it should inform.
+    #
+    # The task's TEXT survives — it moves to the archive with its annotation
+    # intact — but every COUNT around it does not: `task_count` (TASK_RE, `[x]`
+    # only) excludes it, so `build_archive_block` renders the round as
+    # "N/N tasks completed" and `build_grand_total_row` marks it `Complete`
+    # over a block visibly containing an open box. That is this phase's own
+    # thesis one layer up, and it is not fixed here (see REVIEW_CHECKLIST.md
+    # § Low) — which is exactly why the warning has to fire before the prompt
+    # rather than trusting the archive to represent the state faithfully.
+    if unfinished:
+        # State only what is observable. An unflipped box in a merged batch is
+        # USUALLY a FAIL verdict, but not necessarily — `find_batch_range`'s
+        # `wc -l` fallback undercounts by one on a file with no trailing
+        # newline, which leaves the last task of the last batch unflipped with
+        # no verdict behind it. Naming a cause the tool cannot verify would make
+        # this warning assert a fabricated verdict.
+        print(
+            f"\n⚠️  {len(unfinished)} task(s) in these batches are still open. "
+            "Archiving moves them out of the live queue:"
+        )
+        for batch_name, task_id in unfinished:
+            print(f"      {batch_name}: {task_id}")
+        print(
+            "    Finish them (/claim-task) or re-file them into a later round "
+            "first if they should stay visible."
+        )
+        print(
+            "    Note: the archive's own `N/M tasks completed` summary and its "
+            "Statistics row count only `[x]` lines, so an archived round holding "
+            "these will read as fully complete."
+        )
 
     if args.dry_run:
         print("\n[DRY RUN] No files modified.")

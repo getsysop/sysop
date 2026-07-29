@@ -106,8 +106,13 @@ class TestPermissionDisclosure:
         target = _consumer(tmp_path / "loop")
         r = _install(target, "--mode", "loop")
         assert r.returncode == 0, r.stdout + r.stderr
-        assert "no push, merge, or rebase grants" in r.stdout, (
-            "loop-mode subset disclosure missing"
+        flat = " ".join(r.stdout.split())   # the note is hard-wrapped
+        assert "no push, merge, or rebase" in flat, "loop-mode subset disclosure missing"
+        # Phase 152: the subset gained `git add:*` (both review skills stage
+        # review_tasks_archive.md at Step 7), so the disclosure must name the one
+        # write verb it does grant rather than implying there is none.
+        assert "it does include 'git add'" in flat, (
+            "the loop disclosure no longer names its git add grant"
         )
         # And the loop settings really carry no push grant (the disclosure is
         # honest, not aspirational).

@@ -14,15 +14,13 @@ Designed for cold-context resumption: run after a restart, after stepping away, 
 
 This skill shells out to `git`, `python3`, and reads under `<main-repo>/sysop/runtime/locks/`, `tasks/index.yml`, and `review_tasks.md`. It writes nothing.
 
-Read `.claude/settings.json` and confirm `permissions.allow` contains:
+Read `.claude/settings.json` (and `.claude/settings.local.json` if present) and confirm `permissions.allow` satisfies:
 
-- `Bash(python3 sysop/scripts/sitrep_survey.py:*)` — the survey script itself
-- `Bash(git rev-parse:*)` — git-common-dir resolution
-- `Bash(git worktree list:*)` — worktree enumeration
-- `Bash(git log:*)`, `Bash(git status:*)`, `Bash(git branch:*)` — branch + commit + status reads
-- `Bash(git rev-list:*)` — commits-ahead counts
+- `Bash(python3 sysop/scripts/sitrep_survey.py:*)` — the survey script itself, and the skill's **only** Bash call
 
-If any are missing, stop with the `_shared/permission-guard.md` § Algorithm step 4 message (one-line reason: "read-only survey of active Sysop tasks; shells `git` plumbing + `python3 sysop/scripts/sitrep_survey.py` to classify lifecycle states"). Do not proceed.
+The skill's git work — `git rev-parse` for git-common-dir resolution, `git log` / `git status` / `git branch` / `git rev-list` / `git worktree list --porcelain` — all happens **inside `sitrep_survey.py`**, as subprocesses of the permitted `python3` call, so none of it binds a Bash rule of its own (the same reasoning `/claim-task` Step 2 applies to `scope_overlap.py`). Even at the Bash layer they would need no rule: read-only forms of `git` are auto-approved in every permission mode. (All six *were* listed as hard requirements until Phase 152, none shipped in the seeded allow-list, and the block ended "Do not proceed" — so an agent following this skill literally hard-stopped `/sitrep` on a fresh install. It went unnoticed for the reason upstream #205 gives for its own case: the one consumer exercising the path knowingly overrode the documented gate.)
+
+If the required rule is unsatisfied, stop with the `_shared/permission-guard.md` § Algorithm step 5 message (one-line reason: "read-only survey of active Sysop tasks; shells `git` plumbing + `python3 sysop/scripts/sitrep_survey.py` to classify lifecycle states"). Do not proceed — unless the guard's step 3 mode check applies.
 
 If `$ARGUMENTS` contains `--skip-permission-guard`, print a one-line warning and continue.
 

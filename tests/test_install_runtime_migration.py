@@ -7,6 +7,13 @@ The four gitignored runtime dirs move under one vendor-namespaced home on
     .pending-docs/       → sysop/runtime/pending-docs/
     .locks/              → sysop/runtime/locks/
 
+Phase 159b chains a SECOND hop onto the parked archive in the same run:
+    sysop/runtime/auto-build/parked/ → sysop/runtime/parked/
+so a pre-133 consumer's archive lands at sysop/runtime/parked/ after one
+--update, not at sysop/runtime/auto-build/parked/. The durability property
+these tests exist for is unchanged — only the destination moved. Park-rename
+behaviour of its own is covered in test_install_park_migration.py.
+
 Hard requirements exercised here (spec § 10 v2):
   1. move-if-exists — .auto-build/parked/ archive content survives (Phase 65a);
   2. resumable — a crash-resume where both sides exist merges without clobber;
@@ -78,9 +85,14 @@ def test_update_moves_all_four_dirs_and_content_survives(tmp_path):
     r = _run_install(root, "--update")
     assert r.returncode == 0, r.stdout + r.stderr
     rt = root / "sysop" / "runtime"
-    # Phase 65a durability: the parked archive arrived intact.
-    parked = rt / "auto-build" / "parked" / "TECH-X__20260701.md"
+    # Phase 65a durability: the parked archive arrived intact. Phase 159b
+    # chains the second hop in the same run, so the resting place is
+    # sysop/runtime/parked/ — NOT sysop/runtime/auto-build/parked/.
+    parked = rt / "parked" / "TECH-X__20260701.md"
     assert parked.is_file() and "must survive" in parked.read_text()
+    assert not (rt / "auto-build" / "parked").exists(), (
+        "park archive stranded at the Phase-133 intermediate path"
+    )
     assert (rt / "pending-docs" / "feat-branch.md").is_file()
     assert (rt / "subagent-envelopes" / "_unparseable_1.json").is_file()
     assert (rt / "locks" / "FEAT-DONE.lock~stale").is_file()
@@ -98,7 +110,10 @@ def test_second_update_is_a_no_op_resume(tmp_path):
     assert "runtime-dir consolidation" not in r2.stdout, (
         "second --update re-announced a migration that already completed"
     )
-    assert (root / "sysop" / "runtime" / "auto-build" / "parked"
+    assert "park-namespace rename" not in r2.stdout, (
+        "second --update re-announced the park rename that already completed"
+    )
+    assert (root / "sysop" / "runtime" / "parked"
             / "TECH-X__20260701.md").is_file()
 
 
@@ -116,7 +131,10 @@ def test_crash_resume_merges_without_clobber(tmp_path):
     (root / ".auto-build" / "parked" / "TECH-Y__20260702.md").write_text("OLD COPY — must not clobber\n")
     r = _run_install(root, "--update")
     assert r.returncode == 0, r.stdout + r.stderr
-    parked = rt / "auto-build" / "parked"
+    # Wave 1 merges into sysop/runtime/auto-build/parked/, wave 2 (Phase 159b)
+    # moves the merged result on to sysop/runtime/parked/ — the no-clobber
+    # outcome must survive both hops.
+    parked = rt / "parked"
     # The non-colliding archive merged in; the colliding one kept the
     # destination copy and left the old copy in place for hand reconciliation.
     assert (parked / "TECH-X__20260701.md").is_file()
@@ -157,6 +175,13 @@ def test_dry_run_prints_plan_and_moves_nothing(tmp_path):
     assert r.returncode == 0, r.stdout + r.stderr
     assert "would move" in r.stdout
     assert "sysop/runtime/" in r.stdout
+    # Phase 159b: the park hop must be previewed too. A pre-133 consumer's
+    # archive is still at .auto-build/parked/ while --dry-run runs (wave 1
+    # moved nothing), so a park probe that only looked at the post-133 path
+    # would print no park line here and then really move one on apply.
+    assert "sysop/runtime/parked/" in r.stdout, (
+        "--dry-run hid the park rename it would perform on the apply run"
+    )
     assert (root / ".auto-build" / "parked" / "TECH-X__20260701.md").is_file()
     assert not (root / "sysop" / "runtime").exists()
 
@@ -185,7 +210,7 @@ def test_plain_reinstall_over_locked_install_also_migrates(tmp_path):
     root = _consumer_with_old_runtime_dirs(tmp_path / "c")
     r = _run_install(root, "--packs", "")           # NOT --update
     assert r.returncode == 0, r.stdout + r.stderr
-    assert (root / "sysop" / "runtime" / "auto-build" / "parked"
+    assert (root / "sysop" / "runtime" / "parked"
             / "TECH-X__20260701.md").is_file()
     assert not (root / ".auto-build").exists()
 

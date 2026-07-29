@@ -12,13 +12,13 @@ Claim a roadmap task or review batch, create an isolated worktree, and enter pla
 
 ## Pre-flight: Permission Guard
 
-Verify `.claude/settings.json` carries the allow-rules this skill depends on. Under `auto` mode with `skipAutoPermissionPrompt: true`, a missing worktree-add or branch-creation rule will silently halt before the workspace is created.
+Verify `.claude/settings.json` carries the allow-rules this skill depends on. Under `dontAsk` mode a missing worktree-add or branch-creation rule is auto-denied with no prompt, halting before the workspace is created.
 
 Read `.claude/settings.json` and confirm `permissions.allow` contains:
 
 - `Bash(git checkout:*)` — Step 4 rollback path on 4b/4c failure (`git checkout tasks/index.yml`).
 - `Bash(git worktree add:*)` — transitively invoked by `sysop/scripts/claim_task.sh`.
-- `Bash(bash sysop/scripts/claim_task.sh:*)` — Step 4b worktree + lock creation.
+- `Bash(bash sysop/scripts/claim_task.sh:*)` — Step 2's `--entry-state` query **and** Step 4b's worktree + lock creation. One rule covers both: the trailing `:*` is a prefix match over the whole argument string, so no separate `--entry-state` rule is needed (and adding one would be dead). Verified against Phase 152's finding that rules seeded against invocations which bind none are worse than no rule.
 - `Bash(bash sysop/scripts/batch_work.sh:*)` — Step 4 review-batch path.
 - `Bash(python3 -:*)` — Step 2's `tasks/index.yml` lookup + Step 4a's yaml-round-trip status flip (both are `python3 - <<'PY'` heredocs).
 - `Bash(python3 sysop/scripts/validate_tasks.py)` / `Bash(python3 sysop/scripts/validate_tasks.py:*)` and the `.venv/bin/python3 sysop/scripts/validate_tasks.py` / `.venv/bin/python3 sysop/scripts/validate_tasks.py:*` venv variants — Step 4c post-claim validator (the venv form is preferred per Phase 45b; the bare form remains for non-venv consumers).
@@ -26,7 +26,7 @@ Read `.claude/settings.json` and confirm `permissions.allow` contains:
 - `Bash(git add tasks/index.yml)` — Step 4d commits the claim.
 - `Bash(git commit -m claim:*)` — Step 4d commit message shape.
 
-If any are missing, stop with the `_shared/permission-guard.md` § Algorithm step 4 message (one-line reason: "creates an isolated worktree and a feature branch for the claimed task; queries + updates `tasks/index.yml` via heredoc'd python; runs the schema validator before committing the claim"). Do not proceed.
+If any are missing, stop with the `_shared/permission-guard.md` § Algorithm step 5 message (one-line reason: "creates an isolated worktree and a feature branch for the claimed task; queries + updates `tasks/index.yml` via heredoc'd python; runs the schema validator before committing the claim"). Do not proceed — unless the guard's step 3 mode check applies.
 
 If `$ARGUMENTS` contains `--skip-permission-guard`, print a one-line warning and continue.
 
@@ -49,9 +49,57 @@ Parse `$ARGUMENTS`:
 
 If `--branch <name>` appears in `$ARGUMENTS`, extract it as the branch override (roadmap tasks only).
 
+### Normalise the claim ID here, not later
+
+Fix **both** identifiers now, before any step addresses a file by name:
+
+| Name | Roadmap task | Review batch |
+|---|---|---|
+| `<TASK_ID>` | the task ID (`TECH-0007`) | — not defined; a batch has no roadmap task ID |
+| `<BATCH_NUMBER>` | — | the bare number (`116`), what `batch_work.sh` takes |
+| `<CLAIM_ID>` | the task ID (`TECH-0007`) | **`BATCH-<N>`** (`BATCH-116`) |
+
+**`<CLAIM_ID>` is what every lock, runtime artifact, and envelope is keyed by**, for both kinds. `<BATCH_NUMBER>` is only ever a script argument. The distinction is load-bearing: `/claim-task 116` on a batch leaves an agent holding `116`, and a step that addresses `sysop/runtime/locks/<TASK_ID>.lock` with it looks for `116.lock` while `batch_work.sh` wrote `BATCH-116.lock` — a check that reads as "not claimed" for every batch that ever was. Normalising at Step 7 instead of here is how that class of miss happens, so it is done once, at the top, for both kinds.
+
+Where a later step names `<TASK_ID>` inside a *roadmap-only* mechanism (`tasks/index.yml` lookups, body files, branch generation), that is deliberate and correct — those steps carry an explicit **Review batches:** clause instead.
+
 ## Step 2: Read Context & Validate
 
-**For roadmap tasks** — look the task up in `tasks/index.yml` via Python (never grep YAML). Run:
+**For roadmap tasks — resolve the entry state first.** This is the authority on whether the claim may proceed; the metadata heredoc below extracts fields, it does not adjudicate.
+
+```bash
+bash sysop/scripts/claim_task.sh --entry-state <TASK_ID>
+```
+
+Write the id out literally, as Step 4b does. **Do not carry it in a shell variable** — skill steps are separate shell calls, so `"$TASK_ID"` would expand to the empty string and the script would exit on its usage guard (`WORKFLOW.md` § 8.2a, *Invocation shapes*, the rule Phase 153 established).
+
+It prints exactly one token and exits 0 on every resolved state:
+
+| Token | Meaning | Do |
+|---|---|---|
+| `claimable` | `status: open`, no lock | Ordinary fresh claim — **continue**. |
+| `resumable` | `status: in_progress`, **no lock** | **Stop and ask.** Ambiguous — see below. Continue only on an explicit human go-ahead. |
+| `held` | a lock exists | **Stop.** Print the lock file contents. Someone or something holds this claim. |
+| `closed:<status>` | `done` / `deferred` / … | **Stop.** The task is not claimable. |
+| `absent` | no such id in `tasks/index.yml` | **Stop.** Mistyped id, or the task lives in `deferred/` / `archive/` — suggest `/next-task`. |
+
+A non-zero exit means the question could not be answered at all (`2` no index, `3` no python3/PyYAML, `4` unreadable index) — surface stderr verbatim and stop.
+
+**`resumable` is the ambiguous class, and it must not auto-continue.** Two very different situations produce the identical signature, and nothing on disk separates them:
+
+1. **An abandoned claim** — someone claimed the task, the lock was cleaned up, no work is in flight. Resuming is correct.
+2. **A close that is still in flight.** Under `§ Merge policy: pr`, `/review-close` Step 4c unlinks the lock on the integration branch *before the PR merges*, while the `done` flip rides the unmerged PR — so on `main` the task reads `in_progress` **with no lock** for the whole life of that PR. `review-close/SKILL.md` § *Lock-as-real-time-signal invariant* documents exactly this window. Resuming here re-claims **finished, already-reviewed work**.
+
+So: report the state, name both possibilities, and **require an explicit human go-ahead before continuing**. If the answer is to resume, continue and skip Step 4a's status flip (the status is already `in_progress`). This follows the house pattern the orchestrator spec's Q1 settles on — *surface the ambiguous class, block the unambiguous one* — rather than guessing.
+
+Two further limits, stated because the earlier draft of this step overclaimed both:
+
+- **It is not "your claim."** `claim_task.sh` records `agent: anonymous` unless a name was passed, so no code here can tell an abandoned claim of yours from a colleague's.
+- **Two shipped tools call this state a defect, not a state.** `validate_tasks.py` Invariant 9 makes `in_progress` without a lock a **blocking** validator error, and `sitrep_survey.py` reports it as `index drift (in_progress without lock)` and suggests flipping back to `open`. On the ordinary claim path that disagreement is momentary — Step 4b re-creates the lock immediately — but if you stop between here and Step 4b, you have left the tree in a state the validator rejects.
+
+**Review batches:** `--entry-state` **refuses** a `BATCH-<N>` id and exits 1, exactly as `--release` does — a batch's claim state lives in `review_tasks.md`, not `tasks/index.yml`, so answering from there would report `absent` for every batch that exists. Do not call it on the batch path; the review-batch branch below performs the equivalent check against `review_tasks.md` plus the lock (five outcomes, same shape).
+
+Then look the task up in `tasks/index.yml` via Python (never grep YAML) for the metadata Steps 3–6 need. Run:
 
 ```bash
 # `python3` command word (not `.venv/bin/python3`, no PATH prefix, no `&&` compound) so
@@ -94,8 +142,12 @@ print(f"user_action={match.get('user_action', False)}")
 print(f"branch={match.get('branch', '')}")
 print(f"body={body or ''}")
 
-if status != "open":
-    print(f"ERROR: task '{task_id}' has status='{status}'; only 'open' tasks may be claimed", file=sys.stderr)
+# `in_progress` is allowed through because --entry-state above already ruled on
+# it: it reaches here only as `resumable` (in_progress with NO lock). A held
+# task stopped at the entry-state gate, so re-refusing it here would make the
+# resume path unreachable while looking like defence in depth.
+if status not in ("open", "in_progress"):
+    print(f"ERROR: task '{task_id}' has status='{status}'; only 'open' (fresh claim) or 'in_progress' (resume) tasks may be claimed", file=sys.stderr)
     sys.exit(4)
 
 if not body:
@@ -113,7 +165,7 @@ Hard-fail (exit and report) if the script exits non-zero. Surface the stderr mes
 
 - `2` — `tasks/index.yml` itself missing (consumer not bootstrapped, or wrong cwd).
 - `3` — task ID not found. The user mistyped the ID, or the task lives in `deferred/` / `archive/`. Suggest `/next-task` to find a claimable one.
-- `4` — status not `open`. If `in_progress`, check `sysop/runtime/locks/<TASK_ID>.lock` for owner info before suggesting takeover. If `done` / `deferred`, the task is closed; stop.
+- `4` — status is neither `open` nor `in_progress` (i.e. `done` / `deferred` / unknown). The task is closed; stop. `in_progress` no longer exits here — the `--entry-state` gate above already separated `resumable` (no lock) from `held` (lock present), and re-deciding it in this heredoc would just make the resume path unreachable.
 - `5` / `6` — `body:` field missing or the body file doesn't exist on disk. The index entry is broken — `validate_tasks.py` will reject it; fix the entry before re-claiming.
 
 Also list `sysop/runtime/locks/*.lock` files to surface concurrent claims:
@@ -122,7 +174,9 @@ Also list `sysop/runtime/locks/*.lock` files to surface concurrent claims:
 ls sysop/runtime/locks/*.lock 2>/dev/null
 ```
 
-If `sysop/runtime/locks/<TASK_ID>.lock` already exists, hard-fail with the file contents — another session owns this task. Do not overwrite.
+If `sysop/runtime/locks/<CLAIM_ID>.lock` already exists, hard-fail with the file contents — another session owns this claim. Do not overwrite.
+
+This check sits in the roadmap branch; the review-batch branch has its own, below. What is uniform is the **path**: both kinds write a lock at `sysop/runtime/locks/<CLAIM_ID>.lock` (`batch_work.sh` writes `BATCH-<N>.lock`, Phase 156), so the `ls` listing above surfaces in-flight batches alongside in-flight roadmap tasks and is worth reading on either path.
 
 Read the body file `tasks/open/<TASK_ID>.md` in full so it's loaded as context for Step 6 plan mode.
 
@@ -142,9 +196,11 @@ Read the body file `tasks/open/<TASK_ID>.md` in full so it's loaded as context f
 - Read `review_tasks.md` (full)
 - Verify the batch number exists
 - Check its status (the backtick-wrapped status after the batch title):
-  - `Pending` → available, proceed
-  - `In Progress` → check for `sysop/runtime/locks/BATCH-<N>.lock`. If locked, report "already claimed" and stop. If no lock, it may be resumable — proceed (the script handles this).
+  - `Pending` → available **unless `sysop/runtime/locks/<CLAIM_ID>.lock` exists**. A lock on a `Pending` batch is not a contradiction: `batch_work.sh` skips the `Pending` → `In Progress` commit when it is off `main`, when `review_tasks.md` is dirty, or when the pull fails, and still creates the worktree. So the lock is the more reliable of the two signals. If locked, report "already claimed" with the lock contents and stop.
+  - `In Progress` → check for `sysop/runtime/locks/<CLAIM_ID>.lock`. If locked, report "already claimed" and stop. If no lock, it may be resumable — proceed (the script handles this).
   - `Merged`, `Complete`, `Ready for Review` → report current status and stop
+
+To hand a stranded batch back, use `bash sysop/scripts/batch_work.sh --release <BATCH_NUMBER>` — it reverses both halves of the claim (the `review_tasks.md` status and the lock). `claim_task.sh --release` refuses a `BATCH-*` ID on purpose: it owns `tasks/index.yml`, so it would release the lock and leave the batch reading `In Progress` forever.
 
 ## Step 3: Generate Branch Name
 
@@ -188,12 +244,22 @@ with index_path.open(encoding="utf-8") as f:
     data = yaml.safe_load(f)
 
 found = False
+resumed = False
 for t in data.get("tasks", []):
     if t.get("id") == task_id:
-        if t.get("status") != "open":
-            print(f"ERROR: refusing to flip status; current status='{t.get('status')}'", file=sys.stderr)
+        current = t.get("status")
+        if current == "in_progress":
+            # Resume path (Step 2 entry state `resumable`): already flipped by
+            # the claim this one is re-entering. Leave it alone and write
+            # nothing — re-flipping is a no-op, but treating it as an error
+            # would make the resume unreachable at the LAST guard instead of
+            # the first. Anything other than open/in_progress still refuses.
+            resumed = True
+        elif current != "open":
+            print(f"ERROR: refusing to flip status; current status='{current}'", file=sys.stderr)
             sys.exit(1)
-        t["status"] = "in_progress"
+        else:
+            t["status"] = "in_progress"
         found = True
         break
 
@@ -201,19 +267,28 @@ if not found:
     print(f"ERROR: task '{task_id}' disappeared between Step 2 and Step 4", file=sys.stderr)
     sys.exit(1)
 
-with index_path.open("w", encoding="utf-8") as f:
-    yaml.safe_dump(
-        data,
-        f,
-        sort_keys=False,
-        default_flow_style=False,
-        allow_unicode=True,
-        width=120,
-    )
-
-print(f"OK: flipped {task_id} → in_progress in tasks/index.yml")
+if resumed:
+    # Write NOTHING on the resume path. The status is already correct, and a
+    # safe_dump round-trip of an unchanged doc still reflows the file (comments
+    # dropped, quoting and wrapping normalised) — a whole-file diff with no
+    # semantic change, which Step 4d would then commit and /review-close's
+    # dirty classifier would react to.
+    print(f"OK: {task_id} already in_progress — resuming, index untouched")
+else:
+    with index_path.open("w", encoding="utf-8") as f:
+        yaml.safe_dump(
+            data,
+            f,
+            sort_keys=False,
+            default_flow_style=False,
+            allow_unicode=True,
+            width=120,
+        )
+    print(f"OK: flipped {task_id} → in_progress in tasks/index.yml")
 PY
 ```
+
+**On the resume path this step is a no-op by design.** It prints `already in_progress — resuming, index untouched` and writes nothing, so Step 4d has nothing to stage — see the resume clause there.
 
 ### 4b. Run the claim script with `--lock` to create the worktree and lock file
 
@@ -242,8 +317,12 @@ This commit lands on `main` in the shared **primary** worktree, so apply `_share
 ```bash
 test "$(git rev-parse --abbrev-ref HEAD)" = "main" || {
   echo "HEAD is not main (a concurrent actor moved it) — STOP."; exit 1; }
-git add tasks/index.yml && git commit -m "claim: mark <TASK_ID> as in-progress"
+git add tasks/index.yml
+git diff --cached --quiet -- tasks/index.yml \
+  || git commit -m "claim: mark <TASK_ID> as in-progress"
 ```
+
+**Resume path (Step 2 entry state `resumable`): there is nothing to commit, and that is not an error.** Step 4a wrote no change, so `tasks/index.yml` is already staged-clean and `git commit` would abort with *nothing to commit* — which reads as a failed claim. The `git diff --cached --quiet` test above is what makes the step idempotent; keep it rather than letting the commit fail and be interpreted. Rule A's `HEAD` assert still runs on both paths, because a resume commits nothing but every *later* step still assumes it is standing on `main`.
 
 Run on the main checkout (the worktree at `../<project>-<task-id-lower>/` will pick this up via the shared object DB).
 
@@ -261,7 +340,9 @@ If 4b created an orphan worktree before failing, also run `bash sysop/scripts/cl
 ```bash
 bash sysop/scripts/batch_work.sh <BATCH_NUMBER>
 ```
-The script handles `Pending` → `In Progress` transition in `review_tasks.md` and commits on main automatically. (Review-batch state still lives in `review_tasks.md` — only roadmap tasks live in `tasks/index.yml`.)
+The script handles `Pending` → `In Progress` transition in `review_tasks.md` and commits on main automatically, creates the worktree, and writes `sysop/runtime/locks/<CLAIM_ID>.lock` — the same lock file, in the same main-repo-anchored directory, that `claim_task.sh --lock` writes for a roadmap task. (Review-batch state still lives in `review_tasks.md` — only roadmap tasks live in `tasks/index.yml`. The *lock* is the one thing both kinds share, which is what makes `/next-task`, `/sitrep` and `scope_overlap.py` able to see a batch and a task the same way.)
+
+The status commit is best-effort and the lock is not: off `main`, or with a dirty `review_tasks.md`, the script warns, skips the flip, and still creates the worktree **and** the lock. Read the output — a batch that stayed `Pending` is claimed all the same.
 
 If the script exits non-zero, report the error output and stop.
 
@@ -360,7 +441,6 @@ implementation + Steps 9/10 + single commit all run inside it. This may take
 - Use the `Agent` tool with:
   - `subagent_type`: `"general-purpose"`
   - `model`: `"opus"` (always — adversarial review + implementation against a fresh plan benefits from full reasoning depth)
-  - `run_in_background`: `false` (parent waits synchronously; background mode is reserved for `/auto-build`'s batched-parallel shape)
   - Do NOT set `isolation: "worktree"` — the worktree pre-exists from Step 4; the sub-agent `cd`s into it.
   - `description`: `"Reviewer-executor for <TASK_ID>"`
 - `prompt`: the **Reviewer-Executor Prompt** below, with `<TASK_ID>`, `<WORKTREE_PATH>`, `<BRANCH_NAME>`, and `<PLAN_TEXT>` (the full Step 6 plan body verbatim — Constraints & Risks + Implementation Steps) filled in.
@@ -479,12 +559,27 @@ A malformed envelope (missing keys, content after the closing backticks, status 
 
 After the reviewer-executor sub-agent returns, get the envelope. Read in this order — first hit wins; never go past a clean hit to the next source:
 
-1. **JSON file** (preferred, Phase 37). Try to read `sysop/runtime/subagent-envelopes/<TASK_ID>.json` (resolved against the main repo root via `git rev-parse --git-common-dir` if you're in a worktree). The `SubagentStop` hook (`sysop/scripts/parse_subagent_envelope.py`) parses the sub-agent's final message on the harness's terms and writes structured JSON keyed by the `TASK:` field. Keys you'll need: `status`, `worktree`, `branch`, `error`, `blocker_question`, `review_report_raw`. If the file is missing (hook didn't fire, fired after this read, or crashed) OR `parsed: false` (envelope wasn't found in the agent's final message), continue to (2).
+1. **JSON file** (preferred, Phase 37). Read the envelope from `sysop/runtime/subagent-envelopes/` (resolved against the main repo root via `git rev-parse --git-common-dir` if you're in a worktree). The `SubagentStop` hook (`sysop/scripts/parse_subagent_envelope.py`) parses the sub-agent's final message on the harness's terms and writes structured JSON keyed by the `TASK:` field. Keys you'll need: `status`, `worktree`, `branch`, `error`, `blocker_question`, `review_report_raw`. If no envelope is found (hook unregistered, the file write failed, or it crashed — **not** a race: `SubagentStop` runs synchronously before the parent receives the `Agent` return, so the file is always written before this read) OR `parsed: false` (envelope wasn't found in the agent's final message), continue to (2).
+
+   **Two filenames are possible, and this step must tolerate both** (Phase 159a, `parse_subagent_envelope.py:402`):
+
+   - `<TASK_ID>.json` — written when the agent's envelope carries no `PHASE:` key. **This is what today's single reviewer-executor produces**, because no shipped prompt emits `PHASE:`.
+   - `<TASK_ID>.<phase>.json` — written when it does. The phase component is lower-cased and sanitized, so `PHASE: Plan` and `PHASE: plan` both yield `plan`.
+
+   Resolve in that order: try `<TASK_ID>.json` first; if it is absent, glob `<TASK_ID>.*.json` (ignoring `_unparseable_*.json` diagnostics). If the glob returns exactly one file, use it. If it returns several, prefer `exec`, then `review`, then `plan` — the later the phase, the closer to the executed result Step 8 is reporting on. **Remember which file you actually read**; the delete below removes that one, not a guessed name.
+
+   *(The `_unparseable_` exclusion is belt-and-braces and is **currently unreachable**: diagnostics are written as `_unparseable_<session>_<agent>.json` (`parse_subagent_envelope.py`), which cannot match `<TASK_ID>.*.json` for any schema-valid id. It is kept, and pinned, so a future change to the diagnostic filename cannot quietly start feeding parse failures back in as envelopes — not because it filters anything today.)*
+
+   > **Why tolerate a shape nothing writes yet.** The orchestrator reshape (`tools/CLAIM_TASK_ORCHESTRATOR_SPEC.md`) makes three sub-agents emit `PHASE: plan` / `review` / `exec` under one claim id. Repointing this read at the phased names *before* that lands would break the working single-envelope path for no gain; tolerating both is forward-compatible and changes nothing today.
+
+   **Review batches:** substitute `<CLAIM_ID>` for `<TASK_ID>` throughout this step — the envelope is keyed by whatever the sub-agent put in its `TASK:` field, and `parse_subagent_envelope.py`'s shape check (`^[A-Z][A-Z0-9-]{2,80}$`) accepts `BATCH-<N>`, so a batch claim's envelope really is written as `BATCH-116.json`. This step is **not** roadmap-only; it is spelled with `<TASK_ID>` only because that is the dominant case. Reading it as not-applicable and skipping the envelope is the Phase-29 failure this file's Step 1 convention exists to prevent, and Steps 7–8 are exactly where that happened before.
 2. **Regex parse of the sub-agent's return text** (existing behavior). Parse the YAML envelope from the LAST content block of the sub-agent's final message. Validate that the envelope has the required keys (`TASK`, `STATUS`, `WORKTREE`, `BRANCH`, `ERROR`). Multiple envelopes → last-wins (matches the prompt's "LAST content" instruction).
 
 The `REVIEW_REPORT:` block at the TOP of the sub-agent's response is read from the response body (or from `review_report_raw` in the JSON if path (1) hit).
 
-**After consuming (1)**, delete the JSON file: `rm -f sysop/runtime/subagent-envelopes/<TASK_ID>.json`. The dir is for in-flight handoff only; leftover files accumulate stale state across cycles. Do NOT delete `_unparseable_*.json` diagnostics — those persist intentionally for inspection.
+**After consuming (1)**, delete **the file you actually read** — `rm -f sysop/runtime/subagent-envelopes/<the resolved filename>`, which is `<TASK_ID>.json` on today's path and `<TASK_ID>.<phase>.json` if the glob resolved one. Do not `rm` a guessed name, and do not widen this to `<TASK_ID>.*.json`: under the reshape the plan and review envelopes are still live when the executor's envelope is consumed, and a wildcard here would destroy them mid-lifecycle. The dir is for in-flight handoff only; leftover files accumulate stale state across cycles. Do NOT delete `_unparseable_*.json` diagnostics — those persist intentionally for inspection.
+
+> **This deletion is scheduled to move, and the reshape owns that.** Deleting after consumption is why a review that *did* run left no durable trace — `tools/CLAIM_TASK_ORCHESTRATOR_SPEC.md` § *Evidence* names this exact line as the original defect and requires that nothing be deleted mid-lifecycle. Re-siting it to close-time cleanup is coupled to the artifact set the reshape introduces, so it is deliberately **not** done here; this step only stops guessing the filename.
 
 **On `STATUS: EXECUTED`:**
 

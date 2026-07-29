@@ -17,7 +17,7 @@ at. Two layers:
      than silently leaking into (or dropping out of) the "smallest install".
 
   2. End-to-end — a real `--mode loop` install must ship *exactly* the loop
-     bundle and nothing lifecycle, write the 16-rule hookless settings.json,
+     bundle and nothing lifecycle, write the 19-rule hookless settings.json,
      leave a clean root footprint, record `mode: loop`, and satisfy the full
      mode/update state machine (preserve on --update, additive loop→full
      upgrade, rejected full→loop downgrade).
@@ -51,7 +51,7 @@ EXCLUDED_SKILLS = {
 LOOP_SHARED_STEMS = {
     "adversarial-review", "permission-guard",
     "promotion-write-target", "test-assessment-rubric",
-    "fanout-evidence",
+    "fanout-evidence", "upstream-repo",
 }
 EXCLUDED_SHARED_STEMS = {
     "decomposition-rubric", "guided-mode", "main-push-guard", "ui-verify",
@@ -70,11 +70,15 @@ EXCLUDED_SCRIPTS = {
     "pr_dependabot.py", "scope_overlap.py", "sitrep_survey.py",
     "validate_tasks.py",
 }
-LOOP_ALLOW_COUNT = 16
+LOOP_ALLOW_COUNT = 19
 # The exact loop-mode allow-list (LOOP_ONLY_SPEC § "Leg 1 findings"). Asserting
-# the *set*, not just the count, is what stops a wrong-but-16 permission set
+# the *set*, not just the count, is what stops a wrong-but-19 permission set
 # (e.g. a dropped `gh release create` swapped in for a loop rule) shipping green.
 EXPECTED_LOOP_ALLOW = {
+    # Phase 152: both loop-mode review skills run a plain
+    # `git add review_tasks_archive.md` at Step 7, which no literal rule covers.
+    # See install.sh's LOOP_ALLOW comment for why Step 9 is NOT the reason.
+    "Bash(git add:*)",
     "Bash(git add review_tasks.md)",
     "Bash(git commit -m docs:*)",
     "Bash(bash sysop/scripts/run_checks.sh)",
@@ -87,13 +91,21 @@ EXPECTED_LOOP_ALLOW = {
     "Bash(.venv/bin/python3 sysop/scripts/archive_review_tasks.py:*)",
     # Phase 144: the claude-security ingest CLI — /security-audit ships in loop
     # mode and calls this at its new Step 3c, so its allow-rule must ship too
-    # (without it the call silently halts under auto + skipAutoPermissionPrompt).
+    # (without it the call is auto-denied with no prompt under `dontAsk`).
     "Bash(python3 sysop/scripts/ingest_security_report.py:*)",
     "Bash(.venv/bin/python3 sysop/scripts/ingest_security_report.py:*)",
     "Bash(python3 -c:*)",
     "Bash(python3 -:*)",
+    # Phase 152: the give-back skills' auth gate. `gh` is not in Claude Code's
+    # built-in read-only set, so even `gh auth status` needs an explicit rule.
+    "Bash(gh auth status)",
     "Bash(gh issue list:*)",
     "Bash(gh issue create:*)",
+    # The give-back skills' read-only target-visibility probe
+    # (_shared/upstream-repo.md § B). /report-issues + /contribute-convention
+    # both ship in loop mode, and without the rule the probe degrades to the
+    # offline heuristic on every loop-mode run.
+    "Bash(gh repo view:*)",
 }
 # Loop mode's enforcement payload — checks are the merge gate here, so these must
 # ship (a refactor that gated any behind loop mode would leave a loop with
@@ -267,7 +279,7 @@ class TestLoopSettings:
         data = json.loads((root / ".claude/settings.json").read_text())
         allow = data["permissions"]["allow"]
         # Exact set — count-only would let a dropped lifecycle rule (gh release
-        # create, git push, ...) swap in for a loop rule and still read 16.
+        # create, git push, ...) swap in for a loop rule and still read 17.
         assert set(allow) == EXPECTED_LOOP_ALLOW
         assert len(allow) == LOOP_ALLOW_COUNT  # no duplicates
         assert "hooks" not in data

@@ -12,16 +12,16 @@ This skill is the prerequisite step for `/auto-fix` (which fixes auto batches) a
 
 ## Pre-flight: Permission Guard
 
-This skill stages and commits a single file (`review_tasks.md`) when it writes `Flag:` tags. Under `auto` mode + `skipAutoPermissionPrompt: true`, those commits silently halt without explicit allow-rules.
+This skill stages and commits a single file (`review_tasks.md`) when it writes `Flag:` tags. Under `dontAsk` mode those commits are auto-denied with no prompt unless explicit allow-rules cover them.
 
 Read `.claude/settings.json` and confirm `permissions.allow` contains:
 
 - `Bash(git add review_tasks.md)`
 - `Bash(git commit -m docs:*)`
 
-Read-only ops (`git status`, `git log`, etc.) are auto-approved under `auto` mode and do not need rules.
+Read-only ops (`git status`, `git log`, etc.) are auto-approved in every permission mode and do not need rules.
 
-If any required rule is missing, stop with the `_shared/permission-guard.md` § Algorithm step 4 message (one-line reason: "stages and commits `review_tasks.md` to persist Flag tags so future /auto-fix and /auto-judge runs skip re-analysis").
+If any required rule is missing, stop with the `_shared/permission-guard.md` § Algorithm step 5 message (one-line reason: "stages and commits `review_tasks.md` to persist Flag tags so future /auto-fix and /auto-judge runs skip re-analysis"), unless the guard's step 3 mode check applies.
 
 If `$ARGUMENTS` contains `--skip-permission-guard`, print a one-line warning and continue.
 

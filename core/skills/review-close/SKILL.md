@@ -10,39 +10,45 @@ Final gate before production. Reviews all pending work (feature branches AND unp
 
 ## Pre-flight: Permission Guard
 
-Before doing anything, verify `.claude/settings.json` carries the allow-rules this skill depends on. Under `permissions.defaultMode: "auto"` with `skipAutoPermissionPrompt: true`, a missing rule on `git merge --ff-only` or `git worktree remove` surfaces as a silent halt mid-merge.
+Before doing anything, verify `.claude/settings.json` carries the allow-rules this skill depends on. Under `permissions.defaultMode: "dontAsk"`, a missing rule on `git merge --ff-only` or `git worktree remove` surfaces as an opaque halt mid-merge. Run the `_shared/permission-guard.md` algorithm — including its **step 3 mode check**, which skips the hard stop (but still prints the drift report) when the project declares `bypassPermissions`, where the allow-list is inert.
 
-Read `.claude/settings.json` and confirm `permissions.allow` contains every rule below (exact-string match):
+Read `.claude/settings.json` (and `.claude/settings.local.json` if present) and confirm `permissions.allow` satisfies every rule below:
 
 - `Bash(git checkout:*)`
+- `Bash(git fetch origin:*)` — the `_shared/main-push-guard.md` Rule B safe-push sequence fetches `origin/main` before the Step 4d push, so this is required under **both** merge policies, not just `pr`
 - `Bash(git rebase:*)`
 - `Bash(git rebase --abort)`
 - `Bash(git merge --ff-only:*)`
-- `Bash(git worktree list:*)` — Step 1a + Step 3c's `--porcelain` worktree enumeration
+- `Bash(git worktree list:*)` — Step 1a + Step 3c's `--porcelain` worktree enumeration (the one read-only `git` form Sysop ships a rule for — see `_shared/permission-guard.md` § Notes)
 - `Bash(git worktree remove:*)`
 - `Bash(git branch -d:*)`
 - `Bash(git push origin:*)`
+- `Bash(git add:*)` — Step 4c step 7's shared-doc staging. Those are three plain, unwrapped `git add <path>` commands, which is what makes the wildcard the right shape here: the literal-path rules the template also ships (`git add tasks/index.yml`, `git add review_tasks.md`) cannot cover consumer-authored doc names like `changelog.md`. Note the rule does **not** rescue every staging site in Sysop — the review skills' Step 9 stages inside a `for … done` loop, which binds no rule at all; see § Invocation shapes below
 - `Bash(bash sysop/scripts/close_batch.sh:*)`
 - `Bash(bash sysop/scripts/run_checks.sh)`
 - `Bash(bash sysop/scripts/run_checks.sh:*)`
-- `Bash(python3 -:*)` — Step 3c's smoke-gate detection heredoc **and** Step 4c's yaml-round-trip status flip + git mv. Both are single `python3 - <<` commands (literal `python3` command word, no PATH prefix or `&&` compound) so this one rule matches; venv PyYAML is resolved by an in-heredoc `sys.path` bootstrap, not a `.venv/bin/python3` invocation or an env prefix (BeanRider ISSUE-0049; Sysop Phase 126 — a `.venv/bin/python3` command word or a `VAR=… python3` prefix would each bind to no rule)
+- `Bash(python3 -:*)` — Step 3c's smoke-gate detection heredoc **and** Step 4c's yaml-round-trip status flip + git mv + the `git add` of the index it rewrote (those git calls run *inside* the heredoc via `subprocess`, so they bind no Bash rule of their own). Both are single `python3 - <<` commands (literal `python3` command word, no PATH prefix or `&&` compound) so this one rule matches; venv PyYAML is resolved by an in-heredoc `sys.path` bootstrap, not a `.venv/bin/python3` invocation or an env prefix (BeanRider ISSUE-0049; Sysop Phase 126 — a `.venv/bin/python3` command word or a `VAR=… python3` prefix would each bind to no rule)
 - `Bash(python3 sysop/scripts/validate_tasks.py)` — Step 4c's final-guard validator run (bare `python3`; the script self-resolves venv PyYAML via its own `sys.path` bootstrap, so this one form serves both venv-only and non-venv consumers — Sysop Phase 126)
 - `Bash(python3 sysop/scripts/validate_tasks.py:*)` — same with `--quiet` / `--path`
 
-**One deliberate non-entry:** Step 3b's pending-docs collect (`mkdir -p sysop/runtime/pending-docs && cp …`) ships with **no** allow-rule — the compound splits into `mkdir` + `cp` command words (Phase 126 matcher facts) and neither binds a rule here. On purpose: both are plain intra-repo file writes the auto-classifier has allowed in every live run to date (the bare `cp` shipped ruleless for as long as the step has existed), and a `Bash(cp:*)`-class rule would pre-authorize far more than this one copy. If the collect ever *does* halt there, the Phase 36 `PermissionDenied` hook surfaces the `!`-escape form — run it before continuing; Step 3b itself forbids proceeding to the worktree remove with the docs uncollected.
+**Deliberate non-entries.** Step 3b's pending-docs collect (`mkdir -p sysop/runtime/pending-docs && cp …`) ships with **no** allow-rule — the compound splits into `mkdir` + `cp` command words (Phase 126 matcher facts) and neither binds a rule here. On purpose: both are plain intra-repo file writes the auto-classifier has allowed in every live run to date (the bare `cp` shipped ruleless for as long as the step has existed), and a `Bash(cp:*)`-class rule would pre-authorize far more than this one copy. If the collect ever *does* halt there, the Phase 36 `PermissionDenied` hook surfaces the `!`-escape form — run it before continuing; Step 3b itself forbids proceeding to the worktree remove with the docs uncollected.
 
 **Additionally, under `pr` merge policy only** (read `<project>/CLAUDE.md § Merge policy`; default is `direct` — see Step 4-pre): the PR-routed flow shells out to `gh` and a few extra git verbs. Require these too **only when the policy is `pr`** — a `direct`-policy consumer does not need them and must not be blocked for their absence:
 
-- `Bash(git fetch origin:*)` — Step 4-pre cuts the integration branch off fresh `origin/main`
 - `Bash(git cherry-pick:*)` — Step 4-pre sweeps local-only `main` commits onto the integration branch
 - `Bash(git reset --hard origin/main)` — Step 6 re-syncs local `main` after the PR squash-merges
 - `Bash(git branch -D:*)` — Step 6 deletes the integration + squash-merged feature branches
-- `Bash(gh pr create:*)` — open the integration PR against `main`
+- `Bash(gh pr list:*)` — Step 4-pre's PR-reuse probe (`gh pr list --head … --base main --state open`)
+- `Bash(gh pr create:*)` — open the integration PR against `main` (integration-branch shape only; the PR-reuse shape never calls it)
 - `Bash(gh pr checks:*)` — wait on the PR's required checks
 - `Bash(gh pr view:*)` — read the PR's merge state
 - `Bash(gh pr merge:*)` — squash-merge the integration PR (non-`--auto`)
 
-If any required rule (the always-required git set above, plus the `gh`/git set when the policy is `pr`) is missing, stop with the error message from `_shared/permission-guard.md` § Algorithm step 4 (substitute "merges approved feature branches and either pushes `main` directly or — under `pr` policy — assembles an integration branch and opens a squash-merge PR; updates `tasks/index.yml` via heredoc'd python and runs the validator as a final guard" as the one-line reason). Do not proceed.
+Every rule named above ships in the installer's seeded allow-list, so a consumer who ran `bash install.sh` (or `sysop-update.sh` at Phase 152 or later) satisfies this block on a fresh install under either policy. **A consumer whose skills are newer than their `settings.json` will not** — skill copies auto-update through the plugin path while the allow-list ships only through the installer, so if this block reports a rule you have never seen, run `sysop-update.sh` rather than hand-editing.
+
+**§ Invocation shapes — keep the `pr` path rule-matchable.** A rule authorizes a *command*, not a *step*: the matcher compares against the literal text the model sends, splits on `&&`, `||`, `;`, `|`, `|&`, `&` and newlines, and requires each part to match. Until Phase 153 this skill's `pr` path defeated its own rules in three places — `PR_NUMBER="$(gh pr list …)"` and `PR_REF="$(gh pr create …)"` (a rule does not match past a variable assignment) and two `|| true` tails (`true` is not in the documented read-only set, though that set is documented as non-exhaustive, so this one is a strong inference rather than a stated fact). Those are now invoked bare, with the PR number and integration-branch name as quoted literals. **When editing Step 4-pre, 4d or 6, do not reintroduce them:** no capture into a variable, no `|| true` (use `|| echo …` — `echo` *is* in the documented read-only set), and no `for … done` around a set you could write out.
+
+**What this block does NOT claim.** Two shapes remain and are not defects introduced here. First, this skill still runs `for … done` loops over sets discovered at runtime — the Step 4a branch pre-check (`$BRANCHES_TO_MERGE`) and the Step 3b pending-docs strip (a `*.md` glob, which additionally wraps `rm -f` behind `[ -e … ] &&`). A glob-driven loop cannot be unrolled, so reshaping is not available there; the branch-check loop holds only read-only commands, the Step 3b one does not. Second, the reshaped `gh pr list` commands carry a `|` inside a single-quoted `--jq` argument, and whether the splitter is quote-aware is an open question the docs do not settle. So this block asserts that three *provable* defeaters are gone, not that every `pr`-path invocation is proven to bind. See `WORKFLOW.md` § 8.2a *Invocation shapes* for the full inventory. If any required rule (the always-required git set above, plus the `gh`/git set when the policy is `pr`) is unsatisfied, stop with the error message from `_shared/permission-guard.md` § Algorithm step 5 (substitute "merges approved feature branches and either pushes `main` directly or — under `pr` policy — assembles an integration branch and opens a squash-merge PR; updates `tasks/index.yml` via heredoc'd python and runs the validator as a final guard" as the one-line reason). Do not proceed — unless the guard's step 3 mode check applies.
 
 If `$ARGUMENTS` contains `--skip-permission-guard`, print a one-line warning and continue.
 
@@ -174,7 +180,9 @@ If Step 1b committed an archive rotation on `main`, any feature branch cut from 
 ARCHIVE_RE='(^|/)review_tasks_archive\.md$'
 
 # In-scope branches: non-main local branches the agent is about to merge.
-BRANCHES_TO_MERGE=$(git for-each-ref --format='%(refname:short)' refs/heads/ | grep -v '^main$')
+# `worktree-agent-*` are review sub-agents' isolated checkouts (Step 2b), not
+# feature work — exclude them here and everywhere else branches are enumerated.
+BRANCHES_TO_MERGE=$(git for-each-ref --format='%(refname:short)' refs/heads/ | grep -v '^main$' | grep -v '^worktree-agent-')
 
 for branch in $BRANCHES_TO_MERGE; do
   base=$(git merge-base main "$branch")
@@ -195,38 +203,60 @@ If `$BRANCHES_TO_MERGE` is empty (only unpushed main commits this cycle), Step 1
 
 ### 2a. Feature Branches
 
-For every non-main local branch:
+For every non-main local branch — excluding any **agent worktree branch** (a branch whose registered worktree lives under `.claude/worktrees/`; on Claude Code these are named `worktree-agent-<id>`). Those are review sub-agents' scratch checkouts, not anyone's feature work; Step 2b's HARD RULE covers removing leaked ones. Do not review, approve, reject, or merge them:
 
 0. **Worktree-state pre-check (Step 1a result).** If Step 1a classified this branch's worktree as `dirty`, the verdict is **SKIP — paused work present**. Do NOT inspect the diff and do NOT propose approve/reject — uncommitted worktree changes mean the branch is mid-implementation, not in a reviewable state. Report the dirty file count and the recommendation: *"`<N>` pending changes in `<worktree-path>`. Commit-as-WIP, stash, or leave alone — re-run `/review-close` after the user decides. This branch is excluded from Step 3b (worktree removal), Step 4 (merge), and Step 6 (cleanup) for this run."* Then continue to the next branch. A SKIP'd branch is distinct from both `approve` and `reject`: it is not merged, but its worktree, lock, and branch are all preserved untouched.
 
 1. `git log main..<branch> --oneline` — what commits are on it
-2. `git diff main..<branch> --stat` — scope of changes
+2. `git diff main...<branch> --stat` — scope of changes
 3. Read the diff. Check for correctness, security issues, and alignment with the task body at `tasks/<status>/<TASK_ID>.md` (path resolved from `tasks/index.yml`'s `body:` field for each task ID the branch claims)
 4. Verdict: **approve** (merge to main) or **reject** (report reason, leave branch)
 
+> **Three dots on every `git diff` in Step 2 — 2a, 2b and 2d (upstream #241).** `git diff main..<branch>` compares the two *tips*, so everything `main` gained after the branch was cut renders as though the branch **deleted** it. That is not a rare condition: `/review-close` manufactures it, because Step 1b commits `review_tasks.md` to `main` before any branch is inspected. `git diff main...<branch>` diffs against the merge-base and shows exactly what the branch contributed. A false BLOCK costs a human round-trip; a **false APPROVE** — real hunks buried under phantom deletions — is the worse direction and gets likelier the staler the branch is. **`git log main..<branch>` keeps two dots**: for `log`, two-dot already means "commits on the branch and not on `main`," which is what step 1 wants. The rule is per-command, not a blanket search-and-replace.
+
 ### 2b. Prevention Convention Check
 
-For each feature branch (and for any unpushed main commits as a group), spawn an Opus subagent to perform the convention review. These calls can be parallelized — launch one agent per branch simultaneously.
+**Targets.** One agent per **approved-or-rejected** feature branch, plus **one for the unpushed-main commits as a group** if there are any. A branch Step 2a classified **SKIP — paused work present** is *not* a target: it is not merging this run, and a `VERDICT: BLOCKED` on it would halt the close over work already declared out of scope. These calls can be parallelized — launch one agent per target simultaneously.
 
-**For each branch:**
+Each target has a **diff basis**, used identically by step 0's predicate and step 1's retrieval:
 
-1. Read the **entire** `## Prevention Conventions` section of `CLAUDE.md` (every subsection — subsection names vary by project: a web project might have `Frontend`/`Backend`/`Testing`; a data-pipeline project might have `Data integrity`/`Privacy`/`Testing Patterns`; an MCP server might have `MCP server boundaries`). Retrieve the full diff (`git diff main..<branch>`).
+| Target | Diff basis |
+|---|---|
+| feature branch `<branch>` | `git diff main...<branch>` |
+| unpushed-main group | `git diff origin/main...HEAD` |
+
+If the repo has no `origin` remote, or `HEAD` is not `main`, there is no unpushed-main group — skip that target rather than running a command that will fail or silently diff something else. (Step 1's `git log --oneline origin/main..HEAD` is already qualified "if on main"; this is the same condition.)
+
+**0. Per-target doc-only skip (upstream #240).** Compute the target's diff basis first. If it touches **no** code files (the same code-file set Step 3 uses — `.py` / `.ts` / `.tsx` / `.js` / `.jsx` / `.sql` / `.sh` / `.kt` / `.swift` / `.go` / `.rs`) **and** the project's `## Prevention Conventions` contain no rule that governs the file types the diff *does* touch, skip the agent for that target with a one-line note (`2b: <target> — doc-only diff, no code-convention surface`). Docs-only cycles are not an edge case here — Step 7's own friction capture generates them routinely.
+
+> **Check the second condition; do not assume it.** "Docs cannot violate a convention" is false often enough to be dangerous, and Sysop's own shipped maps are the counter-examples: `core/companion/convention_map.md` routes `.claude/skills/**/*.md` to five conventions including *No secrets in examples*; the beancount pack routes a per-vendor `README.md` to **"Synthetic content only: NO real account numbers, payees, amounts, addresses"** and `<ledger>.beancount` to *No PII in git-tracked ledgers*; the llm pack routes `<prompts dir>/**/*.md` to template rules. **None of those is scanner-shaped** — the beancount rule asks a reader to judge whether a digit string *looks* real, which no entropy or pattern scanner does. So the skip is licensed by the *absence of an applicable rule*, not by the file extension. Read the conventions section (you need it for step 1 anyway), and if any subsection names documentation, config, prompts, fixtures, or committed data, **do not skip** — spawn the agent and let it route. Secret-scanning (`security_map.md` routes root operational docs to **A02**) is a separate expectation covered by the project's scanner, and this skip neither touches nor waives it.
+
+Step 2a still reads the diff either way. If every target skips, Step 2b is a clean no-op; say so in one line rather than reporting nothing.
+
+**For each remaining target:**
+
+1. Read the **entire** `## Prevention Conventions` section of `CLAUDE.md` (every subsection — subsection names vary by project: a web project might have `Frontend`/`Backend`/`Testing`; a data-pipeline project might have `Data integrity`/`Privacy`/`Testing Patterns`; an MCP server might have `MCP server boundaries`). Retrieve the full diff — the target's **diff basis** from the table above, three dots, per Step 2a's note. This text is pasted verbatim into the prompt below, so a two-dot diff hands the reviewer `main`'s newest content as though the branch had torn it out.
 
 2. Spawn an Agent with:
    - `subagent_type: "general-purpose"`
    - `model: "opus"` (always — the **reasoning** role: adversarial convention review; do not omit, per `.claude/served_models.yml`)
-   - `description: "Convention check: <branch-name>"`
+   - `isolation: "worktree"` — give each agent its own checkout (upstream #234). Steps 2a–2d run in the user's **primary** worktree, which has a single `HEAD`; a full-tool agent that decides to compare two revisions will reach for `git checkout` unless something stops it, and in a real run one did, moving `HEAD` off the branch the close was working on. Step 4's HARD RULE already names this hazard but frames the actor as *external*; here it is this skill's own agents, spawned two steps earlier. (The reported run had an integration branch checked out at 2b, which this skill's step order does not produce — 4-pre cuts it two steps later — so read the incident as "off the expected branch", not as evidence about which branch that is. What the misplaced commit would have cost also depends on policy: Step 6 deletes a merged feature branch with a safe `git branch -d`, and force-deletes only the integration branch under `pr`.) Isolation is available here because these agents have **no** pre-existing worktree, so `_shared/adversarial-review.md` § *Running more than one reviewer* applies directly — its "do not use it where a worktree already exists" caveat is about `/claim-task`, `/auto-build`, `/auto-fix` and `/auto-judge`, which spawn into a worktree an earlier step created, not about this step. **Where the harness offers no isolation parameter, the prompt's do-not-mutate rule below is the portable floor** and is sufficient; isolation is the structural hardening on top of it, not a replacement.
+   - `description: "Convention check: <target>"`
    - `prompt`:
 
      ```
      You are the final security gate before this branch merges to production. Review
      the diff below for violations of the project's Prevention Conventions.
 
-     ## Branch
-     <branch name>
+     ## Target
+     <branch name, or "unpushed main commits">
 
      ## Diff
-     <full unified diff from git diff main..<branch>>
+     <full unified diff from the target's diff basis>
+     (Merge-base-relative — this is what the branch ADDED, not a tip-to-tip
+      comparison. Context you cannot see is context `main` already has; it is
+      never a deletion this branch made. Do not report missing content as
+      removed.)
 
      ## Prevention Conventions
      <paste the full ## Prevention Conventions section from CLAUDE.md verbatim,
@@ -268,9 +298,28 @@ For each feature branch (and for any unpushed main commits as a group), spawn an
      Be thorough. A missed convention ships a security hole or reliability bug to prod.
      The ROUTING block is required so the human reviewer can audit which subsections
      you considered for each file.
+
+     Do NOT mutate repository state — no `git checkout`, `switch`, `reset`, `stash`,
+     `merge`, `rebase`, `add`, or `commit`, and no edits to tracked files. A close is
+     in flight; moving `HEAD` corrupts it. The diff above is everything you need. If
+     you need more context, read it with `git show <sha>:<path>`, which reads the
+     object database and is unaffected by tree state.
      ```
 
-3. Collect all verdicts. If **any** subagent returns `VERDICT: BLOCKED`, list every violation with its file:line citation and **stop** — do not proceed to Step 3 until violations are fixed or explicitly waived by the user.
+3. Collect all verdicts. If **any** subagent returns `VERDICT: BLOCKED`, list every violation with its file:line citation and **stop** — do not proceed to Step 3 until violations are fixed or explicitly waived by the user. A target skipped at step 0 has **no verdict** — report it as `skipped (doc-only)`, never as `APPROVED`; an agent that was never spawned has approved nothing.
+
+4. **Record outcomes for Step 8.** Tally `<N checked, N skipped (doc-only)>` for the `Conventions:` line in the final report. Without this, a skip is invisible in the artifact the human reads — the same gap Step 2d's `N doc-only` tally closes for test decisions.
+
+> **HARD RULE — the agents' worktrees must be gone before Step 3b.** Worktree isolation is not free of side effects: on Claude Code it materializes a **real worktree and a real branch** in this repository's shared namespace (observed shape: a worktree under `.claude/worktrees/` on a branch named `worktree-agent-<id>`). The harness removes them when an agent finishes and left its checkout unchanged — but an agent that wrote a scratch file, or a run that was interrupted, leaks both. **That collides directly with this skill**: Step 1c's `git for-each-ref refs/heads/` sweep, Step 2a's "every non-main local branch", and Step 1a's worktree classification all enumerate whatever exists, so a leaked agent branch is reviewed as though it were someone's feature work — it classifies `clean-merged`, Step 2a finds no commits, and Step 6 offers to delete it. Worse across sessions: a *concurrent* `/review-close` can reach `git worktree remove` on a checkout an agent is still running in.
+>
+> After step 3 collects the verdicts, assert both are clean before continuing:
+>
+> ```bash
+> git worktree list --porcelain | grep -F '/.claude/worktrees/' || echo "no agent worktrees"
+> git for-each-ref --format='%(refname:short)' refs/heads/ | grep '^worktree-agent-' || echo "no agent branches"
+> ```
+>
+> Anything listed is a leak: remove the worktree (`git worktree remove <path>`) and delete the branch (`git branch -D <name>`) before Step 3b. **Do not skip this because the harness usually cleans up** — "usually" is what makes the residue arrive on a later run, attached to nobody, in a step that force-deletes branches. If your harness offers no `isolation` parameter, none of this applies: you are relying on the prompt's do-not-mutate rule, which is the portable floor.
 
 ### 2c. Unpushed Main Commits
 
@@ -288,7 +337,7 @@ This is the sibling of Step 3c's manual-smoke gate — a per-task body conventio
 
 For each **approved** feature branch (Step 2a verdict), for each task ID it claims (resolved exactly as in Step 2a step 3 — `tasks/index.yml`'s `body:` per claimed ID):
 
-**0. Per-branch doc-only skip.** If this branch's diff (`git diff main..<branch>`) touches no code files (the same code-file set Step 3 uses — `.py` / `.ts` / `.tsx` / `.js` / `.jsx` / `.sql` / `.sh` / `.kt` / `.swift` / `.go` / `.rs`), skip verification for it with a one-line note (`2d: <branch> — doc-only diff, no test decision to verify`). A test decision over a doc-only change is incoherent — there is no behavior to pin.
+**0. Per-branch doc-only skip.** If this branch's diff (`git diff main...<branch>` — three dots, per Step 2a's note) touches no code files (the same code-file set Step 3 uses — `.py` / `.ts` / `.tsx` / `.js` / `.jsx` / `.sql` / `.sh` / `.kt` / `.swift` / `.go` / `.rs`), skip verification for it with a one-line note (`2d: <branch> — doc-only diff, no test decision to verify`). A test decision over a doc-only change is incoherent — there is no behavior to pin.
 
 **1. Read the record.** Open the task body and find the section under a heading whose text matches `test\s+decision` (case-insensitive — `## Test decision`, `### Test Decision` both match; same pattern as validator Invariant 13). Classify it:
 
@@ -561,7 +610,7 @@ For **rejected** branches, leave worktrees in place (cleaned up in Step 6).
 How approved work reaches `main` depends on the project's **merge policy** — read it from `<project>/CLAUDE.md § Merge policy` (the same "consumer declares its shape" pattern as Step 3's `§ Pre-merge verification`). Two values; **default `direct`** when the section is absent:
 
 - **`direct`** (default) — feature merges, batch close, and doc consolidation land on `main` locally, then `git push origin main`. Correct for any project whose `main` accepts a direct push (no required status check, no `enforce_admins`). This is the historical flow; a consumer who never configured a merge policy keeps it with zero change.
-- **`pr`** — `main` is never written directly. Everything is assembled on a throwaway **integration branch** cut from fresh `origin/main`, pushed, and merged into `main` through a squash PR. Required when `main` is push-protected (a required CI check and/or `enforce_admins`) — a direct push would be rejected. GitHub becomes the sole serialized writer of `main`, which also removes the race against a concurrent auto-merge (e.g. Dependabot) landing on `main` mid-close.
+- **`pr`** — `main` is never written directly; it is written only through a squash PR. Usually that means assembling everything on a throwaway **integration branch** cut from fresh `origin/main`, pushing it, and merging it into `main` through a PR — but when a single approved branch already *has* an open PR against `main`, the close lands on that branch instead (see the reuse probe below). Required when `main` is push-protected (a required CI check and/or `enforce_admins`) — a direct push would be rejected. GitHub becomes the sole serialized writer of `main`, which also removes the race against a concurrent auto-merge (e.g. Dependabot) landing on `main` mid-close.
 
 Set `$MERGE_TARGET` for the rest of Step 4 from the policy:
 
@@ -571,7 +620,77 @@ MERGE_TARGET=main
 git checkout main
 ```
 
-**`pr`:** cut the integration branch off the **live** `origin/main` (so the PR's required checks run against the current base — an auto-merged commit may have landed since this run started), then sweep any local-only `main` commits onto it. Those commits are the `open → in_progress` claim flips from `/claim-task` Step 4d & `/auto-build` Step 5.4 and any Step 1b `review_tasks.md` save/rotation — all committed on `main` locally but never pushed, so the fresh branch does not carry them yet. At close time every local-only `main` commit belongs to this cycle; if you have unrelated un-pushed `main` work, resolve it before running `/review-close` under `pr` policy.
+**`pr`:** two shapes. Almost every run assembles on a throwaway **integration branch** (the default, below). One narrow case instead **reuses the approved branch's own open PR** — probe for it first, because cutting an integration branch there opens a *second* PR for content that already has one, re-runs the whole required-check suite on identical content, and orphans the first PR.
+
+**PR-reuse probe (run first).** Reuse the existing PR when **all five** conditions hold:
+
+1. **exactly one** branch is still approved **after Step 3b** — not merely after Step 2a. Step 2d can demote an approved branch to rejected ("Hold for fix") and Step 3b downgrades a branch to SKIP when its worktree refuses to remove, so the Step 2a verdict is not final. Reusing a branch this run decided *not* to merge would squash-merge it to `main`;
+2. that branch has exactly one open, **non-draft, same-repository** PR whose base is `main`;
+3. there are **no local-only `main` commits** to sweep (`git rev-list origin/main..main` is empty) — the sweep is the integration branch's job and there is nowhere to put those commits on a feature branch;
+4. the local branch is **not behind** its remote counterpart — otherwise the Step 4b/4c commits would land on a branch missing work someone else pushed to the PR, and the Step 4d push would be rejected as non-fast-forward;
+5. the branch is **not behind `origin/main`**. Step 4a is skipped under reuse, so nothing rebases the branch onto the live base. The integration-branch shape exists partly to run the required checks against *current* `origin/main`; this condition is what replaces that guarantee, and without it a branch-protection rule requiring up-to-date branches yields `mergeStateStatus: BEHIND` and a refused merge.
+
+**If anything other than exactly one branch is still approved, condition 1 already fails — skip the probe entirely and go to the integration-branch shape.** Otherwise:
+
+```bash
+git fetch origin main
+# The literal branch name Step 2a approved and Step 3b left approved — write it out. Do
+# NOT read it back from HEAD: the Rule A assert below has to compare HEAD against a value
+# that did not come from HEAD (see the HARD RULE).
+APPROVED_BRANCH="<the single still-approved branch>"
+# `--head` cannot be scoped to an owner (`gh pr list --help`: "<owner>:<branch> syntax not
+# supported"), and GitHub allows several open PRs to share a head-branch NAME across forks.
+# So filter to same-repository non-drafts and demand exactly one: `.[0]` on an unfiltered
+# list can select a third party's PR, and merging that would land their code on `main`
+# while reporting this run's work as merged.
+#
+# Run it BARE and read the number off stdout. Do NOT capture it into a variable: an
+# allow-rule does not match past an assignment, so `PR_NUMBER="$(gh pr list …)"` routes
+# to the classifier — and is auto-denied under `dontAsk` — despite `Bash(gh pr list:*)`
+# being seeded. Every later step writes the number out as a literal for the same reason
+# a variable would not survive anyway: each step is a separate shell call (Phase 153).
+echo "--- reusable PR number (nothing printed = none, which is the normal outcome):"
+gh pr list --head "$APPROVED_BRANCH" --base main --state open \
+  --json number,isDraft,isCrossRepository \
+  --jq '[.[] | select(.isCrossRepository == false and .isDraft == false) | .number]
+        | if length == 1 then .[0] else empty end'
+echo "--- local-only main commits (condition 3; must be 0 to reuse):"
+git rev-list --count origin/main..main
+```
+
+Read both values off stdout and carry them forward as **literals**. The `echo` labels are load-bearing, not decoration: without them the two outputs are positionally ambiguous, and a *missing* first value silently shifts the second into its slot — a bare `2` reads as "PR #2" when it is actually the commit count with no PR found. (`echo` is in Claude Code's documented built-in read-only set, so labelling costs nothing at the permission layer.)
+
+**If the `gh pr list` output is empty, stop here — take the integration-branch shape.** That is the normal outcome, and it is also what an ambiguous result (two candidate PRs) deliberately produces. `/claim-task` feature branches are usually local-only under `pr` policy, so most runs have no PR to reuse. Do **not** run the remaining probes in that case — `git fetch origin <branch>` on a branch that was never pushed fails with `fatal: couldn't find remote ref <branch>`, which is alarming output on the *expected* path.
+
+Only when a PR exists are conditions 4 and 5 worth checking:
+
+```bash
+git fetch origin "$APPROVED_BRANCH"    # also creates/updates refs/remotes/origin/<branch>
+echo "--- behind remote (condition 4; must be 0):"
+git rev-list --count "${APPROVED_BRANCH}..origin/${APPROVED_BRANCH}"
+echo "--- behind origin/main (condition 5; must be 0):"
+git rev-list --count "${APPROVED_BRANCH}..origin/main"
+```
+
+Label these too, and for a sharper reason than block 1: if the `git fetch` above failed (deleted remote branch, no network) the condition-4 count prints **nothing** while condition 5 still prints `0` — so an unlabelled block emits a single `0`, which reads as "both counts are zero" and takes the reuse shape on a branch that is behind its remote. The labels make an absent value visible as an absent value.
+
+If either fetch or count **errors** (a deleted remote branch, no network), the count prints nothing rather than `0` and the conditions below are unmet — take the integration-branch shape. That is the safe direction and it is intentional: this probe fails toward the flow that always works.
+
+If the local-only count from the first probe and **both** counts above are `0` (and conditions 1–2 held, which is why you got here), take the **PR-reuse shape**:
+
+```bash
+git checkout "$APPROVED_BRANCH"
+MERGE_TARGET="$APPROVED_BRANCH"
+# The PR number the first probe printed is the PR Step 4d merges; there is no
+# integration branch this run. Write it out where Step 4d needs it — it is a literal
+# from here on, because each step is a separate shell call.
+```
+
+The policy's invariant is *"`main` is written only through a squash PR"* — landing the Step 4b/4c commits on the existing PR branch and merging that PR satisfies it exactly, with one fewer branch and one fewer CI cycle. Under this shape: **Step 4a is skipped** (`$MERGE_TARGET` *is* the one approved branch — there is nothing to merge into it), Step 4d pushes `$APPROVED_BRANCH` and merges the PR number this probe printed instead of running `gh pr create`, and Step 6 has no integration branch to drop. Everything else in Step 4 is unchanged.
+
+> **How often this actually fires.** Less often than it looks. Condition 3 fails whenever `/claim-task` made its `open → in_progress` flip on `main` (Step 4d) or Step 1b committed a `review_tasks.md` save — both commit to local `main` and neither is pushed — so the common single-branch cycle still takes the integration-branch shape. The reuse shape is for the case where the claim commits were already swept by a prior close and this cycle's only local-only work rode the feature branch. Falling through is never wrong, just wasteful; taking the reuse shape when a condition is unmet **is** wrong, so probe rather than assume.
+
+**Integration-branch shape (the default — any condition above unmet).** Cut the branch off the **live** `origin/main` (so the PR's required checks run against the current base — an auto-merged commit may have landed since this run started), then sweep any local-only `main` commits onto it. Those commits are the `open → in_progress` claim flips from `/claim-task` Step 4d & `/auto-build` Step 5.4 and any Step 1b `review_tasks.md` save/rotation — all committed on `main` locally but never pushed, so the fresh branch does not carry them yet. At close time every local-only `main` commit belongs to this cycle; if you have unrelated un-pushed `main` work, resolve it before running `/review-close` under `pr` policy.
 
 ```bash
 git fetch origin main
@@ -580,22 +699,42 @@ INTEGRATION_BRANCH="merge/review-close-${RUN_ID}"
 git checkout -b "$INTEGRATION_BRANCH" origin/main
 MERGE_TARGET="$INTEGRATION_BRANCH"
 
-# Sweep local-only main commits (claim flips + Step 1b doc saves) onto the branch,
-# oldest first. No-op when origin/main == main. A conflict means origin/main advanced
-# over the same lines (rare — Dependabot touches deps, not tasks/index.yml); resolve it,
-# or `git cherry-pick --abort` and re-cut the branch from local `main` instead.
-for sha in $(git rev-list --reverse origin/main..main); do
-  git cherry-pick "$sha"
-done
+# Sweep local-only main commits (claim flips + Step 1b doc saves) onto the branch.
+# A range, applied oldest-first by cherry-pick itself — NOT a `for … done` loop over
+# `git rev-list`, which would match no allow-rule (`for`/`done` are not documented
+# command separators) and so be denied under `dontAsk`, leaving the claim flips off the
+# integration branch while Step 6's `git reset --hard origin/main` later discarded them
+# from local `main` as well (Phase 153).
+#
+# RUN THIS ONLY IF the local-only count you read in the Step 4-pre probe
+# (`git rev-list --count origin/main..main`) was NON-ZERO. Unlike the loop it replaces,
+# an empty range is not a silent no-op — cherry-pick hard-fails with
+# `error: empty commit set passed`. You already have the number; skip the line if it is 0.
+#
+# A conflict means origin/main advanced over the same lines (rare — Dependabot touches
+# deps, not tasks/index.yml); resolve it, or `git cherry-pick --abort` and re-cut the
+# branch from local `main` instead.
+git cherry-pick origin/main..main
 ```
 
-> **HARD RULE — branch guard.** Steps 4a–4c run in the shared **primary** worktree, which has a single `HEAD`; a concurrent local actor can move it off the branch you expect mid-flow, landing commits on the wrong branch. Apply `_shared/main-push-guard.md` **Rule A** before **every** commit in Step 4. Under `direct` policy assert against the literal: `test "$(git rev-parse --abbrev-ref HEAD)" = "main"`. Under `pr` policy assert against the integration-branch **pattern** — `case "$(git rev-parse --abbrev-ref HEAD)" in merge/review-close-*) : ;; *) echo STOP; exit 1 ;; esac` — and **not** `test "$(...)" = "$INTEGRATION_BRANCH"` when `$INTEGRATION_BRANCH` was itself recovered from `HEAD` (Step 4-pre / the variable-persistence note below): comparing HEAD against a HEAD-derived value is a tautology that passes even after a hijack. On failure, STOP and reconcile via `git reflog` (cherry-pick your stranded commits onto the expected branch) — never commit blind. Per **Rule C**, **never** force-push `main` or the integration branch.
+> **HARD RULE — branch guard.** Steps 4a–4c run in the shared **primary** worktree, which has a single `HEAD`; a concurrent local actor can move it off the branch you expect mid-flow, landing commits on the wrong branch. Apply `_shared/main-push-guard.md` **Rule A** before **every** commit in Step 4. The assert's expected value must come from somewhere **other than `HEAD`** — comparing HEAD against a HEAD-derived value is a tautology that passes even after a hijack. By policy and shape:
+> - **`direct`** — assert against the literal: `test "$(git rev-parse --abbrev-ref HEAD)" = "main"`.
+> - **`pr`, integration-branch shape** — assert against the fixed **pattern**, which needs no remembered name: `case "$(git rev-parse --abbrev-ref HEAD)" in merge/review-close-*) : ;; *) echo STOP; exit 1 ;; esac`. Do **not** write `test "$(...)" = "$INTEGRATION_BRANCH"` when `$INTEGRATION_BRANCH` was itself recovered from `HEAD` (see the variable-persistence note below).
+> - **`pr`, PR-reuse shape** — there is no fixed pattern to match, so assert against the **literal branch name Step 2a approved**, written out: `test "$(git rev-parse --abbrev-ref HEAD)" = "<approved branch name>"`. That name comes from the Step 2a verdict, not from HEAD, so the assert stays non-tautological. Never re-derive it with `git rev-parse --abbrev-ref HEAD`.
+>
+> On failure, STOP and reconcile via `git reflog` (cherry-pick your stranded commits onto the expected branch) — never commit blind. Per **Rule C**, **never** force-push `main`, the integration branch, or a reused PR branch.
 
-> **Variable persistence across steps.** `$RUN_ID`, `$INTEGRATION_BRANCH`, and `$MERGE_TARGET` are referenced in Steps 4a–4d and Step 6, which the skill runner executes as **separate** shell calls — exported variables do **not** persist between them. Re-export the values at the top of each later `pr`-policy step; never run a later `git merge` / `git checkout` / `git branch -D` with any of them empty. Through Steps 4a–4c, HEAD is the integration branch, so it is always recoverable with `INTEGRATION_BRANCH="$(git rev-parse --abbrev-ref HEAD)"` (and `MERGE_TARGET="$INTEGRATION_BRANCH"`) — but only for use as the `git merge` / `git checkout` / `git branch -D` operands. Do **not** feed that HEAD-recovered value into the Rule A branch-assert (the HARD RULE above): asserting HEAD against a value just read from HEAD always passes, even after a hijack. For the assert, guard on the fixed `merge/review-close-*` pattern instead, which needs no remembered name. `$RUN_ID` matters only for the branch name and PR title — if lost, read the branch name back rather than regenerating it.
+> **Variable persistence across steps.** `$MERGE_TARGET`, `$APPROVED_BRANCH`, and `$INTEGRATION_BRANCH` are referenced in Steps 4a–4d, which the skill runner executes as **separate** shell calls — exported variables do **not** persist between them. Re-export the values at the top of each later `pr`-policy step; never run a later `git merge` / `git checkout` / `git push` with any of them empty. **Two values are deliberately off that list, and are written out as quoted literals instead** (Phase 153): the **PR number** at every Step 4d use, and the **integration branch name** at Step 6's `git branch -D`. Neither survives to its use site as a variable, and both have a cheap re-derivation at the point of use — a bare `gh pr list` probe at Step 4d, and `git branch --list 'merge/review-close-*'` at Step 6. **Quote them.** An unsubstituted `"<PR>"` fails loudly; an unquoted `<PR>` is a bash redirection, and an *empty* `gh` operand is the silent-wrong-merge case below.
+>
+> **Why the PR number in particular is never a variable.** `git` rejects an empty ref operand (`git branch -D ""` → `error: branch '' not found`), but `gh` **falls back to resolving the current branch's PR**: `gh pr view ""` and `gh pr merge ""` do not error, they silently act on whatever branch is checked out. Held in a variable across shell calls, an unre-exported one meant `gh pr merge ""` merged the current branch's PR, `--delete-branch` then moved HEAD to `main`, and the verdict probe `gh pr view ""` found no PR for `main` and reported a non-`MERGED` state — a stuck-PR report, and Step 6 skipped, **after a merge that landed**. Writing the number out *removes* that failure mode rather than guarding it: there is no variable left to go empty. Step 4d still re-derives the number from a bare `gh pr list` probe and stops if it prints nothing — keep both the probe and the stop.
+>
+> Through Steps 4a–4c, HEAD is the merge target, so `$MERGE_TARGET` is always recoverable with `MERGE_TARGET="$(git rev-parse --abbrev-ref HEAD)"` (and, in the integration-branch shape, `INTEGRATION_BRANCH="$MERGE_TARGET"`) — but only for use as the `git merge` / `git checkout` / `git push` operands. Do **not** feed that HEAD-recovered value into the Rule A branch-assert (the HARD RULE above): asserting HEAD against a value just read from HEAD always passes, even after a hijack. For the assert, use the fixed `merge/review-close-*` pattern (integration-branch shape) or the literal Step 2a branch name (PR-reuse shape). `$RUN_ID` is never referenced as a *variable* past Step 4-pre — Step 4d's PR title slices the run id back off `$INTEGRATION_BRANCH`, which the same block re-derives from HEAD. It does reappear as *text* in Step 6's `git branch -D "merge/review-close-<run id>"`, and by then HEAD has left the branch, so read the name back with `git branch --list 'merge/review-close-*'` rather than trying to remember it. A lost `$RUN_ID` therefore needs no recovery anywhere; a lost *branch name* has a one-command lookup.
 
 ### 4a. Merge Approved Feature Branches
 
-For each approved feature branch (oldest first), merge it into `$MERGE_TARGET` (set in Step 4-pre — `main` under `direct` policy, the integration branch under `pr`):
+**Skip this step entirely under the Step 4-pre PR-reuse shape** — `$MERGE_TARGET` *is* the one approved branch, so there is nothing to merge into it. (`git rebase "$MERGE_TARGET"` from that same branch is a no-op that reports "up to date", but running it invites the reader to treat a self-rebase as meaningful; go straight to Step 4b.)
+
+For each approved feature branch (oldest first), merge it into `$MERGE_TARGET` (set in Step 4-pre — `main` under `direct` policy, the integration branch or the reused PR branch under `pr`):
 1. `git checkout <branch> && git rebase "$MERGE_TARGET"`
 2. `git checkout "$MERGE_TARGET" && git merge --ff-only <branch>`
 3. If rebase has conflicts: `git rebase --abort`, report the conflict, skip that branch.
@@ -610,9 +749,9 @@ After all branches are merged but **before** doc consolidation:
 bash sysop/scripts/close_batch.sh <N1> <N2> <N3>
 ```
 
-This script updates `review_tasks.md` on the checked-out branch (`$MERGE_TARGET` — it resolves the repo via `git rev-parse --show-toplevel`, so it commits to whatever branch is current): sets batch headers to `Merged`, marks all task checkboxes `[x]`, updates the Statistics table, and adjusts the Grand Total counts. One commit is created for all closed batches.
+This script updates `review_tasks.md` on the checked-out branch (`$MERGE_TARGET` — it resolves the repo via `git rev-parse --show-toplevel`, so it commits to whatever branch is current): sets batch headers to `Merged`, marks task checkboxes `[x]`, updates the Statistics table, and adjusts the Grand Total counts. **One exception:** a task annotated `> Failed:` on the following line keeps its checkbox and is left out of both the flip and the counts — a FAIL verdict means the work was attempted and not finished, so the batch closes as "shipped, minus these" (Phase 157). Expect the per-batch line to read `(3 tasks closed, 1 failed — still open)` when that happens. One commit is created for all closed batches.
 
-**Under `pr` policy, always pass `--force`** — the integration branch is cut from `origin/main`, so it is not a descendant of the batch commit tips and the default merge-base ancestry check would reject the close. (`--force` skips that check; it is the documented escape and lands the close commit on the integration branch.)
+**Under `pr` policy, always pass `--force`** — in *both* Step 4-pre shapes. The script's gate is `git merge-base --is-ancestor <batch branch> main` against the literal `main`, and under `pr` policy nothing has reached local `main` yet at this point: the integration branch is cut from `origin/main` and is not a descendant of the batch commit tips, and a reused PR branch is by definition still unmerged. Either way the ancestry check would reject the close. (`--force` skips that check; it is the documented escape and lands the close commit on whichever branch is checked out.)
 
 If any branches were cherry-picked instead of rebased+merged (e.g., because worktree removal wasn't possible), use `--force` to skip the merge-base ancestry check:
 
@@ -733,9 +872,29 @@ After all branches are merged but **before** pushing:
        new_body = '/'.join(new_parts)
        src = body if body.startswith('tasks/') else f'tasks/{body}'
        dst = new_body if new_body.startswith('tasks/') else f'tasks/{new_body}'
+       # `git mv` into a directory that does not exist is fatal (`renaming … failed: No
+       # such file or directory`), and with check=True that aborts the loop AFTER earlier
+       # renames are already staged and BEFORE the index write below — reproducing the
+       # very half-staged commit this step exists to prevent. install.sh ships
+       # tasks/archive/.gitkeep, so this only bites a branch cut before that landed.
+       Path(dst).parent.mkdir(parents=True, exist_ok=True)
        subprocess.run(['git', 'mv', src, dst], check=True)
        t['body'] = new_body
-   p.write_text(yaml.safe_dump(d, sort_keys=False, default_flow_style=False, allow_unicode=True, width=120))
+   # Only write when something actually closed. With `closed` empty, `d` is unchanged, and
+   # writing it anyway would reserialize the whole index (stripping comments and formatting)
+   # and stage that diff under the consolidation subject — on a run whose pending-docs
+   # carried no roadmap_ids, where Step 7 correctly expects tasks/index.yml to be ABSENT
+   # from the commit.
+   if closed:
+       p.write_text(yaml.safe_dump(d, sort_keys=False, default_flow_style=False, allow_unicode=True, width=120))
+       # Stage the rewrite here, in the same code that performed it. `git mv` above already
+       # staged both halves of each body rename, but `Path.write_text` does not stage
+       # anything — so without this line the index is left HALF staged, and Step 7's
+       # `git commit` would record the renames while silently dropping the `status: done`
+       # + `completed_date` flip under a subject claiming the consolidation happened
+       # (upstream #203). Staging beside the write is the only form that cannot drift out
+       # of sync with what was written.
+       subprocess.run(['git', 'add', str(p)], check=True)
    # Working-tree cleanup, deferred until every git mv landed and the index wrote:
    # an abort mid-loop must not have already destroyed an earlier task's records
    # (the parked marker below is unrecreatable — plan + verdict, never committed).
@@ -751,14 +910,14 @@ After all branches are merged but **before** pushing:
        Path(f'sysop/runtime/locks/{tid}.lock').unlink(missing_ok=True)
        # Also drop any parked marker(s) for the task. /auto-build Phase 6d mirrors a
        # parked task's plan + verdict to the durable project-root archive
-       # sysop/runtime/auto-build/parked/<TASK_ID>__<TS>.md; the close path historically
+       # sysop/runtime/parked/<TASK_ID>__<TS>.md; the close path historically
        # never removed them, so markers for done tasks accumulated — the parked/ dir a
        # human lists when hunting resumable work over-reports a done task as still
        # parked. Same timing + working-tree-only semantics as the lock above (see the
        # `pr`-policy invariant note in Step 4-pre for why pre-merge death is accepted).
        # A task that never parked has no markers, and Path.glob on a missing parked/
        # dir yields nothing — both no-op cleanly.
-       for marker in Path('sysop/runtime/auto-build/parked').glob(f'{tid}__*.md'):
+       for marker in Path('sysop/runtime/parked').glob(f'{tid}__*.md'):
            marker.unlink(missing_ok=True)
    PY
    python3 sysop/scripts/validate_tasks.py || { echo "validator rejected the index — aborting"; exit 1; }
@@ -772,7 +931,37 @@ After all branches are merged but **before** pushing:
 
 6. **Clean up pending-docs**: Delete all remaining `sysop/runtime/pending-docs/*.md` files. Remove the `sysop/runtime/pending-docs/` directory if empty.
 
-7. **Commit**: `docs: consolidate documentation for <N> merged branches`
+7. **Stage, then commit**: `docs: consolidate documentation for <N> merged branches`
+
+   **Stage the shared docs one `git add` per file** — the heredoc already staged `tasks/index.yml` and both halves of each body rename, but the shared-doc edits above were made with the editor and are still unstaged. Add **only** the docs the routing table actually sent this run's entries to:
+
+   ```bash
+   git add PROJECT_STATUS.md                 # every type
+   git add changelog.md                      # if a bugfix entry was routed there, OR if the
+                                             # rotation check moved §6 entries into it
+   git add UI_Iterations.md                  # only if a ui-iteration entry was routed there
+   git commit -m "docs: consolidate documentation for <N> merged branches"
+   ```
+
+   > **One `git add` per file, never one command listing them all.** `git add` is **all-or-nothing across its pathspecs**: if any pathspec matches nothing, the whole invocation aborts with `fatal: pathspec '<path>' did not match any files` and stages **none** of the others (verified). `changelog.md` and `UI_Iterations.md` are consumer-authored and frequently absent — Sysop never creates them — so a combined `git add PROJECT_STATUS.md changelog.md UI_Iterations.md` aborts on the majority of close-outs. `-A` does **not** change this: `git add -A <missing-path>` aborts identically. Separate commands mean a missing optional doc costs only its own line.
+   >
+   > The same property is why the instinctive `git add <old-path> <new-path>` after a `git mv` does not help: the stale pre-rename pathspec aborts the invocation, so nothing is staged by it. It leaves the index exactly as it was — `git mv` had already staged both halves — which is the trap, because it *looks* like staging was attempted and the following `git commit` still succeeds on the unchanged index.
+   >
+   > **Do not stage `changelog.md` from the routing table alone.** The **Rotation check** above writes it whenever §6 exceeds 8 entries, regardless of entry type — so a run with no bugfix at all can still have rotated entries into `changelog.md`, and skipping it there commits the §6 truncation without the entries it moved.
+
+   **Then verify the commit carried everything** — Step 4b has a trust-but-verify gate for exactly this failure class and Step 4c historically had none, which is what let a rename-only commit pass as a consolidation (upstream #203):
+
+   ```bash
+   git log -1 --pretty=%s | grep -q '^docs: consolidate documentation' && git diff --quiet && git diff --cached --quiet
+   ```
+
+   If that fails, the tree still has unstaged or staged-but-uncommitted consolidation edits: stage the missing file(s) and `git commit --amend --no-edit` before proceeding. **Additionally, if this run closed at least one `roadmap_ids` entry** (the heredoc's `closed` list was non-empty), confirm the index flip is actually in the commit:
+
+   ```bash
+   git show --stat HEAD | grep -q 'tasks/index.yml'
+   ```
+
+   Skip that second check when no pending-doc carried `roadmap_ids` — `tasks/index.yml` is then legitimately untouched and its absence from the commit is correct, not a failure.
 
    **If the commit is silently denied** (auto-mode classifier rejects `git commit` on `main` — a `direct`-policy concern; under `pr` policy this commit lands on the integration branch, not `main`, so it does not hit this wall), the Phase 36 `PermissionDenied` hook surfaces the `!`-escape command and the multi-`-m`-flag rewrite recipe — follow its guidance and relay to the user. Background: the classifier extends protected-branch policy upstream from the push to its enabling commit when context implies an imminent push, so the first `docs(tasks):` commit of a cycle goes through but the Step 4c consolidation commit hits the same wall as the Step 4d push. The hook's `additionalContext` names the specific escape form; this skill stays brief on purpose to avoid drifting from the hook's authoritative phrasing.
 
@@ -792,8 +981,11 @@ If the push is **rejected because `main` is protected** (`! [remote rejected] ma
 
 #### `pr` policy
 
-`main` is written only through a PR (squash), never a direct push. After the integration branch holds every feature merge + `close_batch.sh` + doc consolidation, push it and open one PR, then merge it with a normal authenticated `gh pr merge` — **no `--auto`**. (GitHub-native auto-merge is gated behind paid plans for private repos; the non-`--auto` path is what `/pr-dependabot` already standardizes on and works on Free.)
+`main` is written only through a PR (squash), never a direct push. After the merge target holds every feature merge + `close_batch.sh` + doc consolidation, push it and merge one PR with a normal authenticated `gh pr merge` — **no `--auto`**. (GitHub-native auto-merge is gated behind paid plans for private repos; the non-`--auto` path is what `/pr-dependabot` already standardizes on and works on Free.)
 
+**Step 1 — assert HEAD, push, and get the PR.** This is the only part that differs between the two Step 4-pre shapes.
+
+*Integration-branch shape:*
 ```bash
 # 1. assert HEAD is still a review-close integration branch (Rule A, HEAD-independent: a
 #    concurrent actor may have moved HEAD onto main or a feature branch). Match the fixed
@@ -808,29 +1000,86 @@ esac
 #    (the -u sits between push and origin), and upstream tracking isn't needed — `gh pr
 #    create --head` works off the pushed ref and Step 6 force-deletes the branch.
 git push origin "$INTEGRATION_BRANCH"
-# 3. open the PR against main
-PR_URL="$(gh pr create --base main --head "$INTEGRATION_BRANCH" \
-  --title "review-close: consolidate ${RUN_ID}" \
-  --body "Automated /review-close integration PR: feature merges + batch close + doc consolidation. Squash-merges once required checks are green.")"
-echo "Integration PR: $PR_URL"
-# 4. wait for the PR's required checks to finish (blocks ~1–2 min; exits non-zero on a
-#    failing check). A "no checks reported" message is NOT a failure — a repo protected
-#    only by enforce_admins may have zero status checks; fall through to the gate below.
-gh pr checks "$PR_URL" --watch --fail-fast || true
-# 5. confirm mergeability, then squash-merge (blocks until landed; deletes the remote branch)
-gh pr view "$PR_URL" --json state,mergeStateStatus --jq '{state, mergeStateStatus}'
-gh pr merge "$PR_URL" --squash --delete-branch
+# 3. open the PR against main. Run it BARE — `gh pr create` prints the new PR's URL to
+#    stdout and its last path segment is the number Step 2 needs. Do NOT capture it: an
+#    allow-rule does not match past an assignment, so `PR_REF="$(gh pr create …)"` routes
+#    to the classifier and is auto-denied under `dontAsk`, despite `Bash(gh pr create:*)`
+#    being seeded (Phase 153). The title's run id is sliced off the branch name rather
+#    than read from $RUN_ID, which was set in an earlier — separate — shell call.
+gh pr create --base main --head "$INTEGRATION_BRANCH" \
+  --title "review-close: consolidate ${INTEGRATION_BRANCH#merge/review-close-}" \
+  --body "Automated /review-close integration PR: feature merges + batch close + doc consolidation. Squash-merges once required checks are green."
 ```
+
+*PR-reuse shape:* no branch is created and no PR is opened — the Step 4b/4c commits are appended to the branch the existing PR already tracks.
+```bash
+# 1. assert HEAD against the LITERAL branch name Step 2a approved (Rule A). There is no
+#    fixed pattern to match here, and re-reading the name from HEAD would be a tautology.
+test "$(git rev-parse --abbrev-ref HEAD)" = "<approved branch name>" || { echo "HEAD is not the approved branch — STOP, reconcile via git reflog"; exit 1; }
+# 2. push the new commits onto the PR's head branch (fast-forward; NEVER --force, per Rule C)
+git push origin "<approved branch name>"
+# 3. no `gh pr create` — Step 2 below merges the PR number the Step 4-pre probe printed.
+```
+
+**Step 2 — wait for checks, merge, then gate on PR *state*.** Identical for both shapes, except where noted.
+
+**First, re-derive the PR number.** This block is a separate shell call from Step 1, so nothing carries over. Run the probe bare and read the number off stdout:
+
+```bash
+gh pr list --head "$(git rev-parse --abbrev-ref HEAD)" --base main --state open \
+  --json number,isDraft,isCrossRepository \
+  --jq '[.[] | select(.isCrossRepository == false and .isDraft == false) | .number]
+        | if length == 1 then .[0] else empty end'
+```
+
+**If that prints nothing, STOP** — reconcile by hand, and do not run anything below. This is a hard gate rather than a warning because `gh` does **not** reject an empty operand: it silently resolves the current branch's PR instead (see the `gh`-empty-operand note in Step 4-pre), so a missing number does not fail, it merges the wrong thing.
+
+Otherwise substitute the printed number for `"<PR>"` below and run the commands **as written**. It is a literal, not a variable, for the same reason the probe is bare: a captured value would not survive to the next shell call, and an assignment would cost the invocation its allow-rule match. **Keep the quotes.** Unquoted, `<PR>` is not a placeholder to bash — `<` and `>` are redirections, so `gh pr merge <PR> --squash` silently runs as `gh pr merge --delete-branch` reading from a file named `PR`, and `gh` then falls back to the current branch. Quoted, an unsubstituted placeholder is a *loud* failure (`no pull requests found for branch "<PR>"`) instead of a silent wrong merge — which is what makes the stop above enforceable rather than merely advisory.
+
+```bash
+# 4. wait for the PR's required checks to finish (blocks ~1–2 min). Its exit status is NOT
+#    the verdict — it exits non-zero both on a failing check and on a repo with no checks
+#    at all (one protected only by enforce_admins), so a bare invocation would surface a
+#    red tool result on a perfectly mergeable PR and invite you to stop. The `|| echo` tail
+#    is deliberate and is NOT `|| true`: `echo` IS in Claude Code's documented built-in
+#    read-only set while `true` is not, so this keeps the compound authorized while
+#    preserving the do-not-abort semantics the step needs (Phase 153).
+gh pr checks "<PR>" --watch --fail-fast || echo "checks reported non-zero — not the verdict; continue to command 5"
+# 5. confirm mergeability, then squash-merge (blocks until landed; deletes the remote branch)
+gh pr view "<PR>" --json state,mergeStateStatus --jq '{state, mergeStateStatus}'
+gh pr merge "<PR>" --squash --delete-branch
+# 6. THE VERDICT. Run this as its own command, after the merge, always — the merge command's
+#    exit status and stderr are NOT the verdict (see the note below). Only `state` is.
+gh pr view "<PR>" --json state,mergedAt --jq '{state, mergedAt}'
+```
+
+> Here `$(git rev-parse --abbrev-ref HEAD)` is safe and non-tautological: HEAD was already asserted against a non-HEAD-derived value in Step 1 of this same block, so by this line it is *known* to be the right branch. It is a lookup key, not a guard.
+>
+> **PR-reuse shape only — pin the head commit.** The integration-branch shape merges a branch it just created under a unique timestamped name that nothing else writes to. A reused branch is a long-lived branch someone else may push to between your push and your merge, so pass `--match-head-commit "$(git rev-parse HEAD)"` on the merge and let it refuse rather than squash-merging content you never verified. (Requires a reasonably current `gh`; if your `gh` rejects the flag, re-read `gh pr view --json headRefOid` and compare by hand before merging.)
+
+> **A `fatal:` from `gh pr merge --delete-branch` does NOT mean the merge failed (upstream #208).** `--delete-branch` deletes the **local** branch as well as the remote one, so after the remote squash lands, `gh` switches the local checkout to the base branch and tries to fast-forward it. **In the integration-branch shape that fast-forward cannot succeed:** Step 4-pre cherry-picked every local-only `main` commit onto the integration branch, so those commits exist twice at different SHAs and `origin/main` is not a descendant of local `main` after the squash. `gh` reports it as:
+>
+> ```
+> fatal: Not possible to fast-forward, aborting.
+> ! warning: not possible to fast-forward to: "main"
+> ```
+>
+> preceded by a block of `hint: git merge --no-ff` / `hint: git rebase` noise. That is **expected, benign, post-merge local housekeeping**, not a merge failure — `gh` swallows the error and the local branch is deleted anyway. It fires for every `pr` consumer that used `/claim-task` (its `open → in_progress` flip commits to local `main`) or whose Step 1b saved `review_tasks.md`, which is nearly all of them.
+>
+> **In the PR-reuse shape it does *not* fire** — reuse condition 3 requires `origin/main..main` to be empty, so local `main` is an ancestor of `origin/main` and `gh`'s fast-forward succeeds. Expect the message in one shape and not the other; in neither shape is it the verdict.
+>
+> **Run command 6 regardless of what command 5 exited with** — that is the entire point. If your shell aborts the block early, re-run the state probe on its own; the verdict is unchanged either way. Do **not** write `gh pr merge … || true`: `gh` reports genuine failures through that exit status too, and masking it buys nothing when the next command already decides the outcome.
 
 ##### 4d-1. Stuck-PR handling (report + STOP, never force-merge)
 
-The PR is **not mergeable** if a required check failed (`gh pr checks` reports a failing check), `gh pr view` shows `mergeStateStatus: BLOCKED`/`DIRTY`, or `gh pr merge` refuses. When that happens:
+**The trigger is PR state, never the merge command's exit status or stderr.** The PR is **not merged** if the post-merge `gh pr view "<PR>" --json state` (command 6 above) reports anything other than `MERGED`. Typical causes: a required check failed (`gh pr checks` reported a failing check) or `gh pr view` shows `mergeStateStatus: BLOCKED`/`DIRTY`. Do **not** key this branch on `gh pr merge` "refusing" — under `pr` policy that command routinely prints `fatal: Not possible to fast-forward, aborting.` *after a merge that succeeded* (see the note above, upstream #208), and reading that as a refusal strands branches, worktrees, and `sysop/runtime/locks/` behind a close-out that actually landed. When `state` is genuinely not `MERGED`:
 
 - **Report** the PR URL and the failing check name(s), then **STOP** — do not force-merge, do not fall back to a direct `git push origin main`, do not loop. Authority to merge belongs to the PR's required checks, not this skill.
 - Leave the integration branch, the feature branches, the worktrees, and the `sysop/runtime/locks/` **in place**. **Skip Step 6 entirely** this run — its cleanup is gated on a confirmed merge (see Step 6's merge-policy gate). The human (or a follow-up `/review-close`) fixes the check and re-runs.
-- Re-running is safe and idempotent: the next `pr`-policy run cuts a **new** integration branch from `origin/main` and re-sweeps the same still-unpushed local-`main` commits, so nothing is double-applied. The stuck branch is left orphaned but harmless — delete it by hand (`git branch -D <branch>` + `git push origin --delete <branch>`) once its replacement merges.
+- Re-running is safe and idempotent **in the integration-branch shape**: the next `pr`-policy run cuts a **new** integration branch from `origin/main` and re-sweeps the same still-unpushed local-`main` commits, so nothing is double-applied. The stuck branch is left orphaned but harmless — delete it by hand (`git branch -D <branch>` + `git push origin --delete <branch>`) once its replacement merges.
+- **In the PR-reuse shape the recovery is different, and the sentence above does not apply.** There is no integration branch to orphan and no new one to cut: the stuck PR is the consumer's own, still open, now carrying the Step 4b/4c commits, and a re-run's probe finds that same PR again and lands on it again. That re-run is still safe — `close_batch.sh` is idempotent (its `sed` substitutions no-op on already-`Merged` batches) and Step 4c finds no pending-docs the second time because the first run deleted them, so it skips consolidation rather than double-applying it. What it is *not* is self-healing: re-running cannot clear a red required check. Fix the check, then re-run; or if the branch has become unmergeable (`BEHIND`/`DIRTY`), rebase it onto `origin/main` and push, which makes reuse condition 5 hold again. If you would rather stop reusing it, delete nothing — just let the next run fail condition 5 or close the PR by hand, and the integration-branch shape takes over.
 
-On a confirmed merge (`gh pr merge` exits 0 / `gh pr view` shows `state: MERGED`), continue to Step 5, then Step 6 cleanup.
+On a confirmed merge — `gh pr view "<PR>" --json state` reports `MERGED`, whatever the merge command's exit status or stderr said — continue to Step 5, then Step 6 cleanup.
 
 **If a `gh pr` command is silently denied** (auto-mode classifier), the Phase 36 `PermissionDenied` hook surfaces the `!`-escape form; follow its guidance and relay to the user — same pattern as the `direct`-policy push above. Do **NOT** use `AskUserQuestion`.
 
@@ -850,17 +1099,31 @@ Skip this step only if the pushed changes are docs/config only with no code or s
 
 **Merge-policy gate (Step 4-pre).**
 - **`direct` policy** — Step 4d already pushed `main`; run the cleanup below as usual.
-- **`pr` policy** — run cleanup **only if Step 4d confirmed the integration PR `MERGED`.** If 4d-1 reported a stuck PR (red check / `BLOCKED`), **skip Step 6 entirely** — the feature branches, worktrees, and `sysop/runtime/locks/` must survive so the work is recoverable once the check is fixed. When the PR did merge, first re-sync local `main` and drop the integration branch, then run the `pr` per-branch cleanup below:
+- **`pr` policy** — run cleanup **only if Step 4d's post-merge `gh pr view --json state` reported `MERGED`.** If 4d-1 reported a stuck PR (red check / `BLOCKED`), **skip Step 6 entirely** — the feature branches, worktrees, and `sysop/runtime/locks/` must survive so the work is recoverable once the check is fixed. When the PR did merge, first re-sync local `main`, then run the `pr` per-branch cleanup below:
   ```bash
   git checkout main
   git fetch origin main
-  git reset --hard origin/main          # local main's pre-merge commits are now in the squash
-  # `gh pr merge --delete-branch` removes BOTH the remote and (once HEAD left it) the local
-  # integration branch, so it may already be gone — tolerate that, don't error on cleanup.
-  git branch -D "$INTEGRATION_BRANCH" 2>/dev/null || true
+  # local main's pre-merge commits are now inside the squash. Comment on its own
+  # line: `Bash(git reset --hard origin/main)` is an exact-match rule and whether
+  # the matcher strips a trailing comment is undocumented (Phase 152).
+  git reset --hard origin/main
   ```
 
-> **Lock-as-real-time-signal invariant (`pr` policy).** Step 4c removes each closed task's `sysop/runtime/locks/<TASK-ID>.lock` from disk on the integration branch, before the PR merges — so there is a brief window where, on `main`, the task is still `in_progress` (the `done` flip rides the unmerged PR) with no lock. This does **not** reopen the task: `/auto-build` and `next_task` only ever claim `status: open` tasks, and an `in_progress` task is never claimable regardless of its lock. The only visible effect is a transient `/sitrep` "in_progress without lock" drift flag during the in-flight (or stuck-PR) window, which clears when the PR merges and the `done` flip lands. No action needed. The same pre-merge timing applies to the task's **parked marker(s)** (`sysop/runtime/auto-build/parked/<TASK-ID>__*.md`, removed by the same Step 4c cleanup) — with one honest asymmetry: a lock is trivially recreatable (`claim_task.sh --lock`), but a marker's content (the park's plan + adversarial verdict, never committed) is not. Accepted anyway: by the time Step 4c runs, the park was already resolved — the resume that produced this close consumed the verdict — so a stuck PR needs the *code* recoverable (the integration + feature branches Step 4d-1 leaves in place), not the historical park record. A consumer who wants park history durably should copy `parked/` entries somewhere tracked before closing.
+  **Integration-branch shape only — then drop the integration branch.** `$INTEGRATION_BRANCH` was set two shell calls ago and HEAD has already moved back to `main`, so do not reference it. Re-derive the name instead — the local branch still exists at this point, so it is a lookup, not a guess:
+  ```bash
+  git branch --list 'merge/review-close-*'
+  ```
+  Then delete it by its literal name, **quoted** (unquoted, `<…>` is a redirection to bash, not a placeholder):
+  ```bash
+  git branch -D "merge/review-close-<run id>" 2>/dev/null || echo "integration branch already deleted by gh pr merge --delete-branch"
+  ```
+  `gh pr merge --delete-branch` removes both the remote and (once HEAD left it) the local integration branch, so it is often already gone — hence the tolerant tail. It is `|| echo`, not `|| true`: `echo` IS in Claude Code's documented built-in read-only set while `true` is not, so the compound stays authorized. The `2>/dev/null` is fine either way — a redirection is not a command separator, so it never cost the `Bash(git branch -D:*)` match; only the `|| true` did (Phase 153).
+
+  **Do not run that line at all in the PR-reuse shape** — there is no integration branch, and the reused branch is handled by the per-branch cleanup below.
+
+  > **Run the `git reset --hard origin/main` in both shapes — but know why it matters in each.** `gh pr merge --delete-branch` *attempts* this re-sync itself. **Integration-branch shape:** it fails, because local `main` has diverged by construction (see Step 4d's `fatal:` note, upstream #208) — here the reset is load-bearing, and treating `gh` as having already done it leaves local `main` on pre-merge commits now duplicated inside the squash. **PR-reuse shape:** it succeeds, because reuse condition 3 required `origin/main..main` to be empty — here the reset is a harmless no-op. Upstream #204's incidental note ("`gh` fast-forwards `main` itself, so Step 6's reset was already a no-op") was reported from a cycle that met condition 3, so it was **right about that cycle and wrong as a general rule**; #208, from the same reporter, is the other shape. Neither claim generalizes — which is why this step is stated per shape rather than picking a winner.
+
+> **Lock-as-real-time-signal invariant (`pr` policy).** Step 4c removes each closed task's `sysop/runtime/locks/<TASK-ID>.lock` from disk on the integration branch, before the PR merges — so there is a brief window where, on `main`, the task is still `in_progress` (the `done` flip rides the unmerged PR) with no lock. This does **not** reopen the task for the autonomous paths: `/auto-build` and `next_task` only ever claim `status: open` tasks, so neither can pick it up. **Amended by Phase 159b — the unqualified form of this sentence ("an `in_progress` task is never claimable regardless of its lock") is no longer true.** `/claim-task` gained a third entry state, and `in_progress` + no lock is exactly its `resumable` signature — which this window manufactures for a task that is *finished*. That is why `resumable` **stops and asks** instead of continuing: an explicitly-named `/claim-task <TASK_ID>` during this window would otherwise re-claim already-reviewed work. The other visible effects are a transient `/sitrep` "in_progress without lock" drift flag and a `validate_tasks.py` Invariant 9 error during the in-flight (or stuck-PR) window, both of which clear when the PR merges and the `done` flip lands. No action needed beyond not re-claiming. The same pre-merge timing applies to the task's **parked marker(s)** (`sysop/runtime/parked/<TASK-ID>__*.md`, removed by the same Step 4c cleanup) — with one honest asymmetry: a lock is trivially recreatable (`claim_task.sh --lock`), but a marker's content (the park's plan + adversarial verdict, never committed) is not. Accepted anyway: by the time Step 4c runs, the park was already resolved — the resume that produced this close consumed the verdict — so a stuck PR needs the *code* recoverable (the integration + feature branches Step 4d-1 leaves in place), not the historical park record. A consumer who wants park history durably should copy `parked/` entries somewhere tracked before closing.
 
 **`direct` policy — per-branch cleanup.** For each merged feature branch (worktrees already removed in Step 3b):
 1. Delete the **remote** branch first: `git push origin --delete <branch>` (if it exists remotely).
@@ -870,9 +1133,11 @@ Skip this step only if the pushed changes are docs/config only with no code or s
 
 **If `git push origin --delete <branch>` is silently denied** (BeanRider ISSUE-0033, classifier hard-codes destructive-flag protection on `--delete`/`--force` regardless of allow-rule glob), the Phase 36 `PermissionDenied` hook surfaces the `! git push origin --delete <branch>` escape command — with the venv-prefix variant when a `.venv/` directory is present. Follow the hook's guidance and relay to the user. The subsequent `git branch -d <branch>` runs in-band without classifier interference (local-only, no remote contact). Do **NOT** use `AskUserQuestion`.
 
-**`pr` policy — per-branch cleanup** (only after the integration PR merged; the local-`main` re-sync and integration-branch drop are already done in the merge-policy gate above). Each approved feature branch was rebased onto the integration branch, ff-merged, and then **squash-merged** to `main` via the PR — so it is provably contained in the squash commit but is **not** an ancestor of it, and `git branch -d` would refuse with "not fully merged." Force-delete here; the content is safely in `main`:
+**`pr` policy — per-branch cleanup** (only after the PR merged; the local-`main` re-sync and, in the integration-branch shape, the integration-branch drop are already done in the merge-policy gate above). Each approved feature branch reached `main` through a **squash** — in the integration-branch shape by being rebased onto the integration branch and ff-merged before that branch's PR squashed, and in the PR-reuse shape by being the PR's own head. Either way the branch is provably contained in the squash commit but is **not** an ancestor of it, so `git branch -d` would refuse with "not fully merged." Force-delete here; the content is safely in `main`:
 1. Delete the **local** branch: `git branch -D <branch>` (the safe `-d` check is meaningless against a squash — the branch's commits are in the merged PR).
-2. Delete the **remote** branch **only if it was pushed**: `git push origin --delete <branch>`. Feature branches created by `/claim-task` are usually local-only under `pr` policy (the integration branch is the only thing pushed), so skip this when the branch has no remote tracking ref.
+2. Delete the **remote** branch **only if it was pushed and still exists**: `git push origin --delete <branch>`. Feature branches created by `/claim-task` are usually local-only under `pr` policy (the integration branch is the only thing pushed), so skip this when the branch has no remote tracking ref.
+
+**Under the PR-reuse shape both of the above are usually already done for you.** The reused branch *was* the PR's head, so `gh pr merge --delete-branch` deleted it remotely, and it deletes the local branch too once `gh` has switched HEAD off it. Verify rather than assume — `git branch --list <branch>` and `git ls-remote --heads origin <branch>` — and run only the deletions that are still outstanding. A `git push origin --delete` against an already-deleted remote branch fails with `remote ref does not exist`; that is cleanup noise, not an error worth halting on.
 
 For each **SKIP'd** branch (Step 2a verdict — Step 1a classified the worktree as `dirty`):
 1. Leave the worktree, the `sysop/runtime/locks/<TASK_ID>.lock` file, and the branch fully in place — do NOT touch anything.
@@ -932,6 +1197,7 @@ Pushed:        <N> commits to origin/main
 Branches:      <merged list> (or "none")
 Docs:          Consolidated <N> pending-docs files (or "none" / "legacy docs: commits")
 Manual smoke:  <N confirmed, N driven, N waived> (or "none required")
+Conventions:   <N checked, N skipped (doc-only)> (or "none to check")
 Test decisions: <N verified, N waived, N held-for-fix, N doc-only> (or "none to verify")
 Staging:       <verified / skipped / broken>
 Locks cleaned: <list> (or "none")

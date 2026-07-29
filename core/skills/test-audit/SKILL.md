@@ -25,7 +25,7 @@ The base path is **LLM judgment over source + test files** — pure `Read` / `Gr
 
 ## Pre-flight: Permission Guard
 
-**No new permission rules; no Step 0 guard.** Every operation on the base path is read-only: `Read` on source, test, `checks.yml`, `security_map.md`, `CLAUDE.md`, and any coverage artifact; `Grep` / read-only `git grep` for referent scans. Per `_shared/permission-guard.md` § Notes, read-only ops are auto-approved under `auto` mode and are **not** listed as allow-rules. The optional coverage-artifact read is a *file read*, not a shell call. The skill runs no scripts and writes nothing on any path documented here. It is portable to any project on any agent.
+**No new permission rules; no Step 0 guard.** Every operation on the base path is read-only: `Read` on source, test, `checks.yml`, `security_map.md`, `CLAUDE.md`, and any coverage artifact; `Grep` / read-only `git grep` for referent scans. Per `_shared/permission-guard.md` § Notes, read-only forms of `git` and the built-in read-only command set are auto-approved in **every** permission mode and are **not** listed as allow-rules. The optional coverage-artifact read is a *file read*, not a shell call. The skill runs no scripts and writes nothing on any path documented here. It is portable to any project on any agent.
 
 *(If a future tier shells out to `diff-cover` for whole-repo enrichment, gate that behind an explicit opt-in flag that degrades when the rule or artifact is absent — never on the base path. No such tier ships today.)*
 
@@ -57,7 +57,7 @@ Read these, tolerating absence (a consumer may have run `install.sh` but not fil
 - **`--path <glob>`:** restrict to that subtree.
 - **`--all`:** whole tree, **per-module-chunked**. Announce the chunking and, at the end, state explicitly which modules were audited and which were not reached — a standing audit that silently stops halfway reads as "clean" when it isn't (the no-silent-caps discipline).
 
-Whichever scope: name, up front, what surface the report covers, so the reader never mistakes a partial pass for a whole-tree verdict.
+Whichever scope: name, up front, what surface the report covers, so the reader never mistakes a partial pass for a whole-tree verdict. **Record that as the Tier-0 coverage ledger** (`_shared/fanout-evidence.md` § Tier 0) in the report header — `manifest` is the candidate files this scope declared, `opened` the ones whose bodies you read, `grepped` the ones reached by search only, and `workers 0, solo: single-agent base path` is the normal, correct value here (the base path does not fan out — see § Output shape). Naming the surface in prose and stating the numbers are not the same act: the prose is what a reader believes, the numbers are what they can check.
 
 ## Step 3 — Apply the rubric to each candidate surface
 
@@ -107,6 +107,7 @@ Close with one line: `Read-only test audit — no code or tests changed. Actuato
 ## Test audit — <project>   (scope: <crown-jewel-first | --path <glob> | --all>; coverage report: <used coverage.xml | none>)
 
 SURFACE AUDITED
+Coverage: Sampled (crown-jewel + highest-exposure) · manifest 118 · opened 24 · grepped 61 · workers 0, solo: single-agent base path
 Crown-jewel paths: billing/, ledger/import/   ·   plus 4 highest-exposure modules.
 Not reached this pass: reporting/, admin/ (context budget) — re-run with --path to cover.
 
@@ -142,6 +143,10 @@ Read-only test audit — no code or tests changed. Actuator: /intake (route acce
 Adapt the shape to the tree; omit empty tiers; render only the findings that survive the rubric's keep-when-unsure discipline.
 
 **Every row carries two independent brackets** (per `_shared/fanout-evidence.md` § Tier 1). The first is **confidence** — how sure the recommendation is (`[high]`/`[med]`/`[low]`). The second is **provenance** — `[verified]` when you opened the cited `path:symbol` and confirmed the claim against source, `[reported]` when the finding rests on something you did *not* open (most often a coverage artifact flagging a module, or a `security_map.md`/`critical_path:` surface pulled in without reading it). They are orthogonal: a `[high] [reported]` is a strong lead you haven't yet confirmed by reading. Because this skill's base path *is* reading the source (`Read`/`Grep`), most findings are `[verified]`; `[reported]` is the honest tag for anything inferred from an artifact rather than the code. It is a **self-declared honesty label, not a machine-checked guarantee** — never route a `[reported]` recommendation into `/intake` without confirming it at the source first.
+
+**The `Coverage:` line is the Tier-0 ledger and is MANDATORY** (`_shared/fanout-evidence.md` § Tier 0) — it fires on every run, including the solo base path, because a `workers 0` audit is the *normal* shape here and still owes the reader its opened-vs-manifest numbers. `Not reached this pass:` says which modules were skipped; the ledger says how thin the pass was over the ones that *were* in scope, and only the second is checkable. A field you cannot fill is written `unreported`, never blank.
+
+**This skill writes no round receipt, and that is deliberate, not an omission.** The receipt (`sysop/runtime/round-receipts/`) is written by the marker-clear step of the two skills that produce a durable `review_tasks.md` round; `/test-audit` is read-only, opens no round and closes none, so it has no marker to clear and nothing for a receipt to attest. Its ledger lives in the report it prints. Do not add a marker lifecycle here to make the receipt fire — that would report a *round* that never existed, the mirror of the fabricated-footer mistake below.
 
 **If you fan out** — if an invocation dispatches sub-auditors (one per module) instead of reading inline, as the cross-harness reference run was observed to do — the full fan-out contract applies: each sub-auditor returns the **evidence footer** (files opened vs. assigned + tool mix), and you audit it before merging (row-provenance default + low-opened-ratio flag + sample re-read), per `_shared/fanout-evidence.md` § Tier 2. Merging sub-auditor reports without that check is the blind-merge this contract exists to stop. The shipped base path does **not** fan out — `--all` chunks per module *within one agent*, it does not spawn sub-auditors — so the single-agent base path above has no fan-out, and only the Tier-1 marker applies there.
 

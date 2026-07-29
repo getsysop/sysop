@@ -64,6 +64,9 @@ def write_src(skill: str) -> str:
 
 
 def clear_src(skill: str) -> str:
+    """Still a single argument after Phase 149: the Tier-0 coverage line is read
+    back out of `review_tasks.md`, never passed in — model-authored prose in a
+    shell argument is a command-substitution hazard."""
     return _extract(
         skill, "python3 - <<'PY' \"<ROUND_MARKER path from Pre-flight>\"\n"
     )
