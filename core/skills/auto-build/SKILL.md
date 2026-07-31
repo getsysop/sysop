@@ -61,13 +61,19 @@ Single pass through `tasks/index.yml` only — do not open any per-task body fil
 > **Subset vs. lane shift.** Pass IDs when a deadline or a `/roadmap` ordering picks *these tasks first* out of the current lane — an ephemeral execution preference. If the deadline genuinely re-prioritizes the project (the important work lives in another phase, or deserves its own), that's a **lane shift**: reshape `phases:` via `/intake` re-entry and flip `current_focus` instead. Don't restructure phases just to steer one batch — phases are launch lanes with history, not sprint buckets.
 
 ```bash
-# SUBSET_IDS = the space-separated Step 0 task-ID list ("" when no subset was given).
-# Passed as ONE quoted positional arg: "$SUBSET_IDS" is a single argv element (spaces and
-# all) that Python splits — quoting sidesteps the shell word-splitting that argued for
-# env-passing before (unquoted $var splits in bash, not zsh; a quoted arg never splits).
+# Substitute the Step 0 task-ID list for <subset ids> — space-separated, or the EMPTY
+# string when no subset was given. It is a value you hold from Step 0, NOT a shell
+# variable: nothing survives from one fenced block to the next (`WORKFLOW.md` § 8.2a
+# *Persistence boundary*), so `"$SUBSET_IDS"` expands to "" here and silently widens the
+# pool to the whole frontier — the exact inversion of the "never silently dropped"
+# invariant this step states (Phase 169).
+# Passed as ONE quoted positional arg, so the whole list — spaces and all — is a single
+# argv element that Python splits. Quoting sidesteps the shell word-splitting that argued
+# for env-passing before (an unquoted operand splits in bash, not zsh; a quoted one never
+# splits), and it keeps an unsubstituted placeholder from being read as a redirection.
 # `python3` command word (not `.venv/bin/python3`) + in-heredoc PyYAML bootstrap so
 # `Bash(python3 -:*)` matches as a single simple command (BeanRider ISSUE-0049; Phase 126).
-python3 - "$SUBSET_IDS" <<'PY'
+python3 - "<subset ids>" <<'PY'
 import os, sys, glob
 try:
     import yaml
@@ -359,9 +365,20 @@ Pre-create worktrees on `main` for the confirmed batch, mirroring `/claim-task` 
 For each task in the confirmed batch:
 
 ```bash
+# Substitute this task's id for <TASK_ID> and its branch name for <BRANCH_NAME> at every
+# occurrence below — they are values you hold, not shell variables, and nothing survives
+# from one fenced block to the next (`WORKFLOW.md` § 8.2a *Persistence boundary*), so
+# `"$TASK_ID"` is the empty string here. There is no `set -e`: 5.1 exits 1 on its
+# not-in-index guard and 5.2 exits on the script's usage guard, but the block KEEPS GOING,
+# so 5.3 and 5.4 run anyway against a tree nothing claimed. Read each step's exit status
+# and stop on the first non-zero rather than trusting the block to halt for you.
+# Quote both placeholders: an unsubstituted `"<TASK_ID>"` fails loudly, an unquoted one is
+# a redirection — a syntax error in final position, and in mid-command position a silent
+# read from a file of that name if one happens to exist.
+#
 # 5.1 — flip index.yml status open → in_progress. `python3` command word + in-heredoc
 # PyYAML bootstrap so `Bash(python3 -:*)` matches as a single simple command (Phase 126).
-python3 - <<'PY' "$TASK_ID"
+python3 - <<'PY' "<TASK_ID>"
 import sys
 try:
     import yaml
@@ -391,7 +408,7 @@ with index_path.open("w", encoding="utf-8") as f:
 PY
 
 # 5.2 — create worktree + lock
-bash sysop/scripts/claim_task.sh --lock "$TASK_ID" "$BRANCH_NAME"
+bash sysop/scripts/claim_task.sh --lock "<TASK_ID>" "<BRANCH_NAME>"
 # If non-zero exit: roll back the index.yml flip with `git checkout tasks/index.yml`,
 # commit the rollback with `git commit -m "rollback: <TASK_ID> claim failed"`,
 # and abort the batch (don't leave half-claimed). Report which task failed.
@@ -405,14 +422,14 @@ bash sysop/scripts/claim_task.sh --lock "$TASK_ID" "$BRANCH_NAME"
 #        On failure STOP and reconcile via git reflog, do not commit onto the wrong branch.)
 test "$(git rev-parse --abbrev-ref HEAD)" = "main" || {
   echo "HEAD is not main (a concurrent actor moved it) — STOP."; exit 1; }
-git add tasks/index.yml && git commit -m "claim: mark $TASK_ID as in-progress"
+git add tasks/index.yml && git commit -m "claim: mark <TASK_ID> as in-progress"
 ```
 
 Branch-name generation (matches `/claim-task` Step 3): lowercase task ID with prefix `feat/` / `tech/` / `data/` / `ux/` / `fix/` based on the ID prefix; or honour `branch:` field in `index.yml` if present.
 
-Collect `(task_id, worktree_path, branch_name)` tuples. Worktree path is `../$(basename "$REPO_ROOT")-<task-id-lowercase>/` relative to the project root — the path is computed by `sysop/scripts/claim_task.sh` itself (see `claim_task.sh:55`), so the orchestrator just records what the script printed rather than recomputing.
+Collect `(task_id, worktree_path, branch_name)` tuples. Worktree path is `../${WORKTREE_PREFIX:-$(basename "$REPO_ROOT")}-<task-id-lowercase>/` relative to the project root — note the `WORKTREE_PREFIX` override, which the script honors and an earlier version of this sentence omitted. The path is computed by `sysop/scripts/claim_task.sh` itself, at its `WORKTREE_DIR=` assignment (cited by symbol, not line — the line number in this sentence went stale at Phase 32 and stayed wrong until Phase 163), so the orchestrator just records what the script printed rather than recomputing.
 
-**Abort handling:** if any pre-claim step fails, roll back the partial state for that task (`git checkout tasks/index.yml` then `git commit -m "rollback: <TASK_ID> claim failed"`, plus `bash sysop/scripts/cleanup_worktrees.sh --force` on the orphan if created) and report which task failed. Tasks already pre-claimed earlier in the batch stay claimed — the human can either run `/auto-build` again to spawn agents for them, or `/document-work` / `/review-close` them manually.
+**Abort handling:** if any pre-claim step fails, roll back the partial state for **that one task** (`git checkout tasks/index.yml` then `git commit -m "rollback: <TASK_ID> claim failed"`, plus — if a worktree was created — `bash sysop/scripts/claim_task.sh --release <TASK_ID>` when its lock exists, or `git worktree remove <worktree-path>` when the failure preceded the lock write; `--force`, if needed, goes **before** the task ID) and report which task failed. **Never `cleanup_worktrees.sh --force` here.** It takes no path operand, so it removes every non-main worktree: it would wipe the worktrees of the tasks pre-claimed earlier in *this* batch — the ones the next sentence says stay claimed — plus any other session's in-flight work (WORKFLOW.md § 8.4). Tasks already pre-claimed earlier in the batch stay claimed — the human can either run `/auto-build` again to spawn agents for them, or `/document-work` / `/review-close` them manually.
 
 ## Step 6: Per-Task Plan → Review → Execute (orchestrator-driven, three sequential phases)
 
@@ -423,6 +440,14 @@ Spawned agents must NOT use `isolation: "worktree"` (worktree pre-exists from St
 The three phases run **sequentially within a task** but **in parallel across tasks** (rolling window up to N — shape adapted from `/auto-fix`'s batch-orchestration pattern). Peak concurrency is N; total spawns across the cycle ≈ 3N (modulo parked tasks that skip Phase 6e).
 
 ### Phase 6a: Plan-Only Agents (parallel across tasks)
+
+**First, capture each task's pre-plan HEAD.** The integrity check below compares against it, so it has to be read *before* the spawn or it means nothing. Run this once per task in the batch, substituting the worktree path Step 5 recorded:
+
+```bash
+git -C "<worktree path>" rev-parse HEAD
+```
+
+Read the SHA off stdout and hold it in your own context as that task's pre-plan HEAD — one value per task, keyed by task id, **not** in a shell variable and not in a shell associative array. Nothing survives from one fenced block to the next (`WORKFLOW.md` § 8.2a *Persistence boundary*), and the check below is a later block. Because the capture happens before the spawn, there is no parallel-race window.
 
 In a **single message**, spawn `min(N, len(batch))` plan-only agents via parallel `Agent` tool calls. Each call:
 
@@ -440,17 +465,27 @@ When each plan-only agent returns, extract the plan text from the fenced ```` ``
 ```bash
 # Assert the worktree branch HEAD is unchanged from before the plan agent ran.
 # If new commits exist, the plan agent violated the contract — abort and park.
-NEW_HEAD=$(git -C "$WORKTREE_PATH" rev-parse HEAD)
-if [ "$NEW_HEAD" != "$PRE_PLAN_HEAD" ]; then
-  echo "PLAN-ONLY-VIOLATION: $TASK_ID committed during plan phase; parking"
-  mkdir -p "$WORKTREE_PATH/sysop/runtime/auto-build"
-  echo "PLAN_PHASE_VIOLATION: plan-only agent committed $(git -C "$WORKTREE_PATH" log --oneline "$PRE_PLAN_HEAD..HEAD")" \
-    > "$WORKTREE_PATH/sysop/runtime/auto-build/review.md"
+# Substitute this task's worktree path, id, and the pre-plan HEAD you captured above.
+# `NEW_HEAD` is assigned right here, so it is the one name safe to carry — the three
+# placeholders are values you hold. Run as written with a `"$PRE_PLAN_HEAD"` in place of
+# the literal, the right side is the empty string, the comparison is ALWAYS true, and the
+# batch parks wholesale with nothing to reveal it: `git -C ""` does not fail, it runs in
+# the CWD and returns a real SHA (the defect Phase 169 fixed).
+#
+# The `mkdir` is `&&`-gated on a read-only probe because it is the one command here that
+# does NOT fail loudly on an unsubstituted placeholder — `mkdir -p "<worktree path>/…"`
+# happily creates a directory named `<worktree path>` and returns 0, which would land the
+# park verdict in the project root under a literal-placeholder path while the run reports
+# PARKED (found by this phase's own round).
+NEW_HEAD=$(git -C "<worktree path>" rev-parse HEAD)
+if [ "$NEW_HEAD" != "<pre-plan head>" ]; then
+  echo "PLAN-ONLY-VIOLATION: <TASK_ID> committed during plan phase; parking"
+  git -C "<worktree path>" rev-parse --show-toplevel >/dev/null && mkdir -p "<worktree path>/sysop/runtime/auto-build"
+  echo "PLAN_PHASE_VIOLATION: plan-only agent committed $(git -C "<worktree path>" log --oneline "<pre-plan head>..HEAD")" \
+    > "<worktree path>/sysop/runtime/auto-build/review.md"
   # Mark this task PARKED and skip Phases 6b-6e for it.
 fi
 ```
-
-Capture `PRE_PLAN_HEAD` immediately before each Phase-6a spawn so the comparison is meaningful. The orchestrator holds one `PRE_PLAN_HEAD` value per task in its conversation context (NOT in a shell associative array); because the capture happens before the spawn, there is no parallel-race window.
 
 ### Phase 6b: Adversarial-Reviewer Agents (parallel across tasks)
 
@@ -479,11 +514,30 @@ For each task:
 
 - **If any finding is `blocker`** → mark the task `PARKED`. Skip Phase 6e for it. Write the verdict and plan to a scratch directory in the worktree so the human picking up the parked task can resume:
 
+  **Write both files with the `Write` tool, not from the shell.** `PLAN_TEXT[<TASK_ID>]`
+  and `RAW_FINDINGS[<TASK_ID>]` are values *you* hold in context, subscripted per task —
+  they are not shell variables, they are not exported, and nothing survives from one
+  fenced block to the next (`WORKFLOW.md` § 8.2a *Persistence boundary*), so nothing you
+  set earlier would survive anyway. A bare `"$PLAN_TEXT"`
+  expands to the empty string and writes an **empty** `plan.md`, which then reads as a
+  successfully-written record. Create the directory, then write each file's contents
+  directly:
+
   ```bash
-  mkdir -p "$WORKTREE_PATH/sysop/runtime/auto-build"
-  printf '%s\n' "$PLAN_TEXT" > "$WORKTREE_PATH/sysop/runtime/auto-build/plan.md"
-  printf '%s\n' "$RAW_FINDINGS" > "$WORKTREE_PATH/sysop/runtime/auto-build/review.md"
+  # `&&`-gated on a read-only probe: `mkdir -p` is the one command in this skill that
+  # does NOT fail on an unsubstituted placeholder — it would create a directory literally
+  # named `<worktree path>` in the project root, return 0, and the park verdict below
+  # would be written there while the run reports PARKED. The probe fatals instead.
+  git -C "<worktree path>" rev-parse --show-toplevel >/dev/null && mkdir -p "<worktree path>/sysop/runtime/auto-build"
   ```
+
+  - `Write` → `<WORKTREE_PATH>/sysop/runtime/auto-build/plan.md` — the verbatim
+    `PLAN_TEXT[<TASK_ID>]` for this task.
+  - `Write` → `<WORKTREE_PATH>/sysop/runtime/auto-build/review.md` — the verbatim
+    `RAW_FINDINGS[<TASK_ID>]` for this task.
+
+  If either value is empty for this task, say so in the file rather than writing a blank
+  one — an empty record is indistinguishable from a lost one.
 
   The orchestrator does NOT commit these files — they are scratch for the human. Step 8 references the paths in the final report.
 
@@ -491,13 +545,22 @@ For each task:
 
   ```bash
   mkdir -p sysop/runtime/parked
-  TS=$(date -u +%Y%m%dT%H%M%SZ)
-  ARCHIVE="sysop/runtime/parked/${TASK_ID}__${TS}.md"
-  {
-    printf '# %s — PARKED %s\n\n' "$TASK_ID" "$TS"
-    printf '## Plan (verbatim)\n\n%s\n\n' "$PLAN_TEXT"
-    printf '## Adversarial verdict (verbatim)\n\n%s\n' "$RAW_FINDINGS"
-  } > "$ARCHIVE"
+  date -u +%Y%m%dT%H%M%SZ            # the timestamp for the filename below
+  ```
+
+  Then **`Write`** → `sysop/runtime/parked/<TASK_ID>__<timestamp>.md`, with the same
+  context-held values (again: not shell variables — see the note above):
+
+  ```markdown
+  # <TASK_ID> — PARKED <timestamp>
+
+  ## Plan (verbatim)
+
+  <PLAN_TEXT[<TASK_ID>] verbatim>
+
+  ## Adversarial verdict (verbatim)
+
+  <RAW_FINDINGS[<TASK_ID>] verbatim>
   ```
 
   The UTC timestamp keys the filename: a task parks at most once per cycle and cycles run minutes apart, so `<TASK_ID>__<timestamp>` is unique per park. This archive is the **durable** record — worktree cleanup never touches the project-root `sysop/runtime/parked/`. Closed work does not accumulate here: when a parked task is later resumed and closed, `/review-close` Step 4c removes its marker(s) alongside the lock — historically nothing did, so markers for done tasks piled up and this dir over-reported them as still parked. (A `claim_task.sh --release` of a parked task deliberately leaves its markers — a released park's verdict may still serve the next claimant.) (No telemetry is emitted here; this is the standalone park-archive fix, not the `parked_reason`/`task_outcome` instrumentation it was extracted from.)
@@ -518,13 +581,11 @@ For each non-parked task, spawn one execution agent. Run these in parallel acros
 **Pre-execution HEAD capture (load-bearing for Phase 7).** Immediately BEFORE spawning each Phase-6e agent, capture the worktree branch HEAD so Phase 7 can compare against it:
 
 ```bash
-# Captured per-task at Phase-6e spawn time. The orchestrator holds one value
-# per task in its conversation context (NOT in a shell associative array) — same
-# shape as PRE_PLAN_HEAD in Phase 6a. Because the orchestrator captures these
-# values in its own context before spawning, there is no parallel-race window
-# even when Phase 6e fans out across tasks.
-PRE_EXEC_HEAD=$(git -C "$WORKTREE_PATH" rev-parse HEAD)
+# Substitute this task's worktree path. Run once per task at Phase-6e spawn time.
+git -C "<worktree path>" rev-parse HEAD
 ```
+
+Read the SHA off stdout and hold it in your own context as that task's pre-exec HEAD — one value per task, keyed by task id, **not** in a shell variable and not in a shell associative array. Phase 7 is a later block and nothing carries into it (`WORKFLOW.md` § 8.2a *Persistence boundary*); it takes the value as a substituted literal, the same shape as the pre-plan HEAD in Phase 6a. Because the capture happens in the orchestrator's own context before spawning, there is no parallel-race window even when Phase 6e fans out across tasks.
 
 Phase 7 (below) uses this value to distinguish "agent omitted the envelope but the work landed" from "agent failed and nothing landed".
 
@@ -634,15 +695,15 @@ You are executing roadmap task `<TASK_ID>`. The orchestrator has already:
    - **Reject after consideration** — document the rejection rationale inline when you implement, so the same issue does not resurface during human review.
 2. **Call `ExitPlanMode`** with the revised plan as the plan content. This is the agent's only ExitPlanMode call.
 3. **Implement** per the revised plan.
-4. **Post-fix convention verification** (the same gate `/claim-task` Step 7's reviewer-executor runs internally): list changed files via `git diff --name-only main...HEAD`, check each against `.claude/convention_map.md` for the relevant section, scan new lines for the listed conventions, fix any regressions before committing.
+4. **Post-fix convention verification** (the same gate `/claim-task` Step 7e's executor runs internally): list changed files via `git diff --name-only main...HEAD`, check each against `.claude/convention_map.md` for the relevant section, scan new lines for the listed conventions, fix any regressions before committing.
 4b. **Run the consumer's pre-merge verification gates.** The consumer project's `<project>/CLAUDE.md` has a `## Pre-merge verification` section (per WORKFLOW.md § 6.1) that may contain two subsections:
    - **`### Always`** — full-tree commands run unconditionally (lint, typecheck, tests).
    - **`### Ratchet (changed files only)`** — a single bash block that filters `git diff --name-only origin/main...HEAD` to specific file types and invokes lint/typecheck against changed files only (Phase 17 split shape; empty filtered list short-circuits and passes).
 
-   Run the commands listed under each subsection that is present. If both subsections are absent, skip this step — `/review-close` will run any project-side verification at merge time, and the consumer accepts the risk.
+   Run the commands listed under each subsection that is present. If both subsections are absent, skip this step — `/review-close` will run any project-side verification at merge time (its `4a-post` step, on the merged tree), and the consumer accepts the risk. Note the division of labour: this run verifies **this branch in its own worktree**, and is the only thing that ever does — so when the consumer ships no `## Pre-merge verification` section and this step skips, *nothing* verifies the branch in isolation; `4a-post` verifies the **assembled** result and cannot substitute for it.
 
    Treat any non-zero exit like an implementation finding: fix the underlying issue, do not silence it without a `# type: ignore[...]` or `// eslint-disable-next-line <rule> -- <reason>` justified inline. If the gate exits non-zero and you cannot fix it (e.g., missing toolchain dependency in the worktree), emit `STATUS: FAILED` with the stderr in `ERROR`.
-5. **Post-fix UI verification** (the same gate `/claim-task` Step 7's reviewer-executor runs internally) only if any `frontend/` files changed — invoke `.claude/skills/_shared/ui-verify.md`.
+5. **Post-fix UI verification** (the same gate `/claim-task` Step 7e's executor runs internally) only if any `frontend/` files changed — invoke `.claude/skills/_shared/ui-verify.md`.
 5b. **Invoke `/document-work --non-interactive`** via the `Skill` tool to commit your work, write `sysop/runtime/pending-docs/<sanitized-branch>.md`, and enforce the follow-up stub check.
 
    The `--non-interactive` flag (see `/document-work` Step 0) tells the skill to:
@@ -695,14 +756,20 @@ Execution agents never emit `STATUS: PARKED_ON_QUESTION` — parking happens at 
 The orchestrator (top-level session, holding the per-task `PRE_EXEC_HEAD` captured in Phase 6e) runs:
 
 ```bash
+# Substitute this task's worktree path for <worktree path> and the pre-exec HEAD you
+# captured at Phase-6e spawn time for <pre-exec head>. Both are values you hold, not
+# shell variables — nothing survives from Phase 6e's block to this one (`WORKFLOW.md`
+# § 8.2a *Persistence boundary*). `BRANCH_NAME` and the two below are assigned right
+# here, so those names ARE safe to carry within this block.
+#
 # Canonical branch-name sanitization — matches /document-work's convention
 # (git branch --show-current | tr / -). Do NOT substitute a bash parameter
 # expansion; keep the tr form for parity with the rest of the workflow.
-BRANCH_NAME=$(git -C "$WORKTREE_PATH" branch --show-current | tr / -)
+BRANCH_NAME=$(git -C "<worktree path>" branch --show-current | tr / -)
 
 # Filesystem check: did the work actually land?
-NEW_COMMITS=$(git -C "$WORKTREE_PATH" log --oneline "$PRE_EXEC_HEAD..HEAD" | wc -l | tr -d ' ')
-PENDING_DOC_EXISTS=$(test -f "$WORKTREE_PATH/sysop/runtime/pending-docs/$BRANCH_NAME.md" && echo true || echo false)
+NEW_COMMITS=$(git -C "<worktree path>" log --oneline "<pre-exec head>..HEAD" | wc -l | tr -d ' ')
+PENDING_DOC_EXISTS=$(test -f "<worktree path>/sysop/runtime/pending-docs/$BRANCH_NAME.md" && echo true || echo false)
 
 # Load-bearing AND-check: BOTH conditions must hold for recovery. Either one
 # alone is insufficient — commits without a pending-doc means /document-work
@@ -759,11 +826,13 @@ Next steps:
     verdict to `sysop/runtime/auto-build/review.md` (parking happens BEFORE inline absorption,
     so plan.md is the unrevised plan). Read both, resolve the blocker (answer
     the question, add the missing source data, etc.), then continue the work
-    manually — call `ExitPlanMode` yourself and implement, or invoke `/claim-task`
-    to re-enter plan mode against the revised context. The `sysop/runtime/auto-build/` scratch
+    manually — implement it yourself, or hand it to `/claim-task`, which since
+    Phase 171 orchestrates plan → independent review → classify → execute in
+    sub-agents. **It does not enter plan mode; nothing does.** The `sysop/runtime/auto-build/` scratch
     directory is not committed by the orchestrator; clean it up before
     `/document-work`. If the worktree was already cleaned up (e.g. via
-    `cleanup_worktrees.sh --force`), the same plan + verdict survive at the
+    `cleanup_worktrees.sh --force`, which removes every non-main worktree
+    wholesale), the same plan + verdict survive at the
     project root under `sysop/runtime/parked/<TASK_ID>__<timestamp>.md` — the
     durable copy the orchestrator mirrored in Phase 6d.
   - For EXECUTED tasks: start a fresh session (`/clear`, or a new terminal),
@@ -776,8 +845,20 @@ Next steps:
     `## Pending documentation routing` in `<project>/CLAUDE.md`. The human
     stays the merge gate.
   - For FAILED tasks: cd into the worktree, inspect git status and recent logs,
-    then either fix-and-resume or roll back via `bash sysop/scripts/cleanup_worktrees.sh --force`
-    (which removes the worktree and clears the lock).
+    then either fix-and-resume or roll back. To roll back, cd back to the main
+    checkout first (the release refuses to run from inside the worktree it is
+    removing), then:
+        bash sysop/scripts/claim_task.sh --release <TASK_ID>
+    That removes this task's worktree, releases its lock, and flips its status
+    back to open; then commit that flip on main (the release deliberately
+    leaves it uncommitted and prints the git command). To discard uncommitted
+    work in the worktree, --force must come BEFORE the task id
+    (--release --force <TASK_ID>) -- a trailing flag is rejected. The flip
+    step needs a PyYAML-capable python3 on PATH; without one it exits having
+    changed nothing and prints a manual recipe. Do NOT use
+    cleanup_worktrees.sh --force -- it takes no path operand, so it removes
+    every non-main worktree including the EXECUTED ones listed above that are
+    still waiting for /review-close, and it clears no lock.
 ```
 
 After printing the table, the orchestrator's job is done. It does NOT run `/review-close`. The human is the merge gate.
@@ -804,7 +885,7 @@ Deferred to v2+:
 - **Standalone `sysop/scripts/select_batch.py`.** Promote after 3-5 cycles when the batch-math shape stabilizes.
 - **Auto-detecting DB-contention from task bodies.** The verbatim warning at Step 3 is the bake-in.
 - **Separate plan-revise agent in Phase 6d.** v1 absorbs `fixable` findings inline by passing `PLAN_TEXT + RAW_FINDINGS` into the execution agent's prompt. A cleaner alternative is a third sub-agent that produces an explicit `REVISED_PLAN` text the execution agent consumes verbatim. Promote when the inline-absorption shape shows drift in practice.
-- **Reviewer-executor collapse for `/auto-build` Phase 6b-6e.** `/claim-task` collapses adversarial review + classification + plan revision + implementation into one cold-context reviewer-executor sub-agent (see `_shared/adversarial-review.md § "Reviewer-executor variant"`). The handoff guidance there is "validate the interactive shape under `/claim-task` first; the auto-build port is a follow-up after several `/claim-task` runs prove out the prompt discipline." Bundle the collapse only into `/claim-task` for now; `/auto-build` keeps the three-phase (plan-only → adversarial-reviewer → execution) shape.
+- **Reviewer-executor collapse for `/auto-build` Phase 6b-6e.** `/claim-task` splits adversarial review, classification and implementation across an independent reviewer (7b), the orchestrator itself (7c) and an executor (7e) (see `_shared/adversarial-review.md § "Reviewer-executor variant"`). The handoff guidance there is "validate the interactive shape under `/claim-task` first; the auto-build port is a follow-up after several `/claim-task` runs prove out the prompt discipline." Bundle the collapse only into `/claim-task` for now; `/auto-build` keeps the three-phase (plan-only → adversarial-reviewer → execution) shape.
 
 ## First downstream consumer
 

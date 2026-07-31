@@ -54,7 +54,8 @@ LOOP_SHARED_STEMS = {
     "fanout-evidence", "upstream-repo",
 }
 EXCLUDED_SHARED_STEMS = {
-    "decomposition-rubric", "guided-mode", "main-push-guard", "ui-verify",
+    "decomposition-rubric", "guided-mode", "main-push-guard",
+    "plan-review-preference", "ui-verify",
 }
 # Companion scripts (files). run_checks/ is a directory, kept in both modes.
 LOOP_SCRIPTS = {

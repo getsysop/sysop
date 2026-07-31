@@ -1,6 +1,6 @@
 # Shared: UI Verification Procedure
 
-Invoked by the `/claim-task` Step 7 reviewer-executor sub-agent (post-fix UI
+Invoked by the `/claim-task` Step 7e executor sub-agent (post-fix UI
 verification) and `/document-work` Step 1c whenever the diff touches
 `frontend/`. Probes the dev server, navigates to the changed feature via
 Playwright MCP, and checks the browser console + network for regressions.

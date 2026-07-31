@@ -582,12 +582,27 @@ def claim_id_problems(text=None):
                 "Step 2's review-batch lock check keys on <TASK_ID>, which never "
                 "matches a batch lock"
             )
-        if len(re.findall(r"sysop/runtime/locks/<CLAIM_ID>\.lock", arms)) < 2:
-            problems.append(
-                "Step 2's review-batch branch no longer checks "
-                "sysop/runtime/locks/<CLAIM_ID>.lock on both the Pending and "
-                "In Progress arms"
-            )
+        # PER ARM, not a count over the whole branch. A `>= 2` count asserts
+        # "the lock is mentioned twice somewhere below this heading", which is a
+        # different claim and a weaker one: Phase 171 added a third mention (the
+        # `--resume` paragraph), so removing the Pending arm's check left the
+        # count at 2 and the guard silently stopped firing. That is Phase 170's
+        # recorded lesson — adding text to a file weakens every count-based
+        # check over it — landing on a neighbour rather than on the phase's own
+        # guards. Anchor each arm and look inside it.
+        for label in ("`Pending`", "`In Progress`"):
+            i = arms.find("- " + label)
+            if i < 0:
+                problems.append(f"Step 2's review-batch branch lost its {label} arm")
+                continue
+            j = arms.find("\n  - ", i + 1)
+            arm = arms[i:j if j > 0 else len(arms)]
+            if "sysop/runtime/locks/<CLAIM_ID>.lock" not in arm:
+                problems.append(
+                    f"Step 2's review-batch {label} arm no longer checks "
+                    "sysop/runtime/locks/<CLAIM_ID>.lock — on both the Pending and "
+                    "In Progress arms the lock is the more reliable signal"
+                )
     return problems
 
 

@@ -27,6 +27,16 @@ is missing or has been edited to drop a rule the skill depends on.
 > `git merge --ff-only` refused with no prompt, stranding the session
 > mid-merge); only the configuration name was wrong.
 
+**This guard is Claude-Code-only.** `.claude/settings.json` is the *Claude Code*
+harness contract; on any other harness it binds nothing. If you are not running
+under Claude Code (e.g. the Codex CLI, whose policy surfaces are `config.toml`,
+named profiles, and the `--sandbox`/`--ask-for-approval` flags), **skip this
+guard entirely** — skipped-not-failed, straight to the skill's own Step 1 —
+rather than spending calls reading a file that is not your harness's policy
+surface. Sysop also deliberately does not write a permissive profile for any
+non-Claude harness: sandbox and approval policy are the consumer's trust
+boundary.
+
 ## How to invoke from a skill
 
 Each skill that touches the network or rewrites branch state should run this
@@ -71,9 +81,12 @@ which (if any) are missing.
       Fix one of:
         (a) Re-run `bash install.sh <target>` to regenerate the allow-list
             (merges with any rules you've added).
-        (b) Run `/permissions add Bash(<missing rule>)` for each missing rule.
-        (c) Edit `.claude/settings.json` by hand and re-source by running
-            `/permissions reload` (or restart Claude Code).
+        (b) Run `/permissions` to open the permissions UI and add the missing
+            rules there — the fastest path, and it applies to this session.
+        (c) Add them to `permissions.allow` in `.claude/settings.json` by hand.
+            Claude Code watches its settings files and hot-reloads `permissions`,
+            so the edit applies to this session — no restart needed. `/status`
+            lists the loaded setting sources if you want to confirm it took.
 
       If you intentionally removed the rule, or you know this session's
       effective mode makes `permissions.allow` inert (e.g. it was started with
@@ -145,12 +158,13 @@ which (if any) are missing.
   `WORKFLOW.md` § 8.2a *Invocation shapes* records both what changed and the
   three classes that remain uncovered (runtime-set loops, assignments sharing a
   block, and quoting). Three authoring rules follow:
-    - **Need a value an earlier step produced? Write it out, quoted.** Skill
-      steps are separate shell calls, so the variable would not survive anyway,
-      and the assignment costs the invocation its rule match. Quote it: an
-      unsubstituted `"<PR>"` fails loudly, while an unquoted `<PR>` is a bash
-      redirection and an *empty* operand makes `gh` silently pick the current
-      branch.
+    - **Need a value produced earlier? Write it out, quoted.** Assume nothing
+      survives from one fenced block to the next — the boundary is the block,
+      not the step (`WORKFLOW.md` § 8.2a *Persistence boundary*), so a variable
+      set under the same heading is still empty here — and the assignment costs
+      the invocation its rule match besides. Quote it: an unsubstituted
+      `"<PR>"` fails loudly, while an unquoted `<PR>` is a bash redirection and
+      an *empty* operand makes `gh` silently pick the current branch.
     - **Need to tolerate a failing command? Use `|| echo "<why>"`, never
       `|| true`.** `echo` *is* in the documented built-in set, so the compound
       stays authorized, and the reader gets told why the failure was expected.

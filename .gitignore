@@ -1,3 +1,10 @@
+# Sysop runtime dir (Phase 133 consolidation). install.sh seeds exactly this
+# line for consumers; this repo never had it, so a claim_task.sh --lock run here
+# left a real lock TRACKABLE -- and Phase 171 shipped a leak that way: a
+# reconciliation sub-agent's lock carried an absolute home path into a commit,
+# turning the mirror-leak gate red. Locks resolve to the MAIN repo root by
+# design (Phase 32), so any worktree's claim lands here.
+sysop/runtime/
 # Workflow runtime directories (created on demand by skills/scripts)
 .locks/
 .pending-docs/

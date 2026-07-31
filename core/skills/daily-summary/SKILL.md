@@ -48,11 +48,23 @@ _day_name() { local d="$1"; date -j -f %Y-%m-%d "$d" +%A 2>/dev/null || date -d 
 
 If a helper prints nothing (neither `date` variant is present — a system with neither BSD nor GNU `date`), note "date arithmetic unavailable on this system" at the top of the report and continue with the git sections using whatever ranges you can compute; do not fail the whole report.
 
-Compute:
+**Compute all three in the block above, not after it.** The helpers are shell functions, so
+they exist only inside the fenced block that defines them, and nothing survives from one
+fenced block to the next anyway (`WORKFLOW.md` § 8.2a *Persistence boundary*). Append these
+lines to that same block — substituting `<days>` with `--days` (default `7`), and replacing
+`$(_days_ago 1)` with the `--date` value when one was passed:
 
-1. `TARGET_DATE` = the `--date` value, or `_days_ago 1` (yesterday).
-2. `WEEK_START` = `_date_minus "$TARGET_DATE" N` (N = `--days`, default 7).
-3. `DAY_NAME` = `_day_name "$TARGET_DATE"`.
+```bash
+TARGET_DATE="$(_days_ago 1)"
+echo "--- TARGET_DATE: $TARGET_DATE"
+echo "--- WEEK_START:  $(_date_minus "$TARGET_DATE" <days>)"
+echo "--- DAY_NAME:    $(_day_name "$TARGET_DATE")"
+```
+
+Read all three off stdout and write them out as literals at every later use — which is what
+every fenced block below already expects (`<TARGET_DATE>`, `<WEEK_START>`). Until Phase 169
+these three were stated as inline `` `_date_minus "$TARGET_DATE" N` `` calls *outside* any
+block, where the function did not exist and the variable was empty.
 
 **Weekend / gap handling.** Check whether `TARGET_DATE` has any commits:
 

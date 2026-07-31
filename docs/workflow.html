@@ -847,7 +847,7 @@
     <div class="hero-grid">
       <aside class="hero-margin rise">
         <span class="line">Vol. <span class="accent">I</span></span>
-        <span class="line">Issue 86</span>
+        <span class="line">Issue 159</span>
         <span class="line">2026.07.28</span>
         <span class="line" style="margin-top:22px">An essay on</span>
         <span class="line">software workflow</span>
@@ -907,7 +907,7 @@
           is a human judgment call — what's self-improving is the enforcement, which from that point on is automatic and
           permanent. Reviews get cheaper over time because the workflow stops re-finding what
           it already knows. So far that loop has distilled <em>nearly 3,300 review findings</em> into
-          <em>78 enforceable conventions</em> across two codebases — and § IV shows what the archive measures, and, just as carefully, what it can't.
+          <em>78 enforceable conventions</em>, all from one project's five-month review archive — and § IV shows what that archive measures, and, just as carefully, what it can't.
         </p>
         <p>
           I built it to solve a problem. I was shipping a production app solo, generating far more code than I could review
@@ -1104,8 +1104,8 @@
           until you come back to sharpen them.
         </p>
         <p>
-          <strong>Two legs of done.</strong> The floor is mechanical — <code>validate_tasks.py</code> passes in pre-commit,
-          so a malformed queue can't land. The ceiling is human — you read the slice and confirm it's the work you meant.
+          <strong>Two legs of done.</strong> The floor is mechanical — <code>validate_tasks.py</code> enforces the schema
+          (on demand, or wired into pre-commit as an opt-in), so a malformed queue is caught mechanically rather than by eye. The ceiling is human — you read the slice and confirm it's the work you meant.
           Intent that should outlive a single session lives in two optional, consumer-owned files at the <code>tasks/</code>
           root: <code>vision.md</code> (what this is) and <code>decisions.md</code> (what you've ratified and why), so the
           next <code>/intake</code> pass re-checks itself against them instead of relitigating settled calls.
@@ -1371,12 +1371,12 @@
           </div>
           <div class="entry">
             <dt>/review-close<span class="model-tag opus">opus · gate</span></dt>
-            <dd>Worktree-state classification; project pre-merge gates — including a <em>crown-jewel coverage gate</em> (Phase 61) that fails the merge when a critical path loses test coverage, with no baseline escape hatch; a verify-the-record check (Phase 59) that reads back the task's <code>## Test decision</code> and confirms it against the actual diff; the manual-smoke gate; the merge; archive the task; clean up branches. <em>How</em> it merges is the project's call — <code>§ Merge policy</code> in your <code>CLAUDE.md</code> selects <code>direct</code> (push <code>main</code>) or <code>pr</code>, which never writes <code>main</code> <em>directly</em> — work routes through an integration branch and one squash PR, making GitHub the sole serialized writer (Phase 63; PR-state-as-verdict and PR reuse, Phase 151).</dd>
+            <dd>Worktree-state classification; project pre-merge gates, run twice on two trees — a cheap fail-fast before the merges and the authoritative one <em>after</em> them, on the assembled result, because a gate that runs before the merge can only ever describe the tree it stood on (Phase 170) — including a <em>crown-jewel coverage gate</em> (Phase 61) that fails the merge when a critical path loses test coverage, with no baseline escape hatch; a verify-the-record check (Phase 59) that reads back the task's <code>## Test decision</code> and confirms it against the actual diff; the manual-smoke gate; the merge; archive the task; clean up branches. <em>How</em> it merges is the project's call — <code>§ Merge policy</code> in your <code>CLAUDE.md</code> selects <code>direct</code> (push <code>main</code>) or <code>pr</code>, which never writes <code>main</code> <em>directly</em> — work routes through an integration branch and one squash PR, making GitHub the sole serialized writer (Phase 63; PR-state-as-verdict and PR reuse, Phase 151).</dd>
           </div>
         </dl>
 
         <aside class="pullquote">
-          <p><strong>The sub-agent fan-out.</strong> Since Phase 29, <code>/claim-task</code> spawns a single reviewer-executor sub-agent that reads the plan, runs adversarial review, self-classifies as <code>fixable</code> or <code>blocker</code>, halts on blockers via a sealed <code>STATUS: BLOCKED</code> envelope, otherwise implements + verifies + commits.</p>
+          <p><strong>The sub-agent fan-out.</strong> From Phase 29 to Phase 171, <code>/claim-task</code> spawned a single reviewer-executor sub-agent that read the plan, ran adversarial review, <em>self-classified</em> as <code>fixable</code> or <code>blocker</code>, halted on blockers via a sealed <code>STATUS: BLOCKED</code> envelope, and otherwise implemented + verified + committed. <strong>That shape is retired.</strong> A real run bypassed the whole of it — plan mode in, ~200 tool calls, plan mode out, no sub-agent at any point — and because the one durable receipt was deleted after consumption, a review that ran and a review that was skipped left identical evidence. Phase 171 split it: a planner, an <em>independent</em> reviewer that did not write the plan, a classification the orchestrator makes itself, and an executor — each in its own cold context, each leaving a file behind.</p>
           <p>The parent reads the envelope — now structurally parsed by the <code>SubagentStop</code> hook — and prints the handoff.</p>
           <span class="attr">— Internal note, on the reviewer-executor collapse</span>
         </aside>
@@ -1395,11 +1395,11 @@
         <dl class="glossary">
           <div class="entry">
             <dt>/plan-review<span class="model-tag opus">opus · adversarial pass</span></dt>
-            <dd>Adversarial pass on an ad-hoc plan from conversation or a file. Uses the same prompt template as <code>/claim-task</code> Step 7 (<code>_shared/adversarial-review.md</code>); surfaces findings, presents a revised plan for approval before any execution. Phase 58a added a source-verification dimension: external SDK or framework calls with no in-repo precedent get flagged <code>unverified</code> rather than trusted on faith. Phase 140 added decompose-before-reject — the same rule &sect; III applies at review merges, here at its source: refuting one clause of a compound finding never rejects the finding, and a High or security rejection owes a second independent pass. Where the shape can't spawn one (the reviewer-executor leaf, a consumer agent that doesn't nest), the rejection is never silently absorbed — the per-clause rationale is sealed into the plan for the next independent reader.</dd>
+            <dd>Adversarial pass on an ad-hoc plan from conversation or a file. Uses the same prompt template as <code>/claim-task</code> Step 7 (<code>_shared/adversarial-review.md</code>); surfaces findings, presents a revised plan for approval before any execution. Phase 58a added a source-verification dimension: external SDK or framework calls with no in-repo precedent get flagged <code>unverified</code> rather than trusted on faith. Phase 140 added decompose-before-reject — the same rule &sect; III applies at review merges, here at its source: refuting one clause of a compound finding never rejects the finding, and a High or security rejection owes a second independent pass. Where the shape can't spawn one (an executor leaf, which must not nest; a consumer agent that doesn't nest at all), the rejection is never silently absorbed — the per-clause rationale is sealed into the plan for the next independent reader.</dd>
           </div>
           <div class="entry">
             <dt>/sitrep<span class="model-tag">inherits · orientation</span></dt>
-            <dd>Read-only survey across worktrees, locks, branches, the index, and pending review batches. Reports lifecycle position per task — queued, claimed, in-progress, documented, awaiting close — and recommends a single next move. Phase 40 introduced the <code>Doc-Work:</code> git trailer that lets it classify documented vs undocumented branches without grepping prose. Phase 54 made the read-only guarantee structural — a <code>disallowed-tools</code> guard (Claude Code 2.1.152) on both <code>/sitrep</code> and <code>/next-task</code> so neither can mutate state even when asked.</dd>
+            <dd>Read-only survey across worktrees, locks, branches, the index, and pending review batches. Reports lifecycle position per task — queued, claimed, in-progress, documented, awaiting close — and recommends a single next move. Phase 40 introduced the <code>Doc-Work:</code> git trailer that lets it classify documented vs undocumented branches without grepping prose. Phase 54 hardened the read-only intent with a <code>disallowed-tools</code> guard (Claude Code 2.1.152) on both <code>/sitrep</code> and <code>/next-task</code> — partial by design, as both skill files state: it covers the dedicated write tools (<code>Edit</code>, <code>Write</code>, <code>NotebookEdit</code>) while <code>Bash</code> stays allowed for the survey commands, and non-Claude-Code harnesses ignore the key.</dd>
           </div>
         </dl>
       </div>
@@ -1748,8 +1748,11 @@
           crashed tool produces zero findings, and a green gate on top of that is a lie. <em>Skipped</em> is loud
           but never fatal, and warns only when the check is actually armed — a warning that fires from the first
           install forever just teaches people to ignore warnings. The gate is a backstop here rather than the fix:
-          no shipped security check is blocking, so the case that motivated all this would not have tripped it under
-          any rule. What closes that case is the summary contract itself, plus both review skills now being told to
+          every shipped <em>semgrep</em> check is advisory — blocking is earned per-project, after a rule proves quiet
+          on your tree — so the crashed semgrep stage that motivated all this would not have tripped it. (Three shipped
+          grep checks do arrive <code>blocking: true</code>, two of them security checks — though their shipped paths are
+          placeholders, so their gates arm only once a consumer localizes them; on a localized install, a dead grep
+          stage would trip it.) What closes that case is the summary contract itself, plus both review skills now being told to
           read it and carry every dead stage into the round. Where the cause is a missing trust store — the crash
           that motivated all this — the runner now resolves an existing CA bundle for the scanner's subprocess
           rather than only reporting the death, supplying the trust anchors it needs without ever weakening
@@ -1942,10 +1945,11 @@
       <div class="s-body">
         <h2 class="s-title">The loop that makes it<br><span class="stress">self-improving.</span></h2>
         <p class="lede">
-          This is the thing. Every other section is plumbing for this one. When a finding from <code>/review-close</code> recurs across
-          two review rounds, it gets promoted into the relevant pack's <code>convention_map.md</code>. From that moment on,
-          <code>/claim-task</code> consults it during planning <em>and</em> after implementation, and <code>/codebase-review</code>
-          uses it as a rubric on future passes. <em>The workflow forgets nothing.</em>
+          This is the thing. Every other section is plumbing for this one. When a review finding recurs across
+          two rounds, the review skill that filed it — <code>/codebase-review</code> or <code>/security-audit</code>, in the
+          same session, with your approval on every promotion — promotes it into the project's <code>convention_map.md</code>.
+          From that moment on, <code>/claim-task</code> consults it during planning <em>and</em> after implementation, and
+          every future review round uses it as a rubric. <em>The workflow forgets nothing.</em>
         </p>
 
         <figure class="fig" id="loop-fig">
@@ -1965,15 +1969,15 @@
               <g class="node">
                 <ellipse cx="500" cy="278" rx="170" ry="58" class="fill-accent"/>
                 <text x="500" y="262" class="code" style="font-size:18px">convention_map.md</text>
-                <text x="500" y="288" class="smallserif" style="font-size:11px">per-pack: python · postgres · nextjs-react · llm</text>
-                <text x="500" y="306" class="smallserif" style="font-size:11px">core: bash · skill markdown</text>
+                <text x="500" y="288" class="smallserif" style="font-size:11px">your project's map · base + .project overlay</text>
+                <text x="500" y="306" class="smallserif" style="font-size:11px">pack maps ship the same rules, generalized</text>
               </g>
 
-              <!-- 1. /review-close finds finding (top) -->
+              <!-- 1. review round files finding (top) -->
               <g class="node">
                 <rect x="380" y="50" width="240" height="60" rx="2" class="fill-primary"/>
-                <text x="500" y="74" class="code">/review-close finds finding</text>
-                <text x="500" y="96" class="smallserif">round N</text>
+                <text x="500" y="74" class="code">/codebase-review files finding</text>
+                <text x="500" y="96" class="smallserif">round N · or /security-audit</text>
               </g>
 
               <!-- 2. Fix this round (right) -->
@@ -2044,18 +2048,24 @@
 
         <h3>What's in a map entry</h3>
         <p>
-          Each entry is a glob pattern, a one-line rule, and an attribution: the review round where the pattern was first surfaced. The
-          round attribution is load-bearing. When an entry later turns out to be wrong, you can find the review that promoted it and
-          learn what changed.
+          Each entry is a glob pattern and a one-line rule, plus provenance. In the map the loop maintains in <em>your</em>
+          project, a promoted entry is attributed to the review round that surfaced it — and that attribution is
+          load-bearing: the cross-round recurrence gate reads it, and when an entry later turns out to be wrong, you can
+          find the review that promoted it and learn what changed. The shipped pack entries are those same rules with the
+          project-specific detail generalized out — placeholder globs you localize, a pointer to the paired mechanical
+          check, provenance kept inline where it still explains the rule — with their full round history living in the
+          source archive behind Fig.&nbsp;7 rather than as inline tags. One section of the real file, trimmed:
         </p>
         <div class="listing" data-label="excerpt · packs/python/companion/convention_map.md">
-<pre><span class="key">**/*.py</span>
-  <span class="cm">·</span> Use <span class="em">yaml.safe_load</span>, never <span class="em">yaml.load</span> without a Loader  <span class="cm">(Round 12)</span>
-  <span class="cm">·</span> Subprocess calls go through <span class="em">shared_cli.run()</span>, not raw <span class="em">subprocess.run</span>  <span class="cm">(Round 23)</span>
-  <span class="cm">·</span> No bare <span class="em">except:</span> — catch a specific exception or re-raise  <span class="cm">(Round 7)</span>
+<pre><span class="key">## `&lt;scripts dir&gt;/*.py`, `&lt;datajobs entrypoint&gt;` — CLI Scripts and Job Entrypoints</span>
+<span class="cm">  ⋮ (seven of the section's ten bullets elided)</span>
+- <span class="em">Env var validation</span>: Security-critical env vars validated at startup; prod/staging → fatal; dev/test → warning
+- <span class="em">Logger formatting</span>: Use `%s` not f-strings
+- <span class="em">YAML safe load</span>: Always use `yaml.safe_load()` — never `yaml.load()` or `yaml.full_load()`. PyYAML's default
+  loader instantiates arbitrary Python objects from `!!python/object` tags (OWASP A03 deserialization). Codified
+  when YAML became load-bearing for `tasks/index.yml` (Phase 16). Paired check: `yaml-unsafe-load`. <span class="cm">(… trimmed)</span>
 
-<span class="key">tests/**/*.py</span>
-  <span class="cm">·</span> Integration tests use a real database, never mocks  <span class="cm">(Round 4 — burned by mock/prod divergence)</span></pre>
+<span class="cm">&gt; AST-backed equivalents: `semgrep-logger-fstring`, `semgrep-recompile-inside-def` (in this pack's `semgrep/` directory)</span></pre>
         </div>
         <p class="muted">
           The promotion history <em>is</em> the workflow's audit trail.
@@ -2154,7 +2164,7 @@
                 <rect x="840" y="314" width="70" height="16" class="fill-accent"/>
               </g>
               <text x="175" y="251" class="diag-caption" style="fill:var(--accent-ink)">21%</text>
-              <text x="315" y="286" class="diag-caption" style="fill:var(--accent-ink)">10%</text>
+              <text x="315" y="286" class="diag-caption" style="fill:var(--accent-ink)">11%</text>
               <text x="455" y="302" class="diag-caption" style="fill:var(--accent-ink)">5%</text>
               <text x="595" y="264" class="diag-caption" style="fill:var(--accent-ink)">17% *</text>
               <text x="735" y="320" class="diag-caption" style="fill:var(--accent-ink)">0%</text>
@@ -2374,8 +2384,9 @@
           <div>
             <h3>Bash installer</h3>
             <p class="muted">
-              <code>bash install.sh &lt;target&gt; --packs python,postgres</code> works with any agent (or none) —
-              or <code>--packs auto</code> to detect the stack from the target's own markers (Phase 75). Writes scripts, git hooks,
+              <code>bash install.sh &lt;target&gt; --packs python,postgres</code> — the installer and its companion
+              scripts run with any agent, or none; how far the <em>skills</em> travel is measured, with named limits, below.
+              Or <code>--packs auto</code> to detect the stack from the target's own markers (Phase 75). Writes scripts, git hooks,
               permission settings, and per-pack convention maps. Updates via <code>bash sysop/scripts/sysop-update.sh</code> from the consumer
               side once <code>$SYSOP_SRC</code> is set.
             </p>
@@ -2397,7 +2408,7 @@
           <a href="https://github.com/getsysop/sysop/blob/main/docs/loop-mode.md">loop mode</a>.
         </p>
 
-        <h3>One concrete step off Claude Code</h3>
+        <h3 id="off-claude-code">One concrete step off Claude Code</h3>
         <p class="muted">
           The companion layer — checks, hooks, maps, scripts, workflow docs — has always been plain files with no
           Claude dependency. The <em>skills</em> are the part that was Claude-Code-shaped, and portability there was
@@ -2440,7 +2451,7 @@
         <div class="listing" data-label="consumer repo · filesystem layout">
 <pre><span class="key">consumer-repo/</span>
 ├── <span class="key">tasks/</span>                          <span class="cm"># queue lives here</span>
-│   ├── index.yml                  <span class="cm"># source of truth · validated on every commit</span>
+│   ├── index.yml                  <span class="cm"># source of truth · schema-validated by validate_tasks.py</span>
 │   ├── vision.md                  <span class="cm"># optional intent layer · /intake-authored, consumer-owned (Phase 60a)</span>
 │   ├── decisions.md               <span class="cm"># ratified product decisions · re-checked on re-intake (Phase 60a)</span>
 │   ├── open/                      <span class="cm"># task body files for status: open</span>
@@ -2459,7 +2470,7 @@
 │   ├── <span class="key">scripts/</span>
 │   │   ├── claim_task.sh          <span class="cm"># lock + worktree + branch creation</span>
 │   │   ├── close_batch.sh         <span class="cm"># review_tasks.md batch closure</span>
-│   │   ├── validate_tasks.py      <span class="cm"># schema enforcement · runs in pre-commit</span>
+│   │   ├── validate_tasks.py      <span class="cm"># schema enforcement · on demand / opt-in pre-commit</span>
 │   │   ├── self_check.sh          <span class="cm"># Phase 133 · install health probes · Phase 143 abandoned-round probe · Phase 149 coverage ledger</span>
 │   │   ├── ingest_security_report.py  <span class="cm"># Phase 144 · claude-security parse + sanitize boundary</span>
 │   │   ├── permission_denied_hook.py  <span class="cm"># Phase 36 · classifier escape injection</span>

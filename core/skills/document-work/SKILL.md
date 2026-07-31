@@ -67,7 +67,7 @@ verification procedure at `.claude/skills/_shared/ui-verify.md` before
 committing. Hard-fail on console errors; warn on console warnings; skip
 cleanly if the dev server is not running.
 
-This is the same gate `/claim-task` Step 7's reviewer-executor runs internally
+This is the same gate `/claim-task` Step 7e's executor runs internally
 (post-fix UI verification). Re-running it here catches regressions introduced
 after the claim step (e.g., last-minute fixups or simplify-pass edits from
 Step 1b).
@@ -92,7 +92,7 @@ Co-Authored-By: ...
 
 If no `<TASK_ID>` can be derived from the branch (true adhoc work on `main` with no task entry), omit the trailer — `/sitrep` correctly classifies adhoc work as "not a task" via the absence of a lock and index entry.
 
-**Trailer placement on existing commits.** If Step 2 enters with no uncommitted changes (the reviewer-executor in `/claim-task` Step 7 or another upstream step already committed), the most recent commit IS the close-out commit. Verify it carries `Doc-Work: <TASK_ID>` for the current branch's `<TASK_ID>` (resolved per the derivation rule below) by running:
+**Trailer placement on existing commits.** If Step 2 enters with no uncommitted changes (the executor in `/claim-task` Step 7e or another upstream step already committed), the most recent commit IS the close-out commit. Verify it carries `Doc-Work: <TASK_ID>` for the current branch's `<TASK_ID>` (resolved per the derivation rule below) by running:
 
 ```bash
 git log -1 --format=%B | git interpret-trailers --parse | grep -q "^Doc-Work: <TASK_ID>$"
@@ -104,7 +104,7 @@ If the trailer is absent, **probe for an upstream first**:
 git rev-parse --abbrev-ref --quiet '@{u}' >/dev/null 2>&1
 ```
 
-- If the probe **fails** (no upstream — the normal `/claim-task` → `/document-work` → `/review-close` pipeline state, since the reviewer-executor in `/claim-task` Reviewer-Executor Prompt step 9 hard-constrains "Do NOT push"), amend the most recent commit to add the trailer: `git commit --amend --no-edit --trailer "Doc-Work: <TASK_ID>"`. Safe because the commit has not been pushed yet (the worktree branch has no upstream until `/review-close` Step 4a pushes it).
+- If the probe **fails** (no upstream — the normal `/claim-task` → `/document-work` → `/review-close` pipeline state, since the executor in `/claim-task` Step 7e's Executor Prompt hard-constrains "Do NOT push"), amend the most recent commit to add the trailer: `git commit --amend --no-edit --trailer "Doc-Work: <TASK_ID>"`. Safe because the commit has not been pushed yet (the worktree branch has no upstream until `/review-close` Step 4a pushes it).
 - If the probe **succeeds** (the branch already tracks a remote — e.g., `/document-work` invoked outside the claim-task pipeline on a pushed branch, or on `main` mid-direct-commit-flow), do **NOT** amend. Instead, write a fresh trailer-only commit so published history isn't rewritten: `git commit --allow-empty -m "chore: emit Doc-Work trailer (<TASK_ID>)" --trailer "Doc-Work: <TASK_ID>"`. `/sitrep` finds the trailer on this commit and classifies the branch identically to an amended one.
 
 This is the only Step-2 path that could use `--amend`, and the probe-then-branch shape hardens the no-upstream-yet pipeline invariant into a check that catches `/document-work` invocations outside the orchestrated flow before they can rewrite pushed history.

@@ -172,13 +172,37 @@ Name>`) and its bullets. From `checks.project.yml`, read each check entry. From
     slash or alongside other paths (e.g. `["__disabled_no_op__/", "<dir>/"]`),
     not only as `["__disabled_no_op__"]`;
   - it carries `used_by: []` (disabled by having no consumer stage);
-  - **its `id` already exists in the installed base `.claude/checks.yml`** — then
-    it is an *override* of a Sysop-shipped check (consumer wins on id-collision),
-    i.e. local policy, and the check itself is already upstream. Read the base
-    `checks.yml` for this id comparison **only**.
+  - it is an **override of a Sysop-shipped check** — same `id` as a check Sysop
+    ships, i.e. local policy, with the check itself already upstream.
 
-  Only a check whose `id` is **novel** (absent from the base `checks.yml`) and
-  not disabled is a candidate.
+    **You cannot determine this from the base `.claude/checks.yml`, and the
+    subtraction that works for the markdown map does not work here.** The two
+    merges differ: the installer *appends* your `.project.md` into the base map
+    verbatim (both copies coexist, so subtracting your overlay leaves the
+    upstream text to compare against), but it merges `checks.project.yml` by
+    `checks[*].id` and **removes the colliding upstream entry**, keeping yours.
+    So the base is `(upstream − collided) + your overlay`, and "base minus
+    overlay" is a region that by construction contains **none** of your ids. A
+    test against it excludes nothing, exactly as a bare "is this id in the base?"
+    test excludes everything — both readings are uninformative, in opposite
+    directions.
+
+    **Resolve it against the Sysop source, or not at all:**
+    - If the install clone is reachable (`$SYSOP_SRC`, the durable dependency
+      recorded in the install lock), compare the candidate `id` against the
+      shipped fragments — `core/companion/checks.yml.fragment` and
+      `packs/*/companion/checks.yml.fragment`. Present there → it is an override;
+      skip it.
+    - If the clone is **not** reachable, do **not** guess in either direction.
+      Carry the candidate forward marked `could not determine whether this
+      overrides a Sysop-shipped check — source clone unavailable`, and let the
+      Step 3 provenance record and the Step 7 per-candidate consent decide. A
+      wrong guess here files a rule Sysop already ships back to Sysop as novel,
+      with round provenance attached, which is the same false-provenance shape
+      as reading the fire ledger as promotion evidence.
+
+  Only a check that is **not disabled** and not a determined override is a
+  candidate.
 - **Bullets that merely restate a Sysop-shipped convention.** In a consumer install
   the installer **appends your `.project.md` verbatim** into the base
   `.claude/convention_map.md` (WORKFLOW.md § 8.2c) — so *every* overlay bullet
@@ -218,9 +242,18 @@ it rather than asking the human to assert it by hand. For each candidate, search
 `review_tasks.md` (consumer-repo root) for evidence the rule earned promotion:
 
 - A rule that recurred across **2+ distinct `## Round N` blocks**, or is named in
-  a `Promotion summary:` trailer, or appears in the `## Convention fire ledger`
-  → record it: `recurred across Rounds N and M` (or the promotion-summary
-  citation). This is the promotion-grade signal.
+  a `Promotion summary:` trailer → record it: `recurred across Rounds N and M`
+  (or the promotion-summary citation). This is the promotion-grade signal.
+- **Never read the `## Convention fire ledger` as promotion evidence — it is the
+  demotion record, and it means the opposite.** Its rows are *stale-verdicts*:
+  rounds in which the rule fired **falsely**. Step 9b retires a rule once it
+  accrues stale-verdicts across 2+ distinct rounds, so a rule with two ledger
+  rows is one this project has twice judged moot. Rendering those rounds as
+  `recurred across Rounds N and M` would state the reverse of what happened and
+  file it upstream, under the human's consent, as a convention earned from real
+  use. A candidate whose only in-repo evidence is a fire-ledger row has **no**
+  promotion provenance — treat it as the `no match` case below, and say so in
+  the rendered body rather than counting it.
 - **No match** → the overlay entry was likely hand-authored at bootstrap (a
   common, legitimate case — a project can seed its own conventions before ever
   running the Step 9 loop). Record `no in-repo round provenance found`. **Do not

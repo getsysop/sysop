@@ -138,7 +138,9 @@ def test_step6_reset_is_stated_per_shape_and_still_always_run():
 
 def test_step4pre_probes_for_an_existing_pr_before_cutting_a_branch():
     block = _section("### 4-pre.", "### 4a.")
-    probe_at = block.index("gh pr list --head \"$APPROVED_BRANCH\" --base main --state open")
+    probe_at = block.index(
+        'gh pr list --head "<approved branch name>" --base main --state open'
+    )
     cut_at = block.index('git checkout -b "$INTEGRATION_BRANCH" origin/main')
     assert probe_at < cut_at, (
         "the reuse probe must run BEFORE the integration branch is cut — probing after it "
@@ -162,13 +164,27 @@ def test_reuse_requires_all_five_conditions():
     # `$LOCAL_ONLY` / `$BEHIND_REMOTE` / `$BEHIND_MAIN`, because an allow-rule does not
     # match past a variable assignment. So pin the probe commands, not the variable names —
     # asserting on the names would re-pin the shape this phase removed.
+    #
+    # Phase 169: the branch operand is now a substituted `<approved branch name>` literal,
+    # not `$APPROVED_BRANCH`. These four strings were the *previous* spelling and pinning
+    # them had ratcheted the bug in place — the variable was assigned in an earlier fenced
+    # block, so all three branch operands expanded EMPTY on every run. `git fetch origin ""`
+    # exits 0 silently and `git rev-list --count "..origin/main"` answers `HEAD..origin/main`,
+    # so condition 4 printed nothing, `:694` read that as "conditions unmet", and the whole
+    # reuse shape was unreachable. Pinning the literal form is what keeps it reachable.
     for probe in (
-        'gh pr list --head "$APPROVED_BRANCH" --base main --state open',          # 1 + 2
-        "git rev-list --count origin/main..main",                                 # 3
-        'git rev-list --count "${APPROVED_BRANCH}..origin/${APPROVED_BRANCH}"',   # 4
-        'git rev-list --count "${APPROVED_BRANCH}..origin/main"',                 # 5
+        'gh pr list --head "<approved branch name>" --base main --state open',       # 1 + 2
+        "git rev-list --count origin/main..main",                                    # 3
+        'git rev-list --count "<approved branch name>..origin/<approved branch name>"',  # 4
+        'git rev-list --count "<approved branch name>..origin/main"',                # 5
     ):
         assert probe in block, f"reuse probe no longer computes: {probe!r}"
+    # And the operands must never go back to being variables: the value is set in an
+    # earlier block, so a `$APPROVED_BRANCH` here is empty by construction.
+    assert "$APPROVED_BRANCH" not in block.replace("`$APPROVED_BRANCH`", ""), (
+        "a Step 4-pre command reads $APPROVED_BRANCH again — it is assigned in an earlier "
+        "fenced block, so it expands empty; write the branch name out as a literal"
+    )
 
 
 def test_reuse_probe_rejects_fork_and_ambiguous_prs():
@@ -195,7 +211,7 @@ def test_reuse_shape_is_honest_about_how_often_it_fires():
 def test_rule_a_guard_covers_the_reuse_shape_without_becoming_tautological():
     """The reused branch has no `merge/review-close-*` pattern to match, so the assert has
     to use the literal Step 2a branch name — and must still never re-read it from HEAD."""
-    block = _section("> **HARD RULE — branch guard.**", "> **Variable persistence")
+    block = _section("> **HARD RULE — branch guard.**", "> **Value persistence")
     assert "PR-reuse shape" in block
     assert "literal branch name Step 2a approved" in block
     assert "Never re-derive it with `git rev-parse --abbrev-ref HEAD`" in block
@@ -434,11 +450,27 @@ def test_the_gh_empty_operand_hazard_survives_in_the_persistence_note():
     A future author who does not know `gh` resolves an empty operand by guessing is one
     edit away from reintroducing the capture. The note is where that knowledge lives.
     """
-    block = _section("> **Variable persistence across steps.**", "### 4a.")
+    block = _section("> **Value persistence", "### 4a.")
     assert "falls back to resolving the current branch's PR" in block
-    assert "written out as quoted literals" in block, (
-        "the note no longer says the PR number is a *quoted* literal — the quoting is the "
-        "enforcement (unquoted is a bash redirection; unsubstituted-but-quoted fails loud)"
+    assert "written out and quoted at every use site" in block, (
+        "the note no longer says the cross-block values are *quoted* literals — the quoting "
+        "is the enforcement (unquoted is a bash redirection; unsubstituted-but-quoted "
+        "fails loud)"
+    )
+    # Phase 169: the note also has to keep saying WHERE the boundary is. Its predecessor
+    # scoped itself to "Steps 4a-4d" and told the reader to re-export per step, which
+    # prescribed nothing for the six Step 4-pre sites that were actually broken — and a
+    # Phase-164 sweep then cited it as the warrant for excluding them.
+    # NOT a bare `"fenced block" in block` token check: the round rewrote this note to say
+    # a variable within a step is fine, kept that token, and stayed green. The note is
+    # ~3.3 KB, which is the same "token appeared somewhere in a long paragraph" shape
+    # Phase 167's round found 43 of 90 mutations walking through. Pin the sentence.
+    assert " ".join(
+        "Nothing survives from one fenced block to the next, *including two blocks under "
+        "the same heading*".split()
+    ) in " ".join(block.split()), (
+        "the note no longer states the block-granular persistence rule; a step-granular "
+        "reading is what licensed the six phantom Step 4-pre sites"
     )
 
 

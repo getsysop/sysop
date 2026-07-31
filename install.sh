@@ -89,7 +89,7 @@ LOOP_EXCLUDE_SKILLS="intake add-task claim-task auto-build auto-fix auto-judge n
 # _shared/ partials NOT in the five loop skills' closure (leg-1 audit). Kept:
 # adversarial-review, permission-guard, promotion-write-target, test-assessment-rubric,
 # fanout-evidence (Phase 138), upstream-repo (Phase 147).
-LOOP_EXCLUDE_SHARED="decomposition-rubric guided-mode main-push-guard ui-verify"
+LOOP_EXCLUDE_SHARED="decomposition-rubric guided-mode main-push-guard plan-review-preference ui-verify"
 # Companion scripts excluded from loop mode (lifecycle-coupled). Kept: run_checks*
 # (+ run_checks/ dir), _log.py, review_index.py, archive_review_tasks.py,
 # install_hooks.sh, sysop-update.sh, and the model-role set (_model_roles.py,
