@@ -36,10 +36,21 @@ It closes two distinct races:
 
 ## Rule A — assert the branch before EVERY commit and EVERY push
 
+**Substitute `<expected branch>` with the branch this step intends to write** — see the
+table above — at both occurrences, before running it. It is a placeholder, not a variable
+to set: nothing survives from one fenced block to the next (`WORKFLOW.md` § 8.2a
+*Persistence boundary*), so a variable here would be empty and the halt message would name
+no branch. Every shipped caller already writes its own value in: the literal `main` at
+`/claim-task` Step 4d, `/auto-build` Step 5.4 and `/release` — and at `/document-work`
+Step 5 in the inverted `!= "main"` form below. `/review-close` writes in all three of its
+forms: the literal `main` under `direct` policy (the default), the fixed
+`merge/review-close-*` pattern under the integration-branch shape, and the written-out
+approved branch name under PR reuse. So this is the template they copy from, never a
+snippet to run as-is.
+
 ```bash
-# EXPECTED_BRANCH is the branch this step intends to write — see the table above.
-test "$(git rev-parse --abbrev-ref HEAD)" = "$EXPECTED_BRANCH" || {
-  echo "HEAD is not $EXPECTED_BRANCH (a concurrent actor moved it) — STOP."; exit 1; }
+test "$(git rev-parse --abbrev-ref HEAD)" = "<expected branch>" || {
+  echo "HEAD is not <expected branch> (a concurrent actor moved it) — STOP."; exit 1; }
 ```
 
 `/document-work` Step 5 is the one inverted case — it pushes a _feature_ branch, never
@@ -95,8 +106,10 @@ if [ "$(git rev-parse origin/main)" != "$(git merge-base HEAD origin/main)" ]; t
   echo "origin/main advanced (autonomous merge) — rebasing local main onto it."
   git rebase origin/main || { git rebase --abort; \
     echo "conflict with an auto-merged commit — STOP, reconcile manually"; exit 1; }
-  # The base changed → RE-RUN review-close Step 3 (the project's
-  # § Pre-merge verification commands) against the new base before pushing.
+  # The base changed → RE-RUN review-close 4a-post (the merged-tree gate: the
+  # project's § Pre-merge verification commands, run on the merge target) against
+  # the new base before pushing. NOT Step 3 — Step 3's tree is `main` before any
+  # merge, which is not the tree this rebase moved.
 fi
 # 4. push the exact verified tip — NEVER --force (Rule C)
 PUSHED_SHA="$(git rev-parse HEAD)"

@@ -37,9 +37,18 @@ BOOTSTRAP_LINE = 'sys.path[:0] = glob.glob(".venv/lib/python*/site-packages")'
 # Opener for an inline stdin heredoc driven by a literal `python3` command word.
 # Tolerates a positional arg before OR after the `<<'DELIM'` redirect, and markdown
 # list indentation.
+#
+# The positional arg is matched as *any* double-quoted token. It used to be pinned to
+# `"$VAR"` — a quoted shell variable — which meant this regex recognised only the shape
+# Phase 169 removed: converting the four openers to substituted `"<TASK_ID>"` literals
+# dropped the corpus from 7 heredocs to 3 and the floor below caught it. A guard whose
+# detector encodes one spelling of the thing it guards silently narrows to nothing when
+# that spelling is fixed, so the shape question stays here (is there a quoted operand?)
+# and the *content* question — a `$VAR` operand is a phantom — belongs to
+# `test_phantom_shell_vars.py`, which forbids it directly.
 _OPENER = re.compile(
-    r"""^(?P<indent>[ \t]*)python3\ -\ (?:"\$[A-Za-z_][A-Za-z0-9_]*"\ )?"""
-    r"""<<'(?P<delim>[A-Za-z_]+)'(?:\ "\$[A-Za-z_][A-Za-z0-9_]*")?\s*$""",
+    r"""^(?P<indent>[ \t]*)python3\ -\ (?:"[^"]*"\ )?"""
+    r"""<<'(?P<delim>[A-Za-z_]+)'(?:\ "[^"]*")?\s*$""",
     re.VERBOSE,
 )
 

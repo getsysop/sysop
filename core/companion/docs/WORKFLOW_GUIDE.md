@@ -62,6 +62,8 @@ Mark the task as in-progress via `/claim-task <TASK-ID>` — it flips `status: o
 
 **Both claim kinds take a lock.** A review batch is not the informal half of this — `batch_work.sh` writes `sysop/runtime/locks/BATCH-<N>.lock` in the same directory and the same shape, which is what stops `/next-task`, `/sitrep` and the collision advisories from handing the same batch to a second agent. Reverse either one from the main checkout: `claim_task.sh --release <TASK-ID>` for a roadmap task, `batch_work.sh --release <BATCH-NUMBER>` for a batch.
 
+**`/claim-task` does not stop at the claim any more.** Since Phase 171 it is an *orchestrator*: after the lock and worktree it spawns a planner, spawns an independent reviewer of that plan, classifies the findings itself, optionally gates on you, and spawns an executor — writing `plan.md`, `review.md` and `classification.md` under `sysop/runtime/claim/<CLAIM_ID>/<RUN_ID>/` as it goes. `WORKFLOW.md` § 2.2 is the authoritative description. **Steps 3 through 5 below are the manual path** — what to do when you are working the task yourself rather than handing it to `/claim-task`, and what the sub-agents are doing on your behalf when you are not. They are not a second set of steps to run after it.
+
 ### 3. Plan
 
 Before writing code, look up which conventions apply to the files you'll change:
@@ -76,7 +78,7 @@ For security-sensitive files, also check `.claude/security_map.md` for OWASP-spe
 
 Work in the worktree on the feature branch. Follow the conventions from step 3. Never commit to `main` directly.
 
-The pre-commit hook runs automatically and will warn or block on common anti-patterns (f-string SQL, raw exceptions in responses, etc.).
+The pre-commit hook runs automatically — though it ships as a skeleton: it warns or blocks only once your project's checks accrete into it (f-string SQL, raw exceptions in responses, and the like are the shape of what gets added by convention promotion).
 
 ### 5. Commit & Document
 
@@ -204,8 +206,9 @@ This whole process is what `/review-close` automates; run it by hand when no AI 
 1. Review each feature branch: `git diff main...<branch>` (three dots — two compares the tips, so anything `main` gained after the branch was cut looks like the branch deleted it)
 2. Cross-check changes against applicable conventions
 3. **Verify the test-decision record** — read the branch's `## Test decision` back against the diff ("plan said test X — is it here?" / "no-test-because-Z — does Z still hold?"). Halt for a human decision on a mismatch. This *verifies the record*; it does not re-judge whether the test strategy was right (that was the plan-time reviewer's job).
-4. Run full verification: `pytest` + `npm run build`
+4. Run a cheap pre-merge pass of the verification commands — but know what it can reach: you are still on `main`, so it verifies `main`, not the branches. Their files are not in your tree yet.
 5. Merge — `git merge --ff-only <branch>` under the default `## Merge policy: direct`. If your project's `CLAUDE.md` declares `## Merge policy: pr` (the setting for a `main` that is push-protected by a required status check or `enforce_admins`), `main` is never written directly: land the approved branches on a throwaway integration branch and open one squash PR, so GitHub becomes the sole serialized writer of `main`. See WORKFLOW.md § 6.1.
+5b. **Run full verification on the merged result: `pytest` + `npm run build`.** This is the gate that counts — the merged tree is the first tree that is both the work and what you are about to push. Do it here, before consolidating docs: a failure now costs nothing, and step 6 deletes the pending-docs after routing them.
 6. Consolidate `sysop/runtime/pending-docs/*.md` into shared documentation files
 7. Push and verify staging deployment
 8. Clean up: delete merged branches and worktrees
@@ -214,10 +217,10 @@ This whole process is what `/review-close` automates; run it by hand when no AI 
 
 ## Pre-merge Verification Structure
 
-Each project's `CLAUDE.md` declares a `## Pre-merge verification` section listing the commands the senior reviewer (or `/review-close`) runs before push. It supports two shapes:
+Each project's `CLAUDE.md` declares a `## Pre-merge verification` section listing the commands the senior reviewer (or `/review-close`) runs before push. **They run twice, on two different trees:** once before the merges as a cheap fail-fast on `main` (`/review-close` Step 3), and once after them on the merge target (`4a-post`) — that second run is the authoritative one, because it is the only one whose tree contains the work. It supports two shapes:
 
 - **`### Always`** — full-tree commands that run unconditionally on every review pass (build, full test suite, project-level smoke tests). One command per bullet.
-- **`### Ratchet (changed files only)`** — a bash code block of project-supplied snippets. Each snippet pipes `git diff --name-only origin/main...HEAD` through a file-type filter and invokes lint or typecheck against only the changed files. Snippets short-circuit and pass when no changed file matches the filter.
+- **`### Ratchet (changed files only)`** — a bash code block of project-supplied snippets. Each snippet pipes `git diff --name-only origin/main...HEAD` through a file-type filter and invokes lint or typecheck against only the changed files. Snippets short-circuit and pass when no changed file matches the filter — which is why *which tree they run on* decides whether they check anything: on the pre-merge pass that range is `main`'s local-only commits (often empty), and only on the merge target does it name the work.
 
 A section that omits both sub-headings is treated as a flat `### Always` list — fine for projects without a ratchet yet.
 

@@ -337,7 +337,8 @@ If STATUS is PASS and commits were pushed, create a pending-docs file in the wor
 branch: <branch-name>
 date: YYYY-MM-DD
 type: infrastructure
-task_ids: []
+roadmap_ids: []
+review_task_ids: []
 summary: "Batch <N> complete (judgment): <Title>. Fixed <X>, dropped <Y>, failed <Z>."
 ---
 ```

@@ -802,98 +802,140 @@ def _step8(text=None):
 
 
 def step8_envelope_problems(text=None):
+    """Step 8's invariants AFTER the orchestrator reshape.
+
+    Supersedes the Phase-159b tolerance guards (un-phased-first resolution
+    order, phased glob fallback, exec>review>plan precedence, narrow delete).
+    Those existed because no shipped prompt emitted PHASE:, so Step 8 had to
+    guess which filename the hook had written -- and 159b's own in-tree note
+    said the scaffolding was waiting for this: "repointing this read at the
+    phased names *before* that lands would break the working single-envelope
+    path for no gain."
+
+    The reshape landed it. All three spawn prompts emit PHASE:, so the
+    filenames are deterministic and there is nothing left to resolve. The
+    successor invariants are STRONGER, not weaker: "do not widen the delete"
+    becomes "do not delete at all", which is the defect the whole reshape
+    exists to remove -- an envelope destroyed at the moment it became evidence.
+    """
     problems = []
     s8 = _step8(text)
-    # Both names must appear in the BULLET LIST that defines them, not merely
-    # somewhere in Step 8 -- each name is also mentioned in the delete
-    # paragraph below, so bare substring checks survived deleting the
-    # definitions outright.
-    if not _re.search(r"^\s*-\s+`<TASK_ID>\.json`\s+—", s8, _re.M):
-        problems.append("Step 8 no longer defines the un-phased <TASK_ID>.json (today's path)")
-    if not _re.search(r"^\s*-\s+`<TASK_ID>\.<phase>\.json`\s+—", s8, _re.M):
-        problems.append("Step 8 no longer defines the phased <TASK_ID>.<phase>.json")
-    # The RESOLUTION ORDER is the mechanism, not the two names appearing.
-    if not _re.search(r"try `<TASK_ID>\.json` first", s8):
-        problems.append("Step 8 lost the un-phased-first resolution order")
-    if not _re.search(r"glob `<TASK_ID>\.\*\.json`", s8):
-        problems.append("Step 8 lost the phased-envelope glob fallback")
-    # POLARITY, not proximity. The previous form only required the word
-    # `_unparseable_` somewhere after the glob on the same line, so flipping
-    # "ignoring" to "including" -- which feeds parse failures back in as
-    # envelopes -- kept it green.
-    if not _re.search(
-        r"glob `<TASK_ID>\.\*\.json` \(ignoring `_unparseable_\*\.json` diagnostics\)", s8
-    ):
-        problems.append("Step 8's glob no longer excludes _unparseable_ diagnostics")
-    # The precedence ORDER was entirely unguarded; reversing it makes Step 8
-    # report the plan envelope as the executed result.
-    if not _re.search(
-        r"prefer `exec`, then `review`, then `plan`", s8
-    ):
+
+    # 1. Step 8 reads the EXEC envelope. Reporting the plan or review envelope
+    #    as the executed result is what the old exec>review>plan precedence
+    #    rule guarded; it is now prevented by construction instead of ordering.
+    if not _re.search(r"`<CLAIM_ID>\.exec\.json`", s8):
+        problems.append("Step 8 no longer names the exec envelope it must read")
+
+    # 2. NOTHING is deleted mid-lifecycle. Matched as a command span, so the
+    #    paragraph *forbidding* deletion does not fire it -- the failure mode
+    #    _shared/adversarial-review.md Test strategy names by hand.
+    if _re.search(r"`rm -f sysop/runtime/subagent-envelopes/", s8):
         problems.append(
-            "Step 8 lost the exec > review > plan precedence, so a multi-phase "
-            "claim can report an earlier phase as the executed result"
+            "Step 8 deletes an envelope -- deleting after consumption is why a "
+            "review that DID run left no durable trace, the defect the reshape "
+            "exists to remove"
         )
-    # (The --entry-state exit-code contract lives in Step 2, not here; it is
-    # guarded in tests/test_batch_claim_kinds.py::entry_state_problems. A first
-    # draft of this function checked it against Step 8 and failed immediately,
-    # which is the section-scoping discipline working as intended.)
-    # Steps naming <TASK_ID> inside a roadmap-only mechanism must carry an
-    # explicit `Review batches:` clause -- claim-task/SKILL.md's own Step 1
-    # convention, and the Phase-29 failure mode (silence reads as
-    # not-applicable). Step 8 names two <TASK_ID>-keyed filenames.
+    if not _re.search(r"\*\*Do not delete the envelopes here\.\*\*", s8):
+        problems.append("Step 8 lost its explicit no-delete rule")
+
+    # 3. Absence is AMBIGUOUS until the diagnostic is checked. The hook keys
+    #    _unparseable_ by session+agent, never by claim id, so a claim-keyed
+    #    read sees nothing at all and "the executor never ran" is the wrong
+    #    conclusion -- a dead run and a healthy-but-malformed one otherwise
+    #    produce identical evidence.
+    if not _re.search(r"_unparseable_", s8):
+        problems.append(
+            "Step 8 can conclude an envelope is absent without checking for an "
+            "_unparseable_ diagnostic"
+        )
+
+    # 4. Resolved against the MAIN repo root -- the hook resolves its own
+    #    output that way, so a worktree-relative read finds nothing.
+    if not _re.search(r"git rev-parse --git-common-dir", s8):
+        problems.append(
+            "Step 8 no longer resolves the envelope against the main repo root"
+        )
+
+    # 5. A step naming claim-keyed filenames inside a roadmap-shaped mechanism
+    #    carries an explicit Review batches: clause -- claim-task's own Step 1
+    #    convention, and the Phase-29 failure (silence reads as
+    #    not-applicable). Steps 7-8 are precisely where that happened before.
     if not _re.search(r"\*\*Review batches:\*\*", s8):
         problems.append(
-            "Step 8 names <TASK_ID>-keyed filenames with no **Review batches:** "
-            "clause, so a batch claim reads the step as not applicable"
+            "Step 8 names claim-keyed filenames with no **Review batches:** clause"
         )
-    # The delete must stay narrow. A wildcard rm here destroys the plan and
-    # review envelopes mid-lifecycle once the reshape emits PHASE:.
-    #
-    # Matched as a complete backticked COMMAND span, not "rm -f … somewhere on
-    # the same line as a wildcard": the paragraph that forbids the wildcard
-    # names it, and the whole paragraph is one markdown line, so the looser
-    # form fired on the very sentence documenting the rule. That pressures the
-    # next author to delete the explanation to get green -- the failure mode
-    # tools/CLAIM_TASK_ORCHESTRATOR_SPEC.md § Test strategy calls out by name.
-    if _re.search(
-        r"`rm -f sysop/runtime/subagent-envelopes/<TASK_ID>\.\*\.json`", s8
-    ):
-        problems.append(
-            "Step 8's delete was widened to a wildcard, which would destroy the "
-            "plan/review envelopes mid-lifecycle"
-        )
-    if not _re.search(r"delete \*\*the file you actually read\*\*", s8):
-        problems.append("Step 8's delete no longer targets the resolved filename")
     return problems
 
 
-def test_step8_tolerates_both_envelope_filenames():
+def phase_emission_problems(text=None):
+    """All three spawn prompts must emit PHASE:, or their envelopes collide on
+    <CLAIM_ID>.json and last-writer-wins -- the exact defect Phase 159a built
+    the optional key to prevent. Step 8's deterministic read of
+    <CLAIM_ID>.exec.json rests on this and on nothing else, so the emission and
+    the read have to be guarded together or the pair can drift apart silently.
+    """
+    text = _CLAIM_SKILL.read_text(encoding="utf-8") if text is None else text
+    problems = []
+    for phase in ("plan", "review", "exec"):
+        if not _re.search(r"^PHASE: %s$" % phase, text, _re.M):
+            problems.append("no spawn prompt emits `PHASE: %s`" % phase)
+    return problems
+
+
+def test_step8_reads_the_exec_envelope_and_deletes_nothing():
     assert step8_envelope_problems() == []
 
 
-def test_guard_catches_a_step8_that_only_knows_the_unphased_name():
+def test_all_three_spawn_prompts_emit_phase():
+    assert phase_emission_problems() == []
+
+
+def test_guard_catches_a_step8_that_deletes_an_envelope():
     text = _CLAIM_SKILL.read_text(encoding="utf-8")
-    softened = _re.sub(r"glob `<TASK_ID>\.\*\.json`", "ignore other files", text, count=1)
-    assert softened != text
-    assert any("glob fallback" in p for p in step8_envelope_problems(softened))
+    broken = text.replace(
+        "**Do not delete the envelopes here.**",
+        "After consuming, `rm -f sysop/runtime/subagent-envelopes/<CLAIM_ID>.exec.json`.",
+        1)
+    assert broken != text
+    problems = step8_envelope_problems(broken)
+    assert any("deletes an envelope" in p for p in problems)
+    assert any("lost its explicit no-delete rule" in p for p in problems)
 
 
-def test_guard_catches_a_widened_delete():
+def test_guard_catches_a_softened_no_delete_rule():
+    """The no-delete rule must survive being turned into a suggestion."""
     text = _CLAIM_SKILL.read_text(encoding="utf-8")
     softened = text.replace(
-        "`rm -f sysop/runtime/subagent-envelopes/<the resolved filename>`",
-        "`rm -f sysop/runtime/subagent-envelopes/<TASK_ID>.*.json`", 1)
+        "**Do not delete the envelopes here.**",
+        "You may tidy up the envelopes here if you like.", 1)
     assert softened != text
-    assert any("widened to a wildcard" in p for p in step8_envelope_problems(softened))
+    assert any("no-delete rule" in p for p in step8_envelope_problems(softened))
 
 
-def test_guard_catches_a_dropped_resolution_order():
+def test_guard_catches_a_step8_that_reads_the_wrong_phase():
     text = _CLAIM_SKILL.read_text(encoding="utf-8")
-    softened = _re.sub(r"try `<TASK_ID>\.json` first", "read whichever exists",
-                       text, count=1)
-    assert softened != text
-    assert any("resolution order" in p for p in step8_envelope_problems(softened))
+    broken = text.replace("`<CLAIM_ID>.exec.json`", "`<CLAIM_ID>.plan.json`")
+    assert broken != text
+    assert any("exec envelope" in p for p in step8_envelope_problems(broken))
+
+
+def test_guard_catches_a_step8_that_ignores_unparseable_diagnostics():
+    text = _CLAIM_SKILL.read_text(encoding="utf-8")
+    s8_start = text.index("## Step 8")
+    broken = text[:s8_start] + text[s8_start:].replace("_unparseable_", "irrelevant")
+    assert broken != text
+    assert any("_unparseable_" in p for p in step8_envelope_problems(broken))
+
+
+def test_guard_catches_a_prompt_that_drops_its_phase_key():
+    """Dropping PHASE from one prompt collides that envelope onto the
+    un-phased name -- silent, and it makes Step 8's read find nothing."""
+    for phase in ("plan", "review", "exec"):
+        text = _CLAIM_SKILL.read_text(encoding="utf-8")
+        broken = text.replace("PHASE: %s" % phase, "PHASE: none", 1)
+        assert broken != text, phase
+        assert any(phase in p for p in phase_emission_problems(broken)), phase
 
 
 def test_claim_task_carries_no_run_in_background_agent_parameter():
@@ -906,10 +948,43 @@ def test_claim_task_carries_no_run_in_background_agent_parameter():
     Scoped to claim-task deliberately: eleven sibling sites survive in
     /auto-build, /auto-fix and /auto-judge and are tracked separately in
     REVIEW_CHECKLIST.md § High. Widening this guard would fail on work this
-    phase did not do."""
+    phase did not do.
+
+    MATCHES STRUCTURE, NOT THE BARE TOKEN. The first form of this guard failed
+    on any line containing the string, which made it fire on the orchestrator's
+    own sentence *forbidding* the parameter -- the failure mode
+    _shared/adversarial-review.md Test strategy names outright ("the sentence
+    forbidding `rm -f` contains `rm -f`"). A guard that punishes documentation
+    for describing what it prevents pressures the next author to delete the
+    explanation to get green, which is how the parameter came back the first
+    time. So: the assignment shape is banned outright, and a bare mention is
+    allowed only where it is being prohibited."""
     text = _CLAIM_SKILL.read_text(encoding="utf-8")
-    hits = [i for i, line in enumerate(text.splitlines(), 1)
-            if "run_in_background" in line]
-    assert not hits, (
-        f"claim-task/SKILL.md re-introduced run_in_background at line(s) {hits}"
+
+    # (1) The real ratchet: `run_in_background` can only be *passed* as an
+    #     assignment, so ban that shape in any spelling (bare, backticked,
+    #     YAML- or list-style, true or false).
+    assigned = [
+        i for i, line in enumerate(text.splitlines(), 1)
+        if re.search(r"run_in_background`?\s*:\s*`?\s*(true|false)\b", line)
+    ]
+    assert not assigned, (
+        f"claim-task/SKILL.md passes run_in_background as an Agent parameter at "
+        f"line(s) {assigned} -- the tool's schema is closed and a compliant call "
+        f"raises InputValidationError."
+    )
+
+    # (2) Vacuity floor in the other direction: a future author must not slip it
+    #     back in under some new syntax this regex does not model. Every mention
+    #     has to sit in a sentence that forbids it.
+    mentions = [(i, line) for i, line in enumerate(text.splitlines(), 1)
+                if "run_in_background" in line]
+    unprohibited = [
+        i for i, line in mentions
+        if not re.search(r"\bNOT\b|\bnot a parameter\b|\bnever\b", line)
+    ]
+    assert not unprohibited, (
+        f"claim-task/SKILL.md mentions run_in_background outside a prohibition at "
+        f"line(s) {unprohibited} -- if it is being described rather than forbidden, "
+        f"say why it must not be passed."
     )

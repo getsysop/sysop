@@ -514,8 +514,8 @@ def _classify_task(
     if commits_ahead == 0:
         state = "planning"
         next_action = (
-            f"continue planning for {task_id} or run the reviewer-executor "
-            "(see /claim-task Step 7)"
+            f"continue the build pipeline for {task_id} "
+            "(see /claim-task Step 7: plan -> review -> classify -> execute)"
         )
     elif task_id and task_id in doc_work_ids:
         # Doc-Work trailer present for this task_id — distinguish pushed vs not

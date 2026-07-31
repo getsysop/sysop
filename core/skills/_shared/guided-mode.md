@@ -2,7 +2,7 @@
 
 Canonical protocol for **guided (teaching) mode**: a behavioral overlay for builders who are growing into the review judgment this workflow assumes. It governs how a skill behaves at the points where it would halt and ask the human to approve, choose, or promote something. Maintain the protocol in one place — this file.
 
-**Inert until activated.** This partial changes nothing on its own. A consumer opts in by adding the `## Guided mode` activation stanza to their `CLAUDE.md` (project-level, or user-level `~/.claude/CLAUDE.md` to make it follow them across projects) — its presence is the toggle; removing it returns to default (senior-operator) behavior. The stanza is always-loaded context, so skills honor the protocol below at top-level decision points without a per-skill reference. (Gates that run inside a cold-context sub-agent — e.g. `/claim-task`'s reviewer-executor — reach full fidelity once a later phase wires each decision-gate skill to cite this file directly; that per-skill wiring is a deferred build.)
+**Inert until activated.** This partial changes nothing on its own. A consumer opts in by adding the `## Guided mode` activation stanza to their `CLAUDE.md` (project-level, or user-level `~/.claude/CLAUDE.md` to make it follow them across projects) — its presence is the toggle; removing it returns to default (senior-operator) behavior. The stanza is always-loaded context, so skills honor the protocol below at top-level decision points without a per-skill reference. (Gates that run inside a cold-context sub-agent — e.g. `/claim-task`'s planner and executor — reach full fidelity once a later phase wires each decision-gate skill to cite this file directly; that per-skill wiring is a deferred build.)
 
 ---
 

@@ -3,7 +3,7 @@
 SubagentStop hook (Claude Code 2.1.47+ primary path; 2.0.42+ fallback path).
 
 Reads SubagentStop hook input on stdin, extracts the YAML envelope that
-Sysop's /claim-task reviewer-executor (Phase 28+29) and /auto-build
+Sysop's /claim-task planner/reviewer/executor (Phase 171) and /auto-build
 execution agent (Phase 29) emit as the LAST content of their final message,
 and writes structured JSON to ``<repo>/sysop/runtime/subagent-envelopes/<TASK_ID>.json``
 so the parent skill can read JSON instead of regex-parsing free text.
@@ -55,16 +55,24 @@ true of the filename only, and saying it of the behaviour would be false. This
 exists for the orchestrator reshape (tools/CLAIM_TASK_ORCHESTRATOR_SPEC.md),
 where one claim spawns a planner, a reviewer and an executor.
 
-Plus the reviewer-executor's REVIEW_REPORT YAML at the TOP of its response
-(see _shared/adversarial-review.md § Reviewer-executor variant). The hook
+Plus the reviewer's REVIEW_REPORT YAML at the TOP of its response
+(see _shared/adversarial-review.md § The reviewer-executor variant is retired). The hook
 extracts both when present.
 
 Multi-envelope rule. If multiple fenced YAML blocks contain a ``TASK:`` /
 ``STATUS:`` pair, the LAST one wins — matches the sub-agent prompt's "LAST
 content in your final message" instruction.
 
-Cleanup. The parent skill deletes the JSON file after consuming it (see
-/claim-task SKILL.md § Step 8 and /auto-build SKILL.md § Phase 6e). The
+Cleanup, and the two parents differ. /auto-build Phase 6e deletes the JSON file
+after consuming it. **/claim-task Step 8 does NOT, since Phase 171** — deleting
+the envelope at the moment it became evidence is why a review that ran and a
+review that was skipped left identical traces (upstream #220). It keeps all
+three, and instead /claim-task Step 7-pre MOVES any envelope left over from a
+previous run of the same claim into that run's artifact directory before
+spawning, since the filename below carries no run component. That move runs on a
+FRESH claim only -- a --resume adopts an existing run and deliberately leaves the
+mailbox alone, so /claim-task Step 8 records the executor's terminal status into
+the run's own outcome.md rather than routing off this directory. The
 sysop/runtime/subagent-envelopes/ dir is gitignored by install.sh's
 ensure_runtime_gitignore() — append-if-missing on every install AND --update,
 so a .gitignore that pre-dates the install still gets the entry.
@@ -103,7 +111,7 @@ _FENCED_BLOCK_RE = re.compile(
 _ENVELOPE_HEAD_RE = re.compile(r"^\s*TASK\s*:", re.MULTILINE)
 _STATUS_LINE_RE = re.compile(r"^\s*STATUS\s*:", re.MULTILINE)
 
-# REVIEW_REPORT YAML at the TOP of the reviewer-executor response. The shape
+# REVIEW_REPORT YAML at the TOP of the reviewer's response. The shape
 # is a fenced ```yaml block whose first non-blank key is REVIEW_REPORT.
 _REVIEW_REPORT_HEAD_RE = re.compile(r"^\s*REVIEW_REPORT\s*:", re.MULTILINE)
 

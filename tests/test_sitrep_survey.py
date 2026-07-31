@@ -355,7 +355,18 @@ def test_classify_task_planning_when_no_commits_ahead():
         phase40_cutoff=_CUTOFF,
     )
     assert ts.state == "planning"
-    assert "continue planning" in ts.next_action.lower() or "reviewer-executor" in ts.next_action
+    # Assert the PROPERTY, not a phrase: a task with a claim but no commits routes the
+    # operator back into /claim-task's build pipeline. The previous form accepted either
+    # the literal "continue planning" or "reviewer-executor" — the latter naming a shape
+    # retired when /claim-task became an orchestrator, so half this assertion had become a
+    # dead referent that could never fire again.
+    action = ts.next_action.lower()
+    assert "/claim-task" in action, f"next_action must route to the claim skill: {ts.next_action!r}"
+    assert ts.task_id.lower() in action, f"next_action must name the task: {ts.next_action!r}"
+    assert "reviewer-executor" not in action, (
+        "next_action names a shape that no longer exists — /claim-task spawns a planner, "
+        "an independent reviewer and an executor as separate agents."
+    )
 
 
 def test_classify_task_ready_for_review_close_with_doc_work_trailer():

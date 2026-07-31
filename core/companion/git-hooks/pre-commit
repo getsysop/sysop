@@ -7,8 +7,9 @@
 #
 # This is a skeleton. Each project populates its own B*/A* checks
 # based on the conventions in CLAUDE.md and convention_map.md.
-# See core/companion/git-hooks/examples/pre-commit-python.example for
-# a worked example (Python web service: 5 blocking + 9 advisory checks).
+# See git-hooks/examples/pre-commit-python.example in the Sysop source
+# repo (not installed into consumer trees) for a worked example
+# (Python web service: 5 blocking + 9 advisory checks).
 
 STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACM)
 [ -z "$STAGED_FILES" ] && exit 0

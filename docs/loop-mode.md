@@ -170,8 +170,9 @@ A refused round is not a failure you can see. It writes no `review_tasks.md` ent
 no error, so it looks exactly like a clean round.
 
 Sysop's answer is to make the absence visible rather than to talk a model past its own refusal
-(which would no longer be measuring the skill). A refusal shows up in one of two shapes, and each
-has its own surface:
+(which would no longer be measuring the skill). A refusal shows up in one of two shapes — and a
+quieter third neighbor, a round that ran but barely looked, completes the set. Each has its own
+surface:
 
 - **Died partway** (refused after starting, crashed, ran out of context). Each round opens a
   marker under `sysop/runtime/pending-rounds/` and clears it only once findings are written, so a

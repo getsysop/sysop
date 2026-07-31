@@ -212,7 +212,8 @@ passes to `main`, and cleans up the worktree.
 
 > **Have an end-to-end or QA suite?** A Playwright, Cypress, or integration-test run plugs
 > in as one more command under `## Pre-merge verification` → `### Always` in your project's
-> `CLAUDE.md` — `/review-close` runs it on every merge, no Sysop-side wiring. See
+> `CLAUDE.md` — `/review-close` runs it on the merged tree on every merge, no Sysop-side
+> wiring. See
 > [`WORKFLOW.md`](../core/companion/docs/WORKFLOW.md) §6.1.
 
 By default it pushes to `main` directly. If your `main` is push-protected, route it through
@@ -331,7 +332,13 @@ the hooks), the exact steps are in [*Backing out*](../README.md#backing-out) in 
 
 The lifecycle *skills* above are written for Claude Code, but Sysop's companion layer — the
 check runner, the git hooks, the convention and security maps, the workflow docs — is plain
-text with no Claude Code dependency, delivered by the same `bash install.sh`. The intent is
-that the process runs on any capable agent, or none. That end-to-end portability is still
-being validated against a non-Claude agent, so today the guided slash-command experience in
-this guide is the Claude Code path; the underlying workflow is not Claude-specific.
+text with no Claude Code dependency, delivered by the same `bash install.sh`. How far the
+*skills* travel has been measured, and the honest summary is portability with named limits:
+a non-Claude frontier stack ran the review loop and found real issues at a Claude-comparable
+false-positive rate, while a different frontier model refused the security audit outright —
+so treat the two review skills as portable to different degrees, not equally
+(the [README's portability paragraph](../README.md) is the standing statement). The installer
+also registers those two review skills natively with the Codex CLI
+([install-and-update § Codex](./install-and-update.md#codex) — including where Codex's
+default sandbox stops the loop). The guided slash-command experience in this guide is the
+Claude Code path; the underlying workflow is not Claude-specific.

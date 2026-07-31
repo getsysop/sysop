@@ -15,7 +15,7 @@ Several sections are read as structured input rather than prose. Four are pure c
 | `## Post-deploy verification` | A smoke command `/review-close` runs *after* the merge lands — a Playwright run against staging, a curl on a health endpoint, a synthetic monitor check. Absent → the step is a no-op. |
 | `## Pending documentation routing` | Where `/auto-build` consolidates the per-task pending-docs it accumulates across a batch, so a multi-task run doesn't hand you a pile of unrouted fragments. |
 
-Templates are in WORKFLOW.md § 6.1, which also documents `## Pre-merge verification` (the commands `/review-close` Step 3 runs before pushing), the sections the review/audit skills read as run inputs (`## Scope mapping`, `## Map coverage exclusions`, `## Security-critical always-include files`, `## High-value files for review`) and the `## Guided mode` toggle. The give-back skills additionally check the resolved target's visibility before filing and warn when security-sounding content is headed somewhere public — or somewhere they could not verify.
+Templates are in WORKFLOW.md § 6.1, which also documents `## Pre-merge verification` (the commands `/review-close` runs before pushing — twice, as a cheap pre-merge pass on `main` and again on the merged tree, which is the run that counts), the sections the review/audit skills read as run inputs (`## Scope mapping`, `## Map coverage exclusions`, `## Security-critical always-include files`, `## High-value files for review`) and the `## Guided mode` toggle. The give-back skills additionally check the resolved target's visibility before filing and warn when security-sounding content is headed somewhere public — or somewhere they could not verify.
 
 ## Config — never-managed overlay files
 
@@ -104,6 +104,8 @@ Skills pin *roles* (`reasoning` / `mechanical` / `quick`), and `.claude/served_m
 roles:
   reasoning: fable   # or `best`: Fable 5 where your org has access, else latest Opus
 ```
+
+(One key suffices for `fable` — and for anything else already in the default map's `served:` list. A value *outside* that list — `best`, `inherit`, or a full model id — must *also* be listed under a `served:` key in your local overlay, or `check_skill_models.py` fails loudly; the default map's own comments show the shape.)
 
 Local keys win, updates never touch the file, and sunset fixes keep flowing through the managed default map. The mapping is applied by the install-time resolver — after creating or changing the file, run `bash sysop/scripts/sysop-update.sh` (or `install.sh <target> --update`) to rewrite the skills' pins. (`fable` needs Claude Code ≥ 2.1.170; where a pinned model isn't available, the session silently keeps its current model.)
 

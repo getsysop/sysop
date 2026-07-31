@@ -160,7 +160,7 @@ If the user rejects the plan, do not execute. Ask what they want changed and rev
 
 ## Notes
 
-- **Complementary to `/claim-task`.** `/claim-task` runs the same adversarial review automatically at Step 7, inside a single reviewer-executor sub-agent that also self-classifies and implements (see `claim-task/SKILL.md` § Step 7 and `_shared/adversarial-review.md` § "Reviewer-executor variant"). Use `/plan-review` only for plans NOT produced by `/claim-task` — otherwise you are paying for two adversarial passes on the same plan.
+- **Complementary to `/claim-task`.** `/claim-task` runs the same adversarial review automatically at Step 7b, in an independent sub-agent that did not write the plan; the orchestrator classifies its findings at Step 7c (see `claim-task/SKILL.md` § Step 7 and `_shared/adversarial-review.md` § "Reviewer-executor variant"). Use `/plan-review` only for plans NOT produced by `/claim-task` — otherwise you are paying for two adversarial passes on the same plan.
 - **Token cost.** Each invocation spawns a fresh opus sub-agent. Re-running on the same plan after edits is valid but costs tokens. Do not re-run speculatively.
 - **No size gate.** The skill does not gate on plan size — tiny plans still trigger the full adversarial pass. Skip invoking the skill for trivial changes rather than adding a complexity threshold, which would reopen the gap we are trying to close.
 - **Do not dismiss findings silently.** Every finding must be either incorporated or explicitly rejected with rationale in the revised plan. Silent dismissal defeats the purpose of the review.

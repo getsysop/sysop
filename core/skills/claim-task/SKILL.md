@@ -1,12 +1,17 @@
 ---
 name: claim-task
-description: Claim a roadmap task or review batch — creates lock, worktree, and enters planning mode
-argument-hint: "<TASK_ID or BATCH_NUMBER>"
+description: Claim a roadmap task or review batch — creates lock and worktree, then orchestrates plan → adversarial review → execute
+argument-hint: "<TASK_ID or BATCH_NUMBER> [--review-plan | --no-review-plan] [--resume <RUN_ID>]"
 model: opus
+disallowed-tools: Edit, Write, NotebookEdit
 ---
 <!-- sysop:model-roles frontmatter=reasoning inline=reasoning -->
 
-Claim a roadmap task or review batch, create an isolated worktree, and enter plan mode before coding. Follow these steps in order.
+Claim a roadmap task or review batch, create an isolated worktree, then **orchestrate** the work: spawn a planner, spawn an independent reviewer, classify the findings yourself, optionally gate on the human, spawn an executor. Follow these steps in order.
+
+> **This skill is an orchestrator. It never implements.** It does not enter plan mode, does not call `ExitPlanMode`, and does not edit files. Its whole body is: claim, spawn, gate, spawn, report.
+>
+> **What `disallowed-tools` above does and does not buy** — state this honestly rather than treating the frontmatter as a proof. It denies the `Edit` / `Write` / `NotebookEdit` tools, so the orchestrator cannot quietly become the implementer by reaching for them. It is **partial by design**: `Bash` stays allowed, so shell redirects and `sed -i` are not covered. **Non-Claude-Code harnesses ignore the key entirely**, so it does nothing for a Codex consumer. It fires only when the harness *activates* this skill — when an agent is instead told to read this `SKILL.md` and follow it (path-based invocation, the only option on some harnesses), the frontmatter never fires. And it is **turn-scoped**: the documented behaviour is that the restriction clears when the user sends their next message, so any run in which the human types anything has lost it from that point. Whether it survives a sub-agent return, an `AskUserQuestion` answer, or a nested `Skill` invocation is **not established in either direction** — probed 2026-07-31 and no documentation was found for any tool-mediated boundary, which is weaker than proof that none exists and is exactly why nothing here rests on the answer. **Nothing in this skill may depend on the guard's reach past the step that invoked it.** The durable protection against an orchestrator drifting into implementing is the split spawns and the artifact set below, not this key.
 
 > **Helper names** referenced in this skill (e.g., `_sanitize_log`, `useAbortableFetch`, `getDisplayError`, `redact_api_keys`, `shared_cli.py`) are placeholders — substitute the equivalent helpers from your project's `convention_map.md`. Worked examples may also reference specific batch numbers, file paths, or env-var names from the originating project; treat those as illustrations, not literal requirements.
 
@@ -20,7 +25,7 @@ Read `.claude/settings.json` and confirm `permissions.allow` contains:
 - `Bash(git worktree add:*)` — transitively invoked by `sysop/scripts/claim_task.sh`.
 - `Bash(bash sysop/scripts/claim_task.sh:*)` — Step 2's `--entry-state` query **and** Step 4b's worktree + lock creation. One rule covers both: the trailing `:*` is a prefix match over the whole argument string, so no separate `--entry-state` rule is needed (and adding one would be dead). Verified against Phase 152's finding that rules seeded against invocations which bind none are worse than no rule.
 - `Bash(bash sysop/scripts/batch_work.sh:*)` — Step 4 review-batch path.
-- `Bash(python3 -:*)` — Step 2's `tasks/index.yml` lookup + Step 4a's yaml-round-trip status flip (both are `python3 - <<'PY'` heredocs).
+- `Bash(python3 -:*)` — Step 1's `--resume` validation, Step 2's `tasks/index.yml` lookup, Step 4a's yaml-round-trip status flip, Step 7a's post-plan integrity check, **and every write the orchestrator makes at Steps 7-pre, 7c and its park path** (all are `python3 - <<'PY'` heredocs, single simple commands, so one rule covers them). This is deliberate: routing the orchestrator's reads and writes through an interpreter it is already permitted to run means the reshape adds **no** new permission surface, and it does not depend on the auto-classifier's treatment of bare `mkdir` / `cp` / `test`. It also survives this skill's `disallowed-tools: Edit, Write, NotebookEdit` frontmatter, which a `Write`-tool artifact write would not.
 - `Bash(python3 sysop/scripts/validate_tasks.py)` / `Bash(python3 sysop/scripts/validate_tasks.py:*)` and the `.venv/bin/python3 sysop/scripts/validate_tasks.py` / `.venv/bin/python3 sysop/scripts/validate_tasks.py:*` venv variants — Step 4c post-claim validator (the venv form is preferred per Phase 45b; the bare form remains for non-venv consumers).
 - `Bash(python3 sysop/scripts/scope_overlap.py:*)` (and the `.venv/bin/python3` variant) — Step 2's non-blocking overlap advisory. The `git -C <worktree> diff` it shells out to needs **no** separate rule (it's a subprocess of the permitted python call, and read-only `git` auto-passes per `_shared/permission-guard.md` § Notes). This rule is **not** load-bearing — a missing rule (or any non-zero exit) just means the advisory is skipped; the claim still proceeds.
 - `Bash(git add tasks/index.yml)` — Step 4d commits the claim.
@@ -49,6 +54,15 @@ Parse `$ARGUMENTS`:
 
 If `--branch <name>` appears in `$ARGUMENTS`, extract it as the branch override (roadmap tasks only).
 
+**Also extract, here, the three flags the later steps read** — all optional:
+
+| Flag | Read by | Effect |
+|---|---|---|
+| `--review-plan` / `--no-review-plan` | Step 6 | Forces the plan-review preference to option A / option B, outranking any consumer config. |
+| `--resume <RUN_ID>` | Step 2, Step 7-pre | Re-enters a parked or abandoned claim at the named run instead of starting a new one. |
+
+`--resume` takes a `<RUN_ID>` exactly as Step 7-pre minted it (`<UTC timestamp>-<8 hex>`). **Validate it below, after `<CLAIM_ID>` is fixed** — the run directory is keyed by the claim id, so the check is not performable until the normalisation table has run.
+
 ### Normalise the claim ID here, not later
 
 Fix **both** identifiers now, before any step addresses a file by name:
@@ -63,6 +77,40 @@ Fix **both** identifiers now, before any step addresses a file by name:
 
 Where a later step names `<TASK_ID>` inside a *roadmap-only* mechanism (`tasks/index.yml` lookups, body files, branch generation), that is deliberate and correct — those steps carry an explicit **Review batches:** clause instead.
 
+### Validate `--resume <RUN_ID>` — only if it was passed
+
+Skip this entirely on an ordinary claim. **Reject an invocation that passes `--resume` with no value, or with a value that is not an existing run directory** — print the available run ids and stop. Guessing here would re-enter the wrong run. Run ids *are* chronologically sortable — the timestamp half is the prefix, and the listing below is `sorted()` — but newest is not the same as correct: a run may have been superseded, abandoned, or already executed, which is what the routing table at Step 7-pre reads and what an ordering cannot tell you.
+
+```bash
+# `python3` command word + positional args — a single simple command, so `Bash(python3 -:*)`
+# matches. Substitute both placeholders literally, quoted, so an unsubstituted one fails
+# loudly instead of being read as a redirection.
+python3 - <<'PY' "<CLAIM_ID>" "<RUN_ID>"
+import sys, subprocess
+from pathlib import Path
+
+claim_id, run_id = sys.argv[1], sys.argv[2].strip()
+# Runs live in the MAIN checkout (Step 7-pre), which is why this check is performable HERE,
+# before any lock has been read and before a worktree path is known.
+common = subprocess.run(["git", "rev-parse", "--git-common-dir"],
+                        capture_output=True, text=True, check=True).stdout.strip()
+claim_root = Path(common).resolve().parent / "sysop" / "runtime" / "claim" / claim_id
+
+if not run_id:
+    print("ERROR: --resume needs a <RUN_ID>", file=sys.stderr)
+    sys.exit(2)
+
+available = sorted(p.name for p in claim_root.iterdir() if p.is_dir()) if claim_root.is_dir() else []
+if run_id not in available:
+    print("ERROR: no run '{}' under {}".format(run_id, claim_root), file=sys.stderr)
+    print("available runs: " + (", ".join(available) or "(none)"), file=sys.stderr)
+    sys.exit(3)
+print("RESUME_OK=" + str(claim_root / run_id))
+PY
+```
+
+`claim_root.is_dir()` is tested before listing it, so a claim that has never run reports `available runs: (none)` instead of raising — the error path this check exists for must not itself be the thing that crashes.
+
 ## Step 2: Read Context & Validate
 
 **For roadmap tasks — resolve the entry state first.** This is the authority on whether the claim may proceed; the metadata heredoc below extracts fields, it does not adjudicate.
@@ -71,7 +119,7 @@ Where a later step names `<TASK_ID>` inside a *roadmap-only* mechanism (`tasks/i
 bash sysop/scripts/claim_task.sh --entry-state <TASK_ID>
 ```
 
-Write the id out literally, as Step 4b does. **Do not carry it in a shell variable** — skill steps are separate shell calls, so `"$TASK_ID"` would expand to the empty string and the script would exit on its usage guard (`WORKFLOW.md` § 8.2a, *Invocation shapes*, the rule Phase 153 established).
+Write the id out literally, here and at **every** later site — Steps 2, 4a and 4b all take it as a substituted literal. **Do not carry it in a shell variable:** nothing survives from one fenced block to the next, even inside a single step (`WORKFLOW.md` § 8.2a, *Persistence boundary*), so `"$TASK_ID"` expands to the empty string and this script exits on its usage guard. Phase 169 fixed two sites in this file that broke the rule this sentence states — the `python3 -` heredocs at Step 2 and Step 4a — so treat it as load-bearing rather than advisory.
 
 It prints exactly one token and exits 0 on every resolved state:
 
@@ -79,7 +127,7 @@ It prints exactly one token and exits 0 on every resolved state:
 |---|---|---|
 | `claimable` | `status: open`, no lock | Ordinary fresh claim — **continue**. |
 | `resumable` | `status: in_progress`, **no lock** | **Stop and ask.** Ambiguous — see below. Continue only on an explicit human go-ahead. |
-| `held` | a lock exists | **Stop.** Print the lock file contents. Someone or something holds this claim. |
+| `held` | a lock exists | **Stop.** Print the lock file contents. Someone or something holds this claim. **Unless `--resume <RUN_ID>` was passed** — see below. |
 | `closed:<status>` | `done` / `deferred` / … | **Stop.** The task is not claimable. |
 | `absent` | no such id in `tasks/index.yml` | **Stop.** Mistyped id, or the task lives in `deferred/` / `archive/` — suggest `/next-task`. |
 
@@ -97,16 +145,33 @@ Two further limits, stated because the earlier draft of this step overclaimed bo
 - **It is not "your claim."** `claim_task.sh` records `agent: anonymous` unless a name was passed, so no code here can tell an abandoned claim of yours from a colleague's.
 - **Two shipped tools call this state a defect, not a state.** `validate_tasks.py` Invariant 9 makes `in_progress` without a lock a **blocking** validator error, and `sitrep_survey.py` reports it as `index drift (in_progress without lock)` and suggests flipping back to `open`. On the ordinary claim path that disagreement is momentary — Step 4b re-creates the lock immediately — but if you stop between here and Step 4b, you have left the tree in a state the validator rejects.
 
+**`held` plus `--resume <RUN_ID>` is the one way past the stop, and it requires the human to have named the run.** A claim that parked at Step 7c leaves its lock deliberately in place, so `--entry-state` answers `held` — correctly, because from the outside a parked claim and a colleague's live claim are indistinguishable (`claim_task.sh` records `agent: anonymous` unless a name was passed, so no code here can tell them apart). Without a way past it the artifact set would be a one-way door: the park writes a plan, a review and a verdict specifically so the work can be picked up, and then nothing could pick it up.
+
+So: on `held`, if Step 1's `--resume <RUN_ID>` check passed, print the lock contents and — **if that run has one** — its `classification.md` verdict, then continue: skip Step 4 entirely, since the claim, worktree, branch and lock all already exist, and **re-enter at Step 7-pre**, which adopts the named run rather than minting a new one and routes to the right stage from the artifacts on disk. Step 7-pre is the *only* re-entry point; nothing jumps straight to a later stage. On `held` with no `--resume`, stop as the table says.
+
+**A run parked before 7c ran has no `classification.md`, and that is ordinary, not an error** — the 7a integrity park and the 7b reviewer-failure park both happen before any classification exists. The park marker (`sysop/runtime/parked/<CLAIM_ID>__<RUN_ID>.md`) carries the reason in every case and is the file to print when the verdict is absent.
+
+<a id="resume-establishes-branch"></a>**Read `<BRANCH_NAME>` and the worktree path out of the lock — this is the only step on a resume that establishes them.** They are the `branch:` and `workspace:` fields of `sysop/runtime/locks/<CLAIM_ID>.lock`, written there by `claim_task.sh --lock` and by `batch_work.sh` alike. Step 4 is skipped on a resume, so the sites that normally establish them — Step 3 for a roadmap task, `batch_work.sh`'s summary box for a batch — never run, while all three Step 7 prompts substitute `<BRANCH_NAME>` and every envelope requires it.
+
+**This is an explicit human instruction, not an inference.** The flag *is* the go-ahead; the skill never decides on its own that a `held` claim is stale enough to take over. Note the honest limit: `--resume` on a lock genuinely held by a colleague will take their claim. That is the same trust model as `--force` elsewhere in this workflow — the human is asserting something the tree cannot verify.
+
+**`--resume` changes exactly one row of that table, and no other.** It names which *run* to re-enter; it is not a blanket override of the entry state.
+
+- On **`resumable`** it does **not** short-circuit the stop-and-ask. The ambiguity that arm exists for — an abandoned claim versus a `pr` close still in flight — is about the *task*, and naming a run says nothing about it. Report the state, name both possibilities, ask. If the answer is to resume, Step 4 still runs (the lock is missing and the schema requires it), and Step 7-pre then adopts the named run.
+- On **`closed:<status>`** and **`absent`** it changes nothing. A run directory can outlive the task it belonged to; that is not permission to re-claim a done task.
+
 **Review batches:** `--entry-state` **refuses** a `BATCH-<N>` id and exits 1, exactly as `--release` does — a batch's claim state lives in `review_tasks.md`, not `tasks/index.yml`, so answering from there would report `absent` for every batch that exists. Do not call it on the batch path; the review-batch branch below performs the equivalent check against `review_tasks.md` plus the lock (five outcomes, same shape).
 
 Then look the task up in `tasks/index.yml` via Python (never grep YAML) for the metadata Steps 3–6 need. Run:
 
 ```bash
+# Substitute the task id for <TASK_ID>, per the rule above — quoted, so an unsubstituted
+# placeholder fails loudly instead of being read as a redirection.
 # `python3` command word (not `.venv/bin/python3`, no PATH prefix, no `&&` compound) so
 # the allow-rule `Bash(python3 -:*)` matches as a single simple command. PyYAML — which
 # this heredoc imports — is resolved for venv-only consumers by the bootstrap below, not
 # by the caller's interpreter choice (BeanRider ISSUE-0049; Sysop Phase 126).
-python3 - <<'PY' "$TASK_ID"
+python3 - <<'PY' "<TASK_ID>"
 import sys
 try:
     import yaml
@@ -178,7 +243,7 @@ If `sysop/runtime/locks/<CLAIM_ID>.lock` already exists, hard-fail with the file
 
 This check sits in the roadmap branch; the review-batch branch has its own, below. What is uniform is the **path**: both kinds write a lock at `sysop/runtime/locks/<CLAIM_ID>.lock` (`batch_work.sh` writes `BATCH-<N>.lock`, Phase 156), so the `ls` listing above surfaces in-flight batches alongside in-flight roadmap tasks and is worth reading on either path.
 
-Read the body file `tasks/open/<TASK_ID>.md` in full so it's loaded as context for Step 6 plan mode.
+Read the body file `tasks/open/<TASK_ID>.md` in full so it is loaded as context for Step 7's prompts. (This sentence used to say "for Step 6 plan mode" — there is no plan mode, Step 6 is now the plan-review preference, and the planner reads the body itself from the main checkout. It survived the reshape unedited.)
 
 **Overlap advisory (roadmap tasks — non-blocking).** The lock check above only asks "is *this* task claimed?" — it says nothing about whether the task's *files* collide with work already in flight in another worktree. Two claims touching the same files sail through and surface as a merge conflict at `/review-close` — recoverable rework (the worktrees kept the builds isolated), but wasted work the advisory can warn about. Run the shared scope-overlap primitive:
 
@@ -200,6 +265,12 @@ Read the body file `tasks/open/<TASK_ID>.md` in full so it's loaded as context f
   - `In Progress` → check for `sysop/runtime/locks/<CLAIM_ID>.lock`. If locked, report "already claimed" and stop. If no lock, it may be resumable — proceed (the script handles this).
   - `Merged`, `Complete`, `Ready for Review` → report current status and stop
 
+**`--resume <RUN_ID>` gets a batch past the "already claimed" stop, on the same terms as the roadmap `held` arm.** A batch that parked at Step 7c leaves its lock in place by design, so both locked rows above would otherwise refuse it — and a parked batch is exactly the case #220 reported, since a review batch is the claim kind it happened on. When Step 1's `--resume` check passed and a lock exists, print the lock contents and — if the run has one — its `classification.md` verdict, then skip Step 4 (worktree, branch and lock all exist) and re-enter at Step 7-pre.
+
+**Read `<BRANCH_NAME>` and the worktree path out of `sysop/runtime/locks/<CLAIM_ID>.lock`** — its `branch:` and `workspace:` fields — exactly as the roadmap resume arm does; `batch_work.sh` writes both. This is not a repetition for symmetry's sake: skipping Step 4 skips the summary box that Step 3's review-batch clause names as the establishing site, so on this path the lock is the *only* source, and all three Step 7 prompts substitute `<BRANCH_NAME>`.
+
+The same honest limit applies: on a colleague's live lock this takes their claim.
+
 To hand a stranded batch back, use `bash sysop/scripts/batch_work.sh --release <BATCH_NUMBER>` — it reverses both halves of the claim (the `review_tasks.md` status and the lock). `claim_task.sh --release` refuses a `BATCH-*` ID on purpose: it owns `tasks/index.yml`, so it would release the lock and leave the batch reading `In Progress` forever.
 
 ## Step 3: Generate Branch Name
@@ -214,7 +285,7 @@ To hand a stranded batch back, use `bash sysop/scripts/batch_work.sh --release <
   - `UX-X` → `ux/ux-x`
   - `FIX-X` → `fix/fix-x`
 
-**Review batches:** The branch is specified in `review_tasks.md` metadata and handled by `batch_work.sh`. No branch generation needed.
+**Review batches:** The branch is specified in `review_tasks.md` metadata and handled by `batch_work.sh`, so nothing is *generated* here — but `<BRANCH_NAME>` still has to be **established**, because all three Step 7 prompts substitute it and every envelope requires it. `batch_work.sh` prints it in its summary box (`│  Branch: <name>`); read it off Step 4's output there and hold it in context. See Step 4's review-batch block.
 
 ## Step 4: Claim the Task
 
@@ -225,9 +296,11 @@ To hand a stranded batch back, use `bash sysop/scripts/batch_work.sh --release <
 Do NOT edit the YAML by hand with a regex — round-trip through `yaml.safe_load` / `yaml.safe_dump` so the file stays validator-clean. PyYAML round-trip loses inline comments — that's acceptable for `index.yml` (sprint prose lives in block scalars which round-trip fine).
 
 ```bash
+# Substitute the task id for <TASK_ID>, per Step 2's rule — quoted, so an unsubstituted
+# placeholder fails loudly instead of being read as a redirection.
 # `python3` command word + in-heredoc PyYAML bootstrap (see Step 2's note; BeanRider
 # ISSUE-0049; Sysop Phase 126) — single simple command, so `Bash(python3 -:*)` matches.
-python3 - <<'PY' "$TASK_ID"
+python3 - <<'PY' "<TASK_ID>"
 import sys
 try:
     import yaml
@@ -298,7 +371,9 @@ The lock file is **required** by the schema for `in_progress` tasks (see `tasks/
 bash sysop/scripts/claim_task.sh --lock <TASK_ID> <BRANCH_NAME>
 ```
 
-This also creates the git worktree at `../<project>-<task-id-lower>/` on `<BRANCH_NAME>` (branched from current HEAD; main if you ran the skill from main).
+This also creates the git worktree on `<BRANCH_NAME>`, branched from current HEAD (main if you ran the skill from main).
+
+**Take `<WORKTREE_PATH>` off this script's output and hold it in context** — it prints the lock it wrote, whose `workspace:` field is the absolute path. Do **not** derive it from a shape: the conventional location is `../<project>-<task-id-lower>/`, but `WORKTREE_PREFIX` overrides that, and every later site — Step 7a's `git -C`, all three prompts, the executor's working directory — needs the real absolute path rather than a guess.
 
 ### 4c. Validate state with `sysop/scripts/validate_tasks.py`
 
@@ -334,7 +409,12 @@ If 4b's script exits non-zero, or 4c's validator exits non-zero, undo 4a's uncom
 git checkout tasks/index.yml
 ```
 
-If 4b created an orphan worktree before failing, also run `bash sysop/scripts/cleanup_worktrees.sh --force` to drop it. Then report the failing step's error output and stop.
+If 4b got as far as creating anything, undo **only this task's** artifacts. Do **not** reach for `cleanup_worktrees.sh --force`: it takes no path operand, so it removes *every* non-main worktree — ACTIVE ones included — and would destroy any concurrent claim's uncommitted work (WORKFLOW.md § 8.4). Which command applies depends on how far 4b got, because `claim_task.sh` writes the lock **last** (branch → worktree → lock):
+
+- **A lock exists at `sysop/runtime/locks/<TASK_ID>.lock`** — i.e. 4b completed and 4c's validator is what failed. Use the lock-aware inverse: `bash sysop/scripts/claim_task.sh --release <TASK_ID>`. It removes the recorded worktree, releases the lock, and treats the already-`open` status left by the `git checkout` above as an info line rather than an error. It leaves the branch — add `--delete-branch` to drop it, or `git branch -d <BRANCH_NAME>` afterwards. To discard uncommitted work in the worktree, add `--force` **before** the task ID (`--release --force <TASK_ID>`): the script consumes flags only ahead of the positional and rejects a trailing one. **Its index-flip step needs a PyYAML-capable `python3` on `PATH`** — if it reports PyYAML unavailable it exits having changed nothing and prints a manual recipe; activate the project venv and re-run rather than hand-editing.
+- **No lock exists** — i.e. 4b failed before writing the lock (it is written last). `--release` refuses here on purpose, the lock being the claim record it keys on, so undo by hand: `git worktree remove <worktree-path>` if a worktree exists (it refuses on uncommitted or untracked changes; `--force` to discard), then `git branch -d <BRANCH_NAME>`. A 4b failure *at* `git worktree add` leaves the branch and no worktree, so the branch delete is the whole cleanup there — harmless if skipped, since 4b tolerates a pre-existing branch on the retry.
+
+Then report the failing step's error output and stop.
 
 **Review batches:**
 ```bash
@@ -343,6 +423,8 @@ bash sysop/scripts/batch_work.sh <BATCH_NUMBER>
 The script handles `Pending` → `In Progress` transition in `review_tasks.md` and commits on main automatically, creates the worktree, and writes `sysop/runtime/locks/<CLAIM_ID>.lock` — the same lock file, in the same main-repo-anchored directory, that `claim_task.sh --lock` writes for a roadmap task. (Review-batch state still lives in `review_tasks.md` — only roadmap tasks live in `tasks/index.yml`. The *lock* is the one thing both kinds share, which is what makes `/next-task`, `/sitrep` and `scope_overlap.py` able to see a batch and a task the same way.)
 
 The status commit is best-effort and the lock is not: off `main`, or with a dirty `review_tasks.md`, the script warns, skips the flip, and still creates the worktree **and** the lock. Read the output — a batch that stayed `Pending` is claimed all the same.
+
+**Take `<BRANCH_NAME>` and the worktree path off this script's summary box and hold both in context** — the `│  Branch:` and `│  Path:` lines. This is not optional bookkeeping: the roadmap path establishes `<BRANCH_NAME>` at Step 3, the batch path has no equivalent, and Step 7's three prompts and all three envelopes name it. If the script exited before printing the box, both values are in the lock it wrote — `sysop/runtime/locks/<CLAIM_ID>.lock`, fields `branch:` and `workspace:`.
 
 If the script exits non-zero, report the error output and stop.
 
@@ -359,185 +441,515 @@ Print a summary box:
 | Worktree  | ../<project>-<task-lower>/         |
 | Branch    | <branch_name>                      |
 
-Work in: `<worktree_path>`
+Workspace: `<worktree_path>`
 
-When finished, run `/document-work` to commit and prepare for review.
-Do NOT merge to main — `/review-close` handles that.
+The claim is in place. This run continues at Step 6 — plan, adversarial
+review, classification, then implementation — all in sub-agents. You are not
+being handed the worktree to work in yourself.
 ```
 
-## Step 6: Enter Plan Mode
+**Do not stop here and tell the human to go work in the worktree.** That is what this skill used to do, and the steps below are the run, not a suggestion. `/document-work` comes after Step 8, not after this box.
 
-Call the `EnterPlanMode` tool so you design the implementation before writing any code.
+## Step 6: Resolve the plan-review preference
 
-In plan mode:
-- **Roadmap tasks:** Read the task's full requirements from `tasks/open/<TASK_ID>.md` (or wherever `body:` points in `tasks/index.yml`), explore the referenced files, and produce a structured implementation plan.
-- **Review batches:** Read all tasks in the batch from `review_tasks.md`, examine each referenced file and line, and plan the fix order.
+**Resolved here, once, before any agent spawns.** Planning plus review takes 5–25 minutes, so asking *afterwards* asks someone who may have walked away — and "the human didn't really review it" then happens by degradation rather than by choice. Front-loading makes it a declared decision that is always answerable.
 
-**Constraints & Risks (must precede implementation steps):** Read `.claude/convention_map.md` and `.claude/security_map.md`. For each file or directory the plan will create or modify, find its matching sections in **both** maps. Emit a `## Constraints & Risks` heading as the **first** content block after the task summary (Context / problem statement) and **before** any `## Implementation Steps` heading. Under it, list one bullet per file/directory enumerating the applicable conventions and security checks from both maps, plus any cross-cutting rules that apply to the file type (logger formatting, APP_ENV defaults, log sanitization, fetch redirect guards). **One bullet per risk; no prose padding.** Use this structure:
+Follow `.claude/skills/_shared/plan-review-preference.md` to resolve it. That partial is the single source of truth for the resolution order (flag → `<project>/CLAUDE.md § Plan review` → ask), for the guided-mode interaction, and for the `askUserQuestionTimeout` hazard. **Never prompt when the flag or the config resolves it** — `/claim-task <CLAIM_ID>` on a configured project must stay a single command.
+
+Two options are offered:
+
+| Option | Flow | For |
+|---|---|---|
+| **A — review the plan first** | planner → reviewer → **human gate** → executor | Work you want to eyeball before it lands. |
+| **B — run it** | planner → reviewer → executor | Mechanical or well-specified work; walk away. |
+
+**The reviewer runs on both paths.** Only the gate at Step 7d differs. Collapsing reviewer and executor on the unattended path would give the run *nobody is watching* the weaker review property, and `_shared/adversarial-review.md` § *Reviewer-executor variant* already records collapsed self-classification as a known compromise. The autonomous path needs more fresh-eyes rigour, not less.
+
+**A third option — plan-only, where the pipeline stops after review and writes the reviewed plan back to the task body — is specified but not built** (`tools/CLAIM_TASK_ORCHESTRATOR_SPEC.md` § *The three options*, option C). Do not offer it, and do not improvise it: it needs a `## Plan` body section that `tasks/schema.md` does not yet define and a release ordering this skill does not yet carry. Say so in one line if the human asks for it, rather than silently behaving like option B. **Stating the absence is the point** — silence about a missing branch is exactly how Steps 7–8 acquired roadmap-only vocabulary in Phase 29, and it is the failure upstream #220 reported.
+
+**Review batches:** both options are offered, unchanged. Option C would not have been (a batch has no body file to persist a plan into — its "body" is a `### Batch N` section inside the shared `review_tasks.md`, whose six metadata keys are parsed into a shadow index two scripts consume), but since C is not offered to anyone, no asymmetry arises here yet.
+
+## Step 7: Orchestrate — plan → review → classify → gate → execute
+
+**Why this is three spawns, a classification and a gate rather than one sub-agent.** Upstream #220: a real `/claim-task` run on a review batch went `EnterPlanMode` → ~200 tool calls → `ExitPlanMode` with **no `Agent` call at any point**. The adversarial review, the finding classification, the sealed report and the halt-on-blocker gate were all bypassed, and it surfaced only because a human asked. Three distinct failure modes look identical from outside:
+
+1. **Drift** — the skill was read hundreds of tool calls ago and plan mode's own reminder pushes toward `ExitPlanMode`. Attention decay, not intent. This is what #220 observed. The split spawns and the artifact set below are what address it.
+2. **Blocked** — the harness forbids the `Agent` tool outright (a system-prompt instruction outranks skill text). The agent *cannot* comply. **This shape does not prevent that, and does not claim to** — it makes it *visible*: an orchestrator whose entire body is "spawn agents" cannot silently degrade into doing the work itself without leaving an empty artifact directory and no envelopes, where a healthy run leaves three of each. Today it degrades into "just implement it", which looks normal. **Stated exactly: nothing reads that difference yet.** The `/review-close` and `/sitrep` readers are specified and deferred (part B of this reshape), so the evidence today is durable and inspectable by a human, and nothing reports on it automatically. Do not describe those readers as existing.
+3. **Read as not-applicable** — Step 7's prompt opened *"You are executing roadmap task `<TASK_ID>`"* and was threaded with `tasks/index.yml` machinery a review batch does not have, so an agent holding a batch claim reasonably concluded the step was not about it. Every step below is spelled `<CLAIM_ID>` and carries a `Review batches:` clause wherever behaviour differs.
+
+**Say the residual out loud rather than burying it:** a harness that forbids `Agent` produces a claim with no plan, no review and no envelope, and Sysop will *say so* rather than stop it.
+
+### Step 7-pre: resolve the run and its artifact directory
+
+**This is the only entry point to Step 7, on a fresh claim and on a `--resume` alike.** No later stage is entered directly; the routing table below decides which one this run lands on.
+
+Every run of this pipeline gets its own directory. **This is what makes a stale artifact unreachable rather than merely detectable** — a re-invocation never looks in a previous run's directory, so it cannot inherit its `review.md`. That matters most on the batch path: `batch_work.sh`'s `write_batch_lock` is idempotent by design and leaves an existing lock **as-is** (`batch_work.sh:192-195`), and nothing in it refuses a re-claim, so a batch re-invocation would otherwise find yesterday's artifacts sitting under a lock that still looks current. Keying on the lock's `started:` stamp does **not** close this — the stamp is preserved across exactly that re-claim.
+
+**The directory lives in the MAIN checkout, not the worktree**, resolved through `git rev-parse --git-common-dir`. Three properties depend on that and none of them survive a worktree-side path: Step 1 has to validate `--resume` *before* any lock is read, so the run must be discoverable before a worktree path exists; the artifacts have to outlive `git worktree remove` and `cleanup_worktrees.sh`, which is what the park previously needed a second copy for; and the orchestrator itself runs in the main checkout, alongside the hook-written envelopes. An earlier revision created it under `<WORKTREE_PATH>` while Steps 1 and 2 looked for it in the main checkout — the two never met, and every `--resume` was rejected.
+
+```bash
+# `python3` command word + positional args — a single simple command, so `Bash(python3 -:*)`
+# matches. Substitute both placeholders literally. The second argument is the `--resume`
+# run id, or an EMPTY STRING on a fresh claim.
+python3 - <<'PY' "<CLAIM_ID>" "<RESUME_RUN_ID or empty>"
+import sys, secrets, datetime, subprocess
+from pathlib import Path
+
+claim_id, resume = sys.argv[1], sys.argv[2].strip()
+# Quoting alone does NOT make an unsubstituted placeholder loud here, the way it does at
+# Step 2 where the id is looked up and not found: this block CREATES its path, so
+# `<CLAIM_ID>` would quietly become a directory of that literal name. Refuse it instead.
+if "<" in claim_id or "<" in resume:
+    print("ERROR: placeholder not substituted: {!r} {!r}".format(claim_id, resume), file=sys.stderr)
+    sys.exit(2)
+
+common = subprocess.run(["git", "rev-parse", "--git-common-dir"],
+                        capture_output=True, text=True, check=True).stdout.strip()
+main_root = Path(common).resolve().parent
+claim_root = main_root / "sysop" / "runtime" / "claim" / claim_id
+
+if resume:
+    # ADOPT the named run. Do not mint, do not mkdir, do not touch what is in it.
+    d = claim_root / resume
+    if not d.is_dir():
+        print("ERROR: no run '{}' under {}".format(resume, claim_root), file=sys.stderr)
+        sys.exit(2)
+    run_id = resume
+    print("RESUMED=1")
+else:
+    run_id = "{}-{}".format(
+        datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
+        secrets.token_hex(4),
+    )
+    d = claim_root / run_id
+    d.mkdir(parents=True, exist_ok=True)
+    # Clear the shared envelope mailbox INTO this run, moving rather than deleting. The
+    # hook keys envelopes `<CLAIM_ID>.<phase>.json` with NO run component, and Step 8 never
+    # deletes them, so a re-claim would otherwise read the PREVIOUS run's exec.json and
+    # print "Claim complete" for work this run never did. Per-run keying protects the
+    # artifact directory; this is what protects the artifact Step 8 actually reads.
+    env_dir = main_root / "sysop" / "runtime" / "subagent-envelopes"
+    moved = []
+    if env_dir.is_dir():
+        prior = d / "prior-envelopes"
+        stale = sorted(set(env_dir.glob(claim_id + ".*.json")) | set(env_dir.glob(claim_id + ".json")))
+        for p in stale:
+            prior.mkdir(parents=True, exist_ok=True)
+            p.rename(prior / p.name)
+            moved.append(p.name)
+    print("MOVED_PRIOR_ENVELOPES=" + (", ".join(moved) or "none"))
+
+print("RUN_ID=" + run_id)
+print("ARTIFACT_DIR=" + str(d))
+PY
+```
+
+Read `RUN_ID` and `ARTIFACT_DIR` off stdout and **hold them in your own context**, keyed to this claim — not in a shell variable and not in a shell array. Nothing survives from one fenced block to the next, even inside a single step (`WORKFLOW.md` § 8.2a, *Persistence boundary*), so a later `"$RUN_ID"` expands to the empty string and would silently collapse every run into one directory. Substitute them literally at each later site, exactly as `<CLAIM_ID>` is substituted. `ARTIFACT_DIR` is **absolute and outside the worktree** — the sub-agents `cd` into the worktree and still write to it by absolute path.
+
+The timestamp half of the run id is for a human reading the directory listing; the random half is what guarantees uniqueness. A timestamp alone is not enough — `started:` is second-granular, and a release followed immediately by a re-claim produces an identical one.
+
+**On a `--resume`, the mailbox is deliberately left alone.** The moved-aside envelopes belong to *earlier* runs of this claim, and a resumed run's own `plan.json` / `review.json` may still be sitting there from before it parked. The honest limit: if some *other* run of this claim ran after the one being resumed, its `exec.json` is still in the mailbox and Step 8 would read it. `--resume` is a human naming a specific run, and this is one more thing that assertion covers.
+
+#### Where a resume re-enters — read it off the artifacts, not off memory
+
+The artifacts on disk **are** the resume state.
+
+**Route on files in `<ARTIFACT_DIR>` and on nothing else.** In this order, first match wins:
+
+| State of `<ARTIFACT_DIR>` | Re-enter at | Why |
+|---|---|---|
+| `classification.md` reads `verdict: SUPERSEDED` | **stop** | Step 7d's *revise* rejected this run's plan and minted a successor. Name the successor and stop; resuming a plan a human rejected is worse than doing nothing. |
+| `classification.md` reads `verdict: BLOCKED` | **7c** | The ordinary park, and the executor's `BLOCKED` return. Re-classify **with the human's answer in hand** — the answer is the new input, and 7c is where it lands. |
+| `outcome.md` present | **Step 8** | The executor already ran and Step 8 recorded its terminal status. **Do not re-spawn it** — report `outcome.md`. |
+| no `plan.md` | **7a** | Nothing was planned, or the planner failed before writing. |
+| no `planner-integrity.md`, or it reads `VIOLATED` | **7a** | The plan was never re-gated, or it came from a planner that broke its contract by committing. Re-plan; do not review it. |
+| no `review.md` | **7b** | The plan stands and its integrity is recorded `OK`; it has not been reviewed. |
+| no `classification.md` | **7c** | Findings exist and were never adjudicated. |
+| `verdict: PROCEED` | **7d** (option A) / **7e** (option B) | Already adjudicated clean; the run stalled before the executor returned. |
+
+Print which row matched and why before continuing.
+
+**Two rules make this table sound, and both were installed because a round found the table wrong without them.**
+
+**1. Nothing routes off the shared envelope mailbox.** An earlier revision's first row keyed on `<CLAIM_ID>.exec.json` being present in `sysop/runtime/subagent-envelopes/`. That is a *shared* directory keyed by claim and phase with **no run component**, and a resume deliberately does not clear it — so a `BLOCKED` executor's envelope was still sitting there, the first row matched, and the resume went to Step 8, re-parked, and printed "resume with `--resume`" again. **A loop, and it made the `BLOCKED` row below it unreachable** — the row that exists for the one runtime path that actually produces a blocker question. The same shape sent a resume of an *older* run to the executor, because a later fresh claim had moved that run's envelope aside. `outcome.md` is written into **this run's** directory by Step 8, so it answers "did the executor already run *here*" without consulting anything shared.
+
+**2. Every stage that gates records its verdict as a file.** `planner-integrity.md` is why the integrity check is not lost to a crash: it lived only in orchestrator context, so a crash between the planner's return and the check left `plan.md` on disk with no marker and no verdict, and the table routed it to a reviewer — **laundering exactly the plan the check exists to catch**, reachable by a crash rather than by a park. The file also carries the *original* pre-plan SHA, so a re-entry at 7a re-baselines on that rather than on the rogue commit, which an earlier revision did.
+
+`plan.md` is written at most once per run: the rows above reach 7a only when it is absent, and Step 7d's *revise* mints a new run rather than re-planning into this one. Presence-based routing is only sound over an artifact set where each file describes one plan.
+
+**The artifact directory makes the MAIN checkout untracked-dirty on a consumer that has not run the installer.** `install.sh` seeds `sysop/runtime/` into the consumer's `.gitignore`, and git honours a working-tree `.gitignore` whether or not it has been committed, so on a bootstrapped consumer the directory is ignored and nothing shows. Where the entry is absent, do **not** key any check on the literal string `?? sysop/runtime/` — git collapses to the topmost untracked directory, so it is `?? sysop/` when nothing under `sysop/` is tracked. And do not let this decide whether the pipeline may proceed: it is a bootstrap gap, not a fault.
+
+### Step 7a: Spawn the planner
+
+**Capture the pre-plan HEAD first — before the spawn, not after it.** The integrity check below compares against it, and a SHA captured after the planner has already run proves nothing:
+
+```bash
+git -C "<WORKTREE_PATH>" rev-parse HEAD
+```
+
+Hold that SHA in your own context as `<PRE_PLAN_HEAD>` and substitute it literally below. Not a shell variable: nothing survives from one fenced block to the next (`WORKFLOW.md` § 8.2a), and the failure is silent rather than loud — `git -C ""` does not fail, it runs in the CWD and returns a real SHA, so a comparison against an empty right-hand side is always unequal and would park every claim.
+
+Print one line first so the transcript does not go silent:
 
 ```
-## Constraints & Risks
-
-- **`<file or glob>`** — convention/security bullet · convention/security bullet · cross-cutting rule
-- **`<another file>`** — …
-- **Cross-cutting** — logger `%s` formatting, APP_ENV default `"dev"`, …
-
-### Coverage gap
-
-- **`<file>`** — no matching section in convention_map.md / security_map.md (log for next map-coverage audit)
+Spawning planner for <CLAIM_ID> — plan only, no implementation. 3–10 minutes.
 ```
 
-If every touched file matches ≥1 applicable convention from at least one map, write `_(none)_` under `### Coverage gap`. **Do NOT skip a file silently** — an empty match means the maps are missing coverage for that path and must be logged here so `/codebase-review` map-coverage auditing (`WORKFLOW.md §3.6`) can pick it up.
+Spawn with the `Agent` tool:
 
-**External SDK/framework call check:** For any plan step that calls an external library, SDK, or framework method (LLM provider SDKs, cloud clients, web-framework APIs), the Constraints & Risks bullet for that file must either **cite an in-repo precedent** (`file:line` of an existing same-project call site using that method the same way) or mark the call **`unverified — no in-repo precedent`**. External APIs drift between releases — a method recalled from memory may no longer exist. The bar is *cite a precedent or flag it*, **not** *verify against live docs* (you may have no web access at plan time, and a static API map would rot the moment the SDK ships a release). `/plan-review`'s adversarial dimension #9 hard-flags any external call that is neither precedent-cited nor flagged.
-
-**Test decision (record in the task body):** As part of the plan, decide how this change is verified and add a plan step to write a `## Test decision` section into the task's body file (`tasks/open/<TASK_ID>.md`, or wherever `body:` points; the reviewer-executor persists it during implementation). The section states either **`test <X> proves <Y>`** — the regression test (existing or new) that pins the behavior this task changes — or **`no test because <Z>`** — the explicit rationale (pure rename/move, config-only, docs, a path an existing named test already covers, or a `manual_smoke:`-only behavior). This is the durable, plan-time record `/review-close` reads back at close time to verify "plan said test X — is it here?" / "plan said no-test-because-Z — does Z still hold?". The adversarial reviewer's "Missing invariant tests" dimension (finding #7) scrutinizes whether a `no test because Z` rationale is sound, so make `Z` reviewable, not a hand-wave. `validate_tasks.py` warns (never blocks) if an `in_progress` task body lacks the section. See `tasks/schema.md` § Test decision.
-
-**Convention & security map gap check:** For each file the plan **creates, moves/refactors into, or deletes**, check both `.claude/convention_map.md` AND `.claude/security_map.md`:
-
-1. **New files**: Check whether the path matches at least one `## ` section header in each map. If not, add a plan step:
-
-```
-### Plan Step: Update convention_map.md / security_map.md
-
-New file `<path>` is not covered by any convention_map section.
-Action: [Add new section / Expand existing section glob] to cover `<path>`,
-then list the applicable Prevention Convention bullets from CLAUDE.md for that file type.
-
-New file `<path>` is not covered by any security_map section.
-Action: [Add new section / Expand existing section glob] to cover `<path>`,
-then list the applicable OWASP checks from security_map.md for that file type.
-```
-
-2. **Moved/refactored files**: When code moves from `<old_path>` to `<new_path>`, the destination may not match any section even though the source did. Check the new path against both maps and add a plan step if unmatched.
-
-3. **Deleted files**: If a file is explicitly named in a map section header (not just matched by glob), removing it leaves a stale reference. Add a plan step to clean up the header:
-
-```
-### Plan Step: Clean up map references
-
-Deleted file `<path>` is explicitly named in convention_map.md § <Section Name>.
-Action: Remove `<path>` from the section header (or remove the section if it's now empty).
-```
-
-This prevents convention coverage gaps from silently accumulating when the codebase grows or refactors split files into new modules (e.g., a single `<api module>` file split into `<api module>/routes/*.py` refactors created files the map didn't cover).
-
-## Step 7: Spawn Reviewer-Executor Sub-Agent (before ExitPlanMode)
-
-Before calling `ExitPlanMode`, hand the plan off to a single sub-agent that performs adversarial review, finding self-classification, plan revision, implementation, post-fix convention check, and post-fix UI verification (if frontend touched). Planning and critique have different attention patterns inside a single session — a planner builds context momentum and stops re-verifying its own citations. By the time post-implementation verification would run, the parent's context holds 40–60K tokens (spec + maps + explored files + plan + diff). Collapsing all of that into one fresh sub-agent keeps the heavy lifting in a context that opens cold.
-
-The parent's role shrinks to: compose the plan (Step 6), spawn this sub-agent, then handle its envelope. The `/document-work` and `/review-close` Opus gates remain the load-bearing safety net for execution-time issues — this step does not weaken them.
-
-Before spawning, print one line so the parent's transcript does not go silent during the sub-agent run:
-
-```
-Spawning reviewer-executor sub-agent — adversarial review + classification +
-implementation + Steps 9/10 + single commit all run inside it. This may take
-5–25 minutes for a moderate task; the parent is waiting on the envelope.
-```
-
-### Spawning the sub-agent
-
-- Use the `Agent` tool with:
-  - `subagent_type`: `"general-purpose"`
-  - `model`: `"opus"` (always — adversarial review + implementation against a fresh plan benefits from full reasoning depth)
-  - Do NOT set `isolation: "worktree"` — the worktree pre-exists from Step 4; the sub-agent `cd`s into it.
-  - `description`: `"Reviewer-executor for <TASK_ID>"`
-- `prompt`: the **Reviewer-Executor Prompt** below, with `<TASK_ID>`, `<WORKTREE_PATH>`, `<BRANCH_NAME>`, and `<PLAN_TEXT>` (the full Step 6 plan body verbatim — Constraints & Risks + Implementation Steps) filled in.
-
-### Reviewer-Executor Prompt
+- `subagent_type`: `"general-purpose"`
+- `model`: `"opus"`
+- Do **NOT** set `isolation: "worktree"` — the worktree pre-exists from Step 4; the planner `cd`s into it.
+- Do **NOT** pass `run_in_background`. <!-- skill-audit-ok: run_in_background --> It is **not** a parameter of the `Agent` tool and its schema is closed, so a compliant call raises `InputValidationError` — and a rejected tool call is itself an invitation to proceed without the step. Sub-agents have run in the background by default since Claude Code 2.1.198.
+- `description`: `"Plan <CLAIM_ID>"`
+- `prompt`: the **Planner Prompt** below, with `<CLAIM_ID>`, `<WORKTREE_PATH>`, `<BRANCH_NAME>`, `<ARTIFACT_DIR>` filled in.
 
 ---
 
-**START OF REVIEWER-EXECUTOR PROMPT**
+**START OF PLANNER PROMPT**
 
-You are executing roadmap task `<TASK_ID>`. The parent session has already claimed the task (worktree at `<WORKTREE_PATH>`, lock at `sysop/runtime/locks/<TASK_ID>.lock`, branch `<BRANCH_NAME>`, `tasks/index.yml` flipped to `in_progress` on main) and produced the plan below. Your job, in one cold-context pass:
+You are planning `<CLAIM_ID>` for the `/claim-task` orchestrator. Your **only** job is to produce an implementation plan and write it to disk. Do NOT implement, do NOT commit, do NOT call `ExitPlanMode` (you are not in plan mode), do NOT invoke the Agent tool.
 
-1. Adversarially review the plan.
-2. Self-classify findings per `_shared/adversarial-review.md`.
-3. If any finding is `blocker`, halt at the BLOCKED envelope.
-4. Otherwise, revise the plan inline, call `ExitPlanMode`, implement, run post-fix gates, emit the EXECUTED envelope.
+The work is already claimed: worktree at `<WORKTREE_PATH>`, lock at `sysop/runtime/locks/<CLAIM_ID>.lock`, branch `<BRANCH_NAME>`.
+
+**Working directory:** `<WORKTREE_PATH>` (cd here first).
+
+**Read the task from the main checkout, not the worktree.** For a roadmap task the body is `tasks/open/<CLAIM_ID>.md` — or wherever `body:` points in `tasks/index.yml`, which is **relative to `tasks/`**, not to the repo root. A body filed by `/add-task` is deliberately left uncommitted, and the feature branch is cut at pre-claim `HEAD`, so an untracked body never entered this branch and opening it here returns ENOENT. Resolve it against the main repo root (`git rev-parse --git-common-dir`, then its parent). **If the body cannot be read, stop and report it — do not plan from the index title alone.**
+
+**Review batches:** there is no per-task body file. Read the `### Batch <N>` section of `review_tasks.md` in full, including its `> **Branch:** / **Scope:** / **Verify:**` metadata, and plan the fix order across the batch's tasks.
+
+### What the plan must contain
+
+1. **Task summary** — one paragraph restating the goal.
+2. **`## Constraints & Risks`** — the **first** content block after the summary, before any implementation steps. Read `.claude/convention_map.md` and `.claude/security_map.md`; for each file or directory the plan will create or modify, list one bullet enumerating the applicable conventions and security checks from **both** maps, plus cross-cutting rules for the file type. One bullet per risk, no prose padding. Close it with a `### Coverage gap` subsection listing any touched file matching no section in either map (write `_(none)_` if every file matches). **Do not skip a file silently** — an empty match means the maps lack coverage for that path and must be logged so `/codebase-review` map-coverage auditing can pick it up.
+3. **External SDK/framework calls.** Any plan step calling an external library, SDK or framework method must either **cite an in-repo precedent** (`file:line` of an existing same-project call site using that method the same way) or be marked **`unverified — no in-repo precedent`**. The bar is *cite a precedent or flag it*, not *verify against live docs*.
+4. **`## Test decision`** — state either **`test <X> proves <Y>`** (the regression test, existing or new, that pins the behaviour this change touches) or **`no test because <Z>`** with a reviewable rationale. Add a plan step to write this section into the task's body file during implementation. Make `Z` reviewable, not a hand-wave — the reviewer scrutinises it.
+5. **Map gap steps.** For each file the plan **creates**, **moves/refactors into**, or **deletes**, check both maps: a new or moved path matching no `## ` section needs a plan step to extend the map; a deleted file named explicitly in a section header needs a plan step to clean up the reference.
+6. **`## Implementation Steps`** — numbered, with concrete file paths, line ranges and expected diffs.
+
+### Write the plan to disk
+
+Write the full plan to `<ARTIFACT_DIR>/plan.md`. This file is the orchestrator's input to the reviewer and the durable record that planning happened; a plan that exists only in your final message is lost the moment this agent ends.
+
+`<ARTIFACT_DIR>` is an **absolute path in the main checkout, outside your worktree**. Use it exactly as given — do not re-derive it, do not make it relative to the working directory above, and do not `git add` it. The directory already exists.
+
+### Final message
+
+Emit exactly this as the LAST fenced block of your final message, with no content after the closing backticks:
+
+```yaml
+TASK: <CLAIM_ID>
+PHASE: plan
+STATUS: EXECUTED
+WORKTREE: <absolute path, no trailing slash>
+BRANCH: <branch name>
+ERROR: <error description if you could not produce a plan, else "none">
+```
+
+`TASK:` must be exactly `<CLAIM_ID>` — the `SubagentStop` hook validates it against `^[A-Z][A-Z0-9-]{2,80}$` and writes a diagnostic instead of an envelope if it does not match. `PHASE: plan` is what keeps your envelope from overwriting the reviewer's and the executor's.
+
+**END OF PLANNER PROMPT**
+
+---
+
+**Post-plan integrity check.** The planner is instructed not to commit. Verify before spawning the reviewer. The comparison is **mechanical** — an orchestrator that has to eyeball two SHAs hundreds of tool calls into a run is the attention decay this whole reshape exists to remove:
+
+```bash
+# Substitute BOTH literals, quoted: the worktree path, and the pre-plan SHA captured at the
+# top of this step. An unsubstituted `<PRE_PLAN_HEAD>` reports VIOLATED, which parks — loud,
+# and in the safe direction.
+python3 - <<'PY' "<WORKTREE_PATH>" "<PRE_PLAN_HEAD>" "<CLAIM_ID>" "<RUN_ID>"
+import sys, subprocess
+from pathlib import Path
+
+worktree, pre, claim_id, run_id = sys.argv[1], sys.argv[2].strip(), sys.argv[3], sys.argv[4]
+if "<" in claim_id or "<" in run_id:
+    print("ERROR: placeholder not substituted", file=sys.stderr)
+    sys.exit(2)
+
+now = subprocess.run(["git", "-C", worktree, "rev-parse", "HEAD"],
+                     capture_output=True, text=True, check=True).stdout.strip()
+verdict = "OK" if now == pre else "VIOLATED"
+
+# The verdict is a FILE, not a line of transcript. Held only in context it is lost
+# to a crash between the planner's return and this check -- and then `plan.md` sits
+# on disk with nothing recording that it was never re-gated, so a resume routes it
+# to a reviewer and a clean review launders exactly the plan this check exists to
+# catch. The file also carries the ORIGINAL pre-plan SHA, so a re-entry at 7a
+# re-baselines on that rather than on the planner's rogue commit.
+common = subprocess.run(["git", "rev-parse", "--git-common-dir"],
+                        capture_output=True, text=True, check=True).stdout.strip()
+out = Path(common).resolve().parent / "sysop" / "runtime" / "claim" / claim_id / run_id / "planner-integrity.md"
+if not out.parent.is_dir():
+    print("ERROR: no such run directory {}".format(out.parent), file=sys.stderr)
+    sys.exit(3)
+out.write_text("# Planner integrity — {} run {}\n\n- pre_plan_head: {}\n- post_plan_head: {}\n"
+               "- verdict: {}\n".format(claim_id, run_id, pre, now, verdict), encoding="utf-8")
+print("PRE=" + pre)
+print("NOW=" + now)
+print("planner-integrity: " + verdict)
+PY
+```
+
+On `VIOLATED` the planner committed, in breach of its contract: **do not proceed to 7b.** Park per Step 7c's park procedure, passing `planner committed during 7a (HEAD moved <PRE_PLAN_HEAD> -> <NOW>)` as the recorded reason. `planner-integrity.md` now records the violation durably, so Step 7-pre's routing table sends a resume back to 7a rather than handing the un-re-gated plan to a reviewer — and 7a re-baselines on the `pre_plan_head` recorded there, **not** on the rogue commit.
+
+### Step 7b: Spawn the reviewer
+
+**Always.** Review is never inherited, never skipped, and never merged into another agent's job. A reviewer that did not write the plan is the property the collapsed reviewer-executor shape conceded, and recovering it is most of the point of this reshape.
+
+Same agent parameters as 7a, with `description`: `"Adversarial plan review <CLAIM_ID>"`.
+
+`prompt`: the **contents of `<ARTIFACT_DIR>/plan.md` verbatim**, followed by the **Prompt Template** block copied verbatim from `.claude/skills/_shared/adversarial-review.md`, followed by the two paragraphs below. No other wrapper text — the shared template supplies the framing, and duplicating it here would fork it.
+
+---
+
+**START OF REVIEWER PROMPT TAIL** (appended after the plan and the shared Prompt Template)
+
+**Working directory:** `<WORKTREE_PATH>` (cd here first). You did not write this plan and have no context from the session that did. Do not fix it — find what is wrong with it.
+
+Write your full findings, including the sealed `REVIEW_REPORT:` block, to `<ARTIFACT_DIR>/review.md` — an **absolute path in the main checkout, outside your worktree**; use it exactly as given, do not re-derive it, and do not `git add` it. **Then** emit exactly this as the LAST fenced block of your final message:
+
+```yaml
+TASK: <CLAIM_ID>
+PHASE: review
+STATUS: EXECUTED
+WORKTREE: <absolute path, no trailing slash>
+BRANCH: <branch name>
+ERROR: <error description if you could not complete the review, else "none">
+```
+
+Emit the sealed report itself as a fenced block whose body begins `REVIEW_REPORT:` — the hook captures the first such block into the envelope's `review_report_raw`, which is how the verdict reaches the orchestrator through a file no agent writes:
+
+```yaml
+REVIEW_REPORT:
+  findings:
+    - id: F1
+      summary: "..."
+      evidence: "file:line"
+  verdict: FINDINGS | CLEAN
+```
+
+Report findings only. **Do not classify them** as `fixable` or `blocker` and do not decide whether the work proceeds — that is the orchestrator's job at Step 7c, deliberately kept one layer up. If you find nothing, emit `findings: []` and `verdict: CLEAN` explicitly so the orchestrator can record that the step ran clean rather than that it failed to run.
+
+**END OF REVIEWER PROMPT TAIL**
+
+---
+
+### Step 7c: Classify the findings — the orchestrator does this itself
+
+Apply the **Classification Rubric** in `.claude/skills/_shared/adversarial-review.md` to each finding the reviewer returned. **This is not delegated to a third sub-agent**: classification is the seam where the human stays the gate, and pushing parse-and-judge one layer down adds no fresh eyes.
+
+- **`fixable`** — absorbed into the plan without human input (mis-cited patterns, convention mis-applications, factual drift, missing tests, N+1 patterns, asymmetric error handling).
+- **`blocker`** — needs human input the agent cannot produce (ambiguous requirements, missing source data the task assumes, conflicting goals). Only after genuinely trying to resolve it by reading more code.
+
+**Decompose before rejecting.** A finding asserting several independent clauses, or citing several sites, is adjudicated clause by clause — refuting one clause does not reject the finding, and a rejection rationale must name every clause and why each fails. This failure mode is directional: partial refutation only ever turns a real finding into an apparent false positive, never the reverse.
+
+**Write the classification to disk.** It is the third artifact, and without it the claim that "the artifacts on disk are the resume state" is false — Step 7e takes the classification as an input, and an orchestrator that dies between 7c and 7d otherwise loses it.
+
+```bash
+# Compose `findings` from your own classification. Values are yours to write as literals —
+# they are not shell variables and nothing carries between blocks (WORKFLOW.md § 8.2a).
+# Stdlib only — NO PyYAML. This artifact must be writable on a consumer whose
+# bare `python3` has no PyYAML (the PEP-668 default, Phase 131): a classification
+# that cannot be written is a pipeline that halts at 7c on an ordinary install.
+# `json.dumps` is used to emit the block because JSON is a subset of YAML 1.2, so
+# the fence below is genuinely YAML and every scalar is escaped by the stdlib
+# rather than by hand.
+python3 - <<'PY' "<CLAIM_ID>" "<RUN_ID>"
+import sys, json, subprocess
+from pathlib import Path
+
+claim_id, run_id = sys.argv[1], sys.argv[2]
+# Same reason as Step 7-pre's: this block mkdir -p's its own parent, so an unsubstituted
+# placeholder would write into a literally-named directory instead of failing.
+if "<" in claim_id or "<" in run_id:
+    print("ERROR: placeholder not substituted: {!r} {!r}".format(claim_id, run_id), file=sys.stderr)
+    sys.exit(2)
+
+report = {
+    "claim_id": claim_id,
+    "run_id": run_id,
+    "classified_by": "orchestrator",
+    "findings": [
+        # {"id": "F1", "classification": "fixable", "summary": "...", "response": "incorporated in step 3"},
+    ],
+    "verdict": "PROCEED",  # or "BLOCKED"
+}
+
+# Same MAIN-checkout resolution as Step 7-pre — the artifact directory is not in the
+# worktree, so `Path(worktree)/…` here would write a second, unreachable copy.
+common = subprocess.run(["git", "rev-parse", "--git-common-dir"],
+                        capture_output=True, text=True, check=True).stdout.strip()
+main_root = Path(common).resolve().parent
+
+out = main_root / "sysop" / "runtime" / "claim" / claim_id / run_id / "classification.md"
+# REFUSE to create the run directory. Step 7-pre is the only thing that mints a run, and
+# a `mkdir(parents=True)` here would manufacture one from a mistyped <RUN_ID> -- which
+# Step 1's `--resume` validator would then bless, because its whole test is "does this
+# directory exist". Only 7-pre creates; every later block writes into what it made.
+if not out.parent.is_dir():
+    print("ERROR: no such run directory {} -- Step 7-pre mints runs, this step does not"
+          .format(out.parent), file=sys.stderr)
+    sys.exit(3)
+out.write_text(
+    "# Classification — {} run {}\n\n```yaml\n{}\n```\n".format(
+        claim_id, run_id, json.dumps(report, indent=2, ensure_ascii=False)
+    ),
+    encoding="utf-8",
+)
+print("wrote " + str(out))
+PY
+```
+
+`classified_by: orchestrator` is load-bearing metadata, not decoration: the collapsed shape had the reviewer self-classify, and on disk the two are otherwise indistinguishable.
+
+**If any finding is `blocker` — park. Do not spawn the executor.**
+
+Surface the blocker question to the human if one is present. Then write the park marker. **This is the park procedure the whole skill refers to** — Step 7a's integrity check, the reviewer-failure rule and Step 8's `BLOCKED` arm all route here, and each supplies its own `<PARK_REASON>`:
+
+```bash
+# Substitute all four literals. <PARK_REASON> is one line of plain prose saying why this
+# claim parked — a `blocker` finding's question, `planner committed during 7a`, `reviewer
+# returned no review.md twice`, the executor's BLOCKER_QUESTION — and it is written verbatim.
+#
+# It is SINGLE-quoted, and that is the one asymmetry in this file: every other placeholder
+# here is a shape the tree produced (an id, a SHA, a path), while the park reason is FREE
+# TEXT that came back from a sub-agent. Inside double quotes a `$(…)` in that text is command
+# substitution and runs — verified, not reasoned. Single quotes make it inert. Before
+# substituting, collapse it to one line and replace any `'` with a backtick or `’`; a literal
+# single quote is the one character that would end the quoting.
+python3 - <<'PY' "<CLAIM_ID>" "<RUN_ID>" "<BRANCH_NAME>" '<PARK_REASON>'
+import sys, subprocess
+from pathlib import Path
+
+claim_id, run_id, branch, reason = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+# The id and the run key a path this block creates; the branch and the reason are only
+# recorded, so an unsubstituted one of those is visible in the marker rather than silent.
+if "<" in claim_id or "<" in run_id:
+    print("ERROR: placeholder not substituted: {!r} {!r}".format(claim_id, run_id), file=sys.stderr)
+    sys.exit(2)
+
+common = subprocess.run(["git", "rev-parse", "--git-common-dir"],
+                        capture_output=True, text=True, check=True).stdout.strip()
+main_root = Path(common).resolve().parent
+art = main_root / "sysop" / "runtime" / "claim" / claim_id / run_id
+# Same refusal as the classification write: only Step 7-pre mints a run.
+if not art.is_dir():
+    print("ERROR: no such run directory {} -- refusing to park against a run that was "
+          "never minted".format(art), file=sys.stderr)
+    sys.exit(3)
+
+# Which artifacts this park is standing on. An absent one is RECORDED, never silently
+# omitted — a missing record and a lost one must not look the same.
+present = {n: (art / n).is_file() for n in ("plan.md", "review.md", "classification.md")}
+
+marker = main_root / "sysop" / "runtime" / "parked" / "{}__{}.md".format(claim_id, run_id)
+marker.parent.mkdir(parents=True, exist_ok=True)
+marker.write_text(
+    "# Parked — {} run {}\n\n"
+    "- claim_id: {}\n- run_id: {}\n- branch: {}\n- artifacts: {}\n"
+    "- reason: {}\n\n"
+    "## Artifacts at park time\n\n{}\n\n"
+    "Resume with: /claim-task {} --resume {}\n".format(
+        claim_id, run_id, claim_id, run_id, branch, art, reason,
+        "\n".join("- {}: {}".format(n, "present" if ok else "MISSING")
+                  for n, ok in present.items()),
+        claim_id, run_id,
+    ),
+    encoding="utf-8",
+)
+print("parked -> " + str(marker))
+PY
+```
+
+**The marker is a pointer, not a copy.** Under the earlier worktree-side layout the park had to *duplicate* the three artifacts, because `cleanup_worktrees.sh --force` removes every non-main worktree wholesale and would have taken the verdict with it. They now live in the main checkout from the moment they are written, so there is nothing to rescue — and one record beats two that can disagree. What the marker adds is a **reason** (which the artifacts do not carry) and **discoverability**: `sysop/runtime/parked/` is where a human hunting resumable work looks, alongside `/auto-build`'s parks.
+
+`/auto-build` Phase 6d writes its park with the `Write` tool from context-held text, and carries a bold warning that a shell variable there would silently produce a blank file reading as a successful record. The divergence is deliberate: this orchestrator carries `disallowed-tools`, so its writes route through the already-seeded `Bash(python3 -:*)` heredoc instead — and `<PARK_REASON>` is the only context-held value in the block, substituted as a quoted literal where an empty one is visible in the marker rather than hidden.
+
+Worktree and lock stay **intact** on a park. Nothing is deleted mid-lifecycle.
+
+**Who removes the marker.** `/review-close` Step 4c already globs `sysop/runtime/parked/<TASK_ID>__*.md` for each closing roadmap task, so a roadmap park's marker is removed when the task closes — the filename shape above is chosen to match that reader, which the earlier directory-shaped park could never have matched. **A review batch's marker is removed by nothing**: Step 4c's list is built from roadmap ids only (`review-close/SKILL.md`, Step 4c), so `BATCH-<N>__<RUN_ID>.md` markers accumulate. That is a known gap, filed with part B; do not paper over it here.
+
+**Re-entering a parked claim.** A park leaves the lock in place, so `claim_task.sh --entry-state <CLAIM_ID>` answers `held` and Step 2 stops — correctly, because from the outside a parked claim and someone else's live claim are the same thing. To resume, the human names the run explicitly: re-invoke with `/claim-task <CLAIM_ID> --resume <RUN_ID>`, which Step 2 honours as the explicit go-ahead its `held` arm requires. **Re-entry lands at Step 7-pre**, which adopts the named run and routes to the stage its artifacts call for — see 7-pre's routing table; the ordinary blocker park re-enters at 7c with the human's answer as the new input. **Do not tell the human to "just re-run `/claim-task <CLAIM_ID>`"** — that hits the `held` stop and reads as a bug.
+
+### Step 7d: The human gate — option A only
+
+Skip this step entirely when Step 6 resolved to **B**.
+
+Present the plan **as reviewed**: the plan artifact, the reviewer's verdict, and your own classification. Approving a plan that has already survived adversarial review is strictly more useful than approving a raw one, which is what plan mode nominally offered.
+
+Three outcomes:
+
+- **approve** → Step 7e.
+- **revise** → **first re-run Step 7c's classification write for THIS run with `verdict: SUPERSEDED`**, then go back to Step 7-pre and mint a **new** run, and spawn the planner into it with the human's note appended to the Planner Prompt, running 7b and 7c over it — a revised plan has not been reviewed. **Do not re-plan into this run's directory.** A revised `plan.md` sitting beside the previous plan's `review.md` and `classification.md` is exactly the state 7-pre's routing table cannot tell from a reviewed one. The `SUPERSEDED` flip is the other half and is not bookkeeping: without it the rejected run keeps reading `verdict: PROCEED`, and a later `--resume` naming it walks straight to the executor with **a plan a human explicitly rejected**. One run, one plan; the superseded run stays on disk as the record of what was rejected, and 7-pre's first row refuses to resume it.
+- **abandon** → release the claim, **and commit the release**:
+
+  ```bash
+  bash sysop/scripts/claim_task.sh --release <CLAIM_ID>
+  ```
+
+  ```bash
+  test "$(git rev-parse --abbrev-ref HEAD)" = "main" || {
+    echo "HEAD is not main (a concurrent actor moved it) — STOP."; exit 1; }
+  git add tasks/index.yml
+  git commit -m "chore: release <CLAIM_ID>"
+  ```
+
+  **The commit is not optional and the script will not do it for you** — it says so on its own last line. Step 4d *committed* `status: in_progress` onto `main`; `--release` flips the index back and deletes the lock in the **working tree only**. Stop after the script and committed `main` reads `in_progress` **with no lock**, which is `validate_tasks.py` Invariant 9 — a blocking error — plus `/sitrep` index drift, for every person who pulls. Step 2's own table calls that state a defect. Verified by execution.
+
+  **Review batches need no commit here:** `batch_work.sh --release` owns `review_tasks.md` and commits its own reversal, so its working tree comes back clean. The asymmetry is real, not an oversight — the two scripts divide the work differently.
+
+**Review batches:** the abandon outcome is `bash sysop/scripts/batch_work.sh --release <BATCH_NUMBER>`, **never** `claim_task.sh --release`. That script matches a `BATCH-*` id and a bare integer and **exits 1**, because it owns `tasks/index.yml` and releasing only the lock would leave the batch reading `In Progress` forever. Getting this wrong is a runtime hard error on the gate's own exit path.
+
+### Step 7e: Spawn the executor
+
+Inputs: the (possibly revised) plan artifact, the review artifact, and your classification.
+
+Same agent parameters as 7a, with `description`: `"Execute <CLAIM_ID>"`.
+
+---
+
+**START OF EXECUTOR PROMPT**
+
+You are implementing `<CLAIM_ID>`. The orchestrator has already claimed the work (worktree at `<WORKTREE_PATH>`, lock at `sysop/runtime/locks/<CLAIM_ID>.lock`, branch `<BRANCH_NAME>`), produced a plan, run an independent adversarial review of it, and classified every finding as `fixable`. **No `blocker` findings remain — if any had, you would not have been spawned.**
 
 **Working directory:** `<WORKTREE_PATH>` (cd here first; do not run from the project root or any sibling worktree).
 
-**Plan (verbatim from parent):**
-
-```
-<PLAN_TEXT>
-```
+Read your three inputs from disk rather than from this prompt: `<ARTIFACT_DIR>/plan.md`, `<ARTIFACT_DIR>/review.md`, `<ARTIFACT_DIR>/classification.md`. `<ARTIFACT_DIR>` is an **absolute path in the main checkout, outside your worktree** — read it as given, and do not include it in your commit.
 
 ### Sequence
 
-1. **Adversarial review.** Read `.claude/skills/_shared/adversarial-review.md`. Apply its **Prompt Template** verbatim to the plan above. Verify every file:line citation by actually opening the file. Re-grep factual claims.
-
-2. **Emit a sealed `REVIEW_REPORT:` YAML block at the TOP of your response** — BEFORE any implementation discussion. The sealed report acts as a commitment device so findings cannot be silently softened during implementation:
-
-   ```yaml
-   REVIEW_REPORT:
-     findings:
-       - id: F1
-         classification: fixable | blocker
-         summary: "..."
-         response: "incorporated in step X | rejected because Y | (blocker — see envelope)"
-     verdict: PROCEED | BLOCKED
-   ```
-
-   If you find zero issues, emit `findings: []` and `verdict: PROCEED` explicitly so future reviewers know the step ran clean.
-
-3. **Self-classify** per the **Classification Rubric** in `_shared/adversarial-review.md`:
-   - `fixable` — you can revise the plan inline without human input (mis-cited patterns, convention mis-applications, factual drift, missing tests, N+1 patterns, asymmetric error handling).
-   - `blocker` — requires human input the agent cannot produce (ambiguous requirements, missing source data the task assumes, conflicting goals between Constraints & Risks and Implementation Steps). Only mark as `blocker` after genuinely trying to resolve by reading more code.
-
-4. **If any finding is `blocker`** → STOP. Emit the BLOCKED envelope (see "Required final-message format" below) with `BLOCKER_QUESTION:` set to the question the human needs to answer. Do NOT call `ExitPlanMode`. Do NOT implement. Do NOT commit.
-
-5. **Otherwise**, revise the plan inline (or document rejection rationale: `> **Adversarial review rejected:** <finding>. Rationale: <why>.`). Call `ExitPlanMode` with the revised plan.
-
-6. **Implement** per the revised plan. Re-open the files the plan touches; do not rely on summaries.
-
-7. **Post-fix convention verification:**
-   - `git diff --name-only main...HEAD`
-   - For each changed file, look up its section in `.claude/convention_map.md`.
-   - Scan the **new/changed lines** (not just original task locations) against those conventions.
-   - Common regressions: `fetch()` without `encodeURIComponent()` on dynamic path segments; error handling with `str(e)` exposed to API responses; moved code that dropped `_sanitize_log()` wrappers; `useCallback` with incomplete dependency arrays; SELECT queries on a write-only engine.
-   - Fix regressions before committing.
-
-7b. **Run the consumer's pre-merge verification gates.** The consumer project's `<project>/CLAUDE.md § Pre-merge verification` (per WORKFLOW.md § 6.1) may contain two subsections (Phase 17 split shape):
-   - **`### Always`** — full-tree commands run unconditionally (lint, typecheck, tests).
-   - **`### Ratchet (changed files only)`** — a bash block that filters `git diff --name-only origin/main...HEAD` to specific file types and invokes lint/typecheck against changed files only. Empty filtered list short-circuits and passes.
-
-   Run the commands listed under each subsection that is present. If both are absent, skip — `/review-close` will run any project-side verification at merge time.
-
-   Treat any non-zero exit like an implementation finding: fix the underlying issue, do not silence it without a `# type: ignore[...]` or `// eslint-disable-next-line <rule> -- <reason>` justified inline.
-
-8. **Post-fix UI verification:** if `git diff --name-only main...HEAD` touches any `frontend/` files, run the shared procedure at `.claude/skills/_shared/ui-verify.md`. Hard-fail on console errors and 5xx responses; warn on console warnings; skip cleanly with an explicit note if the dev server is not running. Surface the skip note verbatim in your final message so the human knows manual verification is still required.
-
-9. **Commit your changes** with a conventional commit message (`feat:`, `fix:`, `refactor:`, etc.) — a SINGLE commit on the worktree branch. Derive the message from the task title in `tasks/index.yml` (the `title:` field on the task whose `id:` is `<TASK_ID>`) plus the `<TASK_ID>` itself; this matches how `/document-work` formats messages elsewhere. **Append a `Doc-Work: <TASK_ID>` git trailer on the final line of the commit body**, separated from any body prose by one blank line — this is the deterministic marker `/sitrep` consumes to classify the branch as "ready for `/review-close`" (Phase 40). Format:
+1. **Absorb the classification.** For each `fixable` finding, apply its recorded `response` to the plan as you implement. Where a finding was rejected, its rationale is in `classification.md` — do not silently re-litigate it.
+2. **Implement** per the plan. Re-open the files it touches; do not rely on its summaries.
+3. **Persist the `## Test decision`** section into the task's body file, per the plan's step for it.
+4. **Post-fix convention verification.** `git diff --name-only main...HEAD`; for each changed file look up its section in `.claude/convention_map.md` and scan the **new/changed lines** — not just the original task locations — against those conventions. Common regressions: `fetch()` without `encodeURIComponent()` on dynamic path segments; `str(e)` exposed to API responses; moved code that dropped `_sanitize_log()` wrappers; `useCallback` with incomplete dependency arrays; SELECT queries on a write-only engine. Fix regressions before committing.
+5. **Run the consumer's pre-merge verification gates.** `<project>/CLAUDE.md § Pre-merge verification` may carry `### Always` (full-tree commands) and `### Ratchet (changed files only)`. Run the commands under each subsection present. If both are absent, skip — `/review-close` will run any project-side verification at merge time (its `4a-post` step, on the merged tree). Note the division of labour: this run verifies **this branch in its own worktree** — so when the consumer ships no `## Pre-merge verification` section and this step skips, *nothing* verifies the branch in isolation; `4a-post` verifies the **assembled** result and cannot substitute for it. Treat a non-zero exit like an implementation finding — fix the cause, do not silence it without a justified inline `# type: ignore[...]` or `// eslint-disable-next-line <rule> -- <reason>`.
+6. **Post-fix UI verification.** If the diff touches any `frontend/` files, run `.claude/skills/_shared/ui-verify.md`. Hard-fail on console errors and 5xx responses; warn on console warnings; skip cleanly with an explicit note if the dev server is not running, and surface that note verbatim in your final message.
+7. **Commit** — a SINGLE commit on the worktree branch, conventional message derived from the task title plus `<CLAIM_ID>`, with a `Doc-Work: <CLAIM_ID>` trailer on the final line of the body, separated by one blank line. That trailer is the deterministic marker `/sitrep` consumes to classify the branch as ready for `/review-close`.
 
    ```
-   <type>: <title> (<TASK_ID>)
+   <type>: <title> (<CLAIM_ID>)
 
    <optional body prose>
 
-   Doc-Work: <TASK_ID>
+   Doc-Work: <CLAIM_ID>
    ```
-
-   Do NOT push. Do NOT write to `sysop/runtime/pending-docs/`. Do NOT invoke `/document-work`. The trailer eliminates the need for `/document-work` to amend later just to add the marker; the subsequent `/document-work` run will find the trailer already present and proceed straight to Step 3 documentation.
-
-10. **Emit the EXECUTED envelope** (see below).
 
 ### Hard constraints
 
-- Do **NOT** invoke the Agent tool — this run is designed as a leaf. (Claude Code ≥2.1.172 permits nested spawns, but the Phase 37 envelope contract assumes a flat hierarchy; see `_shared/adversarial-review.md` § "Harness constraint".)
-- Do **NOT** flip `status:` fields in `tasks/index.yml`. ADDING a new follow-up task entry IS allowed and expected if `/document-work`'s Step 3b would flag an unfiled follow-up ID — file the entry + body file under `tasks/open/` BEFORE the human invokes `/document-work`, or whitelist the ID per `tasks/schema.md`.
+- Do **NOT** invoke the Agent tool — this run is a leaf, and the envelope contract assumes a flat hierarchy.
+- Do **NOT** write to `sysop/runtime/subagent-envelopes/`. That directory is written **only** by the `SubagentStop` hook, and that is the entire reason it is evidence: no agent can cause it to exist. Writing it yourself converts the one unforgeable artifact into a forgeable one.
+- Do **NOT** flip `status:` fields in `tasks/index.yml`. Adding a new follow-up task entry IS allowed and expected if `/document-work` Step 3b would flag an unfiled follow-up ID.
 - Do **NOT** push to origin (`/review-close` owns the push).
-- Do **NOT** invoke `/document-work` (the parent will instruct the human to run it next).
+- Do **NOT** invoke `/document-work` (the orchestrator does, at Step 8).
 
 ### Required final-message format
 
-Emit exactly this YAML block as the LAST content in your final message, with NO content after the closing backticks. The `REVIEW_REPORT:` block at the TOP of your response is separate from this envelope — both are required:
+Emit exactly this as the LAST fenced block of your final message, with NO content after the closing backticks:
 
 ```yaml
-TASK: <TASK_ID>
+TASK: <CLAIM_ID>
+PHASE: exec
 STATUS: EXECUTED | BLOCKED | FAILED
 BLOCKER_QUESTION: <only if BLOCKED — the question for the human; else "none">
 WORKTREE: <absolute path, no trailing slash>
@@ -545,93 +957,99 @@ BRANCH: <branch name>
 ERROR: <error description if FAILED, else "none">
 ```
 
-> **Envelope-shape note:** `BLOCKER_QUESTION` is the `/claim-task` reviewer-executor's parent-facing field for halt-on-blocker. `/auto-build`'s execution agent uses `PARKED_REASON` instead because parking happens at the orchestrator layer BEFORE execution is spawned — by the time the execution agent runs in auto-build, no blocker can surface. In `/claim-task`, the parent IS the human running it directly, so the sub-agent must be able to surface a blocker question on its own envelope. This divergence is load-bearing for the interactive shape; do not "normalize" the two fields without re-examining the parking-layer split. See `_shared/adversarial-review.md § "Reviewer-executor variant"`.
+Print your step outputs as prose ABOVE the envelope so a human can see what happened even if the envelope is malformed.
 
-A malformed envelope (missing keys, content after the closing backticks, status not in `{EXECUTED, BLOCKED, FAILED}`) causes the parent to classify your run as `FAILED` with reason `envelope parse error`. Print Step 7 + Step 7b + Step 8 outputs as prose in the body of your final message ABOVE the envelope so the human can see what happened even if the envelope is malformed.
-
-**END OF REVIEWER-EXECUTOR PROMPT**
+**END OF EXECUTOR PROMPT**
 
 ---
 
-> **Note for orchestrator-spawned sessions:** Sysop keeps the spawn hierarchy flat — orchestrator-spawned sessions do not nest further agents, even on Claude Code ≥2.1.172 where the harness permits it (through 2.1.171 it was blocked outright). If you are running inside `/auto-build` (rather than from a top-level human prompt), the orchestrator runs the plan + adversarial-review phases at its own top-level layer and supplies you with the absorbed plan; skip this step and proceed to implement against the orchestrator-supplied plan. See `auto-build/SKILL.md` Phase 6a-6e and `_shared/adversarial-review.md` § "Harness constraint".
+### Failure handling — one rule per spawn point
 
-## Step 8: Receive Envelope + Print Handoff
+The tempting recovery from a failed reviewer is *"continue to the executor anyway"*, which is failure mode 1 restored with no plan mode to blame and no `ExitPlanMode` signature to detect it. So these are rules, not judgement:
 
-After the reviewer-executor sub-agent returns, get the envelope. Read in this order — first hit wins; never go past a clean hit to the next source:
+| Spawn | Failed, malformed, or artifact-less return | Rule |
+|---|---|---|
+| **7a planner** | no `plan.md`, or a `FAILED` envelope | **Do not hand-write the plan.** Re-spawn once. On a second failure, stop and report with worktree and lock intact. |
+| **7b reviewer** | no `review.md`, or a `FAILED` envelope | **Never proceed to 7e.** This is the single most important rule in the pipeline. Re-spawn once, then park per 7c with `reviewer returned no review.md twice` (or the envelope's `ERROR:`) as the recorded reason. |
+| **7e executor** | `FAILED` or malformed | Today's Step 8 handling, unchanged: surface `ERROR` verbatim, show `git log` / `git status` in the worktree, let the human decide. **No auto-retry.** |
 
-1. **JSON file** (preferred, Phase 37). Read the envelope from `sysop/runtime/subagent-envelopes/` (resolved against the main repo root via `git rev-parse --git-common-dir` if you're in a worktree). The `SubagentStop` hook (`sysop/scripts/parse_subagent_envelope.py`) parses the sub-agent's final message on the harness's terms and writes structured JSON keyed by the `TASK:` field. Keys you'll need: `status`, `worktree`, `branch`, `error`, `blocker_question`, `review_report_raw`. If no envelope is found (hook unregistered, the file write failed, or it crashed — **not** a race: `SubagentStop` runs synchronously before the parent receives the `Agent` return, so the file is always written before this read) OR `parsed: false` (envelope wasn't found in the agent's final message), continue to (2).
+**Orchestrator context exhaustion mid-pipeline** — the artifacts under `<ARTIFACT_DIR>` are the resume state, and nothing is deleted mid-lifecycle, so re-entry is `/claim-task <CLAIM_ID> --resume <RUN_ID>`, which lands at Step 7-pre and routes off those artifacts. Nothing parked, so there is no park marker — but the claim's **own** lock is still in place, so `--entry-state` answers `held`, and `--resume` is exactly the way past it.
 
-   **Two filenames are possible, and this step must tolerate both** (Phase 159a, `parse_subagent_envelope.py:402`):
+## Step 8: Receive the executor envelope and hand off
 
-   - `<TASK_ID>.json` — written when the agent's envelope carries no `PHASE:` key. **This is what today's single reviewer-executor produces**, because no shipped prompt emits `PHASE:`.
-   - `<TASK_ID>.<phase>.json` — written when it does. The phase component is lower-cased and sanitized, so `PHASE: Plan` and `PHASE: plan` both yield `plan`.
+Read the envelope in this order — first hit wins; never go past a clean hit:
 
-   Resolve in that order: try `<TASK_ID>.json` first; if it is absent, glob `<TASK_ID>.*.json` (ignoring `_unparseable_*.json` diagnostics). If the glob returns exactly one file, use it. If it returns several, prefer `exec`, then `review`, then `plan` — the later the phase, the closer to the executed result Step 8 is reporting on. **Remember which file you actually read**; the delete below removes that one, not a guessed name.
+1. **JSON file** (preferred). `sysop/runtime/subagent-envelopes/<CLAIM_ID>.exec.json`, resolved against the **main repo root** (`git rev-parse --git-common-dir`, then its parent) — the hook resolves its own output that way, so the file lands in the main checkout even when the sub-agent ran in a worktree. Keys: `status`, `worktree`, `branch`, `error`, `blocker_question`, `review_report_raw`. The `SubagentStop` hook runs synchronously before the parent receives the `Agent` return, so absence is never a race.
 
-   *(The `_unparseable_` exclusion is belt-and-braces and is **currently unreachable**: diagnostics are written as `_unparseable_<session>_<agent>.json` (`parse_subagent_envelope.py`), which cannot match `<TASK_ID>.*.json` for any schema-valid id. It is kept, and pinned, so a future change to the diagnostic filename cannot quietly start feeding parse failures back in as envelopes — not because it filters anything today.)*
+   Because every prompt above emits `PHASE:`, this claim's envelopes are `<CLAIM_ID>.plan.json`, `<CLAIM_ID>.review.json` and `<CLAIM_ID>.exec.json`. **Read the `exec` one here.** The plan and review envelopes are still live and carry the reviewer's sealed report; do not read them as the executor's result and do not delete them.
 
-   > **Why tolerate a shape nothing writes yet.** The orchestrator reshape (`tools/CLAIM_TASK_ORCHESTRATOR_SPEC.md`) makes three sub-agents emit `PHASE: plan` / `review` / `exec` under one claim id. Repointing this read at the phased names *before* that lands would break the working single-envelope path for no gain; tolerating both is forward-compatible and changes nothing today.
+   **Before concluding an envelope is absent, look for `_unparseable_*.json`.** A malformed envelope is written as `_unparseable_<session>_<agent>.json` — keyed by session and agent, **not** by claim id or phase — so an orchestrator globbing `<CLAIM_ID>.*.json` sees nothing at all and would otherwise report "the executor never ran" when what actually happened is that it ran and its envelope did not parse.
 
-   **Review batches:** substitute `<CLAIM_ID>` for `<TASK_ID>` throughout this step — the envelope is keyed by whatever the sub-agent put in its `TASK:` field, and `parse_subagent_envelope.py`'s shape check (`^[A-Z][A-Z0-9-]{2,80}$`) accepts `BATCH-<N>`, so a batch claim's envelope really is written as `BATCH-116.json`. This step is **not** roadmap-only; it is spelled with `<TASK_ID>` only because that is the dominant case. Reading it as not-applicable and skipping the envelope is the Phase-29 failure this file's Step 1 convention exists to prevent, and Steps 7–8 are exactly where that happened before.
-2. **Regex parse of the sub-agent's return text** (existing behavior). Parse the YAML envelope from the LAST content block of the sub-agent's final message. Validate that the envelope has the required keys (`TASK`, `STATUS`, `WORKTREE`, `BRANCH`, `ERROR`). Multiple envelopes → last-wins (matches the prompt's "LAST content" instruction).
+   **Treat it as a hint to go and look, never as this run's result.** Nothing in the filename ties a diagnostic to a claim, a phase or a run, and these files persist across runs on purpose — Step 7-pre's move-aside deliberately leaves them alone, precisely because they are diagnostics rather than results. So a diagnostic sitting in the mailbox may belong to another claim entirely, to `/auto-build`, or to a run of this claim from last week. Open it and read its contents before attributing it to anything; if it does not name this claim's work, say the executor's envelope is missing and report that, rather than reporting a stranger's failure as this claim's.
 
-The `REVIEW_REPORT:` block at the TOP of the sub-agent's response is read from the response body (or from `review_report_raw` in the JSON if path (1) hit).
+2. **Regex parse of the executor's return text.** Parse the YAML envelope from the LAST fenced block of its final message. Defense in depth for an unregistered hook or a failed write, not a timing fallback.
 
-**After consuming (1)**, delete **the file you actually read** — `rm -f sysop/runtime/subagent-envelopes/<the resolved filename>`, which is `<TASK_ID>.json` on today's path and `<TASK_ID>.<phase>.json` if the glob resolved one. Do not `rm` a guessed name, and do not widen this to `<TASK_ID>.*.json`: under the reshape the plan and review envelopes are still live when the executor's envelope is consumed, and a wildcard here would destroy them mid-lifecycle. The dir is for in-flight handoff only; leftover files accumulate stale state across cycles. Do NOT delete `_unparseable_*.json` diagnostics — those persist intentionally for inspection.
+**Review batches:** substitute `<CLAIM_ID>` throughout — the hook's shape check accepts `BATCH-<N>`, so a batch claim's envelopes really are `BATCH-116.exec.json`. This step is **not** roadmap-only.
 
-> **This deletion is scheduled to move, and the reshape owns that.** Deleting after consumption is why a review that *did* run left no durable trace — `tools/CLAIM_TASK_ORCHESTRATOR_SPEC.md` § *Evidence* names this exact line as the original defect and requires that nothing be deleted mid-lifecycle. Re-siting it to close-time cleanup is coupled to the artifact set the reshape introduces, so it is deliberately **not** done here; this step only stops guessing the filename.
+**Do not delete the envelopes here.** Deleting after consumption is why a review that *did* run left no durable trace: the envelope was the one artifact no agent could forge, and it was removed at the moment it became evidence. The whole artifact set — `<ARTIFACT_DIR>` and the three envelopes — persists.
 
-**On `STATUS: EXECUTED`:**
+**What cleans it up, stated as it is rather than as it should be.** Nothing does, yet. `/review-close` Step 4c removes the *lock* and any roadmap park *marker* for a closing task; it does not touch `sysop/runtime/claim/` for either claim kind, and it does not remove a batch's park marker. Close-time cleanup of the artifact set is part B of this reshape and is not built. Until it is, the directory grows one run per claim under a gitignored path — the deliberate trade, since the failure this reshape exists to remove is an artifact that vanished, not one that accumulated. Step 7-pre's move-aside is what keeps the *envelope mailbox* from going stale between runs, and it is the only thing that touches these files mid-lifecycle.
 
-Print the REVIEW_REPORT (from the response body) followed by a handoff summary:
+**On `BLOCKED`, rewrite the classification FIRST — before the outcome record below.** The order is load-bearing and a different-model review of the whole pipeline is what found it: a crash between the two writes must leave the run in the state that routes *back into adjudication*, not the one that reports it as finished. Writing `outcome.md` first and crashing leaves `classification.md` still reading `PROCEED`, and the routing table then matches the outcome row and reports a blocked run as complete. Writing the classification first and crashing leaves `verdict: BLOCKED` with no outcome record, which routes to 7c — correct, and the safe direction.
+
+**Then, whatever the status, record the executor's terminal outcome into this run.** It is what tells a later `--resume` that the executor already ran *here*, without consulting the shared envelope mailbox — which is keyed by claim and phase with no run component, and which a resume deliberately does not clear:
+
+```bash
+# Substitute all three literally. <EXEC_STATUS> is the envelope's STATUS verbatim
+# (EXECUTED | BLOCKED | FAILED | MALFORMED).
+python3 - <<'PY' "<CLAIM_ID>" "<RUN_ID>" "<EXEC_STATUS>"
+import sys, subprocess
+from pathlib import Path
+
+claim_id, run_id, status = sys.argv[1], sys.argv[2], sys.argv[3]
+if "<" in claim_id or "<" in run_id:
+    print("ERROR: placeholder not substituted", file=sys.stderr)
+    sys.exit(2)
+common = subprocess.run(["git", "rev-parse", "--git-common-dir"],
+                        capture_output=True, text=True, check=True).stdout.strip()
+out = Path(common).resolve().parent / "sysop" / "runtime" / "claim" / claim_id / run_id / "outcome.md"
+if not out.parent.is_dir():
+    print("ERROR: no such run directory {}".format(out.parent), file=sys.stderr)
+    sys.exit(3)
+out.write_text("# Outcome — {} run {}\n\n- executor_status: {}\n".format(claim_id, run_id, status),
+               encoding="utf-8")
+print("wrote " + str(out))
+PY
+```
+
+**On `STATUS: EXECUTED`** — print the sealed `REVIEW_REPORT` (from `review_report_raw` on the review envelope), then:
 
 ```
-## Reviewer-executor returned: EXECUTED
+## Claim complete: <CLAIM_ID>
 
-| Field    | Value                              |
-|----------|------------------------------------|
-| Task     | <TASK_ID>                          |
-| Worktree | <WORKTREE_PATH>                    |
-| Branch   | <BRANCH_NAME>                      |
+| Field     | Value                                    |
+|-----------|------------------------------------------|
+| Task      | <CLAIM_ID>                               |
+| Worktree  | <WORKTREE_PATH>                          |
+| Branch    | <BRANCH_NAME>                            |
+| Artifacts | <ARTIFACT_DIR>                           |
 
-The reviewer-executor adversarially reviewed, self-classified, revised the
-plan, implemented, ran post-fix gates, and committed your work in the
-worktree. It did NOT push. Run `/document-work` next to commit-message-polish,
-write the pending-docs handoff, and prepare for review. Do NOT merge to main —
+A planner, an independent reviewer, and an executor each ran in their own cold
+context; findings were classified by this session. The work is committed in the
+worktree and NOT pushed. Run `/document-work` next. Do NOT merge to main —
 `/review-close` handles that.
 ```
 
-**Auto-mode chaining (BeanRider ISSUE-0038).** Under `auto` mode, after printing the EXECUTED handoff above, invoke `/document-work` directly via the `Skill` tool rather than ending the turn and waiting for the user to type the command. The chain `claim-task → document-work` is the canonical lifecycle — `/document-work` writes the pending-doc and stages it; it does NOT push or merge, so chaining is safe. Skip the chain (end the turn) when any of: the sub-agent returned `STATUS: BLOCKED` or `STATUS: FAILED`, the UI-verify note flags pending manual checking, the harness is not in `auto` mode, OR the user explicitly asked to pause for inspection in this session. The user can still interrupt mid-chain. The same chaining note does NOT extend to `/document-work → /review-close` — `/review-close` is the senior-reviewer merge gate; that step intentionally stays user-initiated unless a downstream skill version asserts otherwise.
+`<ARTIFACT_DIR>` is the absolute path Step 7-pre printed — `<main repo root>/sysop/runtime/claim/<CLAIM_ID>/<RUN_ID>/`. Print the absolute form rather than the repo-relative one: the human reading this box may be standing in the worktree, where the relative path resolves to nothing.
 
-If Step 8 (UI verify) emitted a skipped/manual-verification note, it appears in the sub-agent's final-message body above the envelope — surface that note verbatim to the user so they know what still needs manual checking. Do NOT call `ExitPlanMode` at the parent — the sub-agent already exited plan mode in its own session. The parent's plan-mode state is separate and ends naturally when control returns to the user.
+**Auto-mode chaining.** Under `auto` mode, invoke `/document-work` directly via the `Skill` tool rather than ending the turn. Skip the chain when the executor returned `BLOCKED` or `FAILED`, when a UI-verify note flags pending manual checking, when the harness is not in `auto` mode, or when the user asked to pause. The chain does **not** extend to `/review-close`, which stays user-initiated.
 
-**On `STATUS: BLOCKED`:**
+**On `STATUS: BLOCKED`** — print the sealed report and the `BLOCKER_QUESTION:`. Then, **before parking, re-run Step 7c's classification write with `verdict: BLOCKED`** and a finding recording the executor's blocker question. Only then park per Step 7c, with the `BLOCKER_QUESTION:` text as the recorded reason, and tell the human to resume with `/claim-task <CLAIM_ID> --resume <RUN_ID>`.
 
-Print the REVIEW_REPORT, the `BLOCKER_QUESTION:` from the envelope (prefixed with `Sub-agent halted on a blocker; needs human input:`), and:
+**The rewrite is not bookkeeping — without it the resume is a no-op that re-runs the executor.** `classification.md` still reads `verdict: PROCEED` at this point, because it had to for 7e to have been spawned at all. Leaving it there sends 7-pre's routing table to its last row, which re-spawns the executor with byte-identical inputs and gives the human's answer nowhere to land — so the one runtime path that actually produces a blocker question would never reach the row written for it.
 
-```
-## Reviewer-executor returned: BLOCKED
+**On `STATUS: FAILED`** — print the `ERROR` verbatim, run `git log --oneline main..HEAD` and `git status --short` in the worktree and surface both. If substantive work landed despite the failure, let the human decide whether to recover or discard. **Do not auto-retry.**
 
-| Field    | Value                              |
-|----------|------------------------------------|
-| Task     | <TASK_ID>                          |
-| Worktree | <WORKTREE_PATH>                    |
-| Branch   | <BRANCH_NAME>                      |
+**On a malformed envelope** — print `Executor returned with a malformed envelope — treating as FAILED`, surface its prose body (which likely contains the implementation output), and check for an `_unparseable_*.json` diagnostic. Do not auto-retry.
 
-Worktree intact. Lock intact. The sub-agent did not call ExitPlanMode and did
-not implement. Resolve the blocker (answer the question, add the missing source
-data, etc.), then re-run `/claim-task <TASK_ID>` or continue manually in the
-worktree.
-```
-
-Do NOT call `ExitPlanMode` at the parent — the work is incomplete and a fresh plan may be needed.
-
-**On `STATUS: FAILED`:**
-
-Print the failure summary with the `ERROR` field verbatim. Run `git log --oneline main..HEAD` and `git status --short` in the worktree and surface the output. If substantive work landed despite the failure, let the human decide whether to recover or discard. Do NOT auto-retry; the next move (fix manually in the worktree, re-spawn the sub-agent, or park the task) is theirs.
-
-**On malformed envelope:**
-
-Print `Reviewer-executor returned with malformed envelope — treating as FAILED`. The sub-agent's prose body (above where the envelope should have been) likely contains the implementation output. Surface the prose body to the user so they can see what actually happened. Do NOT auto-retry.
-
-This is the parent session's terminal action for `/claim-task`. Control returns to the user.
+This is the orchestrator's terminal action. Control returns to the user.

@@ -24,6 +24,7 @@ were put there by its adversarial review.
 """
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from tests import shape_lib as S
@@ -230,3 +231,136 @@ def test_the_four_give_back_skills_actually_stage_a_body_file():
         assert "${TMPDIR:-/tmp}/sysop-" in text, (
             f"/{name} no longer stages its payload through a guarded temp file"
         )
+
+
+# --------------------------------------------------------------------------------------
+# The phantom-variable gate's existence, asserted from OUTSIDE it (Phase 169's round)
+# --------------------------------------------------------------------------------------
+
+def test_the_phantom_shell_variable_gate_is_present_and_wired():
+    """`git rm tests/test_phantom_shell_vars.py` left the suite green.
+
+    Every vacuity floor that module added lives *inside* it, so deleting the file removes
+    the guard and its own floor together — the cheapest hatch of all, and cheaper than the
+    `ENV_PROVIDED` addition that module pins as "the cheapest". The assertion has to sit in
+    a different file to mean anything, and this is the sibling that already owns
+    cross-skill invocation invariants.
+    """
+    module = S.REPO_ROOT / "tests" / "test_phantom_shell_vars.py"
+    assert module.is_file(), (
+        "the phantom shell-variable gate is gone — it is the only thing standing between "
+        "the corpus and the class Phase 169 cleared (33 sites, 5 files)"
+    )
+    body = module.read_text(encoding="utf-8")
+    for required in (
+        "def test_no_skill_reads_a_shell_variable_its_own_fenced_block_does_not_set(",
+        "def test_no_skill_reads_a_shell_variable_from_an_inline_command_in_prose(",
+        "def test_the_scan_actually_examined_something(",
+    ):
+        assert required in body, f"the gate lost one of its invariants: {required}"
+    # And the predicates it calls must still be exported by the shared library.
+    for predicate in ("phantom_shell_vars", "phantom_inline_commands"):
+        assert hasattr(S, predicate), f"shape_lib no longer exports {predicate}"
+
+
+def test_the_merged_tree_gate_is_present_and_wired():
+    """Phase 170's ratchet, deliberately in a DIFFERENT module from the gate it protects.
+
+    Its round found that `git rm tests/test_review_close_merged_tree_gate.py` left the whole
+    suite green — every floor that module added lived inside it, so the cheapest way past all
+    of them was to delete the file. Same rung Phase 169 closed for the phantom-variable gate,
+    same fix: the existence-and-non-vacuity assertion lives somewhere the deletion does not
+    reach.
+    """
+    module = S.REPO_ROOT / "tests" / "test_review_close_merged_tree_gate.py"
+    assert module.is_file(), (
+        "the merged-tree verification gate is gone — it is the only thing asserting that "
+        "/review-close verifies the tree that merges rather than the one it starts on"
+    )
+    body = module.read_text(encoding="utf-8")
+    for required in (
+        "def check_the_gate_runs_after_the_merges_and_before_the_close(",
+        "def check_nothing_routes_past_the_merged_tree_gate(",
+        "def check_the_gate_actually_runs_the_list(",
+        "def check_both_passes_share_one_scope_command(",
+        "def check_the_step3c_coupling_is_gone_from_the_whole_file(",
+        "def test_the_public_docs_carry_the_two_pass_shape(",
+        "def test_legitimate_rewrites_do_not_go_red(",
+    ):
+        assert required in body, f"the merged-tree gate lost one of its invariants: {required}"
+    # Non-vacuity: the shipped skill must actually carry the step the module gates, so an
+    # emptied SECTIONS dict or a renamed step is visible from here too.
+    skill = (S.REPO_ROOT / "core" / "skills" / "review-close" / "SKILL.md").read_text(encoding="utf-8")
+    assert "### 4a-post. Verify the Merged Tree" in skill, (
+        "/review-close no longer has a merged-tree verification step"
+    )
+
+
+def test_the_claim_task_orchestrator_gate_is_present_and_wired():
+    """Phase 171's ratchet, in a DIFFERENT module from the gate it protects.
+
+    Its own round confirmed by execution that `git rm
+    tests/test_claim_task_orchestrator.py` left the whole suite green: nothing
+    outside the module referenced it, so the orchestrator predicates, the
+    mutation battery, the negative controls and the vacuity floor all died
+    together and the cheapest way past every one of them was one `git rm`. Third
+    rung of the same ladder Phases 169 and 170 closed above.
+    """
+    module = S.REPO_ROOT / "tests" / "test_claim_task_orchestrator.py"
+    assert module.is_file(), (
+        "the /claim-task orchestrator gate is gone — it is the only thing asserting that the "
+        "claim path spawns a planner, an independent reviewer and an executor rather than "
+        "collapsing them into one self-classifying sub-agent (upstream #220)"
+    )
+    body = module.read_text(encoding="utf-8")
+    for required in (
+        "def orchestrator_problems(",
+        "def partial_problems(",
+        "def workflow_problems(",
+        "def test_orchestrator_guards_kill_semantic_inversions(",
+        "def test_partial_guards_kill_semantic_inversions(",
+        "def test_workflow_guards_kill_semantic_inversions(",
+        "def test_negative_controls_do_not_fire(",
+        "def test_guards_are_not_vacuous(",
+    ):
+        assert required in body, f"the orchestrator gate lost one of its invariants: {required}"
+
+    # **Signatures are not enough, and the round proved it.** A module reduced to
+    # exactly those eight `def` lines with `return []` bodies satisfied every
+    # check above — `git rm` was closed, gutting was not. So CALL the predicates
+    # from out here and make them detect a planted defect: a module that stops
+    # detecting cannot pass this, whatever its signatures say.
+    sys.path.insert(0, str(S.REPO_ROOT / "tests"))
+    import test_claim_task_orchestrator as G  # noqa: PLC0415
+
+    skill = (S.REPO_ROOT / "core" / "skills" / "claim-task" / "SKILL.md").read_text(encoding="utf-8")
+    assert G.orchestrator_problems(skill) == [], "the shipped /claim-task skill fails its own gate"
+    plants = {
+        # Each inverts a property the reshape exists to establish. If the module
+        # has been gutted, none of these are detected and this test fails here
+        # rather than in the module that was gutted.
+        "artifact dir shared across runs": ("d = claim_root / run_id", "d = claim_root"),
+        "artifact dir back in the worktree": (
+            "main_root = Path(common).resolve().parent",
+            "main_root = Path(__import__('os').environ['PWD'])"),
+        "--resume switched off": ("if resume:", "if resume and False:"),
+        "integrity verdict inverted": ('"OK" if now == pre else "VIOLATED"',
+                                       '"OK" if now != pre else "VIOLATED"'),
+        "reviewer made optional": ("**Always.** Review is never inherited",
+                                   "**Always.** Under option B, skip this step. Review is never inherited"),
+    }
+    for name, (old, new) in plants.items():
+        assert old in skill, f"plant anchor is stale ({name}) — this floor proves nothing"
+        i = skill.rindex(old)
+        mutated = skill[:i] + new + skill[i + len(old):]
+        assert G.orchestrator_problems(mutated), (
+            f"the orchestrator gate no longer detects a planted defect ({name}) — it has been "
+            f"neutered, and every floor inside it was neutered with it"
+        )
+
+
+def test_the_phantom_gate_finds_a_planted_defect():
+    """Non-vacuity for the assertion above, exercised through the production predicate so
+    a narrowed detector fails here too — not only in the module that owns it."""
+    planted = "```bash\ngit -C \"$WORKTREE_PATH\" rev-parse HEAD\n```\n"
+    assert [v for _, v, _ in S.phantom_shell_vars(planted)] == ["WORKTREE_PATH"]

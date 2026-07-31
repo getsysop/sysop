@@ -440,7 +440,8 @@ Use the Write tool to create `<WORKTREE_PATH>/sysop/runtime/pending-docs/<saniti
 branch: <branch-name>
 date: YYYY-MM-DD
 type: infrastructure
-task_ids: []
+roadmap_ids: []
+review_task_ids: []
 summary: "Batch <N> complete: <Title>. <Scope>."
 ---
 ```
