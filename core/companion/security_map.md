@@ -6,7 +6,7 @@
 
 ---
 
-## `scripts/*.sh`, `scripts/hooks/*` — Shell Scripts & Git Hooks
+## `scripts/*.sh`, `scripts/hooks/*`, `sysop/scripts/*.sh`, `sysop/scripts/hooks/*` — Shell Scripts & Git Hooks
 
 **Check:**
 - **A03 Injection**: Variable expansions in command arguments must be double-quoted to prevent word splitting and injection. `eval` and unquoted `$()` on user/env input are injection vectors.

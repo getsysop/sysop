@@ -2896,8 +2896,9 @@ seed_friction_log() {
   cat > "$dst" <<EOF
 # Sysop Issues — ${consumer}
 
-> Sysop friction logged from \`${consumer}\`. This file lives at repo
-> root by design — Sysop's \`install.sh --update\` never touches it.
+> Sysop friction logged from \`${consumer}\`. This file lives in the
+> \`sysop/\` vendor dir and is project-owned by design — Sysop's
+> \`install.sh --update\` never touches it.
 > Project-owned after this initial seed; you can restructure freely.
 >
 > **What belongs here:** symptoms in sysop-shipped files, skills,

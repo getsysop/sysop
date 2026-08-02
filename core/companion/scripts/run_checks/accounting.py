@@ -106,6 +106,22 @@ class RunReport:
             c.get("id", ""): check_is_localized(c) for c in self._checks
         }
         self._records = {}  # check_id -> _Record
+        self._waived = []   # (check_id, file_line, message), in emission order
+
+    def record_waived(self, check_id, file_line, message):
+        """Record a finding suppressed by an inline ``no-check:`` marker.
+
+        Waiving is per *finding*, not per check, so it is deliberately NOT a
+        terminal state: the check still ran and is still ``executed``. The list
+        exists so a waiver can never be silent — the caller reprints each entry
+        with a ``[waived]`` tag (the ``[baseline]`` idiom) and ``render``
+        carries the count in the header.
+        """
+        self._waived.append((check_id, file_line, message))
+
+    def waived(self):
+        """``(check_id, file_line, message)`` for every inline-waived finding."""
+        return list(self._waived)
 
     def record(self, check_ids, status, stage, reason=None, detail=None):
         """Record ``status`` for each id in ``check_ids``.
@@ -184,6 +200,7 @@ class RunReport:
             + " / ".join(count_parts)
             + f" of {selected} selected "
             f"(mode: {mode}; baseline-matched: {baseline_matched}; "
+            f"waived: {len(self._waived)}; "
             f"new blocking: {new_blocking}) ---"
         )
         lines = [header]

@@ -174,7 +174,7 @@ When it reads right, commit it — that commit is your sign-off on the
 decomposition, which the validator can't give you.
 
 Hit any Sysop friction while planning (a confusing step, a rough edge)? Note it
-in SYSOP_ISSUES.md at the repo root — /report-issues sends the keepers upstream.
+in sysop/SYSOP_ISSUES.md — /report-issues sends the keepers upstream.
 ```
 
 The closing friction line is part of the completion summary, not a new turn — `/intake` is judgment-heavy and its turn budget is precious, so this is a one-line nudge in the message the skill already prints, never an extra `AskUserQuestion`.

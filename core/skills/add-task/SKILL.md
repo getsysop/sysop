@@ -15,7 +15,7 @@ This skill exists so the capture is *deterministic*, not emergent. Without it, "
 Three neighbors, three boundaries. Check before drafting:
 
 - **"Fix it now" is not a capture-only event.** If the human wants the change made in this session, do the work — or, when it deserves the full plan/lock/worktree discipline, file the task here and immediately `/claim-task <TASK-ID>` it (claiming requires a queue entry, so filing first costs seconds and keeps the record). What `/add-task` never does is make the change itself.
-- **Friction with Sysop itself goes to `SYSOP_ISSUES.md`**, not the task queue. "The `/review-close` prompt confused me" is a Sysop issue (captured in `SYSOP_ISSUES.md`, transported by `/report-issues`); "the login button is the wrong color" is *your project's* work and belongs here. When the thought is about the workflow rather than the product, say so and capture it in `SYSOP_ISSUES.md` instead.
+- **Friction with Sysop itself goes to `sysop/SYSOP_ISSUES.md`**, not the task queue. "The `/review-close` prompt confused me" is a Sysop issue (captured in that log, transported by `/report-issues`); "the login button is the wrong color" is *your project's* work and belongs here. When the thought is about the workflow rather than the product, say so and capture it in `sysop/SYSOP_ISSUES.md` instead.
 - **A phase is not a task.** If the thought decomposes into more than about three independent tasks, or wants a new phase, that's planning — hand off to `/intake` (re-entry mode). See Step 1.
 
 ## Step 0 — Orient

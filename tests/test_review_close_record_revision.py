@@ -168,9 +168,20 @@ PINS: list[tuple[str, str, str]] = [
      "placeholder — false: intake, add-task and onboard all forbid writing the section, so the "
      "body has no heading. The round caught it contradicting this phase's own Invariant-13 filing."),
     ("2d",
-     "for every task on every code-touching branch on every run",
-     "the scoped claim. The unqualified 'every task on every run' was false — step 0's "
-     "doc-only skip exits before the record is read."),
+     "for every task on every branch on every run",
+     "the scoped claim, RE-SCOPED BY PHASE 175 and deliberately, not by weakening this pin. "
+     "Phase 167 wrote 'every *code-touching* branch' because step 0's doc-only skip exited "
+     "before the record was read, so doc-only branches were spared and the unqualified form "
+     "was false. Phase 175 gave that skip a second conjunct — the record must classify "
+     "`no-test` — which means the read now happens first and a `missing` classification does "
+     "not earn the skip. Nothing is spared any more, so the unqualified claim is the true one "
+     "and the narrowing is what would now be false. P6 below inverts accordingly."),
+    ("2d",
+     "**Nothing spares one**",
+     "the half Phase 167's scoping used to carry implicitly. Stated outright because the "
+     "reason it is true now lives in a different step (2d's step 0), and a reader diagnosing "
+     "a mass-`missing` halt using this note would otherwise expect doc-only branches to have "
+     "been spared and mis-localize the cause."),
     ("2d",
      "`body:` is canonically relative to `tasks/` — `open/<TASK-ID>.md`, NOT",
      "the path rule. Getting this wrong makes `git show` fatal on a DEFAULT install, which the "
@@ -457,8 +468,15 @@ MUTATIONS: list[tuple[str, Callable[[str], str]]] = [
         "N held-for-fix, N unreadable, N doc-only", "N held-for-fix, N doc-only")),
     ("P5 drop the resume instruction", _sub(
         "**Resume at this gate, not at the top of the skill**", "Re-run Step 6")),
-    ("P6 restore the unscoped `every task on every run` claim", _sub(
-        "for every task on every code-touching branch on every run", "for every task on every run")),
+    # Inverted by Phase 175: the narrowing, not the unscoped form, is now the false claim.
+    # A `missing` record no longer earns step 0's skip, so doc-only branches halt here too;
+    # re-adding "code-touching" would tell a reader they are spared when they are not.
+    ("P6 re-narrow the claim to code-touching branches (false since Phase 175)", _sub(
+        "for every task on every branch on every run",
+        "for every task on every code-touching branch on every run")),
+    ("P6b drop the explicit `Nothing spares one`", _sub(
+        "**Nothing spares one** — step 0's doc-only skip does not, because a `missing` classification is not the `no-test` its second conjunct requires, so a doc-only branch halts here too.",
+        "")),
     ("P7 restore Step 2a's false path gloss", _sub(
         "there is no `tasks/in_progress/` directory in any shipped layout",
         "the body lives under `tasks/<status>/`")),

@@ -79,18 +79,43 @@ Before incorporating anything, print `RAW_FINDINGS` verbatim in a clearly-labele
 <RAW_FINDINGS verbatim>
 ```
 
-## Step 5: Incorporate Findings into Revised Plan
+## Step 5: Classify Findings, then Revise the Plan
 
-Produce a revised plan (`REVISED_PLAN`) that is executable as the new source of truth — not a commentary on the original.
+**5a — Classify.** Apply the Classification Rubric in `.claude/skills/_shared/adversarial-review.md` to each finding in `RAW_FINDINGS`: exactly one of `fixable` or `blocker`. Decompose a compound finding into its clauses and classify each on its own merits before rejecting any of them — that file's § *Compound findings — decompose before rejecting* owns the rule, and refuting one clause does not reject the finding.
 
-- For each **blocker** finding → modify the relevant plan step so the issue is resolved. Prefer targeted revisions over full rewrites.
+**If `RAW_FINDINGS` is not a findings list at all** — an error, a refusal, an empty return, or a rewritten plan (the Prompt Template forbids rewriting, so a plan coming back is a reviewer that did not follow it) — **the review did not run.** This is not the same as a clean pass, and the difference is the whole point: 5c's zero-findings arm needs the reviewer to have *said* it found nothing, while silence is a reviewer that may never have read the plan. Do not classify, do not append the clean-pass line, and do not proceed to Steps 6–8. Print the return verbatim under a `## Adversarial Review — Did Not Run` heading, state that no verdict exists for this plan, and stop. `/claim-task` Step 7b makes its reviewer emit `findings: []` and `verdict: CLEAN` explicitly *"so the orchestrator can record that the step ran clean rather than that it failed to run"*; `/plan-review`'s reviewer returns no verdict token, so this arm is the only thing standing between a review that failed and a plan stamped as reviewed clean.
+
+**5b — If any finding is `blocker`, halt.** Do not emit a revised plan, do not call `EnterPlanMode` or `ExitPlanMode`, do not execute, and do not proceed to Steps 6–8. A `blocker` is by definition a finding that needs human input the agent cannot produce, so revising around it is not available — the human's answer is the only thing that unblocks it. (The rubric requires you to have *tried* resolving it by reading more code and revising before you may classify it `blocker` at all; that attempt belongs to 5a and is scratch. What 5b forbids is shipping a revised plan as though the gap were closed.) Print:
+
+```
+## Adversarial Review — Blocked
+
+Halting: <N> finding(s) need human input before this plan can be executed.
+
+1. <finding summary>
+   Question: <the question this finding puts to the human — omit the line if the
+   finding states none; do not invent one>
+2. ...
+
+The plan has not been revised and nothing has been executed. Answer the question(s)
+above. In file mode, edit <path> and re-run `/plan-review <path>`. In conversation,
+give the answer and ask for the plan to be revised with it — a bare re-run of
+`/plan-review` re-selects this same plan (Step 2 prefers the most recent plan-mode
+tool call over a newer message) and halts again on the same finding.
+```
+
+…and stop. **The rubric's *do not call `ExitPlanMode`* is a live prohibition here and vacuous everywhere else:** `/plan-review` is the only rubric consumer that reaches `ExitPlanMode` **while a classification is still live**. `/claim-task` never enters plan mode at all; `/auto-build`'s executor does call it (`auto-build/SKILL.md` Phase 6e), but only after the orchestrator has already parked every blocker and skipped that task's execution, so by then there is no blocker for the prohibition to bind.
+
+**5c — Otherwise every finding is `fixable`.** Produce a revised plan (`REVISED_PLAN`) that is executable as the new source of truth — not a commentary on the original.
+
+- For each **fixable** finding you accept → modify the relevant plan step so the issue is resolved. Prefer targeted revisions over full rewrites.
 - For each finding you **reject** (genuinely disagree with after considering it) → add an inline note in the relevant plan section explaining why, so the same issue does not resurface in a future review. Format:
 
   ```
   > **Adversarial review rejected:** <finding summary>. Rationale: <why>.
   ```
 
-- Append an `## Adversarial Review — Incorporated Changes` section at the end of the revised plan listing each blocker that was accepted and what changed in response:
+- Append an `## Adversarial Review — Incorporated Changes` section at the end of the revised plan listing each finding that was accepted and what changed in response:
 
   ```
   ## Adversarial Review — Incorporated Changes
@@ -99,13 +124,13 @@ Produce a revised plan (`REVISED_PLAN`) that is executable as the new source of 
   2. ...
   ```
 
-- If the sub-agent returned **zero blockers**, append this line to the plan instead:
+- If the sub-agent returned **zero findings**, append this line to the plan instead:
 
   ```
   > **Adversarial review: no blockers found.**
   ```
 
-  Still proceed to Step 8 — a clean review still goes through the native approval prompt.
+  Still continue through Steps 6–8 — a clean review still gets its summary, its file-mode write-back offer, and the native approval prompt. The wording is the rubric's (§ *Recording a clean pass*); the **condition is zero findings, not zero blockers**. Getting that wrong replaces the `## Adversarial Review — Incorporated Changes` record with "no blockers found" on the path where findings were incorporated — which is the common one, since `fixable` is the rubric's default arm and `blocker` is the exception.
 
 ## Step 6: Print Review Summary
 
@@ -116,7 +141,7 @@ Print a compact summary table:
 
 | Metric                                | Count |
 |---------------------------------------|-------|
-| Blockers incorporated                 | N     |
+| Findings incorporated                 | N     |
 | Findings rejected (with rationale)    | M     |
 | File/line citations verified          | K     |
 ```
@@ -141,6 +166,8 @@ Options:
 
 ## Step 8: Present Revised Plan for Approval
 
+**Reachable only when no finding was classified `blocker`** — Step 5b is the other exit *after the review runs* (Steps 1, 2 and 5a stop earlier on their own conditions), and it does not reach here, because the rubric's halt arm forbids the `ExitPlanMode` call below.
+
 Present `REVISED_PLAN` using the standard plan-mode approval flow:
 
 - If not already in plan mode, call `EnterPlanMode`.
@@ -160,7 +187,7 @@ If the user rejects the plan, do not execute. Ask what they want changed and rev
 
 ## Notes
 
-- **Complementary to `/claim-task`.** `/claim-task` runs the same adversarial review automatically at Step 7b, in an independent sub-agent that did not write the plan; the orchestrator classifies its findings at Step 7c (see `claim-task/SKILL.md` § Step 7 and `_shared/adversarial-review.md` § "Reviewer-executor variant"). Use `/plan-review` only for plans NOT produced by `/claim-task` — otherwise you are paying for two adversarial passes on the same plan.
+- **Complementary to `/claim-task`.** `/claim-task` runs the same adversarial review automatically at Step 7b, in an independent sub-agent that did not write the plan; the orchestrator classifies its findings at Step 7c (see `claim-task/SKILL.md` § Step 7 and `_shared/adversarial-review.md` § "The reviewer-executor variant is retired"). Use `/plan-review` only for plans NOT produced by `/claim-task` — otherwise you are paying for two adversarial passes on the same plan.
 - **Token cost.** Each invocation spawns a fresh opus sub-agent. Re-running on the same plan after edits is valid but costs tokens. Do not re-run speculatively.
 - **No size gate.** The skill does not gate on plan size — tiny plans still trigger the full adversarial pass. Skip invoking the skill for trivial changes rather than adding a complexity threshold, which would reopen the gap we are trying to close.
-- **Do not dismiss findings silently.** Every finding must be either incorporated or explicitly rejected with rationale in the revised plan. Silent dismissal defeats the purpose of the review.
+- **Do not dismiss findings silently.** Every finding must be either incorporated or explicitly rejected with rationale in the revised plan. Silent dismissal defeats the purpose of the review. **On the 5b halt path there is no revised plan to hold either**, so this rule takes its other form: the blockers appear in the Blocked block, and any `fixable` findings alongside them stay live in Step 4's verbatim print until the re-run. They are deferred, not dismissed — and a re-run re-derives them, so do not treat the halt as having disposed of them.
