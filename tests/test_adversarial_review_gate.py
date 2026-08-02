@@ -159,6 +159,43 @@ def gate_problems(gate: str) -> list[str]:
         problems.append("gate no longer points at the procedure")
     if not re.search(r"Running more than one reviewer", gate):
         problems.append("gate no longer names the procedure's section")
+    # Phase 174. The governor exists because the count crept 1 -> 2 -> 3 -> 4+ with nobody
+    # choosing it (Phase 166's measurement); a gate that stops naming it is how the creep
+    # restarts. Phase 166's round also faulted the author-side pass for having NO INVOKER —
+    # same defect, one subsection over — so the gate is the invoker, pinned here.
+    if not re.search(r"How many reviewers, how many rounds", gate):
+        problems.append(
+            "gate no longer names the governor — the ratified count/termination policy has "
+            "no invoker again, which is the Phase-166 no-invoker defect recurring"
+        )
+    if not re.search(r"ROUND_YIELD_LEDGER\.md", gate):
+        problems.append(
+            "gate no longer requires the round-yield ledger row — the count becomes tunable "
+            "only on anecdote again, which is the gap Phase 166 filed the ledger to close"
+        )
+    # The author-side battery walked "as many lenses as the phase seems to need" through
+    # this predicate: the governor's name and the ledger were both still present, and no
+    # hedge matched. The gate re-states the governor's numbers, so the governor's
+    # contradiction screen must run here too.
+    for pat, why in GOVERNOR_FORBIDDEN:
+        if re.search(pat, gate, re.I):
+            problems.append(f"gate contradicts the governor ({why}): {pat!r}")
+    # And the round's guards lens then walked FIVE more edits through it — the numbers
+    # drifted to "three lenses default", the whole governor sentence replaced by a bare
+    # "see that file for background", the no-self-spawn and skip-row clauses deleted —
+    # because the two token requirements above never read what the sentence SAYS. The
+    # gate's restatement of the governor's numbers is content, so its content is pinned.
+    for name, pat in {
+        "gate-two-lenses": r"two lenses default",
+        "gate-one-round": r"one round default",
+        "gate-no-self-spawn": r"never spawned on the session'?s own judgment",
+        "gate-skip-row": r"a recorded skip appends one too",
+    }.items():
+        if not re.search(pat, gate, re.I):
+            problems.append(
+                f"gate lost its {name} clause — the governor's numbers are re-stated here, "
+                "and a drifted restatement is the contradiction a reader meets first"
+            )
     for pat in _HEDGES:
         if re.search(pat, gate, re.I):
             problems.append(f"gate hedged with {pat!r}")
@@ -180,6 +217,10 @@ def section_problems(section: str) -> list[str]:
         "premise-vs-conclusion": r"confirmed premise is not a confirmed conclusion",
         "distinct-lenses": r"assign each a different lens",
         "never-forks": r"never forks",
+        # Phase 174: the count/termination governor. Deleting the whole subsection would
+        # otherwise leave every governor-scoped guard reading nothing while this predicate
+        # stayed green — the Phase-166 zero-guards hole, one subsection over.
+        "governor": r"### How many reviewers, how many rounds — the governor",
     }
     for name, pat in required.items():
         if not re.search(pat, section, re.I):
@@ -198,6 +239,13 @@ def section_problems(section: str) -> list[str]:
     for pat, why in RULE_3_FORBIDDEN:
         if re.search(pat, _flat(section), re.I):
             problems.append(f"procedure contradicts the author-side pass ({why}): {pat!r}")
+    # Same wiring as RULE_3_FORBIDDEN, same reason: a contradiction of the governor does not
+    # have to live in the governor. "Run as many rounds as needed" planted in § Caller
+    # contract's neighbourhood would escape every governor-scoped guard while a reader meets
+    # it first.
+    for pat, why in GOVERNOR_FORBIDDEN:
+        if re.search(pat, _flat(section), re.I):
+            problems.append(f"procedure contradicts the governor ({why}): {pat!r}")
     # The isolation carve-out. Without it the section's rule contradicts seven shipped
     # "Do NOT set isolation" instructions in the skills that consume this very partial.
     if re.search(r'isolation: .worktree.', section):
@@ -224,8 +272,10 @@ def author_pass_problems(section: str) -> list[str]:
     unbounded "name the survivors you decline to close" licensed the biggest hole of the
     preceding round to ship as "known blind spot, as designed"; the population rule is the
     one whose absence produced that phase's own worst number; and a one-sided cost argument
-    inside a section that requires several reviewers leans the file toward a decision the
-    phase declared unratified.
+    inside a section that requires more than one reviewer leans the file toward a count
+    decision that was unratified when this shipped. (Phase 174 later ratified the governor's
+    default; the both-halves rule below STAYS, because the counter-finding is the evidence
+    the ratified default stands on.)
     """
     # Flattened before matching. These patterns are Phase 166's and none is line-anchored,
     # but they ran against raw text — so reflowing the limits paragraph split
@@ -267,7 +317,9 @@ def author_pass_problems(section: str) -> list[str]:
             problems.append(
                 "cost argument ships without the counter-finding — the measured overlap was "
                 "~15% and each lens produced its sharpest finding alone, so the section now "
-                "leans toward an unratified reviewer-count decision"
+                "argues one side of the count question on cost alone; the governor's default "
+                "is ratified on both halves of that evidence, and this counter-finding is "
+                "the half a cost-only reading drops"
             )
     for pat in _HEDGES:
         if re.search(pat, section, re.I):
@@ -457,8 +509,8 @@ RULE_3_PINS: list[tuple[str, str]] = [
     # covered by `RULE_3_FORBIDDEN` instead, which is where a contradiction belongs.
     ("It converts one expensive finding into a cheap one; it does not replace a lens",
      "the not-a-substitute clause. Deleting it turns this rule into an argument for fewer "
-     "reviewers — a decision this file's own record says is the maintainer's, not the "
-     "section's, and which the ~15% measured overlap argues against."),
+     "reviewers — a call that belongs to the governor subsection and the maintainer, not "
+     "to this rule, and which the ~15% measured overlap argues against."),
     ("**failed on a default install**",
      "the incident's verdict. Flipped to 'worked on a default install' the paragraph still "
      "reads as an argument for the rule while its evidence now says the rule was "
@@ -568,9 +620,12 @@ _RULE_3_SOFTENING_MODALS = (
 
 # Verbatim pin over the WHOLE author-side-pass subsection.
 #
-# To re-approve a deliberate edit, regenerate the constant rather than hand-editing it:
+# To re-approve a deliberate edit, regenerate the constant rather than hand-editing it
+# (.venv interpreter — the bare `python3` this recipe first prescribed has no pytest on a
+# default setup, so the literal command failed on this machine: rule 3's own class, in the
+# comment that teaches the pin):
 #
-#     python3 -c "import sys; sys.path.insert(0,'.'); \
+#     .venv/bin/python3 -c "import sys; sys.path.insert(0,'.'); \
 #       import tests.test_adversarial_review_gate as G; \
 #       print(repr(G._block_canon(G._flat(G._author_pass_section()))))"
 #
@@ -595,7 +650,7 @@ _RULE_3_SOFTENING_MODALS = (
 # `-`/`*` swap still pass. The cost is real and is the point: wording this rule is now a
 # deliberate act, which for a rule that ships to consumers is the correct default.
 AUTHOR_PASS_VERBATIM = (
-    '### Before you spawn anyone — the author-side pass **Who this addresses:** the *author* of a change that ships code or guards, after committing and before spawning reviewers. It is not part of the plan-review flow — a `/plan-review` or `/claim-task` Step 7 reviewer has no guards to mutate yet, and should skip this section. **Why it exists.** Twelve of the sixteen phases from 150 to 165 in this project\'s log had a round that found the phase\'s own guards vacuous or its mutation claim self-selected. One reported "33 of 33 mutations killed"; an independent reviewer then ran 83 and watched 28 survive. A round that keeps finding the same class of defect is working as a detector while the authoring step is not learning, and **buying more reviewers is the expensive way to treat that** — roughly half of what such a round finds is catchable by inspection in minutes. **This is not an argument for fewer reviewers.** Measured on one such round, reviewers on distinct lenses were **not** redundant: overlap was about 15%, and each of four lenses produced its sharpest finding alone. Findings-per-reviewer was high. The point is to stop paying them for what you can see yourself, not to stop paying them. **1. Mutate the guard\'s assumptions, not just the content it checks.** Deleting a phrase a guard requires proves the guard is *wired to the file* — real information, and for a declared **reversion guard** (one whose stated job is catching deletion or a shortening-back) or a **vacuity guard** (one asserting its own population is non-empty) that mutation is the whole test of its stated job. Run those. The failure is a set **composed mostly** of them: it reports a kill rate that describes wiring while saying nothing about coverage. In the round that produced this rule, four of the author\'s nine mutations were reverts of text the guards were written to assert, the set was reported as "0 survivors", and **eight real bypasses stood**. So add mutations against each assumption the guard makes: - **What it matches on.** A guard keyed to a physical line is walked through by a backslash continuation, by naming a flag before its command, by a variable holding the value, or by a list step that separates a command from its qualifier. None of those is adversarial; they are how people write. - **What it accepts.** A check satisfied by a substring is satisfied by an *incidental* use of that substring — worse than a gap, because it marks a dangerous line compliant. A check requiring N phrases is satisfied by N disconnected phrases in a sentence asserting the opposite. - **Where it looks.** Enumerate the files the guard actually reads and ask whether that population covers every place the defect can appear. One such guard excluded the installer — a file that already prescribed the very script the guard was about. **Derive the population from the source of truth, not from an index or summary of it**; that single substitution produced the worst number in the phase that shipped this rule. - **Over-strictness, the direction that hides.** A pattern requiring an optional token misses the idiomatic form. A guard keyed to `bash <path>/script --flag` missed `<path>/script --flag`, which was the repo\'s own house style. - **Reachability.** Can the guard run at all, and on the thing you think? A new file excluded from its own scan, an uncollected test module, an empty population — each passes while testing nothing. - **When it runs.** If the fix depends on ordering ("rejected *before* anything is deleted"), mutate the ordering. Prose asserting an order is not a test of it. Report the fraction. **A survivor you decline to close must be impossible to close *in kind*** — it needs a judgement no pattern can encode — **not merely unattempted.** "Known blind spot, as designed" is not a disposition: in the round that produced this rule the author labelled the single biggest hole exactly that way, and the round required it fixed. If an ordinary in-repo idiom reaches your survivor, it is a defect wearing a residual\'s label. **2. Re-read your own new prose against the code it describes.** Both defects one such round found *in the fix itself* were sentences the author had just written that contradicted the file they sat in — and both were in the same class the fix existed to remove. New prose is the least-reviewed text in any change: no history, no reviewer has seen it, and its author is the one person who cannot read it cold. Check every new claim against the thing it describes, including claims about paths, which are as easily wrong in the consumer\'s installed layout as in yours. **3. Run the commands the change prescribes, in a throwaway repo — before you spawn anyone.** Shipped scripts get real-subprocess coverage, and a few purpose-built extractors do pull a *named* heredoc out of a skill file and run it against a fixture — but nothing runs a command generally, so **a newly prescribed one stays text until an operator reaches it**, and "the prescribed command does not work" is invisible until that moment. Scope this to commands whose operand the change **computes or substitutes** — `git log --oneline` has no operand to get wrong. Copy the literal string, resolve its placeholders the way the change tells an operator to resolve them, and run it. In the round that produced this rule, a prescribed `git show "<branch>:<body path>"` **failed on a default install** — `fatal: path … does not exist` — and the change\'s own new `unreadable` classification would then have halted every run with a fabricated diagnosis blaming the branch. One of three lenses found it, by building a scratch repo and running the string; the other two read the same files and did not. - **Build the fixture\'s inputs from the source of truth, not from your own model of them.** This is the half that does the work, and the easy one to drop. The same fixture runs **green** on the author\'s assumption and **red** on what the shipped writers actually emit: in that round, an assumed body path of `tasks/open/<ID>.md` printed the file, while the canonical value every writer emits — `open/<ID>.md`, relative to `tasks/` — exited 128. A fixture you populate from memory proves only that you are self-consistent. This is rule 1\'s *"derive the population from the source of truth, not from an index or summary of it"* moved from what a guard **reads** to what a fixture **contains**. - **What it reaches is narrow, and the rule says so rather than leaving it implied:** whether the command runs, and whether it does what you said it does. Nothing past that. In that same round the two other defect classes — 43 of 90 guard mutations bypassing, and the false claims in its own record — were entirely outside it. It converts one expensive finding into a cheap one; it does not replace a lens. **What this pass cannot do.** Rule 3 narrowed this and left more than it took. Executing one command against a fixture *you* built reaches "does it run" and "does it do what I said", and stops there. Out of reach still: whether the prescribed command is the **right** one to prescribe; whether a claim about what its output *means* holds; the common case itself, since a fixture is one case and you are the person who chose which; and it still cannot catch a number whose *source* was wrong, only one whose arithmetic was. Those want a reader who has not already decided what the change means — which is what you are about to spawn. Where the harness cannot spawn reviewers at all (§ Harness constraint), this pass is the most you have and you should say so in the record rather than let its limits pass silently. '
+    '### Before you spawn anyone — the author-side pass **Who this addresses:** the *author* of a change that ships code or guards, after committing and before spawning reviewers. It is not part of the plan-review flow — a `/plan-review` or `/claim-task` Step 7 reviewer has no guards to mutate yet, and should skip this section. **Why it exists.** Twelve of the sixteen phases from 150 to 165 in this project\'s log had a round that found the phase\'s own guards vacuous or its mutation claim self-selected. One reported "33 of 33 mutations killed"; an independent reviewer then ran 83 and watched 28 survive. A round that keeps finding the same class of defect is working as a detector while the authoring step is not learning, and **buying more reviewers is the expensive way to treat that** — roughly half of what such a round finds is catchable by inspection in minutes. **This is not an argument for fewer reviewers.** Measured on one such round, reviewers on distinct lenses were **not** redundant: overlap was about 15%, and each of four lenses produced its sharpest finding alone. Findings-per-reviewer was high. The point is to stop paying them for what you can see yourself, not to stop paying them. **1. Mutate the guard\'s assumptions, not just the content it checks.** Deleting a phrase a guard requires proves the guard is *wired to the file* — real information, and for a declared **reversion guard** (one whose stated job is catching deletion or a shortening-back) or a **vacuity guard** (one asserting its own population is non-empty) that mutation is the whole test of its stated job. Run those. The failure is a set **composed mostly** of them: it reports a kill rate that describes wiring while saying nothing about coverage. In the round that produced this rule, four of the author\'s nine mutations were reverts of text the guards were written to assert, the set was reported as "0 survivors", and **eight real bypasses stood**. So add mutations against each assumption the guard makes: - **What it matches on.** A guard keyed to a physical line is walked through by a backslash continuation, by naming a flag before its command, by a variable holding the value, or by a list step that separates a command from its qualifier. None of those is adversarial; they are how people write. - **What it accepts.** A check satisfied by a substring is satisfied by an *incidental* use of that substring — worse than a gap, because it marks a dangerous line compliant. A check requiring N phrases is satisfied by N disconnected phrases in a sentence asserting the opposite. - **Where it looks.** Enumerate the files the guard actually reads and ask whether that population covers every place the defect can appear. One such guard excluded the installer — a file that already prescribed the very script the guard was about. **Derive the population from the source of truth, not from an index or summary of it**; that single substitution produced the worst number in the phase that shipped this rule. - **Over-strictness, the direction that hides.** A pattern requiring an optional token misses the idiomatic form. A guard keyed to `bash <path>/script --flag` missed `<path>/script --flag`, which was the repo\'s own house style. - **Reachability.** Can the guard run at all, and on the thing you think? A new file excluded from its own scan, an uncollected test module, an empty population — each passes while testing nothing. - **When it runs.** If the fix depends on ordering ("rejected *before* anything is deleted"), mutate the ordering. Prose asserting an order is not a test of it. Report the fraction. **A survivor you decline to close must be impossible to close *in kind*** — it needs a judgement no pattern can encode — **not merely unattempted.** "Known blind spot, as designed" is not a disposition: in the round that produced this rule the author labelled the single biggest hole exactly that way, and the round required it fixed. If an ordinary in-repo idiom reaches your survivor, it is a defect wearing a residual\'s label. **One battery, then hand the question to the round.** Write the battery once — the declared reversion and vacuity tests, plus mutations against each assumption class above, plus negative controls — run it, close what it catches (a survivor you decline to close is still held to the criterion above), re-run it to confirm the closures, and report the final fraction with the survivors named. Do not keep authoring fresh batteries in pursuit of an exhausted zero: in five consecutive phases of this project\'s log, the author\'s battery reported every mutation killed, and an independent reviewer\'s battery then found 33 to 99 survivors — every time. An author\'s zero measures self-consistency; exhaustion is the reviewers\' measurement, and iterating toward it author-side pays twice for the weaker of the two numbers. The pass still pays here — one honest battery instead of none, not many instead of one. A closure that *rewrites* a guard rather than patching it takes the battery with it: re-point the affected mutations at the new guard, give the rewrite a non-vacuity control, and treat it as what it is — new material no fresh reader has seen, which before the round is simply the round\'s subject, and after the round is the second-round condition the governor above names. **2. Re-read your own new prose against the code it describes.** Both defects one such round found *in the fix itself* were sentences the author had just written that contradicted the file they sat in — and both were in the same class the fix existed to remove. New prose is the least-reviewed text in any change: no history, no reviewer has seen it, and its author is the one person who cannot read it cold. Check every new claim against the thing it describes, including claims about paths, which are as easily wrong in the consumer\'s installed layout as in yours. **3. Run the commands the change prescribes, in a throwaway repo — before you spawn anyone.** Shipped scripts get real-subprocess coverage, and a few purpose-built extractors do pull a *named* heredoc out of a skill file and run it against a fixture — but nothing runs a command generally, so **a newly prescribed one stays text until an operator reaches it**, and "the prescribed command does not work" is invisible until that moment. Scope this to commands whose operand the change **computes or substitutes** — `git log --oneline` has no operand to get wrong. Copy the literal string, resolve its placeholders the way the change tells an operator to resolve them, and run it. In the round that produced this rule, a prescribed `git show "<branch>:<body path>"` **failed on a default install** — `fatal: path … does not exist` — and the change\'s own new `unreadable` classification would then have halted every run with a fabricated diagnosis blaming the branch. One of three lenses found it, by building a scratch repo and running the string; the other two read the same files and did not. - **Build the fixture\'s inputs from the source of truth, not from your own model of them.** This is the half that does the work, and the easy one to drop. The same fixture runs **green** on the author\'s assumption and **red** on what the shipped writers actually emit: in that round, an assumed body path of `tasks/open/<ID>.md` printed the file, while the canonical value every writer emits — `open/<ID>.md`, relative to `tasks/` — exited 128. A fixture you populate from memory proves only that you are self-consistent. This is rule 1\'s *"derive the population from the source of truth, not from an index or summary of it"* moved from what a guard **reads** to what a fixture **contains**. - **What it reaches is narrow, and the rule says so rather than leaving it implied:** whether the command runs, and whether it does what you said it does. Nothing past that. In that same round the two other defect classes — 43 of 90 guard mutations bypassing, and the false claims in its own record — were entirely outside it. It converts one expensive finding into a cheap one; it does not replace a lens. **What this pass cannot do.** Rule 3 narrowed this and left more than it took. Executing one command against a fixture *you* built reaches "does it run" and "does it do what I said", and stops there. Out of reach still: whether the prescribed command is the **right** one to prescribe; whether a claim about what its output *means* holds; the common case itself, since a fixture is one case and you are the person who chose which; and it still cannot catch a number whose *source* was wrong, only one whose arithmetic was. Those want a reader who has not already decided what the change means — which is what you are about to spawn. Where the harness cannot spawn reviewers at all (§ Harness constraint), this pass is the most you have and you should say so in the record rather than let its limits pass silently. '
 )
 
 
@@ -1138,6 +1193,12 @@ def test_the_gate_predicate_rejects_a_softened_gate():
     assert any("standing exemptions" in p for p in problems), problems
     assert any("blanket exemption" in p for p in problems), problems
     assert any("points at the procedure" in p for p in problems), problems
+    # The Phase-174 requirements must fire too — the round's guards lens deleted each of
+    # these requirement lines from the predicate and nothing went red.
+    assert any("no-invoker" in p for p in problems), problems
+    assert any("ledger" in p for p in problems), problems
+    assert any("gate-two-lenses" in p for p in problems), problems
+    assert any("gate-no-self-spawn" in p for p in problems), problems
 
 
 def test_the_procedure_predicate_rejects_a_softened_section():
@@ -1147,6 +1208,9 @@ def test_the_procedure_predicate_rejects_a_softened_section():
     assert any("no-tree-mutation" in p for p in problems), problems
     assert any("carve-out" in p for p in problems), problems
     assert any("never-forks" in p for p in problems), problems
+    # Isolates the "governor" required key: the fixture has no governor heading, so the
+    # predicate must say so — deleting the key was invisible until this line.
+    assert any("governor" in p for p in problems), problems
 
 
 def test_the_predicates_are_not_trivially_permissive():
@@ -1387,3 +1451,380 @@ def test_the_hedge_list_catches_cost_framed_softenings():
         assert section_problems(
             "## Running more than one reviewer\n\n" + softening
         ), f"a cost-framed softening passed unflagged: {softening!r}"
+
+
+# --------------------------------------------------------------------------------------
+# Phase 174 — the governor: count, termination, disposition
+# --------------------------------------------------------------------------------------
+#
+# The governor exists because Phase 166 measured the count creeping 1 -> 2 -> 3 -> 4+ with
+# nobody choosing it, and because the round after a round after a round has no stated
+# stopping condition anywhere else. It is the file's most contested subsection — the numbers
+# it names are exactly the ones a session under pressure to be thorough wants to raise — so
+# it gets the same primitive as the author-side pass: a whole-subsection verbatim pin,
+# because five author-side batteries and a reviewer battery both showed every scoped guard
+# losing to ADDITION (see the AUTHOR_PASS_VERBATIM comment).
+
+GOVERNOR_START = "### How many reviewers, how many rounds — the governor"
+
+
+def _governor_slice(text: str) -> str:
+    """The governor subsection, between two named markers, failing closed.
+
+    Same discipline as `_author_pass_slice`, same reasons: exactly one heading or nothing
+    (a softened decoy planted above the real subsection would otherwise steal the window),
+    and a missing end marker yields nothing rather than the rest of the file.
+    """
+    text = _prose_only(text)
+    if text.count(GOVERNOR_START) != 1:
+        return ""
+    a = text.find(GOVERNOR_START)
+    b = text.find(AUTHOR_PASS_START, a)
+    if b <= a:
+        return ""
+    return text[a:b]
+
+
+def _governor_section() -> str:
+    section = _governor_slice(PARTIAL.read_text(encoding="utf-8"))
+    assert section, (
+        "the governor subsection does not resolve — either it is gone (the ratified "
+        "count/termination policy would then be unenforced prose in CLAUDE.md that no "
+        "consumer sees), or its heading/end-marker moved and this slicer needs revisiting"
+    )
+    return section
+
+
+# Regenerate after a deliberate edit, same recipe as AUTHOR_PASS_VERBATIM:
+#
+#     .venv/bin/python3 -c "import sys; sys.path.insert(0,'.'); \
+#       import tests.test_adversarial_review_gate as G; \
+#       print(repr(G._block_canon(G._flat(G._governor_section()))))"
+#
+GOVERNOR_VERBATIM = (
+    '### How many reviewers, how many rounds — the governor A convention that says "several reviewers" ratchets. In this project\'s log the count was never chosen — it crept from 1 to a mode of 2, then 3, with excursions to 4, and the *round* count crept the same way, one phase running three rounds of three; each step taken under local pressure to be thorough and none of them decided. The rules above say what a round must do; this subsection names the numbers, the stopping condition, and who may exceed them. **Scope.** This subsection sizes an *ad-hoc review round over built work* — a phase-close round, a maintainer\'s round on a finished change. It does not govern flows whose reviewer count is fixed by their own design: a per-plan reviewer inside an orchestrator (`/claim-task` Step 7b, `/auto-build` Phase 6b) is one by construction, and a fan-out sized by its own skill\'s dispatch rule stays with its skill — `/review-close` Step 2b\'s one agent per branch, `/security-audit`\'s per-OWASP-category agents, `/codebase-review`\'s per-map-section grouping, `/test-audit`\'s declared solo-or-dispatch choice recorded in its Tier-0 ledger, a maintainer\'s standing audit brief. And § *Compound findings — decompose before rejecting* below — with its twin leg in `_shared/fanout-evidence.md` § Adjudication — mandates a second, independent pass when a High-severity rejection needs re-adjudication; that is a per-finding pass, not a round, and nothing here caps it. A harness with no reviewer-spawning at all runs the author-side pass as the most it has — its § *What this pass cannot do* says exactly that — and records a solo round with its reason, never the two-lens default read as satisfied. **Default: two reviewers on distinct lenses. Escalate to a third lens when the change ships behaviour *and* a record making numeric claims.** Both terms are defined: *ships behaviour* means the change alters what a shipped file does or checks — code, guards, tests — and prose alone does not qualify, however much of it there is; *a record making numeric claims* means the change\'s own record asserts counts or measurements a reviewer could falsify. When in doubt whether the condition holds, it does not — stay at two and record the call. The default is not a claim that extra lenses find nothing — measured on one four-lens round, overlap was ~15% and each lens produced its sharpest finding alone (the same measurement § *Before you spawn anyone* cites below), so the third lens on a qualifying change is bought deliberately, not tolerated; the evidence *for* two is the same round\'s split, in which about half the findings were author-side sloppiness the § *Before you spawn anyone* pass now owns. It is a claim about who decides: the condition licenses the third lens, and everything past that licence — **a third lens without the condition, and anything beyond three, is the maintainer\'s decision, made outside the session that wants it**, with the round yield so far in hand (each round\'s reviewer count, findings by severity, and dispositions — from a round ledger where the project keeps one, from the round records where it does not). **One round is the default, and it ends when every verified finding is dispositioned** — fixed with the fix verified by the caller, filed as latent (below), or surfaced to the human as a `blocker` (the Classification Rubric\'s halt arm; a round holding an open blocker has not ended, it is waiting). What warrants a second round is one thing: the fixes themselves produced substantial new material no fresh reader has seen — a mechanism replaced, a guard module rewritten wholesale rather than patched. Verifying a bounded fix is the caller\'s job, not a new round\'s. **A session that wants a round beyond the second surfaces that to the human, with what the rounds so far have found; it does not spawn one on its own judgment.** **Fix-now is not the only honest disposition for a verified finding.** A finding can be real and *latent*: **no live path reaches it today — demonstrated, not asserted.** The record names the condition that would have to become true for the path to go live, and the evidence that no shipped surface produces that condition now. "Conceptually possible but unobserved" is not the test — every pre-consumer defect is unobserved — and a finding whose path is live today is never latent, whatever its fix costs. Disposition: record it where the project parks demand-gated work — its review queue or issue log, a place another reader will meet it, never a note only this session reads — with the reason it is latent and the trigger that would revisit it. **A latent filing does not count toward warranting a further round**, and the latency claim is itself adjudicated like any finding: the caller verifies the no-live-path demonstration by reading it, not by presuming it. Filing is not dismissal — a filed finding gets another reader, which is more than a dismissal ever gets — and it is not a way to dodge a fix: the finding must first be verified real, and the record must say why it is latent rather than that it was inconvenient. What this tier prevents is the loop where confirmed-but-latent findings spawn fixes, the fixes spawn verification, and the marginal product becomes guards on guards rather than defects a consumer could meet. '
+)
+
+# Contradiction screen, wired into `section_problems` the same way as RULE_3_FORBIDDEN and
+# for the same reason: a contradiction of the governor does not have to live in the
+# governor, and the verbatim pin cannot see outside its own block.
+GOVERNOR_FORBIDDEN: list[tuple[str, str]] = [
+    (r"as many (?:reviewers|lenses|rounds) as",
+     "re-opens the unbounded count the governor closes — 'as many as the change seems to "
+     "want' is the measured Phase-166 ratchet restated as a rule"),
+    (r"until (?:no findings remain|(?:the |a |it )(?:round )?comes? back clean)",
+     "the loop-forever termination — against a capable reviewer a round rarely comes back "
+     "empty, so this condition never fires and rounds continue on inertia"),
+    (r"further rounds? (?:is|are) (?:cheap|encouraged|always)",
+     "converts the bounded default into an invitation"),
+    (r"spawns? (?:it|the (?:next|further|third|fourth) round) (?:first )?and reports? afterwards?",
+     "inverts the surface-to-the-human rule — the decision reaches the maintainer after "
+     "the tokens are spent"),
+    (r"filed? when the fix is (?:merely )?(?:large|inconvenient|costly|slow)",
+     "turns the latent tier into a cost dodge — the tier requires 'no live path', never "
+     "'expensive fix'"),
+    (r"does warrant a further round",
+     "inverts latent-not-round-fuel — a latent filing becomes fuel for the loop the tier "
+     "exists to end"),
+    (r"filed without (?:being )?verif",
+     "drops verified-real from the latent tier, so a reviewer's guess can be parked as if "
+     "it had been adjudicated"),
+    # --- the round's guards lens: ten ordinary-English contradictions, planted outside the
+    # pinned block, that walked past the original seven patterns. Each entry below is one of
+    # its demonstrated survivors, kept as the blocklist's permanent regressions. DECLARED
+    # RESIDUAL: an open-English contradiction phrased in none of these shapes still passes —
+    # the close in kind is a file-wide verbatim pin, which the AUTHOR_PASS_VERBATIM comment
+    # explicitly rejects ("It would be wrong for a file"); the blocklist backs the pins up,
+    # and outside the pinned blocks the section screens plus these enumerated shapes are the
+    # coverage there is.
+    (r"no ceiling on the (?:count|number of (?:reviewers|lenses|rounds))",
+     "denies the cap in place"),
+    (r"until the (?:tree|round|review|reviewers) stops? yielding",
+     "the loop-forever termination, phrased as yield instead of findings"),
+    (r"(?:lenses|rounds)[^.]{0,40}\b(?:is|are) the norm\b",
+     "renorms practice above the default, leaving the default text intact"),
+    (r"leaves the finding open[^.]{0,50}(?:another|further) round|schedule another round",
+     "inverts latent-not-round-fuel by treating a filing as an open item that buys a round"),
+    (r"maintainer need not be involved|the session'?s call;",
+     "hands the beyond-the-licence decision back to the session"),
+    (r"reasonable call for the session running the round",
+     "the same handover, phrased as reasonableness"),
+    (r"repeat while the reviewers? still report",
+     "the loop-forever termination, phrased as repetition"),
+    (r"file (?:the finding|it) as latent instead\b|would be (?:expensive|slow|costly)[^.]{0,40}\blatent\b",
+     "the cost dodge, phrased from the fix's side"),
+    (r"before you believe (?:it|a clean pass)",
+     "converts a clean pass into an obligation to spawn more rounds"),
+    (r"buys (?:the phase )?another (?:full )?(?:review )?round",
+     "converts a High-severity rejection's per-finding second pass into a full round"),
+]
+
+
+def governor_problems(section: str) -> list[str]:
+    """Everything that would stop the governor from binding.
+
+    Required patterns name each load-bearing rule so a failure is actionable; the verbatim
+    pin catches everything else, including the additions the named patterns cannot see.
+    """
+    flat = _flat(section)
+    problems = []
+    required = {
+        "default-two": r"default: two reviewers on distinct lenses",
+        "escalation-condition": r"ships behaviour \*and\* a record making numeric claims",
+        # The round's rule-soundness lens showed the first version's terms were undefined
+        # and the bare "beyond three" clause read as making a third lens self-authorizable.
+        "condition-terms-defined": r"prose alone does not qualify",
+        "condition-falsifiable": r"counts or measurements a reviewer could falsify",
+        "condition-in-doubt-fails": r"when in doubt whether the condition holds, it does not",
+        "beyond-licence-maintainer": r"anything beyond three, is the maintainer'.?s decision",
+        "third-without-condition": r"a third lens without the condition",
+        "outside-the-session": r"outside the session that wants it",
+        "one-round-default": r"one round is the default",
+        "round-ends-dispositioned": r"ends when every verified finding is dispositioned",
+        # The same lens found the round-end arms were two where the rubric defines three:
+        # a blocker-shaped finding was neither fixable nor latent, so no round could end.
+        "blocker-arm": r"surfaced to the human as a .blocker.",
+        "second-round-condition": r"substantial new material no fresh reader has seen",
+        "beyond-second-to-human": r"surfaces that to the human",
+        "no-self-spawn": r"does not spawn one on its own judgment",
+        "latent-tier": r"real and \*latent\*",
+        # And the latent tier's first version admitted "conceptually possible but
+        # unobserved" — satisfied by every pre-consumer defect, i.e. by everything a
+        # round finds. The test is now a demonstrated absent live path.
+        "latent-demonstrated": r"demonstrated, not asserted",
+        "latent-live-never": r"live today is never latent",
+        "latent-another-reader": r"a place another reader will meet it",
+        "latent-revisit-trigger": r"trigger that would revisit it",
+        "latent-not-round-fuel": r"does not count toward warranting a further round",
+        "filing-not-dismissal": r"filing is not dismissal",
+        "verified-before-filed": r"must first be verified real",
+        # The counter-evidence must ride with the cap or the subsection argues one side —
+        # the same both-halves rule `author_pass_problems` enforces for the cost argument.
+        "counter-evidence": r"overlap was ~15% and each lens produced its sharpest finding alone",
+    }
+    for name, pat in required.items():
+        if not re.search(pat, flat, re.I):
+            problems.append(f"governor lost its {name} rule")
+    for pat, why in GOVERNOR_FORBIDDEN:
+        if re.search(pat, flat, re.I):
+            problems.append(f"governor contradicted in place ({why}): {pat!r}")
+    for pat in _HEDGES:
+        if re.search(pat, flat, re.I):
+            problems.append(f"governor hedged with {pat!r}")
+    for pat in _BLANKET_EXEMPTIONS:
+        if re.search(pat, flat, re.I):
+            problems.append(f"governor carries a blanket exemption: {pat!r}")
+    if section.strip() and _block_canon(flat) != GOVERNOR_VERBATIM:
+        problems.append(
+            "the governor no longer matches its verbatim pin "
+            f"({len(_block_canon(flat))} chars vs {len(GOVERNOR_VERBATIM)} pinned). "
+            + _first_divergence(_block_canon(flat), GOVERNOR_VERBATIM)
+            + " Same primitive and same reason as AUTHOR_PASS_VERBATIM: every scoped guard "
+            "loses to addition, and this is the file's most contested subsection — the "
+            "numbers it names are the ones a session under pressure wants to raise. "
+            "Regenerate with the recipe above the constant; updating it in the same commit "
+            "IS the re-approval."
+        )
+    return problems
+
+
+def test_the_governor_binds():
+    assert governor_problems(_governor_section()) == []
+
+
+def test_the_governor_slicer_fails_closed():
+    text = PARTIAL.read_text(encoding="utf-8")
+    assert _governor_slice(text)
+    assert _governor_slice(text.replace(AUTHOR_PASS_START, "### Author pass")) == ""
+    assert _governor_slice(text.replace(GOVERNOR_START, "### The governor")) == ""
+
+
+def test_the_governor_slicer_rejects_a_duplicate_heading():
+    """Isolates the exactly-once guard. The round's guards lens deleted it and the suite
+    stayed green because G9's decoy happened to be caught by the pin instead — so the
+    'decoy-proof slicer' claim was unanchored, and with the pin check also unisolated (see
+    the pin tests below) both properties could vanish together."""
+    text = PARTIAL.read_text(encoding="utf-8")
+    doubled = text.replace(
+        "## Running more than one reviewer\n",
+        "## Running more than one reviewer\n\n" + GOVERNOR_START + "\n\nDecoy.\n", 1)
+    assert _governor_slice(doubled) == ""
+
+
+def test_the_governor_pin_catches_edits_of_every_size():
+    """The pin's own negative control — the round's guards lens deleted the pin comparison
+    outright and all tests stayed green, because every committed G-mutation is also caught
+    by a required pattern or a forbidden screen. Mirrors the AUTHOR_PASS pin tests."""
+    section = _block_canon(_flat(_governor_section()))
+    assert section == GOVERNOR_VERBATIM, "the shipped governor does not match its own pin"
+    tiny = section.replace("stay at two and record the call",
+                           "stay at two and record the call, or three if pressed", 1)
+    assert tiny != section and tiny != GOVERNOR_VERBATIM, "a small softening is not caught"
+
+
+def test_the_governor_pin_check_is_reachable():
+    """And the check FUNCTION must report the mismatch — this is what goes red if the
+    comparison inside `governor_problems` is deleted, which no other test isolates."""
+    mutated = PARTIAL.read_text(encoding="utf-8").replace(
+        "stay at two and record the call",
+        "stay at two and record the call, or three if pressed", 1)
+    problems = governor_problems(_governor_slice(mutated))
+    assert any("verbatim pin" in p for p in problems), problems
+
+
+def test_the_mirror_sites_track_the_governor():
+    """The round's guards lens rewrote all three mirror summaries to contradict the
+    governor — and deleted one outright — with the full suite green. The mirrors are where
+    a reader actually meets the policy, so they are guarded like the policy.
+
+    The two `tools/` briefs are maintainer-side and absent from the public mirror; their
+    checks are conditional on the file existing (never a skip of the whole test — the
+    WORKFLOW.md half ships and must always run)."""
+    wf = (REPO_ROOT / "core" / "companion" / "docs" / "WORKFLOW.md").read_text(encoding="utf-8")
+    lines = [ln for ln in wf.splitlines() if "How many reviewers, how many rounds" in ln]
+    assert lines, (
+        "WORKFLOW.md no longer mentions the governor — the partial-inventory enumeration "
+        "summarizes every other rule of the section and now silently omits the numbered one"
+    )
+    summary = _flat(" ".join(lines))
+    assert re.search(r"two lenses default", summary, re.I), "the WORKFLOW summary lost the count default"
+    assert re.search(r"maintainer'.?s call", summary, re.I), "the WORKFLOW summary lost the beyond-cap owner"
+    offending = [pat for pat, _ in GOVERNOR_FORBIDDEN if re.search(pat, summary, re.I)]
+    assert offending == [], f"the WORKFLOW governor summary contradicts the governor: {offending}"
+    for brief, needle in (
+        (REPO_ROOT / "tools" / "SKILL_AUDIT.md", "the session running it does not raise it"),
+        (REPO_ROOT / "tools" / "LIFECYCLE_AUDIT_BRIEF.md", "the session running the brief does not raise it"),
+    ):
+        if not brief.is_file():
+            continue  # maintainer-side; absent on the public mirror by design
+        text = brief.read_text(encoding="utf-8")
+        assert needle in text, (
+            f"{brief.name} lost its count-authority sentence — the brief's three lenses "
+            "are licensed by the governor's scope rule only while the brief says the "
+            "session does not raise the count"
+        )
+        hits = [pat for pat, _ in GOVERNOR_FORBIDDEN if re.search(pat, _flat(text), re.I)]
+        assert hits == [], f"{brief.name} contradicts the governor: {hits}"
+
+
+def test_the_governor_predicate_is_not_vacuous():
+    assert governor_problems("") != []
+
+
+GOVERNOR_MUTATIONS: list[tuple[str, Callable[[str], str]]] = [
+    ("G1 delete the governor outright",
+     lambda t: t[:_at(t, GOVERNOR_START)] + t[_at(t, AUTHOR_PASS_START):]),
+    ("G2 unbound the count", _sub(
+        "**Default: two reviewers on distinct lenses. Escalate to a third lens when the change ships behaviour *and* a record making numeric claims.**",
+        "Run as many lenses as the change seems to want.")),
+    ("G3 hand the beyond-three decision to the session", _sub(
+        "**a third lens without the condition, and anything beyond three, is the maintainer's decision, made outside the session that wants it**",
+        "a fourth lens is reasonable whenever the change feels risky")),
+    ("G4 loop-forever termination", _sub(
+        "**One round is the default, and it ends when every verified finding is dispositioned**",
+        "Run rounds until a round comes back clean")),
+    ("G5 spawn first, report afterwards", _sub(
+        "surfaces that to the human, with what the rounds so far have found; it does not spawn one on its own judgment",
+        "spawns it and reports afterwards")),
+    ("G6 latent tier becomes a cost dodge", _sub(
+        "and it is not a way to dodge a fix:",
+        "and a finding is also properly filed when the fix is merely large:")),
+    ("G7 latent filings feed further rounds", _sub(
+        "defects a consumer could meet.",
+        "defects a consumer could meet. A latent filing counts as an open finding, so it does warrant a further round to confirm it.")),
+    ("G8 comment the governor out, leaving every pinned word in the file", lambda t: (
+        t[:_at(t, GOVERNOR_START)] + "<!--\n"
+        + t[_at(t, GOVERNOR_START):_at(t, AUTHOR_PASS_START)] + "-->\n\n"
+        + t[_at(t, AUTHOR_PASS_START):])),
+    ("G9 plant a softened decoy above the real governor", _sub(
+        "## Running more than one reviewer\n",
+        "## Running more than one reviewer\n\n" + GOVERNOR_START
+        + "\n\nUse your judgment on counts and rounds.\n")),
+    ("G10 weaken the escalation conjunction to a disjunction", _sub(
+        "ships behaviour *and* a record making numeric claims",
+        "ships behaviour *or* a record making numeric claims")),
+    ("G11 drop verified-real from the latent tier", _sub(
+        "the finding must first be verified real, and the record must say why it is latent",
+        "the record must say why it is latent")),
+]
+
+
+@pytest.mark.parametrize("name,mutate", GOVERNOR_MUTATIONS, ids=[m[0] for m in GOVERNOR_MUTATIONS])
+def test_every_governor_mutation_is_caught(name, mutate):
+    shipped = PARTIAL.read_text(encoding="utf-8")
+    mutated = mutate(shipped)
+    assert mutated != shipped, f"mutation {name!r} was a no-op — it no longer matches the shipped text"
+    failures = governor_problems(_governor_slice(mutated))
+    assert failures, f"mutation {name!r} survived every governor check"
+
+
+def test_governor_innocent_reformats_stay_green():
+    """Same negative control as the author-pass table: content edits red, formatting green."""
+    shipped = PARTIAL.read_text(encoding="utf-8")
+    reformats = {
+        "rewrap the default sentence": lambda t: re.sub(
+            r"(two reviewers on distinct lenses\.)(\s+)(Escalate)",
+            lambda m: m.group(1) + (" " if "\n" in m.group(2) else "\n") + m.group(3),
+            t, count=1),
+        "rewrap the latent tier": lambda t: re.sub(
+            r"(a place another reader will meet it,)(\s+)(never)",
+            lambda m: m.group(1) + (" " if "\n" in m.group(2) else "\n") + m.group(3),
+            t, count=1),
+    }
+    for name, reformat in reformats.items():
+        reformatted = reformat(shipped)
+        assert reformatted != shipped, f"reformat {name!r} is a no-op against the shipped text"
+        failures = governor_problems(_governor_slice(reformatted))
+        assert failures == [], f"innocent reformat {name!r} went red: {failures}"
+
+
+_SOFTENED_GOVERNOR = """\
+### How many reviewers, how many rounds — the governor
+
+Use as many lenses as the change seems to want, and run rounds until a round comes
+back clean. Findings that look minor can be filed when the fix is merely large.
+"""
+
+
+def test_the_governor_predicate_rejects_a_softened_governor():
+    """Non-vacuity through the production predicate, against the softenings the governor
+    exists to forbid: the unbounded count, the loop-forever termination, the cost dodge."""
+    problems = governor_problems(_SOFTENED_GOVERNOR)
+    assert any("default-two" in p for p in problems), problems
+    assert any("one-round-default" in p for p in problems), problems
+    assert any("ratchet" in p for p in problems), problems
+    assert any("loop-forever" in p for p in problems), problems
+    assert any("cost dodge" in p for p in problems), problems
+
+
+def test_no_part_of_the_partial_contradicts_the_governor():
+    """The author-side battery planted 'Run as many rounds as needed until no findings
+    remain.' in § Classification Rubric and every governor-scoped guard stayed green — the
+    same outside-the-section hole `test_no_part_of_the_partial_re_permits_tree_sharing`
+    closes for the isolation rule, reopened one rule over. A reader meets the contradiction
+    wherever it lives."""
+    flat = _flat(_partial())
+    offenders = [pat for pat, _ in GOVERNOR_FORBIDDEN if re.search(pat, flat, re.I)]
+    assert offenders == [], (
+        f"somewhere in the partial, the governor's bounds are contradicted: {offenders}"
+    )
+
+
+def test_that_partial_wide_governor_guard_is_not_vacuous():
+    """Non-vacuity using the verbatim mutation that survived the author-side battery."""
+    planted = _flat(_partial() + "\nRun as many rounds as needed until no findings remain.\n")
+    assert [pat for pat, _ in GOVERNOR_FORBIDDEN if re.search(pat, planted, re.I)]
+
+
+def test_the_gate_rejects_a_governor_contradiction_in_place():
+    """B2's surviving mutation, kept as a permanent regression: soften the gate's count
+    language while the governor's name and the ledger stay present."""
+    softened = _SOFTENED_GATE + (
+        "The procedure is `core/skills/_shared/adversarial-review.md` § Running more than "
+        "one reviewer and its § How many reviewers, how many rounds — the governor: run as "
+        "many lenses as the phase seems to need, appending a `tools/ROUND_YIELD_LEDGER.md` "
+        "row each round.\n"
+    )
+    assert any("contradicts the governor" in p for p in gate_problems(softened)), (
+        gate_problems(softened)
+    )

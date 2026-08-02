@@ -740,12 +740,16 @@ MUTATIONS: list[tuple[str, Callable[[str], str]]] = [
         RAW_SCOPE_POST, RAW_SCOPE_POST.replace("origin/main...HEAD", "origin/main...origin/main"))),
     ("R4d hoist the range into a variable", _sub(
         RAW_SCOPE_POST, '   RANGE=origin/main..HEAD && git diff --name-only "$RANGE"')),
+    # R5/R5b were written against the pre-Phase-175 sentence, which propagated item 4's
+    # doc-only skip into 4a-post. Phase 175 removed that propagation, so both mutations
+    # are re-pointed at the sentence that replaced it — the rewrite takes its battery
+    # with it (`_shared/adversarial-review.md` § Before you spawn anyone, rule 1).
     ("R5 restate the code-file extension LIST in 4a-post", _sub(
-        "applying item 3's surface gate and item 4's doc-only skip to *this* list",
-        "skipping unless a `.py` / `.ts` / `.tsx` / `.js` / `.sql` / `.go` / `.rs` file is in the list")),
+        "3. **Run the list**, applying item 3's surface gate to *this* list.",
+        "3. **Run the list**, skipping unless a `.py` / `.ts` / `.tsx` / `.js` / `.sql` / `.go` / `.rs` file is in the list.")),
     ("R5b restate the LIST without backticks (the under-strict form)", _sub(
-        "applying item 3's surface gate and item 4's doc-only skip to *this* list",
-        "skipping unless a .py / .ts / .tsx / .js / .sql / .go / .rs file is in the list")),
+        "3. **Run the list**, applying item 3's surface gate to *this* list.",
+        "3. **Run the list**, skipping unless a .py / .ts / .tsx / .js / .sql / .go / .rs file is in the list.")),
     ("R6 reconcile the Rule B site away", _sub(
         "**This is the gate `_shared/main-push-guard.md` Rule B re-runs, and Step 3 is not.**",
         "Rule B's re-run is a separate concern and is not addressed here.")),
@@ -783,8 +787,13 @@ MUTATIONS: list[tuple[str, Callable[[str], str]]] = [
         + t[t.index("### 4b. Close Merged Batches"):])),
     ("A4 rename the Step 3c heading that bounds two sections", _sub(
         "## Step 3c: Manual Smoke Gate", "## Step 3d: Manual Smoke Gate")),
+    # Phase 175 split the 4a-post report arm across two lines to add `ran nothing` — the
+    # deletion has to take both, or the check is still satisfied by the remnant.
     ("A5 satisfy the report check from the --dry-run mention alone", lambda t: (
-        t.replace("               merged-tree (4a-post) <ran on <merge target> | not reached: why>\n", "", 1))),
+        t.replace(
+            "               merged-tree (4a-post) <ran on <merge target>: N commands\n"
+            "                                      | ran nothing: why | not reached: why>\n",
+            "", 1))),
     # ---- the round's survivors. 49 of its 63 mutations lived against the first version;
     # these are the ones that named a distinct bypass rather than a variant of one. ----
     ("H01 delete the run-the-list instruction — the gate verifies nothing", lambda t: (

@@ -847,8 +847,8 @@
     <div class="hero-grid">
       <aside class="hero-margin rise">
         <span class="line">Vol. <span class="accent">I</span></span>
-        <span class="line">Issue 159</span>
-        <span class="line">2026.07.28</span>
+        <span class="line">Issue 177</span>
+        <span class="line">2026.08.02</span>
         <span class="line" style="margin-top:22px">An essay on</span>
         <span class="line">software workflow</span>
       </aside>
@@ -871,7 +871,7 @@
             <div class="hero-stat-label">Skills</div>
           </div>
           <div class="hero-stat">
-            <div class="hero-stat-fig">159</div>
+            <div class="hero-stat-fig">177</div>
             <div class="hero-stat-label">Shipped phases</div>
           </div>
           <div class="hero-stat">
@@ -1300,7 +1300,7 @@
                 <rect width="170" height="100" rx="2" class="fill-accent"/>
                 <text x="85" y="34" class="code">/claim-task</text>
                 <text x="85" y="54" class="small">role · reasoning (opus)</text>
-                <text x="85" y="80" class="smallserif">lock + plan + execute</text>
+                <text x="85" y="80" class="smallserif" style="font-size:11px">lock + plan + review + execute</text>
               </g>
               <g class="node" transform="translate(480,140)">
                 <rect width="170" height="100" rx="2" class="fill-primary"/>
@@ -1325,18 +1325,19 @@
               <!-- Sink: last skill → queue (archive) -->
               <path d="M 785 140 Q 800 90 560 64" class="arrow dashed" marker-end="url(#ah1)"/>
 
-              <!-- Sub-agent annotation under claim-task -->
-              <g class="node" transform="translate(260,272)">
-                <rect width="170" height="56" rx="2" class="fill-ghost"/>
-                <text x="85" y="24" class="small" style="fill:var(--accent-ink)">reviewer-executor</text>
-                <text x="85" y="42" class="smallserif">sub-agent · phase 29</text>
+              <!-- Sub-agent annotation under claim-task (Phase 171 orchestrator split) -->
+              <g class="node" transform="translate(225,272)">
+                <rect width="240" height="76" rx="2" class="fill-ghost"/>
+                <text x="120" y="22" class="small" style="fill:var(--accent-ink)">three cold sub-agents</text>
+                <text x="120" y="44" class="smallserif">planner → reviewer → executor</text>
+                <text x="120" y="64" class="smallserif">the orchestrator classifies · phase 171</text>
               </g>
               <path d="M 345 240 L 345 272" class="arrow accent"/>
 
               <!-- Pending-doc annotation under document-work -->
               <g class="node" transform="translate(480,272)">
                 <rect width="170" height="56" rx="2" class="fill-ghost"/>
-                <text x="85" y="24" class="small">sysop/runtime/pending-docs/</text>
+                <text x="85" y="24" class="small" style="font-size:9px">sysop/runtime/pending-docs/</text>
                 <text x="85" y="42" class="smallserif">handoff to senior review</text>
               </g>
               <path d="M 565 240 L 565 272" class="arrow dashed"/>
@@ -1344,8 +1345,8 @@
               <!-- Lock annotation under next-task -->
               <g class="node" transform="translate(40,272)">
                 <rect width="170" height="56" rx="2" class="fill-ghost"/>
-                <text x="125" y="24" class="small">sysop/runtime/locks/</text>
-                <text x="125" y="42" class="smallserif">prevents double-claim</text>
+                <text x="85" y="24" class="small">sysop/runtime/locks/</text>
+                <text x="85" y="42" class="smallserif">prevents double-claim</text>
               </g>
               <path d="M 125 240 L 125 272" class="arrow dashed"/>
             </svg>
@@ -1362,8 +1363,8 @@
             <dd>Single claimable task with effort + blockers. Anchored on <code>current_focus: true</code>, ranked <em>unblocker-first</em> — how many other tasks it unblocks, then effort ascending, then id (Phase 74). <code>--avoid-inflight</code> prepends a collision tier, so an exact-path clash with work already running sorts out of the way even ahead of an unblocker (Phase 103).</dd>
           </div>
           <div class="entry">
-            <dt>/claim-task<span class="model-tag opus">opus · planning + exec</span></dt>
-            <dd>Adjudicates the claim before it creates anything — <code>--entry-state</code> answers <code>claimable</code> / <code>resumable</code> / <code>held</code> / <code>closed</code> / <code>absent</code>, and <code>resumable</code> <em>stops and asks</em> rather than resuming (Phase 159b). Then creates lock + worktree and builds a plan; a single sub-agent owns the adversarial review, the implementation, the verification, and the commit.</dd>
+            <dt>/claim-task<span class="model-tag opus">opus · orchestration</span></dt>
+            <dd>Adjudicates the claim before it creates anything — <code>--entry-state</code> answers <code>claimable</code> / <code>resumable</code> / <code>held</code> / <code>closed</code> / <code>absent</code>, and <code>resumable</code> <em>stops and asks</em> rather than resuming (Phase 159b). Then creates lock + worktree and <em>orchestrates</em> — it never implements, never enters plan mode, and holds no <code>Edit</code> tool: a planner writes the plan, an independent reviewer that did not write it looks for what is wrong, the orchestrator classifies those findings itself, and an executor implements, verifies and commits. Three cold contexts, and a file left behind at each seam in <code>sysop/runtime/claim/&lt;id&gt;/&lt;run&gt;/</code> — the plan, the review, the classification — so a review that ran and a review that was skipped stop producing identical evidence (Phase 171).</dd>
           </div>
           <div class="entry">
             <dt>/document-work<span class="model-tag">inherits · narration</span></dt>
@@ -1385,6 +1386,7 @@
           <p><strong>The test claim has to survive to merge.</strong> Plan-time, the task body records a <em>test decision</em> — &ldquo;test X proves Y&rdquo; or &ldquo;no test because Z&rdquo; (Phase 58b). Close-time, <code>/review-close</code> reads it back and verifies it against the diff that's actually shipping (Phase 59).</p>
           <p>An assertion made during planning doesn't get to coast into main unchecked — the record is verified, not trusted.</p>
           <p><strong>What that doesn't buy.</strong> Verifying a record is not the same as the verification being any good, and this project has the receipts against itself. Six consecutive phase records put independent reviewers on the phase's own new tests, and every one of them found the guards weaker than the phase had just claimed. In the first, 41 of 53 mutations survived. In the next, a reviewer's 83 mutations left 28 alive against a build that had reported 33 of 33 killed. Then 32 of 80. Then 28 across two reviewers' 67, where 22 of 32 tests still passed with all four changed files blanked — one defect explained nearly all of that one: every assertion checked that a token was <em>present</em>, never what the token <em>claimed</em>. In the last two, an author's own sweep reported a perfect score and an independent sweep found survivors anyway — the second time in a phase that had already written that exact lesson into its own record. The transferable finding is not &ldquo;run more mutations.&rdquo; It is that an author-chosen mutation set measures the author's model of the code rather than the tests, so the score is only worth what the <em>independence</em> of the set is worth.</p>
+          <p>It kept happening. In the five most recent phases the author's final battery reported every mutation killed each time, and the independent batteries then run against those same guards found 38 survivors, then 33, then 30, then 20, and then — in the last of them — <em>21 out of 21</em>, every defect the reviewer thought to plant walking straight through a guard whose author had just reported zero. That last gap is the instructive one, because the cause was legible in the author's own numbers: most of the mutations counted were reverts of the edit just made. Deleting a phrase a guard requires proves the guard is <em>wired to the file</em>. It says nothing about what the guard covers, and a battery made mostly of those reports a kill rate that describes its own plumbing. The countermeasure that shipped is not more reviewers — it is a rule that the author must mutate the guard's <em>assumptions</em> (what it matches on, what it accepts, where it looks, whether it can run at all), write that battery exactly once, and then hand the question to someone who has not already decided what the change means.</p>
         </aside>
 
         <h3>Adjacent skills</h3>
@@ -1395,7 +1397,7 @@
         <dl class="glossary">
           <div class="entry">
             <dt>/plan-review<span class="model-tag opus">opus · adversarial pass</span></dt>
-            <dd>Adversarial pass on an ad-hoc plan from conversation or a file. Uses the same prompt template as <code>/claim-task</code> Step 7 (<code>_shared/adversarial-review.md</code>); surfaces findings, presents a revised plan for approval before any execution. Phase 58a added a source-verification dimension: external SDK or framework calls with no in-repo precedent get flagged <code>unverified</code> rather than trusted on faith. Phase 140 added decompose-before-reject — the same rule &sect; III applies at review merges, here at its source: refuting one clause of a compound finding never rejects the finding, and a High or security rejection owes a second independent pass. Where the shape can't spawn one (an executor leaf, which must not nest; a consumer agent that doesn't nest at all), the rejection is never silently absorbed — the per-clause rationale is sealed into the plan for the next independent reader.</dd>
+            <dd>Adversarial pass on an ad-hoc plan from conversation or a file. Uses the same prompt template as <code>/claim-task</code> Step 7 (<code>_shared/adversarial-review.md</code>); surfaces findings, presents a revised plan for approval before any execution — unless a finding classifies <code>blocker</code>, which halts instead: no revised plan, no <code>ExitPlanMode</code>, the question goes to the human (Phase 176). Phase 58a added a source-verification dimension: external SDK or framework calls with no in-repo precedent get flagged <code>unverified</code> rather than trusted on faith. Phase 140 added decompose-before-reject — the same rule &sect; III applies at review merges, here at its source: refuting one clause of a compound finding never rejects the finding, and a High or security rejection owes a second independent pass. Where the shape can't spawn one (an executor leaf, which must not nest; a consumer agent that doesn't nest at all), the rejection is never silently absorbed — the per-clause rationale is sealed into the plan for the next independent reader.</dd>
           </div>
           <div class="entry">
             <dt>/sitrep<span class="model-tag">inherits · orientation</span></dt>
@@ -1733,8 +1735,8 @@
         <p>
           Everything above assumes the review <em>ran</em>. The hardest defect class in a review system is the one
           where it didn't — because a review that dies produces the same artifact as a review that found nothing:
-          no findings, no error, a queue that looks drained. Five shapes of that silence turned up in real runs
-          during July 2026, and each got its own answer.
+          no findings, no error, a queue that looks drained. Six shapes of that silence turned up in real runs
+          across July and August 2026, and each got its own answer.
         </p>
         <p>
           <strong>A stage that died.</strong> The pre-scan used to report how many checks it <em>selected</em>. In a
@@ -1807,6 +1809,29 @@
           roughly 0.8% and 1.7% — while reporting 1,477 and 955 files as their scope. Neither run failed. Both
           reported a scope they never read.
         </p>
+        <p>
+          <strong>A gate that ran, and reported green anyway.</strong> The sixth shape is the same silence one layer
+          down — not the review that never ran, but the check that ran on half its subject. Three phases in quick succession
+          found one each, and the family resemblance is the point. A grep check anchored its pattern on a
+          literal double quote; Python, JavaScript and SQL take either quote, so it scanned half the code and reported
+          the other half clean — at the registry's top severity, shipped that way in every consumer carrying that
+          pack since the packs were populated. Its sibling was worse: a positional check that skips the
+          <em>whole file</em> when its anchor fails to match, which on one real corpus meant it was silently disarmed on
+          59 of the 182 files that set the variable at all, rather than missing a line in each. Then a merge-time gate whose
+          skip rule read &ldquo;while the list still contains a code file&rdquo; — vacuously false on a documentation-only
+          change, making that the one route through the gate that executes nothing and still reports success, with no
+          word in its report vocabulary for <em>ran nothing</em>. Then a plan reviewer whose error, refusal or rewritten
+          answer yielded nothing classifiable, so the zero-findings branch fired and stamped the plan
+          &ldquo;adversarial review: no blockers found&rdquo; — a line whose entire purpose is telling the next reader that
+          the step ran clean.
+        </p>
+        <p>
+          A miss and a real zero are the same output. That is the whole class, and it is why the fixes here are never
+          &ldquo;check harder&rdquo;: they are to derive the population from the source of truth rather than trusting an
+          anchor to find it, and to give the reporting vocabulary a word for <em>nothing ran</em> so the difference
+          reaches a human. <span class="muted">Neither fix makes a check correct. They make a broken one
+          <em>visible</em>, which is the only property a reader downstream can act on.</span>
+        </p>
 
         <h3 id="provenance">What it takes to file a finding — and to kill one</h3>
         <p>
@@ -1873,6 +1898,51 @@
           <em>asserted</em> chain is the defect. Alongside it sits a remediation-blast-radius rule, earned the hard
           way — one refuted finding's fix, applied exactly as filed, would have caused a production outage, and it
           was an ignore-file change rather than a version bump.
+        </p>
+
+        <h3 id="governor">How many reviewers, and when a round ends</h3>
+        <p>
+          A convention that says &ldquo;use several reviewers&rdquo; ratchets. Nobody ever decides to spend more; each
+          round is sized under local pressure to be thorough, and the number only moves one way. In this project's own
+          log it was never chosen at all — it drifted from one reviewer to a mode of two, then to three, with
+          excursions to four, and one phase ran three rounds of three. Every one of those calls was defensible on the
+          day. None of them was a decision.
+        </p>
+        <p>
+          The obvious correction — cut back — is wrong, and the measurement says so. On one four-lens round the
+          overlap between lenses was about <em>15%</em>, and each of the four produced its sharpest finding alone:
+          one found a remedy that was inert on the maintainer's own machine, one found the authoring habits that walk
+          straight through a line-scoped guard, one found that the phase's central framing was false, and one found a
+          false sentence in the phase's own new code. Extra lenses were not buying redundancy. So the question was
+          never &ldquo;are they worth it&rdquo; but <em>who gets to decide</em>, and the answer had to be written down
+          somewhere a session under deadline could not quietly reinterpret.
+        </p>
+        <p>
+          <strong>What shipped is a governor, not a cap.</strong> Two reviewers on distinct lenses by default. A third
+          when the change ships behaviour <em>and</em> its record makes numeric claims a reviewer could falsify — both
+          terms defined, and when it is unclear whether the condition holds, it does not. Beyond that, the count is
+          the maintainer's decision, made <em>outside</em> the session that wants it and with the round yield so far in
+          hand. One round is the default, and it ends when every verified finding is dispositioned; what warrants a
+          second is one thing only — that the fixes themselves produced substantial new material no fresh reader has
+          seen. Verifying a bounded fix is the caller's job, not a new round's.
+        </p>
+        <p>
+          The piece that does the most work is a third disposition. A finding used to have two exits: fix it, or it
+          was not really a finding. That is what turns a round into a loop, because a confirmed-but-unreachable defect
+          spawns a fix, the fix spawns verification, and the marginal product becomes guards on guards. So a finding
+          may now be recorded as <em>latent</em> — verified real, with no live path reaching it today,
+          <em>demonstrated rather than asserted</em>, filed where another reader will meet it along with the condition
+          that would revisit it. &ldquo;Conceptually possible but unobserved&rdquo; deliberately fails that test, since
+          every pre-consumer defect is unobserved. A latent filing does not count toward warranting another round.
+        </p>
+        <p class="muted">
+          The honest limit: the session that wants a round is the same session that judges whether it needs one, and no
+          rule fixes that. What the rule buys is that the judgement gets written down where the next reader can dispute
+          it — and, maintainer-side, that each round's reviewer count, findings and dispositions land in a ledger, so
+          the next revision of these numbers can be argued from data rather than from impressions. The subsection is
+          the most contested text in the file it lives in, which is the expected outcome: the numbers it names are
+          exactly the ones a session under pressure wants to raise. Its own review round disqualified the first version
+          of it.
         </p>
 
         <h3 id="outside-scanner">Folding in an outside scanner</h3>
@@ -2005,8 +2075,8 @@
               <g class="node">
                 <rect x="30" y="352" width="240" height="78" rx="2" class="fill-primary"/>
                 <text x="150" y="374" class="code">/claim-task</text>
-                <text x="150" y="394" class="small">step 6 · pre-impl check</text>
-                <text x="150" y="412" class="small">step 7 · post-impl re-check</text>
+                <text x="150" y="394" class="small">step 7a · pre-impl check</text>
+                <text x="150" y="412" class="small">step 7e · post-impl re-check</text>
               </g>
 
               <!-- 6. Enforced (left-top) -->
@@ -2041,7 +2111,7 @@
         </figure>
 
         <aside class="pullquote">
-          <p><strong>Why this beats a wiki page.</strong> A wiki page rots — nobody reads it before opening a PR. The <code>convention_map.md</code> is read on <em>every</em> <code>/claim-task</code> Step 6 because the plan cannot be written without it — the map read is what produces the plan's <code>## Constraints &amp; Risks</code> block, which must precede any implementation step — and again on Step 7 as a post-impl boy-scout pass.</p>
+          <p><strong>Why this beats a wiki page.</strong> A wiki page rots — nobody reads it before opening a PR. The <code>convention_map.md</code> is read by <em>every</em> <code>/claim-task</code> planner at Step 7a because the plan cannot be written without it — the map read is what produces the plan's <code>## Constraints &amp; Risks</code> block, which must precede any implementation step — and again by the executor at Step 7e as a post-impl boy-scout pass.</p>
           <p>The map's entries also flow downstream: once a pattern is generalizable across projects, it gets promoted from a project's local map into a Sysop pack, where it ships to every consumer on the next <code>bash sysop/scripts/sysop-update.sh</code>.</p>
           <p>The loop is also the smallest way to run Sysop: <code>--mode loop</code> installs just § III's review and audit skills, the maps and checks, and this section's promotion machinery — none of the lifecycle around it (§ VI).</p>
         </aside>
@@ -2283,8 +2353,8 @@
 
               <g class="node">
                 <rect x="600" y="56" width="320" height="56" rx="2" class="fill-accent"/>
-                <text x="760" y="80" class="smallserif" style="font-size:14px">reviewer-executor sub-agent finishes</text>
-                <text x="760" y="100" class="small">emits envelope at top of message</text>
+                <text x="760" y="80" class="smallserif" style="font-size:14px">planner, reviewer or executor finishes</text>
+                <text x="760" y="100" class="small">emits envelope as its last block</text>
               </g>
 
               <g class="node">
@@ -2502,7 +2572,7 @@
       <aside class="col-rule">Colophon</aside>
       <div>
         <p class="col-body">
-          A monograph on <em>Sysop</em>, as of <em>Phase 159</em> · 2026-07-28. Phase numbers throughout are iterations
+          A monograph on <em>Sysop</em>, as of <em>Phase 177</em> · 2026-08-02. Phase numbers throughout are iterations
           of the workflow's own development — each one planned, adversarially reviewed, and shipped through the process it
           extends; <a href="https://github.com/getsysop/sysop/blob/main/PHASE_LOG.md">PHASE_LOG.md</a> carries one entry per phase. Set in the reader's native serif —
           Iowan Old Style where available, Palatino otherwise — paired with ui-monospace for listings and figure labels.
@@ -2542,7 +2612,7 @@
             <ul>
               <li>Extracted from <em>gdp-query-system</em></li>
               <li>First consumer · BeanRider</li>
-              <li>Phase 159 · 2026-07-28</li>
+              <li>Phase 177 · 2026-08-02</li>
             </ul>
           </div>
           <div>

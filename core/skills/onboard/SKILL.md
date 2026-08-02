@@ -144,8 +144,8 @@ Next: run /intake — it will pick up against the new intent layer (or offer to
 establish one, if you skipped Leg A), coherence-check the imported queue, and
 decompose the next slice with you.
 
-Hit any Sysop friction while onboarding? Note it in SYSOP_ISSUES.md at the repo
-root — /report-issues sends the keepers upstream.
+Hit any Sysop friction while onboarding? Note it in sysop/SYSOP_ISSUES.md —
+/report-issues sends the keepers upstream.
 ```
 
 **Leave everything uncommitted.** The commit is the human's sign-off on a potentially large write — `/onboard` never runs `git add` or `git commit`. Skip the Leg-A or Leg-B lines for a leg that didn't run.

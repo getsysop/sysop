@@ -463,7 +463,7 @@ Two options are offered:
 | **A — review the plan first** | planner → reviewer → **human gate** → executor | Work you want to eyeball before it lands. |
 | **B — run it** | planner → reviewer → executor | Mechanical or well-specified work; walk away. |
 
-**The reviewer runs on both paths.** Only the gate at Step 7d differs. Collapsing reviewer and executor on the unattended path would give the run *nobody is watching* the weaker review property, and `_shared/adversarial-review.md` § *Reviewer-executor variant* already records collapsed self-classification as a known compromise. The autonomous path needs more fresh-eyes rigour, not less.
+**The reviewer runs on both paths.** Only the gate at Step 7d differs. Collapsing reviewer and executor on the unattended path would give the run *nobody is watching* the weaker review property, and `_shared/adversarial-review.md` § *The reviewer-executor variant is retired* already records collapsed self-classification as a known compromise. The autonomous path needs more fresh-eyes rigour, not less.
 
 **A third option — plan-only, where the pipeline stops after review and writes the reviewed plan back to the task body — is specified but not built** (`tools/CLAIM_TASK_ORCHESTRATOR_SPEC.md` § *The three options*, option C). Do not offer it, and do not improvise it: it needs a `## Plan` body section that `tasks/schema.md` does not yet define and a release ordering this skill does not yet carry. Say so in one line if the human asks for it, rather than silently behaving like option B. **Stating the absence is the point** — silence about a missing branch is exactly how Steps 7–8 acquired roadmap-only vocabulary in Phase 29, and it is the failure upstream #220 reported.
 

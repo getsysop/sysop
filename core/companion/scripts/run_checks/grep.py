@@ -18,6 +18,47 @@ from .accounting import (
 from .config import _SKIP_DIRS
 
 
+# Inline waiver marker: `no-check: <id>[, <id>…]`, the grep-stage counterpart to
+# semgrep's `# nosemgrep` / coverage's `# pragma: no cover`. Deliberately
+# comment-syntax agnostic (the token, not `#` vs `//`), because one registry
+# scans Python, TypeScript, SQL and YAML.
+#
+# Two design calls worth keeping:
+#   * A BARE `no-check:` waives nothing. A blanket marker would silently
+#     disable checks that do not exist yet — including a future
+#     `severity: critical` one — so the ids are mandatory.
+#   * The id list stops at the first non-id character, so a trailing rationale
+#     (`# no-check: <id> — table name is validated upstream`) is fine. The
+#     corollary is that an id containing anything outside [A-Za-z0-9_-] cannot
+#     be waived; every shipped id is `[a-z0-9-]`, and widening the class would
+#     swallow the rationale (`<id>. Next sentence` would capture `<id>.`).
+#     NOTE the placeholder: writing a real id here would mint a LIVE marker in
+#     this file, which is shipped and is scanned by any `*.py` check.
+#   * Horizontal whitespace ONLY, and matched per line. `\s` matches newlines,
+#     and a file-level (`invert_file_check`) check hands this the WHOLE FILE —
+#     so with `\s*` a bare `no-check:` swallowed the next identifier-shaped
+#     token further down the file, waiving whatever it happened to spell. That
+#     falsified the "a bare marker waives nothing" rule on the one path where
+#     the marker is allowed to live anywhere. Splitting per line makes it
+#     structurally impossible; `[ \t]` makes it impossible again.
+#   * `\b` so `xno-check:` is not a marker.
+_WAIVER_RE = re.compile(
+    r"\bno-check:[ \t]*([A-Za-z0-9_-]+(?:[ \t]*,[ \t]*[A-Za-z0-9_-]+)*)"
+)
+
+
+def waived_ids(text):
+    """Return the set of check ids waived by ``no-check:`` markers in ``text``.
+
+    Case-sensitive, like ``# nosemgrep`` / ``# noqa`` / ``# type: ignore``.
+    """
+    ids = set()
+    for line in (text or "").splitlines():
+        for match in _WAIVER_RE.finditer(line):
+            ids.update(p.strip() for p in match.group(1).split(",") if p.strip())
+    return ids
+
+
 def _paths_unresolved_detail(paths):
     """Human detail for a grep check whose ``paths:`` resolved to nothing.
 
@@ -193,13 +234,16 @@ def _cached_compile(src):
 
 def _run_position_check(
     check_id, spec, paths, includes, excludes,
-    severity, description, repo_root, exclude_dirs=(),
+    severity, description, repo_root, exclude_dirs=(), report=None,
 ):
     """Fire when `later` precedes `earlier` in the same file.
 
     `spec` is a dict {earlier: <regex>, later: <regex>}. Both regexes are
     matched per non-comment line. If either is absent in a file, no
     finding (out of scope — missing-X is a separate convention).
+
+    An inline ``no-check: <id>`` marker on the REPORTED line (the `later`
+    match, which is the line the finding cites) waives the finding.
     """
     earlier_re_src = spec.get("earlier", "")
     later_re_src = spec.get("later", "")
@@ -227,10 +271,12 @@ def _run_position_check(
         if l_line < e_line:
             rel = fpath.replace(repo_root.rstrip("/") + "/", "")
             file_line = f"{rel}:{l_line}"
-            findings.append(
-                (check_id, file_line,
-                 f"[{check_id}] {severity} {file_line} — {description}")
-            )
+            message = f"[{check_id}] {severity} {file_line} — {description}"
+            if check_id in waived_ids(lines[l_line - 1]):
+                if report is not None:
+                    report.record_waived(check_id, file_line, message)
+                continue
+            findings.append((check_id, file_line, message))
     return findings
 
 
@@ -263,6 +309,23 @@ def run_check(check, repo_root, report=None):
         if report is not None:
             report.record([check_id], status, "grep", reason, detail)
 
+    def _emit(findings, file_line, waiver_text):
+        """Append a finding unless ``waiver_text`` carries a ``no-check:`` for it.
+
+        ``waiver_text`` is the matched LINE for line-level checks and the whole
+        FILE for file-level (`invert_file_check`) ones — a file-level finding
+        cites no line, so there is nowhere else the marker could live. A waived
+        finding is handed to the report, never dropped on the floor; with
+        ``report=None`` (direct callers and tests — no shipped CLI path) the
+        suppression still applies but the audit line has nowhere to go.
+        """
+        message = f"[{check_id}] {severity} {file_line} — {description}"
+        if check_id in waived_ids(waiver_text):
+            if report is not None:
+                report.record_waived(check_id, file_line, message)
+            return
+        findings.append((check_id, file_line, message))
+
     # position_check is an alternative dispatch — no `pattern:` is required.
     # Schema: {earlier: <regex>, later: <regex>}. Fires when both patterns
     # match in the same file AND `later`'s first occurrence precedes
@@ -286,7 +349,7 @@ def run_check(check, repo_root, report=None):
             return []
         findings = _run_position_check(
             check_id, position_check, paths, includes, excludes,
-            severity, description, repo_root, exclude_dirs,
+            severity, description, repo_root, exclude_dirs, report,
         )
         _record(EXECUTED)
         return findings
@@ -329,9 +392,7 @@ def run_check(check, repo_root, report=None):
                     content = f.read()
                 if not re.search(neg_pattern, content):
                     rel = fpath.replace(repo_root.rstrip("/") + "/", "")
-                    findings.append(
-                        (check_id, rel, f"[{check_id}] {severity} {rel} — {description}")
-                    )
+                    _emit(findings, rel, content)
             except (OSError, IOError):
                 pass
 
@@ -343,16 +404,9 @@ def run_check(check, repo_root, report=None):
             if len(parts) >= 3:
                 content_part = parts[2]
                 if not re.search(neg_pattern, content_part):
-                    file_line = f"{parts[0]}:{parts[1]}"
-                    findings.append(
-                        (check_id, file_line,
-                         f"[{check_id}] {severity} {file_line} — {description}")
-                    )
+                    _emit(findings, f"{parts[0]}:{parts[1]}", content_part)
             else:
-                findings.append(
-                    (check_id, hit_clean,
-                     f"[{check_id}] {severity} {hit_clean} — {description}")
-                )
+                _emit(findings, hit_clean, "")
 
     else:
         # Simple pattern match — all hits are findings
@@ -360,10 +414,9 @@ def run_check(check, repo_root, report=None):
             hit_clean = strip_repo_prefix(hit, repo_root)
             parts = hit_clean.split(":", 2)
             if len(parts) >= 2:
-                file_line = f"{parts[0]}:{parts[1]}"
-                findings.append(
-                    (check_id, file_line,
-                     f"[{check_id}] {severity} {file_line} — {description}")
-                )
+                # parts[2] is grep -rn's content column; absent only if a path
+                # itself contains ':' in a way that eats the split budget.
+                _emit(findings, f"{parts[0]}:{parts[1]}",
+                      parts[2] if len(parts) >= 3 else "")
 
     return findings

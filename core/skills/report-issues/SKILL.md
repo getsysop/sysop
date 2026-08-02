@@ -291,8 +291,12 @@ For each selected entry, in order:
 
 ## Step 5: Flip the entry and record the URL
 
-For each entry that filed successfully, edit `SYSOP_ISSUES.md` (via `Edit`, keyed
-on the unique `## ISSUE-NNNN` anchor so the change is surgical):
+For each entry that filed successfully, edit **the same file Step 1 read** —
+`sysop/SYSOP_ISSUES.md`, or the bare-root copy if that is where Step 1 resolved
+it — via `Edit`, keyed on the unique `## ISSUE-NNNN` anchor so the change is
+surgical. Writing to a path Step 1 did not read would fail *after* the issue is
+already filed, and the status flip is the only thing stopping a re-run from
+double-posting:
 
 - Change its `**Status:**` line to `**Status:** Filed to Sysop` — **whatever it was
   before** (`Open`, `Prompt-ready`, or a `Fixed in <consumer>` entry filed under

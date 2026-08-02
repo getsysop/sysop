@@ -53,9 +53,10 @@ checks:
     paths: ["<api module>/", "<scripts dir>/"]
     include: ["*.py"]
     exclude: ["*test*"]
-    pattern: 'f"(SELECT|INSERT|UPDATE|DELETE|ALTER|DROP)'
+    pattern: 'f[''"](SELECT|INSERT|UPDATE|DELETE|ALTER|DROP)'
     description: "f-string SQL detected — use parameterized queries"
     convention: "SQL safety"
+    notes: "Quote-agnostic by design: the single-quoted form is what you reach for when the statement embeds \"quoted identifiers\", which is the injection-shaped case. Do NOT add -i (matches English prose: f\"Deleted {n}...\") and do NOT require a same-line FROM/WHERE/JOIN/SET (it narrows, dropping f\"SELECT 1\" and the first line of a multi-line f-string). Lowercase keywords and multi-line SQL are covered by semgrep-sql-fstring, but ONLY where the f-string is passed straight to .execute() / sqlalchemy.text() — an f-string bound to a variable first is this check's alone."
     used_by: [codebase-review]
 
   - id: wrong-engine

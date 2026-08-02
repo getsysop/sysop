@@ -282,6 +282,13 @@ def main():
                 if _is_coverage(check_id):
                     new_coverage_hits += 1
 
+    # Inline `no-check:` waivers, reprinted rather than dropped — same contract
+    # as [baseline]: suppressed from the gate, still visible in the output. A
+    # waiver that produced no line would let a consumer disable a critical
+    # check with a comment and leave nothing behind that says so.
+    for _wid, _wfl, wmsg in report.waived():
+        print(f"[waived] {wmsg}")
+
     # Accounting summary block to stderr — keeps stdout clean for grep/wc
     # piping. Reports checks *executed* vs *skipped* vs *failed*, not just
     # selected, so a stage that skipped its precondition or crashed is visible
@@ -414,6 +421,14 @@ def _run_update_baseline(repo_root, all_checks, baseline_file):
     blocking_ids = classified[6]
     report = RunReport(all_checks)  # selected == every check
     all_findings = _run_all_stages(repo_root, classified, report)
+
+    # Inline waivers, reprinted here too. This is the path a maintainer audits
+    # suppressions on, and the header count alone tells them a waiver exists
+    # without saying which line — the first version printed nothing here while
+    # WORKFLOW.md promised a `[waived]` line, so the promise held on the run
+    # nobody was auditing and broke on the one they were.
+    for _wid, _wfl, wmsg in report.waived():
+        print(f"[waived] {wmsg}")
 
     # Show what actually ran before deciding whether to persist it.
     print("\n" + report.render(all_findings, mode="both"), file=sys.stderr)

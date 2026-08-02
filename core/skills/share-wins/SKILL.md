@@ -363,8 +363,12 @@ Only under `--execute`, with ≥1 consented entry.
 ## Step 5: Flip each shared entry and record the URL
 
 All consented wins went into the **one** comment, so they share the **same**
-comment URL. For each entry that was in the posted comment, edit `SYSOP_ISSUES.md`
-(via `Edit`, keyed on the unique `## GOOD-NNNN` anchor so the change is surgical):
+comment URL. For each entry that was in the posted comment, edit **the same file
+Step 1 read** — `sysop/SYSOP_ISSUES.md`, or the bare-root copy if that is where
+Step 1 resolved it — via `Edit`, keyed on the unique `## GOOD-NNNN` anchor so the
+change is surgical. Writing to a path Step 1 did not read would fail *after* the
+comment is already posted, and the status flip is the only thing stopping a re-run
+from double-posting:
 
 - Change its `**Status:**` line to `**Status:** Shared`.
 - Insert a line immediately below the Status line:

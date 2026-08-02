@@ -51,7 +51,7 @@ checks:
     severity: medium
     paths: ["<api module>/", "<scripts dir>/", "<datajobs dir>/"]
     include: ["*.py"]
-    pattern: 'getenv\("APP_ENV",\s*"prod"\)'
+    pattern: 'getenv\([''"]APP_ENV[''"],\s*[''"]prod[''"]\)'
     description: "APP_ENV defaults to 'prod' — should default to 'dev' (except env_validation.py). Security impact: prod-defaulting gates fail-closed behavior in dev tooling, causing inconsistent security guard activation across modules."
     convention: "APP_ENV default consistency"
     notes: "Needs LLM triage: env_validation.py intentionally defaults to 'prod' (fail-closed)"
@@ -81,11 +81,11 @@ checks:
     paths: ["<tests dir>/"]
     include: ["*.py"]
     position_check:
-      earlier: 'os\.environ\.setdefault\("APP_ENV"'
+      earlier: 'os\.environ\.setdefault\([''"]APP_ENV[''"]'
       later: 'sys\.path\.insert\('
     description: "sys.path.insert() runs before os.environ.setdefault('APP_ENV', 'test') — APP_ENV must be set first or imported modules (db_config, env_validation) capture the wrong env at import time."
     convention: "Test isolation"
-    notes: "Multi-line setdefault forms (split across two lines) would FN. None today. Comment-only lines are skipped to avoid spoofing."
+    notes: "Multi-line setdefault forms (split across two lines) would FN. None today. Comment-only lines are skipped to avoid spoofing. `earlier` is quote-agnostic: when it matches nothing the whole file is skipped silently, so a double-quote-only regex disarmed the check on every single-quoted test file (measured on one real corpus: of the 182 test files that set APP_ENV at all, 59 used only the single-quoted form and were never evaluated)."
     used_by: [codebase-review]
     blocking: false
 
