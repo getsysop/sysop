@@ -447,7 +447,7 @@ Some features can't be verified by automated checks — UI flows that need a bro
 
 **The cost, stated rather than discovered:** detection now runs on cycles that previously skipped it, so step 1's heredoc executes on a docs-only close too. That is the trade — one read, against a human never being asked — and it is why the heredoc's failure modes are loud: an unsubstituted `APPROVED_BRANCHES` exits 3 and an unreachable PyYAML exits 2, both stopping the close rather than reporting no signal. PyYAML is a declared hard dependency (Phase 136), so the second is a broken install surfacing, not a new requirement.
 
-**1. Detect signals.** The gate reads pending-docs from **main's `sysop/runtime/pending-docs/` and each approved branch's worktree** — a `/claim-task` worktree authors its pending-doc there, and it is not copied to main until Step 3b (merge time). Reading the worktrees *in place* keeps the gate honest without collecting docs early: collecting before the merge would break the invariant Steps 4c/6 depend on — "everything in main's `sysop/runtime/pending-docs/` belongs to a just-merged branch" — and a branch SKIP'd at Step 3b (worktree remove-refusal, ISSUE-0016) or a whole-run halt could then leave a stray doc that a later Step 4c consolidates for unmerged work, marking its task `done` with the code never merged (BeanRider ISSUE-0050). List this run's approved branches (the same set Step 3b merges), then run the heredoc from the repo root. Output is either `NO_SMOKE_REQUIRED` (proceed to Step 3b) or `SMOKE_REQUIRED: N signal(s)` followed by one `---SIGNAL---` block per signal:
+**1. Detect signals.** The gate reads pending-docs from **main's `sysop/runtime/pending-docs/` and each approved branch's worktree** — a `/claim-task` worktree authors its pending-doc there, and it is not copied to main until Step 3b (merge time). Reading the worktrees *in place* keeps the gate honest without collecting docs early: collecting before the merge would widen the window in which main's `sysop/runtime/pending-docs/` holds a doc for work that did not land, and a branch SKIP'd at Step 3b (worktree remove-refusal, ISSUE-0016) or a whole-run halt could then leave a stray doc that a later Step 4c consolidates for unmerged work, marking its task `done` with the code never merged (BeanRider ISSUE-0050). **The old form of this sentence claimed an invariant that no longer holds and never fully did** — it read *"everything in main's `sysop/runtime/pending-docs/` belongs to a just-merged branch"*, which its own next clause then contradicted by naming two ways a stray doc gets there. Step 4c step 1b now **enforces** what this sentence used to assert, by testing each doc's branch against the merge target rather than trusting its presence; so the directory may legitimately hold a held-back doc between runs, and nothing downstream may assume otherwise. List this run's approved branches (the same set Step 3b merges), then run the heredoc from the repo root. Output is either `NO_SMOKE_REQUIRED` (proceed to Step 3b) or `SMOKE_REQUIRED: N signal(s)` followed by one `---SIGNAL---` block per signal:
 
 ```bash
 # Map this run's approved branches → their worktree dirs so the gate can read
@@ -804,7 +804,54 @@ git cherry-pick origin/main..main
 For each approved feature branch (oldest first), merge it into the **merge target** Step 4-pre determined — `main` under `direct` policy, the integration branch or the reused PR branch under `pr`. Write it out at both use sites below: Step 4-pre is a different fenced block, so `"$MERGE_TARGET"` is empty here, and `git rebase ""` is a `fatal:` that aborts the close mid-merge.
 1. `git checkout <branch> && git rebase "<merge target>"`
 2. `git checkout "<merge target>" && git merge --ff-only <branch>`
-3. If rebase has conflicts: `git rebase --abort`, report the conflict, skip that branch.
+3. If rebase has conflicts, **route by which file conflicted** — do not abort reflexively. A conflict in one of the **Sysop-written shared append files** below is the expected multi-branch shape, not a reason to skip: resolve it per the next section — and for `tasks/index.yml`, its `validate_tasks.py` gate must pass before you `git rebase --continue`. Abort-and-skip (`git rebase --abort`, report the conflict, downgrade the branch to **4a-SKIP** per *When a branch really is skipped* below) is for conflicts you cannot resolve confidently — genuine code overlap you are not equipped to adjudicate, or a shared-file resolution the validator rejects.
+
+#### Sysop-written shared append files — the conflicts this skill causes itself
+
+Two tracked files are appended to by *every* branch as a matter of workflow, so a conflict in them is prescribed rather than exceptional. **Never resolve either by stripping the `<<<<<<<`/`=======`/`>>>>>>>` markers and keeping both sides.** For an indented list that is exactly the resolution that corrupts silently — verified by repro, not reasoned:
+
+- **`tasks/index.yml`** — `/document-work` **requires** a branch that surfaces a follow-up to file it here: its otherwise-blanket "do NOT modify `tasks/index.yml`" rule carries one explicit carve-out, *"Filing a NEW follow-up task entry (id + body file under `tasks/open/`) IS allowed and is required when the work surfaces a follow-up that Step 3b would otherwise hard-fail on."* `/add-task` appends here too. So two branches filing follow-ups in one cycle collide deterministically — this is a conflict Sysop's own workflow prescribes, not an edge case. Git splits the entry into **two separate hunks** — the `id:` line and the `body:` line — and leaves every field the two entries share (`title` when identical, `phase`, `status`, `effort`, `blast_radius`, `user_action`, `depends_on`, `surfaced_by`) *outside* the markers as common context. Strip the markers and you get one entry holding **`id:` alone** while the next entry absorbs the whole shared field block plus a duplicate `body:` key. `yaml.safe_load` accepts it, the ids stay unique, and the damage is invisible to a diff read.
+- **`review_tasks.md`** — see the paragraph below, which predates this section and still governs.
+
+**Resolve `tasks/index.yml` from the merge stages, structurally.** Both sides are complete files in the index; only the textual splice is broken. Stage numbering is the opposite of the intuitive reading during a rebase and was confirmed by execution, not recalled — **stage 2 is the merge target you are rebasing onto, stage 3 is the commit being replayed** (the feature branch):
+
+```bash
+git show :1:tasks/index.yml > "${TMPDIR:-/tmp}/sysop-base.yml"     # merge base — what the branch started from
+git show :2:tasks/index.yml > "${TMPDIR:-/tmp}/sysop-ours.yml"     # merge target — has the other branches' entries
+git show :3:tasks/index.yml > "${TMPDIR:-/tmp}/sysop-theirs.yml"   # this branch — has its own changes
+```
+
+Take the merge target's file as the base and append only the entries whose `id` it does not already carry, copying each new entry's block **verbatim** from stage 3. Do not hand-retype fields and do not reorder the target's existing entries.
+
+**Union-by-id alone is not sufficient, and both gaps lose work with the validator green.** Before you apply it, diff stage 3 against **stage 1** (the merge base — present on a content conflict) and classify what the branch actually did:
+
+- **The branch MODIFIED an existing entry** (a retriage, a `status`/`effort`/`blast_radius` change, a `deferred` move, an `/onboard` import rewriting the backlog). Union-by-id **discards that change wholesale** — the id is already present, so stage 3's version is never applied — and the result validates clean, because the merge target's file is internally consistent on its own. Re-apply each modified entry's fields onto the base by hand, or abort and 4a-SKIP. **Do not assume this cannot happen** because `/document-work` and `/add-task` are append-only: a task whose *subject* is the backlog legitimately rewrites entries on its branch.
+- **Both sides added the SAME id** — the deterministic outcome when two branches auto-number from the same base. Union-by-id keeps one and **silently annihilates the other's task**. Renumber the incoming entry to the next free id, and **resolve its body file too**: `tasks/open/<ID>.md` conflicts `add/add` in this shape, and neither `validate_tasks.py` nor the shipped `pre-commit` scans for conflict markers, so staging it commits `<<<<<<<` into the task body with every gate green. Grep the branch for references to the old id before continuing.
+- **The branch edited anything outside `tasks:`** — `phases:`, `schema_version:`, a sprint note. Taking the target's file as the base drops those too. A new phase plus a task filed into it surfaces as `task 'phase' N does not match any phases[].number`; **do not "fix" that by retyping the task's `phase:`**, which validates green while discarding the phase and silently reassigning the task.
+
+Then, **stage the resolved file and gate it**:
+
+```bash
+git add tasks/index.yml
+```
+
+**before `git rebase --continue`**:
+
+```bash
+python3 sysop/scripts/validate_tasks.py
+```
+
+**The validator run is the load-bearing half of this recipe, and its placement is the whole point.** It catches the corrupting resolution precisely — a marker-stripped union reports `task 'phase' must be int or float, got NoneType`, the same for `title` and `status`, plus an orphan body file. But Step 4c is where the validator has always first run (`### 4c` step 4's `tasks/index.yml` block, and again at the end of Step 4c), which is *after* the merge and after Step 4b's `close_batch.sh` has already committed. Running it here means a bad resolution stops the rebase instead of being discovered downstream of two commits. **Never `--continue` past a red validator.**
+
+**Read the exit code — `1` and `2` mean different things and take different actions.** `validate_tasks.py` returns **1** for schema errors (your resolution is wrong: fix it, or abort and 4a-SKIP the branch) and **2** for environment failures — missing PyYAML, a missing `tasks/` directory, an unreadable script. A `2` says nothing about the resolution, so **do not abort on it**: fix the environment (the script self-resolves venv PyYAML via its own `sys.path` bootstrap, but a `python3` with neither will exit 2 and say so) and re-run. Aborting on a `2` discards a correct resolution and downgrades an approved branch over a missing dependency.
+
+**What this gate does and does not cover.** It validates `tasks/index.yml` only — `validate_tasks.py` has no knowledge of `review_tasks.md` whatsoever. A `review_tasks.md` conflict is resolved by reading both sides per the paragraph below and has **no automated gate**; do not let this step's green stand in for it. (Git does enforce one thing for free: `git rebase --continue` refuses while *any* conflicted path is unresolved, so a half-resolved commit is not reachable even though the two files are documented separately.)
+
+Write the stage extracts to `"${TMPDIR:-/tmp}"`, not the repo root — `"${TMPDIR:-/tmp}/sysop-ours.yml"` and `"${TMPDIR:-/tmp}/sysop-theirs.yml"` — and delete them when the resolution is written. Nothing in the shipped flow stages untracked files, so a repo-root scratch file is not committed; but Step 1a deliberately skips the main worktree, so one left behind is never surfaced and persists indefinitely. `${TMPDIR:-/tmp}` is the house convention (Phase 153 — `TMPDIR` is unset on most Linux shells, so the fallback is required and a drift guard enforces it) and removes the question.
+
+#### When a branch really is skipped at 4a
+
+A branch you abort-and-skip here is **4a-SKIP**, and it is a *different* verdict from Step 2a's `dirty` SKIP and from `rejected`. It is approved work that did not merge, and three later steps would otherwise treat it as merged. Record the branch name in that state and carry it to **Step 8's report**; Steps 4c and 6 each key on it explicitly. Its worktree was already removed by Step 3b and its pending-doc already copied to main's `sysop/runtime/pending-docs/` — neither is rolled back here, because Step 4c's merged-branch filter is what keeps that doc out of consolidation. Leave the branch and its lock intact so the next cycle can re-run it.
 
 Feature branches MAY modify `review_tasks.md` — typically as single-line task-checkbox flips (`[/]` → `[x]`) that rebase clean. Structural conflicts arise when the merge target has moved `review_tasks.md` between branch-cut and rebase, in two common cases: (a) another already-merged batch added a sibling `### Batch N` section, (b) the project's archive-rotation script (e.g., `archive_review_tasks.py`) rotated rounds or batches out into a sibling archive file (committed by Step 1b — and, under `pr` policy, swept onto the integration branch by Step 4-pre). Resolve by reading both sides of the conflict: keep the merge target's structure as authoritative (it reflects the post-rotation / post-other-batch layout), then re-apply the branch's intent — checkbox flips and any net-new `### Batch N` section — in the new layout. Genuine code-overlap conflicts still surface here too; treat them the same way (resolve, don't abort).
 
@@ -897,6 +944,20 @@ If the check fails (no `docs: close Batch …` tip, or `review_tasks.md` is stil
 After all branches are merged but **before** pushing:
 
 1. **Scan for pending docs**: `ls sysop/runtime/pending-docs/*.md 2>/dev/null`
+
+1b. **Drop any pending-doc whose branch did not actually merge — this gate decides task state, so it must not run on an unmerged branch's doc.** Step 3b copies each approved branch's pending-doc into main's `sysop/runtime/pending-docs/` *before* the merge is attempted (that ordering is deliberate — it is what stops `git worktree remove` from destroying the doc). So a branch that is approved, has its doc collected, and then **fails to merge at Step 4a** leaves a doc here that this step would otherwise consolidate — routing its content to the shared docs, flipping its `roadmap_ids` to `status: done`, `git mv`-ing the body to `archive/`, and dropping the task's lock and parked markers, **with the code never merged**. Step 3b's own rollback (its step 2b) covers only the case where *it* skips a branch, and says so; nothing covered a 4a-SKIP until this filter.
+
+   For each file found in step 1, read its `branch:` frontmatter value and keep it only if that branch is contained in the merge target:
+
+   ```bash
+   git rev-list --count "<branch from frontmatter>" "^HEAD"
+   ```
+
+   **`0` means merged; any non-zero count is the branch's unmerged commits.** `HEAD` is the merge target here, and a rebased-then-ff-merged branch is fully contained in it, so the count is `0` for every branch that landed under either policy — verified in all three shapes: `direct` ff-merge, the `pr` integration branch, and PR-reuse, where the merge target is the approved branch itself. **This test is valid only pre-squash.** It is an ancestry test, and a squash breaks ancestry — so it must not be reused after the PR merges (see Step 6, where an earlier draft did exactly that and shipped a check that could never pass).
+
+   > **Quote the `^` operand. Both operands, every time.** `^HEAD` unquoted is a **negated-glob pattern** under zsh with `extended_glob` set — which oh-my-zsh and many `.zshrc` files enable, on the platform whose shell these blocks are commonly run in. It expands to *"every entry in the CWD except `HEAD`"*, git receives those as **pathspecs**, the exclusion is silently dropped, and the command exits 0 with a wrong number. Measured on a merged branch: `"^HEAD"` → `0`, bare `^HEAD` → `2`. A **merged** branch then classifies `NOT-MERGED`, so its pending-doc is never routed, its `roadmap_ids` never flip to `done`, its body never moves to `archive/`, and its lock and parked markers never drop — every close, silently. The spot-check that would catch it is the one an author is least likely to run, because an *unmerged* branch returns non-zero either way and looks correct. `WORKFLOW.md` § 8.2a names quoting as an uncovered invocation class; this is a shipped instance of it. **`NOT-MERGED` means leave the file in place and skip it entirely**: do not route it, do not touch its task IDs, do not delete it. It is re-collected on a later run once the branch is mergeable. Report each one on Step 8's report beside its 4a-SKIP entry.
+
+   **If `branch:` is absent or the ref no longer resolves, stop and ask — do not guess in either direction.** Step 6 is the only step that deletes feature branches and it runs *after* this one, so at this point every branch this close merged still has a local ref; a missing one is an unexplained state, not a legacy quirk. (A legacy-format pending-doc with no `branch:` at all is the one benign shape — see step 3's format detection — and it predates worktree-per-branch, so consolidating it is safe; say which case you hit rather than silently picking.)
 
 2. **If none found**: check merged history for `docs:` commits (backward compatibility with branches that wrote docs directly). If present, skip doc consolidation — the docs are already in the shared files.
 
@@ -1040,7 +1101,9 @@ After all branches are merged but **before** pushing:
 
    <!-- Convention promotion moved to /codebase-review and /security-audit Step 9 -->
 
-6. **Clean up pending-docs**: Delete all remaining `sysop/runtime/pending-docs/*.md` files. Remove the `sysop/runtime/pending-docs/` directory if empty.
+6. **Clean up pending-docs**: Delete the pending-docs **this step consolidated** — never a bare "delete all remaining". Remove the `sysop/runtime/pending-docs/` directory only if it is now empty; leave it in place if it is not.
+
+   > **A doc step 1b held back must survive this step, and an unqualified delete here silently destroys it.** 1b deliberately leaves any pending-doc whose branch did not merge, for re-collection on a later run. The branch's worktree is already gone (Step 3b removed it before the merge was attempted) and the doc is **untracked**, so deleting it here is unrecoverable — the exact BeanRider ISSUE-0050 class this filter exists to close, re-entered five items later. Delete by name from the set you routed, not by glob.
 
 7. **Stage, then commit**: `docs: consolidate documentation for <N> merged branches`
 
@@ -1258,7 +1321,12 @@ Skip this step only if the pushed changes are docs/config only with no code or s
 
 **If `git push origin --delete <branch>` is silently denied** (BeanRider ISSUE-0033, classifier hard-codes destructive-flag protection on `--delete`/`--force` regardless of allow-rule glob), the Phase 36 `PermissionDenied` hook surfaces the `! git push origin --delete <branch>` escape command — with the venv-prefix variant when a `.venv/` directory is present. Follow the hook's guidance and relay to the user. The subsequent `git branch -d <branch>` runs in-band without classifier interference (local-only, no remote contact). Do **NOT** use `AskUserQuestion`.
 
-**`pr` policy — per-branch cleanup** (only after the PR merged; the local-`main` re-sync and, in the integration-branch shape, the integration-branch drop are already done in the merge-policy gate above). Each approved feature branch reached `main` through a **squash** — in the integration-branch shape by being rebased onto the integration branch and ff-merged before that branch's PR squashed, and in the PR-reuse shape by being the PR's own head. Either way the branch is provably contained in the squash commit but is **not** an ancestor of it, so `git branch -d` would refuse with "not fully merged." Force-delete here; the content is safely in `main`:
+**`pr` policy — per-branch cleanup** (only after the PR merged; the local-`main` re-sync and, in the integration-branch shape, the integration-branch drop are already done in the merge-policy gate above). Each **merged** feature branch reached `main` through a **squash** — in the integration-branch shape by being rebased onto the integration branch and ff-merged before that branch's PR squashed, and in the PR-reuse shape by being the PR's own head. Either way the branch is provably contained in the squash commit but is **not** an ancestor of it, so `git branch -d` would refuse with "not fully merged." Force-delete here; the content is safely in `main`:
+
+> **`-D` is licensed by containment, and a 4a-SKIP'd branch breaks that licence — check merge status, do not iterate "approved".** This list previously read *"each **approved** feature branch"* and asserted that it *"reached `main` through a squash"*. A branch that Step 4a aborted-and-skipped is still approved, is not Step 2a `dirty`-SKIP'd, and is not rejected — so it fell through every carve-out below and was force-deleted with its work in no squash and nowhere else. Its worktree was already removed at Step 3b, so `-D` was the last reference to it. **`direct` never had this hole** because its list iterates *merged* branches and safe `-d` refuses on an unmerged one; the bypass is what removed the backstop here, which is why the guard has to be explicit rather than inherited.
+>
+> **Key this on the 4a-SKIP verdict Step 4a recorded, and do NOT re-derive containment here.** Iterate the branches Step 4a actually merged; a 4a-SKIP'd branch is handled by its own block below and never reaches this list. An earlier draft of this step instead prescribed `git rev-list --count <branch> ^origin/main` as a containment re-check, and **that check can never return its pass value.** `rev-list ^origin/main` *is* an ancestry test, and the paragraph above says in its own words that a squash-merged branch is "**not** an ancestor of it" — so it scores non-zero for a correctly merged branch and non-zero for a 4a-SKIP'd one alike: zero discriminating power, a permanently inert cleanup, and every clean close reported as suspect. Verified against a real squash rather than reasoned: `git branch -d` refuses, `rev-list --count` returns non-zero, `merge-base --is-ancestor` is false, and `git cherry` prints `+` on every commit because patch-ids do not survive a squash. **After a squash there is no ancestry-shaped containment test** — that is exactly what makes safe `-d` "meaningless" here, so a check built from ancestry cannot be the fix. (Step 4c's sibling filter is sound because it runs *pre-squash* against `^HEAD`, where ff-merge preserves ancestry; the equivalence an earlier draft asserted between the two sites does not hold.)
+
 1. Delete the **local** branch: `git branch -D <branch>` (the safe `-d` check is meaningless against a squash — the branch's commits are in the merged PR).
 2. Delete the **remote** branch **only if it was pushed and still exists**: `git push origin --delete <branch>`. Feature branches created by `/claim-task` are usually local-only under `pr` policy (the integration branch is the only thing pushed), so skip this when the branch has no remote tracking ref.
 
@@ -1267,6 +1335,11 @@ Skip this step only if the pushed changes are docs/config only with no code or s
 For each **SKIP'd** branch (Step 2a verdict — Step 1a classified the worktree as `dirty`):
 1. Leave the worktree, the `sysop/runtime/locks/<TASK_ID>.lock` file, and the branch fully in place — do NOT touch anything.
 2. Carry the SKIP entry into Step 8's report so the user sees the paused-work list with its file count and worktree path.
+
+For each **4a-SKIP'd** branch (approved, but Step 4a could not merge it):
+1. Leave the branch and its `sysop/runtime/locks/<TASK_ID>.lock` fully in place under **both** policies — do NOT delete it, and do NOT force-delete it. Its work is in no squash and its worktree is already gone (Step 3b removed it before the merge was attempted), so the branch ref is the only thing holding the commits.
+2. Its pending-doc stays in `sysop/runtime/pending-docs/` — Step 4c's merged-branch filter left it there deliberately, and the `rmdir` at the end of this step is a no-op while it is present.
+3. Carry the entry into Step 8's report with the conflicting file named, so the next cycle knows what to resolve.
 
 For each **rejected** branch that still has a worktree:
 1. Leave the worktree and branch in place for future work.
@@ -1343,6 +1416,9 @@ Documentation written:
 
 Remaining:
   - <any SKIP'd branches — paused work; include file count + worktree path + recommendation>
+  - <any 4a-SKIP'd branches — approved but did NOT merge; name the conflicting file, and say
+     the branch + lock are intact, its pending-doc was held back from consolidation, and its
+     task was NOT flipped to done>
   - <any rejected branches with reasons>
   - <any remote branches needing manual cleanup>
 ```

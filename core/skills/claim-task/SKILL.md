@@ -616,6 +616,10 @@ The work is already claimed: worktree at `<WORKTREE_PATH>`, lock at `sysop/runti
 
 **Read the task from the main checkout, not the worktree.** For a roadmap task the body is `tasks/open/<CLAIM_ID>.md` — or wherever `body:` points in `tasks/index.yml`, which is **relative to `tasks/`**, not to the repo root. A body filed by `/add-task` is deliberately left uncommitted, and the feature branch is cut at pre-claim `HEAD`, so an untracked body never entered this branch and opening it here returns ENOENT. Resolve it against the main repo root (`git rev-parse --git-common-dir`, then its parent). **If the body cannot be read, stop and report it — do not plan from the index title alone.**
 
+**Body *edits* go in the worktree copy, not the one you just read.** The rule above is about *locating* the body; it is not the write path, and reading it as one is what upstream #322 reported. **Nothing commits a body edit made in the main checkout.** Be precise about why, because the obvious reason is wrong: `main` *is* committed to directly here — Step 4d does it — and under `§ Merge policy: pr`, `/review-close` Step 4-pre even sweeps local-only `main` **commits** onto the integration branch. What it sweeps is commits. A body edit left uncommitted in the main checkout is not one, no step stages it, and so it reaches no branch and no PR. Meanwhile `/review-close` Step 2d reads the `## Test decision` record **at the branch tip** (that step says so in as many words — *"the executor writes it into the body during implementation, inside the worktree"*), where a main-checkout edit is not. So every plan step that writes to the body must name the copy under `<WORKTREE_PATH>`.
+
+**If the body is untracked in the main checkout** (filed by `/add-task` and never committed — the case the read rule above exists for) there is no worktree copy, and one cannot be created: `git add`ing it on the branch makes `/review-close`'s merge abort with *"The following untracked working tree files would be overwritten by merge"*. Plan the write against the main-checkout copy, and add a plan step to **say so in the executor's final message** — that record will not reach the PR, and the body needs committing before `/review-close` runs.
+
 **Review batches:** there is no per-task body file. Read the `### Batch <N>` section of `review_tasks.md` in full, including its `> **Branch:** / **Scope:** / **Verify:**` metadata, and plan the fix order across the batch's tasks.
 
 ### What the plan must contain
@@ -623,7 +627,7 @@ The work is already claimed: worktree at `<WORKTREE_PATH>`, lock at `sysop/runti
 1. **Task summary** — one paragraph restating the goal.
 2. **`## Constraints & Risks`** — the **first** content block after the summary, before any implementation steps. Read `.claude/convention_map.md` and `.claude/security_map.md`; for each file or directory the plan will create or modify, list one bullet enumerating the applicable conventions and security checks from **both** maps, plus cross-cutting rules for the file type. One bullet per risk, no prose padding. Close it with a `### Coverage gap` subsection listing any touched file matching no section in either map (write `_(none)_` if every file matches). **Do not skip a file silently** — an empty match means the maps lack coverage for that path and must be logged so `/codebase-review` map-coverage auditing can pick it up.
 3. **External SDK/framework calls.** Any plan step calling an external library, SDK or framework method must either **cite an in-repo precedent** (`file:line` of an existing same-project call site using that method the same way) or be marked **`unverified — no in-repo precedent`**. The bar is *cite a precedent or flag it*, not *verify against live docs*.
-4. **`## Test decision`** — state either **`test <X> proves <Y>`** (the regression test, existing or new, that pins the behaviour this change touches) or **`no test because <Z>`** with a reviewable rationale. Add a plan step to write this section into the task's body file during implementation. Make `Z` reviewable, not a hand-wave — the reviewer scrutinises it.
+4. **`## Test decision`** — state either **`test <X> proves <Y>`** (the regression test, existing or new, that pins the behaviour this change touches) or **`no test because <Z>`** with a reviewable rationale. Add a plan step to write this section into the task's body file during implementation, **naming the worktree copy** (`<WORKTREE_PATH>/tasks/…`) as the path it writes to, per the write rule above. Make `Z` reviewable, not a hand-wave — the reviewer scrutinises it.
 5. **Map gap steps.** For each file the plan **creates**, **moves/refactors into**, or **deletes**, check both maps: a new or moved path matching no `## ` section needs a plan step to extend the map; a deleted file named explicitly in a section header needs a plan step to clean up the reference.
 6. **`## Implementation Steps`** — numbered, with concrete file paths, line ranges and expected diffs.
 
@@ -707,18 +711,11 @@ Same agent parameters as 7a, with `description`: `"Adversarial plan review <CLAI
 
 **Working directory:** `<WORKTREE_PATH>` (cd here first). You did not write this plan and have no context from the session that did. Do not fix it — find what is wrong with it.
 
-Write your full findings, including the sealed `REVIEW_REPORT:` block, to `<ARTIFACT_DIR>/review.md` — an **absolute path in the main checkout, outside your worktree**; use it exactly as given, do not re-derive it, and do not `git add` it. **Then** emit exactly this as the LAST fenced block of your final message:
+Write your full findings to `<ARTIFACT_DIR>/review.md` — an **absolute path in the main checkout, outside your worktree**; use it exactly as given, do not re-derive it, and do not `git add` it. That file is the durable record of what you found. It is **not** the transport, and it does not discharge the sealed block: the block's one required home is your final message, below.
 
-```yaml
-TASK: <CLAIM_ID>
-PHASE: review
-STATUS: EXECUTED
-WORKTREE: <absolute path, no trailing slash>
-BRANCH: <branch name>
-ERROR: <error description if you could not complete the review, else "none">
-```
+**Your final message must carry two fenced blocks, in this order, with no content after the second.**
 
-Emit the sealed report itself as a fenced block whose body begins `REVIEW_REPORT:` — the hook captures the first such block into the envelope's `review_report_raw`, which is how the verdict reaches the orchestrator through a file no agent writes:
+**First — the sealed report.** A fenced block whose body begins `REVIEW_REPORT:`. The hook captures the first such block into the envelope's `review_report_raw`, which is how the verdict reaches the orchestrator through a file no agent writes. Leave it out and the orchestrator has nothing but a file you wrote yourself, which is exactly what an invented review would also produce:
 
 ```yaml
 REVIEW_REPORT:
@@ -729,11 +726,92 @@ REVIEW_REPORT:
   verdict: FINDINGS | CLEAN
 ```
 
+**Second — the envelope, as the LAST fenced block of your final message:**
+
+```yaml
+TASK: <CLAIM_ID>
+PHASE: review
+STATUS: EXECUTED
+WORKTREE: <absolute path, no trailing slash>
+BRANCH: <branch name>
+ERROR: <error description if you could not complete the review, else "none">
+```
+
 Report findings only. **Do not classify them** as `fixable` or `blocker` and do not decide whether the work proceeds — that is the orchestrator's job at Step 7c, deliberately kept one layer up. If you find nothing, emit `findings: []` and `verdict: CLEAN` explicitly so the orchestrator can record that the step ran clean rather than that it failed to run.
 
 **END OF REVIEWER PROMPT TAIL**
 
 ---
+
+**Post-review transport check.** The sealed block is the *only* channel the reviewer cannot forge, and when it is missing nothing says so: the hook writes `review_report_raw: null` beside `"parsed": true` and exits `0`, so a run whose verdict never arrived is byte-for-byte as healthy-looking as one whose verdict did (upstream #329 — the failure shape #220 reported, reappearing inside the mechanism built to fix it). The check is **mechanical** for the same reason the post-plan one is: an orchestrator that has to remember to open a JSON file and notice a `null` is the attention decay this reshape exists to remove.
+
+```bash
+# Substitute BOTH literals, quoted. Reads the review envelope the hook wrote and the
+# review.md the reviewer wrote, and records a verdict. Stdlib only — NO PyYAML (a
+# consumer whose bare `python3` lacks it is the PEP-668 default, Phase 131), and the
+# same MAIN-checkout resolution every other block in this step uses.
+python3 - <<'PY' "<CLAIM_ID>" "<RUN_ID>"
+import sys, json, subprocess
+from pathlib import Path
+
+claim_id, run_id = sys.argv[1], sys.argv[2]
+if "<" in claim_id or "<" in run_id:
+    print("ERROR: placeholder not substituted", file=sys.stderr)
+    sys.exit(2)
+common = subprocess.run(["git", "rev-parse", "--git-common-dir"],
+                        capture_output=True, text=True, check=True).stdout.strip()
+main_root = Path(common).resolve().parent
+run_dir = main_root / "sysop" / "runtime" / "claim" / claim_id / run_id
+if not run_dir.is_dir():
+    print("ERROR: no such run directory {}".format(run_dir), file=sys.stderr)
+    sys.exit(3)
+
+env_path = main_root / "sysop" / "runtime" / "subagent-envelopes" / (claim_id + ".review.json")
+review_md = run_dir / "review.md"
+status, sealed = None, None
+if env_path.is_file():
+    try:
+        payload = json.loads(env_path.read_text(encoding="utf-8"))
+    except ValueError:
+        payload = {}
+    status = payload.get("status")
+    sealed = payload.get("review_report_raw")
+
+# Order matters. An absent `review.md` is the failure table's reviewer row and outranks
+# anything the envelope says: without the durable artifact there is nothing for 7c to fall
+# back to, so routing it as EMPTY_TRANSPORT would send classification at a file that does
+# not exist. An absent envelope FILE is not a reviewer failure at all — Step 8's read-order
+# contract names an unregistered hook and a failed write as supported configurations.
+if not review_md.is_file():
+    verdict = "NO_REVIEW_MD"
+elif not env_path.is_file():
+    verdict = "NO_ENVELOPE"
+elif sealed:
+    verdict = "OK"
+else:
+    verdict = "EMPTY_TRANSPORT"
+
+# A FILE, not a line of transcript: the whole point of the sealed block is that the
+# record survives the context that read it, so a report about the record must too.
+(run_dir / "review-transport.md").write_text(
+    "# Review transport — {} run {}\n\n- envelope: {}\n- envelope_status: {}\n"
+    "- review_md: {}\n- verdict: {}\n".format(
+        claim_id, run_id, env_path, status, review_md.is_file(), verdict),
+    encoding="utf-8")
+print("review_md: {}".format(review_md.is_file()))
+print("envelope_status: {}".format(status))
+print("review-transport: " + verdict)
+PY
+```
+
+Dispositions, one per verdict — these are rules, not judgement, for the same reason the failure table below is:
+
+- **`OK`** — proceed to 7c and classify from the sealed block.
+- **`EMPTY_TRANSPORT`** — the reviewer ran, left `review.md`, and returned an envelope, but the verdict reached you through no unforgeable channel. **Re-spawn 7b once**, unchanged — and **move the stale `<CLAIM_ID>.review.json` into `<ARTIFACT_DIR>/prior-envelopes/` first**, exactly as Step 7-pre does at run start and for the same reason: the mailbox is keyed by claim and phase with **no run component**, so a second reviewer whose envelope fails to write leaves the first one sitting there to be read as its result. If the second return is also `EMPTY_TRANSPORT`, proceed to 7c on `<ARTIFACT_DIR>/review.md` — but say so out loud in your Step 8 report and leave `review-transport.md` recording it. **This does not park**, and the asymmetry with the table below is deliberate: a review that demonstrably ran and left a durable artifact is worth more than a claim discarded over a channel failure, and the receipt is what keeps the degraded case from reading as the healthy one.
+- **`NO_ENVELOPE`** — the hook wrote no envelope file. **This alone is not a failure and must not park.** Step 8's read-order contract names an **unregistered hook or a failed write** as supported configurations and falls back to regex-parsing the agent's return text; do the same here. Read the reviewer's own return text and look for the first fenced block whose body begins `REVIEW_REPORT:`. Found, and that is this run's transport — record `OK (return-text fallback)` in the receipt by hand and proceed. Not found, and the case is `EMPTY_TRANSPORT` above. Check for an `_unparseable_*.json` diagnostic while you are there (Step 8 states how to read one, and how not to attribute a stranger's to this claim).
+- **`NO_REVIEW_MD`** — the reviewer left no durable artifact. **This** is the failure table's reviewer row, and it is the one that parks: re-spawn once, then park per 7c with `reviewer returned no review.md twice` as the recorded reason. Nothing here is recoverable from the envelope, because 7c's fallback input is the file that is missing.
+
+**The receipt is a report, not a freshness proof.** It records what was in the mailbox when it ran, and the mailbox has no run component — Step 7-pre's move-aside is what keeps it fresh for a *fresh* run, and a `--resume` deliberately leaves it alone. So on a resume, treat a bare `OK` as unproven until you have checked that the envelope belongs to this run's reviewer rather than the previous one's.
 
 ### Step 7c: Classify the findings — the orchestrator does this itself
 
@@ -921,7 +999,7 @@ Read your three inputs from disk rather than from this prompt: `<ARTIFACT_DIR>/p
 
 1. **Absorb the classification.** For each `fixable` finding, apply its recorded `response` to the plan as you implement. Where a finding was rejected, its rationale is in `classification.md` — do not silently re-litigate it.
 2. **Implement** per the plan. Re-open the files it touches; do not rely on its summaries.
-3. **Persist the `## Test decision`** section into the task's body file, per the plan's step for it.
+3. **Persist the `## Test decision`** section into the task's body file, per the plan's step for it. **Write the worktree copy** (`<WORKTREE_PATH>/tasks/…`), never the main checkout's — an edit there is on no branch, so it never reaches the PR, and `/review-close` Step 2d reads this record at the branch tip. **If the plan's step names a main-checkout path, correct it and note the correction** rather than following it. The one exception is a body that is untracked in the main checkout (`/add-task` filed it and nobody committed it): it is on no branch and cannot be put on one, so write the main-checkout copy and **say so in your final message** — that record will not reach the PR and the body needs committing before `/review-close` runs.
 4. **Post-fix convention verification.** `git diff --name-only main...HEAD`; for each changed file look up its section in `.claude/convention_map.md` and scan the **new/changed lines** — not just the original task locations — against those conventions. Common regressions: `fetch()` without `encodeURIComponent()` on dynamic path segments; `str(e)` exposed to API responses; moved code that dropped `_sanitize_log()` wrappers; `useCallback` with incomplete dependency arrays; SELECT queries on a write-only engine. Fix regressions before committing.
 5. **Run the consumer's pre-merge verification gates.** `<project>/CLAUDE.md § Pre-merge verification` may carry `### Always` (full-tree commands) and `### Ratchet (changed files only)`. Run the commands under each subsection present. If both are absent, skip — `/review-close` will run any project-side verification at merge time (its `4a-post` step, on the merged tree). Note the division of labour: this run verifies **this branch in its own worktree** — so when the consumer ships no `## Pre-merge verification` section and this step skips, *nothing* verifies the branch in isolation; `4a-post` verifies the **assembled** result and cannot substitute for it. Treat a non-zero exit like an implementation finding — fix the cause, do not silence it without a justified inline `# type: ignore[...]` or `// eslint-disable-next-line <rule> -- <reason>`.
 6. **Post-fix UI verification.** If the diff touches any `frontend/` files, run `.claude/skills/_shared/ui-verify.md`. Hard-fail on console errors and 5xx responses; warn on console warnings; skip cleanly with an explicit note if the dev server is not running, and surface that note verbatim in your final message.
@@ -971,6 +1049,7 @@ The tempting recovery from a failed reviewer is *"continue to the executor anywa
 |---|---|---|
 | **7a planner** | no `plan.md`, or a `FAILED` envelope | **Do not hand-write the plan.** Re-spawn once. On a second failure, stop and report with worktree and lock intact. |
 | **7b reviewer** | no `review.md`, or a `FAILED` envelope | **Never proceed to 7e.** This is the single most important rule in the pipeline. Re-spawn once, then park per 7c with `reviewer returned no review.md twice` (or the envelope's `ERROR:`) as the recorded reason. |
+| **7b reviewer** | `review.md` present, envelope parsed, `review_report_raw` null | Disjoint from the row above — that row fires on a **missing `review.md`** or a `FAILED` envelope, and this one requires `review.md` to be there, so the two cannot both apply. It was the shape that shipped a silent failure (#329). The **post-review transport check** decides it: re-spawn once, then proceed on `review.md` with `review-transport.md` recording `EMPTY_TRANSPORT`. **Does not park** — see the dispositions in Step 7b for why this one differs. |
 | **7e executor** | `FAILED` or malformed | Today's Step 8 handling, unchanged: surface `ERROR` verbatim, show `git log` / `git status` in the worktree, let the human decide. **No auto-retry.** |
 
 **Orchestrator context exhaustion mid-pipeline** — the artifacts under `<ARTIFACT_DIR>` are the resume state, and nothing is deleted mid-lifecycle, so re-entry is `/claim-task <CLAIM_ID> --resume <RUN_ID>`, which lands at Step 7-pre and routes off those artifacts. Nothing parked, so there is no park marker — but the claim's **own** lock is still in place, so `--entry-state` answers `held`, and `--resume` is exactly the way past it.
@@ -1022,7 +1101,40 @@ print("wrote " + str(out))
 PY
 ```
 
-**On `STATUS: EXECUTED`** — print the sealed `REVIEW_REPORT` (from `review_report_raw` on the review envelope), then:
+**On `STATUS: EXECUTED`** — print the sealed `REVIEW_REPORT` (from `review_report_raw` on the review envelope). **If that field is null**, do not print nothing and move on: say `Review transport was empty — the sealed report never reached the orchestrator` and print `review-transport.md`'s verdict alongside `<ARTIFACT_DIR>/review.md`, so the human reading this report sees which channel the findings came through. Then run the stranded-body check:
+
+```bash
+# No placeholders — run it as written. The orchestrator stands in the main checkout, but
+# a CWD that had drifted into the worktree would report the WORKTREE's tree, clean by
+# construction after 7e's commit, so the root is resolved rather than assumed. Scoped to
+# `tasks/` and to TRACKED modifications on purpose: an untracked-inclusive probe fires on
+# every ordinary scratch file (review-close/SKILL.md Step 6 narrows the same way for the
+# same reason), and an untracked body is the one case the executor deliberately writes
+# on main. Stdlib only, and a heredoc rather than a bash one-liner, per Phase 126.
+python3 - <<'PY'
+import subprocess
+from pathlib import Path
+
+common = subprocess.run(["git", "rev-parse", "--git-common-dir"],
+                        capture_output=True, text=True, check=True).stdout.strip()
+main_root = Path(common).resolve().parent
+changed = subprocess.run(
+    ["git", "-C", str(main_root), "diff", "--name-only", "HEAD", "--", "tasks/"],
+    capture_output=True, text=True, check=True).stdout.split()
+if changed:
+    print("STRANDED — task-body edits are uncommitted on main:")
+    for p in changed:
+        print("  " + p)
+else:
+    print("tasks/ CLEAN — no body edits stranded on main")
+PY
+```
+
+**If that printed `STRANDED`** — the executor wrote body edits into the main checkout instead of the worktree (upstream #322). They are on no branch, so they do not reach the PR, and nothing downstream notices: `/review-close` Step 4c `git mv`s the body into `tasks/archive/`, and the edits never having been staged, the rename stages **`HEAD`'s** content, so the body contributes `0 insertions(+), 0 deletions(-)` to the consolidation commit — the rename lands, the documentation does not. (The commit itself is larger; it also carries `tasks/index.yml` and the pending docs.) The only backstop is Step 6's tracked-tree gate, which fires **after `gh pr merge` has landed**, too late to save the PR. So: surface the file list the block just printed, **skip the auto-mode chain**, and tell the human the edits must be moved onto the branch (still checked out at `<WORKTREE_PATH>`, whose work commit is amendable) before `/review-close` runs. **Do not move them yourself** — which copy is authoritative is the human's call.
+
+**An untracked body is not `STRANDED`, and the probe is scoped so it does not report as one.** `git diff HEAD` ignores untracked files, so an `/add-task` body nobody committed leaves this quiet — correctly, because that body is on no branch and cannot be put on one. The executor reports that case itself, in its own final message.
+
+Then:
 
 ```
 ## Claim complete: <CLAIM_ID>
@@ -1042,9 +1154,9 @@ worktree and NOT pushed. Run `/document-work` next. Do NOT merge to main —
 
 `<ARTIFACT_DIR>` is the absolute path Step 7-pre printed — `<main repo root>/sysop/runtime/claim/<CLAIM_ID>/<RUN_ID>/`. Print the absolute form rather than the repo-relative one: the human reading this box may be standing in the worktree, where the relative path resolves to nothing.
 
-**Auto-mode chaining.** Under `auto` mode, invoke `/document-work` directly via the `Skill` tool rather than ending the turn. Skip the chain when the executor returned `BLOCKED` or `FAILED`, when a UI-verify note flags pending manual checking, when the harness is not in `auto` mode, or when the user asked to pause. The chain does **not** extend to `/review-close`, which stays user-initiated.
+**Auto-mode chaining.** Under `auto` mode, invoke `/document-work` directly via the `Skill` tool rather than ending the turn. Skip the chain when the executor returned `BLOCKED` or `FAILED`, **when the stranded-body check printed `STRANDED`**, when a UI-verify note flags pending manual checking, when the harness is not in `auto` mode, or when the user asked to pause. The chain does **not** extend to `/review-close`, which stays user-initiated.
 
-**On `STATUS: BLOCKED`** — print the sealed report and the `BLOCKER_QUESTION:`. Then, **before parking, re-run Step 7c's classification write with `verdict: BLOCKED`** and a finding recording the executor's blocker question. Only then park per Step 7c, with the `BLOCKER_QUESTION:` text as the recorded reason, and tell the human to resume with `/claim-task <CLAIM_ID> --resume <RUN_ID>`.
+**On `STATUS: BLOCKED`** — print the sealed report and the `BLOCKER_QUESTION:`. **The same null arm applies here** — `review_report_raw` can be null on this path exactly as on the one above, and this is the report a human is about to answer a question from, so an empty sealed report has to be named rather than rendered as a blank. Then, **before parking, re-run Step 7c's classification write with `verdict: BLOCKED`** and a finding recording the executor's blocker question. Only then park per Step 7c, with the `BLOCKER_QUESTION:` text as the recorded reason, and tell the human to resume with `/claim-task <CLAIM_ID> --resume <RUN_ID>`.
 
 **The rewrite is not bookkeeping — without it the resume is a no-op that re-runs the executor.** `classification.md` still reads `verdict: PROCEED` at this point, because it had to for 7e to have been spawned at all. Leaving it there sends 7-pre's routing table to its last row, which re-spawns the executor with byte-identical inputs and gives the human's answer nowhere to land — so the one runtime path that actually produces a blocker question would never reach the row written for it.
 

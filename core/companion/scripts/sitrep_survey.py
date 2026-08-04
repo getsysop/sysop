@@ -147,6 +147,15 @@ class ReviewBatchState:
     state: str
     next_action: str
     notes: list[str] = field(default_factory=list)
+    # `> **Triaged:** <date> <auto|flag> [TASK-…]` — /triage's durable verdict.
+    # A batch with no such line has never been classified by a shipped /triage
+    # run (or carries a legacy tag of unknown provenance), so it is *untriaged*
+    # regardless of whether a `Flag:` line is present. This — not `has_flag` —
+    # is what priority 4a routes on, so an all-auto queue stops re-recommending
+    # /triage forever once a run has recorded its verdict.
+    has_triage_record: bool = False
+    triaged_verdict: str = ""  # "auto" | "flag" | "" (no record)
+    triaged_tasks: list[str] = field(default_factory=list)  # judgment-only task ids
 
 
 @dataclass
@@ -267,7 +276,55 @@ def _read_index(main_root: Path) -> dict[str, dict[str, Any]]:
 
 _BATCH_HEADER_RE = re.compile(r"^### Batch (\d+) — (.+?) `([A-Za-z ]+)`$")
 _META_BRANCH_RE = re.compile(r"^> \*\*Branch:\*\* `([^`]+)`")
+# Duplicated verbatim from review_index.py and pinned equal by
+# tests/test_flag_contract.py — see that file's comment for why these are
+# mirrored rather than imported. Edit one, edit both.
 _META_FLAG_RE = re.compile(r"^> \*\*Flag:\*\*\s*(.*)$")
+_META_TRIAGED_RE = re.compile(
+    r"^> \*\*Triaged:\*\* (\d{4}-\d{2}-\d{2}) (auto|flag)"
+    r"(?:\s+\[([^\]]*)\])?"
+    r"(?:\s+[—–-]\s*(.*?))?\s*$"
+)
+_TRIAGED_TASK_ID_RE = re.compile(r"TASK-\d+")
+_FENCE_OPEN_RE = re.compile(r"^ {0,3}(?:> ?)*(`{3,}|~{3,})")
+_FENCE_CLOSE_RE = re.compile(r"^ {0,3}(?:> ?)*(`{3,}|~{3,})[ \t]*$")
+
+
+def _fenced_mask(lines):
+    """True for every line inside a **balanced** fenced block, delimiters included.
+
+    An **unterminated** fence is deliberately ignored — its lines stay
+    structural. Honouring it is strictly worse than having no fence rule at
+    all: one stray ``` disables structural parsing to end-of-file, so the
+    enclosing batch's ``line_end`` runs to EOF and ``close_batch.sh`` flips
+    every checkbox in that range, including a trailing ``## Deferred``
+    section's. Phase 181's first fence implementation did exactly that, and
+    its second review round caught it by writing a tracker with an unbalanced
+    marker — a shape neither the author's fixtures nor the first round had.
+
+    Two passes rather than one state machine for exactly that reason: you
+    cannot know a fence is balanced until you have seen the whole file.
+
+    Duplicated verbatim from ``review_index.py``; pinned equal by
+    ``tests/test_flag_contract.py``.
+    """
+    mask = [False] * len(lines)
+    start = None
+    marker = None
+    for i, line in enumerate(lines):
+        if start is None:
+            m = _FENCE_OPEN_RE.match(line)
+            if m:
+                start, marker = i, m.group(1)
+        else:
+            m = _FENCE_CLOSE_RE.match(line)
+            if m and m.group(1)[0] == marker[0] and len(m.group(1)) >= len(marker):
+                for j in range(start, i + 1):
+                    mask[j] = True
+                start = marker = None
+    return mask
+
+
 _TASK_LINE_RE = re.compile(r"^- \[( |/|x)\] \*\*(TASK-\d+)\*\*:")
 
 
@@ -282,8 +339,24 @@ def _read_review_batches(main_root: Path) -> list[dict[str, Any]]:
             lines = f.readlines()
     except OSError:
         return []
-    for raw in lines:
+    # Fenced content is example text, not structure — see review_index.py's
+    # note. Without this a task quoting the tracker's own shapes both
+    # truncates its batch and donates a fake `Flag:`/`Triaged:` to it.
+    fenced = _fenced_mask([ln.rstrip("\n") for ln in lines])
+    for idx, raw in enumerate(lines):
         line = raw.rstrip("\n")
+        if fenced[idx]:
+            continue
+        # Any level-2 heading ends the open batch. Without it the LAST batch
+        # absorbed `## Deferred` / `## Statistics` task lines into its own
+        # `tasks` list, so `done == total` could never hold and /sitrep's
+        # priority 2 ("ready for /review-close") never fired for it — the
+        # operator was told to keep working on a finished batch.
+        if line.startswith("## "):
+            if current is not None:
+                out.append(current)
+                current = None
+            continue
         m = _BATCH_HEADER_RE.match(line)
         if m:
             if current is not None:
@@ -294,6 +367,9 @@ def _read_review_batches(main_root: Path) -> list[dict[str, Any]]:
                 "status": m.group(3).strip(),
                 "branch": "",
                 "flag_reason": "",
+                "triaged_date": "",
+                "triaged_verdict": "",
+                "triaged_tasks": [],
                 "tasks": [],
             }
             continue
@@ -306,6 +382,12 @@ def _read_review_batches(main_root: Path) -> list[dict[str, Any]]:
         mf = _META_FLAG_RE.match(line)
         if mf:
             current["flag_reason"] = mf.group(1).strip()
+            continue
+        mtr = _META_TRIAGED_RE.match(line)
+        if mtr:
+            current["triaged_date"] = mtr.group(1)
+            current["triaged_verdict"] = mtr.group(2)
+            current["triaged_tasks"] = _TRIAGED_TASK_ID_RE.findall(mtr.group(3) or "")
             continue
         mt = _TASK_LINE_RE.match(line)
         if mt:
@@ -901,6 +983,24 @@ def _classify_review_batches(
         branch = b.get("branch", "")
         flag_reason = b.get("flag_reason", "")
         has_flag = bool(flag_reason)
+        triaged_verdict = b.get("triaged_verdict", "")
+        triaged_tasks = list(b.get("triaged_tasks") or [])
+        # `Triaged:` records the verdict; `Flag:` presence is what the two
+        # drainers actually route on. /triage writes both together, so a
+        # `flag` verdict with no `Flag:` line is a malformed record — and it
+        # fails toward the CHEAP lane: /auto-fix's pool test is "no Flag:
+        # line", so it would claim a batch the record says needs judgment.
+        # Treat the record as absent so the batch routes back to /triage. Note
+        # this changes the *advice*, not the actuator: /auto-fix's pool test is
+        # its own ("no Flag: line") and does not read Triaged:, so the refusal
+        # rule shipped in auto-fix/SKILL.md § 1a is the half that closes the
+        # hazard. The mirror case — `auto` verdict WITH a `Flag:` line — routes
+        # to the expensive lane, which is safe, but the record is still wrong
+        # and nothing else would ever say so.
+        record_conflict = bool(triaged_verdict) and (
+            (triaged_verdict == "flag") != has_flag
+        )
+        has_triage_record = bool(triaged_verdict) and not record_conflict
         has_lock = branch in lock_by_branch
         has_branch = branch in wt_branches or bool(
             _git(["rev-parse", "--verify", "--quiet", branch], cwd=str(main_root))
@@ -914,15 +1014,31 @@ def _classify_review_batches(
 
         if b["status"] == "Pending" and not has_lock:
             state = "pending (not claimed)"
-            if has_flag:
+            if not has_triage_record:
+                # No durable verdict — /triage has never classified this batch,
+                # or its `Flag:` tag predates the `Triaged:` record and so has
+                # unknown provenance. Either way it needs classifying, and a
+                # bare `Flag:` line is not evidence that anything read it.
+                next_action = "/triage will classify (then /auto-fix or /auto-judge picks it up)"
+                if record_conflict:
+                    next_action += (
+                        " — malformed record: Triaged: says flag but there is no"
+                        " Flag: line, so /auto-fix would claim it"
+                    )
+                elif has_flag:
+                    next_action += " — unstamped Flag: tag, provenance unknown"
+            elif has_flag:
                 # Truncate cleanly without leaving an unclosed parenthesis from the reason.
                 reason_short = flag_reason[:55].rstrip()
                 if len(flag_reason) > 55:
                     reason_short += "…"
                 next_action = f"/auto-judge will pick this up — flag: {reason_short}"
+                if triaged_tasks:
+                    next_action += (
+                        f" ({len(triaged_tasks)} of {len(batch_task_ids)} tasks need judgment)"
+                    )
             else:
-                # Untagged pending batch — /triage will classify it
-                next_action = "/triage will classify (then /auto-fix or /auto-judge picks it up)"
+                next_action = "/auto-fix will pick this up — triaged auto"
         elif not has_branch:
             state = "claimed, no branch"
             next_action = (
@@ -956,6 +1072,9 @@ def _classify_review_batches(
                 has_branch=has_branch,
                 has_flag=has_flag,
                 flag_reason=flag_reason,
+                has_triage_record=has_triage_record,
+                triaged_verdict=triaged_verdict,
+                triaged_tasks=triaged_tasks,
                 total_tasks=total,
                 doc_worked_tasks=done,
                 state=state,
@@ -1188,7 +1307,7 @@ def _recommended_next(s: Survey) -> Recommendation | None:
     """Single top routing recommendation. See SKILL.md § Recommendation routing rules.
 
     Priority order: review-close (task) → review-close (batch) → unpushed doc-work →
-    /triage if any pending batch lacks Flag tag → /auto-fix and/or /auto-judge →
+    /triage if any pending batch lacks a Triaged: record → /auto-fix and/or /auto-judge →
     continue in-progress → resume planning → /roadmap (deep queue) or /auto-build
     (shallow) → idle.
     """
@@ -1229,27 +1348,52 @@ def _recommended_next(s: Survey) -> Recommendation | None:
             ),
         )
 
-    # P4: pending unclaimed batches — route via Flag tag presence
+    # P4: pending unclaimed batches — route via the Triaged: verdict record
     pending_unclaimed = [rb for rb in s.review_batches if rb.state == "pending (not claimed)"]
     if pending_unclaimed:
-        untagged = [rb for rb in pending_unclaimed if not rb.has_flag]
-        flagged = [rb for rb in pending_unclaimed if rb.has_flag]
-        auto = [rb for rb in pending_unclaimed if not rb.has_flag]
-        if untagged:
+        # Untriaged is keyed on the durable `Triaged:` verdict, not on the
+        # absence of a `Flag:` tag. Keying on `Flag:` conflated two states a
+        # reader cannot distinguish — "classified auto" and "never read" both
+        # present as no-tag — so an all-auto queue re-recommended /triage
+        # forever, and a legacy `Flag:` tag of unknown provenance was accepted
+        # as a prior verdict.
+        # `triaged_verdict == "flag"` with no `Flag:` line is a malformed
+        # record. `_classify_review_batches` already clears `has_triage_record`
+        # for it, but the same invariant is asserted here rather than assumed:
+        # the failure direction is toward /auto-fix (whose pool test is "no
+        # Flag: line"), i.e. a batch the record says needs judgment being
+        # claimed for mechanical fixing, and that is not a state to reach by
+        # trusting one layer.
+        def _untriaged(rb):
+            return not rb.has_triage_record or (
+                rb.triaged_verdict == "flag" and not rb.has_flag
+            )
+
+        untriaged = [rb for rb in pending_unclaimed if _untriaged(rb)]
+        flagged = [rb for rb in pending_unclaimed if not _untriaged(rb) and rb.has_flag]
+        auto = [rb for rb in pending_unclaimed if not _untriaged(rb) and not rb.has_flag]
+        if untriaged:
             # Some batches not yet triaged — /triage is the prereq before /auto-fix or /auto-judge
-            n_untagged = len(untagged)
-            sample = [f"batch {rb.batch_number}" for rb in untagged[:3]]
+            n_untriaged = len(untriaged)
+            sample = [f"batch {rb.batch_number}" for rb in untriaged[:3]]
             sample_str = ", ".join(sample)
-            if n_untagged > 3:
-                sample_str += f", +{n_untagged - 3} more"
+            if n_untriaged > 3:
+                sample_str += f", +{n_untriaged - 3} more"
+            n_unstamped_flag = sum(1 for rb in untriaged if rb.has_flag)
+            detail_lines = [f"untriaged: {sample_str}"]
+            if n_unstamped_flag:
+                detail_lines.append(
+                    f"{n_unstamped_flag} of them carry an unstamped Flag: tag "
+                    f"(no Triaged: record — provenance unknown, will be re-read)"
+                )
             return Recommendation(
                 command="/triage",
                 reason=(
-                    f"{n_untagged} pending batch(es) lack Flag tags; "
+                    f"{n_untriaged} pending batch(es) have no Triaged: record; "
                     f"/triage classifies them as auto vs flag, then /auto-fix "
                     f"and /auto-judge route accordingly"
                 ),
-                detail_lines=[f"untriaged: {sample_str}"],
+                detail_lines=detail_lines,
             )
         # All triaged — route to /auto-fix and/or /auto-judge
         n_auto = len(auto)
@@ -1398,6 +1542,9 @@ def render_json(s: Survey) -> str:
             "has_branch": r.has_branch,
             "has_flag": r.has_flag,
             "flag_reason": r.flag_reason,
+            "has_triage_record": r.has_triage_record,
+            "triaged_verdict": r.triaged_verdict,
+            "triaged_tasks": r.triaged_tasks,
             "total_tasks": r.total_tasks,
             "doc_worked_tasks": r.doc_worked_tasks,
             "state": r.state,

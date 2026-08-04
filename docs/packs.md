@@ -72,20 +72,26 @@ Auth`, and the placeholder tokens are accurate documentation as they stand.
 What that means in practice depends on which skill is reading the map, and the difference is worth
 knowing:
 
-- **`/security-audit` resolves placeholders by inference.** It instructs its agents to substitute
-  your project's equivalents while reading — so it works against the maps as shipped. The mapping
-  happens in the agent's head.
-- **`/codebase-review` matches on the globs.** Each section header is a glob list
-  (`## <api module>/server.py, ... — API Endpoints`), and a review agent receives the convention
-  bullets from the sections whose globs match the file under review. A glob still in `<api module>`
-  form matches no file on disk, so **those sections deliver no rules until the globs name your real
-  paths.** The skill knows this and won't mislead you: its coverage sweep reports files matched by
-  no section, and it explicitly declines to flag placeholder globs as "stale" — they're an install
-  artifact, not rot.
+- **Both skills treat a placeholder section as binding nothing.** Each section header is a glob list
+  (`## <api module>/server.py, ... — API Endpoints`), and a glob still in `<api module>` form
+  matches no file on disk. So **those sections deliver no rules until the globs name your real
+  paths** — and in `security_map.md`, which also carries `Skip:` lists, they authorise no exclusion
+  either. That rule is stated in the maps themselves (§ Scope note) and everywhere the skills act on
+  a Check/Skip list. It matters most for security: a `Skip:` line under a dead glob otherwise reads
+  as settled triage, so an auditor can land on it and stop looking.
+- **What differs is how each skill routes the work.** `/codebase-review` matches the file under
+  review against the section globs and hands its agent that section's convention bullets.
+  `/security-audit` dispatches per OWASP category and hands each agent the Check lists of the
+  sections whose globs resolved to that agent's files. Neither hides the gap: both coverage sweeps
+  report files matched by no section, and both explicitly decline to flag placeholder globs as
+  "stale" — they're an install artifact, not rot.
 
-So a freshly installed pack is not inert, but it isn't fully wired either. Localizing the globs is
-real work, and the review loop is what drives it: run `/codebase-review`, and its coverage sweep
+So a freshly installed pack's map sections are **not yet wired**: they name paths you don't have,
+and until you localize them they carry neither rules nor exclusions. Localizing the globs is real
+work, and the review loop is what drives it: run `/codebase-review`, and its coverage sweep
 surfaces the unmatched files and proposes sections or glob expansions naming your actual layout.
+Write each localized section to **both** the assembled map and its `.project.md` overlay — see
+*What you own* below for why either one alone fails.
 
 **The checks (`checks.yml`) do get concretized**, because a grep pattern can't infer anything — a
 check scoped to `<api module>/` matches no file on disk and silently does nothing. So you author
@@ -113,20 +119,29 @@ add `exclude_dir: ["alembic", "migrations"]` to the affected checks via a
 depth, grep `--exclude-dir` semantics).
 
 So: **checks are concretized mechanically from a file you author; maps are localized through use** —
-by inference for the security audit, and by naming your real globs for the code review.
+by naming your real globs, for both skills. Neither one infers its way past an unlocalized section.
 
 ## What you own — and where localization lands
 
-This is the part to get right, because the obvious move is the wrong one.
+This is the part to get right, because each of the two obvious moves is wrong on its own.
 
 The assembled `.claude/convention_map.md` is a **managed file**. The installer regenerates it on
-every `--update`, so editing your real paths into it directly works right up until your next update
-silently reverts them. Don't localize there.
+every `--update`, so real paths edited only into it work right up until your next update silently
+reverts them.
 
-Your durable surface is the overlay: `.claude/convention_map.project.md` and
-`.claude/security_map.project.md` are never managed, never overwritten, and appended to the
-assembled map. Sections naming your real paths belong there, and that is where `/codebase-review`
-writes map hygiene when it's running against an install rather than this repo. See
+The overlay is the durable surface: `.claude/convention_map.project.md` and
+`.claude/security_map.project.md` are never managed, never overwritten, and are appended to the
+assembled map on every install and update. But the skills parse the **assembled** map when they
+run, not the overlay — so a section written only to the overlay is inert until the next update
+re-runs the concat, which is the same "I localized it and nothing changed" outcome as not
+localizing at all.
+
+**So write it to both.** The base copy makes the section live for the round you are in; the overlay
+copy is what survives the update, and the regenerated base is re-supplied from it — the base is
+truncated and rebuilt before the overlay is re-appended, so no duplicate results. That is the
+dual-write rule (`_shared/promotion-write-target.md`), and it is what `/codebase-review` does when
+its coverage sweep proposes a section, and what it does for map hygiene when running against an
+install rather than this repo. See
 [configuration.md](./configuration.md#config--never-managed-overlay-files).
 
 The consequence worth stating plainly: an upstream pack section and your localized version coexist

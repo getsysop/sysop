@@ -607,7 +607,7 @@ def test_p3_unpushed_task_routes_review_close():
     assert "unpushed" in rec.reason
 
 
-def test_p4_untagged_pending_batch_routes_triage():
+def test_p4_untriaged_pending_batch_routes_triage():
     rec = ss._recommended_next(_survey(review_batches=[
         _batch(batch_number=2, state="pending (not claimed)", has_flag=False),
     ]))
@@ -617,7 +617,8 @@ def test_p4_untagged_pending_batch_routes_triage():
 
 def test_p4_all_flagged_pending_batches_route_auto_judge():
     rec = ss._recommended_next(_survey(review_batches=[
-        _batch(state="pending (not claimed)", has_flag=True, flag_reason="needs judgment"),
+        _batch(state="pending (not claimed)", has_flag=True, flag_reason="needs judgment",
+               has_triage_record=True, triaged_verdict="flag"),
     ]))
     assert rec.command == "/auto-judge"
     assert rec.clear_nudge is True
@@ -833,13 +834,21 @@ def test_discrepancy_empty_inputs_returns_empty():
 
 
 def _dbatch(number=1, title="T", status="In Progress", branch="review/x",
-            flag_reason="", task_ids=()):
+            flag_reason="", task_ids=(), triaged_verdict="", triaged_date="",
+            triaged_tasks=()):
+    """Phase 181 added the `Triaged:` record. Callers that pass only
+    `flag_reason` are modelling a *legacy* batch — a `Flag:` tag with no
+    verdict behind it — which now routes to /triage rather than /auto-judge.
+    Pass `triaged_verdict` to model a batch a shipped /triage run classified."""
     return {
         "number": number,
         "title": title,
         "status": status,
         "branch": branch,
         "flag_reason": flag_reason,
+        "triaged_date": triaged_date or ("2026-08-03" if triaged_verdict else ""),
+        "triaged_verdict": triaged_verdict,
+        "triaged_tasks": list(triaged_tasks),
         "tasks": [{"id": tid, "checkbox": " "} for tid in task_ids],
     }
 
@@ -888,15 +897,28 @@ def test_batch_skips_terminal_status():
 
 
 def test_batch_pending_flagged_routes_to_auto_judge():
-    out = _run_batches(
-        [_dbatch(status="Pending", branch="review/p", flag_reason="unsafe shell usage")]
-    )
+    out = _run_batches([_dbatch(
+        status="Pending", branch="review/p", flag_reason="unsafe shell usage",
+        triaged_verdict="flag",
+    )])
     assert len(out) == 1
     b = out[0]
     assert b.state == "pending (not claimed)"
     assert b.has_flag is True
     assert "/auto-judge will pick this up" in b.next_action
     assert "unsafe shell usage" in b.next_action
+
+
+def test_batch_pending_unstamped_flag_routes_to_triage():
+    """Phase 181. A `Flag:` tag with no `Triaged:` record is a tag of unknown
+    provenance, not a prior verdict — before this, its mere presence sent the
+    batch to /auto-judge unread."""
+    out = _run_batches([_dbatch(
+        status="Pending", branch="review/p", flag_reason="looks judgy",
+    )])
+    assert out[0].has_flag is True
+    assert "/triage will classify" in out[0].next_action
+    assert "provenance unknown" in out[0].next_action
 
 
 def test_batch_pending_unflagged_routes_to_triage():
@@ -906,23 +928,36 @@ def test_batch_pending_unflagged_routes_to_triage():
     assert "/triage will classify" in out[0].next_action
 
 
+def test_batch_pending_triaged_auto_routes_to_auto_fix():
+    """The verdict now has a durable home, so an all-auto batch stops reading
+    as never-classified."""
+    out = _run_batches([_dbatch(
+        status="Pending", branch="review/p", triaged_verdict="auto",
+    )])
+    assert out[0].has_flag is False
+    assert "/auto-fix will pick this up" in out[0].next_action
+
+
 def test_batch_pending_flag_reason_truncated_at_55():
-    long = _run_batches(
-        [_dbatch(status="Pending", branch="review/l", flag_reason="y" * 60)]
-    )[0]
+    long = _run_batches([_dbatch(
+        status="Pending", branch="review/l", flag_reason="y" * 60,
+        triaged_verdict="flag",
+    )])[0]
     assert long.next_action.endswith("…")
     assert "y" * 56 not in long.next_action  # cut at 55, not 56
 
-    exact = _run_batches(
-        [_dbatch(status="Pending", branch="review/e", flag_reason="x" * 55)]
-    )[0]
+    exact = _run_batches([_dbatch(
+        status="Pending", branch="review/e", flag_reason="x" * 55,
+        triaged_verdict="flag",
+    )])[0]
     assert not exact.next_action.endswith("…")  # exactly 55 → no ellipsis
 
     # rstrip: when char 55 is whitespace the ellipsis must not be space-prefixed
-    ws = _run_batches(
-        [_dbatch(status="Pending", branch="review/w",
-                 flag_reason="z" * 54 + " " + "z" * 10)]
-    )[0]
+    ws = _run_batches([_dbatch(
+        status="Pending", branch="review/w",
+        flag_reason="z" * 54 + " " + "z" * 10,
+        triaged_verdict="flag",
+    )])[0]
     assert ("z" * 54 + "…") in ws.next_action
     assert " …" not in ws.next_action
 

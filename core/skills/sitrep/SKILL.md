@@ -66,7 +66,7 @@ The `RECOMMENDED NEXT` block applies a priority cascade — first match wins:
 | 1        | Any task `ready for /review-close`                                     | `/review-close <ID>`                                                 | no           |
 | 2        | Any review batch with all tasks Doc-Work'd                             | `/review-close (batch N)`                                            | no           |
 | 3        | Any task `doc-work done, unpushed`                                     | `/review-close <ID>`                                                 | no           |
-| 4a       | Pending unclaimed batches exist, ≥1 lacks `> **Flag:**` tag            | `/triage` (with sample of untagged batch numbers)                    | no           |
+| 4a       | Pending unclaimed batches exist, ≥1 lacks a `> **Triaged:**` record    | `/triage` (with sample of untriaged batch numbers; names how many carry an unstamped `Flag:` tag) | no           |
 | 4b       | Pending unclaimed batches all triaged, mix of auto + flag              | `/auto-fix` (concurrent with `/auto-judge`)                       | yes          |
 | 4c       | Pending unclaimed batches all triaged, flag-only                       | `/auto-judge`                                                        | yes          |
 | 4d       | Pending unclaimed batches all triaged, auto-only                       | `/auto-fix`                                                       | yes          |
@@ -80,7 +80,7 @@ The `/clear` nudge fires on every recommendation that spawns parallel/Opus agent
 
 ### Why `/sitrep` does not auto-invoke `/triage`
 
-When pending batches lack `Flag:` tags, `/sitrep` recommends `/triage` but does not run it. The read-only property is worth defending: `/sitrep` is meant to be safe to invoke reflexively when cold-resuming, with no risk of "did that just write something?" The extra keystroke to run `/triage` after `/sitrep` is cheap; the violated invariant is not.
+When pending batches lack a `> **Triaged:**` record, `/sitrep` recommends `/triage` but does not run it. (Routing on the `Triaged:` record rather than on `Flag:`-tag presence is what lets 4a distinguish "classified as auto" from "never read" — as `Flag:`-keyed states, those were the same state, so an all-auto queue re-recommended `/triage` on every run.) The read-only property is worth defending: `/sitrep` is meant to be safe to invoke reflexively when cold-resuming, with no risk of "did that just write something?" The extra keystroke to run `/triage` after `/sitrep` is cheap; the violated invariant is not.
 
 ## Classification states (reference)
 

@@ -340,9 +340,15 @@ def test_the_claim_task_orchestrator_gate_is_present_and_wired():
         # has been gutted, none of these are detected and this test fails here
         # rather than in the module that was gutted.
         "artifact dir shared across runs": ("d = claim_root / run_id", "d = claim_root"),
+        # Anchored on the park block's own next line — see the twin's comment in
+        # `test_claim_task_orchestrator.py`. Phase 180 added prescribed blocks below
+        # this one that resolve the main root identically, and `rindex` then aimed
+        # the plant at a block this gate does not inspect.
         "artifact dir back in the worktree": (
-            "main_root = Path(common).resolve().parent",
-            "main_root = Path(__import__('os').environ['PWD'])"),
+            'main_root = Path(common).resolve().parent\n'
+            'art = main_root / "sysop" / "runtime" / "claim" / claim_id / run_id',
+            "main_root = Path(__import__('os').environ['PWD'])\n"
+            'art = main_root / "sysop" / "runtime" / "claim" / claim_id / run_id'),
         "--resume switched off": ("if resume:", "if resume and False:"),
         "integrity verdict inverted": ('"OK" if now == pre else "VIOLATED"',
                                        '"OK" if now != pre else "VIOLATED"'),
