@@ -103,6 +103,42 @@ BATCH_HEADER_RE = re.compile(
 # Matches any batch header regardless of status (used to count total batches)
 ANY_BATCH_HEADER_RE = re.compile(r"^### (Batch \d+) — .+ `(\w[\w ]*)`")
 
+# Fence detection, duplicated verbatim from review_index.py and pinned equal
+# across all four readers by tests/test_flag_contract.py. This script is the
+# fourth structural reader of review_tasks.md and was the last to be made
+# fence-aware (Phase 181, second review round): a task quoting the tracker's
+# own shapes inside a fenced block SPLIT A REAL MERGED ROUND IN TWO at the
+# opening fence line. Both halves then reported `all_merged: True`, so both
+# were relocated — with unbalanced fences on each side and a real `- [x]` task
+# carried into the wrong archive block. This is the script the size advisory
+# in /triage, /auto-fix and /auto-judge tells the operator to run.
+_FENCE_OPEN_RE = re.compile(r"^ {0,3}(?:> ?)*(`{3,}|~{3,})")
+_FENCE_CLOSE_RE = re.compile(r"^ {0,3}(?:> ?)*(`{3,}|~{3,})[ \t]*$")
+
+
+def _fenced_mask(lines):
+    """True for every line inside a **balanced** fenced block, delimiters included.
+
+    An **unterminated** fence is deliberately ignored — its lines stay
+    structural. See review_index.py's copy for why (honouring one disables
+    structural parsing to end-of-file, which is worse than no fence rule).
+    """
+    mask = [False] * len(lines)
+    start = None
+    marker = None
+    for i, line in enumerate(lines):
+        if start is None:
+            m = _FENCE_OPEN_RE.match(line)
+            if m:
+                start, marker = i, m.group(1)
+        else:
+            m = _FENCE_CLOSE_RE.match(line)
+            if m and m.group(1)[0] == marker[0] and len(m.group(1)) >= len(marker):
+                for j in range(start, i + 1):
+                    mask[j] = True
+                start = marker = None
+    return mask
+
 # Matches task lines "- [x] **TASK-653**: ..."
 TASK_RE = re.compile(r"^- \[x\] \*\*TASK-\d+\*\*")
 
@@ -174,9 +210,20 @@ def parse_archivable_batches(lines):
     current_batch = None
     round_total_batches = 0
     i = 0
+    fenced = _fenced_mask(lines)
 
     while i < len(lines):
         line = lines[i]
+
+        # Fenced content is example text. Accumulate it into whatever batch is
+        # open, but never let it open, close or reclassify one.
+        if fenced[i]:
+            if current_batch is not None:
+                current_batch["lines"].append(line)
+            elif current_round is not None:
+                current_round["preamble"].append(line)
+            i += 1
+            continue
 
         round_match = ROUND_HEADER_RE.match(line)
         if round_match:

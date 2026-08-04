@@ -116,7 +116,7 @@ git push -u origin HEAD
 
 **Frontend diffs also need a UI verification pass** — before committing, start the dev server, load the changed feature in a browser, and check the console + network tab for errors. The `/claim-task` and `/document-work` skills automate this via Playwright when an AI agent is driving; when doing it manually, do it by hand. Hard-fail on console errors and 5xx responses. Skip cleanly if the feature is auth-gated only.
 
-**Record the test decision.** In the task body (`tasks/open/<TASK-ID>.md`), write a `## Test decision` line stating either "test X proves Y" or "no test because Z". This is the record the senior reviewer reads back against your actual diff at merge time (see Merge Process below). `validate_tasks.py` warns when an in-progress task is missing it.
+**Record the test decision.** In the task body (`tasks/open/<TASK-ID>.md`), write a `## Test decision` line stating either "test X proves Y" or "no test because Z". **Write it in your worktree's copy** — the merge-time reader looks at the branch, so a copy edited in the main checkout is committed by nothing and never reaches the PR. This is the record the senior reviewer reads back against your actual diff at merge time (see Merge Process below). `validate_tasks.py` warns when an in-progress task is missing it.
 
 ### 7. Wait for Review
 
@@ -141,7 +141,7 @@ They live in `CLAUDE.md` under `## Prevention Conventions`, organized by categor
 
 Example: when working on `<hooks dir>/*.ts`, check only the "Custom Hooks" section (AbortController cleanup, timer cleanup, stale closures, etc.).
 
-**`.claude/security_map.md`** does the same for OWASP security checks. Each section has a **Check** list (what to audit) and a **Skip** list (what doesn't apply).
+**`.claude/security_map.md`** does the same for OWASP security checks. Each section has a **Check** list (what to audit) and a **Skip** list (what doesn't apply) — both scoped to the files the section's globs match, so a section still in placeholder form confers neither.
 
 ### Project-specific extensions to convention/security/checks (Phase 24a)
 
@@ -207,11 +207,11 @@ This whole process is what `/review-close` automates; run it by hand when no AI 
 2. Cross-check changes against applicable conventions
 3. **Verify the test-decision record** — read the branch's `## Test decision` back against the diff ("plan said test X — is it here?" / "no-test-because-Z — does Z still hold?"). Halt for a human decision on a mismatch. This *verifies the record*; it does not re-judge whether the test strategy was right (that was the plan-time reviewer's job).
 4. Run a cheap pre-merge pass of the verification commands — but know what it can reach: you are still on `main`, so it verifies `main`, not the branches. Their files are not in your tree yet.
-5. Merge — `git merge --ff-only <branch>` under the default `## Merge policy: direct`. If your project's `CLAUDE.md` declares `## Merge policy: pr` (the setting for a `main` that is push-protected by a required status check or `enforce_admins`), `main` is never written directly: land the approved branches on a throwaway integration branch and open one squash PR, so GitHub becomes the sole serialized writer of `main`. See WORKFLOW.md § 6.1.
+5. Merge — `git merge --ff-only <branch>` under the default `## Merge policy: direct`. If your project's `CLAUDE.md` declares `## Merge policy: pr` (the setting for a `main` that is push-protected by a required status check or `enforce_admins`), `main` is never written directly: land the approved branches on a throwaway integration branch and open one squash PR, so GitHub becomes the sole serialized writer of `main`. See WORKFLOW.md § 6.1. **When the rebase conflicts, route it — don't reflexively abort.** Two files every branch appends to as a matter of workflow conflict deterministically when two branches file in the same cycle: `tasks/index.yml` and `review_tasks.md`. Resolve them from the merge stages (`git show :2:<path>` is the target, `:3:` the branch) and run `python3 sysop/scripts/validate_tasks.py` **before** `git rebase --continue` — never by deleting the `<<<<<<<` markers and keeping both sides, which for an indented YAML list leaves one entry holding its `id` alone and still parses. A branch whose conflict you genuinely can't resolve is *skipped*, and steps 6 and 8 both have to know that.
 5b. **Run full verification on the merged result: `pytest` + `npm run build`.** This is the gate that counts — the merged tree is the first tree that is both the work and what you are about to push. Do it here, before consolidating docs: a failure now costs nothing, and step 6 deletes the pending-docs after routing them.
-6. Consolidate `sysop/runtime/pending-docs/*.md` into shared documentation files
+6. Consolidate `sysop/runtime/pending-docs/*.md` into shared documentation files — but **first drop any whose branch did not actually merge** (`git rev-list --count "<branch>" "^HEAD"`; `0` = merged, and quote the `^` operand or zsh's `extended_glob` turns it into a filename pattern and silently returns the wrong answer). Step 5's copy happens *before* the merge is attempted, so a branch you skipped at step 5 leaves a doc here; consolidating it flips its task to `done` and archives the body with the code never merged. Delete only the docs you consolidated — never a bare "delete all remaining"
 7. Push and verify staging deployment
-8. Clean up: delete merged branches and worktrees
+8. Clean up: delete the branches step 5 **merged**, and their worktrees. A branch you skipped at step 5 keeps its branch, its lock and its doc — do not delete it, and under `pr` policy do not force-delete it either (after a squash no ancestry test can tell a merged branch from a skipped one, so the skip verdict itself is the evidence)
 
 ---
 

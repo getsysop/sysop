@@ -60,7 +60,31 @@ _META_BRANCH_RE = re.compile(r"^> \*\*Branch:\*\* `([^`]+)`")
 _META_SCOPE_RE = re.compile(r"^> \*\*Scope:\*\* (.+)")
 _META_VERIFY_RE = re.compile(r"^> \*\*Verify:\*\* (.+)")
 _META_OVERLAP_RE = re.compile(r"^> \*\*Overlap:\*\* (.+)")
-_META_FLAG_RE = re.compile(r"^> \*\*Flag:\*\* (.+)")
+# `Flag:` and `Triaged:` are the two halves of the triage record, and the
+# patterns below are duplicated verbatim in sitrep_survey.py. They are pinned
+# equal by tests/test_flag_contract.py rather than shared through an import.
+#
+# The reason is the house pattern, not availability: this module's own header
+# says its regexes "mirror the patterns used by batch_work.sh, close_batch.sh
+# and archive_review_tasks.py", i.e. this file already duplicates-and-pins
+# rather than exports. sitrep_survey.py also imports nothing from a sibling
+# today, and giving it its first one would add a new failure surface (path
+# bootstrap, this module's import-time REPO_ROOT resolution) to buy a
+# cosmetic. If you edit either pattern, edit both — the test names the sites.
+#
+# `Flag:` = human-readable reason this batch needs judgment. Its presence is
+# the pool predicate (/auto-judge takes it, /auto-fix skips it) and this phase
+# did not change that. `Triaged:` is the machine-readable verdict record:
+# which run classified the batch, what it decided, and — on a flag verdict —
+# exactly which tasks need judgment. A `Flag:` line with no `Triaged:` sibling
+# has unknown provenance and is treated as *untriaged* by /triage.
+_META_FLAG_RE = re.compile(r"^> \*\*Flag:\*\*\s*(.*)$")
+_META_TRIAGED_RE = re.compile(
+    r"^> \*\*Triaged:\*\* (\d{4}-\d{2}-\d{2}) (auto|flag)"
+    r"(?:\s+\[([^\]]*)\])?"
+    r"(?:\s+[—–-]\s*(.*?))?\s*$"
+)
+_TRIAGED_TASK_ID_RE = re.compile(r"TASK-\d+")
 _META_OWASP_RE = re.compile(r"^> \*\*OWASP:\*\* (.+)")
 # Severity emoji escapes: \U0001f534 = \ud83d\udd34 (high), \U0001f7e1 = \ud83d\udfe1 (medium),
 # \U0001f7e2 = \ud83d\udfe2 (low). Matches _SEVERITY_MAP below; keep these in sync.
@@ -134,28 +158,64 @@ def parse_review_tasks(path=None):
     current_round = None
     current_batch = None
     in_deferred_section = False
+    # Fenced content is example text, not structure. A task's remediation
+    # routinely quotes the tracker's own shapes — `## Deferred`,
+    # `### Batch N — … \`Pending\``, `> **Flag:** <reason>` — and before this
+    # was masked, a fenced `> **Flag:**` became the enclosing batch's real
+    # verdict (#337's failure mode arriving from inside the file) and a fenced
+    # `## ` heading truncated the batch.
+    fenced = _fenced_mask([ln.rstrip("\n") for ln in lines])
 
     for i, raw_line in enumerate(lines):
         line = raw_line.rstrip("\n")
         line_num = i + 1  # 1-indexed for sed/grep compatibility
 
+        if fenced[i]:
+            continue
+
+        # ── Any level-2 heading closes the open batch ──
+        # A batch ends at the next `## ` section or `### Batch` header, never
+        # at end-of-file-regardless.
+        #
+        # Before Phase 181 there were four closers — round header, next batch
+        # header, `## Statistics`, and an EOF fallback. The `## Statistics`
+        # closer is skipped whenever a `## Deferred` section is still open at
+        # that point, because the deferred branch below early-`continue`s; but
+        # a `## Round` header clears the flag, so on a tracker whose Deferred
+        # section sits *before* the Rounds (GDP's does) the closer fired and
+        # the last batch bounded correctly. **What was never bounded is any
+        # other trailing section** — above all the `## Convention fire ledger`
+        # that `/codebase-review` § 5e parks at end-of-file on purpose, which
+        # is neither a Round nor Deferred nor Statistics. That is the live
+        # shape, and it appears the first time a round records a stale verdict.
+        #
+        # The range is not cosmetic: close_batch.sh feeds it to CLOSE_AWK as
+        # `-v s -v e`, and `mode=flip` rewrites every `- [ ] **TASK-…**` inside
+        # it to `[x]`. Closing here, before the section branches, makes the
+        # rule hold regardless of section order — and matches close_batch.sh's
+        # own grep fallback (`grep -n '^##'`), so the two range paths agree
+        # whether or not python3 is present.
+        if line.startswith("## ") and current_batch is not None:
+            current_batch["line_end"] = line_num - 1
+            _finalize_batch(current_batch)
+            batches[str(current_batch["number"])] = current_batch
+            current_batch = None
+
         # ── Round header ──
         m = _ROUND_HEADER_RE.match(line)
         if m:
-            # Close previous batch
-            if current_batch is not None:
-                current_batch["line_end"] = line_num - 1
-                _finalize_batch(current_batch)
-                batches[str(current_batch["number"])] = current_batch
-                current_batch = None
-
             current_round = m.group(1)
             rounds.append(current_round)
             in_deferred_section = False
             continue
 
         # ── Deferred section ──
-        if line.strip() == "## Deferred":
+        # `startswith`, not `strip() ==`: an *indented* `## Deferred` in a
+        # task's detail lines is prose, and treating it as a section opener
+        # diverted every following task line into `deferred` while the batch
+        # stayed open — a divergence from the `startswith("## ")` closer above
+        # and from every other reader. Found by the second review round.
+        if line.startswith("## Deferred"):
             in_deferred_section = True
             continue
 
@@ -191,6 +251,10 @@ def parse_review_tasks(path=None):
                 "verify": "",
                 "overlap": "",
                 "flag": "",
+                "triaged_date": "",
+                "triaged_verdict": "",
+                "triaged_tasks": [],
+                "triaged_note": "",
                 "owasp": "",
                 "round": current_round or "",
                 "line_start": line_num,
@@ -220,6 +284,15 @@ def parse_review_tasks(path=None):
             mm = _META_FLAG_RE.match(line)
             if mm:
                 current_batch["flag"] = mm.group(1)
+                continue
+            mm = _META_TRIAGED_RE.match(line)
+            if mm:
+                current_batch["triaged_date"] = mm.group(1)
+                current_batch["triaged_verdict"] = mm.group(2)
+                current_batch["triaged_tasks"] = _TRIAGED_TASK_ID_RE.findall(
+                    mm.group(3) or ""
+                )
+                current_batch["triaged_note"] = (mm.group(4) or "").strip()
                 continue
             mm = _META_OWASP_RE.match(line)
             if mm:
@@ -274,6 +347,52 @@ def parse_review_tasks(path=None):
         "grand_total": grand_total,
         "summary": summary,
     }
+
+
+# Fence detection. The blockquote prefix is deliberate: tracker metadata lines
+# are `> **Key:**`, so an example of the metadata shape is quoted *inside a
+# blockquote*, and a fence rule that cannot see `> ```` misses the one form
+# that matters. The close pattern requires nothing but whitespace after the
+# run (CommonMark), so a nested ```` ```python ```` opener does not close the
+# block it is inside.
+_FENCE_OPEN_RE = re.compile(r"^ {0,3}(?:> ?)*(`{3,}|~{3,})")
+_FENCE_CLOSE_RE = re.compile(r"^ {0,3}(?:> ?)*(`{3,}|~{3,})[ \t]*$")
+
+
+def _fenced_mask(lines):
+    """True for every line inside a **balanced** fenced block, delimiters included.
+
+    An **unterminated** fence is deliberately ignored — its lines stay
+    structural. Honouring it is strictly worse than having no fence rule at
+    all: one stray ``` disables structural parsing to end-of-file, so the
+    enclosing batch's ``line_end`` runs to EOF and ``close_batch.sh`` flips
+    every checkbox in that range, including a trailing ``## Deferred``
+    section's. Phase 181's first fence implementation did exactly that, and
+    its second review round caught it by writing a tracker with an unbalanced
+    marker — a shape neither the author's fixtures nor the first round had.
+
+    Two passes rather than one state machine for exactly that reason: you
+    cannot know a fence is balanced until you have seen the whole file.
+
+    Duplicated verbatim in ``sitrep_survey.py`` and ``next_task.py`` and
+    pinned equal by ``tests/test_flag_contract.py`` — the same
+    duplicate-and-pin idiom this module's regex header already uses.
+    """
+    mask = [False] * len(lines)
+    start = None
+    marker = None
+    for i, line in enumerate(lines):
+        if start is None:
+            m = _FENCE_OPEN_RE.match(line)
+            if m:
+                start, marker = i, m.group(1)
+        else:
+            m = _FENCE_CLOSE_RE.match(line)
+            if m and m.group(1)[0] == marker[0] and len(m.group(1)) >= len(marker):
+                for j in range(start, i + 1):
+                    mask[j] = True
+                start = marker = None
+    return mask
 
 
 def _finalize_batch(batch):

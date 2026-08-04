@@ -77,6 +77,48 @@ _EFFORT_ORDER = {"Low": 0, "Medium": 1, "High": 2}
 # more collision risk = sorted later.
 _OVERLAP_RANK = {"none": 0, "possible": 1, "likely": 2}
 
+# Fenced-block detection. A task's remediation text routinely quotes the
+# tracker's own shapes, and outside a fence those are structure while inside
+# one they are an example.
+_FENCE_OPEN_RE = re.compile(r"^ {0,3}(?:> ?)*(`{3,}|~{3,})")
+_FENCE_CLOSE_RE = re.compile(r"^ {0,3}(?:> ?)*(`{3,}|~{3,})[ \t]*$")
+
+
+def _fenced_mask(lines):
+    """True for every line inside a **balanced** fenced block, delimiters included.
+
+    An **unterminated** fence is deliberately ignored — its lines stay
+    structural. Honouring it is strictly worse than having no fence rule at
+    all: one stray ``` disables structural parsing to end-of-file, so the
+    enclosing batch's ``line_end`` runs to EOF and ``close_batch.sh`` flips
+    every checkbox in that range, including a trailing ``## Deferred``
+    section's. Phase 181's first fence implementation did exactly that, and
+    its second review round caught it by writing a tracker with an unbalanced
+    marker — a shape neither the author's fixtures nor the first round had.
+
+    Two passes rather than one state machine for exactly that reason: you
+    cannot know a fence is balanced until you have seen the whole file.
+
+    Duplicated verbatim from ``review_index.py``; pinned equal by
+    ``tests/test_flag_contract.py``.
+    """
+    mask = [False] * len(lines)
+    start = None
+    marker = None
+    for i, line in enumerate(lines):
+        if start is None:
+            m = _FENCE_OPEN_RE.match(line)
+            if m:
+                start, marker = i, m.group(1)
+        else:
+            m = _FENCE_CLOSE_RE.match(line)
+            if m and m.group(1)[0] == marker[0] and len(m.group(1)) >= len(marker):
+                for j in range(start, i + 1):
+                    mask[j] = True
+                start = marker = None
+    return mask
+
+
 # Review batch heading: ``### Batch <N> — <Title> `<Status>` ``. Both em-dash
 # (—) and ASCII hyphen are tolerated. Status is in single backticks.
 _BATCH_HEADER_RE = re.compile(
@@ -474,8 +516,23 @@ def parse_review_batches(text: str) -> list[dict[str, Any]]:
         if current is not None:
             batches.append(current)
 
-    for raw in lines:
+    fenced = _fenced_mask(lines)
+    for idx, raw in enumerate(lines):
         line = raw.rstrip()
+        if fenced[idx]:
+            continue
+        # Any level-2 heading ends the open batch. Without this the LAST batch
+        # in the file absorbs every trailing standalone section — `## Deferred`,
+        # `## Statistics`, `## Convention fire ledger` — because only a
+        # `### Batch` header reset `current`. Deferred task lines match
+        # `_BATCH_TASK_RE`, so they were counted into the last batch's `tasks`,
+        # `open_count` and severity totals, inflating exactly the batch
+        # `/next-task` ranks. Same class as the `review_index.py` bound
+        # (Phase 181); found by sweeping for it rather than by a report.
+        if line.startswith("## "):
+            _flush()
+            current = None
+            continue
         m = _BATCH_HEADER_RE.match(line)
         if m:
             _flush()

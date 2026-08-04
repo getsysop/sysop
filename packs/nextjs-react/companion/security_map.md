@@ -6,6 +6,8 @@
 
 > **Helper names** (e.g., `getDisplayError()`, `isSafeHref()`, `getSafeRedirect()`, `isAllowedRedirectUrl()`, `MARKDOWN_ALLOWED_ELEMENTS`) are placeholders for whatever your project names these — adapt to your actual helpers.
 
+> **Scope note — a section binds only the files its globs actually match.** A glob still in placeholder form (`<api module>/`) matches nothing until you localize it, so such a section scopes no checks and authorises no exclusion on any file: never read one as coverage, and never read a `Skip:` line under a placeholder glob as a reason to stop looking — not even where a section you localized in the `.project.md` overlay covers the same subject and says the opposite. A section whose glob list mixes concrete and placeholder globs binds exactly what its concrete globs match.
+
 ---
 
 ## `<frontend>/**/__tests__/*.ts`, `<frontend>/**/__tests__/*.tsx` — Frontend Tests

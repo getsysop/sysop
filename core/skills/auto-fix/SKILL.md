@@ -5,7 +5,7 @@ argument-hint: "[concurrency] [--merge]"
 ---
 <!-- sysop:model-roles inline=reasoning -->
 
-Automatically process pending review batches that have prescriptive, mechanical fixes. Reads the `Flag:` tags previously written by `/triage` and claims + fixes only the unflagged (auto) batches via isolated agents. If any pending batch lacks a `Flag:` tag, invokes `/triage` first as a prereq.
+Automatically process pending review batches that have prescriptive, mechanical fixes. Reads the `Flag:` tags written by `/triage` (the sole writer — see `triage/SKILL.md` § Writer-side contract) and claims + fixes only the unflagged (auto) batches via isolated agents. If any pending batch lacks a `> **Triaged:**` record, invokes `/triage` first as a prereq.
 
 Two-pass workflow:
 - **Default mode (pass 1)**: processes only **non-overlapping** auto batches, in parallel. Pushes branches.
@@ -42,23 +42,53 @@ For an assess-only preview without claiming or fixing, run `/triage --dry-run` d
 
 ## Step 0.5: Triage Prerequisite
 
-Read `review_tasks.md` and check whether any batch with status **`Pending`** lacks a `> **Flag:**` tag. If any such batch exists, invoke `/triage` via the Skill tool and wait for it to complete. `/triage` will commit any uncommitted `review_tasks.md` additions from `/codebase-review` or `/security-audit`, classify each pending batch as auto or flag, and write the resulting `Flag:` tags as a single `docs:` commit. After `/triage` returns, re-read `review_tasks.md` so Step 1 sees the freshly written tags.
+Run the index pass from Step 1a and check whether any batch with status **`Pending`** lacks a `> **Triaged:**` record. If any such batch exists, invoke `/triage` via the Skill tool and wait for it to complete. `/triage` will commit any uncommitted `review_tasks.md` additions from `/codebase-review` or `/security-audit`, classify each pending batch as auto or flag, and write the resulting `Triaged:` (and `Flag:`) lines as a single `docs:` commit. After `/triage` returns, re-run the index pass so Step 1 sees the freshly written records.
 
-If every pending batch already carries a `Flag:` tag (or no pending batches exist), skip this step — the queue is already triaged.
+**Key the check on `Triaged:`, not on `Flag:`.** A `Flag:` tag with no `Triaged:` sibling records no verdict — nothing in it says who wrote it or that anything read the batch — so treating its presence as "already triaged" is how batches get skipped unread. `/triage` re-reads them.
+
+If every pending batch already carries a `Triaged:` record (or no pending batches exist), skip this step — the queue is already triaged.
 
 ## Step 1: Read Queue
 
-Read `review_tasks.md` in full (or re-read after Step 0.5). If `review_tasks.md` exceeds 125KB, stop and tell the user to run `.venv/bin/python3 sysop/scripts/archive_review_tasks.py` first.
+**Do not read `review_tasks.md` in full.** Most of it is task bodies belonging to batches this skill will not touch. Read it in two passes; see `triage/SKILL.md` § Step 1 for the same procedure stated at length.
 
-Find all batches with status **`Pending`** that do **not** have a `> **Flag:**` tag — those are the auto batches this skill processes. For each, extract:
-- Batch number and title
-- Branch name (from `> **Branch:** \`...\``)
-- Scope (from `> **Scope:** ...`)
-- Verify command (from `> **Verify:** ...`)
-- Overlap tag (from `> **Overlap:** ...`) — may be absent on older batches
-- All task lines (`- [ ] **TASK-NNN**: description emoji`)
+### 1a. Index pass
 
-**Skip** batches with a `> **Flag:**` tag (those belong to `/auto-judge`). **Skip** batches with status `In Progress`, `Merged`, `Complete`, or `Ready for Review`.
+```bash
+grep -n -E '^## |^### Batch |^> \*\*(OWASP|Scope|Branch|Verify|Overlap|Flag|Triaged):\*\*' review_tasks.md
+```
+
+Each `### Batch N — <title> \`<Status>\`` line gives number, title and status; the `> **Key:**` lines beneath it are its metadata (`Branch:`, `Scope:`, `Verify:`, `Overlap:` — `Overlap:` may be absent on older batches). A batch's **body** runs from its header line to the line *before* the next `^## ` or `^### Batch ` line, or to end-of-file when nothing follows the last batch.
+
+**The index pass is line-oriented and cannot see fenced blocks — check before you trust a boundary.** A task's remediation text routinely quotes the tracker's own shapes (`## Deferred`, `### Batch N — … \`Pending\``, `> **Flag:** <reason>`), and `grep` will report those example lines exactly like real ones. Two consequences, both silent:
+
+- A fenced heading looks like a boundary, so the batch containing it appears to end early and its remaining tasks vanish from your view.
+- A fenced `> **Flag:**` or `> **Triaged:**` looks like the enclosing batch's verdict — which is the #337 failure mode arriving from inside the file.
+
+So: when a candidate boundary or metadata line sits *inside* a batch you have already bounded, open that region with the scoped read below and look at it before acting on it — a fence is obvious on sight and invisible to `grep`.
+
+**If your boundary disagrees with what `/sitrep` or a claim script reports, do not assume either side is right.** The shipped parsers are fence-aware and you are not, so a *balanced* fenced example explains most disagreements — but not all of them, and the ones it does not explain fail in the opposite direction. An unbalanced fence marker, a column-0 `## ` heading written as prose in a task body, or a batch header whose dash is not an em dash will each make one side see structure the other does not. **Read the region. Do not resolve the disagreement by rule.**
+
+Select the auto pool from this output alone:
+
+- **Process** batches with status **`Pending`** that have **no** `> **Flag:**` line.
+- **Skip** batches with a `> **Flag:**` line — those belong to `/auto-judge`, including partially-flagged ones (a batch is claimed as a unit, so splitting one across two concurrently-running skills would put two agents on one branch; `/auto-judge` handles the mechanical remainder itself, at Step 4b).
+- **Skip** batches with status `In Progress`, `Merged`, `Complete`, or `Ready for Review`.
+- **Refuse and report** a batch whose `> **Triaged:**` line says `flag` but which carries **no** `> **Flag:**` line, and one whose record says `auto` but which *does* carry a `Flag:` line. Both are malformed records — `/triage` writes the pair together — and the first fails toward *this* skill, since the pool test above is literally "no `Flag:` line". Name the batch, do not claim it, and tell the user to re-run `/triage`. Without this the record can say a batch needs judgment while a mechanical agent claims it.
+
+### 1b. Scoped body pass
+
+For each **selected** batch only, read its body — nothing else:
+
+```bash
+sed -n '<START>,<END>p' review_tasks.md
+```
+
+`<START>` is the batch header's line number; `<END>` is one less than the next `^## ` / `^### Batch ` line number, or `$` **only when no `^## ` section follows the last batch** — on a tracker with a trailing `## Deferred` / `## Statistics` / `## Convention fire ledger`, `$` re-reads the whole tail, which is the thing this pass exists to avoid. Extract all task lines (`- [ ] **TASK-NNN**: description emoji`) and their indented detail lines.
+
+### 1c. Tracker size is advisory, never a stop
+
+If `review_tasks.md` is large (**~125KB** is the historical rule of thumb), print an advisory and **continue** — do not halt. `archive_review_tasks.py` selects what to relocate by **merge status**, not by size (`archive_review_tasks.py:100` matches only `Merged`/`Complete`; a Round moves whole only when every batch in it is merged, otherwise it relocates the merged batches individually), so it cannot shrink a tracker whose bulk is *open* work — which is exactly the state this skill exists to clear. Levers, in order: run this skill and `/auto-judge`, then `/review-close`; once batches are merged, run `.venv/bin/python3 sysop/scripts/archive_review_tasks.py`.
 
 ## Step 2: Report Plan + Confirm
 
@@ -78,6 +108,8 @@ Print a plan table covering the auto batches this skill will process. Note: the 
 Processing: <N> parallel batches (concurrency: <cap>)
 Deferred:  <M> overlapping batches (run /auto-fix --merge concurrently or after)
 Flagged:   <K> batches for /auto-judge (see review_tasks.md for Flag: reasons)
+           of those, <J> are partially flagged — only <T_J> of their <T_ALL>
+           tasks need judgment (from the Triaged: task lists)
 Estimated: <N> agent runs
 </if>
 
@@ -85,6 +117,8 @@ Estimated: <N> agent runs
 Processing: <N> overlapping batches (sequential, push only)
 Skipped:   <M> non-overlapping batches (already handled or run /auto-fix without --merge)
 Flagged:   <K> batches for /auto-judge (see review_tasks.md for Flag: reasons)
+           of those, <J> are partially flagged — only <T_J> of their <T_ALL>
+           tasks need judgment (from the Triaged: task lists)
 Estimated: <N> agent runs
 </if>
 ```
@@ -190,7 +224,9 @@ For batches from security audit rounds (identified by `> **OWASP:**` in the batc
 also read `.claude/security_map.md` in the worktree
 (`<WORKTREE_PATH>/.claude/security_map.md`). Use the security map's Check/Skip lists
 to understand which OWASP categories apply to each file — this ensures fixes align with
-the security context, not just code quality conventions.
+the security context, not just code quality conventions. Both lists are **glob-scoped**:
+a section whose header glob is still in `<…>` placeholder form matches no file, so it
+neither adds a check nor authorises a skip for anything you are fixing.
 
 ## Context Awareness
 
@@ -210,7 +246,7 @@ For each task:
 4. **Idempotency check**: If an Edit fails because `old_string` is not found, read the file and check whether `new_string` is already present. If so, the fix is already applied — skip it and continue to the next task. Do NOT treat this as an error.
 5. Continue to the next task
 
-### 1b. Sibling scan
+### 1b. Sibling scan (agent-prompt step, not this skill's Step 1b)
 
 After all tasks are fixed, scan each file you modified for **sibling violations** of the same convention(s) you just enforced. The convention you fixed is already in your context from reading the task description and convention_map — now check whether the rest of the file has the same problem at a different location.
 

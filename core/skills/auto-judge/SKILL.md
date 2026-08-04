@@ -6,7 +6,9 @@ model: opus
 ---
 <!-- sysop:model-roles frontmatter=reasoning inline=reasoning -->
 
-Automatically process pending review batches that `/triage` flagged for judgment. Claims flagged batches via isolated Opus subagents that can **FIX**, **DROP**, or **FAIL** each task after adversarial re-reading. If any pending batch lacks a `Flag:` tag, invokes `/triage` first as a prereq.
+Automatically process pending review batches that `/triage` flagged for judgment. Claims flagged batches via isolated Opus subagents that can **FIX**, **DROP**, or **FAIL** each task after adversarial re-reading. If any pending batch lacks a `> **Triaged:**` record, invokes `/triage` first as a prereq.
+
+**The `Triaged:` task list decides where the money goes.** A `flag` verdict may name the specific tasks that need judgment — `> **Triaged:** 2026-08-03 flag [TASK-1124]`. When it does, only those tasks get adversarial re-reading; the rest of the batch is mechanical and gets a prescriptive fix in the same worktree. When it does not, the whole batch is judged, as before. Without this, one judgment task in a 50-task batch put 49 mechanical ones through the expensive lane.
 
 > **Helper names** referenced in this skill (e.g., `_sanitize_log`, `useAbortableFetch`, `getDisplayError`, `redact_api_keys`, `shared_cli.py`) are placeholders — substitute the equivalent helpers from your project's `convention_map.md`. Worked examples may also reference specific batch numbers, file paths, or env-var names from the originating project; treat those as illustrations, not literal requirements.
 
@@ -44,24 +46,57 @@ Parse `$ARGUMENTS`:
 
 ## Step 0.5: Triage Prerequisite
 
-Read `review_tasks.md` and check whether any batch with status **`Pending`** lacks a `> **Flag:**` tag. If any such batch exists, invoke `/triage` via the Skill tool and wait for it to complete. `/triage` will commit any uncommitted `review_tasks.md` additions from `/codebase-review` or `/security-audit`, classify each pending batch as auto or flag, and write the resulting `Flag:` tags as a single `docs:` commit. After `/triage` returns, re-read `review_tasks.md` so Step 1 sees the freshly written tags.
+Run the index pass from Step 1a and check whether any batch with status **`Pending`** lacks a `> **Triaged:**` record. If any such batch exists, invoke `/triage` via the Skill tool and wait for it to complete. `/triage` will commit any uncommitted `review_tasks.md` additions from `/codebase-review` or `/security-audit`, classify each pending batch as auto or flag, and write the resulting `Triaged:` (and `Flag:`) lines as a single `docs:` commit. After `/triage` returns, re-run the index pass so Step 1 sees the freshly written records.
 
-If every pending batch already carries a `Flag:` tag (or no pending batches exist), skip this step — the queue is already triaged.
+**Key the check on `Triaged:`, not on `Flag:`.** A `Flag:` tag with no `Triaged:` sibling records no verdict, so treating its presence as "already triaged" routes an unread batch straight into the Opus lane on the strength of a tag nobody can attribute.
+
+If every pending batch already carries a `Triaged:` record (or no pending batches exist), skip this step — the queue is already triaged.
 
 ## Step 1: Read Queue
 
-Read `review_tasks.md` in full (or re-read after Step 0.5). If over 125KB, stop and tell the user to run `.venv/bin/python3 sysop/scripts/archive_review_tasks.py`.
+**Do not read `review_tasks.md` in full.** Read it in two passes; see `triage/SKILL.md` § Step 1 for the same procedure stated at length.
 
-Find all batches with status **`Pending`** that have a `> **Flag:**` tag. For each, extract:
+### 1a. Index pass
+
+```bash
+grep -n -E '^## |^### Batch |^> \*\*(OWASP|Scope|Branch|Verify|Overlap|Flag|Triaged):\*\*' review_tasks.md
+```
+
+Each `### Batch N — <title> \`<Status>\`` line gives number, title and status; the `> **Key:**` lines beneath it are its metadata. A batch's **body** runs from its header line to the line *before* the next `^## ` or `^### Batch ` line, or to end-of-file when nothing follows the last batch.
+
+**The index pass is line-oriented and cannot see fenced blocks — check before you trust a boundary.** A task's remediation text routinely quotes the tracker's own shapes (`## Deferred`, `### Batch N — … \`Pending\``, `> **Flag:** <reason>`), and `grep` will report those example lines exactly like real ones. Two consequences, both silent:
+
+- A fenced heading looks like a boundary, so the batch containing it appears to end early and its remaining tasks vanish from your view.
+- A fenced `> **Flag:**` or `> **Triaged:**` looks like the enclosing batch's verdict — which is the #337 failure mode arriving from inside the file.
+
+So: when a candidate boundary or metadata line sits *inside* a batch you have already bounded, open that region with the scoped read below and look at it before acting on it — a fence is obvious on sight and invisible to `grep`.
+
+**If your boundary disagrees with what `/sitrep` or a claim script reports, do not assume either side is right.** The shipped parsers are fence-aware and you are not, so a *balanced* fenced example explains most disagreements — but not all of them, and the ones it does not explain fail in the opposite direction. An unbalanced fence marker, a column-0 `## ` heading written as prose in a task body, or a batch header whose dash is not an em dash will each make one side see structure the other does not. **Read the region. Do not resolve the disagreement by rule.**
+
+Select the flag pool from this output alone — batches with status **`Pending`** that have a `> **Flag:**` line — and record for each:
 - Batch number and title
 - Branch name (`> **Branch:** \`...\``)
 - Scope (`> **Scope:** ...`)
 - Verify command (`> **Verify:** ...`)
 - Overlap tag (`> **Overlap:** ...`)
 - Flag reason (text after `> **Flag:**`)
-- All task lines (`- [ ] **TASK-NNN**: description emoji`)
+- **Judgment set** — the bracketed task IDs in `> **Triaged:** <date> flag [TASK-…, TASK-…]`, if present. **Absent brackets mean the whole batch**, which is the pre-existing behaviour and the correct degradation.
 
-**Skip** batches without a `Flag:` tag (they belong to `/auto-fix`). Skip batches with status `In Progress`, `Merged`, `Complete`, or `Ready for Review`.
+**Skip** batches without a `Flag:` line (they belong to `/auto-fix`). Skip batches with status `In Progress`, `Merged`, `Complete`, or `Ready for Review`.
+
+### 1b. Scoped body pass
+
+For each **selected** batch only, read its body — nothing else:
+
+```bash
+sed -n '<START>,<END>p' review_tasks.md
+```
+
+`<START>` is the batch header's line number; `<END>` is one less than the next `^## ` / `^### Batch ` line number, or `$` **only when no `^## ` section follows the last batch** — on a tracker with a trailing `## Deferred` / `## Statistics` / `## Convention fire ledger`, `$` re-reads the whole tail, which is the thing this pass exists to avoid. Extract all task lines (`- [ ] **TASK-NNN**: description emoji`) and their indented detail lines — **all** of them, not just the judgment set: the agent fixes the whole batch, it just does not *judge* the whole batch.
+
+### 1c. Tracker size is advisory, never a stop
+
+If `review_tasks.md` is large (**~125KB** is the historical rule of thumb), print an advisory and **continue** — do not halt. `archive_review_tasks.py` selects what to relocate by **merge status**, not by size (`archive_review_tasks.py:100` matches only `Merged`/`Complete`; a Round moves whole only when every batch in it is merged, otherwise it relocates the merged batches individually), so it cannot shrink a tracker whose bulk is *open* work. Levers, in order: run this skill and `/auto-fix`, then `/review-close`; once batches are merged, run `.venv/bin/python3 sysop/scripts/archive_review_tasks.py`.
 
 ## Step 2: Categorize Flags
 
@@ -82,11 +117,11 @@ Print a classification table:
 ```
 ## Auto-Judge Plan
 
-| Batch | Title | Tasks | Category | Overlap | Flag Reason |
-|-------|-------|-------|----------|---------|-------------|
-| 421   | Backend Auth & Middleware | 10 | verification | none | TASK-2283/2285: judgment call on benign race; design choices... |
-| 424   | Backend Payments stripe_service | 8 | design-choice | 425 | TASK-2312/2313: alerting design; TASK-2314: when to validate... |
-| 427   | Backend SQL & Data Layer cache | 9 | investigation | none | TASK-2329: requires investigation of SET LOCAL pattern |
+| Batch | Title | Tasks | Judgment | Category | Overlap | Flag Reason |
+|-------|-------|-------|----------|----------|---------|-------------|
+| 421   | Backend Auth & Middleware | 10 | 2 of 10 | verification | none | TASK-2283/2285: judgment call on benign race; design choices... |
+| 424   | Backend Payments stripe_service | 8 | 3 of 8 | design-choice | 425 | TASK-2312/2313: alerting design; TASK-2314: when to validate... |
+| 427   | Backend SQL & Data Layer cache | 9 | 9 of 9 | investigation | none | TASK-2329: requires investigation of SET LOCAL pattern |
 
 <if no --merge>
 Processing: <N> parallel batches (concurrency: <cap>)
@@ -99,7 +134,14 @@ Processing: <N> overlapping batches (sequential)
 Skipped:   <M> non-overlapping batches
 Estimated: <N> Opus agent runs
 </if>
+
+Judgment set: <J> of <T> tasks across these batches (the rest are fixed
+mechanically in the same worktree). Batches showing "<T> of <T>" carry no
+Triaged: task list — either the judgment was not attributable per task, or
+the verdict predates task-granular flags.
 ```
+
+The **Judgment** column is `<len(judgment set)> of <batch task count>`. A row reading `<T> of <T>` is the degraded case, not an error.
 
 If no eligible batches for the current mode, report and stop:
 - Without `--merge`: "No non-overlapping flagged batches. Run `/auto-judge --merge` for overlapping."
@@ -162,17 +204,29 @@ Pass this prompt, filling in all placeholders including the **category-specific 
 
 **START OF AGENT PROMPT**
 
-You are processing **Batch <N> — "<TITLE>"**. This batch was flagged as needing judgment by `/auto-fix` — the tasks are NOT purely mechanical. Your job is to use Opus judgment to FIX, DROP, or FAIL each task based on what the code actually needs.
+You are processing **Batch <N> — "<TITLE>"**. `/triage` flagged this batch as containing tasks that need judgment. Your job is to use Opus judgment to FIX, DROP, or FAIL the tasks that need it, and to apply the prescribed fix to the ones that do not.
 
 **Working directory:** `<WORKTREE_PATH>`
 **Branch:** `<BRANCH>`
 **Verify command:** `<VERIFY_COMMAND>`
-**Flag reason (from /auto-fix):** <FLAG_REASON>
+**Flag reason (from /triage):** <FLAG_REASON>
 **Category:** <CATEGORY>
 
 ## Tasks
 
-<paste ALL task lines from review_tasks.md for this batch, including full descriptions>
+### Judgment set — <J> of <T> tasks
+
+<paste the task lines whose IDs appear in the batch's `> **Triaged:**` list, including full descriptions. If the batch has no Triaged: task list, paste ALL task lines here and write "no task list on the verdict — the whole batch is the judgment set" under this heading.>
+
+These are the tasks the flag reason is about. Apply the Verdicts section below to **these** — read the code, weigh the alternatives, and FIX, DROP, or FAIL each one.
+
+### Mechanical remainder — <T - J> tasks
+
+<paste every remaining task line for this batch, including full descriptions. Omit this section entirely when the judgment set is the whole batch.>
+
+These tasks were classified as mechanical and are in this batch only because they share its scope. **Do not re-litigate them.** Apply the prescriptive fix each one names, exactly as `/auto-fix` would: re-read the cited site first if the task is tagged `[reported]` rather than `[verified]`, apply the change, move on. The FIX/DROP/FAIL verdicts still apply if a task turns out to be wrong on its face — a mechanical task whose premise is false is still a DROP — but do not spend adversarial reading on them by default.
+
+**Why the split exists:** a batch is flagged as a unit, and batches run 14–50 tasks. Judging every task in a batch because one of them needs judgment is what this section removes. If the two lists together do not account for every task line in the batch, stop and report — the split is wrong.
 
 ## Category Framing
 

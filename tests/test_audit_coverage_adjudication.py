@@ -171,9 +171,21 @@ def test_2a0_guards_partial_localization_and_routes_to_localizing():
             f"{name}: 2a-0's placeholder guard is all-or-nothing again — a "
             "partly-localized install (the normal case) emits false gaps"
         )
-        assert "never a new duplicate section" in block, (
-            f"{name}: 2a-0 no longer routes an unlocalized entry to localizing "
-            "the existing section — an agent will create a permanent duplicate"
+        # Phase 179 (upstream #280) replaced the remedy twice. The original routed
+        # to "localizing that section's glob (or its `substitutions.project.yml`
+        # token)" — unreachable for markdown. The first replacement said the
+        # overlay was "the only durable write target", which the round showed
+        # contradicts `_shared/promotion-write-target.md` § Why not overlay-only:
+        # skills read the BASE maps, so an overlay-only write is inert until the
+        # next update. The rule is dual-write, and that is what must be routed to.
+        assert "dual-write" in block and ".project.md" in block, (
+            f"{name}: 2a-0 no longer routes an unlocalized entry to the dual-write "
+            "(base + .project.md overlay) — the only remedy that both takes effect "
+            "this round and survives the next update"
+        )
+        assert "second section with a **concrete** glob" in block, (
+            f"{name}: 2a-0 lost the duplicate-section prohibition — an agent will "
+            "create a permanent double-cover over an already-covered subtree"
         )
     assert "security_map.md not localized for this project" in _SECURITY
     assert "convention_map.md not localized for this project" in _CODEBASE
@@ -221,6 +233,9 @@ def test_2a0_blocks_stay_mirrored_across_the_two_skills():
         b = re.sub(r" \((?:the shipped `security_map\.md` keys sections on root files "
                    r"this way — e\.g\. `Dockerfile`, `\.gitignore`|a section glob may name "
                    r"a root-level file directly)\)", " (ROOTEG)", b)
+        # The `.project.md` overlay sibling is parameterised the same way the map
+        # name is (Phase 179) — longer token first, or `own` would not match it.
+        b = b.replace(own.replace(".md", ".project.md"), "OWNOVERLAY")
         b = b.replace(own, "OWNMAP").replace(other, "OTHERMAP")
         b = b.replace("/codebase-review", "SIBLING").replace("/security-audit", "SIBLING")
         b = b.replace("2a-3(a)", "STALEREF").replace("2a-4(a)", "STALEREF")

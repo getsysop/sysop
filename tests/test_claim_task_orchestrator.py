@@ -556,6 +556,12 @@ CONDITIONAL_ALLOWLIST = (
     "If both are absent, skip",                                   # executor: no verification section
     "skip cleanly with an explicit note if the dev server",       # executor: UI verify
     "Skip the chain when the executor returned",                  # Step 8 auto-mode chaining
+    # Bound to its own sentence, not the bare verb phrase. An entry here exempts any
+    # match whose word falls inside the span, so a two-word entry would exempt every
+    # future "skip the auto-mode chain" anywhere in the file — which is the allowlist
+    # hole this list's own design note warns about (proximity is not identity, and
+    # neither is a short span).
+    "surface the file list the block just printed, skip the auto-mode chain",  # Step 8 STRANDED arm (Phase 180, #322)
     # WORKFLOW.md § 2.2
     "SUPERSEDED | stop | Step 7d's revise rejected",                # routing row 1 (the word itself)
     "classification write for THIS run with verdict: SUPERSEDED",   # 7d revise instruction
@@ -987,9 +993,19 @@ def orchestrator_problems(text=None) -> list[str]:
                      "inherited or skipped")
         if not re.search(r"adversarial-review\.md", s7b):
             p.append("Step 7b no longer hands the reviewer the shared adversarial-review template")
-        if re.search(r"(?i)classify (?:each|the) finding", n7b) and not negated(
-            n7b, n7b.lower().index("classify")
-        ):
+        # Two corrections, both exposed by Phase 180's reorder of the tail's fences
+        # and both pre-existing. (1) Negation is tested at EACH match's own offset;
+        # the first version tested it at `n7b.lower().index("classify")` — the first
+        # occurrence of the *word*, which is not where the regex matched. (2) The
+        # scan runs on the section's PROSE, fences removed. An instruction to
+        # classify is prose; the envelope template is not. Once the envelope fence
+        # sat directly above `Report findings only.`, its `ERROR: <… if you could
+        # not complete the review …>` line put a `not` inside the negation window
+        # and this check went blind to a planted self-classification instruction
+        # with the whole mutation table green.
+        prose7b = norm(unfenced(s7b))
+        if any(not negated(prose7b, m.start())
+               for m in re.finditer(r"(?i)classify (?:each|the) finding", prose7b)):
             p.append("Step 7b asks the reviewer to classify -- classification is the orchestrator's")
 
     # --- Step 7c: classification stays one layer up ----------------------
@@ -1378,9 +1394,14 @@ def test_guards_are_not_vacuous():
     deep = {
         "artifact dir shared across runs": ("d = claim_root / run_id", "d = claim_root"),
         "artifact dir wrapped away": ("d = claim_root / run_id", "d = (claim_root / run_id).parent"),
+        # Anchored on the park block's own next line — twin of `SKILL_MUTATIONS`'
+        # entry; see the comment there for why the bare assignment stopped binding
+        # the block this probe is about.
         "artifact dir out of the main checkout": (
-            "main_root = Path(common).resolve().parent",
-            "main_root = Path(__import__('os').environ['PWD'])"),
+            'main_root = Path(common).resolve().parent\n'
+            'art = main_root / "sysop" / "runtime" / "claim" / claim_id / run_id',
+            "main_root = Path(__import__('os').environ['PWD'])\n"
+            'art = main_root / "sysop" / "runtime" / "claim" / claim_id / run_id'),
         "classification unkeyed": ('claim_id / run_id / "classification.md"',
                                    'claim_id / "classification.md"'),
         "integrity verdict inverted": ('"OK" if now == pre else "VIOLATED"',
@@ -1428,9 +1449,19 @@ SKILL_MUTATIONS = {
     "all runs share one directory": ("d = claim_root / run_id", "d = claim_root"),
     "classification drops the run key": (
         'claim_id / run_id / "classification.md"', 'claim_id / "classification.md"'),
+    # Anchored on the park block's OWN next line, not on the bare `main_root =`
+    # assignment. Phase 180 added two more prescribed blocks that resolve the main
+    # root the same way, and the later of them sits BELOW the park block — so
+    # `_last_sub`'s rindex retargeted this mutation onto a block no check here
+    # inspects, and it survived while the park block sat untouched. Same class as
+    # Phase 170's first-occurrence retarget, one index over: `rindex` fixed the
+    # direction, not the ambiguity. Anchor on something the intended block alone
+    # contains.
     "artifact dir back in the worktree": (
-        "main_root = Path(common).resolve().parent",
-        "main_root = Path(__import__('os').environ.get('PWD', '.'))"),
+        'main_root = Path(common).resolve().parent\n'
+        'art = main_root / "sysop" / "runtime" / "claim" / claim_id / run_id',
+        "main_root = Path(__import__('os').environ.get('PWD', '.'))\n"
+        'art = main_root / "sysop" / "runtime" / "claim" / claim_id / run_id'),
     "classification written to /tmp": (
         'out = main_root / "sysop" / "runtime" / "claim" / claim_id / run_id / "classification.md"',
         'out = Path("/tmp") / "classification.md"'),
