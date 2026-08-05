@@ -20,7 +20,7 @@ Read `.claude/settings.json` and confirm `permissions.allow` contains:
 
 - `Bash(bash sysop/scripts/claim_task.sh:*)` — Step 5.2 sequential pre-claim (also invoked transitively by every spawned execution agent's local context).
 - `Bash(python3 -:*)` — Step 1's queue-read/readiness-filter heredoc and Step 5.1's yaml-round-trip status flip (both single `python3 - <<` commands; venv PyYAML is resolved by an in-heredoc `sys.path` bootstrap, not a `.venv/bin/python3` command word or an env prefix — either of which would bind to no rule; Sysop Phase 126).
-- `Bash(python3 sysop/scripts/validate_tasks.py)` / `Bash(python3 sysop/scripts/validate_tasks.py:*)` and the `.venv/bin/python3 sysop/scripts/validate_tasks.py` / `.venv/bin/python3 sysop/scripts/validate_tasks.py:*` venv variants — Step 5.3 post-claim validator (the venv form is preferred per Phase 45b; the bare form remains for non-venv consumers).
+- `Bash(python3 sysop/scripts/validate_tasks.py)` / `Bash(python3 sysop/scripts/validate_tasks.py:*)` and the `.venv/bin/python3 sysop/scripts/validate_tasks.py` / `.venv/bin/python3 sysop/scripts/validate_tasks.py:*` venv variants — Step 5.3 post-claim validator. Bare `python3` is the command word the step prescribes: the script self-resolves venv PyYAML via its own `sys.path` bootstrap (Phase 182), so one form serves every consumer. The `.venv/bin/python3` rules stay only so a hand-typed venv invocation is not denied.
 - `Bash(git add tasks/index.yml)` — Step 5.4 commits each claim.
 - `Bash(git commit -m claim:*)` — Step 5.4 commit message shape.
 - `Bash(git commit -m rollback:*)` — Step 5 rollback path on pre-claim failure.
@@ -414,7 +414,7 @@ bash sysop/scripts/claim_task.sh --lock "<TASK_ID>" "<BRANCH_NAME>"
 # and abort the batch (don't leave half-claimed). Report which task failed.
 
 # 5.3 — validate schema invariants
-.venv/bin/python3 sysop/scripts/validate_tasks.py
+python3 sysop/scripts/validate_tasks.py
 # If non-zero: report validator output verbatim; abort the batch.
 
 # 5.4 — commit the claim (Rule A: assert HEAD is still main before each loop commit —

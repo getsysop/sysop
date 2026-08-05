@@ -171,9 +171,17 @@ def test_validate_tasks_self_resolves_yaml():
     bare form only serves venv-only consumers because the script self-resolves yaml; if
     this regresses, a venv-only consumer's close aborts with a false "validator rejected"
     AFTER the status flip + `git mv` already ran (adversarial-review Finding 1).
+
+    Phase 182 widened the resolution (CWD + ancestors + git-common-dir, `.venv/` and
+    `venv/`), so the literal `BOOTSTRAP_LINE` above — still exactly right for the
+    in-heredoc copies this module's other tests guard — is no longer the shape here.
+    The invariant is unchanged and the canonical form is pinned by
+    `tests/test_venv_pyyaml_bootstrap.py`; this assertion stays as the local
+    check that the script self-resolves at all.
     """
     vt = REPO_ROOT / "core" / "companion" / "scripts" / "validate_tasks.py"
-    assert BOOTSTRAP_LINE in vt.read_text(encoding="utf-8"), (
+    body = vt.read_text(encoding="utf-8")
+    assert "sys.path.insert(0, _site)" in body and "_layout" in body, (
         "validate_tasks.py lost its venv PyYAML sys.path bootstrap — bare "
         "`python3 scripts/validate_tasks.py` would fail on venv-only consumers"
     )

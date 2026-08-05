@@ -223,14 +223,18 @@ It reads the branch and worktree from the lock, so you supply only the task ID. 
 git add tasks/index.yml && git commit -m "chore: release <TASK-ID>"
 ```
 
-The status flip goes through a PyYAML round-trip, never a hand-edit, so the queue stays validator-clean. If the `python3` on your PATH lacks PyYAML, `--release` stops **before touching anything** and prints the manual reversal to run with your project's python — the same steps by hand:
+The status flip goes through a PyYAML round-trip, never a hand-edit, so the queue stays validator-clean. It resolves an interpreter that can read your queue before it gives up — the project venv first (`.venv/bin/python3`, then `venv/bin/python3`, anchored on the **main** checkout so a run from a worktree or a subdirectory still finds it), then whatever `python3` is on PATH — so you do not need to activate anything, and a PEP-668 host where PyYAML can only live in a venv is a normal host rather than a broken one. Only when *nothing* available can `import yaml` does `--release` stop **before touching anything** and print the manual reversal — the same steps by hand:
 
 ```bash
 git worktree remove <worktree-path>        # add --force if it has uncommitted work you're discarding
 git branch -D <feature-branch>             # optional — drop the branch too
 rm sysop/runtime/locks/<TASK-ID>.lock      # release the lock
 # then flip that task's `status:` from in_progress back to open in tasks/index.yml
-.venv/bin/python3 sysop/scripts/validate_tasks.py   # confirm the queue is consistent
+python3 sysop/scripts/validate_tasks.py    # confirm the queue is consistent. Exits 2 if no
+                                           # interpreter here can import yaml — which is the
+                                           # state that printed this recipe. Fix it first:
+                                           #   python3 -m venv .venv && .venv/bin/pip install pyyaml
+                                           # then re-run this line; the script finds that venv itself.
 git commit -am "chore: release <TASK-ID>"
 ```
 

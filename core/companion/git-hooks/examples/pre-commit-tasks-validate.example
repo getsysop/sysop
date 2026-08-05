@@ -11,10 +11,13 @@
 #      Resolved via `git rev-parse --git-common-dir`, so a worktree
 #      inherits the main repo's venv automatically (worktrees have
 #      their own .git file pointing at the main .git/).
-#   2. System python3 as a fallback (only useful on fresh clones
-#      before the venv is created; the validator imports pyyaml,
-#      so this will fail loudly with ModuleNotFoundError if the
-#      system python3 doesn't have pyyaml installed).
+#   2. System python3 as a fallback. Since Sysop Phase 182 the
+#      validator resolves venv PyYAML itself (script-anchored
+#      first, then the main checkout via git-common-dir, across
+#      both .venv/ and venv/ layouts), so this arm succeeds
+#      wherever a venv exists. It fails — loudly, exit 2, naming
+#      the fix — only when no interpreter reachable from here
+#      can import yaml at all.
 #
 # Without this resolution, every developer who hadn't activated
 # .venv before `git commit` would hit:

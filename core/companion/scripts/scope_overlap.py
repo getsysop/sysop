@@ -64,6 +64,72 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+# PyYAML lives only in the project venv on PEP-668 hosts (BeanRider ISSUE-0049;
+# upstream #321). The four fatal copies of this resolution live in
+# validate_tasks.py / sitrep_survey.py / next_task.py /
+# backfill_completed_dates.py; this one is deliberately NON-fatal and imports
+# nothing, because every yaml use below is a local import whose ImportError is
+# a documented degrade path. All it does is make that path rarer — extending
+# sys.path can only add candidates, so a host that already resolves yaml is
+# unaffected, and a host that resolves nothing still degrades exactly as before.
+# It PROBES rather than assuming: a candidate is committed to sys.path only once
+# `import yaml` actually succeeds from it, and is rolled back otherwise. The
+# first draft stopped at the first venv-SHAPED directory, so one empty `.venv`
+# disabled the whole search — including the main-checkout arm, which is the
+# entire point of it — and a `.venv` shadowed a sibling `venv` that did have
+# PyYAML. Order is script-anchored FIRST (this file's ancestors, then the MAIN
+# checkout via git-common-dir, since a worktree carries the scripts but never a
+# `.venv`), and only then the CWD — CWD-first let an unrelated project's venv
+# win. Both layouts, at every root. The git probe strips git's discovery vars
+# for the reason `tests/test_git_env_hermeticity.py` exists (BR ISSUE-0048).
+# tests/test_venv_pyyaml_bootstrap.py pins this loop against the other four.
+#
+# Gated on the probe failing, not run unconditionally: prepending a venv's
+# site-packages ahead of a *working* interpreter's own would shadow more than
+# yaml, so a host that already resolves it must see no sys.path change at all.
+try:
+    import yaml as _yaml_probe  # noqa: F401
+except ImportError:
+    _roots = []
+    for _cand in Path(__file__).resolve().parents[:3]:
+        if _cand not in _roots:
+            _roots.append(_cand)
+    try:
+        _r = subprocess.run(
+            ["git", "rev-parse", "--git-common-dir"],
+            cwd=str(Path(__file__).resolve().parent),
+            capture_output=True,
+            text=True,
+            timeout=5,
+            env={_k: _v for _k, _v in os.environ.items()
+                 if _k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR",
+                               "GIT_INDEX_FILE")},
+        )
+        if _r.returncode == 0 and _r.stdout.strip():
+            _main = (Path(__file__).resolve().parent / _r.stdout.strip()).resolve().parent
+            if _main not in _roots:
+                _roots.append(_main)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    if Path.cwd() not in _roots:
+        _roots.append(Path.cwd())
+    _hit = False
+    for _root in _roots:
+        for _layout in (".venv", "venv"):
+            for _site in glob.glob(str(_root / _layout / "lib/python*/site-packages")):
+                sys.path.insert(0, _site)
+                try:
+                    import yaml
+                except ImportError:
+                    sys.path.remove(_site)
+                    continue
+                _hit = True
+                break
+            if _hit:
+                break
+        if _hit:
+            break
+
 
 # ---------------------------------------------------------------------------
 # Constants & module-scope regex (precompile at module load, per convention).
