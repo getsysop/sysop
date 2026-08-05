@@ -231,7 +231,16 @@ def test_a_gate_rehomed_under_an_unrelated_step_does_not_count():
     version passed. Announcement and command must co-occur in one step."""
     text = _runbook()
     steps = numbered_steps(text)
-    suite_step = next(s for s in steps if "pytest" in s[2])
+    # Select the SUITE step by the same predicate `missing_gates` uses, not by
+    # "the first step whose fences mention pytest". Phase 185 added a pytest
+    # invocation to the pass-list step (Pass 5 runs in the source repo), which
+    # made the old selector pick step 3 and broke this control — a regression the
+    # change introduced into a pre-existing guard, caught by running the commands
+    # the change prescribes rather than by the edit itself.
+    suite_step = next(s for s in steps
+                      if "pytest" in s[2]
+                      and re.search(r"\b(suite|tests?)\b", s[1], re.I)
+                      and re.search(r"run|execut|verify|check|green", s[1], re.I))
     fence_line = next(ln for ln in _live_lines(suite_step[2]) if "pytest" in ln)
     # Delete the announcing step's number+title, re-home its command under a later step.
     gutted = re.sub(rf"(?m)^{suite_step[0]}\. \*\*{re.escape(suite_step[1])}\*\*",
@@ -339,3 +348,259 @@ def test_an_ordinary_rewording_stays_green():
     )
     assert reworded != text, "no rewording applied; this control is testing nothing"
     assert missing_gates(reworded) == [], missing_gates(reworded)
+
+
+# --- Phase 185: the runbook's pass list vs. the passes the gates actually implement ----
+#
+# The hole this closes, found by running the runbook rather than reading it. Step 3 defers
+# to "the script" as the source of truth for the pass list — but it points at
+# `make_public_mirror.sh`, which never prints Pass 4, and the runbook never named
+# `cut_public_release.sh` at all, which is Pass 4's only implementation. Pass 5 (Phase 184)
+# was never added here either. So two hard gates were reachable only by someone who already
+# knew they existed. `missing_gates()` above could not see it: it checks that the suite and
+# history *steps* exist, and asserts nothing about which passes step 3 enumerates.
+#
+# The population is DERIVED from the implementing files, never hardcoded here — the
+# author-side rule that "an index of the source of truth is not the source of truth". A
+# pass added to a script and not to the runbook reddens this on the next run.
+
+PASS_SOURCES = (
+    REPO_ROOT / "tools" / "cut_public_release.sh",
+    REPO_ROOT / "tools" / "make_public_mirror.sh",
+    REPO_ROOT / "tests" / "test_mirror_leak_gate.py",
+)
+# "Pass 1a", "Passes 2 + 2b", "Pass 5 (MUST be empty)" — the identifier, not the prose.
+_PASS_TOKEN = re.compile(r"\bPass(?:es)?\s+(\d+[a-z]?)(?:\s*\+\s*(\d+[a-z]?))?", re.I)
+
+
+def implemented_passes() -> set[str]:
+    found: set[str] = set()
+    for path in PASS_SOURCES:
+        if not path.is_file():
+            continue
+        for m in _PASS_TOKEN.finditer(path.read_text(encoding="utf-8")):
+            found.update(g.lower() for g in m.groups() if g)
+    return found
+
+
+def _passes_named_in(text: str) -> set[str]:
+    """Passes named in the step that tells the operator to RUN them — not anywhere
+    in the document.
+
+    The author-side battery for this guard found the whole-file version satisfied by
+    an incidental mention: deleting Pass 5 from the operator's list left the guard
+    green because a later sentence discussing Pass 5's history still contained the
+    string. That is the same announcement-and-command-must-co-occur lesson this
+    module already learned once, in the other direction. Scoped to the verify-grep
+    step, discovered by property rather than by number so inserting a step ahead of
+    it stays ordinary work.
+    """
+    found: set[str] = set()
+    for body in _step_bodies_announcing_passes(text):
+        for item in _list_items(_live_text(body)):
+            # ONLY the pass this item LEADS with counts. Three rounds of the author's
+            # and the reviewer's batteries walked through the weaker forms:
+            #   - whole-file scope: a sentence *about* Pass 5 elsewhere satisfied it;
+            #   - step scope, any mention: the same bullet's own trailing prose did;
+            #   - step scope, must-lead-but-harvest-all: deleting a pass's bullet and
+            #     folding its name into a SIBLING bullet satisfied it — the cheapest
+            #     way to lose a pass from an operator's list, and the one the first
+            #     version's docstring explicitly conceded.
+            # One pass per bullet is therefore the contract, and the runbook is
+            # written that way (Pass 2 and Pass 2b have separate items).
+            m = _PASS_TOKEN.match(item)
+            if m:
+                found.update(g.lower() for g in m.groups() if g)
+    return found
+
+
+# Bullet markers people actually use, plus ordered items. Keyed on a property
+# rather than a literal: the reviewer's over-strictness probes reddened this guard
+# on `+`, `•`, en-dash, a numbered sub-list and a backticked pass name — every one
+# an ordinary re-rendering of the same list, and over-strictness is the direction
+# that gets a correct guard deleted instead of fixed.
+_LIST_ITEM = re.compile(r"(?m)^[ \t]*(?:[-*+•–—]|\d+[.)])[ \t]+(.*)$")
+_LEAD_NOISE = "*_`~ \t"
+
+
+def _list_items(text: str) -> list[str]:
+    return [m.group(1).lstrip(_LEAD_NOISE) for m in _LIST_ITEM.finditer(text)]
+
+
+def _live_text(body: str) -> str:
+    """Fenced blocks and HTML comments removed.
+
+    This module already learned once that "a commented-out command is not a
+    command" (`_live_lines`). The reviewer showed that lesson had not been carried
+    across: wrapping a pass's bullet in `<!-- -->` or in a ```text fence left the
+    guard green while the operator's list no longer contained it.
+    """
+    body = re.sub(r"```.*?```", "", body, flags=re.S)
+    body = re.sub(r"<!--.*?-->", "", body, flags=re.S)
+    return body
+
+
+def _step_bodies_announcing_passes(text: str) -> list[str]:
+    """Full prose bodies of the numbered step(s) that announce the leak passes.
+
+    `numbered_steps()` returns *fenced command text* as its third element, which is
+    the right population for a command gate and the wrong one here — the pass list
+    is prose bullets, so scoping to fences silently yields the empty set and the
+    guard passes while reading nothing. Found by running the battery, not by
+    reading the helper.
+    """
+    steps = _steps_section(text)
+    marks = list(re.finditer(r"(?m)^(\d+)\. (.*)$", steps))
+    bodies = []
+    for i, m in enumerate(marks):
+        end = marks[i + 1].start() if i + 1 < len(marks) else len(steps)
+        lead = re.match(r"\*\*(.+?)\*\*", m.group(2))
+        title = lead.group(1) if lead else m.group(2)
+        if re.search(r"verify-grep|leak pass|\bpasses\b", title, re.I):
+            bodies.append(steps[m.start() : end])
+    return bodies
+
+
+def test_the_runbook_names_every_pass_the_gates_implement():
+    """A pass an operator is never told to run is a pass that does not run."""
+    if not _in_source_repo():
+        pytest.skip("sterilized mirror; the maintainer-side surface is correctly absent")
+    text = _runbook()
+    implemented = implemented_passes()
+    named = _passes_named_in(text)
+    # Diagnose an empty population separately. The reviewer retitled the announcing
+    # step and got a TRUE failure with a FALSE diagnosis — it listed every pass as
+    # missing while all eight bullets were still there, which sends the next reader
+    # to the wrong file.
+    assert named or not _step_bodies_announcing_passes(text), (
+        "no numbered step announces the leak passes any more — the step that "
+        "enumerated them has been retitled or removed, so this guard is reading "
+        "nothing. The bullets may well still be there; the ANNOUNCEMENT is what is "
+        "missing, and an operator scanning step titles will not find them."
+    )
+    missing = sorted(implemented - named)
+    assert not missing, (
+        f"the runbook does not name pass(es) {missing}, which the gate scripts implement — "
+        "step 3's deferral to 'the script' does not save it, because the script it points "
+        "at is not the one that implements them (Pass 4 and the rename-residue diff live "
+        "only in cut_public_release.sh, Pass 5 only in tests/test_mirror_leak_gate.py). "
+        "Each pass needs its own list item, led by its identifier."
+    )
+
+
+def test_the_runbook_names_the_script_that_implements_the_hard_gates():
+    """Round-proofing the fix above: naming 'Pass 4' while still pointing the operator at a
+    script that cannot run it is the paraphrase that would satisfy the check and change
+    nothing."""
+    if not _in_source_repo():
+        pytest.skip("sterilized mirror; the maintainer-side surface is correctly absent")
+    # Scoped to the step that announces the passes, not the whole file. The
+    # reviewer stripped both operative mentions from step 3 and added a `## Notes`
+    # line saying the script was RETIRED — whole-file `in` was satisfied, and the
+    # operator was now told the opposite of the instruction. That is the same
+    # whole-file scoping the sibling check had just been fixed for, left in place
+    # one test down.
+    bodies = "\n".join(_step_bodies_announcing_passes(_runbook()))
+    assert "cut_public_release.sh" in _live_text(bodies), (
+        "the step that announces the leak passes does not name cut_public_release.sh — "
+        "the only implementation of Pass 4 and of the rename-residue diff; a cut driven "
+        "from make_public_mirror.sh alone runs neither. Naming it elsewhere in the file "
+        "does not reach the operator running the passes."
+    )
+
+
+def test_the_pass_population_is_derived_and_non_vacuous():
+    """Vacuity control. If the extractor stops matching, `implemented - named` is empty and
+    the guard above passes while checking nothing — the failure mode it exists to prevent."""
+    if not _in_source_repo():
+        pytest.skip("sterilized mirror; the maintainer-side surface is correctly absent")
+    implemented = implemented_passes()
+    assert {"1a", "1b", "1c", "2", "2b", "3", "4", "5"} <= implemented, (
+        f"the pass extractor found only {sorted(implemented)} — it has stopped seeing the "
+        "identifiers in the implementing files, so the runbook check is inert"
+    )
+
+
+def test_dropping_a_pass_from_the_runbook_is_detected():
+    """Declared reversion test for the guard above, and it is aimed at the pass that was
+    actually missing (4), not at one the file has always carried."""
+    if not _in_source_repo():
+        pytest.skip("sterilized mirror; the maintainer-side surface is correctly absent")
+    for target in ("4", "5"):
+        gutted = re.sub(rf"\bPass(es)?\s+{target}\b", "the excluded-class check",
+                        _runbook(), flags=re.I)
+        assert target not in _passes_named_in(gutted), (
+            f"this control did not remove Pass {target} from the runbook text — it is "
+            "passing on an unmutated file"
+        )
+        assert target in sorted(implemented_passes() - _passes_named_in(gutted)), (
+            f"dropping Pass {target} from the runbook was not detected"
+        )
+
+
+def test_rewording_around_a_pass_name_stays_green():
+    """Over-strictness control — the direction that gets guards deleted. Retitling a pass,
+    changing its description, or reordering the list is ordinary editing."""
+    if not _in_source_repo():
+        pytest.skip("sterilized mirror; the maintainer-side surface is correctly absent")
+    text = _runbook()
+    reworded = (text
+                .replace("Pass 4 (excluded *classes* still tracked",
+                         "Pass 4 — excluded classes that are still tracked")
+                .replace("Pass 1a (internal identifiers, token-scoped allowlist)",
+                         "Pass 1a, the internal-identifier sweep,"))
+    assert reworded != text, (
+        "neither rewording anchor matched, so this control mutated nothing and is passing "
+        "on an unmutated file — the no-op-control shape Phase 178's round caught"
+    )
+    assert not sorted(implemented_passes() - _passes_named_in(reworded)), (
+        "rewording a pass description reddened the guard; it must key on the identifier"
+    )
+
+
+def test_a_pass_mentioned_but_not_listed_does_not_count():
+    """Closes the two survivors the author-side battery left, and both are
+    *semantic* controls rather than guards-on-guards: they assert what the
+    population means, so reverting either scoping decision reddens here.
+
+    - **In-prose, inside the right step.** Deleting Pass 5's bullet while its
+      history is still discussed a sentence later kept the first version green.
+      A pass an operator is *told about* is not a pass an operator is told to
+      *run*.
+    - **Bulleted, but in the wrong step.** The population is the verify-grep
+      step, not the document; a bullet elsewhere must not satisfy it.
+    """
+    if not _in_source_repo():
+        pytest.skip("sterilized mirror; the maintainer-side surface is correctly absent")
+    text = _runbook()
+    bullet = next((ln for ln in text.splitlines()
+                   if re.match(r"^[ \t]*[-*][ \t]+Pass(?:es)?\s+5\b", ln)), None)
+    assert bullet, "no Pass 5 bullet to work from — this control needs re-pointing"
+
+    in_prose = text.replace(bullet, "   Pass 5 is one of the checks this page describes.")
+    assert in_prose != text
+    assert "5" in implemented_passes() - _passes_named_in(in_prose), (
+        "a pass demoted from the operator's list to a passing prose mention still "
+        "counted as listed — the check is matching the string, not the instruction"
+    )
+
+    # Bulleted in the right step, but the bullet is ABOUT something else. This is the
+    # shape the original defect actually had — the lead was rewritten to a prose name
+    # while the pass's own history stayed in the same item — and it is the only
+    # mutation that distinguishes "must be a list item" from "must LEAD a list item".
+    not_leading = text.replace(
+        bullet, "   - The stripped-path check → MUST be empty. Phase 184 called it Pass 5.")
+    assert not_leading != text
+    assert "5" in implemented_passes() - _passes_named_in(not_leading), (
+        "a bullet that merely mentions a pass while announcing something else counted "
+        "as listing it — the lead requirement has been dropped"
+    )
+
+    elsewhere = text.replace(bullet, "")
+    assert "9. **Enable Discussions**" in elsewhere, "re-home anchor moved"
+    elsewhere = elsewhere.replace(
+        "9. **Enable Discussions**", "9. **Enable Discussions**\n   - Pass 5 — see above.\n", 1)
+    assert "5" in implemented_passes() - _passes_named_in(elsewhere), (
+        "a pass bulleted under an unrelated step satisfied the check — the "
+        "population has been widened past the step that announces the passes"
+    )

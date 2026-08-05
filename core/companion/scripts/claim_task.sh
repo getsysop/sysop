@@ -83,8 +83,13 @@ done
 #
 #   * It PROBES rather than assuming. A blind `PATH=.venv/bin:$PATH` prepend
 #     would shadow a capable system interpreter with an incapable venv one —
-#     trading the reported failure for its mirror image. self_check.sh:61-66
-#     documents that hazard in the other direction.
+#     trading the reported failure for its mirror image. self_check.sh:75-83
+#     documents the same hazard, named from the probe side. (Phase 182 wrote
+#     this citation against :61-66 and then, in the same commit, hoisted
+#     MAIN_ROOT above probe 3 — moving the text it points at. It also said
+#     "the other direction", which that phase's own round refuted. Both
+#     corrected in Phase 184; the range is pinned by
+#     tests/test_intra_repo_citations.py so the next hoist reddens.)
 #   * It PREPENDS the winner's bin dir instead of binding a `$PY` variable, so
 #     every call site keeps a literal `python3` command word. (Script-internal
 #     commands are permission-exempt — the matcher only sees `bash …

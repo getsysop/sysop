@@ -9,10 +9,11 @@ crashed contributed nothing and changed nothing in the summary, so
 which of three terminal states it reached and renders a summary that
 distinguishes them.
 
-See ``tools/PRESCAN_ACCOUNTING_SPEC.md`` for the design and provenance
-(cross-harness comparison run 2026-07-19/20: five independent silent-skip
-paths, 5 of 25 checks executing while the summary said ``890 findings from
-25 checks``).
+The design and provenance are recorded in ``tools/PRESCAN_ACCOUNTING_SPEC.md``,
+which is maintainer-side and not in the public tree; the finding that produced
+this module is stated here so nothing depends on reaching it (cross-harness
+comparison run 2026-07-19/20: five independent silent-skip paths, 5 of 25
+checks executing while the summary said ``890 findings from 25 checks``).
 
 Terminal states (§1 of the spec):
 

@@ -17,7 +17,7 @@ at. Two layers:
      than silently leaking into (or dropping out of) the "smallest install".
 
   2. End-to-end — a real `--mode loop` install must ship *exactly* the loop
-     bundle and nothing lifecycle, write the 19-rule hookless settings.json,
+     bundle and nothing lifecycle, write the 21-rule hookless settings.json,
      leave a clean root footprint, record `mode: loop`, and satisfy the full
      mode/update state machine (preserve on --update, additive loop→full
      upgrade, rejected full→loop downgrade).
@@ -71,7 +71,7 @@ EXCLUDED_SCRIPTS = {
     "pr_dependabot.py", "scope_overlap.py", "sitrep_survey.py",
     "validate_tasks.py",
 }
-LOOP_ALLOW_COUNT = 19
+LOOP_ALLOW_COUNT = 21
 # The exact loop-mode allow-list (LOOP_ONLY_SPEC § "Leg 1 findings"). Asserting
 # the *set*, not just the count, is what stops a wrong-but-19 permission set
 # (e.g. a dropped `gh release create` swapped in for a loop rule) shipping green.
@@ -85,6 +85,11 @@ EXPECTED_LOOP_ALLOW = {
     "Bash(bash sysop/scripts/run_checks.sh)",
     "Bash(bash sysop/scripts/run_checks.sh:*)",
     "Bash(bash sysop/scripts/install_hooks.sh)",
+    # Phase 184: self_check.sh ships in BOTH modes and the installer's own
+    # post-install footer prescribes it, so a loop-mode consumer met a
+    # permission prompt on the first thing the install told them to run.
+    "Bash(bash sysop/scripts/self_check.sh)",
+    "Bash(bash sysop/scripts/self_check.sh:*)",
     "Bash(bash sysop/scripts/sysop-update.sh)",
     "Bash(bash sysop/scripts/sysop-update.sh:*)",
     "Bash(python sysop/scripts/archive_review_tasks.py:*)",

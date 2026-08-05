@@ -647,9 +647,9 @@ def main():
     # only) excludes it, so `build_archive_block` renders the round as
     # "N/N tasks completed" and `build_grand_total_row` marks it `Complete`
     # over a block visibly containing an open box. That is this phase's own
-    # thesis one layer up, and it is not fixed here (see REVIEW_CHECKLIST.md
-    # § Low) — which is exactly why the warning has to fire before the prompt
-    # rather than trusting the archive to represent the state faithfully.
+    # thesis one layer up, and it is deliberately not fixed here — which is
+    # exactly why the warning has to fire before the prompt rather than
+    # trusting the archive to represent the state faithfully.
     if unfinished:
         # State only what is observable. An unflipped box in a merged batch is
         # USUALLY a FAIL verdict, but not necessarily — `find_batch_range`'s

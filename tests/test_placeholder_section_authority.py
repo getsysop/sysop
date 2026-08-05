@@ -560,3 +560,36 @@ def test_public_docs_do_not_readvertise_the_retired_paths():
         "docs/packs.md again prescribes overlay-only localization in the section "
         "headed 'where localization lands' — the inert remedy"
     )
+
+
+# --- Phase 185: the two halves of disposition (c) must not contradict each other ----
+
+def test_disposition_c_is_never_called_not_a_gap():
+    """Phase 179 established that an unlocalized placeholder section is a *named
+    gap, not coverage*, and wrote that at the invariant's (c) clause. It left the
+    paragraph six lines above still saying the opposite — ``a third disposition,
+    not a gap`` — in BOTH review skills, where it survived Phase 179's two rounds
+    and Phase 185's monograph correction, which tracked the (c) clause and never
+    looked up.
+
+    An agent reading top to bottom meets the negation first. That is the same
+    read-order defect Phase 180 is about, inside the rule Phase 179 shipped.
+    """
+    import re
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+    for rel in ("core/skills/codebase-review/SKILL.md",
+                "core/skills/security-audit/SKILL.md"):
+        path = root / rel
+        if not path.is_file():          # loop-mode installs ship both; be explicit
+            continue
+        text = path.read_text(encoding="utf-8")
+        assert not re.search(r"third disposition,\s*not a gap", text), (
+            f"{rel} calls the unlocalized disposition 'not a gap', contradicting "
+            "its own (c) clause ('a named gap, not coverage') a few lines below. "
+            "An agent reading in order acts on the first one."
+        )
+        assert "a named gap, not coverage" in text, (
+            f"{rel} has lost the Phase-179 wording that (c) is a named gap rather "
+            "than coverage — the clause a placeholder section must not discharge"
+        )

@@ -50,7 +50,7 @@ If your project still has a single-file `product_roadmap.md`:
 1. Scaffold the directory tree: `mkdir -p tasks/open tasks/deferred tasks/archive`.
 2. Hand-author `tasks/index.yml` — every phase heading becomes a `phases:` entry; every task becomes a `tasks:` entry.
 3. For each open/deferred task, create the per-task body at `tasks/{open,deferred}/<TASK-ID>.md`. The first heading must be `# <TASK-ID>`.
-4. Run `sysop/scripts/backfill_completed_dates.py --source-file product_roadmap.md --id-pattern '<your-ID-regex>'` to reconstruct `completed_date` for already-completed (`[x]`) items via git history. Inspect the output for plausibility before accepting.
+4. Run `python3 sysop/scripts/backfill_completed_dates.py --source-file product_roadmap.md --id-pattern '<your-ID-regex>'` to reconstruct `completed_date` for already-completed (`[x]`) items via git history. Inspect the output for plausibility before accepting.
 5. `python3 sysop/scripts/validate_tasks.py` — must exit 0.
 6. Delete `product_roadmap.md` (or move it to an archive location). Add a `DEPRECATED.md` pointer if other tooling still references the old path.
 

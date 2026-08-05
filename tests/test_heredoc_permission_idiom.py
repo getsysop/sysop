@@ -172,8 +172,9 @@ def test_validate_tasks_self_resolves_yaml():
     this regresses, a venv-only consumer's close aborts with a false "validator rejected"
     AFTER the status flip + `git mv` already ran (adversarial-review Finding 1).
 
-    Phase 182 widened the resolution (CWD + ancestors + git-common-dir, `.venv/` and
-    `venv/`), so the literal `BOOTSTRAP_LINE` above — still exactly right for the
+    Phase 182 widened the resolution (script-anchored first — the file's ancestors,
+    then the main checkout via git-common-dir — and only then the CWD, across both
+    `.venv/` and `venv/`), so the literal `BOOTSTRAP_LINE` above — still exactly right for the
     in-heredoc copies this module's other tests guard — is no longer the shape here.
     The invariant is unchanged and the canonical form is pinned by
     `tests/test_venv_pyyaml_bootstrap.py`; this assertion stays as the local

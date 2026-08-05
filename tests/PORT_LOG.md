@@ -4,6 +4,12 @@ Per-test classification of every gdp test ported into Sysop during
 Phase 47. Mandated by spec § 3 step 14 (adversarial finding #8 — no
 hand-waving "expect 5–10 tests to fail").
 
+> **This is a maintainer-side record and names files the public tree does not
+> contain** — the `auto_claim_miner*.py` research scripts and their test module
+> are maintainer-side and **not in the public tree**, and neither is anything
+> under `tools/`. Rows naming them describe work that was done, not files to
+> open. (Phase 184.)
+
 Classification scheme:
 - **(a) script regression in Sysop** — passes in gdp, fails in Sysop because the Sysop script port introduced a bug. Fix the script; do not modify the test.
 - **(b) intentional Sysop divergence** — fails because Phase 45a (or later) deliberately changed behavior. Update the test; document inline.

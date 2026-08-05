@@ -93,6 +93,31 @@ WRITE_CAPABLE_SPELLINGS = ("git branch",)
 # installed consumer (install_permissions set-unions), so pruning buys nothing
 # for existing installs — the bar for keeping one is only that it is reachable.
 SEEDED_WITHOUT_SKILL_MENTION = {
+    # ---- Phase 184: prescribed by docs and by the installer, not by a skill
+    # step. `test_prescribed_command_coverage.py` is the guard that now
+    # requires them; each is reachable from shipped instructions.
+    "Bash(bash sysop/scripts/self_check.sh)":
+        "install.sh's post-install footer prints this in BOTH modes and "
+        "docs/getting-started.md puts it in a fence; WORKFLOW.md § 8.4 lists "
+        "it as the one-command health check. No skill step invokes it.",
+    "Bash(bash sysop/scripts/self_check.sh:*)":
+        "Same self_check.sh script, with flags (Phase 184). The installer "
+        "prints the absolute-path spelling too, which no relative rule can "
+        "match — a stated limit.",
+    "Bash(bash sysop/scripts/cleanup_worktrees.sh)":
+        "WORKFLOW.md § 4 prescribes it as an operator step and /sitrep names "
+        "it as a recommended actuator; /claim-task and /auto-build discuss "
+        "its --force semantics but neither runs it.",
+    "Bash(bash sysop/scripts/cleanup_worktrees.sh:*)":
+        "Same cleanup_worktrees.sh script with --clean / --force (Phase "
+        "184), which is the form WORKFLOW.md § 4 actually shows.",
+    "Bash(python3 sysop/scripts/backfill_completed_dates.py)":
+        "No skill prescribes it; core/companion/tasks/README.md carries the "
+        "one recipe that runs it, and WORKFLOW.md § 8.2a used to claim an "
+        "allow-rule existed for it when none did (Phase 184).",
+    "Bash(python3 sysop/scripts/backfill_completed_dates.py:*)":
+        "Same backfill_completed_dates.py script with --path (Phase 184), "
+        "the form the roadmap-migration recipe in tasks/README.md uses.",
     "Bash(bash sysop/scripts/install_hooks.sh)":
         "Human-invoked only since Phase 150 removed the worktree auto-arm; "
         "WORKFLOW.md § 8.2a records it as direct-user-invocation-only; § 8.4 "

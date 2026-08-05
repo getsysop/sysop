@@ -1,7 +1,7 @@
 # Does the workflow actually get quieter? — gdp review-history analysis
 
 **Date:** 2026-06-09 (revised same day after reviewer critique); refreshed **2026-07-11** to the July snapshot; **2026-07-15** the covered-class falsifier was run (Phase 112) — see § Revision notes.
-**Filed as:** colleague-review item 4 (`REVIEW_CHECKLIST.md`, Medium)
+**Filed as:** colleague-review item 4 (Medium, in the maintainer-side `REVIEW_CHECKLIST.md` — not in the public tree)
 **Source:** `~/Projects/gdp-query-system` — `review_tasks.md` + `review_tasks_archive.md` (71 rounds, 3,298 findings, 2026-02-23 → 2026-07-10) + `CLAUDE.md` git history (78 conventions, all dated).
 **Reproduce:** `python3 mine_gdp_reviews.py` (read-only against the gdp clone) → `gdp_review_metrics.json`.
 
@@ -116,8 +116,8 @@ the plateau); every one dated by first appearance in git history
 (2026-02 → 2026-05-14).
 Stale figures (1,400+ findings / 67 conventions) updated in README.md,
 CLAUDE.md, WORKFLOW.md, and the monograph; the two "rounds 1–67" references in
-CLAUDE.md § Provenance and HANDOVER.md correctly describe the 2026-04-30
-extraction event and were left as-is.
+CLAUDE.md § Provenance and the maintainer-side HANDOVER.md (not in the public
+tree) correctly describe the 2026-04-30 extraction event and were left as-is.
 
 ## Revision notes (2026-06-09, second pass)
 
