@@ -80,7 +80,14 @@ def _py3_bin(tmp_path):
 
 def _no_yaml_py3_bin(tmp_path):
     """A bin dir whose `python3` always fails — forces the pre-flight degradation
-    (the `python3 -c "import yaml"` probe returns non-zero)."""
+    (the `python3 -c "import yaml"` probe returns non-zero).
+
+    Note what this models after Phase 182: the repos built here carry no venv,
+    so this is a host where *nothing* can import yaml — still the fail-closed
+    case. A venv-only host is no longer, and is covered in
+    tests/test_claim_task_venv_python.py with a faithful yaml-less interpreter
+    (this shim cannot distinguish a gate that probes from one that merely runs).
+    """
     b = tmp_path / "pybad"
     b.mkdir(exist_ok=True)
     shim = b / "python3"
@@ -225,10 +232,16 @@ class TestRelease:
         assert (repo / "sysop/runtime/locks" / "FEAT-X.lock").is_file()
         assert "status: in_progress" in (repo / "tasks" / "index.yml").read_text()
 
-    def test_no_pyyaml_degrades_without_mutating(self, tmp_path):
-        # index.yml present but python3 can't import yaml → print the manual
-        # reversal and touch nothing (removing the lock alone would desync).
+    def test_no_pyyaml_anywhere_degrades_without_mutating(self, tmp_path):
+        # index.yml present, PATH python3 can't import yaml, AND there is no
+        # project venv to fall back to → print the manual reversal and touch
+        # nothing (removing the lock alone would desync).
+        #
+        # Phase 182 narrowed this contract rather than retiring it: fail-closed
+        # is still right when NO interpreter has PyYAML. What stopped counting
+        # as that case is a venv-only host, which the sibling below covers.
         repo = self._setup_claimed(tmp_path)
+        assert not (repo / ".venv").exists(), "fixture invalid: repo has a venv"
         wt = tmp_path / "wt-feat-x"
         bad = _no_yaml_py3_bin(tmp_path)
         r = _run(repo, "--release", "FEAT-X", env=_path_env(bad))
@@ -237,6 +250,23 @@ class TestRelease:
         assert wt.is_dir()
         assert (repo / "sysop/runtime/locks" / "FEAT-X.lock").is_file()
         assert "status: in_progress" in (repo / "tasks" / "index.yml").read_text()
+
+    def test_venv_pyyaml_is_found_so_the_release_completes(self, tmp_path):
+        """The sibling: same yaml-less PATH, but the project venv can. Phase 165
+        documented "activate the venv and re-run" as the remedy here; upstream
+        #321 is the demand event that overturned it."""
+        repo = self._setup_claimed(tmp_path)
+        venv_bin = repo / ".venv" / "bin"
+        venv_bin.mkdir(parents=True)
+        shim = venv_bin / "python3"
+        shim.write_text(f'#!/bin/sh\nexec "{sys.executable}" "$@"\n')
+        shim.chmod(0o755)
+        bad = _no_yaml_py3_bin(tmp_path)
+        r = _run(repo, "--release", "FEAT-X", env=_path_env(bad))
+        assert r.returncode == 0, r.stderr + r.stdout
+        assert not (tmp_path / "wt-feat-x").exists(), "worktree not removed"
+        assert not (repo / "sysop/runtime/locks" / "FEAT-X.lock").exists()
+        assert "status: open" in (repo / "tasks" / "index.yml").read_text()
 
     def test_no_index_still_releases_worktree_and_lock(self, tmp_path):
         # A lock/branch-only claim, or a consumer with no queue: no flip to do,
@@ -582,11 +612,29 @@ class TestEntryState:
         r = _es(repo, "FEAT-0001", tmp_path)
         assert r.returncode == 2, (r.returncode, r.stdout, r.stderr)
 
-    def test_missing_pyyaml_exits_3(self, tmp_path):
+    def test_missing_pyyaml_anywhere_exits_3(self, tmp_path):
+        """Fail-closed when NO interpreter has PyYAML — narrowed, not retired,
+        by Phase 182: the repo built here carries no venv, so this is still that
+        case. The venv-only host is the sibling below."""
         repo = _es_repo(tmp_path)
+        assert not (repo / ".venv").exists(), "fixture invalid: repo has a venv"
         r = _run(repo, "--entry-state", "FEAT-0001",
                  env=_path_env(_no_yaml_py3_bin(tmp_path)))
         assert r.returncode == 3, (r.returncode, r.stdout, r.stderr)
+
+    def test_venv_pyyaml_is_found_so_the_gate_answers(self, tmp_path):
+        """Step 2's first command must not die on a PEP-668 host. Upstream #321:
+        the claim never started, and exit 3's contract is 'stop'."""
+        repo = _es_repo(tmp_path)
+        venv_bin = repo / ".venv" / "bin"
+        venv_bin.mkdir(parents=True)
+        shim = venv_bin / "python3"
+        shim.write_text(f'#!/bin/sh\nexec "{sys.executable}" "$@"\n')
+        shim.chmod(0o755)
+        r = _run(repo, "--entry-state", "FEAT-0001",
+                 env=_path_env(_no_yaml_py3_bin(tmp_path)))
+        assert r.returncode == 0, (r.returncode, r.stdout, r.stderr)
+        assert r.stdout.strip() == "claimable", (r.stdout, r.stderr)
 
     def test_unreadable_index_exits_4_not_a_bogus_token(self, tmp_path):
         """A malformed index must not degrade into `absent` — that would read as

@@ -149,10 +149,10 @@ ID format: `^[A-Z][A-Z0-9-]{2,80}$` (e.g. `FEAT-LEDGER-IMPORT`, `TECH-DB-BOOTSTR
 **Floor (mechanical).** Run the validator and make it pass:
 
 ```bash
-.venv/bin/python3 sysop/scripts/validate_tasks.py
+python3 sysop/scripts/validate_tasks.py
 ```
 
-(Use bare `python3 sysop/scripts/validate_tasks.py` if the project has no `.venv`.) Exit 0 proves the queue is *well-formed* — IDs match the pattern, every body exists with the right first heading, references resolve, exactly one phase is current-focus. If it fails, fix the data and re-run; **do not** hand off on a red validator. What the validator **cannot** judge is whether the decomposition is any *good*: a single 40-hour `FEAT-EVERYTHING` task passes it cleanly.
+Exit 0 proves the queue is *well-formed* — IDs match the pattern, every body exists with the right first heading, references resolve, exactly one phase is current-focus. If it fails, fix the data and re-run; **do not** hand off on a red validator. What the validator **cannot** judge is whether the decomposition is any *good*: a single 40-hour `FEAT-EVERYTHING` task passes it cleanly.
 
 **Ceiling (judgment).** Print a scannable summary — the phases, the emitted phase-one tasks with `effort` / `blast_radius`, and a pointer to two or three sample bodies — and hand off:
 

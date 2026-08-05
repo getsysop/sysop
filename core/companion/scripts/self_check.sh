@@ -58,13 +58,34 @@ else
   bad "bash ${BASH_VERSION:-unknown} — Sysop scripts need bash 3.2+"
 fi
 
+# ── The main checkout ───────────────────────────────────────────────────────
+# Resolved once, here, because two probes below need it. A worktree carries the
+# scripts but never a `.venv`, and run_checks.sh anchors on the main root via
+# git-common-dir, so anything asking "what will run_checks use" must anchor the
+# same way. Hoisted from probe 6 by Phase 182 — the round found probe 3 still
+# reading `$REPO_ROOT`, which is the *same* defect Phase 143 fixed for probe 6
+# and left here.
+MAIN_ROOT="$REPO_ROOT"
+_cd="$(git -C "$REPO_ROOT" rev-parse --git-common-dir 2>/dev/null)"
+if [[ -n "$_cd" ]]; then
+  case "$_cd" in /*) : ;; *) _cd="$REPO_ROOT/$_cd" ;; esac
+  MAIN_ROOT="$(cd "$_cd/.." 2>/dev/null && pwd)" || MAIN_ROOT="$REPO_ROOT"
+fi
+
 # ── 3. python3 + PyYAML ─────────────────────────────────────────────────────
 # Probe the interpreter run_checks.sh will ACTUALLY use (its selection order:
-# .venv/bin/python3 unconditionally when executable, then venv/bin via the
-# PATH prefix, then PATH python3), then verify PyYAML on THAT interpreter — a
-# yaml-capable system python is no comfort if run_checks picks a venv python
-# without it (adversarial-review finding, 2026-07-19).
-if [[ -x "$REPO_ROOT/.venv/bin/python3" ]]; then
+# the MAIN checkout's .venv/bin/python3 unconditionally when executable, then
+# its venv/bin via the PATH prefix, then this checkout's, then PATH python3),
+# then verify PyYAML on THAT interpreter — a yaml-capable system python is no
+# comfort if run_checks picks a venv python without it (adversarial-review
+# finding, 2026-07-19). **From a worktree this used to answer about the
+# worktree**, which has no venv, so it reported a failure run_checks.sh would
+# not have had; the comment above it claimed otherwise (Phase 182).
+if [[ -x "$MAIN_ROOT/.venv/bin/python3" ]]; then
+  RC_PY="$MAIN_ROOT/.venv/bin/python3"
+elif [[ -x "$MAIN_ROOT/venv/bin/python3" ]]; then
+  RC_PY="$MAIN_ROOT/venv/bin/python3"
+elif [[ -x "$REPO_ROOT/.venv/bin/python3" ]]; then
   RC_PY="$REPO_ROOT/.venv/bin/python3"
 elif [[ -x "$REPO_ROOT/venv/bin/python3" ]]; then
   RC_PY="$REPO_ROOT/venv/bin/python3"
@@ -163,12 +184,8 @@ printf '\n'
 # the empty worktree copy and reports a false all-clear on an abandoned round —
 # the exact silent under-report this phase exists to close (adversarial review,
 # 2026-07-23, reproduced from both the mechanics and evidence lenses).
-MAIN_ROOT="$REPO_ROOT"
-_cd="$(git -C "$REPO_ROOT" rev-parse --git-common-dir 2>/dev/null)"
-if [[ -n "$_cd" ]]; then
-  case "$_cd" in /*) : ;; *) _cd="$REPO_ROOT/$_cd" ;; esac
-  MAIN_ROOT="$(cd "$_cd/.." 2>/dev/null && pwd)" || MAIN_ROOT="$REPO_ROOT"
-fi
+# MAIN_ROOT is resolved once, above probe 3 (Phase 182 hoisted it there so the
+# PyYAML probe anchors the same way this one does).
 PENDING_DIR="$MAIN_ROOT/sysop/runtime/pending-rounds"
 STALE_MIN=120  # first-guess live/stale split; tune on real use. Minute
                # granularity (find -mmin) is deliberately coarse — the ~60s

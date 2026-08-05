@@ -71,6 +71,53 @@ while [[ "${1:-}" == --* ]]; do
   esac
 done
 
+# ── PyYAML interpreter resolution (Phase 182) ────────────────
+# Four sites below read tasks/index.yml through PyYAML. On a PEP-668 host —
+# every modern distro, and Homebrew macOS — `pip install` into the system
+# interpreter is an *error*, so PyYAML lives only in the project venv. A bare
+# `python3` therefore failed on hosts that are perfectly well provisioned:
+# `--entry-state` (Step 2's FIRST command) exited 3 and named no remedy, and
+# `--release` exited 1 with a manual recipe. Upstream #321.
+#
+# Three properties are deliberate:
+#
+#   * It PROBES rather than assuming. A blind `PATH=.venv/bin:$PATH` prepend
+#     would shadow a capable system interpreter with an incapable venv one —
+#     trading the reported failure for its mirror image. self_check.sh:61-66
+#     documents that hazard in the other direction.
+#   * It PREPENDS the winner's bin dir instead of binding a `$PY` variable, so
+#     every call site keeps a literal `python3` command word. (Script-internal
+#     commands are permission-exempt — the matcher only sees `bash …
+#     claim_task.sh` — so this buys consistency with the shipped Phase-126
+#     idiom rather than an allow-rule match. Stated plainly because the filing
+#     recorded the allow-rule as the binding reason, and here it is not.)
+#   * It anchors on the MAIN checkout before the current one. `--entry-state`
+#     is routinely run from a worktree and `--release` may be run from any
+#     subdirectory, so a CWD-relative probe answers the wrong question — and
+#     worktrees do not carry their own .venv.
+#
+# Returns 0 when some interpreter on the resulting PATH can `import yaml`, 1
+# when none can. Callers MUST invoke it in a conditional: fail-closed is still
+# the right answer when nothing has PyYAML, and only the venv-only host stops
+# being that case.
+resolve_yaml_python() {
+  local root candidate seen=""
+  for root in "${MAIN_REPO_ROOT:-}" "${REPO_ROOT:-}"; do
+    [[ -n "$root" ]] || continue
+    # Every non-worktree invocation has REPO_ROOT == MAIN_REPO_ROOT, so without
+    # this the refusal path launches four interpreters instead of two.
+    [[ "$root" == "$seen" ]] && continue
+    seen="$root"
+    for candidate in "${root}/.venv/bin" "${root}/venv/bin"; do
+      [[ -x "${candidate}/python3" ]] || continue
+      "${candidate}/python3" -c "import yaml" >/dev/null 2>&1 || continue
+      export PATH="${candidate}:${PATH}"
+      return 0
+    done
+  done
+  command -v python3 >/dev/null 2>&1 && python3 -c "import yaml" >/dev/null 2>&1
+}
+
 # ── Entry state (read-only claim triage) ─────────────────────
 # Answers ONE question — "what happens if I claim <TASK_ID> right now?" — and
 # mutates nothing. It exists so the decision lives in testable, allow-ruled
@@ -154,8 +201,14 @@ if $ENTRY_STATE; then
     echo "❌ ${INDEX} not found — consumer not bootstrapped, or wrong repo." >&2
     exit 2
   fi
-  if ! command -v python3 >/dev/null 2>&1 || ! python3 -c "import yaml" >/dev/null 2>&1; then
+  # Resolves the project venv first, so PyYAML need not be installed into a
+  # PEP-668 system interpreter. Only a host where NOTHING can import yaml
+  # reaches the refusal — and that refusal now names a remedy, which the
+  # original did not, leaving the reporter's workaround undiscoverable.
+  if ! resolve_yaml_python; then
     echo "❌ python3 + PyYAML is required to read tasks/index.yml." >&2
+    echo "   Tried .venv/bin/python3 and venv/bin/python3 under ${MAIN_REPO_ROOT} then ${REPO_ROOT}, then python3 on PATH." >&2
+    echo "   fix: python3 -m venv .venv && .venv/bin/pip install pyyaml   (PEP-668-safe)" >&2
     exit 3
   fi
 
@@ -288,14 +341,24 @@ if $RELEASE; then
   # leaving index.yml in_progress would create exactly the desync the validator
   # flags. Hand off the whole reversal to the operator's venv python.
   if [[ -f "$INDEX" ]]; then
-    if ! command -v python3 >/dev/null 2>&1 || ! python3 -c "import yaml" >/dev/null 2>&1; then
+    # Same resolution as --entry-state: prefer the project venv (anchored on
+    # the MAIN checkout, since --release may be run from any subdirectory),
+    # fall back to PATH, and only refuse when nothing can import yaml.
+    if ! resolve_yaml_python; then
       echo "❌ tasks/index.yml exists but python3 + PyYAML isn't available here, so I" >&2
       echo "   can't safely flip its status (a hand-edit risks a lock/status desync)." >&2
-      echo "   Run the manual reversal with your project's python (e.g. .venv/bin/python3):" >&2
+      echo "   Tried .venv/bin/python3 and venv/bin/python3 under ${MAIN_REPO_ROOT} then ${REPO_ROOT}, then python3 on PATH." >&2
+      echo "   fix: python3 -m venv .venv && .venv/bin/pip install pyyaml   (PEP-668-safe)" >&2
+      echo "   Or run the manual reversal with an interpreter that has PyYAML:" >&2
       echo "     git worktree remove ${LOCK_WORKSPACE:-<worktree>}   # add --force to discard uncommitted work" >&2
       echo "     rm ${LOCK_FILE}" >&2
       echo "     # then flip ${TASK_ID}'s status: in_progress → open in tasks/index.yml" >&2
-      echo "     .venv/bin/python3 sysop/scripts/validate_tasks.py" >&2
+      # Bare python3, NOT .venv/bin/python3: validate_tasks.py self-resolves venv
+      # PyYAML itself (Phase 182), so this line works once the fix above lands a
+      # venv — under any layout — whereas a .venv/bin/python3 command word is
+      # `command not found` on the venv/, poetry and conda consumers, and this
+      # branch is reached only where no interpreter on the host has PyYAML yet.
+      echo "     python3 sysop/scripts/validate_tasks.py   # after the fix above" >&2
       exit 1
     fi
   fi

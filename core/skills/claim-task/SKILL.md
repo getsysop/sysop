@@ -26,7 +26,7 @@ Read `.claude/settings.json` and confirm `permissions.allow` contains:
 - `Bash(bash sysop/scripts/claim_task.sh:*)` — Step 2's `--entry-state` query **and** Step 4b's worktree + lock creation. One rule covers both: the trailing `:*` is a prefix match over the whole argument string, so no separate `--entry-state` rule is needed (and adding one would be dead). Verified against Phase 152's finding that rules seeded against invocations which bind none are worse than no rule.
 - `Bash(bash sysop/scripts/batch_work.sh:*)` — Step 4 review-batch path.
 - `Bash(python3 -:*)` — Step 1's `--resume` validation, Step 2's `tasks/index.yml` lookup, Step 4a's yaml-round-trip status flip, Step 7a's post-plan integrity check, **and every write the orchestrator makes at Steps 7-pre, 7c and its park path** (all are `python3 - <<'PY'` heredocs, single simple commands, so one rule covers them). This is deliberate: routing the orchestrator's reads and writes through an interpreter it is already permitted to run means the reshape adds **no** new permission surface, and it does not depend on the auto-classifier's treatment of bare `mkdir` / `cp` / `test`. It also survives this skill's `disallowed-tools: Edit, Write, NotebookEdit` frontmatter, which a `Write`-tool artifact write would not.
-- `Bash(python3 sysop/scripts/validate_tasks.py)` / `Bash(python3 sysop/scripts/validate_tasks.py:*)` and the `.venv/bin/python3 sysop/scripts/validate_tasks.py` / `.venv/bin/python3 sysop/scripts/validate_tasks.py:*` venv variants — Step 4c post-claim validator (the venv form is preferred per Phase 45b; the bare form remains for non-venv consumers).
+- `Bash(python3 sysop/scripts/validate_tasks.py)` / `Bash(python3 sysop/scripts/validate_tasks.py:*)` and the `.venv/bin/python3 sysop/scripts/validate_tasks.py` / `.venv/bin/python3 sysop/scripts/validate_tasks.py:*` venv variants — Step 4c post-claim validator. Bare `python3` is the command word the step prescribes: the script self-resolves venv PyYAML via its own `sys.path` bootstrap (Phase 182), so one form serves every consumer. The `.venv/bin/python3` rules stay only so a hand-typed venv invocation is not denied.
 - `Bash(python3 sysop/scripts/scope_overlap.py:*)` (and the `.venv/bin/python3` variant) — Step 2's non-blocking overlap advisory. The `git -C <worktree> diff` it shells out to needs **no** separate rule (it's a subprocess of the permitted python call, and read-only `git` auto-passes per `_shared/permission-guard.md` § Notes). This rule is **not** load-bearing — a missing rule (or any non-zero exit) just means the advisory is skipped; the claim still proceeds.
 - `Bash(git add tasks/index.yml)` — Step 4d commits the claim.
 - `Bash(git commit -m claim:*)` — Step 4d commit message shape.
@@ -248,10 +248,10 @@ Read the body file `tasks/open/<TASK_ID>.md` in full so it is loaded as context 
 **Overlap advisory (roadmap tasks — non-blocking).** The lock check above only asks "is *this* task claimed?" — it says nothing about whether the task's *files* collide with work already in flight in another worktree. Two claims touching the same files sail through and surface as a merge conflict at `/review-close` — recoverable rework (the worktrees kept the builds isolated), but wasted work the advisory can warn about. Run the shared scope-overlap primitive:
 
 ```bash
-.venv/bin/python3 sysop/scripts/scope_overlap.py <TASK_ID>
+python3 sysop/scripts/scope_overlap.py <TASK_ID>
 ```
 
-(The `.venv/bin/python3` form is preferred per Phase 45b so the advisory still fires for consumers whose PyYAML lives only in the venv; bare `python3` also works where PyYAML is on the system interpreter. Both permission rules exist.) It infers the candidate's likely scope from its `## Key files` + `blast_radius` (a *pre-plan guess*), reads the **actual** changed set of each in-flight worktree (`git diff --name-only main...HEAD` + uncommitted), and prints a per-in-flight verdict — `likely` (exact path match) / `possible` (same directory or glob) / `none`.
+(Bare `python3` is the command word: `scope_overlap.py` self-resolves venv PyYAML via its own `sys.path` bootstrap — script-anchored first (this file's ancestors, then the main checkout via git-common-dir), and only then the CWD, across both `.venv/` and `venv/` layouts — so this one form serves venv-only *and* non-venv consumers, Sysop Phase 182. A `.venv/bin/python3` command word would instead be `command not found` on a `venv/`-layout, poetry, conda or system-python project. Both permission rules exist.) It infers the candidate's likely scope from its `## Key files` + `blast_radius` (a *pre-plan guess*), reads the **actual** changed set of each in-flight worktree (`git diff --name-only main...HEAD` + uncommitted), and prints a per-in-flight verdict — `likely` (exact path match) / `possible` (same directory or glob) / `none`.
 
 - **Surface the output verbatim** if it reports any overlap, then continue. This is **advisory, not a gate** — overlap is a recoverable rework cost, not corruption, so the human owns the call (the guided-mode "genuine tradeoff → human owns it" branch, in contrast to the lock collision above, which *is* a false choice and correctly hard-fails). Do **not** block the claim on it.
 - The primitive is **non-blocking by construction**: it exits 0 on every degrade path (no in-flight work, missing index, absent PyYAML, an unreadable worktree). Treat *any* non-zero exit or error as "advisory unavailable — proceed"; never halt the claim because the overlap check couldn't run.
@@ -380,7 +380,7 @@ This also creates the git worktree on `<BRANCH_NAME>`, branched from current HEA
 This proves the schema invariants hold (status, lock file presence, body existence, ref integrity) before the claim commit lands on `main`:
 
 ```bash
-.venv/bin/python3 sysop/scripts/validate_tasks.py
+python3 sysop/scripts/validate_tasks.py
 ```
 
 If it fails, **do not proceed to 4d**. Report the validator output verbatim and fall through to the rollback below. Common causes: lock file missing (4b silently failed), body file moved, ID collision introduced upstream.

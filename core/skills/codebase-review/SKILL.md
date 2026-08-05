@@ -18,7 +18,7 @@ Read `.claude/settings.json` and confirm `permissions.allow` contains:
 - `Bash(bash sysop/scripts/run_checks.sh:*)`
 - `Bash(python sysop/scripts/archive_review_tasks.py:*)`
 - `Bash(python3 sysop/scripts/archive_review_tasks.py:*)`
-- `Bash(.venv/bin/python3 sysop/scripts/archive_review_tasks.py:*)` — Phase 45b venv-prefixed variant (preferred when the consumer has a venv with PyYAML)
+- `Bash(.venv/bin/python3 sysop/scripts/archive_review_tasks.py:*)` — back-compat only for a hand-typed venv invocation. `archive_review_tasks.py` imports no yaml at all, so the bare rule above is what the skills prescribe
 - `Bash(git add review_tasks.md)` — Step 7's task-loss protection commit
 - `Bash(git add:*)` — Step 7 also stages `review_tasks_archive.md`, whose own name no literal rule covers (it is staged as its **own** command precisely because `git add` is all-or-nothing across pathspecs)
 - `Bash(git commit -m docs:*)` — the `docs:` commit Step 7 and the Step 9 promotion/demotion commits use

@@ -12,7 +12,7 @@ Run the deterministic resolver and print its output verbatim.
 > **Structural read-only guard (Phase 54):** the `disallowed-tools` frontmatter (Claude Code 2.1.152+) removes the file-write tools while this skill is active. Partial by design — `Bash` stays allowed for the resolver invocation, so the guard covers the dedicated write tools, not shell redirects. Non-Claude-Code harnesses ignore the key.
 
 ```bash
-.venv/bin/python3 sysop/scripts/next_task.py $ARGUMENTS
+python3 sysop/scripts/next_task.py $ARGUMENTS
 ```
 
 The script is the source of truth for the selection algorithm — see the module

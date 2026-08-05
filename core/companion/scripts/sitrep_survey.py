@@ -17,6 +17,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import glob
 import json
 import os
 import re
@@ -31,11 +32,80 @@ from typing import Any
 try:
     import yaml
 except ImportError:
-    print(
-        "ERROR: sitrep_survey.py requires PyYAML. Install: pip install pyyaml",
-        file=sys.stderr,
-    )
-    sys.exit(1)
+    # PyYAML lives only in the project venv on PEP-668 hosts (BeanRider
+    # ISSUE-0049; upstream #321), so resolve it onto sys.path before giving up
+    # — that keeps a bare `python3 sysop/scripts/…` working, which is what the
+    # skills prescribe and settings.json allow-rules are written against.
+    # It PROBES rather than assuming: a candidate is committed to sys.path only
+    # once `import yaml` actually succeeds from it, and is rolled back
+    # otherwise. The first draft stopped at the first venv-SHAPED directory, so
+    # one empty `.venv` disabled the whole search — including the main-checkout
+    # arm below, which is the entire point of it — and a `.venv` shadowed a
+    # sibling `venv` that did have PyYAML. That was the shell helper's design
+    # (`claim_task.sh:resolve_yaml_python`) stated in this phase's own log and
+    # not honoured here; the round caught it by running it.
+    #
+    # Order is script-anchored FIRST — this file's ancestors, then the MAIN
+    # checkout via git-common-dir (a linked worktree carries the scripts but
+    # never a `.venv`, and worktrees are where /claim-task builds) — and only
+    # then the CWD. CWD-first let an unrelated project's venv win whenever a
+    # script was invoked by path from elsewhere. Both `.venv/` and `venv/`
+    # layouts, at every root.
+    #
+    # The git probe strips git's discovery vars for the reason
+    # `tests/test_git_env_hermeticity.py` exists (BeanRider ISSUE-0048): git
+    # exports `GIT_DIR` into every hook, and these scripts run from pre-commit. Inline by necessity rather than by accident: it must run before
+    # any import can be trusted, and validate_tasks.py + next_task.py are
+    # deliberately standalone for pre-commit (see _log.py's header).
+    # tests/test_venv_pyyaml_bootstrap.py pins the five copies identical.
+    _roots = []
+    for _cand in Path(__file__).resolve().parents[:3]:
+        if _cand not in _roots:
+            _roots.append(_cand)
+    try:
+        _r = subprocess.run(
+            ["git", "rev-parse", "--git-common-dir"],
+            cwd=str(Path(__file__).resolve().parent),
+            capture_output=True,
+            text=True,
+            timeout=5,
+            env={_k: _v for _k, _v in os.environ.items()
+                 if _k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR",
+                               "GIT_INDEX_FILE")},
+        )
+        if _r.returncode == 0 and _r.stdout.strip():
+            _main = (Path(__file__).resolve().parent / _r.stdout.strip()).resolve().parent
+            if _main not in _roots:
+                _roots.append(_main)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    if Path.cwd() not in _roots:
+        _roots.append(Path.cwd())
+    _hit = False
+    for _root in _roots:
+        for _layout in (".venv", "venv"):
+            for _site in glob.glob(str(_root / _layout / "lib/python*/site-packages")):
+                sys.path.insert(0, _site)
+                try:
+                    import yaml
+                except ImportError:
+                    sys.path.remove(_site)
+                    continue
+                _hit = True
+                break
+            if _hit:
+                break
+        if _hit:
+            break
+    try:
+        import yaml
+    except ImportError:
+        print(
+            "ERROR: sitrep_survey.py requires PyYAML. fix: python3 -m venv .venv && "
+            ".venv/bin/pip install pyyaml   (PEP-668-safe), or activate the venv.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
 
 # ── Constants ────────────────────────────────────────────────────

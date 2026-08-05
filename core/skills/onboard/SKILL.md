@@ -121,10 +121,10 @@ For a large backlog (tens of items), **emit in chunks** — one phase (or ~15 ta
 Run the validator and make it pass:
 
 ```bash
-.venv/bin/python3 sysop/scripts/validate_tasks.py
+python3 sysop/scripts/validate_tasks.py
 ```
 
-(Bare `python3` if the project has no `.venv`.) Then print the summary and hand off:
+Then print the summary and hand off:
 
 ```
 ## Onboarding complete — review before committing

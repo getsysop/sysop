@@ -34,7 +34,7 @@ Mid-project, most planning events are smaller than a phase: a bug spotted in a s
 
 How big should each task be? Decomposition follows the shared rubric in `_shared/decomposition-rubric.md` — one-sentence done-condition litmus, `effort` ⊥ `blast_radius` (size of the work vs. size of the surface are independent), `depends_on` = physical impossibility, and so on.
 
-Doing this by hand? Author `tasks/index.yml` entries directly against `tasks/schema.md` and validate with `.venv/bin/python sysop/scripts/validate_tasks.py` — or say `/add-task <what you want>` and let the skill do the schema bookkeeping.
+Doing this by hand? Author `tasks/index.yml` entries directly against `tasks/schema.md` and validate with `python3 sysop/scripts/validate_tasks.py` — or say `/add-task <what you want>` and let the skill do the schema bookkeeping.
 
 ### 1. Find Work
 
@@ -226,7 +226,9 @@ A section that omits both sub-headings is treated as a flat `### Always` list �
 
 **Boy-scout consequence.** Editing a file with pre-existing lint or type findings causes the ratchet to fire on those findings too — touched files get cleaned, even when the regression isn't yours. Full-tree backlog cleanups stay as separate tasks (e.g. `TECH-LINT-BACKLOG-FIX`), so the ratchet doesn't force a clean-everything-first dependency on a project with an existing backlog. The full template lives in WORKFLOW.md § 6.1.
 
-**Venv-aware invocation.** The agent's tool shell starts cold. If a verification command depends on a tool installed in a project venv (`pytest`, project-specific CLIs, linters), spell out the venv path in the section (`.venv/bin/pytest`, `.venv/bin/python sysop/scripts/validate_tasks.py`) — bare command names hit the system PATH and either fail or, worse, succeed against the wrong interpreter. The same rule applies to git hooks in `sysop/scripts/hooks/`: prepend `${REPO_ROOT}/.venv/bin` to `PATH` at the top of each hook. Sysop does not auto-detect venv paths.
+**Venv-aware invocation.** The agent's tool shell starts cold. If a verification command depends on a tool installed in a project venv (`pytest`, project-specific CLIs, linters), spell out the venv path in the section (`.venv/bin/pytest`, or `.venv/bin/python scripts/build_ledger.py` for a Python script your own repo ships) — bare command names hit the system PATH and either fail or, worse, succeed against the wrong interpreter. The same rule applies to git hooks in `sysop/scripts/hooks/`: prepend `${REPO_ROOT}/.venv/bin` to `PATH` at the top of each hook. Sysop does not auto-detect venv paths.
+
+This rule is about **your project's** tooling, not Sysop's own scripts. Never give a `sysop/scripts/*.py` invocation a `.venv/bin/` command word — the scripts a skill prescribes resolve venv PyYAML themselves, script-anchored first and only then the CWD, under both `.venv/` and `venv/` layouts (Phase 182). So bare `python3 sysop/scripts/<script>.py` is the form to use: it works inside a worktree and on the poetry/conda/`venv/`-layout/system-python projects where `.venv/bin/python3` is simply `command not found`. (The one host it does not serve and the venv form would is one with no `python3` on `PATH` at all — rarer, and it fails loudly.)
 
 ---
 

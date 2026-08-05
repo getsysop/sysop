@@ -96,7 +96,7 @@ sed -n '<START>,<END>p' review_tasks.md
 
 ### 1c. Tracker size is advisory, never a stop
 
-If `review_tasks.md` is large (**~125KB** is the historical rule of thumb), print an advisory and **continue** — do not halt. `archive_review_tasks.py` selects what to relocate by **merge status**, not by size (`archive_review_tasks.py:100` matches only `Merged`/`Complete`; a Round moves whole only when every batch in it is merged, otherwise it relocates the merged batches individually), so it cannot shrink a tracker whose bulk is *open* work. Levers, in order: run this skill and `/auto-fix`, then `/review-close`; once batches are merged, run `.venv/bin/python3 sysop/scripts/archive_review_tasks.py`.
+If `review_tasks.md` is large (**~125KB** is the historical rule of thumb), print an advisory and **continue** — do not halt. `archive_review_tasks.py` selects what to relocate by **merge status**, not by size (`archive_review_tasks.py:100` matches only `Merged`/`Complete`; a Round moves whole only when every batch in it is merged, otherwise it relocates the merged batches individually), so it cannot shrink a tracker whose bulk is *open* work. Levers, in order: run this skill and `/auto-fix`, then `/review-close`; once batches are merged, run `python3 sysop/scripts/archive_review_tasks.py`.
 
 ## Step 2: Categorize Flags
 

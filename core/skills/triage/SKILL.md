@@ -89,7 +89,7 @@ where `<START>` is the batch header's line number and `<END>` is one less than t
 
 The two passes above are why this step no longer has a size gate. If `review_tasks.md` is large (**~125KB** is the historical rule of thumb), print an advisory and **continue** — do not halt:
 
-> `review_tasks.md` is <SIZE>. This does not block triage. Note that `archive_review_tasks.py` selects what to relocate by **merge status**, not by size (`archive_review_tasks.py:100` matches only `Merged`/`Complete`; a Round moves whole only when every batch in it is merged, otherwise it relocates the merged batches individually), so it cannot shrink a tracker whose bulk is *open* work. The levers, in order: close open batches (`/auto-fix`, `/auto-judge`, then `/review-close`), then — once batches are merged — run `.venv/bin/python3 sysop/scripts/archive_review_tasks.py`.
+> `review_tasks.md` is <SIZE>. This does not block triage. Note that `archive_review_tasks.py` selects what to relocate by **merge status**, not by size (`archive_review_tasks.py:100` matches only `Merged`/`Complete`; a Round moves whole only when every batch in it is merged, otherwise it relocates the merged batches individually), so it cannot shrink a tracker whose bulk is *open* work. The levers, in order: close open batches (`/auto-fix`, `/auto-judge`, then `/review-close`), then — once batches are merged — run `python3 sysop/scripts/archive_review_tasks.py`.
 
 A halt here was a dead end whenever the overflow was open work, which is the case archiving cannot answer.
 

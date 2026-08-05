@@ -146,10 +146,17 @@ MANAGED_PATHS=()
 SELECTED_PACKS=()
 
 # Phase 24a: pick a python3 that can `import yaml`. Tries the consumer's
-# project venv first (`.venv/bin/python3`) since that's where pyyaml lives
-# in the existing Sysop setup (validate_tasks.py runs via .venv/bin/python3
-# from the pre-commit hook). Falls back to system python3. Returns empty if
-# neither works. Caller decides how to react.
+# project venv first, since that is where pyyaml lives on a PEP-668 host.
+# Falls back to system python3. Returns empty if neither works; caller
+# decides how to react.
+#
+# Phase 183: this comment used to say "validate_tasks.py runs via
+# .venv/bin/python3 from the pre-commit hook" — the doctrine that kept
+# minting the command-word defect, and the last instance of it, missed by
+# that phase's own sweep because a shell comment carries no invocation for
+# the guard to see. The hook resolves an interpreter (see
+# git-hooks/examples/pre-commit-tasks-validate.example) and the validator
+# resolves venv PyYAML itself (Phase 182); nothing prescribes it venv-prefixed.
 pick_python_with_yaml() {
   local candidate
   for candidate in "$TARGET/.venv/bin/python3" "$TARGET/venv/bin/python3" "python3"; do
