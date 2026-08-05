@@ -927,9 +927,9 @@ If the check fails (no `docs: close Batch …` tip, or `review_tasks.md` is stil
 
 1. **Re-run the script** with the same batch list — the rerun is idempotent for review_tasks.md (sed substitutions are no-ops on already-Merged batches) and will re-attempt the commit:
    ```bash
-   bash sysop/scripts/close_batch.sh <N1> <N2> <N3> 2>&1 | tee /tmp/close-batch.log
+   bash sysop/scripts/close_batch.sh <N1> <N2> <N3> 2>&1
    ```
-   `tee` preserves the full output so a missing terminal line is unambiguously visible.
+   Read the full output in the tool result — a missing terminal line is then unambiguously visible. **Do not pipe it through `tee`** (this step used to, into a bare `/tmp` path): `|` is a documented separator, so the tail becomes its own invocation, `tee` is not in the harness's read-only set and binds no shipped rule, and the prompt lands *after* the close has already run.
 
 2. **If re-run still doesn't commit** (review_tasks.md is staged but the script aborts after the `git add`), commit by hand with the canonical subject — same form the script would have used — and proceed:
    ```bash

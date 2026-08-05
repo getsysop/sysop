@@ -58,8 +58,10 @@ nobody is waiting — gives the run *nobody is watching* the weaker review prope
 compromise; the autonomous path needs more fresh-eyes rigour, not less.
 
 **A third option, plan-only, is specified but not built** (`tools/CLAIM_TASK_ORCHESTRATOR_SPEC.md`
-§ *The three options*, option C: stop after review, write the reviewed plan back to the task
-body, release the claim). It needs a `## Plan` body section `tasks/schema.md` does not define
+§ *The three options*, option C — a maintainer-side design doc that is not in the public tree;
+its content is summarised here so nothing depends on reaching it: stop after review, write the
+reviewed plan back to the task body, release the claim). It needs a `## Plan` body section
+`tasks/schema.md` does not define
 and a release ordering the skill does not carry. **Say so if a human asks for it rather than
 improvising it or silently running option B** — a missing branch nobody wrote down is how
 `/claim-task` Steps 7–8 acquired roadmap-only vocabulary in Phase 29, which is the defect
@@ -67,9 +69,10 @@ upstream #220 reported.
 
 ## C. Guided mode
 
-`tools/GUIDED_MODE_SPEC.md`'s behavioural overlay is a set of per-skill decision gates for
-newer builders, and this preference is exactly such a gate. When guided mode is active it
-pins the preference to **A**.
+Guided mode's behavioural overlay is a set of per-skill decision gates for newer builders,
+and this preference is exactly such a gate. When guided mode is active it pins the preference
+to **A**. (The full design lives in `tools/GUIDED_MODE_SPEC.md`, a maintainer-side doc that is
+not in the public tree — the sentence above is the whole contract this file needs.)
 
 **It overrides tier 2, never tier 1.** A human's explicit `--no-review-plan` on a single
 invocation still wins — guided mode raises the floor for the unconfigured case; it does not

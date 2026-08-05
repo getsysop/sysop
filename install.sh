@@ -208,7 +208,8 @@ declare -A SUBSTITUTION_USAGE_COUNT=()
 # because the consumer modified them since the lock's sysop_commit;
 # ACCEPT_UPSTREAM is a set of target-relative paths the consumer explicitly
 # opted to take upstream content for (via --accept-upstream / -list). See
-# WORKFLOW.md § 8.2c (Phase 24b paragraph) and PHASE_24_HANDOFF.md § 4.5.
+# WORKFLOW.md § 8.2c (Phase 24b paragraph); also PHASE_24_HANDOFF.md § 4.5, a
+# maintainer-side note that is not in the public tree.
 DIVERGENCE_SHADOW=""
 OLD_COMMIT=""
 PRESERVED_PATHS=()
@@ -835,7 +836,8 @@ _phase_24b_in_scope() {
   return 1
 }
 
-# ─── Phase 128: sysop/ vendor-namespace migration (tools/SYSOP_NAMESPACE_SPEC.md) ───
+# ─── Phase 128: sysop/ vendor-namespace migration ───
+# Design doc: tools/SYSOP_NAMESPACE_SPEC.md — maintainer-side, not in the public tree.
 # One consumer-install layout change: the vendor footprint moves out of the
 # consumer's shared namespaces (flat scripts/ + root docs) into a labelled
 # sysop/ dir. These helpers map a relpath between the OLD (flat) and NEW
@@ -2005,7 +2007,8 @@ install_skills() {
   record "skills: $skill_count skill dir(s) copied to .claude/skills/$_mode_note"
 }
 
-# ─── Phase 142: Codex-native skill links (tools/CODEX_INTEGRATION_SPEC.md) ───
+# ─── Phase 142: Codex-native skill links ───
+# Design doc: tools/CODEX_INTEGRATION_SPEC.md — maintainer-side, not in the public tree.
 # Identity of a link is its RAW target string, never the bytes it resolves to: a
 # *different* link is consumer data even when it happens to resolve to the same
 # skill. Every comparison below reads `readlink` output, never the file content.
@@ -2619,6 +2622,12 @@ LOOP_ALLOW = {
     "Bash(bash sysop/scripts/run_checks.sh)",
     "Bash(bash sysop/scripts/run_checks.sh:*)",
     "Bash(bash sysop/scripts/install_hooks.sh)",
+    # The post-install footer this very script prints tells every consumer, in
+    # both modes, to run `bash sysop/scripts/self_check.sh` — and until Phase
+    # 184 no rule of any shape covered it, so the first thing a fresh loop-mode
+    # install prescribes was also the first permission prompt it hit.
+    "Bash(bash sysop/scripts/self_check.sh)",
+    "Bash(bash sysop/scripts/self_check.sh:*)",
     "Bash(bash sysop/scripts/sysop-update.sh)",
     "Bash(bash sysop/scripts/sysop-update.sh:*)",
     "Bash(python sysop/scripts/archive_review_tasks.py:*)",
@@ -2684,13 +2693,13 @@ install_permissions() {
     # would violate the dry-run contract, and the copy note would render the
     # raw /tmp path).
     if [[ "$DRY_RUN" -eq 1 ]]; then
-      note "would write $(rel "$dst") (loop allow-subset: 19 rules, no hooks)"
+      note "would write $(rel "$dst") (loop allow-subset: 21 rules, no hooks)"
       record_managed_path "$dst"
       record "permissions: would write $(rel "$dst") (loop allow-subset)"
       return 0
     fi
     # Fail CLOSED: if the filter can't be built, do NOT fall back to the full
-    # master — that would over-grant the 65-rule allow-list AND re-add the hooks
+    # master — that would over-grant the 71-rule allow-list AND re-add the hooks
     # block referencing scripts loop mode never installs (broken at runtime).
     # Skip settings.json instead (the consumer sees more permission prompts, but
     # no over-grant and no dangling hooks); the loud error keeps it visible.
@@ -3636,7 +3645,7 @@ tmpl = load(template_path)
 # no-op for the ~20 non-path rules (Bash(gh pr merge:*), Bash(git checkout:*),
 # Bash(python3 -c:*), …), so those CURRENT-VALID rules entered the removal set
 # verbatim and got stripped from settings.local.json (where install_permissions
-# never re-adds them) and from loop-mode settings.json (only the 19-rule LOOP_ALLOW
+# never re-adds them) and from loop-mode settings.json (only the 21-rule LOOP_ALLOW
 # subset is re-added) — auto-approved commands silently started prompting again.
 # A rule is a movable vendor-path rule iff its flat and sysop/-namespaced spellings
 # differ; only such a rule's flat spelling is dead. Non-path and consumer-authored

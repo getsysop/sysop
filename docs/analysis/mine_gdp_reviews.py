@@ -3,8 +3,9 @@
 
 Read-only against the gdp repo (file reads + read-only git commands). Produces
 ``gdp_review_metrics.json`` next to this script. Filed as colleague-review
-item 4 in REVIEW_CHECKLIST.md: test the monograph's "quieter over time" thesis
-before claiming it publicly.
+item 4 in the maintainer-side review queue (REVIEW_CHECKLIST.md, not in the
+public tree): test the monograph's "quieter over time" thesis before claiming
+it publicly.
 
 Three deterministic metrics:
   1. Findings per review round over time, split by round type

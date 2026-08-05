@@ -52,8 +52,9 @@ payload's key set (both read only the keys they name), so both current producers
 (/claim-task Step 7, /auto-build Phase 6e) and both current consumers (their
 respective read-then-``rm -f`` steps) are unaffected — but "byte-identical" is
 true of the filename only, and saying it of the behaviour would be false. This
-exists for the orchestrator reshape (tools/CLAIM_TASK_ORCHESTRATOR_SPEC.md),
-where one claim spawns a planner, a reviewer and an executor.
+exists for the orchestrator reshape (specified in tools/CLAIM_TASK_ORCHESTRATOR_SPEC.md,
+maintainer-side and not in the public tree), where one claim spawns a planner, a
+reviewer and an executor.
 
 Plus the reviewer's REVIEW_REPORT YAML at the TOP of its response
 (see _shared/adversarial-review.md § The reviewer-executor variant is retired). The hook

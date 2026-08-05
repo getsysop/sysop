@@ -438,8 +438,12 @@ class TestTheCandidateOrderIsPinned:
 
 class TestTheValidatorCallRidesAlong:
     """`:409` runs `validate_tasks.py` under a bare `python3` after a `cd` to
-    the main checkout, and is a NON-instance only because that script carries
-    its own CWD-relative `sys.path` bootstrap. It must keep working when the
+    the main checkout, and is a NON-instance because `:291`'s guard has already
+    hard-exited on the broken path, so `:409` is unreachable in that state
+    regardless. (The docstring used to credit the script's own `sys.path`
+    bootstrap and call it *CWD-relative* — that was the pre-Phase-182 shape,
+    written into this file by Phase 182 itself; the bootstrap is
+    script-anchored first and only then CWD.) It must keep working when the
     only capable interpreter is the venv, and it must not become the thing that
     fails a release the flip already completed."""
 
