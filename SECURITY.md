@@ -13,19 +13,21 @@ Include the affected file or skill, a reproduction, and the impact you see. This
 
 ## Supported versions
 
-The default track is rolling `main` — both install paths follow the latest commit, and security fixes land there. On top of that, reviewed checkpoints are cut as **tagged releases** (`vX.Y.Z`, with a GitHub Release and a `CHANGELOG.md` entry). A tag marks a point that was reviewed and shipped; it is what a cautious consumer can pin to.
+The default track is rolling `main` — both install paths follow the latest commit, and security fixes land there. On top of that, the intent is that reviewed checkpoints are cut as **tagged releases** (`vX.Y.Z`, with a GitHub Release and a `CHANGELOG.md` entry) — a tag marking a point that was reviewed and shipped.
+
+**Current state, stated plainly:** the tagging cadence above is the intent, not yet the record. One release exists (`v0.1.0`, 2026-07-15) and **it predates the `sysop/` vendor-directory migration, so the installer deliberately refuses it** — pinning to that tag exits 1 rather than producing a silently broken install. No `CHANGELOG.md` has been cut yet either. Until the next tagged release, **pin to a reviewed commit SHA** — `--ref` takes any rev, not only a tag (see below).
 
 ## How updates reach you — and how to pin
 
-Sysop has no auto-update server: updates propagate because you (or your agent) pull the latest source. That also means a bad update — a compromised maintainer account, or a malicious merge — would reach you the same way. Pinning to a reviewed release tag is the mitigation.
+Sysop has no auto-update server: updates propagate because you (or your agent) pull the latest source. That also means a bad update — a compromised maintainer account, or a malicious merge — would reach you the same way. Pinning to a reviewed rev is the mitigation.
 
-- **Bash-installer path** — tracks the HEAD of your local Sysop clone by default (`bash scripts/sysop-update.sh` copies whatever that clone is checked out at). To pin to a reviewed release instead:
+- **Bash-installer path** — tracks the HEAD of your local Sysop clone by default (`bash sysop/scripts/sysop-update.sh` copies whatever that clone is checked out at). To pin to a reviewed rev instead:
   ```bash
-  bash install.sh <target> --packs <packs> --ref v0.1.0   # fresh install, pinned
-  bash scripts/sysop-update.sh --ref v0.1.0               # update, pinned
+  bash install.sh <target> --packs <packs> --ref <tag-or-commit>   # fresh install, pinned
+  bash sysop/scripts/sysop-update.sh --ref <tag-or-commit>               # update, pinned
   ```
-  The tag must exist in your clone (`git -C "$SYSOP_SRC" fetch --tags`). The lock records the tag's commit, so `--check` later shows how far behind HEAD you are. Omit `--ref` to track HEAD.
-- **Claude Code plugin path** — tracks HEAD by commit SHA. The manifests deliberately omit a `version` field so plugin auto-update works per-commit (adding one would freeze updates until a manual bump, and Claude Code has no consumer-side "install `sysop@1.0.0`" pin). To hold a known state, disable auto-update for the Sysop marketplace (`/plugin` → Marketplaces → Sysop → Auto-update off) and update deliberately; for a hard pin, use the bash path at a `--ref` tag. A dedicated stable-channel marketplace may be added later if there's demand.
+  `--ref` takes **any rev your clone can resolve**. For *pinning*, that means a release tag or a commit SHA — a branch resolves too, but a branch moves, so it pins nothing. With no usable release tag published yet (above), a commit SHA is the pin that works today. The rev must exist in your clone (`git -C "$SYSOP_SRC" fetch --tags` for tags). The lock records the pinned commit, so `--check` later shows how far behind HEAD you are. Omit `--ref` to track HEAD.
+- **Claude Code plugin path** — tracks HEAD by commit SHA. The manifests deliberately omit a `version` field so plugin auto-update works per-commit (adding one would freeze updates until a manual bump, and Claude Code has no consumer-side "install `sysop@1.0.0`" pin). To hold a known state, disable auto-update for the Sysop marketplace (`/plugin` → Marketplaces → Sysop → Auto-update off) and update deliberately; for a hard pin, use the bash path at a `--ref` rev. A dedicated stable-channel marketplace may be added later if there's demand.
 
 ## Maintainer posture
 

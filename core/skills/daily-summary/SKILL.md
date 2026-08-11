@@ -35,36 +35,55 @@ Parse `$ARGUMENTS` for flags:
 
 ## Step 1 — Determine the date range
 
-Sysop consumers run on both macOS (BSD `date`) and Linux (GNU `date`), which disagree on date arithmetic. Use these portable helpers — **BSD form first (`-v` / `-j -f`), GNU form as the fallback (`-d`)** — the same BSD→GNU pattern `claim_task.sh` uses (Phase 50). Whole-day arithmetic is cleanly expressible in both, so no third (epoch) fallback is needed here:
+Sysop consumers run on both macOS (BSD `date`) and Linux (GNU `date`), which disagree on date arithmetic. Every `date` call below is written **BSD form first (`-v` / `-j -f`), GNU form as the `||` fallback (`-d`)** — the same BSD→GNU pattern `claim_task.sh` uses (Phase 50). Whole-day arithmetic is cleanly expressible in both, so no third (epoch) fallback is needed here.
+
+Substitute `<days>` with the `--days` value (default `7`). For `--date`, replace **the whole
+`TARGET_DATE=` line** — it is deliberately a single line so that is a safe instruction — with
+`TARGET_DATE=YYYY-MM-DD`. Run it as **one** block:
 
 ```bash
-# print YYYY-MM-DD for N days before today (N default 1 → "yesterday")
-_days_ago() { local n="${1:-1}"; date -v-"${n}"d +%Y-%m-%d 2>/dev/null || date -d "${n} days ago" +%Y-%m-%d 2>/dev/null; }
-# _date_minus YYYY-MM-DD N → the date N days before the given date
-_date_minus() { local d="$1" n="$2"; date -j -v-"${n}"d -f %Y-%m-%d "$d" +%Y-%m-%d 2>/dev/null || date -d "$d -$n days" +%Y-%m-%d 2>/dev/null; }
-# _day_name YYYY-MM-DD → Monday..Sunday
-_day_name() { local d="$1"; date -j -f %Y-%m-%d "$d" +%A 2>/dev/null || date -d "$d" +%A 2>/dev/null; }
-```
+# All three values, computed inline. BSD form first, GNU form as the `||` fallback.
+# The placeholder is QUOTED so an unsubstituted run fails loudly here rather than as a
+# bare syntax error further down (the same shape Step 3c uses for APPROVED_BRANCHES).
+WEEK_DAYS='<days>'
+case "$WEEK_DAYS" in
+  *'<'*)
+    echo "ERROR: substitute <days> (the --days value, default 7) before running Step 1." >&2
+    exit 3 ;;
+esac
 
-If a helper prints nothing (neither `date` variant is present — a system with neither BSD nor GNU `date`), note "date arithmetic unavailable on this system" at the top of the report and continue with the git sections using whatever ranges you can compute; do not fail the whole report.
+# --date override: replace this ENTIRE line with  TARGET_DATE=YYYY-MM-DD
+TARGET_DATE=$(date -v-1d +%Y-%m-%d 2>/dev/null || date -d '1 day ago' +%Y-%m-%d 2>/dev/null)
 
-**Compute all three in the block above, not after it.** The helpers are shell functions, so
-they exist only inside the fenced block that defines them, and nothing survives from one
-fenced block to the next anyway (`WORKFLOW.md` § 8.2a *Persistence boundary*). Append these
-lines to that same block — substituting `<days>` with `--days` (default `7`), and replacing
-`$(_days_ago 1)` with the `--date` value when one was passed:
+WEEK_START=$(date -j -v-"${WEEK_DAYS}"d -f %Y-%m-%d "$TARGET_DATE" +%Y-%m-%d 2>/dev/null \
+          || date -d "$TARGET_DATE -${WEEK_DAYS} days" +%Y-%m-%d 2>/dev/null)
+DAY_NAME=$(date -j -f %Y-%m-%d "$TARGET_DATE" +%A 2>/dev/null \
+        || date -d "$TARGET_DATE" +%A 2>/dev/null)
 
-```bash
-TARGET_DATE="$(_days_ago 1)"
 echo "--- TARGET_DATE: $TARGET_DATE"
-echo "--- WEEK_START:  $(_date_minus "$TARGET_DATE" <days>)"
-echo "--- DAY_NAME:    $(_day_name "$TARGET_DATE")"
+echo "--- WEEK_START:  $WEEK_START"
+echo "--- DAY_NAME:    $DAY_NAME"
 ```
+
+**Straight-line assignments, not shell functions — and that is a correctness requirement,
+not a style choice.** These were three helpers taking positional parameters (`local d="$<1>"
+n="$<2>"`). The skill runner substitutes a bare `$<1>`/`$<2>` in this file with the invocation's
+argument words *before bash ever defines the function*. Indices are **0-based**, so
+`/daily-summary --date 2026-08-10` turned that line into `local d="2026-08-10" n="$<2>"` —
+`$<1>` is the *second* word, and `$<2>` is out of range so it stayed literal and the week
+window then computed from the string `$<2>` (upstream #360). Nothing in this file may read
+a positional parameter.
+
+It also removes the older hazard this section used to warn about: functions live only inside
+the fenced block that defines them, and nothing survives from one fenced block to the next
+(`WORKFLOW.md` § 8.2a *Persistence boundary*). With no functions there is nothing to carry.
+
+If a value comes back empty (neither `date` variant is present), note "date arithmetic
+unavailable on this system" at the top of the report and continue with the git sections using
+whatever ranges you can compute; do not fail the whole report.
 
 Read all three off stdout and write them out as literals at every later use — which is what
-every fenced block below already expects (`<TARGET_DATE>`, `<WEEK_START>`). Until Phase 169
-these three were stated as inline `` `_date_minus "$TARGET_DATE" N` `` calls *outside* any
-block, where the function did not exist and the variable was empty.
+every fenced block below already expects (`<TARGET_DATE>`, `<WEEK_START>`, `<DAY_NAME>`).
 
 **Weekend / gap handling.** Check whether `TARGET_DATE` has any commits:
 
@@ -147,7 +166,7 @@ Skip this step if `--yesterday-only` was passed. Aggregate across all commits in
    Fri 07-03: ██ (2)
    Sat 07-04:  (0)
    ```
-   Cap very long bars (e.g. render at most ~30 blocks and append the raw count) so a high-volume day doesn't overflow the line. Use the real weekday for each date (via `_day_name`) — don't hardcode Mon–Fri.
+   Cap very long bars (e.g. render at most ~30 blocks and append the raw count) so a high-volume day doesn't overflow the line. Use the real weekday for each date (compute it the same way `DAY_NAME` is computed in Step 1) — don't hardcode Mon–Fri.
 3. **Key themes** — the top 3–5 areas of work by commit frequency, grouped by scope or changed directory. This is the synthesis that makes the report legible; name themes the way a human would in standup, not just "commits to `src/`".
 4. **Milestones** — the Step 2 weekly completions (`WEEK_START <= completed_date <= TARGET_DATE`), grouped by phase via the phase-title map, each shown as `<TASK-ID> — <title> (<completed_date>)`.
 5. **Notable file classes this week** — migrations / schema / other high-signal files touched.

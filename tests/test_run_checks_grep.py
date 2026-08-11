@@ -264,3 +264,34 @@ def test_iter_check_files_skips_root_whose_basename_matches_exclude_dir(tmp_path
         ["pkg/migrations"], ["*.py"], [], str(tmp_path),
         exclude_dirs=["migrations"]))
     assert got == []
+
+
+def _min_check(**kw):
+    c = {"id": "grep-c", "severity": "medium", "description": "d"}
+    c.update(kw)
+    return c
+
+
+class TestUnroutableVsSkipped:
+    """Phase 189's round found the shipped predicate did not match its own message: a
+    check with a `position_check:` but no resolvable paths was recorded UNROUTABLE with
+    the detail 'no pattern: or position_check: … cannot execute in any environment' —
+    a false claim AND a false remediation, which is the mislabelling #239 exists to stop.
+    It also found the sibling test pinned nothing, because the arm it covered returned
+    the same Outcome either way. These two distinguish the arms."""
+
+    def test_a_position_check_without_paths_is_a_SKIP_not_unroutable(self, tmp_path):
+        from run_checks.accounting import RunReport
+        r = RunReport([{"id": "grep-c"}])
+        grep_mod.run_check(
+            _min_check(position_check={"earlier": "a", "later": "b"}, paths=[]),
+            str(tmp_path), r)
+        assert r.status_of("grep-c") == "skipped", (
+            "a check that declares an executable form was told it can never run"
+        )
+
+    def test_neither_pattern_nor_position_check_is_unroutable(self, tmp_path):
+        from run_checks.accounting import RunReport
+        r = RunReport([{"id": "grep-c"}])
+        grep_mod.run_check(_min_check(paths=["src/"]), str(tmp_path), r)
+        assert r.status_of("grep-c") == "unroutable"

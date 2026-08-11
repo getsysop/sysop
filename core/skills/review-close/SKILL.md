@@ -77,10 +77,15 @@ For every worktree from `git worktree list --porcelain` (excluding the worktree 
 # .gitignore rules the symlink downgrade below consults (BeanRider ISSUE-0043).
 repo_root=$(git rev-parse --show-toplevel)
 
-git worktree list --porcelain | awk '
-  /^worktree / { path = $2 }
-  /^branch /   { br = substr($2, length("refs/heads/") + 1); print path "\t" br }
-' | while IFS=$'\t' read -r wt_path branch; do
+# Parsed with case/parameter-expansion rather than awk: a bare `$<2>` in this file is
+# replaced by the invocation's third argument word before bash sees it (upstream #360),
+# which emptied this table and disabled the ISSUE-0016 guard below.
+git worktree list --porcelain | while IFS= read -r _line; do
+  case "$_line" in
+    "worktree "*)          _wt=${_line#worktree } ;;
+    "branch refs/heads/"*) printf '%s\t%s\n' "$_wt" "${_line#branch refs/heads/}" ;;
+  esac
+done | while IFS=$'\t' read -r wt_path branch; do
   # Skip the main worktree (it's the runner's vantage; not a feature worktree).
   [[ "$branch" == "main" ]] && continue
 
@@ -148,8 +153,18 @@ Check `git status -- review_tasks.md` for uncommitted changes. Two distinct shap
 git status --porcelain -- review_tasks.md | grep -q . || exit 0   # nothing to do
 
 # Compute net deletions in review_tasks.md from the working tree against HEAD.
-ADDED=$(git diff --numstat HEAD -- review_tasks.md | awk '{print $1+0}')
-DELETED=$(git diff --numstat HEAD -- review_tasks.md | awk '{print $2+0}')
+# numstat is tab-separated (added<TAB>deleted<TAB>path), so `cut` reads it directly.
+# `awk '{print $<1>+0}'` would be rewritten to `{print <second argument word>+0}` by the
+# skill runner before bash saw it (upstream #360).
+#
+# awk's `+0` coerced TWO cases to a number that `cut` does not: no output at all, and a
+# BINARY row, which numstat prints as `-<TAB>-`. `${…:-0}` only covers the first — `-` is
+# non-empty — and the `DELETED > ADDED` test below would then die with
+# `[: -: integer expected`. So non-numeric output is normalised to 0 explicitly.
+ADDED=$(git diff --numstat HEAD -- review_tasks.md | cut -f1)
+DELETED=$(git diff --numstat HEAD -- review_tasks.md | cut -f2)
+case "$ADDED" in ''|*[!0-9]*) ADDED=0 ;; esac
+case "$DELETED" in ''|*[!0-9]*) DELETED=0 ;; esac
 
 # Is a sibling archive file dirty or untracked? Common names: review_tasks_archive.md
 # at repo root, or any *_archive.md the project's archive-rotation script writes.
@@ -468,9 +483,16 @@ esac
 SMOKE_WORKTREE_DIRS=""
 while IFS= read -r _b; do
   [ -n "$_b" ] || continue
-  _wt=$(git worktree list --porcelain | awk -v br="refs/heads/$_b" '
-    /^worktree /{w=substr($0,10)}
-    /^branch /{if(substr($0,8)==br) print w}')
+  # `substr($<0>,…)` would be rewritten by the skill runner: a bare `$<0>` in this file is
+  # replaced by the invocation's FIRST argument word, so `/review-close --dry-run` alone
+  # was enough to break this and print NO_SMOKE_REQUIRED over an unscanned worktree
+  # (upstream #360). Parameter expansion has no such collision.
+  _wt=$(git worktree list --porcelain | while IFS= read -r _line; do
+    case "$_line" in
+      "worktree "*)          _w=${_line#worktree } ;;
+      "branch refs/heads/"*) [ "${_line#branch refs/heads/}" = "$_b" ] && printf '%s\n' "$_w" ;;
+    esac
+  done)
   [ -n "$_wt" ] && SMOKE_WORKTREE_DIRS+="$_wt"$'\n'
 done <<BR_LIST
 $APPROVED_BRANCHES

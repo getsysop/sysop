@@ -179,6 +179,13 @@ ENV_PROVIDED = frozenset({
 # `/auto-build`'s printed report table). Phase 169's round measured the cost: 24 distinct
 # sub-floor/lower-case names appear in real fenced blocks and all but `$X` are assigned
 # in-block, so the honest floor is "none".
+# **Population, stated because a green zero-invariant proves its population is empty and
+# not that the class is.** The leading `[A-Z]` means shell POSITIONALS (`$1`, `${2}`) were
+# never in this scan — Phase 169's zero-invariant was green while five skills carried
+# thirteen of them (upstream #360). That is deliberate, not a hole: positionals are a
+# different defect (the skill runner rewrites them before bash sees them, so they are not
+# *phantom* — they are substituted), and they are owned by
+# `tests/test_skill_positional_substitution.py`. This scan is for named variables only.
 PHANTOM_REF_RE = re.compile(r"\$\{?([A-Z][A-Z0-9_]*)\}?")
 
 # An inline code span is treated as an executable prescription when it *starts with* a
@@ -187,11 +194,14 @@ PHANTOM_REF_RE = re.compile(r"\$\{?([A-Z][A-Z0-9_]*)\}?")
 #
 # The list of command words is NOT hardcoded alone: each file also contributes the shell
 # functions it defines. A fixed list is an assumption about what a skill can invoke, and
-# this one was wrong — `/daily-summary` defines `_days_ago`/`_date_minus`/`_day_name` in
-# one block and calls them from inline code two paragraphs later, where neither the
-# functions nor the `$TARGET_DATE` they are passed exist. Deriving the words from the
-# file's own definitions is rule 1's "derive the population from the source of truth"
-# applied to the detector itself.
+# this one was wrong — `/daily-summary` USED TO define `_days_ago`/`_date_minus`/`_day_name`
+# in one block and call them from inline code two paragraphs later, where neither the
+# functions nor the `$TARGET_DATE` they were passed existed. Phase 188 deleted all three
+# (their positional parameters were being substituted by the skill runner), so no skill
+# defines a shell function today and the derivation currently contributes nothing —
+# it is kept because the assumption it replaced is the one that was wrong. Deriving the
+# words from the file's own definitions is rule 1's "derive the population from the
+# source of truth" applied to the detector itself.
 # Widened by Phase 169's round from `git|gh|bash|python3|sh`. The repo already writes
 # prescriptions in the rest — `/auto-fix` uses `mkdir -p <WORKTREE_PATH>/…` and
 # `cd <WORKTREE_PATH> && git add -A` as inline list items, in exactly the idiom

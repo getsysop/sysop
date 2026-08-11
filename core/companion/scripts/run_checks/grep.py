@@ -11,6 +11,7 @@ from .accounting import (
     EXECUTED,
     FAILED,
     SKIPPED,
+    UNROUTABLE,
     Outcome,
     is_placeholder_token,
     stderr_excerpt,
@@ -354,8 +355,21 @@ def run_check(check, repo_root, report=None):
         _record(EXECUTED)
         return findings
 
-    if not pattern or not paths:
-        _record(SKIPPED, "not-configured", "no pattern/paths configured")
+    # Phase 189 / upstream #239: these were one arm reporting `skipped:
+    # not-configured`, which put two different things in the same words. A check with
+    # no `pattern:` and no `position_check:` declares no executable form at all — it
+    # can never run in ANY environment, so it is a registry-authoring defect, and
+    # GDP's `doc-parity-violation` sat in that state for weeks reading identically to
+    # a tool that merely was not installed here. A check that HAS a pattern but no
+    # resolvable paths is an ordinary precondition-absent skip, which is what the
+    # `skipped` bucket is load-bearing for.
+    if not pattern and not position_check:
+        _record(UNROUTABLE, "no-executable-form",
+                "no pattern: or position_check: — this check cannot execute in any "
+                "environment; declare a kind or remove it")
+        return []
+    if not paths:
+        _record(SKIPPED, "paths-unresolved", _paths_unresolved_detail(paths))
         return []
 
     outcome, hits = _run_grep_status(

@@ -182,8 +182,14 @@ Before launching any review agents, cross-reference both maps against the actual
 **The enumeration** — deterministic, whole-repo, independent of the map:
 
 ```bash
-git ls-files | awk -F/ '{print $1}' | sort -u
+git ls-files | cut -d/ -f1 | sort -u
 ```
+
+(`cut`, not `awk '{print $<N>}'`: the skill runner substitutes a bare `$<1>` in this file
+with the invocation's second argument word before any shell sees it, so under
+`--scope backend` the `awk` form became `{print backend}` — an unset variable — and printed one empty line.
+The invariant below then compared the map against an empty inventory and reported complete
+coverage. Upstream #360.)
 
 That yields **both directories and root-level files**. They are judged differently below, so partition them first.
 

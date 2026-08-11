@@ -323,9 +323,10 @@ Examples:
   bash install.sh ~/Projects/myapp --update
   # Upgrade a loop install to the full workflow (additive):
   bash install.sh ~/Projects/myapp --update --mode full
-  # Pin a fresh install (or update) to a reviewed release tag instead of HEAD:
-  bash install.sh ~/Projects/myapp --packs python --ref v0.1.0
-  bash install.sh ~/Projects/myapp --update --ref v0.1.0
+  # Pin a fresh install (or update) to a reviewed tag or commit instead of HEAD
+  # (tags: gh release list --repo getsysop/sysop; any rev works, incl. a commit SHA):
+  bash install.sh ~/Projects/myapp --packs python --ref <tag-or-commit>
+  bash install.sh ~/Projects/myapp --update --ref <tag-or-commit>
   # Adopt update tracking for a pre-Phase-7 install:
   bash install.sh ~/Projects/myapp --adopt --packs python,postgres
   # Preview pending upstream changes (read-only):
@@ -357,12 +358,12 @@ while [[ $# -gt 0 ]]; do
                    # "forgot the tag, the next flag got consumed" mistake). Git
                    # refs never start with '-', so rejecting -* is safe.
                    if [[ -z "${2:-}" || "${2:-}" == -* ]]; then
-                     echo "❌ --ref requires a tag/rev value (e.g. --ref v0.1.0)" >&2; exit 2
+                     echo "❌ --ref requires a tag/rev value (e.g. --ref <tag-or-commit>)" >&2; exit 2
                    fi
                    REF_OVERRIDE="$2"; shift 2 ;;
     --ref=*)       REF_OVERRIDE="${1#--ref=}"
                    if [[ -z "$REF_OVERRIDE" ]]; then
-                     echo "❌ --ref requires a tag/rev (e.g. --ref=v0.1.0)" >&2; exit 2
+                     echo "❌ --ref requires a tag/rev (e.g. --ref=<tag-or-commit>)" >&2; exit 2
                    fi
                    shift ;;
     --accept-upstream)
@@ -4240,7 +4241,8 @@ main() {
       err "--ref '$REF_OVERRIDE' predates the sysop/ vendor namespace (Phase 128)."
       err "  Its scripts self-locate at flat scripts/, but this installer wires them into"
       err "  sysop/scripts/ — the result would be silently broken. Options:"
-      err "    • pin a newer release tag that post-dates the sysop/ namespace, or"
+      err "    • pin a rev that post-dates the sysop/ namespace — a newer release tag if one"
+      err "      exists, or a commit SHA; omitting --ref tracks HEAD, or"
       err "    • check out that tag and run ITS OWN installer instead of this one:"
       err "        git -C ${SYSOP_SRC_CLONE:-$REPO_ROOT} checkout $REF_OVERRIDE && bash install.sh $TARGET"
       exit 1

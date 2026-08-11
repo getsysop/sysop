@@ -6,7 +6,7 @@ model-independent and trustworthy, but its old summary line counted checks
 crashed contributed nothing and changed nothing in the summary, so
 ``0 findings from 13 checks`` was the exact output of a genuinely healthy run
 **and** of a run where nothing ran. This module records, per selected check,
-which of three terminal states it reached and renders a summary that
+which of five terminal states it reached and renders a summary that
 distinguishes them.
 
 The design and provenance are recorded in ``tools/PRESCAN_ACCOUNTING_SPEC.md``,
@@ -15,7 +15,7 @@ this module is stated here so nothing depends on reaching it (cross-harness
 comparison run 2026-07-19/20: five independent silent-skip paths, 5 of 25
 checks executing while the summary said ``890 findings from 25 checks``).
 
-Terminal states (§1 of the spec):
+Terminal states (§1 of the spec; the last two added by Phase 189):
 
 * ``executed``  — the tool/scan ran to completion over its inputs. A
   zero-findings executed check is a real zero.
@@ -26,8 +26,39 @@ Terminal states (§1 of the spec):
 * ``failed``    — the tool started and broke: nonzero exit with no parseable
   output, timeout, non-JSON output, grep rc≥2, a caught exception.
 
-Cut line: *skipped = precondition absent; failed = attempted and died.*
+* ``degraded``   — the tool ran to completion but demonstrably over **less than
+  its declared inputs**: a file whose parse failed part-way, a discovery
+  shortfall. **A zero-findings degraded check is not a real zero.** (Phase 189,
+  upstream #362.)
+* ``unroutable`` — the check declares no executable form at all: no ``pattern``,
+  no ``position_check``, no recognised kind. Distinct from ``skipped``, whose
+  precondition could become true in another environment; an unroutable check
+  can never execute **anywhere**, so it is a registry-authoring defect rather
+  than an environment one. (Phase 189, upstream #239.)
+
+Cut line: *skipped = precondition absent; failed = attempted and died;
+degraded = attempted, survived, saw less than it claimed; unroutable = nothing
+to attempt.*
 Timeouts are ``failed`` (work was lost, not declined).
+
+**Do ``degraded`` and ``unroutable`` block? No — decided by Phase 189 and
+recorded here because the phase's brief named it an open question.** Only
+``failed`` is fatal (§4). The reasoning is not "they are less bad":
+
+* ``degraded`` — the shape §4 keys on is *the stage started and died*: zero
+  output, work lost, a gate that is armed and dead. A degraded stage produced
+  real findings over most of its inputs; calling that fatal conflates
+  *incomplete* with *dead*, and the common cause is the scanner's own language
+  support failing on **valid** source, which no consumer edit can fix. A gate
+  that cannot be made green is a gate that gets bypassed.
+* ``unroutable`` — this follows the existing, already-argued rule that a
+  *blocking* check which did not run is **loud but non-fatal** (see
+  ``blocking_failures`` and the spec on why gate-on-skipped cannot ship).
+
+What both get instead is what the defect actually was: attribution. They are
+counted separately in the header, rendered with their affected paths, and carry
+the same ``⚠`` as any other localized blocking check that did not really run.
+The failure being closed is *silence*, not permissiveness.
 """
 from collections import namedtuple
 
@@ -37,6 +68,8 @@ from _log import _sanitize_log
 EXECUTED = "executed"
 SKIPPED = "skipped"
 FAILED = "failed"
+DEGRADED = "degraded"        # ran, but over less than its declared inputs
+UNROUTABLE = "unroutable"    # declares no executable form; can never run
 
 # Grep determines its status but has no check id at the call site, so it hands
 # an Outcome back up to ``run_check`` (which owns the single per-check record
@@ -44,7 +77,30 @@ FAILED = "failed"
 # hold their ids and record directly, so they don't use this.
 Outcome = namedtuple("Outcome", ["status", "reason", "detail"])
 
+Counts = namedtuple("Counts", [
+    "executed", "skipped", "failed", "degraded", "unroutable",
+    "unaccounted", "selected",
+])
+
 _Record = namedtuple("_Record", ["status", "stage", "reason", "detail"])
+
+# Severity order for the upgrade rule in ``Accounting.record``. Only states that can
+# legitimately arrive *after* an earlier one appear here; ``skipped`` and ``unroutable``
+# are decided before any work happens, so they are never an upgrade target.
+_RANK = {EXECUTED: 0, DEGRADED: 1, FAILED: 2}
+
+
+def _outranks(new_status, old_status):
+    """True when ``new_status`` should replace ``old_status`` on a re-record.
+
+    Both states must be on the ladder. A ``.get(..., -1)`` default here would make
+    ``executed`` outrank a previously recorded ``skipped`` (0 > -1) and silently erase a
+    skip — the exact class this module exists to stop. Anything off the ladder keeps
+    record-once semantics: the first state wins.
+    """
+    if new_status not in _RANK or old_status not in _RANK:
+        return False
+    return _RANK[new_status] > _RANK[old_status]
 
 
 def is_placeholder_token(value):
@@ -127,16 +183,16 @@ class RunReport:
     def record(self, check_ids, status, stage, reason=None, detail=None):
         """Record ``status`` for each id in ``check_ids``.
 
-        Record-once semantics (spec §2): the first recorded state wins,
-        **except** ``failed`` overrides an earlier ``executed`` — a stage that
-        scanned and then crashed in post-processing is failed, not clean.
-        Same-state re-records are idempotent no-ops.
+        Record-once semantics (spec §2): the first recorded state wins, except
+        that a state may be **upgraded** along ``executed -> degraded ->
+        failed`` — a stage that scanned and then crashed in post-processing is
+        failed, not clean, and one that scanned and then found part of its
+        input unparsed is degraded, not clean. Same-state re-records are
+        idempotent no-ops, and a downgrade is never applied.
         """
         for cid in check_ids:
             existing = self._records.get(cid)
-            if existing is None or (
-                status == FAILED and existing.status == EXECUTED
-            ):
+            if existing is None or _outranks(status, existing.status):
                 self._records[cid] = _Record(status, stage, reason, detail)
 
     def status_of(self, check_id):
@@ -144,24 +200,31 @@ class RunReport:
         return rec.status if rec else None
 
     def counts(self):
-        """Return ``(executed, skipped, failed, unaccounted, selected)``.
+        """Return ``Counts(executed, skipped, failed, degraded, unroutable,
+        unaccounted, selected)``.
 
         ``unaccounted`` is any selected check that reached no terminal state —
         an accounting bug (a stage wired for dispatch but not for recording),
         not a normal outcome.
+
+        A namedtuple rather than a plain tuple: this used to be a 5-tuple that
+        callers unpacked positionally, and adding two states mid-tuple would
+        have silently rebound every one of them. Existing callers that unpack
+        five names are the reason ``unaccounted`` and ``selected`` stay last.
         """
-        executed = skipped = failed = unaccounted = 0
+        tally = {st: 0 for st in (EXECUTED, SKIPPED, FAILED, DEGRADED, UNROUTABLE)}
+        unaccounted = 0
         for cid in self._order:
             st = self.status_of(cid)
-            if st == EXECUTED:
-                executed += 1
-            elif st == SKIPPED:
-                skipped += 1
-            elif st == FAILED:
-                failed += 1
+            if st in tally:
+                tally[st] += 1
             else:
                 unaccounted += 1
-        return (executed, skipped, failed, unaccounted, len(self._order))
+        return Counts(
+            tally[EXECUTED], tally[SKIPPED], tally[FAILED],
+            tally[DEGRADED], tally[UNROUTABLE],
+            unaccounted, len(self._order),
+        )
 
     def blocking_failures(self):
         """``(id, stage, reason, detail)`` for every blocking check in ``failed``.
@@ -186,16 +249,23 @@ class RunReport:
         checks produced zero findings — the line that separates a real zero
         from a never-ran zero.
         """
-        executed, skipped, failed, unaccounted, selected = self.counts()
+        c = self.counts()
+        selected = c.selected
         ids_with_findings = {cid for cid, _, _ in findings}
 
         count_parts = [
-            f"{executed} executed",
-            f"{skipped} skipped",
-            f"{failed} failed",
+            f"{c.executed} executed",
+            f"{c.skipped} skipped",
+            f"{c.failed} failed",
         ]
-        if unaccounted:
-            count_parts.append(f"{unaccounted} unaccounted")
+        # Only when non-zero: the header is read every run, and two permanent
+        # `0 degraded / 0 unroutable` columns train the eye to skip it.
+        if c.degraded:
+            count_parts.append(f"{c.degraded} degraded")
+        if c.unroutable:
+            count_parts.append(f"{c.unroutable} unroutable")
+        if c.unaccounted:
+            count_parts.append(f"{c.unaccounted} unaccounted")
         header = (
             f"--- {len(findings)} finding(s) · checks: "
             + " / ".join(count_parts)
@@ -218,7 +288,7 @@ class RunReport:
             group = groups.setdefault(key, {"ids": [], "detail": rec.detail})
             group["ids"].append(cid)
 
-        for want in (FAILED, SKIPPED):
+        for want in (FAILED, DEGRADED, UNROUTABLE, SKIPPED):
             for (status, stage, reason), group in groups.items():
                 if status != want:
                     continue
@@ -229,11 +299,17 @@ class RunReport:
                 # ⚠ only for a LOCALIZED blocking check that did not run — an
                 # armed gate gone dead. Placeholder-scoped blocking checks are
                 # unarmed and render calm (their detail already says so).
+                # ⚠ means "this gate was armed and is now dead". A `degraded` check
+                # DID run — it just saw less than it claimed — so it gets its own
+                # wording; using the dead-gate warning for it would make the loudest
+                # signal in the summary mean two different things.
                 if any(
                     cid in self._blocking and self._localized.get(cid)
                     for cid in ids
                 ):
-                    line += "  ⚠ BLOCKING CHECK DID NOT RUN"
+                    line += ("  ⚠ BLOCKING CHECK RAN INCOMPLETE"
+                             if status == DEGRADED else
+                             "  ⚠ BLOCKING CHECK DID NOT RUN")
                 lines.append(line)
 
         unaccounted_ids = [

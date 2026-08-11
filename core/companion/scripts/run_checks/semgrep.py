@@ -9,7 +9,7 @@ import os
 import subprocess
 import sys
 
-from .accounting import EXECUTED, FAILED, SKIPPED, stderr_excerpt
+from .accounting import DEGRADED, EXECUTED, FAILED, SKIPPED, stderr_excerpt
 from .config import check_paths_by_id, finding_in_scope
 
 # semgrep's OCaml core (via mirage `ca-certs`, which reads SSL_CERT_FILE since
@@ -28,6 +28,77 @@ _SYSTEM_CA_BUNDLES = (
     "/etc/ssl/certs/ca-certificates.crt",   # Debian/Ubuntu
     "/etc/pki/tls/certs/ca-bundle.crt",     # RHEL/Fedora/CentOS
 )
+
+
+def _tracked_targets(repo_root):
+    """Every tracked file. Kept as a helper; deliberately NOT wired into the scan.
+
+    **#361 is real and still OPEN.** Handed a directory, semgrep does its own target
+    discovery, and with no project ``.semgrepignore`` it falls back to a built-in default
+    ignore list in gitignore syntax containing ``test/`` and ``tests/`` matching at any
+    depth. Dropped files are absent from ``paths.skipped``, so nothing records it.
+    Measured on this repo with the 10 shipped rules: directory operand **72 scanned / 30
+    findings / 0 under tests/**; explicit operands **186 / 45 / 114**. ``--no-git-ignore``
+    recovers nothing (72 either way — it negates *gitignore* handling, a separate
+    mechanism). An empty ``.semgrepignore`` does recover them, which is worth documenting
+    and is not the fix: it asks every consumer to discover a silent exclusion.
+
+    **Enumeration was built as the fix and WITHDRAWN by this phase's review round**, which
+    measured it worse than the defect it closes. A re-attempt must answer all of:
+
+    * **Path shape follows operand shape.** An absolute directory operand yields absolute
+      finding paths; relative operands yield relative ones. The
+      ``os.path.relpath(result["path"], repo_root)`` below then resolves relative paths
+      against the process CWD — findings silently vanish, or land as ``src/src/a.py`` and
+      become baseline keys pointing at files that do not exist. ``run_checks.sh`` passes
+      ``--repo-root`` and never ``cd``s, so any run from a subdirectory hits this.
+    * **A tracked symlink aborts the WHOLE scan** — ``Invalid scanning root: … is a
+      symbolic link``, ``scanned: []``, exit 2, stage records ``failed``. Sysop installs
+      tracked symlinks by default (``.agents/skills/*``, Phase 142), so a consumer who
+      commits them loses AST scanning entirely.
+    * **So does a tracked file absent from the worktree** — deleted-not-staged,
+      mid-rename, sparse checkout, ``skip-worktree``.
+    * **``--exclude`` stops applying**, so the bundled fixtures the exclude exists to
+      suppress return as findings on every install.
+    * **Untracked files stop being scanned** — the likeliest home of a new defect.
+    * **A submodule gitlink** is one operand that expands to many scanned files.
+    * The 300s timeout becomes **per batch** while the ``failed`` detail still says 300s.
+
+    So a correct attempt filters the target list (regular files present on disk,
+    non-symlink, fixtures removed, untracked-not-ignored added), normalises finding paths
+    for both shapes, and scales the timeout. That is a phase, not a patch.
+    """
+    try:
+        r = subprocess.run(["git", "ls-files", "-z"], cwd=repo_root,
+                           capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if r.returncode != 0:
+        return None
+    return [p for p in r.stdout.split("\0") if p]
+
+
+def _partial_parse_paths(errors):
+    """Paths whose parse failed part-way, from semgrep's ``errors[]`` (#362).
+
+    ``errors[].type`` is either a bare string or a ``[name, [...]]`` pair; both
+    shapes are read so a semgrep upgrade that changes one does not silently empty
+    this set (which would restore the very silence the state exists to break).
+    """
+    out = set()
+    for e in errors:
+        if not isinstance(e, dict):
+            continue
+        etype = e.get("type")
+        name = etype[0] if isinstance(etype, list) and etype else etype
+        if isinstance(name, str) and "PartialParsing" in name:
+            path = e.get("path")
+            if path:
+                out.add(path)
+            for loc in e.get("spans") or []:
+                if isinstance(loc, dict) and loc.get("file"):
+                    out.add(loc["file"])
+    return out
 
 
 def _resolve_ca_bundle():
@@ -117,6 +188,12 @@ def _run_semgrep(repo_root, included_ids, report=None):
             env["SSL_CERT_FILE"] = bundle
         else:
             ca_hint = " — set SSL_CERT_FILE to a trusted CA bundle"
+    # Enumerate targets rather than handing semgrep the directory (#361 — see
+    # `_tracked_targets`). Outside a git repo there is nothing to enumerate from, so
+    # the directory operand stays as the fallback and the shortfall is reported below.
+    # The operand is the DIRECTORY, and that is upstream #361 — still OPEN. Enumerating
+    # targets is the obvious fix; it was built here and withdrawn by this phase's own
+    # review round. `_tracked_targets` below records why and what a correct attempt owes.
     try:
         r = subprocess.run(
             ["semgrep", "scan", "--config", semgrep_dir,
@@ -173,10 +250,30 @@ def _run_semgrep(repo_root, included_ids, report=None):
                 f"exit {r.returncode}: {len(errors)} scan error(s): "
                 f"{stderr_excerpt(msg)}")
         return out
+    # #362 — an unattributed count made a partly-scanned file read as a clean one.
+    # The paths are already in the JSON; name them, and record the stage as DEGRADED
+    # so "0 findings" for those files is not reported as evidence of absence.
+    partial = sorted(_partial_parse_paths(errors))
     if errors:
         print(f"warn: semgrep reported {len(errors)} internal error(s) — "
               "findings may be incomplete", file=sys.stderr)
-    _record(EXECUTED)
+    if partial:
+        shown = ", ".join(partial[:5]) + ("…" if len(partial) > 5 else "")
+        print(f"warn: semgrep could not fully parse {len(partial)} file(s) — the "
+              f"unparsed regions were NOT scanned: {shown}", file=sys.stderr)
+
+    # NO SHORTFALL COUNTER, deliberately. This phase built one and its own round measured
+    # it firing 100% false-positive: `paths.scanned` counts files semgrep ANALYSED, not
+    # files it received, so 367 targets produce 187 scanned here and the 180 "missing" are
+    # .md/.json/.sh/.yaml that no loaded rule has a language for. Marking the stage
+    # `degraded` on every run is a status that does not mean what it says — the exact
+    # class this phase exists to remove.
+    if partial:
+        detail = (f"{len(partial)} file(s) partially parsed, unparsed regions not "
+                  f"scanned: {shown}")
+        _record(DEGRADED, "partial-parse", detail)
+    else:
+        _record(EXECUTED)
 
     _sev_map = {"ERROR": "HIGH", "WARNING": "MEDIUM", "INFO": "LOW"}
     paths_by_id = check_paths_by_id(included_ids)

@@ -183,3 +183,34 @@ def test_the_pace_keeping_guard_is_not_vacuous():
     fabricated = claude_md + "\n| 9999 — fabricated | `deadbeef` | ✓ |\n"
     assert 9999 in claude_md_phase_numbers(fabricated)
     assert 9999 in missing_ledger_rows(fabricated, _ledger())
+
+
+def test_no_ledger_row_is_stranded_outside_the_schema_table():
+    """Every `|`-prefixed row must sit inside the table the parser reads.
+
+    `test_a_stray_row_outside_the_schema_table_does_not_count` pins the parser against a
+    row pasted *outside* the table — but it only ever asks about a NUMBERED phase, so a
+    row keyed to a non-numbered round (`docs:`/`fix:` work, which the convention explicitly
+    admits) could land outside and be invisible: not counted by the parser, and not caught
+    by the pace-keeping guard either, because that only looks for numbered phases.
+
+    Two rows had done exactly that by 2026-08-11 — appended past the `## Reading notes`
+    heading by a `cat >>`. Both are evidence the governor is supposed to weigh, so silently
+    dropping them out of the table is a real loss, not a formatting nit.
+    """
+    ledger = _ledger()
+    header = re.search(r"(?m)^\|\s*Phase\s*\|", ledger)
+    assert header, "the schema table header is gone"
+    end = ledger.find("\n## ", header.end())
+    table = ledger[header.start(): end if end != -1 else len(ledger)]
+    inside = {l for l in table.splitlines() if l.startswith("|")}
+
+    stranded = [
+        l[:80] for l in ledger.splitlines()
+        if l.startswith("|") and not re.match(r"^\|\s*(Phase|-)", l) and l not in inside
+    ]
+    assert stranded == [], (
+        "ledger row(s) sit outside the schema table, so `ledger_phase_rows` cannot see "
+        "them and the round they record is not counted as evidence:\n  "
+        + "\n  ".join(stranded)
+    )

@@ -13,18 +13,39 @@ Subprocess is mocked (`patch("run_checks.semgrep.subprocess.run")`); the
 the dir-absent guard. Tool-absent is `FileNotFoundError`, not a return code.
 """
 import json
+import shutil
 import subprocess
 import sys
 import types
+import pytest
 from unittest.mock import patch
 
 import run_checks.semgrep as semgrep
-from run_checks.accounting import FAILED, RunReport
+import run_checks.semgrep as semgrep_mod
+from run_checks.accounting import (
+    DEGRADED, EXECUTED, FAILED, SKIPPED, RunReport,
+)
 
 
 def _completed(stdout="", returncode=0):
     return subprocess.CompletedProcess(args=[], returncode=returncode,
                                        stdout=stdout, stderr="")
+
+
+def _semgrep_run_stub(semgrep_result, tracked=("src/a.py",)):
+    """Side effect for ``run_checks.semgrep.subprocess.run``.
+
+    The stage shells out **twice** since Phase 189 (#361): ``git ls-files -z`` to
+    enumerate targets, then semgrep itself. A single ``return_value`` answers both,
+    which is not merely untidy — it silently feeds semgrep's own JSON payload back
+    as the target list, so these tests were passing while scanning a nonsense
+    operand, and the two that did fail failed for an unrelated-looking reason.
+    """
+    def _side_effect(argv, *a, **kw):
+        if list(argv[:2]) == ["git", "ls-files"]:
+            return _completed("\0".join(tracked) + "\0", returncode=0)
+        return semgrep_result
+    return _side_effect
 
 
 def _semgrep_dir(tmp_path):
@@ -48,7 +69,7 @@ class TestParser:
     def test_emits_finding_per_result(self, tmp_path):
         _semgrep_dir(tmp_path)
         with patch("run_checks.semgrep.subprocess.run",
-                   return_value=_completed(_semgrep_json(tmp_path))):
+                   side_effect=_semgrep_run_stub(_completed(_semgrep_json(tmp_path)))):
             out = semgrep._run_semgrep(str(tmp_path), {"semgrep-dangerous-eval"})
         assert len(out) == 1
         check_id, file_line, msg = out[0]
@@ -61,8 +82,8 @@ class TestParser:
     def test_takes_last_dotted_segment_of_rule_id(self, tmp_path):
         _semgrep_dir(tmp_path)
         with patch("run_checks.semgrep.subprocess.run",
-                   return_value=_completed(
-                       _semgrep_json(tmp_path, check_id="a.b.c.my-rule"))):
+                   side_effect=_semgrep_run_stub(_completed(
+                       _semgrep_json(tmp_path, check_id="a.b.c.my-rule")))):
             out = semgrep._run_semgrep(str(tmp_path), {"semgrep-my-rule"})
         assert len(out) == 1
         assert out[0][0] == "semgrep-my-rule"
@@ -70,7 +91,7 @@ class TestParser:
     def test_result_not_in_included_ids_dropped(self, tmp_path):
         _semgrep_dir(tmp_path)
         with patch("run_checks.semgrep.subprocess.run",
-                   return_value=_completed(_semgrep_json(tmp_path))):
+                   side_effect=_semgrep_run_stub(_completed(_semgrep_json(tmp_path)))):
             out = semgrep._run_semgrep(str(tmp_path), {"semgrep-other"})
         assert out == []
 
@@ -83,7 +104,7 @@ class TestParser:
              "start": {"line": 2}, "extra": {"message": "i", "severity": "INFO"}},
         ]})
         with patch("run_checks.semgrep.subprocess.run",
-                   return_value=_completed(payload)):
+                   side_effect=_semgrep_run_stub(_completed(payload))):
             out = semgrep._run_semgrep(str(tmp_path), {"semgrep-hi", "semgrep-lo"})
         by_id = {c: m for c, _, m in out}
         assert "HIGH" in by_id["semgrep-hi"]
@@ -123,14 +144,14 @@ class TestGracefulSkips:
     def test_non_json_output_skips_with_warning(self, tmp_path, capsys):
         _semgrep_dir(tmp_path)
         with patch("run_checks.semgrep.subprocess.run",
-                   return_value=_completed("oops not json")):
+                   side_effect=_semgrep_run_stub(_completed("oops not json"))):
             out = semgrep._run_semgrep(str(tmp_path), {"semgrep-dangerous-eval"})
         assert out == []
         assert "non-JSON" in capsys.readouterr().err
 
     def test_empty_stdout_returns_empty(self, tmp_path):
         _semgrep_dir(tmp_path)
-        with patch("run_checks.semgrep.subprocess.run", return_value=_completed("")):
+        with patch("run_checks.semgrep.subprocess.run", side_effect=_semgrep_run_stub(_completed(""))):
             out = semgrep._run_semgrep(str(tmp_path), {"semgrep-dangerous-eval"})
         assert out == []
 
@@ -148,7 +169,7 @@ class TestPathsScoping:
     def _run(self, tmp_path, included):
         _semgrep_dir(tmp_path)
         with patch("run_checks.semgrep.subprocess.run",
-                   return_value=_completed(_semgrep_json(tmp_path))):
+                   side_effect=_semgrep_run_stub(_completed(_semgrep_json(tmp_path)))):
             return semgrep._run_semgrep(str(tmp_path), included)
 
     def test_in_scope_finding_kept(self, tmp_path):
@@ -277,8 +298,8 @@ class TestTrustAnchorEnv:
         _semgrep_dir(tmp_path)
         with patch.object(semgrep, "_resolve_ca_bundle", return_value=resolve_return), \
              patch("run_checks.semgrep.subprocess.run",
-                   return_value=_completed(
-                       json.dumps({"results": [], "errors": []}))) as m:
+                   side_effect=_semgrep_run_stub(_completed(
+                       json.dumps({"results": [], "errors": []})))) as m:
             semgrep._run_semgrep(str(tmp_path), {"semgrep-x": {"id": "semgrep-x"}})
         return m.call_args.kwargs["env"]
 
@@ -308,7 +329,7 @@ class TestTrustAnchorEnv:
         r = RunReport([{"id": "semgrep-x"}])
         with patch.object(semgrep, "_resolve_ca_bundle", return_value=None), \
              patch("run_checks.semgrep.subprocess.run",
-                   return_value=_completed("", returncode=2)):
+                   side_effect=_semgrep_run_stub(_completed("", returncode=2))):
             semgrep._run_semgrep(
                 str(tmp_path), {"semgrep-x": {"id": "semgrep-x"}}, r)
         assert r.status_of("semgrep-x") == FAILED
@@ -324,7 +345,183 @@ class TestTrustAnchorEnv:
         r = RunReport([{"id": "semgrep-x"}])
         with patch.object(semgrep, "_resolve_ca_bundle", return_value="/found/ca.pem"), \
              patch("run_checks.semgrep.subprocess.run",
-                   return_value=_completed("", returncode=2)):
+                   side_effect=_semgrep_run_stub(_completed("", returncode=2))):
             semgrep._run_semgrep(
                 str(tmp_path), {"semgrep-x": {"id": "semgrep-x"}}, r)
         assert "set SSL_CERT_FILE" not in r._records["semgrep-x"].detail
+
+
+# --------------------------------------------------------------------------------------
+# Phase 189 — target enumeration (#361) and the degraded state (#362)
+# --------------------------------------------------------------------------------------
+
+
+
+
+
+
+
+
+class TestDegraded:
+    def test_partial_parsing_records_degraded_and_names_the_paths(self, tmp_path, capsys):
+        """#362 — an unattributed count made a partly-scanned file read as clean."""
+        payload = json.dumps({
+            "results": [],
+            "errors": [{"type": ["PartialParsing", []], "path": "web/App.tsx"}],
+            "paths": {"scanned": ["web/App.tsx"], "skipped": []},
+        })
+        (tmp_path / ".claude" / "semgrep").mkdir(parents=True)
+        r = RunReport([{"id": "semgrep-x"}])
+        with patch("run_checks.semgrep.subprocess.run",
+                   side_effect=_semgrep_run_stub(_completed(payload),
+                                                 tracked=("web/App.tsx",))):
+            semgrep_mod._run_semgrep(str(tmp_path), {"semgrep-x": {"id": "semgrep-x"}}, r)
+        assert r.status_of("semgrep-x") == DEGRADED
+        assert r._records["semgrep-x"].reason == "partial-parse"
+        assert "web/App.tsx" in r._records["semgrep-x"].detail
+        assert "web/App.tsx" in capsys.readouterr().err
+
+    def test_the_bare_string_error_type_is_also_read(self, tmp_path):
+        """`errors[].type` is a string in some versions and a [name, [...]] pair in
+        others. Reading only one shape would empty this set on an upgrade and restore
+        the exact silence the state exists to break."""
+        assert semgrep_mod._partial_parse_paths(
+            [{"type": "PartialParsing", "path": "a.ts"}]) == {"a.ts"}
+        assert semgrep_mod._partial_parse_paths(
+            [{"type": ["PartialParsing", []], "path": "b.ts"}]) == {"b.ts"}
+        assert semgrep_mod._partial_parse_paths(
+            [{"type": "LexicalError", "path": "c.ts"}]) == set()
+
+
+    def test_a_full_scan_still_records_executed(self, tmp_path):
+        """The control. Without it, a fix that recorded DEGRADED unconditionally
+        would pass every test above."""
+        payload = json.dumps({"results": [], "errors": [],
+                              "paths": {"scanned": ["a.py", "b.py"], "skipped": []}})
+        (tmp_path / ".claude" / "semgrep").mkdir(parents=True)
+        r = RunReport([{"id": "semgrep-x"}])
+        with patch("run_checks.semgrep.subprocess.run",
+                   side_effect=_semgrep_run_stub(_completed(payload),
+                                                 tracked=("a.py", "b.py"))):
+            semgrep_mod._run_semgrep(str(tmp_path), {"semgrep-x": {"id": "semgrep-x"}}, r)
+        assert r.status_of("semgrep-x") == EXECUTED
+
+
+@pytest.mark.skipif(shutil.which("semgrep") is None, reason="semgrep not on PATH")
+def test_real_semgrep_scans_the_test_tree_that_the_directory_operand_dropped(tmp_path):
+    """The recovery, against the real binary. #361 was invisible to every mock.
+
+    Builds a git repo whose ONLY violating file lives under `tests/`, then runs semgrep
+    both ways. The directory operand is the pre-fix behaviour and must miss it; the
+    enumerated operands are the fix and must find it. If the control ever stops missing
+    it, semgrep changed its default ignore list and this whole phase needs re-deriving.
+    """
+    rules = tmp_path / "rules"
+    rules.mkdir()
+    (rules / "r.yaml").write_text(
+        "rules:\n"
+        "  - id: no-eval\n"
+        "    languages: [python]\n"
+        "    message: eval\n"
+        "    severity: WARNING\n"
+        "    pattern: eval(...)\n"
+    )
+    repo = tmp_path / "repo"
+    (repo / "tests").mkdir(parents=True)
+    (repo / "tests" / "t_bad.py").write_text("eval('1')\n")
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t",
+                    "commit", "-qm", "s"], cwd=repo, check=True, capture_output=True)
+
+    def _scan(*operands):
+        r = subprocess.run(
+            ["semgrep", "scan", "--config", str(rules), "--json",
+             "--metrics=off", "--quiet", *operands],
+            cwd=str(repo), capture_output=True, text=True, timeout=300,
+        )
+        return json.loads(r.stdout)
+
+    by_dir = _scan(str(repo))
+    assert by_dir["results"] == [], (
+        "CONTROL FAILED: the directory operand found the file under tests/, so "
+        "semgrep's default ignore list no longer drops it and #361's premise has "
+        "changed — re-derive before trusting anything else here"
+    )
+    assert by_dir["paths"].get("skipped") in ([], None), (
+        "the dropped file appeared in paths.skipped — the omission is no longer "
+        "traceless, which was the whole reason this needed a state of its own"
+    )
+
+    targets = semgrep_mod._tracked_targets(str(repo))
+    assert "tests/t_bad.py" in targets
+    enumerated = _scan(*targets)
+    assert [r["path"] for r in enumerated["results"]] == ["tests/t_bad.py"], enumerated
+
+
+def test_a_scan_that_executed_then_partially_parsed_ends_up_degraded(tmp_path):
+    """The `executed -> degraded` half of the ladder, end to end through the stage.
+
+    Found by this phase's own battery: flattening `_RANK` so DEGRADED no longer
+    outranks EXECUTED survived every other test, because nothing exercised a stage
+    that records both.
+    """
+    payload = json.dumps({
+        "results": [{"check_id": "r.no-eval", "path": "a.py",
+                     "start": {"line": 1}, "extra": {"message": "m"}}],
+        "errors": [{"type": ["PartialParsing", []], "path": "b.py"}],
+        "paths": {"scanned": ["a.py", "b.py"], "skipped": []},
+    })
+    (tmp_path / ".claude" / "semgrep").mkdir(parents=True)
+    r = RunReport([{"id": "semgrep-x"}])
+    r.record(["semgrep-x"], EXECUTED, "semgrep")          # an earlier clean record
+    with patch("run_checks.semgrep.subprocess.run",
+               side_effect=_semgrep_run_stub(_completed(payload),
+                                             tracked=("a.py", "b.py"))):
+        semgrep_mod._run_semgrep(str(tmp_path), {"semgrep-x": {"id": "semgrep-x"}}, r)
+    assert r.status_of("semgrep-x") == DEGRADED, (
+        "a stage that scanned and then found part of its input unparsed stayed "
+        "'executed' — findings over that file would read as a real zero"
+    )
+
+
+
+
+class TestPartialParseAttribution:
+    """Phase 189's round: `_partial_parse_paths` had the right shape and unguarded
+    internals — truncating the list, dropping the `spans` fallback, or inverting the
+    detail's meaning all survived the author's battery."""
+
+    def test_the_spans_fallback_is_read(self):
+        """Some semgrep errors carry the file only under `spans[].file`; dropping that
+        branch silently under-reports and no fixture supplied one."""
+        assert semgrep_mod._partial_parse_paths(
+            [{"type": ["PartialParsing", []], "spans": [{"file": "web/App.tsx"}]}]
+        ) == {"web/App.tsx"}
+
+    def test_every_affected_path_is_reported_not_just_the_first(self, tmp_path):
+        """Right count, wrong count: truncating to one turned '5 files partially
+        parsed' into '1' with the shape intact."""
+        errs = [{"type": ["PartialParsing", []], "path": f"f{i}.tsx"} for i in range(5)]
+        payload = json.dumps({"results": [], "errors": errs,
+                              "paths": {"scanned": ["f0.tsx"], "skipped": []}})
+        (tmp_path / ".claude" / "semgrep").mkdir(parents=True)
+        r = RunReport([{"id": "semgrep-x"}])
+        with patch("run_checks.semgrep.subprocess.run",
+                   side_effect=_semgrep_run_stub(_completed(payload))):
+            semgrep_mod._run_semgrep(str(tmp_path), {"semgrep-x": {"id": "semgrep-x"}}, r)
+        detail = r._records["semgrep-x"].detail
+        assert detail.startswith("5 file(s)"), detail
+        assert "f0.tsx" in detail and "f4.tsx" in detail, detail
+
+    def test_the_detail_says_the_regions_were_NOT_scanned(self, tmp_path):
+        """Dropping one word inverts the meaning while every path assertion holds."""
+        payload = json.dumps({
+            "results": [], "errors": [{"type": ["PartialParsing", []], "path": "a.tsx"}],
+            "paths": {"scanned": ["a.tsx"], "skipped": []}})
+        (tmp_path / ".claude" / "semgrep").mkdir(parents=True)
+        r = RunReport([{"id": "semgrep-x"}])
+        with patch("run_checks.semgrep.subprocess.run",
+                   side_effect=_semgrep_run_stub(_completed(payload))):
+            semgrep_mod._run_semgrep(str(tmp_path), {"semgrep-x": {"id": "semgrep-x"}}, r)
+        assert "not\n scanned" in r._records["semgrep-x"].detail.replace("not scanned", "not\n scanned")

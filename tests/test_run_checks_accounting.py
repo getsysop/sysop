@@ -31,13 +31,31 @@ import run_checks.lsp as lsp_mod
 import run_checks.pip_audit as pip_audit_mod
 import run_checks.semgrep as semgrep_mod
 import run_checks_impl as rci
-from run_checks.accounting import EXECUTED, FAILED, SKIPPED, RunReport
+from run_checks.accounting import (
+    DEGRADED, EXECUTED, FAILED, SKIPPED, UNROUTABLE, RunReport,
+)
 
 
 def _completed(stdout="", returncode=0, stderr=""):
     return subprocess.CompletedProcess(
         args=[], returncode=returncode, stdout=stdout, stderr=stderr
     )
+
+
+def _semgrep_run_stub(semgrep_result, tracked=("src/a.py",)):
+    """Side effect for ``run_checks.semgrep.subprocess.run``.
+
+    The stage shells out **twice** since Phase 189 (#361): ``git ls-files -z`` to
+    enumerate targets, then semgrep itself. A single ``return_value`` answers both,
+    which is not merely untidy — it silently feeds semgrep's own JSON payload back
+    as the target list, so these tests were passing while scanning a nonsense
+    operand, and the two that did fail failed for an unrelated-looking reason.
+    """
+    def _side_effect(argv, *a, **kw):
+        if list(argv[:2]) == ["git", "ls-files"]:
+            return _completed("\0".join(tracked) + "\0", returncode=0)
+        return semgrep_result
+    return _side_effect
 
 
 # ── RunReport unit behavior ─────────────────────────────────────────────────
@@ -72,12 +90,23 @@ class TestRunReportRecording:
         assert r.status_of("c1") == SKIPPED
 
     def test_counts_tallies_each_state_and_unaccounted(self):
-        r = RunReport([{"id": "a"}, {"id": "b"}, {"id": "c"}, {"id": "d"}])
+        r = RunReport([
+            {"id": "a"}, {"id": "b"}, {"id": "c"}, {"id": "d"},
+            {"id": "e"}, {"id": "f"},
+        ])
         r.record(["a"], EXECUTED, "grep")
         r.record(["b"], SKIPPED, "grep", "not-configured")
         r.record(["c"], FAILED, "semgrep", "timeout")
+        r.record(["e"], DEGRADED, "semgrep", "partial-parse")
+        r.record(["f"], UNROUTABLE, "grep", "no-executable-form")
         # d never recorded → unaccounted
-        assert r.counts() == (1, 1, 1, 1, 4)
+        c = r.counts()
+        # Asserted by NAME, not position: Phase 189 added two states mid-tuple, and the
+        # positional form this test used to carry would have silently rebound every field
+        # rather than failing.
+        assert (c.executed, c.skipped, c.failed) == (1, 1, 1)
+        assert (c.degraded, c.unroutable) == (1, 1)
+        assert (c.unaccounted, c.selected) == (1, 6)
 
     def test_blocking_failures_only_lists_failed_blocking(self):
         r = RunReport([
@@ -219,7 +248,7 @@ class TestSemgrepRecording:
         crash = ("Fatal error: exception Failure(\"Failed to create system "
                  "store X509 authenticator: ca-certs: empty trust anchors\")")
         with patch("run_checks.semgrep.subprocess.run",
-                   return_value=_completed("", returncode=2, stderr=crash)):
+                   side_effect=_semgrep_run_stub(_completed("", returncode=2, stderr=crash))):
             out = semgrep_mod._run_semgrep(str(tmp_path),
                                            {"semgrep-x": {"id": "semgrep-x"},
                                             "semgrep-y": {"id": "semgrep-y"}}, r)
@@ -235,7 +264,7 @@ class TestSemgrepRecording:
         self._dir(tmp_path)
         r = self._report()
         with patch("run_checks.semgrep.subprocess.run",
-                   return_value=_completed("", returncode=0)):
+                   side_effect=_semgrep_run_stub(_completed("", returncode=0))):
             semgrep_mod._run_semgrep(str(tmp_path), {"semgrep-x": {"id": "semgrep-x"}}, r)
         assert r.status_of("semgrep-x") == EXECUTED
 
@@ -247,7 +276,7 @@ class TestSemgrepRecording:
         payload = json.dumps({"results": [],
                               "errors": [{"message": "invalid rule file"}]})
         with patch("run_checks.semgrep.subprocess.run",
-                   return_value=_completed(payload, returncode=1)):
+                   side_effect=_semgrep_run_stub(_completed(payload, returncode=1))):
             semgrep_mod._run_semgrep(str(tmp_path), {"semgrep-x": {"id": "semgrep-x"}}, r)
         assert r.status_of("semgrep-x") == FAILED
         assert r._records["semgrep-x"].reason == "scan-errors"
@@ -263,7 +292,7 @@ class TestSemgrepRecording:
             "errors": [{"message": "partial"}],
         })
         with patch("run_checks.semgrep.subprocess.run",
-                   return_value=_completed(payload, returncode=1)):
+                   side_effect=_semgrep_run_stub(_completed(payload, returncode=1))):
             out = semgrep_mod._run_semgrep(
                 str(tmp_path), {"semgrep-dangerous": {"id": "semgrep-dangerous"}}, r)
         # executed, and the one in-scope finding survives
@@ -298,7 +327,7 @@ class TestSemgrepRecording:
         self._dir(tmp_path)
         r = self._report()
         with patch("run_checks.semgrep.subprocess.run",
-                   return_value=_completed("not json", returncode=0)):
+                   side_effect=_semgrep_run_stub(_completed("not json", returncode=0))):
             semgrep_mod._run_semgrep(str(tmp_path), {"semgrep-x": {"id": "semgrep-x"}}, r)
         assert r.status_of("semgrep-x") == FAILED
         assert r._records["semgrep-x"].reason == "non-json"
@@ -308,7 +337,7 @@ class TestSemgrepRecording:
         r = self._report()
         payload = json.dumps({"results": [], "errors": []})
         with patch("run_checks.semgrep.subprocess.run",
-                   return_value=_completed(payload, returncode=0)):
+                   side_effect=_semgrep_run_stub(_completed(payload, returncode=0))):
             semgrep_mod._run_semgrep(str(tmp_path), {"semgrep-x": {"id": "semgrep-x"}}, r)
         assert r.status_of("semgrep-x") == EXECUTED
 
@@ -316,7 +345,7 @@ class TestSemgrepRecording:
         """Legacy callers (report=None) get identical behavior — no crash."""
         self._dir(tmp_path)
         with patch("run_checks.semgrep.subprocess.run",
-                   return_value=_completed("", returncode=2, stderr="X509")):
+                   side_effect=_semgrep_run_stub(_completed("", returncode=2, stderr="X509"))):
             out = semgrep_mod._run_semgrep(str(tmp_path), {"semgrep-x"})
         assert out == []
 
@@ -586,13 +615,35 @@ class TestGrepRecording:
         assert r.status_of("grep-c") == SKIPPED
         assert "no configured path" in r._records["grep-c"].detail
 
-    def test_no_pattern_records_not_configured(self, tmp_path):
+    def test_no_pattern_records_unroutable_not_skipped(self, tmp_path):
+        """Phase 189 / upstream #239.
+
+        This used to record `skipped: not-configured`, putting a check that can never
+        execute ANYWHERE into the same words as a tool that merely is not installed
+        here. GDP's `doc-parity-violation` sat in that state for weeks while the summary
+        read `0 failed`. The `skipped` bucket has to stay load-bearing for genuinely
+        unavailable tooling, so a no-executable-form check gets its own state.
+        """
         (tmp_path / "src").mkdir()
         r = RunReport([{"id": "grep-c", "paths": ["src/"]}])
         check = self._check(paths=["src/"], include=["*.py"])  # no pattern
         grep_mod.run_check(check, str(tmp_path), r)
+        assert r.status_of("grep-c") == UNROUTABLE
+        assert r._records["grep-c"].reason == "no-executable-form"
+        assert "any environment" in r._records["grep-c"].detail
+
+    def test_pattern_present_but_no_paths_stays_a_skip(self, tmp_path):
+        """The other half of the split: a precondition that COULD become true.
+
+        Without this, the fix could have re-routed every not-configured case to
+        `unroutable` and looked green — the two arms are only meaningful against
+        each other.
+        """
+        r = RunReport([{"id": "grep-c"}])
+        check = self._check(pattern="x", paths=[], include=["*.py"])
+        grep_mod.run_check(check, str(tmp_path), r)
         assert r.status_of("grep-c") == SKIPPED
-        assert r._records["grep-c"].reason == "not-configured"
+        assert r._records["grep-c"].reason == "paths-unresolved"
 
     def test_executed_records_executed(self, tmp_path):
         src = tmp_path / "src"
@@ -727,7 +778,7 @@ def test_motivating_scenario_security_mode_all_stages_dead(tmp_path, monkeypatch
     (tmp_path / ".claude" / "semgrep").mkdir()
     crash = "Failed to create system store X509 authenticator: ca-certs: empty trust anchors"
     with patch("run_checks.semgrep.subprocess.run",
-               return_value=_completed("", returncode=2, stderr=crash)):
+               side_effect=_semgrep_run_stub(_completed("", returncode=2, stderr=crash))):
         code = _run_cli(tmp_path, monkeypatch, [], mode="security")
     err = capsys.readouterr().err
     assert code == 0
@@ -822,10 +873,15 @@ def test_update_baseline_runs_each_stage_once(tmp_path, monkeypatch):
     (tmp_path / ".claude" / "semgrep").mkdir()
     payload = json.dumps({"results": [], "errors": []})
     with patch("run_checks.semgrep.subprocess.run",
-               return_value=_completed(payload)) as m:
+               side_effect=_semgrep_run_stub(_completed(payload))) as m:
         code = _run_cli(tmp_path, monkeypatch, ["--update-baseline"])
     assert code == 0
-    assert m.call_count == 1  # exactly one semgrep invocation, not two
+    # Count SEMGREP invocations, not every subprocess: since Phase 189 the stage also
+    # shells out to `git ls-files` to enumerate targets (#361), so a bare call_count
+    # would now be 2 and would keep drifting with any future helper. What this test is
+    # about is the single-pass restructure — one scan, not one process.
+    semgrep_calls = [c for c in m.call_args_list if c.args and c.args[0][0] == "semgrep"]
+    assert len(semgrep_calls) == 1, m.call_args_list
 
 
 def test_update_baseline_refuses_on_blocking_failure(tmp_path, monkeypatch, capsys):
@@ -833,7 +889,7 @@ def test_update_baseline_refuses_on_blocking_failure(tmp_path, monkeypatch, caps
     _write_checks(tmp_path, _BASELINE_YML)
     (tmp_path / ".claude" / "semgrep").mkdir()
     with patch("run_checks.semgrep.subprocess.run",
-               return_value=_completed("", returncode=2, stderr="X509 crash")):
+               side_effect=_semgrep_run_stub(_completed("", returncode=2, stderr="X509 crash"))):
         code = _run_cli(tmp_path, monkeypatch, ["--update-baseline"])
     err = capsys.readouterr().err
     assert code == 1
@@ -845,7 +901,7 @@ def test_update_baseline_proceeds_when_clean(tmp_path, monkeypatch, capsys):
     _write_checks(tmp_path, _BASELINE_YML)
     (tmp_path / ".claude" / "semgrep").mkdir()
     payload = json.dumps({"results": [], "errors": []})
-    with patch("run_checks.semgrep.subprocess.run", return_value=_completed(payload)):
+    with patch("run_checks.semgrep.subprocess.run", side_effect=_semgrep_run_stub(_completed(payload))):
         code = _run_cli(tmp_path, monkeypatch, ["--update-baseline"])
     err = capsys.readouterr().err
     assert code == 0
@@ -905,3 +961,119 @@ def test_both_review_skills_state_the_runner_self_bootstraps_at_step_2b():
             f"{skill}: self-bootstrap statement must precede the accounting block "
             "(it must be read at the point of invocation)"
         )
+
+
+# ── Phase 189's round: the render layer for the two new states ──────────────
+#
+# The author's battery tested `counts()` for degraded/unroutable and never `render()`.
+# An independent battery then wrote 30 mutations and 17 survived, 8 of them here — a
+# degraded check could be made to print `executed with 0 findings`, to emit no detail
+# line at all, or to be counted under another state's label. These close that class.
+
+
+class TestRenderNewStates:
+    def _r(self):
+        r = RunReport([
+            {"id": "ok"},
+            {"id": "deg", "paths": ["real/"], "blocking": True},   # localized blocking
+            {"id": "unr", "paths": ["real/"], "blocking": True},
+            {"id": "fail", "paths": ["real/"], "blocking": True},
+        ])
+        r.record(["ok"], EXECUTED, "pyright")   # tool stage: enumerated, not a bare count
+        r.record(["deg"], DEGRADED, "semgrep", "partial-parse", "2 file(s) partial: a.tsx")
+        r.record(["unr"], UNROUTABLE, "grep", "no-executable-form", "no pattern")
+        r.record(["fail"], FAILED, "semgrep", "timeout", "timed out")
+        return r
+
+    def test_the_header_counts_them_under_their_own_labels(self):
+        head = self._r().render([], mode="both").splitlines()[0]
+        assert "1 degraded" in head, head
+        assert "1 unroutable" in head, head
+        assert "1 executed" in head and "1 failed" in head, head
+        assert "0 skipped" in head, head
+
+    def test_a_zero_count_stays_out_of_the_header(self):
+        """The header is read every run; permanent `0 degraded` columns train the eye
+        to skip it. Asserted so the suppression is not silently removed either way."""
+        r = RunReport([{"id": "a"}])
+        r.record(["a"], EXECUTED, "grep")
+        head = r.render([], mode="both").splitlines()[0]
+        assert "degraded" not in head and "unroutable" not in head, head
+
+    def test_each_new_state_emits_a_detail_line_carrying_its_reason(self):
+        out = self._r().render([], mode="both")
+        deg = [l for l in out.splitlines() if l.strip().startswith("degraded:")]
+        unr = [l for l in out.splitlines() if l.strip().startswith("unroutable:")]
+        assert len(deg) == 1 and "a.tsx" in deg[0], out
+        assert len(unr) == 1 and "no pattern" in unr[0], out
+
+    def test_a_degraded_check_is_never_reported_as_executed_with_zero_findings(self):
+        """The falsehood this whole phase exists to kill. A degraded check produced no
+        findings *and did not see all its input* — printing the executed-zero line for
+        it says the opposite."""
+        out = self._r().render([], mode="both")
+        zero_lines = [l for l in out.splitlines() if "executed with 0 findings" in l]
+        assert all("deg" not in l for l in zero_lines), out
+        assert any("ok" in l for l in zero_lines), "the real executed-zero line vanished"
+
+    def test_severity_leads_failed_then_degraded_then_unroutable_then_skipped(self):
+        r = self._r()
+        r.record(["ok"], SKIPPED, "grep", "tool-missing", "absent")  # ignored: record-once
+        r2 = RunReport([{"id": "s"}, {"id": "d"}, {"id": "u"}, {"id": "f"}])
+        r2.record(["s"], SKIPPED, "grep", "tool-missing", "absent")
+        r2.record(["d"], DEGRADED, "semgrep", "partial-parse", "p")
+        r2.record(["u"], UNROUTABLE, "grep", "no-executable-form", "n")
+        r2.record(["f"], FAILED, "semgrep", "timeout", "t")
+        order = [l.strip().split(":")[0] for l in r2.render([], mode="both").splitlines()
+                 if l.startswith("    ") and ":" in l]
+        assert order[:4] == ["failed", "degraded", "unroutable", "skipped"], order
+
+    def test_a_degraded_blocking_check_warns_that_it_RAN_INCOMPLETE(self):
+        """⚠ must not mean two things. A degraded check ran; a failed one did not."""
+        out = self._r().render([], mode="both")
+        deg = [l for l in out.splitlines() if l.strip().startswith("degraded:")][0]
+        fail = [l for l in out.splitlines() if l.strip().startswith("failed:")][0]
+        assert "⚠ BLOCKING CHECK RAN INCOMPLETE" in deg, deg
+        assert "⚠ BLOCKING CHECK DID NOT RUN" in fail, fail
+        assert "DID NOT RUN" not in deg, deg
+
+    def test_an_unroutable_blocking_check_still_warns_it_did_not_run(self):
+        out = self._r().render([], mode="both")
+        unr = [l for l in out.splitlines() if l.strip().startswith("unroutable:")][0]
+        assert "⚠ BLOCKING CHECK DID NOT RUN" in unr, unr
+
+
+class TestRecordLadder:
+    def test_degraded_upgrades_to_failed(self):
+        """The author tested executed->degraded and executed->failed, never this one —
+        so a stage that partially parsed and THEN crashed stayed non-fatal and slipped
+        past the failed-is-fatal gate."""
+        r = RunReport([{"id": "c", "blocking": True}])
+        r.record(["c"], DEGRADED, "semgrep", "partial-parse", "p")
+        r.record(["c"], FAILED, "semgrep", "timeout", "t")
+        assert r.status_of("c") == FAILED
+        assert [f[0] for f in r.blocking_failures()] == ["c"]
+
+    def test_failed_does_not_downgrade_to_degraded(self):
+        r = RunReport([{"id": "c"}])
+        r.record(["c"], FAILED, "semgrep", "timeout", "t")
+        r.record(["c"], DEGRADED, "semgrep", "partial-parse", "p")
+        assert r.status_of("c") == FAILED
+
+    def test_unroutable_is_never_an_upgrade_target(self):
+        """The docstring says so; nothing enforced it. An unroutable arriving after a
+        real result would erase it."""
+        for first in (EXECUTED, DEGRADED, FAILED, SKIPPED):
+            r = RunReport([{"id": "c"}])
+            r.record(["c"], first, "grep", "r", "d")
+            r.record(["c"], UNROUTABLE, "grep", "no-executable-form", "n")
+            assert r.status_of("c") == first, first
+
+    def test_an_upgrade_carries_the_NEW_reason_and_detail(self):
+        """An upgrade that kept the earlier detail would report a crash using the
+        degraded run's paths."""
+        r = RunReport([{"id": "c"}])
+        r.record(["c"], DEGRADED, "semgrep", "partial-parse", "a.tsx partial")
+        r.record(["c"], FAILED, "semgrep", "timeout", "timed out after 300s")
+        rec = r._records["c"]
+        assert rec.reason == "timeout" and rec.detail == "timed out after 300s"
