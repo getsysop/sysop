@@ -650,7 +650,7 @@ _RULE_3_SOFTENING_MODALS = (
 # `-`/`*` swap still pass. The cost is real and is the point: wording this rule is now a
 # deliberate act, which for a rule that ships to consumers is the correct default.
 AUTHOR_PASS_VERBATIM = (
-    '### Before you spawn anyone — the author-side pass **Who this addresses:** the *author* of a change that ships code or guards, after committing and before spawning reviewers. It is not part of the plan-review flow — a `/plan-review` or `/claim-task` Step 7 reviewer has no guards to mutate yet, and should skip this section. **Why it exists.** Twelve of the sixteen phases from 150 to 165 in this project\'s log had a round that found the phase\'s own guards vacuous or its mutation claim self-selected. One reported "33 of 33 mutations killed"; an independent reviewer then ran 83 and watched 28 survive. A round that keeps finding the same class of defect is working as a detector while the authoring step is not learning, and **buying more reviewers is the expensive way to treat that** — roughly half of what such a round finds is catchable by inspection in minutes. **This is not an argument for fewer reviewers.** Measured on one such round, reviewers on distinct lenses were **not** redundant: overlap was about 15%, and each of four lenses produced its sharpest finding alone. Findings-per-reviewer was high. The point is to stop paying them for what you can see yourself, not to stop paying them. **1. Mutate the guard\'s assumptions, not just the content it checks.** Deleting a phrase a guard requires proves the guard is *wired to the file* — real information, and for a declared **reversion guard** (one whose stated job is catching deletion or a shortening-back) or a **vacuity guard** (one asserting its own population is non-empty) that mutation is the whole test of its stated job. Run those. The failure is a set **composed mostly** of them: it reports a kill rate that describes wiring while saying nothing about coverage. In the round that produced this rule, four of the author\'s nine mutations were reverts of text the guards were written to assert, the set was reported as "0 survivors", and **eight real bypasses stood**. So add mutations against each assumption the guard makes: - **What it matches on.** A guard keyed to a physical line is walked through by a backslash continuation, by naming a flag before its command, by a variable holding the value, or by a list step that separates a command from its qualifier. None of those is adversarial; they are how people write. - **What it accepts.** A check satisfied by a substring is satisfied by an *incidental* use of that substring — worse than a gap, because it marks a dangerous line compliant. A check requiring N phrases is satisfied by N disconnected phrases in a sentence asserting the opposite. - **Where it looks.** Enumerate the files the guard actually reads and ask whether that population covers every place the defect can appear. One such guard excluded the installer — a file that already prescribed the very script the guard was about. **Derive the population from the source of truth, not from an index or summary of it**; that single substitution produced the worst number in the phase that shipped this rule. - **Over-strictness, the direction that hides.** A pattern requiring an optional token misses the idiomatic form. A guard keyed to `bash <path>/script --flag` missed `<path>/script --flag`, which was the repo\'s own house style. - **Reachability.** Can the guard run at all, and on the thing you think? A new file excluded from its own scan, an uncollected test module, an empty population — each passes while testing nothing. - **When it runs.** If the fix depends on ordering ("rejected *before* anything is deleted"), mutate the ordering. Prose asserting an order is not a test of it. Report the fraction. **A survivor you decline to close must be impossible to close *in kind*** — it needs a judgement no pattern can encode — **not merely unattempted.** "Known blind spot, as designed" is not a disposition: in the round that produced this rule the author labelled the single biggest hole exactly that way, and the round required it fixed. If an ordinary in-repo idiom reaches your survivor, it is a defect wearing a residual\'s label. **One battery, then hand the question to the round.** Write the battery once — the declared reversion and vacuity tests, plus mutations against each assumption class above, plus negative controls — run it, close what it catches (a survivor you decline to close is still held to the criterion above), re-run it to confirm the closures, and report the final fraction with the survivors named. Do not keep authoring fresh batteries in pursuit of an exhausted zero: in five consecutive phases of this project\'s log, the author\'s battery reported every mutation killed, and an independent reviewer\'s battery then found 33 to 99 survivors — every time. An author\'s zero measures self-consistency; exhaustion is the reviewers\' measurement, and iterating toward it author-side pays twice for the weaker of the two numbers. The pass still pays here — one honest battery instead of none, not many instead of one. A closure that *rewrites* a guard rather than patching it takes the battery with it: re-point the affected mutations at the new guard, give the rewrite a non-vacuity control, and treat it as what it is — new material no fresh reader has seen, which before the round is simply the round\'s subject, and after the round is the second-round condition the governor above names. **2. Re-read your own new prose against the code it describes.** Both defects one such round found *in the fix itself* were sentences the author had just written that contradicted the file they sat in — and both were in the same class the fix existed to remove. New prose is the least-reviewed text in any change: no history, no reviewer has seen it, and its author is the one person who cannot read it cold. Check every new claim against the thing it describes, including claims about paths, which are as easily wrong in the consumer\'s installed layout as in yours. **3. Run the commands the change prescribes, in a throwaway repo — before you spawn anyone.** Shipped scripts get real-subprocess coverage, and a few purpose-built extractors do pull a *named* heredoc out of a skill file and run it against a fixture — but nothing runs a command generally, so **a newly prescribed one stays text until an operator reaches it**, and "the prescribed command does not work" is invisible until that moment. Scope this to commands whose operand the change **computes or substitutes** — `git log --oneline` has no operand to get wrong. Copy the literal string, resolve its placeholders the way the change tells an operator to resolve them, and run it. In the round that produced this rule, a prescribed `git show "<branch>:<body path>"` **failed on a default install** — `fatal: path … does not exist` — and the change\'s own new `unreadable` classification would then have halted every run with a fabricated diagnosis blaming the branch. One of three lenses found it, by building a scratch repo and running the string; the other two read the same files and did not. - **Build the fixture\'s inputs from the source of truth, not from your own model of them.** This is the half that does the work, and the easy one to drop. The same fixture runs **green** on the author\'s assumption and **red** on what the shipped writers actually emit: in that round, an assumed body path of `tasks/open/<ID>.md` printed the file, while the canonical value every writer emits — `open/<ID>.md`, relative to `tasks/` — exited 128. A fixture you populate from memory proves only that you are self-consistent. This is rule 1\'s *"derive the population from the source of truth, not from an index or summary of it"* moved from what a guard **reads** to what a fixture **contains**. - **What it reaches is narrow, and the rule says so rather than leaving it implied:** whether the command runs, and whether it does what you said it does. Nothing past that. In that same round the two other defect classes — 43 of 90 guard mutations bypassing, and the false claims in its own record — were entirely outside it. It converts one expensive finding into a cheap one; it does not replace a lens. **What this pass cannot do.** Rule 3 narrowed this and left more than it took. Executing one command against a fixture *you* built reaches "does it run" and "does it do what I said", and stops there. Out of reach still: whether the prescribed command is the **right** one to prescribe; whether a claim about what its output *means* holds; the common case itself, since a fixture is one case and you are the person who chose which; and it still cannot catch a number whose *source* was wrong, only one whose arithmetic was. Those want a reader who has not already decided what the change means — which is what you are about to spawn. Where the harness cannot spawn reviewers at all (§ Harness constraint), this pass is the most you have and you should say so in the record rather than let its limits pass silently. '
+    '### Before you spawn anyone — the author-side pass **Who this addresses:** the *author* of a change that ships code or guards, after committing and before spawning reviewers. It is not part of the plan-review flow — a `/plan-review` or `/claim-task` Step 7 reviewer has no guards to mutate yet, and should skip this section. **Why it exists.** Twelve of the sixteen phases from 150 to 165 in this project\'s log had a round that found the phase\'s own guards vacuous or its mutation claim self-selected. One reported "33 of 33 mutations killed"; an independent reviewer then ran 83 and watched 28 survive. A round that keeps finding the same class of defect is working as a detector while the authoring step is not learning, and **buying more reviewers is the expensive way to treat that** — roughly half of what such a round finds is catchable by inspection in minutes. **This is not an argument for fewer reviewers.** Measured on one such round, reviewers on distinct lenses were **not** redundant: overlap was about 15%, and each of four lenses produced its sharpest finding alone. Findings-per-reviewer was high. The point is to stop paying them for what you can see yourself, not to stop paying them. **1. Mutate the guard\'s assumptions, not just the content it checks.** Deleting a phrase a guard requires proves the guard is *wired to the file* — real information, and for a declared **reversion guard** (one whose stated job is catching deletion or a shortening-back) or a **vacuity guard** (one asserting its own population is non-empty) that mutation is the whole test of its stated job. Run those. The failure is a set **composed mostly** of them: it reports a kill rate that describes wiring while saying nothing about coverage. In the round that produced this rule, four of the author\'s nine mutations were reverts of text the guards were written to assert, the set was reported as "0 survivors", and **eight real bypasses stood**. So add mutations against each assumption the guard makes: - **What it matches on.** A guard keyed to a physical line is walked through by a backslash continuation, by naming a flag before its command, by a variable holding the value, or by a list step that separates a command from its qualifier. None of those is adversarial; they are how people write. - **What it accepts.** A check satisfied by a substring is satisfied by an *incidental* use of that substring — worse than a gap, because it marks a dangerous line compliant. A check requiring N phrases is satisfied by N disconnected phrases in a sentence asserting the opposite. - **Where it looks.** Enumerate the files the guard actually reads and ask whether that population covers every place the defect can appear. One such guard excluded the installer — a file that already prescribed the very script the guard was about. **Derive the population from the source of truth, not from an index or summary of it**; that single substitution produced the worst number in the phase that shipped this rule. - **Over-strictness, the direction that hides.** A pattern requiring an optional token misses the idiomatic form. A guard keyed to `bash <path>/script --flag` missed `<path>/script --flag`, which was the repo\'s own house style. - **Reachability.** Can the guard run at all, and on the thing you think? A new file excluded from its own scan, an uncollected test module, an empty population — each passes while testing nothing. - **When it runs.** If the fix depends on ordering ("rejected *before* anything is deleted"), mutate the ordering. Prose asserting an order is not a test of it. Report the fraction. **A survivor you decline to close must be impossible to close *in kind*** — it needs a judgement no pattern can encode — **not merely unattempted.** "Known blind spot, as designed" is not a disposition: in the round that produced this rule the author labelled the single biggest hole exactly that way, and the round required it fixed. If an ordinary in-repo idiom reaches your survivor, it is a defect wearing a residual\'s label. **One battery, then hand the question to the round.** Write the battery once — the declared reversion and vacuity tests, plus mutations against each assumption class above, plus negative controls — run it, close what it catches (a survivor you decline to close is still held to the criterion above), re-run it to confirm the closures, and report the final fraction with the survivors named. Do not keep authoring fresh batteries in pursuit of an exhausted zero: in five consecutive phases of this project\'s log, the author\'s battery reported every mutation killed, and an independent reviewer\'s battery then found 33 to 99 survivors — every time. An author\'s zero measures self-consistency; exhaustion is the reviewers\' measurement, and iterating toward it author-side pays twice for the weaker of the two numbers. The pass still pays here — one honest battery instead of none, not many instead of one. A closure that *rewrites* a guard rather than patching it takes the battery with it: re-point the affected mutations at the new guard, give the rewrite a non-vacuity control, and treat it as what it is — new material no fresh reader has seen, which before the round is simply the round\'s subject, and after the round is the second-round condition the governor above names. **2. Re-read your own new prose against the code it describes.** Both defects one such round found *in the fix itself* were sentences the author had just written that contradicted the file they sat in — and both were in the same class the fix existed to remove. New prose is the least-reviewed text in any change: no history, no reviewer has seen it, and its author is the one person who cannot read it cold. Check every new claim against the thing it describes, including claims about paths, which are as easily wrong in the consumer\'s installed layout as in yours. **3. Run the commands the change prescribes, in a throwaway repo — before you spawn anyone.** Shipped scripts get real-subprocess coverage, and a few purpose-built extractors do pull a *named* heredoc out of a skill file and run it against a fixture — but nothing runs a command generally, so **a newly prescribed one stays text until an operator reaches it**, and "the prescribed command does not work" is invisible until that moment. Scope this to commands whose operand the change **computes or substitutes** — `git log --oneline` has no operand to get wrong. Copy the literal string, resolve its placeholders the way the change tells an operator to resolve them, and run it. In the round that produced this rule, a prescribed `git show "<branch>:<body path>"` **failed on a default install** — `fatal: path … does not exist` — and the change\'s own new `unreadable` classification would then have halted every run with a fabricated diagnosis blaming the branch. One of three lenses found it, by building a scratch repo and running the string; the other two read the same files and did not. - **Build the fixture\'s inputs from the source of truth, not from your own model of them.** This is the half that does the work, and the easy one to drop. The same fixture runs **green** on the author\'s assumption and **red** on what the shipped writers actually emit: in that round, an assumed body path of `tasks/open/<ID>.md` printed the file, while the canonical value every writer emits — `open/<ID>.md`, relative to `tasks/` — exited 128. A fixture you populate from memory proves only that you are self-consistent. This is rule 1\'s *"derive the population from the source of truth, not from an index or summary of it"* moved from what a guard **reads** to what a fixture **contains**. - **What it reaches is narrow, and the rule says so rather than leaving it implied:** whether the command runs, and whether it does what you said it does. Nothing past that. In that same round the two other defect classes — 43 of 90 guard mutations bypassing, and the false claims in its own record — were entirely outside it. It converts one expensive finding into a cheap one; it does not replace a lens. **4. When the change moves a boundary over text you do not control, build the hostile corpus BEFORE the change, not after.** Rule 3\'s fixture half asks for inputs taken from the source of truth. What that produces is a **healthy** corpus — what the writers emit on a good day — and a boundary rule is never defeated by healthy input. In the round that produced this rule, a phase widened a delimiter rule (a `## ` heading closes a batch) over a tracker file that several different steps append to. Round 1 found the new rule had no fence awareness. The fence fix went in, and round 2 then found that it honoured an **unterminated** fence and was *worse than the bug it replaced*. Both were derivable from the change itself, and the four fixtures the author had built contained neither a fence nor an unbalanced marker — so two rounds of reviewers were spent on rework rather than on review, which is the most expensive way to buy a finding this cheap. The trigger is narrow: the change moves, widens or reinterprets a **delimiter, predicate or state machine** applied to text some other writer produces. When it does, three cases go into the corpus before the change is written, and the change is run against them: - **What else matches this.** The token in a context the rule did not intend — inside a fence, a quote, a comment, a URL, an example of the rule itself. A rule keyed to a marker is keyed to every occurrence of that marker, including the ones nobody put there on purpose. - **What happens when the construct never closes.** An unterminated fence, an unbalanced marker, EOF mid-construct. A state machine written for well-formed input gives its worst answer on input that never closes, and gives it silently. - **What the real artefact already contains.** Grep the live file for the token and read the hits you did not expect. The tracker in that round already carried both shapes, and nobody had looked. A corpus built after the fix describes the fix. A corpus built before it is red before and green after, which is the fix\'s own evidence — and it is the same evidence a reviewer would otherwise have had to construct, at reviewer prices. **What this pass cannot do.** Rules 3 and 4 narrowed this and left more than they took. Executing one command against a fixture *you* built reaches "does it run" and "does it do what I said", and stops there. Out of reach still: whether the prescribed command is the **right** one to prescribe; whether a claim about what its output *means* holds; the common case itself, since a fixture is one case and you are the person who chose which; and it still cannot catch a number whose *source* was wrong, only one whose arithmetic was. Rule 4 reaches the boundary cases you thought to name, and the three it names are the ones this project has already paid for — a shape nobody here has met yet sits outside it too. Those want a reader who has not already decided what the change means — which is what you are about to spawn. Where the harness cannot spawn reviewers at all (§ Harness constraint), this pass is the most you have and you should say so in the record rather than let its limits pass silently. '
 )
 
 
@@ -890,6 +890,234 @@ def test_the_block_pin_catches_edits_of_every_size():
 
 
 # --------------------------------------------------------------------------------------
+# Rule 4 — build the hostile corpus BEFORE the change (Phase 187)
+# --------------------------------------------------------------------------------------
+#
+# Pinned separately from `AUTHOR_PASS_VERBATIM` on that constant's own instruction:
+# regenerating the block pin is how a deliberate edit is re-approved, so a rule whose only
+# protection is the block pin loses it the next time someone re-approves something else.
+# These pins are independent of the constant and name what broke.
+
+RULE_4_HEADING = (
+    "**4. When the change moves a boundary over text you do not control, build the "
+    "hostile corpus BEFORE the change, not after.**"
+)
+
+RULE_4_PINS: list[tuple[str, str]] = [
+    (RULE_4_HEADING,
+     "the rule, including WHEN. 'After the change, add hostile cases' keeps every other "
+     "word and retires it: the corpus then describes the fix instead of testing it, which "
+     "is the failure the rule is named for."),
+    ("What that produces is a **healthy** corpus",
+     "the premise, and the whole reason rule 3's fixture half does not already cover this. "
+     "Without it rule 4 reads as a restatement of 'build from the source of truth', which "
+     "is the thing that was already being done when the incident happened."),
+    ("round 2 then found that it honoured an **unterminated** fence and was *worse than the bug it replaced*",
+     "the evidence, and the half that makes the case for doing it FIRST. Softened to 'was "
+     "not quite complete' the paragraph still argues for the rule while its evidence stops "
+     "supporting the ordering — the reader is left free to add the corpus afterwards."),
+    ("the change moves, widens or reinterprets a **delimiter, predicate or state machine** applied to text some other writer produces",
+     "the trigger. Unscoped, the rule says 'build a hostile corpus for every change', "
+     "which is the shape authors reasonably ignore — and an ignored rule is worse than "
+     "none, because the author-side pass is then reported as run."),
+    ("**What else matches this.**",
+     "case 1, the one round 1 of that incident found — a delimiter rule is keyed to every "
+     "occurrence of its delimiter, including the ones nobody wrote on purpose."),
+    ("**What happens when the construct never closes.**",
+     "case 2, the one round 2 found, and the one an author is most likely to drop because "
+     "well-formed input never reaches it. It is also the expensive one: the state machine "
+     "answers silently rather than failing."),
+    ("**What the real artefact already contains.**",
+     "case 3, and the only one of the three that is a measurement rather than an "
+     "invention. The tracker in that incident already carried both shapes."),
+    ("three cases go into the corpus before the change is written, and the change is run against them",
+     "the ordering, stated in the BODY. The heading carries it too, and a reviewer showed "
+     "why both are needed: inverting this clause alone left the heading intact and every "
+     "pin green, and the body is the sentence an author executes."),
+    ("A corpus built after the fix describes the fix.",
+     "the consequence, stated as a result rather than a duty — the sentence that stops an "
+     "after-the-fact fixture from being reported as evidence."),
+]
+
+# Written as CLASSES, not as the five sentences a first draft happened to imagine. That
+# draft's five literal-ish patterns were walked through by a reviewer with five ordinary
+# rewordings — *"it does not create an obligation on any author"*, *"Rule 4 below is
+# illustrative and binds nothing"*, *"In practice a healthy corpus already covers the
+# ordinary case"*, *"Reviewers will normally surface anything a before-corpus would have"*,
+# and an ordering inversion in the body while the heading still said BEFORE — every one of
+# them green after the sanctioned `AUTHOR_PASS_VERBATIM` regeneration, which is the only
+# condition under which these predicates are load-bearing at all. Same failure the M49–M52
+# rows were written for, one rule later, so each of these is now subject × predicate.
+_R4_SUBJECT = r"(?:rule 4|this rule|the hostile corpus|the three cases|the before-corpus)"
+_R4_DEMOTION = (r"(?:optional|advisory|a suggestion|best-effort|non-?binding|illustrative|"
+                r"aspirational|guidance|informational|a recommendation)")
+
+RULE_4_FORBIDDEN: list[tuple[str, str]] = [
+    (r"(?:building|adding|writing) (?:it|the corpus|them) after(?:wards)?[^.]{0,60}"
+     r"\b(?:is fine|is enough|works too|is equivalent|is acceptable|suffices)",
+     "licenses the after-the-fact corpus, which is the only thing rule 4 forbids"),
+    (r"healthy corpus\b[^.]{0,60}\b(?:is enough|is sufficient|is fine|suffices|covers|"
+     r"already covers|is usually enough)",
+     "denies the premise in place, leaving every pin intact"),
+    (rf"{_R4_SUBJECT}\b[^.]{{0,70}}\bis {_R4_DEMOTION}",
+     "demotes the rule to advice, stated of the rule by name"),
+    (rf"{_R4_SUBJECT}\b[^.]{{0,70}}\b(?:binds nothing|is not binding|creates? no "
+     r"obligation|imposes? no obligation|does not create an obligation|is not an "
+     r"obligation|carries no requirement)",
+     "retires the rule by denying it obliges anyone — the same demotion phrased as an "
+     "absence of duty rather than as a status word"),
+    (r"(?:the round|reviewers?)\b[^.]{0,70}\b(?:will|would|normally|usually|generally|"
+     r"in practice)\b[^.]{0,50}\b(?:find|catch|surface|cover|pick up)",
+     "hands rule 4 back to the round it exists to spare — which is exactly what the two "
+     "rounds in its own incident did, at reviewer prices"),
+    (r"well-?formed input is (?:the|a) (?:reasonable|fair|sensible|safe) assumption",
+     "re-permits the state-machine case, which is the one that answers silently"),
+    (r"(?:go into|goes into|added to) the corpus (?:once|after|when) the change is "
+     r"(?:written|made|landed)",
+     "inverts the ordering in the BODY while the heading still says BEFORE, so the rule "
+     "contradicts itself and the later sentence is the one an author executes"),
+]
+
+
+# Rule 4's block is three short imperative paragraphs and a three-item list. A hedge in it
+# is a carve-out, the same argument `_RULE_3_SOFTENING_MODALS` makes one rule up; these are
+# the ones a reviewer used that that list does not carry.
+_RULE_4_EXTRA_MODALS = (
+    r"\bin practice\b",
+    r"\bnormally\b",
+    r"\billustrative\b",
+    r"\bwhere it helps\b",
+    r"\bif you have time\b",
+)
+
+
+def _rule_4_block(section: str) -> str:
+    """Rule 4 alone, flattened, bounded by the limits paragraph. Fails closed."""
+    flat = _flat(section)
+    a = flat.find(_flat(RULE_4_HEADING))
+    if a < 0:
+        return ""
+    b = flat.find(_flat(LIMITS_HEADING), a)
+    if b < 0:
+        return ""
+    return flat[a:b]
+
+
+def rule_4_problems(section: str) -> list[str]:
+    flat = _flat(section)
+    block = _rule_4_block(section)
+    problems = [
+        f"rule 4 pin lost, reworded or moved out of the rule — {why} :: {span[:70]!r}"
+        for span, why in RULE_4_PINS
+        if _flat(span) not in block
+    ]
+    problems += [
+        f"rule 4 contradicted in place ({why}): {pat!r}"
+        for pat, why in RULE_4_FORBIDDEN
+        if re.search(pat, flat, re.I)
+    ]
+    problems += [
+        f"rule 4 softened with a permissive modal: {pat!r}"
+        for pat in _RULE_3_SOFTENING_MODALS + _RULE_4_EXTRA_MODALS
+        if re.search(pat, block, re.I)
+    ]
+    return problems
+
+
+def rule_4_placement_problems(section: str) -> list[str]:
+    """Rule 4 sits BETWEEN rule 3 and the limits paragraph.
+
+    Above rule 3 it precedes the fixture half it refines; below the limits paragraph it
+    reads as an afterthought to a paragraph that already bounded the pass. Each anchor
+    must occur exactly once, so a duplicate heading cannot satisfy an ordering check while
+    the real rule has moved.
+    """
+    flat = _flat(section)
+    problems: list[str] = []
+    positions: dict[str, int] = {}
+    for name, anchor in (("rule 3", RULE_3_HEADING), ("rule 4", RULE_4_HEADING),
+                         ("the limits paragraph", LIMITS_HEADING)):
+        hits = flat.count(_flat(anchor))
+        if hits == 0:
+            problems.append(f"{name} has no heading in this subsection")
+        elif hits > 1:
+            problems.append(f"{name} has {hits} headings — which one is the real rule?")
+        else:
+            positions[name] = flat.index(_flat(anchor))
+    if len(positions) == 3:
+        if not positions["rule 3"] < positions["rule 4"]:
+            problems.append("rule 4 is placed above rule 3, which it refines")
+        if not positions["rule 4"] < positions["the limits paragraph"]:
+            problems.append("rule 4 is placed BELOW the limits paragraph that scopes it")
+    return problems
+
+
+def test_rule_4_binds():
+    assert rule_4_problems(_author_pass_section()) == []
+
+
+def test_rule_4_sits_between_rule_3_and_the_limits_paragraph():
+    assert rule_4_placement_problems(_author_pass_section()) == []
+
+
+def test_the_rule_4_predicates_are_not_vacuous():
+    assert rule_4_problems("") != []
+    assert rule_4_placement_problems("") != []
+
+
+def test_the_rule_4_block_slicer_fails_closed():
+    section = _author_pass_section()
+    assert _rule_4_block(section)
+    assert _rule_4_block(section.replace(RULE_4_HEADING, "**4.**", 1)) == ""
+    assert _rule_4_block(section.replace(LIMITS_HEADING, "**Caveats.**", 1)) == ""
+
+
+def test_the_rule_4_predicates_discriminate_on_their_own():
+    """Driven directly, because every table mutation below also fails the block pin — so
+    the table would stay green with `rule_4_problems` deleted from `RULE_3_CHECKS`. This
+    is the shape `test_the_placement_predicate_discriminates_on_its_own` established.
+    """
+    section = _author_pass_section()
+    assert rule_4_problems(section) == []
+
+    # Whitespace-tolerant, like the rule-3 machinery. Raw `section.replace` reddened on a
+    # rewrap with `mutation source text not found` — a confusing failure about the harness
+    # on an edit that is not a defect, which is the class `_sub`'s own docstring names and
+    # which a round found reproduced here.
+    def _mut(old, new):
+        return _sub(old, new)(section)
+
+    dropped = _mut("**What happens when the construct never closes.**", "")
+    assert any("never closes" in p for p in rule_4_problems(dropped))
+
+    licensed = _mut(
+        "A corpus built after the fix describes the fix.",
+        "A corpus built after the fix describes the fix, and building it afterwards is "
+        "fine when the change is small.")
+    assert any("after-the-fact corpus" in p for p in rule_4_problems(licensed))
+
+    hedged = _mut(
+        "three cases go into the corpus before the change is written",
+        "three cases may go into the corpus before the change is written")
+    assert any("permissive modal" in p for p in rule_4_problems(hedged))
+
+    # Placement, isolated: rule 4 moved under the limits paragraph.
+    below = _sub(LIMITS_HEADING, LIMITS_HEADING + " " + RULE_4_HEADING)(
+        _sub(RULE_4_HEADING, "")(section))
+    assert any("BELOW the limits paragraph" in p for p in rule_4_placement_problems(below))
+
+
+def test_the_rule_4_softening_screen_reads_rule_4_and_not_its_neighbours():
+    """Scoped to the rule-4 block. Over the whole subsection it would inherit rule 1's own
+    'A pattern requiring an optional token misses the idiomatic form' — the over-strictness
+    rule 1 warns about, reached by mis-scoping the guard written for it."""
+    section = _author_pass_section()
+    assert "optional token" in section
+    assert rule_4_problems(section) == []
+    assert "optional token" not in _rule_4_block(section)
+
+
+# --------------------------------------------------------------------------------------
 # Non-vacuity — mutations applied to the WHOLE partial, then re-sliced
 # --------------------------------------------------------------------------------------
 #
@@ -900,6 +1128,8 @@ def test_the_block_pin_catches_edits_of_every_size():
 RULE_3_CHECKS: list[Callable[[str], list[str]]] = [
     rule_3_problems,
     rule_3_placement_problems,
+    rule_4_problems,
+    rule_4_placement_problems,
     author_pass_problems,
 ]
 
@@ -952,7 +1182,7 @@ RULE_3_MUTATIONS: list[tuple[str, Callable[[str], str]]] = [
      lambda t: t[:_at(t, RULE_3_HEADING)] + t[_at(t, LIMITS_HEADING):]),
     ("M2 ship rule 3 below the paragraph that scopes it", _swap_rule_3_and_limits),
     ("M3 restore the sentence rule 3 falsified", _sub(
-        "Rule 3 narrowed this and left more than it took. Executing one command against a fixture *you* built reaches \"does it run\" and \"does it do what I said\", and stops there.",
+        "Rules 3 and 4 narrowed this and left more than they took. Executing one command against a fixture *you* built reaches \"does it run\" and \"does it do what I said\", and stops there.",
         "It never executes the change against real state, and that is where the findings you most need come from.")),
     ("M4 drop half (ii), keep half (i)", lambda t: t[:_at(t, "**Build the fixture's inputs from the source of truth")] + t[_at(
         t, "**What it reaches is narrow"):]),
@@ -1050,8 +1280,8 @@ RULE_3_MUTATIONS: list[tuple[str, Callable[[str], str]]] = [
         "Where the harness cannot spawn reviewers at all",
         "The fixture half is aspirational in practice. Where the harness cannot spawn reviewers at all")),
     ("M34 mark rule 3's result unverified", _sub(
-        "Rule 3 narrowed this and left more than it took.",
-        "Rule 3 narrowed this and left more than it took. A fixture is not reality, so treat its result as unverified.")),
+        "Rules 3 and 4 narrowed this and left more than they took.",
+        "Rules 3 and 4 narrowed this and left more than they took. A fixture is not reality, so treat its result as unverified.")),
     ("M35 declare the rule not yet binding", _sub(
         "the other two read the same files and did not.",
         "the other two read the same files and did not. This rule is under evaluation and not yet binding.")),
@@ -1117,7 +1347,120 @@ RULE_3_MUTATIONS: list[tuple[str, Callable[[str], str]]] = [
     ("M48 reverse the no-runner rationale, leaving its conclusion pinned and unsupported", _sub(
         "nothing runs a command generally, so **a newly prescribed one stays text until an operator reaches it**",
         "skill prose is covered by the suite like everything else")),
+    # --- rule 4 (Phase 187) ---
+    ("M53 delete rule 4 outright",
+     lambda t: t[:_at(t, RULE_4_HEADING)] + t[_at(t, LIMITS_HEADING):]),
+    ("M54 invert rule 4's ordering, keeping every other word", _sub(
+        RULE_4_HEADING,
+        "**4. When the change moves a boundary over text you do not control, add the "
+        "hostile corpus once the change is written.**")),
+    ("M55 drop the unterminated-construct case — the one round 2 found", _sub(
+        "**What happens when the construct never closes.**",
+        "**What happens on unusual input.**")),
+    ("M56 deny the premise, leaving every pin intact", _sub(
+        "The trigger is narrow:",
+        "A healthy corpus is enough in the ordinary case. The trigger is narrow:")),
+    ("M57 license the after-the-fact corpus", _sub(
+        "A corpus built after the fix describes the fix.",
+        "A corpus built after the fix describes the fix, though building it afterwards is "
+        "fine when the boundary is simple.")),
+    ("M58 hand rule 4 back to the round", _sub(
+        "at reviewer prices.",
+        "at reviewer prices. In practice the round will catch these anyway.")),
+    ("M59 soften the three cases to a suggestion", _sub(
+        "three cases go into the corpus before the change is written",
+        "three cases may go into the corpus before the change is written")),
+    ("M60 unscope the trigger so authors ignore it", _sub(
+        "the change moves, widens or reinterprets a **delimiter, predicate or state machine** applied to text some other writer produces",
+        "the change touches anything")),
+    ("M61 ship rule 4 below the paragraph that scopes it",
+     lambda t: (t[:_at(t, RULE_4_HEADING)]
+                + t[_at(t, LIMITS_HEADING):_at(t, AUTHOR_PASS_END)]
+                + t[_at(t, RULE_4_HEADING):_at(t, LIMITS_HEADING)]
+                + t[_at(t, AUTHOR_PASS_END):])),
+    ("M62 re-permit the state-machine case from the limits paragraph", _sub(
+        "Where the harness cannot spawn reviewers at all",
+        "Well-formed input is a reasonable assumption for a first pass. Where the harness "
+        "cannot spawn reviewers at all")),
+    # --- the five a round walked through the first pin set, each after regenerating
+    # --- `AUTHOR_PASS_VERBATIM` the documented way, which is when these predicates are
+    # --- the only thing left. Kept permanently: they are the record of what the author's
+    # --- own sweep could not see.
+    ("M63 deny that rule 4 obliges anyone", _sub(
+        "A corpus built after the fix describes the fix.",
+        "A corpus built after the fix describes the fix. Rule 4 does not create an "
+        "obligation on any author.")),
+    ("M64 call rule 4 illustrative, from the preamble", _sub(
+        "**Why it exists.**",
+        "Rule 4 below is illustrative and binds nothing. **Why it exists.**")),
+    ("M65 deny the premise in an unpinned rewording", _sub(
+        "The trigger is narrow:",
+        "In practice a healthy corpus already covers the ordinary case. The trigger is "
+        "narrow:")),
+    ("M66 hand rule 4 back to the round, reworded", _sub(
+        "at reviewer prices.",
+        "at reviewer prices. Reviewers will normally surface anything a before-corpus "
+        "would have.")),
+    ("M67 invert the ordering in the body, heading intact", _sub(
+        "three cases go into the corpus before the change is written",
+        "three cases go into the corpus once the change is written")),
 ]
+
+
+# The rule-4 rows, named rather than matched by id prefix. A round beat the prefix+count
+# form two ways: `[one_row] * 10` satisfied `len(...) == 10` while nine mutations stopped
+# running, and a future rule-4 row named outside the hardcoded `M5x` tuple was silently
+# excluded while the count stayed right. Three mechanical checks replace the count below —
+# id uniqueness, set/list agreement, and the suffix invariant — and none of them is a
+# number an author can edit to make a failure go away.
+RULE_4_MUTATION_IDS = (
+    "M53", "M54", "M55", "M56", "M57", "M58", "M59", "M60", "M61", "M62",
+    "M63", "M64", "M65", "M66", "M67",
+)
+
+_RULE_4_MUTATIONS = [m for m in RULE_3_MUTATIONS
+                     if m[0].split()[0] in RULE_4_MUTATION_IDS]
+
+
+@pytest.mark.parametrize("name,mutate", _RULE_4_MUTATIONS,
+                         ids=[m[0] for m in _RULE_4_MUTATIONS])
+def test_every_rule_4_mutation_is_caught_by_the_rule_4_predicates(name, mutate):
+    """Not by the block pin — by the rule's OWN checks.
+
+    Every entry in the table below also fails `author_pass_problems`, so the combined
+    table would stay green with both rule-4 predicates deleted from `RULE_3_CHECKS`. That
+    is the vacuity this module is named for, and regenerating `AUTHOR_PASS_VERBATIM` — a
+    legitimate act, and the documented way to re-approve an edit — is exactly when the
+    block pin stops covering rule 4. These predicates are what remains.
+    """
+    shipped = PARTIAL.read_text(encoding="utf-8")
+    section = _author_pass_slice(mutate(shipped))
+    failures = rule_4_problems(section) + rule_4_placement_problems(section)
+    assert failures, f"mutation {name!r} survived both rule-4 predicates"
+
+
+def test_the_rule_4_population_cannot_be_thinned_or_drift():
+    """Three checks, none of them a number an author can edit.
+
+    A round beat the previous `len(...) == 10` two ways and both are closed here:
+    duplicating one row ten times now fails **id uniqueness** and **set/list agreement**,
+    and appending a new rule-4 row without naming it fails the **suffix invariant** —
+    the rule-4 rows are the tail of the table, under their own banner comment, so a row
+    added after them is not silently outside the parametrisation.
+    """
+    ids = [m[0].split()[0] for m in _RULE_4_MUTATIONS]
+    assert ids == list(RULE_4_MUTATION_IDS), (
+        "the rule-4 rows and their id list disagree — a row was duplicated, dropped or "
+        f"reordered: {ids}")
+    all_ids = [m[0].split()[0] for m in RULE_3_MUTATIONS]
+    assert len(all_ids) == len(set(all_ids)), "duplicate ids in the mutation table"
+    assert all_ids[-len(RULE_4_MUTATION_IDS):] == list(RULE_4_MUTATION_IDS), (
+        "the rule-4 rows are no longer the tail of the table. If you appended a rule-4 "
+        "mutation, add its id to RULE_4_MUTATION_IDS; if you appended a rule-3 one, move "
+        "it above the rule-4 banner — otherwise it is outside the rule-4 parametrisation "
+        "and nothing checks the rule-4 predicates catch it.")
+    # …and the list really is rule-4-scoped: no rule-3-only row leaked into it.
+    assert "M1" not in ids and "M45" not in ids
 
 
 @pytest.mark.parametrize("name,mutate", RULE_3_MUTATIONS, ids=[m[0] for m in RULE_3_MUTATIONS])

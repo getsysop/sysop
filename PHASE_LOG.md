@@ -4495,3 +4495,609 @@ The additions are the argument the seven phases share: **a value is produced in 
 **One method note, because the dispatch bug is reusable knowledge.** The reviewer-prompt check that saved this round — *"run `git log --oneline -1`; it MUST be `<sha>`; if not, stop"* — was in the brief because `_shared/adversarial-review.md` records an earlier round where two isolated reviewers landed on different commits. **The second half of that check was weaker than it looked and is worth fixing in the prompt template, not just here:** the re-dispatch briefs also asked each lens to confirm a content marker, and lens 2's marker was `grep -c "Phase 185" CLAUDE.md`, which returns **0** — the row reads `| 185 — …`, so the phrase never appears. The lens reported the mismatch, checked the commit hash instead, and proceeded correctly; a less careful reader would have stopped on a true tree. A content marker for a revision check has to be derived from the diff, not guessed at.
 
 **Final gate, measured on the tree that ships — the record, the ledger row and every round fix already in place, which is the ordering Phase 182's round prescribed.** **2,965 passed, 4 skipped, 0 failed.** Against `main`'s 2,957 that is **+8 collected**: six in `test_mirror_runbook_gates.py` (the pass-list guard, its script-name check, its vacuity and reversion controls, and the semantic control closing the two survivors the author-side battery left), one in `test_mirror_leak_gate.py` (`test_the_cut_scripts_gate_mechanism_is_intact`), one in `test_placeholder_section_authority.py` (the shipped-skill contradiction). Zero removals. The four skips are the pre-existing `test_install_namespace_migration.py` history guards. The intermediate figure quoted earlier in this entry — 2,962 passed / 1 failed — was the pre-round commit, where the one failure was the ledger-row gate firing because the row is appended at close; it is recorded rather than overwritten because both lenses were told that failure was expected and one of them re-ran it to confirm.
+
+## Phase 186 (executed 2026-08-05 — the publication gate is guarded by text about a script nothing runs; the first § High entry filed by Phase 185's round, plus the three residual holes filed beside it)
+
+**Trigger, and it is reproducible rather than a worry.** `grep -rn cut_public_release tests/ core/ install.sh` returns two test modules that read `tools/cut_public_release.sh` **as text** and nothing that executes it. That script is the only implementation of Pass 4 and of the rename-residue diff, and it is the one path whose failure puts content on a public repo permanently — the Phase-160 incident is exactly that. Its gate logic had no runnable coverage at all.
+
+**The baseline was re-measured before anything was built, and the filing's claim about what Phase 185 closed is wrong in one place.** `main` at `f368ca1`: **2965 passed, 4 skipped, 0 failed** in 9m32s. The population of gate-defeating one-line edits was then **derived from the script** — the `hard()` body, the verdict block, and each gate call site's pattern / tree / truncation / argument shape — rather than taken from the filing's list of six, which is a reviewer's list and the count this repo has been wrong about four phases running. That yielded **25 real mutations plus 4 negative controls** (`tools/phase186_mutations.py`), scored in two columns: the pre-186 guards, and the new harness.
+
+**Result of the pre-build run: the pre-186 guards kill 8 of 25.** Five of the filed six reproduce as claimed (`set -- "$1" ""`; deleting `FAIL=1`; changing the verdict comparison; an empty literal argument; `| head -0` at a call site). **The sixth does not.** "Re-pointing a gate at `$PUB` rather than `$TARGET`" is closed for **Pass 4 alone** — `test_the_cut_scripts_gate_mechanism_is_intact` asserts `"$TARGET"` only inside Pass 4's command — and the same edit applied to Pass 1a, Pass 1b, Pass 1c, Pass 3 or the residue scan's `_res_now` walks straight through. Five of six sites for that shape were open, and that test's docstring said it closes "that specific list". **The pre-round draft of this paragraph claimed the docstring had been corrected; it had not been touched at all, and the round caught it** — it is corrected now, together with four sentences in the same module that this phase itself falsified ("Nothing in this repo ever executes `cut_public_release.sh`", and two filing the harness as future work).
+
+**One of my own mutations was a no-op and was scored as a survivor until it was read.** `A02` first wrote `... || true | head -0`, which parses as `grep || (true | head -0)`: when grep *matches* — the only case that matters — the short-circuit keeps the untruncated output and nothing is truncated. It scored "killed by the old guards only", i.e. it looked like a harness gap. Phase 181's lesson about no-op mutations, reproduced in the battery written after reading it; the anchor now truncates inside the pipeline.
+
+### Leg A — the harness
+
+`tests/test_cut_release_gate.py` builds a throwaway source repo, plants one violation, runs the real `tools/cut_public_release.sh` over it, and asserts four things per case: the **exit status** (nothing else in the suite asserts it, and `exit 1` → `exit 0` in the verdict block leaves every structural assertion green); **which** pass caught it, parsed from the ❌/✅ report; that the **other** gates stayed ✅, so a mutation that reddens the whole board is not scored as six working gates; and that a red run **never prints the push commands** an operator would paste.
+
+**Two design questions the filing named, both decided rather than defaulted.**
+
+*The fixture.* The script derives its source from its own location, builds a full mirror of it, and refuses a dirty tree — so it cannot be pointed at a prepared directory without editing it, and planting a leak in *this* repo to watch the gate fire would mean committing a leak. Copying the two real scripts into a 20-file fixture repo runs the same code with none of that. The fixture carries **every path the mirror's `rm` block removes** — a claim the round falsified twice over, and which is now enforced by a derived sweep rather than asserted (see the round below). Cost, measured not budgeted: **33 tests in ~13 s** after the round's additions, ~2% of the suite; the fixture is rebuilt per case so one case cannot contaminate the next.
+
+*The network.* The script clones the published repo for its rename-residue baseline and falls back to a STRICT arm when that clone fails. Neither arm can be tested by *not* having a network — offline is not a state a test may assume, and the online arm is the normal path. So the clone is redirected with a `GIT_CONFIG_GLOBAL` `insteadOf` rewrite to a local stub repo, and **every run asserts the baseline SHA the script printed is the stub's**: without that, a rewrite that stopped applying would silently reach GitHub and the test would be measuring the real public repo. The offline arm is exercised on purpose by pointing the rewrite at a path that does not exist, and is pinned in both directions (STRICT blocks on residue, STRICT stays green on a clean tree — otherwise "STRICT blocks" is indistinguishable from "STRICT always blocks").
+
+**What is planted.** Pass 1a bare and *beside the allowlisted address* (the shape that actually reached the public repo); Pass 1b; Pass 1c; Pass 3 via a **nested** `docs/internal/CLAUDE.md` — the mirror's `rm -f "$TARGET/CLAUDE.md"` is top-level and does not recurse while Pass 3's `find` does, so a nested copy genuinely ships and Pass 3 is the only thing between it and the public repo; Pass 4 via a nested `*_HANDOFF.md`, which correctly trips Pass 3 *and* Pass 4 and is asserted as exactly that pair; the rename-residue diff in all three states (new → blocks, already published → stays green, offline → STRICT). **Pass 4's `^tools/` arm needed the builder to fail**, since `tools/` is stripped wholesale and the script's own `tools/ removed:` line prints `NO — BUG` without setting `FAIL` — so the fixture's copy of the builder has its removal *narrowed* to `*.sh` and `tools/NOTES.md` survives into the mirror. Narrowing rather than deleting is deliberate: deleting also ships the two real scripts, whose grep patterns carry every blocked identifier as a literal, and Passes 1a/1b/1c would drown the signal.
+
+**One documented claim became a measured one.** The runbook tells an operator that "pytest red + cut-time green" means the leak is in a *filename*, because `grep -rn` matches content while the pytest scanner matches paths too. Nothing had ever run that. It holds — a file whose *name* carries the Pass-1c token and whose body is clean passes the cut-time gate — and it is now pinned, so the paragraph stays true or gets rewritten.
+
+**The module is excluded from the public mirror**, for both of `test_mirror_leak_gate.py`'s reasons: it must carry the blocked identifiers as literals in order to plant them, and its subject is `tools/`, which the mirror removes — it could not ship even if it carried no literals — it reads the script at **import** time and has no skip path, so in a tree without `tools/` it does not skip, it fails collection and takes the public suite down. That is deliberate (a skip there would read as coverage) and it is why exclusion, not a guard, is the mechanism.
+
+**Final battery, on the shipped tree: 25 real mutations — the text-side guards kill 11, the harness kills all 25, 14 are killed ONLY by the harness, 0 survive.** The text-side column moved 8 → 11 between the two runs because Leg B(c) landed in between and now kills the three "this pattern matches nothing" mutations; the harness column moved 24 → 25 because A02's anchor was corrected from a no-op. **All four negative controls hold green**, where the pre-Leg-B run had one false kill. The 14 the harness alone catches are: the whole *which tree does this gate read* class (5 of its 6 sites), `FAIL=1` present but unreachable, the second argument discarded at read, the output truncated inside `hard()`, `FAIL` reset just before the verdict, **`GATE RED` exiting 0**, Pass 3 dropping a class from its `find`, `ls-files --others`, the residue diff reversed, and the `PHASE_LOG.md` carve-out widened to every `.md`.
+
+### Leg B — the three residual holes
+
+**(c) The substring pattern check, replaced with an executed one.** `test_pass_patterns_still_match_both_scripts` asserted each leak token appeared in a grep line. Both of that form's failure directions were measured, not argued: appending a suffix to Pass 1c's token leaves the token as a substring, so the check passed while the pattern matched nothing (the filed case); and rewriting the same token as an equivalent bracket-expression regex — which contains no copy of the token — **reddened** the guard — one of the battery's four negative controls, a false kill on a legitimate edit. The replacement extracts each script's grep patterns (resolving `$P1A` from its single-quoted assignment, which is how `make_public_mirror.sh` prints Pass 1a) and **executes** them against the same canaries this module's own detectors are pinned against, under the flags the script uses — so dropping `-i` from a case-insensitive pass now fails too, and that `-i` is load-bearing, since three of Pass 1a's five tokens are not canonically lowercase — one mixed-case organisation name and two upper-case env vars. A precision control pins that no pattern matches ordinary prose, because a pattern gone broad passes a canary check as easily as one that works.
+
+*A defect found by running it.* The first version emitted `FutureWarning: Possible nested set` — Python's `re` does not implement POSIX bracket classes, so the scripts' `[[:space:]]` was compiling as a **set of the characters `[ : s p a c e`**, silently, a different pattern with no error. The extractor now translates the classes and asserts on an unknown one rather than mis-compiling it.
+
+**(a) `PASS_SOURCES`, derived.** Three hardcoded paths became the globs `tools/*.sh` + `tests/*.py`, minus this module (which names every pass in prose, so including it would let a docstring impose a requirement on the runbook). The case the finding named — a pass implemented in a new `tools/verify_mirror_*.sh` — now lands in the population by default. Two neighbouring populations are excluded, and **both exclusions are re-derived on every run** rather than asserted, so one whose reason has expired reddens instead of quietly persisting: prose `.md` under `tools/` still discusses the retired "Pass 1" (`PUBLIC_RELEASE_SPEC.md`), an identifier from before Pass 1 split into 1a/1b/1c; and one-shot maintainer analyses under `tools/*.py` quote pass identifiers as *subject matter*. That second exclusion was **found by running the first derivation, not by foresight**: `tools/phase186_negation_probe.py`'s corpus of hypothetical retirement bullets contains "superseded by Pass 6", and the derivation duly demanded the runbook list a Pass 6 that nothing implements. The residual is stated in the code: a pass implemented outside those globs is still invisible. The token grammar also joined only on `+`, so `Passes 1a/1b/1c` — a form `make_public_mirror.sh` already uses twice — yielded `1a` alone; it now joins on `+ / ,` and the word "and", with an over-capture control.
+
+**(b) The do-not-run bullet: declined in kind, with the numbers.** A bullet reading `- Pass 4 … → SUPERSEDED, do NOT run` satisfies a guard whose stated property is "a pass an operator is never told to run is a pass that does not run". The obvious remedy is a negation check; Phase 179 abandoned polarity-by-string-matching at 0 of 21, so it was **measured before being declined** (`tools/phase186_negation_probe.py`: 16 realistic retirement bullets against the runbook's 8 live pass bullets, the vocabulary frozen before the corpus was scored).
+
+- The vocabulary an author writes from the filing's own example — *superseded / do not run / don't run / retired / obsolete / deprecated* — catches **5 of 16**, false-flags **0 of 8**. Decorative.
+- Widened until it covers the corpus (20 markers): **15 of 16**, but it false-flags **2 of the 8 live bullets** — including the **real Pass 4 bullet** (*"`make_public_mirror.sh` **does not** print this one"*) and the real Pass 2 one (*"**eyeball only** the new hits"*). A guard that reddens on the correct text gets deleted, not fixed.
+- The one neither reaches is a conditional (*"only when cutting the public repo"*), which is not a vocabulary problem at all.
+
+**What bounds the residual is the tree, not the prose, and that is the part worth keeping.** No *gate* stops running because of a bullet: step 3 runs `bash tools/cut_public_release.sh` in its own fenced block, and that script wires Passes 1a/1b/1c/3/4 and the residue diff to `hard()` unconditionally. Pass 5's content runs in every suite run, including the `pytest` check branch protection requires on `main` (`.github/workflows/tests.yml`); its bullet adds running it at the exact cut SHA. Passes 2 and 2b are labelled *informational — NOT gating* by the script itself. What a do-not-run bullet could still do is persuade an operator to dismiss a **red** gate they have already seen — a different failure from the one the guard claims, and one no string check reaches. The guard's docstring now says what it establishes and stops there.
+
+### Cost, scope and the governor call
+
+**The battery's scoped runs rest on an assumption, so it was measured rather than argued.** A mutation to `tools/cut_public_release.sh` was applied and the **whole** suite run against it: exactly two modules react — `tests/test_cut_release_gate.py` and `tests/test_mirror_leak_gate.py` — out of the 2,980 tests that run collected. A reviewer independently re-ran every mutation against the third candidate (`tests/test_mirror_runbook_gates.py`); it went red on none. That is what licenses running the battery against those modules instead of the full suite per mutation, which at 9m40s × 41 would be over six and a half hours.
+
+**Two claims other pages make were converted from documented to measured, and both are pre-flight rather than gate.** The runbook's Pass-5 sufficiency argument rests on *"the builder refuses a dirty tree, so the worktree it scans is the commit that ships"* — a behavioural claim nothing had run, and one that **fails open**, since a dirty tree still builds a mirror from `git archive HEAD` and every content gate would read green over it. And `--force` is an `rm -rf` of whatever the operand names, which the runbook warns an operator about; both halves are now pinned (refuse without the flag, actually rebuild with it). Beyond the filed legs the phase pins three claims other pages make: these two refusals and the runbook's filename asymmetry above. Each was taken because it is a claim with no coverage anywhere that another page leans on.
+
+**Governor (`_shared/adversarial-review.md` § *How many reviewers, how many rounds*): the third-lens condition holds and the call is recorded here rather than inferred.** The phase ships behaviour — a new executing test module plus rewritten assertions in two existing guards — *and* its record makes numeric claims a reviewer can falsify (8, 11, 25, 14, 5/16, 15/16, 2/8). Both terms are met on a plain reading, so **three lenses, one round**.
+
+## Phase 186's adversarial round
+
+**Three fresh-context `general-purpose` reviewers, one round, distinct lenses — *does the harness actually execute the gate and can it be fooled* / *are the record's claims true* / *are the guards real, on an independently designed battery*.** Count per the governor's escalation condition, decided and recorded above. Dispatched onto **worktrees created at the phase commit and verified before use**, because Phase 185's round had `isolation: "worktree"` fork all three from `main`; each reviewer re-checked `git log --oneline -1` and a content marker derived from the actual diff before reading anything, and all three reported the right revision.
+
+**Yield: 1 HIGH + 4 MEDIUM + 3 LOW from the harness lens, 2 HIGH + 4 MEDIUM + 6 LOW from the claims lens, and 15 defect survivors + 6 false kills from the guard lens.** Overlap was three findings across three lenses — close to the ~15% the shared partial records. **Every finding below was verified against the tree by me before acceptance; none was taken on the reviewer's word, and one was rejected on re-derivation** (see the last paragraph).
+
+**The round cost this phase a repo, briefly, and that is the sharpest thing in it.** The harness lens ran the module with `GIT_DIR` exported at the real repo to probe hermeticity, and the fixture's own `git init` / `add` / `commit` wrote **into it**, moving the `phase-186` branch onto a chain of commits named "fixture" and "published". Recovered from the reflog with the working tree intact. `run_gate` had carefully overridden `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_NOSYSTEM` and `HOME` **for the script under test** and left the harness's own `git` calls on bare `os.environ` — so a developer with `GIT_DIR` set, or with `commit.gpgsign` or `core.hooksPath` in a global config, had the module either red or writing to the wrong repository. `tests/test_git_env_hermeticity.py` has existed since Phase 124 for exactly this class; the rule simply had not been carried into a new module.
+
+**Four defects in the shipped gate, none of them in the harness:**
+
+- **Four of the mirror's twelve `rm -f` exclusions were gated by nothing.** `tests/test_mirror_leak_gate.py`, `tests/test_cut_release_gate.py` and the two `covered_class_*` research artifacts are stripped by a path-exact `rm` and named by neither Pass 3's `find` nor Pass 4's `ls-files` grep, so a moved, renamed or newly-nested copy ships silently. The sharp one is `covered_class_analysis.py`, which `make_public_mirror.sh`'s own comment calls a *"leak-scan-drift trap"* because it hardcodes identifiers **the content passes cannot see** — so for that file no pass of any kind stood between it and the public repo. Both gates now name all twelve, and `test_every_path_the_builder_strips_is_also_named_by_a_gate` **derives the population from the builder** and disables each removal in turn, so adding an exclusion without gating it reddens rather than ships.
+- **The rename-residue gate carried two line-scoped exemptions** — `grep -viE 'wade-flow-extract-base'` (drops the whole line) and `grep -v 'PHASE_LOG.md:'` (unanchored, so it matched file *content* as well as a path). That is the identical defect Phase 160 rebuilt Pass 1a to remove, sitting twenty lines further down the same script, and it was **reachable on the shipped tree**: `README.md` and `core/skills/release/SKILL.md` name the extraction tag and `tests/test_venv_command_word.py` quotes a `PHASE_LOG.md:<line>` citation, so new residue on any of those lines was invisible in both the diff and the STRICT arm. Now token- and path-scoped, with both directions pinned — the exemption still works, and it no longer blinds the rest of its line. Verified against a real built mirror: 7 residue lines before, 7 after, no new flags.
+- **A large violation killed the script at exit 141 before the verdict.** `… | sed … | head -20; FAIL=1` under `set -euo pipefail`: past the pipe buffer, `head` closes the pipe, `sed` takes SIGPIPE, and the script aborts mid-board with `FAIL` never set, no `GATE RED` line, and every later pass skipped. Reproduced at ~400 report lines. It failed *closed*, so nothing could ship — it destroyed the report an operator is told to read. `FAIL=1` now precedes the report and the report cannot kill the script.
+- **An absent tree answers "is this empty?" yes for every gate.** With `-e` dropped from `set -euo pipefail` and the build failing, the script printed six ✅ gates, `GATE GREEN`, and the push commands — over a directory that does not exist. No case in the harness ever made the build fail. The script now counts the mirror's tracked files before gating, and the pair was re-run directly afterwards: exit 1, no `GATE GREEN`, no push block, and the reason named.
+
+**Two false claims in the record, both mine, both of the class this phase exists to catch.** The pre-round draft said `test_the_cut_scripts_gate_mechanism_is_intact`'s docstring had been *"corrected there"* — it had not been touched at all, and still listed the `$PUB` shape among the six it "closes" while this phase had just measured that closed at one gate of seven. And the module still carried *"Nothing in this repo ever executes `cut_public_release.sh`"* plus two sentences filing the harness as future work, all four falsified by the commit they sat in. Four further quantifier errors of the same family: *"every path the `rm` block removes"* was missing the one path this phase itself added to the builder; *"a form **both** scripts already use"* is one script; *"17 gate runs"* is 16 invocations of which 14 reach the gate; *"in the public tree it could only ever skip"* is wrong in the module's favour — it has no skip path and would fail collection.
+
+**The guard lens designed its own battery and ran 48 mutations to my 29: 15 defect survivors and 6 false kills.** The survivors that mattered are the four shipped-gate defects above plus: the Pass-1a allowlist `sed` widened from the *address* to the bare host token inside it — the historical defect, in the script that blocks the push; a gate given `--exclude-dir=core`, invisible because **every plant lived under `docs/`**, five of them in one file; Pass 1a dropping two of five tokens, because two of the five had no canary in the module that pins them; the residue pattern losing its `wade-flow` arm; and `PASS_SOURCE_GLOBS` narrowed to `tests/test_mirror_*.py` — a glob hand-fitted to the four files that exist today, which is *"the hardcoded list in glob clothing"* and passed the membership check I had written to prevent exactly that. Each is closed by a test that plants the thing rather than by an assertion about the script.
+
+**The false kills changed a design decision, and that is worth more than the survivors.** Three of the six traced to one clever idea: the pass-source population's excluded neighbours each had to *keep naming a phantom pass*, so an exclusion whose reason expired would redden. It fired on deleting a throwaway probe, on editing that probe's corpus, and — worst — on **implementing a real Pass 6**, which is the number the next pass will take, with a failure message about maintainer analyses that had nothing to do with what the maintainer had done. A guard that reddens on the single most likely correct future edit gets deleted rather than fixed, so **the assertions were removed and the two reasons are recorded in the comment with their evidence**. The other three: an exact-width report-line regex made a cosmetic re-indent fail eight tests while blaming the gate; a double-quoted `P1A="…"` refactor was unreadable by an extractor that only accepted single quotes; and a test docstring naming a hypothetical pass reddens the runbook guard. **That last one is kept as an accepted residual**, because the one test module that really does implement a pass is a test module — and the failure message now names the file that declared it, so it is a one-line fix rather than a mystery.
+
+**Final battery, after the closures, on the shipped tree: 41 mutations — 33 defect, 8 negative controls; 0 skipped.** Text-side guards kill **15**, the harness kills **30**, **18** are killed only by the harness, and **0 survive**. Three of the 33 are killed by the text-side guards and not by the harness (two Pass-1a/Pass-3 class-list drops, and the glob-shape one) — coverage where it belongs, not a hole. The negative controls hold **7 of 8**, the eighth being the accepted residual above.
+
+**Three of my own mutations were wrong before they were read, and that is the honest cost line.** `A02`'s first form was a no-op (`… || true | head -0` short-circuits when grep matches) and was scored a harness gap for a whole run. `X01` — dropping `-e` — is inert once the gate stops trusting `-e` for non-vacuity, so it was scored a survivor until the pair was **executed directly** (`-e` dropped *and* the builder made to exit 3: exit 1, no `GATE GREEN`, reason named) and relabelled a negative control. And seven anchors went stale the moment the round's own fixes edited the lines they pointed at; they were reported as `SKIPPED`, which is the honest outcome and is also seven mutations that did not run, and they are now **derived from the script** rather than retyped.
+
+**One reviewer claim was rejected on re-derivation.** The claims lens read the harness's cost sentence as *"17 gate runs"* being wrong by one; recounting gives 16 script invocations of which 14 reach the gate, which is the correction taken — but the same lens also reported the suite at *"2,986 collected"* against the record's 2,980 and called the record stale. The record describes the scope-check run, which collected 2,980 at the time it ran; the tree has since grown by the round's own additions. Scoped in place rather than renumbered.
+
+---
+
+## Phase 187 (executed 2026-08-06 — the suite is every phase's dominant cost, and the mutation battery gets hand-rolled again each time; the § High velocity item Wade asked for on 2026-08-03)
+
+Not a shipped defect. Phase 181's close-out cost review measured where a phase's wall clock
+actually goes and the answer was the test suite: **2,819 tests in 547s, serial, run six
+times in that phase**, and a mutation battery re-runs the suite once per mutation, so round
+1's guard lens took 87 minutes and round 2's took 40. Phase 186 then ran the suite seven
+times and its battery six — roughly 2h10m, more than everything else in the phase combined.
+The entry carried its own sequencing note: do this first in a fresh window, because its
+entire payoff is on the phases that follow it.
+
+### Leg A — the suite parallelises, and the filed hazard estimate was the wrong shape
+
+**Measured, back to back, on the same tree: `-n0` **582.74s**, `-n auto` **132.78s** and
+**138.04s** — about **4.3×** on 14 logical cores.** That pair is the cleanest comparison,
+not the whole picture: across the phase the parallel run was observed at 123.7, 132.8,
+135.4, 136.1, 138.0, 139.0, 146.4, 152.0, 158.7 (a reviewer's) and 168.6s, the last while
+another project's suite was competing for the machine. **So the honest figure is 583s →
+~123–169s, i.e. 3.5–4.7×, and the range is what to quote.** The record first said
+"123.7–139.0s", which was the last three runs rather than the observed set; the round's
+claims lens caught it by running the suite and landing outside it. Serial is the stable one: 582.95s
+on the pre-phase tree and 582.74s on the post-phase tree, twenty minutes and 81 tests
+apart.
+
+**Why it parallelises, corrected by the round.** The serial run spends **491s of CPU
+against 583s of wall clock** (224s user + 266s sys) — **84% utilised**, so there is only
+~93s of idle to reclaim and the 4.3× cannot be coming from absorbing it. It comes from
+spreading that 491s across cores, which is ordinary parallelism; the claims lens caught the
+first draft asserting the opposite (*"not compute-bound; it is subprocess-bound … exactly
+the seconds another core can absorb"*) and that sentence shipped in `pyproject.toml`,
+`tests/README.md` and `requirements-dev.txt` before it was corrected in all four places.
+What **is** unusual and worth keeping is the split: **266s of the 491s is system time**,
+because the suite drives `install.sh`, `git`, `bash` and `semgrep` in thousands of real
+subprocesses by design. And parallelism *costs* total CPU rather than saving it — a
+reviewer measured 782s of CPU on a parallel run against 491s serial.
+
+**The filed hazard estimate — "~696 non-`tmp_path` `write_text`/`mkdir` call sites" — is not
+a hazard set, and the entry said so itself: verify before defaulting it on.** Re-derived,
+the tree has **818** `write_text`/`write_bytes`/`mkdir`/`touch` call sites across
+`tests/*.py` and **51 modules that both write and reference `REPO_ROOT`**. A single-line
+probe for a write whose target is `REPO_ROOT`-derived returns **zero**, and that zero is
+worthless: it is line-scoped, so `p = REPO_ROOT / "x"` on one line and `p.write_text(...)`
+on the next is invisible to it. That is the Phase-173 shape — a scout's grep *scope* being
+the estimate — and neither 818 nor 0 is the answer.
+
+(Both figures are the **pre-phase** tree, `bf17b84`, which is where the question was
+asked; `grep -oE "\.(write_text|write_bytes|mkdir|touch)\(" tests/*.py | wc -l` gives 818
+there and 849 at HEAD, and the module intersection gives 51 at `bf17b84` and 54 at HEAD. A
+reviewer re-derived 48 for the second figure from a different write-pattern set, which is
+why the command is written down here rather than the number alone.)
+
+**So the population was derived by instrumenting the writers and running the whole suite.**
+A throwaway pytest plugin patched `Path.write_text`/`write_bytes`/`mkdir`/`touch`/`unlink`/
+`rename`, `builtins.open` and `Path.open` in write modes, the `shutil` copy/move/rmtree
+family, `subprocess.run`/`Popen` and `os.chdir`, and recorded every call whose target
+resolved inside the repo and outside a tmp dir. **632 rows. Exactly one is a test writing
+into this repo:** `test_venv_command_word.py::test_an_untracked_file_is_in_scope`, which
+planted `docs/_untracked_guard_probe.md` in the real tree and deleted it in a `finally`.
+Everything else is `__pycache__`, a subprocess whose *cwd* is the repo while its operand is
+a tmp path, or — 64 rows of it — `shutil.rmtree` walking a tmp tree with
+`os.unlink(entry.name, dir_fd=…)`, which arrives as a bare basename that any CWD-relative
+resolution mis-attributes to the repo. **The instrument over-reported by 64 to 1 and it is
+recorded here rather than smoothed away**, because the shipped guard deliberately does not
+patch `os.unlink`/`os.rmdir` for that exact reason.
+
+**The empirical half agreed and added the part that matters: it is a race, not a
+certainty.** The first `-n auto` run failed exactly one test —
+`test_no_shipped_file_gives_a_sysop_script_a_venv_command_word`, a sibling worker scanning
+the shipped file set and finding the planted probe, reported as a shipped defect. A second
+`-n auto` run over the same tree passed 3000/4. One run is one interleaving; the two
+instruments together are what make the finding a fact rather than an anecdote.
+
+**Fixed rather than serialized, because serializing would have been the wrong answer twice
+over.** Confining the two tests to one xdist worker only helps if nothing else reads
+`docs/` — and the mirror gate, the doc-currency guards and the citation sweep all do — and
+the window is open to any concurrent session sharing this clone, which `CLAUDE.md`
+explicitly expects. `_shipped_files()` grew a `root` parameter and the probe now builds a
+throwaway git repo in `tmp_path`, adds the eight vacuity anchors to its index and leaves
+the defect file untracked. **The fixture tests more than the original did**: it pins the
+`--cached` half of `--cached --others` as well as the `--others` half, it asserts the probe
+really is untracked before drawing any conclusion from `--others`, and the vacuity anchors
+run against a tree the test built rather than being switched off for the fixture. Its
+`git init`/`add` strip git's four discovery vars, per `test_git_env_hermeticity.py`.
+
+**And the class is guarded, because otherwise the next test to plant a file re-opens it
+silently.** `tests/conftest.py` now patches the Python-level writers and fails any write
+that lands inside the repo, with `__pycache__` and `.pytest_cache` the only allowances —
+pinned, since widening that tuple is the cheapest way to disarm the guard. There is **no
+opt-out marker**: after the fix the population is zero, and an escape hatch is what Phase
+172's round found reddening its own pin. `tests/test_repo_write_guard.py` drives every
+patched API end to end against a real repo path, because "the predicate is correct" and
+"the predicate is wired to `Path.write_text`" are separate claims and only the second one
+stops the next collision.
+
+`pytest-xdist==3.8.0` is pinned in `requirements-dev.txt` and `-n auto` is in `addopts`.
+`--dist load` is xdist's default and is **kept deliberately over `loadfile`**, which would
+have put a module's tests back on one worker and masked the only real defect this leg
+found. The pin and the flag are one fact in two files, so a guard pairs them: dropping the
+pin is loud (pytest exits 4 in CI), dropping `-n auto` is silent.
+
+### Leg B — `tools/mutation_battery.py`, derived from the nine rather than designed
+
+Nine hand-rolled batteries preceded it (158, 159b, 160, 172, 177, 178, 183, 184, 186), plus
+`mutate_envelope_hook.py`. They were read in full and the requirements taken from what they
+*do*, not from what a fresh design would want. The corpus disagrees with itself on almost
+every decision, and where it does, the shipped default is the one a recorded incident
+argues for:
+
+- **A missing anchor is its own bucket and exits 2.** Four of the nine (160, 172, 178, 183)
+  score a failed `str.replace` as a **surviving mutation** — a battery bug indicting an
+  innocent guard. Two (184, 186) bucket it as `skipped` and exclude it from the
+  denominator; 186's record reports seven such rows, seven mutations that did not run.
+- **Anchors can be derived at run time.** Phase 186's `_line_after` is the corpus's one
+  forward-looking idea and it was applied to two of five gate lines, at import time, where
+  a moved marker raises `StopIteration` and kills the module. `line_after(marker)` is that
+  idea evaluated inside the run loop, so a stale marker becomes a scored row.
+- **Exactly one occurrence, asserted.** Every battery calls `replace(old, new, 1)` and only
+  Phase 177 checks the anchor is unique. `occurrence=` and `region=` are the explicit
+  opt-outs; Phase 178's `_in_region` exists for nothing else.
+- **`__pycache__` cleared recursively plus `PYTHONDONTWRITEBYTECODE=1`.** Five of ten do
+  this. Phase 186 does it non-recursively over `tests/` alone and without the env var — a
+  regression against 172/183 that was inert only because its subject was a shell script,
+  while two of its rows mutated `.py` test modules.
+- **pytest exit 5 *and* exit 4 are setup failures.** Phase 158 records exit 5 scored as a
+  kill on a run that executed zero assertions. **Exit 4 is this phase's own addition and it
+  was found by a test, not by reading**: a node id that no longer resolves gives 4, not 5,
+  and a mutation that renames the very test its verifier is pinned to produces exactly
+  that — indistinguishable from a kill on the return code alone.
+- **`sys.executable` first.** `phase159b`, `phase184` and `mutate_envelope_hook` hardcode
+  `.venv/bin/python3`, and **Phase 183's round is the incident** — that harness *died from
+  a linked worktree, which never carries a venv*, in its own words. The first draft of
+  this list pinned it on Phase 186, which is **false**: 186 already carries the fallback
+  *and* a comment naming the scenario. Caught by the round's claims lens. What is new is
+  probing each candidate with `import pytest` rather than testing for the file.
+- **Per-row target, per-row verifier subset, and multi-column scoring.** 186 needed
+  old-guards vs new-harness columns to attribute what its phase actually bought; the report
+  prints, per column, how many each killed and how many it killed *alone*.
+- **The revert/assumption split is printed**, because three of the nine compute it and it is
+  the number the governor reads: a set composed mostly of reverts reports wiring, not
+  coverage.
+- **Green start, per-row `finally`, whole-tree restore assertion, signal handlers and a
+  post-run re-verification.** Phase 182's battery left a mutation in the tree when
+  interrupted; 186's outer `finally` restored one file while two rows mutated others.
+
+**No-op detection was the hard part, and the honest answer has three tiers.** A textual
+no-op (Phase 178's rule) is refused. A declared-equivalent mutant (Phase 172's third
+bucket) is reported apart, with a *kill* as the finding. Neither reaches the class Phase 186
+shipped twice: `… || true | head -0` short-circuiting when grep matches, and a dropped `-e`
+gone inert once the gate stopped trusting it — both changed the text, both changed no
+behaviour, both were scored as results for a whole run. **A battery cannot infer behaviour,
+so the row declares it and the harness runs it**: `effect=<command>` executes against the
+pristine and the mutated tree, and a byte-identical `(rc, stdout, stderr)` demotes the row
+to `NO-OP(effect)` whatever the verifier said. **The limit is stated in the output rather
+than left implied** — every run prints how many defect rows carry no probe, and that an
+unprobed survivor may be a live hole or may be a no-op and this battery cannot tell you
+which.
+
+**One thing was deliberately not built.** Three of the nine mutate a sandbox copy instead of
+the tree, and each broke differently: 177/178 `copytree` excluding `.git`, so a guard that
+shells out to `git ls-files` (183's does) cannot run at all; 158 copies only `git ls-files`
+output, so an untracked new guard vanishes and scores phantom survivors; and 177's own
+docstring records a `git clone` sandbox hiding uncommitted guard fixes and producing four
+more. In-place plus the restore discipline above is what the three most recent batteries do,
+and the omission is recorded in the module rather than left to be rediscovered.
+
+`tests/test_mutation_battery.py` drives all of it end to end against a throwaway subject
+tree — two gates written identically, so `replace(…, 1)` retargeting is reachable — and
+skips on the sterilized tree the way `test_skill_audit_refs.py` established.
+
+### Leg C — rule 4 of the author-side pass
+
+`_shared/adversarial-review.md` § *Before you spawn anyone* gains **rule 4: when the change
+moves a boundary over text you do not control, build the hostile corpus BEFORE the change,
+not after.** Rule 3's fixture half already says to build a fixture's inputs from the source
+of truth; what that produces is a *healthy* corpus, and a boundary rule is never defeated by
+healthy input. Phase 181's expensive loop was rework, not review: round 1 found the new
+`## `-closes-a-batch rule had no fence awareness, and round 2 then found the fence fix
+honoured an **unterminated** fence and was worse than the bug it replaced. Four author-built
+fixtures contained neither a fence nor an unbalanced marker.
+
+The trigger is scoped to a delimiter, predicate or state machine over text another writer
+produces, and it names three cases: what else matches the token; what happens when the
+construct never closes; and what the live artefact already contains that nobody put there
+on purpose. The limits paragraph was re-scoped in the same edit — it opened *"Rule 3
+narrowed this"* and would otherwise have gone stale the way it did when rule 3 shipped.
+
+**Guarded independently of the block pin, on that pin's own instruction.**
+`AUTHOR_PASS_VERBATIM` covers everything, but regenerating it is the documented way to re-approve a
+deliberate edit — so a rule whose only protection is the block pin loses it the next time
+someone re-approves something else. Rule 4 gets eight verbatim pins, five contradiction
+patterns, a placement predicate (rule 3 < rule 4 < the limits paragraph), the permissive-
+modal screen scoped to its own block, and ten mutation-table entries **asserted against the
+rule-4 predicates alone** rather than against the combined check list, which every one of
+them would fail via the block pin.
+
+### The rider
+
+`REVIEW_CHECKLIST.md` § *Before announce*'s Net line said what remained before the video was
+"Wave 2 (`tools/FIX_WAVE_BRIEF.md` items 6–10) and the announce copy". **Wave 2 closed
+2026-08-02 with Phase 176.** The brief carries four Wave-2 status stamps (items 6, 7, 8+9,
+10) out of seven overall, and the last of the four states the closure outright: *"Item 10
+is DONE and Wave 2 is closed"*. That line had gone on naming closed work as
+remaining for eleven phases, and it is the line a future session reads to decide what is
+left before announce. `tools/FIX_WAVE_BRIEF.md:133` also told its reader the author-side
+pass has "two rules" — true at Phase 166, three since Phase 168, four now; the count is
+retired rather than corrected.
+
+### Suite
+
+**3,004 → 3,146 collected; 3,000 → 3,142 passed, 4 skipped, 0 failed** after the round's
+fixes; +104 at the pre-round commit, which is the figure the breakdown below describes. It breaks
+down as **41** `test_repo_write_guard.py` + **34** `test_mutation_battery.py` + **27** in
+`test_adversarial_review_gate.py` (rule 4) + **2** in `test_venv_command_word.py`. The
+first draft wrote "41 / 36 / 27", which sums to 104 only because the 36 silently absorbed
+the two the fourth module contributes — arithmetic made to close, caught by the round's
+claims lens re-collecting each module at `bf17b84` and at HEAD. Parallel wall clock
+123.7–160.4s, measured with the cache provider active, which is how CI invokes pytest.
+
+### Phase 187's author-side pass — one battery, and it cost the repo `README.md`
+
+Run with the module this phase ships (`tools/phase187_mutations.py` — 42 defect mutations
++ 3 negative controls across four verifier columns at the final count, 38 + 3 when this
+section was first written), which is the honest test of Leg B as well as of the guards.
+
+**Final: 38/38 killed, 3/3 controls green, 0 stale anchors, tree clean. 2 of 38 are
+declared reverts (5%).** That number is a floor, not exhaustion — five consecutive phases
+of this log reported an all-killed author battery and an independent reviewer then found 33
+to 99 survivors. The first run was **30/35 with 5 survivors and 4 of 5 controls
+false-killed**, and getting from there to here is where the pass earned its cost.
+
+**The worst finding is in this phase's own new test module, and it is a data-loss defect.**
+`tests/test_repo_write_guard.py` drove its destructive cases at real content —
+`(REPO_ROOT / "README.md").unlink()` and `shutil.rmtree(REPO_ROOT / "docs")` — on the
+reasoning that the guard would block them. It does, right up until it does not. A mutation
+battery against a guard *disables the guard*; three rows did exactly that, those two tests
+ran, and **`README.md` and the whole of `docs/` were deleted from the working tree.** The
+`assert … is_file()` line written directly underneath catches it *after* the loss. Recovered
+by `git checkout` only because the round procedure's **commit-first** rule had already put
+the tree in a commit — the one rule that makes everything else recoverable, doing exactly
+that. Every **destructive** probe now targets a path that does not exist; the guard refuses on
+the *path* before calling through, so a nonexistent target proves the identical thing with
+no loss, and `pytest.raises(AssertionError, match=…)` still separates "the guard fired"
+from "`FileNotFoundError`, because the guard is gone". **The creating probes are a
+different case and the first draft of this paragraph elided it** — `TARGET.write_text` and
+its siblings do create `docs/_write_guard_probe.md` for real whenever the guard is
+disabled. What contains those is the module's `_no_probe_residue` fixture, which sweeps
+before and after every test with `os.*`, the API the guard deliberately does not patch.
+
+**Two of the four "false kills" were the same incident, arriving disguised.** With the
+guard disabled, `TARGET.write_text(…)` also landed for real, leaving
+`docs/_write_guard_probe.md` in the tree — where the next rows' verifier read it and went
+red for a reason unrelated to their own mutation. So a mutation that changed one sentence
+of an error message reported as over-strictness. **The battery's per-target restore cannot
+see this**, which is Phase 186's outer-`finally` bug one level up: *the blast radius of a
+mutation is not bounded by its target*. `tools/mutation_battery.py` now snapshots
+`git status --porcelain` before and after and reports **COLLATERAL DAMAGE** with both
+states when they differ, and the guard module sweeps its own probe artefacts with `os.*`
+— the API the guard deliberately does not patch, so the cleanup cannot be blocked by the
+thing it is cleaning up after.
+
+**The residue was also manufacturing kills, which is the direction that hides.** Once it
+was gone, two mutations that had been scoring as killed turned out to be surviving:
+dropping `"a"` and `"+"` from the write-mode set (nothing opened a repo path for append),
+and refusing to resolve a relative path against the CWD (nothing wrote a bare filename
+after `chdir`). Both are ordinary in-repo idioms, so neither qualified as a residual;
+both are now driven, parametrised, with a read-mode control.
+
+**The other two controls were wrong, not the guards, and retiring them is the finding.**
+"A fourth case is added to rule 4" and "rule 4's heading is rewrapped" were written as
+innocent edits that must stay green. They cannot be: `AUTHOR_PASS_VERBATIM` is a
+whole-block verbatim pin whose *stated* contract is that any edit — added, deleted,
+swapped, relocated — reddens until the constant is regenerated in the same commit. Scoring
+them as false kills would have reported a pin working exactly as specified as a defect.
+Over-strictness against rule 4 is now tested where it can be: a control editing prose the
+pin does not cover, plus `test_the_rule_4_predicates_discriminate_on_their_own`.
+
+**Three survivors were tests asserting on state the harness itself supplied or on a
+fixture that could not discriminate.** `PYTHONDONTWRITEBYTECODE` could be deleted from
+`_child_env()` because the battery *sets it in every subprocess it launches*, so
+`dict(os.environ)` already carried it — the assertion passed on ambient state (now
+`monkeypatch.delenv` first). `resolve_python` could be reordered back to venv-first because
+the fixture had no `.venv` and both orderings returned `sys.executable` (the fixture now
+plants a working shim, and a second test pins the fallback direction). And the eight
+`_SCAN_ANCHORS` — the vacuity guard for the shipped-file scan — could be emptied wholesale,
+because the loop that reads them simply stops iterating; the replacement is derived rather
+than counted: every `_SCAN_PATHSPEC` entry must have an anchor beneath it.
+
+**Two of my own mutation rows were wrong before they were read, and both lied in their
+labels.** `W01 drop Path.open from the patched set` dropped `hardlink_to`, not `Path.open`;
+`V03 the vacuity anchors are emptied` commented out one of eight and emptied nothing, so
+its survival was correct behaviour by a coverage check being misreported as a hole. Both
+are the class Phase 186 recorded as its own honest cost line, and both are corrected in
+place rather than dropped.
+
+**Rule 3 — the prescribed commands were run.** `python3 -m pytest -n0` and the parallel
+default (the timings above); the `AUTHOR_PASS_VERBATIM` regeneration recipe verbatim; the
+`Battery(...)` usage block from `mutation_battery.py`'s own docstring, which is what
+`tools/phase187_mutations.py` is. **Rule 4 — applied to this phase's own boundary
+changes.** `repo_tree_violation` is a predicate over paths nobody controls, so the hostile
+corpus went in first: `..` traversal out of the repo, a bare relative path, a file *named*
+like the allowlist rather than under it, a path outside the repo entirely, and every write
+mode. `_rule_4_block` is a state machine over markdown, so it is tested for a heading that
+resolves without its terminator (fails closed) and for a duplicated heading.
+
+**pytest exit 4 is this phase's one addition to the derived requirement set, and a test
+found it rather than a reading.** The corpus records exit 5 (collected nothing) scored as a
+kill. Exit 5 is what `-k` produces; a **node id that no longer resolves gives exit 4**, and
+the mutation that renames the very test a verifier is pinned to produces exactly that —
+indistinguishable from a kill on the return code alone.
+
+**One limit is printed on every run rather than left implied:** all 38 rows carry no
+`effect=` probe, because the subjects here are text guards whose observable behaviour *is*
+the verifier's verdict. The probe pays where a mutation changes a shipped command's
+behaviour; it has nothing to compare here, and the report says so instead of letting the
+fraction imply otherwise.
+
+### Two defects the author-side pass did not catch, found by CI and by the battery itself
+
+**CI was red on the first push, and the reason is a reachability miss in how I ran the
+suite.** Every local run in this phase passed `-p no:cacheprovider`; CI runs plain
+`pytest`. With the cache provider active, `_pytest/cacheprovider.py::
+_ensure_cache_dir_and_supporting_files` calls
+`self._cachedir.parent.mkdir(parents=True, exist_ok=True)` — on the **rootdir itself** —
+and the write guard rejected it and took the whole suite down. A second firing followed
+under `-n auto`: the same function builds the cache in a
+`TemporaryDirectory(prefix="pytest-cache-files-", dir=<rootdir>)`, `chmod`s it, writes
+three files with `open(…, "x")`, and renames it into place, so the transient prefix is as
+much a part of pytest's contract as `.pytest_cache` is. Both fixes are **derived from
+pytest's source rather than from what happened to fire**: `_creates_nothing` exempts a
+`mkdir` on a directory that already exists (which can never create anything, and is
+deliberately *not* written as "the repo root is exempt"), and the allowlist gains the
+staging prefix, matched per path component with `fnmatch` so `docs/__pycache__.md` is
+still a violation. Local runs now use the CI invocation.
+
+**Then the battery deleted the entire working tree.** Row `W15` makes the new exemption
+unconditional; with the guard disabled, `test_the_exemption_does_not_reach_a_destructive_
+call_on_the_root` executed the `shutil.rmtree(REPO_ROOT)` it had wrapped in a
+`pytest.raises`, and the repository's own working tree ceased to exist. Recovered by
+re-cloning `origin` at the pushed commit; the uncommitted cacheprovider fix was rewritten.
+
+**That is the same defect as the `README.md` one, committed after writing it up.** The
+comment block explaining why a probe must never target real content sits one screen above
+the test that then aimed `rmtree` at the repo root — the most destructive target
+available — on the identical reasoning the comment refutes. The generalisation the first
+incident did not draw, now recorded in `tools/mutation_battery.py`: **a battery disables
+the thing it attacks, so for the duration of the run every test that trusts that guard for
+its own safety runs unguarded.** The destructive case is now asserted on `_creates_nothing`
+as a pure function — answering "does it exempt an rmtree of the root" needs no rmtree —
+plus a source assertion that `_patch_shutil` never consults it. An AST sweep over `tests/*.py` — **113** files at the time it ran, including both modules
+this phase added — for a destructive call on a `REPO_ROOT`-derived path returns exactly the
+two `mkdir(exist_ok=True)` calls above, both provably non-creating. (The count was first
+written as 111, the pre-phase figure. The round's claims lens caught the number and
+inferred from it that the sweep had excluded the two new modules; that half is **wrong** —
+the sweep's own output names `test_repo_write_guard.py:310` and `:311`, which are those
+very calls.)
+
+**Neither would have been found by more mutations.** The first needed the suite run the way
+CI runs it; the second needed the battery to run at all. Both are rule 1 *reachability*
+failures in the pass itself rather than in the guards, which is the honest place to put
+them.
+
+**Final author-side battery: 42/42 killed, 3/3 controls green, 0 stale anchors, tree
+verified intact.** The four new rows attack the exemption and the allowlist glob directly.
+Four anchors went stale when the cacheprovider fix landed and were reported as **battery
+bugs rather than guard holes**, with a non-zero exit — the mechanism Leg B exists for,
+working on its author.
+
+## Phase 187's adversarial round
+
+**Three fresh-context `general-purpose` reviewers, one round, distinct lenses — *does it
+execute* / *are the record's claims true* / *are the guards real, on an independently
+designed battery*.** The governor's escalation condition holds on a plain reading and the
+call is recorded rather than assumed: the change ships behaviour (a process-wide guard in
+`conftest.py`, a shipped skill partial, the test harness's own configuration) **and** its
+record asserts numbers a reviewer can falsify (a speedup, a population, mutation
+fractions). Dispatched onto three worktrees created at the phase commit and **verified at
+that commit before use** — `isolation: "worktree"` forks from `main`, which is the Phase-185
+dispatch failure. All three on the author's model; no diff-model lens this round.
+
+**Yield: 11 findings from the claims lens, 11 from the execute lens, 16 survivors + 5
+guard-defeats from the guard lens. Overlap was one finding across all three** — the red
+suite — which is under the ~15% the shared partial records, and every lens produced its
+sharpest finding alone.
+
+**The round's headline is that CI, not the round, found the blocker first — and all three
+lenses found it independently anyway.** `PHASE_LOG.md` shipped an absolute home
+path in the paragraph narrating the tree deletion, tripping the mirror
+gate's Pass 1b on a file the public mirror ships. It was fixed in `7d53af4` before any
+lens reported. **The cause is worth more than the defect:** the suite ran *before* that
+paragraph was appended and not after — the gate ran before the thing it gated, which is
+the class Phase 170 exists for, committed by the author who had just re-read it.
+
+### What the guards lens broke — 16 survivors against my 42/42
+
+**Rule 4's residue does not survive a sanctioned pin regeneration (5 survivors).** This is
+the finding that matters, and it is only reachable by doing what the file documents:
+regenerate `AUTHOR_PASS_VERBATIM` the way its own comment prescribes, which is the
+legitimate way to re-approve an edit — and then the whole-block pin is gone and the
+rule-4 predicates are all that is left. Five ordinary rewordings walked through: *"Rule 4
+does not create an obligation on any author"*, a preamble *"Rule 4 below is illustrative
+and binds nothing"*, *"In practice a healthy corpus already covers the ordinary case"*,
+*"Reviewers will normally surface anything a before-corpus would have"*, and an ordering
+inversion in the **body** while the heading still said BEFORE. My five patterns were
+literal-ish phrases against a rule whose defeat condition is a *sentence*. They are now
+**subject × predicate classes** — the shape `_RULE_3_SOFTENING_MODALS` already used one
+rule up — plus a pin on the body's ordering clause, and all five are in the mutation table
+permanently as `M63`–`M67`.
+
+**`_RULE_4_MUTATIONS` was counted, not derived (2 survivors).** `[one_row] * 10` satisfies
+`len(...) == 10` while nine mutations stop running; a future rule-4 row named outside the
+hardcoded `M5x` prefix is silently excluded while the count stays right. A first fix
+derived membership by *applying* each mutation and asking whether rule 4's block moved —
+and that was over-inclusive, pulling in every rule-3 row that destroys the partial
+wholesale. What shipped is three checks with no number to edit: id uniqueness, set/list
+agreement, and a **suffix invariant** — the rule-4 rows are the tail of the table, so a row
+appended after them fails rather than sitting outside the parametrisation.
+
+**The shipped-file scan could be thinned while the new coverage check stayed green (4
+survivors).** `test_the_vacuity_anchors_cover_every_pathspec_entry` asserts *entry →
+anchor* and says nothing about which entries exist, so deleting `packs/` with its anchor,
+or narrowing `core/` to two subdirectories, left every pack file outside the scan with the
+check green. The pathspec is the population and is now pinned verbatim. A fourth survivor
+thinned the anchor loop *inside* `_shipped_files` to `[:1]` while the tuple stayed pinned —
+closed by driving the real scan and asserting every anchor comes back out of it.
+
+**Five in `mutation_battery.py`, and one of them is the mechanism this phase added after
+destroying its own tree.** The COLLATERAL DAMAGE detector was **never exercised**: every
+test used a bare `tmp_path` as `root`, which is not a git tree, so `_tree_state()` returned
+`None` and the branch was dead — deleting the whole mechanism left the module green. Also
+untested: the post-run restore check, the `atexit` net, and an empty resolved anchor. Each
+now has a test, and the collateral-damage one builds a real git fixture and makes a
+mutation cause a write the battery never declared.
+
+### What the execute lens broke — four live bypasses in the write guard
+
+Each observed end to end, each a real write into this repo, and **none of them attacked by
+any of my 17 write-guard rows** — the "an author's zero measures self-consistency" failure
+in the phase that shipped the sentence.
+
+- **`Path.rename` / `Path.replace` checked the source, not the destination.** A file moved
+  from `tmp_path` into the repo landed. `shutil.move` — the same operation — was checked on
+  its destination all along, so the guard was internally inconsistent, and tmp-write-then-
+  `replace` is this repo's own shipped atomic-write idiom.
+- **The `shutil` wrappers were bypassed by keyword arguments.** Every one of those
+  parameters is positional-or-keyword, so `shutil.rmtree(path=…)` reached the real
+  `shutil.rmtree`. The conftest's claim that the tree-deleting case "is still covered at
+  the API a test would use" was false as written.
+- **`os.mkdir`, `os.open`+`os.fdopen`, and `tempfile.NamedTemporaryFile(dir=REPO_ROOT)`
+  all wrote into the tree.** The stated justification for not patching the `os` layer only
+  ever covered `os.unlink`/`os.rmdir` under `rmtree`'s `dir_fd` walk. **`dir_fd` was the
+  actual discriminator**, so it is now tested for directly and the rest of the layer is
+  covered rather than exempt.
+- **A symlink was a total bypass in one direction and a false positive in the other.**
+  `normpath` cannot see through a link: a link under `tmp_path` pointing at this repo let a
+  write through with the predicate returning `None`, and a link inside the repo pointing
+  out was flagged as a violation it is not. `realpath` answers the question the guard is
+  actually asking.
+
+Three more in the harness: a verifier **killed by a signal** was scored as a kill (the
+identical shape as pytest exit 5, which the module already demotes); `occurrence=` and the
+ambiguity check **counted differently** for a self-overlapping anchor, so `occurrence=2`
+selected an index `str.count` had never counted; and `--json` **threw the entire report
+away** after a completed run for a row whose target sits outside `root`.
+
+### What the claims lens found — eight of eleven confirmed, one refuted, two partial
+
+Confirmed and fixed: the `+104` breakdown was **arithmetic made to close** (41 / 34 / 27 /
+2, not 41 / 36 / 27 — the 36 silently absorbed a fourth module's two tests); *"Phase 186
+hardcoded `<root>/.venv/bin/python3`"* is **false and shipped in `tools/mutation_battery.py`
+as well as the record** — 186 already carries the fallback *and* a comment naming the
+scenario, the hardcoders are `phase159b`, `phase184` and `mutate_envelope_hook`, and the
+incident is **Phase 183's** round; the anchor-absent-as-survivor count is **four of the
+nine, not three** (`phase183` does it too); the parallel range was quoted as 123.7–139.0s
+when the phase's own observations span 123.7–168.6s and the reviewer measured 158.7s; the
+battery was described as "38 + 3" after it had grown to 42 + 3; "111 test modules" was the
+pre-phase count; and *"every probe now targets a path that does not exist"* was true only
+of the **destructive** probes.
+
+**One was refuted.** The lens reported that "818 call sites" and "51 modules" came from two
+different trees. Re-deriving at `bf17b84` gives **818 and 51 together**; their 48 comes
+from a different write-pattern set. The record now carries the command rather than the
+number alone — which is the useful half of the finding either way.
+
+**One was partial, and the partial half is the instructive one.** The lens was right that
+"111 test modules" is wrong (113) and inferred from it that the sweep had therefore
+excluded the two modules the phase added — *"which are exactly where the destructive calls
+live"*. That half is false: the sweep's own output names `test_repo_write_guard.py:310`
+and `:311`. A wrong number and a wrong conclusion drawn from it are two findings, and only
+one of them survived.
+
+**The one claim about the machine that had to be rewritten, because it shipped in three
+files.** The record said the suite is *"not compute-bound; it is subprocess-bound — those
+are exactly the seconds another core can absorb"*. It is 84% CPU-utilised serially (491s of
+CPU against 583s of wall clock), so there is only ~93s of idle and the 4.3× cannot come
+from reclaiming it — it comes from spreading the CPU across cores, which is ordinary
+parallelism. A reviewer measured 782s of CPU on a parallel run against 491s serial:
+parallelism *costs* total CPU. What survives is the split — **266s of the 491s is system
+time** — and that is a real and unusual property worth recording. Corrected in
+`pyproject.toml`, `tests/README.md`, `requirements-dev.txt` and here.
+
+### The final battery, and the one row that changed its own kind
+
+**42/42 killed, 3/3 negative controls green, 1 declared-equivalent proven inert, 0 stale
+anchors, tree verified clean.** Four anchors went stale twice as the round's fixes landed
+and were reported as **battery bugs rather than guard holes**, with a non-zero exit — Leg B
+working on its author, twice.
+
+**One row stopped being a survivor and became a proof.** `W09` removes the Path-layer check
+and *looked* like a hole. It is not: `pathlib` routes `mkdir`/`touch`/`unlink`/`symlink_to`/
+`write_text` through the `os` writers, which the round's own fix patched, so the guard now
+has defence in depth and that mutation changes text without changing behaviour. Rather than
+assert the equivalence it is **demonstrated** — this is the battery's one `effect=`-probed
+row, and the probe reports `NO-OP(effect)`. The ordering property it was written for was
+then re-pointed at the `os` layer, where it is now load-bearing, and killed there. *The
+filed site is not always the site that matters*, applied to my own row.
+
+**A third residue incident, smaller and the same shape.** The new `tempfile` probe left two
+randomly-named files in the repo root when a mutation disabled the guard — the residue
+sweep could not name what `tempfile` had chosen. The probe now carries a fixed prefix and
+`delete=True`, and the sweep globs it. Three times in one phase a guard's own test wrote
+into the tree while the guard was off; that is the hazard `tools/mutation_battery.py` now
+opens with.
+
+**Suite: 3,004 → 3,142 collected, 3,142 passed, 4 skipped, 0 failed**, run the way CI
+invokes pytest.

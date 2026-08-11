@@ -36,7 +36,9 @@ but only when the *whole* maintainer-side surface is absent, never when the runb
 has gone missing.
 """
 
+import fnmatch
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -364,22 +366,87 @@ def test_an_ordinary_rewording_stays_green():
 # author-side rule that "an index of the source of truth is not the source of truth". A
 # pass added to a script and not to the runbook reddens this on the next run.
 
-PASS_SOURCES = (
-    REPO_ROOT / "tools" / "cut_public_release.sh",
-    REPO_ROOT / "tools" / "make_public_mirror.sh",
-    REPO_ROOT / "tests" / "test_mirror_leak_gate.py",
+# The population is DERIVED from the tracked tree, not listed. Phase 185 shipped
+# three hardcoded paths — "three files someone remembered" — and its own round
+# filed that: a pass implemented in a new `tools/verify_mirror_*.sh` would be
+# invisible to this guard, which is the one drift it exists to catch.
+#
+# The shape rule is that **a pass is a mechanism**: it is implemented by a
+# cut-time shell script or by a test module that runs or scans for it. Two
+# neighbouring populations are deliberately OUT, and both exclusions were measured
+# rather than argued:
+#
+#   * Prose `.md` under `tools/`. `tools/PUBLIC_RELEASE_SPEC.md` still discusses
+#     "Pass 1", an identifier retired when Pass 1 split into 1a/1b/1c. Including
+#     specs imports a pass nothing implements and reddens the guard against a
+#     runbook that is correct.
+#   * One-shot maintainer analyses under `tools/*.py`. These quote pass
+#     identifiers as SUBJECT MATTER, and the derivation cannot tell a mechanism
+#     from a mention: `tools/phase186_negation_probe.py` carries a corpus of
+#     hypothetical retirement bullets including "superseded by Pass 6", and the
+#     first run of this derivation duly demanded the runbook list a Pass 6.
+#
+# **Those two reasons are recorded here, not asserted as a test, and that was a
+# reversal.** The first version required each excluded population to still name a
+# phantom pass, so that an exclusion whose reason expired would redden. A reviewer
+# showed it firing on three ordinary edits: deleting the throwaway probe, editing
+# its corpus, and — worst — implementing a real Pass 6, which is the number the
+# next pass will take, and which produced a failure message about maintainer
+# analyses that had nothing to do with what the maintainer had done. A guard that
+# reddens on the single most likely correct future edit gets deleted rather than
+# fixed. `test_the_pass_source_population_is_derived_from_the_tree` now checks the
+# structural facts only: the two populations stay out, the globs name file TYPES
+# rather than filename shapes, and this module stays out of its own population.
+#
+# Two residuals, stated rather than discovered later. A pass implemented outside
+# these globs — in `core/companion/scripts/`, say — is still invisible. And in the
+# other direction, `tests/*.py` prose carries the same mention-vs-mechanism
+# ambiguity `tools/*.py` was excluded for: a docstring that names a hypothetical
+# pass reddens this guard. That is accepted rather than fixed, because the one test
+# module that really does implement a pass (Pass 5, in `test_mirror_leak_gate.py`)
+# is a test module — and the failure now names the file that declared the pass, so
+# it is a one-line fix rather than a mystery.
+PASS_SOURCE_GLOBS = ("tools/*.sh", "tests/*.py")
+# This module is excluded from its own population. It names every pass in prose,
+# so including it would let a docstring here impose a requirement on the runbook
+# — the guard writing its own subject.
+PASS_SOURCE_EXCLUDE = ("tests/test_mirror_runbook_gates.py",)
+
+# "Pass 1a", "Passes 2 + 2b", "Passes 1a/1b/1c", "Pass 2 and 2b" — the
+# identifiers, not the prose. The joiner set is `+ / ,` and the word "and": the
+# first version joined only on `+`, so `Passes 1a/1b/1c` — a form
+# `make_public_mirror.sh` already uses at lines 18 and 91 — yielded `1a` alone.
+_PASS_ID = r"\d+[a-z]?"
+_PASS_TOKEN = re.compile(
+    rf"\bPass(?:es)?\s+({_PASS_ID})((?:\s*(?:[+/,]|and)\s*{_PASS_ID})*)", re.I
 )
-# "Pass 1a", "Passes 2 + 2b", "Pass 5 (MUST be empty)" — the identifier, not the prose.
-_PASS_TOKEN = re.compile(r"\bPass(?:es)?\s+(\d+[a-z]?)(?:\s*\+\s*(\d+[a-z]?))?", re.I)
+
+
+def _pass_ids(m) -> list[str]:
+    return [m.group(1).lower(), *re.findall(_PASS_ID, (m.group(2) or "").lower())]
+
+
+def pass_sources() -> list[Path]:
+    out = subprocess.run(
+        ["git", "ls-files", "-z"],
+        cwd=REPO_ROOT, capture_output=True, text=True, check=True,
+    ).stdout
+    return [
+        REPO_ROOT / rel
+        for rel in out.split("\0")
+        if rel
+        and rel not in PASS_SOURCE_EXCLUDE
+        and any(fnmatch.fnmatch(rel, g) for g in PASS_SOURCE_GLOBS)
+    ]
 
 
 def implemented_passes() -> set[str]:
     found: set[str] = set()
-    for path in PASS_SOURCES:
+    for path in pass_sources():
         if not path.is_file():
             continue
         for m in _PASS_TOKEN.finditer(path.read_text(encoding="utf-8")):
-            found.update(g.lower() for g in m.groups() if g)
+            found.update(_pass_ids(m))
     return found
 
 
@@ -410,7 +477,7 @@ def _passes_named_in(text: str) -> set[str]:
             # written that way (Pass 2 and Pass 2b have separate items).
             m = _PASS_TOKEN.match(item)
             if m:
-                found.update(g.lower() for g in m.groups() if g)
+                found.update(_pass_ids(m))
     return found
 
 
@@ -462,7 +529,52 @@ def _step_bodies_announcing_passes(text: str) -> list[str]:
 
 
 def test_the_runbook_names_every_pass_the_gates_implement():
-    """A pass an operator is never told to run is a pass that does not run."""
+    """Every implemented pass must LEAD a list item in the step that announces them.
+
+    **What this establishes, stated narrowly because the first version's headline
+    claimed more.** It was *"a pass an operator is never told to run is a pass that
+    does not run"*, and Phase 185's round showed a bullet reading
+    ``- Pass 4 … → SUPERSEDED, do NOT run`` satisfies it. So the property is
+    presence in the operator's list, not that the item tells them to run it.
+
+    **Why the missing half is not guarded, measured rather than conceded**
+    (``tools/phase186_negation_probe.py``, 16 realistic retirement bullets against
+    the runbook's 8 live ones):
+
+    * A vocabulary written from the finding's own example — superseded / do not run
+      / don't run / retired / obsolete / deprecated — catches **5 of 16** and
+      falsely flags **0 of 8**. Decorative.
+    * Widened until it covers the corpus (20 markers) it catches **15 of 16** and
+      falsely flags **2 of 8 live bullets** — including the real Pass 4 bullet
+      (*"`make_public_mirror.sh` **does not** print this one"*) and the real Pass 2
+      one (*"**eyeball only** the new hits"*). A guard that reddens on the correct
+      text gets deleted, not fixed.
+    * The one neither reaches is a conditional (*"only when cutting the public
+      repo"*), which is not a vocabulary problem at all.
+
+    That is Phase 179's polarity-by-string-matching result reproduced on this
+    surface, so the negation check is declined **in kind**, not left unattempted.
+
+    **What bounds the residual is the tree, not the prose — and the first version
+    of this paragraph got that bound wrong in the phase's favour.** It said no gate
+    stops running because of a bullet. Within the script that is true: it wires
+    Passes 1a/1b/1c/3/4 and the rename-residue diff to ``hard()`` unconditionally.
+    But *whether the script runs at all* was itself prescribed by a bullet — the
+    fenced ``bash tools/cut_public_release.sh`` block was nested **inside the Pass 4
+    bullet**, the very bullet the finding is about, and by that bullet's own words
+    Pass 4 and the residue diff are implemented nowhere else. Retiring it retired
+    them both. Phase 186 hoisted that block into step 3's own body, which is what
+    makes the claim true rather than the claim making itself true.
+
+    With it hoisted: Passes 1a/1b/1c/3 also survive independently, because
+    ``make_public_mirror.sh`` prints them in step 2. Pass 5's content runs in every
+    suite run, including the ``pytest`` check ``.github/workflows/tests.yml``
+    defines and branch protection requires on ``main``; its bullet adds running it
+    at the exact cut SHA. Passes 2 and 2b are labelled *informational — NOT gating*
+    by the script itself. What a do-not-run bullet could still do is persuade an
+    operator to dismiss a RED gate they have already seen, and no string check
+    reaches that.
+    """
     if not _in_source_repo():
         pytest.skip("sterilized mirror; the maintainer-side surface is correctly absent")
     text = _runbook()
@@ -479,8 +591,18 @@ def test_the_runbook_names_every_pass_the_gates_implement():
         "missing, and an operator scanning step titles will not find them."
     )
     missing = sorted(implemented - named)
+    where = {
+        pid: sorted(
+            str(p.relative_to(REPO_ROOT))
+            for p in pass_sources()
+            if p.is_file()
+            and any(pid in _pass_ids(m)
+                    for m in _PASS_TOKEN.finditer(p.read_text(encoding="utf-8")))
+        )
+        for pid in missing
+    }
     assert not missing, (
-        f"the runbook does not name pass(es) {missing}, which the gate scripts implement — "
+        f"the runbook does not name pass(es) {missing}, declared in {where} — "
         "step 3's deferral to 'the script' does not save it, because the script it points "
         "at is not the one that implements them (Pass 4 and the rename-residue diff live "
         "only in cut_public_release.sh, Pass 5 only in tests/test_mirror_leak_gate.py). "
@@ -519,6 +641,85 @@ def test_the_pass_population_is_derived_and_non_vacuous():
         f"the pass extractor found only {sorted(implemented)} — it has stopped seeing the "
         "identifiers in the implementing files, so the runbook check is inert"
     )
+
+
+def test_the_pass_source_population_is_derived_from_the_tree():
+    """Phase 186: the source list was three hardcoded paths, and its own round filed
+    that as a hole. Both directions of the derivation are pinned here.
+
+    NARROWING — the three files the old list named must still be in the derived set,
+    plus the harness that executes the gate. A glob edited down to `tools/*.sh` drops
+    both test modules and the guard goes quiet about Pass 5.
+
+    WIDENING — the two neighbouring populations named at PASS_SOURCE_GLOBS must stay
+    out, AND their reasons must still hold. Both are re-derived here rather than
+    restated: each excluded population must still name a pass the implementations do
+    not, because the moment that stops being true the exclusion is running on a stale
+    justification and wants re-deriving rather than keeping.
+    """
+    if not _in_source_repo():
+        pytest.skip("sterilized mirror; the maintainer-side surface is correctly absent")
+    rels = {str(p.relative_to(REPO_ROOT)) for p in pass_sources()}
+    for expected in (
+        "tools/cut_public_release.sh",
+        "tools/make_public_mirror.sh",
+        "tests/test_mirror_leak_gate.py",
+        "tests/test_cut_release_gate.py",
+    ):
+        assert expected in rels, (
+            f"{expected} implements or executes a leak pass and is no longer in the "
+            f"derived population; the globs have been narrowed. Derived: {sorted(rels)}"
+        )
+    assert "tests/test_mirror_runbook_gates.py" not in rels, (
+        "this module is in its own pass population, so a pass identifier written "
+        "in a docstring here becomes a requirement on the runbook"
+    )
+    for glob in ("tools/*.md", "tools/*.py"):
+        outside = {p for p in REPO_ROOT.glob(glob) if p.is_file()}
+        assert not (outside & set(pass_sources())), (
+            f"{glob} entered the implementation population. Those files DISCUSS "
+            "passes rather than running them — see PASS_SOURCE_GLOBS for the two "
+            "measured phantoms that produced."
+        )
+    # A glob must name a file TYPE, not a filename shape. Round finding: the
+    # NARROWING check above is membership of the same four files the hardcoded
+    # list named, so `tests/test_mirror_*.py` — a glob hand-fitted to exactly
+    # those files — passed it. That is the hardcoded list in glob clothing, which
+    # is the hole this derivation replaced.
+    for glob in PASS_SOURCE_GLOBS:
+        _, _, base = glob.rpartition("/")
+        assert re.fullmatch(r"\*\.\w+", base), (
+            f"{glob!r} names a filename shape rather than a file type, so it only "
+            "covers the files that happen to exist today — which is the hardcoded "
+            "population this derivation exists to replace"
+        )
+
+
+def test_the_pass_token_grammar_reads_the_forms_the_scripts_use():
+    """Phase 186: the joiner set was `+` alone, and `make_public_mirror.sh` writes
+    `Passes 1a/1b/1c` twice — so the second and third identifiers were invisible.
+    No live gap resulted (each is declared singly elsewhere), which is precisely
+    why it needed a test rather than a sighting. The comma and "and" forms below
+    are grammar coverage; neither script writes them today."""
+    cases = {
+        "Pass 1a": ["1a"],
+        "Passes 2 + 2b": ["2", "2b"],
+        "Passes 1a/1b/1c": ["1a", "1b", "1c"],
+        "Passes 1a, 1b, 3": ["1a", "1b", "3"],
+        "Pass 2 and 2b": ["2", "2b"],
+        "Pass 5 (MUST be empty)": ["5"],
+        # The declared re.I flag, exercised — it was not, so dropping it survived.
+        "passes 1a/1b": ["1a", "1b"],
+    }
+    for text, expected in cases.items():
+        m = _PASS_TOKEN.match(text)
+        assert m and _pass_ids(m) == expected, (
+            f"{text!r} parsed as {_pass_ids(m) if m else None}, expected {expected}"
+        )
+    # Over-capture control: a sentence continuing past the list must not swallow
+    # the next number it meets.
+    m = _PASS_TOKEN.match("Pass 5, and the runbook says 4 things")
+    assert m and _pass_ids(m) == ["5"], _pass_ids(m) if m else None
 
 
 def test_dropping_a_pass_from_the_runbook_is_detected():

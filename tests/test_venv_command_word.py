@@ -75,41 +75,65 @@ def _shipped_script_stems() -> set[str]:
     return stems
 
 
-def _shipped_files() -> list[Path]:
+_SCAN_PATHSPEC = ["core/", "docs/", "packs/",
+                  "README.md", "CONTRIBUTING.md", "install.sh"]
+
+# One anchor per `_SCAN_PATHSPEC` entry, so dropping any entry reddens. Without
+# these, a `git ls-files` that returns nothing (wrong cwd, a pathspec typo, a
+# future directory rename) makes every assertion below vacuously true while
+# reporting green — the exact shape Phase 149 built the coverage ledger for. The
+# first cut anchored only on `core/` paths, so narrowing the pathspec to
+# `["core/"]` alone survived the round's battery even though
+# `docs/install-and-update.md` is one of the sixteen fixed sites.
+_SCAN_ANCHORS = (
+    "core/skills/next-task/SKILL.md",
+    "core/companion/docs/WORKFLOW.md",
+    "core/companion/scripts/claim_task.sh",
+    "docs/install-and-update.md",
+    "packs/python/companion/convention_map.md",
+    "README.md",
+    "CONTRIBUTING.md",
+    "install.sh",
+)
+
+_GIT_DISCOVERY_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE")
+
+
+def _git_env() -> dict[str, str]:
+    """git's ambient discovery vars stripped, per `test_git_env_hermeticity.py`.
+
+    They take precedence over `git -C` and over the process CWD, and git exports
+    them into every hook — so a `git ls-files` run from a hook, or a `git init`
+    over a fixture, would resolve against the *invoking* repo instead.
+    """
+    return {k: v for k, v in os.environ.items() if k not in _GIT_DISCOVERY_VARS}
+
+
+def _shipped_files(root: Path = REPO_ROOT) -> list[Path]:
     """Files a consumer receives, via `git ls-files`.
 
     NOT `Path.rglob` — `.claude/worktrees/agent-*/` holds stale untracked copies
     of the whole tree, which inflate a naive walk ~10x and would let this guard
     pass or fail on a directory nobody ships.
+
+    `root` is a parameter so `test_an_untracked_file_is_in_scope` can prove the
+    `--others` flag against a throwaway repo instead of planting a real file in
+    this one. The vacuity anchors below stay unconditional — the fixture builds
+    every one of them — because a `root == REPO_ROOT` conditional around them
+    would be a switch that turns the guard off.
     """
-    pathspec = ["core/", "docs/", "packs/",
-                "README.md", "CONTRIBUTING.md", "install.sh"]
     # `--others --exclude-standard` includes UNTRACKED-but-not-ignored files.
     # Without it the guard is blind exactly when a site is being authored — the
     # round's guard lens planted `core/skills/zz-probe/SKILL.md` carrying the
     # canonical defect and the suite stayed green.
     out = subprocess.run(
         ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard",
-         "--", *pathspec],
-        cwd=REPO_ROOT, capture_output=True, text=True, check=True,
+         "--", *_SCAN_PATHSPEC],
+        cwd=root, capture_output=True, text=True, check=True, env=_git_env(),
     ).stdout
-    files = [REPO_ROOT / p for p in out.split("\0") if p]
-    # Without this, a `git ls-files` that returns nothing (wrong cwd, a pathspec
-    # typo, a future directory rename) makes every assertion below vacuously
-    # true while reporting green — the exact shape Phase 149 built the coverage
-    # ledger for. The first cut anchored only on `core/` paths, so narrowing the
-    # pathspec to `["core/"]` alone survived the round's battery even though
-    # `docs/install-and-update.md` is one of the sixteen fixed sites. One anchor
-    # per pathspec entry now, so dropping any entry reddens.
-    rel = {str(p.relative_to(REPO_ROOT)) for p in files}
-    for anchor in ("core/skills/next-task/SKILL.md",
-                   "core/companion/docs/WORKFLOW.md",
-                   "core/companion/scripts/claim_task.sh",
-                   "docs/install-and-update.md",
-                   "packs/python/companion/convention_map.md",
-                   "README.md",
-                   "CONTRIBUTING.md",
-                   "install.sh"):
+    files = [root / p for p in out.split("\0") if p]
+    rel = {str(p.relative_to(root)) for p in files}
+    for anchor in _SCAN_ANCHORS:
         assert anchor in rel, f"shipped-file scan lost {anchor} — guard is vacuous"
     return files
 
@@ -283,7 +307,7 @@ def _offending_lines(files=None, root=REPO_ROOT) -> list[tuple[str, int, str]]:
     function positively over a temp tree.
     """
     hits = []
-    for path in (_shipped_files() if files is None else files):
+    for path in (_shipped_files(root) if files is None else files):
         try:
             text = path.read_text(encoding="utf-8")
         except (UnicodeDecodeError, OSError):
@@ -299,6 +323,54 @@ class TestNoShippedVenvCommandWord:
         assert not hits, "venv-prefixed command word for a Sysop script:\n" + "\n".join(
             f"  {f}:{n}: {line[:160]}" for f, n, line in hits
         )
+
+    def test_the_scan_pathspec_is_pinned(self):
+        """THE PATHSPEC IS THE POPULATION, and the anchor-coverage check below cannot see
+        it shrink. A round removed `packs/` together with its anchor, and narrowed `core/`
+        to `core/skills/` + `core/companion/` — every pack file, and everything else under
+        `core/`, silently left the shipped-file scan while the coverage check stayed green,
+        because entry→anchor says nothing about which entries exist. Pinned verbatim:
+        widening it is a one-line re-approval, narrowing it is a deliberate act.
+        """
+        assert _SCAN_PATHSPEC == ["core/", "docs/", "packs/",
+                                  "README.md", "CONTRIBUTING.md", "install.sh"]
+
+    def test_the_vacuity_anchors_cover_every_pathspec_entry(self):
+        """The anchors ARE the vacuity guard, so an empty or thinned tuple disarms it
+        silently — emptying it survived this phase's own battery. Derived rather than
+        counted: every `_SCAN_PATHSPEC` entry must have at least one anchor under it, so
+        adding a pathspec entry without an anchor reddens and no number here goes stale.
+        """
+        assert _SCAN_ANCHORS, "the vacuity anchors are empty — the scan guard is disarmed"
+        for entry in _SCAN_PATHSPEC:
+            assert any(a == entry or a.startswith(entry) for a in _SCAN_ANCHORS), (
+                f"{entry!r} is scanned but no anchor pins it, so dropping it from the "
+                f"pathspec would not redden")
+        for anchor in _SCAN_ANCHORS:
+            assert (REPO_ROOT / anchor).is_file(), f"anchor {anchor!r} no longer exists"
+
+    def test_every_anchor_is_actually_returned_by_the_scan(self):
+        """Pinning the tuple is not enough: a round thinned the *loop that reads it* to
+        `_SCAN_ANCHORS[:1]` and the pin stayed green, because nothing outside
+        `_shipped_files` asserted the whole tuple is consumed. This drives the real scan
+        and checks every anchor comes back."""
+        returned = {str(p.relative_to(REPO_ROOT)) for p in _shipped_files()}
+        missing = [a for a in _SCAN_ANCHORS if a not in returned]
+        assert not missing, (
+            f"the scan does not return {missing} — its internal anchor loop has been "
+            f"thinned, or the pathspec no longer reaches them")
+
+    def test_the_fixture_git_env_strips_the_discovery_vars(self, monkeypatch):
+        """`git init` over a tmp fixture with `GIT_DIR` exported writes into the INVOKING
+        repo — a reviewer's hermeticity probe did exactly that during Phase 186 and moved
+        the phase branch. `tests/test_git_env_hermeticity.py` is the convention."""
+        for var in _GIT_DISCOVERY_VARS:
+            monkeypatch.setenv(var, "/some/leaked/path")
+        monkeypatch.setenv("SYSOP_SENTINEL", "keep-me")
+        env = _git_env()
+        for var in _GIT_DISCOVERY_VARS:
+            assert var not in env, f"_git_env leaked {var}"
+        assert env.get("SYSOP_SENTINEL") == "keep-me", "_git_env dropped an unrelated var"
 
     def test_the_sweep_finds_a_planted_defect(self, tmp_path):
         """POSITIVE coverage of the file sweep — the guard's whole product.
@@ -326,7 +398,7 @@ class TestNoShippedVenvCommandWord:
         assert lineno == 6, hits          # the line number must be real, not 0
         assert ".venv/bin/python3" in line, hits
 
-    def test_an_untracked_file_is_in_scope(self):
+    def test_an_untracked_file_is_in_scope(self, tmp_path):
         """Blind exactly when a site is being authored, until this.
 
         The round's guard lens planted `core/skills/zz-probe/SKILL.md` carrying
@@ -335,16 +407,44 @@ class TestNoShippedVenvCommandWord:
         the whole time someone is writing it — precisely when you want the
         guard. Plants a real file so the `--others` flag is proven, not merely
         asserted to be in the argv.
+
+        THE FILE IS PLANTED IN A THROWAWAY REPO, NOT IN THIS ONE. Until Phase
+        187 the probe was written to `docs/_untracked_guard_probe.md` in the
+        real tree and deleted in a `finally`. That is a shared-state write, and
+        it was the only one the whole suite made: under `pytest -n auto` a
+        sibling worker running
+        `test_no_shipped_file_gives_a_sysop_script_a_venv_command_word` scanned
+        the tree inside that window and reported the probe as a shipped defect.
+        It is a race rather than a certainty — it fired in one of two runs — and
+        the same window is open to any concurrent reader of this clone, which
+        `CLAUDE.md` explicitly expects. The fixture also tests more than the old
+        form did: it pins the *tracked* half of `--cached --others` at the same
+        time, and it runs the vacuity anchors against a tree it built.
         """
-        probe = REPO_ROOT / "docs" / "_untracked_guard_probe.md"
-        assert not probe.exists(), "stale probe file — remove it"
+        repo = tmp_path / "repo"
+        for anchor in _SCAN_ANCHORS:
+            path = repo / anchor
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("Run `python3 sysop/scripts/validate_tasks.py`.\n")
+        subprocess.run(["git", "init", "-q", str(repo)], check=True, env=_git_env())
+        subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True,
+                       env=_git_env(), capture_output=True)
+
+        probe = repo / "docs" / "_untracked_guard_probe.md"
+        assert not probe.exists(), "the fixture already contains the probe path"
         probe.write_text("`.venv/bin/python3 sysop/scripts/validate_tasks.py`\n")
-        try:
-            hits = _offending_lines()
-            assert any(f.endswith("_untracked_guard_probe.md") for f, _, _ in hits), (
-                "an untracked file carrying the defect is invisible to the sweep")
-        finally:
-            probe.unlink(missing_ok=True)
+
+        untracked = subprocess.run(
+            ["git", "-C", str(repo), "ls-files", "--others", "--exclude-standard"],
+            capture_output=True, text=True, check=True, env=_git_env(),
+        ).stdout.split()
+        assert untracked == ["docs/_untracked_guard_probe.md"], (
+            "the fixture's probe is not untracked, so `--others` is not what this "
+            f"test would be measuring: {untracked}")
+
+        hits = _offending_lines(root=repo)
+        assert any(f.endswith("_untracked_guard_probe.md") for f, _, _ in hits), (
+            "an untracked file carrying the defect is invisible to the sweep")
 
     def test_the_guard_can_actually_see_the_defect(self):
         """A guard that cannot fail is Phase 123's finding and Phase 159a's.
