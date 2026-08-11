@@ -142,7 +142,7 @@ CITATION_ANCHORS = {
         "open/<TASK-ID>.md",
     ("core/skills/review-close/SKILL.md", "onboard/SKILL.md:95"):
         "Test decision",
-    ("docs/one-rule.md", "core/companion/scripts/run_checks/grep.py:231"):
+    ("docs/one-rule.md", "core/companion/scripts/run_checks/grep.py:232"):
         "nosemgrep: recompile-inside-def",
 }
 

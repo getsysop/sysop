@@ -74,9 +74,24 @@ def test_2a0_enumerates_independently_of_the_map():
     # globs, the check becomes a no-op: it could only find gaps inside territory
     # the map already names, which is precisely 2a-1's job.
     for name, text in _REVIEW_SKILLS.items():
-        assert "git ls-files | awk -F/ '{print $1}' | sort -u" in text, (
+        # Phase 188: this used to pin the `awk -F/ '{print $1}'` form — i.e. a shipped
+        # guard was asserting the presence of the defect. The skill runner rewrites a bare
+        # positional in a skill body before any shell sees it (upstream #360), so under a
+        # two-word invocation that awk became `{print <argument>}` and printed one empty
+        # line, and 2a-0 then reported complete coverage over an empty inventory. `cut` has
+        # no such collision. Do not restore the awk form to make this pass.
+        assert "git ls-files | cut -d/ -f1 | sort -u" in text, (
             f"{name}: 2a-0's whole-repo enumeration command changed — verify it "
-            "still enumerates independently of the map's section globs"
+            "still enumerates independently of the map's section globs, and do NOT "
+            "reintroduce an awk positional (see tests/test_skill_positional_substitution.py)"
+        )
+        # Independent of the pin above, because this phase's battery showed the pin can be
+        # relaxed to a bare `git ls-files` with everything green. This half states the
+        # thing that must never come back rather than the thing that must be present.
+        assert "awk -F/" not in text, (
+            f"{name}: the awk field-splitting form is back in 2a-0. The skill runner "
+            "rewrites its positional with an argument word before bash sees it, and the "
+            "step then reports complete coverage over an empty inventory (upstream #360)"
         )
         assert "authored, not derived" in text, (
             f"{name}: 2a-0 lost the rationale (the map is authored, not derived) "
@@ -145,7 +160,7 @@ def test_2a0_does_not_inherit_2a1_per_file_exclusions():
 
 
 def test_2a0_partitions_directories_from_root_level_files():
-    # `git ls-files | awk -F/ '{print $1}'` yields both. "resolves beneath it" is
+    # `git ls-files | cut -d/ -f1` yields both. "resolves beneath it" is
     # false for a section glob that NAMES a root file (the shipped security_map
     # keys sections on `Dockerfile` and `.gitignore`), so an unpartitioned check
     # false-flags them on the shipping default.

@@ -87,7 +87,7 @@ The full walkthrough — including the manual reversal path when PyYAML is missi
 
 ## Support expectations
 
-Sysop is built for my own daily use and published in that spirit. Issues and PRs are welcome and reviewed as time permits — there is no SLA, no roadmap commitment, and no backwards-compatibility guarantee during early development. Plugin manifests stay unversioned by design (every commit is the latest); reviewed checkpoints are cut as tagged releases you can pin to via the bash installer's `--ref` flag (see [SECURITY.md](SECURITY.md)). If it's useful to you, use it and fork freely — it's MIT-licensed.
+Sysop is built for my own daily use and published in that spirit. Issues and PRs are welcome and reviewed as time permits — there is no SLA, no roadmap commitment, and no backwards-compatibility guarantee during early development. Plugin manifests stay unversioned by design (every commit is the latest); the bash installer's `--ref` flag pins an install to any rev — today that means a commit SHA, since the one existing release tag predates a structural change and is refused (see [SECURITY.md](SECURITY.md)). If it's useful to you, use it and fork freely — it's MIT-licensed.
 
 ## Prior art
 

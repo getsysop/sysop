@@ -7,14 +7,14 @@
 #   - Sysop source via $SYSOP_SRC (set once in shell rc)
 # then exec's `bash "$SYSOP_SRC/install.sh" "<consumer-root>" --update "$@"`.
 # All flags are forwarded verbatim (`--force`, `--packs`, `--dry-run`,
-# `--yes`, `--no-arm-hooks`, `--ref <tag>`, …). The exec means install.sh's
+# `--yes`, `--no-arm-hooks`, `--ref <tag-or-commit>`, …). The exec means install.sh's
 # exit code propagates to the caller; the Phase 7/8 safety net (snapshot
 # commit + pre/post-overwrite divergence checks + delta table) runs unchanged.
 #
-# To pin an update to a reviewed release instead of the source clone's HEAD:
-#   bash sysop/scripts/sysop-update.sh --ref v0.1.0
-# (the tag must exist in your $SYSOP_SRC clone — release tags:
-#  git -C "$SYSOP_SRC" fetch --tags). Omit --ref to track HEAD (the default).
+# To pin an update to a reviewed rev instead of the source clone's HEAD:
+#   bash sysop/scripts/sysop-update.sh --ref <tag-or-commit>
+# (--ref takes any rev your clone can resolve — a release tag, or a commit SHA;
+#  for tags: git -C "$SYSOP_SRC" fetch --tags). Omit --ref to track HEAD (default).
 #
 # See WORKFLOW.md § 8.2b for the upgrade-flow contract.
 # ──────────────────────────────────────────────────────────────

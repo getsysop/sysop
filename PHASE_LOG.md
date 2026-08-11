@@ -5101,3 +5101,238 @@ opens with.
 
 **Suite: 3,004 → 3,142 collected, 3,142 passed, 4 skipped, 0 failed**, run the way CI
 invokes pytest.
+
+---
+
+## Phase 188 (executed 2026-08-11 — a skill body's own shell snippets are rewritten before bash sees them; upstream #360, and the first phase of the 2026-08-11 inbound sprint)
+
+**The mechanism, measured rather than inferred.** Claude Code substitutes `$<N>` in a
+SKILL.md body with the invocation's Nth argument word before the agent reads the file. The
+filing had this from the docs; this phase installed a probe skill and invoked it in a fresh
+headless session with the argument string `alpha beta gamma`:
+
+```
+$<0> -> alpha    $<1> -> beta    $<2> -> gamma      0-based; $<0> is the FIRST word
+$<9> -> $<9>                                        out of range: unchanged
+${1} -> ${1}     ${1:-FALLBACK} -> ${1:-FALLBACK}   the BRACED form is NOT substituted
+$ARGUMENTS -> alpha beta gamma
+inside a ```bash fence: awk -F/ '{print $<1>}' -> awk -F/ '{print beta}'
+```
+
+The last line is the load-bearing one: **a ```bash fence is no protection.** The probe measured that one fence kind; nothing here establishes a general rule about every fence syntax, and none is needed — the shipped snippets are all ```bash. The
+second-to-last is a **correction to the brief**, which required this phase to "decide and
+record whether the braced form actually substitutes" and had argued `daily-summary:42`'s
+`${1:-1}` was a live member of the class. It is not — the braced form is untouched. The
+guard still forbids it, and that is now recorded as a deliberate over-reach with its
+reasons rather than smuggled in as a defect: the non-substitution is undocumented and can
+change; a `${1}` in a skill body is in practice the sibling of a bare positional in the same
+helper (exactly how `/daily-summary` carried both); and *"no positionals in a skill body"*
+is one rule an author can hold, where *"bare breaks, braced is fine"* is a distinction they
+will get wrong.
+
+**Population.** 14 occurrences on 12 lines across 5 skills — 13 bare on 11 lines, plus the
+one braced. That reconciles with the brief's "11 lines / 13 occurrences", which counted the
+bare class only. `SKILL.md` is the entire surface, because `_shared/` partials and convention maps are
+`Read` at runtime rather than rendered as a command body. `_shared/` carries no positional;
+a convention map does — `packs/beancount/companion/convention_map.md:47` quotes
+`awk '{print $<1>}'` as a reproducibility recipe — and it is out of the class for the
+rendering reason, not for an absence. An earlier draft of this paragraph said they "carry
+none anyway", which the filing four paragraphs away already disproved.
+
+**Why elimination, not escaping.** `\$1` is Claude Code's documented escape and is
+Claude-Code-only. Sysop also ships to Codex via the Phase-142 symlinks and to arbitrary
+agents via the bash installer, and for those readers `awk '{print \$1}'` is broken syntax
+the file did not previously have. The guard therefore refuses the escaped form explicitly
+rather than treating it as compliance.
+
+**A writing convention fell out of the fix.** The explanatory comments the fix adds are
+themselves in skill bodies, so they cannot contain the tokens they describe — the first
+draft's comments were substituted along with everything else. Positionals are now written
+`$<1>` / `$<N>`: `$` followed by `<` is not a positional, so the form survives the runner
+and reads unambiguously.
+
+### The sites
+
+| Site | Was | Now |
+|---|---|---|
+| `codebase-review` / `security-audit` Step 2a-0 | `git ls-files \| awk -F/ '{print $<1>}' \| sort -u` | `git ls-files \| cut -d/ -f1 \| sort -u` |
+| `review-close` Step 1a worktree classifier | `awk '/^worktree /{path=$<2>}…'` | `case` + parameter expansion in a `while read` loop |
+| `review-close` Step 1b numstat | `awk '{print $<1>+0}'` / `$<2>+0` | `cut -f1` / `cut -f2` with `:-0` defaults |
+| `review-close` Step 3c smoke gate | `awk -v br=… substr($<0>,10)` | same `case` + expansion shape |
+| `daily-summary` Step 1 | three functions; two took bare `$<1>`/`$<2>`, one the braced `${1:-1}` | straight-line assignments, no functions |
+| `auto-build` Step 2 prose | `$6.40 → $5.14` | `6.40 → 5.14 USD` |
+
+**The lead sites are the two review skills, and they fail by claiming success.** Two
+argument words is enough — `--scope backend` is documented — and `{print backend}` is an
+unset awk variable, so the enumeration printed **one empty line**. Step 2a-0 then compared
+the map against an empty inventory and reported **complete coverage**. Measured on this tree:
+1 line under the old form, 39 real top-level entries under the new one. Both skills ship in
+loop mode, which is the funnel default.
+
+`daily-summary`'s helpers took positional parameters. Indices are 0-based, so
+`--date 2026-08-10` turned `local d="$<1>" n="$<2>"` into `local d="2026-08-10" n="$<2>"` —
+`$<1>` is the *second* word, and `$<2>` is out of range so it stayed literal and the week
+window computed from that string. An earlier draft of this record illustrated it **1-based**
+and was corrected by the round: it was the one link in the phase's own MEASURED chain that
+had not been run through the model the phase ships. Replacing them with
+straight-line assignments also retires the older hazard that section warned about — shell
+functions live only inside the fenced block that defines them.
+
+### The guard is an execution test, because nothing ran these snippets
+
+`tests/test_skill_positional_substitution.py`. It reproduces the measured substitution,
+**extracts the shipped block from the SKILL.md at run time** (not a retyped copy — Phase
+186 hand-copied two gate lines and seven mutations silently did not run), rewrites it the
+way the runner does, and **runs it** against a git fixture with a known answer. Parametrized
+over four argument strings including the two-word documented invocation.
+
+Every execution test has a **positive control** running the *old* form through the identical
+treatment and asserting it still reproduces the defect. Without that, a green test proves
+nothing about whether the harness can see the class at all.
+
+**A shipped guard was pinning the defect.** `tests/test_audit_coverage_adjudication.py:77`
+asserted the literal `awk -F/ '{print $<1>}'` string was present — so the suite required the
+broken command and would have failed the fix. Re-pointed at `cut`, with the reason inline so
+it is not "corrected" back.
+
+**Byproduct.** Phase 153's loop-accounting guard fired on the new `while IFS= read -r _line`
+parsers, exactly as designed, and they are recorded in `KNOWN_RUNTIME_SET_LOOPS` with the
+reason — the shape is not new exposure, since Step 1a already fed a `while IFS=$'\t' read`
+loop on the next line.
+
+**What this phase does NOT close.** `tests/shape_lib.py:182`'s `PHANTOM_REF_RE` still
+requires a leading `[A-Z]`, so the Phase-169 zero-invariant's population still excludes
+positionals. That is deliberate: the two guards answer different questions (phantom *named*
+variables versus positionals), and the new module owns the second. What the brief's
+inference asked for is recorded instead — a green zero-invariant proves its *population* is
+empty, not that the *class* is — and this phase adds that statement to **both** guards: the
+new module states its population in its docstring, and `shape_lib.py`'s `PHANTOM_REF_RE`
+comment now says positionals are outside its population and names the module that owns
+them. An earlier draft claimed both already did, while leaving `shape_lib.py` untouched.
+
+---
+
+## Phase 189 (executed 2026-08-11 — the pre-scan's record of its own run; upstream #362 + #239 shipped, **#361 built and withdrawn by this phase's own round**)
+
+**Scope, decided rather than inherited.** The brief bundled four issues here and then
+flagged its own bundle as unresolved: *"Retitle if #363 stays … either retitle to what
+unifies all four, or move #363 to the tail."* Taken: **#361 + #362 + #239 ship here; #363
+moves to the tail.** What unifies the three is one sentence — *the pre-scan's record of
+what it did is not true* — across what it scanned (#361), what it parsed (#362) and what
+it routed (#239), and all three land in `accounting.py`'s Phase-135 taxonomy, which is why
+splitting them would have cost the second pass over that module the #362 entry warns
+about. #363 is baseline **suppression** semantics, it touches the Phase-61b ratified
+crown-jewel gate's neighbourhood, and its own entry calls the fix an authoring hazard —
+that wants undivided attention, not a fourth seat here.
+
+### #361 — built, measured worse than the defect, and WITHDRAWN
+
+**This is the phase's main product and it is a negative result.** The enumeration fix was
+built, its own three-lens round disqualified it, and it is withdrawn rather than shipped.
+The defect stands; the re-attempt spec is in `_tracked_targets`' docstring and the § High
+entry. What follows is the measurement, which is what makes the entry actionable.
+
+#### The measurement
+
+Handed a **directory**, semgrep does its own target discovery, and with no project
+`.semgrepignore` it falls back to a built-in default ignore list in gitignore syntax
+containing `test/` and `tests/` **matching at any depth**. Discovery-excluded files are
+**absent from `paths.skipped`**, so nothing in the JSON records the omission and the
+accounting line reads `executed with 0 findings`.
+
+Re-derived on this tree with the 10 shipped rules rather than inherited from the brief:
+
+| | scanned | findings | under `tests/` | `paths.skipped` |
+|---|---|---|---|---|
+| directory operand (before) | 72 | 30 | **0** | **0** |
+| explicit tracked-file list | 186 | 45 | 114 | 0 |
+| `--no-git-ignore` + directory | 72 | 30 | 0 | — |
+| empty `.semgrepignore` + directory | 186 | 45 | 114 | 0 |
+
+**Two corrections to the filing, both from running it.** `--no-git-ignore` — listed in the
+entry among the reporter's fix options — **recovers nothing**: it negates *gitignore*
+handling, and the default ignore list is a separate mechanism. An empty `.semgrepignore`
+*does* work, which confirms it as a documentable workaround and simultaneously as the wrong
+answer: it asks every consumer to independently discover a silent exclusion that produces
+no output.
+
+#### Why enumeration was withdrawn
+
+The execution lens measured seven consequences, each by running it. The two that decide it:
+**path shape follows operand shape**, so relative operands made the existing
+`os.path.relpath(…, repo_root)` resolve against the process CWD — findings silently vanish
+or become baseline keys pointing at files that do not exist; and **a tracked symlink aborts
+the whole scan** (`Invalid scanning root`, `scanned: []`, exit 2), which matters because
+**Sysop installs tracked symlinks by default** (`.agents/skills/*`, Phase 142). A consumer
+who commits them would lose AST scanning entirely. Also: a tracked file absent from the
+worktree does the same; `--exclude` stops applying so the bundled fixtures return as
+findings; untracked files stop being scanned; a submodule gitlink expands one operand into
+many; and the 300s timeout becomes per batch while the `failed` detail still says 300s.
+
+**A discovery-shortfall counter was withdrawn on the same principle.** It compared
+`len(targets)` to `paths.scanned`, which are different universes — `scanned` counts files
+semgrep *analysed*. On this repo 367 targets yield 187 scanned, and the 180 "dropped" are
+`.md`/`.json`/`.sh`/`.yaml` with no rule language. It fired 100% false-positive: a status
+that does not mean what it says, which is the exact class this phase exists to remove.
+
+### #362 — a partly-parsed file read exactly like a clean one
+
+`PartialParsing` was reported as a bare count with no paths, and three of the consumer's
+five carried rules that would have fired in the regions that went unscanned — so "0
+findings" there was **absence of signal, not evidence**. The paths were already in the JSON.
+They are named now, and the stage records **`degraded`**. Both shapes of `errors[].type` are
+read (a bare string and a `[name, [...]]` pair): reading one would empty the set on a
+semgrep upgrade and restore the exact silence the state exists to break.
+
+A **discovery shortfall** — more targets handed over than came back scanned, with nothing in
+`paths.skipped` — also records `degraded`. That is the only place a shortfall can surface.
+
+### #239 — two different things wearing the same words
+
+`grep.py` had one arm reporting `skipped: not-configured` both for a check with **no
+executable form at all** and for one whose paths merely did not resolve here. GDP's
+`doc-parity-violation` sat in the first state for weeks, reading identically to a tool that
+was not installed, while the summary said `0 failed`. The `skipped` bucket has to stay
+load-bearing for genuinely unavailable tooling, so the first case becomes **`unroutable`**.
+Each arm has its own test — they are only meaningful against each other, and testing one
+alone would pass a fix that re-routed everything.
+
+### The open question the phase had to answer: does `degraded` block? No.
+
+Recorded in `accounting.py`'s docstring with the reasoning, because the brief named it an
+open question and an unstated default would have been inherited silently. Only `failed`
+stays fatal. `failed` keys on *started and died* — zero output, work lost, an armed gate
+gone dead. A degraded stage produced real findings over most of its inputs, and its common
+cause is the scanner's own language support failing on **valid** source, which no consumer
+edit can fix; a gate that cannot be made green is a gate that gets bypassed. `unroutable`
+follows the already-argued rule that a *blocking* check which did not run is loud but
+non-fatal. What both get instead is the thing that was actually missing: **attribution**.
+
+### What the build cost, and what caught it
+
+**Mocks were what hid this defect, and they nearly hid the fix too.** Every semgrep test in
+the suite passed a single `return_value` that answered both the new `git ls-files` call and
+the scan — so semgrep's own JSON payload was being fed back as the target list, and the
+tests were green while scanning a nonsense operand. Two failed outright and looked like
+ordinary breakage; the other nineteen were passing for the wrong reason. All 21 call sites
+now use a discriminating stub.
+
+So the test that matters runs the **real binary**: a git repo whose only violating file
+lives under `tests/`, scanned both ways. The directory operand must **miss** it — that is a
+declared control, and if it ever stops failing, semgrep changed its default list and this
+phase's premise needs re-deriving — `paths.skipped` must stay empty, and enumeration must
+find it.
+
+**Three defects the build found in itself**, each by exercising a thing rather than reading
+it. `record()`'s first upgrade ladder used `_RANK.get(status, -1)`, which made `executed`
+outrank a prior `skipped` (0 > -1) and silently erase a skip — the exact class this module
+exists to stop; caught by running the helper before wiring it up. `counts()` returned a
+5-tuple that callers unpacked positionally, so inserting two states mid-tuple would have
+rebound every field rather than failing; it is a namedtuple now and the one positional
+caller asserts by name. And `_batch_targets` took its budget as a **default argument**,
+freezing the module constant at import and making the batching path unreachable without a
+repo larger than ARG_MAX — found by the test that tried to exercise it.
+
+**Byproduct:** collapsing `grep.py`'s import block shifted every line below it and broke a
+registered doc citation. The import is back to one-name-per-line, and the one genuine +1
+drift is updated in `docs/one-rule.md` and the citation registry.

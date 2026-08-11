@@ -238,6 +238,14 @@ KNOWN_RUNTIME_SET_LOOPS: dict[str, str] = {
         "Read-only body (merge-base / diff / grep / echo).",
     "while IFS= read -r _b; do":
         "Step 4a branch enumeration. Read-only body.",
+    "while IFS= read -r _line; do":
+        "Steps 1a and 3c `git worktree list --porcelain` parsers (Phase 188). Iterate "
+        "runtime-discovered worktree records; read-only bodies (`case` + parameter "
+        "expansion + `printf`). These replaced `awk` programs whose `$<1>`/`$<2>`/`$<0>` "
+        "the skill runner rewrote with the invocation's argument words before bash saw "
+        "them (upstream #360) — the awk form emptied the branch->worktree table that the "
+        "ISSUE-0016 silent-data-loss guard consumes. The loop shape is not new exposure: "
+        "Step 1a already fed a `while IFS=$'\\t' read` loop on the line below.",
     "while IFS= read -r line; do":
         "Step 1a/3b `git status --porcelain` symlink classifier. Read-only body; the "
         "non-greedy regex can also swallow the sibling strip loop that follows it.",
