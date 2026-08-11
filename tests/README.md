@@ -29,8 +29,11 @@ tests/
 ## Running
 
 ```bash
-# One-shot
+# One-shot. `pyproject.toml` defaults `-n auto`, so this is already parallel.
 python3 -m pytest
+
+# Serial — when an interleaved traceback is harder to read than a slow run
+python3 -m pytest -n0
 
 # Faster local iteration — only collect / show structure
 python3 -m pytest --collect-only -q
@@ -38,6 +41,23 @@ python3 -m pytest --collect-only -q
 # Skip integration tests that need npx/pip-audit (default on a clean dev box)
 python3 -m pytest -m "not requires_node and not requires_pip_audit"
 ```
+
+**`pytest-xdist` is a hard dependency** (pinned in `requirements-dev.txt`), not an
+optional accelerant: with `-n auto` in `addopts`, pytest exits 4 on
+`unrecognized arguments: -n` without it. Parallelism is most of the win: **583s →
+123–160s on 14 logical cores** when Phase 187 measured it. The serial run is already
+84% CPU-bound (224s user + 266s sys against 583s wall), so the speedup comes from
+spreading that CPU over cores rather than from reclaiming idle; the large *system*
+half is the thousands of real subprocesses the suite drives by design.
+
+**Writing a test that writes into this repo is the one thing `-n` cannot
+tolerate.** Write under `tmp_path`. If a test genuinely needs a git repo on
+disk, build one in `tmp_path` and strip git's discovery vars before shelling out
+(`_git_env()` in `test_venv_command_word.py`, or the fuller `_hermetic_env` in
+the mirror-excluded `tests/test_cut_release_gate.py`) rather than
+planting a file in this tree and deleting it afterwards. The suite had exactly
+one such write when parallelism was turned on, and a sibling worker read the
+planted file and reported it as a shipped defect.
 
 ## Markers
 

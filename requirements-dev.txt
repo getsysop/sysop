@@ -12,3 +12,10 @@
 # that question first.
 pytest==9.0.3
 pyyaml==6.0.2
+# Phase 187. `pyproject.toml` defaults `-n auto`, so this is a HARD dep for the
+# suite, not an optional accelerant — without it pytest exits 4 on
+# `unrecognized arguments: -n`. Measured on this tree: 583s serial -> 123-160s on
+# 14 logical cores, ~4x, with the whole suite's one shared-tree write fixed
+# rather than serialized (tests/test_venv_command_word.py). Pass `-n0` to run
+# serially when a traceback is easier to read that way.
+pytest-xdist==3.8.0

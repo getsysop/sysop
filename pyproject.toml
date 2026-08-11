@@ -2,7 +2,16 @@
 minversion = "9.0"
 testpaths = ["tests"]
 pythonpath = ["core/companion/scripts", "scripts"]
-addopts = "-ra --strict-markers"
+# `-n auto` (Phase 187): 583s serial -> 123-160s here, ~4x on 14 logical cores.
+# The serial run is already 84% CPU-bound (224s user + 266s sys against 583s wall),
+# so the win is spreading that CPU across cores, NOT reclaiming idle -- and the
+# unusually large SYS half is the thousands of real subprocesses this suite drives
+# by design. Parallelism costs more total CPU, not less. `--dist load`
+# is xdist's default and is kept deliberately over `loadfile`, which would have
+# masked the one real defect this change found by putting a module's tests back on
+# one worker. Requires pytest-xdist (pinned in requirements-dev.txt); pass `-n0`
+# for a serial run.
+addopts = "-ra --strict-markers -n auto"
 markers = [
     "requires_node: skip when npx/eslint not on PATH",
     "requires_pip_audit: skip when pip-audit not on PATH",
