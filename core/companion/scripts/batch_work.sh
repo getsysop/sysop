@@ -64,7 +64,13 @@ _parse_batches_fallback() {
   local in_batch=false
 
   while IFS= read -r line; do
-    if [[ "$line" =~ ^###[[:space:]]+Batch[[:space:]]+([0-9]+)[[:space:]]+—[[:space:]]+(.+)[[:space:]]+\`([A-Za-z ]+)\` ]]; then
+    # `[^\`]+`, not `[A-Za-z ]+`: a status carrying a hyphen or a digit is a
+    # thing a consumer can write, and a reader that cannot see it does not
+    # prevent it — it just makes the batch invisible. `--release <N>` answered
+    # "not found" for a batch plainly in the file. What the value MEANS is
+    # decided by the status ladder on the claim path, which is where an
+    # undeclared value gets refused by name.
+    if [[ "$line" =~ ^###[[:space:]]+Batch[[:space:]]+([0-9]+)[[:space:]]+—[[:space:]]+(.+)[[:space:]]+\`([^\`]+)\` ]]; then
       if $in_batch && [[ -n "$num" ]]; then
         printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$num" "$title" "$status" "$branch" "$scope" "$verify"
       fi
@@ -73,6 +79,29 @@ _parse_batches_fallback() {
       status="${BASH_REMATCH[3]}"
       branch="" scope="" verify=""
       in_batch=true
+      continue
+    fi
+
+    # A `### Batch <N>` line the pattern above could NOT parse still ends the
+    # open batch. Without this it fell through as ordinary content and the
+    # orphan's own `> **Branch:**`/`Scope:`/`Verify:` lines overwrote the
+    # PREVIOUS batch's — so `batch_work.sh 7` built a worktree named
+    # `…-batch-7` on branch `review/batch-8`, with batch 8's scope and batch 8's
+    # verify command. Measured in this parser and in the Python index alike, so
+    # the shadow index was never a safety net for it.
+    #
+    # Widening the status charset above shrinks this class but cannot close it:
+    # a header with no status token at all, or a hyphen where the em-dash
+    # belongs, still fails to parse. Those are authoring slips, not statuses —
+    # they leave the batch invisible, which is honest, but they must not
+    # corrupt a batch that IS visible.
+    if [[ "$line" =~ ^###[[:space:]]+Batch[[:space:]]+[0-9]+ ]]; then
+      if $in_batch && [[ -n "$num" ]]; then
+        printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$num" "$title" "$status" "$branch" "$scope" "$verify"
+      fi
+      num="" title="" status="" branch="" scope="" verify=""
+      in_batch=false
+      echo "⚠️  Unparseable batch header, skipped: ${line}" >&2
       continue
     fi
 
@@ -168,9 +197,11 @@ find_worktree_for_branch() {
 #
 # Idempotent by design: an existing lock is reported and left alone, never
 # overwritten and never an error. `batch_work.sh <N>` is re-runnable on purpose
-# — /auto-fix and /auto-judge call it in a loop, and the script already lets a
-# `Complete`/`Merged` batch through for follow-up work — so turning a present
-# lock into a hard failure would be a new abort in three skills' fan-out.
+# — /auto-fix and /auto-judge call it in a loop over `Pending` batches, and the
+# claim path's status gate admits both live statuses (`Pending` outright,
+# `In Progress` as the resume) — so turning a present lock into a hard failure
+# would be a new abort in three skills' fan-out. A finished batch reaches this
+# helper too, but only behind `--force`.
 # (`claim_task.sh --lock` DOES refuse an existing lock. The asymmetry is
 # deliberate: that path is one-shot per task and its lock is a schema
 # invariant, this one is a re-runnable coordination marker.) Leaving the
@@ -274,15 +305,29 @@ if [[ "${1:-}" == "--list" || "${1:-}" == "--list-all" ]]; then
   FOUND=0
   while IFS=$'\t' read -r num title status branch scope verify; do
     # Status emoji
+    # Every DECLARED status gets a glyph. `Review Ready` and `Ready for Review`
+    # used to fall to `*)` and render `❓` — the glyph a typo gets — so the one
+    # signal this table has for "that status is not a thing" was spent on two
+    # values the workflow defines. Now `❓` means only what it says, which is
+    # what makes it worth printing at all.
     case "$status" in
-      Pending)       icon="⬜" ;;
-      "In Progress") icon="🔵" ;;
-      Complete|Merged) icon="✅" ;;
-      *)             icon="❓" ;;
+      Pending)              icon="⬜" ;;
+      "In Progress")        icon="🔵" ;;
+      "Review Ready")       icon="👀" ;;
+      Complete|Merged|"Ready for Review") icon="✅" ;;
+      *)                    icon="❓" ;;
     esac
 
-    # In --list mode, skip completed/merged
-    if ! $SHOW_ALL && [[ "$status" == "Complete" || "$status" == "Merged" ]]; then
+    # In --list mode, skip the finished three. `Ready for Review` joins
+    # `Complete`/`Merged` here because it is terminal despite its name, and
+    # because the claim path refuses all three — a listing that offers work the
+    # claim path will not take is the contradiction this pairing removes.
+    #
+    # `Review Ready` deliberately stays visible: it is LIVE, and it is the one
+    # status that needs someone to act. The claim path refuses it too, but for
+    # the opposite reason — you should see it, you just should not re-claim it.
+    if ! $SHOW_ALL && [[ "$status" == "Complete" || "$status" == "Merged" \
+                         || "$status" == "Ready for Review" ]]; then
       continue
     fi
 
@@ -637,11 +682,32 @@ if [[ "${1:-}" == "--release" ]]; then
 fi
 
 # ── Mode: create worktree for batch ───────────────────────────
+# Flag parsing mirrors --release exactly (consume flags before the positional,
+# then reject a trailing one). A silent no-op on `batch_work.sh 5 --force` is
+# worse here than there: the operator believes they forced a claim that was
+# actually refused, or — before the status gate below existed — believes they
+# were warned about one that went through anyway.
+CLAIM_FORCE=false
+while [[ "${1:-}" == --* ]]; do
+  case "$1" in
+    --force) CLAIM_FORCE=true; shift ;;
+    *) echo "❌ Unknown flag: $1" >&2
+       echo "Usage: batch_work.sh [--force] <BATCH_NUMBER>" >&2
+       exit 1 ;;
+  esac
+done
+
 if [[ -z "${1:-}" ]]; then
-  echo "❌ Usage: batch_work.sh <BATCH_NUMBER> | --list | --list-all | --release [--force] <BATCH_NUMBER>" >&2
+  echo "❌ Usage: batch_work.sh [--force] <BATCH_NUMBER> | --list | --list-all | --release [--force] <BATCH_NUMBER>" >&2
   exit 1
 fi
 BATCH_NUM="$(normalize_batch_arg "$1")"
+shift || true
+if [[ "${1:-}" == --* ]]; then
+  echo "❌ Flags must come before <BATCH_NUMBER> (e.g. batch_work.sh --force ${BATCH_NUM})." >&2
+  echo "   Saw trailing flag: $1" >&2
+  exit 1
+fi
 
 # Validate it's a number
 if ! [[ "$BATCH_NUM" =~ ^[0-9]+$ ]]; then
@@ -674,11 +740,120 @@ if [[ -z "$BATCH_BRANCH" ]]; then
   exit 1
 fi
 
-if [[ "$BATCH_STATUS" == "Complete" || "$BATCH_STATUS" == "Merged" ]]; then
-  echo "⚠️  Batch ${BATCH_NUM} is already marked as '${BATCH_STATUS}'."
-  echo "   Proceeding anyway (you may be doing follow-up work)."
-  echo ""
-fi
+# ── Status decision, BEFORE anything is written ──────────────
+# The claim path had no status decision at all. `claim_batch()`'s
+# `!= "Pending"` early return reads like one and is not: that helper performs
+# only the review_tasks.md flip, and its `return 0` returns from a FUNCTION —
+# the script then continues to the branch/worktree/lock writes regardless. So
+# returning early skipped the flip and nothing else.
+#
+# Ordering is not the mechanism, and saying it was is a defect this phase's own
+# round caught: `claim_batch` is called at the line ABOVE those writes, not
+# below them. The upstream filing said "after", this phase repeated it to five
+# sites without running it, and `claim_batch`'s own messages three functions up
+# ("The worktree and the lock are still created") contradict it in the same
+# file. Function-scope return is why the writes happen; the line order is not.
+#
+# Measured on a fixture carrying one batch per status: every PARSEABLE status,
+# including `Merged`, `Complete`, `Ready for Review` and parseable undeclared
+# values, left a lock and a worktree on disk. An unparseable status was
+# invisible to the reader, so nothing was written for it — which is this
+# phase's own charset finding, and the reason "any status" would overstate it.
+#
+# Why a lock makes that § High rather than untidy: `close_batch.sh` and
+# `--release` are the only things that remove one. A second agent claiming a
+# TERMINAL batch the first still holds gets a worktree on the same branch while
+# the first agent's lock stays live — the collision `scope_overlap.py` and the
+# whole lock discipline exist to prevent, reached through the front door.
+#
+# Stated for the terminal states on purpose. `In Progress` is the one status a
+# batch carries WHILE another agent holds it, and that arm deliberately proceeds
+# (below) because re-running after a dropped session is the documented way back
+# in — it announces the foreign claim rather than stepping over it silently.
+# That is a resume affordance, not a closed collision, and an earlier draft of
+# this comment stated the collision claim unconditionally, which is false for
+# the one state where the collision is most likely.
+#
+# The arms REUSE `--release`'s live/terminal split — they are not its arms
+# inverted, and only `Review Ready` actually inverts (release proceeds, claim
+# refuses). `Pending` acts on both paths, the terminal three refuse on both,
+# `In Progress` proceeds on both. That split was verified by execution against
+# all six declared values, and a claim gate that disagreed with the release gate
+# about which states are live would just relocate the confusion. `Review Ready`
+# is LIVE (--release still owns it) and `Ready for Review` is TERMINAL, despite the
+# names.
+case "$BATCH_STATUS" in
+  Pending)
+    : # the claim this path exists for
+    ;;
+  "In Progress")
+    # Resume. Re-running on your own in-flight batch after a dropped session is
+    # the documented way back in, so this proceeds — but it announces the lock
+    # rather than stepping over it in silence, because the same invocation is
+    # what a second agent runs when it does not know the batch is taken.
+    # `resolve_locks_dir` returns 1 when the main root is unresolvable, so it is
+    # given its own `|| CLAIM_LOCK_DIR=""` rather than being inlined into the
+    # test — an unset-on-failure assignment inside `if` would take the helper's
+    # exit status for the whole condition and read as "no lock". The `|| true`
+    # on the grep is the same guard close_batch.sh's Branch/Grand-Total greps
+    # carry: no matching field must not abort the run under `set -euo pipefail`.
+    CLAIM_LOCK_DIR="$(resolve_locks_dir 2>/dev/null)" || CLAIM_LOCK_DIR=""
+    CLAIM_LOCK_FILE="${CLAIM_LOCK_DIR}/BATCH-${BATCH_NUM}.lock"
+    if [[ -n "$CLAIM_LOCK_DIR" && -f "$CLAIM_LOCK_FILE" ]]; then
+      echo "ℹ️  Batch ${BATCH_NUM} is already claimed — resuming."
+      grep -E '^(agent|started|workspace):' "$CLAIM_LOCK_FILE" \
+        | sed 's/^/   /' || true
+      echo "   If that is not your claim, stop: release it from main first with"
+      echo "     bash sysop/scripts/batch_work.sh --release ${BATCH_NUM}"
+      echo ""
+    fi
+    ;;
+  "Review Ready")
+    # Live, but finished and awaiting review. Claiming it is precisely the
+    # colleague-collision case: the work is done, someone is reviewing it, and a
+    # second worktree on that branch has nothing to add.
+    if ! $CLAIM_FORCE; then
+      echo "❌ Batch ${BATCH_NUM} is '${BATCH_STATUS}' — the work is done and waiting on review." >&2
+      echo "   Claiming it would put a second worktree on a branch someone is reviewing." >&2
+      echo "   To close it out:  bash sysop/scripts/close_batch.sh ${BATCH_NUM}" >&2
+      echo "   To re-open it:    bash sysop/scripts/batch_work.sh --release ${BATCH_NUM}" >&2
+      echo "   To claim anyway:  bash sysop/scripts/batch_work.sh --force ${BATCH_NUM}" >&2
+      exit 1
+    fi
+    echo "⚠️  Batch ${BATCH_NUM} is '${BATCH_STATUS}' — claiming anyway (--force)."
+    echo ""
+    ;;
+  Complete|Merged|"Ready for Review")
+    # Finished. `--release` refuses this same triple ("releasing a finished
+    # batch would re-open work that is already done"); the claim side owes the
+    # symmetric refusal. --force keeps the follow-up-work affordance the old
+    # warn-and-proceed offered, so the capability survives — it just stops being
+    # the default for an invocation that reads like a fresh claim.
+    if ! $CLAIM_FORCE; then
+      echo "❌ Batch ${BATCH_NUM} is already '${BATCH_STATUS}' — refusing to claim finished work." >&2
+      echo "   A claim writes a lock, and only close_batch.sh and --release remove one," >&2
+      echo "   so a stray claim here strands the lock on a batch nothing will close again." >&2
+      echo "   Doing follow-up work on it is still supported:" >&2
+      echo "     bash sysop/scripts/batch_work.sh --force ${BATCH_NUM}" >&2
+      exit 1
+    fi
+    echo "⚠️  Batch ${BATCH_NUM} is already '${BATCH_STATUS}' — claiming anyway (--force, follow-up work)."
+    echo ""
+    ;;
+  *)
+    # Undeclared, and --force does NOT open this arm. Every other refusal above
+    # knows what it is refusing and can name the right next command; here we
+    # cannot tell live from terminal, so there is no safe action to offer and no
+    # way to word a --force that means anything. `--release`'s `*)` already
+    # refuses "to guess at the inverse" — this refuses to guess at all. The
+    # remedy is to fix the record, so the message says which record and where.
+    echo "❌ Batch ${BATCH_NUM} has status '${BATCH_STATUS}', which is not a value this workflow defines." >&2
+    echo "   Declared: Pending · In Progress · Review Ready (live) · Complete · Merged · Ready for Review (finished)." >&2
+    echo "   Nothing can tell whether that batch is claimable, so nothing was written." >&2
+    echo "   Fix the header in review_tasks.md, then re-run. --force does not cover this." >&2
+    exit 1
+    ;;
+esac
 
 # ── Claim batch on main (Pending → In Progress) ──────────────
 claim_batch "$BATCH_NUM" "$BATCH_STATUS"

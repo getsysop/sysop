@@ -134,7 +134,7 @@ CITATION_ANCHORS = {
         "Merged|Complete",
     ("core/skills/triage/SKILL.md", "archive_review_tasks.py:100"):
         "Merged|Complete",
-    ("core/skills/claim-task/SKILL.md", "batch_work.sh:192-195"):
+    ("core/skills/claim-task/SKILL.md", "batch_work.sh:221-225"):
         "left as-is",
     ("core/skills/review-close/SKILL.md", "intake/SKILL.md:111"):
         "tasks/schema.md",

@@ -3,7 +3,9 @@
 The migration moves Sysop's consumer-install footprint out of shared namespaces
 into a labelled ``sysop/`` dir: ``scripts/`` → ``sysop/scripts/``,
 ``WORKFLOW*.md`` → ``sysop/docs/``, ``SYSOP_ISSUES.md`` → ``sysop/``. Spec:
-``tools/SYSOP_NAMESPACE_SPEC.md`` (§5 algorithm + traps T1–T7).
+``tools/SYSOP_NAMESPACE_SPEC.md`` (§5 algorithm + traps T1–T7), deleted as
+spent by Phase 194 once every leg it specified had shipped — recover from git
+history if the algorithm's rationale is needed.
 
 Most tests build a SYNTHETIC old-layout install (flat ``scripts/`` + a
 version-1 lock with old-layout ``managed_paths`` and an unreachable

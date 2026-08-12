@@ -256,7 +256,7 @@ Sysop-original (no gdp counterpart). 61b arms the 61a measurement stage as a har
 | `test_update_baseline_never_writes_coverage` | `--update-baseline` persists zero `coverage-` keys to the baseline file |
 | `test_is_baseline_suppressed_coverage_never_suppresses` | `is_baseline_suppressed` returns `False` for a coverage id even when blocking + baselined |
 | `test_is_baseline_suppressed_normal_check_still_suppresses` | the carve-out does NOT regress the normal path — a blocking + baselined non-coverage finding still suppresses |
-| `test_is_baseline_suppressed_requires_blocking_and_baseline` | a non-coverage finding suppresses only when blocking AND baselined (neither alone) |
+| `test_is_baseline_suppressed_requires_only_the_baseline_key` | a non-coverage finding suppresses on its baseline key alone — renamed and inverted by Phase 193 (upstream #363), which dropped the `blocking_ids` conjunct; it previously read *"only when blocking AND baselined (neither alone)"* |
 | `test_write_baseline_excludes_coverage` | `write_baseline` persists a blocking non-coverage finding but drops a coverage finding from the same call |
 | `test_is_coverage_predicate` | `_is_coverage` matches the `coverage-` prefix and nothing else (`pip-audit-vuln`, grep ids excluded) |
 

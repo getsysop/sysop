@@ -71,7 +71,7 @@ Build the candidate set from this output alone:
 - **Skip** batches with status `In Progress`, `Merged`, `Complete`, or `Ready for Review`.
 - **Carry forward** `Pending` batches that already have a `> **Triaged:**` line — their verdict is recorded; Step 2 does not re-analyze them.
 
-Note each candidate's `Branch:` and `Overlap:` values (both come from the index pass; `Overlap:` may be absent on older batches) and its body line range.
+Note each candidate's `Branch:` and `Overlap:` values (both come from the index pass; `Overlap:` may be absent on older batches) and its body line range. `Overlap:` is `none` or a `batch-<N>, batch-<M>` list, tested **whole** after trimming surrounding whitespace — anything that is not exactly `none`, including an unparseable value, counts as overlapping (`WORKFLOW.md` § Batch metadata fields). This skill only records the value; `/auto-fix` and `/auto-judge` are what route on it.
 
 If there are no candidates, print `No batches to classify.` and exit cleanly — the queue is already triaged.
 

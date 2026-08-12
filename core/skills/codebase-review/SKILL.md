@@ -395,7 +395,7 @@ Tag Semgrep findings with `[semgrep]` source in your notes (distinct from `[grep
 
 - **Dispatch is the default** whenever the scope is larger than one context can actually read. Count the manifest first (Step 1 already bounded it); if you cannot open those files yourself, workers are the mechanism that covers them.
 - **Solo is legitimate in exactly two cases, and both must be *stated*:** (a) the harness offers no sub-agent primitive, or (b) the scope is small enough to open in full. Nothing else. "I'll just review it myself" on a scope you cannot read is case (c) — and case (c) does not exist.
-- **If you run solo on a scope you cannot open in full, the round is `Sampled`, not `Full`.** Name the sampling basis (highest-exposure modules, pre-scan hits, changed surfaces) and carry it into the ledger. **Never report the manifest size as though it were coverage** — "1,477 reviewable files" beside 13 opened is the exact misread this rule forbids.
+- **If the round does not open its declared scope in full, it is `Sampled`, not `Full` — whether you ran solo or dispatched workers.** The test is arithmetic, not judgement: **`Full` means `opened + grepped` reached the manifest**, and a round under a third of it is reported as a self-contradiction by every reader of its receipt. Staffing is not part of that test and may not be read into it — no worker count, however large, converts files nobody opened into covered ones, and `_shared/fanout-evidence.md` § Tier 0 defines kind as *"what the round **actually was**, not what was requested"* while firing *"on **every** round, fan-out or solo"*. A fan-out round that dispatched eight workers and still reached a fraction of its manifest is `Sampled`, and labelling it `Full` is the same overstatement as doing it solo. Name the sampling basis (highest-exposure modules, pre-scan hits, changed surfaces) and carry it into the ledger. **Never report the manifest size as though it were coverage** — "1,477 reviewable files" beside 13 opened is the exact misread this rule forbids.
 - Carry the decision into the Tier-0 ledger as `workers <K>` (with `solo: <reason>` when `K` is 0), rendered in Step 5b's round header and Step 6's summary.
 
 ### 3-pre. Convention Scoping (CRITICAL)
@@ -620,7 +620,9 @@ After organizing batches, compute file-level overlap between all batches in this
    - **No shared files with any other batch** → `Overlap: none`
    - **Shares file(s) with other batches** → `Overlap: batch-N, batch-M` (list all overlapping batch numbers)
 
-This tag is written into the batch header in Step 5c and used by `/auto-fix` to determine which batches can be processed in parallel.
+This tag is written into the batch header in Step 5c and used by `/auto-fix` and `/auto-judge` to determine which batches can be processed in parallel.
+
+**You are one of this field's only two writers** (the other is `/security-audit`), and it has **no validator** — nothing checks the value at write time, and no reader ever recomputes a tag that is present. A wrong value here produces a wrong lane assignment that nothing downstream can detect, so compute it rather than estimating it. **Emit exactly one of the two declared shapes** — the literal `none`, or a comma-separated `batch-<N>` list — and **nothing else on the line**: readers test the value *whole*, so a qualifier like `none (batch 5 shares tests/)` is read as *overlapping*, not as `none`. Full contract: `WORKFLOW.md` § Batch metadata fields (loop installs ship no `WORKFLOW.md` — the two shapes above and the whole-value rule are the whole contract).
 
 ## Step 5: Write to `review_tasks.md`
 
@@ -673,7 +675,7 @@ For each batch:
 > **Scope:** <comma-separated file paths or globs>
 > **Branch:** `fix/batch-N-<kebab-name>`
 > **Verify:** `<test or build command for this scope>`
-> **Overlap:** <none | batch-M, batch-P>
+> **Overlap:** <none | batch-N, batch-M>
 
 - [ ] **TASK-N**: <Imperative title> <severity emoji>
   `<file:line>` `[verified|reported]` — <1-2 sentence description with concrete suggested fix>
@@ -873,6 +875,64 @@ try:
         print(f"round-receipt: {receipt['kind']} — opened {receipt['opened']}"
               f"/{receipt['manifest']} of {receipt['tracked']} tracked, "
               f"{receipt['workers']} worker(s)")
+    # The WRITE-side half of the low-look test. Both readers of this receipt
+    # already apply this exact arithmetic — `/sitrep` (sitrep_survey.py,
+    # LOW_LOOK_RATIO) and `self_check.sh` (a literal `* 3`) — but both run
+    # AFTER the Step 7 commit, against a one-shot JSON snapshot. By then the
+    # label cannot be corrected: editing `review_tasks.md` does not rewrite a
+    # receipt, and this block has already unlinked the marker. Step 5f runs
+    # BEFORE that commit, so this is the one moment relabelling is still free,
+    # and the round author is the one person who knows the basis to name.
+    #
+    # Ratio, never worker count: a fan-out round reaches this too. That
+    # asymmetry — a solo-gated rule at dispatch, a ratio-gated one at read —
+    # is the defect this check closes.
+    #
+    # OUTSIDE the `miss` branch on purpose, and this is not a style choice.
+    # The shipped instruction two steps up says a round that cannot fill a
+    # field writes `unreported` in it — so `grepped unreported` is a
+    # DOCUMENTED input, and gating this check on a complete receipt let the
+    # documented input switch the check off while BOTH readers still fired
+    # (they exclude `grepped` from their own required set and read a non-int
+    # as 0). Match them: `grepped` contributes when it is an int and
+    # contributes 0 otherwise, and the check runs on whatever is present.
+    #
+    # WARN, NEVER ABORT. This whole block is wrapped in a try/except and
+    # `p.unlink()` sits outside it, deliberately: evidence must never cost the
+    # cleanup it rides on. A hard gate here would trade a mislabeled round for
+    # a stranded marker, which is the worse failure.
+    #
+    # Three copies of this constant now exist (here, sitrep_survey.py,
+    # self_check.sh) and are pinned equal by
+    # tests/test_round_coverage_ledger.py — that test names all three.
+    #
+    # `LOW-LOOK` is a STABLE TOKEN, not prose. It is what the test and any
+    # consumer grep keys on, so the sentences around it stay free to be
+    # reworded. Keying a guard on the human wording is what makes a guard
+    # redden on a correct edit, and a guard that reddens on correct edits
+    # teaches the next maintainer to weaken it.
+    LOW_LOOK_RATIO = 3
+    _man, _opened, _grepped = receipt["manifest"], receipt["opened"], receipt["grepped"]
+    if (str(receipt["kind"]).startswith("Full") and isinstance(_man, int)
+            and _man > 0 and isinstance(_opened, int)):
+        looked = _opened + (_grepped if isinstance(_grepped, int) else 0)
+        if looked * LOW_LOOK_RATIO < _man:
+            try:  # a hand-edited manifest can be large enough to overflow the
+                pct = f" ({100.0 * looked / _man:.1f}%)"   # float divide, and
+            except OverflowError:                          # losing the whole
+                pct = ""                                   # warning to that is
+            print(f"round-receipt: LOW-LOOK — labelled Full but looked at "   # worse
+                  f"{looked} of {_man} files{pct}: "
+                  f"opened {_opened} + grepped {_grepped}")
+            print("round-receipt:   Once committed, this round reads as a "
+                  "self-contradiction to the coverage readers — `/sitrep` "
+                  "where it is installed, and `self_check.sh` when this is "
+                  "the newest receipt.")
+            print("round-receipt:   The round header is NOT committed yet "
+                  "(Step 7 does that). Relabel it now as `Sampled (<basis>)` "
+                  "naming what chose the subset — or widen the round. After "
+                  "the commit the receipt is fixed and this cannot be "
+                  "corrected.")
 except Exception as exc:
     print(f"round-receipt: skipped ({exc.__class__.__name__}) — clearing anyway")
 

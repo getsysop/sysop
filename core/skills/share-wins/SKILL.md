@@ -152,6 +152,37 @@ deliberately loose, consumer-restructurable markdown** — the seed template inv
 like a win but its status is missing or ambiguous, surface it to the human as
 "unclear — is this a win to share? (y/n)" rather than silently guessing.
 
+**Entry boundaries — both id kinds, and fences are not headings.** An entry
+begins at a **column-0 `## ` heading whose text starts with an entry id** —
+`ISSUE-NNNN` **or** `GOOD-NNNN` — and ends at the line before the next such
+heading, the next column-0 `## ` heading of any kind, or end-of-file, whichever
+comes first. Three rules keep that honest on a file nothing validates:
+
+- **The number is digits, and the seeded templates are not entries.** `NNNN` in
+  the seed's `## ISSUE-NNNN` / `## GOOD-NNNN` template headings is a literal
+  placeholder, so an id-shape read on digits already excludes both. A read on the
+  bare `## ISSUE-` prefix does not — and the retired instruction permitted either,
+  which is the ambiguity this replaces.
+- **A `## ` line inside a fenced block is neither a boundary nor an entry, and a
+  fence opener may be indented up to three spaces.** This is the independent
+  defence and the only one that reaches a *real* entry: in upstream #264 a wrapped
+  list item put a triple-backtick `plan` opener at **column 3**, which CommonMark
+  reads as a fence opener with an info string rather than as prose, and the 119
+  lines it opened absorbed the rest of one entry, the whole of the next, and the
+  head of a third. Counting only column-0 fences misses it, which is why the indent
+  allowance is stated. It also covers the seeded templates a second time: both sit
+  inside triple-backtick fences, *above* every real entry, so neither read above
+  can reach them. Where the `<!-- Entries below. Newest first. -->` marker
+  survives, entries are below it; the fence rule is what holds when a consumer has
+  restructured the marker away.
+- **An unterminated fence is reported, never assumed shut.** If a ``` opens and
+  never closes, everything after it reads as one block and the entries inside it
+  vanish without a trace. Say so and stop rather than posting whatever the
+  truncated block appears to contain — announcing the swallow costs a re-run,
+  and not announcing it costs a wrong post. **An odd number of fence-opener-eligible
+  lines is the cheap signal**: #264 took the file from 36 such lines (balanced) to 39,
+  and that count is checkable without parsing anything.
+
 Classify each `[good]` entry by `**Status:**`:
 
 | Status | Eligible to share? |
@@ -163,7 +194,11 @@ Classify each `[good]` entry by `**Status:**`:
 <url>` line (written by a prior run, Step 5) is **ineligible** no matter what its
 `Status:` says. This is what keeps a re-run from double-posting even if a status
 flip was missed. Friction (`ISSUE-NNNN`) entries are out of scope here — ignore
-them; they're `/report-issues`' job.
+them; they're `/report-issues`' job. **They are still boundaries**: an
+`ISSUE-NNNN` heading ends the win above it, per the boundary rule above. Reading
+one as body text is the symmetric form of the defect that put `GOOD-0026` inside
+upstream issue #360 — the direction that fails here is a win published with a
+bug report's text appended to it.
 
 Read the consumer name from the file's H1 (`# Sysop Issues — <consumer>`) — you'll
 name it in the comment so cross-repo readers know which project the win came from.

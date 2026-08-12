@@ -53,9 +53,35 @@ INDEX_FILE = os.path.join(REPO_ROOT, ".claude", "review_index.json")
 # archive_review_tasks.py, but consolidated in one place.
 
 _ROUND_HEADER_RE = re.compile(r"^## (Round \d+.*)$")
+# Status charset is `[^`]+`, not `[A-Za-z ]+`. A status carrying a hyphen or a
+# digit is a thing a consumer can write, and a reader that cannot see it does
+# not prevent it \u2014 it only makes the batch invisible, which is how
+# `batch_work.sh --release <N>` came to answer "not found" for a batch plainly
+# in the file. Deciding what an undeclared value MEANS belongs to the readers'
+# status ladders, not to the pattern that finds the batch.
 _BATCH_HEADER_RE = re.compile(
-    r"^### Batch (\d+) \u2014 (.+?) `([A-Za-z ]+)`$"
+    r"^### Batch (\d+) \u2014 (.+?) `([^`]+)`$"
 )
+# Permissive twin, used ONLY to notice a `### Batch <N>` line the strict pattern
+# rejected so the open batch can be closed. See the closer in
+# `parse_review_tasks` for what it prevents.
+#
+# `\s+`, not literal spaces. The first version of this twin used single literal
+# spaces and so was NOT permissive where it mattered: a header with a TAB or a
+# double space (`###\tBatch 8`, `###  Batch 8`, `### Batch  8`) fails the strict
+# pattern AND fails this one, which is precisely the fall-through the twin
+# exists to stop. Phase 191's own adversarial round reproduced the full
+# carry-over \u2014 batch 7 returned with `review/batch-8` \u2014 on the fixed tree.
+# The twin must be strictly more permissive than the strict pattern in EVERY
+# dimension the strict pattern constrains, not just the status charset.
+#
+# Kept equal to the twins in sitrep_survey.py, next_task.py and
+# archive_review_tasks.py \u2014 but note those files' strict patterns differ from
+# each other (next_task.py tolerates an ASCII hyphen; the bash fallback in
+# batch_work.sh uses `[[:space:]]`), so "edit one, edit all" applies to THIS
+# pattern, not to the strict ones. tests/test_batch_status_gate.py drives every
+# shape against every parser rather than pinning the text.
+_BATCH_HEADER_ANY_RE = re.compile(r"^###\s+Batch\s+\d+\b")
 _META_BRANCH_RE = re.compile(r"^> \*\*Branch:\*\* `([^`]+)`")
 _META_SCOPE_RE = re.compile(r"^> \*\*Scope:\*\* (.+)")
 _META_VERIFY_RE = re.compile(r"^> \*\*Verify:\*\* (.+)")
@@ -261,6 +287,31 @@ def parse_review_tasks(path=None):
                 "line_end": None,
                 "tasks": [],
             }
+            continue
+
+        # ── A `### Batch <N>` line the strict pattern rejected ──
+        # It still closes the open batch. Without this it fell through as
+        # ordinary content and the orphan's own `> **Branch:**`/`Scope:`/
+        # `Verify:` lines were read as the PREVIOUS batch's — so `batch_work.sh
+        # 7` built a worktree named `…-batch-7` on branch `review/batch-8`,
+        # carrying batch 8's scope and batch 8's verify command. Measured in
+        # this parser and in batch_work.sh's bash fallback alike.
+        #
+        # This is the same rule as the `## ` closer above, applied to the one
+        # heading level that was missing it: a heading ends the batch whether or
+        # not the parser could make sense of the heading.
+        #
+        # Widening the status charset shrinks this class but cannot close it —
+        # a header with no status token, or a hyphen where the em-dash belongs,
+        # still fails to parse. Those are authoring slips rather than statuses,
+        # so the batch stays invisible, which is honest; what it must not do is
+        # corrupt a batch that IS visible.
+        if _BATCH_HEADER_ANY_RE.match(line):
+            if current_batch is not None:
+                current_batch["line_end"] = line_num - 1
+                _finalize_batch(current_batch)
+                batches[str(current_batch["number"])] = current_batch
+                current_batch = None
             continue
 
         # ── Batch metadata (blockquote lines) ──

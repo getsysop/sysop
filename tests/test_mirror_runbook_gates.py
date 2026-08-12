@@ -382,7 +382,8 @@ def test_an_ordinary_rewording_stays_green():
 #     runbook that is correct.
 #   * One-shot maintainer analyses under `tools/*.py`. These quote pass
 #     identifiers as SUBJECT MATTER, and the derivation cannot tell a mechanism
-#     from a mention: `tools/phase186_negation_probe.py` carries a corpus of
+#     from a mention: `tools/phase186_negation_probe.py` (deleted as spent by Phase 194;
+#     recoverable from git history) carried a corpus of
 #     hypothetical retirement bullets including "superseded by Pass 6", and the
 #     first run of this derivation duly demanded the runbook list a Pass 6.
 #
@@ -538,7 +539,9 @@ def test_the_runbook_names_every_pass_the_gates_implement():
     presence in the operator's list, not that the item tells them to run it.
 
     **Why the missing half is not guarded, measured rather than conceded**
-    (``tools/phase186_negation_probe.py``, 16 realistic retirement bullets against
+    (``tools/phase186_negation_probe.py`` — the throwaway probe, deleted as spent by
+    Phase 194; its measurement stands in the record and is recoverable from git
+    history — 16 realistic retirement bullets against
     the runbook's 8 live ones):
 
     * A vocabulary written from the finding's own example — superseded / do not run
@@ -604,8 +607,10 @@ def test_the_runbook_names_every_pass_the_gates_implement():
     assert not missing, (
         f"the runbook does not name pass(es) {missing}, declared in {where} — "
         "step 3's deferral to 'the script' does not save it, because the script it points "
-        "at is not the one that implements them (Pass 4 and the rename-residue diff live "
-        "only in cut_public_release.sh, Pass 5 only in tests/test_mirror_leak_gate.py). "
+        "at is not the one that implements them (the rename-residue diff lives only in "
+        "cut_public_release.sh; Pass 4's cut-time run is there too, with a per-phase "
+        "counterpart in tests/test_mirror_leak_gate.py since Phase 195; Pass 5 only in "
+        "tests/test_mirror_leak_gate.py). "
         "Each pass needs its own list item, led by its identifier."
     )
 

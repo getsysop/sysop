@@ -1390,6 +1390,7 @@
           <p>It did not stop there, and the record is kept because the trend is the finding. The run continued through the next five phases — 21 survivors of 46, then 49 of 52, then 56 of 74 on a second round, then a module whose 22 planted defects all survived it (13 of them surviving the whole four-file suite around it), then 56 genuine escapes of 119.</p>
           <p>A third authoring rule had already shipped part-way through all this — earlier than the run above, which is why the run kept going — and it is the one that pays: <strong>run the commands your change prescribes</strong>, in a throwaway repo, before spawning anyone — with the fixture's inputs built from what the shipped code actually emits rather than from your own model of it. The two halves are not decoration. The same prescribed <code>git show</code> against the same fixture printed the file under the author's assumed path and exited 128 under the path every shipped writer really produces; the change's own new error branch would then have halted every run with a confident, wrong diagnosis. One of three reviewers found it, by building the repo and typing the command. The other two read the same files and did not.</p>
           <p class="muted">And the rule is necessary, not sufficient — which the log demonstrated on itself. Fifteen phases after it shipped, a sweep found sixteen live sites prescribing an interpreter path that is absent on a named and ordinary set of consumer machines — poetry, conda, a plain <code>venv/</code> layout, a system Python that refuses installation — three of those sites being the documentation still teaching the idiom. A rule about the commands you are adding does not sweep the commands already there.</p>
+          <p><strong>Addendum (2026-08-11).</strong> The streak has not ended since this snapshot was cut. Two consecutive phases after it built mechanisms their own review rounds then rejected outright: one withdrew its headline fix after the round showed the fix was worse than the defect it closed, and the other built a reference table false for four of its six rows, with a guard that killed 2 of 26 independent mutations while false-killing 12 of 15 negative controls. Neither rejected mechanism merged. The record is kept because the trend is the finding — and because a review gate strong enough to reject its author's own work, with the rejection written down, is the property everything else on this page is trying to buy.</p>
         </aside>
 
         <h3>Adjacent skills</h3>
@@ -2309,7 +2310,9 @@
           low single digits and has stayed there. The share of low-severity findings mirrors it, rising from 22% in
           February to a 75% peak in June, 65% in July. Activity-normalized rates agree on direction: criticals per
           10,000 effective lines changed fell roughly 3× from the March peak to May, lower still through June and
-          partial July. Reviews don't get smaller; they stop finding things that matter.
+          partial July. Reviews don't get smaller; they stop <em>reporting</em> things that matter — and the archive
+          cannot distinguish &ldquo;not there&rdquo; from &ldquo;not seen,&rdquo; which is why the limits below name
+          the reviewer itself as an instrument, and why every round is now required to carry a coverage ledger.
         </p>
         <p>
           Two confounds were checked rather than assumed. Commit size shrank ~5× across the interior of the period
@@ -2327,7 +2330,19 @@
           from ~1.5%. The tail is thin — 68 findings in June, 37 in partial July — so a single bad round would move the
           late shares by double digits. And the strongest rival explanation is ordinary maturation: young codebases
           surface their worst findings early and harden over time with or without a convention loop, so some of the
-          21% → 5% fall was coming anyway. Nothing in Fig. 7 separates the two hypotheses.
+          21% → 5% fall was coming anyway. Nothing in Fig. 7 separates the two hypotheses. One more instrument
+          belongs in this list: the reviewing model itself. Every finding in the archive was filed by the same era of
+          model, and a review is a sample, not a census — when two frontier reviewers later scanned one identical
+          tree, their finding sets mostly did not overlap. Just past this chart's window (August 2026), the
+          measurement arrived: the first full round run under a newer model generation, with a scan scope derived
+          from the repository rather than from the convention map, filed 358 findings against the 23–45 a single
+          round filed in the months before — and an unrelated second vendor on the identical baseline filed 132,
+          itself several times the &ldquo;usual,&rdquo; confirming the backlog was real rather than the new reviewer
+          over-filing. Most of the surge was scope and lens growth, and the mechanized-class signal held through it
+          (zero new blocking findings; the promoted baselines unmoved) — but it means the thin tail above was thin
+          partly because of what that era's reviewer looked at and could see. &ldquo;Held low&rdquo; is also three
+          review rounds — June's two and July's one — not three months of scrutiny; and without a coverage ledger, a
+          declining total is unauditable, the reason every round is now required to carry one.
         </p>
         <p>
           What would separate them is specified in the method notes (<code>docs/analysis/REPORT.md</code>) and has now
@@ -2337,7 +2352,7 @@
           classes together; the loop selectively suppresses the covered ones. That analysis needs the upstream
           per-finding archive, which is private — the round-level dataset that ships here cannot answer it. The result
           is mixed and leaves this section's claim unchanged: the rate comparison is inconclusive (the review
-          instrument changed twice mid-history, inflating then collapsing every class), the mechanized-convention
+          instrument — the scan tooling — changed twice mid-history, inflating then collapsing every class), the mechanized-convention
           signal confirms the claim but is partly true by construction, and prose-only conventions show no separable
           effect from maturation. The claim this section makes stays the narrow, defensible one: the severe share fell
           early and stayed low while the rubric grew, and where a convention is mechanized, its machine check makes
@@ -2708,7 +2723,8 @@
       <aside class="col-rule">Colophon</aside>
       <div>
         <p class="col-body">
-          A monograph on <em>Sysop</em>, as of <em>Phase 185</em> · 2026-08-05. Phase numbers throughout are iterations
+          A monograph on <em>Sysop</em>, as of <em>Phase 185</em> · 2026-08-05, with dated addenda where the record
+          moved after the snapshot. Phase numbers throughout are iterations
           of the workflow's own development — each one planned, adversarially reviewed, and shipped through the process it
           extends; <a href="https://github.com/getsysop/sysop/blob/main/PHASE_LOG.md">PHASE_LOG.md</a> carries one entry per phase. Set in the reader's native serif —
           Iowan Old Style where available, Palatino otherwise — paired with ui-monospace for listings and figure labels.

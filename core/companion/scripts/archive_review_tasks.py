@@ -100,8 +100,41 @@ BATCH_HEADER_RE = re.compile(
     r"^### (Batch \d+) — .+ `(Merged|Complete)`"
 )
 
-# Matches any batch header regardless of status (used to count total batches)
-ANY_BATCH_HEADER_RE = re.compile(r"^### (Batch \d+) — .+ `(\w[\w ]*)`")
+# Matches any batch header regardless of status — the DENOMINATOR in the
+# `all_merged` test below, and deliberately the most permissive pattern in this
+# file.
+#
+# It used to be `— .+ \`(\w[\w ]*)\``, which is a fifth status charset, narrower
+# than the four structural readers use. A header it could not see was never
+# counted, so `round_total_batches == len(batches)` held with an OPEN batch in
+# the round — and an `all_merged` round is *relocated into the archive*.
+# Measured against this exact function before the fix: `On-Hold`,
+# `Blocked/waiting` and `Re-open` each produced `all_merged=True` for a round
+# whose batch 2 was unmerged with an open task. That is the same harm the fence
+# comment below records, arriving by a different route.
+#
+# The asymmetry is why permissive is not just safe here but required: an
+# under-count silently archives live work, while an over-count only makes
+# `all_merged` False, which keeps the round in place and loses nothing. So this
+# pattern asks one question — is this line a batch header — and leaves every
+# judgment about the status to BATCH_HEADER_RE's explicit `Merged|Complete`
+# allowlist above.
+#
+# `\s+`, not literal spaces, and that distinction was worth a round: the first
+# version widened only the STATUS charset and kept single literal spaces, so it
+# still could not see `###\tBatch 8` or `### Batch  8`. Those headers went
+# uncounted, `round_total_batches == len(batches)` held with an OPEN batch
+# present, and the round was relocated into the archive — the same data loss
+# this comment describes above, surviving the fix for it. Reproduced on the
+# supposedly-fixed tree by Phase 191's adversarial round for all three
+# whitespace shapes. The asymmetry argument above is exactly why this pattern
+# must be the loosest thing that still means "batch header".
+ANY_BATCH_HEADER_RE = re.compile(r"^###\s+(Batch\s+\d+)\b")
+
+# Any level-3 heading, whatever whitespace follows the marker. `####` and deeper
+# are deliberately excluded (the char after `###` must be whitespace or EOL), so
+# this stays a level-3 test rather than a prefix test.
+H3_HEADER_RE = re.compile(r"^###(?:\s|$)")
 
 # Fence detection, duplicated verbatim from review_index.py and pinned equal
 # across all four readers by tests/test_flag_contract.py. This script is the
@@ -291,7 +324,17 @@ def parse_archivable_batches(lines):
 
             # A `### ` header that isn't a merged batch ends the current batch
             # (e.g., a pending batch header or OWASP section header)
-            if line.startswith("### "):
+            #
+            # `H3_HEADER_RE`, not `startswith("### ")`: the literal trailing
+            # space meant `###\tBatch 8` did not close the open batch, so it
+            # never reached the `ANY_BATCH_HEADER_RE` counter below and
+            # `round_total_batches` stayed short — `all_merged` then held True
+            # for a round with an OPEN batch, and the round was archived.
+            # Widening ANY_BATCH_HEADER_RE alone did NOT fix this: the counter
+            # is unreachable while the batch is still open, which is why the
+            # first fix measured clean on two whitespace shapes and lost data
+            # on the third. Found by Phase 191's round on the fixed tree.
+            if H3_HEADER_RE.match(line):
                 current_batch["end_line"] = i
                 current_round["batches"].append(current_batch)
                 current_batch = None

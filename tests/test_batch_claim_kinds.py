@@ -102,9 +102,19 @@ def _lock(repo, n):
     return _locks(repo) / f"BATCH-{n}.lock"
 
 
-def _claim(repo, n=7):
-    """Claim a batch and assert the claim itself succeeded."""
-    r = _run(BATCH_WORK, repo, str(n))
+def _claim(repo, n=7, force=False):
+    """Claim a batch and assert the claim itself succeeded.
+
+    `force=True` is the follow-up-work re-claim on a finished batch. Phase 191
+    put a status decision on the claim path, so that case now needs the flag it
+    always conceptually needed — before, a bare `batch_work.sh <N>` claimed a
+    batch in ANY status, which is the § High the gate closes. The flag does not
+    weaken anything here: the invariant these callers assert is that a finished
+    batch's lock stays *removable*, and re-creating the lock is only their
+    setup.
+    """
+    args = (["--force"] if force else []) + [str(n)]
+    r = _run(BATCH_WORK, repo, *args)
     assert r.returncode == 0, r.stderr
     return r
 
@@ -713,12 +723,18 @@ class TestAdversarialRoundRegressions:
     edge cases, they were reproduced against the shipped scripts."""
 
     def test_a_merged_batch_sheds_its_lock(self, tmp_path):
-        """HIGH — the strand. `batch_work.sh <N>` deliberately lets a Merged
-        batch through for follow-up work and writes a lock; close_batch skipped
+        """HIGH — the strand. `batch_work.sh --force <N>` lets a Merged batch
+        through for follow-up work and writes a lock; close_batch skipped
         already-Merged batches before reaching the removal, `--release` refuses
         a Merged batch, and `claim_task.sh --release` refuses a BATCH id and
         points back at `--release`. All three refusals routed in a circle and
-        the lock became unremovable by any shipped command."""
+        the lock became unremovable by any shipped command.
+
+        The follow-up claim took no flag when Phase 156 wrote this; Phase 191's
+        status gate moved it behind `--force`. The strand is still reachable —
+        that is the point of keeping the affordance rather than deleting it —
+        so this test still reproduces it, just through the sanctioned door.
+        """
         repo = _repo(tmp_path / "repo")
         _claim(repo, 7)
         _git(repo, "worktree", "remove", "--force", str(tmp_path / "repo-batch-7"),
@@ -726,7 +742,8 @@ class TestAdversarialRoundRegressions:
         assert _run(CLOSE_BATCH, repo, "--force", "7").returncode == 0
         assert not _lock(repo, 7).exists()
 
-        _claim(repo, 7)  # the documented follow-up re-claim, now on a Merged batch
+        # the documented follow-up re-claim, now on a Merged batch
+        _claim(repo, 7, force=True)
         assert _lock(repo, 7).is_file(), "precondition: the strand is reproduced"
 
         r = _run(CLOSE_BATCH, repo, "7")
@@ -742,7 +759,7 @@ class TestAdversarialRoundRegressions:
         _git(repo, "worktree", "remove", "--force", str(tmp_path / "repo-batch-7"),
              check=False)
         _run(CLOSE_BATCH, repo, "--force", "7")
-        _claim(repo, 7)
+        _claim(repo, 7, force=True)   # re-strand a now-Merged batch
         assert _run(CLOSE_BATCH, repo, "--dry-run", "7").returncode == 0
         assert _lock(repo, 7).is_file(), "--dry-run must mutate nothing"
 

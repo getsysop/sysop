@@ -767,3 +767,154 @@ def test_importing_the_module_as_a_script_says_so(mb):
     proc = subprocess.run([sys.executable, str(SCRIPT)], capture_output=True, text=True)
     assert proc.returncode != 0
     assert "is a library" in proc.stderr
+
+
+# --------------------------------------------------------------------------------------
+# BLIND-CONTROL — a control the verifier could not have seen (Phase 194)
+#
+# Phase 189's author battery declared two `kind="control"` rows and both were comment-only
+# edits to a Python file whose verifiers were pytest modules. Python discards comments at
+# compile time, so neither could have reddened anything; both scored `control ok` and were
+# reported as evidence the guards discriminate. These tests pin the refusal AND its scope,
+# because the round's own finding was that item 5 shipped with no coverage at all.
+# --------------------------------------------------------------------------------------
+
+PY_SUBJECT = '''\
+# a leading comment
+def predicate(value):
+    """A docstring, which IS a runtime object and so is not a comment."""
+    if value in ("a", "b"):  # trailing comment
+        return True
+    return False
+'''
+
+PY_GUARD = '''\
+import subject_py
+
+
+def test_predicate_accepts_a():
+    assert subject_py.predicate("a")
+
+
+def test_predicate_rejects_z():
+    assert not subject_py.predicate("z")
+'''
+
+
+@pytest.fixture()
+def pytree(tmp_path):
+    (tmp_path / "subject_py.py").write_text(PY_SUBJECT, encoding="utf-8")
+    (tmp_path / "test_pyguard.py").write_text(PY_GUARD, encoding="utf-8")
+    return tmp_path
+
+
+def _pybattery(mb, pytree, mutations, verifiers=None):
+    return mb.Battery(
+        root=pytree,
+        default_target=pytree / "subject_py.py",
+        verifiers=verifiers or [mb.Verifier("pyguard", modules=["test_pyguard.py"])],
+        mutations=mutations,
+    )
+
+
+def test_a_comment_only_control_on_a_python_target_is_refused(mb, pytree, capsys):
+    """The Phase 189 incident itself."""
+    rc = _pybattery(mb, pytree, [
+        mb.Mutation("N1", "over-strictness", kind="control",
+                    old="# a leading comment", new="# a leading comment, reworded"),
+    ]).main([])
+    out = capsys.readouterr().out
+    assert rc == 2, out
+    assert "BLIND CONTROLS" in out and "N1" in out
+
+
+def test_a_real_code_control_is_not_refused(mb, pytree, capsys):
+    """The discriminator that `NO-OP(effect)` could not draw: a *good* control changes text
+    and deliberately does not change behaviour, so a behaviour-based check would flag every
+    correct control as vacuous. This one must pass through and score `control ok`."""
+    rc = _pybattery(mb, pytree, [
+        mb.Mutation("N2", "over-strictness", kind="control",
+                    old='    if value in ("a", "b"):',
+                    new='    if value == "a" or value == "b":'),
+    ]).main([])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "BLIND CONTROLS" not in out
+    assert "1 negative controls · false kills: 0" in out
+
+
+def test_a_docstring_only_control_is_not_refused(mb, pytree, capsys):
+    """A docstring is a runtime object, not a comment — `__doc__` is importable and a test
+    can assert on it. Refusing docstring edits would be a false refusal."""
+    rc = _pybattery(mb, pytree, [
+        mb.Mutation("N3", "over-strictness", kind="control",
+                    old="A docstring, which IS a runtime object",
+                    new="A docstring, which is very much a runtime object"),
+    ]).main([])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "BLIND CONTROLS" not in out
+
+
+def test_a_comment_only_control_on_a_non_python_target_is_not_refused(mb, tree, capsys):
+    """Scope. A shell script's comments are not discarded by any compiler, and a guard that
+    greps the file text sees them — so the refusal must not fire outside `.py`."""
+    rc = _battery(mb, tree, [
+        mb.Mutation("N4", "over-strictness", kind="control",
+                    old="#!/usr/bin/env bash", new="#!/usr/bin/env bash -\n"),
+    ]).main([])
+    out = capsys.readouterr().out
+    assert "BLIND CONTROLS" not in out, out
+    assert rc in (0, 1), out
+
+
+def test_a_comment_only_control_with_an_argv_verifier_is_not_refused(mb, pytree, capsys):
+    """Scope, the other half. An `argv` verifier may run anything — a linter, a docs build,
+    a grep — and those legitimately read comments. Only pytest-module verifiers justify the
+    'the compiler dropped it' argument."""
+    rc = _pybattery(mb, pytree, [
+        mb.Mutation("N5", "over-strictness", kind="control",
+                    old="# a leading comment", new="# a leading comment, reworded"),
+    ], verifiers=[mb.Verifier("grep", argv=["grep", "-q", "leading comment",
+                                            "subject_py.py"])]).main([])
+    out = capsys.readouterr().out
+    assert "BLIND CONTROLS" not in out, out
+
+
+def test_a_non_control_comment_edit_is_not_refused(mb, pytree, capsys):
+    """Scope, third axis. Only `kind="control"` rows are adjudicated; an ordinary mutation
+    that happens to edit a comment is a survivor, which is information, not a battery bug."""
+    rc = _pybattery(mb, pytree, [
+        mb.Mutation("M1", "where it looks",
+                    old="# a leading comment", new="# a leading comment, reworded"),
+    ]).main([])
+    out = capsys.readouterr().out
+    assert "BLIND CONTROLS" not in out, out
+    assert rc == 1 and "SURVIVORS" in out
+
+
+def test_a_refused_control_leaves_the_tree_restored(mb, pytree, capsys):
+    """A refusal happens at apply time, so the file must never have been written."""
+    before = (pytree / "subject_py.py").read_text(encoding="utf-8")
+    _pybattery(mb, pytree, [
+        mb.Mutation("N6", "over-strictness", kind="control",
+                    old="# trailing comment", new="# trailing comment!"),
+    ]).main([])
+    capsys.readouterr()
+    assert (pytree / "subject_py.py").read_text(encoding="utf-8") == before
+
+
+def test_blind_ok_is_an_explicit_per_row_escape(mb, pytree, capsys):
+    """The over-strictness direction, found by the round: this repo has guards that read
+    `.py` files as raw TEXT (`tests/test_flag_contract.py` globs `scripts/*.py` and greps
+    `read_text()`), so a comment edit IS visible to them and refusing it is a false
+    refusal. `blind_ok=True` is the stated opt-out — refuse by default, override with a
+    reason, the same shape `occurrence=` gives the ambiguity check."""
+    rc = _pybattery(mb, pytree, [
+        mb.Mutation("N7", "over-strictness", kind="control", blind_ok=True,
+                    note="the verifier greps this file's text",
+                    old="# a leading comment", new="# a leading comment, reworded"),
+    ]).main([])
+    out = capsys.readouterr().out
+    assert "BLIND CONTROLS" not in out, out
+    assert rc == 0, out

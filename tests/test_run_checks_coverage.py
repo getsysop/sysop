@@ -506,17 +506,30 @@ def test_is_baseline_suppressed_normal_check_still_suppresses():
     ) is True
 
 
-def test_is_baseline_suppressed_requires_blocking_and_baseline():
-    """A non-coverage finding suppresses only when blocking AND baselined."""
+def test_is_baseline_suppressed_requires_only_the_baseline_key():
+    """A non-coverage finding suppresses on its key alone — `blocking` is not part of it.
+
+    This assertion is inverted from what it pinned before upstream #363, and the
+    inversion is the fix: an advisory check's baseline entry used to suppress
+    nothing, so a recorded triage verdict was inert. The `blocking_ids` argument
+    is now unused by the predicate and both spellings must agree.
+    """
     key = rci.finding_key("todo-vs-deferred", "app/x.py:3")
-    # Not in baseline → not suppressed.
+    # Not in baseline → not suppressed, whatever `blocking_ids` says.
     assert rci.is_baseline_suppressed(
         "todo-vs-deferred", "app/x.py:3", {"todo-vs-deferred"}, set()
     ) is False
-    # Baselined but not a blocking check → not suppressed.
+    assert rci.is_baseline_suppressed(
+        "todo-vs-deferred", "app/x.py:3", set(), set()
+    ) is False
+    # Baselined and NOT a blocking check → suppressed (#363; was False).
     assert rci.is_baseline_suppressed(
         "todo-vs-deferred", "app/x.py:3", set(), {key}
-    ) is False
+    ) is True
+    # And the blocking spelling gives the identical answer.
+    assert rci.is_baseline_suppressed(
+        "todo-vs-deferred", "app/x.py:3", {"todo-vs-deferred"}, {key}
+    ) is True
 
 
 def test_write_baseline_excludes_coverage(tmp_path):
@@ -533,8 +546,23 @@ def test_write_baseline_excludes_coverage(tmp_path):
 
 
 def test_is_coverage_predicate():
-    """_is_coverage matches the coverage- prefix and nothing else."""
+    """_is_coverage matches the coverage- PREFIX, not a list of shipped ids.
+
+    Phase 193's round narrowed the body to
+    ``check_id in ("coverage-diff-python", "coverage-diff-frontend")`` and every
+    assertion in both modules stayed green, because every one of them used only
+    those two ids — while `coverage.py` states the contract as "check id starts
+    `coverage-`" and `critical_path` entries are **consumer-authored**. So a
+    consumer's own `coverage-diff-kotlin` became baselinable: the Phase-61b
+    crown-jewel gate, opened for exactly the checks a consumer adds. The ids below
+    that Sysop does not ship are the point of the test.
+    """
     assert rci._is_coverage("coverage-diff-python") is True
     assert rci._is_coverage("coverage-diff-frontend") is True
+    # Not shipped by Sysop — a consumer-authored coverage check must be covered.
+    assert rci._is_coverage("coverage-diff-kotlin") is True
+    assert rci._is_coverage("coverage-") is True
     assert rci._is_coverage("todo-vs-deferred") is False
     assert rci._is_coverage("pip-audit-vuln") is False
+    # …and the prefix is a prefix, not a substring.
+    assert rci._is_coverage("my-coverage-check") is False

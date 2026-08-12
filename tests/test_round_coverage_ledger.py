@@ -694,6 +694,354 @@ def test_self_check_is_silent_without_receipts(tmp_path):
     assert "last round coverage" not in _self_check_output(_repo(tmp_path / "sc-none"))
 
 
+# ── §3b the low-look boundary is ONE rule with three implementations ────────
+#
+# Phase 192 / upstream #367. The rule "a Full round that looked at under 1/3 of
+# its manifest contradicts itself" is now implemented three times: the skills'
+# Step 5f receipt block (write time, added by this phase), `sitrep_survey.py`
+# (`LOW_LOOK_RATIO`), and `self_check.sh` (a literal `* 3`, the loop-mode-only
+# surface). Before this phase there were two and NOTHING tested the coupling —
+# `grep -rn LOW_LOOK_RATIO tests/` returned nothing — so the constants could
+# diverge silently and the write side did not exist at all.
+#
+# These tests do not grep for the number. They drive all three surfaces with
+# the SAME numbers and assert the three verdicts agree, so changing one copy
+# alone reddens the suite at a boundary triple rather than at a string.
+
+
+# (manifest, opened, grepped, expected_contradiction) — straddling looked*3 < manifest
+#
+# Every triple here is driven through ALL THREE implementations. The round's
+# lens 3 showed the first nine were too narrow in three specific ways, each of
+# which let a real defect through: no manifest below 9 (so `manifest > 0` could
+# be relaxed to `manifest > 5` unnoticed), and — in the cases list's companion
+# `_kind_for` below — no parenthesised kind and no non-integer `grepped`.
+_BOUNDARY_CASES = [
+    (1477, 13, 220, True),    # the motivating failure: 233/1477 = 15.8%
+    (1000, 333, 0, True),     # just under: 999 < 1000
+    (1000, 334, 0, False),    # exactly at: 1002 !< 1000
+    (1000, 400, 200, False),  # healthy: 1800 !< 1000
+    (100, 33, 0, True),       # small scope, same rule
+    (100, 34, 0, False),
+    (9, 3, 0, False),         # grepped counts toward `looked` on every surface
+    (9, 1, 2, False),
+    (9, 1, 1, True),
+    (3, 0, 0, True),          # tiny manifest: `manifest > 0` is the only guard
+    (4, 1, 0, True),          # and it must not become `manifest > 5`
+    (1, 0, 0, True),
+    (0, 0, 0, False),         # zero manifest: no division, no warning
+]
+
+# Kind spellings the shipped `parse_coverage` regex admits. `Full (…)` is a
+# real, produced value — the round narrowed the write side to `== "Full"` and
+# every one of the nine original triples still passed, because all nine used
+# the bare spelling.
+_FULL_SPELLINGS = ["Full", "Full (whole repo)", "Full (excluding vendored)"]
+
+
+def _skill_warns(tmp_path, manifest, opened, grepped, skill="codebase-review",
+                 kind="Full"):
+    """Run the real Step 5f heredoc and report whether it warned."""
+    root = _repo(tmp_path)
+    marker = _open_round(root, skill)
+    _write_round(
+        root,
+        f"{kind} · manifest {manifest} · opened {opened} · grepped {grepped} · workers 4",
+        label=("security" if skill == "security-audit" else "code quality"),
+    )
+    r = _close(root, marker, skill)
+    assert r.returncode == 0, r.stderr
+    assert "round-marker: cleared" in r.stdout, "the marker must always clear"
+    return "round-receipt: LOW-LOOK" in r.stdout
+
+
+def _sitrep_flags(tmp_path, manifest, opened, grepped, kind="Full"):
+    root = _repo(tmp_path)
+    _plant_receipt(root, kind=kind, manifest=manifest, opened=opened,
+                   grepped=grepped, workers=4)
+    return "full round covered a fraction of its scope" in _kinds(root)
+
+
+def _self_check_failures(root: Path) -> int:
+    """Count `self_check.sh`'s failing lines (`bad`, which prints `✗`).
+
+    Deliberately NOT a substring match on the message. `self_check.sh` runs
+    other checks that fail in a bare fixture (there is no `.claude/sysop.lock`),
+    so its exit code is not a clean signal either — but the *count* of failing
+    lines is, and unlike the sentence it does not change when someone rewords
+    the diagnostic. A guard keyed to prose reddens on a correct edit, which is
+    the failure this file's own battery caught on the skill side.
+    """
+    return sum(1 for ln in _self_check_output(root).splitlines()
+               if ln.strip().startswith("✗"))
+
+
+def _self_check_flags(tmp_path, manifest, opened, grepped, kind="Full"):
+    """Does self_check.sh report ONE MORE failure than the identical repo whose
+    round is healthy? The control fixture differs only in the three numbers."""
+    lo = _repo(tmp_path / "subject")
+    _plant_receipt(lo, kind=kind, manifest=manifest, opened=opened,
+                   grepped=grepped, workers=4)
+    hi = _repo(tmp_path / "control")
+    _plant_receipt(hi, kind="Full", manifest=1, opened=1, grepped=0, workers=4)
+    return _self_check_failures(lo) == _self_check_failures(hi) + 1
+
+
+def test_the_low_look_boundary_is_identical_on_all_three_surfaces(tmp_path):
+    """One rule, three implementations, one boundary.
+
+    This is the coupling `grep -rn LOW_LOOK_RATIO tests/` used to prove absent.
+    Change the ratio in any single copy and at least one boundary case below
+    disagrees with the other two.
+    """
+    for i, (manifest, opened, grepped, expected) in enumerate(_BOUNDARY_CASES):
+        d = tmp_path / f"c{i}"
+        verdicts = {
+            "skill 5f (write time)": _skill_warns(d / "skill", manifest, opened, grepped),
+            "sitrep_survey.py": _sitrep_flags(d / "sitrep", manifest, opened, grepped),
+            "self_check.sh": _self_check_flags(d / "selfcheck", manifest, opened, grepped),
+        }
+        assert set(verdicts.values()) == {expected}, (
+            f"manifest {manifest} opened {opened} grepped {grepped}: the three "
+            f"implementations of the low-look rule disagree — {verdicts}"
+        )
+
+
+def test_every_full_spelling_is_treated_alike_on_all_three_surfaces(tmp_path):
+    """`Full` is a PREFIX, not a literal, and `parse_coverage`'s own regex
+    produces `Full (whole repo)`. The round narrowed the write side to
+    `== "Full"` and all nine original boundary triples still passed, because
+    every one of them used the bare spelling — so the write/read asymmetry this
+    phase closes could be reopened invisibly."""
+    for i, kind in enumerate(_FULL_SPELLINGS):
+        d = tmp_path / f"k{i}"
+        verdicts = {
+            "skill 5f (write time)": _skill_warns(d / "skill", 1477, 13, 220, kind=kind),
+            "sitrep_survey.py": _sitrep_flags(d / "sitrep", 1477, 13, 220, kind=kind),
+            "self_check.sh": _self_check_flags(d / "selfcheck", 1477, 13, 220, kind=kind),
+        }
+        assert set(verdicts.values()) == {True}, (
+            f"kind {kind!r}: the three surfaces disagree — {verdicts}"
+        )
+
+
+def test_a_non_integer_grepped_does_not_switch_the_write_check_off(tmp_path):
+    """The round's H1. `unreported` is the value the shipped instruction tells
+    an author to write when a field cannot be filled, and gating this check on
+    a complete receipt let that documented input turn it off while BOTH readers
+    still fired — a 0.9%-coverage `Full` round closing silent, flagged only
+    after the commit that made it uncorrectable."""
+    for tail in ("grepped unreported · workers 6", "workers 6"):
+        root = _repo(tmp_path / tail.replace(" ", "_").replace("·", ""))
+        marker = _open_round(root)
+        _write_round(root, f"Full · manifest 900 · opened 8 · {tail}")
+        out = _close(root, marker).stdout
+        assert "round-receipt: LOW-LOOK" in out, (
+            f"the write-side check went silent on `{tail}` while both readers "
+            "fire on the same numbers"
+        )
+        # and the round is still correctly reported as incompletely recorded
+        if "unreported" in tail or "grepped" not in tail:
+            assert "unreported field(s)" in out
+
+
+def test_the_warning_reports_looked_over_manifest_in_that_order(tmp_path):
+    """The round swapped the two numbers — "looked at 1477 of 233 files" — and
+    only the `LOW-LOOK` token was asserted, so it shipped green."""
+    root = _repo(tmp_path / "order")
+    marker = _open_round(root)
+    _write_round(root, "Full · manifest 1477 · opened 13 · grepped 220 · workers 4")
+    out = _close(root, marker).stdout
+    assert "233 of 1477 files" in out, (
+        f"the warning does not read `looked of manifest`: {out!r}"
+    )
+
+
+def test_the_marker_clears_even_when_the_receipt_block_raises(tmp_path):
+    """The layout claim, actually exercised. `PHASE_LOG` says the constraint is
+    asserted by test rather than trusted; before the round no test in the suite
+    made the block raise at all, so `p.unlink()` could have been moved inside
+    the `try` with the whole suite green."""
+    root = _repo(tmp_path / "raises")
+    marker = _open_round(root)
+    _write_round(root, "Full · manifest 1477 · opened 13 · grepped 220 · workers 4")
+    # A FILE where the receipts directory must be: mkdir raises inside the try.
+    (root / RECEIPT_REL).parent.mkdir(parents=True, exist_ok=True)
+    (root / RECEIPT_REL).write_text("not a directory\n", encoding="utf-8")
+    r = _close(root, marker)
+    assert "round-receipt: skipped (" in r.stdout, (
+        f"fixture did not force the except path: {r.stdout!r}"
+    )
+    assert r.returncode == 0, r.stderr
+    assert not marker.exists(), (
+        "the marker was stranded by a failure inside the receipt block — "
+        "evidence must never cost the cleanup it rides on"
+    )
+
+
+def test_both_review_skills_warn_at_write_time(tmp_path):
+    """The write-side check ships in BOTH generators, not just the quality one.
+
+    The round measured the cost of the earlier two-point version: four defect
+    mutations injected into the `security-audit` copy were GREEN against every
+    guard this phase added, and died only on the pre-existing byte-identity
+    invariant. That invariant is a real defence, but it makes this file's
+    coverage of the security copy entirely indirect. Drive the whole boundary
+    set through both copies instead.
+    """
+    for skill in SKILLS:
+        for i, (manifest, opened, grepped, expected) in enumerate(_BOUNDARY_CASES):
+            got = _skill_warns(tmp_path / f"{skill}-{i}", manifest, opened,
+                               grepped, skill)
+            assert got is expected, (
+                f"{skill}: manifest {manifest} opened {opened} grepped "
+                f"{grepped} — write-side warned={got}, expected {expected}"
+            )
+
+
+def test_a_narrowed_round_is_exempt_at_write_time_as_it_is_at_read_time(tmp_path):
+    """A round that declared its own narrowness is correct and must stay
+    silent. A check that fires on the honest case gets ignored — and both
+    readers already exempt Scoped/Sampled, so the write side must too."""
+    for kind in ("Sampled (highest-exposure modules)", "Scoped (api)"):
+        root = _repo(tmp_path / kind.split()[0].lower())
+        marker = _open_round(root)
+        _write_round(root, f"{kind} · manifest 1477 · opened 13 · grepped 220 · workers 8")
+        r = _close(root, marker)
+        assert "round-receipt: LOW-LOOK" not in r.stdout, kind
+
+
+def test_the_write_time_warning_fires_on_a_fanout_round(tmp_path):
+    """The defect #367 reports. The only normative write-side sentence was
+    solo-gated (`If you run solo…`) while both readers test the ratio, so a
+    fan-out round that covered a fraction landed in the gap: nothing at write
+    time, flagged after the commit when the label can no longer be fixed."""
+    verdicts = {}
+    for tag, tail in (("fanout", "workers 8"),
+                      ("solo", "workers 0, solo: no sub-agent primitive"),
+                      ("one-worker", "workers 1")):
+        root = _repo(tmp_path / tag)
+        marker = _open_round(root)
+        _write_round(root, f"Full · manifest 1477 · opened 13 · grepped 220 · {tail}")
+        verdicts[tag] = "round-receipt: LOW-LOOK" in _close(root, marker).stdout
+    assert verdicts == {"fanout": True, "solo": True, "one-worker": True}, (
+        f"the warning must key on the ratio, never on the worker count: {verdicts}"
+    )
+
+
+def test_the_warning_never_costs_the_cleanup_it_rides_on(tmp_path):
+    """The binding constraint on Step 5f: evidence must never cost the cleanup.
+    A round that trips the warning still clears its marker and still writes its
+    receipt, because a stranded marker is worse than a mislabeled round."""
+    root = _repo(tmp_path / "clears")
+    marker = _open_round(root)
+    _write_round(root, "Full · manifest 1477 · opened 13 · grepped 220 · workers 8")
+    r = _close(root, marker)
+    assert r.returncode == 0, r.stderr
+    assert "round-receipt: LOW-LOOK" in r.stdout
+    assert not marker.exists(), "the marker must be unlinked even when warning"
+    assert _only_receipt(root)["kind"] == "Full"
+
+
+def test_the_kind_rule_is_not_conditioned_on_staffing():
+    """#367's write-side half, and the hole this phase's own battery found.
+
+    The rule that picks `Full` vs `Sampled` used to open "If you run **solo**
+    on a scope you cannot open in full" — a staffing condition — while both
+    readers of the receipt test the ratio and never look at `workers`. A
+    fan-out round that covered a fraction therefore satisfied the write-side
+    rule and failed both read-side ones. `_shared/fanout-evidence.md` § Tier 0
+    already said the tier "fires on **every** round, fan-out or solo"; the
+    skills disagreed with the contract they cite.
+
+    Presence check, and that is all it is: this pins the *rule as stated*, not
+    an agent's compliance with it. Reverting the de-gating survived every other
+    guard in this file, which is why it exists.
+    """
+    for skill, path in SKILLS.items():
+        lines = path.read_text(encoding="utf-8").splitlines()
+        start = next(i for i, ln in enumerate(lines)
+                     if ln.startswith("### 3-0."))
+        end = next(i for i in range(start + 1, len(lines))
+                   if lines[i].startswith("### ") and i > start)
+        block = "\n".join(lines[start:end])
+
+        rule = [ln for ln in lines[start:end]
+                if "`Sampled`, not `Full`" in ln]
+        assert len(rule) == 1, f"{skill}: expected one kind rule, got {len(rule)}"
+        rule = rule[0]
+        assert "whether you ran solo or dispatched workers" in rule, (
+            f"{skill}: the kind rule is conditioned on staffing again: {rule!r}"
+        )
+        # The rule must state its own TEST. The round redefined the antecedent
+        # ("a scope counts as opened in full whenever the round dispatched at
+        # least one worker per top-level directory…") and every pinned literal
+        # survived, because the rule described a state instead of a measure.
+        assert "`opened + grepped` reached the manifest" in rule, (
+            f"{skill}: the rule no longer states the arithmetic it means, so "
+            f"its antecedent can be redefined around it: {rule!r}"
+        )
+        assert "Staffing is not part of that test" in rule, skill
+        assert "If you run solo on a scope you cannot open in full" not in block, (
+            f"{skill}: the retired solo-gated opener is back"
+        )
+
+        # D09: the round re-gated the rule by ADDING a sentence elsewhere in
+        # the same block — "keep the `Full` label whenever `workers` is
+        # non-zero" — leaving every assertion above green. Nothing in this
+        # block may make the label conditional on staffing.
+        low = block.lower()
+        for phrase in ("keep the `full` label", "keep the full label",
+                       "in practice this binds a solo round",
+                       "counts as opened *in full* whenever",
+                       "has covered its scope through them"):
+            assert phrase not in low, (
+                f"{skill}: Step 3-0 carries staffing-conditional language "
+                f"({phrase!r}) — the kind rule is re-gated"
+            )
+        for ln in lines[start:end]:
+            if "workers" in ln.lower() and "full" in ln.lower():
+                assert ln is rule or "Staffing is not part" in ln or (
+                    "`workers <K>`" in ln), (
+                    f"{skill}: a line outside the kind rule ties `workers` to "
+                    f"the `Full` label: {ln!r}"
+                )
+
+
+def test_the_warning_says_the_header_is_still_uncommitted(tmp_path):
+    """The whole value of moving this check to write time is that the round
+    header is still editable. If the message does not say so, the author has no
+    reason to act on it now rather than ignore it like the read-side one."""
+    root = _repo(tmp_path / "msg")
+    marker = _open_round(root)
+    _write_round(root, "Full · manifest 1477 · opened 13 · grepped 220 · workers 8")
+    out = _close(root, marker).stdout
+    # Key on the INSTRUCTION, not on its wording. The round showed that
+    # rewording "The round header is NOT committed yet" to "is not yet
+    # committed" reddened the suite — a false kill on a correct edit, the
+    # exact class the `LOW-LOOK` token exists to avoid, applied to two of the
+    # three printed lines but not to this one.
+    assert "Sampled (<basis>)" in out, (
+        "the warning no longer tells the author what to relabel it to"
+    )
+    assert "Step 7" in out, (
+        "the warning no longer says which step commits the header, so an "
+        "author cannot tell that the window is still open"
+    )
+    # The round rewrote the remediation into "so nothing needs doing now …
+    # most rounds should keep the Full label; this line is informational
+    # only", keeping both strings above. A warning that tells the author to
+    # ignore it is worse than no warning.
+    low = out.lower()
+    for defeat in ("nothing needs doing", "informational only",
+                   "keep the full label", "no action is required",
+                   "safe to ignore"):
+        assert defeat not in low, (
+            f"the LOW-LOOK remediation tells the author to ignore it "
+            f"({defeat!r}): {out!r}"
+        )
+
+
 # ── §4 drift guards on the shipped prose ────────────────────────────────────
 
 

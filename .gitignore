@@ -36,6 +36,11 @@ venv/
 # Local Claude Code state (per-machine, not workflow content)
 # (settings.local.json is covered by the user's global git ignore)
 .claude/settings.json
+# Agent worktrees the harness creates for `isolation: "worktree"` sub-agents.
+# Each is a real git worktree, so a bare `git add -A` in this repo stages it as an
+# EMBEDDED REPOSITORY — which is exactly what happened during Phase 193's review
+# round, mid-round, while a reviewer was still working in one.
+.claude/worktrees/
 
 # Scratch attach-copy of docs/workflow.html — must never ship in the public mirror
 workflow_2.html

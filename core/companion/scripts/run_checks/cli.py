@@ -21,6 +21,11 @@ CI contract:
     are printed with a [baseline] tag so they stay visible without failing CI.
     Use --update-baseline to regenerate the baseline after deliberately
     accepting new tech debt (review required).
+
+    An advisory (`blocking: false`) check's findings are baselined too, and
+    that is the whole of what it buys them: a [baseline] tag instead of a
+    plain line. The gate reads `blocking: true` on its own, so an advisory
+    entry cannot change an exit code in either direction (upstream #363).
 """
 import argparse
 import os
@@ -188,7 +193,8 @@ def main():
     parser.add_argument(
         "--update-baseline",
         action="store_true",
-        help="Write current blocking-check findings to the baseline file and exit 0.",
+        help="Write current findings (all checks, never coverage) to the baseline "
+             "file and exit 0.",
     )
     parser.add_argument(
         "--baseline-file",
@@ -271,10 +277,18 @@ def main():
     baseline_hits = 0
     new_blocking_hits = 0
     new_coverage_hits = 0  # blocking coverage findings (can't be baselined)
+    # Blocking checks whose findings are being suppressed. Since #363 a check can
+    # be baselined while advisory and promoted to `blocking: true` later, and the
+    # promotion is then inert for every pre-existing finding — `new blocking: 0`,
+    # exit 0. That is correct behaviour for an accepted finding and indefensible
+    # to leave silent: an armed-but-inert gate reads exactly like a clean scan.
+    blocking_suppressed = set()
     for check_id, file_line, msg in all_findings:
         if is_baseline_suppressed(check_id, file_line, blocking_ids, baseline):
             print(f"[baseline] {msg}")
             baseline_hits += 1
+            if check_id in blocking_ids:
+                blocking_suppressed.add(check_id)
         else:
             print(msg)
             if check_id in blocking_ids:
@@ -302,6 +316,16 @@ def main():
     # operation), so the never-completed signal is appended here to give it
     # real reach. Not added to --update-baseline: that path is a maintenance
     # snapshot, not a review round.
+    # Name the inert-gate case rather than leaving it to arithmetic the reader has
+    # to do (`baseline-matched: N` alone cannot say whether any of the N belonged
+    # to a blocking check). WORKFLOW.md § CI integration states the remedy.
+    if blocking_suppressed:
+        names = ", ".join(sorted(blocking_suppressed))
+        summary += (
+            f"\n   blocking suppressed: {names} — baselined finding(s) on a "
+            "`blocking: true` check; the gate covers new findings only. Drop those "
+            "lines from the baseline if the gate is meant to bite."
+        )
     note = _pending_rounds_note(repo_root)
     if note:
         summary += "\n" + note
@@ -448,17 +472,14 @@ def _run_update_baseline(repo_root, all_checks, baseline_file):
         )
         sys.exit(1)
 
-    write_baseline(baseline_file, all_findings, blocking_ids)
+    # The tally is what write_baseline reports it persisted, not a second
+    # copy of its filter. The hand-inlined copy that used to live here was
+    # already one edit away from disagreeing with it (upstream #363 changed
+    # the predicate; a duplicate would have kept printing the old number).
+    written = write_baseline(baseline_file, all_findings, blocking_ids)
     baseline_rel = baseline_file.replace(repo_root.rstrip("/") + "/", "")
-    # Count only what write_baseline actually persisted — coverage findings
-    # are never baselined (Phase 61b), so exclude them to keep the printed
-    # tally honest.
-    blocking_count = sum(
-        1 for cid, _, _ in all_findings
-        if cid in blocking_ids and not _is_coverage(cid)
-    )
     print(
-        f"Wrote {blocking_count} baseline finding(s) to {baseline_rel}",
+        f"Wrote {written} baseline finding(s) to {baseline_rel}",
         file=sys.stderr,
     )
     sys.exit(0)

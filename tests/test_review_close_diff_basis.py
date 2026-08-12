@@ -40,8 +40,9 @@ So the rules this file now follows:
    The premise tests (git's own range semantics) are kept, but they are labelled premise
    and are not counted as coverage of the deliverable.
 
-The mutation harness is committed at `tools/phase158_mutations.py` rather than left in a
-session scratchpad — during the round a sibling reviewer overwrote the scratch copy, and
+The mutation harness was committed at `tools/phase158_mutations.py` until Phase 187 promoted the shared
+harness to `tools/mutation_battery.py` and Phase 194 deleted the superseded one-offs. It stayed committed rather than living in a
+session scratchpad because — during the round a sibling reviewer overwrote the scratch copy, and
 an artefact that is the sole evidence for a headline claim should not be destroyable by a
 concurrent process. It also fails closed on a nominated test name that no longer exists,
 which is how the first version scored a false kill.

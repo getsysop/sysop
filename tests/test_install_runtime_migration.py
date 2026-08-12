@@ -1,7 +1,9 @@
 """Integration tests for install.sh's runtime-dir consolidation (Phase 133).
 
 The four gitignored runtime dirs move under one vendor-namespaced home on
---update (SYSOP_NAMESPACE_SPEC § 10, the deliberately-cut Phase 128 leg):
+--update. This was SYSOP_NAMESPACE_SPEC § 10, the leg Phase 128 deliberately cut
+and Phase 133 built; that spec was deleted as spent by Phase 194, and the leg is
+recorded closed at REVIEW_ARCHIVE.md § Resolved — Phase 133:
     .subagent-envelopes/ → sysop/runtime/subagent-envelopes/
     .auto-build/         → sysop/runtime/auto-build/
     .pending-docs/       → sysop/runtime/pending-docs/
