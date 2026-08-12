@@ -109,6 +109,22 @@ template**, which runs the full `run_checks` suite. You merge however you alread
 hooks ship as skeletons that block nothing on day one; they gain teeth exactly as fast as your
 project promotes mechanical rules.
 
+**Known limitation (open as of 2026-08-11): the semgrep stage silently skips test directories.**
+The pre-scan hands semgrep a directory, so semgrep's built-in default ignore list excludes
+every `tests/` and `test/` directory at any depth from the AST stage (in practice that swallows
+e2e specs living under such directories too) — and the omission is absent from the pre-scan's
+`paths.skipped` accounting, so a semgrep rule scoped to test files reports "executed,
+0 findings" over surface it never saw. Deterministic means repeatable, not complete: shipped checks have been caught blind
+to part of their declared subject before, which is why checks are maintained like code — with a
+demotion path for the ones caught misfiring. Until the durable fix lands (the obvious fix,
+enumerating targets explicitly, was built and withdrawn by its own review round after it proved
+worse than the defect), the workaround is an **empty `.semgrepignore` at your repo root**. It
+replaces semgrep's built-in ignore list wholesale, restoring test directories to the scan —
+and anything else on that list that isn't gitignored (committed `vendor/`, `node_modules/`,
+`dist/`, minified bundles) returns to the scan too, so re-add any of those you carry in the
+same file. Grep-based `checks.yml` rules are unaffected — prefer those for test-directory
+patterns in the meantime.
+
 ## If you send friction upstream, check where it lands first
 
 Loop mode ships two skills that file *outward*, to the Sysop repo rather than yours:

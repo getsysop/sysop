@@ -204,6 +204,17 @@ _BATCH_HEADER_RE = re.compile(
     r"^###\s+Batch\s+(?P<number>\d+)\s*[—\-]+\s*(?P<title>.+?)\s*`(?P<status>[^`]+)`\s*$"
 )
 
+# Permissive twin, used ONLY to notice a `### Batch <N>` line the strict pattern
+# above rejected, so the open batch can be closed. See the closer in
+# `parse_review_batches`. The same twin lives in `review_index.py` and
+# `sitrep_survey.py` — edit one, edit all three.
+#
+# This pattern is deliberately looser than the strict one in a second way: the
+# strict pattern tolerates an ASCII hyphen for the em-dash, so `\b` after the
+# number is the only boundary that catches every shape this file already
+# accepts plus the ones it does not.
+_BATCH_HEADER_ANY_RE = re.compile(r"^###\s+Batch\s+\d+\b")
+
 # Quoted metadata lines under a batch heading:
 #   > **Branch:** `branch-name`
 #   > **Scope:** `path` or prose
@@ -637,6 +648,25 @@ def parse_review_batches(text: str) -> list[dict[str, Any]]:
                 "open_count": 0,
             }
             continue
+
+        # ── A `### Batch <N>` line the strict pattern rejected ──
+        # It still closes the open batch, for the same reason the `## ` closer
+        # above exists: a heading ends the batch whether or not the parser could
+        # make sense of the heading. Without this the orphan fell through to the
+        # `_BATCH_FIELD_RE` matcher below and its `> **Branch:**`/`Scope:`/
+        # `Verify:` lines were read as the PREVIOUS batch's, and its task lines
+        # were counted into that batch's `tasks`/`open_count`/severity totals.
+        # Measured here: batch 7 came back carrying `review/batch-8`, `eight/`,
+        # `pytest eight` and 2 tasks.
+        #
+        # This one is the sharpest of the family because `/next-task` is the
+        # deterministic resolver — it would hand an operator batch 7 with batch
+        # 8's branch and verify command.
+        if _BATCH_HEADER_ANY_RE.match(line):
+            _flush()
+            current = None
+            continue
+
         if current is None:
             continue
 

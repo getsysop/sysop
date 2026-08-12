@@ -415,7 +415,13 @@ def test_prescribed_index_pass_runs_and_bounds_every_batch(tracker):
     for ln in lines:
         num, _, body = ln.partition(":")
         boundaries.append(int(num))
-        m = re.match(r"^### Batch (\d+) — .+ `([A-Za-z ]+)`$", body)
+        # `[^`]+`, matching the four shipped readers. Phase 191 retired the
+        # `[A-Za-z ]+` charset from every production parser and missed this
+        # test-side copy — in the file that pins those readers equal, which is
+        # where a stale copy is least affordable. Fail-loud rather than silent
+        # (the exact-set assert below catches a miss), but a hyphenated status
+        # in this fixture would fail here for the retired reason.
+        m = re.match(r"^### Batch (\d+) — .+ `([^`]+)`$", body)
         if m:
             headers[int(m.group(1))] = int(num)
 

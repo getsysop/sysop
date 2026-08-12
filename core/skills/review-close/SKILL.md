@@ -1016,7 +1016,17 @@ After all branches are merged but **before** pushing:
 
    **PROJECT_STATUS.md §6**: Generate a one-line entry: `<date>: [<ID(s)> Complete:] <summary>`. Pull IDs from `roadmap_ids` AND/OR `review_task_ids` — both kinds belong in the PROJECT_STATUS entry as provenance. Insert at the TOP of Section 6 "Recent Major Updates" (below the section header, above existing entries). Newest branch first.
 
-   **Rotation check**: if §6 has more than 8 entries after adding, rotate the oldest entries to `changelog.md` (under the appropriate date heading) until only 6 remain.
+   **Consolidation clause — a wide close writes ONE §6 entry, not one per branch.** Count the pending-docs this run is routing (the merged-only set from step 1b, the same `<N>` the commit subject carries). **If `<N>` is more than 4**, do not write the per-branch entries above. Write a single one-line entry instead — `<date>: <N> branches merged in one close: <batch or branch list> — per-branch detail in changelog.md` — and route **every** entry's detail to `changelog.md` as a bullet under today's date heading, whatever its `type`. Then §6 reads as one update, which is what a close of many branches is; a squash PR is one update however many branches it consolidated.
+
+   > **Why the cap is on the writer and not on the rotation.** The write above scales with branch count and the rotation below is a **constant**, so without this clause the two invert on exactly the shape `/auto-fix` and `/auto-judge` produce (upstream #364): with 6 pre-existing entries and 8 pending-docs, 6 + 8 = 14 rotates down to 6 — discarding all 6 pre-existing entries **and 2 of the 8 just written**, in the commit that wrote them.
+   >
+   > **The condition, derived rather than restated.** The run's entries are inserted newest-first, so rotation reaches them only after it has consumed every pre-existing entry: it removes `total − 6`, which exceeds `pre_existing` exactly when **`docs > 6`** — the retained count, not the trigger. So a run loses its own entries iff `pre_existing + docs > 8` **and `docs > 6`**. The filing (and this clause's first draft) said `docs > 2`, which over-claims on 22 of the 49 `(pre_existing, docs)` pairs up to 9 — every one of them in the "says it reproduces, does not" direction. The filing's worked example was right and its general rule was not.
+   >
+   > **What follows for the threshold, stated so it is not read as arithmetic.** Any cap of 6 or less closes the self-loss case completely, so **4 is not required by the defect** — it is chosen for the second reason option (b) was preferred at all: eight per-branch lines in "Recent Major Updates" is not a summary of anything, and a squash PR is one update however many branches it consolidated. That half is a judgement about readability, and it is the only reason the cap is 4 rather than 6. The invariant a test can hold is the one that matters: **the cap must never exceed the retained count**, or an entry this run wrote can be rotated out by this run.
+   >
+   > The rejected alternative was to make the rotation skip anything dated today: that grows §6 without bound on a day with several closes, and has no answer for a §6 in which every entry is from today.
+
+   **Rotation check**: if §6 has more than 8 entries after adding, rotate the oldest entries to `changelog.md` (under the appropriate date heading) until only 6 remain. **Report the count you rotated** in the Step 8 summary — a truncation nothing announces is how this step's scaling defect survived unnoticed.
 
    **changelog.md** (bugfix type only): Generate entry `- **<Short Title>**: <summary>`. Add under today's date heading (`### YYYY-MM-DD`). Create the heading if it doesn't exist (at the top, under the month heading).
 
@@ -1143,7 +1153,7 @@ After all branches are merged but **before** pushing:
    >
    > The same property is why the instinctive `git add <old-path> <new-path>` after a `git mv` does not help: the stale pre-rename pathspec aborts the invocation, so nothing is staged by it. It leaves the index exactly as it was — `git mv` had already staged both halves — which is the trap, because it *looks* like staging was attempted and the following `git commit` still succeeds on the unchanged index.
    >
-   > **Do not stage `changelog.md` from the routing table alone.** The **Rotation check** above writes it whenever §6 exceeds 8 entries, regardless of entry type — so a run with no bugfix at all can still have rotated entries into `changelog.md`, and skipping it there commits the §6 truncation without the entries it moved.
+   > **Do not stage `changelog.md` from the routing table alone.** Two steps above write it without the routing table's say-so, both regardless of entry type: the **Rotation check** writes it whenever §6 exceeds 8 entries, and the **Consolidation clause** writes every entry's detail there on a close of more than 4 branches. So a run with no bugfix at all can still have written `changelog.md`, and skipping it there commits the §6 truncation — or the consolidated §6 line — without the entries whose detail it points at.
 
    **Then verify the commit carried everything** — Step 4b has a trust-but-verify gate for exactly this failure class and Step 4c historically had none, which is what let a rename-only commit pass as a consolidation (upstream #203):
 
@@ -1431,7 +1441,8 @@ Friction:      <N entries appended to SYSOP_ISSUES.md> (or "none" / "log missing
 Signal:        <N [good] entries appended> (or "none")
 
 Documentation written:
-  ✓ PROJECT_STATUS.md §6: <N> new entries    (if any)
+  ✓ PROJECT_STATUS.md §6: <N> new entries, <N> rotated out    (if any; say "consolidated" when the
+                                                              consolidation clause wrote one entry for many)
   ✓ changelog.md:         <N> entries         (if any)
   ✓ tasks/index.yml:      <task IDs>          (if any — status flipped to done, body moved to archive/)
   ✓ UI_Iterations.md:     <N> rows            (if any)

@@ -1,7 +1,7 @@
 ---
 name: auto-judge
 description: Automatically process flagged review batches with Opus judgment — claims, fixes or drops via isolated Opus agents, then pushes
-argument-hint: "[concurrency] [--dry-run] [--merge]"
+argument-hint: "[concurrency] [--batches <selector>] [--dry-run] [--merge]"
 model: opus
 ---
 <!-- sysop:model-roles frontmatter=reasoning inline=reasoning -->
@@ -43,6 +43,8 @@ Parse `$ARGUMENTS`:
 - **Bare integer** (e.g., `2`) → concurrency cap. Default: **2** (Opus costs more than Sonnet — be conservative). Only affects the default path.
 - **`--dry-run`** → report without claiming or fixing. Stops after Step 3.
 - **`--merge`** → process only overlapping batches, sequentially. Concurrency cap ignored.
+- **`--batches <selector>`** → narrow this run to the named batches. The selector is comma-separated bare integers and inclusive `<lo>-<hi>` ranges: `--batches 563-584`, `--batches 563,570,580-584`. Applied at Step 1d — after the pool is selected and before Step 4's lane split — so it can only ever narrow what the pool already holds. Omitted, nothing is narrowed. **It is a flag rather than a bare argument on purpose:** a bare integer is already this skill's concurrency cap, so `/auto-judge 563` would set a 563-way cap, and nothing in the invocation would say which of the two was meant. That is the one thing `/auto-build`'s positional task-ID grammar (`auto-build:40`) cannot be copied on — its bare integer and its `^[A-Z]`-shaped IDs are structurally disjoint, and two integers are not.
+- **Resuming a killed run** is what the selector is mostly for. `--merge` is sequential and a rate-limit death mid-run leaves the batches it already claimed flipped to `In Progress`, so a bare re-invocation skips exactly the ones that need finishing. `/auto-judge --merge --batches <first-unfinished>-<last>` re-enters at the right place. **It does not recover the stranded batch itself:** the 1a pool requires `Pending`, and naming a batch never overrides that (1d), so an `In Progress` batch stays excluded — and is reported as such rather than silently skipped. Recovering it is a separate step, and **which command depends on whether the killed run had already finished any task**: `bash sysop/scripts/batch_work.sh --release <N>` removes the worktree and reverts the status, but it **exits 1 when the batch contains any `- [x]` task** — which is precisely what a run killed part-way through produces. The script states the boundary itself: *"`/review-close` owns a batch that has results; `--release` owns one that does not."* So route a batch with finished work through `/review-close` on its branch; use `--release <N>` for a batch claimed but not yet worked, and `--release --force <N>` only to abandon finished work deliberately. Then include the batch in the selector.
 
 ## Step 0.5: Triage Prerequisite
 
@@ -98,6 +100,24 @@ sed -n '<START>,<END>p' review_tasks.md
 
 If `review_tasks.md` is large (**~125KB** is the historical rule of thumb), print an advisory and **continue** — do not halt. `archive_review_tasks.py` selects what to relocate by **merge status**, not by size (`archive_review_tasks.py:100` matches only `Merged`/`Complete`; a Round moves whole only when every batch in it is merged, otherwise it relocates the merged batches individually), so it cannot shrink a tracker whose bulk is *open* work. Levers, in order: run this skill and `/auto-fix`, then `/review-close`; once batches are merged, run `python3 sysop/scripts/archive_review_tasks.py`.
 
+### 1d. Optional `--batches` narrowing
+
+When Step 0 collected a `--batches` selector, narrow the pool selected in 1a to it **by intersection**. Expand the selector first: comma-separated bare integers and inclusive `<lo>-<hi>` ranges. A range whose low bound exceeds its high bound is a malformed selector — stop and say so, rather than silently selecting nothing.
+
+**The selector narrows; it never overrides.** Every 1a rule still applies to a named batch: a status other than `Pending`, or the wrong side of the `Flag:` split, keeps it out however explicitly it was named. A selector can shrink the pool, never grow it.
+
+Then print this, and carry it into Step 3's output ahead of the classification table:
+
+```
+Selected:  <batch numbers this run will process>
+Excluded by --batches: <every pool batch the selector left out>
+Requested but not in the pool: <number> — <reason: status is `<Status>`, not Pending / no Flag: line (belongs to /auto-fix) / no such batch in review_tasks.md>
+```
+
+**Report what was excluded, not only what was selected.** A narrowed run and a full run otherwise print the same-shaped report, and the failure that costs is reading a 6-batch run as having cleared a 38-batch queue. A requested number that never reaches the pool is reported with its reason and is never silently dropped.
+
+If the intersection is empty, stop and print the requested numbers with the reason each was excluded — do **not** fall through to the "no batches" message below, which describes an empty queue rather than an empty selection, and would send the operator looking for work that is sitting right there.
+
 ## Step 2: Categorize Flags
 
 For each flagged batch, read the `Flag:` reason and assign a **category** used only to prime the agent prompt:
@@ -120,7 +140,7 @@ Print a classification table:
 | Batch | Title | Tasks | Judgment | Category | Overlap | Flag Reason |
 |-------|-------|-------|----------|----------|---------|-------------|
 | 421   | Backend Auth & Middleware | 10 | 2 of 10 | verification | none | TASK-2283/2285: judgment call on benign race; design choices... |
-| 424   | Backend Payments stripe_service | 8 | 3 of 8 | design-choice | 425 | TASK-2312/2313: alerting design; TASK-2314: when to validate... |
+| 424   | Backend Payments stripe_service | 8 | 3 of 8 | design-choice | batch-425 | TASK-2312/2313: alerting design; TASK-2314: when to validate... |
 | 427   | Backend SQL & Data Layer cache | 9 | 9 of 9 | investigation | none | TASK-2329: requires investigation of SET LOCAL pattern |
 
 <if no --merge>
@@ -164,15 +184,18 @@ For each flagged batch, check if its `Overlap:` tag was extracted in Step 1. If 
 1. Extract all `file:line` references from task lines
 2. Strip line numbers to get file paths
 3. Two batches overlap if they share any file path
-4. Assign computed overlap: `none` or list of batch numbers
+4. Assign computed overlap: `none` or a `batch-<N>` list in the declared grammar (`WORKFLOW.md` § Batch metadata fields)
 
 Store in memory — do not write back to `review_tasks.md`.
 
 ### 4b. Claim and Execute
 
-Determine eligible batches:
-- **Without `--merge`**: batches with `Overlap: none`
-- **With `--merge`**: batches with overlap (NOT `Overlap: none`)
+Determine eligible batches. **Test the value whole, never as a substring** (`WORKFLOW.md` § Batch metadata fields):
+
+- **Without `--merge`**: only batches whose `Overlap:` value, trimmed of surrounding whitespace, is **exactly** `none`.
+- **With `--merge`**: every other batch — anything that is not exactly `none`.
+
+**Anything you cannot parse counts as overlapping.** A value in an undeclared shape, a trailing comment, `none (batch 5 shares tests/)` — all of them are *overlapping*, because a substring match on `none` there would route a genuinely conflicting batch into the parallel lane. The asymmetry is deliberate: serialising a batch that could have run in parallel costs wall-clock; parallelising one that really overlaps costs a merge conflict and the rework behind it.
 
 To claim a batch:
 

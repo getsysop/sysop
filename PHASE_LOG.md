@@ -8,7 +8,7 @@ Each phase row in CLAUDE.md's `## Phase log` table links to a commit; `git show 
 
 ## Phases 1 through 25
 
-**Phases 1 + 2A–2K + 3 + 4 + 5 + 6 + 7 + 8 + 9 + 10 + 11 + 12 + 13 + 14 + 15 + 16 + 16.1 + 17 + 18 + 19 + 20 + 21 + 23a + 23b + 24a + 24b + 25 + 26 + 27 + 28 + 29 + 30 + 31 + 32 + 33 + 34 + 35 + 36 + 37 are done.** Sysop has its first real consumer (BeanRider, `~/Projects/BeanRider/`). Phase 5 (2026-05-12) cleaned up all three Phase 4 discoveries — fresh installs now produce 0 findings from `run_checks.sh`. Phase 6 (2026-05-12) closed the permissions-surface gap surfaced by BeanRider's first `/review-close` under `auto` mode: installer writes/merges `.claude/settings.json`, affected skills enforce a Step 0 / Pre-flight permission guard, documented canonically in WORKFLOW.md § 8.2a. Phase 7 (2026-05-12) shipped the update story for consumer projects: installer now writes `.claude/sysop.lock` (records Sysop commit + packs + managed paths), and three new modes (`--update`, `--adopt`, `--check`) let an existing install absorb upstream Sysop changes via a snapshot-then-overwrite contract. Phase 8 (2026-05-12) added a `--update` reconciliation safety net after BeanRider's first absorption silently overwrote 38 lines of committed project-specific sections: pre-overwrite divergence detection reconstructs OLD Sysop content via a temporary `git worktree` + shadow target, then warns per file with committed local edits; post-overwrite delta summary prints a `git diff HEAD --numstat` table flagging files with ≥ 5 deletions or any pre-overwrite divergence. Both signals documented canonically in WORKFLOW.md § 8.2b. Phase 9 (2026-05-12) applied the four BeanRider quick fixes filed during the Phase 6 + 8 absorption: ISSUE-0001 addendum (WORKFLOW.md § 8.2a now states `AskUserQuestion` does NOT satisfy the auto-mode classifier on protected-branch pushes; `/review-close` Step 4d directs agents to `! git push origin main` shell-escape); ISSUE-0002 (`/review-close` Step 3 verification is now discovery-driven, with a `## Pre-merge verification` row added to the WORKFLOW.md § 6.1 required-CLAUDE.md-sections table); ISSUE-0003 (Step 2b convention-check subagent discovers applicable subsections itself, replacing parent-side Frontend/Backend/Testing routing that broke on BeanRider's domain-specific subsection names); ISSUE-0004 (a) (`run_checks_impl.py:378` pyright install hint dropped the broken `requirements-dev.txt` pointer). Phase 10 (2026-05-12) shipped the plugin-path update doc deferred since Phase 7: README.md "Updating an existing install" now has a `#### Plugin path: how updates work` subsection clarifying that only `core/skills/` is plugin-delivered (pack plugins are dependency-marker only, with no `skills`/`commands`/`agents`/`hooks` payload — `companion/` content reaches consumers only through the bash installer), recommends enabling auto-update for the Sysop marketplace (off by default for third-party marketplaces), and provides reconciliation guidance for the hybrid plugin + bash-installer case. Phase 12 (2026-05-12) shipped the model-guard task filed 2026-05-12: new `core/skills/_shared/model-guard.md` reads the actually-served `message.model` from `~/.claude/projects/<encoded-cwd>/*.jsonl` rather than trusting the harness's drifted `Environment` block (Phase 10 surfacer). Wired in as `## Pre-flight: Model Guard` across seven skills — `/document-work` (replacing its old `Config`-tool Step 0), `/review-close`, `/auto-judge`, `/codebase-review`, `/security-audit`, `/plan-review`, plus `/claim-task` (which also gained `model: opus` frontmatter — Step 7's adversarial plan review needs Opus reasoning). Skipped `/next-task` (haiku is correct) and `/auto-review` (orchestration-only). WORKFLOW.md § 8.2a documents the guard inventory and the Phase 10 root-cause inline. Phase 11 (2026-05-12) applied the 15 review/2026-05-12 quick fixes spanning Phase 6–10: missing Pre-flight Permission Guards added to `/codebase-review` + `/security-audit`; `/review-close` Step 0 + WORKFLOW.md § 8.2a brought into sync (added `git worktree list` / `run_checks.sh` rules; `install_hooks.sh` row reframed as direct-invocation only; `--force-with-lease` added to `/auto-review` + `/auto-judge`); WORKFLOW.md § 8.2b `--force` step numbering corrected, `--adopt` `installed_at` semantic disclaimer added, `install.sh::reconstruct_old_install` now retries without `--no-arm-hooks` when the OLD installer rejects it (pre-Phase-5 anchor edge case); `/review-close` Step 3 gained doc-only-diff skip, `(cd <frontend>)` working-dir clarification, silent-deny `!`-shell-escape guidance, and sharpened Step 4d push-denied wording; README Status + "Updating" + "Plugin path" subsections refreshed; HANDOVER.md "What's complete" / §7 / §9 refreshed through Phase 10. Phase 13 (2026-05-13) shipped in-flow Sysop friction capture, closing BeanRider ISSUE-0006: `install.sh::seed_friction_log()` seeds `<target>/SYSOP_ISSUES.md` at consumer-repo root on fresh install only (NOT in `managed_paths` by design — non-management is the property that protects it from `--update`'s overwrite gap; skip-if-exists keeps hand-rolled versions like BeanRider's intact). `/review-close` gained Step 7: Friction Capture (renumbered current Step 7 → Step 8) that prompts the agent — append-only, never blocking — to log witnessed Sysop friction (silent-deny rejections, parent-side prompt rewrites, subagent confusion, `!`-shell-escape moments, install-step failures, missing-path references) before cycle close-out; witness-limited (this-session-only, no fabrication from git history or auto-memory). Canonical doc: WORKFLOW.md § 8.1 table gained the `SYSOP_ISSUES.md` row; § 8.2b gained a paragraph naming the seed-once-never-overwrite contract and citing the in-flow capture mechanism. Phase 14 (2026-05-13) shipped downstream update ergonomics — the consumer-side `--update` shim: new `core/companion/scripts/sysop-update.sh` (~60 lines) resolves the consumer root via `git rev-parse --show-toplevel` and the Sysop source via `$SYSOP_SRC` (env var set once in shell rc; absolute path, no `~`), then exec's `bash "$SYSOP_SRC/install.sh" "<consumer-root>" --update "$@"`. One project-root command (`bash scripts/sysop-update.sh`) replaces the multi-arg `bash <sysop-src>/install.sh <consumer-root> --update` form; all flags forward verbatim via `"$@"`. Phases 7/8's snapshot + divergence + delta safety net runs unchanged — the shim is purely an invocation-friction fix. Loud-failure precondition checks (unset env var, missing dir, missing `install.sh`, not a git working tree, run from outside a git tree) each emit a one-line actionable error and exit 1; no silent fallback to guessed paths. The shim is itself shipped via `install_companion_scripts()` and is therefore a managed path — improvements to the wrapper flow through the standard update channel. Open-question resolutions (recorded inline in the active-phase design contract): no helpful path-guessing fallback (`lean no` → confirmed: silent fallback to a guessed clone path would surprise users with multiple clones); `$SYSOP_SRC` must be a git working tree, not just a directory containing `install.sh` (`lean yes` → confirmed: `install.sh --update` resolves `sysop_commit` via git, so an unpacked tarball would fail downstream; surface as a precondition error in the shim with a clearer message); pass-through forwards everything via `"$@"` (`lean yes` → confirmed: transparent wrapper, future install.sh flags inherit automatically). Canonical doc: WORKFLOW.md § 8.2b gained a "Recommended invocation" paragraph naming the shim, a "Lower-level invocation" paragraph reframing the multi-arg form as an advanced escape hatch, and § 8.4 scripts table gained a `sysop-update.sh` row. README.md "Updating an existing install" leads with the shim + `bash scripts/sysop-update.sh` (with `--dry-run` / `--force` examples), the existing `bash install.sh --update` invocation moves to "lower-level" framing; the post-install bullet gained the `export SYSOP_SRC=/absolute/path/to/sysop` setup instruction. Phase 15 (2026-05-14) closed BeanRider ISSUE-0007 (hook-arming race): `install.sh::arm_git_hooks` now early-returns in `--update` mode (preserving Phase 5's fresh-install auto-arm, surgically closing the race window where the pipeline overwrote `scripts/hooks/*` with upstream skeletons and then armed the skeleton into `.git/hooks/` before the consumer could reconcile). New `check_armed_hooks_divergence` function runs in all modes after the install pipeline and prints a `── armed-hook divergence (ISSUE-0007 safety check) ──` block when `scripts/hooks/<base>` differs from `.git/hooks/<base>` (catches both the `--update` reconcile-window race AND fresh-install hand-edits to `.git/hooks/`). `--update` footer gained a "re-arm git hooks after reconciling scripts/hooks/" reminder. The sysop-update.sh shim needed no change — it `exec`s install.sh so the divergence warning is naturally part of the shim's output. Canonical doc: WORKFLOW.md § 8.2b's upgrade-flow step list renumbered to 11 (split step 6's note clarifying no-auto-arm + added step 10 for the divergence check); § 8.2b gained an "Armed-hook safety (Phase 15 / BeanRider ISSUE-0007)" paragraph; § 8.4 `install_hooks.sh` row updated. README.md Status + "Updating an existing install" reflect the new behavior. Phase 16 (2026-05-14) shipped the `product_roadmap.md` → `tasks/` hybrid system backport per [`PHASE_16_HANDOFF.md`](./PHASE_16_HANDOFF.md): new `core/companion/scripts/validate_tasks.py` (forward-compat versioning per Decision 2 — `MIN_SCHEMA_VERSION = 1` accepts `schema_version >= 1`, self-test gained a `forward-compat` fixture) and `backfill_completed_dates.py` (Decision 3 — generalized from gdp's hardcoded form with `--source-file` + `--id-pattern` flags); `install.sh::install_tasks_scaffold` creates the three-subdir shape (`open/`/`deferred/`/`archive/`, Decision 1 default), copies `schema.md` + `README.md` as managed paths, and writes a starter `index.yml` only if not already present (skip-if-exists, NOT in `managed_paths` — same protection property as `seed_friction_log` so `--update` never overwrites a consumer's hand-authored index). Skills rewritten: `/claim-task` (yaml-round-trip `status: open → in_progress`, body read from `tasks/open/<TASK_ID>.md`); `/review-close` (yaml-round-trip `status: done` + `completed_date`, `git mv` body open/→archive/, `validate_tasks.py` runs as final guard); `/document-work` (now points at `tasks/index.yml`; Step 3b's gdp-specific follow-up-stub check doesn't exist in Sysop's simpler skill — handoff overestimated this scope); `/next-task` (selection algo replaced — anchor on `current_focus: true`, filter status:open + user_action:false + null on_hold_until + all depends_on:done + no lock, sort by effort Low→Medium→High; prose-rubric fallback paragraphs deleted). WORKFLOW.md § 2.1/2.2/2.4/2.8/8.1 + WORKFLOW_GUIDE.md lines 17/37 updated. `packs/python/companion/{convention_map.md, checks.yml.fragment, security_map.md}` gained YAML-safe-load convention + paired `yaml-unsafe-load` check. New `core/companion/git-hooks/examples/pre-commit-tasks-validate.example` (drop-in B6 block resolving `<main-repo-root>/.venv/bin/python3` via `git rev-parse --git-common-dir` then falling back to system python3; pattern from `gdp@abcfe3d0`). Verification (handoff § 10) all green: validator `--self-test` exits 0 across three fixtures (valid, forward-compat `schema_version: 2`, bad); `grep -rn product_roadmap core/ install.sh` returns only intentional historical cross-references; fresh install produces a `tasks/` tree that validates clean; `--update` correctly skips a modified `index.yml`. Out of scope (deferred): `/promote-task` slash command, migration of Sysop's own `REVIEW_CHECKLIST.md` (different shape — narrative + review batches, not feature roadmap). First real consumer: BeanRider's `product_roadmap.md` — migration deferred to a follow-up session. Phase 16.1 (2026-05-14) closed the missing-allow-rules gap surfaced when prepping BeanRider's absorption of Phase 15 + 16: `core/companion/.claude/settings.json` gained four rules (`Bash(python3 -c:*)`, `Bash(python3 -:*)`, `Bash(python3 scripts/validate_tasks.py)`, `Bash(python3 scripts/validate_tasks.py:*)`) covering the heredoc'd `yaml.safe_load`/`safe_dump` round-trips that `/claim-task` Step 2 + Step 4 and `/review-close` Step 4c added in Phase 16, plus the final-guard validator invocation in `/review-close` Step 4c. Both skills' Pre-flight Permission Guards (Phase 6) gained matching check-list entries — without 16.1, the guards would have passed (stale check-list) and then the python3 invocation would have silently halted mid-skill under `auto` mode (the exact failure mode Phase 6 was built to prevent). Verified via scratch repo: fresh install ships the new rules; `--update` against a consumer with a custom rule preserves the custom rule AND adds the four new ones (set-union merge from Phase 6 works as designed). Phase 17 (2026-05-14) ported gdp's `gdp@5abf1c95` "Step 3a: Lint + Pyright Ratchet" into `/review-close` in a project-supplied, framework-agnostic shape: `<project>/CLAUDE.md § "Pre-merge verification"` now supports two sub-headings — `### Always` (full-tree bulleted commands run unconditionally) and `### Ratchet (changed files only)` (single bash code block of project-supplied shell snippets that filter `git diff --name-only origin/main...HEAD` to their file types and invoke lint/typecheck against changed files only; empty filtered list short-circuits and passes). The flat-list form (Phase 9 / ISSUE-0002 shape) remains valid as `### Always`-only — backward compatible for projects without lint/typecheck. Boy-scout escalation surfaces naturally as a consequence of project-side tool behavior on touched files with pre-existing findings, with full-tree backlog cleanups tracked as separate project-side tasks (`TECH-LINT-BACKLOG-FIX` / `TECH-TYPECHECK-BACKLOG-FIX` in `tasks/index.yml`) so the ratchet doesn't force clean-everything-first. Three doc edits: `/review-close` Step 3 discovery resolution + new boy-scout paragraph; WORKFLOW.md § 6.1 template gained the split-sub-headings form with python (pyflakes) + typescript (eslint under `<frontend>/`) snippet examples alongside the existing flat-list form; WORKFLOW_GUIDE.md gained a new `## Pre-merge Verification Structure` H2 for consumer-side authors (between "Merge Process" and "Adapting for Mobile Development"). No installer change (purely a `/review-close` × `<project>/CLAUDE.md` contract). First consumer: BeanRider, deferred — its current `bean-check` belongs under `### Always`, and changed-files lint adopts in once parser code lands (FEAT-0002 onward). Pack content (including the placeholder `sysop-mcp-server`) grows via review-and-promotion from BeanRider use. Phase 18 (2026-05-14) closed BeanRider ISSUE-0009 (Step 4c heredoc prefix mismatch — silently no-op'd the `git mv` on indexes that stored `body: tasks/open/<TASK_ID>.md` rather than the schema-canonical `body: open/<TASK_ID>.md`, leaving the index half-migrated as `status: done` with body still under `tasks/open/` while the validator's body-existence check reported `OK`). Three coordinated edits: (1) `/review-close` Step 4c heredoc replaced the `startswith('open/')` rename gate with a prefix-agnostic segment-based walk that locates an `open` or `deferred` segment, swaps it for `archive`, and emits `src`/`dst` with `tasks/` prepended only when not already present — handles both canonical (`open/X.md`) and BeanRider-shape (`tasks/open/X.md`) bodies and generalizes to tasks that complete from `status: deferred`. (2) `validate_tasks.py::_check_status_consistency` gained a status-vs-directory invariant for `status: done` with `body:` — rejects any body path containing an `open/` or `deferred/` segment, converting the silent half-migration into a hard final-guard validator failure; new `_build_drifted_status_fixture` + self-test branch asserts the check fires. Accepts bodies under `archive/` (canonical for `done`) and at the root of `tasks/` (flat-layout consumers). (3) `core/companion/tasks/schema.md` `body:` row gained an explicit canonical example (`open/FEAT-0001.md` NOT `tasks/open/FEAT-0001.md`) with a note that the validator + Step 4c also accept the `tasks/`-prefixed shape; "Directory convention" paragraph replaced "(validator-unenforced)" with "(validator-enforced for `done` since ISSUE-0009)" + Invariant 10's bullet list now mentions the new check inline. Smoke-tested: `--self-test` exits 0 across all four fixtures (valid / forward-compat / bad / drifted-status); the segment-based rename logic verified against seven body-shape cases (canonical, `tasks/`-prefixed, both `deferred/` variants, already-migrated `archive/`, flat-layout `tasks/X.md`, empty body) — all produce the expected `src`/`dst`/`new_body` tuples or correctly skip. Heredoc form retained (no new script-side allow-rule needed); first end-to-end exercise on BeanRider's next `/review-close` cycle. Phase 19 (2026-05-14) shipped per [`PHASE_19_HANDOFF.md`](./PHASE_19_HANDOFF.md): added the `blast_radius` field to `tasks/index.yml` as a four-value scoped enum (`single-file` / `single-module` / `cross-module` / `architectural`) capturing surface area independent of `effort` (effort = how much work; blast_radius = how much surrounding code gets pulled in). Forward-compat follows Phase 16's pattern — optional at `schema_version: 1`, required at `schema_version: 2` on `status in {open, in_progress}` only (mirrors `effort:`'s required-status set; legacy `done` and `deferred` tasks may omit it without error, same accommodation Phase 16 made for `completed_date`). When present at any status/version, enum membership is enforced — catches typos. `validate_tasks.py` gained `BLAST_RADIUS_VALUES` + `BLAST_RADIUS_REQUIRED_FROM_VERSION` constants, a new `_check_blast_radius` function threaded into the per-task loop, and four new self-test fixtures (`_build_blast_radius_v1_optional_fixture`, `_build_blast_radius_v2_required_fixture`, `_build_blast_radius_v2_missing_fixture`, `_build_blast_radius_bad_value_fixture`); existing valid + forward-compat fixtures gained `blast_radius:` lines on their open tasks so they pass at v2. `install.sh::install_tasks_scaffold`'s starter `index.yml` heredoc gained a commented-out example task showing the full field set (including `blast_radius:`), with a paired comment explaining the v1 → v2 opt-in path. `tasks/schema.md` gained a new "### Blast radius" section with value definitions + the v1-optional / v2-required contract; the existing "## Versioning" section gained a per-version table making the v1 vs v2 differences explicit. WORKFLOW.md § 8.1 task-system row + § 2.1 `/next-task` paragraph updated to mention `blast_radius` alongside `effort` (selection ordering keeps `effort:` as primary sort for now — a secondary sort on `blast_radius` is candidate for a future Phase 19.x once a consumer populates v2 widely enough). WORKFLOW_GUIDE.md Step 1 prose mentions the new field briefly. Verification all green: validator `--self-test` exits 0 across all 8 fixtures (valid / forward-compat / bad / drifted-status / 4 new blast_radius fixtures); fresh install produces a `tasks/index.yml` that validates clean and includes the documented `blast_radius:` example in the comment block; the three v1→v2 scenarios (`schema_version: 1` without blast_radius passes; bumping to v2 without backfill fails with clear per-entry message naming the missing field; adding `blast_radius:` lets the v2 index pass) all behave as designed; `grep -rn blast_radius core/ install.sh` lands in exactly five expected files and nothing else. No starter-index `schema_version` bump (stays at 1) — a future phase can flip the default once `blast_radius` is established practice. Out of scope (deferred): backfill helper script for consumers (no source of truth to scrape — author judgment), `/next-task` secondary-sort behavior, `/review-close` batch-complexity hints. First downstream consumer: BeanRider, which absorbs Phase 19 via `bash scripts/sysop-update.sh`, backfills `blast_radius` on its `index.yml` tasks, and bumps its own `schema_version: 1 → 2` before the parallel-orchestrator skill build per [`BEANRIDER_PARALLEL_ORCHESTRATOR_HANDOFF.md`](./BEANRIDER_PARALLEL_ORCHESTRATOR_HANDOFF.md). Phase 20 (2026-05-14) closed the model-guard structural bug. The false halt was observed in BeanRider (Sysop's downstream consumer) and reported independently in gdp-query-system, the extraction source — gdp predates Sysop's plugin shape and carries its own derivative copy of the prose-algorithm guard, so the same root cause manifests there; the Sysop Phase 20 fix lands in BeanRider via `bash scripts/sysop-update.sh`, but gdp-query-system is NOT a Sysop consumer and absorbs nothing through that channel — porting the fix back into gdp (if desired) is a separate manual task. Concrete symptom: `/claim-task` (and other Opus skills) emitted `❌ Model Mismatch — currently served by claude-haiku-4-5-20251001` despite `/status` and the underlying transcript both showing the session was on Opus. Root cause: Phase 12's guard was a prose algorithm telling Claude to "find the most-recent jsonl, read the last assistant entry, match the model" — Claude was reading `_shared/model-guard.md` and then jumping straight to the mismatch output without ever running the bash, hallucinating a Haiku model ID from conversational memory of an earlier Haiku turn (or from the model-ID format strings present in the system prompt). The prose-algorithm shape was structurally indistinguishable from the Environment-block-consultation shape it replaced — both relied on Claude faithfully consulting a specific in-context signal, and Claude is unreliable at that. Fix: new `core/companion/scripts/model_guard.sh` (~70 lines bash + embedded python) reads `$HOME/.claude/projects/$(printf '%s' "$PWD" | tr '/' '-')/`, finds the most-recent `*.jsonl`, walks the last N (default 3) `type=="assistant"` entries' `message.model` values, and prints exactly one line on stdout: `PROCEED` (any of the last N matches the pattern), `MISMATCH:<model>` (none match; `<model>` is the most-recent observed, used verbatim by the skill), or `SKIP:<reason>` (no transcripts dir / no jsonl / read error). Exits 0 in every case — caller branches on stdout, not exit status, so a misconfigured environment never silently halts a skill. `_shared/model-guard.md` rewritten as a directive: skills must run the Bash call as their first action, the script's stdout is the ONLY signal they may act on, and Claude is explicitly forbidden from consulting the Environment block, `/status`, the skill's own frontmatter, or its self-model. All 7 calling skills updated to the new shape: `/claim-task`, `/document-work`, `/plan-review`, `/review-close`, `/codebase-review`, `/security-audit`, `/auto-judge` — each substitutes its own slash command name + per-skill `Why:` reason; the Bash invocation and branching logic are identical. Each skill's Permission Guard checklist gained the `Bash(bash scripts/model_guard.sh:*)` rule, and the canonical `core/companion/.claude/settings.json` template ships the allow-rule (Phase 6's set-union merge ensures it lands in existing consumer settings on `--update`). The multi-turn lookback (N=3) also closes the secondary by-one-turn-staleness window from Phase 12's design (Claude can `/model opus` and immediately invoke a skill without false-halting on the stale prior-model turn). Verification: smoke-tested in the current Opus session (`PROCEED`), against BeanRider's transcript with opus pattern (`PROCEED` — if the skill had actually run the script, the original BeanRider halt would NOT have fired), against haiku pattern (`MISMATCH:claude-opus-4-7`), and from `/tmp` with no transcripts (`SKIP:no-transcripts-dir`). WORKFLOW.md § 8.2a model-guard paragraph rewritten to describe the script-based mechanism + root-cause inline; § 8.4 scripts table gained a `model_guard.sh` row; `_shared/model-guard.md` § History section names Phase 12 + Phase 20 inline so future readers see the evolution. Phase 21 (2026-05-14) removed the model-guard system entirely after the Phase 20 script's structural race surfaced again on gdp-query-system: the harness flushes the current assistant turn's `message.model` to the `.jsonl` AFTER the tool subprocess returns, so `bash scripts/model_guard.sh` can only ever observe PRIOR assistant turns. When a session ran a `model: haiku` skill (e.g., `/next-task`) and then immediately invoked a `model: opus` skill (e.g., `/claim-task`), the guard's N=3 lookback saw three haiku turns from the prior skill and emitted `MISMATCH:claude-haiku-4-5-20251001` — even though the current `/claim-task` invocation was already running on Opus (the harness honored its frontmatter, confirmed by the very same `.jsonl` once the assistant turn flushed: `model=claude-opus-4-7, attributionSkill=claim-task` on the bash-invoking turn itself). The underlying problem Phase 12 was built to catch — "the harness ignores skill frontmatter and serves the session model" — no longer holds in current Claude Code versions (2.1.141): the same transcript showed both `/next-task` correctly routed to Haiku per its `model: haiku` frontmatter AND `/claim-task` correctly routed to Opus per its `model: opus` frontmatter, in the same session, back-to-back, with no user intervention. The guard was checking an indirect, race-prone signal for a problem that had been silently fixed at the harness layer. Removed: `core/companion/scripts/model_guard.sh`, `core/skills/_shared/model-guard.md`, the `Bash(bash scripts/model_guard.sh:*)` allow-rule from `core/companion/.claude/settings.json`, and the `## Pre-flight: Model Guard` section + Permission Guard checklist row from all 7 calling skills (`/claim-task`, `/document-work`, `/plan-review`, `/review-close`, `/codebase-review`, `/security-audit`, `/auto-judge`). WORKFLOW.md § 8.2a's model-guard paragraph rewritten as a one-paragraph note: skill model routing is delegated to the harness via frontmatter; Phase 21 removed the verification layer because the verification couldn't observe the current turn (race) and the original failure mode (harness ignoring frontmatter) no longer occurs; if a future Claude Code version regresses, the symptom will surface in skill-output quality and a check can be re-introduced then. § 8.4 scripts table dropped the `model_guard.sh` row. The derivative copy in gdp-query-system (`scripts/model_guard.sh`, `.claude/skills/_shared/model-guard.md`, and the 7 skills' Pre-flight sections) is unchanged — gdp is not a Sysop consumer; removing the guard there is a separate manual task in a gdp session. Consumers (BeanRider) absorb Phase 21 via `bash scripts/sysop-update.sh` — set-union merge on settings.json removes nothing (the deleted allow-rule line is benign if it lingers in a consumer's settings.json; the script it referenced just no longer exists), and the skill files are managed paths so the Pre-flight: Model Guard sections delete cleanly. Phase 23a (2026-05-15, commit `c041d3f`) renamed `/document-work`'s pending-doc frontmatter field `task_ids:` → `roadmap_ids:` (consumed by `/review-close` Step 4c's `tasks/index.yml` round-trip) + `review_task_ids:` (documentary-only — review-queue task IDs that live in `review_tasks.md`; their actual closure happens in Step 4b via `bash scripts/close_batch.sh`), closing BeanRider ISSUE-0022. Either namespace may be `[]`; both may be populated for cross-cutting work. The old single-namespace field silently no-op'd review-task IDs in Step 4c's heredoc because they didn't match any roadmap entry — failure was invisible. `/review-close` Step 4c routing-table column relabeled "Roadmap (`roadmap_ids`)"; the heredoc reads `roadmap_ids` only; PROJECT_STATUS entries pull from both namespaces (provenance). One-cycle compat shim documented in Step 4c step 3 as a prose block (not heredoc code): `roadmap_ids = pending.get('roadmap_ids') or pending.get('task_ids') or []` with an explicit removal trigger ("any subsequent phase that touches Step 4c, once BeanRider has run one /review-close cycle on a post-23a-absorption pending-doc"). No schema change in `tasks/index.yml` — the rename lives entirely in the pending-doc handoff format. Phase 23b (2026-05-15) hardened `/review-close` against four step-level papercuts surfaced during BeanRider's 2026-05-15 cycle (Round 3 archive rotation + 4 batches + venv-cold-shell + post-rebase cleanup), closing ISSUE-0018 / -0019 / -0020 / -0021. **ISSUE-0021** (Step 6 cleanup order): swapped — delete remote first (`git push origin --delete`) so `git branch -d` no longer refuses on the rebased branch's diverged upstream; explicit no-`-D` rule (safe-delete refusal is correct given the upstream check; the fix is to drop the upstream first). **ISSUE-0020** (Step 4a rebase-conflict disclaimer wrong): prose rewritten to acknowledge that batch checkbox flips DO modify `review_tasks.md` and that structural conflicts arise after archive rotations or sibling-batch additions; new Step 1c "drain archive state" warning detects pre-archive feature branches via **file-based** archive-touch detection (`git diff --name-only $base..main` matched against `(^|/)review_tasks_archive\.md$`, configurable via consumer's CLAUDE.md § Key Files) rather than the handoff-spec'd grep-on-commit-subject (the file-based signal is project-convention-agnostic). Soft warning, not a hard gate — consistent with the rest of `/review-close`. **ISSUE-0019** (Step 1b commit invariant): detect-then-commit branch added — single-file commit remains the default; archive-rotation commit shape kicks in when a sibling archive file is dirty/untracked AND `review_tasks.md` has **net deletions** (`DELETED > ADDED` from `git diff --numstat`), a concrete numeric rule replacing the handoff's fuzzy "diff dominated by deletions" prose. In-place rotations (no sibling file) fall through to the single-file path. **ISSUE-0018** (venv-cold-shell): WORKFLOW.md § 6.1 (Pre-merge verification template) gained a "Venv-aware invocation" paragraph applying to both `### Always` and `### Ratchet` forms, recommending consumers express verification commands as `.venv/bin/<tool>`; Step 4d silent-deny escape hatch grew a venv-prefix hint (`! PATH=.venv/bin:$PATH git push origin main`) covering both the main push and Step 6's `git push origin --delete` cleanup. WORKFLOW.md § 2.8 step 1 updated to name the new Step 1b/1c shape; WORKFLOW_GUIDE.md gained a "Venv-aware invocation" paragraph in the Pre-merge Verification Structure section and a new "## Recent /review-close Hardening" section summarizing all five papercuts for consumer-side authors. No installer change, no new scripts, no new permission rules, no schema bump. First downstream consumer: BeanRider, absorbs both 23a + 23b in one `bash scripts/sysop-update.sh` run. Phase 24a (2026-05-18) added consumer-authored `*.project.<ext>` suffix files for the three concat-style managed configs, closing BeanRider ISSUE-0023 (≡ ISSUE-0010 Option 3). `install.sh::concat_files` now checks the `SYSOP_PROJECT_SUFFIXES` lookup for a sibling suffix file after writing the regenerated upstream + pack body; if present, appends it (for `convention_map.md` and `security_map.md` — plain text-append with a blank-line separator) or merges it by `checks[*].id` (for `checks.yml` — via a `pick_python_with_yaml`-selected python3 heredoc). Consumer wins on id-collision with a `⚠ id-collision: <id>` warn line. The common (no-collision) `checks.yml` case is a header-strip + text-append — preserves comments and formatting in both files so the post-update diff stays signal-only; only the collision case round-trips via pyyaml (upstream comments lost on collision, surfaced explicitly). The suffix files (`.claude/convention_map.project.md`, `.claude/security_map.project.md`, `.claude/checks.project.yml`) live in the consumer's repo, are committed normally, and are explicitly NOT in `MANAGED_PATHS` — `--update` never touches them. Same protection property as `tasks/index.yml` (Phase 16) and `SYSOP_ISSUES.md` (Phase 13). New helper `pick_python_with_yaml()` picks a python3 that can `import yaml` — tries `<target>/.venv/bin/python3`, then `<target>/venv/bin/python3`, then `python3` on PATH; if none can AND a `.claude/checks.project.yml` exists, install aborts with an actionable error pointing at `python3 -m venv .venv && .venv/bin/pip install pyyaml`. Markdown suffix files have no pyyaml dependency. Dry-run announces would-be appends/merges. Malformed YAML in a suffix file is a hard install abort. Three new file-purposes rows in WORKFLOW.md § 8.2; new § 8.2c subsection; § 6.1 paragraph routing project-specific map content to the suffix files (vs CLAUDE.md prose); worked example in README.md "Updating an existing install" section; one paragraph in WORKFLOW_GUIDE.md "Convention maps". No installer flag added (suffix presence is the trigger); no schema change; no new permission rules (`Bash(python3 -:*)` from Phase 16.1 already covers the heredoc'd merger). Phase 24b (2026-05-18) extended Phase 8's pre-overwrite divergence detection from "warn about consumer modifications" to "warn AND skip overwrite when the target differs from the Sysop-shipped ancestor — scoped to `scripts/*` and `scripts/hooks/*`," closing BeanRider ISSUE-0024 + ISSUE-0025 (ISSUE-0024 ⊂ ISSUE-0005 Option 2 — left explicitly Open after Phase 8 shipped Option 1). The hook point is `install.sh::copy_file` (install.sh:384, the universal one-to-one file write); a scope filter `_phase_24b_in_scope()` limits preservation to depth-1 `scripts/` and depth-2 `scripts/hooks/` — skills, workflow docs, semgrep rules, and tasks-scaffold templates are explicitly out of scope (per Decision 9, to avoid creating a silent prompt-fork channel that would accumulate divergence from upstream improvements indefinitely; project-specific guidance for those classes belongs in CLAUDE.md sections or pack-level extensions). Concat files are also out of scope because 24a's suffix-file mechanism is the right shape for them. The shadow target Phase 8 already builds via `reconstruct_old_install()` is hoisted from the pre-overwrite block to a module-scope `DIVERGENCE_SHADOW` global with `trap` cleanup, so `copy_file` can per-file-diff during the pipeline. New `--accept-upstream <relpath>` and `--accept-upstream-list <file>` flags (both repeatable, both forward through `sysop-update.sh`'s `"$@"` pass-through from Phase 14) explicitly override preservation. Two-pass workflow documented: first run reports preserved paths; agent inspects upstream-vs-consumer diff; optional second run with `--accept-upstream*` flags for the subset to overwrite. `report_post_overwrite_deltas` gains two preceding blocks before the existing `numstat` table: a "preserved managed paths (Phase 24b)" block listing every path in `PRESERVED_PATHS` with the override hint, and a "stale --accept-upstream entries (Phase 24b)" block listing flag entries that didn't match a preserved path (so stale list-file entries don't accumulate silently). Fail-closed posture on `reconstruct_old_install` failure: `--update` non-`--force` aborts with a multi-line error naming `git fetch` / `--force` / `--accept-upstream` as the three escape hatches (stricter than Phase 8's warn-and-proceed, since proceed-on-failure was the failure mode that motivated this issue). `--dry-run` short-circuit at the pre-overwrite divergence block lifted (Decision 11) so the plan output shows would-be-preserved paths before commitment; the shadow-build is read-only and the only true write (snapshot commit) is already DRY_RUN-guarded. Phase 15's `scripts/hooks/<base>` template overwrite gap is closed by the same mechanism — consumer-customized hook bodies now survive `--update` automatically (Phase 15's `.git/hooks/<base>` auto-arm-skip protection still applies on top). No new scripts; no new permission rules; no schema bump. Verified on a scratch repo: scripts/* + scripts/hooks/* preservation, out-of-scope skill overwrite, `--accept-upstream` override, `--accept-upstream-list` with blanks/comments/stale entries, fail-closed exit 1 with `--force` escape, dry-run preservation plan without writes. First downstream consumer: BeanRider, which (after absorbing Phase 24a + 24b together via `bash scripts/sysop-update.sh` and authoring three `*.project.<ext>` suffix files in a pre-absorption commit per PHASE_24_HANDOFF.md § 10 step 17) stops needing the manual reconciliation commit that followed every prior absorption. Phase 25 (2026-05-18) closed BeanRider ISSUE-0026 — the residual gap Phase 24a deferred. Pack `checks.yml.fragment` files ship `paths:` lists with placeholder tokens (`<api module>/`, `<scripts dir>/`, `<datajobs dir>/`, `<data seed dir>/`, `<tests dir>/`, `<frontend>/`, etc.) that name the project layout abstractly so packs stay framework-agnostic. Without substitution, `run_checks_impl.py:164-170` silently returns empty when a check's `paths:` entries don't resolve on disk — consumer's `.claude/checks.yml` reports `0 finding(s)` clean by accident, not by validation. Phase 24a's suffix-file mechanism handled additive cases (new sections / new checks) and full-replacement collisions, but had no shape for "concretize this placeholder inside an upstream check." Phase 25 adds a fourth consumer-authored suffix file — `.claude/substitutions.project.yml` — with a top-level `substitutions:` map of `"<token>": "value"` pairs. `install.sh::concat_files` applies the substitution to the regenerated upstream body AFTER concat finishes and BEFORE the Phase 24a suffix file is appended/merged — substitution is bounded to upstream-shipped text, consumer suffix content stays byte-faithful. Literal string replacement (`.count()` + `.replace()`), not regex. New helpers `_load_substitution_keys()` (lazy-load once, pre-zero per-token counts, hard-abort on missing pyyaml or malformed YAML) + `apply_substitutions()` (per-dst substitution + per-token tally) + `report_stale_substitutions()` (post-run report of keys that didn't match anywhere — typo catcher for `<api modules>` vs `<api module>`, mirrors Phase 24b's "stale --accept-upstream entries" reporting pattern). Dry-run announces would-substitute per concat dst + runs the stale check so typos surface before commitment. Scope is the three concat-style configs only — skills, workflow docs, semgrep rules, and scripts are explicitly out of scope (their placeholder vocabulary is deliberately abstract; substituting in skill prose would silently fork prompts per consumer — the same anti-pattern Phase 24b's scope filter avoids for code-shaped managed paths). pyyaml dependency reused from Phase 24a (`pick_python_with_yaml()`); same actionable abort error when missing. The substitutions file is NOT in `MANAGED_PATHS` — same protection as Phase 24a suffix files, `tasks/index.yml` (Phase 16), and `SYSOP_ISSUES.md` (Phase 13). Verified on a scratch repo: fresh install + substitutions file substitutes 13/6/50 tokens across convention_map.md/security_map.md/checks.yml; consumer's `.claude/checks.project.yml` content with a literal `<api module>` in `paths:` survives byte-faithfully (substitution is bounded to upstream); intentional typo `<api modules>` fires the stale-token report; `--dry-run` announces and reports correctly; malformed YAML in the substitutions file is a hard abort with python traceback + a Sysop follow-up line. Resolves the long-deferred "Filed Phase 3 — Installer placeholder substitution" REVIEW_CHECKLIST item (shape differs from that entry's `--substitutions key=val,...` flag proposal — file-based instead, fits Phase 24a's `*.project.<ext>` vocabulary, no installer-state lock-file additions). Canonical doc: WORKFLOW.md § 8.2c gained a "Phase 25 — placeholder substitution" subsection; README.md "Updating an existing install" gained a "Phase 25 — placeholder substitution" subsection between the Phase 24a and Phase 24b blocks; README's stale "Placeholder vocabulary is currently left intact" paragraph rewritten to point at the new mechanism; WORKFLOW_GUIDE.md "Project-specific extensions" paragraph gained a Phase 25 sentence. No installer flag (file presence is the trigger); no schema change; no new permission rules (`Bash(python3 -:*)` from Phase 16.1 already covers the heredoc'd python invocation). Phase 27 (2026-05-21) ported gdp's `/document-work` Step 3b follow-up-stub HARD-FAIL gate (gdp `13b6402c` Phase 16 migration), closing the Filed-2026-05-20 Medium-priority entry. New `## Step 3b: Follow-up Task Stub Check (HARD FAIL)` section between current Step 3 and Step 4 in `core/skills/document-work/SKILL.md`. **Algorithm:** (1) discover the prefix vocabulary dynamically from `tasks[].id` in `tasks/index.yml` (collect leading `^[A-Z][A-Z0-9]*` segment — no hardcoded prefix list anywhere in Sysop, resolving the handoff's token-regex judgment call in favor of dynamic over a `task_id_prefixes:` top-level field); (2) scan the pending-docs body for `\b(?:<discovered prefixes>)-[A-Z0-9][A-Z0-9-]+\b`; (3) bypass set = frontmatter `roadmap_ids:` (Phase 23a name) + frontmatter `whitelist:` + per-parent-task `whitelist:` in `tasks/index.yml`; (4) HARD FAIL with line numbers for tokens not in `tasks[].id` ∪ bypass. **Skip conditions:** no `tasks/index.yml` → `skipped` exit 0; empty `tasks:` list → `0 task IDs named (no prefixes)` exit 0. **Known limitation documented inline:** a token with a prefix NOT yet in the index slips through unchecked — fundamental to framework-agnostic design; once one task with that prefix is filed every future mention is gated. **`whitelist:` field already existed** in schema.md (line 60 + Invariant 6) and validate_tasks.py (line 328) from Phase 16 — the handoff's Scope item naming a validator allow-list update was stale carryover, verified by inspection before the change; no schema or validator edit needed. **Doc edits:** WORKFLOW.md § 8.1 task-system row mentions `whitelist:` + Phase 27 enforcement; § 8.2a permission-rules table row + "A note on `Bash(python3 -:*)`" paragraph extended to name `/document-work` Step 3b as a third caller alongside `/claim-task` and `/review-close`. **Permission Guard:** `/document-work`'s Pre-flight Permission Guard required-rule list gained `Bash(python3 -:*)` (Phase 16.1 ships the rule already; only the guard's checklist drifted). **Smoke-tested on `/tmp/wf-step3b-test`** across 5 fixtures using `~/Projects/gdp-query-system/.venv/bin/python3` (system python3 lacks pyyaml — exercises the venv-resolution edge case noted in the Low-priority pre-commit-hook item): (1) no `tasks/index.yml` → `skipped` exit 0; (2) empty `tasks:` list → `0 task IDs named (no prefixes)` exit 0; (3) one known token + a `TASK-9999` review-task ID correctly NOT scanned (TASK not in discovered prefixes) → `1 task IDs named, all resolved` exit 0; (4) unfiled `TECH-NEW-UNFILED` → HARD FAIL with line number, exit 1 (and `BUG-MISSING-PIECE` correctly silently passed since `BUG` isn't a discovered prefix — exercises the known-limitation case); (5) frontmatter `whitelist: [TECH-EXTERNAL-XYZ]` + parent task `whitelist: [BATCH-42]` both correctly bypass tokens. No installer change, no schema bump, no new permission rules.
+**Phases 1 + 2A–2K + 3 + 4 + 5 + 6 + 7 + 8 + 9 + 10 + 11 + 12 + 13 + 14 + 15 + 16 + 16.1 + 17 + 18 + 19 + 20 + 21 + 23a + 23b + 24a + 24b + 25 + 26 + 27 + 28 + 29 + 30 + 31 + 32 + 33 + 34 + 35 + 36 + 37 are done.** Sysop has its first real consumer (BeanRider, `~/Projects/BeanRider/`). Phase 5 (2026-05-12) cleaned up all three Phase 4 discoveries — fresh installs now produce 0 findings from `run_checks.sh`. Phase 6 (2026-05-12) closed the permissions-surface gap surfaced by BeanRider's first `/review-close` under `auto` mode: installer writes/merges `.claude/settings.json`, affected skills enforce a Step 0 / Pre-flight permission guard, documented canonically in WORKFLOW.md § 8.2a. Phase 7 (2026-05-12) shipped the update story for consumer projects: installer now writes `.claude/sysop.lock` (records Sysop commit + packs + managed paths), and three new modes (`--update`, `--adopt`, `--check`) let an existing install absorb upstream Sysop changes via a snapshot-then-overwrite contract. Phase 8 (2026-05-12) added a `--update` reconciliation safety net after BeanRider's first absorption silently overwrote 38 lines of committed project-specific sections: pre-overwrite divergence detection reconstructs OLD Sysop content via a temporary `git worktree` + shadow target, then warns per file with committed local edits; post-overwrite delta summary prints a `git diff HEAD --numstat` table flagging files with ≥ 5 deletions or any pre-overwrite divergence. Both signals documented canonically in WORKFLOW.md § 8.2b. Phase 9 (2026-05-12) applied the four BeanRider quick fixes filed during the Phase 6 + 8 absorption: ISSUE-0001 addendum (WORKFLOW.md § 8.2a now states `AskUserQuestion` does NOT satisfy the auto-mode classifier on protected-branch pushes; `/review-close` Step 4d directs agents to `! git push origin main` shell-escape); ISSUE-0002 (`/review-close` Step 3 verification is now discovery-driven, with a `## Pre-merge verification` row added to the WORKFLOW.md § 6.1 required-CLAUDE.md-sections table); ISSUE-0003 (Step 2b convention-check subagent discovers applicable subsections itself, replacing parent-side Frontend/Backend/Testing routing that broke on BeanRider's domain-specific subsection names); ISSUE-0004 (a) (`run_checks_impl.py:378` pyright install hint dropped the broken `requirements-dev.txt` pointer). Phase 10 (2026-05-12) shipped the plugin-path update doc deferred since Phase 7: README.md "Updating an existing install" now has a `#### Plugin path: how updates work` subsection clarifying that only `core/skills/` is plugin-delivered (pack plugins are dependency-marker only, with no `skills`/`commands`/`agents`/`hooks` payload — `companion/` content reaches consumers only through the bash installer), recommends enabling auto-update for the Sysop marketplace (off by default for third-party marketplaces), and provides reconciliation guidance for the hybrid plugin + bash-installer case. Phase 12 (2026-05-12) shipped the model-guard task filed 2026-05-12: new `core/skills/_shared/model-guard.md` reads the actually-served `message.model` from `~/.claude/projects/<encoded-cwd>/*.jsonl` rather than trusting the harness's drifted `Environment` block (Phase 10 surfacer). Wired in as `## Pre-flight: Model Guard` across seven skills — `/document-work` (replacing its old `Config`-tool Step 0), `/review-close`, `/auto-judge`, `/codebase-review`, `/security-audit`, `/plan-review`, plus `/claim-task` (which also gained `model: opus` frontmatter — Step 7's adversarial plan review needs Opus reasoning). Skipped `/next-task` (haiku is correct) and `/auto-review` (orchestration-only). WORKFLOW.md § 8.2a documents the guard inventory and the Phase 10 root-cause inline. Phase 11 (2026-05-12) applied the 15 review/2026-05-12 quick fixes spanning Phase 6–10: missing Pre-flight Permission Guards added to `/codebase-review` + `/security-audit`; `/review-close` Step 0 + WORKFLOW.md § 8.2a brought into sync (added `git worktree list` / `run_checks.sh` rules; `install_hooks.sh` row reframed as direct-invocation only; `--force-with-lease` added to `/auto-review` + `/auto-judge`); WORKFLOW.md § 8.2b `--force` step numbering corrected, `--adopt` `installed_at` semantic disclaimer added, `install.sh::reconstruct_old_install` now retries without `--no-arm-hooks` when the OLD installer rejects it (pre-Phase-5 anchor edge case); `/review-close` Step 3 gained doc-only-diff skip, `(cd <frontend>)` working-dir clarification, silent-deny `!`-shell-escape guidance, and sharpened Step 4d push-denied wording; README Status + "Updating" + "Plugin path" subsections refreshed; HANDOVER.md "What's complete" / §7 / §9 refreshed through Phase 10. Phase 13 (2026-05-13) shipped in-flow Sysop friction capture, closing BeanRider ISSUE-0006: `install.sh::seed_friction_log()` seeds `<target>/SYSOP_ISSUES.md` at consumer-repo root on fresh install only (NOT in `managed_paths` by design — non-management is the property that protects it from `--update`'s overwrite gap; skip-if-exists keeps hand-rolled versions like BeanRider's intact). `/review-close` gained Step 7: Friction Capture (renumbered current Step 7 → Step 8) that prompts the agent — append-only, never blocking — to log witnessed Sysop friction (silent-deny rejections, parent-side prompt rewrites, subagent confusion, `!`-shell-escape moments, install-step failures, missing-path references) before cycle close-out; witness-limited (this-session-only, no fabrication from git history or auto-memory). Canonical doc: WORKFLOW.md § 8.1 table gained the `SYSOP_ISSUES.md` row; § 8.2b gained a paragraph naming the seed-once-never-overwrite contract and citing the in-flow capture mechanism. Phase 14 (2026-05-13) shipped downstream update ergonomics — the consumer-side `--update` shim: new `core/companion/scripts/sysop-update.sh` (~60 lines) resolves the consumer root via `git rev-parse --show-toplevel` and the Sysop source via `$SYSOP_SRC` (env var set once in shell rc; absolute path, no `~`), then exec's `bash "$SYSOP_SRC/install.sh" "<consumer-root>" --update "$@"`. One project-root command (`bash scripts/sysop-update.sh`) replaces the multi-arg `bash <sysop-src>/install.sh <consumer-root> --update` form; all flags forward verbatim via `"$@"`. Phases 7/8's snapshot + divergence + delta safety net runs unchanged — the shim is purely an invocation-friction fix. Loud-failure precondition checks (unset env var, missing dir, missing `install.sh`, not a git working tree, run from outside a git tree) each emit a one-line actionable error and exit 1; no silent fallback to guessed paths. The shim is itself shipped via `install_companion_scripts()` and is therefore a managed path — improvements to the wrapper flow through the standard update channel. Open-question resolutions (recorded inline in the active-phase design contract): no helpful path-guessing fallback (`lean no` → confirmed: silent fallback to a guessed clone path would surprise users with multiple clones); `$SYSOP_SRC` must be a git working tree, not just a directory containing `install.sh` (`lean yes` → confirmed: `install.sh --update` resolves `sysop_commit` via git, so an unpacked tarball would fail downstream; surface as a precondition error in the shim with a clearer message); pass-through forwards everything via `"$@"` (`lean yes` → confirmed: transparent wrapper, future install.sh flags inherit automatically). Canonical doc: WORKFLOW.md § 8.2b gained a "Recommended invocation" paragraph naming the shim, a "Lower-level invocation" paragraph reframing the multi-arg form as an advanced escape hatch, and § 8.4 scripts table gained a `sysop-update.sh` row. README.md "Updating an existing install" leads with the shim + `bash scripts/sysop-update.sh` (with `--dry-run` / `--force` examples), the existing `bash install.sh --update` invocation moves to "lower-level" framing; the post-install bullet gained the `export SYSOP_SRC=/absolute/path/to/sysop` setup instruction. Phase 15 (2026-05-14) closed BeanRider ISSUE-0007 (hook-arming race): `install.sh::arm_git_hooks` now early-returns in `--update` mode (preserving Phase 5's fresh-install auto-arm, surgically closing the race window where the pipeline overwrote `scripts/hooks/*` with upstream skeletons and then armed the skeleton into `.git/hooks/` before the consumer could reconcile). New `check_armed_hooks_divergence` function runs in all modes after the install pipeline and prints a `── armed-hook divergence (ISSUE-0007 safety check) ──` block when `scripts/hooks/<base>` differs from `.git/hooks/<base>` (catches both the `--update` reconcile-window race AND fresh-install hand-edits to `.git/hooks/`). `--update` footer gained a "re-arm git hooks after reconciling scripts/hooks/" reminder. The sysop-update.sh shim needed no change — it `exec`s install.sh so the divergence warning is naturally part of the shim's output. Canonical doc: WORKFLOW.md § 8.2b's upgrade-flow step list renumbered to 11 (split step 6's note clarifying no-auto-arm + added step 10 for the divergence check); § 8.2b gained an "Armed-hook safety (Phase 15 / BeanRider ISSUE-0007)" paragraph; § 8.4 `install_hooks.sh` row updated. README.md Status + "Updating an existing install" reflect the new behavior. Phase 16 (2026-05-14) shipped the `product_roadmap.md` → `tasks/` hybrid system backport per `PHASE_16_HANDOFF.md`: new `core/companion/scripts/validate_tasks.py` (forward-compat versioning per Decision 2 — `MIN_SCHEMA_VERSION = 1` accepts `schema_version >= 1`, self-test gained a `forward-compat` fixture) and `backfill_completed_dates.py` (Decision 3 — generalized from gdp's hardcoded form with `--source-file` + `--id-pattern` flags); `install.sh::install_tasks_scaffold` creates the three-subdir shape (`open/`/`deferred/`/`archive/`, Decision 1 default), copies `schema.md` + `README.md` as managed paths, and writes a starter `index.yml` only if not already present (skip-if-exists, NOT in `managed_paths` — same protection property as `seed_friction_log` so `--update` never overwrites a consumer's hand-authored index). Skills rewritten: `/claim-task` (yaml-round-trip `status: open → in_progress`, body read from `tasks/open/<TASK_ID>.md`); `/review-close` (yaml-round-trip `status: done` + `completed_date`, `git mv` body open/→archive/, `validate_tasks.py` runs as final guard); `/document-work` (now points at `tasks/index.yml`; Step 3b's gdp-specific follow-up-stub check doesn't exist in Sysop's simpler skill — handoff overestimated this scope); `/next-task` (selection algo replaced — anchor on `current_focus: true`, filter status:open + user_action:false + null on_hold_until + all depends_on:done + no lock, sort by effort Low→Medium→High; prose-rubric fallback paragraphs deleted). WORKFLOW.md § 2.1/2.2/2.4/2.8/8.1 + WORKFLOW_GUIDE.md lines 17/37 updated. `packs/python/companion/{convention_map.md, checks.yml.fragment, security_map.md}` gained YAML-safe-load convention + paired `yaml-unsafe-load` check. New `core/companion/git-hooks/examples/pre-commit-tasks-validate.example` (drop-in B6 block resolving `<main-repo-root>/.venv/bin/python3` via `git rev-parse --git-common-dir` then falling back to system python3; pattern from `gdp@abcfe3d0`). Verification (handoff § 10) all green: validator `--self-test` exits 0 across three fixtures (valid, forward-compat `schema_version: 2`, bad); `grep -rn product_roadmap core/ install.sh` returns only intentional historical cross-references; fresh install produces a `tasks/` tree that validates clean; `--update` correctly skips a modified `index.yml`. Out of scope (deferred): `/promote-task` slash command, migration of Sysop's own `REVIEW_CHECKLIST.md` (different shape — narrative + review batches, not feature roadmap). First real consumer: BeanRider's `product_roadmap.md` — migration deferred to a follow-up session. Phase 16.1 (2026-05-14) closed the missing-allow-rules gap surfaced when prepping BeanRider's absorption of Phase 15 + 16: `core/companion/.claude/settings.json` gained four rules (`Bash(python3 -c:*)`, `Bash(python3 -:*)`, `Bash(python3 scripts/validate_tasks.py)`, `Bash(python3 scripts/validate_tasks.py:*)`) covering the heredoc'd `yaml.safe_load`/`safe_dump` round-trips that `/claim-task` Step 2 + Step 4 and `/review-close` Step 4c added in Phase 16, plus the final-guard validator invocation in `/review-close` Step 4c. Both skills' Pre-flight Permission Guards (Phase 6) gained matching check-list entries — without 16.1, the guards would have passed (stale check-list) and then the python3 invocation would have silently halted mid-skill under `auto` mode (the exact failure mode Phase 6 was built to prevent). Verified via scratch repo: fresh install ships the new rules; `--update` against a consumer with a custom rule preserves the custom rule AND adds the four new ones (set-union merge from Phase 6 works as designed). Phase 17 (2026-05-14) ported gdp's `gdp@5abf1c95` "Step 3a: Lint + Pyright Ratchet" into `/review-close` in a project-supplied, framework-agnostic shape: `<project>/CLAUDE.md § "Pre-merge verification"` now supports two sub-headings — `### Always` (full-tree bulleted commands run unconditionally) and `### Ratchet (changed files only)` (single bash code block of project-supplied shell snippets that filter `git diff --name-only origin/main...HEAD` to their file types and invoke lint/typecheck against changed files only; empty filtered list short-circuits and passes). The flat-list form (Phase 9 / ISSUE-0002 shape) remains valid as `### Always`-only — backward compatible for projects without lint/typecheck. Boy-scout escalation surfaces naturally as a consequence of project-side tool behavior on touched files with pre-existing findings, with full-tree backlog cleanups tracked as separate project-side tasks (`TECH-LINT-BACKLOG-FIX` / `TECH-TYPECHECK-BACKLOG-FIX` in `tasks/index.yml`) so the ratchet doesn't force clean-everything-first. Three doc edits: `/review-close` Step 3 discovery resolution + new boy-scout paragraph; WORKFLOW.md § 6.1 template gained the split-sub-headings form with python (pyflakes) + typescript (eslint under `<frontend>/`) snippet examples alongside the existing flat-list form; WORKFLOW_GUIDE.md gained a new `## Pre-merge Verification Structure` H2 for consumer-side authors (between "Merge Process" and "Adapting for Mobile Development"). No installer change (purely a `/review-close` × `<project>/CLAUDE.md` contract). First consumer: BeanRider, deferred — its current `bean-check` belongs under `### Always`, and changed-files lint adopts in once parser code lands (FEAT-0002 onward). Pack content (including the placeholder `sysop-mcp-server`) grows via review-and-promotion from BeanRider use. Phase 18 (2026-05-14) closed BeanRider ISSUE-0009 (Step 4c heredoc prefix mismatch — silently no-op'd the `git mv` on indexes that stored `body: tasks/open/<TASK_ID>.md` rather than the schema-canonical `body: open/<TASK_ID>.md`, leaving the index half-migrated as `status: done` with body still under `tasks/open/` while the validator's body-existence check reported `OK`). Three coordinated edits: (1) `/review-close` Step 4c heredoc replaced the `startswith('open/')` rename gate with a prefix-agnostic segment-based walk that locates an `open` or `deferred` segment, swaps it for `archive`, and emits `src`/`dst` with `tasks/` prepended only when not already present — handles both canonical (`open/X.md`) and BeanRider-shape (`tasks/open/X.md`) bodies and generalizes to tasks that complete from `status: deferred`. (2) `validate_tasks.py::_check_status_consistency` gained a status-vs-directory invariant for `status: done` with `body:` — rejects any body path containing an `open/` or `deferred/` segment, converting the silent half-migration into a hard final-guard validator failure; new `_build_drifted_status_fixture` + self-test branch asserts the check fires. Accepts bodies under `archive/` (canonical for `done`) and at the root of `tasks/` (flat-layout consumers). (3) `core/companion/tasks/schema.md` `body:` row gained an explicit canonical example (`open/FEAT-0001.md` NOT `tasks/open/FEAT-0001.md`) with a note that the validator + Step 4c also accept the `tasks/`-prefixed shape; "Directory convention" paragraph replaced "(validator-unenforced)" with "(validator-enforced for `done` since ISSUE-0009)" + Invariant 10's bullet list now mentions the new check inline. Smoke-tested: `--self-test` exits 0 across all four fixtures (valid / forward-compat / bad / drifted-status); the segment-based rename logic verified against seven body-shape cases (canonical, `tasks/`-prefixed, both `deferred/` variants, already-migrated `archive/`, flat-layout `tasks/X.md`, empty body) — all produce the expected `src`/`dst`/`new_body` tuples or correctly skip. Heredoc form retained (no new script-side allow-rule needed); first end-to-end exercise on BeanRider's next `/review-close` cycle. Phase 19 (2026-05-14) shipped per `PHASE_19_HANDOFF.md`: added the `blast_radius` field to `tasks/index.yml` as a four-value scoped enum (`single-file` / `single-module` / `cross-module` / `architectural`) capturing surface area independent of `effort` (effort = how much work; blast_radius = how much surrounding code gets pulled in). Forward-compat follows Phase 16's pattern — optional at `schema_version: 1`, required at `schema_version: 2` on `status in {open, in_progress}` only (mirrors `effort:`'s required-status set; legacy `done` and `deferred` tasks may omit it without error, same accommodation Phase 16 made for `completed_date`). When present at any status/version, enum membership is enforced — catches typos. `validate_tasks.py` gained `BLAST_RADIUS_VALUES` + `BLAST_RADIUS_REQUIRED_FROM_VERSION` constants, a new `_check_blast_radius` function threaded into the per-task loop, and four new self-test fixtures (`_build_blast_radius_v1_optional_fixture`, `_build_blast_radius_v2_required_fixture`, `_build_blast_radius_v2_missing_fixture`, `_build_blast_radius_bad_value_fixture`); existing valid + forward-compat fixtures gained `blast_radius:` lines on their open tasks so they pass at v2. `install.sh::install_tasks_scaffold`'s starter `index.yml` heredoc gained a commented-out example task showing the full field set (including `blast_radius:`), with a paired comment explaining the v1 → v2 opt-in path. `tasks/schema.md` gained a new "### Blast radius" section with value definitions + the v1-optional / v2-required contract; the existing "## Versioning" section gained a per-version table making the v1 vs v2 differences explicit. WORKFLOW.md § 8.1 task-system row + § 2.1 `/next-task` paragraph updated to mention `blast_radius` alongside `effort` (selection ordering keeps `effort:` as primary sort for now — a secondary sort on `blast_radius` is candidate for a future Phase 19.x once a consumer populates v2 widely enough). WORKFLOW_GUIDE.md Step 1 prose mentions the new field briefly. Verification all green: validator `--self-test` exits 0 across all 8 fixtures (valid / forward-compat / bad / drifted-status / 4 new blast_radius fixtures); fresh install produces a `tasks/index.yml` that validates clean and includes the documented `blast_radius:` example in the comment block; the three v1→v2 scenarios (`schema_version: 1` without blast_radius passes; bumping to v2 without backfill fails with clear per-entry message naming the missing field; adding `blast_radius:` lets the v2 index pass) all behave as designed; `grep -rn blast_radius core/ install.sh` lands in exactly five expected files and nothing else. No starter-index `schema_version` bump (stays at 1) — a future phase can flip the default once `blast_radius` is established practice. Out of scope (deferred): backfill helper script for consumers (no source of truth to scrape — author judgment), `/next-task` secondary-sort behavior, `/review-close` batch-complexity hints. First downstream consumer: BeanRider, which absorbs Phase 19 via `bash scripts/sysop-update.sh`, backfills `blast_radius` on its `index.yml` tasks, and bumps its own `schema_version: 1 → 2` before the parallel-orchestrator skill build per `BEANRIDER_PARALLEL_ORCHESTRATOR_HANDOFF.md`. Phase 20 (2026-05-14) closed the model-guard structural bug. The false halt was observed in BeanRider (Sysop's downstream consumer) and reported independently in gdp-query-system, the extraction source — gdp predates Sysop's plugin shape and carries its own derivative copy of the prose-algorithm guard, so the same root cause manifests there; the Sysop Phase 20 fix lands in BeanRider via `bash scripts/sysop-update.sh`, but gdp-query-system is NOT a Sysop consumer and absorbs nothing through that channel — porting the fix back into gdp (if desired) is a separate manual task. Concrete symptom: `/claim-task` (and other Opus skills) emitted `❌ Model Mismatch — currently served by claude-haiku-4-5-20251001` despite `/status` and the underlying transcript both showing the session was on Opus. Root cause: Phase 12's guard was a prose algorithm telling Claude to "find the most-recent jsonl, read the last assistant entry, match the model" — Claude was reading `_shared/model-guard.md` and then jumping straight to the mismatch output without ever running the bash, hallucinating a Haiku model ID from conversational memory of an earlier Haiku turn (or from the model-ID format strings present in the system prompt). The prose-algorithm shape was structurally indistinguishable from the Environment-block-consultation shape it replaced — both relied on Claude faithfully consulting a specific in-context signal, and Claude is unreliable at that. Fix: new `core/companion/scripts/model_guard.sh` (~70 lines bash + embedded python) reads `$HOME/.claude/projects/$(printf '%s' "$PWD" | tr '/' '-')/`, finds the most-recent `*.jsonl`, walks the last N (default 3) `type=="assistant"` entries' `message.model` values, and prints exactly one line on stdout: `PROCEED` (any of the last N matches the pattern), `MISMATCH:<model>` (none match; `<model>` is the most-recent observed, used verbatim by the skill), or `SKIP:<reason>` (no transcripts dir / no jsonl / read error). Exits 0 in every case — caller branches on stdout, not exit status, so a misconfigured environment never silently halts a skill. `_shared/model-guard.md` rewritten as a directive: skills must run the Bash call as their first action, the script's stdout is the ONLY signal they may act on, and Claude is explicitly forbidden from consulting the Environment block, `/status`, the skill's own frontmatter, or its self-model. All 7 calling skills updated to the new shape: `/claim-task`, `/document-work`, `/plan-review`, `/review-close`, `/codebase-review`, `/security-audit`, `/auto-judge` — each substitutes its own slash command name + per-skill `Why:` reason; the Bash invocation and branching logic are identical. Each skill's Permission Guard checklist gained the `Bash(bash scripts/model_guard.sh:*)` rule, and the canonical `core/companion/.claude/settings.json` template ships the allow-rule (Phase 6's set-union merge ensures it lands in existing consumer settings on `--update`). The multi-turn lookback (N=3) also closes the secondary by-one-turn-staleness window from Phase 12's design (Claude can `/model opus` and immediately invoke a skill without false-halting on the stale prior-model turn). Verification: smoke-tested in the current Opus session (`PROCEED`), against BeanRider's transcript with opus pattern (`PROCEED` — if the skill had actually run the script, the original BeanRider halt would NOT have fired), against haiku pattern (`MISMATCH:claude-opus-4-7`), and from `/tmp` with no transcripts (`SKIP:no-transcripts-dir`). WORKFLOW.md § 8.2a model-guard paragraph rewritten to describe the script-based mechanism + root-cause inline; § 8.4 scripts table gained a `model_guard.sh` row; `_shared/model-guard.md` § History section names Phase 12 + Phase 20 inline so future readers see the evolution. Phase 21 (2026-05-14) removed the model-guard system entirely after the Phase 20 script's structural race surfaced again on gdp-query-system: the harness flushes the current assistant turn's `message.model` to the `.jsonl` AFTER the tool subprocess returns, so `bash scripts/model_guard.sh` can only ever observe PRIOR assistant turns. When a session ran a `model: haiku` skill (e.g., `/next-task`) and then immediately invoked a `model: opus` skill (e.g., `/claim-task`), the guard's N=3 lookback saw three haiku turns from the prior skill and emitted `MISMATCH:claude-haiku-4-5-20251001` — even though the current `/claim-task` invocation was already running on Opus (the harness honored its frontmatter, confirmed by the very same `.jsonl` once the assistant turn flushed: `model=claude-opus-4-7, attributionSkill=claim-task` on the bash-invoking turn itself). The underlying problem Phase 12 was built to catch — "the harness ignores skill frontmatter and serves the session model" — no longer holds in current Claude Code versions (2.1.141): the same transcript showed both `/next-task` correctly routed to Haiku per its `model: haiku` frontmatter AND `/claim-task` correctly routed to Opus per its `model: opus` frontmatter, in the same session, back-to-back, with no user intervention. The guard was checking an indirect, race-prone signal for a problem that had been silently fixed at the harness layer. Removed: `core/companion/scripts/model_guard.sh`, `core/skills/_shared/model-guard.md`, the `Bash(bash scripts/model_guard.sh:*)` allow-rule from `core/companion/.claude/settings.json`, and the `## Pre-flight: Model Guard` section + Permission Guard checklist row from all 7 calling skills (`/claim-task`, `/document-work`, `/plan-review`, `/review-close`, `/codebase-review`, `/security-audit`, `/auto-judge`). WORKFLOW.md § 8.2a's model-guard paragraph rewritten as a one-paragraph note: skill model routing is delegated to the harness via frontmatter; Phase 21 removed the verification layer because the verification couldn't observe the current turn (race) and the original failure mode (harness ignoring frontmatter) no longer occurs; if a future Claude Code version regresses, the symptom will surface in skill-output quality and a check can be re-introduced then. § 8.4 scripts table dropped the `model_guard.sh` row. The derivative copy in gdp-query-system (`scripts/model_guard.sh`, `.claude/skills/_shared/model-guard.md`, and the 7 skills' Pre-flight sections) is unchanged — gdp is not a Sysop consumer; removing the guard there is a separate manual task in a gdp session. Consumers (BeanRider) absorb Phase 21 via `bash scripts/sysop-update.sh` — set-union merge on settings.json removes nothing (the deleted allow-rule line is benign if it lingers in a consumer's settings.json; the script it referenced just no longer exists), and the skill files are managed paths so the Pre-flight: Model Guard sections delete cleanly. Phase 23a (2026-05-15, commit `c041d3f`) renamed `/document-work`'s pending-doc frontmatter field `task_ids:` → `roadmap_ids:` (consumed by `/review-close` Step 4c's `tasks/index.yml` round-trip) + `review_task_ids:` (documentary-only — review-queue task IDs that live in `review_tasks.md`; their actual closure happens in Step 4b via `bash scripts/close_batch.sh`), closing BeanRider ISSUE-0022. Either namespace may be `[]`; both may be populated for cross-cutting work. The old single-namespace field silently no-op'd review-task IDs in Step 4c's heredoc because they didn't match any roadmap entry — failure was invisible. `/review-close` Step 4c routing-table column relabeled "Roadmap (`roadmap_ids`)"; the heredoc reads `roadmap_ids` only; PROJECT_STATUS entries pull from both namespaces (provenance). One-cycle compat shim documented in Step 4c step 3 as a prose block (not heredoc code): `roadmap_ids = pending.get('roadmap_ids') or pending.get('task_ids') or []` with an explicit removal trigger ("any subsequent phase that touches Step 4c, once BeanRider has run one /review-close cycle on a post-23a-absorption pending-doc"). No schema change in `tasks/index.yml` — the rename lives entirely in the pending-doc handoff format. Phase 23b (2026-05-15) hardened `/review-close` against four step-level papercuts surfaced during BeanRider's 2026-05-15 cycle (Round 3 archive rotation + 4 batches + venv-cold-shell + post-rebase cleanup), closing ISSUE-0018 / -0019 / -0020 / -0021. **ISSUE-0021** (Step 6 cleanup order): swapped — delete remote first (`git push origin --delete`) so `git branch -d` no longer refuses on the rebased branch's diverged upstream; explicit no-`-D` rule (safe-delete refusal is correct given the upstream check; the fix is to drop the upstream first). **ISSUE-0020** (Step 4a rebase-conflict disclaimer wrong): prose rewritten to acknowledge that batch checkbox flips DO modify `review_tasks.md` and that structural conflicts arise after archive rotations or sibling-batch additions; new Step 1c "drain archive state" warning detects pre-archive feature branches via **file-based** archive-touch detection (`git diff --name-only $base..main` matched against `(^|/)review_tasks_archive\.md$`, configurable via consumer's CLAUDE.md § Key Files) rather than the handoff-spec'd grep-on-commit-subject (the file-based signal is project-convention-agnostic). Soft warning, not a hard gate — consistent with the rest of `/review-close`. **ISSUE-0019** (Step 1b commit invariant): detect-then-commit branch added — single-file commit remains the default; archive-rotation commit shape kicks in when a sibling archive file is dirty/untracked AND `review_tasks.md` has **net deletions** (`DELETED > ADDED` from `git diff --numstat`), a concrete numeric rule replacing the handoff's fuzzy "diff dominated by deletions" prose. In-place rotations (no sibling file) fall through to the single-file path. **ISSUE-0018** (venv-cold-shell): WORKFLOW.md § 6.1 (Pre-merge verification template) gained a "Venv-aware invocation" paragraph applying to both `### Always` and `### Ratchet` forms, recommending consumers express verification commands as `.venv/bin/<tool>`; Step 4d silent-deny escape hatch grew a venv-prefix hint (`! PATH=.venv/bin:$PATH git push origin main`) covering both the main push and Step 6's `git push origin --delete` cleanup. WORKFLOW.md § 2.8 step 1 updated to name the new Step 1b/1c shape; WORKFLOW_GUIDE.md gained a "Venv-aware invocation" paragraph in the Pre-merge Verification Structure section and a new "## Recent /review-close Hardening" section summarizing all five papercuts for consumer-side authors. No installer change, no new scripts, no new permission rules, no schema bump. First downstream consumer: BeanRider, absorbs both 23a + 23b in one `bash scripts/sysop-update.sh` run. Phase 24a (2026-05-18) added consumer-authored `*.project.<ext>` suffix files for the three concat-style managed configs, closing BeanRider ISSUE-0023 (≡ ISSUE-0010 Option 3). `install.sh::concat_files` now checks the `SYSOP_PROJECT_SUFFIXES` lookup for a sibling suffix file after writing the regenerated upstream + pack body; if present, appends it (for `convention_map.md` and `security_map.md` — plain text-append with a blank-line separator) or merges it by `checks[*].id` (for `checks.yml` — via a `pick_python_with_yaml`-selected python3 heredoc). Consumer wins on id-collision with a `⚠ id-collision: <id>` warn line. The common (no-collision) `checks.yml` case is a header-strip + text-append — preserves comments and formatting in both files so the post-update diff stays signal-only; only the collision case round-trips via pyyaml (upstream comments lost on collision, surfaced explicitly). The suffix files (`.claude/convention_map.project.md`, `.claude/security_map.project.md`, `.claude/checks.project.yml`) live in the consumer's repo, are committed normally, and are explicitly NOT in `MANAGED_PATHS` — `--update` never touches them. Same protection property as `tasks/index.yml` (Phase 16) and `SYSOP_ISSUES.md` (Phase 13). New helper `pick_python_with_yaml()` picks a python3 that can `import yaml` — tries `<target>/.venv/bin/python3`, then `<target>/venv/bin/python3`, then `python3` on PATH; if none can AND a `.claude/checks.project.yml` exists, install aborts with an actionable error pointing at `python3 -m venv .venv && .venv/bin/pip install pyyaml`. Markdown suffix files have no pyyaml dependency. Dry-run announces would-be appends/merges. Malformed YAML in a suffix file is a hard install abort. Three new file-purposes rows in WORKFLOW.md § 8.2; new § 8.2c subsection; § 6.1 paragraph routing project-specific map content to the suffix files (vs CLAUDE.md prose); worked example in README.md "Updating an existing install" section; one paragraph in WORKFLOW_GUIDE.md "Convention maps". No installer flag added (suffix presence is the trigger); no schema change; no new permission rules (`Bash(python3 -:*)` from Phase 16.1 already covers the heredoc'd merger). Phase 24b (2026-05-18) extended Phase 8's pre-overwrite divergence detection from "warn about consumer modifications" to "warn AND skip overwrite when the target differs from the Sysop-shipped ancestor — scoped to `scripts/*` and `scripts/hooks/*`," closing BeanRider ISSUE-0024 + ISSUE-0025 (ISSUE-0024 ⊂ ISSUE-0005 Option 2 — left explicitly Open after Phase 8 shipped Option 1). The hook point is `install.sh::copy_file` (install.sh:384, the universal one-to-one file write); a scope filter `_phase_24b_in_scope()` limits preservation to depth-1 `scripts/` and depth-2 `scripts/hooks/` — skills, workflow docs, semgrep rules, and tasks-scaffold templates are explicitly out of scope (per Decision 9, to avoid creating a silent prompt-fork channel that would accumulate divergence from upstream improvements indefinitely; project-specific guidance for those classes belongs in CLAUDE.md sections or pack-level extensions). Concat files are also out of scope because 24a's suffix-file mechanism is the right shape for them. The shadow target Phase 8 already builds via `reconstruct_old_install()` is hoisted from the pre-overwrite block to a module-scope `DIVERGENCE_SHADOW` global with `trap` cleanup, so `copy_file` can per-file-diff during the pipeline. New `--accept-upstream <relpath>` and `--accept-upstream-list <file>` flags (both repeatable, both forward through `sysop-update.sh`'s `"$@"` pass-through from Phase 14) explicitly override preservation. Two-pass workflow documented: first run reports preserved paths; agent inspects upstream-vs-consumer diff; optional second run with `--accept-upstream*` flags for the subset to overwrite. `report_post_overwrite_deltas` gains two preceding blocks before the existing `numstat` table: a "preserved managed paths (Phase 24b)" block listing every path in `PRESERVED_PATHS` with the override hint, and a "stale --accept-upstream entries (Phase 24b)" block listing flag entries that didn't match a preserved path (so stale list-file entries don't accumulate silently). Fail-closed posture on `reconstruct_old_install` failure: `--update` non-`--force` aborts with a multi-line error naming `git fetch` / `--force` / `--accept-upstream` as the three escape hatches (stricter than Phase 8's warn-and-proceed, since proceed-on-failure was the failure mode that motivated this issue). `--dry-run` short-circuit at the pre-overwrite divergence block lifted (Decision 11) so the plan output shows would-be-preserved paths before commitment; the shadow-build is read-only and the only true write (snapshot commit) is already DRY_RUN-guarded. Phase 15's `scripts/hooks/<base>` template overwrite gap is closed by the same mechanism — consumer-customized hook bodies now survive `--update` automatically (Phase 15's `.git/hooks/<base>` auto-arm-skip protection still applies on top). No new scripts; no new permission rules; no schema bump. Verified on a scratch repo: scripts/* + scripts/hooks/* preservation, out-of-scope skill overwrite, `--accept-upstream` override, `--accept-upstream-list` with blanks/comments/stale entries, fail-closed exit 1 with `--force` escape, dry-run preservation plan without writes. First downstream consumer: BeanRider, which (after absorbing Phase 24a + 24b together via `bash scripts/sysop-update.sh` and authoring three `*.project.<ext>` suffix files in a pre-absorption commit per PHASE_24_HANDOFF.md § 10 step 17) stops needing the manual reconciliation commit that followed every prior absorption. Phase 25 (2026-05-18) closed BeanRider ISSUE-0026 — the residual gap Phase 24a deferred. Pack `checks.yml.fragment` files ship `paths:` lists with placeholder tokens (`<api module>/`, `<scripts dir>/`, `<datajobs dir>/`, `<data seed dir>/`, `<tests dir>/`, `<frontend>/`, etc.) that name the project layout abstractly so packs stay framework-agnostic. Without substitution, `run_checks_impl.py:164-170` silently returns empty when a check's `paths:` entries don't resolve on disk — consumer's `.claude/checks.yml` reports `0 finding(s)` clean by accident, not by validation. Phase 24a's suffix-file mechanism handled additive cases (new sections / new checks) and full-replacement collisions, but had no shape for "concretize this placeholder inside an upstream check." Phase 25 adds a fourth consumer-authored suffix file — `.claude/substitutions.project.yml` — with a top-level `substitutions:` map of `"<token>": "value"` pairs. `install.sh::concat_files` applies the substitution to the regenerated upstream body AFTER concat finishes and BEFORE the Phase 24a suffix file is appended/merged — substitution is bounded to upstream-shipped text, consumer suffix content stays byte-faithful. Literal string replacement (`.count()` + `.replace()`), not regex. New helpers `_load_substitution_keys()` (lazy-load once, pre-zero per-token counts, hard-abort on missing pyyaml or malformed YAML) + `apply_substitutions()` (per-dst substitution + per-token tally) + `report_stale_substitutions()` (post-run report of keys that didn't match anywhere — typo catcher for `<api modules>` vs `<api module>`, mirrors Phase 24b's "stale --accept-upstream entries" reporting pattern). Dry-run announces would-substitute per concat dst + runs the stale check so typos surface before commitment. Scope is the three concat-style configs only — skills, workflow docs, semgrep rules, and scripts are explicitly out of scope (their placeholder vocabulary is deliberately abstract; substituting in skill prose would silently fork prompts per consumer — the same anti-pattern Phase 24b's scope filter avoids for code-shaped managed paths). pyyaml dependency reused from Phase 24a (`pick_python_with_yaml()`); same actionable abort error when missing. The substitutions file is NOT in `MANAGED_PATHS` — same protection as Phase 24a suffix files, `tasks/index.yml` (Phase 16), and `SYSOP_ISSUES.md` (Phase 13). Verified on a scratch repo: fresh install + substitutions file substitutes 13/6/50 tokens across convention_map.md/security_map.md/checks.yml; consumer's `.claude/checks.project.yml` content with a literal `<api module>` in `paths:` survives byte-faithfully (substitution is bounded to upstream); intentional typo `<api modules>` fires the stale-token report; `--dry-run` announces and reports correctly; malformed YAML in the substitutions file is a hard abort with python traceback + a Sysop follow-up line. Resolves the long-deferred "Filed Phase 3 — Installer placeholder substitution" REVIEW_CHECKLIST item (shape differs from that entry's `--substitutions key=val,...` flag proposal — file-based instead, fits Phase 24a's `*.project.<ext>` vocabulary, no installer-state lock-file additions). Canonical doc: WORKFLOW.md § 8.2c gained a "Phase 25 — placeholder substitution" subsection; README.md "Updating an existing install" gained a "Phase 25 — placeholder substitution" subsection between the Phase 24a and Phase 24b blocks; README's stale "Placeholder vocabulary is currently left intact" paragraph rewritten to point at the new mechanism; WORKFLOW_GUIDE.md "Project-specific extensions" paragraph gained a Phase 25 sentence. No installer flag (file presence is the trigger); no schema change; no new permission rules (`Bash(python3 -:*)` from Phase 16.1 already covers the heredoc'd python invocation). Phase 27 (2026-05-21) ported gdp's `/document-work` Step 3b follow-up-stub HARD-FAIL gate (gdp `13b6402c` Phase 16 migration), closing the Filed-2026-05-20 Medium-priority entry. New `## Step 3b: Follow-up Task Stub Check (HARD FAIL)` section between current Step 3 and Step 4 in `core/skills/document-work/SKILL.md`. **Algorithm:** (1) discover the prefix vocabulary dynamically from `tasks[].id` in `tasks/index.yml` (collect leading `^[A-Z][A-Z0-9]*` segment — no hardcoded prefix list anywhere in Sysop, resolving the handoff's token-regex judgment call in favor of dynamic over a `task_id_prefixes:` top-level field); (2) scan the pending-docs body for `\b(?:<discovered prefixes>)-[A-Z0-9][A-Z0-9-]+\b`; (3) bypass set = frontmatter `roadmap_ids:` (Phase 23a name) + frontmatter `whitelist:` + per-parent-task `whitelist:` in `tasks/index.yml`; (4) HARD FAIL with line numbers for tokens not in `tasks[].id` ∪ bypass. **Skip conditions:** no `tasks/index.yml` → `skipped` exit 0; empty `tasks:` list → `0 task IDs named (no prefixes)` exit 0. **Known limitation documented inline:** a token with a prefix NOT yet in the index slips through unchecked — fundamental to framework-agnostic design; once one task with that prefix is filed every future mention is gated. **`whitelist:` field already existed** in schema.md (line 60 + Invariant 6) and validate_tasks.py (line 328) from Phase 16 — the handoff's Scope item naming a validator allow-list update was stale carryover, verified by inspection before the change; no schema or validator edit needed. **Doc edits:** WORKFLOW.md § 8.1 task-system row mentions `whitelist:` + Phase 27 enforcement; § 8.2a permission-rules table row + "A note on `Bash(python3 -:*)`" paragraph extended to name `/document-work` Step 3b as a third caller alongside `/claim-task` and `/review-close`. **Permission Guard:** `/document-work`'s Pre-flight Permission Guard required-rule list gained `Bash(python3 -:*)` (Phase 16.1 ships the rule already; only the guard's checklist drifted). **Smoke-tested on `/tmp/wf-step3b-test`** across 5 fixtures using `~/Projects/gdp-query-system/.venv/bin/python3` (system python3 lacks pyyaml — exercises the venv-resolution edge case noted in the Low-priority pre-commit-hook item): (1) no `tasks/index.yml` → `skipped` exit 0; (2) empty `tasks:` list → `0 task IDs named (no prefixes)` exit 0; (3) one known token + a `TASK-9999` review-task ID correctly NOT scanned (TASK not in discovered prefixes) → `1 task IDs named, all resolved` exit 0; (4) unfiled `TECH-NEW-UNFILED` → HARD FAIL with line number, exit 1 (and `BUG-MISSING-PIECE` correctly silently passed since `BUG` isn't a discovered prefix — exercises the known-limitation case); (5) frontmatter `whitelist: [TECH-EXTERNAL-XYZ]` + parent task `whitelist: [BATCH-42]` both correctly bypass tokens. No installer change, no schema bump, no new permission rules.
 
 
 ## Phase 26
@@ -34,7 +34,7 @@ Phase 31 (2026-05-22) closed BeanRider ISSUE-0016 — the structural `/review-cl
 
 ## Phase 32
 
-Phase 32 (2026-05-22) closed the lock half of the BeanRider worktree × venv × lock asymmetry cluster (ISSUE-0028 + 0030 + 0032 + 0013 + 0017 collapse) that Phase 30 explicitly deferred as "interlocking, needs design call on where locks canonically live before shipping" — per [`PHASE_32_HANDOFF.md`](./PHASE_32_HANDOFF.md). The design call landed on **Option A** from ISSUE-0032: locks resolve to the **main** repo's `.locks/` via `git rev-parse --git-common-dir` regardless of cwd, with both the lock writer (`claim_task.sh --lock`) and the lock reader (`validate_tasks.py` Invariant 9) using the same resolution so every caller — pre-commit hooks running inside worktrees, `/review-close` validator runs from main, ad-hoc CLI from any working tree — agrees on one canonical location. Picked over Option B (validator-resolves-via-worktree-aware-repo-root with locks staying per-worktree) because B re-creates the visibility problem one layer deeper: the whole point of the `in_progress requires lock` invariant is to be checkable from any caller, and B distributes per-worktree what should be a single source of truth. The `.venv`-symlink half (Option C) was held back as a Phase 32.x Mac/Linux opt-in because Windows file-symlink behavior (admin/dev-mode requirement + Git Bash quirks) hasn't been verified and shipping it bundled would have forced a per-OS code path into the canonical claim flow. **Five edits:** (1) `core/companion/scripts/claim_task.sh` — the `USE_LOCK` block now runs `git rev-parse --git-common-dir`, canonicalizes the absolute-or-relative result via `dirname` + `cd ... && pwd`, sets `LOCKS_DIR="$MAIN_REPO_ROOT/.locks"`, and hard-aborts with an actionable error if `git-common-dir` fails (no silent fallback — the contract is canonical-or-fail). The script's docstring gained a "Lock location (Phase 32)" block explaining the canonical contract for future readers of `--help`. (2) `core/skills/claim-task/SKILL.md` Step 4 — documented invocation flipped from `bash scripts/claim_task.sh <TASK_ID> <BRANCH_NAME>` to `bash scripts/claim_task.sh --lock <TASK_ID> <BRANCH_NAME>`, bringing skill prose into sync with Phase 16's already-stated promise that a lock IS created (the prior asymmetry meant the validator's Invariant 9 fired after every `/claim-task` until the agent hand-touched the lock, which BeanRider hit on every multi-session active-development week per ISSUE-0028 + 0030 + 0013). (3) `core/companion/scripts/validate_tasks.py` — new `_resolve_canonical_locks_dir()` helper invokes `subprocess.run("git", "-C", project_root, "rev-parse", "--git-common-dir")` (5 s timeout, never raises) with three-tier fallback (subprocess error → non-zero exit → empty stdout all return `project_root / ".locks"`) so `--self-test` synthetic fixtures and atomic-staging callers outside any working tree continue to work; `validate()` calls the helper instead of computing `locks_dir = project_root / ".locks"` inline. Invariant 9's error message was rewritten: "this usually means a /claim-task crashed mid-flight" was misleading (the script may have completed cleanly without `--lock`); the new text names the canonical location, points at `git rev-parse --git-common-dir` as the resolution path, and tells the user to re-run `bash scripts/claim_task.sh --lock <TASK_ID> <BRANCH>` or flip the task back to `open`. (4) `core/companion/tasks/schema.md` — Invariant 9 + Status-specific-requirements table cell both gained the `<main-repo-root>/.locks/` clarifier with inline "resolved via `git rev-parse --git-common-dir`" + Phase 32 attribution; the table's "Requires lock file" column for `in_progress` updated from `.locks/<TASK-ID>.lock` to `<main-repo-root>/.locks/<TASK-ID>.lock`. (5) `core/companion/docs/WORKFLOW.md` — § 4.1's "Lock file coordination" paragraph gained the canonical-location contract; § 2.2 Planning step 3 documents that `/claim-task` Step 4 now passes `--lock` always; § 8.1 task-system row's Invariant 9 description mentions the git-common-dir resolution so every caller (pre-commit from inside a worktree, `/review-close` from main, ad-hoc CLI) finds the same canonical state. **Q2 lean from PHASE_32_HANDOFF.md revised mid-implementation:** the initial "leave validator's resolution simple, only fix error text" lean was overturned after discovering that `core/companion/git-hooks/examples/pre-commit-tasks-validate.example` runs `validate_tasks.py` with cwd = worktree (line 65: `"$PYTHON3" scripts/validate_tasks.py --quiet`). Under "locks in main + validator-stays-simple," any pre-commit inside a worktree with `tasks/index.yml` containing any `in_progress` task would fail because cwd-resolved `.locks/` is the worktree's empty one. Centralizing the resolution in the validator makes every caller correct by construction — including the inevitable case of someone debugging interactively from a worktree by running `python3 scripts/validate_tasks.py`. The revised decision is documented in PHASE_32_HANDOFF.md § "Resolved design decisions" #2 so future readers don't second-guess the validator's now-larger surface area. **Smoke-tested on `/tmp/wf-phase32-test` across 8 scenarios** (all green): `claim_task.sh --help` shows the new Lock-location block; claim from main → lock at main's `.locks/`; claim from worktree → lock STILL at main's `.locks/` (worktree's `.locks/` never exists in either case); validator from main with `in_progress` + valid lock → exits 0; validator from worktree (cwd=worktree) → resolves git-common-dir → finds main's lock → exits 0; validator from non-git-tmpdir (the `--self-test` fixture case) → falls back to `project_root / ".locks"` → 8 existing fixtures all pass (`SELF-TEST OK`); rewritten error text fires correctly when lock is hand-deleted and names canonical location + git-common-dir + re-run command; worktree path computation (`${REPO_ROOT}/../...-${TASK_LOWER}`) is unchanged — peer-worktree placement still works whether invoked from main or from a worktree. **Phase 32.x deferred candidate:** `.venv` symlink for Mac/Linux (ISSUE-0031); opt-in via `claim_task.sh --symlink-venv` flag or separate `link_worktree_venv.sh` helper, with OS guard skipping on `MINGW*`/`CYGWIN*` and pointing at Phase 23b's `.venv/bin/<cmd>` prose workaround for Windows. Filed as a Medium-priority entry in REVIEW_CHECKLIST.md alongside the closed cluster. **Scope:** 5 files + REVIEW_CHECKLIST.md + CLAUDE.md + PHASE_32_HANDOFF.md (new), no installer change, no schema version bump, no new permission rules, no new scripts. **Housekeeping bundled:** the cluster checkbox in Medium-priority flipped from `[ ]` to `[x]` with "Resolved Phase 32, 2026-05-22" prefix; "Open BeanRider issues" paragraph at top of REVIEW_CHECKLIST.md updated (count of remaining Medium-priority dropped from five to four; ISSUE-0031 named as Phase 32.x carryover); CLAUDE.md Phase 31 row's `(this commit)` placeholder updated to `36ee6ef`. **First downstream consumer:** BeanRider's next `bash scripts/sysop-update.sh` cycle, which exercises the new claim path on first `/claim-task` and confirms pre-commit hooks continue working inside worktrees with an `in_progress` task in `tasks/index.yml`.
+Phase 32 (2026-05-22) closed the lock half of the BeanRider worktree × venv × lock asymmetry cluster (ISSUE-0028 + 0030 + 0032 + 0013 + 0017 collapse) that Phase 30 explicitly deferred as "interlocking, needs design call on where locks canonically live before shipping" — per `PHASE_32_HANDOFF.md`. The design call landed on **Option A** from ISSUE-0032: locks resolve to the **main** repo's `.locks/` via `git rev-parse --git-common-dir` regardless of cwd, with both the lock writer (`claim_task.sh --lock`) and the lock reader (`validate_tasks.py` Invariant 9) using the same resolution so every caller — pre-commit hooks running inside worktrees, `/review-close` validator runs from main, ad-hoc CLI from any working tree — agrees on one canonical location. Picked over Option B (validator-resolves-via-worktree-aware-repo-root with locks staying per-worktree) because B re-creates the visibility problem one layer deeper: the whole point of the `in_progress requires lock` invariant is to be checkable from any caller, and B distributes per-worktree what should be a single source of truth. The `.venv`-symlink half (Option C) was held back as a Phase 32.x Mac/Linux opt-in because Windows file-symlink behavior (admin/dev-mode requirement + Git Bash quirks) hasn't been verified and shipping it bundled would have forced a per-OS code path into the canonical claim flow. **Five edits:** (1) `core/companion/scripts/claim_task.sh` — the `USE_LOCK` block now runs `git rev-parse --git-common-dir`, canonicalizes the absolute-or-relative result via `dirname` + `cd ... && pwd`, sets `LOCKS_DIR="$MAIN_REPO_ROOT/.locks"`, and hard-aborts with an actionable error if `git-common-dir` fails (no silent fallback — the contract is canonical-or-fail). The script's docstring gained a "Lock location (Phase 32)" block explaining the canonical contract for future readers of `--help`. (2) `core/skills/claim-task/SKILL.md` Step 4 — documented invocation flipped from `bash scripts/claim_task.sh <TASK_ID> <BRANCH_NAME>` to `bash scripts/claim_task.sh --lock <TASK_ID> <BRANCH_NAME>`, bringing skill prose into sync with Phase 16's already-stated promise that a lock IS created (the prior asymmetry meant the validator's Invariant 9 fired after every `/claim-task` until the agent hand-touched the lock, which BeanRider hit on every multi-session active-development week per ISSUE-0028 + 0030 + 0013). (3) `core/companion/scripts/validate_tasks.py` — new `_resolve_canonical_locks_dir()` helper invokes `subprocess.run("git", "-C", project_root, "rev-parse", "--git-common-dir")` (5 s timeout, never raises) with three-tier fallback (subprocess error → non-zero exit → empty stdout all return `project_root / ".locks"`) so `--self-test` synthetic fixtures and atomic-staging callers outside any working tree continue to work; `validate()` calls the helper instead of computing `locks_dir = project_root / ".locks"` inline. Invariant 9's error message was rewritten: "this usually means a /claim-task crashed mid-flight" was misleading (the script may have completed cleanly without `--lock`); the new text names the canonical location, points at `git rev-parse --git-common-dir` as the resolution path, and tells the user to re-run `bash scripts/claim_task.sh --lock <TASK_ID> <BRANCH>` or flip the task back to `open`. (4) `core/companion/tasks/schema.md` — Invariant 9 + Status-specific-requirements table cell both gained the `<main-repo-root>/.locks/` clarifier with inline "resolved via `git rev-parse --git-common-dir`" + Phase 32 attribution; the table's "Requires lock file" column for `in_progress` updated from `.locks/<TASK-ID>.lock` to `<main-repo-root>/.locks/<TASK-ID>.lock`. (5) `core/companion/docs/WORKFLOW.md` — § 4.1's "Lock file coordination" paragraph gained the canonical-location contract; § 2.2 Planning step 3 documents that `/claim-task` Step 4 now passes `--lock` always; § 8.1 task-system row's Invariant 9 description mentions the git-common-dir resolution so every caller (pre-commit from inside a worktree, `/review-close` from main, ad-hoc CLI) finds the same canonical state. **Q2 lean from PHASE_32_HANDOFF.md revised mid-implementation:** the initial "leave validator's resolution simple, only fix error text" lean was overturned after discovering that `core/companion/git-hooks/examples/pre-commit-tasks-validate.example` runs `validate_tasks.py` with cwd = worktree (line 65: `"$PYTHON3" scripts/validate_tasks.py --quiet`). Under "locks in main + validator-stays-simple," any pre-commit inside a worktree with `tasks/index.yml` containing any `in_progress` task would fail because cwd-resolved `.locks/` is the worktree's empty one. Centralizing the resolution in the validator makes every caller correct by construction — including the inevitable case of someone debugging interactively from a worktree by running `python3 scripts/validate_tasks.py`. The revised decision is documented in PHASE_32_HANDOFF.md § "Resolved design decisions" #2 so future readers don't second-guess the validator's now-larger surface area. **Smoke-tested on `/tmp/wf-phase32-test` across 8 scenarios** (all green): `claim_task.sh --help` shows the new Lock-location block; claim from main → lock at main's `.locks/`; claim from worktree → lock STILL at main's `.locks/` (worktree's `.locks/` never exists in either case); validator from main with `in_progress` + valid lock → exits 0; validator from worktree (cwd=worktree) → resolves git-common-dir → finds main's lock → exits 0; validator from non-git-tmpdir (the `--self-test` fixture case) → falls back to `project_root / ".locks"` → 8 existing fixtures all pass (`SELF-TEST OK`); rewritten error text fires correctly when lock is hand-deleted and names canonical location + git-common-dir + re-run command; worktree path computation (`${REPO_ROOT}/../...-${TASK_LOWER}`) is unchanged — peer-worktree placement still works whether invoked from main or from a worktree. **Phase 32.x deferred candidate:** `.venv` symlink for Mac/Linux (ISSUE-0031); opt-in via `claim_task.sh --symlink-venv` flag or separate `link_worktree_venv.sh` helper, with OS guard skipping on `MINGW*`/`CYGWIN*` and pointing at Phase 23b's `.venv/bin/<cmd>` prose workaround for Windows. Filed as a Medium-priority entry in REVIEW_CHECKLIST.md alongside the closed cluster. **Scope:** 5 files + REVIEW_CHECKLIST.md + CLAUDE.md + PHASE_32_HANDOFF.md (new), no installer change, no schema version bump, no new permission rules, no new scripts. **Housekeeping bundled:** the cluster checkbox in Medium-priority flipped from `[ ]` to `[x]` with "Resolved Phase 32, 2026-05-22" prefix; "Open BeanRider issues" paragraph at top of REVIEW_CHECKLIST.md updated (count of remaining Medium-priority dropped from five to four; ISSUE-0031 named as Phase 32.x carryover); CLAUDE.md Phase 31 row's `(this commit)` placeholder updated to `36ee6ef`. **First downstream consumer:** BeanRider's next `bash scripts/sysop-update.sh` cycle, which exercises the new claim path on first `/claim-task` and confirms pre-commit hooks continue working inside worktrees with an `in_progress` task in `tasks/index.yml`.
 
 ## Phase 33
 
@@ -227,7 +227,7 @@ The orphan "if not mechanically searchable" sub-step (line 553 pre-Phase-46) get
 
 **Scope.** One file edited (`core/skills/security-audit/SKILL.md`), +8 -5 net lines across two contiguous regions (anchor-type list insertion + step renumber). No new files, no installer change, no permission-rule change, no script change. Backward compatible — the routing tree is structurally additive (it absorbs the legacy single-grep path as the new branch 1.b "Pattern-anchored"), so any consumer's existing in-flight `/security-audit` convention sweep that was applying the old prose still maps to a valid branch in the new tree.
 
-**Phase 47 deferral (gdp `2fdca506`).** The remaining heavy backport from the Phase 45 absorption audit — gdp's `/codebase-review` ESLint + pip-audit ingest (`2fdca506`, 2026-05-20) — is filed as a Medium-priority REVIEW_CHECKLIST entry with no deferral trigger (just queued for the next absorption window). Scope estimate: ~600-line diff (gdp's `scripts/run_checks_impl.py` +221, `tests/test_run_checks.py` +319, `.claude/checks.yml` +41, plus skill/doc edits). Three sub-decisions for Phase 47 design: (a) port the two Python helpers and generalize gdp's hardcoded `frontend/node_modules/{eslint,eslint-config-next}` + `requirements.txt:1` paths to Sysop placeholder vocabulary; (b) decide the tests question — defer like Phase 45a did, extend the installer to ship `core/companion/tests/`, or stand up Sysop-side CI under a new top-level `tests/`; (c) skill table edits for `/codebase-review` Step 2b and `/security-audit` Step 2b-2 (both gain `lint-error` and `pip-audit-vuln` registry-entry rows). Filed during Phase 46 commit prep so future sessions can find it via `grep -E "Filed 2026-05-27 by Phase 46"`. **Update 2026-05-27:** Phase 47 spec filed at [`PHASE_47_SPEC.md`](./PHASE_47_SPEC.md) (commit `a271462`); see Phase 47 section below for the design narrative.
+**Phase 47 deferral (gdp `2fdca506`).** The remaining heavy backport from the Phase 45 absorption audit — gdp's `/codebase-review` ESLint + pip-audit ingest (`2fdca506`, 2026-05-20) — is filed as a Medium-priority REVIEW_CHECKLIST entry with no deferral trigger (just queued for the next absorption window). Scope estimate: ~600-line diff (gdp's `scripts/run_checks_impl.py` +221, `tests/test_run_checks.py` +319, `.claude/checks.yml` +41, plus skill/doc edits). Three sub-decisions for Phase 47 design: (a) port the two Python helpers and generalize gdp's hardcoded `frontend/node_modules/{eslint,eslint-config-next}` + `requirements.txt:1` paths to Sysop placeholder vocabulary; (b) decide the tests question — defer like Phase 45a did, extend the installer to ship `core/companion/tests/`, or stand up Sysop-side CI under a new top-level `tests/`; (c) skill table edits for `/codebase-review` Step 2b and `/security-audit` Step 2b-2 (both gain `lint-error` and `pip-audit-vuln` registry-entry rows). Filed during Phase 46 commit prep so future sessions can find it via `grep -E "Filed 2026-05-27 by Phase 46"`. **Update 2026-05-27:** Phase 47 spec filed at `PHASE_47_SPEC.md` (commit `a271462`); see Phase 47 section below for the design narrative.
 
 **First downstream consumer.** BeanRider absorbs Phase 46 via the next `bash scripts/sysop-update.sh` cycle. The behavioral change is visible on the next `/security-audit` round that promotes a symbol-anchored security convention — instead of a grep-only sweep that misses Python import aliases, the agent now routes through `LSP.findReferences` and surfaces all callers regardless of alias / rename. For consumers whose security code is grep-friendly (no aliases, no dynamic dispatch), behavior is identical to pre-Phase-46. No schema bump, no migration path, no marketplace.json change.
 
@@ -235,7 +235,7 @@ The orphan "if not mechanically searchable" sub-step (line 553 pre-Phase-46) get
 
 ## Phase 47 (spec filed 2026-05-27 — pending execution)
 
-Phase 47 (spec commit `a271462`) is the first Sysop phase to land as a **design spec without execution** — full design narrative + adversarial-review-incorporated implementation steps are filed at [`PHASE_47_SPEC.md`](./PHASE_47_SPEC.md), and execution is queued for the next absorption window. Goal: port gdp commit `2fdca506` (the `/codebase-review` ESLint + pip-audit ingest) into Sysop **with tests**, by first standing up Sysop's own `tests/` directory + GitHub Actions CI, then using that infrastructure to land `2fdca506` and backfill previously-skipped test files from Phases 36 / 37 / 40 / 44 / 45a.
+Phase 47 (spec commit `a271462`) is the first Sysop phase to land as a **design spec without execution** — full design narrative + adversarial-review-incorporated implementation steps are filed at `PHASE_47_SPEC.md`, and execution is queued for the next absorption window. Goal: port gdp commit `2fdca506` (the `/codebase-review` ESLint + pip-audit ingest) into Sysop **with tests**, by first standing up Sysop's own `tests/` directory + GitHub Actions CI, then using that infrastructure to land `2fdca506` and backfill previously-skipped test files from Phases 36 / 37 / 40 / 44 / 45a.
 
 **The three-option choice + rationale.** The Phase 46 deferral paragraph (above) named three sub-decisions for Phase 47 design; (b), the "tests question," is the load-bearing one. Options surveyed:
 
@@ -274,7 +274,7 @@ Full sub-agent transcript verbatim in spec § 7; finding × resolution table in 
 
 ## Phase 47a + 47b + 47c (executed 2026-05-27)
 
-Phase 47 executed in one session against the adversarial-review-incorporated spec at [`PHASE_47_SPEC.md`](./PHASE_47_SPEC.md). All three sub-phases landed together: 47a (test infrastructure), 47b (gdp `2fdca506` ESLint + pip-audit ingest port), 47c (backfill of `test_next_task.py` + `test_validate_tasks.py`). **104 tests passing** end-to-end (3 smoke + 21 ported `test_run_checks.py` + 23 Sysop-original generalization tests + 41 ported `test_next_task.py` + 16 ported/original `test_validate_tasks.py`). Zero (a)-classified script regressions, zero (c)-classified deferrals against gdp absorptions — every gdp test in scope landed in Sysop on first port.
+Phase 47 executed in one session against the adversarial-review-incorporated spec at `PHASE_47_SPEC.md`. All three sub-phases landed together: 47a (test infrastructure), 47b (gdp `2fdca506` ESLint + pip-audit ingest port), 47c (backfill of `test_next_task.py` + `test_validate_tasks.py`). **104 tests passing** end-to-end (3 smoke + 21 ported `test_run_checks.py` + 23 Sysop-original generalization tests + 41 ported `test_next_task.py` + 16 ported/original `test_validate_tasks.py`). Zero (a)-classified script regressions, zero (c)-classified deferrals against gdp absorptions — every gdp test in scope landed in Sysop on first port.
 
 **Spec-first pattern outcome.** The adversarial-review-incorporated spec ran cleanly off the file with no material surprises mid-implementation. Two minor tweaks surfaced during execution and were absorbed inline: (1) gdp's `test_run_checks.py` is 414 lines, not the spec's 733 (the spec also recorded the post-`2fdca506` function count of 21, which was correct — the line count assumption diverged from reality); (2) the spec's "schema_version=2 + valid blast_radius" Sysop-original test used `small` as the value, but Sysop's enum is `{single-file, single-module, cross-module, architectural}` — corrected to `single-module` during run. Neither tweak required a spec revision because both were factual reconciliations against the live gdp / Sysop source, not design decisions. **The spec-first pattern is now confirmed as a viable option for future phases ≥ 1 day in scope** — design errors caught by adversarial review BEFORE execution paid back; line-count drift in a four-page spec cost ~5 minutes of execution-time reconciliation.
 
@@ -748,7 +748,7 @@ Phase 67 builds **Tier 2** of the convention-demotion plan, closing the long-ope
 
 > Section added by Phase 116 (2026-07-16). This rename predated the convention of authoring every phase's prose here — its only prose home was its `CLAUDE.md` phase-table row, a gap found while verifying that Phase 116's table truncation lost nothing. The row's prose is preserved verbatim below (commit `969a4cc`, PR #9). See `## Rename round 2` for the 2026-07-11 `jig` → `sysop` re-execution.
 
-`wade-flow` → `jig` (launch-prep, ahead of public): Batches A–E of [`tools/RENAME_PLAN.md`](./tools/RENAME_PLAN.md) — manifests (`marketplace.json` + 12 `plugin.json`), `install.sh` identifiers (`.claude/jig.lock`, `jig_commit` key, `JIG_SRC`/`JIG_ISSUES`, `get_jig_commit`/`references_jig`, pack-prefix logic, heredoc vars), `git mv wade-flow-update.sh → jig-update.sh` (history preserved), prose sweep (README/WORKFLOW(.md/_GUIDE)/workflow.html/PHASE_LOG/skills/maps/schema/rubric/CONTRIBUTING/issue-templates/tests-docs), internal `tools/` slugs. Identifiers lowercase `jig`/`JIG`; brand `Jig` in prose. Gate green: 387 tests, JSON valid, install round-trip (fresh/update/adopt) exits 0 with jig naming, residue grep clean but for the **protected `wade-flow-extract-base` tag** (literal source-repo name, deliberately untouched) + Tier-4 internal/history (`CLAUDE.md`/`REVIEW_CHECKLIST.md`/`REVIEW_ARCHIVE.md`/`*_HANDOFF.md` — never ship; "wade-flow" there is historically correct). **Batch F remains (off-repo, user action):** GitHub repo rename `wade-cms/wade-flow` → `wade-cms/jig`, `git remote set-url`, consumer migration (BeanRider, GDP).
+`wade-flow` → `jig` (launch-prep, ahead of public): Batches A–E of `tools/RENAME_PLAN.md` — manifests (`marketplace.json` + 12 `plugin.json`), `install.sh` identifiers (`.claude/jig.lock`, `jig_commit` key, `JIG_SRC`/`JIG_ISSUES`, `get_jig_commit`/`references_jig`, pack-prefix logic, heredoc vars), `git mv wade-flow-update.sh → jig-update.sh` (history preserved), prose sweep (README/WORKFLOW(.md/_GUIDE)/workflow.html/PHASE_LOG/skills/maps/schema/rubric/CONTRIBUTING/issue-templates/tests-docs), internal `tools/` slugs. Identifiers lowercase `jig`/`JIG`; brand `Jig` in prose. Gate green: 387 tests, JSON valid, install round-trip (fresh/update/adopt) exits 0 with jig naming, residue grep clean but for the **protected `wade-flow-extract-base` tag** (literal source-repo name, deliberately untouched) + Tier-4 internal/history (`CLAUDE.md`/`REVIEW_CHECKLIST.md`/`REVIEW_ARCHIVE.md`/`*_HANDOFF.md` — never ship; "wade-flow" there is historically correct). **Batch F remains (off-repo, user action):** GitHub repo rename `wade-cms/wade-flow` → `wade-cms/jig`, `git remote set-url`, consumer migration (BeanRider, GDP).
 
 ## Phase 68 (executed 2026-06-26 — `run_checks/` package backport + `_log.py` single-source decision)
 
@@ -1015,7 +1015,7 @@ Closes the Medium launch-prep item filed 2026-07-06 by Phase 76. Sysop shipped a
 
 ## Phase 80 (executed 2026-07-07 — `/test-audit` standing test-quality assessment skill + `test-assessment-rubric.md`)
 
-Closes the Medium item filed 2026-07-06 (main-session), decisions ratified 2026-07-07. Builds the skill the [`tools/TEST_AUDIT_SPEC.md`](./tools/TEST_AUDIT_SPEC.md) spec (filed the same morning, commit `ba69ead` #37) designed and the 2026-07-07 ratification (all 7 decisions on their spec recommendations) unblocked.
+Closes the Medium item filed 2026-07-06 (main-session), decisions ratified 2026-07-07. Builds the skill the `tools/TEST_AUDIT_SPEC.md` spec (filed the same morning, commit `ba69ead` #37) designed and the 2026-07-07 ratification (all 7 decisions on their spec recommendations) unblocked.
 
 **The gap it closes.** Every test mechanism in Sysop is **forward-facing / diff-anchored**: `## Test decision` (58b) covers the current task, adversarial #7 judges the current plan, `/review-close` Step 2d verifies the current diff, the coverage gate (61a/61b) measures **only changed crown-jewel lines** by design, and `/codebase-review`'s "Test Coverage Gaps" is per-file/reactive. Two capabilities had **no home**: (1) *standing* coverage assessment — a module 0%-covered for a year but never in a diff produces zero findings anywhere; (2) *existing-test health* — obsolete / redundant / hollow tests, flagged today only by one reactive `/codebase-review` bullet. `/test-audit` is the structural replacement for the ad-hoc "occasionally ask Opus to look for weak testing" practice — and, like `decomposition-rubric.md` / `adversarial-review.md`, **the value is the calibrated rubric, not the skill shell.**
 
@@ -5336,3 +5336,2089 @@ repo larger than ARG_MAX — found by the test that tried to exercise it.
 **Byproduct:** collapsing `grep.py`'s import block shifted every line below it and broke a
 registered doc citation. The import is back to one-name-per-line, and the one genuine +1
 drift is updated in `docs/one-rule.md` and the citation registry.
+
+**Mirror push (2026-08-11, same day — carries Item B + Phases 188 + 189; and closes an
+unrecorded push).** Public `6324796` via `getsysop/sysop` PR #29 (required `pytest` green,
+squash-merged); tester `a5f55cb` force-pushed to `wade-cms/sysop-tester`, confirmed **Private
+before and after**. Cut from merged `main` `0b668de`. **Public main, the tester tip and the
+gated build all resolve to git tree `bd044bc`**, verified on cold clones of both repos after
+the push — the gate and both mirrors are provably the same bytes. Gate on the exact pushed
+tree: Passes 1a/1b/1c/3/**4** and the rename-residue diff all empty; Passes 2 and 2b **0 new /
+0 removed** against the published snapshot; **population agreement 287 = 287, identical sets**;
+Pass 5 green in the source repo at the cut SHA (44 passed); sterilized-tree suite **2997 passed
+/ 125 skipped / 0 failed**; per-commit public-history Pass 1a re-run **after** the push over the
+now-23-commit clone returning exactly the 15 known-and-accepted commits with the new tip clean
+at `content:0 names:0`.
+
+**Two method notes, both from getting it wrong first.** (1) **Passes 2 and 2b must run on a
+pristine build.** Running the step-4 suite inside the step-2 tree leaves `__pycache__`
+directories, and the passes are *filesystem*-scoped rather than tracked-file-scoped, so the
+first Pass-2 diff returned two `Binary file …pyc matches` rows that were my own test run. Re-run
+on the untouched `cut_public_release.sh` build, both passes are 0 new / 0 removed. The runbook
+orders step 3 before step 4 for exactly this reason and running them concurrently breaks it.
+(2) **The handoff prompt's delivered-delta count was understated** — it said "8 files including
+four skills"; derived against the *published tree* rather than a private commit range, it is
+**26 files, of which 10 under `core/` and 5 skills** (`auto-build` was the missed one). Diffing
+the built mirror against the published mirror is the derivation that cannot drift, because it
+compares the two things that actually ship.
+
+**The previously unrecorded push is recorded here too.** Public `cb6abac` / tester `a52987e`
+(snapshot of private `fbbc422`, Phases 186–187) was pushed and **announced** on 2026-08-11 at
+17:36Z, but no `docs: record the … mirror push` commit and no checklist entry was ever written —
+the first push since 178–185 with no private record at all. Nothing was wrong with the push;
+the record simply stopped at the announcement.
+
+**The announcement went through its own two-lens round, and the round rewrote it.** [Discussion
+#1](https://github.com/wade-cms/sysop-tester/discussions/1#discussioncomment-17980697). The
+claims lens found **three false statements**, two of which I had verified badly rather than not
+at all: (i) the `--ref v0.1.0` *refusal mechanism* was described as `install.sh`'s Phase-128
+namespace check, which a tester never reaches — the tester repo carries **no tags**, so the rev
+fails to resolve 22 lines earlier and the error's own `git fetch --tags` remedy fetches nothing
+(the tag exists only on the public repo, `d5a288b`); (ii) **`unroutable` was defined backwards** —
+it means *a check that declares no executable form*, not unattributed findings, and it previously
+rendered as `skipped: not-configured`, not `executed with 0 findings`; (iii) **`/review-close`'s
+ISSUE-0016 guard was never disabled** — `$2` needs a *third* argument word and that skill's whole
+argument surface is `[--dry-run]`, so the index stayed literal and the awk ran correctly. The
+reachable defect there is Step 3c's `$0`, the *first* word, which `--dry-run` does replace.
+
+**Both lenses independently found the same omission, and it was the lead.** The draft never
+mentioned the one Phase-188 site that is reachable by a documented invocation, measured, and
+present in **loop mode** — `/codebase-review` and `/security-audit` Step 2a-0 built their
+inventory with `awk -F/ '{print $1}'`, so `--scope backend` made it `{print backend}`, an unset
+awk variable; the enumeration printed **one empty line** and the completeness invariant then
+reported **complete coverage** against it. Reproduced on the pushed tester tree: **1 line under
+the old form, 16 under the new**. The draft had led with two skills loop mode does not install.
+
+**The actionability lens installed both modes from both snapshots and diffed real consumer
+trees**, which produced three things no reading would have: the update is a **silent no-op when
+`$SYSOP_SRC` still points at the old clone** — full success transcript, clean `git status`, exit
+0, and `install.sh:4815-4817` prints `was:`/`now:` with no branch for "these are equal"; the
+update prints **`⚠` on 4 files (2 in loop mode)** on a pristine tree, because the flag is a
+≥5-deleted-lines threshold this snapshot's rewrites clear by construction (verified: `accounting.py`
+−27, `daily-summary` −23, `review-close` −9, `sysop-update.sh` −5, whose five deleted lines are
+*all comments*); and the delivered set is **10 files in full mode, 6 in loop** (`install.sh:3248`
+skips the workflow docs in loop mode, and three of the five skills are loop-excluded).
+
+**My own "check it yourself" block was wrong twice, and running it is what found that** — the
+rule from Phase 168. `grep -rn -- 'pattern' . --exclude-dir=.git` makes BSD grep treat the flag
+as a file operand and error, and the command was **not empty on the new snapshot**:
+`tests/test_install_ref_sh.py` carries the literal `--ref v0.1.0` three times as the new guard's
+own fixtures. Re-scoped to shipped surfaces it flips exactly — **10 lines before, 0 after**,
+which independently reproduces the `--ref` fix's own "11 occurrences on 10 lines across 5 files".
+
+**Three findings filed rather than fixed** (all § Medium): the shipped `review-close/SKILL.md:80-82`
+comment asserting the ISSUE-0016 guard was disabled — a claim the tree does not support, and it
+went out in *this* snapshot; `SECURITY.md`'s new "pin to a reviewed commit SHA" advice carrying no
+warning that a **tester-repo** SHA is unresolvable after the next force-push (the note says it; the
+doc does not); and the `was:`/`now:` no-op silence. The first is the Phase-175/176 class — a shipped
+sentence asserting a consequence — and it is the one to fix first.
+
+## Phase 190 (executed 2026-08-11 — the batch status a consumer is told to use, and that no orchestrator can process)
+
+> **WITHDRAWN — read this first. The mechanism described below was built and then
+> DISQUALIFIED by this phase's own three-lens round; none of its code merged.** The
+> section headed *"What ships"* describes what was *built*, not what shipped — nothing
+> did. The round's findings, and the two § High defects it produced, are in
+> § *Phase 190's adversarial round* at the end of this entry. Read the build narrative for
+> the derivation and the design decision, both of which stand; do not read it as a
+> description of the tree.
+
+**The filing was the `Status` divergence: two near-identical spellings with opposite
+semantics. The tree is worse than that — it is four vocabularies, and the value both
+review generators advertise has a defined arm in 2 of 11 reader sites.**
+
+`review_tasks.md` batch headers carry a backtick-wrapped status. `codebase-review:645`
+and `security-audit:675` print the legend `Pending · In Progress · Review Ready · Merged`,
+so **`Review Ready` is the value a fresh consumer is told to use.** `WORKFLOW.md:620`
+declared a different list — `Pending` → `In Progress` → `Complete` | `Merged` |
+`Ready for Review` — which omitted `Review Ready` entirely.
+
+**The two spellings are wired as opposites, and both wirings are deliberate.**
+`close_batch.sh:289` groups `Review Ready` with `Pending`/`In Progress` (**live** — flip
+it to `Merged`) while `:290` groups `Ready for Review` with `Complete` (**finished** —
+nothing to flip). `batch_work.sh:509` allows `--release` on `Review Ready`; `:494`
+hard-`exit 1`s on `Ready for Review` (*"releasing a finished batch would re-open work
+that is already done"*). So they are not two spellings of one state; they are two states
+whose names are near-homophones.
+
+**Where the advertised value has no arm, derived site by site.** Verified by reading each
+one, not by grep count: `batch_work.sh:281` — falls to `*)` and renders `❓`, the glyph a
+*typo* gets, while `close_batch.sh` treats it as a normal flip; `batch_work.sh:285` —
+`--list` hides only `Complete`/`Merged`, so the batch **is offered**; `batch_work.sh:310`
+— `[[ "$batch_status" != "Pending" ]]` then silently `return 0`s, so it is offered and
+then refused; `auto-fix:74`, `auto-judge:76` and `triage:70` all select **positively** on
+`Pending`, so it is never processed; `claim-task:264-266` has arms for `Pending`,
+`In Progress` and `Merged|Complete|Ready for Review` and **no arm for it at all**, and no
+final arm either; `sitrep_survey.py:1051` drops it from the discrepancy scan;
+`archive_review_tasks.py:100` matches `(Merged|Complete)`, a **fourth** vocabulary, so it
+never archives.
+
+**The consequence is a stranding, not a collision** — the round-corrected reading in the
+filing, and the derivation confirms it. Because all three orchestrators select positively
+on `Pending`, a `Review Ready` batch is not contended over; it is silently never
+processed, while `--list` still shows it and `close_batch.sh`/`--release` still treat it
+as live. Stranded and, thanks to the `/sitrep` exclusion, invisible at the same time.
+
+**The design decision, and the one I nearly got backwards.** The obvious fix is to stop
+the generators advertising a value the doc does not declare — swap the legend to
+`Ready for Review`. **That would have broken the merge path.** `close_batch.sh` flips
+`Review Ready` to `Merged` and treats `Ready for Review` as terminal, so the swap moves
+every batch using the advertised value from the flip arm to the nothing-to-flip arm.
+Caught by reading `close_batch.sh:289-290` before editing the generators rather than
+after. `Review Ready` therefore **stays**: it is what the generators advertise, its
+transition is already implemented correctly, and retiring it would strand batches that
+already exist in consumer trees. The defect is that the other nine readers never learned
+it.
+
+**What ships.** `WORKFLOW.md` § Batch status values becomes a **declared table** — six
+values × meaning / writer / `close_batch.sh` disposition / claimable — plus the explicit
+statement that `Review Ready` is live and `Ready for Review` terminal, and that a status
+outside the table is a hard error rather than a default. Writer attributions are derived,
+not assumed: the generators emit `Pending` (`codebase-review:671`), `batch_work.sh:395`
+writes `In Progress` and `:607` writes back to `Pending` on release, `close_batch.sh:401`
+writes `Merged`, and **no script writes** `Review Ready`/`Complete`/`Ready for Review` —
+so "set by hand" is a checked claim. Then the arms: `claim-task` gains a `Review Ready`
+arm *and* a final unrecognized-status arm that refuses to fall through to the claim path;
+`batch_work.sh` gains an icon arm so the value stops rendering as unrecognized;
+`sitrep_survey.py` includes it in the discrepancy scan because it is live; and the three
+orchestrators name it in their skip lists so the skip is a **decision** rather than an
+omission that happens to have the right effect.
+
+**`tests/test_batch_status_vocabulary.py` (10 tests) pins the table as the single source.**
+And the guard was wrong twice before it was right — both found by the author battery, not
+by reading.
+
+**(1) The first version could not fail.** `test_no_reader_uses_an_undeclared_status`
+scanned for status literals with a regex alternation listing *the six declared values*,
+then subtracted the declared set. An undeclared value cannot match a pattern that only
+lists declared ones, so the subtraction was empty by construction. Battery row R01 — add
+a `"Blocked")` arm to `batch_work.sh` — **survived**, which is what exposed it. It parses
+the `case` arms structurally now and checks membership.
+
+**(2) The second version false-killed a correct edit.** Row N02 reordered the
+alternatives inside one case arm — bash-identical — and the guard went red, because it
+tested `'"Review Ready")' in line`, a substring that requires the value to be **last** in
+the alternation. Membership over parsed alternatives has no such dependence. This is the
+control class Phase 189's round filed: a control that is a behaviour-preserving *rewrite*
+of scanned content, not a comment edit, which is why it could catch anything at all.
+
+**(3) And the parser under-collected, silently.** Its first word pattern required every
+word of a status to be capitalised, so `Ready for Review` — lowercase "for" — never
+matched, and **both** terminal arms were invisible in **both** scripts. Every downstream
+assertion still passed, because each only asks about arms the parser did find. A parser
+that under-collects weakens every check built on it without reddening anything, so
+`test_the_arm_parser_sees_both_sides_in_both_scripts` now asks the opposite question:
+does the parse contain what the file is known to contain?
+
+**Author battery: 10/10 killed, 2 controls clean, 0 false kills, 0 reverts** —
+`tools/phase190_mutations.py`. Two verifiers on purpose: `vocab` (the new guard) and
+`existing` (the pre-existing script suites), to separate coverage this phase bought from
+coverage that already existed. **8 of the 10 are killed only by `vocab`**; the two that
+both catch are the `close_batch.sh` arm regressions. Read the fraction honestly: 0% of
+these rows are reverts of my own edits, but they are all my own nominations, and the five
+phases before this one each reported an all-killed author battery that an independent
+battery then walked through.
+
+**Scope, stated because the brief asked for more.** The brief's Phase 190 was the
+metadata contract across `Overlap:`, `Coverage (…)` and `Status`. Wade cut it to `Status`
+alone. The `#366`/`#367` populations are **corrected in their checklist entries instead**,
+because the derivation found them understated in three ways: every
+`codebase-review`/`security-audit` line number in the brief is stale by **exactly +6**
+(Phase 188 inserted above every anchor, so `:392` is now `:398`); the metadata field set
+with machine readers is **seven, not six** — `Flag:` and `Triaged:` were uncounted and
+are the most heavily read of the set, while `Coverage (…)` is round-level and is read
+from `review_tasks.md` by no script at all; and `<VERIFY_COMMAND>` has **four**
+interpolation sites, not two, the uncounted pair (`auto-fix:286`, `auto-judge:331`) being
+the `cd <WORKTREE_PATH> && <VERIFY_COMMAND>` line the fix agent is actually told to run.
+
+### Phase 190's adversarial round — the phase is DISQUALIFIED by it
+
+Three lenses per the governor (behaviour plus a numeric record). **The round did not
+improve this phase; it established that it cannot ship**, and the phase's product is
+therefore the round record plus two § High filings, on the Phase 155 / #361 precedent.
+
+**Lens 1 (does it execute) ran the tree and contradicted three central claims.** It built
+a fixture carrying one batch in each of the six declared statuses plus an undeclared one
+and ran the real scripts against it.
+
+* **`WORKFLOW.md`'s new `claimable?` column is false for four of six rows.** `batch_work.sh
+  <N>` creates a branch, worktree and lock for `Review Ready`, `Ready for Review`,
+  `Merged`, `Complete` and undeclared statuses alike. My derivation said `batch_work.sh:310`
+  refuses a non-`Pending` batch; that `return 0` is inside the `claim_batch()` **helper**,
+  which performs only the `review_tasks.md` status flip and is called at `:690` *after* the
+  worktree path. The sole status branch on the claim path is `:683`, which names
+  `Complete|Merged` and merely **warns before proceeding**. So the batch is offered and then
+  **claimed**, not refused — and `:683` is a reader site absent from my count of 11. Filed
+  § High: two agents can hold worktrees on one branch through the front door.
+* **"A status outside this table is a hard error, not a default" is false**, and so is the
+  clause about `--list` still displaying it. `close_batch.sh:268` extracts the status with
+  `grep -oE '`[A-Za-z ]+`…'` and **no `|| true`**, so under `set -euo pipefail` any status
+  carrying a hyphen or digit aborts the script *before* the `*)` arm that paragraph
+  describes. Measured: `close_batch.sh 1 2 7` flipped two batches to `Merged` in the working
+  tree, printed a bare `── Batch 7 ──` and exited 1 — no commit, no summary, no diagnostic,
+  `review_tasks.md` left dirty. My battery used only alphabetic statuses, which is exactly
+  why it never saw this. Filed § High.
+* **The `/sitrep` edit reproduces the defect it fixes, one function below.** Admitting
+  `Review Ready` past the filter without teaching the classifier ladder beneath it means the
+  batch now renders identically to an `In Progress` one — *"next: continue work"* — while
+  the table this same phase declares says the work is done and `claim-task` says the next
+  move is `close_batch.sh`. And the function is `_classify_review_batches`;
+  `_find_discrepancies` never receives batches at all, so "discrepancy scan" is the wrong
+  name in the record and in the shipped test's assertion message.
+
+**Lens 3 (guards real) wrote 41 rows against my 12 and left the guard with almost nothing.**
+**2 of 26 defect mutations killed — 24 survived, 92%** — against my reported 10/10. The
+author battery's rows each edit the exact literal their assertion was written against, so
+10/10 measured wiring and nothing else, which is the failure this project's ledger exists to
+name. Four of the phase's five shipped edits can be reverted or inverted with the **full
+3,205-test suite green**.
+
+* **A test that is true regardless of its subject.** `test_claim_task_has_an_arm_for_the_advertised_value`
+  scans all ~700 lines for any `` - ` `` bullet containing `` `Review Ready` ``. Lens 3
+  deleted **every** arm of the status ladder, replaced them with *"do whatever seems best;
+  there is no declared vocabulary"*, added one unrelated bullet mentioning the value — and
+  the suite stayed **green**.
+* **The disposition assertion never checks the disposition.** It accepts `"flips"` or
+  `"terminal"` anywhere in the row, so the table may state the exact opposite of the arms
+  the guard separately pins. For `Ready for Review` it is satisfied by the *Means* cell
+  ("Deprecated spelling of a terminal state") no matter what the disposition column says.
+* **The remedy the guard prescribes does not work.** Its failure message says *"Add it to
+  the table … or remove the arm"*; doing precisely that stays **red**, because the reader
+  tests compare against the hardcoded `EXPECTED_VALUES` rather than the parsed table. The
+  single source of truth is the test file, and the message points the maintainer at the
+  wrong one.
+* **The arm parser's alphabet is narrower than bash's grammar.** `blocked)`, `Blocked*)`,
+  `'Blocked')` and `Awaiting_Merge)` all evade the headline anti-drift check — the very
+  check whose vacuity row R01 was supposed to have closed. And because one unparseable
+  alternative kills the whole arm, `Pending|Blocked*)` would hide the declared values too.
+* **12 of 15 negative controls FALSE-KILLED** (11 of 14 behaviour-preserving rewrites),
+  each proved bash- or Python-equivalent by execution: single-quoted case patterns, an
+  unquoted subject, renaming `BATCH_STATUS`, splitting an arm in two, three ordinary
+  refactors of the sitrep tuple, a `*` bullet marker, a comma-separated legend. **Eleven
+  false kills against two kills is the wrong side of the ratio** — a guard that reddens on
+  correct edits teaches the next maintainer to weaken it. Worth keeping: the pinned sitrep
+  line is 73 characters and reaches 91 the moment a fourth live value is added, so the
+  *sanctioned* edit produces exactly the line wrap the guard rejects.
+
+**What survives the round, and it is not nothing.** The live-vs-terminal reading is correct
+and worth having declared: lens 1 ran all six values through `close_batch.sh` and
+`--release` and the disposition column matched on every one. The generators-versus-
+`WORKFLOW.md` divergence is real. And the decision *not* to swap the generators' legend was
+right for the right reason — the swap would have moved every batch carrying the advertised
+value out of the flip arm.
+
+**Disposition.** The code does not merge. What ships from Phase 190 is this record, the
+corrected `#366`/`#367` populations already written into their checklist entries, and the
+two § High filings the round produced — both of which are larger, better-evidenced defects
+than the vocabulary problem the phase set out to fix.
+
+**Lens 2 (claims true) audited the record and the shipped prose, and corrected this record
+twice.** It reproduced the author battery exactly (`10/10`, `2 controls`, `0 false kills`,
+`8 of 10 vocab-only`) and confirmed all six rows of the `close_batch.sh` disposition column
+by execution — so the half that survives is independently verified. Then:
+
+* **The table's load-bearing sentence is false, and the lens measured it rather than
+  arguing it.** `WORKFLOW.md:620` ships *"pins **every reader's arms** against it, so a
+  reader that grows a new value without landing here fails the suite"*, while the guard's
+  own docstring 380 lines away in the same phase disclaims exactly that. The lens added an
+  undeclared status `Draft` to **four readers at once** (`sitrep_survey.py`, `next_task.py`,
+  `archive_review_tasks.py`, `auto-fix/SKILL.md`) and re-ran the full suite: **`1 failed,
+  3203 passed, 6 skipped` — byte-identical to baseline. Zero kills.** `Blocked` is caught
+  only by accident, because `tests/test_sitrep_survey.py:895` happens to use it as a fixture
+  literal.
+* **"Would have broken the merge path" is the wrong label** — mechanism right, name wrong,
+  and it was the headline of the `CLAUDE.md` row and the commit message. `close_batch.sh`
+  merges nothing; its own header says it runs *after* branches are merged. The git merge is
+  `/review-close` Step 4a; `close_batch.sh` is Step 4b. The swap would have broken the
+  **close path** — the record close — not the merge. Corrected here and in the row. Also
+  loose: *"every batch using the advertised value"* — a legend edit cannot retitle batches
+  that already carry the status.
+* **"Four vocabularies" was never derived** — `PHASE_LOG` labels `archive_review_tasks.py:100`
+  "a fourth" and never names the first three, and the lens counts at least five distinct
+  value-sets. **Recorded as UNVERIFIABLE as stated**, which is the honest disposition for a
+  number that reached the `CLAUDE.md` row without a derivation behind it.
+* **The undercount is worse than `batch_work.sh:683`.** Four more reader sites: `next_task.py:692`
+  (positive `Pending` selection — the exact shape counted three times for the skills, but in
+  a script), `next_task.py:580` (**a shipped vocabulary comment that still omits `Review
+  Ready` after this phase**, so "the other readers learn it" left a declaration un-taught),
+  `review_index.py:635-636`, and `sitrep_survey.py:1092`. The phase's own two artifacts
+  disagree: the test file lists `next_task.py` in "the full reader set" and the `PHASE_LOG`
+  enumeration of 11 does not.
+* **The guard's docstring names a test that does not exist** — `test_no_reader_uses_an_undeclared_status`,
+  renamed to `test_no_shell_reader_branches_on_an_undeclared_status` during the rewrite and
+  not updated in the prose that introduces it. `tools/mutation_battery.py:33-35` names this
+  exact class as a measured past failure.
+* **The `Pending` row's writer is incomplete, on the one row the derivation had already
+  answered.** `batch_work.sh:607-609` writes `Pending` back on `--release`; this record says
+  so three lines above the sentence claiming the attributions are derived, and the shipped
+  table dropped it.
+* **`In Progress` "claimable? no" contradicts the shipped ladder** — `claim-task:265` says
+  *"If no lock, it may be resumable — proceed"*, and `--resume` gets a batch past the stop
+  entirely. A fifth false cell in the same column, from a different source than the
+  `batch_work.sh` finding.
+* **This entry mixes pre- and post-change line coordinates for `batch_work.sh` without
+  labelling which** — `:281`/`:285`/`:310`/`:494`/`:509` are pre-change, `:395`/`:607` are
+  post-change, in the same paragraph. `:494`/`:509` sit in a sentence describing a
+  *still-current* fact, so a reader opening them at HEAD lands on unrelated code. The entry
+  criticises `#366`/`#367` for precisely this.
+
+**And the correction shipped stale in the commit that staled it.** The `#366`/`#367`
+checklist corrections — whose entire premise is that citations drift — added two new
+`WORKFLOW.md` citations, and this phase's own `+13`-line table insertion at `:620`
+invalidated both: `:628` → **`:641`**, `:1386` → **`:1399`**. Both substantive claims hold;
+only the numbers moved. **This couples the corrections to the disposition:** revert the
+table and `:628`/`:1386` are right again; keep it and they must be renumbered. Whoever
+executes the disposition needs that told to them, so it is in the next-session prompt.
+
+**Round total: three lenses, and the phase does not ship.** Lens 1 contradicted three
+central claims by running the tree; lens 3 left 24 of 26 defects alive and false-killed 12
+of 15 controls; lens 2 falsified the table's own guarantee by measurement and corrected two
+claims in this record. What survives is stated above and is genuinely useful — the
+live/terminal reading verified against all six values, and the reason not to swap the
+legend. Everything else is filed.
+
+## Phase 191 (executed 2026-08-11 — the claim path had no status decision, and a header that could not be parsed ate its neighbour)
+
+Two § High filings from Phase 190's round, plus the one-line record fix that round left
+open. Both filings were confirmed by execution before anything was edited. **Filing 2 was wrong
+about its own population** — it counted three charset sites where there are five — because
+it counted by reading source instead of by running it. Filing 1's defect claim was
+confirmed rather than corrected; its only population error runs the *other* way (it said
+"any status", where an unparseable status was invisible and wrote nothing). An earlier
+draft of this paragraph claimed both erred in the same direction, which the round showed
+was unsubstantiated for filing 1 and inverted. That is the lesson Phase 190's
+round stated in its ranked survivor list, and this phase is the first to be built under it.
+
+### Item 0 — the record fix
+
+CLAUDE.md's Phase 190 row carried `_unmerged_` in the Commit column. #377 merged as
+`26a332b`; the cell now says so, matching the Phase 155 precedent for a phase whose product
+is a record rather than code.
+
+### The claim path had no status decision at all
+
+`batch_work.sh <N>` created a branch, a worktree **and a lock** for a batch in every
+*parseable* status —
+`Merged`, `Complete`, `Ready for Review`, and values in no declared vocabulary alike. The
+guard everyone assumed existed is `claim_batch()`'s `!= "Pending"` early return, and it is
+not one: that helper performs only the `review_tasks.md` status flip, and its `return 0`
+returns from a **function** — the script continues to the branch/worktree/lock writes
+regardless — so returning early skips the flip and nothing else. The sole status branch on
+the claim path itself warned and proceeded.
+
+**The round corrected the stated mechanism, and this is the phase's own worst defect.** An
+earlier draft of this paragraph said `claim_batch` is called *after* those writes. It is
+called on the line **above** them (`:684` on `main`, writes at `:703`/`:712`). The
+conclusion held, but for the wrong reason, and the wrong reason shipped to five sites
+including two shipped files. It was inherited verbatim from the Phase 190 filing — whose
+own citation was also wrong — and repeated without being run, while `claim_batch`'s own
+messages three functions up ("The worktree and the lock **are still created**") contradict
+it in the same file. This paragraph opens by saying both filings erred by reading rather
+than running; this phase then did exactly that with the filing's central sentence.
+
+Why that is § High rather than untidy: `close_batch.sh` and `--release` are the only things
+that remove a batch lock. A second agent claiming a **terminal** batch the first still holds
+gets a worktree on the same branch while the first agent's lock stays live — the exact
+collision `scope_overlap.py` and the whole lock discipline exist to prevent, reached through
+the front door.
+
+**Scoped to the terminal states deliberately, and the round is why.** `In Progress` is the
+one status a batch carries *while* another agent holds it, and that arm proceeds on purpose
+— re-running after a dropped session is the documented way back in, and it announces the
+foreign claim rather than stepping over it silently. So the gate refuses five states where
+the collision is unlikely and admits the one where it actually happens. That is a resume
+affordance, not a closed collision; an earlier draft stated the collision claim
+unconditionally, which is false for exactly that state.
+
+**The fix is a status decision on the claim path, before anything is written** — not a
+widening of `claim_batch()`'s early return, which is correct for what that helper does. The
+arms **reuse** `--release`'s live/terminal split — not its arms inverted; only `Review
+Ready` actually inverts (release proceeds, claim refuses), while `Pending` acts on both
+paths, the terminal three refuse on both, and `In Progress` proceeds on both. That ladder's
+live/terminal split was verified by execution against all six declared values in Phase 190
+and is the one part of that phase worth reusing, and a claim gate that disagreed with the
+release gate about which states are live would merely relocate the confusion. So
+`Review Ready` is LIVE and refused because it is someone else's claim; `Ready for Review`
+is TERMINAL despite its name.
+
+`--force` keeps the deliberate follow-up-work affordance the old warn-and-proceed provided,
+and its flag parsing mirrors `--release`'s exactly (flags before the positional, a trailing
+flag rejected rather than silently ignored). `--force` does **not** open the undeclared
+arm: an unrecognized status is a parse or authoring problem, and forcing past it would
+claim a batch nobody can describe.
+
+### The close path aborted before the arm written for the case
+
+`close_batch.sh:268` extracted the status with no `|| true`, so under `set -euo pipefail` a
+status carrying a hyphen or a digit killed the run *before* the `*)` arm that exists for
+exactly that input — leaving `review_tasks.md` dirty with uncommitted `Merged` flips and
+printing no diagnostic at all. The same file states the `|| true` rule for its Branch and
+Grand-Total greps forty lines below.
+
+### The filed three charset sites were five, and the fifth is worse than the other four
+
+`[A-Za-z ]+` sat in `close_batch.sh`, `review_index.py` and `batch_work.sh`'s fallback —
+the filed three. Deriving rather than trusting found `sitrep_survey.py` as the fourth and
+`archive_review_tasks.py` as the fifth. The fifth is a data-loss defect the filing did not
+predict: `ANY_BATCH_HEADER_RE` is the **denominator** for a round's `all_merged` flag, so a
+status it cannot match makes an open batch invisible to the count and the archiver
+**relocates a round that still holds open work**. Verified by execution: `On-Hold`,
+`Blocked/waiting` and `Re-open` each produced `all_merged=True` on a round with an
+unfinished batch. Same harm class the file's own comment already documents for the fence
+bug it fixed earlier.
+
+### The defect neither filing predicted
+
+A `### Batch <N>` header the parser could not match did not merely make that batch
+invisible — it fell through as ordinary content, and the orphan's own `> **Branch:**`,
+`Scope:` and `Verify:` lines then overwrote the **previous** batch's. So `batch_work.sh 7`
+built a worktree named `…-batch-7` on branch `review/batch-8`, carrying batch 8's scope and
+batch 8's verify command. Present in the bash fallback and the Python index alike, so the
+shadow index was never a safety net for it. Widening the charset shrinks the class but
+cannot close it — a header with no status token, or a hyphen where the em-dash belongs,
+still fails to parse — so the affected parsers now treat an unparseable `### Batch` line as
+a closer. Only `batch_work.sh`'s fallback announces it on stderr; the three Python parsers
+close silently, and an earlier draft of this sentence claimed otherwise.
+
+**Which parsers those are was got wrong first, and the author-side pass caught it** — see
+§ *What the author-side pass found* below. The population is derived from the parsers that
+carry per-batch metadata (`git grep -ln 'Branch:\*\*' -- core/companion/scripts/`), which
+is the precondition for the defect: **five** files, of which `close_batch.sh` needs no closer of its own — though
+"structurally immune" overstates it, and the round said so. Its *fallback* range bound is
+`grep -n '^##'`, strictly broader than a batch header, so an unparseable one already
+terminates the range; but its **primary** path calls `review_index.py --range` and
+therefore inherits that parser's correctness rather than standing on its own. The other
+four now carry the closer.
+
+### Coherence: `--list` stopped advertising what the claim path refuses
+
+`Ready for Review` joins `Complete`/`Merged` in the `--list` filter because it is terminal
+despite its name and the claim path now refuses it; a listing that offers work the claim
+path will not take is the contradiction the pairing removes. `Review Ready` deliberately
+stays visible — it is live and it is the one status that needs someone to act — and it gets
+a glyph that is not `❓` — as do all six declared values, three of which share `✅` rather
+than each having a distinct one. The operative property is the one that matters: `❓` again
+means only "that is not a declared status", which is the single signal that table has.
+
+### What the build cost, and what caught it
+
+28 new tests in `tests/test_batch_status_gate.py`, every one driving the real scripts
+against a fixture rather than matching their source — the top item on Phase 190's ranked
+survivor list, and the reason that phase's guard died. Two tests in
+`test_batch_claim_kinds.py` moved their *setup* to `--force` (the invariant under test is
+lock-shedding; the bare claim was only scaffolding), and one stale citation in
+`test_intra_repo_citations.py` was renumbered.
+
+Suite: **3223 passed, 1 failed, 4 skipped** — `+28` collected (3228) against `main`'s 3200
+collected, and the delta is entirely the new file (both modified test files hold the same
+test count as `main`: 68 and 15). Stated as collected-against-collected because `main`'s
+often-quoted 3196 is a *passed* count and the two do not compose. The single failure is `test_every_phase_from_174_has_a_ledger_row`, and it is
+**expected between the phase commit and the round's close**: the ledger row is written after
+the round, and the ledger's own guard rejects a half-filled row. Verified to be the only
+failure rather than assumed.
+
+**Battery after the round: 48 of 49 defect mutations killed, 11 negative controls, 0 false
+kills** — 34 author rows (33 killed) plus 15 reviewer rows from the round (all killed),
+kept separate because the battery's own convention preserves reviewer-found mutations as
+the record of what the author's sweeps could not see. The single survivor is C04, recorded
+as a no-op with its reason — all six carried fields are read only under `$in_batch`, which
+that arm sets false, and two independent lenses hand-checked that argument. 6 of 49 rows
+are declared reverts (12%), a minority, per rule 1. The battery names its own limitation and it belongs
+in this record: **49 of 49 defect rows carry no `effect=` probe**, so a kill is evidence the
+guard is wired to the file, and an unprobed survivor could be a live hole or a no-op — the
+battery cannot distinguish them, and C04's disposition rests on a hand-checked argument
+rather than a measured one.
+
+### What the author-side pass found
+
+Run after the build commit (`07ae17c`) and before spawning anyone, per
+`_shared/adversarial-review.md` § *Before you spawn anyone*. Reported here because Phase 166
+established the rule had no invoker and so would not otherwise have run. Rule 1 is the
+battery above. Rules 2 and 4 both fired, and rule 4 is what found the real one — this change
+reinterprets a **delimiter** (`### Batch` now closes a batch) over a file several different
+steps append to, which is exactly its trigger.
+
+**1. A sixth reader with the live defect, unfixed — and a false claim in this record.**
+`next_task.py` carries its own batch-header regex, its own `Branch:`/`Scope:`/`Verify:`
+matcher and the same `if current is None: continue` fall-through. Measured, not read: on a
+fixture whose batch 8 header has no status token, `parse_review_batches` returned **batch 7
+carrying `branch=review/batch-8`, `scope=eight/`, `verify=pytest eight` and 2 tasks**. It is
+the sharpest member of the family, because `/next-task` is the deterministic resolver an
+operator is told to trust — it would hand out batch 7 with batch 8's branch and verify
+command. Fixed with the same closer the other three carry, plus a test and a control
+proving a well-formed pair still parses into two batches.
+
+**And the battery then caught the fix being half-measured, which is the part worth keeping.**
+New code gets its own rows rather than inheriting its twins' confidence, so C09/C10 and the
+control N09 were added — and **C10 survived**: narrowing the new closer to the em-dash
+spelling passed the whole suite. The reason is specific and was invisible by inspection.
+`next_task.py`'s *strict* pattern tolerates an ASCII hyphen where its three twins require the
+em-dash, so the shared `MALFORMED` set had no member that was both an orphan **there** and
+missed by an em-dash-only closer — the hyphen row carries a status token, so it parses
+cleanly in that one parser and never reaches the closer at all. Closed by adding
+`### Batch 8 - Batch 8 title` (both slips at once). Rows 1, 3 and 4 of that set are all
+orphans for every parser; the property that makes this one load-bearing is the
+**conjunction** — an orphan everywhere *and* invisible to an em-dash-only closer. An
+earlier draft claimed uniqueness on the first half alone, which the round falsified. Re-run confirms it. The sequence is the argument for running the battery over
+a pass's *own* output: the pass found the defect, and the battery found that the fix for it
+was measured on three parsers and assumed on the fourth.
+
+**Why the sweep missed it, and this is the reusable part:** `next_task.py`'s status charset
+was *already* permissive (`` `[^`]+` ``), so it was never a charset site — and the sweep that
+found the five charset sites was shaped like a charset search. The defect is the missing
+closer, not the alphabet. The corrected derivation asks which parsers carry per-batch
+metadata, because that is the actual precondition. A grep whose *shape* encodes the
+hypothesis cannot falsify it — the Phase 183 lesson ("the grep's scope was the estimate")
+arriving one class over.
+
+**2. A test named for more coverage than it has.** `test_the_four_readers_agree_on_a_declared_status`
+asserted three things, and one of them — `batch_work.sh --list-all` — re-enters
+`review_index.py`, because `_repo` installs the shadow index by default and its own comment
+says so. Two distinct parsers, named four. Renamed to
+`test_the_three_python_parsers_agree_on_a_declared_status`, `next_task.py` added as a
+genuine third, and the `--list-all` line kept with its docstring stating plainly that it is
+an end-to-end round-trip rather than independent coverage. This is the Phase 190 class — a
+guard whose name overstates it — caught author-side this time rather than by a lens.
+
+**3. Filed, not fixed: the bash fallback has no fence rule.** `review_index.py`,
+`sitrep_survey.py`, `next_task.py` and `archive_review_tasks.py` all mask **balanced** fenced blocks
+before parsing, and the new closers sit correctly behind that mask (verified: the fence-mask
+guard precedes them at `review_index.py:184`, `sitrep_survey.py:422` and
+`next_task.py:612` — spelled `fenced[i]` in the first and `fenced[idx]` in the other two).
+**Balanced is load-bearing and the round proved it:** `_fenced_mask` deliberately ignores an
+*unterminated* fence, so a doc example inside one is structural and overwrites the real
+batch. Filed separately as § High. `batch_work.sh`'s `_parse_batches_fallback`
+has no fence handling at all. That gap is pre-existing — a fenced *parseable* header already
+started a spurious batch — but this change **widens** it, because a fenced unparseable
+`### Batch` line now closes a batch too. It is closable in kind (the Python twins do it in
+two passes, and bash could), so it is not dismissed as a residual; it is out of this phase's
+declared scope and is filed as § Medium with this derivation. Recorded here so the round
+sees the decision rather than having to rediscover the gap.
+
+**What the pass could not reach**, per its own § *What this pass cannot do*: whether the
+live/terminal split is the *right* vocabulary to gate on, whether `--force` is the right
+affordance to keep, and the common case — the fixtures are the ones I chose. Those are the
+round's.
+
+### Phase 191's adversarial round
+
+Three lenses per the governor: the phase ships behaviour **and** a record making numeric
+claims, which is the stated three-lens condition. One round. Every finding below was
+re-derived by me before it was acted on — reviewer agreement is not evidence, and two of
+the three lenses reported findings I could only confirm by running them.
+
+**The round's one-sentence result: every finding was in a derived population or a described
+mechanism, and none was in the new logic.** The status ladder, the flag parsing, the
+`|| true` and the charset widening executed correctly under everything lens 1 threw at
+them — 11 hostile statuses through `close_batch.sh`, 16 flag combinations, all six declared
+values under `--force`, bash 3.2 against bash 5.3. What failed, repeatedly, was counting
+sites by reading rather than running, which is the lesson this phase was written to apply.
+
+**Two of three reviewers were handed a worktree parked on `main`.** Both detected it on the
+arrival check and worked around it — one by running against a `git archive` extract of the
+phase tip, one by fast-forwarding its own disposable branch. This is the second caveat in
+`_shared/adversarial-review.md` § *Worktree isolation* ("it does not guarantee the revision
+you expect") firing in **two of three** spawns, and it is only harmless because the section
+also mandates the arrival check. Worth the ledger row.
+
+#### Lens 1 (does it execute) — reopened the phase's own headline fix
+
+* **§ High — the carry-over class was narrowed, not closed, in three of four parsers.** The
+  five closers are not the same pattern: `review_index.py`, `sitrep_survey.py` and
+  `archive_review_tasks.py` were spelled with literal single spaces, while `next_task.py`
+  and the bash fallback use `\s+`/`[[:space:]]+`. So a header with a TAB or a double space
+  fails the strict pattern **and** the twin written to catch it. Reproduced on the fixed
+  tree: `batch_work.sh 7` built a worktree on `review/batch-8` carrying batch 8's scope and
+  verify command — the phase's own quoted symptom, after its own fix. The parser I got right
+  was the one written during the author-side pass; the three written in the build commit were
+  all wrong the same way. **Fixed**, all four now `\s+`-spelled, zero leaks across five
+  whitespace shapes.
+* **§ High — the archiver still relocated a round holding open work**, and widening its
+  denominator did **not** fix it. The counter sits in the outside-a-batch branch, so it is
+  unreachable while the batch is open, and the batch never closed because the closer tested
+  `line.startswith("### ")` — with a literal trailing space. Two spaces passed; a tab lost
+  data. **Fixed** with an `H3_HEADER_RE`, plus a control proving fully-merged rounds still
+  archive.
+* **§ High — an unterminated fence bypasses the new gate.** `_fenced_mask` deliberately
+  ignores an unterminated fence (a sound Phase 181 decision, taken when no gate existed).
+  Reproduced: a real `Merged` batch 7 followed by an unterminated fence holding an example
+  `### Batch 7 — EXAMPLE ONLY \`Pending\`` returns `Pending`/`review/FENCED`, and the claim
+  path then writes a branch, worktree and lock for it. **Filed § High, not patched** — both
+  available answers are bad (honouring an unterminated fence hides real batches), so the fix
+  is a design decision outside this phase.
+* **Medium — the § High rationale was stated unconditionally and is false for `In Progress`**,
+  the one status a batch carries while another agent holds it. That arm proceeds on purpose.
+  **Corrected** in prose at both sites; the affordance is unchanged.
+* **Medium — duplicate batch numbers make the parsers disagree** (index keeps the last, the
+  fallback emits both and the claim takes the first), so the gate's verdict depends on which
+  parser ran. **Filed.**
+* Lens 1 also ran a large negative sweep and reported it: `close_batch.sh` genuinely fixed
+  (11 hostile statuses, all exit 0, tree clean, versus 8 of 11 aborting dirty pre-fix), no
+  flag-parsing bypass in 16 combinations, `--force` correctly refusing the undeclared arm,
+  and byte-identical behaviour on bash 3.2.57 and 5.3.9.
+
+#### Lens 2 (are its claims true) — eleven record defects, one of them central
+
+* **The phase's central mechanism claim was backwards, at five sites, two of them shipped.**
+  `claim_batch()` is called on the line *above* the branch/worktree/lock writes, not after
+  them; the reason the writes happen anyway is that `return 0` leaves a **function**. The
+  sentence was inherited verbatim from the Phase 190 filing — whose own line citation was
+  also wrong — and repeated without being run, while `claim_batch`'s own messages ("The
+  worktree and the lock **are still created**") contradict it in the same file. **Corrected**
+  at all five sites. This is the phase's worst defect, because its opening paragraph is about
+  precisely this failure.
+* **Stale numbers the second commit did not bump:** `32 of 32` effect-probe rows (34), and
+  `22 new tests` (23 then, 28 now). **Corrected.**
+* **`+23 collected against main's 3196` mixes units** — 3196 is a passed count, 3200 is the
+  collected one. **Corrected.**
+* **"`--release`'s arms with the actions inverted" is false**: of five arms, only
+  `Review Ready` inverts; `Pending` acts on both paths, the terminal three refuse on both,
+  `In Progress` proceeds on both. What is reused is the live/terminal split. **Corrected** in
+  the record and in the shipped comment.
+* **"for a batch in any status" overstates it** — an unparseable status was invisible, so
+  nothing was written for it, which is this phase's own charset finding. **Corrected** to
+  "every parseable status".
+* **"the only fixture that is an orphan for every parser" is false** — three of four are; the
+  load-bearing property is the conjunction with "invisible to an em-dash-only closer".
+  **Corrected.**
+* **"structurally immune" overstates `close_batch.sh`** — that describes its *fallback* range
+  bound; its primary path calls `review_index.py --range` and inherits that parser's
+  correctness. The conclusion (it needs no closer) holds. **Corrected.**
+* **"its own glyph, as do all six declared values"** — three share `✅`. **Corrected**, and
+  the test that asserted it now checks distinctness rather than its own name.
+* **"say so on stderr" is true for one parser of four.** **Corrected.**
+* **"both were wrong about their own population — in the same direction" is unsubstantiated
+  and inverted** for filing 1, whose only population error runs the other way. **Corrected.**
+* **A sixth live `[A-Za-z ]+`** in `tests/test_flag_contract.py` — the file the shipped
+  parsers name as the pin that keeps them equal. Missed because the derivation grep was
+  `Branch:**`-shaped and scoped to `core/companion/scripts/`. **Fixed.**
+* Lens 2 also reproduced the battery (33/34) and both suite runs independently, and confirmed
+  C04's no-op disposition by hand — the one claim in the record that rests on an argument
+  rather than a measurement.
+
+#### Lens 3 (are the guards real) — 19 of 32 survived, against my 33/34
+
+Lens 3 reproduced my number exactly and then showed what it was worth: **20 of my 34 rows
+edit a literal inside the fix itself**, so the figure measured wiring. Its own battery:
+**32 defect rows, 13 killed, 19 survived (59%)**, and **3 false kills of 20 controls (15%)**.
+
+The finding that matters, and the one this phase should be remembered for:
+
+* **The fixture corpus was shaped like the fix.** Every member of `MALFORMED` carried a dash
+  after the batch number, and every fixture was numbered 7/8. A closer narrowed to *require*
+  a dash — or narrowed to `^### Batch [78]\b`, which matches nothing a real tracker contains
+  — passed all 23 tests in all four readers while re-opening the full § High. Probed at the
+  time: batch 7 returned `review/batch-8`, `scope-8`, 2 tasks. **This is the phase's own
+  thesis turned on the phase**: a grep whose shape encodes the hypothesis cannot falsify it,
+  and neither can a fixture. **Fixed** — a dash-free member, and `_neighbour_fixture`
+  parametrised over batch numbers with a 41/42, 102/103, 5/6 set.
+* The archiver's corpus had the same shape, where the consequence is data loss. **Fixed.**
+* `test_refusal_happens_before_any_write` covered one of three refusing arms, so a `git
+  branch` inserted before the other two left a branch behind with the suite green. **Fixed**,
+  parametrised over all three.
+* `--force` on `Review Ready` was never tested, so that arm was free to refuse
+  unconditionally. **Fixed.**
+* The `In Progress` resume announcement — new code with an eight-line comment — was entirely
+  untested; `if false` passed. **Fixed.**
+* `test_every_declared_status_gets_its_own_glyph` asserted only that `❓` was absent, so
+  collapsing all six declared statuses onto one glyph passed. The test did not test its own
+  name. **Fixed.**
+* `close_batch.sh`'s ISSUE-0044 end-anchor was unpinned: replacing it with a first-match grep
+  passed the suite while a batch titled ``fix `foo` regression`` reported
+  `Unrecognized batch status 'foo'`. Pre-existing, but this phase edited that exact line.
+  **Fixed.**
+* **The 3 false kills are characterised, not dismissed.** All three are pure `echo`
+  string-literal edits; two were introduced by this phase, one is inherited from
+  `test_close_batch_sh.py`. Each is a diagnostic a maintainer may legitimately reword, and
+  rewording reddens the suite for no behaviour change. Recorded rather than fixed, because
+  the assertions they pin are the ones that caught battery rows A07, K01 and R03 — loosening
+  them re-opens those. Named here so the next maintainer meets the trade rather than the
+  surprise.
+* Lens 3 also **confirmed there is no sixth reader** (it swept four more scripts and three
+  skill outlines), verified `_repo(with_index=…)` really drives two different parsers, and
+  hand-checked C04's no-op argument independently of lens 2.
+
+#### What the round cost, and the numbers after it
+
+**Battery after the round: 48 of 49 defect rows killed, 11 negative controls, 0 false
+kills.** The rows are split by origin, because the battery's own convention keeps
+reviewer-found mutations permanently as the record of what the author's sweeps could not
+see: **34 author rows** (33 killed, 1 survivor) and **15 reviewer rows, all 15 killed** —
+the ten from lens 3's findings and the five from lens 1's. The survivor is still C04, the
+declared no-op, whose argument two independent lenses hand-checked.
+
+**Two things went wrong inside the battery itself, and both are worth the record.**
+
+* **Eight rows went ANCHOR-STALE.** The round's fix rewrote the literals those rows anchored
+  on, so they silently did not run — the battery caught this and refused to report them as
+  kills, which is the behaviour that makes the tool trustworthy. Re-pointed.
+* **The re-point was half-applied, and it produced two FALSE KILLS.** I updated each stale
+  row's `old=` anchor and not its `new=` replacement, so N05 and N06 — negative controls —
+  ended up asserting that narrowing the pattern back to literal single spaces was
+  behaviour-preserving. That is the exact defect the round had just found, so the suite was
+  right to redden, and the rows were mislabelled as false kills rather than as the stale
+  controls they were. Fixed; controls back to 0 false kills. **A control is a claim about
+  the code like any other, and a stale one lies in the most expensive direction — it argues
+  for weakening the guard that just caught something.**
+
+Suite: see the entry above. `tests/test_batch_status_gate.py` is 28 tests, up from the 23
+the round began with; the five added are the round's own findings, each verified red against
+the pre-fix source before being kept.
+
+**Disposition.** Everything the round confirmed is either fixed and re-verified, or filed
+with its reproduction: two § High filings (the unterminated-fence gate bypass, and the
+duplicate-batch-number parser disagreement) and one § Medium (the bash fallback's missing
+fence rule). The record's eleven false claims are corrected at every site, including the two
+shipped files that carried the central one.
+
+**No second round.** The governor's condition is that the fixes produced substantial new
+material no fresh reader has seen — a mechanism replaced, a guard module rewritten wholesale.
+These fixes widened three regexes, added one closer and one heading predicate, and
+strengthened eight tests; that is patching, and verifying a bounded fix is the caller's job
+rather than a new round's. The 15 reviewer rows are the verification, and they all kill.
+
+## Phase 192 (executed 2026-08-11, round closed 2026-08-12 — two fields with machine readers and no writer-side contract; upstream #366 + #367)
+
+The 2026-08-11 brief scheduled `#366` + `#367` + the `Status` divergence as one phase.
+Wade cut Phase 190 to `Status` alone, that phase was disqualified by its own round, and
+Phase 191 took the two § High defects the round produced. **What was left is the pair the
+`#366` checklist entry itself calls "the same defect class on two fields, filed as two
+issues" — a `review_tasks.md` field with machine readers and nothing binding what a writer
+may put in it.** The `Status` remainder is deliberately not here; § *Scope* below says why.
+
+### #367 — the rule was enforced on both sides of the commit except the one that could fix it
+
+**Reproduced before anything was edited, by running the shipped close step.** A round
+header reading `Full · manifest 1477 · opened 13 · grepped 220 · workers 8` — the motivating
+failure's own numbers — closes like this:
+
+```
+round-receipt: Full — opened 13/1477 of 2 tracked, 8 worker(s)
+```
+
+Silent, and self-flattering. Plant the receipt those same numbers produce and both readers
+report it:
+
+```
+/sitrep:      declared Full over 1477 files but looked at 233 (15.8%) — opened 13, workers 8
+self_check.sh: ✗ last review round declared Full over 1477 files but reached 233
+```
+
+**So the rule was already implemented twice, and both copies run after the Step 7 commit.**
+The receipt is a one-shot JSON snapshot: editing `review_tasks.md` afterwards changes
+nothing, the marker is already unlinked, and the flag clears only when that skill closes
+another round. The author is told at the one moment they can do nothing about it.
+
+**And the write side did not merely lack the check — it disagreed about the trigger.** The
+only normative sentence tying coverage to kind opened *"If you run **solo** on a scope you
+cannot open in full, the round is `Sampled`, not `Full`"* — a **staffing** condition — while
+both readers test the **ratio** and never look at `workers`. A fan-out round that covered a
+fraction satisfied the write-side rule and failed both read-side ones, which is the case the
+reproduction above **constructs** (`workers 8`). The motivating rounds themselves ran solo —
+`_shared/fanout-evidence.md` records that they *"narrated a fan-out, ran solo"*, and the 8 is
+the **control** run's dispatch count — so the fan-out variant is the generalisation the
+de-gating buys, not the incident. The contract the skills cite had already
+settled it: `_shared/fanout-evidence.md` defines kind as *"what the round **actually was**,
+not what was requested"* and fires Tier 0 *"on **every** round, fan-out
+or solo."* The skills disagreed with the file they cite as governing.
+
+**What ships.** The rule is de-gated in both skills — *"whether you ran solo or dispatched
+workers"*, with the reason stated (the readers test the ratio, never the worker count) — and
+Step 5f applies the readers' own arithmetic at write time, where the round header is still
+uncommitted. Verified by execution: it fires on the motivating-failure numbers fan-out and
+solo alike, stays silent on a healthy round, stays silent on `Scoped`/`Sampled` with identical
+thin numbers (a check that fires on the honest case gets ignored), and does not divide by a
+zero manifest. **The round corrected this sentence twice.** Its first form claimed "eight
+cases in both skills" when all but two shapes ran against `codebase-review` only — the
+security copy was covered indirectly, by the byte-identity invariant, which the round
+demonstrated by injecting four defects into it that every guard here passed. The boundary set
+now drives **both** copies directly. And "does not divide by a zero manifest" was true of the
+code and untested: the round removed the `manifest > 0` guard and the full suite stayed green.
+Both are now in `_BOUNDARY_CASES`.
+
+**The binding constraint is structural, not a comment.** Step 5f swallows every failure by
+design — *"evidence must never cost the cleanup it rides on"* — and `p.unlink()` sits
+**outside** its `try`, so a warning cannot strand a marker. `test_the_warning_never_costs_
+the_cleanup_it_rides_on` asserts the marker is gone and the receipt written on a round that
+trips the warning, rather than trusting the layout.
+
+**The constant now has three copies and, for the first time, a coupling test.**
+`grep -rn 'LOW_LOOK_RATIO' tests/` returned nothing before this phase: `sitrep_survey.py`'s
+constant and `self_check.sh`'s hardcoded `* 3` could diverge silently, and now a third copy
+joins them. `test_the_low_look_boundary_is_identical_on_all_three_surfaces` does not grep for
+the number — it drives all three surfaces with the same numbers across nine boundary triples
+and asserts the three verdicts agree. Changing any single copy reddens it at a boundary
+triple rather than at a string.
+
+### #366 — a routing rule stated at a precision that admits both answers
+
+The readers routed on *"batches with `Overlap: none`"*. That is ambiguous, and the two
+readings disagree on the value that matters: `> **Overlap:** none (batch 5 shares tests/)`
+is **parallel** under a substring read and **sequential** under a whole-value read — and
+parallel is the unsafe direction, because it puts two agents on files that really do collide.
+
+**What ships is a contract, not a validator, and the difference is stated.** `WORKFLOW.md`
+§ Batch metadata fields now declares two shapes (`none`, or a `batch-<N>` list), names the
+two writers, and states the reader rule: **whole value, trimmed, and everything that is not
+exactly `none` — including an unparseable value and an undeclared shape — routes to
+sequential.** The asymmetry is given its reason, because a default stated without one reads
+as arbitrary: serialising a batch that could have run in parallel costs wall-clock;
+parallelising one that really overlaps costs a merge conflict and the rework behind it. Both
+generators are told they are the field's only writers and that **nothing will catch a
+mistake**. The three renderings collapse to one — `WORKFLOW.md`'s retired *"conflicting batch
+numbers"* templates, `/auto-fix`'s plan table (bare) versus its own deferred table (prefixed)
+400 lines later, and both Step 4a fallbacks.
+
+**What this does not fix, said in the shipped doc rather than only here.** A tag that is
+**present and wrong** is never recomputed: both fallbacks compute overlap only when the tag
+is *absent*, hold it in memory, and never write it back. Only computing rather than trusting
+closes that half, and it is not implemented. The contract says so, and
+`test_the_contract_records_what_it_does_not_fix` pins the admission — a contract that reads
+as complete is worse than one that names its hole.
+
+**Two things execution found that reading did not.** A trailing space (`none `) is stored
+verbatim by `review_index.py` and fails a strict whole-value test, so the rule says
+*trimmed* at every site. And the author-side pass's rule-4 sweep of the real artefact turned
+up the hit I had not predicted: **this repo's own `tests/test_flag_contract.py` fixtures
+carry `> **Overlap:** 702`**, and both fallbacks compute bare numbers. That made
+back-compatibility a live question rather than an assumption, and the answer is measured:
+an undeclared bare-number shape routes to the **same** lane it always did (not-`none` before,
+not-exactly-`none` now), so **no consumer tracker needs migrating** — the grammar binds what
+writers emit and reclassifies nothing already written. Stated in `WORKFLOW.md` and executed
+by `test_an_existing_bare_number_tag_routes_to_the_same_lane_as_before`.
+
+**The honest limit, in the test module's own docstring.** `Overlap:`'s readers are prose
+instructions to an agent, not code. No test here can prove an agent *complies* with the
+whole-value rule; the presence checks prove only that the rule is stated at every site that
+routes on the field. What is executed is `review_index.py` — the field's only real parser —
+and the point of executing it is to prove a **negative** the contract asserts: it validates
+nothing and normalises nothing, so no reader may treat the shadow index as a check.
+
+### What the author-side pass found
+
+Run after the mechanism commit, per `_shared/adversarial-review.md` § *Before you spawn
+anyone*. It found one live hole and two defects in its own instruments.
+
+1. **R11 was a live hole, and it was the write-side half of `#367`.** Reverting the
+   de-solo-gating survived **every** guard in the file. The pre-existing
+   `test_review_skills_state_the_dispatch_decision_as_a_step` asserts the substring
+   ``` `Sampled`, not `Full` ``` — which the revert *preserves* while restoring "if you run
+   solo" in front of it. That is rule 1's *"a check satisfied by a substring is satisfied by
+   an incidental use of that substring"*, met in a guard I had read and assumed covered the
+   sentence. Closed by a new test that pins both the de-gated wording and the retired
+   opener's **absence**.
+2. **Six reported false kills were a battery bug.** `pair()` edits one of two heredocs a
+   shipped invariant requires byte-identical, so the identity guard correctly reds — right
+   for a defect row, misleading for a control. Controls are now scored on this phase's
+   column, and the both-sides form of each was run by hand and stayed green everywhere.
+3. **N06 found my own probe keyed to prose.** `_self_check_flags` matched the sentence
+   *"declared Full over"*, so rewording a diagnostic would redden the suite — **the same
+   class this phase had already fixed once**, on the skill side, where the warning carries a
+   stable `LOW-LOOK` token precisely so its prose stays free. `self_check.sh`'s exit code is
+   not a clean substitute (a bare fixture already fails the `sysop.lock` check), so the probe
+   now compares the **count of failing lines** against an otherwise identical repo whose
+   round is healthy. Structural, and immune to wording.
+
+**Final battery: 22 of 22 killed, 11 negative controls, 0 false kills, 6 of 22 declared
+reverts (27%).** The revert fraction is a minority, which is what rule 1 asks for — a
+revert-heavy set reports wiring rather than coverage. Attribution across two verifiers: 18
+killed by this phase's guards, 12 of those by this phase's guards alone.
+
+**Read that number as the floor, not as coverage.** An author's battery measures
+self-consistency. **The round caught this paragraph's first draft asserting *"five consecutive
+phases … 19 to 99 survivors — every time, including the two phases immediately before this
+one"*, and it is not derivable.** The ledger's canonical form is scoped to **Phases 169–173**
+at **33–99**; the last five phases fit neither half of the sentence, because three of them did
+not report an all-killed battery at all. Derived from the records instead: over Phases
+187–191 the **author** survivor counts were 0, 3, 0, 0, 1 and the **independent** counts were
+16, 5, 17, 24, 19. The *direction* holds every time; the range was invented. Putting an
+underived number inside the honesty paragraph is the same failure § *The corrections this
+phase made to its own inputs* describes, committed one screen earlier — and the round found it
+there. The controls are the part worth trusting here,
+because they are the measurement Phase 190 failed (2 of 26 defects killed against 12 of 15
+controls **false**-killed), and getting to zero false kills required two instrument fixes.
+
+### Scope, and what is deliberately not here
+
+**The `Status` vocabulary remainder stays open in § High.** Phase 190 was disqualified
+attempting exactly it. Its round recorded three specific falsifications — the shipped
+`claimable?` column false for four of six rows, 2 of 26 real defects killed, 12 of 15 controls
+false-killed — and **the generalisation from those to "the doc-table-plus-presence-guard shape
+does not work here" is this phase's inference, not that round's stated verdict.** Phase 192's
+own round then supplied the evidence for it directly: the `#366` presence checks were 92%
+bypassable until they were rewritten line-scoped.
+Phase 191 then took the half that mattered, the claim path's missing status decision. What
+remains is a declaration problem whose readers are prose, and folding it into this phase
+would have bought a third field's presence checks at the price of the one half that
+ships executable behaviour (`#367`) and the one whose contract at least has a real parser to
+pin a negative against (`#366`). It is filed, not forgotten.
+
+**Not attempted, and named so the next author does not read a green suite as coverage:**
+recomputing `Overlap:` rather than trusting it (the half that fixes a present-and-wrong tag),
+and any write-time *validation* of the field — there is no runnable enforcement point on the
+skills' path, since all three readers parse the markdown themselves and never touch
+`review_index.py`.
+
+### The corrections this phase made to its own inputs
+
+Both checklist entries carry populations "corrected by Phase 190's derivation" and **the
+`#367` correction is now itself stale for the Python reader it cites**. Derived rather than
+asserted — `git show e4d68c2~1:core/companion/scripts/sitrep_survey.py` against the same
+file at `e4d68c2`:
+
+| | `LOW_LOOK_RATIO = 3` | `looked * LOW_LOOK_RATIO < manifest` |
+|---|---|---|
+| before Phase 191 | `:901` | `:1012` |
+| after Phase 191 (and today) | `:921` | `:1032` |
+
+`:901`/`:1012` are exactly the numbers the entry cites, so they were **right when written**
+and Phase 191 moved both by `+20` later the same day. The entry corrected the *skill* line numbers
+for Phase 188's `+6` and left its own script citations untouched in the same edit.
+That is the third consecutive phase to find a filed count wrong, and the second to find the
+*correction* wrong — which is the argument for the rule those entries state and this phase
+followed: derive every population from the tree, including the ones a previous phase says it
+already derived.
+
+### Phase 192's adversarial round
+
+Three lenses per the governor: the phase ships behaviour **and** a record making numeric
+claims. One round. Every finding below was re-derived by me before it was acted on — and two
+of them were wrong in a way only re-derivation could show.
+
+**The one-sentence result: the shipped contract was not found wrong anywhere, and the guards
+protecting it were 78% bypassable.** That is the opposite shape from Phase 190, whose *artifact*
+was false, and it is why this phase fixes rather than withdraws. All three lenses arrived on
+the default branch and detached onto `f6276a7` themselves — the third round running where the
+`§ Worktree isolation` caveat fired, and harmless only because the arrival check is mandated.
+
+#### Lens 1 (does it execute) — a documented input switched the deliverable off
+
+* **§ High — `grepped unreported` silenced the write-side check while both readers fired.**
+  The shipped instruction two steps above the check says *"A round that cannot fill a field
+  writes `unreported` in it, never a guess and never a blank"*, and the check sat inside the
+  `if miss:`/`else:` arm — so **the documented value turned the phase's central deliverable
+  off**, while `sitrep_survey.py` (which excludes `grepped` from its required set) and
+  `self_check.sh` (`${R_GREP:-0}`) both still flagged the round. Reproduced end-to-end in a
+  real `--mode loop` consumer install: a 0.9%-coverage `Full` round closed silent and was
+  reported only *after* the Step 7 commit — the exact window this phase exists to close.
+  **Fixed:** the check now sits outside the `miss` branch and treats a non-int `grepped` as 0,
+  matching both readers; a `Full` round whose `opened` or `manifest` is unreported stays
+  silent, and all three surfaces agree on every shape.
+* **Medium — the coupling test could not see a `startswith("Full")` → `== "Full"` narrowing**,
+  because all nine boundary triples used the bare spelling while `parse_coverage` explicitly
+  produces `Full (whole repo)`. **Fixed** with a `_FULL_SPELLINGS` case.
+* **Medium — my own new sentence was false in loop mode.** The warning promised *"/sitrep and
+  self_check.sh will **both** report this round"*; `/sitrep` and `sitrep_survey.py` are both in
+  `install.sh`'s loop-exclude lists, and loop mode is the funnel default. **Fixed**, along with
+  four other loop-dangling references the same lens found in the loop-shipped generators.
+* **Filed, pre-existing (verified byte-identical before and after this phase's commits):**
+  `read_coverage`'s skill disambiguator blanks the whole ledger when a free-text sampling basis
+  contains the other audit's tag word, and credits a merged round's single coverage line to
+  whichever skill closes. Both are Phase 149 mechanisms this phase inherits.
+* Lens 1's negative sweep is the part worth keeping: the *"warning can never cost the
+  cleanup"* claim held under every failure it could induce inside the `try`
+  (`FileExistsError`, `OverflowError`, absent tracker, closed stdout), `review_index.py`
+  round-tripped all 15 declared and undeclared shapes verbatim, and the installed consumer
+  copy of the heredoc was byte-identical to the source.
+
+#### Lens 2 (are its claims true) — the honesty paragraph carried the underived number
+
+* **§ High — *"five consecutive phases … 19 to 99 survivors — every time"* is not derivable.**
+  The ledger's canonical form is **Phases 169–173 at 33–99**; over the five phases my sentence
+  actually pointed at, three did not report an all-killed battery at all. **Corrected** to the
+  derived figures (author 0/3/0/0/1, independent 16/5/17/24/19). It sat inside the paragraph
+  telling the reader to distrust author numbers, which is the failure this phase's own
+  § *corrections* section names one screen later.
+* **§ High — every `2026-08-12` was a date the tree did not have.** All three commits, Phase
+  191, and the filing carrying the `:901`/`:1012` citations are **2026-08-11**, so *"the next
+  day"* was false and one site was **load-bearing**: the Phase 149 amendment made
+  `2026-08-12` the boundary from which receipts count, discarding a day of them. **Corrected
+  at all seven sites.** I asserted a date without running `date` — the phase's own stated rule,
+  broken inside the record that states it.
+* **Medium — a false sentence in shipped consumer prose.** *"The grammar binds what writers
+  emit; it does not reclassify anything already written"* is contradicted by the sentence
+  after it: reclassifying `none (batch 5 …)` from parallel to sequential **is** the fix.
+  **Corrected** to the scoped claim the tree supports.
+* **Medium — "verified by execution across eight cases in both skills" was overstated** (all
+  but two shapes ran against `codebase-review` only) and **"does not divide by a zero manifest"
+  was untested** — the lens removed the `manifest > 0` guard and the full suite stayed green.
+  Both **fixed by making the sentence true**: the boundary set now drives both copies and
+  carries zero- and small-manifest triples.
+* **Medium — `workers 8` was bad provenance.** The motivating rounds *"narrated a fan-out, ran
+  solo"*; 8 was the **control** run's dispatch count. **Corrected.**
+* **The half of that finding I refuted.** The same item claimed `grepped 220` appears nowhere
+  in the tree outside this record. It is `tests/test_round_coverage_ledger.py:48`'s
+  long-standing `FULL_LINE`. The lens grepped the four record files and excluded `tests/` —
+  **the derive-from-a-subset error it was auditing this phase for**, which is why the caller
+  verifies rather than accepts.
+* Lower: `fanout-evidence.md:5` was the weaker of two available quotes (**fixed** — the
+  kind-definition sentence is the on-point one); Phase 190's round stated falsifications, not
+  the shape-level verdict I attributed to it (**corrected**); `CLAUDE.md`'s row 191 credited it
+  with `#366+#367`, which it never touched (**fixed**).
+
+#### Lens 3 (are the guards real) — 21 of 27 survived, against my 22/22
+
+**6 killed, 21 survived (78%), 3 of 21 controls false-killed (14%)**, every survivor
+re-confirmed against the full suite. Split by half, and the split is the finding:
+
+* **`#367`, the executed half — 14 rows, 5 killed (64% survival).** The arithmetic guards were
+  real; the survivors were population gaps (no parenthesised kind, no manifest under 9, no test
+  that forced the `except` path, no assertion on the number order) and prose that could be
+  re-gated.
+* **`#366`, the prose half — 13 rows, 1 killed (92% survival).** The lens **inverted the
+  shipped contract in every direction it tried** and the suite never noticed: the two routing
+  lanes swapped outright, an exception carved out of the fail-safe default, the whole-value
+  rule moved 350 lines from the step that routes on it, the sole writer's mapping inverted, and
+  the contract rewritten to claim its open half was closed — all with every asserted phrase
+  still present, because every check was `needle in text`.
+
+**The diagnosis is exact and it is not "prose cannot be guarded".** The module docstring's
+limit — that no test can prove an *agent* complies — is true and unchanged. What was wrong is
+that a file-scoped check cannot see *which bullet* a phrase sits in. **Every one of the 15
+ranked survivors is now closed**, by scoping each rule assertion to the line or block that
+carries the rule (`_line_with`), by asserting antecedents rather than arrow fragments, by
+forbidding licences rather than requiring phrases, and by adding the missing boundary cases.
+Re-run of the lens's own ranked list against the rewritten guards: **15 of 15 killed** — D26
+needed a second pass, because its mutation *preserved* the phrase my first fix asserted and
+negated it in the clause before.
+
+**Two findings outside the battery, both filed:** `install.sh` leaves git-tracked `.pyc` under
+the vendored `sysop/scripts/`, and two suite tests pass only because that bytecode churn makes
+their `git commit` succeed — with `PYTHONDONTWRITEBYTECODE=1` (which `tools/mutation_battery.py`
+sets for every row) the consumer tree is unchanged and both fail.
+
+#### What the round cost, and the two instrument failures it exposed in me
+
+The author battery's anchors went **stale** when the H1 fix rewrote the block it pointed at —
+`mutation_battery.py`'s docstring names that exact failure from Phase 186, and Phase 191's
+round names the half-applied re-point that follows it. Re-pointed with `old=` and `new=`
+changed together, and the collapsed rename row records the second instrument bug: **a control
+must be behaviour-preserving *as applied*, not in aggregate.** Splitting one rename across two
+rows made each half a `NameError` the harness scored as over-strictness — the same shape as
+this phase's earlier one-sided edit of two byte-identical heredocs.
+
+And an ad-hoc replay script I wrote to re-test the lens-3 survivors **timed out and left two
+mutations in the working tree**. What caught it was the guard this round had just made me add
+(`test_every_full_spelling_is_treated_alike_on_all_three_surfaces`). The shared harness has a
+`finally`-restore for exactly this reason and my throwaway did not; it does now.
+
+**Final author battery after the fixes: 25 of 25 killed, 11 negative controls, 0 false kills,
+6 of 25 declared reverts (24%), no stale anchors.** Suite **3248 passed, 4 skipped**, +25
+against `main`'s 3228 collected. The one red is the ledger row, which this section closes.
+
+**No second round.** The governor's condition is that the fixes produced substantial new
+material no fresh reader has seen — a mechanism replaced, a guard module rewritten wholesale.
+The mechanism change is one hoist out of an `if` arm, verified by execution across sixteen
+shapes on both skills; the guard work re-scoped existing assertions rather than replacing the
+module, and its verification is the lens's own ranked list re-run row by row. That is the
+caller verifying a bounded fix, which the governor assigns to me rather than to a new round.
+
+## Phase 193 (executed 2026-08-12 — the 2026-08-11 sprint tail: four small items, and three of the four filings were wrong about something)
+
+The brief grouped these four because each is small, independent and fully specified — which is
+the condition under which one phase is cheaper than four. That held. What also held, for the
+fourth session running, is that **a filed population is not a derived one** — though the round
+corrected this paragraph's own arithmetic, which had inflated it. Derived: **two** of the four
+filings were *wrong* — #364 (a false reproduction condition, line numbers drifted by +22, and a
+cross-reference that resolves nowhere) and #365 (a prescribed grammar that collides with an
+argument its target skills already take). The other **two were incomplete rather than wrong**:
+#363's filing did not name the duplicated predicate at the call site, and the `[good]` filing
+did not have the installer seed that causes the defect. **One** line-number set had drifted, not
+two. None of it is visible without going to the tree, and one would have shipped a defect.
+
+The phase also backfilled Phase 192's commit cell (`980c6e7`, #382), which twenty consecutive
+phases had spent a follow-up PR on. Derived from `git log`, not from the brief — whose own
+recipe for it (`git log --oneline -1 main`) had already gone stale, returning `cd9dcfd`.
+
+### #363 — an advisory check's findings could never be baselined, and the docs told people to baseline them
+
+Both ends of the baseline were gated on `check_id in blocking_ids`: `is_baseline_suppressed`
+at `baseline.py:60` and `write_baseline` at `:87`. So an entry for a `blocking: false` check
+**could neither suppress anything nor be written**, and survived only until the next
+`--update-baseline` regeneration dropped it. Measured upstream: of 341 pre-scan findings, 30
+matched the baseline (all from the one blocking check) and triage found essentially all of the
+other ~300 to be false positives or documented exceptions, with nowhere to record the verdict.
+Inert state that reads as live state.
+
+**The authoring hazard was verified by execution before either line was touched**, which the
+brief asked for and which reading cannot settle: `is_baseline_suppressed`'s Phase-61b coverage
+carve-out is an **early `return False`** that dropping the conjunct on the line below cannot
+reach, and `write_baseline`'s is a **sibling conjunct** surviving as `if not
+_is_coverage(check_id)`. Both sites were driven before and after the edit, blocking and advisory,
+coverage and not. The round noted correctly that the scratch script proving it is not in the
+tree, so take the reproducible form instead: `tools/phase193_probe.py module` prints the same
+predicates, and `tests/test_run_checks_baseline.py` executes them. Phase 61b's ratified no-escape-hatch gate is reversed by deleting
+the whole condition, not by this operation — and both remaining defences are now driven by
+tests rather than trusted.
+
+**The choice the filing left open, and the reason.** The reporter's alternative was a separate
+`checks_triage.txt` advisory ledger. Rejected: one ledger, one format, one regeneration
+command. A second file doubles the triage surface and mints a question the single file does not
+have — which wins when a key is in both — for an outcome the existing key shape already
+delivers, since every key carries its `check_id` and the two classes stay distinguishable by it.
+
+**One site the filing did not name, and the fix needed it.** `cli.py`'s `Wrote N baseline
+finding(s)` tally re-implemented `write_baseline`'s predicate **by hand**. Editing the function
+without editing the copy would have left the printed number describing the old rule — a
+disagreement no test would have caught, because the string it asserts (`Wrote 0 …`) is true of
+a coverage-only fixture under both. Closed structurally rather than by editing both:
+`write_baseline` now returns what it persisted and the caller prints that, so there is no
+second copy left to drift.
+
+**Eight shipped prose sites were edited, and five of them were false** — corrected by the
+round, which counted the list, found it enumerates eight while calling itself six, and found
+two of the eight were never false. **False, now corrected:** `baseline.py`'s two docstrings
+(*"Suppression requires the check to be blocking AND…"*, *"all current blocking-check
+findings"*), `cli.py`'s `--update-baseline` help (*"blocking-check findings"*), `WORKFLOW.md`'s
+§ CI-integration clause (*"baseline entries bypass CI"*) and its § 8.2 file-table row
+(*"Blocking-check baseline"*). **Extended rather than corrected**, each having asserted
+something still true: the header text written into every consumer's baseline file, `cli.py`'s
+module docstring (a pure addition — the pre-existing CI-contract paragraph is byte-identical),
+and the waiver-composition sentence. The gate's asymmetry is now stated where it is read: `--fail-on-blocking` keys off
+`blocking_ids` independently, so **an advisory baseline entry cannot change an exit code** in
+either direction — it changes what is printed. Two consequences are stated rather than left to
+be discovered: the baseline file gets substantially bigger, and an advisory entry a consumer
+added by hand *starts* suppressing at the next run, activating state that was written expecting
+exactly that.
+
+**The reverse direction is the more interesting one.** `packs/python/companion/checks.yml.fragment:205`
+has always shipped, on a `blocking: false` check, the note *"Two known sites baselined as
+accepted tech debt"* — describing an operation the code refused. `/codebase-review` and
+`/security-audit` likewise tell reviewers that *"a baseline entry or `# nosemgrep`"* is what a
+legitimate single exception is for, on any rule — and the round scoped this correctly, because
+that advice already worked on a `blocking: true` check and `# nosemgrep` always worked
+regardless. What #363 makes true is the **advisory half**. The pack `notes:` claim is the exact
+one, because that entry is `blocking: false`. That
+is #367's lesson from one phase earlier — **the documented value is an input** — arriving from
+the opposite side: not a doc that switched a check off, but a doc that prescribed a capability
+the code did not have.
+
+**Test debt closed the way the brief specified — call the code, don't match its source.**
+`tests/test_run_checks_baseline.py` goes from 3 tests (32 lines, pure file I/O) to 15,
+including CLI-level runs that drive `run_checks_impl.main()` against a real fixture tree with
+one blocking and one advisory check over the same file, and assert the exit code is invariant to
+the advisory entry's presence. `tests/test_run_checks_coverage.py::test_is_baseline_suppressed_requires_blocking_and_baseline`
+asserted the removed behaviour verbatim; renamed and inverted, with its `tests/PORT_LOG.md` row
+carrying the before-and-after rather than being quietly overwritten. And that module's own
+docstring claim — *"there is no other baseline test file; the `baseline` hits elsewhere are the
+English word"* — has been false since Phase 61b; corrected, with the division of labour stated.
+
+### #364 — the §6 write scaled and its rotation did not
+
+`review-close/SKILL.md` writes one PROJECT_STATUS §6 entry **per pending-doc** and rotates down
+to a **constant 6** above 8. With 6 pre-existing entries and 8 pending-docs, 6 + 8 = 14 rotates
+to 6 — discarding all 6 pre-existing entries *and 2 of the 8 just written*, in the commit that
+wrote them. It reproduces whenever `pre_existing + docs > 8` and `docs > 2`, which is exactly
+the shape `/auto-fix` and `/auto-judge` produce: Sysop's own workflows.
+
+**Option (b), the consolidation clause, with (a) rejected on a stated defect.** A close routing
+more than 4 pending-docs writes **one** §6 line naming the branches and routes every entry's
+detail to `changelog.md`, whatever its type. A squash PR *is* one update. Option (a) — rotate
+only entries whose date predates today — grows §6 without bound on a day with several closes and
+has no answer for a §6 in which every entry is already from today.
+
+**The guard is the arithmetic, not the wording.** `kept >= cap` is the whole invariant: a run
+contributes at most `cap` entries and the rotation keeps the `kept` newest, so an entry this run
+wrote survives its own close iff that inequality holds. `tests/test_project_status_rotation.py`
+**parses both numbers out of the shipped text and compares them**, so raising the threshold past
+6 or lowering the retained count fails without touching a phrase any other assertion pins —
+which is the direct answer to Phase 192's round finding prose guards 92% invertible with every
+asserted phrase still present. The rest of that module forbids a licence rather than requiring a
+phrase, and asserts placement by line index, because "consolidate, then rotate" is what makes the
+arithmetic hold.
+
+**Three corrections to the filing, all derived.** Its `:995`/`:997`/`:1124` citations had drifted
+**+22** to `:1017`/`:1019`/`:1146` — Phase 188's `92ba2cb`, which landed *after* the filing, added
+22 lines above them. Its `#308 (:127)` cross-reference resolves to Step **1a**'s worktree-state
+classifier in every revision checked, not to Step 4c; #308 *is* a Step 4c defect, but its real
+sites are `:1105-1115` and `:1336`. And Step 8's report said `<N> new entries` and nothing about
+departures, so the run that discarded six printed the same line as the run that discarded none —
+now `<N> new entries, <N> rotated out`, with the instruction to report it sitting **on the rule**
+rather than only in the report template, because a template field with no step telling anyone to
+fill it is a field that gets written `unreported` (#367, one phase earlier).
+
+**The ordering warning went where the filing said it belonged.** *"Do not fix #324 before #364"*
+lived only on #364's entry, and #324 is the entry someone picks up first. It is now on #324,
+recorded as **discharged** — #364 is closed, so the one-way constraint is spent — with the
+residual coupling kept: a fix there still changes the pending-doc population.
+
+### #365 — the selector, and the grammar the filing prescribed will not work
+
+`/auto-build` has taken explicit task IDs since Phase 97; `/auto-fix` and `/auto-judge` took a
+concurrency integer and nothing else, so the batch set was always whatever Step 1 selected.
+Three reported costs from a 38-batch queue: no cohorts, no resume-from, and an all-or-nothing
+38-batch Opus commitment.
+
+**The filing asks for "bare numbers and/or ranges" and that grammar cannot be had here.** Both
+siblings already spend the bare positional integer on the concurrency cap, so `/auto-fix 563`
+would set a 563-way cap. `/auto-build`'s positional grammar works precisely because its token
+classes are structurally disjoint — a bare integer is the count, `^[A-Z]`-shaped tokens are ids
+— and two integers are not. So the selector is `--batches <selector>`, taking comma-separated
+bare numbers and inclusive ranges, and **the rationale ships on the line that carries the flag**
+so the next reader does not "simplify" it back into a positional for symmetry.
+
+Applied at a new Step **1d** — after 1a's pool selection, before 4b's lane split, which is where
+the filing asked for it — by intersection only, mirroring `/auto-build`'s narrowing-never-a-bypass
+contract. It prints the selected set **and** the excluded one, and reports every
+requested-but-not-in-pool number with its reason, because a narrowed run and a full run otherwise
+print the same-shaped report and the failure that costs is reading a 6-batch run as having cleared
+38. An empty intersection stops with the requested numbers and their reasons rather than falling
+through to the "no batches" message, which describes an empty queue.
+
+**Placement was constrained by two existing guards, both checked before writing.**
+`test_overlap_contract.py` requires the whole-value `Overlap:` rule to stay within 15 lines of
+`### 4b.` (current delta 4), and `test_flag_contract.py` requires Step 1's subsections to stay in
+1a → 1b → 1c order with 1c inside Step 1. A `### 1d.` after 1c satisfies both; a filter inserted
+at the lane split would have broken the first.
+
+**A claim in the first draft that the tree did not support.** `/auto-judge`'s resume paragraph
+originally sent the operator to `close_batch.sh --release <N>`. That flag does not exist —
+`batch_work.sh --release [--force] <N>` is the un-claim owner. Corrected, and the correction
+exposed the more useful truth: the selector does **not** recover a stranded batch, because the
+1a pool requires `Pending` and naming a batch never overrides that, so an `In Progress` batch
+stays excluded. Now stated, along with the fact that it is *reported* rather than silently
+skipped.
+
+**The dangling `--only` reference is resolved rather than re-flagged.** § Decisions'
+`--surfaced-by` entry deferred onto a *"near-term `--only` slice (§ Low priority)"* that has never
+existed anywhere in the file, and asserted *"`--only` already covers the audit case"*. There is no
+`--only` and will not be, so the clause is **wrong as written and right in substance** — the round
+rejected the first draft's "true as written", which asserted the truth of a sentence naming a flag
+the same paragraph says never existed. In substance: the task-axis capability shipped as Phase
+97's `SUBSET_IDS`, and `/roadmap` expands an ordering into exactly that ID list, so the audit case
+*is* covered for `/auto-build` — the only skill `--surfaced-by` would land on — and that leg of the
+deferral stands.
+`--batches` is a *batch*-axis selector, knows nothing of `surfaced_by`, and must not be read as
+covering it. The revisit trigger is unchanged.
+
+**The eleven `run_in_background` sites were deliberately not folded in.** The brief warned that
+#365 touches the same three spawn blocks and that the dead parameter would get re-copied into new
+prompts. It would have — if the fix wrote new spawn prompts. It does not: 1d filters the pool
+before either lane, and no spawn block was edited, so the coupling does not arise. That entry
+stays open with its own additional obligations (the concurrency-cap prose, the two unestablished
+version claims) and its own baseline counts, which are unchanged at 4/4/3.
+
+### The `[good]` boundary — the swallow, and the installer instruction that asked for it
+
+`report-issues/SKILL.md` read entry blocks as *"each begins `## ISSUE-NNNN — <title> (<date>)`"*
+and the file contained **zero** occurrences of "good", so a `## GOOD-NNNN — …  [good]` heading was
+not a boundary and the win's body was absorbed by the preceding bug. Observed, not theorised:
+upstream #360's body carries all of `GOOD-0026` and #364's carries `GOOD-0027`. Three costs — a
+win published under consent given for a bug; no `**Shared:** <url>` line written, so the next
+`/share-wins` run posts it again and the anti-double-post backstop cannot see this path; and the
+filed-side `**Filed:**` backstop recording nothing either. The exclusion was one-directional:
+`/share-wins` has scoped `ISSUE-NNNN` out since it shipped.
+
+**A boundary rule, not a third point fix** — which is what two independent instances of the class
+argue for (this one and upstream #264, a wrap-induced fence that swallowed three entries). Both
+readers now carry the same rule: an entry begins at a column-0 `## ` heading whose id is `ISSUE-`
+or `GOOD-` plus **digits**, and ends at the next such heading, the next column-0 `## ` heading, or
+EOF. Three defences, each stated for what it actually does:
+
+1. **The digit anchor** excludes the seeded `## ISSUE-NNNN` / `## GOOD-NNNN` templates without
+   needing anything else.
+2. **Fence-awareness** is the independent one, and the only one that reaches a *real* entry,
+   because a heading inside a fence carries digits and the first defence cannot help. #264 is the
+   *unintended* form of that — a wrapped list item whose continuation put a fence opener at column
+   3 — not a heading quoted on purpose; the synthetic quoted-heading case is its class and has its
+   own test.
+3. **An unterminated fence is reported, never assumed shut.** Phase 181's round established that
+   honouring one is *worse* than the bug it replaces, because structure dies to EOF silently.
+
+`/report-issues` gains the reciprocal exclusion, and states the half that actually fixes the
+swallow: a `GOOD-NNNN` heading is out of scope **and still a boundary**. An exclusion that only
+says "ignore them" leaves the body absorbed exactly as before — it just stops calling it a win
+while it happens.
+
+**One root cause the filing did not have.** The shipped installer seed told the consumer, *inside
+the file itself*, that *"`/report-issues` can batch these into one upstream note instead of filing
+each as a bug."* That is an instruction to route wins through the bug transport, written before
+`/share-wins` existed (Phase 107) and never swept — the same shape as #367 one phase earlier,
+where the value the docs told authors to write switched the check off. Corrected to name
+`/share-wins` and to say explicitly which skill does not do this.
+
+**The guards execute rather than match, and that is what caught the phase's own overstatement.**
+`tests/test_friction_log_entry_boundaries.py` extracts `seed_friction_log`'s heredoc from
+`install.sh`, runs it through `bash` so the expansion is the shipped one, and applies a reference
+implementation of the rule to the bytes a consumer actually gets — reproducing the #360/#364
+swallow and showing it fixed. **For #264 it shows the swallow persists**, and the round was right
+to insist on that wording: fence-awareness is what *causes* #264's absorption, because that
+entry's real headings sit inside an unintended fence, so a fence-aware reader must treat them as
+body. What closes #264 is the third defence — an unterminated fence reported rather than assumed
+shut — which is **detection, not a parse**, and the shipped rule says exactly that. The first
+draft of this sentence claimed "both fixed" while the test one screen away asserts the opposite. Running it falsified my own first draft:
+I had written that the seeded templates are *"written in the entry grammar"*, and they are not —
+`NNNN` is a literal placeholder, so a digit-anchored read already excludes them and only a
+bare-prefix read reaches them. The rule now says that, and the two defences are stated as
+independent rather than as one. **A sentence-matching guard would have shipped the overstatement**,
+which is the whole argument for rule 3 of the author-side pass.
+
+### What is deliberately not here
+
+**#361, the `Status` vocabulary divergence, and #366's compute half** — all three named
+out-of-scope by the brief, each a phase on its own. **The stale-`_unmerged_`-cell detector** filed
+under § Medium by `ed84d39`: the brief says explicitly not to build it as a rider, and it is its
+own decision. **The mirror push**, now further behind than the nine commits the brief recorded.
+
+**Not attempted, named so a green suite is not read as coverage:** nothing here proves an agent
+*obeys* the two prose rules (#364's consolidation clause, the boundary rule). PROJECT_STATUS.md is
+consumer-authored with no shipped template, and the friction-log readers are instructions, not
+code. What is executable is the arithmetic relationship between #364's two numbers, and the
+boundary rule applied to the real seeded artefact — both of which fail when the thing they
+describe drifts. The gap is stated in each module's docstring rather than left implied.
+
+### What the author-side pass found
+
+Run after the phase commit (`9a97fbd`), per `_shared/adversarial-review.md` § *Before you
+spawn anyone*. Reporting it because Phase 166's round showed the rule had no invoker and so
+would not otherwise have run. All four rules applied; three of them found something.
+
+**Rule 1 — the battery.** `tools/phase193_mutations.py`, four verifier columns (one per item)
+so a row killed by the wrong column is visible as such. First run: **28 of 29 killed, 8
+controls, 0 false kills**, one survivor. The survivor is worth naming because it is a shape a
+presence check cannot see: rewriting `/auto-judge`'s Step 0 bullet head to ``- **`--batches`
+(reserved)**`` left **every** assertion green — the bullet still started with the pinned
+prefix, still said "concurrency cap", still carried the flag-not-positional rationale — while
+Step 0 now advertised an unimplemented flag against a Step 1d that goes on describing how it
+narrows. Closed by asserting the bullet head is the same spelling the `argument-hint`
+advertises and forbidding a not-yet-implemented licence on it.
+
+Then two more survivors appeared once the closures and rule 2's findings were added as rows,
+**and both were the same defect in my instrument**: `_block()` ended a section at the next
+line starting `## ` **or** `**`, with the operator-precedence bug that implies, so on one of
+the two skills it ran past the rule into the Classify table. `#264` appears twice inside that
+over-wide block (the fence rule and the parity signal), so deleting either citation left the
+other satisfying the check. Block-scoped is not line-scoped — Phase 192's finding arriving in
+the guards written to honour it. Closed by parsing the boundary bullets individually and
+asserting per-bullet, with a non-vacuity test pinning that there are exactly three and that
+the prose's own "Three rules" count matches.
+
+**Battery at the time of writing: 34 of 34 killed, 9 negative controls, 0 false kills, 6 of 34
+declared reverts (17%).** The *"no stale anchors"* this sentence originally carried was **false by
+the time it was committed**, and the round caught it by running the committed battery: exit 2, one
+`ANCHOR-STALE`. See § *the round* below for the final figure — the honest version of this paragraph
+is that an author's battery number is only true of the tree it ran against. Read it as a floor
+either way: **24 of the 34 carried no behaviour probe**, because 24 attack prose instructions to an
+agent and there is nothing to probe. The harness says so in
+its own report, and the honest reading is that an unprobed *kill* shows the guard is wired to
+the file while an unprobed *survivor* could be either a hole or a no-op. The 10 probed rows —
+`baseline.py`, the CLI tally, and the rendered installer seed — are the ones where the number
+means what it says.
+
+**Rule 2 — re-read the new prose against what it describes.** Three claims checked, one wrong,
+and the wrong one improved the fix. `auto-build:40` is the Task-ID bullet the new prose cites:
+correct. *"`/share-wins` has scoped `ISSUE-NNNN` out since it shipped"*: correct — the clause
+is in `aff195b`, the file's creating commit. **But #264 I had taken from the queue's one-line
+summary**, which reads "a wrap-induced fence swallowed three entries" and is marked *unverified*.
+Reading the upstream issue gave the mechanism: a wrapped list item put a triple-backtick `plan`
+opener at **column 3**, which CommonMark reads as a fence opener with an info string, and the
+119 lines it opened absorbed the rest of `ISSUE-0024`, the whole of `ISSUE-0023` and the head of
+`ISSUE-0022`, taking the file from 36 fence-opener-eligible lines to 39. **A fence rule that
+recognised only column-0 openers would have shipped without catching the one instance it was
+written for.** So the rule now states the three-space allowance and the parity signal, and the
+test module's own `FENCE` is `^ {0,3}` + backticks rather than the `^\s*` a first pass reaches
+for. This is the rule-4 "what the real artefact already contains" case, reached by reading the
+primary source instead of the index of it.
+
+**Rule 3 — run the prescribed command.** `bash sysop/scripts/run_checks.sh --mode both
+--update-baseline` was run for real in a throwaway git repo laid out as a consumer install, with
+one blocking and one advisory check over the same file. It writes both keys, prints
+`Wrote 2 baseline finding(s)` from the writer's own return value, and the header it puts in the
+consumer's file reads as intended. Then the claim the whole fix rests on, executed rather than
+asserted: with an advisory-only baseline, `--fail-on-blocking` **still exits 1** and prints
+`new blocking: 1` while tagging the advisory finding `[baseline]`. Two environment facts the run
+surfaced and neither is new: outside a git repo the runner refuses, and on a bare `python3`
+without PyYAML it exits 2 with the install line — the one hard dependency Phase 136 settled.
+
+**Rule 4 — the hostile corpus.** This phase moves a delimiter over text other writers produce,
+so the corpus is mandatory. Built from the real artefact rather than from memory: the installer's
+seeding heredoc, extracted and run through `bash`. It immediately falsified a sentence I had
+already written — that the seeded templates are *"written in the entry grammar"*. They are not:
+`NNNN` is a literal placeholder, so a digit-anchored read excludes them and only a bare-prefix
+read reaches them. The rule now states the two defences for what each actually does. The corpus
+also carries the never-closing case and the column-3 case, both of which are in the shipped
+rule because they were in the corpus.
+
+**And one regression the pass caught in itself.** The rule-2 rewrite reflowed a sentence so that
+an inline triple-backtick span landed at the **start** of a line, and `shape_lib`'s `_FENCE_RE`
+(`^\s*` + backticks) read it as a fence opener — inverting the scanner's state across both skills.
+The visible cost was two red tests, one of them `test_every_skill_guards_tmpdir_with_a_fallback`
+reporting an unrelated `$TMPDIR` "defect" in prose the scanner had just started treating as live.
+Fixed by dropping the literal spans; the underlying regex difference from CommonMark is **filed
+under § Low** rather than changed here, because the balance test makes the loud direction loud and
+tightening the regex wants its own look at what the repo's own fences currently rely on.
+
+### Phase 193's adversarial round
+
+Three lenses per the governor: the phase ships behaviour **and** a record making numeric
+claims. One round. Every finding below was re-derived by me before it was acted on, and two
+were wrong in a way only re-derivation could show.
+
+**The one-sentence result: the shipped contract held everywhere it was attacked, and the guards
+protecting it were 70% bypassable.** Lens 3 wrote 70 mutations and 26 negative controls against
+my self-reported 41/41 and watched **49 survive (70%)**, with **7 of 26 controls false-killed
+(27%)**. That is the fifth phase running where an independent battery has found the author's
+number to be self-consistency rather than coverage, and it is the reason the governor puts the
+measurement on the reviewers.
+
+**Two of the three lenses arrived on the wrong revision.** Their worktrees were created off
+`main`, which does not contain the phase; both noticed and worked around it (`git show` /
+`git archive`), and the third moved its own worktree branch. The § *Worktree isolation* caveat
+says isolation does not guarantee the revision you expect — that is now three rounds in a row
+where the mandated arrival check is the only reason the round was not silently reviewing
+`main`.
+
+#### Lens 1 (does it execute) — two § High, both reproduced by running it
+
+* **§ High — a promoted check's gate goes inert, and silently.** Baseline an advisory check,
+  then flip it to `blocking: true`: every pre-existing finding stays suppressed, the run prints
+  `new blocking: 0` and exits **0**, where before #363 the identical sequence exited **1**.
+  Advisory is the staging state for promotion (`WORKFLOW.md` § 6.5), so the population #363
+  newly baselines is exactly the population headed for promotion. Reproduced end to end in a
+  consumer-shaped repo. **The semantics are kept** — a baseline entry means *accepted*, and when
+  what was baselined were false positives (the case #363 exists for) suppression is the right
+  answer. What could not stand is the silence: an armed-but-inert gate reads exactly like a
+  clean scan, which is the failure Sysop exists to make visible. **Fixed** with a
+  `blocking suppressed: <ids>` line in the summary header naming every blocking check whose
+  findings were suppressed, and a third documented consequence telling the operator to decide
+  about existing entries in the promotion commit.
+* **§ High — the new recovery command refuses on the case it was written for.**
+  `batch_work.sh --release <N>` exits 1 when the batch carries any `- [x]` task — which a
+  `--merge` run killed part-way through is precisely what produces. The script states the
+  ownership boundary itself (*"`/review-close` owns a batch that has results; `--release` owns
+  one that does not"*), and my paragraph named only `--release`. **Fixed:** `/review-close` for
+  a batch with results, `--release` for one without, `--release --force` for deliberate
+  abandonment.
+* **Medium — my own new prose was false in loop mode.** Loop installs `/report-issues` and
+  **not** `/share-wins`, and does not seed the friction log at all, so the wins clause pointed a
+  loop consumer at a command they do not have. Phase 192's round found the identical class in
+  its own new prose; loop mode is the funnel default, so a sentence true only of a full install
+  is false where most readers are. **Fixed** by stating the gap and what to print instead.
+* **Medium — the consolidation clause's arithmetic was the filing's, not derived.** See § *what
+  the round corrected in the record* below; this is the finding that mattered most about method.
+* **Low ×2** — the phase's own probe used the `^\s*` fence regex the phase had just filed
+  against; `write_baseline` wrote one line per finding where the reader loads a **set**, so the
+  tally over-reported on a shared `check_id|path:line` (ordinary for `lint-*`, whose id carries
+  no rule name). Both fixed; the writer now dedupes and returns the suppression count.
+* Lens 1's negative sweep is worth as much as its findings: **no route was found past the
+  Phase-61b coverage gate** (hand-edited coverage keys, case variants, both call sites), all
+  five `--fail-on-blocking` combinations behaved correctly, the re-exports return the new value,
+  waived findings still never reach the baseline, and a real `install.sh` run produced a seed
+  whose three asserted properties all hold.
+
+#### Lens 2 (are its claims true) — four § High in the record, none in the tree
+
+* **§ High — *"no stale anchors"* was false when it was committed.** The lens ran the committed
+  battery: **exit 2**, one `ANCHOR-STALE`. My last prose fix had reflowed the sentence a
+  mutation pointed at, *after* the battery's final run. Re-pointing then exposed four more
+  anchors invalidated by the dedupe rewrite and one made ambiguous by the prose rewrite. This is
+  the Phase-186 failure that `mutation_battery.py`'s own docstring names, committed inside the
+  sentence claiming immunity to it — and the general lesson is sharper than "re-run": **an
+  author's battery number is only true of the tree it ran against**, so the number and the tree
+  must be committed together.
+* **§ High — *"Six shipped prose sites"* enumerated eight**, and three of the eight had asserted
+  nothing false (the baseline-file header, `cli.py`'s module docstring — a pure addition — and
+  the waiver sentence). Corrected to five false of eight edited.
+* **§ High — *"showing both fixed"* was contradicted by my own test one screen away.** For #264
+  the module asserts the swallow **persists**: fence-awareness is what *causes* that absorption,
+  because #264's real headings sit inside an unintended fence, so a fence-aware reader must treat
+  them as body. What closes #264 is the third defence — an unterminated fence reported rather
+  than assumed shut — which is **detection, not a parse**. The shipped rule says so; the record
+  did not.
+* **§ High — the suite figure was one too high.** 49 new tests landed but one pre-existing test
+  flipped red, so the phase commit is **3297 passed**, not 3298. The next sentence of the same
+  commit message named the test that flipped.
+* Medium/Low: the drift count was inflated (**one** line-number set, not two; **two** filings
+  wrong and two *incomplete*, not three wrong); *"true as written"* was asserted of a clause
+  naming a flag the same paragraph says never existed; *"makes those true for the first time"*
+  was over-scoped to advice that already worked on blocking checks; a *"fourteen assertions"*
+  count had no artefact in the tree; and the record's #264 summary conflated the real
+  column-3 fence with the synthetic quoted-heading case. All corrected in place.
+* **Every date checked and none wrong** — 2026-08-12 ×6, 2026-08-11 ×10, and the rest. Phase
+  192's future-date defect did not recur.
+
+#### Lens 3 (are its guards real) — 49 of 70 survived, and the fix is structural
+
+**Its measurement, verbatim: 70 executed mutations, 21 killed (30%), 49 surviving (70%), 26
+controls with 7 false kills (27%).** 19 of the 21 kills were in `baseline.py`/`cli.py`; 47 of the
+49 survivors were semantic reversals of *prose*, because every prose assertion I had written was
+a substring or first-match regex that a reversal satisfies. The four worst:
+
+* **The rotation direction was asserted nowhere.** `rotate the oldest` → `rotate the newest`
+  left `kept >= cap` true and the suite green — **#364 reopened in its worst form**, since the
+  entries the close just wrote become the first thing removed.
+* **Both numbers were readable as decoys.** `re.search` takes the *first* match, so prepending
+  "never leaves more than 6 entries standing" made the guard read 6 while the real threshold was
+  12; the same trick on "only 6 remain visible" hid a real retained count of 2.
+* **The conditional inverted with every needle intact** — a second, un-negated copy of "write the
+  per-branch entries" beside the negated one.
+* **`_is_coverage` narrowed** from `startswith("coverage-")` to the two ids Sysop ships, and every
+  coverage assertion in both modules used only those two — so a **consumer-authored**
+  `coverage-diff-kotlin` became baselinable. `critical_path` entries are consumer-authored by
+  design, so this is the Phase-61b crown-jewel gate opened for precisely the checks a consumer
+  adds. The one survivor with real gate consequence.
+
+**What ships is a different kind of guard, not more of the same.** The rotation is now **parsed
+into a model and simulated** — trigger, retained count, cap, which end rotates, where entries are
+inserted — and run over the whole grid; numbers are extracted with a **uniqueness** requirement so
+a second number of the same shape fails rather than shadowing; polarity is asserted by requiring
+*every* occurrence of a phrase to be negated, not one of them; the boundary block is sliced to the
+rule's own bullets (the previous slicer ran seven lines long on one of the two readers, which
+produced both a survivor and a false kill); rule sentences are split at their own hinges, because
+a needle in the end clause was satisfying an assertion about the start clause; and the
+consolidation clause's **operative half is pinned verbatim**, Phase 168's remedy, after every
+licence blacklist protecting it was walked through by one synonym.
+
+**Re-run of lens 3's own 97 cases against the fixed tree: 63 of 63 killed, 0 surviving, 26
+controls, 1 control reddening.** The replay harness is committed
+(`tools/phase193_replay_lens3.py`) so the number is reproducible rather than reported.
+
+**Two adjudications where I disagree with the lens, stated rather than absorbed.** Its A19
+(`today's date heading` → `the appropriate date heading`) is filed as a behaviour-preserving
+control; I score it a **legitimate kill**, because the two phrasings send the bullet to different
+headings. And its A13 was labelled a reflow but restructures sentences; unpinning the clause's
+rationale tail made it green, which is the right outcome for a different reason than the label
+gave. One of my own controls (N04) went the other way: it rewords the shipped §6 entry template,
+which is what a close writes into a consumer's file, so **scoring it as over-strictness was my
+error** and it is now a defect row.
+
+**Final author battery: 42 of 42 killed, 9 negative controls, 0 false kills, 6 of 42 declared
+reverts (14%), no stale anchors, exit 0.** Read it as the weaker of the two numbers, which is what
+it is.
+
+#### What the round cost, and the three instrument failures it exposed in me
+
+The stale anchor above was the first. The second: **my replay harness reproduced the exact
+"as applied, not in aggregate" bug** `mutation_battery.py` records from Phase 192 — it built one
+candidate text per *edit* from the file's unmutated bytes, so a case with two edits to one file
+lost the first to the second, and it mis-scored three of lens 3's cases (two as false kills, one
+as a survivor). I had quoted that rule in this phase's own carry-in list. The third: committing
+with `git add -A` while a reviewer was still working staged **its live worktree as an embedded
+git repository** — `.claude/worktrees/` was ignored nowhere. Unstaged with `git rm --cached`,
+ignored here, and the consumer-side question filed rather than reflexively fixed.
+
+**No second round.** The governor's condition is that the fixes produced substantial new material
+no fresh reader has seen. They did produce a lot — but the verification is *lens 3's own 97 cases
+re-run row by row against the result*, which is a stronger check than a fresh reader would supply
+and is exactly the caller-verifies-a-bounded-fix work the governor assigns to me. What is left
+undone is named: lens 3 stopped per-row full-suite attribution after 15 rows and grouped the rest
+(13 singleton, 36 in non-conflicting groups, one group needing bisection), and it did not capture
+the rendered assertion text for its false kills. Both are recorded here rather than repaired,
+because the survivors they concern are now closed.
+
+
+## Phase 194 (executed 2026-08-12 — the maintainer-velocity bundle: nine items, and four of the brief's ten rested on a false premise)
+
+This phase ships no consumer-facing fix on purpose. It removes per-phase taxes, deletes dead
+weight that misinforms a fresh session, and files three gated decisions. The argument for doing
+it now rather than later is that its entire payoff lands on the phases that follow it — the
+same sequencing argument Phase 181 recorded for the test-suite item, which proved correct.
+
+**The headline is not what got built. It is that the brief was wrong four times, and the
+verification pass that found it ran *before* any of it was written.** Phase 153's failure was a
+false claim already sitting in the record when the round started; this session inverted that
+order deliberately. Three fresh-context agents were sent at the brief's factual claims first,
+and every finding below was reproduced by me against the tree before it changed anything.
+
+**(1) Item 1 — "do this FIRST" — would have silently blinded the scanner every other item's
+guards run through.** `tests/shape_lib.py`'s `_FENCE_RE` is `^\s*```` where the brief called
+for `^ {0,3}````, on the stated ground that the latter is "the CommonMark rule". It is not, for
+this corpus: CommonMark measures a fence's indentation **relative to the enclosing list item's
+content column**, not from column 0. This repo's skill files nest fences under list items
+constantly — `core/skills/review-close/SKILL.md:646/660/664/668` sit at six spaces under a
+`   b.` whose content column is six, and are genuine fences. Measured over the 34-file skill
+corpus: the proposed tightening stops recognising **18 fences across 7 files** and removes
+**101 live command lines from the scan** (2,351 → 2,250, −4.3%), including real
+`gh issue create --body-file "${TMPDIR:-/tmp}/…"` sites the `$TMPDIR` guards exist to police.
+Each file loses an *even* number of fences, **so `test_fences_are_balanced_in_every_skill`
+stays green** — which is precisely the stop-condition the brief prescribed. The only thing that
+reddens is `test_no_allowlisted_loop_has_gone_stale`, whose two allowlisted loops live inside
+those fences. That is this repo's own carry-in — *a green zero-invariant proves its population
+is empty, not that the class is* — firing on the proposed remedy. The item was dropped on
+Wade's call and `Q-102` rewritten with the measurement; the real fix is a list-aware fence rule
+and wants its own phase with the hostile corpus built first.
+
+**(2) Item 2's premise did not exist.** The brief said to derive the `## Merge policy` header
+"from the shipped reader, not from the checklist entry and not from here", and `Q-063` says
+"there is no `## Merge policy` section for `_shared/`'s reader to find". **There is no
+`_shared/` reader.** No partial, no grep, no parse of that header anywhere in the tree — the
+reader is *prose* at `core/skills/review-close/SKILL.md:680`, and the three `_shared/` files
+that name it cite it only as the precedent pattern for their own config. The instruction was
+unexecutable as written. The authority is the shipped template at `WORKFLOW.md` § 6.1 — level-2
+header, blank line, one bare word — and that is what this repo now declares (`pr`; `main` has
+required the `pytest` check since 2026-06-24, `strict: true`). Unlike `§ Sysop upstream repo`
+and `§ Plan review`, `§ Merge policy` ships **no stated parse contract**; that gap is real and
+is named, not closed.
+
+**(3) Item 4(a)'s guard, as filed, would have shipped green over a live defect.** It asked to
+key on the literal `_unmerged_`. That token is one of **ten** placeholder forms this column has
+carried and is only four commits old — while the one genuinely stale cell in the file, row 120
+at `CLAUDE.md:278`, read `_PR pending_` and had been stale for **73 rows**, since 2026-07-16
+(the mirror push it referred to landed that day as `getsysop/sysop#3`, squash `3e70d15`, which
+the row's own title already said). So the guard keys on the **class** — an italic run in the
+Commit column — and row 120 was resolved. The related filing `ed84d39` also claims "19 commits
+covering phases 172 through 190 with no gaps"; that is false, 190 has no backfill commit (it
+was repaired inline by Phase 191's merge, the exact case the filing describes) and neither does
+192. The defensible class size is **~88 phases with a dedicated backfill commit across five
+distinct wordings**, not the 22 the brief's two `--grep` patterns return.
+
+**(4) Item 6's flagged blocker was not one, and a different Group-B file was.** The brief said
+to read `SYSOP_NAMESPACE_SPEC § 10` before deleting it because a test cites it as "the
+deliberately-cut Phase 128 leg". Read: Phase 133 **built** that leg (`install.sh:3878-4003`,
+the 4→1 gitignore shrink at `:3138`, the T7 split-brain preflight), and `REVIEW_ARCHIVE.md`
+records it resolved; the docstring is historical framing. Meanwhile `tools/R76_STORY_PROPOSALS.md`
+was listed under "completed specs, **per their own status headers**" and has no status header —
+its opening line reads *"Nothing here is merged, pushed, or closed."* It **is** spent (`30a76fe`
+shipped its work in the same commit that added the file), but the attribution was false, and
+deleting on a false premise is the thing this repo keeps catching. `SPRINT_2026_08_11_BRIEF.md`
+got the same treatment: its § *The version cut* is named by open entry `Q-039` as that entry's
+closing procedure, so it was checked rather than assumed — Move 1 has already landed (1 live
+`v0.1.0` site remains, not the 10 it inventories) and `Q-039` already inlines Move 2, so only
+two judgment caveats were extracted before deletion.
+
+**What shipped.** **Item 8**, first because items 7, 9 and 10 need IDs to exist: every
+`REVIEW_CHECKLIST.md` entry now carries `<!-- id: Q-NNN -->` immediately after its checkbox.
+170 anchors, `Q-001`–`Q-170`, assigned by a scripted pass that asserted before writing (entry
+count unchanged, line count unchanged at 413, byte delta exactly the sum of the anchors — 3,230
+= 170 × 19) and then **round-tripped**: strip every anchor from the result, diff against the
+original, byte-identical. The ID does not encode priority, on the in-repo `tasks/` precedent
+that IDs are kind-prefixed and never status-prefixed — an entry moving § Medium → § High keeps
+its ID, because that is the one event making the reference worth having. The next ID is derived
+over **both** the checklist and the archive, since a resolved entry carries its ID out.
+`tests/test_queue_entry_ids.py` guards coverage, intra-file and cross-file uniqueness, the
+flat form, and same-line placement. (It was authored as `tests/test_review_checklist_ids.py`;
+Phase 195's cut found that name tripping the Pass-4 excluded-class gate and renamed it.) One premise of the brief was wrong here too and is worth
+recording because it was *nearly* load-bearing: "every entry in this file is exactly one line"
+— four of the 170 carry an indented continuation line **immediately** below them (eight under
+the looser reading that also counts blocks after a blank line; the round showed the number
+depends entirely on a classification the first draft left unstated). The mechanic is
+unaffected — it matches only entry lines — but the stated reason was not the real one; the real one is that an anchor
+on its own line would split the markdown list.
+
+**Item 4**, two staleness detectors in a new `tests/test_phase_log_currency.py` — not
+`test_doc_currency.py`, which the filing and the brief both named and which **never opens
+`CLAUDE.md`**. Only the newest phase row may carry an unresolved Commit cell; at most one row
+may; and a floor test asserts the row parser still sees ≥150 rows, because both guards are
+zero-invariants. Plus 4(b): `tools/NEXT_SESSION_PROMPT.md`'s declared phase must be the table's
+max + 1, which makes the single-use convention real rather than aspirational and makes that
+file test-read. The `Phase <N>,` shape has **zero committed precedent** — all four committed
+predecessors carry no number — so the format ships with the guard, and the trailing comma is
+load-bearing: a committed title reading "…after Phase 190's disqualification" would false-match
+a bare `Phase (\d+)` scan.
+
+**Item 5**, `tools/mutation_battery.py` refuses a control the guard cannot see. A
+`kind="control"` row on a `.py` target whose resolved verifiers are all pytest modules is
+rejected at apply time when its edit leaves the non-comment token stream unchanged. Three
+constraints the brief did not have: it **cannot** live at construction time (derived callable
+anchors like `line_after` need the file's run-time text, which `_snapshot()` has not taken
+yet), so `_apply` immediately after the `NO-OP(text)` check is the only viable slot; the scope
+is the *row's* resolved verifiers, not the battery's, because `Mutation.verifiers` selects a
+subset and an `argv` verifier may legitimately read comments; and the collision the brief warns
+about is **latent, not live** — no `kind="control"` row in any of the 17 committed batteries
+carries `effect=`, so `NO-OP(effect)` has never once fired on a control. The honest limit is
+stated as one in the code: this catches comment-only controls and does **not** catch a control
+editing real code the tests never reach, which is a reachability problem. Not promoted into
+`_shared/adversarial-review.md` — one round's evidence, and Phase 57's gate is cross-round
+survival. Verified against every committed control row: **0 regress** — but the denominator
+was recorded as 32 from a static scan and is **40** at runtime, because `phase192_mutations.py`
+builds four controls through a helper returning two `Mutation`s each; and only **8** of the 40
+target a `.py` file at all, so "0 regress" over the other 32 is vacuous by construction. The
+conclusion holds; the number that made it sound impressive did not. Also fixed the
+module's own dangling `§ No-op detection` pointer, which named a section never written.
+
+**Item 6**, 39 files and 9,589 lines deleted (18 root handoffs / 5,266; 10 completed `tools/`
+specs / 1,761; 11 superseded one-off mutation scripts / 2,562 — the **seven** batteries that
+import the shared harness are kept: the six `phase*` ones plus `ref_pin_advert_mutations.py`,
+which the first count missed by counting only phase-numbered names). Counts re-derived independently and matched the brief digit for
+digit, which is worth saying because it is the first time in five phases a filed count survived
+re-derivation. The reference-repair pass was **much larger than the two docstring fixups
+filed**: 40 dangling markdown links converted to code spans across `PHASE_LOG.md` (9),
+`REVIEW_ARCHIVE.md` (28), `REVIEW_CHECKLIST.md` (2) and `tools/LOOP_ONLY_SPEC.md` (1), plus
+hand repairs to two comments in **shipped `install.sh`**, `docs/analysis/REPORT.md`, five test
+docstrings, four live checklist entries, three kept `tools/` specs and the harness's own
+rationale. The brief's prescribed sweep (`git grep "<basename>"`) structurally could not find
+several of these, because they cite `SYSOP_NAMESPACE_SPEC § 10` and `PHASE_47_SPEC` without the
+`.md`. **One guard went red on the deletion, and it was the guard working:**
+`test_the_excluded_basename_arm_is_live` hardcoded `HANDOVER.md` as a required member of a set
+derived from `git ls-files`; the representative was moved to `CLAUDE.md` with a note that a
+deleted member leaves a derived set silently.
+
+**Item 7**, `Q-016` archived. All three deliverables had shipped in three separate phases and
+nobody closed it. Why it sat: it is a *velocity* item filed into § High, which is otherwise
+defined as live defects in shipped code, so every reader scanning § High for defects correctly
+skipped it. That mis-sorting is the durable lesson and is the argument for item 8.
+
+**Items 9 and 10**, three filings — `Q-173` (the two-lane plan, designed and deliberately
+unbuilt, with its trigger and its real prerequisite: the record files must be split first),
+`Q-171` (the redundant post-merge CI run — `strict: true` confirmed by reading branch
+protection, so the squash tree equals the tested tree) and `Q-172` (the `paths-ignore` trap).
+Item 9's partition was **re-derived because the brief's did not reproduce**: `shape_lib.py` is
+4, not the 21 the brief used as its reason for assigning that file to Lane A, and **`install.sh`
+at 19 open entries is a shared file the design never mentioned**. The method is stated in the
+entry so the next reader can disagree with it.
+
+**Gate.** 3,364 passed, 4 skipped **and one deliberate failure** — `test_every_phase_from_174_has_a_ledger_row`, which is red by construction between this commit and the round's close, because the ledger row is written *after* the round. The first draft of this line said "3,364 passed, 4 skipped" and omitted the failure, which is the false-claim-in-the-record class this phase's opening paragraph claims to have inverted the order to avoid — caught by the round's execution lens, in the same paragraph that boasts about it. Deliberately not done: the mirror push (both mirrors sit at Phase
+189 — **12** commits behind `origin/main`, 13 once this squash-merges; the 14 first recorded
+here counted this branch's own two commits, a state `main` never occupies — and it must be
+solo); `#361`, the `Status` vocabulary divergence
+and `#366`'s compute half; any change to `.github/workflows/tests.yml`; and the list-aware
+fence fix that replaced item 1.
+
+### Phase 194's adversarial round
+
+Three lenses per the governor: the phase ships behaviour **and** a record making numeric
+claims. One round. Every finding below was re-derived by me before it was acted on, and the
+lenses were given structurally different jobs — run the prescribed commands, measure the
+guards, re-derive every claim. All three worked in scratch clones and left the live tree
+untouched; the first round since 153 with no cross-reviewer collision.
+
+**The one-sentence result: the shipped items survived, and every instrument the phase built
+to measure itself was wrong in a way the phase could not see.**
+
+**The author-side pass was itself the first finding.** Rule 1's battery came back 17/36 with
+19 survivors — and 17 of those 19 rows mutated a guard and then ran *that same guard*, which
+cannot answer the question, because weakening an assertion makes it pass. So the battery was
+split: `phase194_mutations.py` asks only whether the guards catch real defects (**19/19
+killed, 0 false kills**), and `phase194_paired_probe.py` applies a weakening and its subject
+defect **together** (19 pairs: 11 caught by a sibling assertion, 8 tautological — "delete the
+only assertion that catches X, then do X"). Reporting the original 19 as survivors would have
+been as misleading as suppressing them.
+
+**Then the round found the split battery still measuring nothing in four places.** Rows
+B01–B04 attacked `tools/mutation_battery.py` while verifying with a module that never imports
+it — structurally guaranteed survivors. That is **Phase 189's exact defect, reproduced inside
+the phase whose item 5 exists to fix Phase 189's defect**, by the author, after writing the
+fix. Re-pointed to `tests/test_mutation_battery.py`.
+
+**Four HIGH findings, all confirmed and all fixed.**
+
+**(1) The record claimed a green gate it did not have.** `PHASE_LOG.md` read "Gate. 3,364
+passed, 4 skipped" while the suite was `1 failed, 3,363 passed` — the failing test counted as
+a pass. Worse, the commit message called the red "legitimate by construction between the
+phase commit and the round's close", and `git show` on 190, 191, 192 and 193 shows **all four
+shipped their ledger row inside the phase commit**. The claim was inherited from the brief and
+never checked against the practice. The row is now appended and the gate is green. This is the
+false-claim-already-in-the-record class, sitting in the same entry whose opening paragraph
+claims the phase inverted its order to avoid it.
+
+**(2) A third `install.sh` site.** The phase repaired `:212` and `:842` and recorded "two
+comments"; `:3883` still read "SYSOP_NAMESPACE_SPEC § 10, the deliberately-cut Phase 128 leg"
+— the exact falsehood this phase's own § (4) establishes as false — sitting directly above the
+Phase-133 code that built the leg. The count *was* the sweep.
+
+**(3) The turn-report guard was 100% invertible.** A bullet reading "RETIRED; do **not** report
+**what is done**, **what is not done**, or **the recommended next action** … 'not done' need
+no longer cover in-scope work *deliberately left*" passed 5/5, because a negation quotes what
+it negates. The module's own docstring cited Phase 192's 92%-invertible finding and the
+carry-in *"forbid licences rather than requiring phrases"* — and then required phrases. A decoy
+bullet placed *earlier* in the section also passed, because the lookup took the first match.
+Both closed: a negation-licence blacklist, and an exactly-one-bullet count.
+
+**(4) The Commit-cell parser skipped 46 of 228 rows.** Keying on `^(\d+)\s` dropped every
+letter-suffixed phase (`2A`, `16.1`, `159a`, `99.1`) plus `rename`, `rename 2` and `launch` —
+all of which carry Commit cells that rot identically. Its docstring justified this by claiming
+those are "recorded prose-side"; they are in the table. The guard lens walked `159a`,
+`rename 2` and Phase 100 straight through, and the `>= 150` floor could not see a 46-row blind
+spot in a 182-row parse. Rewritten to parse every row, with the floor set against 228.
+
+**Two false kills — the over-strictness direction, which gets a correct guard deleted rather
+than fixed.** `UNRESOLVED_RE` was a bare `_[^_]+_`, so any snake_case token in the Commit
+column reddened two tests; the column already carries free prose, so that was latent rather
+than hypothetical. And `PROMPT_PHASE_RE` silently **mandated that every future session be a
+numbered phase** — a behaviour change shipped as a currency guard, refuted by the round-yield
+ledger's own `r76-doc-honesty-pass (docs:, not a numbered phase)` row and by three rows of the
+very table it reads. Both fixed, the second with an explicit opt-out.
+
+**`_blind_control`'s premise was false for this repo, and the feature had no tests.** The
+docstring asserted that "for a pytest verifier over a Python target, the answer is the
+non-comment token stream". Several guards here read `.py` files as **raw text** —
+`tests/test_flag_contract.py` globs `scripts/*.py` and greps `read_text()` — so a comment edit
+*is* visible to them, and refusing it is a false refusal. The refusal now carries a
+`blind_ok=True` per-row opt-out (the shape `occurrence=` already gives the ambiguity check),
+the premise is stated as a heuristic with both limits named, and the feature gained **eight
+tests** covering both directions and all three scope axes, where the diff had shipped zero.
+
+**Six numbers in the record did not reproduce**, all corrected: 39 dangling links → **40**;
+"six batteries kept" → **seven**; "0 of 32 control rows" → 0 of **40** at runtime, of which
+only **8** are in scope at all; "14 commits behind" → **12** on `origin/main` (a branch-only
+state); Q-173's partition taken over **166** open entries, not 165; and the continuation-line
+count depends on a classification the record left unstated. The three claims the record stakes
+its headline on **reproduced exactly** — the item-1 measurement was rebuilt from scratch by an
+independent lens (18 fences, 2,351 → 2,250, balance test still green, exactly one other test
+reddening), the deletion accounting matched digit for digit, and every CI figure in `Q-171`
+verified, with `enforce_admins: true` making its conclusion stronger than stated.
+
+**Filed, not fixed — and named as residuals rather than closed.** The negation-licence
+blacklist is one-synonym-deep: *"briefly, at your discretion"*, *"except where the turn is
+trivial"* and three more all pass. `PHASE_LOG.md` records the identical class for Phase 193
+("every licence blacklist was walked through by one synonym"), so this is a recurrence, not a
+surprise, and whack-a-mole is not a fix. The prompt guard reads line 1 only, so a title bumped
+over a body still briefing a closed phase is green. Both are filed. Eight of the paired
+probe's 19 pairs remain green by construction and are genuinely unclosable in kind — a floor
+for the floor regresses infinitely.
+
+**And the required check found one the round did not.** The first CI run went red on
+`test_every_commit_hash_in_the_table_resolves`, a guard added *during* the round in response
+to lens 2's finding that hash *shape* is not hash *existence*. It passes locally and fails on
+GitHub, because `actions/checkout` defaults to `fetch-depth: 1` and a shallow clone holds one
+commit — so every historical hash "does not resolve". None of the three lenses ran under CI
+conditions, and neither did I: the fix was verified against a real `git clone --depth 1`
+before the second push, which is rule 3 applied to the thing rule 3 exists for. Two guards
+now skip explicitly on a shallow clone, and the ID-stability guard is recorded as
+**local-only** in its own docstring rather than left to look like coverage it does not have.
+
+**The number this round is actually about.** Lens 2's independent battery scored **0 of 21
+killed** against the reviewed commit. The phase's own "15/15" was a self-selected 15 — defects
+the author chose, against guards the author wrote. That is the sixth consecutive phase in
+which an author's battery reported near-total coverage and an independent one did not, and the
+honest reading is the one `_shared/adversarial-review.md` already states: an author's zero
+measures self-consistency. Most of lens 2's 21 are closed by the fixes above; the count stands
+as recorded, unadjusted, because adjusting it after the fact is the move that would make it
+meaningless.
+
+## Phase 195 (executed 2026-08-12 — the overdue mirror push, and the gate that only ran at cut time)
+
+**The phase is one item: advance both mirrors, Phases 190–194.** They had sat at Phase 189
+(public `6324796`, tester `a5f55cb`, both resolving to git tree `bd044bc`, snapshot of private
+`0b668de`) since 2026-08-11 — **14 commits behind**, derived rather than carried from the brief.
+A mirror push snapshots the whole tree, so it runs solo.
+
+**The brief was verified before it was executed, and two of its claims did not survive.** Three
+of Phase 194's ten items had rested on false premises, so this phase sent two independent
+fresh-context agents at its own brief's factual claims first. Eight claims checked; six
+confirmed exactly (both mirror tips and their dates, the 14-commit count, `30a76fe` inside the
+payload, the `R76_STORY_PROPOSALS.md`/branch split, and the public branch protection that
+forces PR routing). Two did not:
+
+* **"Public CI has been dark since 2026-08-05" was false when it was written.** The most
+  recent public run was 2026-08-11T20:26Z — workflow `tests`, event `push` on `main`,
+  conclusion **success**. `tests.yml` fires on `push` to `main` and on `pull_request` and has
+  no `schedule:` trigger, so it runs when a snapshot lands and at no other time. **The
+  round's claims lens corrected this correction, and the correction was the sloppy part:**
+  an earlier draft said "the last 40 runs are green with no gaps", which is understated on
+  one axis (57 consecutive green; the last non-success is 2026-07-16) and *wrong on the axis
+  that matters*, because there were **zero runs between 2026-08-05T23:30Z and
+  2026-08-11T17:14Z** — exactly the window the brief called dark. So the honest statement is
+  narrower and more interesting than "false": the claim was **true when the window opened and
+  was falsified by the 2026-08-11 push**, which the brief itself records two paragraphs
+  earlier. Two snapshots landed that day, not one, so "stale by one mirror cycle" was wrong
+  too.
+* **"Public, tester and private `0b668de` all resolve to tree `bd044bc`" is a wording error.**
+  The two *mirrors* share `bd044bc`; the private commit's own tree is `5c33992` and cannot
+  equal it, because the mirror strips `CLAUDE.md`, `tools/`, the checklist and the archive.
+  The underlying snapshot relationship was then derived rather than taken from the commit
+  message — four surviving files' blob SHAs at `0b668de` appear verbatim in the public tree
+  and all four differ from HEAD's.
+
+The one claim the brief flagged as this cut's specific check **held**: Phase 194 deleted
+exactly 39 files, every one already mirror-excluded (21 under `tools/`, 16 matching the
+root-anchored `*_HANDOFF.md` glob, plus `HANDOVER.md` and `PHASE_47_SPEC.md`), so the mirror
+loses nothing. Derived independently by simulating the mirror file list at both commits from
+`make_public_mirror.sh`'s own removal rules and `comm`-ing them: **0 removed, 8 added**, all
+eight under `tests/`. The simulation was then validated against a real build rather than
+trusted — byte-identical at 295 files. Load-bearing and checked: `make_public_mirror.sh` has
+**no commits in `0b668de..HEAD`**, so applying HEAD's rules to the old tree reconstructs what
+the published mirror was actually built with. One correction to the brief's reasoning even
+so: *"if the public diff shows deletions, an exclusion rule was removed rather than a file"*
+is not sound in general — any commit in the range deleting a genuinely public file produces
+the same signal. Here neither happened.
+
+### The cut came back GATE RED, on the one pass with no per-phase counterpart
+
+**Pass 4 (excluded classes in tracked files) flagged `tests/test_review_checklist_ids.py`** —
+one of those eight new files, added by Phase 194 **earlier the same day**: merged at 19:59Z,
+flagged by this cut about thirty minutes later. An earlier draft of this sentence said *"four
+days earlier"*, which the round's claims lens refuted from the git dates. The error flattered
+the finding — the whole point of the paragraph below is that a defect can age unseen, and the
+one number attached to that age was wrong in the direction that made it sound worse. Its
+*path* matches the reserved `REVIEW_CHECKLIST` class, so
+`git ls-files | grep -iE '…REVIEW_CHECKLIST…'` on the built mirror is non-empty and the push
+is blocked.
+
+**Why it took a cut to find it is the more useful half.** Passes 1a/1b/1c run on **every
+phase** as `tests/test_mirror_leak_gate.py`. Pass 4 is implemented **only** inside
+`tools/cut_public_release.sh` — the runbook says so at `TESTER_MIRROR_RUNBOOK.md:42`. Phase 186
+did give it a harness, and the harness is better than "checks the script still names its
+classes": `test_pass_4_catches_an_excluded_class_that_survived_as_a_tracked_file` **executes the
+cut script** against a planted `docs/internal/NOTES_HANDOFF.md` and requires Pass 4 to redden.
+What it plants is a violation of its own making. **Nothing ran Pass 4 against this repo's actual
+shipped tree.** So the collision sat green through a phase, a merge and a required-check run,
+and surfaced on a push already fourteen commits overdue. The same was true of any future file
+named after an excluded class.
+
+**The fix is a rename, and Pass 4 is deliberately not narrowed** (Wade's call, in-session, on
+three options put to him). `git mv tests/test_review_checklist_ids.py tests/test_queue_entry_ids.py`.
+The file is a test *about* the excluded queue file, not a copy of one, so this module's own
+measured doctrine applies to it — *"test modules name excluded paths as their subject … and
+skip when it is absent"* — and it ships and skips, as **156 tests in the sterilized tree** do
+(measured on this cut; the *previous* push's 125 is the number an earlier draft of this
+paragraph carried, which is the stale-number class this file keeps catching). What it may
+not do is carry a name claiming to be an excluded class. The rejected alternative worth
+naming is anchoring Pass 4's classes to exact filenames: that would have cleared the red
+immediately and defeated the thing Pass 4 exists for, since its subject is a **moved or
+renamed copy** of an excluded file. Weakening a gate to make a push go through is the move
+Phases 160 and 186 both went the other way on.
+
+**`test_no_shipped_path_matches_an_excluded_class` runs Pass 4's class check every phase**,
+over `_shipped_files()` instead of a built mirror, **reading the class alternation out of the
+cut script** rather than restating it — one list, one gate, two moments, for the same reason
+`test_exclusion_set_still_matches_the_mirror_script` exists.
+
+**Scope, stated because the round caught the first draft overstating it.** This covers **9 of
+Pass 4's 11 arms, not all of them.** `_shipped_files()` has already removed `tools/*` and
+`CLAUDE.md`, so those two arms match nothing here and can only fire at the build — which is
+right, because at the build they are asking a different question: *did the removal work?* The
+per-phase copy answers "was a new file named after an excluded class"; only the cut-time copy
+answers "did `rm -rf tools/` actually happen". Neither retires the other, and the sentence
+"runs Pass 4 every phase" would have implied it did.
+
+**Author battery** (`tools/phase195_mutations.py`): **11/13 killed, 3 negative controls clean,
+0 false kills** — and the round's guards lens then ran 20 disjoint rows and killed **3**, with
+**4 false kills**, so the author number is once again a measure of self-consistency and nothing
+else. That is the seventh consecutive phase in which this happened; the detail is in the round
+section below. Two of the author rows were rewritten mid-run after they measured nothing: the
+first M03 mutated the assertion as well as the computation, and the first M03b merely restated
+M03's constant at a different site — a duplicate row scored as coverage. All 13 rows are
+unprobed (`effect=`), so the harness alone cannot tell a survivor from a no-op.
+
+**Both declared survivors were declared wrongly, and both are now closed.** **M03** — a
+constant that *encodes the expected answer* (`hits = [canary]`) — was recorded as "unclosable
+in kind for any single-call-site guard". That is a universal claim resting on one unattempted
+design, and two lenses said so independently; the guards lens supplied a working closure, which
+is now `test_the_gate_still_calls_its_scanner_and_its_population` (the gate's own code object
+must still name `_pass4_classes`, `_shipped_files` and `_class_hits` — a constant at the call
+site cannot fake the call). **M08** — removing the population floor — was recorded as surviving
+because a sibling guard covers the emptied-population class, with row M12 offered as proof. M12
+empties the population *at the source*, which is the one route the sibling can see; the lens
+found a route **both** guards miss (swap the gate to `_operational_files()`, which drops every
+`tests/*.py` — precisely the class of the defect that started this — and drop the floor). So
+the floor is load-bearing rather than redundant, and the reasoning that declined it was wrong
+even though the code it defended was right.
+
+### Gate results on the pre-merge tree — and why they are not the shipping numbers
+
+Cut re-run after the fix, on the branch tree: **Passes 1a / 1b / 1c / 3 / 4 and the
+rename-residue diff all empty.** Population agreement **295 = 295, identical sets** (287 at the
+last push, +8 exactly as derived). Pass 5 green in the source repo at that SHA, 47 passed. The
+gate build and the tester build resolved to the **same tree, `295c34c`**, checked rather than
+assumed. Sterilized-tree suite **3152 passed / 156 skipped / 0 failed**.
+
+**The round's claims lens caught the heading these numbers originally sat under — "the exact
+cut tree" — asserting something they cannot support.** `295c34c` is the mirror of the *code*
+commit, taken before this record existed; the repo's practice, and the cut script's own
+closing line, is to cut from the merged `main` you actually push. The lens rebuilt at the
+record commit and got a different tree, and a Pass 2b count one higher — because **this
+paragraph is itself a new BeanRider-provenance site**. A record that certifies a tree hash it
+is not part of has certified the wrong artefact. The shipping numbers are re-derived at the
+real cut SHA and recorded in the mirror-push section below; these stand as the pre-merge gate.
+
+**Passes 2 and 2b, diffed against the published snapshot rather than counted.** Pass 2 is
+**50 = 50 (raw grep counts) with no genuinely new site**: three lines read as changed and all
+three are rewrites, not additions — Phase 194's dangling-link repair converting `[X](./X)`
+markdown links into stripped paths (`PHASE_16_HANDOFF.md`, `PHASE_19_HANDOFF.md`,
+`BEANRIDER_PARALLEL_ORCHESTRATOR_HANDOFF.md`, `tools/RENAME_PLAN.md`) into plain code spans,
+plus the README clause the honesty pass added. Pass 2b is **206 raw / 204 distinct now against
+204 raw / 202 distinct published: two new sites, both in `tests/test_phase_log_currency.py`** —
+a `FOREIGN_REPO_MARKERS` constant and the comment above it, naming the consumer in a shipped
+test module. Accepted consumer-provenance class (Decision 2b, ratified 2026-07-10, tree-wide).
+**Two corrections from the round, both mine:** the first draft listed `PHASE_32_HANDOFF.md`
+among Pass 2's de-linked paths — it is one of Pass 2b's three rewrite pairs, not Pass 2's — and
+it quoted Pass 2 as a raw count beside Pass 2b as a deduplicated one without saying so, which
+is exactly the mismatch an operator re-running the gate would hit, since the script prints the
+raw 206.
+
+**A method error worth writing down, because the first reading of those passes was 190 KB of
+false delta.** `comm` collates in the shell's locale; I had sorted the two streams under
+`LC_ALL=C` and left `comm` on the default. Byte-identical lines then fail to pair, and the
+diff reports every one of them as *both* new and removed — 28 new / 28 removed with an
+identical per-file distribution, which is the signature. `od -c` on a matched pair showed
+them equal. The rule the runbook does not currently state: **sort and `comm` must run under
+the same collation** — the scripts' own snippets are internally consistent (both default) and
+the runbook's population check uses `LC_ALL=C sort` with `diff`, which does not collate, so
+the hazard only appears when an operator mixes them, as I did.
+
+
+### The round — three lenses, and it moved the code more than the record
+
+Governor: three lenses, one round. The condition is met on a plain reading — the phase ships
+behaviour (a rename, a new guard, an extractor) **and** a record asserting counts. Lenses:
+*does it execute and is the class closed* · *are its claims true* · *are the guards real, on an
+independently designed battery*. All three ran fresh-context with no session history; the third
+worked in its own worktree, the other two in scratch clones, and the live tree was untouched
+throughout.
+
+**The guards lens ran 20 rows to my 13 and killed 3 to my 11, with 4 false kills — and the
+false kills were the finding.** `grep -Ei`, `grep -i -E`, a double-quoted pattern and a
+collapsed line continuation are all byte-equivalent reformats of the shipped Pass 4 call, and
+the first extractor raised on **every one of them**, which would have turned the *required*
+`pytest` check red on a refactor that changes nothing. This module had already learned that
+exact lesson once — `_SQ_ASSIGN`'s comment records `P1A="…"` being an ordinary refactor of
+`P1A='…'` — and the new extractor reintroduced it twenty lines away. My three negative controls
+were all chosen so they could not reach the parse, so "0 false kills" was self-selected in the
+most literal sense. The extractor now accepts flag order, flag splitting, either quote style
+and either layout, with all five pinned as acceptance cases. **One false kill is left and is
+not mine:** the collapsed layout also reddens Phase 186's `test_the_cut_scripts_gate_mechanism_is_intact`,
+which is filed rather than fixed — changing a Phase-186 guard from inside a push is the scope
+creep this phase already declined once.
+
+**Three real blindings, all at the call site rather than in the scanner, and all closed.** The
+lens demonstrated that the extractor could validate the gate and then `return` a three-class
+constant (blind to eight of eleven arms, suite green); that a filter inserted between
+`_shipped_files()` and the scan hides the very file that produced the GATE RED; and that
+swapping the population to `_operational_files()` — which drops every `tests/*.py` — is invisible
+to both this gate and its sibling. Closures: the extracted pattern must appear **verbatim** in
+the script it claims to be read from; the scanned list must be exactly the shipped set plus one
+canary; and the gate's code object must still name its three calls. Each was verified by
+re-running the reviewer's own mutation, and the population-filter one by planting the offending
+file back and confirming the gate reddens **with the filter applied**.
+
+**The execution lens found the coverage hole that mattered: 4 of Pass 4's 11 arms were
+unpinned.** `PHASE_47_SPEC`, `test_mirror_leak_gate`, `test_cut_release_gate` and
+`covered_class_` could each be deleted from the cut script with the entire 3,38x-test suite
+green — verified by deleting them one at a time. My positive control planted three paths
+against an eleven-arm alternation, while this module's own stated contract, four hundred lines
+above, is *"one canary per token"*. `covered_class_` is the sharp one: `make_public_mirror.sh`
+says those files hardcode identifiers the Pass-1a greps do **not** catch, so no other pass backs
+that arm up. There is now one canary per arm, a coverage test requiring the two sets to be
+equal in both directions, and a pin that *removes each arm in turn* and requires its canary to
+stop matching — which is the property, rather than a match assertion that a sibling arm could
+satisfy.
+
+**The same lens followed the guard's own failure message and ended up with a red suite.** The
+message offered two remedies and the second named two sites; it needs four. Following it
+literally left `test_no_shipped_path_matches_an_excluded_class` — the test that printed the
+advice — still failing, plus a Phase-186 parametrized case. The message now names all four.
+This is rule 3 of the author-side pass working in reverse: I ran the commands the change
+prescribes, but only the ones I had chosen to prescribe, and not the branch I did not take.
+
+**The claims lens found six defects in the record, and the one I would rank first is the
+runbook rule this phase shipped.** My new collation paragraph told the next operator that the
+signature of the hazard is *equal counts in the two directions*. The lens reproduced the exact
+mistake on the exact two trees and got **30/28 on Pass 2 and 18/4 on Pass 2b** — so an operator
+meeting the 18/4 shape would apply the shipped rule, conclude the hazard was absent, and act on
+a false delta. The rule was generalized from one direction-pair of one pass and never run
+against the other. That is the same failure class this phase is *about*: a gate written from a
+single observation and not executed against the case it claims to cover. The paragraph now says
+the test is `od -c` on a line appearing in both directions, and that the counts are not
+reliably symmetric.
+
+The other five: "four days earlier" was thirty minutes (Phase 194 landed the same day, and the
+error inflated exactly the number the paragraph's argument rests on); `NEXT_SESSION_PROMPT.md`
+pointed the next session at a `Q-176` that did not exist, in a file whose own header promises
+its IDs resolve, and the checklist entry the close-out convention requires had simply not been
+written; the Pass-2 de-linked list imported a path from Pass 2b's diff; the two passes were
+quoted on different bases (raw vs deduplicated) with no note, against a script that prints the
+raw one; and the `CLAUDE.md` row's compression — *"the one leak pass with no per-phase
+counterpart"* — is false as written, since Passes 2/2b, Pass 3 and the rename-residue diff have
+none either. The row now says what is true and was true in the prose all along: the one leak
+pass never run against this repo's **own shipped tree**.
+
+**What the round did not reach**, recorded rather than left implied: the guards lens built no
+mirror, so the `295 = 295`, the tree hash, the sterilized-suite numbers and the Pass 2/2b diffs
+are unverified by it (the claims lens re-derived all of them independently, including rebuilding
+the mirror at `0b668de` and getting `bd044bc` at 287 files — a stronger derivation than the
+four-blob-SHA one this record originally used). Every guards-lens row is a text splice, so
+nothing exercises the `git ls-files` subprocess itself. And the grep-equivalence work ran on
+BSD grep while CI runs GNU grep; the four forms are POSIX-mandated equivalents, but that was
+not executed on GNU.
+

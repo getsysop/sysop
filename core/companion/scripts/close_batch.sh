@@ -264,15 +264,31 @@ for BATCH_NUM in "${BATCH_NUMS[@]}"; do
   # title containing backtick-quoted tokens (e.g. ``Batch 12 — fix `foo`
   # regression `In Progress` ``) yields the *trailing* status token, not
   # the first backtick block on the line.
+  #
+  # Two guards here, and the file already states the rule for both 40 lines
+  # below at the Branch: grep (ISSUE-0044): a `grep -o` that matches nothing
+  # exits 1, and under `set -euo pipefail` that aborts the whole run.
+  #
+  # `|| true` — without it a status the charset could not hold killed the script
+  # *before* the `*)` arm written for exactly that case. Measured:
+  # `close_batch.sh 1 2 8` with batch 8 at `On-Hold` flipped batches 1 and 2 to
+  # `Merged` in the working tree, printed a bare `── Batch 8 ──`, exited 1 with
+  # an EMPTY stderr and left review_tasks.md dirty and uncommitted.
+  #
+  # `[^`]+` not `[A-Za-z ]+` — the charset was the thing doing the killing, and
+  # narrowing what a reader can SEE does not narrow what a consumer can WRITE.
+  # Whatever sits in the trailing backticks is extracted; the allowlist `case`
+  # below is what decides, and it is still the only thing that gates
+  # interpolation into the sed patterns.
   BATCH_HEADER=$(sed -n "${BATCH_START}p" "$TASKS_FILE")
-  BATCH_STATUS=$(echo "$BATCH_HEADER" | grep -oE '`[A-Za-z ]+`[[:space:]]*$' | tr -d '`' | sed 's/[[:space:]]*$//')
+  BATCH_STATUS=$(echo "$BATCH_HEADER" | grep -oE '`[^`]+`[[:space:]]*$' | tr -d '`' | sed 's/[[:space:]]*$//' || true)
 
   if [[ "$BATCH_STATUS" == "Merged" ]]; then
     echo "   ℹ️  Already Merged. Skipping."
     SKIPPED+=("${BATCH_NUM}:already-merged")
-    # ...but a Merged batch must not hold a lock. `batch_work.sh <N>` lets a
-    # Merged batch through for follow-up work and writes one, and every other
-    # removal path refuses a Merged batch — so without this the lock is
+    # ...but a Merged batch must not hold a lock. `batch_work.sh --force <N>`
+    # lets a Merged batch through for follow-up work and writes one, and every
+    # other removal path refuses a Merged batch — so without this the lock is
     # unremovable by any shipped command, and scope_overlap counts it as
     # in-flight forever. Clearing is unconditionally safe here: the record
     # already says Merged, so nothing is being decided, only tidied. This is
@@ -294,6 +310,16 @@ for BATCH_NUM in "${BATCH_NUMS[@]}"; do
       echo "   ℹ️  Batch ${BATCH_NUM} is '${BATCH_STATUS}' — no flip to make."
       SKIPPED+=("${BATCH_NUM}:${BATCH_STATUS}")
       MERGED_UNLOCK+=("${BATCH_NUM}")
+      continue
+      ;;
+    "")
+      # Distinct from an unrecognized status, and distinct in the remedy: there
+      # is no value to correct, the header is missing its trailing `status`
+      # token altogether. Naming the header is what makes that actionable —
+      # `Unrecognized batch status ''` names nothing.
+      echo "   ⚠️  No trailing \`status\` token in the Batch ${BATCH_NUM} header. Skipping."
+      echo "      header: ${BATCH_HEADER}"
+      SKIPPED+=("${BATCH_NUM}:no-status")
       continue
       ;;
     *)
@@ -533,8 +559,10 @@ if ! $DRY_RUN && [[ ${#CLOSED[@]} -gt 0 ]]; then
 fi
 
 # A batch that is already finished (Merged / Complete / Ready for Review) sheds
-# its lock whether or not this run closed anything: `batch_work.sh <N>` lets a
-# finished batch through for follow-up work and writes a lock, and every other
+# its lock whether or not this run closed anything: `batch_work.sh --force <N>`
+# lets a finished batch through for follow-up work and writes a lock (the bare
+# form is refused since Phase 191, but the affordance is kept precisely because
+# this removal path is what makes it safe), and every other
 # removal path refuses a finished batch, so without this the lock is unremovable
 # by any shipped command. This is also the recovery path for the deferred case
 # above — once the PR merges and `main` reads `Merged`, re-running here clears it.

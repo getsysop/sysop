@@ -116,12 +116,63 @@ reporting nothing. If neither exists, stop with one line: `note:
 sysop/SYSOP_ISSUES.md not present — nothing to report. (Re-run bash install.sh to
 seed it, or capture friction via /review-close Step 7 first.)` and stop.
 
-Read the entry blocks (each begins `## ISSUE-NNNN — <title> (<date>)`). **This
-file is deliberately loose, consumer-restructurable markdown** — the seed
-template invites "you can restructure freely." So *read* it with judgment; do
-not assume a rigid shape. If an entry's `Status:` is missing or ambiguous,
-surface it to the human as "unclear status — treat as eligible? (y/n)" rather
-than silently guessing either way.
+Read the entry blocks. **This file is deliberately loose,
+consumer-restructurable markdown** — the seed template invites "you can
+restructure freely." So *read* it with judgment; do not assume a rigid shape. If
+an entry's `Status:` is missing or ambiguous, surface it to the human as
+"unclear status — treat as eligible? (y/n)" rather than silently guessing either
+way.
+
+**Entry boundaries — both id kinds, and fences are not headings.** An entry
+begins at a **column-0 `## ` heading whose text starts with an entry id** —
+`ISSUE-NNNN` **or** `GOOD-NNNN` — and ends at the line before the next such
+heading, the next column-0 `## ` heading of any kind, or end-of-file, whichever
+comes first. Three rules keep that honest on a file nothing validates:
+
+- **The number is digits, and the seeded templates are not entries.** `NNNN` in
+  the seed's `## ISSUE-NNNN` / `## GOOD-NNNN` template headings is a literal
+  placeholder, so an id-shape read on digits already excludes both. A read on the
+  bare `## ISSUE-` prefix does not — and the retired instruction permitted either,
+  which is the ambiguity this replaces.
+- **A `## ` line inside a fenced block is neither a boundary nor an entry, and a
+  fence opener may be indented up to three spaces.** This is the independent
+  defence and the only one that reaches a *real* entry: in upstream #264 a wrapped
+  list item put a triple-backtick `plan` opener at **column 3**, which CommonMark
+  reads as a fence opener with an info string rather than as prose, and the 119
+  lines it opened absorbed the rest of one entry, the whole of the next, and the
+  head of a third. Counting only column-0 fences misses it, which is why the indent
+  allowance is stated. It also covers the seeded templates a second time: both sit
+  inside triple-backtick fences, *above* every real entry, so neither read above
+  can reach them. Where the `<!-- Entries below. Newest first. -->` marker
+  survives, entries are below it; the fence rule is what holds when a consumer has
+  restructured the marker away.
+- **An unterminated fence is reported, never assumed shut.** If a ``` opens and
+  never closes, everything after it reads as one block and the entries inside it
+  vanish without a trace. Say so and stop rather than filing whatever the
+  truncated block appears to contain — announcing the swallow costs a re-run,
+  and not announcing it costs a wrong issue. **An odd number of fence-opener-eligible
+  lines is the cheap signal**: #264 took the file from 36 such lines (balanced) to 39,
+  and that count is checkable without parsing anything.
+
+**Wins are out of scope here, and they are still boundaries.** A `GOOD-NNNN`
+entry (marked `[good]`) belongs to `/share-wins` — ignore its content; never
+file it. But its heading **ends the entry above it**, and missing that is how
+`GOOD-0026` was published inside upstream issue #360 and `GOOD-0027` inside #364:
+each win was absorbed into the preceding bug's body, spending win-privacy under
+consent given for a bug. Because only `/share-wins` writes `**Shared:** <url>`,
+neither win got one — so the next `/share-wins` run posts both again as fresh,
+and its anti-double-post backstop cannot see this path. This is the reciprocal of
+`/share-wins`' own exclusion clause, which has scoped `ISSUE-NNNN` out since it
+shipped; the asymmetry was the defect.
+
+**In `--mode loop` there is nowhere to route them, and saying so is part of the
+rule.** Loop mode installs this skill and **not** `/share-wins`, and does not seed
+the friction log at all. So a loop-mode consumer's `[good]` entry has no transport:
+still do not file it as a bug — that is the defect this rule closes, and it does
+not stop being one because the alternative is missing — but say so plainly in the
+run's report (`<N> [good] entries skipped; /share-wins is not installed in loop
+mode`) rather than leaving the entry to look handled. A full install ships
+`/share-wins`.
 
 Classify each entry by `**Status:**`:
 

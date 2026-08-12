@@ -116,8 +116,8 @@ the plateau); every one dated by first appearance in git history
 (2026-02 → 2026-05-14).
 Stale figures (1,400+ findings / 67 conventions) updated in README.md,
 CLAUDE.md, WORKFLOW.md, and the monograph; the two "rounds 1–67" references in
-CLAUDE.md § Provenance and the maintainer-side HANDOVER.md (not in the public
-tree) correctly describe the 2026-04-30 extraction event and were left as-is.
+CLAUDE.md § Provenance and the maintainer-side HANDOVER.md (never in the public
+tree; deleted as spent by Phase 194) correctly describe the 2026-04-30 extraction event and were left as-is.
 
 ## Revision notes (2026-06-09, second pass)
 

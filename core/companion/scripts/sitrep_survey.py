@@ -344,7 +344,15 @@ def _read_index(main_root: Path) -> dict[str, dict[str, Any]]:
 # ── review_tasks.md reading (minimal — only batch shape) ─────────
 
 
-_BATCH_HEADER_RE = re.compile(r"^### Batch (\d+) — (.+?) `([A-Za-z ]+)`$")
+_BATCH_HEADER_RE = re.compile(r"^### Batch (\d+) — (.+?) `([^`]+)`$")
+# Permissive twin, used ONLY to close the open batch on a `### Batch <N>` line
+# the strict pattern rejected — see the closer in _read_review_batches. Both
+# patterns are duplicated verbatim from review_index.py; edit one, edit both.
+# `\s+`, not literal spaces — see review_index.py's twin for the full reason.
+# In short: a TAB or double space (`###\tBatch 8`) fails the strict pattern AND
+# a single-space twin, which is the exact fall-through the twin exists to stop.
+# Phase 191's round reproduced the carry-over here on the supposedly-fixed tree.
+_BATCH_HEADER_ANY_RE = re.compile(r"^###\s+Batch\s+\d+\b")
 _META_BRANCH_RE = re.compile(r"^> \*\*Branch:\*\* `([^`]+)`")
 # Duplicated verbatim from review_index.py and pinned equal by
 # tests/test_flag_contract.py — see that file's comment for why these are
@@ -442,6 +450,18 @@ def _read_review_batches(main_root: Path) -> list[dict[str, Any]]:
                 "triaged_tasks": [],
                 "tasks": [],
             }
+            continue
+        # A `### Batch <N>` line the strict pattern rejected still closes the
+        # open batch — the same rule the `## ` closer above applies, at the one
+        # heading level that was missing it. Here the orphan donated its `- [ ]
+        # TASK-…` lines as well as its `> **Branch:**`, so the done/total
+        # arithmetic behind /sitrep's "ready for /review-close" signal was wrong
+        # for the batch above it, which is the very failure the `## ` closer was
+        # added to stop.
+        if _BATCH_HEADER_ANY_RE.match(line):
+            if current is not None:
+                out.append(current)
+                current = None
             continue
         if current is None:
             continue

@@ -260,7 +260,10 @@ class TestUpdateRef:
 # (`core/companion/docs/WORKFLOW.md`) left the guard green, because the non-vacuity check
 # was derived from that same list and so could never fail. Deriving from the tree also
 # widened the scanned set from 5 files to 9 — `CLAUDE.md`, `PHASE_29_HANDOFF.md`,
-# `README.md` and `core/skills/release/SKILL.md` were simply missing from it. None of the
+# `README.md` and `core/skills/release/SKILL.md` were simply missing from it.
+# (`PHASE_29_HANDOFF.md` was deleted as spent by Phase 194, so the derived set is 8
+# now; the count is derived from `git ls-files`, which is the point — it narrowed
+# without this comment or any assertion having to be edited.) None of the
 # four held a `--ref` *value*, so nothing about the fix changed; what changed is that a
 # concrete pin written into any of them from now on is caught. That is this repo's
 # most-repeated defect

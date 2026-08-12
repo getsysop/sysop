@@ -208,8 +208,9 @@ declare -A SUBSTITUTION_USAGE_COUNT=()
 # because the consumer modified them since the lock's sysop_commit;
 # ACCEPT_UPSTREAM is a set of target-relative paths the consumer explicitly
 # opted to take upstream content for (via --accept-upstream / -list). See
-# WORKFLOW.md § 8.2c (Phase 24b paragraph); also PHASE_24_HANDOFF.md § 4.5, a
-# maintainer-side note that is not in the public tree.
+# WORKFLOW.md § 8.2c (Phase 24b paragraph). A maintainer-side note carrying the
+# fuller rationale lived at PHASE_24_HANDOFF.md § 4.5, deleted as spent by Phase
+# 194; recover from git history if the reasoning is ever needed again.
 DIVERGENCE_SHADOW=""
 OLD_COMMIT=""
 PRESERVED_PATHS=()
@@ -838,7 +839,9 @@ _phase_24b_in_scope() {
 }
 
 # ─── Phase 128: sysop/ vendor-namespace migration ───
-# Design doc: tools/SYSOP_NAMESPACE_SPEC.md — maintainer-side, not in the public tree.
+# Design doc: tools/SYSOP_NAMESPACE_SPEC.md — maintainer-side, never in the public
+# tree, and deleted as spent by Phase 194 once every leg it specified had shipped
+# (§ 10's "separable leg" was built by Phase 133). Recover from git history.
 # One consumer-install layout change: the vendor footprint moves out of the
 # consumer's shared namespaces (flat scripts/ + root docs) into a labelled
 # sysop/ dir. These helpers map a relpath between the OLD (flat) and NEW
@@ -2926,8 +2929,9 @@ seed_friction_log() {
 > **Positive signal counts too.** Something Sysop got notably right — a
 > guardrail that fired correctly, a clear error, a step that just worked — is
 > worth capturing so a later change doesn't quietly "fix" it. Log it as a
-> \`[good]\` entry (positive-signal template below); \`/report-issues\` can
-> batch these into one upstream note instead of filing each as a bug.
+> \`[good]\` entry (positive-signal template below). \`/share-wins\` is what
+> sends these upstream, as one aggregated comment you consent to per entry —
+> **not** \`/report-issues\`, which files bugs and skips wins.
 >
 > Append entries newest-first. Numbering is local (\`ISSUE-NNNN\`); when
 > referencing across repos, prefix with the project name
@@ -3876,7 +3880,8 @@ _ns_migration_preflight() {
 
 # ─── Phase 133: runtime-dir consolidation (sysop/runtime/) ────────────────
 # The four gitignored runtime dirs move under one vendor-namespaced home
-# (SYSOP_NAMESPACE_SPEC § 10, the deliberately-cut Phase 128 leg):
+# (SYSOP_NAMESPACE_SPEC § 10 — the leg Phase 128 cut and THIS code builds; the spec
+# itself was deleted as spent by Phase 194):
 #   .subagent-envelopes/ → sysop/runtime/subagent-envelopes/
 #   .auto-build/         → sysop/runtime/auto-build/
 #   .pending-docs/       → sysop/runtime/pending-docs/

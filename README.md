@@ -2,7 +2,7 @@
 
 **Recurring review findings become rules it enforces for you.**
 
-Sysop brings a full team's engineering rigor to one builder and an AI — from first plan to merge. You bring the idea worth building; Sysop brings the discipline. It's a self-improving development workflow — where "self-improving" means recurring review findings are promoted into written conventions and compiled to machine checks, with you adjudicating every promotion; nothing learns autonomously — extracted from the GDP Query System project (71 review rounds, 3,298 findings, 78 promoted conventions as of 2026-07).
+Sysop brings a full team's engineering rigor to one builder and an AI — from first plan to merge. You bring the idea worth building; Sysop brings the discipline. It's a self-improving development workflow — where "self-improving" means recurring review findings are promoted into written conventions and compiled to machine checks, with you adjudicating every promotion; nothing learns autonomously — extracted from the GDP Query System project (71 review rounds, 3,298 findings, 78 promoted conventions as of 2026-07 — counts of what one era of reviewing model filed, so read them as a floor, not a census).
 
 ## The loop
 
