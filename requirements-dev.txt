@@ -19,3 +19,17 @@ pyyaml==6.0.2
 # rather than serialized (tests/test_venv_command_word.py). Pass `-n0` to run
 # serially when a traceback is easier to read that way.
 pytest-xdist==3.8.0
+# Phase 196. A HARD dep, for the same reason pytest-xdist is one. The semgrep
+# default-ignore-list recovery (internal tracker #361) can only be tested against the real binary
+# — the defect lives in semgrep's own target discovery, which no mock reproduces
+# — so those tests carry `skipif(shutil.which("semgrep") is None)`. Without
+# semgrep installed, CI SKIPPED all eleven of them, and this phase's review round
+# measured the consequence: with the entire recovery disabled the suite was
+# BIT-IDENTICAL to the baseline, so the required `pytest` check was green over a
+# feature that had been switched off. A gate that cannot see what it gates is
+# this repo's most-repeated defect (Phases 154, 160, 186, 195). Pinned because
+# the ignore list is compiled into semgrep-core and is version-dependent; the
+# control test `test_the_directory_operand_alone_still_misses_them` is what
+# catches an upstream change to it. macOS arm64 + manylinux2014 wheels both
+# exist for cp313, which is what CI runs.
+semgrep==1.157.0

@@ -15,7 +15,7 @@ git diff --name-only "$(git merge-base main HEAD)" -- frontend/
 ```
 
 This covers both committed and uncommitted changes relative to the point this
-branch was cut. **Diff against the merge-base, not `main`** (upstream #241): a
+branch was cut. **Diff against the merge-base, not `main`** (internal tracker #241): a
 bare `git diff --name-only main` compares `main`'s *tip* to the working tree, so
 frontend files `main` gained after the branch was cut are reported as this
 branch's changes and drive a browser verification of work it never did. Three

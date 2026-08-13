@@ -25,7 +25,7 @@ CI contract:
     An advisory (`blocking: false`) check's findings are baselined too, and
     that is the whole of what it buys them: a [baseline] tag instead of a
     plain line. The gate reads `blocking: true` on its own, so an advisory
-    entry cannot change an exit code in either direction (upstream #363).
+    entry cannot change an exit code in either direction (internal tracker #363).
 """
 import argparse
 import os
@@ -277,7 +277,7 @@ def main():
     baseline_hits = 0
     new_blocking_hits = 0
     new_coverage_hits = 0  # blocking coverage findings (can't be baselined)
-    # Blocking checks whose findings are being suppressed. Since #363 a check can
+    # Blocking checks whose findings are being suppressed. Since internal tracker #363 a check can
     # be baselined while advisory and promoted to `blocking: true` later, and the
     # promotion is then inert for every pre-existing finding — `new blocking: 0`,
     # exit 0. That is correct behaviour for an accepted finding and indefensible
@@ -474,7 +474,7 @@ def _run_update_baseline(repo_root, all_checks, baseline_file):
 
     # The tally is what write_baseline reports it persisted, not a second
     # copy of its filter. The hand-inlined copy that used to live here was
-    # already one edit away from disagreeing with it (upstream #363 changed
+    # already one edit away from disagreeing with it (internal tracker #363 changed
     # the predicate; a duplicate would have kept printing the old number).
     written = write_baseline(baseline_file, all_findings, blocking_ids)
     baseline_rel = baseline_file.replace(repo_root.rstrip("/") + "/", "")

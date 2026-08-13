@@ -37,7 +37,7 @@ A substantial change wants more than one reviewer, on distinct lenses (e.g. *doe
 
 - **It does not guarantee the revision you expect.** In one round two reviewers spawned together landed on *different* commits — one of them the pre-phase tip, so that reviewer's first findings described code the phase had already changed. Isolation removes the interference; it does not remove the need to check what you are reading.
 - **Do not use it where a worktree already exists.** `/claim-task`, `/auto-build`, `/auto-fix` and `/auto-judge` spawn agents into a worktree an earlier step created, and each says "Do NOT set `isolation: \"worktree\"`" for that reason. This section is about an **ad-hoc review round with no pre-existing worktree**; it does not override those instructions. Where the harness offers no isolation at all, the commit-first + do-not-mutate + `git show` rules above are the portable form and are sufficient.
-- **Shipped steps meet that description too, and one of them now sets isolation for exactly the reason above.** `/review-close` Step 2b spawns its convention reviewers into the user's **primary** worktree while a close is mid-flight, with no worktree of their own; an agent there once ran `git checkout` and moved `HEAD` off the integration branch (upstream #234) — the same failure this section records from an ad-hoc round, in shipped code rather than a maintainer's session. The `/codebase-review` and `/security-audit` fan-outs have the same shape (primary worktree, no worktree of their own) and the same exposure, so the rules above apply to them whether or not their prompts repeat them.
+- **Shipped steps meet that description too, and one of them now sets isolation for exactly the reason above.** `/review-close` Step 2b spawns its convention reviewers into the user's **primary** worktree while a close is mid-flight, with no worktree of their own; an agent there once ran `git checkout` and moved `HEAD` off the integration branch (internal tracker #234) — the same failure this section records from an ad-hoc round, in shipped code rather than a maintainer's session. The `/codebase-review` and `/security-audit` fan-outs have the same shape (primary worktree, no worktree of their own) and the same exposure, so the rules above apply to them whether or not their prompts repeat them.
 
 **Never weight findings by how many reviewers agree.** In the same round, one reviewer confirmed a finding that another disproved by reading the document that *governed* the behaviour — the lone dissenter was right. A majority that checked the surface loses to one reviewer that read the spec.
 
@@ -157,7 +157,7 @@ Why retained: (1) the Phase 37 `SubagentStop` envelope contract (`parse_subagent
 failure is the reason the current one exists.** `/claim-task` used to collapse adversarial
 review, classification, plan revision, implementation and the post-fix gates into a single
 "reviewer-executor" sub-agent, which **self-classified its own findings**. That is a known
-compromise this file recorded at the time, and it failed in the field: upstream #220 observed
+compromise this file recorded at the time, and it failed in the field: internal tracker #220 observed
 a real claim run to completion with no `Agent` call at any point, so the review, the
 classification, the sealed report and the halt-on-blocker gate were all bypassed — and
 because a review that *did* run left nothing durable either, the healthy case and the skipped

@@ -13,6 +13,7 @@ Subprocess is mocked (`patch("run_checks.semgrep.subprocess.run")`); the
 the dir-absent guard. Tool-absent is `FileNotFoundError`, not a return code.
 """
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -35,8 +36,11 @@ def _completed(stdout="", returncode=0):
 def _semgrep_run_stub(semgrep_result, tracked=("src/a.py",)):
     """Side effect for ``run_checks.semgrep.subprocess.run``.
 
-    The stage shells out **twice** since Phase 189 (#361): ``git ls-files -z`` to
-    enumerate targets, then semgrep itself. A single ``return_value`` answers both,
+    The stage shells out **three times** since Phase 196 (#361): ``git ls-files -z``
+    and ``git ls-files -z --others --exclude-standard`` to find the files semgrep's
+    default ignore list drops, then semgrep itself. (Zero git calls when the repo has
+    a root ``.semgrepignore`` — the recovery switches off.) A single ``return_value``
+    answers all of them, which
     which is not merely untidy — it silently feeds semgrep's own JSON payload back
     as the target list, so these tests were passing while scanning a nonsense
     operand, and the two that did fail failed for an unrelated-looking reason.
@@ -453,10 +457,16 @@ def test_real_semgrep_scans_the_test_tree_that_the_directory_operand_dropped(tmp
         "traceless, which was the whole reason this needed a state of its own"
     )
 
-    targets = semgrep_mod._tracked_targets(str(repo))
-    assert "tests/t_bad.py" in targets
-    enumerated = _scan(*targets)
-    assert [r["path"] for r in enumerated["results"]] == ["tests/t_bad.py"], enumerated
+    targets, dropped = semgrep_mod._default_ignored_targets(str(repo), "nope")
+    assert dropped == 0
+    assert [os.path.relpath(t, str(repo)) for t in targets] == ["tests/t_bad.py"]
+
+    # The SHIPPED shape is the directory operand PLUS the recovered files, not the
+    # recovered files alone — Phase 189's withdrawn fix dropped the directory and
+    # that is what made it worse than the defect.
+    recovered = _scan(str(repo), *targets)
+    assert [os.path.relpath(r["path"], str(repo))
+            for r in recovered["results"]] == ["tests/t_bad.py"], recovered
 
 
 def test_a_scan_that_executed_then_partially_parsed_ends_up_degraded(tmp_path):
@@ -525,3 +535,100 @@ class TestPartialParseAttribution:
                    side_effect=_semgrep_run_stub(_completed(payload))):
             semgrep_mod._run_semgrep(str(tmp_path), {"semgrep-x": {"id": "semgrep-x"}}, r)
         assert "not\n scanned" in r._records["semgrep-x"].detail.replace("not scanned", "not\n scanned")
+
+
+def test_the_ignored_test_path_predicate_is_directory_only_for_dir_spellings():
+    """semgrep's default-list entries are `test/` — DIRECTORY-only, trailing slash.
+
+    A file merely *named* `tests` is not ignored by semgrep, so treating it as a
+    match names an operand that needed no naming. Closed from Phase 196's own
+    battery: mutating `parts[:-1]` to `parts` survived every other test, because
+    over-breadth here costs an operand rather than a finding and nothing looked.
+    `*_test.go` is the one entry that IS a basename rule, so it stays one.
+    """
+    p = semgrep_mod._is_ignored_test_path
+    # directory spellings, at any depth
+    assert p("tests/b.py")
+    assert p("test/d.py")
+    assert p("deep/nested/testsuite/c.py")
+    assert p("src/tests/e.py")
+    # the same words as a FILE basename are not directories
+    assert not p("tests")
+    assert not p("src/tests")
+    assert not p("src/test")
+    assert not p("testsuite")
+    # the suffix rule works at any depth, and on a DIRECTORY of that name too
+    # (`*_test.go` has no trailing slash, so gitignore matches both)
+    assert p("src/handler_test.go")
+    assert p("handler_test.go")
+    assert p("helpers_test.go/util.py")
+    assert not p("src/handler.go")
+
+    # Over-match is the direction that hides: each of these adds operands, which
+    # bypass --exclude and a consumer's .semgrepignore and eat operand budget.
+    # All three were live mutations that survived the first battery.
+    assert not p("src/handlertest.go")     # `_test.go` -> `test.go` widens this
+    assert not p("src/a_test.go.bak")      # endswith -> substring widens this
+    assert not p("src/x_test.gogo")        # ...and this
+    assert not p("Tests/b.py")             # semgrep's matcher is case-SENSITIVE
+    assert not p("TEST/b.py")
+    assert not p("src/mytests/e.py")       # a segment CONTAINING "tests"
+    assert not p("src/tests_helper/e.py")
+
+
+def test_semgrep_is_present_wherever_the_suite_is_the_merge_gate():
+    """A skip must not be able to hide a dead gate.
+
+    The whole #361 recovery is covered by tests carrying
+    `skipif(shutil.which("semgrep") is None)`, because the defect lives in
+    semgrep's target discovery and no mock reproduces it. Phase 196's review round
+    measured what that costs when semgrep is absent: with the ENTIRE recovery
+    disabled (`_default_ignored_targets` returning `[], 0` immediately), the suite
+    was **bit-identical to the baseline** — 45/3341/20 in both cells — so the
+    required `pytest` check passed over a switched-off feature.
+
+    `semgrep` is now a hard dep in `requirements-dev.txt`. This asserts the
+    install actually worked, so a resolver failure reddens the gate instead of
+    silently converting eleven tests into skips. Local runs without it stay
+    skipped, which is the intended developer ergonomics.
+    """
+    if not os.environ.get("CI"):
+        pytest.skip("not a gating run — semgrep is optional for local work")
+    assert shutil.which("semgrep"), (
+        "semgrep is not on PATH in a CI run. It is a HARD dependency in "
+        "requirements-dev.txt: without it, every test of the #361 recovery "
+        "skips and the merge gate goes green over a feature that has been "
+        "switched off. Fix the install rather than removing this assertion."
+    )
+
+
+def test_a_partly_parsed_and_over_budget_run_reports_both(tmp_path):
+    """The accounting ladder's MERGE case, which no test constructed.
+
+    Three of Phase 196's review-round mutations lived here and all survived:
+    deleting the budget clause from the combined detail, inverting precedence so
+    the partially-parsed FILE NAMES are dropped (the whole product of #362), and
+    misrouting the machine-readable `reason`. Mocked deliberately — the merge is
+    pure accounting, and a real `PartialParsing` is not reliably constructible.
+    """
+    _semgrep_dir(tmp_path)
+    payload = json.dumps({
+        "results": [],
+        "errors": [{"type": "PartialParsing", "path": "src/broken.py"}],
+        "paths": {"scanned": ["src/broken.py"], "skipped": []},
+    })
+    r = RunReport([{"id": "semgrep-x"}])
+    with patch("run_checks.semgrep.subprocess.run",
+               side_effect=_semgrep_run_stub(_completed(payload))), \
+         patch("run_checks.semgrep._default_ignored_targets",
+               return_value=([], 7)):
+        semgrep_mod._run_semgrep(str(tmp_path), {"semgrep-x": {"id": "semgrep-x"}}, r)
+    rec = r._records["semgrep-x"]
+    assert rec.status == DEGRADED, rec.status
+    detail = rec.detail or ""
+    assert "partially parsed" in detail, detail
+    assert "src/broken.py" in detail, (
+        f"the partially-parsed file NAMES were dropped in the merge: {detail}")
+    assert "7 test file(s) omitted" in detail, (
+        f"the budget shortfall vanished from the combined record: {detail}")
+    assert rec.reason == "partial-parse", rec.reason

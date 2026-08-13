@@ -8,7 +8,10 @@ hand-waving "expect 5–10 tests to fail").
 > contain** — the `auto_claim_miner*.py` research scripts and their test module
 > are maintainer-side and **not in the public tree**, and neither is anything
 > under `tools/`. Rows naming them describe work that was done, not files to
-> open. (Phase 184.)
+> open. **It also cites issue numbers the public tree cannot resolve** — the bare
+> `#NNN` here are entries in Sysop's private maintainer tracker, not in the public
+> `getsysop/sysop` repository, whose numbering is unrelated. (Phase 184; issue-number
+> half added Phase 197.)
 
 Classification scheme:
 - **(a) script regression in Sysop** — passes in gdp, fails in Sysop because the Sysop script port introduced a bug. Fix the script; do not modify the test.

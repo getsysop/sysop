@@ -165,7 +165,7 @@ comes first. Three rules keep that honest on a file nothing validates:
   which is the ambiguity this replaces.
 - **A `## ` line inside a fenced block is neither a boundary nor an entry, and a
   fence opener may be indented up to three spaces.** This is the independent
-  defence and the only one that reaches a *real* entry: in upstream #264 a wrapped
+  defence and the only one that reaches a *real* entry: in internal tracker #264 a wrapped
   list item put a triple-backtick `plan` opener at **column 3**, which CommonMark
   reads as a fence opener with an info string rather than as prose, and the 119
   lines it opened absorbed the rest of one entry, the whole of the next, and the
@@ -180,7 +180,7 @@ comes first. Three rules keep that honest on a file nothing validates:
   vanish without a trace. Say so and stop rather than posting whatever the
   truncated block appears to contain — announcing the swallow costs a re-run,
   and not announcing it costs a wrong post. **An odd number of fence-opener-eligible
-  lines is the cheap signal**: #264 took the file from 36 such lines (balanced) to 39,
+  lines is the cheap signal**: internal tracker #264 took the file from 36 such lines (balanced) to 39,
   and that count is checkable without parsing anything.
 
 Classify each `[good]` entry by `**Status:**`:
@@ -197,7 +197,7 @@ flip was missed. Friction (`ISSUE-NNNN`) entries are out of scope here — ignor
 them; they're `/report-issues`' job. **They are still boundaries**: an
 `ISSUE-NNNN` heading ends the win above it, per the boundary rule above. Reading
 one as body text is the symmetric form of the defect that put `GOOD-0026` inside
-upstream issue #360 — the direction that fails here is a win published with a
+internal tracker #360 — the direction that fails here is a win published with a
 bug report's text appended to it.
 
 Read the consumer name from the file's H1 (`# Sysop Issues — <consumer>`) — you'll

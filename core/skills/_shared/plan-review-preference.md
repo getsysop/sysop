@@ -65,7 +65,7 @@ reviewed plan back to the task body, release the claim). It needs a `## Plan` bo
 and a release ordering the skill does not carry. **Say so if a human asks for it rather than
 improvising it or silently running option B** — a missing branch nobody wrote down is how
 `/claim-task` Steps 7–8 acquired roadmap-only vocabulary in Phase 29, which is the defect
-upstream #220 reported.
+internal tracker #220 reported.
 
 ## C. Guided mode
 

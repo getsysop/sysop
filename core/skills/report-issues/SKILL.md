@@ -136,7 +136,7 @@ comes first. Three rules keep that honest on a file nothing validates:
   which is the ambiguity this replaces.
 - **A `## ` line inside a fenced block is neither a boundary nor an entry, and a
   fence opener may be indented up to three spaces.** This is the independent
-  defence and the only one that reaches a *real* entry: in upstream #264 a wrapped
+  defence and the only one that reaches a *real* entry: in internal tracker #264 a wrapped
   list item put a triple-backtick `plan` opener at **column 3**, which CommonMark
   reads as a fence opener with an info string rather than as prose, and the 119
   lines it opened absorbed the rest of one entry, the whole of the next, and the
@@ -151,13 +151,13 @@ comes first. Three rules keep that honest on a file nothing validates:
   vanish without a trace. Say so and stop rather than filing whatever the
   truncated block appears to contain — announcing the swallow costs a re-run,
   and not announcing it costs a wrong issue. **An odd number of fence-opener-eligible
-  lines is the cheap signal**: #264 took the file from 36 such lines (balanced) to 39,
+  lines is the cheap signal**: internal tracker #264 took the file from 36 such lines (balanced) to 39,
   and that count is checkable without parsing anything.
 
 **Wins are out of scope here, and they are still boundaries.** A `GOOD-NNNN`
 entry (marked `[good]`) belongs to `/share-wins` — ignore its content; never
 file it. But its heading **ends the entry above it**, and missing that is how
-`GOOD-0026` was published inside upstream issue #360 and `GOOD-0027` inside #364:
+`GOOD-0026` was published inside internal tracker #360 and `GOOD-0027` inside internal tracker #364:
 each win was absorbed into the preceding bug's body, spending win-privacy under
 consent given for a bug. Because only `/share-wins` writes `**Shared:** <url>`,
 neither win got one — so the next `/share-wins` run posts both again as fresh,

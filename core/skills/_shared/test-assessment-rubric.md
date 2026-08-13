@@ -14,7 +14,7 @@ The rubric answers each candidate surface with exactly one verdict: **recommend 
 
 **The litmus: does an untested line here encode a load-bearing invariant — a promise the code makes that a wrong change could silently break?** If yes, and nothing guards it, recommend a test. If the line is trivial glue, do not — a test that only restates wiring is negative value (it adds maintenance drag and catches nothing).
 
-**Load-bearing surfaces — recommend a test** (reusing adversarial-review dimension #7's "load-bearing invariant" vocabulary, applied to the *standing* codebase rather than a diff):
+**Load-bearing surfaces — recommend a test** (reusing adversarial-review dimension 7's "load-bearing invariant" vocabulary, applied to the *standing* codebase rather than a diff):
 
 - **Guards and validation** — the branch that rejects bad input, enforces a precondition, or raises on an invalid state. The whole point of the guard is that it fires; an untested guard is a promise nobody checks.
 - **Error and exception paths** — retry/backoff, rollback, fallback, the `except` that recovers vs. the one that re-raises. These run rarely in production and are exactly where silent regressions hide.
@@ -45,7 +45,7 @@ The exact analog of Phase 62's backward *convention* sweep (map → code: which 
 - **Deprecated / removed code path.** The test drives a branch, flag, or module that has been removed or permanently disabled — a feature flag hard-wired off, a legacy path the code no longer reaches.
 - **Self-marked dead.** The test is indefinitely `skip` / `xfail` / `it.skip` / `@Disabled` with **no live un-skip condition** — a bare `skip("obsolete")` or `skip("flaky, ignore")` with no ticket, date, or platform gate. It has been quarantined and forgotten.
 
-**FP guard — the "looks dead but isn't" trap** (Phase 58a dimension #9's discipline, reused by Phase 62's demotion sweep): a static grep does not see every reference. A symbol reached by **dynamic dispatch, a string key, reflection, a plugin/entry-point registry, serialization-by-name, or a public-API re-export** can appear grep-dead while production still calls it. Before flagging dead: check the export surface and any registration tables. **A conditional skip is not a dead skip** — a test gated on a platform (`skipif(sys.platform == "win32")`), an environment (needs a live binary / network), or a tracked upstream fix (`xfail(reason="upstream #1234")`) is *parked with a live condition*, not obsolete; keep it. **When you cannot tell whether the referent is truly gone, keep it and say so** — Tier 2a is the high-confidence tier; ambiguity demotes the finding to a Tier-2b judgment note or to no finding at all.
+**FP guard — the "looks dead but isn't" trap** (Phase 58a dimension 9's discipline, reused by Phase 62's demotion sweep): a static grep does not see every reference. A symbol reached by **dynamic dispatch, a string key, reflection, a plugin/entry-point registry, serialization-by-name, or a public-API re-export** can appear grep-dead while production still calls it. Before flagging dead: check the export surface and any registration tables. **A conditional skip is not a dead skip** — a test gated on a platform (`skipif(sys.platform == "win32")`), an environment (needs a live binary / network), or a tracked upstream fix (`xfail(reason="tracked upstream fix")`) is *parked with a live condition*, not obsolete; keep it. **When you cannot tell whether the referent is truly gone, keep it and say so** — Tier 2a is the high-confidence tier; ambiguity demotes the finding to a Tier-2b judgment note or to no finding at all.
 
 ---
 
@@ -55,7 +55,7 @@ Here the retire-vs-keep line is a genuine judgment with real false-positive cost
 
 1. **A confidence label** (`high` / `medium` / `low`) — and `low` means "flagging for your eyes, leaning keep."
 2. **The specific evidence**, so the human verifies in seconds, not minutes: for redundancy, *name the sibling test* that already catches this; for brittleness, *name the observable behavior* the test should assert instead of the implementation detail it currently pins; for hollowness, *quote the assertion* (or its absence).
-3. **The keep-when-unsure default** — Phase 58a dimension #9 again. If you cannot articulate the specific evidence in the two forms above, there is no 2b finding.
+3. **The keep-when-unsure default** — Phase 58a dimension 9 again. If you cannot articulate the specific evidence in the two forms above, there is no 2b finding.
 
 The three judgment shapes:
 

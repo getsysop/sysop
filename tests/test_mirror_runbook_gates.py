@@ -642,7 +642,10 @@ def test_the_pass_population_is_derived_and_non_vacuous():
     if not _in_source_repo():
         pytest.skip("sterilized mirror; the maintainer-side surface is correctly absent")
     implemented = implemented_passes()
-    assert {"1a", "1b", "1c", "2", "2b", "3", "4", "5"} <= implemented, (
+    # `5b` added Phase 197 — the round's nit: without it here, that pass alone
+    # dropping out of the EXTRACTOR is silent, and the runbook-coverage guard
+    # above then passes by not knowing the pass exists.
+    assert {"1a", "1b", "1c", "2", "2b", "3", "4", "5", "5b"} <= implemented, (
         f"the pass extractor found only {sorted(implemented)} — it has stopped seeing the "
         "identifiers in the implementing files, so the runbook check is inert"
     )

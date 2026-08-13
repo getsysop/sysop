@@ -71,7 +71,7 @@ n="$<2>"`). The skill runner substitutes a bare `$<1>`/`$<2>` in this file with 
 argument words *before bash ever defines the function*. Indices are **0-based**, so
 `/daily-summary --date 2026-08-10` turned that line into `local d="2026-08-10" n="$<2>"` —
 `$<1>` is the *second* word, and `$<2>` is out of range so it stayed literal and the week
-window then computed from the string `$<2>` (upstream #360). Nothing in this file may read
+window then computed from the string `$<2>` (internal tracker #360). Nothing in this file may read
 a positional parameter.
 
 It also removes the older hazard this section used to warn about: functions live only inside

@@ -30,47 +30,70 @@ _SYSTEM_CA_BUNDLES = (
 )
 
 
-def _tracked_targets(repo_root):
-    """Every tracked file. Kept as a helper; deliberately NOT wired into the scan.
+# semgrep's built-in default ignore list, "Common test paths" block, read out of
+# the compiled semgrep-core binary at 1.157.0 rather than from any summary of it:
+#
+#     test/  tests/  testsuite/  *_test.go
+#
+# It applies only when the project has no ``.semgrepignore``, it matches at ANY
+# depth, and — the reason this module carries a recovery step at all —
+# discovery-excluded files are absent from ``paths.skipped``, so nothing records
+# the omission while the accounting line reads ``executed with 0 findings``.
+#
+# Internal tracker #361 (Q-011) named only ``test/`` and ``tests/``; the other two entries
+# were found by reading the binary. ``*_test.go`` is Go's entire test convention.
+_IGNORED_TEST_DIRS = frozenset({"test", "tests", "testsuite"})
+_IGNORED_TEST_SUFFIX = "_test.go"
 
-    **#361 is real and still OPEN.** Handed a directory, semgrep does its own target
-    discovery, and with no project ``.semgrepignore`` it falls back to a built-in default
-    ignore list in gitignore syntax containing ``test/`` and ``tests/`` matching at any
-    depth. Dropped files are absent from ``paths.skipped``, so nothing records it.
-    Measured on this repo with the 10 shipped rules: directory operand **72 scanned / 30
-    findings / 0 under tests/**; explicit operands **186 / 45 / 114**. ``--no-git-ignore``
-    recovers nothing (72 either way — it negates *gitignore* handling, a separate
-    mechanism). An empty ``.semgrepignore`` does recover them, which is worth documenting
-    and is not the fix: it asks every consumer to discover a silent exclusion.
+# The recovered population rides on the command line: semgrep 1.157.0 has no
+# --targets-file and reads no targets from stdin (both probed). So the ceiling is
+# the platform's exec limit, and a fixed guess is wrong in both directions — a
+# review round measured a real usable ceiling of ~980 KiB here while a flat
+# 256 KiB was discarding 28% of a 5,000-file population that would have fit.
+# ``_operand_budget`` derives it instead, and this constant is only the floor
+# used when the platform will not say. When the population exceeds the budget the
+# stage records ``degraded`` and names the shortfall — silently scanning less is
+# the defect this exists to close, not an acceptable way to close it.
+_OPERAND_BUDGET = 256 * 1024
 
-    **Enumeration was built as the fix and WITHDRAWN by this phase's review round**, which
-    measured it worse than the defect it closes. A re-attempt must answer all of:
+# Room for the fixed argv (``semgrep scan --config … --exclude … --json …`` plus
+# the directory operand) and for an environment that grows between the
+# measurement and the exec.
+_ARGV_SLACK = 64 * 1024
 
-    * **Path shape follows operand shape.** An absolute directory operand yields absolute
-      finding paths; relative operands yield relative ones. The
-      ``os.path.relpath(result["path"], repo_root)`` below then resolves relative paths
-      against the process CWD — findings silently vanish, or land as ``src/src/a.py`` and
-      become baseline keys pointing at files that do not exist. ``run_checks.sh`` passes
-      ``--repo-root`` and never ``cd``s, so any run from a subdirectory hits this.
-    * **A tracked symlink aborts the WHOLE scan** — ``Invalid scanning root: … is a
-      symbolic link``, ``scanned: []``, exit 2, stage records ``failed``. Sysop installs
-      tracked symlinks by default (``.agents/skills/*``, Phase 142), so a consumer who
-      commits them loses AST scanning entirely.
-    * **So does a tracked file absent from the worktree** — deleted-not-staged,
-      mid-rename, sparse checkout, ``skip-worktree``.
-    * **``--exclude`` stops applying**, so the bundled fixtures the exclude exists to
-      suppress return as findings on every install.
-    * **Untracked files stop being scanned** — the likeliest home of a new defect.
-    * **A submodule gitlink** is one operand that expands to many scanned files.
-    * The 300s timeout becomes **per batch** while the ``failed`` detail still says 300s.
 
-    So a correct attempt filters the target list (regular files present on disk,
-    non-symlink, fixtures removed, untracked-not-ignored added), normalises finding paths
-    for both shapes, and scales the timeout. That is a phase, not a patch.
+def _operand_budget():
+    """Bytes available for recovered operands on this platform.
+
+    Half the headroom left after the environment and the fixed arguments, floored
+    at ``_OPERAND_BUDGET``. Half, not all, because the environment a consumer
+    execs with is not the one measured here — a CI runner that injects secrets
+    between this call and the exec must not turn a working scan into ``E2BIG``.
     """
     try:
-        r = subprocess.run(["git", "ls-files", "-z"], cwd=repo_root,
-                           capture_output=True, text=True, timeout=60)
+        limit = os.sysconf("SC_ARG_MAX")
+    except (AttributeError, ValueError, OSError):
+        return _OPERAND_BUDGET
+    if not isinstance(limit, int) or limit <= 0:
+        return _OPERAND_BUDGET
+    env_bytes = sum(len(k) + len(v) + 2 for k, v in os.environ.items())
+    return max(_OPERAND_BUDGET, (limit - env_bytes - _ARGV_SLACK) // 2)
+
+
+def _git_lines(repo_root, args):
+    """``git`` output split on NUL, or None when git cannot answer.
+
+    The environment is stripped of ``GIT_*`` the same way ``next_task.py``,
+    ``validate_tasks.py``, ``scope_overlap.py`` and ``backfill_completed_dates.py``
+    strip it: git exports ``GIT_DIR``/``GIT_INDEX_FILE`` into every hook, and a
+    pre-commit invocation would otherwise point these calls at the wrong index.
+    Demonstrated consequence, on a tree with gitignored-but-force-tracked tests:
+    the recovered population goes from the right files to none at all, silently.
+    """
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    try:
+        r = subprocess.run(["git"] + args, cwd=repo_root,
+                           capture_output=True, text=True, timeout=60, env=env)
     except (OSError, subprocess.SubprocessError):
         return None
     if r.returncode != 0:
@@ -78,8 +101,108 @@ def _tracked_targets(repo_root):
     return [p for p in r.stdout.split("\0") if p]
 
 
+def _is_ignored_test_path(rel):
+    """True when semgrep's built-in default ignore list drops ``rel``.
+
+    The three directory entries are directory-only (``test/`` has a trailing
+    slash), so they match a path *component* and never a basename. ``*_test.go``
+    has no trailing slash, so in gitignore syntax it matches a **directory of
+    that name as well as a file** — a review round found a `helpers_test.go/`
+    directory still eaten by the very block this recovers.
+    """
+    parts = rel.split("/")
+    if any(seg in _IGNORED_TEST_DIRS for seg in parts[:-1]):
+        return True
+    if any(seg.endswith(_IGNORED_TEST_SUFFIX) for seg in parts[:-1]):
+        return True
+    return parts[-1].endswith(_IGNORED_TEST_SUFFIX)
+
+
+def _default_ignored_targets(repo_root, exclude_rel):
+    """Explicit operands for the files semgrep's default ignore list would drop.
+
+    Returns ``(targets, dropped)`` — absolute paths to add alongside the directory
+    operand, and the count omitted because the operand budget was reached.
+
+    **The directory operand is KEPT.** That is the whole design: an explicitly named
+    *file* bypasses the default ignore list, but a directory operand does not — naming
+    ``<root>/tests`` recovers nothing, measured. So the scan stays a directory scan and
+    this function supplies only the population that scan cannot see. Phase 189 built the
+    other shape — replacing the directory with a full enumeration — and its review round
+    withdrew it as worse than the defect. Each condition that round raised is answered
+    here, and by construction rather than by care:
+
+    * **Path shape follows operand shape.** Every operand is ``os.path.join(repo_root,
+      rel)``, so it carries *the same* shape as the ``repo_root`` operand beside it.
+      semgrep then reports both populations in one shape and the existing
+      ``os.path.relpath(result["path"], repo_root)`` resolves them identically. A
+      relative ``repo_root`` keeps today's behaviour exactly, because the join preserves
+      it — nothing here introduces a second shape to reconcile.
+    * **A tracked symlink aborts the WHOLE scan** (``Invalid scanning root: … is a
+      symbolic link``, ``scanned: []``, exit 2). ``islink`` is filtered out below, so a
+      symlink is never named. Under the directory operand semgrep skips symlinks itself,
+      which is why the shipped scan survives them today and must keep doing so.
+    * **A tracked file absent from the worktree** (deleted-not-staged, mid-rename, sparse
+      checkout, ``skip-worktree``) aborts it the same way. ``isfile`` is filtered.
+    * **``--exclude`` stops applying to a named file**, so the bundled fixtures would
+      return as findings on every install. ``exclude_rel`` is filtered here, and the
+      directory operand still carries ``--exclude`` for everything else.
+    * **Untracked files stop being scanned** under a pure enumeration. Here the directory
+      operand still discovers them, and ``--others --exclude-standard`` adds the untracked
+      *test* files the directory operand cannot see.
+    * **A submodule gitlink** is one ``ls-files`` entry that would expand to many scanned
+      files. ``isfile`` is False for the gitlink directory, so it is filtered; the
+      submodule keeps whatever treatment the directory operand gives it.
+    * **The 300s timeout stays whole-scan** because this stays ONE subprocess. It never
+      becomes per-batch, so the ``failed`` detail that says 300s remains true.
+
+    Outside a git repo there is nothing to enumerate from; the caller falls back to the
+    bare directory operand, which is exactly today's behaviour.
+    """
+    # A project ``.semgrepignore`` REPLACES the built-in default list wholesale,
+    # so there is nothing for this function to recover — and naming files anyway
+    # would override the consumer's own exclusions, because an explicit operand
+    # bypasses `.semgrepignore` exactly as it bypasses the built-in list. A review
+    # round demonstrated it: with `tests/` in their `.semgrepignore`, the scan
+    # returned a file they had deliberately excluded. Only a ROOT `.semgrepignore`
+    # has this effect — a nested one does not disable the built-in list, verified —
+    # so the probe is deliberately root-only rather than a walk.
+    if os.path.isfile(os.path.join(repo_root, ".semgrepignore")):
+        return [], 0
+
+    tracked = _git_lines(repo_root, ["ls-files", "-z"])
+    if tracked is None:
+        return [], 0
+    untracked = _git_lines(
+        repo_root, ["ls-files", "-z", "--others", "--exclude-standard"]) or []
+
+    budget = _operand_budget()
+    targets, dropped, used = [], 0, 0
+    for rel in sorted(set(tracked) | set(untracked)):
+        if not _is_ignored_test_path(rel):
+            continue
+        # The shipped --exclude does not survive an explicit file operand.
+        if rel == exclude_rel or rel.startswith(exclude_rel + "/"):
+            continue
+        abs_path = os.path.join(repo_root, rel)
+        # A symlink or a missing path is not merely unscannable — as a named
+        # operand it aborts the entire scan. Never name one.
+        if os.path.islink(abs_path) or not os.path.isfile(abs_path):
+            continue
+        # BYTES, not characters. exec counts the encoded argv, and a path of
+        # astral-plane characters is 4x its length — the one shape where a
+        # character-counted budget under-reports enough to reach E2BIG.
+        cost = len(os.fsencode(abs_path)) + 1
+        if used + cost > budget:
+            dropped += 1
+            continue
+        used += cost
+        targets.append(abs_path)
+    return targets, dropped
+
+
 def _partial_parse_paths(errors):
-    """Paths whose parse failed part-way, from semgrep's ``errors[]`` (#362).
+    """Paths whose parse failed part-way, from semgrep's ``errors[]`` (internal tracker #362).
 
     ``errors[].type`` is either a bare string or a ``[name, [...]]`` pair; both
     shapes are read so a semgrep upgrade that changes one does not silently empty
@@ -188,17 +311,24 @@ def _run_semgrep(repo_root, included_ids, report=None):
             env["SSL_CERT_FILE"] = bundle
         else:
             ca_hint = " — set SSL_CERT_FILE to a trusted CA bundle"
-    # Enumerate targets rather than handing semgrep the directory (#361 — see
-    # `_tracked_targets`). Outside a git repo there is nothing to enumerate from, so
-    # the directory operand stays as the fallback and the shortfall is reported below.
-    # The operand is the DIRECTORY, and that is upstream #361 — still OPEN. Enumerating
-    # targets is the obvious fix; it was built here and withdrawn by this phase's own
-    # review round. `_tracked_targets` below records why and what a correct attempt owes.
+    # The operand is the DIRECTORY, and it stays the directory (internal tracker #361 / Q-011).
+    # semgrep's built-in default ignore list eats test/, tests/, testsuite/ and
+    # *_test.go before discovery and leaves them out of `paths.skipped`, so those
+    # files are invisibly unscanned. An explicitly named FILE bypasses that list;
+    # a named directory does NOT (measured — naming <root>/tests recovers nothing).
+    # So the directory operand keeps doing everything it does today and
+    # `_default_ignored_targets` names only what it cannot see. Phase 189's
+    # withdrawn fix replaced the directory instead of supplementing it, which is
+    # what made it worse than the defect; that function's docstring answers each
+    # condition its round raised.
+    ignored_targets, over_budget = _default_ignored_targets(
+        repo_root, fixtures_exclude)
     try:
         r = subprocess.run(
             ["semgrep", "scan", "--config", semgrep_dir,
              "--exclude", fixtures_exclude,
-             "--json", "--metrics=off", "--quiet", repo_root],
+             "--json", "--metrics=off", "--quiet", repo_root]
+            + ignored_targets,
             capture_output=True, text=True, cwd=repo_root, timeout=300, env=env,
         )
     except FileNotFoundError:
@@ -250,7 +380,7 @@ def _run_semgrep(repo_root, included_ids, report=None):
                 f"exit {r.returncode}: {len(errors)} scan error(s): "
                 f"{stderr_excerpt(msg)}")
         return out
-    # #362 — an unattributed count made a partly-scanned file read as a clean one.
+    # internal tracker #362 — an unattributed count made a partly-scanned file read as a clean one.
     # The paths are already in the JSON; name them, and record the stage as DEGRADED
     # so "0 findings" for those files is not reported as evidence of absence.
     partial = sorted(_partial_parse_paths(errors))
@@ -262,16 +392,30 @@ def _run_semgrep(repo_root, included_ids, report=None):
         print(f"warn: semgrep could not fully parse {len(partial)} file(s) — the "
               f"unparsed regions were NOT scanned: {shown}", file=sys.stderr)
 
-    # NO SHORTFALL COUNTER, deliberately. This phase built one and its own round measured
+    # NO SHORTFALL COUNTER, deliberately. Phase 189 built one and its round measured
     # it firing 100% false-positive: `paths.scanned` counts files semgrep ANALYSED, not
     # files it received, so 367 targets produce 187 scanned here and the 180 "missing" are
     # .md/.json/.sh/.yaml that no loaded rule has a language for. Marking the stage
     # `degraded` on every run is a status that does not mean what it says — the exact
-    # class this phase exists to remove.
+    # class that work exists to remove. `over_budget` below is a different number and is
+    # safe to report because it counts files this module DECIDED not to name, not files
+    # semgrep declined to analyse — a known quantity, not an inferred one.
+    if over_budget:
+        print(f"warn: {over_budget} test file(s) exceeded the semgrep operand "
+              f"budget and were NOT scanned — the default ignore list hides them "
+              f"and the command line could not carry them", file=sys.stderr)
     if partial:
         detail = (f"{len(partial)} file(s) partially parsed, unparsed regions not "
                   f"scanned: {shown}")
+        if over_budget:
+            detail += (f"; {over_budget} test file(s) omitted over the operand "
+                       f"budget")
         _record(DEGRADED, "partial-parse", detail)
+    elif over_budget:
+        _record(DEGRADED, "targets-over-budget",
+                f"{over_budget} test file(s) omitted over the operand budget — "
+                f"semgrep's default ignore list hides them and they could not fit "
+                f"on the command line")
     else:
         _record(EXECUTED)
 

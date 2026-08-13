@@ -385,7 +385,7 @@ for BATCH_NUM in "${BATCH_NUMS[@]}"; do
   # the annotation decision were silent: a task held open on a stray quoted
   # `> Failed:` line vanished from the Grand Total with no notice, and an
   # annotation the matcher did not recognise closed the task with its failure
-  # note left sitting underneath — the exact rendering upstream #207 reported.
+  # note left sitting underneath — the exact rendering internal tracker #207 reported.
   # A dead item and a clean one must not produce identical evidence.
   while IFS=' ' read -r KIND LNO TEXT; do
     case "$KIND" in

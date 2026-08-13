@@ -9,7 +9,7 @@
 # an `install.sh --update` (Phase 15 / ISSUE-0007 deliberately does not re-arm).
 # A worktree does NOT need its own run — worktrees share one hooks directory,
 # and arming from inside one writes that branch's templates into the shared
-# directory, over the main checkout's armed hooks (Phase 150 / upstream #202).
+# directory, over the main checkout's armed hooks (Phase 150 / internal tracker #202).
 # Skips entirely when core.hooksPath is configured: that directory is yours.
 # ──────────────────────────────────────────────────────────────
 set -euo pipefail

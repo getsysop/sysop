@@ -29,12 +29,12 @@ Terminal states (§1 of the spec; the last two added by Phase 189):
 * ``degraded``   — the tool ran to completion but demonstrably over **less than
   its declared inputs**: a file whose parse failed part-way, a discovery
   shortfall. **A zero-findings degraded check is not a real zero.** (Phase 189,
-  upstream #362.)
+  internal tracker #362.)
 * ``unroutable`` — the check declares no executable form at all: no ``pattern``,
   no ``position_check``, no recognised kind. Distinct from ``skipped``, whose
   precondition could become true in another environment; an unroutable check
   can never execute **anywhere**, so it is a registry-authoring defect rather
-  than an environment one. (Phase 189, upstream #239.)
+  than an environment one. (Phase 189, internal tracker #239.)
 
 Cut line: *skipped = precondition absent; failed = attempted and died;
 degraded = attempted, survived, saw less than it claimed; unroutable = nothing

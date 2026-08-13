@@ -3122,7 +3122,7 @@ EOF
 # The guarantee must hold: /review-close Step 2a derives its `dirty` verdict
 # from `git status --porcelain`, so an un-ignored lock or pending-doc makes a
 # clean branch read dirty → auto-SKIP → the close silently refuses (Phase 99.1
-# / tester issue #10). A drift-guard test
+# / the tester repo's own internal tracker #10). A drift-guard test
 # (tests/test_install_runtime_gitignore.py) greps the skills for every dir they
 # assert is gitignored and fails if this entry doesn't cover it.
 # Loop mode uses the same entry: the audit skills' Step 8 promotion-deferral

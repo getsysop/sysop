@@ -55,7 +55,7 @@ def is_baseline_suppressed(check_id, file_line, blocking_ids, baseline):
     (see `_is_coverage`): a blocking coverage gap always fails the gate,
     baseline or no baseline.
 
-    ``blocking_ids`` is accepted and deliberately unused (upstream #363).
+    ``blocking_ids`` is accepted and deliberately unused (internal tracker #363).
     Suppression used to require ``check_id in blocking_ids`` as well, which
     made a baseline entry for a ``blocking: false`` check unable to suppress
     anything *and* unable to be written — inert state that reads as live
@@ -83,7 +83,7 @@ def write_baseline(path, all_findings, blocking_ids):
     entry for a diff-relative coverage line would be both un-matchable and a
     back-door around the Phase 61b crown-jewel gate. That carve-out is the
     *only* one: an advisory (`blocking: false`) check's findings are written
-    like any other (upstream #363 — see `is_baseline_suppressed`).
+    like any other (internal tracker #363 — see `is_baseline_suppressed`).
 
     ``blocking_ids`` is accepted and deliberately unused, for the reason given
     there. **The return value exists so no caller has to restate the filter:**

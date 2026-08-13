@@ -67,7 +67,7 @@ content in your final message" instruction.
 Cleanup, and the two parents differ. /auto-build Phase 6e deletes the JSON file
 after consuming it. **/claim-task Step 8 does NOT, since Phase 171** — deleting
 the envelope at the moment it became evidence is why a review that ran and a
-review that was skipped left identical traces (upstream #220). It keeps all
+review that was skipped left identical traces (internal tracker #220). It keeps all
 three, and instead /claim-task Step 7-pre MOVES any envelope left over from a
 previous run of the same claim into that run's artifact directory before
 spawning, since the filename below carries no run component. That move runs on a

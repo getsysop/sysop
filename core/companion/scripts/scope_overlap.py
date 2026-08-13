@@ -65,7 +65,7 @@ from pathlib import Path
 from typing import Any
 
 # PyYAML lives only in the project venv on PEP-668 hosts (BeanRider ISSUE-0049;
-# upstream #321). The four fatal copies of this resolution live in
+# internal tracker #321). The four fatal copies of this resolution live in
 # validate_tasks.py / sitrep_survey.py / next_task.py /
 # backfill_completed_dates.py; this one is deliberately NON-fatal and imports
 # nothing, because every yaml use below is a local import whose ImportError is

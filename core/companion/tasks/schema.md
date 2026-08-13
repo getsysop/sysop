@@ -111,7 +111,7 @@ Every claimed task records a **test decision** in its body — the plan-time ans
 
 **Validator behavior** (warn-only): for `status: in_progress` tasks, the validator warns (does NOT block) if the body lacks a test-decision heading. It fires only on `in_progress` because the decision is a claim-time artifact — `open` backlog predates planning, and `done`/`deferred` are terminal or parked. Warn-not-block keeps authoring fluid; the read-and-verify gate lives in `/review-close` (Phase 59).
 
-This is the **plan-time recording** half of Sysop's test discipline; the adversarial plan reviewer's "Missing invariant tests" dimension (`_shared/adversarial-review.md` finding #7) is the **review-time scrutiny** half — it judges whether a recorded `no test because Z` rationale is *sound*, rather than flagging the mere absence of a test. They are complementary, not redundant: the author records the decision here; the reviewer judges the recorded rationale.
+This is the **plan-time recording** half of Sysop's test discipline; the adversarial plan reviewer's "Missing invariant tests" dimension (`_shared/adversarial-review.md` finding 7) is the **review-time scrutiny** half — it judges whether a recorded `no test because Z` rationale is *sound*, rather than flagging the mere absence of a test. They are complementary, not redundant: the author records the decision here; the reviewer judges the recorded rationale.
 
 ## Phase entry — fields
 
