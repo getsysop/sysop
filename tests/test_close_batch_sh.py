@@ -372,22 +372,56 @@ class TestFailedTaskAccounting:
         assert "Marked as Merged (2 tasks closed)." in r.stdout
         assert "failed" not in r.stdout
 
-    def test_annotation_only_counts_for_the_line_above_it(self, tmp_path):
-        # A `> Failed:` line that isn't directly under a task line must not
-        # shield some other task. Here it trails a prose line, so both tasks
-        # close normally.
+    def test_annotation_counts_for_the_nearest_task_in_its_block(self, tmp_path):
+        # WAS `test_annotation_only_counts_for_the_line_above_it`, which asserted
+        # BOTH tasks below close — and was therefore pinning the defect upstream
+        # internal tracker #398 reported. Its fixture is structurally the shape
+        # the shipped generators emit (bullet, indented continuation, annotation),
+        # and there is no syntactic discriminator between its "prose" line and a
+        # real `file:line` continuation: both are `^\s+\S`. Asserting the
+        # annotation is ignored there is asserting it is ignored everywhere it
+        # actually appears.
+        #
+        # The concern the test was written to defend is legitimate and is kept:
+        # a stray annotation must not shield some ARBITRARY task further up the
+        # file. What changed is the reach — nearest preceding task bullet within
+        # its own block, and no further. TASK-1 owns the indented lines under it,
+        # so TASK-1 is held; TASK-2 is a separate block and closes normally.
         tasks = (
             "# Review Tasks\n\n"
             "### Batch 9 — Stray annotation `Pending`\n\n"
             "- [ ] **TASK-1**: first\n"
             "  some prose about the batch\n"
-            "  > Failed: not attached to any task line\n"
+            "  > Failed: attached to TASK-1, which owns this block\n"
             "- [ ] **TASK-2**: second\n"
         )
         repo = _repo(tmp_path / "repo", tasks=tasks)
         r = _run(repo, "9")
         assert r.returncode == 0, r.stderr
-        assert "Marked as Merged (2 tasks closed)." in r.stdout
+        assert "Marked as Merged (1 tasks closed, 1 failed — still open)." in r.stdout
+        text = (repo / "review_tasks.md").read_text()
+        assert "- [ ] **TASK-1**: first" in text, text
+        assert "- [x] **TASK-2**: second" in text, text
+
+    def test_the_scan_does_not_run_past_the_block_it_started_in(self, tmp_path):
+        # The other half of the old test's concern, now pinned on its own: an
+        # annotation separated from the task by a blank line, or sitting under a
+        # LATER task, must never reach back to an earlier one.
+        tasks = (
+            "# Review Tasks\n\n"
+            "### Batch 9 — Out of reach `Pending`\n\n"
+            "- [ ] **TASK-1**: must close\n"
+            "  its own continuation line\n"
+            "\n"
+            "- [ ] **TASK-2**: must be held\n"
+            "  > Failed: belongs to TASK-2 alone\n"
+        )
+        repo = _repo(tmp_path / "repo", tasks=tasks)
+        r = _run(repo, "9")
+        assert r.returncode == 0, r.stderr
+        text = (repo / "review_tasks.md").read_text()
+        assert "- [x] **TASK-1**: must close" in text, text
+        assert "- [ ] **TASK-2**: must be held" in text, text
 
 
 class TestShortWriteGuard:
@@ -436,8 +470,10 @@ class TestShortWriteGuard:
 # plausibly writes and found each of them SILENTLY closing the task, with the
 # failure note left sitting underneath — the exact rendering upstream #207
 # reported. `> FAILED:` mattered most: all-caps FAILED is /auto-judge's own
-# vocabulary at :300, :304 and :360, i.e. everywhere except the one place the
-# read side looked.
+# vocabulary — `TASKS_FAILED:`, `FAILED —` and `Tasks Marked FAILED` — i.e.
+# everywhere except the one place the read side looked. (Named by TOKEN, not
+# by line: the line numbers this comment carried, `:300`/`:304`/`:360`, had
+# drifted to `:385`/`:389`/`:446` and pointed at unrelated prose.)
 #
 # The round also found the inverse: a task whose next line quotes error output
 # starting `> Failed:` was held open and dropped from the Grand Total, equally
@@ -487,8 +523,11 @@ class TestAnnotationIsLoud:
         repo = _repo(tmp_path / "repo", tasks=LOUD_TASKS)
         r = _run(repo, "1")
         assert "- [x] **T4**: near miss, closes but must warn" in (repo / "review_tasks.md").read_text()
-        assert "looks like a failure note but was NOT recognised" in r.stderr, r.stderr
-        assert "line 11" in r.stderr
+        # STDOUT, not stderr. /review-close Step 4b tells the operator to read
+        # stdout, so a warning written to stderr was addressed to nobody.
+        assert "looks like a failure note but was NOT recognised" in r.stdout, r.stdout
+        assert "line 11" in r.stdout
+        assert "Failure-note near misses not honoured: 1" in r.stdout, r.stdout
 
     def test_dropped_line_mentioning_failing_produces_no_noise(self, tmp_path):
         # A warning that fires on ordinary prose gets ignored, and an ignored
@@ -506,7 +545,11 @@ class TestAnnotationIsLoud:
         repo = _repo(tmp_path / "repo", tasks=tasks)
         r = _run(repo, "2")
         assert "- [x] **T1**: blank line below" in (repo / "review_tasks.md").read_text()
-        assert "protects nothing" in r.stderr, r.stderr
+        # STDOUT, not stderr — this is the warning that noticed six failed tasks
+        # closing in the reported round, and it was being written to the stream
+        # /review-close Step 4b never tells the operator to read.
+        assert "protects nothing" in r.stdout, r.stdout
+        assert "Annotations protecting nothing: 1" in r.stdout, r.stdout
 
     def test_in_progress_task_can_also_be_held(self, tmp_path):
         # /auto-judge says "leave the checkbox exactly as you found it", so `[/]`

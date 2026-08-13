@@ -101,6 +101,24 @@ def _git_lines(repo_root, args):
     return [p for p in r.stdout.split("\0") if p]
 
 
+def _inside_git_repo(repo_root):
+    """True when git is available AND ``repo_root`` is inside a work tree.
+
+    The discriminator for the two ways ``_git_lines`` returns ``None``. Outside a
+    repository — or with no git at all — there is genuinely nothing to recover
+    and silence is correct. INSIDE one, a failure means a corrupted index, a
+    permission problem, or a timeout, and that is worth saying out loud: the
+    recovery silently returned an empty population and the stage still reported
+    ``executed``.
+    """
+    # `_git_lines` splits on NUL because its other two callers pass `-z`.
+    # `rev-parse` has no `-z`, so its whole output arrives as one element with a
+    # trailing newline — comparing against a bare `["true"]` is False for every
+    # real repository, which is how the first version of this got it backwards.
+    lines = _git_lines(repo_root, ["rev-parse", "--is-inside-work-tree"])
+    return bool(lines) and lines[0].strip() == "true"
+
+
 def _is_ignored_test_path(rel):
     """True when semgrep's built-in default ignore list drops ``rel``.
 
@@ -168,11 +186,21 @@ def _default_ignored_targets(repo_root, exclude_rel):
     # has this effect — a nested one does not disable the built-in list, verified —
     # so the probe is deliberately root-only rather than a walk.
     if os.path.isfile(os.path.join(repo_root, ".semgrepignore")):
-        return [], 0
+        # NO WARNING HERE, deliberately. This early return shares its shape with
+        # the git-failure one below, but it is a correct, intentional disable —
+        # warning would fire on every run for a consumer who configured it on
+        # purpose, which is the same noise class this recovery exists to avoid.
+        return [], 0, False
 
     tracked = _git_lines(repo_root, ["ls-files", "-z"])
     if tracked is None:
-        return [], 0
+        # Two very different states reach here. Outside a repo (or with no git)
+        # there is nothing to enumerate and the caller's bare directory operand
+        # is exactly right — say nothing. Inside a repo, git ANSWERED and failed:
+        # a corrupted index, a permission problem, a timeout. The recovery then
+        # returns an empty population and the stage would report `executed` over
+        # a set it could not enumerate — a status that does not mean what it says.
+        return [], 0, _inside_git_repo(repo_root)
     untracked = _git_lines(
         repo_root, ["ls-files", "-z", "--others", "--exclude-standard"]) or []
 
@@ -198,7 +226,7 @@ def _default_ignored_targets(repo_root, exclude_rel):
             continue
         used += cost
         targets.append(abs_path)
-    return targets, dropped
+    return targets, dropped, False
 
 
 def _partial_parse_paths(errors):
@@ -321,7 +349,7 @@ def _run_semgrep(repo_root, included_ids, report=None):
     # withdrawn fix replaced the directory instead of supplementing it, which is
     # what made it worse than the defect; that function's docstring answers each
     # condition its round raised.
-    ignored_targets, over_budget = _default_ignored_targets(
+    ignored_targets, over_budget, recovery_failed = _default_ignored_targets(
         repo_root, fixtures_exclude)
     try:
         r = subprocess.run(
@@ -404,6 +432,19 @@ def _run_semgrep(repo_root, included_ids, report=None):
         print(f"warn: {over_budget} test file(s) exceeded the semgrep operand "
               f"budget and were NOT scanned — the default ignore list hides them "
               f"and the command line could not carry them", file=sys.stderr)
+    # SCOPED DELIBERATELY. This says the RECOVERY did not run; it does NOT say
+    # the scan found nothing. `repo_root` is passed as an operand unconditionally
+    # above, so a failed recovery yields precisely the pre-recovery whole-tree
+    # directory scan — byte-identical argv — and changes no scanned file. The
+    # loss is the supplementary test files the default ignore list hides, and
+    # claiming more than that would be the same overclaim this warning exists to
+    # remove.
+    if recovery_failed:
+        print("warn: git could not enumerate this repository, so the test files "
+              "semgrep's default ignore list hides were NOT added to the scan "
+              "(the whole-tree scan itself is unaffected). A corrupted index, a "
+              "permission problem, or a git timeout will do this.",
+              file=sys.stderr)
     if partial:
         detail = (f"{len(partial)} file(s) partially parsed, unparsed regions not "
                   f"scanned: {shown}")
@@ -416,6 +457,11 @@ def _run_semgrep(repo_root, included_ids, report=None):
                 f"{over_budget} test file(s) omitted over the operand budget — "
                 f"semgrep's default ignore list hides them and they could not fit "
                 f"on the command line")
+    elif recovery_failed:
+        _record(DEGRADED, "targets-unenumerable",
+                "git could not enumerate the repository, so the test files "
+                "hidden by semgrep's default ignore list were not added to the "
+                "scan; the whole-tree scan itself ran normally")
     else:
         _record(EXECUTED)
 
