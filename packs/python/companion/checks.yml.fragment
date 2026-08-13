@@ -200,8 +200,25 @@ checks:
     category: correctness
     severity: low
     paths: ["<api module>/", "<scripts dir>/", "<datajobs dir>/"]
+    # Test directories are excluded because this rule's OWN rationale scopes it
+    # to hot-path code, and a test body is categorically not that. It is here
+    # rather than in `paths:` because an unlocalized `<placeholder>` path is
+    # stripped as "not yet localized" — so a fresh install scans whole-tree,
+    # which is the funnel default — while `exclude_dir:` survives that strip and
+    # narrows every stage uniformly. Measured through the real stage by a
+    # maintainer-side script that never ships (`tools/phase197_q182_measure.py`,
+    # Phase 197): fresh install 48 -> 33 findings, all 15 removed being this
+    # rule's test-path hits; a consumer
+    # localized to real source directories is unchanged at 3 -> 3. Scoped to
+    # this one rule on purpose — there is no performance category to generalize
+    # to, and this is the only shipped rule whose rationale is hot-path.
+    # If you override this check in `.claude/checks.project.yml`, your entry
+    # REPLACES this one wholesale (the collision merge is not a deep merge), so
+    # copy `exclude_dir` across or the test-path findings come back. This is the
+    # one shipped rule where dropping a key changes what you see.
+    exclude_dir: ["test", "tests", "testsuite"]
     description: "re.compile() called inside a def body — hot-path code should hoist the pattern to module scope as a _PATTERN constant. Memoization helpers (parameterized regex cached in a module-level dict) are a legitimate exception; see _HEADER_RE_CACHE in orchestrator.py."
     convention: "Module-scope regex compilation"
-    notes: "Manual triage: parameterized memoization helpers are a legitimate exception. Two known sites baselined as accepted tech debt (TECH-CHECKS-EXPAND)."
+    notes: "Manual triage: parameterized memoization helpers are a legitimate exception. Two known sites baselined as accepted tech debt (TECH-CHECKS-EXPAND). Test directories are excluded via exclude_dir (Phase 197) — the rule targets hot-path code."
     used_by: [codebase-review]
     blocking: false

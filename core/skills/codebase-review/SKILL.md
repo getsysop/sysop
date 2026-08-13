@@ -189,7 +189,7 @@ git ls-files | cut -d/ -f1 | sort -u
 with the invocation's second argument word before any shell sees it, so under
 `--scope backend` the `awk` form became `{print backend}` — an unset variable — and printed one empty line.
 The invariant below then compared the map against an empty inventory and reported complete
-coverage. Upstream #360.)
+coverage. Internal tracker #360.)
 
 That yields **both directories and root-level files**. They are judged differently below, so partition them first.
 
@@ -284,7 +284,7 @@ The checks above run **forward** (code → map: which files lack coverage). This
 - **Aspirational / lead section:** a glob may legitimately precede the code so new files get coverage before they are written (§ 5.3 feedback loop). A section added in a recent round for not-yet-created files is not stale — note and skip.
 - **Un-substituted placeholder:** a glob still in `<...>` placeholder form matches nothing because the consumer has not localized it to real paths — an install artifact, not staleness. Skip it.
 
-**(b) Dead citations — a cited symbol is gone (a renamed/deleted helper, staleness Mode B).** For each bullet that cites a concrete in-repo identifier (a backticked symbol naming a project helper/function/component — e.g. the canonical `_sanitize_log`, `useAbortableFetch`, `isSafeHref`), run `git grep -nw -- '<symbol>'` across tracked files. Zero hits means the cited symbol was renamed, moved, or deleted — flag the bullet. Scope guards keep false positives down (mirroring the source-verification discipline in `_shared/adversarial-review.md` dimension #9 — when you cannot tell, leave it unflagged):
+**(b) Dead citations — a cited symbol is gone (a renamed/deleted helper, staleness Mode B).** For each bullet that cites a concrete in-repo identifier (a backticked symbol naming a project helper/function/component — e.g. the canonical `_sanitize_log`, `useAbortableFetch`, `isSafeHref`), run `git grep -nw -- '<symbol>'` across tracked files. Zero hits means the cited symbol was renamed, moved, or deleted — flag the bullet. Scope guards keep false positives down (mirroring the source-verification discipline in `_shared/adversarial-review.md` dimension 9 — when you cannot tell, leave it unflagged):
 - Skip angle-bracket placeholders (`<api module>`, `<components dir>`) — not real symbols.
 - Skip library/framework identifiers (`AbortController`, `useEffect`, `yaml.safe_load`) — these have no in-repo definition by design, so their absence is not staleness. Only test identifiers that resolve (or once resolved) to an in-repo definition.
 
@@ -350,7 +350,7 @@ Checks with a `notes: "Needs LLM triage"` field in `.claude/checks.yml` require 
 
 These findings are treated identically to LLM agent findings in Step 4 (deduplication, batching).
 
-**Stale-rule capture (convention demotion — Tier 2).** Triage produces a verdict on every flagged match, and one verdict is normally discarded: *the rule itself is moot.* When a mechanical check (a `checks.yml` regex, a `semgrep-*` rule, or a `pre-commit` letter) fires on a match that is **not** a real violation **because the convention it enforces no longer applies** — a default moved, a category was migrated away, a dependency bump fixed the underlying issue (the change-event taxonomy in WORKFLOW.md §3.5) — record a **stale-verdict** for that rule in the `## Convention fire ledger` (Step 5e). This is the demotion counterpart to Step 8's promotion-candidate extraction: promotion captures recurring *true* positives, demotion captures recurring *stale* ones. Guards (mirroring the Step 2a-4 staleness discipline and `_shared/adversarial-review.md` dimension #9):
+**Stale-rule capture (convention demotion — Tier 2).** Triage produces a verdict on every flagged match, and one verdict is normally discarded: *the rule itself is moot.* When a mechanical check (a `checks.yml` regex, a `semgrep-*` rule, or a `pre-commit` letter) fires on a match that is **not** a real violation **because the convention it enforces no longer applies** — a default moved, a category was migrated away, a dependency bump fixed the underlying issue (the change-event taxonomy in WORKFLOW.md §3.5) — record a **stale-verdict** for that rule in the `## Convention fire ledger` (Step 5e). This is the demotion counterpart to Step 8's promotion-candidate extraction: promotion captures recurring *true* positives, demotion captures recurring *stale* ones. Guards (mirroring the Step 2a-4 staleness discipline and `_shared/adversarial-review.md` dimension 9):
 - **Rule moot, not instance exception.** A single legitimate exception (one call site that is genuinely fine) is *not* a stale-verdict — that is what a baseline entry or `# nosemgrep` is for, and the rule stays. Record a stale-verdict only when the rule keeps flagging things that are **no longer violations at all** because the underlying convention changed.
 - **When you cannot tell, do not record.** A false positive you do not understand is not yet a stale-verdict. Leave it unrecorded; if it is real staleness it recurs next round.
 - **Blocking rules matter most.** A stale *blocking* rule halts every commit that touches the scoped code (the expensive cost); a stale *advisory* rule is low-stakes. Capture both, but retirement value concentrates on blocking rules (Step 9b).

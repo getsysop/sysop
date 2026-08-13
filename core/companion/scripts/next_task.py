@@ -63,7 +63,7 @@ try:
     import yaml
 except ImportError:
     # PyYAML lives only in the project venv on PEP-668 hosts (BeanRider
-    # ISSUE-0049; upstream #321), so resolve it onto sys.path before giving up
+    # ISSUE-0049; internal tracker #321), so resolve it onto sys.path before giving up
     # — that keeps a bare `python3 sysop/scripts/…` working, which is what the
     # skills prescribe and settings.json allow-rules are written against.
     # It PROBES rather than assuming: a candidate is committed to sys.path only

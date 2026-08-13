@@ -99,7 +99,7 @@ Each surviving item becomes one or more tasks per `tasks/schema.md`. **Read `.cl
 Every imported task carries, non-negotiably:
 
 1. **`surfaced_by: [imported]`** — the validator-sanctioned sentinel (it is not a task ID and never fabricates one). This is the machine-visible signal that `effort`/`blast_radius` are estimates: `/auto-build` re-estimates them from the body before its batch math trusts them.
-2. **An `**Imported from:**` line opening `## Context`** — the exact source: `ROADMAP.md § "Q3 ideas"`, `issue #142`, etc. The human auditing the queue can always trace a task back to what it came from.
+2. **An `**Imported from:**` line opening `## Context`** — the exact source: `ROADMAP.md § "Q3 ideas"`, `issue 142`, etc. The human auditing the queue can always trace a task back to what it came from.
 
 ### Step B5 — Dedup against the existing queue — and hold, don't drop
 

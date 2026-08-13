@@ -890,7 +890,7 @@ write_batch_lock "$BATCH_NUM" "$BATCH_BRANCH" "$WORKTREE_DIR"
 # Worktrees share the main repo's hooks directory, so arming from inside a new
 # worktree pushed this batch branch's sysop/scripts/hooks/* into the MAIN
 # checkout — replacing a consumer's armed checks with the shipped skeletons.
-# Dropped in Phase 150 (upstream #202); see the fuller note in claim_task.sh.
+# Dropped in Phase 150 (internal tracker #202); see the fuller note in claim_task.sh.
 # Arm explicitly from the main checkout: bash sysop/scripts/install_hooks.sh
 
 # ── Print summary ────────────────────────────────────────────

@@ -355,7 +355,7 @@ def run_check(check, repo_root, report=None):
         _record(EXECUTED)
         return findings
 
-    # Phase 189 / upstream #239: these were one arm reporting `skipped:
+    # Phase 189 / internal tracker #239: these were one arm reporting `skipped:
     # not-configured`, which put two different things in the same words. A check with
     # no `pattern:` and no `position_check:` declares no executable form at all — it
     # can never run in ANY environment, so it is a registry-authoring defect, and

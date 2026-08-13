@@ -69,7 +69,7 @@ Each `### Batch N — <title> \`<Status>\`` line gives number, title and status;
 **The index pass is line-oriented and cannot see fenced blocks — check before you trust a boundary.** A task's remediation text routinely quotes the tracker's own shapes (`## Deferred`, `### Batch N — … \`Pending\``, `> **Flag:** <reason>`), and `grep` will report those example lines exactly like real ones. Two consequences, both silent:
 
 - A fenced heading looks like a boundary, so the batch containing it appears to end early and its remaining tasks vanish from your view.
-- A fenced `> **Flag:**` or `> **Triaged:**` looks like the enclosing batch's verdict — which is the #337 failure mode arriving from inside the file.
+- A fenced `> **Flag:**` or `> **Triaged:**` looks like the enclosing batch's verdict — which is the internal tracker #337 failure mode arriving from inside the file.
 
 So: when a candidate boundary or metadata line sits *inside* a batch you have already bounded, open that region with the scoped read below and look at it before acting on it — a fence is obvious on sight and invisible to `grep`.
 

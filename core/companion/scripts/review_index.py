@@ -188,7 +188,7 @@ def parse_review_tasks(path=None):
     # routinely quotes the tracker's own shapes — `## Deferred`,
     # `### Batch N — … \`Pending\``, `> **Flag:** <reason>` — and before this
     # was masked, a fenced `> **Flag:**` became the enclosing batch's real
-    # verdict (#337's failure mode arriving from inside the file) and a fenced
+    # verdict (internal tracker #337's failure mode arriving from inside the file) and a fenced
     # `## ` heading truncated the batch.
     fenced = _fenced_mask([ln.rstrip("\n") for ln in lines])
 

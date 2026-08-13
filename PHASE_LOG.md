@@ -5,6 +5,8 @@ Full prose history for all Sysop phases — the sole prose home since Phase 39 (
 Each phase row in CLAUDE.md's `## Phase log` table links to a commit; `git show <hash>` recovers the implementation diff. The prose here is the "why we made this call" narrative — most useful when modifying or extending the same surface area in a later phase.
 
 > **This file narrates maintainer-side work, so it names files the public tree does not contain.** `CLAUDE.md`, `REVIEW_CHECKLIST.md`, `REVIEW_ARCHIVE.md`, `*_HANDOFF.md` and everything under `tools/` are maintainer-side and **not in the public tree** — they are stripped from the published mirror on purpose. Where an entry below names one, read it as a record of what was done, not as a document to go and open. Every claim a *consumer* has to act on lives in the shipped skills, `core/companion/docs/WORKFLOW.md`, and `docs/`. (Phase 184 measured 272 such references here — 236 of them unqualified — and discharged them with this paragraph rather than by editing the history; the per-phase guard in `tests/test_mirror_leak_gate.py` holds the shipped operational surface at zero and exempts this file *because* of this paragraph.)
+>
+> **It also cites issue numbers the public tree cannot resolve.** Every bare `#NNN` below is an entry in a private maintainer tracker — Sysop's own, or an upstream project's — not in the public `getsysop/sysop` repository — whose numbering is unrelated and, at the time of writing, reaches only 30. Following one either 404s or lands on an unrelated pull request. The same exemption applies for the same reason: they are discharged with this sentence rather than by rewriting the record, while the shipped operational surface is held at zero by writing `internal tracker #NNN` there instead. **No count is quoted here on purpose** — the first draft named one and it was stale in the same commit, because this file grows by a phase entry every time the number would be re-read. `tests/test_mirror_leak_gate.py` derives it.
 
 ## Phases 1 through 25
 
@@ -5229,7 +5231,7 @@ that wants undivided attention, not a fourth seat here.
 
 **This is the phase's main product and it is a negative result.** The enumeration fix was
 built, its own three-lens round disqualified it, and it is withdrawn rather than shipped.
-The defect stands; the re-attempt spec is in `_tracked_targets`' docstring and the § High
+The defect stands; the re-attempt spec is in `_tracked_targets`' docstring (**renamed to `_default_ignored_targets` by Phase 196**, which shipped the fix; the reasoning moved with it) and the § High
 entry. What follows is the measurement, which is what makes the entry actionable.
 
 #### The measurement
@@ -5242,12 +5244,19 @@ accounting line reads `executed with 0 findings`.
 
 Re-derived on this tree with the 10 shipped rules rather than inherited from the brief:
 
-| | scanned | findings | under `tests/` | `paths.skipped` |
+| | scanned | findings | **files scanned** under `tests/` | `paths.skipped` |
 |---|---|---|---|---|
 | directory operand (before) | 72 | 30 | **0** | **0** |
 | explicit tracked-file list | 186 | 45 | 114 | 0 |
 | `--no-git-ignore` + directory | 72 | 30 | 0 | — |
 | empty `.semgrepignore` + directory | 186 | 45 | 114 | 0 |
+
+> **Column relabelled (Phase 196).** The fourth column read `under `tests/``, directly after
+> `findings`, and every later reader took the `114` for findings — impossible against 45
+> total. It is **files scanned**, i.e. `186 − 72`. The recovered *findings* are `45 − 30` =
+> **15**. Phase 196 re-derived both independently and got the same 15 on a tree that had
+> drifted to 70/33 → 193/48, so the arithmetic was always right and only the heading was
+> wrong. It propagated verbatim into `Q-011`, which is corrected there too.
 
 **Two corrections to the filing, both from running it.** `--no-git-ignore` — listed in the
 entry among the reporter's fix options — **recovers nothing**: it negates *gitignore*
@@ -5284,8 +5293,16 @@ They are named now, and the stage records **`degraded`**. Both shapes of `errors
 read (a bare string and a `[name, [...]]` pair): reading one would empty the set on a
 semgrep upgrade and restore the exact silence the state exists to break.
 
-A **discovery shortfall** — more targets handed over than came back scanned, with nothing in
-`paths.skipped` — also records `degraded`. That is the only place a shortfall can surface.
+> **Correction (Phase 196).** This paragraph originally read *"A **discovery shortfall** —
+> more targets handed over than came back scanned, with nothing in `paths.skipped` — also
+> records `degraded`. That is the only place a shortfall can surface."* **No such counter
+> shipped.** It is the mechanism this same section says two paragraphs above was withdrawn
+> for firing 100% false-positive, and `run_checks/semgrep.py` disclaims it in as many words
+> (*"NO SHORTFALL COUNTER, deliberately"*). The sentence asserted a shipped behaviour against
+> the code in the same commit and survived a three-lens round. Phase 196 added an
+> `over_budget` count that does record `degraded`, but it is a different number — files that
+> module *decided not to name*, a known quantity rather than one inferred by comparing two
+> populations that were never the same universe.
 
 ### #239 — two different things wearing the same words
 
@@ -7422,3 +7439,736 @@ nothing exercises the `git ls-files` subprocess itself. And the grep-equivalence
 BSD grep while CI runs GNU grep; the four forms are POSIX-mandated equivalents, but that was
 not executed on GNU.
 
+
+### The push — public `a6fb75b`, tester `c74e3d2`, both tree `c001ae9`
+
+Cut from **merged `main` `07e67c4`**, not from the branch — the correction the round's claims lens
+forced, and it mattered: the branch tree was `295c34c` and the shipping tree is `c001ae9`, so the
+pre-merge section's numbers certify an artefact that was never published.
+
+**Gate on the exact pushed tree.** Passes 1a / 1b / 1c / 3 / 4 and the rename-residue diff all
+empty. **The gate build and the tester build resolve to the same tree, `c001ae9`**, checked
+rather than assumed — and both mirrors were re-verified on **cold clones after the push**, so the
+gate, the public tip and the tester tip are provably the same bytes. Population agreement **295 =
+295, identical sets**. Pass 5 green in the source repo at the cut SHA, 52 passed. Sterilized-tree
+suite **3152 passed / 156 skipped / 0 failed** — unchanged from the pre-merge run, which is the
+right answer: everything this phase added to the guard lives in a mirror-excluded module.
+
+**Pass 2 = 50 = 50, zero new sites.** **Pass 2b = 208 raw / 206 distinct against 204 / 202
+published — four new distinct sites**, and the round predicted two of them: the
+`FOREIGN_REPO_MARKERS` constant and its comment in `tests/test_phase_log_currency.py`, plus **two
+lines of this phase's own record**, one of which is the sentence observing that the record becomes
+a provenance site. No new leak class, no new file class. File-set delta **287 → 295: eight added,
+none removed** — exactly the derivation made before the cut, and the brief's specific worry (that
+Phase 194's 39 deletions might surface as mirror deletions) closed at zero.
+
+**Public landed as `getsysop/sysop` PR #30** (required `pytest` green, squash-merged **`a6fb75b`**).
+**Tester force-pushed to `c74e3d2`**, `wade-cms/sysop-tester` confirmed **Private before and
+after**. **Pages `built` on the first attempt** at `a6fb75b` with no error, and the disclosure this
+snapshot carries is live: `curl https://getsysop.com/loop-mode` serves the *Known limitation* block
+naming the semgrep test-directory blindness. **Post-push per-commit history Pass 1a over a
+24-commit cold clone returns exactly the 15 known-and-accepted commits**, with the new tip clean at
+`content:0 names:0` — no new non-zero commit, which is what that gate exists to detect.
+
+
+### The announcement, and the round that inverted it
+
+Posted to [`sysop-tester` Discussion #1](https://github.com/wade-cms/sysop-tester/discussions/1#discussioncomment-17994239)
+— the standing thread, because a new Discussion notifies nobody. Two lenses over the draft
+first, per the runbook's rule that the announcement is part of the push rather than a follow-on.
+**They rewrote it end to end**, and the draft I would have posted was wrong in a way no amount of
+re-reading would have caught, because both lenses worked by *installing* rather than reading.
+
+**Seven false statements in the draft.** Two were "new in this snapshot" claims for things that
+shipped long ago: `/claim-task` has been an orchestrator since Phase 171 (its entire change here
+is one line-number citation), and the durable `> Failed:` marker plus `close_batch.sh`'s
+exclusion of failed tasks shipped in Phase 157. Three of five file counts were wrong (eight
+companion scripts, not nine; nine skills, not ten; eight files added, not nine). "They now fail
+loudly" was false on the path that actually runs — the new warning lives in the bash fallback,
+and `parse_batches()` prefers `review_index.py`, which drops the batch silently. And **both
+"check it yourself" commands failed to discriminate**: the first typed its own regex on the
+command line and never read the shipped file, returning `1` on both snapshots; the second matched
+`LOOP_EXCLUDE_SKILLS` in each. That is the fourth consecutive announcement to ship a check-block
+command that checks nothing, and the fourth time running it is what found that.
+
+**The actionability lens installed all four combinations — old/new × loop/full — and diffed real
+consumer trees.** It produced three things no reading would have, and all three outrank what the
+draft led with. **(1)** `--update` regenerates `.claude/convention_map.md` and `.claude/checks.yml`
+from scratch; Phase-24b preservation covers `sysop/scripts/*` only, so a tester's promoted
+conventions — the loop's actual product — are lost, flagged as one `⚠` row in a long log.
+**(2)** `--update-baseline` changed meaning under every loop tester: suppression no longer
+requires the check to be blocking (upstream #363, deliberate), so on a stock install it goes from
+near-no-op to accepting essentially the whole findings set as triaged. **(3)** The re-clone this
+note *mandates* silently degrades the update it is required for — a fresh root makes the anchor
+unreachable, so committed-edit preservation is off for the whole run, no snapshot commit is made,
+and the recovery command the installer prints returns `not our ref` against a force-pushed remote.
+No note has ever explained that, and it applies to every recipient by construction.
+
+**The lead was wrong for a structural reason worth keeping.** The draft led with the
+`batch_work.sh` worktree/branch mix-up — which is real, reproduces exactly, and is **not installed
+in loop mode**, the funnel default. It also needs a hand-authored header no shipped writer emits;
+the trigger is an ASCII hyphen where the em-dash belongs, which the draft had demoted to a
+parenthetical while leading with the status charset. This is the same failure the 186–189
+announcement made: leading with what the phase found interesting rather than with what a
+recipient will meet.
+
+**And I refused the lens's most severe finding after checking it.** It reported that two testers'
+wins were "already public inside bug issues" `#360` and `#364` and framed it as a consent
+incident. Both numbers are `wade-cms/sysop` — **private** — and both issues are `[gdp-query-system]`
+filings from this project's own consumer, not from any tester. The *mechanism* is real and is in
+the note (a `GOOD-` heading did not end the entry above it, so a win could be absorbed into a bug
+filed under consent given for the bug, and carries no `**Shared:**` back-reference afterwards), but
+the reach was not. Publishing the lens's version would have told external testers their private
+content had leaked, which is false. **A finding can be right about a mechanism and wrong about who
+it touches, and the second half is the half that decides whether it goes in an outbound message.**
+
+**One byproduct, filed rather than fixed:** chasing those issue numbers showed that shipped prose
+cites private-repo issue numbers as though a public reader could resolve them — **54 sites across
+28 files** on the operational surface, 53 of them naming a number above 30, which is the highest
+number `getsysop/sysop` has. It is Pass 5's class (a pointer the reader cannot follow) applied to
+issue numbers instead of file paths, which is exactly why Pass 5 does not catch it. `Q-179`.
+
+
+## Phase 196 (executed 2026-08-12 — the ignore list that ate the test tree, and the operand that was never the problem)
+
+**The phase is `Q-011` / upstream #361 plus its record twins.** The semgrep stage handed
+semgrep a directory; semgrep's built-in default ignore list dropped the test tree before
+discovery; discovery-excluded files never reach `paths.skipped`, so the stage reported
+`executed with 0 findings` over surface it had never read. Phase 189 built the obvious fix —
+replace the directory operand with an enumerated file list — and **its own round withdrew it**,
+naming seven ways it was worse than the defect. `Q-011` carried those seven as the price of any
+retry.
+
+**The brief that nominated this phase was two commits stale, and its errors were checked
+before anything was built.** Two fresh-context agents over its factual claims first. Six held
+exactly — the round gate and governor, the ledger append hazard, the `test_queue_entry_ids.py`
+rename with no stale live reference, `mutation_battery.py` as the prescribed harness, both
+mirror tips (`a6fb75b` / `c74e3d2`, tree `c001ae9`), and the public disclosure live on
+`getsysop.com/loop-mode`. Four did not: the brief's excluded-class list was **9 of 11 arms**
+(missing `test_mirror_leak_gate` and `test_cut_release_gate`, and `^CLAUDE.md` is really
+`^CLAUDE\.md$`); `Q-176` was cited as live and is `[x]`; the brief predates the announcement
+round entirely, so it never mentions `Q-179` or `Q-180` — and `Q-180` is a comment six lines
+from the code this phase changes.
+
+### The fix is not the enumeration, and the difference is one measured sentence
+
+**An explicitly named FILE bypasses semgrep's default ignore list. A named DIRECTORY does
+not.** That asymmetry is the whole phase, and it was found by running a matrix rather than by
+reasoning about the CLI. Naming `<root>/tests` alongside `<root>` recovers **nothing** —
+1/5 on the first corpus, identical to the bare directory. `--include='*'` recovers nothing,
+because the help says it is applied *after* semgrepignore filtering and it means it.
+`--no-git-ignore` recovers nothing, confirming `Q-011`'s own correction. Only two shapes work:
+a full file enumeration, and an explicit file operand **beside** the directory.
+
+So the directory operand **stays**, and explicit operands are added for exactly the population
+it cannot see. That is what answers the seven conditions — by construction, not by care:
+
+| | condition | how the shape answers it |
+|---|---|---|
+| (a) | path shape follows operand shape | every operand is `os.path.join(repo_root, rel)`, so it carries *the same* shape as the `repo_root` operand beside it; there is never a second shape for `os.path.relpath` to reconcile |
+| (b) | a tracked symlink aborts the WHOLE scan | `islink` filtered — never named; the directory operand skips symlinks itself, as it always did |
+| (c) | a tracked file absent from the worktree | `isfile` filtered |
+| (d) | `--exclude` stops applying to a named operand | the fixtures prefix is filtered out of the recovered list; the directory operand still carries `--exclude` for everything else |
+| (e) | untracked files stop being scanned | the directory operand still discovers them — that is the half enumeration lost — and `--others --exclude-standard` adds the untracked *test* files it cannot see |
+| (f) | a submodule gitlink expands to many files | `isfile` is False for the gitlink directory |
+| (g) | the 300s timeout becomes per batch | it stays ONE subprocess, so the `failed` detail that says 300s remains true |
+
+Each is a test against the **real binary** in `tests/test_run_checks_semgrep_targets.py`; #361
+was invisible to every mock in the sibling module for the obvious reason — the defect lives in
+semgrep's target discovery, which no stub reproduces.
+
+### The filed scope was short by two, and the corpus is why
+
+**The corpus was built before the fix** (author-side rule 4), and its population was derived
+from `semgrep-core`'s compiled-in default list rather than from `Q-011`'s summary of it. The
+"Common test paths" block is **four** entries:
+
+```
+test/  tests/  testsuite/  *_test.go
+```
+
+`Q-011` names two. So `testsuite/` and **Go's entire test convention** were being dropped as
+well, by a defect filed twice and re-opened once without anyone reading the list. That is the
+eighth consecutive phase in which a filed population was wrong, and this time the correction
+came from the source of truth on the first attempt only because the rule said to go there.
+
+### Numbers, derived here and stated at the altitude they hold
+
+On this tree with the 10 shipped rules: **71 → 194 scanned, 33 → 48 findings**, 125 recovered
+operands totalling **8,723 bytes**, `paths.skipped` **0 both ways** — the omission was traceless
+before and there is nothing left to trace now. *(The scanned pair was first written as 70 → 193,
+measured before `tools/phase196_mutations.py` existed — a number taken from a mid-build tree and
+never re-derived against what shipped. The round caught it. The byte figure is also
+repo-path-length dependent: 8,723 at this absolute root, 6,223 at a shorter one.)*
+
+**The recovered findings are 15**, from `48 − 33` here — and Phase 189's `45 − 30` is also 15.
+The round was right to object to the first draft's "three independent derivations agree": the
+two are **not the same quantity**. Phase 189's 45 came from an enumeration that *replaced* the
+directory operand, so it had already lost the untracked coverage its 30 baseline included; this
+phase's operands are added *beside* the directory, so untracked coverage is present in both
+terms. That the two nets coincide at 15 is a agreement worth noting and not an independent
+confirmation, and the draft also reached "three" only by counting one measurement twice.
+
+Which brings the twin: **Phase 189's table column was mislabelled**, not miscounted. It read
+`under tests/` immediately after `findings`, so `114` reads as findings and is impossible
+against 45 total. It is *files scanned* (`186 − 72`). The heading was the only thing wrong. It
+is relabelled in `PHASE_LOG.md`; in `Q-011` the filing text is left verbatim — a filing is a
+record of what was believed when it was written — with the correction in the resolution note
+beneath it. The first draft of this paragraph said "corrected at both sites", which is not what
+happened at one of them.
+
+**What a consumer actually sees is conditional, and saying otherwise would be the overclaim
+this phase exists to remove.** Measured through the real stage, not raw semgrep — `_run_semgrep`
+post-filters every finding through `finding_in_scope`:
+
+* **Fresh install: 33 → 48, all 15 new findings under test paths.** All ten shipped rules are
+  `paths:`-scoped to placeholder vocabulary, and `check_paths_by_id` **strips unlocalized
+  placeholders** as "not yet localized", so a fresh install is whole-tree. This is loop mode's
+  funnel default, and `install_semgrep` is unconditional — the defect was live for every
+  loop-mode consumer, which is the half `Q-011`'s § High filing understated.
+* **Localized to real source directories: 14 → 14.** The recovery contributes nothing, because
+  rules scoped to source stop applying to tests by design.
+* **Localized to `.`: 33 → 48.** `path_in_scope` documents `.` as a legitimate substitution for
+  a small repo whose whole tree is source, and that consumer sees all 15.
+
+**The first draft of those bullets was wrong twice and the round caught both.** "31 → 46" was
+this phase's own measuring script collapsing findings into a `set` of `file:line`, so two
+findings sharing a location counted once; the deltas survived it (both give 15) but the
+absolutes did not. The reviewer's proposed causes — a dropped rule, or baseline suppression —
+were both wrong, which is worth recording: the finding was right and its diagnosis was not.
+And "localized: 0 → 0" was obtained by substituting every placeholder with `src/`, **a directory
+that does not exist in this repo**, so the scan was scoped to nothing and the measurement said
+nothing about tests. The substantive claim survives at 14 → 14; the number as written did not.
+
+So the honest claim is: **the fix changes what is scannable.** Whether it changes what you see
+depends on your `paths:`. All 15 are one rule — `semgrep-recompile-inside-def`, severity `low`,
+whose own message scopes its rationale to *"request handlers and hot-path code"* — and at least
+one hit is the parameterized-regex case the rule text names as a **legitimate exception**. True
+positives of the pattern, aimed at the wrong population. Filed as `Q-182` rather than papered
+over, because a day-one loop consumer now meets 15 low-value findings.
+
+### Two errors I made and one the runbook had
+
+**My own test asserted on absolute paths and false-passed on its own name.**
+`test_d_the_bundled_fixtures_stay_excluded` checked `"fixtures" in target` — and pytest's
+`tmp_path` embeds the test's name, which contains *fixtures*, so every target matched. The
+code was right; the assertion was measuring the temp directory. Closed by a `_rel_targets`
+helper that makes absolute-path substring matching unavailable rather than by fixing the one
+line.
+
+**The command I wrote into the runbook printed the wrong list.** Replacing the drifted class
+list with "print it yourself", I prescribed
+`grep -oE "grep -iE '[^']+'" tools/cut_public_release.sh | head -1` — which returns **Pass 1a's**
+identifier list, a wrong answer that looks like a right one. Found by running it, which is the
+only thing that would have. It is now `grep -A3 'hard "Pass 4'`, run and verified to print all
+eleven arms.
+
+**And the runbook was short by three, not two.** `tools/TESTER_MIRROR_RUNBOOK.md:42` said
+"eight classes" and omitted `test_mirror_leak_gate`, `test_cut_release_gate` **and**
+`covered_class_` — the sharp one, since `make_public_mirror.sh` says those files hardcode
+identifiers the Pass-1a greps do not catch, so no other pass backs that arm up.
+
+**The first draft then made the same mistake it was documenting.** It said "three prose
+restatements, three different counts" — reaching three only by counting the live alternation,
+which is not prose. The round found **two more**, both in `tools/PUBLIC_RELEASE_SPEC.md` and
+neither touched by the first commit: `:38` listed seven, and `:142` — under a heading reading
+literally *"Pass 4"* — listed four. So it is **four prose copies and four different counts**
+(7, 4, 8, 9) against an eleven-arm alternation, in the phase whose own subject is a population
+counted from a summary. All four now restate nothing and print the live list.
+
+**`PHASE_LOG.md` § Phase 189 asserted a shipped mechanism that was withdrawn in the same
+phase.** *"A discovery shortfall … also records `degraded`. That is the only place a shortfall
+can surface."* No such counter shipped; `semgrep.py` disclaims it in as many words two hundred
+lines away, and the same PHASE_LOG section says it was withdrawn for firing 100%
+false-positive. It survived a three-lens round. Corrected in place.
+
+### The one condition the seven do not name
+
+semgrep 1.157.0 has **no `--targets-file` and reads no targets from stdin** — both probed — so
+the recovered population rides on the command line and ARG_MAX is a real ceiling (1 MiB macOS,
+typically 2 MiB Linux). The budget is 256 KiB; over it, the stage records **`degraded`** with
+the omitted count named. This is deliberately *not* Phase 189's withdrawn shortfall counter:
+that one compared `len(targets)` to `paths.scanned` — different universes, 100% false-positive —
+whereas `over_budget` counts files this module **decided not to name**. A known quantity, not
+an inferred one.
+
+### Author-side battery
+
+`tools/phase196_mutations.py`: **14/14 killed, 3 negative controls clean, 0 false kills, 0
+declared reverts.** The subject is the shipped module, not the guard — mutating the guard would
+measure whether the guard is wired to its file, and the question here is whether it would notice
+the fix being undone. M11 is the row that matters: it reconstructs Phase 189's withdrawn shape
+exactly (drop the directory operand, keep the enumeration) and dies.
+
+One survivor was closed rather than declared a residual. M04 widened the directory predicate to
+match a *file* named `tests`, and survived everything — over-breadth there costs an operand
+rather than a finding, so nothing looked. `_is_ignored_test_path` is now pinned as directory-only
+for the three directory spellings and basename-only for `*_test.go`.
+
+**What the battery cannot see, stated rather than implied:** every assumption row needs semgrep
+on PATH or the condition tests skip and report as survivors for the wrong reason; nothing here
+mutates semgrep's own behaviour, so "a named file bypasses the default list" is pinned as a
+control, not tested; and the budget rows monkeypatch `_OPERAND_BUDGET` rather than reaching a
+real ARG_MAX, so nothing proves 256 KiB is the right number. All 14 rows are unprobed
+(`effect=`), so the harness alone cannot distinguish a survivor from a no-op — and an author's
+zero measures self-consistency, which is why the round follows.
+
+### The public surface moved, so a push is due
+
+`docs/loop-mode.md` § *Where enforcement lives* carried a **published** *Known limitation (open
+as of 2026-08-11)* paragraph naming this defect, live and verified serving. It now records the
+defect as closed, drops the empty-`.semgrepignore` workaround, and warns that the first run
+after updating may surface findings from rules that were always enabled over files they never
+saw. Until the mirror push lands, the public site tells readers a fixed defect is open — filed
+as `Q-181`, ahead of the ~5-phase cadence. One correction to my own earlier reading: the shipped
+paragraph's description of the workaround's cost was **accurate**, naming the committed
+`vendor/` / `dist/` / minified-bundle trade-off explicitly. I had it down as an understatement
+and it was not.
+
+### The round — three lenses, and the guards were the weak half again
+
+Governor: three lenses, one round. The condition holds on a plain reading — the phase ships
+behaviour (a recovery, an accounting state, new guards) **and** a record asserting counts. All
+three ran fresh-context in their own worktrees, none on the live tree. Lenses: *does it execute
+and is the class closed* · *are its claims true* · *are the guards real, on an independently
+designed battery*.
+
+**Author-side pass, reported because Phase 166 showed the rule otherwise has no invoker.**
+Battery 14/14 with 3 behaviour-preserving controls and 0 false kills; hostile corpus built
+before the change (rule 4); new prose re-read against the code (rule 2); and rule 3 — running
+the commands the change prescribes — caught the runbook command printing Pass 1a's list. Every
+one of those was worth its cost, and none of them found what the round found.
+
+#### The execution lens found a defect the seven conditions do not name — an eighth
+
+**A project `.semgrepignore` REPLACES semgrep's built-in list wholesale, so when one exists
+there is nothing to recover — and naming files anyway overrides exclusions the consumer chose
+on purpose.** Reproduced: with `tests/` in their own `.semgrepignore`, the stage returned a file
+they had deliberately excluded. **The module's own comment stated the precondition** — *"It
+applies only when the project has no `.semgrepignore`"* — and nothing acted on it; `git grep
+semgrepignore tests/` returned nothing at all. Both the execution lens and the guards lens found
+it independently, from different directions, which is the one form of agreement worth noting.
+The recovery now switches off entirely when a root `.semgrepignore` exists. Root only: a
+**nested** one does not disable the built-in list, verified against the binary before the guard
+was written, so a walk would have been wrong.
+
+**The class is not closed, and the record now says so instead of implying it.** The same
+compiled-in list carries **18 further entries** beyond the test block, 13 of them content
+classes (`build/ vendor/ dist/ *.min.js .env/ .tox/ node_modules/ .npm/ .yarn/ .venv/ _opam/
+_build/ _cargo/`), and committed source under any of them is dropped exactly as invisibly.
+`vendor/` is where Go and PHP composer keep committed dependency source. There is also a
+**second traceless mechanism nobody had mentioned** — `Skip_target.is_big` — and this phase
+created an asymmetry there, because a named operand bypasses `is_big` too, so the same 1.2 MB
+file is skipped under `src/` and scanned under `tests/`. Underneath all of it: **semgrep
+1.157.0's JSON has no `paths.skipped` key at all**, so every skip reason is traceless, not just
+discovery exclusion. Filed as `Q-183` rather than absorbed — recovering `vendor/`-class paths is
+a judgment call, unlike tests, but the *silence* is not.
+
+**One lens claim did not survive checking.** It reported `.hg` and `CVS` as absent from the
+list; they are present, read out of the binary. The rest of its enumeration was exact.
+
+Also from that lens, all fixed: the budget discarded 28% of a 5,000-file population with ~620 KiB
+of the real ceiling unused (it is now derived from `SC_ARG_MAX`, floored at the old constant);
+the budget counted characters where exec counts bytes; `*_test.go` has no trailing slash so it
+matches a **directory** of that name too, which the recovery missed inside its own four-entry
+scope; `_git_lines` inherited `GIT_*`, which four other shipped scripts strip precisely because
+git exports them into every hook — demonstrated to empty the population on a tree with
+gitignored-but-force-tracked tests. A non-git tree or a broken index still silently contributes
+nothing under a status of `executed`: pre-existing, but it is a door into this phase's own
+indicted class, so `Q-184`.
+
+#### The claims lens found eight, and all eight were real
+
+**Two numbers were wrong and one was an artifact.** `70 → 193 scanned` was measured before
+`tools/phase196_mutations.py` existed — a mid-build tree, never re-derived against what shipped;
+it is `71 → 194`. `31 → 46` was wrong for a reason worth recording: **the reviewer was right
+about the number and wrong about both of its proposed causes** (a dropped rule, baseline
+suppression). The real cause was this phase's own measuring script collapsing findings into a
+`set` of `file:line`, so two findings at one location counted once. The deltas survived it —
+both forms give 15 — but the absolutes did not. And `localized: 0 → 0` was obtained by
+substituting every placeholder with `src/`, **a directory that does not exist in this repo**, so
+the scan was scoped to nothing and the measurement said nothing about tests. Re-derived: real
+source directories give `14 → 14`, and `.` — which `path_in_scope` documents as legitimate for a
+small repo — gives `33 → 48`. The substantive claim survives; the number as written did not, and
+the public sentence built on it would have told a `.`-localizing consumer the opposite of the
+truth.
+
+**"Three independent derivations agree" was overstated and stated three different ways across
+three sites.** `45 − 30` and `48 − 33` are not the same quantity: Phase 189's enumeration
+*replaced* the directory operand and had already lost untracked coverage, while these operands
+are added *beside* it. That both net 15 is a coincidence worth noting, not a confirmation — and
+"three" was reached by counting one measurement twice. **"Three prose restatements" was four:**
+`tools/PUBLIC_RELEASE_SPEC.md` carried two more copies of Pass 4's alternation, at seven items
+and at four, one of them under a heading reading literally *"Pass 4"*. Four copies, four counts
+(7, 4, 8, 9) against eleven arms — in the phase whose subject is a population counted from a
+summary. All four now print the live list. **"Corrected at both sites"** was not true of `Q-011`,
+whose filing text is deliberately left verbatim with the correction beneath it.
+
+#### The guards lens: 38 mutations, 14 killed — the eighth consecutive phase
+
+My 14/14 was a measure of self-consistency again. An independently designed battery found **18
+real holes**, with 0 false kills across 7 controls, every row carrying an `effect=` probe (mine
+carried none). Three structural findings outranked every individual row:
+
+**S1 — the required `pytest` check could not see this phase at all.** `requirements-dev.txt`
+lists pytest, pyyaml and pytest-xdist. **Not semgrep.** CI installs from that file and runs on
+`ubuntu-latest`, which has no semgrep, so `skipif(shutil.which("semgrep") is None)` skipped
+**eleven of the twelve new tests**. Measured four-cell: with the entire recovery disabled, the
+semgrep-absent cell is **bit-identical to the baseline** — same passes, same skips. The merge
+gate was green over a switched-off feature. This is exactly the class the phase is about, and
+exactly Phase 195's lesson wearing different clothes. `semgrep==1.157.0` is now a hard dep
+(pinned, because the list is compiled in and version-dependent; manylinux2014 and macOS arm64
+wheels both exist for cp313), plus an assertion that reddens CI if the install ever fails
+instead of silently converting eleven tests back into skips.
+
+**S3 — two guards passed over a completely empty population**, because five of the target
+assertions were absence claims, which an empty list satisfies. Positive floors added. This is
+the same class as the `_rel_targets` helper I introduced earlier in the phase: it closed the
+false-*positive* direction and opened a false-negative one.
+
+The individual holes were almost all guard gaps rather than code defects, which is what the lens
+exists to establish. The two that mattered most: the corpus had a deep *prefix*
+(`deep/nested/tests/c.py`) and **no deep suffix**, so mutating the segment scan to one level
+re-opened #361 for the shape every real `tests/` directory has, with the suite green; and
+`test_f`'s submodule sat at `vendor/sub`, which the path predicate rejects *before* the `isfile`
+filter, so condition (f)'s guard never reached the line it claims to test.
+
+**Round-2 battery** (`tools/phase196_round2_mutations.py`): every re-pointed survivor re-run
+against the strengthened guards — **18/18 killed, 3 controls clean, 0 false kills** — so
+"we closed them" is a measurement, not a claim.
+
+#### Three errors I made *during* the round, all of one shape
+
+**A vacuous assertion satisfied by an empty population, three times in one phase.** My
+fixtures test passed on its own name; my astral-plane budget test passed because the budget was
+so tight that *every* file dropped, making "the astral one is absent" trivially true; and two
+absence-only target assertions passed with the fix disabled. Each was fixed by adding a positive
+floor first. **And one of my own round-2 mutations was a no-op** — `R-D01` hoisted a budget
+check whose accumulator never grows past the first accepted file, so it could never fire. The
+harness reported it as a survivor and could not tell me which; probing it, rather than counting
+it, is the only reason it was re-crafted instead of recorded as a hole. That is the harness's
+own stated limit doing its job.
+
+**What the round did not reach**, recorded rather than implied: no lens exercised a real
+`E2BIG`, so the derived budget is verified as *below* the platform limit and not as *sufficient*;
+no lens ran on GNU/Linux, so the CI cell is reasoned from wheel availability rather than
+observed; nothing tested a consumer whose promoted rules actually scope *to* test paths, which
+is the population `Q-182` is about; and the `is_big` asymmetry in `Q-183` is filed on one
+reviewer's measurement, re-read but not independently reproduced by me.
+
+## Phase 197 (executed 2026-08-12 — the issue numbers a public reader cannot resolve, and the count that was wrong in both directions)
+
+**The phase is `Q-179` and `Q-182`, and the mirror push (`Q-181`) that carries them.** Every
+bare `#NNN` **citation** on the shipped surface points into a *private* tracker — 76 of
+the 129 raw `#NNN` tokens there; the other 53 are anchors, colours, rubric ordinals and
+illustrations, and separating them is most of the work below. *A* private tracker rather than
+*Sysop's*: 13 of the 76 are GDP issue numbers (#202, #203, #204, #205, #208, #210) and one is the
+tester repo's — all equally unresolvable to a public reader, which is why the qualifier names a
+kind of tracker rather than a repository. The public repo is a
+different repository with unrelated numbering — `getsysop/sysop` reaches **#30**, verified
+against the API, and it has no non-PR issues at all — so a citation above it 404s, and one below it
+**may** resolve to an unrelated pull request — the worse direction when it happens, because it
+resolves and therefore reads as corroboration. Stated at the strength the tree supports: the
+public numbers are `[1, 2, 3, 11..30]`, so 4 through 10 404 as well, and the single ≤ 30 citation
+in this population (`install.sh`'s `#10`) is one of those. The corroboration case is the reason
+to gate the class, not something this surface was already doing. Pass 5 could never have seen this: it scans for pointers
+into *stripped paths*, and an issue number is not a path.
+
+### The brief was verified before anything was built, and its central number was wrong
+
+Two fresh-context agents over its factual claims first, per the standing rule. Six claims held
+exactly — the ledger insertion hazard and its two guards, the single-use-brief guard including
+the load-bearing comma and the `(not a numbered phase)` opt-out, the commit-cell guard in both
+directions, Phase 196's row still `_pending_` with `fc2ea11` (#391) as its backfill, both mirror
+tips (`a6fb75b` / `c74e3d2`, tree `c001ae9`), Pass 4's eleven arms, and the `od -c` collation
+test. Four did not, and three of the four changed the work:
+
+* **`Q-179`'s population is not 54 sites across 28 files. It is 76 across 33.** Derived here,
+  twice, by two independent classifiers, and confirmed a third time by the round. (76/33 counts
+  citations that KEPT a number; the population *touched* is **91 across 38 files**, the 76 plus the
+  15 rubric and illustration sites reworded instead — which is the distinction the class list
+  below exists to draw.) It was already wrong at the filing commit — where it derives
+  as 76 across **32**, one file fewer, because Phase 196 moved a citation out of
+  `run_checks/semgrep.py` into `requirements-dev.txt`. Its
+  supporting sub-counts are wrong the same way: `review-close/SKILL.md` carries **15**, not
+  thirteen; it is **16** companion script files, not eight. (The round corrected the first of
+  those from 16 — the pre-fix file holds 17 tokens, two of which are a rubric ordinal and an
+  illustration that this phase reworded, and the phase's own classification excludes both.)
+* **`docs/` carries none of it.** The brief and the entry both name `docs/` as part of the
+  operational surface; every `#NNN` in `docs/` is a CSS colour. The real surface is `core/` (75)
+  and `install.sh` (1). This does not change the *sequencing* argument — `core/` is mirrored
+  too — but the reason as stated names a directory with zero sites in it. The real split is
+  `core/` **74**, `install.sh` 1, `requirements-dev.txt` 1.
+* **`PHASE_LOG.md` ships, and the entry's "21" is off by a factor of twenty.** It carries
+  **410** bare citations, 291 of them above #30 — more than five times the surface being fixed.
+  `make_public_mirror.sh:6` says it ships in as many words. The entry waved it off as the same
+  historical-narration class Pass 5 discharges at file level; the *class* argument survives, and
+  its number did not.
+* The brief attributes "cut from merged `main`, not the branch" to `tools/TESTER_MIRROR_RUNBOOK.md`.
+  **The runbook says no such thing** — a clean tree is the only precondition it states, and
+  `make_public_mirror.sh` archives whatever `HEAD` is. Correct policy, wrong home. It is now in
+  the runbook as step 1.
+
+### What counts as a site is the whole derivation, so it is written down rather than assumed
+
+129 raw `#NNN` tokens on the surface reduce to 76 real citations, and the reduction is four
+classes — 36 + 2 + 12 + 3 = 53, and 129 − 53 = 76, which is the arithmetic to check.
+(The first draft said 152. That number comes from a plain `#[0-9]+` sweep, under which the CSS
+class is 26 rather than 2 because partial matches appear inside letter-bearing hex colours — so
+it cannot be reconciled with the other three figures, and its reduction did not close. The
+round caught it.) Two are **structural** and became gate exemptions: markdown anchor links (`](#4-2-…`,
+36 of them, all in `WORKFLOW.md`) and CSS colours (2, both `--paper-deep: #080705`, and only
+all-digit colours can reach the token at all — `#1a2b3c` has letters and never matches). Two
+are **prose** and were reworded instead: rubric references (`dimension #9`, `finding #7` — 12
+sites, now `dimension 9`) and three genuine illustrations (a `#1234` in an `xfail(reason=…)`, an
+`issue #142` in a template, a `"PR #2"` misreading).
+
+**There is deliberately no "looks illustrative" exemption**, and that is the design decision
+worth recording. Classifying those three by content would put the gate in the business of
+guessing intent, and Phase 179 is this repo's account of what a content-judged skip becomes. The
+three cost one clause each to reword. The two structural exemptions are narrow, each pinned by a
+canary, and the residual is stated: a genuine six-digit citation inside a CSS declaration would
+be missed.
+
+The shape is Wade's call among three (2026-08-12): **`internal tracker #NNN`**. It tells a public
+reader the referent is not theirs to open without putting the private org/repo slug on the public
+surface — which the leak passes do not block, so it would have been a disclosure choice made by
+default rather than by decision. The gate matches the phrase case-insensitively and
+substring-wise, so `Sysop's internal tracker #241` qualifies too: keyed on the class, not on one
+spelling.
+
+### The scope excludes test modules, and that is a decision about cost, not a claim
+
+`_operational_files()` drops every `tests/*.py`, so Pass 5b's zero is a zero over the
+instructional surface. Measured, and stated here because a scope that makes a zero look like a
+closed class is the shape this repo keeps getting wrong: **44 test modules carry 206 such
+citations, 191 of them above #30, and they ship.** Pass 5's reason for exempting test modules —
+they name excluded paths as their subject and skip on absence — **does not transfer**; a
+docstring citing #202 is the same defect on the same shipped surface. Filed as `Q-185` with the
+number rather than absorbed, and the exemption is a comment in the gate that says so.
+
+`PHASE_LOG.md` and `tests/PORT_LOG.md` are exempt by **declaration**, reusing Phase 184's earned-
+exemption mechanism with a **different sentinel sentence**. Different on purpose: one sentinel
+for both classes would let a record that declared only its file pointers collect the
+issue-number exemption for free, and `test_the_two_disclaimers_are_independent` pins that in
+both directions.
+
+### `Q-182`, decided by measurement and not by preference
+
+`tools/phase197_q182_measure.py` drives the real stage against the real binary — not a
+hand-rolled semgrep invocation, because the mechanism under measurement *is* the interaction
+between the placeholder strip and the post-filter, and only the stage applies both.
+
+| cell | as shipped | with `exclude_dir` |
+|---|---|---|
+| fresh install | 48 | **33** |
+| localized to real source | 3 | 3 |
+| localized to `.` | 48 | **33** |
+
+So the answer is `exclude_dir: ["test", "tests", "testsuite"]` on **one** rule,
+`semgrep-recompile-inside-def` — it removes exactly the 15, and changes nothing for a localized
+consumer. It goes in `exclude_dir:` and not `paths:` because an unlocalized `<placeholder>` path
+is *stripped* as "not yet localized" while `exclude_dir` survives that strip, which is the only
+reason the fix reaches the fresh install it is for. It is faithful to the rule rather than a
+suppression: the rule's own message scopes its rationale to *"request handlers and hot-path
+code"*, and a test body is categorically not that. Scoped to one rule on purpose — there is no
+performance category to generalize to, and this is the only shipped rule whose rationale is
+hot-path.
+
+**One number in `Q-182` does not survive: "localized to real source directories 14 → 14."** No
+substitution reproduces 14 — this measurement gives 3 → 3, and an independent agent trying its
+own substitutions got 0 → 0 and 3 → 3 and never 14. The substantive claim (the delta is zero
+once localized) holds in every cell anyone has run. The absolute does not, and it is corrected
+here rather than repeated. Also worth carrying: **29 of the 33 baseline findings are this repo's
+own pack fixtures** (the other four are one `docs/` and three `tools/`), which sit at `.claude/semgrep/fixtures/` in a real install and are excluded
+there — so only the **delta of 15** transfers to a consumer, not the absolutes.
+
+### Three defects in the runbook, in the paragraph that exists to prevent them
+
+Found while reading it to drive this phase's cut, not by looking for them.
+
+1. Its **"What testers get vs. don't" table** still enumerated **eight** of the eleven excluded
+   classes, under a caption claiming it mirrored the exclude list — omitting
+   `test_mirror_leak_gate`, `test_cut_release_gate` and `covered_class_`, *the same three* the
+   Pass 4 bullet thirty lines below retired its own copy for. So Phase 196's "four prose copies,
+   four counts" was **five**, and the fifth was in the file that fixed the other four. Restating
+   nothing has to be applied to every copy in a file, not to the one you are looking at.
+2. That Pass 4 bullet still said **"Three restatements, three counts"** — the count its own
+   round corrected to four, in the same phase, without the sentence being updated.
+3. The merged-`main` precondition was **absent**, as above.
+
+### The gate caught its author, once, on the change itself
+
+Pass 5 went red on this phase's own new comment: the shipped `checks.yml.fragment` cited
+`tools/phase197_q182_measure.py`, a path the mirror strips. Qualified in place. **The event is
+not attestable after the fact** — the phase is one squashed commit — so what a reader can check
+is the mechanism: strip the qualifier from that comment and Pass 5 names the line. Worth recording
+because it is the cheapest possible demonstration that the pass is live on new content and not
+only on the population it was built against.
+
+### Author-side battery: 15/15 killed, 4 controls clean, 0 false kills
+
+`tools/phase197_mutations.py`. **Zero declared reverts** — every row is an assumption, which is
+what rule 1 asks for and what a revert-heavy battery cannot give you. Two rows survived the
+first run and both were real:
+
+* **C04's first fix was the no-op, not C04.** The round corrected the subject of this sentence,
+  and the distinction is the one the battery's own limits paragraph draws three lines later: the
+  mutation is a live hole (it drops an extensionless file named `test`), while the *assertion*
+  written to close it changed nothing. Widening
+  `rp.split("/")[:-1]` to `rp.split("/")` makes `exclude_dir` match the *filename* too. My first
+  fix asserted `tests.py` stays in scope — green under both versions, because
+  `fnmatch("tests.py", "tests")` is False. The discriminating case is the **extensionless** name:
+  a shell script honestly called `test`. Fixed by testing both spellings, and the assertion is
+  now about the semantics rather than about a path that happened to be nearby.
+* **B06 showed a count floor is not a population floor.** Sampling the file list and lowering the
+  number in the same edit kept the zero green. Closed by naming the four files that carried most
+  of the 76 and requiring them in the scanned set — a sample cannot contain them, and a rename
+  fails loudly here instead of quietly widening the exemption.
+
+**What the battery cannot see, stated rather than implied:** nothing here mutates semgrep, so
+"an `exclude_dir` really removes those 15 from a real scan" rests on the measurement script and
+not on a mutation; every Pass 5b row takes `_operational_files()` as an input, so **no row can
+show what the scope excludes** — the 206 test-module citations are outside every assertion in
+the battery by construction; and all 15 rows are unprobed (`effect=`), so the harness alone
+cannot distinguish a survivor from a no-op, which is exactly how C04 presented.
+
+### The suite delta, and why the obvious way to measure it is wrong
+
+**3459 passed / 5 skipped, from a comparable baseline of 3410 / 5 — `+49`**, of which the round
+added 18 on top of the build's 31.
+
+*(The build's own commit reported `3441 passed / 5 skipped` and that was wrong in the way this
+phase keeps finding: the committed tree was `3440 passed / 1 failed`, red on
+`test_every_phase_from_174_has_a_ledger_row`, because a ledger row is written after the round
+by convention. The number was measured before the `CLAUDE.md` row that reddens it was added, and
+never re-derived. Worse, the same commit **deleted** the inherited brief sentence that explains
+that redness — so the phase both reported a clean suite and removed the note that would have
+told the next session why it was not. The claims lens found both halves. The sentence is
+restored, and the ledger row now closes it.)*
+
+*Comparable* is doing work in that sentence. The baseline was first measured by running the
+suite in a linked worktree at `HEAD`, which reported **3409 / 6** — and the extra skip is
+`tests/test_repo_write_guard.py:458`, which skips when there is no `.venv` symlink in the
+checkout. A linked worktree never carries one. So the worktree number is one *pass* short of
+what the same commit produces in the main checkout, and subtracting it directly would have
+reported `+32` against a baseline measured under different conditions. `tools/mutation_battery.py`
+warns about exactly this hazard for exactly this reason; it applies to baselines too, and the
+arithmetic only closed once the skip lists were diffed rather than the totals.
+
+### Three pre-existing guards went red on this change, and all three were correct to
+
+None was a defect in the guard. `test_review_close_diff_basis.py` pins the *whole line* of
+`review-close/SKILL.md:230` in `ALLOWED_TWO_DOT` — deliberately, so a reworded rationale fails —
+and this phase reworded it; the pin was updated. The two `test_mirror_runbook_gates.py` failures
+were the runbook-coverage guard demanding that every implemented pass be **led** by its own
+bullet in the step that tells an operator to run them: Pass 5b existed in code and nowhere in
+the runbook. That is the Phase 196 lesson — a gate CI could not see — caught by a guard written
+after it, on the first change that could trip it.
+
+
+### The round — three lenses, and the guards were the weak half again
+
+Governor: three lenses, one round. The condition holds on a plain reading — the phase ships
+behaviour (Pass 5b, an `exclude_dir`) **and** a record asserting counts. All three ran
+fresh-context in their own worktrees, none on the live tree, none a fork. Lenses: *does it
+execute and is the class closed* · *are its claims true* · *are the guards real, on an
+independently designed battery*.
+
+**Author-side pass, reported because Phase 166 showed the rule otherwise has no invoker.**
+Battery 15/15 with 4 behaviour-preserving controls and 0 false kills, 0 declared reverts; the
+derivation ran twice with independently-written classifiers before any prose was edited (rule 4);
+the runbook's own `grep -A3 'hard "Pass 4'` was run and prints eleven arms (rule 3). Two rows
+survived the first run and both were real. **None of it found what the round found.**
+
+#### The execution lens found two HIGH, and one of them was the instrument
+
+**Any shipped file could buy the file-level exemption with one pasted line.** Pass 5 carries
+`test_the_operational_surface_cannot_buy_a_file_level_exemption` — added by *its* round's H4,
+for this exact reason — and Pass 5b shipped without a twin. Demonstrated on
+`core/skills/review-close/SKILL.md`: a planted citation went RED → GREEN with the whole module
+still passing, and a **negated** form of the sentence bought it just as well, because a sentinel
+is matched rather than read. Reproduced here before fixing. The remedy is Pass 5's, deliberately
+— the exemption stays one mechanism and the *purchase* is made loud, rather than two mechanisms
+to keep in sync.
+
+**`tools/phase197_q182_measure.py` could no longer produce the number it was committed to
+support.** Its docstring says it is committed *because* the headline rests on it. Run on the tree
+it ships in, every cell showed a zero delta: `_pack_checks()` reads the fragment from the tree,
+the tree now carries `exclude_dir`, and the control arm merely *declined to add* the key rather
+than *removing* it — so both arms were the treated arm. The numbers were right; the instrument
+had stopped being able to show it. This is Phase 194's "every instrument the phase built to
+measure itself wrong", reproduced by a phase that had read that entry. The control arm now pops
+the key, and 48 → 33 reproduces.
+
+#### The claims lens found seven, and all seven were real
+
+`152` raw tokens was **129** — and the tell was available for free, because 36 + 2 + 12 + 3 = 53
+and 129 − 53 = 76 while 152 − 53 = 99. The four class sizes were right and the total they were
+subtracted from was not, and nobody had tried the subtraction. `review-close/SKILL.md` carries
+**15**, not 16. The surface split omitted `requirements-dev.txt`, a file this phase itself
+edited. The fixtures composition was **29** of 33, not 30. The brief asserted the mirror push
+had already happened. The suite line is corrected above. And **`install.sh:3125` shipped a
+doubled qualifier** — *"the tester repo's own internal tracker, issue internal tracker #10"* —
+where a hand edit and the mechanical pass both fired on one line. Pass 5b was green on it,
+because the gate checks that the phrase is *present*, not that the sentence is coherent. A
+class sweep found it the only instance; every qualifier on the operational surface now has
+exactly one citation.
+
+Two scope corrections that matter more than their size. *A* private tracker, not *Sysop's*: 13
+of the 76 are GDP numbers and one is the tester repo's — the qualifier names a **kind** of
+tracker for that reason. And 76 across 33 counts citations that *kept* a number; the population
+**touched** is 91 across 38, the other 15 being the rubric and illustration sites reworded
+instead.
+
+#### The guards lens: 84 mutations, 53 killed, 20 survivors — the ninth consecutive phase
+
+My 15/15 was self-consistency again. An independently designed battery found **20 survivors at
+73%**, with 0 false kills across 11 controls and every survivor probed rather than counted. It
+also ran a census I had not thought to run: **revert each of the 76 shipped citations one at a
+time and ask whether the gate notices.** Eight did not.
+
+**The qualifier was window-scoped where it needed to be referent-scoped.** `_qualified` asks
+whether the *line* (plus a wrapped neighbour) contains the phrase, so any line carrying two
+citations laundered the other — `See #999, tracked in internal tracker #241.` told the reader
+nothing about #999 and was green. The module names and guards that exact class for its two
+*structural* exemptions and did not guard it for the qualifier. Fixed by requiring adjacency,
+which was affordable only because the measurement said it was: **76 of 76** citations were
+already written with the qualifier against the number, so the gate got strictly stronger with
+no prose churn. The census now returns **0 uncovered**.
+
+The rest, all fixed: no vagueness canary, though `POINTER_QUALIFIERS` carries one with a comment
+naming widening-until-green as the drift it stops — `("tracker",)` and `("internal",)` each
+survived a full-suite run; the two qualifier *lists* unpinned while the two *sentinels* were
+pinned; **membership in the population mistaken for being scanned**, so a file-type skip or a
+40-line cap left the carriers floor satisfied and the files unread; the count floor at `>100`
+defeated by a `[:120]` slice that still contained every carrier, so the two floors fell to one
+edit; `.html` able to leave `_shipped_files()` with the whole suite green, taking both `docs/`
+pages and the colour exemption's only real-tree use; and `exclude_dir`'s **documented glob
+semantics tested nowhere** — `fnmatch` → `==` survived all 3,440 tests.
+
+**The colour exemption was wrong in both directions at once**, which is the finding I would not
+have reached alone. It keyed on "the text before the token ends with a colon", so `Filed: #123456`
+in prose was exempt — wider than the residual the docstring stated — while ordinary CSS that
+moved a colour out of a bare declaration (a gradient, `border: 1px solid #080705`,
+`var(--x, #080705)`) **fired**, which is a mirror-gate failure on a public surface arriving with
+a message about issue numbers. Re-keyed on the file type: a colour is a colour in a stylesheet
+and nowhere else. Both arms closed by the same change.
+
+**One survivor was closed by moving where a constant comes from.** The guard's `TEST_DIRS` was
+retyped, so it could be narrowed in one edit and then matched by narrowing the shipped list in a
+second — a two-step regression with no tripwire between the steps. It is now derived from the
+shipped `exclude_dir`, and its non-vacuity floor is derived from `run_checks/semgrep.py`'s own
+`_IGNORED_TEST_DIRS`, asserted as an **equality** so neither list can shrink alone.
+
+Round-2 battery: every re-pointed row re-run against the strengthened guards — **26/26 killed,
+4 controls clean, 0 false kills** — so "we closed them" is a measurement.
+
+**What the round did not reach**, recorded rather than implied: no lens ran `cut_public_release.sh`
+or `make_public_mirror.sh`, so Passes 1a–5b were exercised only through pytest and the cut path
+is verified at push time, not here; the guards lens confirmed only 4 of its 20 survivors against
+the full suite, so "no other module catches it" is unproven for the other 16 and I closed them
+on their own terms rather than on that claim; nothing mutates semgrep, so *"`exclude_dir` removes
+exactly those 15"* rests on the measurement script and not on a guard; and the 206 test-module
+citations are outside every assertion in every battery **by construction**, which is why `Q-185`
+carries the number rather than a promise.

@@ -193,7 +193,7 @@ For each file area, use the convention map to know what to check:
 2. Find the section matching the files being reviewed
 3. Check each convention bullet against the code
 
-One review dimension worth calling out: **source verification** (adversarial-review dimension #9). When a plan or a diff calls an external SDK/framework API that has no in-repo precedent, flag it as `unverified` rather than assuming it's correct — hallucinated API calls are a common failure mode. The `/claim-task` plan template carries a matching `## Constraints & Risks` preamble so this surfaces at plan time, not only at review time.
+One review dimension worth calling out: **source verification** (adversarial-review dimension 9). When a plan or a diff calls an external SDK/framework API that has no in-repo precedent, flag it as `unverified` rather than assuming it's correct — hallucinated API calls are a common failure mode. The `/claim-task` plan template carries a matching `## Constraints & Risks` preamble so this surfaces at plan time, not only at review time.
 
 Write findings to `review_tasks.md` using the batch format documented in WORKFLOW.md §4.2.
 

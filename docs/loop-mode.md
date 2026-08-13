@@ -109,21 +109,55 @@ template**, which runs the full `run_checks` suite. You merge however you alread
 hooks ship as skeletons that block nothing on day one; they gain teeth exactly as fast as your
 project promotes mechanical rules.
 
-**Known limitation (open as of 2026-08-11): the semgrep stage silently skips test directories.**
-The pre-scan hands semgrep a directory, so semgrep's built-in default ignore list excludes
-every `tests/` and `test/` directory at any depth from the AST stage (in practice that swallows
-e2e specs living under such directories too) — and the omission is absent from the pre-scan's
-`paths.skipped` accounting, so a semgrep rule scoped to test files reports "executed,
-0 findings" over surface it never saw. Deterministic means repeatable, not complete: shipped checks have been caught blind
-to part of their declared subject before, which is why checks are maintained like code — with a
-demotion path for the ones caught misfiring. Until the durable fix lands (the obvious fix,
-enumerating targets explicitly, was built and withdrawn by its own review round after it proved
-worse than the defect), the workaround is an **empty `.semgrepignore` at your repo root**. It
-replaces semgrep's built-in ignore list wholesale, restoring test directories to the scan —
-and anything else on that list that isn't gitignored (committed `vendor/`, `node_modules/`,
-`dist/`, minified bundles) returns to the scan too, so re-add any of those you carry in the
-same file. Grep-based `checks.yml` rules are unaffected — prefer those for test-directory
-patterns in the meantime.
+**Closed 2026-08-12: the semgrep stage used to skip test directories silently.** For the
+record, because the limitation was published here and the workaround it recommended is no
+longer needed. The pre-scan handed semgrep a directory, so semgrep's built-in default ignore
+list dropped `test/`, `tests/`, `testsuite/` and `*_test.go` at any depth before they became
+candidates — and discovery-excluded files never appear in `paths.skipped`, so the stage
+reported "executed, 0 findings" over surface it had never read. Deterministic means
+repeatable, not complete: shipped checks have been caught blind to part of their declared
+subject before, which is why checks are maintained like code — with a demotion path for the
+ones caught misfiring.
+
+The pre-scan now keeps the directory operand and **adds the dropped files as explicit
+operands**, which is the part that makes it work: semgrep applies its default ignore list to
+what it discovers under a directory, but not to a file you name. (Naming the *directory*
+recovers nothing — measured.) Everything the directory operand did, it still does: untracked
+files are still scanned, the bundled-fixture exclusion still applies, symlinks and
+mid-rename files still can't abort the scan, and it remains a single subprocess under one
+timeout. Very large test trees have a ceiling — the recovered files travel on the command
+line, so past the platform's exec limit the stage reports `degraded` and names how many it
+omitted rather than quietly scanning fewer.
+
+**If you keep a `.semgrepignore`, it wins and this recovery switches off entirely.** That is
+deliberate: a project `.semgrepignore` already replaces semgrep's built-in list wholesale, so
+there is nothing left to recover, and naming files explicitly would override exclusions you
+chose on purpose.
+
+**If you added the empty `.semgrepignore` this page used to recommend, the honest advice is
+now "keep it or replace it, but don't just delete it."** Deleting it does get your test tree
+scanned — the fix handles that — but it also hands `build/`, `vendor/`, `dist/`,
+`node_modules/`, `.venv/`, `.tox/` and minified bundles back to semgrep's built-in list, and
+files dropped that way are **as invisible as the test tree used to be**: they never appear in
+the pre-scan's `paths.skipped`. If you carry committed dependency source (Go and PHP composer
+both use `vendor/`), the better move is to keep a `.semgrepignore` listing everything on
+semgrep's default list *except* the test entries.
+
+**Expect new findings on your first run after updating**, from rules that were always enabled
+over files they never actually saw. How many depends on your rules' `paths:` scope. On a fresh
+install the shipped packs' scoping is still placeholder vocabulary, which is treated as
+whole-tree, so test findings surface immediately. Once you localize `paths:` to your source
+directories, rules scoped away from tests stop contributing — though localizing to `.`, which
+is a legitimate choice for a small repo whose whole tree is source, keeps them all in scope.
+Triage them the usual way, or accept the current state with `run_checks.sh --update-baseline`
+(which snapshots *every* outstanding finding, not only these).
+
+One rule was re-scoped rather than left to your triage. `semgrep-recompile-inside-def` scopes
+its own rationale to *"request handlers and hot-path code"*, and a test body is categorically
+not that — so it now carries `exclude_dir: ["test", "tests", "testsuite"]` and skips those
+directories at any depth. Measured on the Sysop tree, that is 15 of the newly-visible findings
+on a fresh install and none at all once `paths:` is localized to real source directories. Every
+other rule still reads your test tree, which is the point of the fix above.
 
 ## If you send friction upstream, check where it lands first
 

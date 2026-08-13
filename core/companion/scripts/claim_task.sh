@@ -77,7 +77,7 @@ done
 # interpreter is an *error*, so PyYAML lives only in the project venv. A bare
 # `python3` therefore failed on hosts that are perfectly well provisioned:
 # `--entry-state` (Step 2's FIRST command) exited 3 and named no remedy, and
-# `--release` exited 1 with a manual recipe. Upstream #321.
+# `--release` exited 1 with a manual recipe. Internal tracker #321.
 #
 # Three properties are deliberate:
 #
@@ -570,7 +570,7 @@ if [[ "$MODE" == "worktree" ]]; then
   fi
   WORKSPACE_PATH="$WORKTREE_DIR"
 
-  # Deliberately NO hook install here (Phase 150 / upstream #202).
+  # Deliberately NO hook install here (Phase 150 / internal tracker #202).
   #
   # Worktrees share the main repo's hooks directory ($GIT_COMMON_DIR/hooks), so
   # a worktree never needs its own arm — it already runs whatever the main
