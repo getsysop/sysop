@@ -8172,3 +8172,352 @@ on their own terms rather than on that claim; nothing mutates semgrep, so *"`exc
 exactly those 15"* rests on the measurement script and not on a guard; and the 206 test-module
 citations are outside every assertion in every battery **by construction**, which is why `Q-185`
 carries the number rather than a promise.
+
+---
+
+## Phase 198 (executed 2026-08-13 — the close path loses work, and the test that asserted it)
+
+**The phase is `Q-186`, `Q-191`, `Q-187` and `Q-184`, plus two defects the pre-fix corpus
+found that nobody had filed.** All four items came with a `⚠ AMENDED 2026-08-13` block from
+the pre-build verification pass, which had already found a wrong premise in every one. That
+pass is not this phase's discovery and the record says so. What this phase owed was the
+build, the author battery, and the round.
+
+### The brief was verified before anything was built, and one of its verified corrections was itself wrong
+
+The pre-build pass (two fresh-context agents, worktree-isolated, 2026-08-13, its own
+`ROUND_YIELD_LEDGER` row) found 20 defects across the four filings and wrote them into the
+entries. Nineteen held on contact with the build. One did not, and it was the one Wade had
+already decided on.
+
+`Q-187`'s amendment said `close_landed_on_main()` was the only site that *compares* two
+derived paths, and that the five sibling scripts named at `close_batch.sh:188-191` merely
+*derive* a lock path. Wade chose "fix the comparison, scope the rest" on that premise, and
+asked for the claim to be verified during the build and written in as the reason the others
+were not swept. Verifying it refuted it. There are **five** comparison sites, not one:
+
+| site | what a case-divergent CWD does | harm |
+|---|---|---|
+| `close_batch.sh` `close_landed_on_main` | batch-lock sweep silently skipped | the filed defect |
+| `batch_work.sh --release` main-checkout guard | **hard `exit 1`** from the real main checkout | refuses legitimate work |
+| `batch_work.sh` never-remove-main-worktree | guard misses | git backstops it |
+| `claim_task.sh` never-remove-main-worktree | guard misses | git backstops it |
+| `claim_task.sh` inside-the-worktree-being-released | guard misses | **removes the operator's CWD** |
+
+The narrow reading of Wade's decision still governs — fix the comparisons, do not chase the
+derivations — and the derivation copies genuinely are benign, because they never compare and
+a divergent spelling reaches the same directory anyway. But "the comparison" was five
+comparisons, and the last one is a data-loss path: the end-to-end test written for it shows
+the pre-fix script removing the worktree the shell was standing in.
+
+### The reader was blaming the wrong writer, and the comment saying so was part of the defect
+
+`CLOSE_AWK`'s `emit()` held exactly one line, so a task was left open only when the
+*physically next* line was its `> Failed:` annotation. `close_batch.sh:47` attributed that
+one-line shape to `/auto-judge`. It is not `/auto-judge`'s: the annotator only appends
+*below the task*, and the two-line entry is written at **creation** by
+`codebase-review/SKILL.md:680-684` and `security-audit/SKILL.md:711-715` — a checkbox line
+plus a mandatory indented `` `file:line` `` + provenance continuation. A fix aimed at the
+annotator would have missed both authors.
+
+Driving the shipped awk on stdin, before any change:
+
+```
+one-line task + `> Failed:`      -> HELD,   counts "0 1"   (held open)
+the SHIPPED two-line task        -> ORPHAN, counts "1 0"   (closed, note underneath)
+```
+
+The same fixture through the real script, `--dry-run`, reading both streams — which is how
+the reporter found this when no gate did:
+
+| | pre-fix (`main`) | post-fix |
+|---|---|---|
+| checkboxes | **3 tasks → [x]** | 2 tasks → [x], **1 left open** |
+| Grand Total | 5→8 done, 10→7 open — **overstated by 1** | 5→7 done, 10→8 open |
+| held task | *nothing printed* | `⏸ held open (line 7)` |
+| the warning | ORPHAN, **stderr only** | stdout, plus a summary count |
+
+`emit()` is now a block state machine. A task owns its checkbox line plus every indented,
+non-blank line under it; the block ends at a blank line, at any column-0 line, or at EOF;
+an annotation protects the **nearest preceding task bullet within its block** and reaches no
+further. `is_failed` is tested *before* the block-end test, so a column-0 annotation directly
+under a task still counts as it always did. Under `mode=flip` the pending task and its
+buffered lines flush in order on every block end and once more at EOF, so the
+`TestBlastRadius` class stays closed.
+
+### A shipped test asserted the bug, and its concern was still legitimate
+
+`test_annotation_only_counts_for_the_line_above_it` used a fixture that is structurally the
+shipped two-line shape — bullet, one indented line, `> Failed:` — with the middle line
+described as prose, and asserted *both tasks close normally*. There is no syntactic
+discriminator between its prose line and a real `file:line` continuation; both are `^\s+\S`.
+Asserting the annotation is ignored there is asserting it is ignored everywhere it actually
+appears.
+
+Deleting it would have dropped the only guard against a runaway forward scan. It is renamed
+`test_annotation_counts_for_the_nearest_task_in_its_block`, its expectation legitimately
+changed, its rationale rewritten to say why, and its original concern pinned separately in
+`test_the_scan_does_not_run_past_the_block_it_started_in`.
+
+### The hostile corpus came first, and it found two defects nobody had filed
+
+`_shared/adversarial-review.md` rule 4: the change reinterprets a predicate over text other
+writers produce, so the corpus is built **before** the fix — red before, green after, which
+is the fix's own evidence. `tests/test_close_batch_block_scope.py`, 24 cases, fixtures
+derived from the generators' templates rather than from an author's memory of them, with
+`> Dropped:` drops as controls because a drop matches **no** branch at all and therefore
+produces byte-identical evidence whether or not the scope rule fired.
+
+**Exactly one** test had ever driven the awk against the two-line shape — and it asserted
+the bug. `test_annotation_only_counts_for_the_line_above_it` invokes the real script, and its
+fixture is that shape with the middle line called prose. Every *other* awk fixture is a
+one-line task: `BASE_TASKS`, `FAILURE_TASKS`, `LOUD_TASKS` and `_TRAILING_SECTION_TRACKER`,
+plus both `test_failed_verdict_record.py` subprocess documents. So the suite's only contact
+with the shipped shape was a test defending the defect, which is why a green suite never saw
+this.
+
+(An earlier draft of this section said *zero* tests had, and listed
+`_ARCHIVABLE_WITH_FAILURE` among the awk fixtures. Both wrong, and the round caught both:
+that fixture feeds `archive_review_tasks.py` and never reaches the awk at all, and the
+"zero" claim is refuted by this phase's own account of `:375` two sections above. The true
+sentence is the sharper one.)
+
+The corpus found two more, neither filed anywhere:
+
+1. **`find_batch_range`'s `wc -l` fallback counts newlines**, so a `review_tasks.md` whose
+   last line lacks a trailing newline lost its last task: the batch header flipped to
+   `Merged`, the task stayed `[ ]`, and the count said `0 tasks closed`. `review_index.py`
+   uses `readlines()` and does **not** have this bug, so the two range resolvers disagreed
+   on exactly that file — one level up from the "one program, both modes" principle the awk
+   header states. Now `awk 'END { print NR }'`. It was *already known*: a comment in
+   `archive_review_tasks.py` named it as an alternate cause of an unflipped box and nobody
+   had fixed it. That comment is now corrected too.
+2. **Two comments cited `/auto-judge`'s all-caps vocabulary at `:300`/`:304`/`:360`**; the
+   real sites are `:385`/`:389`/`:446`/`:457`/`:461`, and `:300` is unrelated prose. One of
+   the two is inside a drift guard. Re-pointed at **tokens** rather than line numbers, which
+   is the durable form `close_batch.sh` was already using — the amendment called this three
+   copies, and the third was already durable.
+
+### The archive erased the task its own warning had just named
+
+`archive_review_tasks.py` handled a legitimately-open task in a `Merged` batch twice, and
+the halves disagreed. The warning naming the task was correct. Both counting sites used
+`total_tasks` on **both** sides — `<summary>{total}/{total}</summary>` and
+`| {total} | {total} | 0 | Complete |` — so they asserted completeness by construction and
+no input could make them say otherwise. The open task was not miscounted; it was removed
+from the denominator.
+
+The reported fix — reuse `UNFINISHED_TASK_RE` — is wrong in both directions, and the
+amendment had measured it: `- [x] task one` is matched by neither existing pattern, and
+`- [ ] **Acceptance**: criterion` *is* matched by the permissive one. So this ships a
+**third** pattern, `COUNTED_TASK_RE`, mirroring `close_batch.sh`'s `is_open_task` plus the
+`[x]` its flip produces — because the counter and the flipper must agree about what a task
+line is, which is the cross-file desync `UNFINISHED_TASK_RE`'s own comment describes.
+
+One correction the phase made to itself: the first cut took the numerator from `TASK_RE`
+(bold id required) and the denominator from `COUNTED_TASK_RE` (bold id optional), so an
+unbolded `- [x] task one` counted in the denominator and not the numerator and a *finished*
+round reported `0/1 … Partial`. A ratio assembled from two definitions is a new way to be
+wrong, not a fix for the old one. Both halves now come from one pattern.
+
+Output shape, ratified by Wade: `done/total`, and `Complete` when `open == 0` else
+`Partial`. Deferred stays `0` — a `> Failed:` task is open, not deferred, and mislabelling
+it trades one wrong cell for another. **No backfill** of archives already written.
+`update_archive_total` takes separate deltas for Total and Completed, because applying one
+delta to both is how the running total inherited the same tautology.
+
+Of the three tests the amendment named as pinning the old behaviour, **one went red on the
+fix and two stayed green, for two different reasons — and neither reason is the one this
+record first gave.** `:251` went red, because its fixture declares `task_count: 3` over a
+`lines` list holding no task lines and the derived denominator reads the lines: it returns
+`| 0 | 0 | 0 | Complete |` against an asserted `| 4 | 4 | 0 | Complete |`. That is the
+incoherent fixture the amendment warned about, and the fix caught it rather than passing it.
+`:183` stayed green because its fixture is internally *consistent* and carries no open task.
+`:266` stayed green because the new `update_archive_total` signature defaults its third
+parameter, so a two-argument call still means what it meant.
+
+All three are rewritten with coherent fixtures anyway, and the partial case is covered end to
+end against the written artifact rather than only at the builders. The first draft of this
+paragraph asserted all three stayed green *and* gave a mechanism that applies to only one of
+them; the round measured it. That is the Phase-153 class — a claim written into the record
+before the round, refuted by the record's own subject — caught this time by the round rather
+than shipped.
+
+### `Q-184`: the true half, and the half that is refuted
+
+`_default_ignored_targets` returned `[], 0` for every way git can fail to answer — bare
+directory, git absent, timeout, corrupt index, any nonzero exit — with no warning, so
+`over_budget == 0` skipped both the warn and the `DEGRADED` branch and the stage recorded
+`executed` over a population it could not enumerate. That is fixed: a failure **inside** a
+work tree warns and records `degraded`; a non-git directory stays silent, and the root
+`.semgrepignore` early return stays silent because it is a deliberate disable.
+
+What is **not** in this record, because the amendment refuted it: the "nothing scanned at
+all, reported clean" measurement. `repo_root` is passed as a semgrep operand
+unconditionally, so a failed recovery produces byte-identical argv to the pre-recovery
+whole-tree scan and **changes no scanned file**. The warning's text is scoped to say only
+that the supplementary population was not added.
+
+### Author-side battery: 25/25 killed, 2 no-ops, 3 controls clean, 0 false kills
+
+`tools/phase198_mutations.py`, 27 rows across five verifier columns, one declared revert
+(4% — rule 1 wants reverts a minority, and a revert-heavy set reports wiring rather than
+coverage). First run: **22/27 killed, 5 survivors**. Every survivor probed, and three were
+real holes:
+
+- **A02** — `is_continuation` tests `^[[:space:]]` **and** not-blank, and dropping the
+  not-blank half survived the whole corpus, because every "blank" line in it was *empty* —
+  and an empty line does not match `^[[:space:]]` while a line of spaces does. Only a
+  whitespace-only separator distinguishes the two halves. Case added.
+- **S01/S02** — the corpus derives its fixture from the generators' templates. Collapsing a
+  template's first task to one line left the guard **green**, because both templates carry
+  two example tasks and the search found the second. A derivation that falls through to the
+  next candidate reports the shape it wanted rather than the shape the file has. The guard
+  now checks *every* task bullet in each template.
+
+Two were measured no-ops rather than holes, by the harness's `effect=` probe rather than by
+assertion: `COUNTED_TASK_RE` carries both `^` **and** `.match`, so either alone anchors it
+and defeating the sub-bullet protection takes two edits; and dropping `-d "$target"` from
+`cwd_is_inside` changes no answer, because `-ef` against a missing path is false and the
+walk reaches `/` and returns the same result.
+
+**What the battery cannot see, stated rather than implied:** no defect row carries an
+`effect=` probe, so each kill is evidence the guard is wired to the file and says nothing
+about whether the guard's *population* is the right one. The two `-ef` sites that only git
+backstops (`never remove the main worktree`, in both scripts) are killed only by rows that
+mutate them directly — no test drives a release against a main-worktree lock record. And
+the case-divergence column is **macOS-only by construction**: those tests skip on a
+case-sensitive filesystem, which is Linux, which is where the required `pytest` check runs,
+so the guard for `Q-187` is skipped on CI by design and this is said in the module docstring
+rather than discovered later.
+
+### The suite delta
+
+Baseline `3459 passed / 5 skipped` on `a233c66`, measured in the main checkout. After the
+build and the battery closures: **`3509 passed / 5 skipped`**, `+50`, with an *identical*
+skip list — the five named skips, unchanged.
+
+That figure is the state at the battery commit. At the commit that added this record — the third of
+the five this phase squashed into `7d43af3` — the suite is
+**`3508 passed / 1 failed / 5 skipped`**, and the failure is
+`test_every_phase_from_174_has_a_ledger_row`, legitimately red from the moment `CLAUDE.md`
+gains a Phase 198 row until the round's ledger entry lands. Both the commit message and the
+Phase 199 brief disclose that; the first draft of this section did not, and reported a green
+suite for a commit that is red. A reproduction note, since two readers will now try it: a
+linked *worktree* is one skip longer than the main checkout (no `.venv`, so
+`tests/test_repo_write_guard.py:458` skips), and a *clone* is two longer (that, plus no local
+`main` ref, so `tests/test_queue_entry_ids.py:181` skips). The comparison is by skip list rather than by
+total, per Phase 197's round: a linked worktree carries no `.venv`, so
+`tests/test_repo_write_guard.py:458` skips there and a worktree baseline is one pass short
+of the same commit in the main checkout.
+
+Phase 197's own mirror gate caught this phase once, on the change itself: a bare `#393` in a
+new `archive_review_tasks.py` comment tripped
+`test_no_shipped_file_cites_an_unresolvable_issue_number`. That is the guard Phase 197
+shipped doing exactly its job on the next phase to write a citation.
+
+### The round — three lenses, and the guards were the weak half for the tenth phase running
+
+Governor: three lenses, one round — the change ships behaviour **and** a record making numeric
+claims, which is the condition. All three were fresh-context `general-purpose` agents, none a
+fork, none permitted to mutate the tree under review.
+
+**The round's first finding was the round's own setup.** All three reviewers, spawned with
+`isolation: "worktree"`, landed on `a233c66` — the phase's parent. An isolated worktree is
+created from the repository's **default branch**, not the spawning session's `HEAD`, so under
+`§ Merge policy = pr` every reviewer gets the pre-phase tree, deterministically rather than as
+a race. The diff they could not see was 18 files: every subject of the review. Lens 1
+stopped at its pre-flight check and said so; lens 3 stopped independently and added the part
+that matters most — **the check has to key on a symbol the change INTRODUCED.** Grepping for
+`CLOSE_AWK` passes on the wrong tree, because that name predates the phase; `is_continuation`
+does not. All three were re-pointed at a tagged throwaway clone.
+
+`_shared/adversarial-review.md` already carried this accident and diagnosed it as
+non-determinism ("two reviewers spawned together landed on *different* commits"), which is why
+the only remedy it could offer was vigilance — and why it happened again. It now names the
+mechanism, both spawner-side pins, and the introduced-symbol rule.
+
+**Lens 3 never returned on its first run.** It died silently after being re-pointed, and the
+absence surfaced only because the human asked whether anything was still running. It was
+re-spawned against the round-1 tip, which also put fresh eyes on the round's own
+fixes — the governor's second-round condition ("the fixes produced substantial new material no
+fresh reader has seen") satisfied inside the round rather than by spawning another.
+
+#### The execution lens: two regressions this phase introduced, and a class it had not closed
+
+- **The loudness fix went quiet.** ORPHAN and NEARMISS moved to stdout to be louder, and in
+  the same commit the near-miss domain silently narrowed: `nmnr` was assigned only inside the
+  `is_continuation` branch, and a column-0 `> Fail:` is not a continuation. So a **malformed**
+  annotation at column 0 closed its task with evidence byte-identical to a clean close — the
+  invariant this script's own header states, broken by the change that was making it louder.
+  No fixture in the tree used a column-0 annotation.
+- **The archive's per-batch breakdown stopped summing to its own total.** The total moved to
+  `count_round_tasks`; the per-batch print kept reading `task_count`, so a batch whose only
+  task was open printed `0 tasks` and still counted 1 toward the `Archive N tasks?` prompt
+  directly beneath it.
+- **Three shipped sites still stated the refuted one-line contract**, none of them touched:
+  `close_batch.sh:16` (asserting it 37 lines above its own refutation), `WORKFLOW.md:1860` and
+  `review-close/SKILL.md:932` — the last two being what an operator reads to learn what the
+  script does. The phase had rewritten the implementation comment and left the contract.
+
+#### The claims lens: two HIGH false claims, and in both the true sentence is stronger
+
+Both are corrected above, in place. Recorded here because a correction that erases its own
+occasion teaches nothing: "zero tests had ever driven the awk against the two-line shape" was
+refuted by this record two sections earlier (exactly one had, and it asserted the bug), and
+"the three tests all stayed green" was false in the one direction that mattered — `:251` went
+**red**, caught by the derived counter, and the mechanism the record gave applied to only one
+of the three. The lens also found the suite delta reporting a green suite for a commit that is
+red, and a "five-for-five" tally over a four-item list.
+
+#### The guards lens: 15 of 28 killed — 54%, against this phase's author-side 25/25
+
+An independently designed 32-row battery. **All 13 survivors applied simultaneously left the
+full suite byte-identical to baseline**, which is the number that matters: not one of them was
+caught by any test anywhere in the repo. Closed this round, each mutation-verified after the
+fix:
+
+- **The near-miss fix was incomplete in a third position.** `nmnr` only ever fires while a
+  task is pending, so a `> Fail:` **detached** from any task — after a blank line, after a
+  heading, before any task — produced no evidence at all, while a well-formed `> Failed:` in
+  that same position produced ORPHAN. The previous round fix had claimed both directions
+  closed. A `STRAY` verdict now reports the line as both unrecognised and attached to nothing.
+- **The three new doc clauses were satisfied by a document asserting the exact opposite.** The
+  round replaced the isolation block with a paragraph inverting every claim — mechanism,
+  remedy, and the reviewer-side rule — and the gate stayed green, because all three checks
+  were `re.search` over keywords and a sentence *denying* the mechanism contains them too.
+  This phase's own commit had called that guard "raised, not loosened… all three clauses
+  mutation-checked, all kill": the mutations tested **deletion** and never **reversal**. It is
+  rule 1's own "a check satisfied by a substring is satisfied by an incidental use of that
+  substring — worse than a gap, because it marks a dangerous line compliant", in a guard
+  written to enforce rule 1. The checks now pin the *direction* of the claim, which a reversal
+  cannot satisfy without swapping its operands, plus a retraction canary.
+- **Both summary counters were indistinguishable from the constant `1`** — every assertion on
+  both used the value 1, in a line that exists precisely because per-line warnings scroll and
+  a summary does not.
+- **A vacuous assertion**: `test_run_checks_semgrep.py` asserted the recovery warning was
+  absent from the stderr of a function containing no `print`. Correspondingly nothing pinned
+  that the warning is ever *emitted* — only the machine-readable `DEGRADED` record was.
+- **`_inside_git_repo`'s comparison was untested**, only its `.strip()`: the existing negative
+  case is a plain directory where git prints nothing, so `bool(lines)` alone passed. A bare
+  repo answers `false` and is the reachable divergence.
+- **`is_open_task` accepting `- [x]`** re-counts a finished task as newly closed, drifting the
+  Grand Total by one per close, silently.
+
+**One claim of mine the lens refuted rather than confirmed.** This record said the two "never
+remove the main worktree" guards were ones "git backstops". Driven end to end, that is wrong
+and the wrong way round: without the guard the release does not fall through to git's refusal
+and continue — it **aborts with exit 1 and a wrong diagnosis** ("uncommitted changes?"), and
+leaves the lock in place. The guard prevents a failed release, not a cosmetic error.
+
+**Filed, not fixed** (live paths, but each is its own change): `BATCH_END`'s
+`+ offset_end - 1` carries the identical failure signature to the `wc -l` defect this phase
+fixed one line away, and is unguarded; the block rule means a task body that *quotes* a prior
+`> Failed:` can never close, which is loud rather than silent but pinned nowhere; and
+`- [ ]` with no text is counted by `COUNTED_TASK_RE` and not by `UNFINISHED_TASK_RE`.
+
+**What the round did not reach:** no lens ran `cut_public_release.sh` or the mirror gates, so
+the 196–198 push is unverified until it happens; the `Q-187` guards are macOS-only by
+construction and were therefore exercised on no Linux host, including CI; and lens 3's own
+battery is unprobed on its kills, so its 15 kills are wiring evidence exactly as this phase's
+25 were.

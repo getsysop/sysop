@@ -457,7 +457,7 @@ def test_real_semgrep_scans_the_test_tree_that_the_directory_operand_dropped(tmp
         "traceless, which was the whole reason this needed a state of its own"
     )
 
-    targets, dropped = semgrep_mod._default_ignored_targets(str(repo), "nope")
+    targets, dropped, _failed = semgrep_mod._default_ignored_targets(str(repo), "nope")
     assert dropped == 0
     assert [os.path.relpath(t, str(repo)) for t in targets] == ["tests/t_bad.py"]
 
@@ -583,7 +583,7 @@ def test_semgrep_is_present_wherever_the_suite_is_the_merge_gate():
     `skipif(shutil.which("semgrep") is None)`, because the defect lives in
     semgrep's target discovery and no mock reproduces it. Phase 196's review round
     measured what that costs when semgrep is absent: with the ENTIRE recovery
-    disabled (`_default_ignored_targets` returning `[], 0` immediately), the suite
+    disabled (`_default_ignored_targets` returning `[], 0, False` immediately), the suite
     was **bit-identical to the baseline** — 45/3341/20 in both cells — so the
     required `pytest` check passed over a switched-off feature.
 
@@ -621,7 +621,7 @@ def test_a_partly_parsed_and_over_budget_run_reports_both(tmp_path):
     with patch("run_checks.semgrep.subprocess.run",
                side_effect=_semgrep_run_stub(_completed(payload))), \
          patch("run_checks.semgrep._default_ignored_targets",
-               return_value=([], 7)):
+               return_value=([], 7, False)):
         semgrep_mod._run_semgrep(str(tmp_path), {"semgrep-x": {"id": "semgrep-x"}}, r)
     rec = r._records["semgrep-x"]
     assert rec.status == DEGRADED, rec.status
@@ -632,3 +632,156 @@ def test_a_partly_parsed_and_over_budget_run_reports_both(tmp_path):
     assert "7 test file(s) omitted" in detail, (
         f"the budget shortfall vanished from the combined record: {detail}")
     assert rec.reason == "partial-parse", rec.reason
+
+
+# === Phase 198 (`Q-184`): the two ways git can fail to answer ==============
+#
+# `_default_ignored_targets` returned `[], 0` whenever `_git_lines` came back
+# None — a bare directory, git absent, a timeout, a corrupted index, any nonzero
+# exit — with NO warning. `over_budget == 0` then skipped both the warn and the
+# DEGRADED branch, and the stage recorded `executed` over a population it could
+# not enumerate. `git grep _git_lines -- tests/` returned nothing before this,
+# so the whole path shipped unguarded.
+#
+# What the fix does NOT claim: `repo_root` is passed as a semgrep operand
+# unconditionally, so a failed recovery produces byte-identical argv to the
+# pre-recovery whole-tree scan and changes no scanned file. The lost population
+# is the supplementary test files the default ignore list hides — nothing more.
+
+
+# Same value `_run_semgrep` passes; defined locally so this module stays
+# independent of test_run_checks_semgrep_targets.py, which skips wholesale
+# when semgrep is absent — these tests need neither semgrep nor its skip.
+Q184_FIXTURES_EXCLUDE = os.path.join(".claude", "semgrep", "fixtures")
+
+
+def _corrupt_the_index(repo):
+    (repo / ".git" / "index").write_bytes(b"not a git index at all")
+
+
+def test_a_non_git_directory_is_silent_and_not_degraded(tmp_path, capsys):
+    """The benign half. There is nothing to enumerate outside a repo, the bare
+    directory operand is exactly right, and a warning here would fire forever
+    for every consumer who is not using git."""
+    targets, dropped, failed = semgrep_mod._default_ignored_targets(
+        str(tmp_path), Q184_FIXTURES_EXCLUDE)
+    assert (targets, dropped, failed) == ([], 0, False)
+    # NOT a stderr assertion on this function — it contains no `print`, so the
+    # original form here was vacuous by construction (the round caught it). The
+    # warning is emitted by `_run_semgrep`, and the two tests below drive that.
+    assert capsys.readouterr().err == ""
+
+
+def test_a_corrupted_index_reports_recovery_failure(tmp_path):
+    """The true half. git ANSWERS here — this is a real work tree — and the
+    enumeration fails anyway."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "-c", "init.defaultBranch=main", "init", "-q", str(repo)],
+                   check=True, capture_output=True)
+    _corrupt_the_index(repo)
+
+    targets, dropped, failed = semgrep_mod._default_ignored_targets(
+        str(repo), Q184_FIXTURES_EXCLUDE)
+    assert targets == []
+    assert dropped == 0
+    assert failed is True, "a git failure inside a real repo must be distinguishable"
+
+
+def test_a_root_semgrepignore_is_a_deliberate_disable_not_a_failure(tmp_path):
+    """The third early return shares the shape and must NOT report failure — a
+    consumer who configured `.semgrepignore` did so on purpose."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "-c", "init.defaultBranch=main", "init", "-q", str(repo)],
+                   check=True, capture_output=True)
+    (repo / ".semgrepignore").write_text("tests/\n")
+
+    assert semgrep_mod._default_ignored_targets(str(repo), Q184_FIXTURES_EXCLUDE) == \
+        ([], 0, False)
+
+
+def test_inside_git_repo_discriminates_the_two_states(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "-c", "init.defaultBranch=main", "init", "-q", str(repo)],
+                   check=True, capture_output=True)
+    assert semgrep_mod._inside_git_repo(str(repo)) is True
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    assert semgrep_mod._inside_git_repo(str(plain)) is False
+
+
+def test_a_failed_recovery_records_degraded_not_executed(tmp_path):
+    """The status is the point. `executed` over a population the stage could not
+    enumerate is a status that does not mean what it says."""
+    _semgrep_dir(tmp_path)
+    payload = json.dumps({"results": [], "paths": {"scanned": ["a.py"], "skipped": []}})
+    r = RunReport([{"id": "semgrep-x"}])
+    with patch("run_checks.semgrep.subprocess.run",
+               side_effect=_semgrep_run_stub(_completed(payload))), \
+         patch("run_checks.semgrep._default_ignored_targets",
+               return_value=([], 0, True)):
+        semgrep_mod._run_semgrep(str(tmp_path), {"semgrep-x": {"id": "semgrep-x"}}, r)
+    rec = r._records["semgrep-x"]
+    assert rec.status == DEGRADED, rec.status
+    assert rec.reason == "targets-unenumerable", rec.reason
+    detail = rec.detail or ""
+    assert "whole-tree scan itself ran normally" in detail, detail
+
+
+def test_a_clean_recovery_still_records_executed(tmp_path):
+    """The negative control. If `degraded` fires on a healthy run the status has
+    stopped carrying information."""
+    _semgrep_dir(tmp_path)
+    payload = json.dumps({"results": [], "paths": {"scanned": ["a.py"], "skipped": []}})
+    r = RunReport([{"id": "semgrep-x"}])
+    with patch("run_checks.semgrep.subprocess.run",
+               side_effect=_semgrep_run_stub(_completed(payload))), \
+         patch("run_checks.semgrep._default_ignored_targets",
+               return_value=([], 0, False)):
+        semgrep_mod._run_semgrep(str(tmp_path), {"semgrep-x": {"id": "semgrep-x"}}, r)
+    assert r._records["semgrep-x"].status == EXECUTED
+
+
+def test_the_operator_sees_a_warning_when_the_recovery_fails(tmp_path, capsys):
+    """`if recovery_failed:` could be deleted with the suite green: only the
+    DEGRADED *record* was pinned, never the human-facing line. A status field an
+    operator never reads is not the loudness this was built for."""
+    _semgrep_dir(tmp_path)
+    payload = json.dumps({"results": [], "paths": {"scanned": ["a.py"], "skipped": []}})
+    r = RunReport([{"id": "semgrep-x"}])
+    with patch("run_checks.semgrep.subprocess.run",
+               side_effect=_semgrep_run_stub(_completed(payload))), \
+         patch("run_checks.semgrep._default_ignored_targets",
+               return_value=([], 0, True)):
+        semgrep_mod._run_semgrep(str(tmp_path), {"semgrep-x": {"id": "semgrep-x"}}, r)
+    err = capsys.readouterr().err
+    assert "git could not enumerate this repository" in err, err
+    # And it must not overclaim: the directory operand is unconditional, so the
+    # scan itself is unaffected and the text has to say so.
+    assert "whole-tree scan itself is unaffected" in err, err
+
+
+def test_no_warning_when_the_recovery_succeeds(tmp_path, capsys):
+    """The negative control — a warning that fires on every run gets ignored."""
+    _semgrep_dir(tmp_path)
+    payload = json.dumps({"results": [], "paths": {"scanned": ["a.py"], "skipped": []}})
+    r = RunReport([{"id": "semgrep-x"}])
+    with patch("run_checks.semgrep.subprocess.run",
+               side_effect=_semgrep_run_stub(_completed(payload))), \
+         patch("run_checks.semgrep._default_ignored_targets",
+               return_value=([], 0, False)):
+        semgrep_mod._run_semgrep(str(tmp_path), {"semgrep-x": {"id": "semgrep-x"}}, r)
+    assert "git could not enumerate" not in capsys.readouterr().err
+
+
+def test_inside_git_repo_rejects_a_non_true_answer(tmp_path):
+    """The negative half of the discriminator was untested: the existing test's
+    negative case is a plain directory, where git prints NOTHING, so `bool(lines)`
+    alone passes and the `== "true"` comparison was never exercised. A bare repo
+    answers `false` — a real reachable divergence."""
+    bare = tmp_path / "bare.git"
+    subprocess.run(["git", "init", "-q", "--bare", str(bare)],
+                   check=True, capture_output=True)
+    assert semgrep_mod._inside_git_repo(str(bare)) is False

@@ -135,7 +135,7 @@ def _rel_targets(repo, exclude_rel=None):
     in `test_d_the_bundled_fixtures_stay_excluded` — a self-inflicted false positive
     that this helper exists to make unavailable.
     """
-    targets, dropped = semgrep_mod._default_ignored_targets(
+    targets, dropped, _failed = semgrep_mod._default_ignored_targets(
         repo, exclude_rel if exclude_rel is not None else FIXTURES_EXCLUDE)
     return [os.path.relpath(t, repo) for t in targets], dropped
 
@@ -212,9 +212,9 @@ def test_a_relative_repo_root_from_another_cwd_keeps_todays_path_shape(tmp_path)
     repo = _corpus(str(tmp_path / "r"))
     abs_rels, _, _ = _scan(repo)
     # every operand carries the same shape as repo_root
-    targets, _ = semgrep_mod._default_ignored_targets(repo, FIXTURES_EXCLUDE)
+    targets, _, _f = semgrep_mod._default_ignored_targets(repo, FIXTURES_EXCLUDE)
     assert targets and all(os.path.isabs(t) for t in targets)
-    rel_targets, _ = semgrep_mod._default_ignored_targets(".", FIXTURES_EXCLUDE)
+    rel_targets, _, _f = semgrep_mod._default_ignored_targets(".", FIXTURES_EXCLUDE)
     assert rel_targets == [] or all(not os.path.isabs(t) for t in rel_targets)
     # no finding escapes as an absolute path or climbs out of the repo
     for rel in abs_rels:

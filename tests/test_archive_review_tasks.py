@@ -183,6 +183,32 @@ def test_build_archive_block_emits_details_summary_per_round():
     assert "<summary>1/1 tasks completed</summary>" in block
 
 
+def test_build_archive_block_summary_is_done_over_total_not_total_over_total():
+    # `{total}/{total}` was tautological — it could not report anything but
+    # completeness, so a round carrying a `> Failed:` task archived as
+    # "3/3 tasks completed" over a block visibly containing an open box.
+    rounds = [{
+        "header": "## Round 12 — 2026-05-02",
+        "batches": [{
+            "lines": [
+                "### Batch 700 — X `Merged`",
+                "- [x] **TASK-700**: a",
+                "- [x] **TASK-701**: b",
+                "- [x] **TASK-702**: c",
+                "- [ ] **TASK-703**: failed thing",
+                "  > Failed: out of scope for this batch",
+                "",
+            ],
+            "task_count": 3,
+        }],
+    }]
+    block = art.build_archive_block(rounds)
+    assert "<summary>3/4 tasks completed</summary>" in block, block
+    # And the open task's text still travels with it.
+    assert "- [ ] **TASK-703**: failed thing" in block
+    assert "  > Failed: out of scope for this batch" in block
+
+
 def test_build_archive_block_inserts_separator_between_multiple_rounds():
     rounds = [
         {
@@ -238,17 +264,109 @@ def test_build_archive_block_strips_trailing_blank_lines_per_batch():
 
 
 def test_build_grand_total_row_renders_batch_range():
+    # The fixture carries REAL task lines. It used to declare `task_count: 3`
+    # over a `lines` list holding no tasks at all, which is why this test stayed
+    # green through the whole life of the tautology it was pinning: the row was
+    # `| {total} | {total} | 0 | Complete |`, so it reported completeness by
+    # construction and no fixture could make it say otherwise.
     rounds = [{
         "header": "## Round 14 — 2026-05-03",
         "batches": [
-            {"lines": ["### Batch 50 — A `Merged`"], "task_count": 3},
-            {"lines": ["### Batch 52 — B `Merged`"], "task_count": 1},
+            {
+                "lines": [
+                    "### Batch 50 — A `Merged`",
+                    "- [x] **TASK-1**: a",
+                    "- [x] **TASK-2**: b",
+                    "- [x] **TASK-3**: c",
+                ],
+                "task_count": 3,
+            },
+            {
+                "lines": ["### Batch 52 — B `Merged`", "- [x] **TASK-4**: d"],
+                "task_count": 1,
+            },
         ],
     }]
     rows = art.build_grand_total_row(rounds)
     assert len(rows) == 1
     assert "Round 14 (Batches 50-52)" in rows[0]
     assert "| 4 | 4 | 0 | Complete |" in rows[0]
+
+
+def test_build_grand_total_row_reports_partial_when_a_task_is_open():
+    # The defect: close_batch.sh deliberately leaves a `> Failed:` task unflipped,
+    # so a `Merged` batch can legitimately hold an open task — and this row
+    # counted only `[x]` lines, which did not miscount the open task so much as
+    # remove it from the denominator. A 4-task batch archived as `4 | 4 | Complete`.
+    rounds = [{
+        "header": "## Round 14 — 2026-05-03",
+        "batches": [{
+            "lines": [
+                "### Batch 50 — A `Merged`",
+                "- [x] **TASK-1**: a",
+                "- [x] **TASK-2**: b",
+                "- [x] **TASK-3**: c",
+                "- [ ] **TASK-4**: failed thing",
+                "  > Failed: needs a cross-module signature change",
+            ],
+            "task_count": 3,
+        }],
+    }]
+    rows = art.build_grand_total_row(rounds)
+    assert "| 4 | 3 | 0 | Partial |" in rows[0], rows[0]
+
+
+def test_build_grand_total_row_counts_an_in_progress_task_as_open():
+    # `/auto-judge` says "leave the checkbox exactly as you found it", so `[/]`
+    # is a first-class FAIL state and belongs in the denominator too.
+    rounds = [{
+        "header": "## Round 14",
+        "batches": [{
+            "lines": [
+                "### Batch 50 — A `Merged`",
+                "- [x] **TASK-1**: a",
+                "- [/] **TASK-2**: claimed then failed",
+            ],
+            "task_count": 1,
+        }],
+    }]
+    rows = art.build_grand_total_row(rounds)
+    assert "| 2 | 1 | 0 | Partial |" in rows[0], rows[0]
+
+
+def test_the_ratio_uses_one_definition_of_a_task_line():
+    # Both halves come from the same pattern. Taking the numerator from TASK_RE
+    # (which requires `**TASK-N**`) and the denominator from COUNTED_TASK_RE
+    # (which does not) reported a finished round as `0/1 ... Partial`.
+    # `- [x] task one` is a shape close_batch.sh treats as a real task.
+    rounds = [{
+        "header": "## Round 14",
+        "batches": [{
+            "lines": ["### Batch 50 — A `Merged`", "- [x] task one"],
+            "task_count": 0,
+        }],
+    }]
+    assert art.count_round_tasks(rounds[0]) == (1, 1)
+    assert "| 1 | 1 | 0 | Complete |" in art.build_grand_total_row(rounds)[0]
+
+
+def test_an_indented_sub_bullet_is_not_counted_as_a_task():
+    # An `- [ ] **Acceptance**:` criterion inside a task body is indented, and
+    # is not a task to close_batch.sh either. Counting it would inflate the
+    # denominator and mark finished rounds `Partial` forever.
+    rounds = [{
+        "header": "## Round 14",
+        "batches": [{
+            "lines": [
+                "### Batch 50 — A `Merged`",
+                "- [x] **TASK-1**: a",
+                "  - [ ] **Acceptance**: the criterion under it",
+            ],
+            "task_count": 1,
+        }],
+    }]
+    assert art.count_round_tasks(rounds[0]) == (1, 1)
+    assert "| 1 | 1 | 0 | Complete |" in art.build_grand_total_row(rounds)[0]
 
 
 def test_build_grand_total_row_falls_back_when_no_batch_numbers():
@@ -276,6 +394,28 @@ def test_update_archive_total_bumps_totals():
     assert "**105**" in lines[1]
     # Deferred preserved
     assert "**5**" in lines[1]
+
+
+def test_update_archive_total_takes_different_deltas_for_total_and_completed():
+    # The two columns are different quantities. Applying ONE delta to both is
+    # how the running total inherited the same tautology the per-round rows had:
+    # archiving a round with an open task raised Completed as if it were done.
+    lines = [
+        "| **Archive Total** | **100** | **95** | **5** |  |",
+    ]
+    old, new = art.update_archive_total(lines, 10, 9)
+    assert (old, new) == (100, 110)
+    assert "**110**" in lines[0]
+    assert "**104**" in lines[0], lines[0]
+    assert "**5**" in lines[0]
+
+
+def test_update_archive_total_defaults_completed_to_total():
+    # The fully-complete run is the common case and must not need the argument.
+    lines = ["| **Archive Total** | **100** | **95** | **5** |  |"]
+    art.update_archive_total(lines, 10)
+    assert "**110**" in lines[0]
+    assert "**105**" in lines[0]
 
 
 def test_update_archive_total_returns_none_when_row_absent():
@@ -838,3 +978,151 @@ def test_unbolded_open_task_is_detected(tmp_path):
     assert r.returncode == 0, r.stderr
     assert "1 task(s) in these batches are still open" in r.stdout, r.stdout
     assert "plain unbolded failed thing" in r.stdout, r.stdout
+
+
+# === Phase 198: the archive's own arithmetic ===============================
+#
+# The warning above was correct and the document it introduced was not. The
+# `<summary>N/M</summary>` line and the Grand Total row both used `total_tasks`
+# on BOTH sides, so they asserted completeness by construction — a 4-task batch
+# holding one `> Failed:` task archived as `3/3 tasks completed` and `Complete`.
+# The open task was not miscounted; it was removed from the denominator.
+#
+# This is the end-to-end check: not the builders in isolation, but the artifact
+# a consumer actually opens after a real run.
+
+
+def test_the_written_archive_reports_the_open_task_in_its_arithmetic(
+    tmp_path, monkeypatch
+):
+    review = tmp_path / "review_tasks.md"
+    archive = tmp_path / "review_tasks_archive.md"
+    review.write_text(
+        "# Review Tasks\n\n"
+        "> **Archive:** Rounds 1-4 (200 tasks) are in "
+        "[review_tasks_archive.md](review_tasks_archive.md).\n\n"
+        "## Round 6 (2026-08-13) — Code Quality Review\n\n"
+        "### Batch 30 — Mixed verdicts `Merged`\n\n"
+        "- [x] **TASK-301**: fixed thing\n"
+        "- [x] **TASK-302**: another fixed thing\n"
+        "- [ ] **TASK-303**: failed thing\n"
+        "  > Failed: needs a cross-module signature change\n\n"
+        "## Statistics\n\ntext\n",
+        encoding="utf-8",
+    )
+    archive.write_text(
+        "# Review Tasks Archive\n\n## Grand Total (Archived)\n\n"
+        "| Round | Total | Done | Deferred | Status |\n"
+        "|-------|-------|------|----------|--------|\n"
+        "| **Archive Total** | **200** | **200** | **0** | |\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(art, "REVIEW_FILE", str(review))
+    monkeypatch.setattr(art, "ARCHIVE_FILE", str(archive))
+    monkeypatch.setattr(sys, "argv", ["archive_review_tasks.py"])
+    monkeypatch.setattr("builtins.input", lambda _prompt: "y")
+    import review_index
+    monkeypatch.setattr(review_index, "rebuild_index", lambda: None)
+
+    art.main()
+
+    written = archive.read_text(encoding="utf-8")
+    # The fold's own summary tells the truth about the block beneath it.
+    assert "<summary>2/3 tasks completed</summary>" in written, written
+    # The Statistics row says so too, and does not claim `Complete`.
+    assert "| 3 | 2 | 0 | Partial |" in written, written
+    assert "| 3 | 3 | 0 | Complete |" not in written
+    # The open task travelled with its annotation.
+    assert "- [ ] **TASK-303**: failed thing" in written
+    assert "> Failed: needs a cross-module signature change" in written
+    # And the running total moved by different amounts on the two columns:
+    # +3 total, +2 completed. One delta applied to both is the same tautology
+    # one level up.
+    assert "| **Archive Total** | **203** | **202** | **0** |" in written, written
+
+
+def test_a_fully_complete_round_still_writes_complete(tmp_path, monkeypatch):
+    """The negative control. If `Partial` fires on a clean round, the status
+    column has stopped carrying information — the failure direction that would
+    make an operator ignore it."""
+    review = tmp_path / "review_tasks.md"
+    archive = tmp_path / "review_tasks_archive.md"
+    review.write_text(
+        "# Review Tasks\n\n"
+        "> **Archive:** Rounds 1-4 (200 tasks) are in "
+        "[review_tasks_archive.md](review_tasks_archive.md).\n\n"
+        "## Round 6 (2026-08-13) — Code Quality Review\n\n"
+        "### Batch 30 — All done `Merged`\n\n"
+        "- [x] **TASK-301**: fixed thing\n"
+        "- [x] **TASK-302**: another fixed thing\n\n"
+        "## Statistics\n\ntext\n",
+        encoding="utf-8",
+    )
+    archive.write_text(
+        "# Review Tasks Archive\n\n## Grand Total (Archived)\n\n"
+        "| Round | Total | Done | Deferred | Status |\n"
+        "|-------|-------|------|----------|--------|\n"
+        "| **Archive Total** | **200** | **200** | **0** | |\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(art, "REVIEW_FILE", str(review))
+    monkeypatch.setattr(art, "ARCHIVE_FILE", str(archive))
+    monkeypatch.setattr(sys, "argv", ["archive_review_tasks.py"])
+    monkeypatch.setattr("builtins.input", lambda _prompt: "y")
+    import review_index
+    monkeypatch.setattr(review_index, "rebuild_index", lambda: None)
+
+    art.main()
+
+    written = archive.read_text(encoding="utf-8")
+    assert "<summary>2/2 tasks completed</summary>" in written, written
+    assert "| 2 | 2 | 0 | Complete |" in written, written
+    assert "Partial" not in written, written
+    assert "| **Archive Total** | **202** | **202** | **0** |" in written, written
+
+
+def test_the_per_batch_breakdown_sums_to_the_total_it_is_printed_with(
+    tmp_path, monkeypatch, capsys
+):
+    """The round's operator-facing finding, and a regression this phase caused.
+
+    The per-batch lines kept reading `task_count` (TASK_RE, `[x]`-only) while the
+    total moved to `count_round_tasks`, so a batch whose only task was OPEN
+    printed `0 tasks` and still counted 1 toward the `Archive N tasks?` prompt
+    directly beneath it. Two numbers about the same set, disagreeing, immediately
+    before the decision they inform — this phase's own subject one layer up.
+    """
+    review = tmp_path / "review_tasks.md"
+    review.write_text(
+        "# Review Tasks\n\n"
+        "> **Archive:** Rounds 1 are in "
+        "[review_tasks_archive.md](review_tasks_archive.md).\n\n"
+        "## Round 2 (2026-08-13) — Mixed\n\n"
+        "### Batch 1 — All done `Merged`\n\n"
+        "- [x] **TASK-1**: a\n"
+        "- [x] **TASK-2**: b\n\n"
+        "### Batch 2 — One open `Merged`\n\n"
+        "- [ ] **TASK-3**: failed thing\n"
+        "  > Failed: reason\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(art, "REVIEW_FILE", str(review))
+    monkeypatch.setattr(art, "ARCHIVE_FILE", str(tmp_path / "review_tasks_archive.md"))
+    monkeypatch.setattr(sys, "argv", ["archive_review_tasks.py", "--dry-run"])
+
+    art.main()
+
+    out = capsys.readouterr().out
+    per_batch = [
+        int(m.group(1))
+        for m in re.finditer(r"^    .*?: (\d+) tasks", out, re.MULTILINE)
+    ]
+    total_m = re.search(r"^Total: (\d+) tasks", out, re.MULTILINE)
+    assert total_m, out
+    assert per_batch, out
+    assert sum(per_batch) == int(total_m.group(1)), (
+        f"per-batch lines sum to {sum(per_batch)} but the total says "
+        f"{total_m.group(1)}:\n{out}"
+    )
+    # And the open one is named as open, not silently folded into the count.
+    assert "(1 open)" in out, out

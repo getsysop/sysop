@@ -254,10 +254,67 @@ def section_problems(section: str) -> list[str]:
         missing = [s for s in PRE_EXISTING_WORKTREE_SKILLS if f"/{s}" not in section]
         if missing:
             problems.append(f"carve-out no longer names the affected skills: {missing}")
-        if not re.search(r"does not guarantee the revision", section, re.I):
+        # The wrong-revision warning. Phase 198 replaced the original sentence
+        # ("does not guarantee the revision you expect") with a stronger and more
+        # accurate one, so this accepts either wording — but it is NOT loosened:
+        # the two clauses below were added at the same time and raise the floor.
+        # An isolated worktree comes from the DEFAULT BRANCH, not the spawning
+        # session's HEAD, so under a `pr` merge policy every reviewer gets the
+        # pre-phase tree deterministically. The old wording called that
+        # non-determinism, and a warning framed as bad luck can only ask for
+        # vigilance.
+        if not re.search(r"does not guarantee the revision|does not give you the branch",
+                         section, re.I):
             problems.append(
                 "isolation rule no longer warns that it can hand you the wrong revision"
             )
+        # A warning with no remedy is the state Phase 198 found this rule in: the
+        # accident was on record, and it happened again anyway because nothing
+        # told the SPAWNER what to do about it.
+        #
+        # DIRECTIONAL, not keyword. The first version of these three checks was
+        # `re.search("default branch")` and `re.search("--detach|throwaway
+        # clone")`, and this phase's own round defeated all three at once with a
+        # replacement paragraph that INVERTED every claim — "created from the
+        # spawning session's HEAD, **not** from the repository's default branch…
+        # `--detach <sha>` and the throwaway clone recipe were both removed as
+        # cargo cult… Skip the check." Every keyword still present, gate green.
+        # That is rule 1's "a check satisfied by a substring is satisfied by an
+        # incidental use of that substring — worse than a gap, because it marks a
+        # dangerous line compliant", in a guard written to enforce rule 1.
+        #
+        # So the pattern below pins the DIRECTION of the claim (X, not Y), which
+        # a reversal cannot satisfy because it has to swap the operands.
+        if not re.search(
+            r"created from the repository.s \*\*default branch\*\*,?\s*not from",
+            section, re.I | re.S,
+        ):
+            problems.append(
+                "isolation rule no longer ASSERTS the mechanism in its load-bearing "
+                "direction (an isolated worktree is created from the default "
+                "branch, NOT from the spawning session's HEAD) — naming the words "
+                "is not enough, a sentence denying it contains them too"
+            )
+        if not re.search(r"--detach <sha>", section) or \
+           not re.search(r"throwaway clone", section, re.I):
+            problems.append(
+                "isolation rule no longer names BOTH spawner-side remedies "
+                "(`git worktree add --detach <sha>`, and a throwaway clone at a "
+                "tag) — reviewer-side vigilance alone only fires when the brief "
+                "happens to ask for it"
+            )
+        # The retraction blacklist. Belt-and-braces with the directional pattern
+        # above: a future edit could satisfy the direction and still tell the
+        # reader to ignore it. These are the exact phrases the round's reversal
+        # used, kept as a canary rather than as an exhaustive filter — the
+        # directional pattern is the real check.
+        for retraction in (r"is a myth", r"cargo cult", r"skip the check",
+                           r"no spawner-side pin is needed"):
+            if re.search(retraction, section, re.I):
+                problems.append(
+                    f"isolation rule contains a retraction of its own remedy "
+                    f"({retraction!r}) — the rule and its negation cannot both ship"
+                )
     return problems
 
 

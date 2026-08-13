@@ -506,9 +506,14 @@ if [[ "${1:-}" == "--release" ]]; then
     echo "❌ Could not resolve the main repo root — refusing to release from an unknown checkout." >&2
     exit 1
   fi
+  # `-ef` (same device+inode), NOT a string compare: `pwd -P` resolves symlinks
+  # but not CASE, and `REPO_ROOT` carries the on-disk spelling while
+  # `REL_MAIN_ROOT` carries the spelling the caller entered. On a
+  # case-insensitive filesystem the two reach the same directory and compare
+  # unequal, which refused a legitimate release FROM the main checkout.
   REL_MAIN_REAL="$(cd "$REL_MAIN_ROOT" && pwd -P 2>/dev/null)" || REL_MAIN_REAL="$REL_MAIN_ROOT"
   REL_HERE_REAL="$(cd "$REPO_ROOT" && pwd -P 2>/dev/null)" || REL_HERE_REAL="$REPO_ROOT"
-  if [[ "$REL_HERE_REAL" != "$REL_MAIN_REAL" ]]; then
+  if [[ ! "$REL_HERE_REAL" -ef "$REL_MAIN_REAL" ]]; then
     echo "❌ --release must run from the main checkout, not a worktree." >&2
     echo "   here: ${REL_HERE_REAL}" >&2
     echo "   main: ${REL_MAIN_REAL}" >&2
@@ -618,7 +623,12 @@ if [[ "${1:-}" == "--release" ]]; then
     if REL_WT="$(find_worktree_for_branch "$REL_BRANCH")"; then
       REL_WT_REAL="$( { cd "$REL_WT" && pwd -P; } 2>/dev/null || echo "$REL_WT" )"
       # `REL_MAIN_REAL` was resolved by the main-checkout guard above.
-      if [[ "$REL_WT_REAL" == "$REL_MAIN_REAL" ]]; then
+      # `-ef`, not `==` — a case-divergent spelling would make this
+      # "never remove the main worktree" guard MISS, which is the direction
+      # that fails open. (git refuses to remove a main working tree, so it is
+      # the backstop; a guard whose whole job is not reaching that error should
+      # not depend on it.)
+      if [[ "$REL_WT_REAL" -ef "$REL_MAIN_REAL" ]]; then
         echo "⚠️  Branch ${REL_BRANCH} is checked out in the main worktree — not removing it."
       elif $RELEASE_FORCE; then
         if ! git worktree remove --force "$REL_WT_REAL"; then

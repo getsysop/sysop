@@ -123,6 +123,33 @@ resolve_yaml_python() {
   command -v python3 >/dev/null 2>&1 && python3 -c "import yaml" >/dev/null 2>&1
 }
 
+# ── Path containment (case-safe) ─────────────────────────────
+# True when the current directory IS $1 or sits underneath it.
+#
+# The obvious form — `[[ "$CWD" == "$DIR" || "$CWD" == "$DIR"/* ]]` — is a
+# STRING test, and `pwd -P` resolves symlinks but not case. Two spellings that
+# differ only in case reach the same directory on any case-insensitive
+# filesystem (every default macOS install: `~/projects/repo` vs the on-disk
+# `~/Projects/repo`), so the test says "not inside" while you are standing in
+# it. That is the direction that fails open: the caller then removes the
+# worktree the operator is currently in.
+#
+# `-ef` compares device+inode, which is what "the same directory" actually
+# means, but it cannot express a prefix — so walk up from the cwd and ask the
+# question at each level. Bounded by the walk to `/`, and `dirname` of `/` is
+# `/`, so the loop terminates on the root as well.
+cwd_is_inside() {
+  local target="$1" d prev
+  [[ -n "$target" && -d "$target" ]] || return 1
+  d="$(pwd -P)"
+  while :; do
+    [[ "$d" -ef "$target" ]] && return 0
+    prev="$d"
+    d="$(dirname "$d")"
+    [[ "$d" == "$prev" ]] && return 1
+  done
+}
+
 # ── Entry state (read-only claim triage) ─────────────────────
 # Answers ONE question — "what happens if I claim <TASK_ID> right now?" — and
 # mutates nothing. It exists so the decision lives in testable, allow-ruled
@@ -372,10 +399,16 @@ if $RELEASE; then
   if [[ -n "$LOCK_WORKSPACE" && -d "$LOCK_WORKSPACE" ]]; then
     WS_REAL="$(cd "$LOCK_WORKSPACE" && pwd -P 2>/dev/null || echo "$LOCK_WORKSPACE")"
     MAIN_REAL="$(cd "$MAIN_REPO_ROOT" && pwd -P 2>/dev/null || echo "$MAIN_REPO_ROOT")"
-    CWD_REAL="$(pwd -P)"
-    if [[ "$WS_REAL" == "$MAIN_REAL" ]]; then
+    # `-ef` and `cwd_is_inside`, not string compares. `pwd -P` resolves symlinks
+    # but NOT case, and these three paths reach the shell from three different
+    # places — the lock file, `git rev-parse`, and the user's own `cd` — so on a
+    # case-insensitive filesystem two of them can name the same directory and
+    # compare unequal. Both guards below fail OPEN in that state: the first
+    # stops protecting the main worktree, and the second stops noticing that you
+    # are standing in the directory about to be removed.
+    if [[ "$WS_REAL" -ef "$MAIN_REAL" ]]; then
       echo "⚠️  Recorded workspace is the main worktree — refusing to remove it."
-    elif [[ "$CWD_REAL" == "$WS_REAL" || "$CWD_REAL" == "$WS_REAL"/* ]]; then
+    elif cwd_is_inside "$WS_REAL"; then
       echo "❌ You're inside the worktree being released (${WS_REAL})." >&2
       echo "   cd to the main checkout (${MAIN_REAL}) and re-run." >&2
       exit 1

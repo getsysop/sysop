@@ -184,8 +184,9 @@ def test_close_batch_recognises_the_marker_a_skill_writes():
 def test_close_batch_tolerates_the_forms_an_agent_actually_writes(variant):
     # Each of these silently closed the task before the round widened the
     # matcher. `> FAILED:` mattered most: all-caps FAILED is /auto-judge's own
-    # vocabulary at :300, :304 and :360 — everywhere except the one place the
-    # read side looked.
+    # vocabulary — `TASKS_FAILED:`, `FAILED —`, `Tasks Marked FAILED` —
+    # everywhere except the one place the read side looked. Named by token
+    # rather than by line number, which is what had drifted here.
     import subprocess
 
     prog = re.search(

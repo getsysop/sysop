@@ -194,6 +194,36 @@ UNFINISHED_TASK_RE = re.compile(
     r"^- \[[ /]\][ \t]*(?:\*\*(?P<bold>[^*\n]+)\*\*|(?P<plain>[^\n]+))"
 )
 
+# The DENOMINATOR regex — a third one, and deliberately not a reuse of either
+# above. Both existing patterns are wrong for arithmetic, in opposite directions,
+# and the report this fix answers (internal tracker #393) proposed the one that
+# fails in both:
+#
+#   * TASK_RE requires `**TASK-N**`, so `- [x] task one` — a shape close_batch.sh
+#     treats as a real task and legitimately holds open — is NOT counted.
+#   * UNFINISHED_TASK_RE is documented above as deliberately over-reporting
+#     ("for a warning, over-reporting beats missing one"). Promoting a
+#     deliberate over-reporter into a denominator makes the count wrong the
+#     other way, and tightening it in place would red the guard asserting it
+#     matches every line CLOSE_AWK holds open. Two consumers, two patterns.
+#
+# This one mirrors close_batch.sh's `is_open_task` (`^- [ ]` / `^- [/]`) plus the
+# `[x]` its flip produces, because the counter and the flipper MUST agree about
+# what a task line is — the same cross-file desync UNFINISHED_TASK_RE's own
+# comment describes. Matching is anchored at column 0, so an indented sub-bullet
+# (an `- [ ] **Acceptance**:` criterion inside a task body) is not a task here,
+# and is not one to close_batch.sh either.
+COUNTED_TASK_RE = re.compile(r"^- \[[ x/]\]")
+
+# The same notion of a task line, restricted to the done box. Both halves of the
+# ratio MUST come from one pattern: the first cut of this fix took the numerator
+# from TASK_RE (bold id required) and the denominator from COUNTED_TASK_RE (bold
+# id optional), so an unbolded `- [x] task one` counted in the denominator and
+# not the numerator, and a finished round reported itself `0/1 ... Partial`.
+# A ratio assembled from two different definitions is a new way to be wrong, not
+# a fix for the old one.
+COMPLETED_TASK_RE = re.compile(r"^- \[x\]")
+
 # Matches the archive reference line (line ~14)
 ARCHIVE_REF_RE = re.compile(
     r"^> \*\*Archive:\*\* Rounds .+ are in "
@@ -405,6 +435,28 @@ def parse_archivable_batches(lines):
     return archivable
 
 
+def count_round_tasks(r):
+    """(done, total) for one round, both derived from the same task lines.
+
+    Recomputed from each batch's captured lines rather than threaded through as
+    a new `task_count`-style dict key: a new required key would raise KeyError
+    in every hand-built fixture that constructs a batch dict, and the callers
+    that need these numbers are exactly the two builders below plus `main`.
+
+    `task_count` is deliberately NOT reused here. It comes from TASK_RE, which
+    requires `**TASK-N**` — fine for the per-batch progress line it feeds, wrong
+    for a ratio, because it silently drops a task whose id is not bolded.
+    """
+    done = total = 0
+    for b in r["batches"]:
+        for line in b["lines"]:
+            if COUNTED_TASK_RE.match(line):
+                total += 1
+                if COMPLETED_TASK_RE.match(line):
+                    done += 1
+    return done, total
+
+
 def build_archive_block(rounds):
     """Build the markdown block to insert into the archive file.
 
@@ -413,7 +465,7 @@ def build_archive_block(rounds):
     """
     blocks = []
     for idx, r in enumerate(rounds):
-        total_tasks = sum(b["task_count"] for b in r["batches"])
+        done_tasks, total_tasks = count_round_tasks(r)
 
         if idx > 0:
             blocks.append("---")
@@ -433,7 +485,12 @@ def build_archive_block(rounds):
             blocks.extend(line.rstrip("\n") for line in r["preamble"])
         blocks.append("")
         blocks.append("<details>")
-        blocks.append(f"<summary>{total_tasks}/{total_tasks} tasks completed</summary>")
+        # `done/total`, not `total/total`. The tautological form made the number
+        # unfalsifiable: a round carrying a `> Failed:` task archived as
+        # "3/3 tasks completed" while the block below it visibly held an open
+        # box, because the open task was not miscounted — it was removed from
+        # the denominator.
+        blocks.append(f"<summary>{done_tasks}/{total_tasks} tasks completed</summary>")
         blocks.append("")
 
         for b in r["batches"]:
@@ -454,7 +511,7 @@ def build_grand_total_row(rounds):
     """Build a new row for the Grand Total table in the archive."""
     rows = []
     for r in rounds:
-        total_tasks = sum(b["task_count"] for b in r["batches"])
+        done_tasks, total_tasks = count_round_tasks(r)
         batch_numbers = []
         for b in r["batches"]:
             # Extract batch number from first line
@@ -472,14 +529,31 @@ def build_grand_total_row(rounds):
         else:
             label = round_name
 
+        # Columns: | Round | Total | Completed | Deferred | Status |.
+        # `Completed` was the literal `total_tasks` and `Status` the literal
+        # `Complete`, so the row asserted completeness by construction — it could
+        # not report anything else. Deferred stays 0: a `> Failed:` task is open,
+        # not deferred, and mislabelling it would trade one wrong cell for
+        # another. `Partial` is what carries the fact that Total > Completed.
+        status = "Complete" if done_tasks == total_tasks else "Partial"
         rows.append(
-            f"| {label} | {total_tasks} | {total_tasks} | 0 | Complete |"
+            f"| {label} | {total_tasks} | {done_tasks} | 0 | {status} |"
         )
     return rows
 
 
-def update_archive_total(archive_lines, new_task_count):
-    """Update the Archive Total row with new counts."""
+def update_archive_total(archive_lines, new_task_count, new_completed_count=None):
+    """Update the Archive Total row with new counts.
+
+    `new_completed_count` defaults to `new_task_count` — the old behaviour, and
+    still the right one for a fully-completed archive run. It is separate
+    because the two columns are different quantities: adding a round that
+    carried an open task must raise Total by more than Completed, and applying
+    one delta to both was how the running total inherited the same tautology
+    the per-round rows had.
+    """
+    if new_completed_count is None:
+        new_completed_count = new_task_count
     for i, line in enumerate(archive_lines):
         if ARCHIVE_TOTAL_RE.match(line):
             # Parse existing totals
@@ -510,7 +584,7 @@ def update_archive_total(archive_lines, new_task_count):
             old_deferred = int(m_deferred.group())
 
             new_total = old_total + new_task_count
-            new_completed = old_completed + new_task_count
+            new_completed = old_completed + new_completed_count
 
             archive_lines[i] = (
                 f"| **Archive Total** | **{new_total}** | **{new_completed}** "
@@ -660,15 +734,26 @@ def main():
 
     # Summarize what we found
     total_tasks = 0
+    completed_tasks = 0
     all_batch_numbers = []
     unfinished = []
     for r in rounds:
-        round_tasks = sum(b["task_count"] for b in r["batches"])
-        total_tasks += round_tasks
+        round_done, round_total = count_round_tasks(r)
+        completed_tasks += round_done
+        total_tasks += round_total
         print(f"  {r['header'].lstrip('# ')}")
         for b in r["batches"]:
             batch_name = b["lines"][0].split("`")[0].strip("# ").strip()
-            print(f"    {batch_name}: {b['task_count']} tasks")
+            # Counted the SAME way as the total below it. This line used to read
+            # `task_count` (TASK_RE, `[x]`-only) while the total moved to
+            # count_round_tasks, so the per-batch breakdown summed to less than
+            # the `Archive N tasks?` prompt directly beneath it — a batch whose
+            # only task is open printed `0 tasks` and still counted 1. An
+            # operator-facing count that has drifted from the thing it describes
+            # is this phase's own subject, one layer up.
+            b_done, b_total = count_round_tasks({"batches": [b]})
+            suffix = f" ({b_total - b_done} open)" if b_total > b_done else ""
+            print(f"    {batch_name}: {b_total} tasks{suffix}")
             m = re.search(r"Batch (\d+)", b["lines"][0])
             if m:
                 all_batch_numbers.append(int(m.group(1)))
@@ -686,20 +771,25 @@ def main():
     # confirmation prompt it should inform.
     #
     # The task's TEXT survives — it moves to the archive with its annotation
-    # intact — but every COUNT around it does not: `task_count` (TASK_RE, `[x]`
-    # only) excludes it, so `build_archive_block` renders the round as
-    # "N/N tasks completed" and `build_grand_total_row` marks it `Complete`
-    # over a block visibly containing an open box. That is this phase's own
-    # thesis one layer up, and it is deliberately not fixed here — which is
-    # exactly why the warning has to fire before the prompt rather than
-    # trusting the archive to represent the state faithfully.
+    # intact — and so now do the COUNTS around it. This warning used to be the
+    # only honest number in the flow: `task_count` (TASK_RE, `[x]` only)
+    # excluded the open task, so `build_archive_block` rendered the round
+    # "N/N tasks completed" and `build_grand_total_row` marked it `Complete`
+    # over a block visibly containing an open box. Both now derive their
+    # denominator from COUNTED_TASK_RE and report `done/total` + `Partial`.
+    # The warning stays, and stays before the prompt: a correct number in a
+    # document nobody re-reads is not the same as being told at the moment of
+    # the decision that archiving moves live work out of the queue.
     if unfinished:
         # State only what is observable. An unflipped box in a merged batch is
-        # USUALLY a FAIL verdict, but not necessarily — `find_batch_range`'s
-        # `wc -l` fallback undercounts by one on a file with no trailing
-        # newline, which leaves the last task of the last batch unflipped with
-        # no verdict behind it. Naming a cause the tool cannot verify would make
-        # this warning assert a fabricated verdict.
+        # USUALLY a FAIL verdict, but not necessarily, and naming a cause the
+        # tool cannot verify would make this warning assert a fabricated
+        # verdict. (The specific alternate cause this comment used to name —
+        # `find_batch_range`'s `wc -l` fallback undercounting by one on a file
+        # with no trailing newline, leaving the last task unflipped with no
+        # verdict behind it — was fixed in close_batch.sh, which now derives
+        # the line count with `awk END{print NR}`. The reasoning still holds
+        # for causes nobody has found yet.)
         print(
             f"\n⚠️  {len(unfinished)} task(s) in these batches are still open. "
             "Archiving moves them out of the live queue:"
@@ -711,9 +801,9 @@ def main():
             "first if they should stay visible."
         )
         print(
-            "    Note: the archive's own `N/M tasks completed` summary and its "
-            "Statistics row count only `[x]` lines, so an archived round holding "
-            "these will read as fully complete."
+            "    Note: the archive will record them — its `N/M tasks completed` "
+            "summary counts them in M, and its Statistics row reads `Partial`. "
+            "It will not read as fully complete."
         )
 
     if args.dry_run:
@@ -783,7 +873,9 @@ def main():
     )
 
     # Find and update the Archive Total row (shifted by insertion)
-    old_total, new_total = update_archive_total(archive_lines, total_tasks)
+    old_total, new_total = update_archive_total(
+        archive_lines, total_tasks, completed_tasks
+    )
     if old_total is None:
         print("Warning: Could not find Archive Total row to update")
 

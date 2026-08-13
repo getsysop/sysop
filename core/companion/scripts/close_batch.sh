@@ -13,7 +13,8 @@
 #      Statistics table → Merged, Grand Total done/open counts adjusted
 #   3. Commits the changes
 #
-# A task carrying a `> Failed:` annotation on the following line is NOT closed:
+# A task carrying a `> Failed:` annotation anywhere in its own block is NOT closed
+# (the block is the task line plus the indented lines under it — see CLOSE_AWK):
 # its checkbox is left as-is and it is excluded from the batch's closed count
 # (and so from the Grand Total). A FAIL verdict means the task was attempted and
 # left unfinished, so closing it would make review_tasks.md overstate what the
@@ -42,16 +43,45 @@ fi
 # disagreed about what a failed task looks like, the totals would drift from the
 # file they describe — the exact class of defect this pass exists to prevent.
 #
-# awk rather than sed because the decision needs one line of LOOKAHEAD: a task
-# is left open when the NEXT line is its `> Failed:` annotation (the shape
-# /auto-judge writes, mirroring `> Dropped:`). The bold-tolerance is written
-# `[*][*]` rather than `\*\*` and the optional group avoids an interval
-# (`{0,2}`), both for BSD/mawk portability; verified byte-identical output
-# across one-true-awk 20200816, gawk 5.4.1 and mawk 1.3.4.
+# awk rather than sed because the decision needs LOOKAHEAD: a task is left open
+# when its `> Failed:` annotation appears anywhere in the block the task owns.
+#
+# THE BLOCK IS THE UNIT, and it took an upstream report to learn why. This pass
+# originally held exactly ONE line and required the annotation to be physically
+# next. But nobody writes one-line tasks: /codebase-review and /security-audit
+# both emit a task as a checkbox line PLUS a mandatory indented `file:line` +
+# provenance continuation (their § 5c Batch Format templates), and /auto-judge
+# then appends the annotation "immediately below the task" — which is two lines
+# below the checkbox, not one. So on the shape the shipped writers actually
+# emit, the protection could never fire: the task closed `[x]` with its own
+# failure note sitting underneath it. Six failed tasks closed that way in a
+# single reported round.
+#
+# The reader was also wrong about who to blame. The one-line shape was never
+# /auto-judge's — it is the TASK CREATORS who write two lines, and the comment
+# that used to attribute it to the annotator sent a fix at the wrong file.
+#
+# A task owns its checkbox line plus every INDENTED, non-blank line under it.
+# The block ends at a blank line, at any line starting in column 0 (the next
+# task bullet, a heading, ordinary prose), or at EOF. An annotation protects
+# the NEAREST PRECEDING task bullet within its block and reaches no further —
+# which is what keeps the old guarantee that a stray annotation cannot shield
+# some arbitrary task further up the file. `is_failed` is tested BEFORE the
+# block-end test so a column-0 annotation directly under a task still counts,
+# as it always did.
+#
+# The bold-tolerance is written `[*][*]` rather than `\*\*` and the optional
+# group avoids an interval (`{0,2}`), both for BSD/mawk portability; verified
+# byte-identical output across one-true-awk 20200816, gawk 5.4.1 and mawk 1.3.4.
 #
 # `s`/`e` are the batch's 1-indexed line range. Lines outside it pass through
-# untouched. A `> Failed:` line sitting one past `e` still counts, because only
-# the TASK line is range-checked.
+# untouched. Only the TASK line is range-checked, so a block that runs past `e`
+# still resolves — and it can now run several lines past, not one.
+#
+# Under `mode=flip` every input line is reprinted exactly once and in order.
+# The pending task and its buffered continuation lines are flushed in order the
+# moment the block resolves, and `END` flushes whatever is still pending;
+# nothing is dropped, reordered or coalesced.
 readonly CLOSE_AWK='
 function is_open_task(l) { return (l ~ /^- \[ \]/ || l ~ /^- \[\/\]/) }
 function is_failed(l) {
@@ -66,6 +96,12 @@ function is_failed(l) {
   # (No apostrophes in this block: it lives inside a single-quoted shell string.)
   return (tolower(l) ~ /^[[:space:]]*>[[:space:]]*[*_]*failed[*_]*[[:space:]]*:/)
 }
+function is_continuation(l) {
+  # An indented, non-blank line: part of the task above it. Column-0 lines are
+  # never continuations, which is what stops the block from running away into
+  # the next task, the next heading, or ordinary prose.
+  return (l ~ /^[[:space:]]/ && l !~ /^[[:space:]]*$/)
+}
 function looks_like_failed(l) {
   # A near miss: the annotation WORD starts with "fail" but the line did not
   # match — "> Fail:", "> Failure:", "> FAILED" with no colon. Anchored to the
@@ -75,35 +111,70 @@ function looks_like_failed(l) {
   # "I saw this and did not act on it".
   return (!is_failed(l) && tolower(l) ~ /^[[:space:]]*>[[:space:]]*[*_]*fail/)
 }
-function emit(nextline,   line) {
-  if (!held) return
-  line = heldline
-  if (heldnr >= s && heldnr <= e) {
-    if (is_open_task(line)) {
-      if (is_failed(nextline)) {
-        failed++
-        if (mode == "count") print "HELD " heldnr " " line > "/dev/stderr"
-      } else {
-        closed++
-        if (looks_like_failed(nextline) && mode == "count")
-          print "NEARMISS " (heldnr + 1) " " nextline > "/dev/stderr"
-        if (mode == "flip") {
-          sub(/^- \[ \]/, "- [x]", line)
-          sub(/^- \[\/\]/, "- [x]", line)
-        }
+function out(l) { if (mode == "flip") print l }
+function resolve(protected,   i) {
+  # Settle the pending task, then reprint it and every line of its block, in
+  # order. Called on every block end and once more at EOF.
+  if (!pend) return
+  if (pnr >= s && pnr <= e) {
+    if (protected) {
+      failed++
+      if (mode == "count") print "HELD " pnr " " ptask > "/dev/stderr"
+    } else {
+      closed++
+      # A near miss is only worth reporting when the task actually CLOSED --
+      # if a real annotation turned up later in the block, the task was held
+      # and saying "the task above it was CLOSED" would be a false report.
+      if (nmnr > 0 && mode == "count")
+        print "NEARMISS " nmnr " " nmtext > "/dev/stderr"
+      if (mode == "flip") {
+        sub(/^- \[ \]/, "- [x]", ptask)
+        sub(/^- \[\/\]/, "- [x]", ptask)
       }
-    } else if (is_failed(line) && !is_open_task(prevline)) {
-      # An annotation attached to nothing — a blank line above it, or a line
-      # that is not a task. It protects no task, and before this it was
-      # indistinguishable from no annotation at all.
-      if (mode == "count") print "ORPHAN " heldnr " " line > "/dev/stderr"
     }
   }
-  prevline = line
-  if (mode == "flip") print line
+  out(ptask)
+  for (i = 1; i <= nbuf; i++) out(buf[i])
+  pend = 0; nbuf = 0; nmnr = 0
 }
-{ emit($0); heldline = $0; heldnr = NR; held = 1 }
-END { emit(""); if (mode == "count") printf "%d %d\n", closed + 0, failed + 0 }
+{
+  if (pend) {
+    if (is_failed($0)) { resolve(1); out($0); next }
+    # Record the near miss BEFORE the continuation test, not inside it. A near
+    # miss is any annotation-shaped line following a pending task, and a
+    # column-0 one (`> Fail:` unindented) is not a continuation — so testing
+    # this inside that branch made the warning silent for exactly the shape
+    # `is_failed` is tested at column 0 to support. The first cut of this fix
+    # did that, and it made a MALFORMED annotation produce evidence
+    # byte-identical to a clean close: the failure this pass exists to prevent,
+    # reintroduced in the other direction while the run got louder elsewhere.
+    if (looks_like_failed($0)) { nmnr = NR; nmtext = $0 }
+    if (is_continuation($0)) {
+      nbuf++; buf[nbuf] = $0
+      next
+    }
+    resolve(0)
+  }
+  if (is_open_task($0)) { pend = 1; ptask = $0; pnr = NR; nbuf = 0; nmnr = 0; next }
+  if (is_failed($0) && NR >= s && NR <= e && mode == "count") {
+    # An annotation attached to nothing — a blank line above it, or a line that
+    # is not part of any task block. It protects no task, and before this it was
+    # indistinguishable from no annotation at all.
+    print "ORPHAN " NR " " $0 > "/dev/stderr"
+  } else if (looks_like_failed($0) && NR >= s && NR <= e && mode == "count") {
+    # The near miss in the DETACHED position, which is the one the round found
+    # still silent. `nmnr` above only ever fires while a task is pending, so a
+    # `> Fail:` sitting after a blank line, after a heading, or before any task
+    # produced NO evidence at all — while the well-formed `> Failed:` in that
+    # same position produced ORPHAN. A malformed annotation was once again
+    # byte-identical to a clean close, which is the one thing this pass exists
+    # to prevent. Both defects it can have are now reported together, because
+    # this line is both attached to nothing AND unrecognised.
+    print "STRAY " NR " " $0 > "/dev/stderr"
+  }
+  out($0)
+}
+END { resolve(0); if (mode == "count") printf "%d %d\n", closed + 0, failed + 0 }
 '
 
 DRY_RUN=false
@@ -157,8 +228,17 @@ find_batch_range() {
   fi
 
   # Fallback: grep-based range detection
+  #
+  # `awk END{print NR}`, not `wc -l`: `wc -l` counts NEWLINES, so a review_tasks.md
+  # whose last line has no trailing newline reports one line short. The last batch
+  # then ended one line early and its final task was silently skipped — the batch
+  # header flipped to `Merged` while the task stayed `[ ]` and the count said
+  # `0 tasks closed`. Worse, the JSON-index path above does NOT have this bug
+  # (`review_index.py` uses `readlines()`, which returns an unterminated final
+  # line), so the two resolvers disagreed on exactly this file — and this pass
+  # exists to stop the count and the file it describes from drifting apart.
   local total_lines
-  total_lines=$(wc -l < "$TASKS_FILE" | tr -d ' ')
+  total_lines=$(awk 'END { print NR }' "$TASKS_FILE")
 
   BATCH_START=$(grep -n "^### Batch ${batch_num} " "$TASKS_FILE" | head -1 | cut -d: -f1)
   if [[ -z "$BATCH_START" ]]; then
@@ -208,12 +288,21 @@ resolve_locks_dir() {
 
 # True only when this close committed to `main` in the MAIN checkout — the one
 # state in which the batch is really merged and its lock is really dead.
+#
+# `-ef` (same device+inode), NOT `==`. `pwd -P` resolves symlinks but NOT CASE:
+# `here` comes from `git rev-parse --show-toplevel` (the ON-DISK spelling) while
+# `main_root` is derived by cd-ing into the path the caller entered (the ENTERED
+# spelling). On a case-insensitive filesystem — every default macOS install —
+# `cd ~/projects/repo` and `cd ~/Projects/repo` reach the same directory and
+# compare UNEQUAL as strings. The batch-lock sweep below is gated on this, so it
+# silently did not run, and the remedy the script itself prints ("released by
+# the next close run from main") was unreachable. Reproduced both directions.
 close_landed_on_main() {
   local main_root here branch
   main_root="$(resolve_main_root 2>/dev/null)" || return 1
   main_root="$(cd "$main_root" && pwd -P 2>/dev/null)" || return 1
   here="$(cd "$REPO_ROOT" && pwd -P 2>/dev/null)" || return 1
-  [[ "$here" == "$main_root" ]] || return 1
+  [[ "$here" -ef "$main_root" ]] || return 1
   branch="$(git symbolic-ref --short HEAD 2>/dev/null)" || return 1
   [[ "$branch" == "main" ]]
 }
@@ -249,6 +338,8 @@ CLOSED=()
 SKIPPED=()
 MERGED_UNLOCK=()
 TOTAL_TASKS_CLOSED=0
+TOTAL_ORPHANS=0
+TOTAL_NEARMISSES=0
 
 for BATCH_NUM in "${BATCH_NUMS[@]}"; do
   echo "── Batch ${BATCH_NUM} ──"
@@ -387,14 +478,28 @@ for BATCH_NUM in "${BATCH_NUMS[@]}"; do
   # annotation the matcher did not recognise closed the task with its failure
   # note left sitting underneath — the exact rendering internal tracker #207 reported.
   # A dead item and a clean one must not produce identical evidence.
+  #
+  # ALL THREE GO TO STDOUT, and that is a fix, not a style choice. NEARMISS and
+  # ORPHAN used to go to stderr while /review-close Step 4b tells the operator to
+  # read stdout — so the one warning that noticed the annotation had failed to
+  # protect anything was written to the stream nobody was told to look at. The
+  # loudness these lines exist to provide was addressed to an empty room.
+  BATCH_ORPHANS=0
+  BATCH_NEARMISSES=0
   while IFS=' ' read -r KIND LNO TEXT; do
     case "$KIND" in
       HELD)     echo "   ⏸  held open (line ${LNO}): ${TEXT}" ;;
-      NEARMISS) echo "   ⚠️  line ${LNO} looks like a failure note but was NOT recognised — the task above it was CLOSED: ${TEXT}" >&2 ;;
-      ORPHAN)   echo "   ⚠️  line ${LNO} is a failure note attached to no open task — it protects nothing: ${TEXT}" >&2 ;;
+      NEARMISS) echo "   ⚠️  line ${LNO} looks like a failure note but was NOT recognised — the task above it was CLOSED: ${TEXT}"
+                BATCH_NEARMISSES=$((BATCH_NEARMISSES + 1)) ;;
+      ORPHAN)   echo "   ⚠️  line ${LNO} is a failure note attached to no open task — it protects nothing: ${TEXT}"
+                BATCH_ORPHANS=$((BATCH_ORPHANS + 1)) ;;
+      STRAY)    echo "   ⚠️  line ${LNO} looks like a failure note, was NOT recognised, AND is attached to no open task — it protects nothing: ${TEXT}"
+                BATCH_ORPHANS=$((BATCH_ORPHANS + 1)) ;;
     esac
   done < "$BATCH_DIAG"
   rm -f "$BATCH_DIAG"
+  TOTAL_ORPHANS=$((TOTAL_ORPHANS + BATCH_ORPHANS))
+  TOTAL_NEARMISSES=$((TOTAL_NEARMISSES + BATCH_NEARMISSES))
 
   if $DRY_RUN; then
     echo "   [dry-run] Would update:"
@@ -588,6 +693,18 @@ if [[ ${#CLOSED[@]} -gt 0 ]]; then
 fi
 if [[ ${#SKIPPED[@]} -gt 0 ]]; then
   echo "   Skipped: ${SKIPPED[*]}"
+fi
+# Per-line warnings scroll; a count in the summary does not. An operator reading
+# only the tail of a 20-batch run still learns that some annotation somewhere
+# protected nothing — which is the state that lost six tasks in the reported
+# round. This is deliberately NOT an exit-code change: /review-close Step 4b
+# diagnoses failure by commit absence, and a non-zero exit after a successful
+# commit is a state its prose does not cover.
+if [[ $TOTAL_ORPHANS -gt 0 ]]; then
+  echo "   ⚠️  Annotations protecting nothing: ${TOTAL_ORPHANS} (see the per-line warnings above)"
+fi
+if [[ $TOTAL_NEARMISSES -gt 0 ]]; then
+  echo "   ⚠️  Failure-note near misses not honoured: ${TOTAL_NEARMISSES} (see the per-line warnings above)"
 fi
 if $DRY_RUN; then
   echo "   (dry-run mode — no changes made)"
