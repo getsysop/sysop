@@ -3206,14 +3206,19 @@ install_tasks_scaffold() {
     return 0
   fi
 
+  # The seed carries NO comments, on purpose (Phase 201). Every writer of this
+  # file — /claim-task Step 4a, /auto-build Step 5.1, claim_task.sh --release,
+  # /review-close Step 4c, backfill_completed_dates.py — rewrites it whole via
+  # yaml.safe_dump, which strips every comment. A seeded reference block is
+  # therefore destroyed by the first whole-file write, on every install: that is
+  # /intake's `Write` on a fresh project (the documented on-ramp) and the first
+  # /claim-task otherwise. Either way the guidance that used to live here survived
+  # exactly until it was first used.
+  # It lives in tasks/README.md § "Authoring an entry by hand" instead, which is
+  # a managed path — refreshed by --update rather than reserialized away.
   cat > "$idx" <<'EOF'
 schema_version: 1
-# schema_version: 1 keeps `blast_radius:` optional. Bump to 2 once every
-# open/in_progress task declares a blast_radius value; the validator will
-# then enforce its presence. See tasks/schema.md § Versioning.
 
-# Phases — exactly one must carry `current_focus: true`.
-# /next-task anchors on the current-focus phase.
 phases:
   - number: 1
     title: "Initial phase"
@@ -3223,23 +3228,6 @@ phases:
       Replace this with your first sprint's narrative.
       Multi-line block scalar; supports markdown.
 
-# Tasks — one entry per discrete piece of work.
-# Schema reference: tasks/schema.md
-# Validator:       sysop/scripts/validate_tasks.py
-#
-# Example task entry (copy + populate; remove the leading `# `):
-# tasks:
-#   - id: FEAT-EXAMPLE
-#     title: "Short human-readable title"
-#     phase: 1
-#     status: open                       # open | in_progress | done | deferred
-#     effort: Medium                     # Low | Medium | High — how much work
-#     blast_radius: single-module        # single-file | single-module | cross-module | architectural — surface area
-#     user_action: false                 # true = requires console / credentials / domain reg
-#     manual_smoke: false                # true = /review-close Step 3c halts for human smoke (Phase 35)
-#     depends_on: []                     # other task IDs this blocks on
-#     surfaced_by: []                    # IDs that filed this task (e.g., review findings)
-#     body: tasks/open/FEAT-EXAMPLE.md   # required for open/in_progress/deferred
 tasks: []
 EOF
   record "tasks/: schema.md + README.md (managed); index.yml seeded; open/, deferred/, archive/ created"

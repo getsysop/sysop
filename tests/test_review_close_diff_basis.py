@@ -524,9 +524,19 @@ def test_a_skipped_target_is_not_reported_as_approved():
 
 
 def test_step_2b_results_have_somewhere_to_render():
-    """A skip nobody can see is not a fix. Step 8 had no convention line at all."""
+    """A skip nobody can see is not a fix. Step 8 had no convention line at all.
+
+    Matched by content, not by list number. This assertion used to read
+    `"4. **Record outcomes for Step 8.**"`; Phase 200 inserted a step ahead of
+    it, everything renumbered, and the guard went red on a change that did not
+    touch its subject at all. A guard keyed to an ordinal is walked through by
+    any insertion above it -- and reports the wrong defect when it fires.
+    """
     rc = REVIEW_CLOSE.read_text()
-    assert "4. **Record outcomes for Step 8.**" in _step_2b(rc)
+    assert re.search(r"^\s*\d+\.\s+\*\*Record outcomes for Step 8\.\*\*",
+                     _step_2b(rc), re.M), (
+        "Step 2b no longer has a numbered step recording outcomes for Step 8"
+    )
     report = rc[rc.index("## Step 8: Report") :]
     assert "Conventions:" in report, "Step 8 has no line for convention-check results"
     assert "N skipped (doc-only)" in report

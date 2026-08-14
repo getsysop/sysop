@@ -293,7 +293,9 @@ To hand a stranded batch back, use `bash sysop/scripts/batch_work.sh --release <
 
 ### 4a. Flip `status: open` → `status: in_progress` in `tasks/index.yml`
 
-Do NOT edit the YAML by hand with a regex — round-trip through `yaml.safe_load` / `yaml.safe_dump` so the file stays validator-clean. PyYAML round-trip loses inline comments — that's acceptable for `index.yml` (sprint prose lives in block scalars which round-trip fine).
+Do NOT edit the YAML by hand with a regex — round-trip through `yaml.safe_load` / `yaml.safe_dump` so the file stays validator-clean.
+
+**What the round-trip costs, stated accurately.** A whole-file dump reproduces the *data*, not the text. Every comment is stripped, quoting and indentation are normalised, anchors are renamed, and block scalars keep their **value** but not their **style** — a `|` literal comes back as a quoted folded scalar with a trailing blank line, and a `>-` folded scalar comes back plain. An earlier version of this note claimed sprint prose was safe because it lived in block scalars; that was measured false, and it was the stated reason the comment loss was ruled acceptable. The real reason it is acceptable is narrower: `index.yml` is machine-owned, every reader parses it, and no *value* is lost — nothing survives intact because of its construct. `tasks/README.md` § *Comments in `index.yml` do not survive* says the same thing to the consumer; prose written for a human belongs there or in the task body, never in the index.
 
 ```bash
 # Substitute the task id for <TASK_ID>, per Step 2's rule — quoted, so an unsubstituted

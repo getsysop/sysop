@@ -252,10 +252,19 @@ Step 2a still reads the diff either way. If every target skips, Step 2b is a cle
 
 1. Read the **entire** `## Prevention Conventions` section of `CLAUDE.md` (every subsection — subsection names vary by project: a web project might have `Frontend`/`Backend`/`Testing`; a data-pipeline project might have `Data integrity`/`Privacy`/`Testing Patterns`; an MCP server might have `MCP server boundaries`). Retrieve the full diff — the target's **diff basis** from the table above, three dots, per Step 2a's note. This text is pasted verbatim into the prompt below, so a two-dot diff hands the reviewer `main`'s newest content as though the branch had torn it out.
 
-2. Spawn an Agent with:
+2. **Capture the primary-tree baseline — before any agent is spawned.** Step 3's assertion is a *delta* against this file and there is nothing to compare against if you skip it. It must run here, ahead of the spawn below; a baseline taken afterwards records the breach as though it were pre-existing and the assertion then certifies the tree clean.
+
+   ```bash
+   rm -f sysop/runtime/2b-baseline.txt
+   mkdir -p sysop/runtime && git status --porcelain -uall > sysop/runtime/2b-baseline.txt
+   ```
+
+   **`rm -f` first, and `-uall` on both ends.** The delete is what makes a *skipped* capture fail loudly on every close rather than only the first — without it the file persists between runs, and a later close that skips this step silently diffs against a previous close's tree. `-uall` is required because plain `--porcelain` collapses an untracked directory to a single `?? dir/` line, so an agent writing into a directory that was already untracked is invisible; the assertion below uses `-uall` too, and the two must match.
+
+3. Spawn an Agent with:
    - `subagent_type: "general-purpose"`
    - `model: "opus"` (always — the **reasoning** role: adversarial convention review; do not omit, per `.claude/served_models.yml`)
-   - `isolation: "worktree"` — give each agent its own checkout (internal tracker #234). Steps 2a–2d run in the user's **primary** worktree, which has a single `HEAD`; a full-tool agent that decides to compare two revisions will reach for `git checkout` unless something stops it, and in a real run one did, moving `HEAD` off the branch the close was working on. Step 4's HARD RULE already names this hazard but frames the actor as *external*; here it is this skill's own agents, spawned two steps earlier. (The reported run had an integration branch checked out at 2b, which this skill's step order does not produce — 4-pre cuts it two steps later — so read the incident as "off the expected branch", not as evidence about which branch that is. What the misplaced commit would have cost also depends on policy: Step 6 deletes a merged feature branch with a safe `git branch -d`, and force-deletes only the integration branch under `pr`.) Isolation is available here because these agents have **no** pre-existing worktree, so `_shared/adversarial-review.md` § *Running more than one reviewer* applies directly — its "do not use it where a worktree already exists" caveat is about `/claim-task`, `/auto-build`, `/auto-fix` and `/auto-judge`, which spawn into a worktree an earlier step created, not about this step. **Where the harness offers no isolation parameter, the prompt's do-not-mutate rule below is the portable floor** and is sufficient; isolation is the structural hardening on top of it, not a replacement.
+   - `isolation: "worktree"` — give each agent its own checkout (internal tracker #234). Steps 2a–2d run in the user's **primary** worktree, which has a single `HEAD`; a full-tool agent that decides to compare two revisions will reach for `git checkout` unless something stops it, and in a real run one did, moving `HEAD` off the branch the close was working on. Step 4's HARD RULE already names this hazard but frames the actor as *external*; here it is this skill's own agents, spawned two steps earlier. (The reported run had an integration branch checked out at 2b, which this skill's step order does not produce — 4-pre cuts it two steps later — so read the incident as "off the expected branch", not as evidence about which branch that is. What the misplaced commit would have cost also depends on policy: Step 6 deletes a merged feature branch with a safe `git branch -d`, and force-deletes only the integration branch under `pr`.) Isolation is available here because these agents have **no** pre-existing worktree, so `_shared/adversarial-review.md` § *Running more than one reviewer* applies directly — its "do not use it where a worktree already exists" caveat is about `/claim-task`, `/auto-build`, `/auto-fix` and `/auto-judge`, which spawn into a worktree an earlier step created, not about this step. **Where the harness offers no isolation parameter, the prompt's do-not-mutate rule below is the portable floor** — all that is available, which is not the same as sufficient. Measured twice, on two different instruction texts: a consumer's 13-agent run had one agent create `tasks/open/<ID>.md` and edit `tasks/index.yml`, with several others leaving scratch scripts in the worktree root; and this repo's own pre-build pass, under a more emphatic read-only instruction, had an agent create a scratch file inside its worktree anyway. Both were contained only because the run passed `isolation: "worktree"`. So isolation is the structural hardening the floor does not provide, not a redundant extra on top of it — and a harness without it **must** expect a dirty tree and re-assert cleanliness rather than trust the prompt.
    - `description: "Convention check: <target>"`
    - `prompt`:
 
@@ -319,22 +328,40 @@ Step 2a still reads the diff either way. If every target skips, Step 2b is a cle
      in flight; moving `HEAD` corrupts it. The diff above is everything you need. If
      you need more context, read it with `git show <sha>:<path>`, which reads the
      object database and is unaffected by tree state.
+
+     Do NOT create new files either — no scratch scripts, no notes, no probe files,
+     not even untracked ones, anywhere in the repository. If you want to compute
+     something, run it from a heredoc or write under `/tmp`. "No edits to tracked
+     files" is not permission to add untracked ones: an untracked file is invisible
+     to every `git diff` gate this skill runs, so it survives to the close and is
+     attributed to nobody.
      ```
 
-3. Collect all verdicts. If **any** subagent returns `VERDICT: BLOCKED`, list every violation with its file:line citation and **stop** — do not proceed to Step 3 until violations are fixed or explicitly waived by the user. A target skipped at step 0 has **no verdict** — report it as `skipped (doc-only)`, never as `APPROVED`; an agent that was never spawned has approved nothing.
+4. Collect all verdicts. If **any** subagent returns `VERDICT: BLOCKED`, list every violation with its file:line citation and **stop** — do not proceed to Step 3 until violations are fixed or explicitly waived by the user. A target skipped at step 0 has **no verdict** — report it as `skipped (doc-only)`, never as `APPROVED`; an agent that was never spawned has approved nothing.
 
-4. **Record outcomes for Step 8.** Tally `<N checked, N skipped (doc-only)>` for the `Conventions:` line in the final report. Without this, a skip is invisible in the artifact the human reads — the same gap Step 2d's `N doc-only` tally closes for test decisions.
+5. **Record outcomes for Step 8.** Tally `<N checked, N skipped (doc-only)>` for the `Conventions:` line in the final report. Without this, a skip is invisible in the artifact the human reads — the same gap Step 2d's `N doc-only` tally closes for test decisions.
 
 > **HARD RULE — the agents' worktrees must be gone before Step 3b.** Worktree isolation is not free of side effects: on Claude Code it materializes a **real worktree and a real branch** in this repository's shared namespace (observed shape: a worktree under `.claude/worktrees/` on a branch named `worktree-agent-<id>`). The harness removes them when an agent finishes and left its checkout unchanged — but an agent that wrote a scratch file, or a run that was interrupted, leaks both. **That collides directly with this skill**: Step 1c's `git for-each-ref refs/heads/` sweep, Step 2a's "every non-main local branch", and Step 1a's worktree classification all enumerate whatever exists, so a leaked agent branch is reviewed as though it were someone's feature work — it classifies `clean-merged`, Step 2a finds no commits, and Step 6 offers to delete it. Worse across sessions: a *concurrent* `/review-close` can reach `git worktree remove` on a checkout an agent is still running in.
 >
-> After step 3 collects the verdicts, assert both are clean before continuing:
+> **It must be a delta, not an absolute cleanliness test — that is why step 2 above captures a baseline.** Nothing in this skill establishes that the primary worktree is clean before the agents run: Step 1a excludes it by construction (it skips the worktree whose branch is `main`, as Step 6's `pr` re-sync note also states in its own words), and the only earlier primary-tree reads are both in **Step 1b** — one path-scoped (`git status --porcelain -- review_tasks.md`), one whole-tree but grepped down to `review_tasks_archive.md` — while **Step 1c reads no working tree at all** (`for-each-ref`, `merge-base`, `diff --name-only`). So nothing before the agents run establishes anything about the rest of the tree. A bare `git diff --quiet HEAD --` here would fire on any ordinary uncommitted work and SKIP a close that is fine — a false-FAIL on the dominant path, which is how a gate gets disabled by the first operator who hits it. The baseline is taken after Steps 1b and 1c because both deliberately create commits, so a Step-1 reading is stale by design.
+>
+> After step 4 collects the verdicts, assert all three are clean before continuing:
 >
 > ```bash
 > git worktree list --porcelain | grep -F '/.claude/worktrees/' || echo "no agent worktrees"
 > git for-each-ref --format='%(refname:short)' refs/heads/ | grep '^worktree-agent-' || echo "no agent branches"
+> diff <(git status --porcelain -uall) sysop/runtime/2b-baseline.txt && echo "primary tree unchanged by 2b"
 > ```
 >
-> Anything listed is a leak: remove the worktree (`git worktree remove <path>`) and delete the branch (`git branch -D <name>`) before Step 3b. **Do not skip this because the harness usually cleans up** — "usually" is what makes the residue arrive on a later run, attached to nobody, in a step that force-deletes branches. If your harness offers no `isolation` parameter, none of this applies: you are relying on the prompt's do-not-mutate rule, which is the portable floor.
+> **If the third command reports `No such file or directory`, the step-2 baseline was never captured — that is the loud failure, and it is not optional to fix.** Re-running the capture *now* cannot help: it would record whatever the agents did as the starting state. Inspect the tree by hand against `git log`, or re-run Step 2b from a known-clean point.
+>
+> **The baseline lives under `sysop/runtime/` because that directory is gitignored** (Phase 133's single runtime home; `install.sh`'s `ensure_runtime_gitignore` appends the entry when missing and runs unconditionally in both modes and on `--update`, so a consumer has it). **It is not there to stop the file reporting itself** — it cannot do that in either location, because `>` creates the file before `git status` runs, so it appears in the baseline *and* in the comparison and cancels out. The reason is downstream: an untracked artefact at a tracked path shows up in the operator's own `git status` for the rest of the close, and is reachable by a later `git add`. Steps 2a–2d run in the primary checkout by construction, so a plain relative path is correct here; there is no worktree to resolve through.
+>
+> **Use `status --porcelain`, not `git diff --quiet HEAD --`.** The dominant observed breach shape is a *new untracked* scratch file, and `git diff` cannot see one — untracked files are invisible to it and to the 4a-post and 4b gates alike, which is why the prompt rule above had to name file creation directly. `status --porcelain` lists them.
+>
+> Anything listed is a leak: remove the worktree (`git worktree remove <path>`) and delete the branch (`git branch -D <name>`) before Step 3b. A **third-command** difference is an agent that mutated the primary tree — inspect each line and revert or set it aside deliberately; do not carry it into Step 3b, where it becomes indistinguishable from the close's own work and rides Step 4c's consolidation commit under that commit's message. **Read the first two commands before acting on the third.** `.claude/worktrees/` is gitignored in Sysop's own repo but not in a consumer install, so a leaked agent worktree surfaces in the delta as well — that line is the leak the first command already named, and its remedy is `git worktree remove`, not "revert an edit". Only lines the first two commands did not account for are tree mutations. **Do not skip this because the harness usually cleans up** — "usually" is what makes the residue arrive on a later run, attached to nobody, in a step that force-deletes branches.
+>
+> **If your harness offers no `isolation` parameter, the first two commands do not apply — but the third one matters MORE, not less.** With no isolation the agents run directly in this checkout, so the prompt's do-not-mutate rule is the only thing standing between a stray edit and the close, and it has now been measured failing twice. Run the baseline and the delta. (An honest limit, stated so the check is not over-trusted: a tight window still cannot distinguish an agent's edit from a human's edit made while the agents ran.)
 
 ### 2c. Unpushed Main Commits
 
@@ -917,6 +944,8 @@ Feature branches MAY modify `review_tasks.md` — typically as single-line task-
 
    A formatter, a regenerated lockfile or a rewritten snapshot can leave tracked files modified. Step 4b's landing check is `git diff --quiet && git diff --cached --quiet`, so those modifications would surface there as a *close-batch commit that did not land* — a true report of the wrong cause. On `DIRTY`, resolve it project-side; do **not** fold the modifications into the close's commits. (Untracked build output is not at risk and does not trip this — `git diff` does not see it.)
 
+   > **`DIRTY` here has a second cause this message does not name: a Step 2b agent.** The convention agents run five steps earlier and are contained only by a prompt rule and, where the harness offers it, worktree isolation — both of which have been measured failing. If Step 2b's own delta assertion was run, this cannot be the cause and the message above is right; if it was skipped, check that first, because the project-side remedy for a formatter is the wrong action for a stray agent edit and will commit it.
+
 **Under the Step 4-pre PR-reuse shape this step still runs**, even though Step 4a was skipped there. The merge target is the approved branch and it is checked out, so step 2's command returns that branch's own diff against `origin/main` — which is exactly the tree its PR will squash.
 
 > **This is the gate `_shared/main-push-guard.md` Rule B re-runs, and Step 3 is not.** When Rule B's rebase-first arm fires at Step 4d because `origin/main` advanced mid-run, the base underneath the merge target changed, so the verdict *this* step produced no longer describes the tree being pushed. Re-run this step. Re-running Step 3 would answer a question nobody asked: its tree is not the one that moved.
@@ -975,11 +1004,30 @@ After all branches are merged but **before** pushing:
    git rev-list --count "<branch from frontmatter>" "^HEAD"
    ```
 
-   **`0` means merged; any non-zero count is the branch's unmerged commits.** `HEAD` is the merge target here, and a rebased-then-ff-merged branch is fully contained in it, so the count is `0` for every branch that landed under either policy — verified in all three shapes: `direct` ff-merge, the `pr` integration branch, and PR-reuse, where the merge target is the approved branch itself. **This test is valid only pre-squash.** It is an ancestry test, and a squash breaks ancestry — so it must not be reused after the PR merges (see Step 6, where an earlier draft did exactly that and shipped a check that could never pass).
+   **`0` means merged; any non-zero count is the branch's unmerged commits.** `HEAD` is the merge target here, and a **rebased-then-ff-merged** branch is fully contained in it, so the count is `0` for a branch that landed *that* way under either policy — **exercised by a test for `direct` ff-merge only**; the `pr` integration branch and PR-reuse shapes are reasoned from the same ancestry property, not built. (The previous version of this paragraph claimed all three were verified, and its drift guard asserted the same three while building one. Do not restore the stronger wording without the two missing fixtures.) **This test is valid only pre-squash.** It is an ancestry test, and a squash breaks ancestry — so it must not be reused after the PR merges (see Step 6, where an earlier draft did exactly that and shipped a check that could never pass).
+
+   > **It is an ancestry test, so a CHERRY-PICK breaks it too — and Step 4-pre prescribes one.** An earlier version of the paragraph above said the count is `0` for *every* branch that landed under either policy. That is false, and the drift guard pinning it asserted "all three merge shapes" while building only a `direct` ff-merge. Cherry-picking rewrites commits, so the tip is not an ancestor even when the content is fully applied — measured: with the merge target diverged, a picked range of 2 commits scores `2` while `git cherry` reports `0` unapplied; a rebase-then-cherry-pick scores `1`; and an **empty** cherry-pick (content already applied, `git diff --quiet <branch> HEAD --` reporting the trees *byte-identical*) still scores `1`. Only the prescribed rebase + `merge --ff-only` scores `0`.
+   >
+   > **The shape that actually bites is not an operator improvisation — it is `main` itself.** Step 4-pre's `pr` policy moves local-only `main` commits onto the integration branch with `git cherry-pick origin/main..main`, and `/document-work` supports running on `main`, which writes a pending-doc whose frontmatter is `branch: main`. Step 1 above is a bare `ls`, so it picks that doc up, and this filter then classifies it `NOT-MERGED` on **every** `pr`-policy close — while its content is provably in the merge target. **It does not hide.** A cherry-pick scores `0` only in the degenerate case where it reproduces the *identical SHA*, which needs the picked commit to land on the **same parent** it originally had **and** to carry the same committer timestamp. `git cherry-pick` stamps the committer date at **pick** time, and the commits Step 4-pre sweeps are `/claim-task` Step 4d flips and Step 1b `review_tasks.md` saves made minutes to days earlier — so the timestamp condition is essentially never met on this path, and the same-parent condition alone is not enough. Measured on a realistic five-minute-old local `main` commit: `rev-list --count` `1`, `git cherry` `0` unapplied. The `0` outcome is confined to a pick made inside the same clock second as the original commit, which the close path does not produce. **Expect this on every `pr` close that has local-only `main` commits to sweep**, not occasionally. Under `pr` the cost is usually a one-cycle deferral rather than a loss, because Step 6 resets local `main` to `origin/main` and the doc consolidates on the next close — but only if there *is* a next close, and nothing reports the deferral meanwhile.
+   >
+   > **So do not trust a non-zero count on its own. Fall back before you skip — but resolve the ref first.** The stop-and-ask below (*"if `branch:` is absent or the ref no longer resolves"*) governs this fallback too, and it is written *after* it, so apply it *before*: `git rev-parse --verify "<branch from frontmatter>^{commit}"` must succeed. If it does not, go straight to that stop. **A `fatal: unknown commit` leaves the pipeline printing `0`**, and `0` is this test's *merged* answer — so an unresolvable branch would read as "content is in the merge target" and get its doc routed, its task flipped to `done` and its lock dropped, which is the precise loss this filter exists to prevent.
+   >
+   > ```bash
+   > git rev-parse --verify "<branch from frontmatter>^{commit}" >/dev/null || echo "ref does not resolve — go to the stop-and-ask below, do NOT read the count"
+   > git cherry HEAD "<branch from frontmatter>" | grep '^+' | wc -l
+   > ```
+   >
+   > **Count with `grep '^+' | wc -l`, never with `grep`'s own `-c` flag.** That flag exits **1** when the count is zero — and zero is the *pass* value here — so the prescribed form would return a failing status on the good outcome, abort under `set -e`, and never fire the right-hand side of an `&&` chain. Verified: the `-c` form prints `0` and exits `1`; `grep | wc -l` prints `0` and exits `0`. This is the `|| true`-class trap `_shared/permission-guard.md` already names, in a command whose exit status is read in exactly the direction that inverts it.
+   >
+   > `git cherry` compares **patch-ids** rather than ancestry, so it sees through a cherry-pick: `0` unapplied commits means the content is in the merge target however it got there. Treat that as **ask, not skip** — report the branch and let the human decide, because this is the one case where the two tests disagree. **State its limit rather than trusting it blindly:** a cherry-pick that required conflict resolution changes the patch, so `git cherry` prints `+` for a commit that *is* applied (measured: `rev-list` `1`, `git cherry` `+1`, content present). Neither test is authoritative alone; a branch that fails both is genuinely unmerged, and a branch that passes either is not to be skipped silently.
 
    > **Quote the `^` operand. Both operands, every time.** `^HEAD` unquoted is a **negated-glob pattern** under zsh with `extended_glob` set — which oh-my-zsh and many `.zshrc` files enable, on the platform whose shell these blocks are commonly run in. It expands to *"every entry in the CWD except `HEAD`"*, git receives those as **pathspecs**, the exclusion is silently dropped, and the command exits 0 with a wrong number. Measured on a merged branch: `"^HEAD"` → `0`, bare `^HEAD` → `2`. A **merged** branch then classifies `NOT-MERGED`, so its pending-doc is never routed, its `roadmap_ids` never flip to `done`, its body never moves to `archive/`, and its lock and parked markers never drop — every close, silently. The spot-check that would catch it is the one an author is least likely to run, because an *unmerged* branch returns non-zero either way and looks correct. `WORKFLOW.md` § 8.2a names quoting as an uncovered invocation class; this is a shipped instance of it. **`NOT-MERGED` means leave the file in place and skip it entirely**: do not route it, do not touch its task IDs, do not delete it. It is re-collected on a later run once the branch is mergeable. Report each one on Step 8's report beside its 4a-SKIP entry.
+   >
+   > **Report it even when there is no 4a-SKIP entry to sit beside.** That instruction assumed the only way to be held back is to fail Step 4a, and the cherry-pick case above breaks the assumption: the branch merged, Step 4a recorded no skip, and Step 8's `Remaining:` block has no slot for the doc. Use the `Held-back docs:` line in Step 8's template — one row per doc, naming the branch, the count each test returned, and the reason — and never let the only trace be a smaller `<N>` in `Docs: Consolidated <N> pending-docs`, a number with nothing to compare it against.
 
-   **If `branch:` is absent or the ref no longer resolves, stop and ask — do not guess in either direction.** Step 6 is the only step that deletes feature branches and it runs *after* this one, so at this point every branch this close merged still has a local ref; a missing one is an unexplained state, not a legacy quirk. (A legacy-format pending-doc with no `branch:` at all is the one benign shape — see step 3's format detection — and it predates worktree-per-branch, so consolidating it is safe; say which case you hit rather than silently picking.)
+   **If `branch:` is absent or the ref no longer resolves, stop and ask — do not guess in either direction.** Step 6 is the only step that deletes feature branches and it runs *after* this one, so at this point every branch this close merged still has a local ref; a missing one is an unexplained state, not a legacy quirk.
+
+   > **One way to reach that hard stop is this close's own Step 6, one run earlier.** Under `pr` policy Step 6 force-deletes (`git branch -D`) every branch Step 4a recorded as merged. A branch the operator cherry-picked is recorded merged, so it is deleted — while its pending-doc was held back here for scoring non-zero. On the next close the doc is re-collected, its `branch:` no longer resolves, and this rule fires: the close halts on a doc it created the conditions for. Under `direct` the tail is benign, because that path's safe `git branch -d` refuses on a cherry-picked branch and the ref survives. **The `git cherry` fallback above is what prevents the hold-back in the first place**; if you are reading this having already hit the stop, the doc's content is almost certainly in `main` already — verify with `git log --oneline --all --grep` on its summary before deciding, and do not consolidate on the assumption alone. (A legacy-format pending-doc with no `branch:` at all is the one benign shape — see step 3's format detection — and it predates worktree-per-branch, so consolidating it is safe; say which case you hit rather than silently picking.)
 
 2. **If none found**: check merged history for `docs:` commits (backward compatibility with branches that wrote docs directly). If present, skip doc consolidation — the docs are already in the shared files.
 
@@ -1037,7 +1085,7 @@ After all branches are merged but **before** pushing:
    # Phase 126) so `Bash(python3 -:*)` matches as a single simple command — no PATH prefix,
    # no `&&` compound, no `.venv/bin/python3` (none of which match that rule).
    python3 - <<'PY'
-   import datetime, subprocess, sys
+   import datetime, os, subprocess, sys
    try:
        import yaml
    except ImportError:  # PyYAML lives only in the project venv (BeanRider ISSUE-0049)
@@ -1051,7 +1099,7 @@ After all branches are merged but **before** pushing:
    # review_task_ids are NOT processed here — they're documentary only.
    ids = ["<ROADMAP_ID_1>", "<ROADMAP_ID_2>"]
    p = Path('tasks/index.yml')
-   d = yaml.safe_load(p.read_text())
+   d = yaml.safe_load(p.read_text(encoding='utf-8'))
    closed = []
    for t in d.get('tasks', []):
        if t['id'] not in ids:
@@ -1090,7 +1138,32 @@ After all branches are merged but **before** pushing:
    # carried no roadmap_ids, where Step 7 correctly expects tasks/index.yml to be ABSENT
    # from the commit.
    if closed:
-       p.write_text(yaml.safe_dump(d, sort_keys=False, default_flow_style=False, allow_unicode=True, width=120))
+       # Atomic rewrite (Phase 201). `p.write_text` truncates in place, so an interrupted
+       # write leaves a half-written index — the one file carrying every task's status.
+       # `backfill_completed_dates.py` has used tempfile + os.replace since Phase 108 and is
+       # the shape copied here. The three claim-side writers (claim-task Step 4a, auto-build
+       # Step 5.1, claim_task.sh --release) still truncate in place via open(..., "w"); this
+       # site was done first because it is the one that has already `git mv`d the bodies, so
+       # a torn write there strands staged renames against an index that never recorded them.
+       # Same directory, so the replace is atomic and no reader sees a partial file.
+       # Scope, stated because the sibling is copied only in part: this takes the
+       # tempfile + os.replace half, NOT its fsync pair — process-level interruption is
+       # covered, machine-level (power loss) is not. The failure arm IS copied: a
+       # surviving .tmp would sit untracked beside a tracked path for the rest of the
+       # close, which is the residue hazard Step 2b names. Two properties `write_text`
+       # had for free and `os.replace` does not are restored explicitly: it writes
+       # THROUGH a symlink rather than replacing it, and it keeps the old file's mode.
+       target = Path(os.path.realpath(p))
+       tmp = target.with_suffix(target.suffix + '.tmp')
+       try:
+           mode = target.stat().st_mode & 0o7777
+           tmp.write_text(yaml.safe_dump(d, sort_keys=False, default_flow_style=False, allow_unicode=True, width=120), encoding='utf-8')
+           os.chmod(tmp, mode)
+           os.replace(tmp, target)
+       except BaseException:
+           if tmp.exists():
+               tmp.unlink()
+           raise
        # Stage the rewrite here, in the same code that performed it. `git mv` above already
        # staged both halves of each body rename, but `Path.write_text` does not stage
        # anything — so without this line the index is left HALF staged, and Step 7's
@@ -1161,7 +1234,9 @@ After all branches are merged but **before** pushing:
    git log -1 --pretty=%s | grep -q '^docs: consolidate documentation' && git diff --quiet && git diff --cached --quiet
    ```
 
-   If that fails, the tree still has unstaged or staged-but-uncommitted consolidation edits: stage the missing file(s) and `git commit --amend --no-edit` before proceeding. **Additionally, if this run closed at least one `roadmap_ids` entry** (the heredoc's `closed` list was non-empty), confirm the index flip is actually in the commit:
+   If that fails, the tree still has unstaged or staged-but-uncommitted consolidation edits: stage the missing file(s) and `git commit --amend --no-edit` before proceeding.
+
+   > **Read the diff before you amend — this is the step that launders a foreign edit in.** `git add` the *named* files the routing table sent this run's entries to, never `-A` and never a bare `git add .`; then `git diff --cached` and confirm every hunk is this close's own work. A stray edit from a Step 2b agent reaches here as an ordinary unstaged modification, and an unread `--amend --no-edit` folds it into a commit whose message says "consolidate documentation for N merged branches" — attributed to this close, under a subject that describes something else. If a hunk is not yours, stop and resolve it rather than amending; Step 2b's delta assertion exists to catch it four steps earlier. **Additionally, if this run closed at least one `roadmap_ids` entry** (the heredoc's `closed` list was non-empty), confirm the index flip is actually in the commit:
 
    ```bash
    git show --stat HEAD | grep -q 'tasks/index.yml'
@@ -1357,7 +1432,7 @@ Skip this step only if the pushed changes are docs/config only with no code or s
 
 > **`-D` is licensed by containment, and a 4a-SKIP'd branch breaks that licence — check merge status, do not iterate "approved".** This list previously read *"each **approved** feature branch"* and asserted that it *"reached `main` through a squash"*. A branch that Step 4a aborted-and-skipped is still approved, is not Step 2a `dirty`-SKIP'd, and is not rejected — so it fell through every carve-out below and was force-deleted with its work in no squash and nowhere else. Its worktree was already removed at Step 3b, so `-D` was the last reference to it. **`direct` never had this hole** because its list iterates *merged* branches and safe `-d` refuses on an unmerged one; the bypass is what removed the backstop here, which is why the guard has to be explicit rather than inherited.
 >
-> **Key this on the 4a-SKIP verdict Step 4a recorded, and do NOT re-derive containment here.** Iterate the branches Step 4a actually merged; a 4a-SKIP'd branch is handled by its own block below and never reaches this list. An earlier draft of this step instead prescribed `git rev-list --count <branch> ^origin/main` as a containment re-check, and **that check can never return its pass value.** `rev-list ^origin/main` *is* an ancestry test, and the paragraph above says in its own words that a squash-merged branch is "**not** an ancestor of it" — so it scores non-zero for a correctly merged branch and non-zero for a 4a-SKIP'd one alike: zero discriminating power, a permanently inert cleanup, and every clean close reported as suspect. Verified against a real squash rather than reasoned: `git branch -d` refuses, `rev-list --count` returns non-zero, `merge-base --is-ancestor` is false, and `git cherry` prints `+` on every commit because patch-ids do not survive a squash. **After a squash there is no ancestry-shaped containment test** — that is exactly what makes safe `-d` "meaningless" here, so a check built from ancestry cannot be the fix. (Step 4c's sibling filter is sound because it runs *pre-squash* against `^HEAD`, where ff-merge preserves ancestry; the equivalence an earlier draft asserted between the two sites does not hold.)
+> **Key this on the 4a-SKIP verdict Step 4a recorded, and do NOT re-derive containment here.** Iterate the branches Step 4a actually merged; a 4a-SKIP'd branch is handled by its own block below and never reaches this list. An earlier draft of this step instead prescribed `git rev-list --count <branch> ^origin/main` as a containment re-check, and **that check can never return its pass value.** `rev-list ^origin/main` *is* an ancestry test, and the paragraph above says in its own words that a squash-merged branch is "**not** an ancestor of it" — so it scores non-zero for a correctly merged branch and non-zero for a 4a-SKIP'd one alike: zero discriminating power, a permanently inert cleanup, and every clean close reported as suspect. Verified against a real squash rather than reasoned: `git branch -d` refuses, `rev-list --count` returns non-zero, `merge-base --is-ancestor` is false, and `git cherry` prints `+` on every commit because patch-ids do not survive a squash. **After a squash there is no ancestry-shaped containment test** — that is exactly what makes safe `-d` "meaningless" here, so a check built from ancestry cannot be the fix. (Step 4c's sibling filter is sound because it runs *pre-squash* against `^HEAD`, where ff-merge preserves ancestry; the equivalence an earlier draft asserted between the two sites does not hold. That clause is load-bearing and narrow: it licenses the filter **only** where an ff-merge happened. A cherry-pick is not an ff-merge and breaks the filter the same way a squash would — see Step 4c step 1b, which now carries a `git cherry` fallback for it. This sentence was never wrong about that case; it was silent about it, which read as an exemption.)
 
 1. Delete the **local** branch: `git branch -D <branch>` (the safe `-d` check is meaningless against a squash — the branch's commits are in the merged PR).
 2. Delete the **remote** branch **only if it was pushed and still exists**: `git push origin --delete <branch>`. Feature branches created by `/claim-task` are usually local-only under `pr` policy (the integration branch is the only thing pushed), so skip this when the branch has no remote tracking ref.
@@ -1446,6 +1521,12 @@ Documentation written:
   ✓ changelog.md:         <N> entries         (if any)
   ✓ tasks/index.yml:      <task IDs>          (if any — status flipped to done, body moved to archive/)
   ✓ UI_Iterations.md:     <N> rows            (if any)
+
+Held-back docs: <N> (or "none")
+  - <pending-doc filename> — branch <name>; rev-list <count>, git cherry <count> unapplied;
+     held because <reason>. Task IDs NOT flipped to done; doc left in place for a later run.
+     (A doc can be held back WITHOUT a 4a-SKIP — a cherry-picked branch, including the
+      `branch: main` doc under `pr` policy, merges fine and still scores non-zero.)
 
 Remaining:
   - <any SKIP'd branches — paused work; include file count + worktree path + recommendation>
