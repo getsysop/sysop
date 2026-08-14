@@ -72,6 +72,8 @@ This is one conversational turn, not a review gate. The human's real sign-off is
 ## Step 5 — Emit, validate, hand off
 
 1. **`tasks/index.yml`** — append with the `Edit` tool: add the new `tasks:` entry (or entries) under the existing list. If the queue is still the installer seed (a literal `tasks: []`), replace the inline empty list with a block sequence containing your entry — you're authoring the first entry, not appending to a list. **Never** rewrite or drop an existing entry or its `sprint_note` block scalar, never touch `phases:`, never change any existing task's `status:`. On an ID collision discovered at write time, stop and re-slug — surface it, don't overwrite.
+
+   **Quote every `title:` you write** — `title: "<the title>"`. Unquoted, YAML reads ` #` (space then hash) as the start of a comment, so `title: Fix the widget #define` lands on disk as `Fix the widget`, and the rest is gone the first time anything reads the file. The validator stays green, because what survives is still a legal title. Issue and PR references, hash-written ordinals, preprocessor tokens and heading fragments all hit this. The entry shape to copy is `tasks/README.md` § *Authoring an entry by hand*.
 2. **Body file(s)** — `Write` `tasks/open/<TASK-ID>.md` per the Step 3 shape.
 3. **Validate (the floor):**
 

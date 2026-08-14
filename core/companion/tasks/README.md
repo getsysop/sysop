@@ -17,8 +17,8 @@ Source of truth for the project's task queue. Replaces the single-file `product_
 | `/intake` | `vision.md`, `decisions.md`, `index.yml` | the populated queue itself — `index.yml` + `open/<ID>.md` bodies + the intent layer (`vision.md`, `decisions.md`); leaves it **uncommitted** for human sign-off |
 | `/onboard` | consented in-repo evidence (README/docs/manifests/git log), a roadmap/`TODO.md` file or `gh issue list`, `index.yml` (dedup) | for an *existing* project adopting Sysop: drafts `vision.md` + `decisions.md` from evidence (fabrication-guarded — inferred rationales confirmed, never asserted) and/or imports the backlog into `index.yml` + bodies with `surfaced_by: [imported]` provenance; leaves everything **uncommitted**, then hands off to `/intake` for going-forward planning |
 | `/add-task` | `index.yml`, `open/` + `deferred/` bodies (dedup), `decisions.md` (contradiction check; tolerates absence) | quick capture of a single task (or 2–3 independent siblings): appends the validated `index.yml` entry + writes `open/<TASK-ID>.md`; never creates phases, never edits existing entries or `status:`, leaves it **uncommitted** — routes phase-shaped thoughts to `/intake` |
-| `/next-task` | `index.yml`, `sysop/runtime/locks/*.lock` | — |
-| `/roadmap` | `index.yml`, `vision.md`, `decisions.md` | — (read-only strategy view: groups the outstanding queue by kind + proposes orderings of attack; never mutates) |
+| `/next-task` | `index.yml`, `review_tasks.md`, `sysop/runtime/locks/*.lock` | — (default mode resolves a roadmap task, falling back to the next pending review batch; `--review` surfaces only batches) |
+| `/roadmap` | `index.yml`, `vision.md`, `decisions.md`, `review_tasks.md` | — (read-only strategy view: groups both queues' outstanding work by kind + proposes orderings of attack; never mutates) |
 | `/daily-summary` | `index.yml` (completed tasks for the milestone section), git history | — (read-only retrospective: standup/async report of the last day + week, git-log-driven; never mutates) |
 | `/test-audit` | source + test trees, `.claude/checks.yml` (`critical_path:` globs), optional coverage artifact | — (read-only test-quality audit: recommends new tests on load-bearing surfaces + retirements of dead/redundant/hollow tests; routes accepted recs to `/intake`; never writes tests or mutates) |
 | `/claim-task <ID>` | `index.yml`, body | flips `status: open → in_progress` in `index.yml`; creates `sysop/runtime/locks/<ID>.lock` |
@@ -33,6 +33,44 @@ Source of truth for the project's task queue. Replaces the single-file `product_
 3. **`validate_tasks.py` is authoritative.** If you can't get the validator to pass, fix the data — don't bypass the hook.
 4. **Adding a task:** run `/add-task` — it appends the `index.yml` entry, writes `open/<TASK-ID>.md`, dedups against the queue, and validates. (By hand is fine too: add the entry + body yourself; the ID must match `^[A-Z][A-Z0-9-]{2,80}$`.)
 5. **Renaming a task:** `git mv` the body file AND change `id:` in `index.yml` AND update any `depends_on:` / `surfaced_by:` references. The validator catches stragglers.
+
+## Authoring an entry by hand
+
+Copy this shape. It is the reference the installer used to seed into `index.yml` itself — see § *Comments in `index.yml` do not survive* below for why it lives here instead.
+
+```yaml
+tasks:
+  - id: FEAT-EXAMPLE
+    title: "Short human-readable title"
+    phase: 1
+    status: open                       # open | in_progress | done | deferred
+    effort: Medium                     # Low | Medium | High — how much work
+    blast_radius: single-module        # single-file | single-module | cross-module | architectural — surface area
+    user_action: false                 # true = requires console / credentials / domain reg
+    manual_smoke: false                # true = /review-close Step 3c halts for human smoke
+    depends_on: []                     # other task IDs this blocks on
+    surfaced_by: []                    # IDs that filed this task (e.g., review findings)
+    body: open/FEAT-EXAMPLE.md         # required for open/in_progress/deferred
+```
+
+**Copy the fields, not the comments.** The trailing `#` notes above document the field values *for you*; they are not part of the entry. Pasted into `index.yml` they are destroyed by the next write, for the reason in § *Comments in `index.yml` do not survive* below — which is why this template lives here and no longer ships inside the file itself.
+
+**Quote the title.** A YAML plain (unquoted) scalar treats ` #` — space then hash — as the start of a comment, so `title: Fix the widget #define` parses as `Fix the widget`, and the rest is gone at *read* time, before any writer touches the file. The validator sees a valid file and reports no error, because what survives is still a legal title. Quoting is the whole defence: `title: "Fix the widget #define"` round-trips exactly. Anything after a space-hash hits this — issue and PR references, ordinals written with a hash, preprocessor tokens, markdown heading fragments. `phases[].title` has the same exposure.
+
+Two more notes that used to sit in the seed:
+
+- **`schema_version: 1`** keeps `blast_radius:` optional. Bump to `2` once every open/in_progress task declares a value; the validator then enforces its presence. See `schema.md` § Versioning.
+- **`phases:`** — exactly one entry must carry `current_focus: true`. `/next-task` anchors on the current-focus phase.
+
+Validate with `python3 sysop/scripts/validate_tasks.py` — it must exit 0.
+
+### Comments in `index.yml` do not survive
+
+`index.yml` is a machine-owned file. Five code paths rewrite it whole through `yaml.safe_dump` — `/claim-task` Step 4a, `/auto-build` Step 5.1, `claim_task.sh --release`, `/review-close` Step 4c, and `backfill_completed_dates.py` — and a whole-file dump reproduces the *data*, not the text. On the first write that touches this file, every comment is stripped, quoting is normalised, indentation is rewritten, `|` literal block scalars become quoted folded ones, an anchor that has an alias is renamed (`&base` → `&id001`) while one with no alias is dropped, and a `<<:` merge key is resolved and flattened into the mapping it merged into. The output is a fixed point, so it happens once and then stops changing.
+
+Nothing is lost *in the dump* — every value the parser read is written back, and every reader reads through the same parser. (A value can still be lost earlier, at *read* time: that is the unquoted-title case above, and quoting is its fix.) What does not survive the dump is anything you wrote for a human to read. **Put that here, or in the task's body file, not in `index.yml`.** This is why the reference template above lives in this file: seeded into `index.yml`, it was destroyed by the first whole-file write — `/intake`'s `Write` on a fresh project, the first `/claim-task` otherwise — on every install.
+
+One construct the seed still uses is worth naming, because it is the exception that proves the rule: `phases[].sprint_note` is seeded as a `|` literal block. Its **text** survives, but after the first write it comes back as a quoted folded scalar with a trailing blank line. That is cosmetic and expected; it is not a reason to avoid `sprint_note`.
 
 ## The intent layer (`vision.md` + `decisions.md`)
 

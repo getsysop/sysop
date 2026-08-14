@@ -15,8 +15,11 @@ substring pin can fake:
   1. The marker-strip union corrupts, still parses, and the validator rejects it
      with the specific errors the skill quotes.
   2. The stage numbers are what the skill says they are.
-  3. `rev-list --count <b> "^HEAD"` really does separate merged from unmerged,
-     pre-squash, in all three merge shapes.
+  3. `rev-list --count <b> "^HEAD"` really does separate merged from unmerged
+     pre-squash **for a rebase-then-ff-merge**, and does NOT for a cherry-pick.
+     The docstring here used to say "in all three merge shapes"; nothing built
+     an integration branch or a cherry-pick, so the claim was pinned by a test
+     that never exercised it.
   4. That same test is INVALID post-squash -- which is why Step 6 must not use
      it, and this test fails if someone reintroduces it there.
   5. The `^` operand must be quoted, because unquoted it is a zsh glob.
@@ -287,7 +290,12 @@ def _count(repo: Path, branch: str, excl: str) -> int:
 
 
 def test_containment_separates_merged_from_unmerged_pre_squash(tmp_path: Path) -> None:
-    """Step 4c's filter. 0 == merged, non-zero == not. All three merge shapes."""
+    """Step 4c's filter, for the shape it is actually valid on.
+
+    0 == merged, non-zero == not -- for a **rebase-then-ff-merge**. This test
+    builds only that shape, which is why the module docstring no longer claims
+    it covers three. The cherry-pick shapes are covered below.
+    """
     repo = tmp_path / "r"
     _init(repo)
     _git(repo, "checkout", "-q", "-b", "feat/merged", "main")
@@ -305,6 +313,119 @@ def test_containment_separates_merged_from_unmerged_pre_squash(tmp_path: Path) -
     _git(repo, "add", "-A")
     _git(repo, "commit", "-qm", "advance main")
     assert _count(repo, "feat/merged", "^HEAD") == 0
+
+
+def _unapplied(repo: Path, upstream: str, head: str) -> int:
+    """`git cherry` '+' count -- commits in `head` whose patch is NOT upstream."""
+    r = subprocess.run(
+        ["git", "cherry", upstream, head],
+        cwd=repo, capture_output=True, text=True, check=True,
+    )
+    return sum(1 for ln in r.stdout.splitlines() if ln.startswith("+"))
+
+
+def test_containment_is_broken_by_a_cherry_pick_which_step4pre_prescribes(
+    tmp_path: Path,
+) -> None:
+    """Q-189. The ancestry test scores non-zero on a FULLY APPLIED branch.
+
+    Step 4-pre's `pr` policy runs `git cherry-pick origin/main..main`, so this
+    is not an operator improvisation -- it is the prescribed path. If this test
+    ever reports 0, the fallback in Step 4c step 1b can be reconsidered; until
+    then the skill must not skip on `rev-list` alone.
+    """
+    repo = tmp_path / "r"
+    _init(repo)
+    _git(repo, "checkout", "-q", "-b", "feat/picked", "main")
+    _file_a_followup(repo, "FEAT-P", "Picked")
+    _git(repo, "checkout", "-q", "main")
+    # Make main diverge first, so the cherry-pick cannot reproduce the same SHA.
+    (repo / "diverge.txt").write_text("x")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "advance main before the pick")
+    _git(repo, "cherry-pick", "feat/picked")
+
+    assert _count(repo, "feat/picked", "^HEAD") > 0, (
+        "a cherry-picked branch is NOT an ancestor -- if this is 0 the whole "
+        "premise of Q-189 has changed"
+    )
+    # ...while the content is provably present.
+    assert _unapplied(repo, "HEAD", "feat/picked") == 0, (
+        "git cherry must see through the pick -- this is the fallback the "
+        "skill now prescribes"
+    )
+
+
+def test_the_two_tests_disagree_only_on_the_applied_branch(tmp_path: Path) -> None:
+    """The fallback must not rubber-stamp a genuinely unmerged branch.
+
+    A guard that says "applied" for everything is worse than no guard. This
+    pins the discriminating case: cherry-picked scores 0 unapplied, genuinely
+    unmerged scores non-zero, and `rev-list` cannot tell them apart.
+    """
+    repo = tmp_path / "r"
+    _init(repo)
+    _git(repo, "checkout", "-q", "-b", "feat/picked", "main")
+    _file_a_followup(repo, "FEAT-P", "Picked")
+    _git(repo, "checkout", "-q", "-b", "feat/never", "main")
+    _file_a_followup(repo, "FEAT-N", "Never")
+    _git(repo, "checkout", "-q", "main")
+    (repo / "diverge.txt").write_text("x")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "advance main before the pick")
+    _git(repo, "cherry-pick", "feat/picked")
+
+    # rev-list: identical verdicts -- zero discriminating power.
+    assert _count(repo, "feat/picked", "^HEAD") > 0
+    assert _count(repo, "feat/never", "^HEAD") > 0
+
+    # git cherry: separates them.
+    assert _unapplied(repo, "HEAD", "feat/picked") == 0, "applied -> 0"
+    assert _unapplied(repo, "HEAD", "feat/never") > 0, (
+        "a branch that never landed must still score non-zero unapplied, or "
+        "the fallback would consolidate unmerged work"
+    )
+
+
+def test_git_cherry_false_reports_after_a_conflict_resolved_pick(
+    tmp_path: Path,
+) -> None:
+    """The fallback's stated limit, pinned so the prose cannot drop it.
+
+    `git cherry` is patch-id based, so resolving a conflict during the pick
+    changes the patch and the commit reads as unapplied. The skill says this
+    out loud; if this test goes green-by-inversion someone has softened it.
+    """
+    repo = tmp_path / "r"
+    _init(repo)
+    (repo / "shared.txt").write_text("base\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "base shared")
+
+    _git(repo, "checkout", "-q", "-b", "feat/conflict", "main")
+    (repo / "shared.txt").write_text("branch version\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "branch edits shared")
+
+    _git(repo, "checkout", "-q", "main")
+    (repo / "shared.txt").write_text("main version\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "main edits shared")
+
+    # Cherry-pick conflicts; resolve to the branch's content.
+    subprocess.run(
+        ["git", "cherry-pick", "feat/conflict"],
+        cwd=repo, capture_output=True, text=True,
+    )
+    (repo / "shared.txt").write_text("branch version\n")
+    _git(repo, "add", "-A")
+    _git(repo, "-c", "core.editor=true", "cherry-pick", "--continue")
+
+    assert _unapplied(repo, "HEAD", "feat/conflict") > 0, (
+        "a conflict-resolved pick changes the patch-id, so git cherry reports "
+        "it unapplied even though the content landed -- this is exactly why "
+        "the skill says neither test is authoritative alone"
+    )
 
 
 def test_containment_is_invalid_after_a_squash_so_step6_must_not_use_it(

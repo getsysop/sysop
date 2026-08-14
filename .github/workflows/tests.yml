@@ -1,16 +1,31 @@
 name: tests
 
-# Runs Sysop's own test suite on every PR + push to main.
+# Runs Sysop's own test suite on every PR.
 # Hardened shape: SHA-pinned actions, concurrency group, contents:read
 # permissions, scoped pull_request.types so draft / fork PRs do not
 # over-trigger.
 #
 # Branch protection on `main` requires this `pytest` check
 # (see tests/README.md "Branch protection").
+#
+# NO `push: branches: [main]` trigger, and that is deliberate — do not add
+# one back without re-checking the condition below. Branch protection sets
+# `required_status_checks.strict: true`, so a branch must be up to date with
+# `main` before it can merge. The PR is therefore tested against current
+# `main`, and the squash commit that lands has the same tree the PR just
+# ran green on: a push-triggered run would re-test bytes already tested,
+# doubling both wall-clock and billed minutes on every change. Direct pushes
+# to `main` are rejected by the same protection, so nothing else reaches it.
+# If `strict` is ever turned off, this reasoning lapses and the trigger
+# should come back.
+#
+# Do NOT add `paths-ignore` for Markdown either. 113 of this repo's 127 test
+# files read Markdown — the suite is largely a *doc* test (phase-log currency,
+# the mirror leak gate, queue-entry IDs, the ledger schema, the prose pins),
+# so filtering docs would skip the guards exactly when they matter. A skipped
+# workflow also never reports, which blocks a required check forever.
 
 on:
-  push:
-    branches: [main]
   pull_request:
     types: [opened, synchronize, reopened]
 
@@ -36,5 +51,8 @@ jobs:
       - name: Install dev dependencies
         run: pip install -r requirements-dev.txt
 
+      # Not `-v`: 3,681 verbose lines nobody reads, and pytest-xdist interleaves
+      # them across workers anyway. Default dot output plus the `-ra` summary
+      # already in pyproject's addopts names every failure.
       - name: Run tests
-        run: pytest -v
+        run: pytest

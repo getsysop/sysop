@@ -8521,3 +8521,667 @@ the 196–198 push is unverified until it happens; the `Q-187` guards are macOS-
 construction and were therefore exercised on no Linux host, including CI; and lens 3's own
 battery is unprobed on its kills, so its 15 kills are wiring evidence exactly as this phase's
 25 were.
+
+## Phase 199 (executed 2026-08-13 — the strategy view that could not see the second queue)
+
+**The phase is `Q-192` alone.** It arrived bundled with `Q-193` as "the `/roadmap` bundle",
+and the bundle did not survive its own verification: reading `Q-193` closely enough to design
+a fix found that its central mechanism does not describe stock Sysop at all. Wade's call was
+to ship `Q-192`, amend `Q-193` with the corrected premise, and let it become its own phase.
+So the honest shape of this phase is one filing built and one filing corrected — and the
+correction is the more valuable half.
+
+### The bundle broke before the build started
+
+`Q-193` says plans "authored at `/claim-task` plan time live in body prose under free-form
+headings." **Shipped `/claim-task` writes no plan into any task body.** `claim-task/SKILL.md`
+says so itself: the plan-only path is *specified but not built*, and "needs a `## Plan` body
+section that `tasks/schema.md` does not yet define." The only body write on the claim path is
+`## Test decision`, and the **executor** writes it at Step 7e — so a planned-but-unexecuted
+task has none. The ≥2 heading spellings the filing cites are the reporting consumer's own
+practice, which makes its fix item 3 ("standardize the heading `/claim-task` writes") a
+request to standardize a heading Sysop never writes.
+
+What Sysop actually produces is two artifacts, both under gitignored `sysop/runtime/`:
+`/claim-task` leaves `sysop/runtime/claim/<CLAIM_ID>/<RUN_ID>/plan.md` — its park marker is
+explicitly "a pointer, not a copy", which I had wrong until a lens corrected me — and
+`/auto-build` leaves `sysop/runtime/parked/<TASK_ID>__<ts>.md` carrying `## Plan (verbatim)`.
+The lens then found the cleaner proof of the filing's own premise: `claim_task.sh --release`
+flips `in_progress → open` in the **tracked** index while the plan stays in the **untracked**
+runtime dir, so nothing tracked records that planning ever happened. That is a better
+mechanism than body-prose invisibility, and it makes the pile per-machine rather than merely
+unread.
+
+And the headline is refuted on the filing's own evidence. Foundation-first falls through to
+`effort` only *"where `blast_radius` is absent"* — the condition is field **absence**, not
+`schema_version`, which is how I first framed it and was wrong. Measured on the reporting
+consumer's queue: **200/200 active tasks carry `blast_radius`**, so that branch never fires
+there; and planned tasks are **12/17 cross-module-or-architectural (71%) against 78/183
+unplanned (43%)**, so foundation-first tie-breaks *toward* the property planned tasks have
+more of and ranks them **up**. "Every ordering the tool produces" is one of three. The
+absent-`blast_radius` branch is reachable only on hand-authored or legacy queues, because
+`/intake`, `/add-task` and `/onboard` each mandate the field "even at `schema_version: 1`".
+
+One rider from `Q-193` shipped here, and the round corrected why. The first draft said the
+fix *depends* on it, which this phase's own skill text refutes — a batch's weight "comes
+from its routing cell, not from `effort`/`blast_radius`", and the `Q-193` refutation runs on
+the other branch entirely. The honest reason is narrower: foundation-first
+never stated the **direction** of its `effort` tie-break, and that is the axis `Q-193`'s
+mechanism rests on, so leaving it ambiguous would have made the amendment unverifiable. Ship-fast says "lowest effort first";
+foundation-first said only "then `effort`", so an agent could sort either way — and that axis
+is what `Q-193`'s whole mechanism rests on. It now says ascending.
+
+### `Q-192` verified, and its own fix proposal carried a foot-gun
+
+The defect reproduces exactly: `review_tasks.md` is zero hits in `roadmap/SKILL.md`,
+`review_batches` is zero hits anywhere under `core/skills/`, and Step 2a fetches the array and
+consumes only `state` and `discrepancies`. But **both lenses independently killed the filing's
+`Run it:` grammar.** `/auto-fix 583` does not select batch 583 — a bare integer is those
+skills' **concurrency cap**, so it requests a 583-way concurrency. Both skills say why in their
+own Step 0: `/auto-build`'s positional grammar cannot be copied here because "its bare integer
+and its `^[A-Z]`-shaped IDs are structurally disjoint, and two integers are not." The selector
+is `--batches`. The bad form came straight from the upstream issue's proposed fix, and I had
+repeated it into the scoping question before either lens ran.
+
+Two more from the pass. `next_action` is **prose**, not a command — **eight** sentence templates like
+`"/triage will classify (then /auto-fix or /auto-judge picks it up)"` — so "fold it into the
+`Run it:` lines" cannot be done at all; it has to be translated, and for `/triage` and
+`/review-close` there is no per-batch argument form to translate *into*. (This said *six*
+until the round's claims lens counted them from the AST. Six was not the `state` count
+either — that is five.) And the survey drops
+every batch outside `Pending`/`In Progress` before emitting, so a base-path read of the whole
+file and an `--in-flight` read return **different populations**, with the richer flag showing
+*fewer* batches.
+
+### The exclusion was never argued, and the sentence contradicted itself
+
+The filing frames this as an asymmetry — execution view sees both queues, strategy view sees
+one — and that frame is weaker than what is actually there. `roadmap/SKILL.md`'s boundary
+sentence listed "review batches" as `/sitrep`'s territory while its own next clause defined
+`/roadmap`'s subject as the *backlog*; an unclaimed `Pending` batch is backlog, which is
+precisely why the survey classifies it `pending (not claimed)`. Phases 70, 73 and 103 contain
+no defence of the exclusion — it is a four-item enumeration of what `/sitrep` reads, not a
+scoping decision. So the sentence was rewritten rather than routed around.
+
+The stronger fact is that **`/next-task` already crosses the queue boundary on its default
+path** — `next_task.py` is commented "Default mode: index first, then review" and falls
+through to the next pending batch when no roadmap task is claimable. Cross-queue reading was
+already the shipped shape for a read-side skill. (The two lenses disagreed here; one reported
+it as `--review`-gated. Reading the code settled it.)
+
+### What shipped
+
+`/roadmap` reads `review_tasks.md` on the base path **and** consumes `review_batches` under
+`--in-flight`, with batches as their own Step 3 kind. Six calls, each forced by the pass:
+
+- **Both paths filter to `Pending`/`In Progress`**, so the flag adds *depth, not breadth*.
+- **The base path names the main checkout**, because a worktree carries its branch's own copy
+  and the survey reads main's — the two halves would otherwise describe different trees.
+- **`Run it:` emits `--batches`**, never a bare integer.
+- **`next_action` is translated**, never printed; `/triage` and `/review-close` are named
+  without a batch argument because they have none.
+- **Precedence is roadmap-first with batches alongside**, matching `/next-task` rather than
+  `/sitrep`'s batch-first cascade — and the skill says so where the two can disagree, because
+  they can and it is legitimate.
+- **No `BATCH-<N>` ID is minted.** The round refuted this bullet's first draft, which said
+  `claim_task.sh` refuses that shape: it refuses it on `--entry-state` and `--release` only,
+  and the primary claim path creates the worktree and mints the lock. The decision stands;
+  its stated justification was wrong, and the real one is stronger — nothing downstream can
+  reject such an id.
+
+Absence is documented as the **ordinary** case: `install.sh` never seeds the tracker, so it
+first exists after a project's first `/codebase-review` or `/security-audit`, and the dominant
+fresh-consumer shape has no review queue at all. Doc currency followed to four files —
+including `tasks/README.md`'s skill→reads table, which my own survey of the doc surface had
+missed and which was wrong for **`/next-task` too**, not just `/roadmap`.
+
+**Two things this deliberately does not do.** #394's item 3 — letting `surfaced_by` accept
+`BATCH-<N>` — is a schema and validator change reaching every consumer, and it is the same
+shape as `Q-154`; it is carved out as `Q-202` rather than arriving by the side door. And
+`/roadmap` is excluded from `--mode loop`, so this fix cannot reach the one mode whose only
+queue is `review_tasks.md`. Both are in the skill's design notes, not left to be discovered.
+
+### The battery found five real holes in my own guards
+
+`tools/phase199_mutations.py`, 13 rows, 3 controls, 1 declared revert (7%). The set is
+weighted toward **reversal and laundering** rather than deletion, because this phase ships
+prose an agent executes and Phase 198's round had shown three keyword clauses staying green
+against a document asserting the opposite of all three.
+
+First run **8/13, 5 survivors, all five real**:
+
+- **S01/S02** — the "cross-file" filter guard was decorative. It asked whether each surveyed
+  status was named *anywhere* in the skill, and the skill names `Merged` in its **excluded**
+  list — so widening the survey's own filter left it green. Now it parses the skill's declaring
+  sentence and asserts **set equality** with the survey's filter, in both directions.
+- **L01** — Phase 197's laundering class: the required phrase survived inside a sentence
+  prescribing the opposite ("Read whichever is nearest… some projects keep the main checkout's
+  elsewhere"). The match is now anchored to the start of the instruction.
+- **L02** — the batch-actuator **table** was not scanned; only `Run it:` lines were. The
+  foot-gun walked back in one row above. Replaced with a count-and-identity rule: `/roadmap`
+  never sets concurrency, so exactly one line may carry the bare form — the prohibition itself.
+  The pattern also had to grow the `<N>` placeholder spelling, which a digits-only rule could
+  not see and which reads *more* like a template to copy.
+- **D01** — nothing asserted Step 1's read list names `review_tasks.md` at all.
+
+Final **13/13 killed, 3 controls clean, 0 false kills**. Stated limit, so no lens has to find
+it: **no row carries an `effect=` probe**, so each kill is evidence a guard is wired to the
+file and says nothing about whether its population is right. And nothing here can test whether
+an agent *following* the prose parses `review_tasks.md` correctly — `/roadmap` has no runner,
+so the parsing itself is unguardable from this repo.
+
+One guard defect worth recording because it is the same class the phase is about: my
+normalizer stripped `_` along with `*`, turning `review_tasks.md` into `reviewtasks.md` and
+making the one check that names the file unsatisfiable. It failed loudly, but a slightly
+different phrasing would have made it pass vacuously instead.
+
+Suite at the phase commit was **3576 passed / 5 skipped** with
+`test_every_phase_from_174_has_a_ledger_row` **legitimately red** by convention; after the
+round's fixes and its ledger row, **3608 passed / 5 skipped / 0 failed**. Baseline 3521 at
+`10ff418`, identical skip list throughout. The first draft of this line said `3577 passed / 5 skipped` and
+mentioned no failure — it double-counted the ledger guard as passing and asserted a green
+suite for a commit that is red. The commit message had it right and the record did not,
+which is the half a reader trusts. Caught by the round's claims lens.
+
+### The round — three lenses, one round, and it disqualified more of the record than the build
+
+Governor condition met (ships behaviour **and** a record making numeric claims), so three
+lenses on distinct contracts: *does it execute* / *are its claims true* / *are the guards
+real*. All fresh-context `general-purpose`, none a fork, all told not to mutate the tree.
+Dispatched via **tagged throwaway clones**, not `isolation: "worktree"` — Phase 198's round
+established that isolation forks from the **default branch**, which under `pr` policy hands
+every reviewer the pre-phase tree — and each gated on `_skill_declared_statuses`, a symbol
+this phase introduced. All three landed correctly; the gate cost nothing and would have been
+the whole round without it.
+
+**The execution lens found the fix contradicting itself in two lines I wrote in the same
+commit.** Step 1 said *"Read the main checkout's `review_tasks.md`"*; the portability note 215
+lines later said the base path reads it *"at the repo root"* with *"no git or script
+dependency"*. Both were added by this phase, and they name different files — resolving the
+main checkout needs `git rev-parse --git-common-dir`, which the base path deliberately cannot
+run. This is rule 2's exact class: new prose is the least-reviewed text in a change, and its
+author is the one person who cannot read it cold. What ships now declares the divergence
+instead of instructing past it, and states the price of the portability contract rather than
+pretending there isn't one.
+
+**And the class was closed for one file out of four.** The worktree-divergence reasoning
+applies verbatim to `tasks/index.yml`, `vision.md` and `decisions.md`, which sit *directly
+above* `review_tasks.md` in the same numbered read list — the survey resolves the index from
+`main_root` too. The lens demonstrated it with a real worktree returning divergent task IDs.
+I found the bug, wrote the general reasoning, and applied it to the file I happened to be
+thinking about.
+
+**Two more from that lens, both real.** The `Run it:` routing could never actually offer a
+batch: Step 5 emits *one* move, and its first bullet fired on any ready task — so on the
+195-task queue that produced the filing, the flagged security batch would be described in the
+report and never be the thing the human was offered. Visibility without routing is half a fix,
+and the cascade now leads with the batch when it outranks. Separately, the example block's
+fourth ordering broke the `1–3` bound stated in three places *and* its rationale announced it
+had ignored the roadmap-first rule I wrote forty lines above it. The bound is now `1–4` with
+the fourth ordering named in prose, because a queue-shaped ordering is a real fourth path.
+
+**The claims lens refuted four record assertions and one shipped one.** The shipped one is the
+worst: *"`claim_task.sh` refuses that shape"* appeared in the skill, the archive and `Q-202` —
+and it refuses `BATCH-<N>` only on `--entry-state` and `--release`. The lens drove the primary
+claim path and watched it create a worktree and mint `BATCH-7.lock`. The decision not to mint
+such an id stands; its justification was false, and the true one is stronger — nothing
+downstream can reject it. In the record: the suite line double-counted the ledger guard and
+asserted a green suite for a commit that is red (the commit message had it right, which is the
+worse half — the record is what gets read); `next_action`'s "six templates" is eight;
+`CLAUDE.md` turned five survivors into "five guards" when they map to four, of which three
+were decorative and one was a *missing* guard; and the `Q-193` rider's stated justification is
+contradicted by this phase's own skill text.
+
+**The guards lens is the one that matters, and it beat me five to one.** An independently
+designed 30-row battery killed **6 (20%)** against my reported 16/16. Split by row class:
+straight deletion 4/4, but **laundering / inversion-evasion / population / count-identity
+1 of 24 (4%)** — and that one was an accidental word match. Then the decisive measurement:
+**21 non-conflicting survivors applied simultaneously left the full suite byte-identical to
+baseline** — including a `/roadmap` explicitly instructed not to read `review_tasks.md` on the
+base path. Every guard I wrote could be walked through by a following sentence, a decoy above,
+a file outside the scanned population, or a phrase on the same line.
+
+Four structural causes, each fixed as a class rather than row by row: the cross-file
+derivations took the *first* regex match, so a docstring or an "an earlier revision read…"
+line — this repo's own house style — rerouted them to a decoy (now scoped to the function
+body, with ambiguity a hard failure); the `Run it:` population came from a hand-listed index
+and missed `docs/getting-started.md`, `docs/workflow.html` (**edited by this phase**) and
+`tasks/schema.md` (now derived from the directories); the bare-operand rule counted *lines*
+so a prescriptive occurrence appended to the prohibition sentence kept the count at one (now
+per-occurrence with an exact expected count); and the `install.sh` seeding pin fired on
+essentially nothing — blind to `cat > "$dst"`, to `cp`, and to any line carrying a `#` before
+the redirect, i.e. blind to every idiom that file actually uses.
+
+**The single most valuable finding is a product defect the fix itself shipped.** `Review Ready`
+is declared **LIVE** by `batch_work.sh` — *"Declared: Pending · In Progress · Review Ready
+(live) · Complete · Merged · Ready for Review (finished)"*, and *"the one status that needs
+someone to act"* — and this skill dropped it and called it finished. It did so because I had
+matched the population to `sitrep_survey.py`'s filter, reasoning that the two halves must
+describe the same set. That reasoning was wrong twice over: the execution lens had already
+shown the status filter is not the only population gate (the survey silently **drops** any
+batch whose header its strict pattern rejects, making it invisible to every other tool), and
+the claims lens showed matching the survey meant dropping live work. **Reproducing `Q-192`
+inside the fix for `Q-192`.** The population now derives from the tracker's own live/terminal
+declaration, `--in-flight` is documented as reaching a subset, and the skill says which rows
+it cannot enrich.
+
+Final battery **16/16 killed, 1 measured no-op** (`S01`, proven by an `effect=` probe rather
+than argued — widening the survey no longer makes the skill wrong, because the population moved
+to the tracker), 3 controls clean, 0 false kills. Guard module 87 tests.
+
+**Filed, not fixed.** `Q-203` — a prose direction-guard cannot detect an arbitrary contradicting
+sentence, and four of the lens's rows exploited exactly that. Carve-out canaries close the
+shapes this project has met; the general case needs a judgement no pattern encodes, which is
+the governor's own criterion for a survivor one may decline to close. `Q-204` — the mutation
+harness is not crash-safe: a killed run leaves the tree mutated, which the lens hit and the
+next run's already-red guard caught.
+
+**One over-strictness debt I am not claiming to have fixed:** the lens reddened **9 of 9**
+behaviour-preserving edits — a set literal, a comment, a named constant, an added article,
+"Do not" for "Never", a bulleted prohibition. Some of those failures are correct and say so
+("fix the pattern, do not delete the test"); several assert the *claim* is gone when only its
+formatting changed, which is how a correct edit gets reverted. Rolled into `Q-203`.
+
+## Phase 200 — the consolidation transaction's gate and its staging arm
+
+> **Line numbers in this entry are against `09cf630`, the pre-phase tree** — they
+> cite text as the filings and this phase found it, not as it sits after the change.
+> The first draft mixed the two bases and cited four lines that resolved in neither;
+> the round caught it. To read a cited line: `git show 09cf630:<path> | sed -n '<N>p'`.
+
+**Brief:** three filings against `/review-close` Step 4c, framed as three organs of one
+transaction — `Q-189` the gate, `Q-188` the writer, `Q-194` the staging arm. Two shipped.
+`Q-188` was dropped on Wade's call after the pre-build pass showed its chosen fix does not
+close it; the phase's product there is an amended filing, not a mechanism.
+
+### The pre-build verification pass, six for six
+
+Two hostile fresh-context verifiers in throwaway clones at `09cf630`, told to falsify rather
+than confirm. It has now paid on every phase from 195 forward, and this was its largest yield:
+it did not merely correct claims, it **removed a build from the phase**.
+
+**On `Q-188` it disqualified the chosen fix.** The decision on the table was option (a) — stop
+rewriting the whole file, do a targeted text edit. Four findings, each by execution:
+
+- **The scope is a writer class of five, and the filed site fires last.** `tasks/index.yml` has
+  five whole-file `safe_dump` writers, all five with identical kwargs. Claiming an *unrelated*
+  task destroyed `#482`, `#307` and all 22 comment lines at **claim** time (`claim-task/SKILL.md:352`),
+  and `safe_dump` output is a **byte fixed point** — so by the time Step 4c runs there is nothing
+  left for it to destroy. Fixing Step 4c alone buys almost nothing on the prescribed lifecycle.
+- **The `width=120` folding clause is false** — 0 lossy round-trips in 3000 random ` #`-bearing
+  titles. PyYAML refuses plain style for `#`-preceded-by-space at any length. The unquoted ` #`
+  reaches disk from the `Edit`/`Write` authoring paths, never from a dump.
+- **Leg 2 is a null set.** A plain scalar cannot contain ` #` after load, so a guard flagging
+  "any plain multi-line scalar containing ` #`" can never fire. Dropped, Wade's call.
+- **Built naively, fix (a) is worse than the bug** — silent no-close on 6 of 18 legal index
+  shapes, exit 0, validator green, pending-doc then deleted and the consolidation committed.
+  **9 of the 9 shipped tests passed against that version**; none has a `title:` field, and the
+  one accidental catch was a string-vs-`datetime.date` comparison.
+
+The honest reframe went into the filing too: every consumer reads through `safe_load`, so the
+truncated title is **already invisible system-wide**. The fix would preserve bytes for human
+eyes and restore nothing to any reader.
+
+**On `Q-189` and `Q-194` it rewrote the premises but left both buildable** — see below. Both
+filings' *headline* claims were wrong in a way that would have sent the build at the wrong line.
+
+### `Q-189` — the gate
+
+The filing framed cherry-pick as an operator deviation Step 4b tolerates. **Sysop prescribes
+it.** Step 4-pre's `pr` policy runs `git cherry-pick origin/main..main` at `review-close/SKILL.md:806`,
+and `/document-work` supports running on `main`, writing `branch: main` frontmatter that Step 4c's
+bare `ls` collects. So every `pr`-policy close carrying that doc holds it back — and
+*intermittently*, because a pick made in the same second as the original commit reproduces an
+identical SHA and scores `0`. A bug that appears and disappears with the clock.
+
+**The load-bearing falsehood was at `:978`, which the filing never named:** *"the count is `0`
+for every branch that landed under either policy — verified in all three shapes."* It is not,
+and the drift guard pinning it claimed "all three merge shapes" while building only a `direct`
+ff-merge. **`:1360`, the site the filing said must be corrected, needed no correction** — the
+filing truncated the quote at the clause that scopes it (*"where ff-merge preserves ancestry"*),
+and a cherry-pick is not an ff-merge. Silent, not wrong; it got a one-clause addition.
+
+The remedy is `git cherry`, already in the file's vocabulary at `:1360` as evidence about squash.
+Measured rather than reasoned: cherry-picked scores `rev-list=1 / unapplied=0`; genuinely
+unmerged scores `rev-list=1 / unapplied=1` — `rev-list` returns **identical verdicts**, zero
+discriminating power. The verdict on a `git cherry` pass is **ask, not skip**, and the fallback
+ships with its own limit stated: a conflict-resolved pick changes the patch-id and `git cherry`
+false-reports, so neither test is authoritative alone. +3 tests build the cherry-pick shapes the
+guard had only ever claimed.
+
+Two adjacent defects the filing did not name: `:980` anchors the held-back report to a 4a-SKIP
+entry that does not exist in this case, so Step 8's template gained a `Held-back docs:` block;
+and under `pr`, Step 6 force-deletes a cherry-picked branch while its doc sits held back, so the
+next close hard-stops on the unresolvable ref — the close creating the conditions for its own halt.
+
+### `Q-194` — the staging arm
+
+**The marquee claim is false as written.** There is no `git add tasks/index.yml` in Step 4c; the
+filing is quoting `:857`, which is Step 4a. The real site is `:1101`, gated on `if closed:`, and
+the sweep happens because `:1054` reads the **working tree**. Anyone grepping Step 4c for the
+filed command finds nothing and concludes the filing is wrong.
+
+**"Swept into someone else's commit" is overstated** — two gates sit between 2b and 4c and fire
+first. What is actually broken is that detection lands five steps late, **both gates name the
+wrong cause**, and **`:1164` then instructs a `git commit --amend --no-edit`** that folds the
+foreign edit in. That laundering path is the one the filing missed, and it is where the harm
+actually lands.
+
+**The legs re-ranked 3 > 1 > 2.** Leg 3 — naming file *creation* in the prompt — went first,
+because untracked scratch files are the dominant observed breach shape and are invisible to every
+`git diff` gate in the skill **and to leg 2's own proposed command**. Verified: on a clean tree
+with only an untracked file added, all three of `git diff --quiet HEAD --`, `git diff --quiet`
+and `git diff --cached --quiet` report CLEAN.
+
+**Leg 2 did not ship as filed.** Nothing establishes a clean primary tree before Step 2b — Step 1a
+excludes it by construction — so the proposed absolute `git diff --quiet HEAD --` would false-FAIL
+on ordinary uncommitted work: the disqualifying shape from Phase 155. Shipped instead as a
+`git status --porcelain` **baseline** taken after 1b/1c commit, into gitignored `sysop/runtime/`,
+compared as a **delta**. Run end to end: a pre-existing dirty file
+yields "primary tree unchanged by 2b"; an agent-created untracked file is caught.
+
+**The rider is the important part.** `:337`'s *"none of this applies"* switched the whole
+assertion block off for exactly the no-isolation harness leg 2 protects — and
+`_shared/adversarial-review.md:43` carried the identical *"are sufficient"* overclaim. That is the
+doctrine site minting the class, and it governs every round this repo runs, including this
+phase's own. The rule has now been measured failing on **two** separate instruction texts.
+
+### The round — three lenses, one round
+
+Governor's three-lens condition: the phase ships behaviour **and** a record making
+numeric claims. Dispatched as fresh-context `general-purpose` agents in **tagged throwaway
+clones** (per Phase 198's finding that `isolation: "worktree"` forks from the default
+branch), each gated on `2b-baseline`, a symbol this phase introduced. Lenses: *does it
+execute* / *are the claims true* / *are the guards real*.
+
+**The round found the `Q-194` gate inert — worse than absent.** The baseline capture sat
+82 lines *after* the spawn it must precede, inside a blockquote headed "HARD RULE — the
+agents' worktrees must be gone before Step 3b", which reads as post-agent cleanup. Walked
+in reading order: the operator spawns at item 2, an agent breaches, the operator reaches
+the capture at line 337 and records the breach *as the starting state*, and the assertion
+then prints `primary tree unchanged by 2b` over the mutation it exists to catch. The whole
+Q-194 leg-2 mechanism, certifying clean on the only path a reader can take. Now a numbered
+step ahead of the spawn, with `rm -f` — without it a stale baseline persists between closes,
+so a skipped capture fails loudly only on the first close ever run — and `-uall` on both
+ends, because plain `--porcelain` collapses an untracked directory to one line and an agent
+writing into an already-untracked directory was invisible.
+
+**Two defects in the single command `Q-189` added.** `grep -c '^+'` exits **1** when the
+count is zero — and zero is the *pass* value — so the good outcome returned a failing status,
+aborted under `set -e`, and never fired the right-hand side of an `&&`. And a branch whose
+ref no longer resolves leaves the pipeline printing `0`, which is this test's *merged* answer:
+the doc gets routed, the task flipped to `done`, the lock dropped — the precise loss the filter
+exists to prevent, reachable from the Step 6 tail this phase itself documented. Now
+`grep '^+' | wc -l` behind a `rev-parse --verify`.
+
+**The claims lens found twelve false or overstated statements, four in the shipped skill —
+three of them written or left standing by this phase's own author-side pass.** The worst was
+the intermittency paragraph the pass had just rewritten: it claimed the bug "hides on the quiet
+path" because both SHA-collision conditions are ordinarily met under `pr`. They are not.
+`git cherry-pick` stamps the committer date at **pick** time, so the timestamp condition is
+essentially never met — measured on a five-minute-old commit with an undiverged parent: not an
+identical SHA, `rev-list` `1`, `git cherry` `0`. The paragraph advised backwards about when to
+expect the failure. Also: four record citations resolved in **neither** tree because the basis
+was mixed; all re-derived against `09cf630`, with the basis now stated at the top of the entry.
+
+**The guards lens produced the number that matters.** Against the phase's first two commits it
+ran 61 mutations and killed 8 of 49 defect-seeking rows — but the decomposition is the finding:
+six of the eight were vacuity probes against this phase's own new tests, two were pre-existing
+guards on shell scripts the phase never touched, and **mutations attacking the phase's own
+shipped content killed 0 of 41**. Twenty-one non-conflicting survivors applied simultaneously
+left the full suite **byte-identical to baseline**, and that 21 removes most of what the phase
+added. Zero of twelve behaviour-preserving controls false-killed — because there was nothing
+to false-kill. Its own tally: 24 distinct prose claims, **0 guarded**.
+
+**Its population finding is the one the guards could not have caught.** `/codebase-review`,
+`/security-audit` and `/plan-review` all fan sub-agents into the user's primary worktree, and
+all three carried **zero** do-not-mutate rules and zero do-not-create-files rules. Only
+`/review-close` had either — so the rule this phase spent its `Q-194` half strengthening existed
+in one of the places that need it. A pre-existing sentence in `_shared/adversarial-review.md`
+waived the requirement for the other two, and **this phase's own edit two lines above made that
+waiver worse**, by establishing that even a rule which *is* sent gets breached. A rule not in
+the prompt is not sent. Waiver retired; both fan-outs now paste the containment rule; a
+population test derived from the source of truth stops the set shrinking back to one.
+
+**Author-side battery.** First run **17% (4 killed / 23)**, with every one of sixteen prose
+mutations surviving — the same conclusion the guards lens reached independently, which is why
+two guard files were written rather than the number argued with. Running those guards found
+three more defects: a **pre-existing** guard keyed to the literal list number `4.` that the
+renumbering broke (fixed to match by content — the same brittleness this phase had just built
+into its own ordering test and caught by mutating it), and two new guards firing on this phase's
+own prose quoting the strings they ban. The prose was reworded rather than the guards loosened,
+and the convention is now stated in the guard file: describe a retired falsehood, never quote
+it, so a grep returns zero hits. A third instance appeared while writing the population guard.
+
+**A defect in the instrument, recorded because it invalidated two reported numbers.** The
+battery clones from the source repo, and `git clone` takes committed content only — so two runs
+started before the guards were committed silently scored the *previous* tree. The tell was a
+survivor list that came back identical after guards had been added for six of its seven rows,
+which is not a plausible outcome. The script now prints the commit it measured and warns on an
+uncommitted source tree. This is the phase's own subject — a gate reporting on something other
+than its subject — arriving in the instrument built to measure the gate.
+
+**One battery row was retired as mis-filed.** It asserted that a baseline at a tracked path
+"self-pollutes" by reporting itself. Two lenses independently disproved it: `>` creates the
+redirect target *before* `git status` runs, so the file appears in both readings and cancels.
+The row could only ever have scored as a phantom hole. Kept as a comment rather than deleted,
+because a battery row built on a false premise is worth recording.
+
+## Phase 201 — the writer class that did not need rewriting
+
+> **Line numbers in this entry are against `28204eb`, the pre-phase tree.** To read a
+> cited line: `git show 28204eb:<path> | sed -n '<N>p'`. This matters more than usual
+> here: the filing this phase was briefed from carried anchors against `7d43af3`, and
+> Phase 200's own commit shifted every `review-close` anchor in it by **+48** without
+> re-deriving them. `review-close/SKILL.md`'s writer is `:1141`, not the `:1093` the
+> amendment and the next-session brief both name.
+
+**Brief:** `Q-188` (upstream #399) plus its rider `Q-207`, scoped by Wade on 2026-08-13
+as the `tasks/index.yml` **writer class** rather than the one site the filing named.
+Phase 200 had already disqualified the filing's own fix — a line-targeted text edit that
+silently failed to close tasks on 6 of 18 legal index shapes while passing all 9 shipped
+tests — so the phase began with the mechanism undecided.
+
+### The mechanism decision, made before building
+
+The amendment left one question open: what replaces the disqualified fix. Three candidates,
+and the deciding evidence was a dependency fact, not a design argument.
+
+A comment-preserving round-trip (`ruamel.yaml`) is the only *low-risk* way to buy byte
+preservation — a hand-rolled surgical editor has to survive an unbounded syntactic space,
+because `tasks/schema.md` constrains **semantics only**: no key order, no quoting, no
+indentation. But `ruamel` has **no delivery path to consumers**. `requirements-dev.txt`'s
+own header states Sysop ships no runtime `requirements.txt` by design; the five writers run
+in the *consumer's* interpreter, and **every one of the five already hunts for PyYAML**: four
+carry the `sys.path` bootstrap (the three skill heredocs plus `backfill_completed_dates.py`)
+and `claim_task.sh` carries `resolve_yaml_python()`, the bash-side equivalent. The first draft
+said three, undercounting in its own favour. A soft dependency (`ruamel` if importable,
+`safe_dump` otherwise) is worse than either: it would leave the fix inert for nearly every
+consumer, which is the shape that disqualified Phase 155 and Phase 190.
+
+So the writers were **not changed**, and the phase's honest product is partly a finding:
+*comment preservation in `index.yml` cannot be bought safely with the dependencies Sysop is
+willing to ship.* Wade ratified that scope on 2026-08-14. What the phase does instead is
+remove the trap Sysop itself ships, close the defect at the path that actually produces it,
+and make the record true.
+
+### Deriving the populations corrected the brief four times
+
+The brief said to derive every population rather than carry a count. Doing so found the
+amendment wrong in four ways — three of them load-bearing.
+
+**1. The three authoring-path anchors hold exactly — and the first draft of this entry said
+they did not.** The amendment named `/add-task:74`, `/intake:140` and `/onboard:115` as *"the
+`Edit`/`Write` authoring paths"*, and all three resolve to precisely that: an `Edit`-append
+instruction in each. What is true is narrower and still useful — none of those paths carries
+a `title:` **template**. `/add-task` and `/onboard` contain no `title:` line at all (`git grep
+'title:'` returns zero hits in both) and `/intake:130` **already quotes**. So the unquoted
+title comes from free authoring where no template exists, and the fix is to state the rule
+with its reason rather than correct an example.
+
+**The error is worth recording rather than quietly fixing**, because it is the Phase-153
+class: this entry rebutted a claim the filing never made, and wrote the rebuttal into the
+record as a discovery. `CLAUDE.md`'s row carried the strongest form of it (*"the filed
+authoring anchors held none"*). The round's claims lens caught it by doing the one thing the
+brief's own carry-in asks for — reading what the filing actually said, rather than what the
+phase remembered it saying.
+
+**2. With the writer unchanged, the 11-site stale-description population collapses to one.**
+The amendment's *"8 of 11 genuinely go stale"* was an artifact of assuming the writer would
+change. Derived against the shipped tree, every round-trip description is already accurate —
+`claim-task/SKILL.md:345` (*"still reflows the file (comments dropped, quoting and wrapping
+normalised)"*) and `review-close/SKILL.md:1136` (*"would reserialize the whole index"*) are
+the two most precise statements in the repo — and exactly **one** site is false: the `Q-207`
+parenthetical. The scoping decision shrank the work by an order of magnitude, and the number
+that shrank it was one this phase derived, not one it was handed.
+
+**3. The seed was the real day-one harm, and no filing mentioned it.** `install.sh:3209-3243`
+seeded `tasks/index.yml` with ~22 comment lines, including a complete "Example task entry"
+reference block. Every writer rewrites the file whole, so the **first whole-file write**
+destroyed all of it — on every install. The first draft said "first claim"; the round showed
+that is false on the documented on-ramp, where `/intake` **`Write`s** the whole index on a
+fresh project and the seed dies before a claim can exist.
+The guidance survived exactly until it was first used. Reproduced in a real install: seed,
+author two entries, run one round-trip, 22 comment lines to zero.
+
+**4. The premise three phases reasoned from was pinned by nothing.** `git grep "width=120"
+-- tests/` returned **zero hits** before this phase. The "five writers, identical kwargs"
+claim that scoped Phases 199, 200 and this one was unguarded, and a sixth writer could have
+landed without anything noticing.
+
+### What shipped
+
+- **The seed carries no comments.** `install.sh`'s `index.yml` heredoc is now data only. The
+  reference block moved to `core/companion/tasks/README.md` § *Authoring an entry by hand* —
+  a **managed** path, so `--update` refreshes it rather than a dump destroying it. Its
+  `body:` example was also non-canonical (`tasks/open/FEAT-EXAMPLE.md` against `schema.md:58`'s
+  canonical `open/<TASK-ID>.md`); corrected in the move.
+- **A consumer-facing statement of the loss**, in the same README: the five writers named,
+  what a whole-file dump does to comments, quoting, indentation, anchors and block-scalar
+  style, and the instruction that prose written for a human belongs in the body file.
+- **The quoting rule, stated with its reason**, in all three authoring skills. `/intake`
+  carries it as the contract `/onboard` inherits by reference; `/onboard`'s copy names its own
+  exposure, since `gh issue list` titles carry `#NNN` and it imports them wholesale.
+- **`Q-207` corrected.** The claim that sprint prose was safe because block scalars round-trip
+  fine was the stated reason the comment loss was ruled acceptable, and it is false: a `|`
+  literal returns as a quoted folded scalar with a trailing blank line, a `>-` folded scalar
+  returns plain. Replaced with what the round-trip actually costs, and with the narrower real
+  reason it is acceptable — the file is machine-owned and every reader parses it, so no *value*
+  is lost. Per Phase 200's convention the retired wording is **described, never quoted**.
+- **Step 4c writes atomically.** `p.write_text(yaml.safe_dump(...))` → tempfile + `os.replace`.
+  **It was not "the only writer truncating in place" — the first draft of this entry said so and
+  the round disproved it.** `open(path, "w")` is `O_TRUNC`, so the three claim-side writers
+  (`/claim-task` Step 4a, `/auto-build` Step 5.1, `claim_task.sh --release`) carry the identical
+  hazard and are unchanged; `backfill_completed_dates.py` was already atomic. Step 4c was done
+  first because it is the site that has already `git mv`d the bodies, so a torn write there
+  strands staged renames against an index that never recorded them. Only the tempfile +
+  `os.replace` half of the sibling shape is copied, not its `fsync` pair — process-level
+  interruption is covered, power loss is not, and the comment says so. The failure arm **is**
+  copied, and the round added three more properties `write_text` had for free and `os.replace`
+  drops: it writes through a symlink instead of replacing it, preserves the file's mode
+  (a `0640` index was being widened to the umask default on every close), and the read half
+  gained the `encoding='utf-8'` its write half had.
+- **`tests/test_index_writer_class.py`**, 39 tests after the round rewrote it: the writer population derived by scanning
+  the shipped tree and checked against a named expectation; the kwargs invariant; a reversion
+  guard on the comment-free seed; the relocated block; the quoting rule in all three skills;
+  every shipped `title:` template quoted; atomicity; and the retired falsehood staying retired.
+
+### The defect, and the fix, executed rather than described
+
+Both directions were run in a real install rather than reasoned about. Authoring
+`title: "Fix the widget #482"` and `title: Fix the widget #482` side by side and running one
+round-trip: the quoted value reaches disk as `'Fix the widget #482'`, the plain one as
+`Fix the widget`. The loss happens at `safe_load`, **before** any dump — which is precisely
+why a parsed-value assertion in a test can never see it, and why nine shipped tests passed
+against a fix that did not work.
+
+### Two of this phase's own guards were defective on first run
+
+The author-side pass caught them before any reviewer, and both are textbook entries from the
+governor's assumption list.
+
+- **"What it accepts."** `assert "p.write_text(yaml.safe_dump(" not in flat` matched the fix
+  itself, because `tmp.write_text(...)` **contains** that substring — "tmp" ends in "p". The
+  guard written to protect the atomic write false-fired on the atomic write. Now boundary-
+  anchored, with a negative control asserting it separates `p.` from `tmp.` and `tmp_path.`.
+- **"What it matches on."** The population scan keyed on `\byaml\.safe_dump\b`, which matches
+  **prose** mentions as well as calls — it counted `tasks/README.md` and `claim-task`'s own
+  doctrine sentence as writer sites, then walked the paren-balancer onto whatever paren came
+  next. Now requires the opening paren.
+
+Both were found by running the battery, not by reading it. The comment on each guard records
+the defect rather than just the fix, because the next author to "simplify" one will reach for
+exactly the form that was broken.
+
+### The adversarial round — three lenses, one round
+
+Governor's three-lens condition held: the phase ships behaviour **and** a record making
+numeric claims. Fresh-context `general-purpose` agents in **tagged throwaway clones** (not
+`isolation: "worktree"`, per Phase 198's finding), each gated on `_title_template_files`, a
+symbol this phase introduced. Lenses: *does it execute* / *are its claims true* / *are the
+guards real*. All three clones ended clean, which is worth recording after Phase 198's
+breach: the containment rule held under an instruction to mutate freely (lens 3) and under
+real installs (lens 1).
+
+**The guards lens is the one that matters, and it is the sixth phase running to say the same
+thing.** An independently designed battery ran **36 defect mutations and 30 survived**, with
+**9 of 11 negative controls false-killed** — against the author's reported 14/14 and 0/3.
+The two numbers were not in conflict; they measured different things. The author's set was
+wired to the files and reported wiring. The independent set attacked the *assumptions* and
+found the module was, in its own reviewer's phrase, decorative.
+
+Four structural defects, each now closed and each recorded in the guard file next to the fix,
+because the shapes that failed are the ones a later author reaches for again:
+
+- **The real defect could still ship, in the file this phase exists to make safe.** A legal
+  YAML key reorder putting `title:` behind a `- ` sequence marker in the installer's own seed
+  passed all 26 tests, with `#1` lost at read time. Two holes lined up: the comment guard's
+  quote state machine treated the apostrophe in the seed's *own* plain scalar (`your first
+  sprint's narrative`) as an unterminated quote and discarded the rest of the line, and the
+  title scan required the stripped line to *start with* `title:`. An unterminated construct
+  gives its worst answer silently — rule 4's own case, met in the guard written under it.
+- **The rule could be stated and inverted at once.** A window check for the words "comment"
+  and "read" passes on a sentence asserting the opposite, and both tokens are near
+  unavoidable ("read" is a substring of *already*, *reader*, *thread*). The round inverted the
+  quoting rule in all three skills and in the README and every one stayed green. Fixed with
+  two tiers: short verbatim clauses whose *negation* is the failure, plus a loose regex that
+  the rule is stated at all. One tier alone got the tradeoff wrong in both directions — the
+  full-sentence pin false-killed an ordinary reword, which pressures the next author toward
+  vaguer language.
+- **The atomicity check was satisfied by a comment.** It grepped the whole 1200-line
+  `SKILL.md`, so `os.replace(tmp, p)` written in prose certified code that truncated in place.
+  Every Step 4c assertion now runs against the extracted heredoc body with comments stripped.
+- **Membership is not equality.** `"width=120" in "width=1200"` is true, so the
+  identical-kwargs invariant — the premise three phases reasoned from — missed the one drift
+  that reads as a typo. Kwargs are parsed and compared by value now, and the writer population
+  gained the four aliased spellings (`from yaml import safe_dump as _sd`, an aliased module
+  actually used to dump, `yaml.dump(..., Dumper=SafeDumper)`, `getattr`) that had smuggled a
+  sixth whole-file writer past it.
+
+**The execute lens found the atomic write bought less than it claimed**, by running it rather
+than reading it: `os.replace` silently dropped three properties `write_text` had for free —
+it replaced a symlinked index instead of writing through it, widened a `0640` index to the
+umask default on every close, and left an untracked `.tmp` beside a tracked path on failure.
+The read half had also been left locale-dependent while the write half gained `encoding=`.
+All four are fixed and executed: mode `640` preserved, symlink still a symlink with the real
+target updated, no residue after a forced failure. It also found the commit red on
+`test_the_next_session_prompt_briefs_the_next_phase` — the phase had consumed its own brief
+without rewriting it, which is exactly what that gate exists to catch.
+
+**The claims lens found seven false statements, two of them shipped.** The sharpest is the
+Phase-153 class and is corrected above at every site: the entry rebutted a claim the filing
+never made. The two shipped ones were *"the only whole-file index writer truncating in
+place"* (three still are) and *"destroyed by the consumer's first claim"* (false on the
+documented `/intake` on-ramp, where the seed dies before a claim can exist). Also corrected:
+three-of-five PyYAML bootstraps is four plus a bash resolver, 25 tests is 39, `Q-206`'s body
+still said "two" under a headline that said three, and the README's round-trip list said
+anchors are "renamed" when an anchor with no alias is *dropped* and a merge key is flattened.
+
+**After the fixes, re-measured against the reviewer's own batteries** rather than a fresh
+author-designed one: **24/24 and 5/5 killed, 0 of 11 controls false-killed**. Seven rows had
+gone `ANCHOR-STALE` because the fixes rewrote the code they pointed at; those were re-pointed
+in `tools/phase201_repoint.py` and run rather than left out of the denominator — **7/7, 0 of 3
+controls false-killed** — because a fraction over a reduced population is the self-selection
+this log keeps recording. The author's own battery, re-pointed, is 14/14 with 0 false kills.
+The runtime column, which killed nothing in the first version, now kills three: the atomic
+block is executable code rather than prose about executable code.

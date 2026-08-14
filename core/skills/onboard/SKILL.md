@@ -114,6 +114,8 @@ Compare each candidate against existing tasks (open, in-progress, deferred, **an
 
 Follow `/intake` Step 7's contract exactly: **append with `Edit`** when `index.yml` already lists tasks (never rewrite or drop an existing entry or its `sprint_note`; flip the previous `current_focus: true` to `false` in the same pass if you introduce a new current-focus phase); **author with `Write`** only when the queue is empty (`schema_version: 1` at top). **Refuse ID collisions** — surface them, never overwrite. Pick an ID prefix vocabulary consistent with any existing tasks; emit each phase's entry before the tasks that reference it.
 
+**Quote every `title:` you write** — `title: "<the title>"` — and this leg is the one most exposed to it. Unquoted, YAML reads ` #` (space then hash) as the start of a comment, so an imported `Fix the widget #define` lands as `Fix the widget`, with the rest gone the first time anything reads the file and the validator still green. An imported backlog is full of the shape: `gh issue list` titles carry a hash-and-number reference, and roadmap lines carry hash-written ordinals and heading fragments. The reference entry shape is `tasks/README.md` § *Authoring an entry by hand*.
+
 For a large backlog (tens of items), **emit in chunks** — one phase (or ~15 tasks) at a time, running the validator between chunks — so a structural mistake surfaces after the first chunk, not after task ninety.
 
 ## Final step — Validate (floor), hand off (ceiling)

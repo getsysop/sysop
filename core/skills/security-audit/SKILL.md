@@ -389,6 +389,23 @@ This structure ensures every category is checked by a dedicated agent with a nar
 
 **Also paste the § Adjudication kill/keep pair** (`_shared/fanout-evidence.md`) into each agent's prompt — agents assign their own severity, so an agent that quietly downgrades its own finding on a control it assumed rather than read has already destroyed the evidence before your merge ever sees it. The two lines to paste: *kill or downgrade only on a mitigation you located and read at a specific `file:line`; keep or escalate only on a path you actually traced — otherwise mark it unassessed and report it anyway.* This is an adjudication instruction, **not** a licence to report less: report every candidate you cannot dispose of on evidence.
 
+**Containment rule — paste into every agent's prompt, verbatim.** These agents run in the user's **primary** worktree, and the prompt is the only thing standing between them and it:
+
+```
+Do NOT mutate repository state — no `git checkout`, `switch`, `reset`, `stash`,
+`merge`, `rebase`, `add`, or `commit`, and no edits to tracked files. Read history
+with `git show <sha>:<path>`, which reads the object database and is unaffected by
+tree state.
+
+Do NOT create new files either — no scratch scripts, no notes, no probe files, not
+even untracked ones, anywhere in the repository. Compute from a heredoc or write
+under `/tmp`. "No edits to tracked files" is not permission to add untracked ones:
+an untracked file is invisible to every `git diff` gate and survives to whatever
+commits next, attributed to nobody.
+```
+
+**This rule has been measured failing, so send it AND check afterwards.** Two independent instruction texts produced the same breach — a consumer's 13-agent run whose agent created a task file and edited `tasks/index.yml`, and this repo's own Phase 198 pre-build pass, where an agent under an explicit read-only instruction created a scratch file anyway. Where your harness offers `isolation: "worktree"`, use it; that is what contained both. Where it does not, snapshot `git status --porcelain -uall` before dispatch and diff it after — `git diff` in any form is blind to a new untracked file, which is the dominant breach shape. `/review-close` Step 2b prescribes that sequence in full.
+
 **Do-not-report list (dispatch-side FP guard — paste into every agent's prompt).** The orchestrator's triage guards fire *after* agents spend attention; the cheapest false positive is the one never reported. Tell each agent NOT to report:
 
 - **Patterns the pre-scan already covers deterministically** — paste the ids of the checks the pre-scan **actually executed this round** (the Step 2b accounting's `executed` set — never a check it reported `skipped` or `failed`; a scanner that didn't run covered nothing, and suppressing agents on its behalf is the silent-degradation shape Phase 135's accounting exists to surface). The deterministic layer reports executed checks itself; this is the same rule Step 3b applies to amplification, stated at dispatch so agents stop hand-reporting what a machine check already caught.

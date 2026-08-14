@@ -138,6 +138,8 @@ You own this write path. Produce:
          body: open/FEAT-EXAMPLE.md
      ```
    - **Re-entry** (the index already lists tasks) → **append** with the `Edit` tool — add the new `tasks:` and `phases:` entries, and never rewrite or drop an existing entry or its `sprint_note` block scalar. If you're introducing a new current-focus phase, flip the previous `current_focus: true` to `false` in the same pass (exactly-one is a validator invariant). **Refuse to reuse an existing task `id`** — surface the collision to the human instead of overwriting.
+
+   **Both shapes: quote every `title:`**, task and phase alike, exactly as the skeleton above does. This is a contract, not a style preference, and `/onboard` Step B6 inherits it by reference. Unquoted, YAML reads ` #` (space then hash) as the start of a comment, so `title: Fix the widget #define` lands as `Fix the widget` — the loss happens at *read* time, before any writer touches the file, and the validator stays green because what survives is still a legal title.
 3. **`tasks/vision.md`** (if not already written in Step 2) and **`tasks/decisions.md`** — see § Artifact shapes.
 
 ID format: `^[A-Z][A-Z0-9-]{2,80}$` (e.g. `FEAT-LEDGER-IMPORT`, `TECH-DB-BOOTSTRAP`). Pick a prefix vocabulary that fits the project (`FEAT-`, `TECH-`, `DATA-`, `UX-`, `FIX-`) and stay consistent — downstream skills discover prefixes from the index. Every task's `phase:` must match a `number:` you actually defined under `phases:` (the validator rejects a task pointing at an undefined phase) — so emit the phase entry before the tasks that reference it.
