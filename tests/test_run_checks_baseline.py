@@ -91,6 +91,26 @@ def _write_baseline_lines(tmp_path, lines):
     p.write_text("# header\n\n" + "".join(f"{ln}\n" for ln in lines))
 
 
+# The fixture's two source lines, and the identity each one hashes to. Derived
+# from the same helper the runner uses rather than pasted as literals: a hash
+# typed into a test is a second implementation of `identity_of`, and it would
+# go stale silently the first time the normalization changed.
+_FIXTURE_SRC = {"src/a.py:1": "x = 'FORBIDDEN'", "src/a.py:2": "y = 'ADVISORY'"}
+
+
+def _key(check_id, file_line):
+    """The real three-field baseline key for a fixture finding.
+
+    Tests used to hand-write `check_id|path:line`. That is no longer a key any
+    identity-bearing check produces — which is the whole point of Phase 213 —
+    so a test that hand-writes one is asserting the defect. Consumers have the
+    same problem and `--print-keys` is their answer; this is the test-side twin.
+    """
+    return baseline.finding_key(
+        check_id, file_line, baseline.identity_of(_FIXTURE_SRC[file_line])
+    )
+
+
 # ── 1. file I/O ─────────────────────────────────────────────────────────────
 
 
@@ -108,7 +128,7 @@ def test_write_then_load_roundtrip_ignores_header(tmp_path):
     # drop all of it and return only the key. (dirname must be non-empty —
     # write_baseline os.makedirs it.)
     p = str(tmp_path / ".sysop" / "baseline.txt")
-    baseline.write_baseline(p, [("chk", "src/a.py:3", "msg")], blocking_ids={"chk"})
+    baseline.write_baseline(p, [("chk", "src/a.py:3", "msg", "")], blocking_ids={"chk"})
     assert baseline.load_baseline(p) == {"chk|src/a.py:3"}
 
 
@@ -140,9 +160,9 @@ def test_write_baseline_returns_what_it_persisted(tmp_path):
     """
     p = str(tmp_path / ".claude" / "checks_baseline.txt")
     findings = [
-        ("gate-check", "src/a.py:1", "m"),
-        ("advisory-check", "src/a.py:2", "m"),
-        ("coverage-diff-python", "src/a.py:3", "m"),
+        ("gate-check", "src/a.py:1", "m", ""),
+        ("advisory-check", "src/a.py:2", "m", ""),
+        ("coverage-diff-python", "src/a.py:3", "m", ""),
     ]
     written = baseline.write_baseline(p, findings, blocking_ids={"gate-check"})
     keys = baseline.load_baseline(p)
@@ -155,7 +175,7 @@ def test_write_baseline_leaves_no_tmp_file_behind(tmp_path):
     """Atomic rewrite via `<path>.tmp` + os.replace — the tmp must not survive."""
     d = tmp_path / ".claude"
     p = str(d / "checks_baseline.txt")
-    baseline.write_baseline(p, [("chk", "src/a.py:3", "m")], blocking_ids={"chk"})
+    baseline.write_baseline(p, [("chk", "src/a.py:3", "m", "")], blocking_ids={"chk"})
     assert sorted(x.name for x in d.iterdir()) == ["checks_baseline.txt"]
 
 
@@ -171,7 +191,7 @@ def test_an_advisory_finding_is_written_and_suppresses(tmp_path):
     """
     p = str(tmp_path / ".claude" / "checks_baseline.txt")
     baseline.write_baseline(
-        p, [("advisory-check", "src/a.py:2", "m")], blocking_ids=set()
+        p, [("advisory-check", "src/a.py:2", "m", "")], blocking_ids=set()
     )
     keys = baseline.load_baseline(p)
     assert keys == {"advisory-check|src/a.py:2"}
@@ -196,7 +216,7 @@ def test_blocking_ids_does_not_change_either_answer(tmp_path):
             "advisory-check", "src/a.py:2", blocking_ids, set()
         ) is False
 
-    findings = [("advisory-check", "src/a.py:2", "m")]
+    findings = [("advisory-check", "src/a.py:2", "m", "")]
     seen = set()
     for i, blocking_ids in enumerate((set(), {"advisory-check"}, {"unrelated"})):
         p = str(tmp_path / f"b{i}" / "checks_baseline.txt")
@@ -227,9 +247,9 @@ def test_coverage_is_never_written_however_it_is_classified(tmp_path):
     filing names, and this is what fails when someone does.
     """
     findings = [
-        ("coverage-diff-python", "billing/charge.py:12", "m"),
-        ("coverage-diff-frontend", "web/app.tsx:4", "m"),
-        ("advisory-check", "src/a.py:2", "m"),
+        ("coverage-diff-python", "billing/charge.py:12", "m", ""),
+        ("coverage-diff-frontend", "web/app.tsx:4", "m", ""),
+        ("advisory-check", "src/a.py:2", "m", ""),
     ]
     for i, blocking_ids in enumerate((set(), {"coverage-diff-python"})):
         p = str(tmp_path / f"c{i}" / "checks_baseline.txt")
@@ -286,7 +306,7 @@ def test_an_advisory_baseline_entry_cannot_change_the_exit_code(tmp_path, monkey
     changes nothing else; the blocking finding still fails the gate.
     """
     _tree(tmp_path)
-    _write_baseline_lines(tmp_path, ["advisory-check|src/a.py:2"])
+    _write_baseline_lines(tmp_path, [_key("advisory-check", "src/a.py:2")])
     code = _run(tmp_path, monkeypatch, ["--fail-on-blocking"])
     out = capsys.readouterr()
     assert code == 1, "the blocking finding is still fresh"
@@ -302,7 +322,7 @@ def test_baselining_the_blocking_finding_still_clears_the_gate(tmp_path, monkeyp
                                                               capsys):
     """The half #363 did not touch, asserted so a regression here is visible."""
     _tree(tmp_path)
-    _write_baseline_lines(tmp_path, ["gate-check|src/a.py:1"])
+    _write_baseline_lines(tmp_path, [_key("gate-check", "src/a.py:1")])
     code = _run(tmp_path, monkeypatch, ["--fail-on-blocking"])
     out = capsys.readouterr()
     assert code == 0
@@ -353,32 +373,67 @@ def test_the_summary_stays_quiet_when_no_blocking_check_is_suppressed(tmp_path,
     warning. (Same reasoning as Phase 192's `Scoped`/`Sampled` carve-out.)
     """
     _tree(tmp_path)
-    _write_baseline_lines(tmp_path, ["advisory-check|src/a.py:2"])
+    _write_baseline_lines(tmp_path, [_key("advisory-check", "src/a.py:2")])
     _run(tmp_path, monkeypatch, ["--fail-on-blocking"])
     err = capsys.readouterr().err
     assert "baseline-matched: 1" in err
     assert "blocking suppressed" not in err, err
 
 
-def test_two_findings_sharing_a_key_are_written_once(tmp_path):
-    """The tally is suppressions recorded, not findings seen.
+def test_distinct_rules_on_one_line_no_longer_share_a_key(tmp_path):
+    """Three ESLint rules on one line are three suppressions, not one.
 
-    `load_baseline` returns a set, so a duplicate key is one suppression however
-    many lines were written. The catch-all ids make this ordinary rather than
-    exotic: `lint-*` carries the real rule in its message, not its id, so several
-    ESLint rules on one line share `lint-error|path:line`.
+    **This test asserted the opposite until Phase 213, and the assertion was the
+    defect.** It read "three findings, one suppression key" and its docstring
+    explained the collapse as an ordinary consequence of the catch-all id — so
+    the guard that should have caught `Q-246` was pinning it in place instead.
+    `lint-error` is one id for the whole ESLint stage, so `lint-error|a.js:7`
+    meant "whatever ESLint says about line 7", and one accepted entry excused
+    every rule that would ever fire there — including a new one nobody reviewed.
+
+    The rule id was in scope at the emit site the whole time (`lint.py`); it
+    just went into the message instead of the key.
     """
     p = str(tmp_path / ".claude" / "checks_baseline.txt")
     findings = [
-        ("lint-error", "a.js:7", "no-unused-vars"),
-        ("lint-error", "a.js:7", "eqeqeq"),
-        ("lint-error", "a.js:7", "no-shadow"),
+        ("lint-error", "a.js:7", "m", "no-unused-vars"),
+        ("lint-error", "a.js:7", "m", "eqeqeq"),
+        ("lint-error", "a.js:7", "m", "no-shadow"),
     ]
     written = baseline.write_baseline(p, findings, blocking_ids=set())
     raw = [ln for ln in open(p, encoding="utf-8").read().splitlines()
            if ln.strip() and not ln.startswith("#")]
-    assert written == 1, "three findings, one suppression key"
-    assert raw == ["lint-error|a.js:7"], raw
+    assert written == 3, "three distinct rules, three suppression keys"
+    assert raw == [
+        "lint-error|a.js:7|eqeqeq",
+        "lint-error|a.js:7|no-shadow",
+        "lint-error|a.js:7|no-unused-vars",
+    ], raw
+
+    # Accepting one rule must not accept the others — the actual Q-246 defect.
+    accepted = baseline.load_baseline(p) - {"lint-error|a.js:7|no-shadow",
+                                            "lint-error|a.js:7|eqeqeq"}
+    assert baseline.is_baseline_suppressed(
+        "lint-error", "a.js:7", set(), accepted, "no-unused-vars")
+    assert not baseline.is_baseline_suppressed(
+        "lint-error", "a.js:7", set(), accepted, "no-shadow")
+
+
+def test_a_genuine_duplicate_is_still_written_once(tmp_path):
+    """The dedup property the inverted test above was really about.
+
+    Deduplication is still correct and still worth a guard — it just needs a
+    genuine duplicate (same check, same line, same identity) rather than three
+    different findings that only looked like duplicates because the key was too
+    coarse to tell them apart.
+    """
+    p = str(tmp_path / ".claude" / "checks_baseline.txt")
+    findings = [
+        ("lint-error", "a.js:7", "m", "no-unused-vars"),
+        ("lint-error", "a.js:7", "m", "no-unused-vars"),
+    ]
+    written = baseline.write_baseline(p, findings, blocking_ids=set())
+    assert written == 1
     assert written == len(baseline.load_baseline(p))
 
 
@@ -434,7 +489,7 @@ def test_the_baseline_write_is_atomic(tmp_path, monkeypatch):
 
     monkeypatch.setattr(baseline.os, "replace", boom)
     try:
-        baseline.write_baseline(str(p), [("new", "src/b.py:2", "m")],
+        baseline.write_baseline(str(p), [("new", "src/b.py:2", "m", "")],
                                 blocking_ids=set())
     except OSError:
         pass
@@ -454,9 +509,9 @@ def test_the_baseline_is_written_in_sorted_order(tmp_path):
     """
     p = str(tmp_path / ".claude" / "checks_baseline.txt")
     findings = [
-        ("zeta", "src/z.py:1", "m"),
-        ("alpha", "src/a.py:9", "m"),
-        ("alpha", "src/a.py:2", "m"),
+        ("zeta", "src/z.py:1", "m", ""),
+        ("alpha", "src/a.py:9", "m", ""),
+        ("alpha", "src/a.py:2", "m", ""),
     ]
     baseline.write_baseline(p, findings, blocking_ids=set())
     keys = [ln for ln in open(p, encoding="utf-8").read().splitlines()

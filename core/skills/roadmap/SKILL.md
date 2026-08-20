@@ -93,7 +93,7 @@ python3 sysop/scripts/sitrep_survey.py --json
 
 Read each task's `state` (e.g. `in progress`, `planning`, `ready for /review-close`) and the `discrepancies` list, and overlay them onto the index tasks by `id`. Surface, in the Standing block, anything the index and the live state disagree on (index says `in_progress` but no lock; an orphan branch with no index entry) — but **route hygiene to `/sitrep`**: name the discrepancy, then say *"run `/sitrep` for the full execution-state survey and cleanup routing"*. Do not attempt cleanup; do not re-derive `/sitrep`'s classification table here.
 
-**Also read the payload's `review_batches` array** and upgrade the batch rows Step 1 already built. The flag adds **depth, not breadth**: it is the same batches (both paths filter to `Pending` / `In Progress`), with cells the base path cannot compute. Per batch the payload carries `batch_number`, `title`, `md_status`, `branch`, `has_lock`, `has_branch`, `has_flag`, `flag_reason`, `has_triage_record`, `triaged_verdict`, `triaged_tasks`, `total_tasks`, `doc_worked_tasks`, `notes`, plus:
+**Also read the payload's `review_batches` array** and upgrade the batch rows Step 1 already built. The flag adds **depth, not breadth**: it carries cells the base path cannot compute, on a **subset** of the rows Step 1 built. The payload filters to `Pending` / `In Progress`, so a `Review Ready` row stays exactly as Step 1 built it — **the base path is the broader view, and the two halves do not cover the same batches.** Saying they do drops the one live status that needs a human from the enriched half without saying so. Per batch the payload carries `batch_number`, `title`, `md_status`, `branch`, `has_lock`, `has_branch`, `has_flag`, `flag_reason`, `has_triage_record`, `triaged_verdict`, `triaged_tasks`, `total_tasks`, `doc_worked_tasks`, `notes`, plus:
 
 - **`state`** — one of `pending (not claimed)`, `claimed, no branch`, `empty batch`, `in progress`, `ready for /review-close`. **Every one of these needs git** (branch existence, the main-repo lock dir, and `Doc-Work:` trailers on `git log main..<branch>` — *not* `[x]` checkboxes), which is why the base path cannot produce it and must not pretend to.
 - **`next_action`** — a prose sentence, e.g. `"/triage will classify (then /auto-fix or /auto-judge picks it up)"`. **Read it, never print it as a command.** See Step 4's batch actuator rules.
@@ -119,7 +119,7 @@ Read the JSON `max_verdict` (`likely` / `possible` / `none`), the `overlaps` lis
 
 ## Step 3 — Group the outstanding work by kind
 
-"Outstanding" = every **roadmap task** with `status` in `{open, in_progress}` (skip `done` and `deferred`; count `done` for the Standing block only), **plus every `Pending` / `In Progress` review batch** from Step 1.
+"Outstanding" = every **roadmap task** with `status` in `{open, in_progress}` (skip `done` and `deferred`; count `done` for the Standing block only), **plus every `Pending`, `In Progress` and `Review Ready` review batch** from Step 1 — all three of the statuses Step 1 surveyed, not the two the `--in-flight` payload reaches. **`Review Ready` is the one that must not be dropped here:** the tracker calls it *"the one status that needs someone to act"*, so excluding it hides the most actionable work in the project from the strategy view — this skill's own reported defect, one layer in.
 
 **Classify each outstanding task's readiness** from its fields — a task can carry more than one flag:
 
@@ -153,7 +153,7 @@ The readiness flags do not apply either — a batch has no `user_action`, `on_ho
 | Cell | Base path | `--in-flight` adds |
 |---|---|---|
 | identity | `Batch <N> — <title>` | — |
-| status | `` `Pending` `` / `` `In Progress` `` from the header | `state` (the live classification) |
+| status | `` `Pending` ``, `` `In Progress` `` or `` `Review Ready` `` from the header — all three live statuses reach this column | `state` (the live classification), on the two the payload reaches |
 | routing | `⚑ flagged: <reason>` from `> **Flag:**`, or `✓ triaged <verdict>` from `> **Triaged:**`, or `untriaged` when neither is present | `has_lock` / `has_branch` reality |
 | size | count lines matching `- [<state>] **TASK-<n>**:` — **three** states (` `, `/`, `x`; `[/]` is "in progress"), and the **bold id plus colon are required**, because that is the shape the survey counts. A bare `- [ ]` sub-checkbox inside a task's remediation prose is *not* a task; counting it makes this cell disagree with the `--in-flight` cell beside it. Add the severity mix where the findings carry one | `doc_worked_tasks` / `total_tasks` progress |
 
@@ -172,9 +172,11 @@ For each ordering you present: the first ~3–5 task IDs in that order, a one-se
 
 ### Where review batches sit in an ordering, and how to actuate them
 
-**Rank batches alongside tasks, roadmap-first on ties.** The *precedence* matches `/next-task`'s default mode (a claimable roadmap task wins; otherwise the next pending batch). The **populations differ, and that is not a bug to fix here**: `/next-task` surfaces only `Pending` batches, while `/roadmap` also carries `In Progress` ones, because a survey should show work that is underway and a resolver should not hand you a batch someone else claimed. It deliberately differs from `/sitrep`, whose cascade puts batches first — say which you are following when you present an ordering that contradicts a `/sitrep` recommendation the human has already seen.
+**Rank batches alongside tasks, roadmap-first on ties.** The *precedence* matches `/next-task`'s default mode (a claimable roadmap task wins; otherwise the next pending batch). The **populations differ, and that is not a bug to fix here**: `/next-task` surfaces only `Pending` batches, while `/roadmap` also carries `In Progress` and `Review Ready` ones, because a survey should show work that is underway or waiting on a human, and a resolver should not hand you a batch someone else claimed. It deliberately differs from `/sitrep`, whose cascade puts batches first — say which you are following when you present an ordering that contradicts a `/sitrep` recommendation the human has already seen.
 
 A batch's weight in an ordering comes from its routing cell, not from `effort`/`blast_radius` (which it does not have): an **untriaged `Pending`** batch is unowned work that nothing will pick up on its own; a **flagged** batch is waiting on a human judgment call; a **triaged `auto`** batch is already routable and cheap to drain. Where a batch carries security findings, say so in the ordering's rationale — that is precisely the signal this skill exists to surface.
+
+**A `Review Ready` batch outranks all three, and it is the one case where the routing cell must not decide.** It is past being worked and is waiting on a human, so the tracker calls it *"the one status that needs someone to act"* — it belongs at the head of a *drain-the-review-queue* ordering, not sorted by triage state. **Do not route it by its routing cell:** an untriaged `Review Ready` batch is not unowned work, and sending it to `/triage` re-triages something already reviewed. It is also invisible to `--in-flight`, so it never carries a survey `state` and can never present as `ready for /review-close` — **read its status from the `review_tasks.md` header, not from the payload**, and say the row could not be enriched.
 
 **Batch actuators, and the grammar is load-bearing:**
 
@@ -182,8 +184,9 @@ A batch's weight in an ordering comes from its routing cell, not from `effort`/`
 |---|---|
 | triaged `auto` | `/auto-fix --batches <N>` |
 | flagged / triaged `flag` | `/auto-judge --batches <N>` |
-| untriaged | `/triage` — **no batch argument exists**; name the batch in prose |
+| untriaged — `Pending` or `In Progress`, **never `Review Ready`** (see the row below) | `/triage` — **no batch argument exists**; name the batch in prose |
 | ready for `/review-close` | `/review-close` — **no batch argument exists**; run it on the batch's branch |
+| header status `Review Ready` | `/review-close` — **no batch argument exists**; run it on the batch's branch. Keyed on the **header**, because this batch never reaches the payload and so never carries the survey `state` the row above matches on |
 
 **Never write `/auto-fix <N>` or `/auto-judge <N>`.** A bare integer is those skills' **concurrency cap**, not a batch selector — `/auto-fix 583` requests a 583-way concurrency, and both skills say so in their own Step 0 (*"a bare integer is already this skill's concurrency cap"*). The selector is the `--batches` flag, which accepts comma-separated integers and inclusive ranges (`--batches 563,570,580-584`).
 

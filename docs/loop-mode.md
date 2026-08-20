@@ -150,7 +150,7 @@ whole-tree, so test findings surface immediately. Once you localize `paths:` to 
 directories, rules scoped away from tests stop contributing — though localizing to `.`, which
 is a legitimate choice for a small repo whose whole tree is source, keeps them all in scope.
 Triage them the usual way, or accept the current state with `run_checks.sh --update-baseline`
-(which snapshots *every* outstanding finding, not only these).
+(which snapshots *every* outstanding finding, not only these). To accept one finding rather than all of them, take its key from `run_checks.sh --print-keys` and add that line by hand — for grep and semgrep findings the key carries a content hash, so it cannot be typed from what the finding prints. If you are upgrading a project that already had a baseline, run `run_checks.sh --migrate-baseline` once: it converts your entries in place and keeps your comments, which `--update-baseline` does not.
 
 One rule was re-scoped rather than left to your triage. `semgrep-recompile-inside-def` scopes
 its own rationale to *"request handlers and hot-path code"*, and a test body is categorically

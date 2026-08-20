@@ -1244,7 +1244,7 @@ SIZE_SECTION_HEADING = "### 1c. Tracker size is advisory, never a stop"
 SIZE_ADVISORY_CLAUSE = "print an advisory and **continue** — do not halt"
 MERGED_ONLY_CLAUSE = (
     "selects what to relocate by **merge status**, not by size "
-    "(`archive_review_tasks.py:100` matches only `Merged`/`Complete`; a Round "
+    "(`archive_review_tasks.py:101` matches only `Merged`/`Complete`; a Round "
     "moves whole only when every batch in it is merged, otherwise it "
     "relocates the merged batches individually)"
 )

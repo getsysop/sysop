@@ -92,7 +92,25 @@ def _run_install(target, *extra):
 
 
 def _commit_all(root, msg):
+    """Absorb whatever the last install wrote so the next cycle starts clean.
+
+    Commits only when something is actually staged. A no-op `--update` that
+    leaves the tree clean is the CORRECT outcome (Phase 148: a no-op update
+    must not dirty a clean consumer tree), so an unconditional `git commit`
+    here fails on precisely the behaviour the installer is supposed to have.
+
+    Before Phase 212 these cycles were carried by vendored `.pyc` churn — the
+    tree was never actually clean, so the commit always had something to make.
+    That is why this helper passed while the defect it depended on was live:
+    with `PYTHONDONTWRITEBYTECODE=1` set, the commit exited 1 and the test
+    failed. The dependency is removed here rather than pinned, because pinning
+    it would re-mint the class.
+    """
     _git(root, "add", "-A")
+    staged = subprocess.run(["git", "diff", "--cached", "--quiet"],
+                            cwd=root, capture_output=True)
+    if staged.returncode == 0:
+        return  # nothing to commit — the tree is already clean, which is the goal
     _git(root, "commit", "-qm", msg)
 
 

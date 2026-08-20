@@ -45,7 +45,7 @@ tasks:
 | Field | Type | Required | Notes |
 |---|---|---|---|
 | `id` | string | yes | `^[A-Z][A-Z0-9-]{2,80}$`. Examples: `FEAT-FOO`, `TECH-BAR-BAZ`, `FIX-XYZ-123`. Used as filename for the body. Must be unique across the file. |
-| `title` | string | yes | Short human-readable title. |
+| `title` | string | yes | Short human-readable title. **Quote every `title:` you write** — `title: "<the title>"`. Unquoted, YAML reads ` #` (space then hash) as the start of a comment, so `title: Fix the widget #define` lands on disk as `Fix the widget` the first time anything reads the file, and the validator stays green because what survives is still a legal title. Entry shape: `tasks/README.md` § *Authoring an entry by hand*. |
 | `phase` | int | yes | Must match an entry in `phases[].number`. |
 | `section` | string | no | Legacy section number from a pre-migration `product_roadmap.md` (e.g., `"6.88"`). Preserved for historical reference only; do not introduce on new tasks. |
 | `status` | enum | yes | One of `open \| in_progress \| done \| deferred`. |

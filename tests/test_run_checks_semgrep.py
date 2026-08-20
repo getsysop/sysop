@@ -76,7 +76,7 @@ class TestParser:
                    side_effect=_semgrep_run_stub(_completed(_semgrep_json(tmp_path)))):
             out = semgrep._run_semgrep(str(tmp_path), {"semgrep-dangerous-eval"})
         assert len(out) == 1
-        check_id, file_line, msg = out[0]
+        check_id, file_line, msg, _ident = out[0]
         assert check_id == "semgrep-dangerous-eval"
         # semgrep line numbers are already 1-indexed — no offset applied.
         assert file_line == "app/x.py:10"
@@ -110,7 +110,7 @@ class TestParser:
         with patch("run_checks.semgrep.subprocess.run",
                    side_effect=_semgrep_run_stub(_completed(payload))):
             out = semgrep._run_semgrep(str(tmp_path), {"semgrep-hi", "semgrep-lo"})
-        by_id = {c: m for c, _, m in out}
+        by_id = {f[0]: f[2] for f in out}
         assert "HIGH" in by_id["semgrep-hi"]
         assert "LOW" in by_id["semgrep-lo"]
 

@@ -55,4 +55,14 @@ else
   PYTHON="python3"
 fi
 
+# Never write bytecode beside the vendored source. CPython caches next to the
+# module, so the pre-scan would otherwise mint `sysop/scripts/__pycache__/` and
+# `sysop/scripts/run_checks/__pycache__/` in the consumer's tree on every run —
+# 12 files — and a consumer without a bytecode ignore then carries them as
+# tracked churn. Suppressing the write is the root fix; the gitignore entry
+# install.sh appends is belt-and-braces for anything that bypasses this script.
+# Measured cost of recompiling each run: ~10ms, against a scan measured in
+# seconds. Phase 212.
+export PYTHONDONTWRITEBYTECODE=1
+
 exec "$PYTHON" "${SCRIPT_DIR}/run_checks_impl.py" --repo-root "$REPO_ROOT" "$@"

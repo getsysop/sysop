@@ -128,21 +128,50 @@ UNRESOLVED_ALLOWED = {
 CITATION_ANCHORS = {
     ("core/companion/scripts/claim_task.sh", "self_check.sh:75-83"):
         "then verify PyYAML on THAT interpreter",
-    ("core/skills/auto-fix/SKILL.md", "archive_review_tasks.py:100"):
+    ("core/skills/auto-fix/SKILL.md", "archive_review_tasks.py:101"):
         "Merged|Complete",
-    ("core/skills/auto-judge/SKILL.md", "archive_review_tasks.py:100"):
+    ("core/skills/auto-judge/SKILL.md", "archive_review_tasks.py:101"):
         "Merged|Complete",
-    ("core/skills/triage/SKILL.md", "archive_review_tasks.py:100"):
+    ("core/skills/triage/SKILL.md", "archive_review_tasks.py:101"):
         "Merged|Complete",
-    ("core/skills/claim-task/SKILL.md", "batch_work.sh:221-225"):
+    # Phase 209 retired `_parse_batches_fallback` (62 lines), moving this anchor
+    # up. The anchor string is what makes that a caught drift rather than a
+    # silent one.
+    ("core/skills/claim-task/SKILL.md", "batch_work.sh:260-264"):
         "left as-is",
+    # Phase 211: this was written `(`:763-765`)` — a BARE self-citation, which
+    # CITATION's regex cannot see because it requires a filename token before
+    # the colon. It had drifted 90 lines and nothing could tell. Qualifying it
+    # with its own filename is what put it under this guard; the sweep found
+    # exactly one such citation in the shipped tree, and there are now none.
+    # Anchored on the rule's CONSEQUENCE clause, not on "NOT an exit-code
+    # change" — that phrase also appears in the sentence doing the citing, so it
+    # resolved to two lines and the staleness check could not tell them apart.
+    ("core/companion/scripts/close_batch.sh", "close_batch.sh:880-884"):
+        "diagnoses failure by commit absence",
+    # Phase 211: the duplicate-refusal comment used to assert that no shipped
+    # skill derives the next batch number. These two are the only writers of
+    # `### Batch` headers in the tree and both do, file-globally, which is why
+    # the comment now cites them by line.
+    ("core/companion/scripts/batch_work.sh", "codebase-review/SKILL.md:164"):
+        "next_batch_number",
+    ("core/companion/scripts/batch_work.sh", "security-audit/SKILL.md:179"):
+        "next_batch_number",
+    # Phase 211's round found the same struck premise in review_index.py's own
+    # docstring — the copy where it is load-bearing, since it justifies the
+    # scoping decision. The author-side sweep missed it because the sentence
+    # wraps across two lines there and the grep was line-oriented.
+    ("core/companion/scripts/review_index.py", "codebase-review/SKILL.md:164"):
+        "next_batch_number",
+    ("core/companion/scripts/review_index.py", "security-audit/SKILL.md:179"):
+        "next_batch_number",
     ("core/skills/review-close/SKILL.md", "intake/SKILL.md:111"):
         "tasks/schema.md",
     ("core/skills/review-close/SKILL.md", "add-task/SKILL.md:62"):
         "open/<TASK-ID>.md",
     ("core/skills/review-close/SKILL.md", "onboard/SKILL.md:95"):
         "Test decision",
-    ("docs/one-rule.md", "core/companion/scripts/run_checks/grep.py:232"):
+    ("docs/one-rule.md", "core/companion/scripts/run_checks/grep.py:300"):
         "nosemgrep: recompile-inside-def",
 }
 
@@ -531,3 +560,53 @@ def test_foreign_citations_are_excluded_by_marker_not_by_luck():
             "filter has gone LINE-scoped again — the Pass-1a defect, one module "
             "over, and it takes the citation out of the sweep entirely."
         )
+
+
+# ── The shape this guard structurally could not see (Phase 211) ────────
+
+BARE_SELF_CITATION = re.compile(r"\(`:\d+(?:-\d+)?`")
+
+
+def test_no_citation_is_written_as_a_bare_line_number():
+    """A `` (`:855-857`) `` self-citation is invisible to CITATION above.
+
+    `CITATION` requires a *filename* token before the colon, so a file citing
+    its own lines by number alone is swept by nothing — not registered, not
+    checked for staleness, not reported as unregistered. `close_batch.sh`
+    carried exactly one, pointing at `:763-765` for a rule that on the tree
+    carrying the stale pointer sat at `:832-836`: a ~70-line drift, in a comment
+    whose whole job was to justify a control-flow decision by quoting that rule.
+    (A first draft of this docstring said 90 lines, measured against the rule's
+    position AFTER this phase's own edits rather than on the tree where the
+    pointer was stale. Measuring a historical drift against the present tree
+    inflates it; the round caught that.)
+
+    Derived over the shipped tree rather than assumed: the sweep found one
+    instance, and this guard exists so a second cannot arrive quietly. The fix
+    is always the same and always cheap — write the filename, which puts the
+    citation under `CITATION_ANCHORS` and under the staleness check with it.
+    """
+    offenders = []
+    for rel in _scanned_files():
+        text = (REPO_ROOT / rel).read_text(encoding="utf-8", errors="replace")
+        for n, line in enumerate(text.splitlines(), 1):
+            if BARE_SELF_CITATION.search(line):
+                offenders.append(f"  {rel}:{n}  {line.strip()[:90]}")
+    assert not offenders, (
+        "these cite line numbers with no filename, so nothing sweeps them for "
+        "staleness:\n" + "\n".join(offenders) +
+        "\n\nWrite the filename (`foo.sh:123-125`) and register an anchor."
+    )
+
+
+def test_the_bare_self_citation_pattern_would_catch_one():
+    """Non-vacuity control: the guard above passes because the tree is clean,
+    not because its pattern matches nothing.
+
+    Without this, deleting `BARE_SELF_CITATION`'s body to `re.compile("$^")`
+    leaves the suite green over a guard that can never fire.
+    """
+    assert BARE_SELF_CITATION.search("  # is to report and continue (`:763-765`: annotation")
+    assert BARE_SELF_CITATION.search("see (`:855-857`)")
+    assert not BARE_SELF_CITATION.search("see (`close_batch.sh:855-857`)")
+    assert not BARE_SELF_CITATION.search("a plain :123 with no backticks")

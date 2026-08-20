@@ -50,7 +50,7 @@ class FrontendDirAmbiguous(RuntimeError):
 
 
 def _run_eslint(repo_root, included_ids, report=None):
-    """Run ESLint against the frontend dir, return findings as (check_id, file_line, msg).
+    """Run ESLint against the frontend dir, return findings as (check_id, file_line, msg, identity).
 
     The frontend dir is discovered via `_find_frontend_dir()` — the first
     directory under repo_root that contains `node_modules/eslint`. Ambiguous
@@ -183,6 +183,12 @@ def _run_eslint(repo_root, included_ids, report=None):
             sev = _sev_map.get(severity_num, "LOW")
             msg_body = (msg.get("message") or "").replace("\n", " ")[:300]
             msg_text = f"[{rule_id}] {msg_body}"
+            # `rule_id` was already a live local here and went only into the
+            # message text, so `lint-error|path:line` meant "whatever ESLint
+            # says about this line" and one accepted entry excused every rule
+            # on it. The discriminator was always in scope; it just was not in
+            # the key.
             out.append((check_id, file_line,
-                        f"[{check_id}] {sev} {file_line} — {msg_text}"))
+                        f"[{check_id}] {sev} {file_line} — {msg_text}",
+                        rule_id))
     return out

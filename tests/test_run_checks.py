@@ -69,7 +69,7 @@ def test_position_check_wrong_order_fires(tmp_path):
     check = _make_check(tmp_path, paths=["."])
     findings = rci.run_check(check, str(tmp_path))
     assert len(findings) == 1, findings
-    check_id, file_line, _msg = findings[0]
+    check_id, file_line, _msg, _ident = findings[0]
     assert check_id == "test-app-env-before-syspath"
     assert file_line.endswith(":3"), file_line
 
@@ -166,7 +166,7 @@ def test_eslint_parser_emits_finding_per_message(tmp_path):
         )
         findings = rci._run_eslint(str(tmp_path), {"lint-error"})
     assert len(findings) == 1, findings
-    check_id, file_line, msg = findings[0]
+    check_id, file_line, msg, _ident = findings[0]
     assert check_id == "lint-error"
     assert file_line == "frontend/app/components/Foo.tsx:42"
     assert "react-hooks/exhaustive-deps" in msg
@@ -250,7 +250,7 @@ def test_eslint_severity_warning_mapped_to_medium(tmp_path):
         )
         findings = rci._run_eslint(str(tmp_path), {"lint-error"})
     assert len(findings) == 1
-    _, _, msg = findings[0]
+    msg = findings[0][2]
     assert "MEDIUM" in msg
 
 
@@ -276,7 +276,7 @@ def test_eslint_null_rule_id_uses_syntax_error(tmp_path):
         )
         findings = rci._run_eslint(str(tmp_path), {"lint-error"})
     assert len(findings) == 1
-    _, _, msg = findings[0]
+    msg = findings[0][2]
     assert "syntax-error" in msg
 
 
@@ -308,7 +308,7 @@ def test_pip_audit_parser_emits_finding_per_vuln(tmp_path):
         )
         findings = rci._run_pip_audit(str(tmp_path), {"pip-audit-vuln"})
     assert len(findings) == 1, findings
-    check_id, file_line, msg = findings[0]
+    check_id, file_line, msg, _ident = findings[0]
     assert check_id == "pip-audit-vuln"
     # No requirements file in tmp_path → falls back to default anchor
     assert file_line == "requirements.txt:1"

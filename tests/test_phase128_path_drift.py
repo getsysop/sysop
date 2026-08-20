@@ -909,3 +909,57 @@ def test_workflow_pointer_template_names_the_installed_path():
         "the § 6.1 `## Task Workflow (pointer)` template row tells a consumer to "
         "follow a path that does not exist on a post-Phase-128 install"
     )
+
+
+def test_workflow_md_names_no_bare_consumer_side_doc_path():
+    """The `sysop/docs/` half of this module's own subject, finally guarded.
+
+    This file's docstring has named `WORKFLOW.md → sysop/docs/WORKFLOW.md` as
+    part of the Phase-128 class since it was written, and guarded only the
+    `SYSOP_ISSUES.md` half. That gap is why § 8.2c and § 8.7 both still told a
+    consumer to look for bare `WORKFLOW.md` five phases later, and why Phase 207
+    found the § 8.2c site, fixed it, and left the § 8.7 sibling standing — the
+    fix-the-site-in-front-of-you shape this module exists to end.
+
+    Scoped to instruction-shaped references, which are the ones that assert a
+    consumer-side location. A bare mention of the document by name (`see
+    WORKFLOW.md § 4.2`) is a citation of the spec, not a path claim, and is left
+    alone deliberately: widening this to every occurrence would false-fire on
+    several hundred legitimate cross-references in this file.
+    """
+    text = (_ROOT / "core" / "companion" / "docs" / "WORKFLOW.md").read_text(
+        encoding="utf-8"
+    )
+    # "Copy/open/edit/write <bare path>" — a verb that acts on the FILE.
+    pattern = re.compile(
+        r"(?:Copy|copy|Open|open|Edit|edit|Write|write|Create|create)\s+"
+        r"`?WORKFLOW(?:_GUIDE)?\.md`?"
+    )
+    offenders = []
+    for i, line in enumerate(text.splitlines(), 1):
+        for m in pattern.finditer(line):
+            # A correctly-qualified path is fine; only the bare form is a claim.
+            if "sysop/docs/" not in line[max(0, m.start() - 20):m.end()]:
+                offenders.append(f"  WORKFLOW.md:{i}: {m.group(0)!r} in {line.strip()[:90]!r}")
+
+    assert offenders == [], (
+        "WORKFLOW.md tells a reader to act on a bare `WORKFLOW.md` / "
+        "`WORKFLOW_GUIDE.md` path. Phase 128 moved both under `sysop/docs/`, so "
+        "the bare path does not exist in any consumer install and the "
+        "instruction cannot be followed.\n" + "\n".join(offenders)
+    )
+
+
+def test_the_bare_doc_path_guard_is_not_vacuous():
+    """Control: the guard must reject the shape it exists to catch, and accept
+    the qualified form. Without this, a pattern that matches nothing reports a
+    clean sweep — the vacuity class this repo keeps re-finding."""
+    pattern = re.compile(
+        r"(?:Copy|copy|Open|open|Edit|edit|Write|write|Create|create)\s+"
+        r"`?WORKFLOW(?:_GUIDE)?\.md`?"
+    )
+    assert pattern.search("1. Copy WORKFLOW.md, WORKFLOW_GUIDE.md, and this manifest")
+    assert pattern.search("Open `WORKFLOW_GUIDE.md` and read § 2")
+    # A citation is not a path claim and must not be swept up.
+    assert not pattern.search("see WORKFLOW.md § 4.2 for the full contract")
+    assert not pattern.search("documented canonically in WORKFLOW.md § 8.2a")

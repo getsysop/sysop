@@ -114,7 +114,7 @@ One more fire, and this one is in the repo you're reading. The `recompile-inside
 (promoted **2026-04-30**, same batch) flags `re.compile()` inside a function body. At landing
 it caught three sites in the source project — including the checks runner's own memoization
 helper — and when the workflow was extracted, it caught the same helper here.
-[`core/companion/scripts/run_checks/grep.py:232`](../core/companion/scripts/run_checks/grep.py)
+[`core/companion/scripts/run_checks/grep.py:300`](../core/companion/scripts/run_checks/grep.py)
 ships with the inline suppression and its reasoning, a documented adjudication you can read.
 The sensor is indifferent to whose code it reads, including the code that runs the sensor.
 

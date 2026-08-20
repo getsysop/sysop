@@ -12,6 +12,7 @@ the wrapper is exercised without pyyaml / the real checks pipeline.
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -101,3 +102,76 @@ def test_prefers_repo_venv_interpreter(tmp_path):
     assert r.returncode == 0, r.stderr
     assert "VENV_PYTHON_USED" in r.stdout, "wrapper did not prefer repo .venv python"
     assert _impl_argv(r.stdout)[-2:] == ["--mode", "quality"]
+
+
+# ── Phase 212: the wrapper must never leave bytecode in a consumer's tree ─────
+
+
+def test_wrapper_suppresses_bytecode_in_the_consumer_tree(tmp_path):
+    """`run_checks.sh` exports PYTHONDONTWRITEBYTECODE=1 before exec'ing the impl.
+
+    Without it CPython caches beside the vendored source, so every pre-scan mints
+    `sysop/scripts/__pycache__/` and `sysop/scripts/run_checks/__pycache__/` in
+    the consumer's repo — 12 files — which a consumer with no bytecode ignore
+    then tracks and re-dirties on every run (`Q-041`/`Q-126`).
+
+    This guard exists because the phase's own review round found the export had
+    NO test: deleting the line left the whole suite green. The install-cycle
+    tests that used to be sensitive to bytecode churn were repaired in the same
+    phase to stop depending on it — correctly, but that removed the only thing
+    reacting to this, so the sensitivity is restored here as a direct assertion
+    rather than as a side effect of something else.
+    """
+    root = _repo_with_stub(tmp_path / "c")
+    # A real importable module beside the impl, and an impl that imports it —
+    # a stub that imports nothing can never write a cache, so this fixture is
+    # what makes the assertion capable of failing.
+    (root / "sysop" / "scripts" / "_probe_mod.py").write_text("VALUE = 1\n")
+    (root / "sysop" / "scripts" / "run_checks_impl.py").write_text(
+        "import sys, os\n"
+        "sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))\n"
+        "import _probe_mod\n"
+        "print('IMPL_ARGV:', repr(sys.argv[1:]))\n"
+    )
+    r = _run(root)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+    caches = sorted(str(p.relative_to(root)) for p in root.rglob("__pycache__"))
+    assert caches == [], (
+        "run_checks.sh left bytecode in the consumer tree — the "
+        "PYTHONDONTWRITEBYTECODE export is missing or ineffective: " + str(caches)
+    )
+
+
+def test_the_bytecode_probe_fixture_can_actually_fail(tmp_path):
+    """Non-vacuity control for the test above.
+
+    Runs the SAME fixture with the wrapper's own suppression explicitly undone,
+    and asserts bytecode IS written. Without this, an impl that imported nothing
+    (or an interpreter that cached nowhere) would make the sibling pass while
+    testing nothing at all — which is exactly how the export shipped unguarded.
+    """
+    root = _repo_with_stub(tmp_path / "c")
+    (root / "sysop" / "scripts" / "_probe_mod.py").write_text("VALUE = 1\n")
+    impl = root / "sysop" / "scripts" / "run_checks_impl.py"
+    impl.write_text(
+        "import sys, os\n"
+        "sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))\n"
+        "import _probe_mod\n"
+        "print('IMPL_ARGV:', repr(sys.argv[1:]))\n"
+    )
+    env = dict(os.environ)
+    env.pop("PYTHONDONTWRITEBYTECODE", None)
+    r = subprocess.run(
+        [sys.executable, "-c",
+         "import sys, os;"
+         "sys.path.insert(0, os.path.dirname(os.path.abspath(sys.argv[1])));"
+         "import _probe_mod",
+         str(impl)],
+        cwd=str(root), capture_output=True, text=True, env=env,
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert list(root.rglob("__pycache__")), (
+        "the fixture cannot write bytecode even with suppression off, so the "
+        "sibling test proves nothing"
+    )

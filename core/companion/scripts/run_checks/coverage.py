@@ -3,7 +3,7 @@
 Crown-jewel coverage gate: shells out to ``diff-cover`` and reports *changed*
 lines that lack test coverage, **filtered to a few critical-path globs** so
 consumer-CI weight stays small. Findings are emitted in the same
-``(check_id, file_line, message)`` shape as the grep / LSP / semgrep /
+``(check_id, file_line, message, identity)`` shape as the grep / LSP / semgrep /
 pip-audit stages so ``--mode`` filtering and ``--fail-on-blocking`` apply
 uniformly.
 
@@ -86,7 +86,7 @@ def _path_in_critical(rel_path, critical_paths):
 
 
 def _run_diff_cover_check(repo_root, check, report=None):
-    """Run diff-cover for one coverage check, return (check_id, file_line, msg) tuples.
+    """Run diff-cover for one coverage check, return (check_id, file_line, msg, identity) tuples.
 
     `check` is a parsed checks.yml entry whose id starts `coverage-`. Reads
     its `critical_path` globs and `report` path (default per id). Emits one
@@ -183,11 +183,17 @@ def _run_diff_cover_check(repo_root, check, report=None):
         pct_str = f"{pct:.0f}%" if isinstance(pct, (int, float)) else "?"
         for line in stats.get("violation_lines", []) or []:
             file_line = f"{rel}:{line}"
+            # Identity is deliberately empty: coverage never reaches the
+            # baseline at either end (see `baseline._is_coverage`). The field is
+            # present so the finding shape is uniform across all six stages —
+            # which the shipped prose asserts, and which a 3-or-4 arity split
+            # would have quietly made false.
             out.append((
                 check_id, file_line,
                 f"[{check_id}] MEDIUM {file_line} — changed line not covered "
                 f"by tests ({pct_str} of changed lines covered in this file; "
                 f"critical path)",
+                "",
             ))
     return out
 

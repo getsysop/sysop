@@ -132,6 +132,6 @@
 ## `pyrightconfig.json` — Python Type Checker Config
 
 **Check:**
-- Keep `reportMissingImports` and `reportUndefinedVariable` at `error` (these catch real bugs); do not silently downgrade to `warning` or `none` without a documented reason.
+- **A05 Misconfiguration**: keep `reportMissingImports` and `reportUndefinedVariable` at `error` (these catch real bugs); do not silently downgrade to `warning` or `none` without a documented reason.
 
 **Skip:** Everything else

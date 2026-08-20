@@ -1,7 +1,7 @@
 """Semgrep / AST diagnostics.
 
 semgrep is invoked as a CLI. Findings are emitted in the same
-``(check_id, file_line, message)`` shape as grep/LSP findings so baseline
+``(check_id, file_line, message, identity)`` shape as grep/LSP findings so baseline
 matching, ``--update-baseline``, and ``--fail-on-blocking`` work uniformly.
 """
 import json
@@ -11,6 +11,7 @@ import sys
 
 from .accounting import DEGRADED, EXECUTED, FAILED, SKIPPED, stderr_excerpt
 from .config import check_paths_by_id, finding_in_scope
+from .baseline import identity_of
 
 # semgrep's OCaml core (via mirage `ca-certs`, which reads SSL_CERT_FILE since
 # 0.2.3) builds an OpenTelemetry TLS authenticator at startup; where no system
@@ -276,7 +277,7 @@ def _resolve_ca_bundle():
 
 
 def _run_semgrep(repo_root, included_ids, report=None):
-    """Run semgrep against .claude/semgrep/, return findings as (check_id, file_line, msg) tuples.
+    """Run semgrep against .claude/semgrep/, return findings as (check_id, file_line, msg, identity) tuples.
 
     `included_ids` is the collection of semgrep-* check IDs that the caller
     has already filtered for the active mode — a dict of id → check dict from
@@ -482,6 +483,23 @@ def _run_semgrep(repo_root, included_ids, report=None):
         msg_text = result.get("extra", {}).get("message", "").replace("\n", " ")[:300]
         sev_raw = result.get("extra", {}).get("severity", "WARNING")
         sev = _sev_map.get(sev_raw, "MEDIUM")
+        # Identity is the matched SPAN (`extra.lines`), not `extra.fingerprint`.
+        # The fingerprint is `hash(path, rule) + "_" + ordinal`, so it is not
+        # identity-bearing: inserting a match renumbers every later one, and the
+        # new match inherits the accepted match's fingerprint — reproducing the
+        # very over-suppression this key exists to close. Measured, both ways.
+        # Normalized like grep's, so a re-indent does not invalidate an entry.
+        # Note `extra.lines` is the whole matched span, multi-line for 3 of the
+        # 10 shipped rules, so an edit anywhere inside an accepted match re-fires
+        # it. That is under-suppression: loud, and the safe direction.
+        # Falls back to the message for the same reason pyright falls back:
+        # `extra.lines` is absent on some result shapes, and a check id that
+        # emits a two-field key for one finding and a three-field key for the
+        # next breaks `legacy_entries` and `--migrate-baseline` on entries that
+        # are perfectly valid. Every identity-bearing producer must be
+        # uniformly identity-bearing.
+        lines_text = result.get("extra", {}).get("lines", "")
         out.append((check_id, file_line,
-                    f"[{check_id}] {sev} {file_line} — {msg_text}"))
+                    f"[{check_id}] {sev} {file_line} — {msg_text}",
+                    identity_of(lines_text) or identity_of(msg_text) or "no-span"))
     return out

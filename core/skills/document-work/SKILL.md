@@ -135,9 +135,11 @@ date: <YYYY-MM-DD>
 type: <feature|bugfix|ui-iteration|infrastructure|adhoc>
 roadmap_ids: [<FEAT-NNNN | TECH-NNNN | BUG-NNNN>, ...]
 review_task_ids: [<TASK-NNNN>, ...]
-summary: <one-sentence description of the work, including key files affected>
+summary: "<one-sentence description of the work, including key files affected>"
 ---
 ```
+
+> **`summary:` is quoted, and the quotes are load-bearing — do not drop them.** This value is free-form prose written per-branch, and the shapes this workflow's own conventions invite are exactly the ones that break bare YAML. **Every one of the following shapes breaks unquoted, and each is exercised by `tests/test_pending_doc_integrity.py`** — the list is the claim, because a bare ratio over an unshipped corpus is a number a reader cannot check: a conventional-commit prefix (`fix: handle the rollback case`) and any other `": "` raise `ScannerError`; a leading `[` (`[FEAT-0001] add the guard`) raises `ParserError`; a leading `*` raises `ScannerError`. The quiet one is worse than the loud ones — a summary that cites an issue by number (`resolves` followed by a `#`-prefixed number) parses **successfully** and yields just the word `resolves`, because `#` opens a YAML comment, and that truncated summary is what lands in `PROJECT_STATUS.md`. `/auto-fix` and `/auto-judge` already quote this field (their templates emit a `:` and had to); this template is the one a human drives, and it was the one left bare. If the summary itself contains a double quote, escape it (`\"`) or switch the value to single quotes — do not solve it by removing the quoting.
 
 **Two ID namespaces — each independently optional.** `roadmap_ids` and `review_task_ids` capture distinct lifecycles and have different consumers; either or both may be `[]`.
 
@@ -199,9 +201,16 @@ Run this check on the just-written pending-docs file. The source of truth is `ta
    depends_on: [], surfaced_by: [<parent task id>], body: open/<TASK-ID>.md) plus a body file under
    tasks/open/ whose first heading is `# <TASK-ID>`. Cross-reference from the parent task's body if
    appropriate.
+
+   Quote the title: title: "<the title>". Unquoted, YAML reads ` #` (space then hash) as the
+   start of a comment, so `title: Fix the widget #define` lands as `Fix the widget`. A follow-up
+   stub is filed FROM a review finding, so an issue or PR number in the title is the normal
+   case here — see tasks/README.md § Authoring an entry by hand for the entry shape.
    ```
    Do NOT proceed to Step 4. Block until the user files the stubs.
 6. If all tokens resolve (either in `tasks/index.yml` or via the bypass set), log `Follow-up check: <N> task IDs named, all resolved` and continue.
+
+**Quote every `title:` you write** — `title: "<the title>"`. This step is an authoring path, not just a gate: it *requires* the stub above, so the title it asks for is composed here, by hand, with no template to copy. Unquoted, YAML reads ` #` (space then hash) as the start of a comment, so `title: Fix the widget #define` lands on disk as `Fix the widget`, and the rest is gone the first time anything reads the file. The validator stays green, because what survives is still a legal title. **This step is the most exposed of the four authoring paths**, not the least: a follow-up stub is filed *from* a review finding, so an issue number, a PR number or a heading fragment in the title is the ordinary case rather than the edge one. The entry shape to copy is `tasks/README.md` § *Authoring an entry by hand*.
 
 **Reference implementation** (copy-pasteable; run from repo root after writing the pending-docs file):
 
@@ -291,6 +300,11 @@ if missing:
     print(
         "\nFile a stub for each in tasks/index.yml + tasks/open/<TASK-ID>.md "
         "(per tasks/schema.md),\nthen re-run /document-work."
+        "\n\nQuote the title: title: \"<the title>\". Unquoted, YAML reads ' #' "
+        "(space then hash) as\nthe start of a comment, so `title: Fix the widget "
+        "#define` lands as `Fix the widget`.\nA follow-up stub is filed FROM a "
+        "review finding, so a number in the title is the normal\ncase here. Entry "
+        "shape: tasks/README.md section 'Authoring an entry by hand'."
     )
     sys.exit(1)
 

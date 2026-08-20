@@ -30,11 +30,21 @@ Terminal states (§1 of the spec; the last two added by Phase 189):
   its declared inputs**: a file whose parse failed part-way, a discovery
   shortfall. **A zero-findings degraded check is not a real zero.** (Phase 189,
   internal tracker #362.)
-* ``unroutable`` — the check declares no executable form at all: no ``pattern``,
-  no ``position_check``, no recognised kind. Distinct from ``skipped``, whose
-  precondition could become true in another environment; an unroutable check
-  can never execute **anywhere**, so it is a registry-authoring defect rather
-  than an environment one. (Phase 189, internal tracker #239.)
+* ``unroutable`` — the check declares no executable form **this runner** can
+  use: no ``pattern``, no ``position_check``, and no id prefix that routes it to
+  another stage. Distinct from ``skipped``, whose precondition could become true
+  in another environment; an unroutable check will not execute here however the
+  environment changes. (Phase 189, internal tracker #239.)
+
+  **Not necessarily a registry-authoring defect — corrected by Phase 212**
+  (internal tracker #438). This state's own motivating example, GDP's
+  ``doc-parity-violation``, turned out to be a *deliberate catalogue stub* for a
+  check a live CI gate executes: routable, just not by this runner. So the
+  bucket means "this runner did not run it", which is an attribution claim and
+  true in both cases — not "somebody forgot to finish it", which is a motive
+  claim and false for the stub. The message at the emit site offers the third
+  reading; deliberately no schema flag suppresses it, because a check nothing
+  here executed is exactly what this taxonomy exists to keep visible.
 
 Cut line: *skipped = precondition absent; failed = attempted and died;
 degraded = attempted, survived, saw less than it claimed; unroutable = nothing
@@ -163,7 +173,11 @@ class RunReport:
             c.get("id", ""): check_is_localized(c) for c in self._checks
         }
         self._records = {}  # check_id -> _Record
-        self._waived = []   # (check_id, file_line, message), in emission order
+        # (check_id, file_line, message), in emission order. Deliberately a
+        # 3-tuple where `all_findings` is a 4-tuple: a waived finding never
+        # reaches the baseline at either end, so it has no identity to carry
+        # and inventing an empty one would imply it could be baselined.
+        self._waived = []
 
     def record_waived(self, check_id, file_line, message):
         """Record a finding suppressed by an inline ``no-check:`` marker.
@@ -241,6 +255,39 @@ class RunReport:
                 out.append((cid, rec.stage, rec.reason, rec.detail))
         return out
 
+    def non_executed_ids(self):
+        """Check ids that PRODUCED NOTHING this run — skipped, failed, unroutable.
+
+        The baseline migration's only question is "could this check have
+        produced a finding?". A check that did not run produces none, so its
+        entries look identical to entries whose findings are gone, and migrating
+        against such a run would delete them. `--update-baseline` guards only on
+        *failed* blocking checks and therefore still has that hole.
+
+        **``degraded`` is deliberately NOT here, and the docstring used to say
+        so while the code did the opposite.** This returned everything that was
+        not ``executed``, which swept in the one non-executed state where the
+        stage ran and emitted findings — so a semgrep run degraded by an
+        unparseable file made the migration refuse outright, on a persistent
+        tree property, with the only escape being `--update-baseline`: the
+        command whose destruction of consumer rationale is the reason the
+        remedy routing was rewritten in the first place. Degraded checks are
+        handled by `incomplete_ids` instead, which holds their unmatched
+        entries without blocking everything else.
+        """
+        return {cid for cid in self._order
+                if self.status_of(cid) in (SKIPPED, FAILED, UNROUTABLE)}
+
+    def incomplete_ids(self):
+        """Check ids that ran but over less than their declared inputs.
+
+        A ``degraded`` stage emits real findings, so its entries CAN be
+        migrated — but an entry it did not match may simply be in the part that
+        was not scanned. Absence of evidence, so those are held rather than
+        dropped, while everything else proceeds.
+        """
+        return {cid for cid in self._order if self.status_of(cid) == DEGRADED}
+
     def render(self, findings, *, mode, baseline_matched=0, new_blocking=0):
         """Render the multi-line summary block (spec §3).
 
@@ -251,7 +298,7 @@ class RunReport:
         """
         c = self.counts()
         selected = c.selected
-        ids_with_findings = {cid for cid, _, _ in findings}
+        ids_with_findings = {f[0] for f in findings}
 
         count_parts = [
             f"{c.executed} executed",

@@ -16,8 +16,28 @@ from .accounting import (
     is_placeholder_token,
     stderr_excerpt,
 )
+from .baseline import identity_of
 from .config import _SKIP_DIRS
 
+
+# Fallback parse for a grep hit that arrives WITHOUT the `--null` separator
+# (an external caller's own lines, or a grep too old for the flag). LAZY on the
+# path, so the FIRST `:<digits>:` boundary wins — which is byte-for-byte the
+# pre-212 `split(":", 2)` behaviour, deliberately.
+#
+# The first cut was greedy, on the reasoning that a colon in a path is the thing
+# being fixed. The round measured it and the reasoning was wrong: greedy makes
+# the fallback WORSE than what it replaces whenever the CONTENT holds a
+# `:<digits>:` run — a timestamp literal like "10" colon "30" colon "00", or a
+# slice step like arr[1:2:3]. Both are ordinary Python, and both appear in this
+# module's own list of content colons. (Spelled out rather than shown as a
+# sample hit on purpose: a literal `<path>:<line>:` in a comment is read as a
+# source citation by `tests/test_intra_repo_citations.py`, which flagged the
+# first version of this paragraph for pointing at a file that does not exist.) Content containing
+# `:<digits>:` is far commoner than a path containing one, so the compatibility
+# path keeps compatibility semantics and the CORRECT parse stays where it
+# belongs: on `--null`, which has no ambiguity to resolve. Phase 212.
+_HIT_RE = re.compile(r"^(?P<path>.*?):(?P<line>\d+):(?P<content>.*)$", re.S)
 
 # Inline waiver marker: `no-check: <id>[, <id>…]`, the grep-stage counterpart to
 # semgrep's `# nosemgrep` / coverage's `# pragma: no cover`. Deliberately
@@ -81,7 +101,17 @@ def _run_grep_status(pattern, paths, includes, excludes, repo_root, exclude_dirs
     grep itself has no check id at this call site (spec §5). ``run_grep`` (the
     original list-returning name) is a thin wrapper over this.
     """
-    cmd = ["grep", "-rn", "-E", pattern]
+    # `--null` puts a NUL between the filename and the rest of the hit, and NUL
+    # is the one byte a POSIX path cannot contain — so the path column becomes
+    # unambiguous. Without it the output is `path:lineno:content`, which no
+    # split can parse correctly: a colon is legal in a path AND ordinary in
+    # content, so `split(":", 2)` loses the line number on a colon-bearing path
+    # while `rsplit(":", 2)` corrupts every hit whose content holds a colon
+    # (a dict literal, a URL, a type annotation). Both directions were tried;
+    # the flag is the only correct fix, and the runner builds this command
+    # itself so the flag is ours to add. Same idiom as `semgrep.py`'s
+    # `git ls-files -z` parse. Phase 212 / Q-026.
+    cmd = ["grep", "-rn", "--null", "-E", pattern]
     for inc in includes:
         cmd.extend(["--include", inc])
     # Always exclude common non-source directories
@@ -143,6 +173,35 @@ def _run_grep_status(pattern, paths, includes, excludes, repo_root, exclude_dirs
     return Outcome(EXECUTED, None, None), lines
 
 
+def parse_hit(hit):
+    """Split one grep hit into ``(path, lineno, content)``; ``None`` if unparsable.
+
+    ``_run_grep_status`` passes ``--null``, so a hit is ``path\\0lineno:content``
+    and the path column ends at a byte no path can contain. That is the whole
+    reason this is reliable: the legacy ``path:lineno:content`` form is genuinely
+    ambiguous, because a colon is legal in a path and ordinary in content.
+
+    The colon fallback exists for hits that reach here without a NUL — an
+    external caller passing its own lines, or a grep too old for ``--null``. It
+    takes the FIRST ``:<digits>:`` boundary, which reproduces the pre-212
+    ``split(":", 2)`` exactly: same answers, including the same known wrong one
+    on a colon-bearing path. That is the point — it is a compatibility path, not
+    a second attempt at the correct parse, and the correct parse is ``--null``.
+    A hit with no NUL and no line number at all yields ``(hit, None, "")``; the
+    emit branches drop those (see the note in ``run_check``).
+    """
+    if "\0" in hit:
+        path, _, rest = hit.partition("\0")
+        lineno, sep, content = rest.partition(":")
+        if sep and lineno.isdigit():
+            return path, lineno, content
+        return path, None, rest
+    m = _HIT_RE.match(hit)
+    if m:
+        return m.group("path"), m.group("line"), m.group("content")
+    return hit, None, ""
+
+
 def run_grep(pattern, paths, includes, excludes, repo_root, exclude_dirs=()):
     """Run grep -rn and return the match lines (back-compat wrapper).
 
@@ -150,10 +209,19 @@ def run_grep(pattern, paths, includes, excludes, repo_root, exclude_dirs=()):
     and for existing direct callers/tests. New accounting-aware code calls
     ``_run_grep_status`` for the ``(Outcome, lines)`` pair it needs to record
     the stage's terminal state.
+
+    Phase 212: the underlying run now passes ``--null``, so the raw lines carry
+    a NUL between path and line number. This wrapper restores the historical
+    ``path:lineno:content`` spelling so its documented contract is unchanged for
+    any caller outside this package. Internal callers use ``parse_hit`` on the
+    NUL form instead, which is the only unambiguous parse.
     """
-    return _run_grep_status(
-        pattern, paths, includes, excludes, repo_root, exclude_dirs
-    )[1]
+    return [
+        h.replace("\0", ":", 1)
+        for h in _run_grep_status(
+            pattern, paths, includes, excludes, repo_root, exclude_dirs
+        )[1]
+    ]
 
 
 def strip_repo_prefix(line, repo_root):
@@ -277,12 +345,19 @@ def _run_position_check(
                 if report is not None:
                     report.record_waived(check_id, file_line, message)
                 continue
-            findings.append((check_id, file_line, message))
+            # The `position_check` dispatch builds its key from a file walk
+            # rather than a grep hit, so it never went through `_emit` and had
+            # no identity threaded. The matched line is right here — it is
+            # already read one line above for the waiver test — so this is the
+            # 18th line-level grep check and it keys like the other 17.
+            findings.append(
+                (check_id, file_line, message, identity_of(lines[l_line - 1]))
+            )
     return findings
 
 
 def run_check(check, repo_root, report=None):
-    """Run a single check and return a list of (check_id, file_line, message) tuples.
+    """Run a single check and return a list of (check_id, file_line, message, identity) tuples.
 
     file_line is "<path>:<lineno>" (or bare "<path>" for file-level checks)
     and serves as the baseline key. message is the full "[id] SEV path:line —
@@ -310,7 +385,7 @@ def run_check(check, repo_root, report=None):
         if report is not None:
             report.record([check_id], status, "grep", reason, detail)
 
-    def _emit(findings, file_line, waiver_text):
+    def _emit(findings, file_line, waiver_text, identity_text=None):
         """Append a finding unless ``waiver_text`` carries a ``no-check:`` for it.
 
         ``waiver_text`` is the matched LINE for line-level checks and the whole
@@ -319,13 +394,23 @@ def run_check(check, repo_root, report=None):
         finding is handed to the report, never dropped on the floor; with
         ``report=None`` (direct callers and tests — no shipped CLI path) the
         suppression still applies but the audit line has nowhere to go.
+
+        ``identity_text`` is DELIBERATELY a separate parameter rather than a
+        reuse of ``waiver_text``, even though for line-level checks they hold
+        the same string. Reusing it is the obvious move and it is wrong: for
+        `invert_file_check` the waiver text is the whole file, so the key would
+        change on any edit anywhere in it — turning the one kind whose key is
+        already stable into the churniest one. File-level callers pass nothing
+        and stay on the two-field key.
         """
         message = f"[{check_id}] {severity} {file_line} — {description}"
         if check_id in waived_ids(waiver_text):
             if report is not None:
                 report.record_waived(check_id, file_line, message)
             return
-        findings.append((check_id, file_line, message))
+        findings.append(
+            (check_id, file_line, message, identity_of(identity_text or ""))
+        )
 
     # position_check is an alternative dispatch — no `pattern:` is required.
     # Schema: {earlier: <regex>, later: <regex>}. Fires when both patterns
@@ -357,16 +442,32 @@ def run_check(check, repo_root, report=None):
 
     # Phase 189 / internal tracker #239: these were one arm reporting `skipped:
     # not-configured`, which put two different things in the same words. A check with
-    # no `pattern:` and no `position_check:` declares no executable form at all — it
-    # can never run in ANY environment, so it is a registry-authoring defect, and
-    # GDP's `doc-parity-violation` sat in that state for weeks reading identically to
-    # a tool that merely was not installed here. A check that HAS a pattern but no
-    # resolvable paths is an ordinary precondition-absent skip, which is what the
-    # `skipped` bucket is load-bearing for.
+    # no `pattern:` and no `position_check:` declares no executable form THIS RUNNER
+    # can use — it will not run in any environment, so it is reported separately from
+    # a tool that merely was not installed here. GDP's `doc-parity-violation` sat in
+    # that state for weeks reading identically to an uninstalled tool, which is why
+    # the state exists. A check that HAS a pattern but no resolvable paths is an
+    # ordinary precondition-absent skip, which is what `skipped` is load-bearing for.
+    #
+    # Phase 212 (internal tracker #438): the state is right and the REMEDY was not. The old
+    # message said "declare a kind", and there has never been a `kind:` field — stage
+    # routing is by id prefix only (`cli.py`'s `_classify_checks`). It also assumed
+    # every such entry is half-authored, but `doc-parity-violation` turned out to be
+    # a deliberate catalogue stub for a check a live CI gate runs: routable, just not
+    # by this runner. Both of the old remedies were wrong for it — declaring a kind
+    # would duplicate the CI gate, removing it would drop the catalogue entry. So the
+    # message now names the real mechanism and admits the third case, and says plainly
+    # that recording it does not silence the line. Deliberately NOT a new schema field:
+    # a one-line flag that renders a non-executing check clean is the exact
+    # gate-goes-green-over-a-dead-check shape this taxonomy exists to prevent.
     if not pattern and not position_check:
         _record(UNROUTABLE, "no-executable-form",
-                "no pattern: or position_check: — this check cannot execute in any "
-                "environment; declare a kind or remove it")
+                "no pattern: or position_check:, and the id carries no stage prefix "
+                "(semgrep- / pyright- / tsc- / lint- / pip-audit- / coverage-), so no "
+                "stage will run it. Give it a pattern: or a position_check:, rename it "
+                "to a routing prefix, or remove it. If something outside this runner "
+                "executes it (a CI step, a hook), record that in notes: — the check "
+                "stays listed here every run, because this runner still did not run it")
         return []
     if not paths:
         _record(SKIPPED, "paths-unresolved", _paths_unresolved_detail(paths))
@@ -379,18 +480,45 @@ def run_check(check, repo_root, report=None):
     if outcome.status != EXECUTED or not hits:
         return []
 
+    # A hit with no line number is not a hit. `_run_grep_status` always passes
+    # `-n` AND `--null`, so every genuine match carries a NUL and a line number;
+    # a line without one is grep talking ABOUT a file rather than quoting it —
+    # in practice `Binary file <path> matches`, which grep prints for any file
+    # holding a NUL byte (a corrupt or mislabelled `.sql`/`.py` is enough).
+    #
+    # Pre-212 the plain branch dropped these as a side effect of its
+    # `len(parts) >= 2` guard, and Phase 212's first cut turned that accident
+    # into an explicit emit — which produced a **new blocking finding** on a
+    # `severity: critical` check, keyed by the literal string
+    # `Binary file /abs/path matches`. That key is an ABSOLUTE path, so it does
+    # not survive a move to another checkout and cannot be baselined portably:
+    # a consumer could not even accept it to get green. Found by this phase's
+    # own review round; restoring the drop is a return to shipped behaviour,
+    # not a new policy.
+    #
+    # Whether a binary-classified file in a check's declared scope should be
+    # SURFACED (as `degraded` — the scan demonstrably saw less than it claimed,
+    # which is what that state is for) is a real question and a separate one.
+    # Filed rather than decided here.
     findings = []
 
     if invert and neg_pattern:
         # File-level check: find files with pattern but WITHOUT neg_pattern
         files_with_pattern = set()
         for hit in hits:
-            parts = hit.split(":", 2)
-            if len(parts) >= 2:
-                fpath = strip_repo_prefix(parts[0], repo_root)
-                files_with_pattern.add(os.path.join(repo_root, fpath)
-                                       if not os.path.isabs(fpath)
-                                       else fpath)
+            # Pre-212 this split BEFORE stripping, so a colon anywhere in
+            # `repo_root` — a CI job directory is enough — truncated the path to
+            # a fragment, the containment guard below then rejected every one of
+            # them, and the whole branch silently produced zero findings while
+            # the accounting reported `executed`. `parse_hit` returns the path
+            # whole, so the strip and the guard both get what they expect.
+            fpath, lineno, _content = parse_hit(hit)
+            if lineno is None:
+                continue  # `Binary file … matches` — see the note above
+            fpath = strip_repo_prefix(fpath, repo_root)
+            files_with_pattern.add(os.path.join(repo_root, fpath)
+                                   if not os.path.isabs(fpath)
+                                   else fpath)
 
         repo_root_real = os.path.realpath(repo_root) + os.sep
         for fpath in sorted(files_with_pattern):
@@ -406,6 +534,7 @@ def run_check(check, repo_root, report=None):
                     content = f.read()
                 if not re.search(neg_pattern, content):
                     rel = fpath.replace(repo_root.rstrip("/") + "/", "")
+                    # File-level: identity deliberately omitted — see _emit.
                     _emit(findings, rel, content)
             except (OSError, IOError):
                 pass
@@ -413,24 +542,25 @@ def run_check(check, repo_root, report=None):
     elif neg_pattern:
         # Per-line filter: keep hits that do NOT match negative_pattern
         for hit in hits:
-            hit_clean = strip_repo_prefix(hit, repo_root)
-            parts = hit_clean.split(":", 2)
-            if len(parts) >= 3:
-                content_part = parts[2]
-                if not re.search(neg_pattern, content_part):
-                    _emit(findings, f"{parts[0]}:{parts[1]}", content_part)
-            else:
-                _emit(findings, hit_clean, "")
+            fpath, lineno, content_part = parse_hit(hit)
+            if lineno is None:
+                continue  # not a real hit — see the note above `findings = []`
+            fpath = strip_repo_prefix(fpath, repo_root)
+            # Pre-212, a colon-bearing path shifted the line number into the
+            # content column, so `content_part` began `<n>:` — which defeats any
+            # `^`-anchored negative_pattern and turns a correctly-filtered hit
+            # into a false positive. The filter now sees the content alone.
+            if not re.search(neg_pattern, content_part):
+                _emit(findings, f"{fpath}:{lineno}", content_part,
+                      content_part)
 
     else:
         # Simple pattern match — all hits are findings
         for hit in hits:
-            hit_clean = strip_repo_prefix(hit, repo_root)
-            parts = hit_clean.split(":", 2)
-            if len(parts) >= 2:
-                # parts[2] is grep -rn's content column; absent only if a path
-                # itself contains ':' in a way that eats the split budget.
-                _emit(findings, f"{parts[0]}:{parts[1]}",
-                      parts[2] if len(parts) >= 3 else "")
+            fpath, lineno, content_part = parse_hit(hit)
+            if lineno is None:
+                continue  # not a real hit — see the note above `findings = []`
+            fpath = strip_repo_prefix(fpath, repo_root)
+            _emit(findings, f"{fpath}:{lineno}", content_part, content_part)
 
     return findings

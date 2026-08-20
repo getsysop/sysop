@@ -19,8 +19,8 @@ name: tests
 # If `strict` is ever turned off, this reasoning lapses and the trigger
 # should come back.
 #
-# Do NOT add `paths-ignore` for Markdown either. 113 of this repo's 127 test
-# files read Markdown — the suite is largely a *doc* test (phase-log currency,
+# Do NOT add `paths-ignore` for Markdown either. This repo's tests read
+# Markdown as a matter of course — the suite is largely a *doc* test (phase-log currency,
 # the mirror leak gate, queue-entry IDs, the ledger schema, the prose pins),
 # so filtering docs would skip the guards exactly when they matter. A skipped
 # workflow also never reports, which blocks a required check forever.

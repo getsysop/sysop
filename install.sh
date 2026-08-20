@@ -828,7 +828,9 @@ ensure_dir() {
 #   sysop/scripts/foo/bar.py        → out    (depth-2 not under hooks/)
 #   sysop/scripts/hooks/sub/bar     → out    (depth-3 under hooks/)
 #   .claude/skills/X/SKILL.md → out
-#   WORKFLOW.md               → out
+#   sysop/docs/WORKFLOW.md    → out    (Phase 128 moved it under sysop/;
+#                                       the bare path never existed post-128)
+#   .claude/semgrep/README.md → out    (shipped by name — so are fixtures/*)
 _phase_24b_in_scope() {
   local relp="${1#"$TARGET"/}"
   # sysop/scripts/<file> at depth 1 — must contain no further `/`.
@@ -2841,7 +2843,14 @@ resolve_skill_models() {
     return 0
   fi
   local _out
-  if _out="$("$_py" "$script" --root "$skills" --config "$config" --local "$localcfg" --apply --quiet 2>&1)"; then
+  # PYTHONDONTWRITEBYTECODE: this is the one install-time python invocation that
+  # runs FROM the vendor dir, so without it CPython leaves
+  # `sysop/scripts/__pycache__/{_model_roles,migrate_skill_model}.cpython-*.pyc`
+  # in the consumer's tree — which a consumer with no bytecode ignore then
+  # tracks, and which `--update` rewrites on every run, dirtying a clean tree.
+  # That is the failure Phase 148 closed for the lock file, one directory over.
+  # Phase 212.
+  if _out="$(PYTHONDONTWRITEBYTECODE=1 "$_py" "$script" --root "$skills" --config "$config" --local "$localcfg" --apply --quiet 2>&1)"; then
     record "model-roles: $(printf '%s' "$_out" | tail -1)"
   else
     note "model-role resolution reported an issue (skills keep their default models):"
@@ -3138,7 +3147,13 @@ EOF
 ensure_runtime_gitignore() {
   hdr "runtime-artifact gitignore"
   local gi="$TARGET/.gitignore"
-  local -a want=("sysop/runtime/")
+  # `sysop/**/__pycache__/` and not `sysop/scripts/__pycache__/`: the pre-scan
+  # imports `run_checks/*`, so the larger of the two caches is one level deeper
+  # (`sysop/scripts/run_checks/__pycache__/`, 11 files; 12 counting `_log` in the
+  # shallow one). Naming only the shallow
+  # path leaves that one untracked-and-unignored, which is the shape the filing
+  # proposed. The glob covers both plus any vendor subdir added later. Phase 212.
+  local -a want=("sysop/runtime/" ".claude/review_index.json" "sysop/**/__pycache__/")
   local -a missing=()
   local entry
   for entry in "${want[@]}"; do
@@ -3151,7 +3166,7 @@ ensure_runtime_gitignore() {
     note "already ignored: ${want[*]}"
     return 0
   fi
-  note "gitignore: appending ${#missing[@]} Sysop runtime dir(s) → $(rel "$gi")"
+  note "gitignore: appending ${#missing[@]} Sysop runtime artifact(s) → $(rel "$gi")"
   if [[ "$DRY_RUN" -eq 1 ]]; then
     return 0
   fi
@@ -3169,6 +3184,63 @@ ensure_runtime_gitignore() {
       printf '%s\n' "$entry"
     done
   } >> "$gi"
+}
+
+# ─── Phase 212: untrack vendored bytecode a previous install left behind ───
+# A gitignore rule does nothing for a file that is ALREADY tracked, so for every
+# consumer who ran a pre-212 install the entry above arrives and changes
+# nothing: `--update` still rewrites the .pyc and still dirties a clean tree.
+# The population that needs this is exactly the population the rule cannot help.
+#
+# `git rm -r --cached` unstages without touching the working tree, so nothing is
+# deleted from disk — the files simply stop being tracked, and the new ignore
+# rule then keeps them out. Scoped to the vendor dir Sysop owns (Phase 128); a
+# consumer's own bytecode elsewhere is none of our business.
+untrack_vendor_bytecode() {
+  # Not a git repo (or git absent) → nothing is tracked, nothing to do.
+  git -C "$TARGET" rev-parse --git-dir >/dev/null 2>&1 || return 0
+
+  # `:(glob)` is REQUIRED and is not decoration. git's default pathspec syntax
+  # gives `**` no special meaning, so a bare `sysop/**/__pycache__/*` matches
+  # from depth 1 only and silently misses `sysop/__pycache__/`. The gitignore
+  # rule above uses gitignore syntax, where `**` DOES span zero directories —
+  # so the two halves of this fix disagreed about their own population until
+  # the review round measured it. Verified: bare matches 2 of 3 fixtures,
+  # `:(glob)` matches 3 of 3.
+  local -a tracked=()
+  while IFS= read -r -d '' f; do
+    [[ -n "$f" ]] && tracked+=("$f")
+  done < <(git -C "$TARGET" ls-files -z -- ':(glob)sysop/**/__pycache__/*' 2>/dev/null)
+
+  (( ${#tracked[@]} == 0 )) && return 0
+
+  hdr "vendored bytecode untrack (Phase 212)"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    note "would untrack ${#tracked[@]} tracked bytecode file(s) under sysop/ (kept on disk)"
+    return 0
+  fi
+  # `-f` because a `.pyc` that is staged AND then re-modified (ordinary: a
+  # `git add -A` followed by any run that imports the module) makes git refuse
+  # the whole all-or-nothing removal with "staged content different from both
+  # the file and the HEAD". `--cached` means the index only — the working-tree
+  # file is never touched, with or without `-f`, which is what makes forcing
+  # safe here rather than merely convenient.
+  local _rm_err
+  if _rm_err="$(git -C "$TARGET" rm -r --cached -f --quiet \
+                    -- ':(glob)sysop/**/__pycache__/*' 2>&1)"; then
+    note "untracked ${#tracked[@]} bytecode file(s) under sysop/ — files kept on disk"
+    note "  commit this alongside the .gitignore entry; until you do, they show"
+    note "  as staged deletions in \`git status\`."
+    record "bytecode: untracked ${#tracked[@]} vendored .pyc"
+  else
+    # Surface git's own words. The first cut printed a remedy byte-identical to
+    # the command that had just failed AND swallowed stderr, so the consumer saw
+    # neither why it failed nor git's own "(use -f to force removal)" hint.
+    note "⚠ could not untrack vendored bytecode. git said:"
+    printf '%s\n' "$_rm_err" | sed 's/^/      /'
+    note "  Nothing was changed. Remove it by hand with:"
+    note "    git rm -r --cached -f -- ':(glob)sysop/**/__pycache__/*'"
+  fi
 }
 
 install_tasks_scaffold() {
@@ -3256,6 +3328,16 @@ run_install_pipeline() {
   # sysop/runtime/pending-docs/ via the promotion-deferral (leg-5 dogfood
   # finding), and the single line adds no dead per-dir entries.
   ensure_runtime_gitignore
+  # Reads naturally after ensure_runtime_gitignore, and that is ALL it is — the
+  # first cut of this comment said "strictly after", claiming that untracking
+  # before the rule existed would leave the files untracked-and-unignored. That
+  # is false within a single run: both steps complete before the installer
+  # returns, so the end state is identical either way. Measured by swapping them
+  # and re-running the suite — 14 passed, byte-identical `git status`. Recorded
+  # rather than quietly deleted, because "prose asserting an order is not a test
+  # of it" was the finding, and the honest resolution turned out to be that
+  # there was no order to test.
+  untrack_vendor_bytecode
   install_permissions
   install_served_models
   resolve_skill_models

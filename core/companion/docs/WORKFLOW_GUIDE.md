@@ -96,7 +96,7 @@ branch: feat/feat-studio
 date: 2026-03-20
 type: feature
 roadmap_ids: [FEAT-STUDIO]
-summary: Add payment-provider webhook endpoint. Key files: <api module>/routes/webhooks.py, <api module>/<payments service module>.
+summary: "Add payment-provider webhook endpoint. Key files: <api module>/routes/webhooks.py, <api module>/<payments service module>."
 ---
 EOF
 ```

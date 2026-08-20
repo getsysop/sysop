@@ -20,6 +20,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import tempfile
 import textwrap
 import datetime
 from pathlib import Path
@@ -311,13 +312,62 @@ def test_close_heredoc_creates_a_missing_archive_directory(tmp_path):
 
 
 def test_step3b_collect_has_loadbearing_mkdir():
-    """Drift guard for the gdp cb8f3840 backport: the Step 3b collect command must
-    create main's pending-docs dir before the silently-failing-when-dest-missing cp."""
+    """Drift guard for the gdp cb8f3840 backport, re-pointed by Phase 210.
+
+    The original asserted the literal bash `mkdir -p … && cp … 2>/dev/null`. Phase 210
+    replaced that with a provenance-checking `python3 -` heredoc, so the guard now asserts
+    the SURVIVING INVARIANT rather than the retired spelling: main's pending-docs dir is
+    still created before anything is copied into it. That is the whole point of the
+    backport — a copy into a missing destination fails, and the next `git worktree remove`
+    then destroys the gitignored doc.
+
+    An earlier version of this guard did `text.find(...)` on the markdown and compared
+    byte offsets. A reviewer walked it by COMMENTING OUT the mkdir: the substring is still
+    present, still ordered before the copy, and the collect then dies with
+    FileNotFoundError on any repo whose pending-docs dir does not yet exist — which is
+    every fresh clone. So this now EXECUTES the extracted heredoc against a destination
+    that genuinely does not exist, which is the only form that can fail for the right
+    reason.
+    """
+    import re as _re
+
     text = SKILL.read_text(encoding="utf-8")
-    assert (
-        "`mkdir -p sysop/runtime/pending-docs && "
-        "cp <worktree>/sysop/runtime/pending-docs/*.md sysop/runtime/pending-docs/ 2>/dev/null`"
-    ) in text
+    bodies = _re.findall(
+        r"python3 - \"<worktree-path>\" \"<branch name>\" <<'PY'\n(.*?)\n      PY\n", text, _re.DOTALL
+    )
+    assert bodies, "Step 3b's collect heredoc is gone"
+    collect_src = "\n".join(
+        ln[6:] if ln.startswith("      ") else ln for ln in bodies[0].split("\n")
+    )
+    # The masking redirect that made the original failure silent must not come back.
+    assert "cp <worktree>/sysop/runtime/pending-docs/*.md" not in text
+
+    with tempfile.TemporaryDirectory() as td:
+        d = Path(td)
+        main, wt = d / "main", d / "wt"
+        main.mkdir()
+        # Deliberately do NOT create main/sysop/runtime/pending-docs — that is the case.
+        assert not (main / "sysop/runtime/pending-docs").exists()
+        doc = wt / "sysop/runtime/pending-docs/feat-x.md"
+        doc.parent.mkdir(parents=True)
+        doc.write_text('---\nbranch: feat/x\nsummary: "s"\n---\n', encoding="utf-8")
+
+        script = d / "collect.py"
+        script.write_text(collect_src, encoding="utf-8")
+        r = subprocess.run(
+            [sys.executable, str(script), str(wt), "feat/x"],
+            cwd=main, capture_output=True, text=True,
+        )
+
+        # Assert INSIDE the context manager — the tree is deleted on exit.
+        assert r.returncode == 0, (
+            "the collect failed against a missing destination — the load-bearing mkdir "
+            f"is gone or inert:\n{r.stdout}\n{r.stderr}"
+        )
+        assert (main / "sysop/runtime/pending-docs/feat-x.md").exists(), (
+            "the doc was not collected; a fresh clone would lose it at the next "
+            "worktree remove"
+        )
 
 
 def test_final_report_template_carries_parked_markers_row():

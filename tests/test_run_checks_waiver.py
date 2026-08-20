@@ -60,7 +60,7 @@ def _write(repo: Path, name: str, body: str) -> None:
 
 
 def _lines(findings) -> set[str]:
-    return {file_line for _, file_line, _ in findings}
+    return {f[1] for f in findings}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

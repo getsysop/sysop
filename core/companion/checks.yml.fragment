@@ -102,9 +102,11 @@ checks:
   # THE GATE (Phase 61b). These ship `blocking: true`: an uncovered changed
   # line inside a `critical_path` glob fails `--fail-on-blocking`. Unlike
   # every other blocking check, coverage findings NEVER baseline-suppress —
-  # `--update-baseline` will not accept a crown-jewel coverage gap, because a
-  # diff-relative line number can't stand as tech debt and the carve-out
-  # exists precisely so these paths are never "caught later". A line that is
+  # `--update-baseline` will not accept a crown-jewel coverage gap, because the
+  # carve-out exists precisely so these paths are never "caught later". (This
+  # used to give a second reason, about line numbers shifting every commit.
+  # That was false — `diff-cover`'s violation_lines are absolute source lines.
+  # What is diff-relative is the SET reported, not the numbering.) A line that is
   # genuinely untestable is excluded with a coverage pragma
   # (`# pragma: no cover`, `/* istanbul ignore */`) at the report-producer
   # layer — that drops it from the report so it is not a violation; the task's

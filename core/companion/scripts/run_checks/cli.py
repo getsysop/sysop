@@ -38,8 +38,11 @@ from _log import _sanitize_log
 from .accounting import FAILED, RunReport, stderr_excerpt
 from .baseline import (
     _is_coverage,
+    finding_key,
     is_baseline_suppressed,
+    legacy_entries,
     load_baseline,
+    migrate_baseline,
     write_baseline,
 )
 from .config import parse_checks_yml
@@ -197,6 +200,24 @@ def main():
              "file and exit 0.",
     )
     parser.add_argument(
+        "--print-keys",
+        action="store_true",
+        help="Print the exact baseline key for every current finding and exit 0. "
+             "For grep and semgrep checks the identity is a content hash, so "
+             "those keys cannot be typed from what the finding line shows; this "
+             "is how a consumer hand-adds an accepted finding.",
+    )
+    parser.add_argument(
+        "--migrate-baseline",
+        action="store_true",
+        help="Convert an existing two-field baseline to identity-bearing keys, "
+             "in place and preserving comments. Rewrites an entry only where "
+             "exactly one current finding matches it; drops the rest for "
+             "re-triage, EXCEPT entries whose check did not execute this run, "
+             "which are held untouched and named in the report. Not a "
+             "regeneration — see --update-baseline for that.",
+    )
+    parser.add_argument(
         "--baseline-file",
         default=None,
         help="Baseline file path (default: .claude/checks_baseline.txt)",
@@ -238,8 +259,40 @@ def main():
     # pass, discarded its findings, then re-ran every stage a second time over
     # all checks — double execution and a double-record ambiguity for the
     # accounting layer. One pass, one RunReport.
+    # The three baseline verbs are mutually exclusive. `--update-baseline`
+    # rewrites the whole file and keeps no comment; `--migrate-baseline`
+    # preserves every one. Passing both used to run the destroyer and exit 0,
+    # reading as success while a consumer's hand-written triage rationale went
+    # to zero — the dispatch order was the only thing deciding it.
+    verbs = [n for n, v in (("--update-baseline", args.update_baseline),
+                            ("--print-keys", args.print_keys),
+                            ("--migrate-baseline", args.migrate_baseline)) if v]
+    if len(verbs) > 1:
+        print(
+            f"error: {' and '.join(verbs)} cannot be combined — they do "
+            "different things to the same file.\n"
+            "   --update-baseline regenerates it (accepts every current "
+            "finding, keeps no comment).\n"
+            "   --migrate-baseline converts existing entries in place "
+            "(preserves comments).\n"
+            "   --print-keys writes nothing. Run one.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
     if args.update_baseline:
         _run_update_baseline(repo_root, all_checks, baseline_file)
+        return
+
+    # `--print-keys` and `--migrate-baseline` share --update-baseline's
+    # all-checks, single-pass shape for the same reason: a key or a migration
+    # decision derived from a mode-filtered subset would be silently partial.
+    if args.print_keys:
+        _run_print_keys(repo_root, all_checks)
+        return
+
+    if args.migrate_baseline:
+        _run_migrate_baseline(repo_root, all_checks, baseline_file)
         return
 
     # Map --mode to the used_by token, then classify every check by stage in
@@ -283,8 +336,9 @@ def main():
     # exit 0. That is correct behaviour for an accepted finding and indefensible
     # to leave silent: an armed-but-inert gate reads exactly like a clean scan.
     blocking_suppressed = set()
-    for check_id, file_line, msg in all_findings:
-        if is_baseline_suppressed(check_id, file_line, blocking_ids, baseline):
+    for check_id, file_line, msg, identity in all_findings:
+        if is_baseline_suppressed(check_id, file_line, blocking_ids, baseline,
+                                  identity):
             print(f"[baseline] {msg}")
             baseline_hits += 1
             if check_id in blocking_ids:
@@ -302,6 +356,28 @@ def main():
     # check with a comment and leave nothing behind that says so.
     for _wid, _wfl, wmsg in report.waived():
         print(f"[waived] {wmsg}")
+
+    # Two-field entries for checks that now carry an identity. These stopped
+    # matching the moment the identity key arrived, and they are named here
+    # rather than honoured by a load-time fallback: a fallback would let the
+    # legacy entry keep meaning "whatever this check finds at this line", which
+    # is the defect, permanently, for exactly the baselines that have it. The
+    # finding they used to excuse is firing somewhere in the output above.
+    stale = legacy_entries(baseline, all_findings)
+    if stale:
+        shown = ", ".join(stale[:5])
+        more = f" (+{len(stale) - 5} more)" if len(stale) > 5 else ""
+        noun, verb = (("entry", "matches") if len(stale) == 1
+                      else ("entries", "match"))
+        print(
+            f"\n⚠ {len(stale)} baseline {noun} no longer {verb}: {shown}{more}\n"
+            "  These predate the identity field and cannot say WHICH finding "
+            "they accepted.\n"
+            "  Convert them: bash sysop/scripts/run_checks.sh --migrate-baseline\n"
+            "  (that pass covers EVERY check, not just this --mode's — so it "
+            "may report\n   entries this warning did not name.)",
+            file=sys.stderr,
+        )
 
     # Accounting summary block to stderr — keeps stdout clean for grep/wc
     # piping. Reports checks *executed* vs *skipped* vs *failed*, not just
@@ -340,13 +416,36 @@ def main():
     blocking_failures = report.blocking_failures()
     if args.fail_on_blocking and (new_blocking_hits > 0 or blocking_failures):
         if new_blocking_hits > 0:
-            print(
-                f"\nerror: {new_blocking_hits} new blocking finding(s) — failing CI.\n"
-                "   If a finding is known tech debt, regenerate the baseline with:\n"
-                "     bash sysop/scripts/run_checks.sh --mode both --update-baseline\n"
-                "   (Review the diff before committing — baseline entries bypass CI.)",
-                file=sys.stderr,
-            )
+            # When legacy entries are present the failure is almost certainly
+            # them, and the remedy is the CONVERTER. Naming the regenerator
+            # here sent a consumer to the one command that discards their
+            # rationale and silently accepts every current finding — including
+            # the unreviewed one that just failed the gate. Two remedies for
+            # one failure, and the destructive one was attached to the exit.
+            if stale:
+                print(
+                    f"\nerror: {new_blocking_hits} new blocking finding(s) — "
+                    "failing CI.\n"
+                    f"   {len(stale)} of your baseline entries no longer match "
+                    "(see the warning above).\n"
+                    "   Convert them first — this preserves your comments:\n"
+                    "     bash sysop/scripts/run_checks.sh --migrate-baseline\n"
+                    "   Only then, for genuinely new tech debt, "
+                    "--update-baseline (which keeps no comment).",
+                    file=sys.stderr,
+                )
+            else:
+                print(
+                    f"\nerror: {new_blocking_hits} new blocking finding(s) — "
+                    "failing CI.\n"
+                    "   If a finding is known tech debt, regenerate the "
+                    "baseline with:\n"
+                    "     bash sysop/scripts/run_checks.sh --mode both "
+                    "--update-baseline\n"
+                    "   (Review the diff before committing — baseline entries "
+                    "bypass CI.)",
+                    file=sys.stderr,
+                )
             if new_coverage_hits > 0:
                 # Coverage findings are NOT baselineable (Phase 61b crown-jewel
                 # gate) — steer the consumer away from the dead-end
@@ -480,6 +579,94 @@ def _run_update_baseline(repo_root, all_checks, baseline_file):
     baseline_rel = baseline_file.replace(repo_root.rstrip("/") + "/", "")
     print(
         f"Wrote {written} baseline finding(s) to {baseline_rel}",
+        file=sys.stderr,
+    )
+    sys.exit(0)
+
+
+def _run_print_keys(repo_root, all_checks):
+    """Print `key<TAB>message` for every current finding, then exit 0.
+
+    Exists because the identity field is a hash: `WORKFLOW.md` documents a
+    consumer hand-adding an accepted finding to the baseline, and no printed
+    finding line carries the hash, so without this the documented capability
+    would have been removed rather than changed. Coverage is filtered out for
+    the same reason `write_baseline` filters it — a coverage key is not an
+    entry anyone may add.
+    """
+    classified = _classify_checks(all_checks, active_token=None)
+    report = RunReport(all_checks)
+    all_findings = _run_all_stages(repo_root, classified, report)
+    for check_id, file_line, msg, identity in sorted(all_findings):
+        if _is_coverage(check_id):
+            continue
+        print(f"{finding_key(check_id, file_line, identity)}\t{msg}")
+    # The accounting block, for the same reason the other two verbs print it:
+    # this list is what a consumer picks an entry to accept FROM, so a stage
+    # that did not run makes it silently partial. Omitting it here hid six
+    # skipped checks on one fixture, two of them blocking coverage gates.
+    print("\n" + report.render(all_findings, mode="both"), file=sys.stderr)
+    sys.exit(0)
+
+
+def _run_migrate_baseline(repo_root, all_checks, baseline_file):
+    """One-shot two-field -> identity-bearing conversion, in place.
+
+    Deliberately NOT a second standing regeneration command (Phase 193 ratified
+    "one ledger, one format, one regeneration command"): it is run once, when
+    the identity key arrives, and `--update-baseline` remains the only way to
+    regenerate. The report is mandatory rather than opt-in because the whole
+    argument for rewriting in place instead of dropping everything is that a
+    human sees what each entry now excuses.
+    """
+    if not os.path.exists(baseline_file):
+        print(f"error: no baseline at {baseline_file} — nothing to migrate.",
+              file=sys.stderr)
+        sys.exit(1)
+
+    classified = _classify_checks(all_checks, active_token=None)
+    report = RunReport(all_checks)
+    all_findings = _run_all_stages(repo_root, classified, report)
+    print("\n" + report.render(all_findings, mode="both"), file=sys.stderr)
+
+    rows, refusal = migrate_baseline(
+        baseline_file, all_findings, repo_root, report.non_executed_ids(),
+        report.incomplete_ids()
+    )
+    if refusal:
+        print(f"\nerror: {refusal}", file=sys.stderr)
+        sys.exit(1)
+
+    tally = {}
+    for action, old, new, detail in rows:
+        tally[action] = tally.get(action, 0) + 1
+        if action == "rewritten":
+            print(f"  rewrote  {old}\n        -> {new}\n           {detail}")
+        elif action.startswith("dropped"):
+            print(f"  DROPPED  {old}\n           {detail}")
+        elif action == "header-updated":
+            # The one line this command REWRITES, and it printed as `kept` —
+            # beside the old text, which reads as confirmation that nothing
+            # happened. It is the row most likely to sit next to a destroyed
+            # comment, so mislabelling it is the worst place to be vague.
+            print(f"  REPLACED the generated header line\n        was: {old}")
+        elif action == "kept-3field" or not detail:
+            # Already migrated, or nothing to say. Counted, not narrated.
+            continue
+        else:
+            # Every other `kept-*` carries a reason the operator has to act on
+            # — an entry held because its stage did not run, one whose path
+            # cannot be keyed, one whose check found nothing this pass. Those
+            # reasons existed and reached nobody: only `rewritten` and
+            # `dropped*` were printed, so the transient-vs-permanent
+            # distinction that motivated writing them was invisible, and the
+            # consumer saw a bare count.
+            print(f"  kept     {old}\n           {detail}")
+    for action in sorted(tally):
+        print(f"{action}: {tally[action]}", file=sys.stderr)
+    print(
+        "\nEvery DROPPED entry is a finding that will now fire. Re-triage it "
+        "and re-accept it with --print-keys, or fix it.",
         file=sys.stderr,
     )
     sys.exit(0)

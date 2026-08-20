@@ -247,13 +247,19 @@ KNOWN_RUNTIME_SET_LOOPS: dict[str, str] = {
         "ISSUE-0016 silent-data-loss guard consumes. The loop shape is not new exposure: "
         "Step 1a already fed a `while IFS=$'\\t' read` loop on the line below.",
     "while IFS= read -r line; do":
-        "Step 1a/3b `git status --porcelain` symlink classifier. Read-only body; the "
-        "non-greedy regex can also swallow the sibling strip loop that follows it.",
-    'for f in "<worktree-path>"/sysop/runtime/pending-docs/*.md; do':
-        "Step 3b stale pending-docs strip. GLOB-DRIVEN, so it cannot be unrolled, and it "
-        "wraps `rm -f` behind `[ -e … ] &&` — a write inside two unmatched shapes at once. "
-        "Genuinely uncovered; recorded as such in WORKFLOW.md § 8.2a rather than fixed.",
+        "Step 1a/3b `git status --porcelain` symlink classifier. Its body WRITES (`rm -f` on "
+        "the downgraded symlinks) — an earlier version of this entry called it read-only and "
+        "blamed a regex overlap for the write; the write is in this loop. Set discovered at "
+        "runtime, so it cannot be unrolled.",
 }
+# Phase 210 RETIRED the one write loop this list carried:
+#   'for f in "<worktree-path>"/sysop/runtime/pending-docs/*.md; do'  (Step 3b rollback)
+# It was ONE of the skill set's two write loops (the other, Step 3b's symlink
+# strip, survives below and is also `rm`-bearing) and the one § 8.2a named. Its replacement is a
+# `python3 - <<'PY'` heredoc, which `Bash(python3 -:*)` already authorizes and whose
+# Python `for` does not match LOOP_RE (no `; do` / `done`). Do not re-add a bash loop
+# here to make a future change pass — test_no_bash_write_loop_returned_to_step3b, in
+# tests/test_pending_doc_integrity.py, asserts the retired shape stays gone.
 
 
 def test_every_surviving_loop_is_accounted_for():
@@ -296,19 +302,70 @@ def test_no_allowlisted_loop_has_gone_stale():
 def test_no_write_command_runs_inside_a_loop_except_the_one_documented_case():
     """Severity split: a read-only loop is a permission question, a write loop is a defect.
 
-    Exactly one surviving loop writes — Step 3b's glob-driven `rm -f` strip — and it is
-    named here so a second one cannot appear quietly.
+    Exactly one surviving loop writes — Step 3b's symlink strip — and it is named here
+    so a second one cannot appear quietly.
+
+    **Keyed on `(header, the write commands in the body)`, not on the header alone
+    (Q-236, fixed Phase 211).** The header-only key was a subset check whose permitted
+    set contained `while IFS= read -r line; do` — the most ordinary line-reading idiom
+    in bash. A brand-new write loop reusing that header, in a DIFFERENT skill, with
+    `mkdir`/`git add`/`git commit`/`git push origin main` in its body, passed the entire
+    suite byte-identically; two independent round lenses demonstrated it by execution.
+    The body's write set is what distinguishes them: `{rm}` is the documented case,
+    anything else is a new defect wearing a familiar header.
     """
-    writing = []
+    writing = {}
     for skill in S.skill_files():
         for m in S.loops(skill.read_text(encoding="utf-8")):
-            if S.WRITE_CMD_RE.search(m.group("body")):
-                writing.append(S.loop_header(m))
-    assert set(writing) <= {
-        'for f in "<worktree-path>"/sysop/runtime/pending-docs/*.md; do',
-        "while IFS= read -r line; do",   # regex overlap with the strip loop below it
-    }, f"a new write-containing loop appeared: {writing}"
+            cmds = S.loop_write_commands(m)
+            if cmds:
+                writing[(S.loop_header(m), cmds)] = skill.name
+    permitted = {
+        # Step 3b's symlink strip. The `rm -f` is in the loop BODY (not a regex overlap,
+        # as an earlier comment here claimed) — it deletes the downgraded tooling
+        # symlinks Step 1a classified, and cannot be unrolled because the set is
+        # discovered at runtime.
+        ("while IFS= read -r line; do", frozenset({"rm"})),
+    }
+    unexpected = {k: v for k, v in writing.items() if k not in permitted}
+    assert not unexpected, (
+        "a new write-containing loop appeared:\n" + "\n".join(
+            f"  {name}: {header!r} writes {sorted(cmds)}"
+            for (header, cmds), name in sorted(unexpected.items(), key=lambda kv: kv[1])
+        )
+    )
 
+
+def test_the_write_allowlist_cannot_be_inherited_by_a_new_loop():
+    """The non-vacuity control for the key change, and the demonstrated bypass.
+
+    Without this, reverting `loop_write_commands` to `loop_header` leaves the whole
+    suite green — which is exactly the state Phase 210 measured. The synthetic loop
+    below is the one that shipped green under the old key.
+    """
+    bypass = (
+        "```bash\n"
+        "while IFS= read -r line; do\n"
+        "  mkdir -p sysop/runtime/x\n"
+        "  git add -A && git commit -m 'x' && git push origin main\n"
+        "done < list.txt\n"
+        "```\n"
+    )
+    matches = S.loops(bypass)
+    assert matches, "the fixture no longer parses as a loop; the control proves nothing"
+    cmds = S.loop_write_commands(matches[0])
+    assert cmds, "the fixture's body no longer contains a write command"
+
+    header_key = S.loop_header(matches[0])
+    assert header_key == "while IFS= read -r line; do", header_key
+    # The header ALONE is indistinguishable from the permitted loop …
+    assert header_key == "while IFS= read -r line; do"
+    # … and the body's write set is what separates them.
+    assert cmds != frozenset({"rm"}), (
+        "the new key cannot tell the demonstrated bypass apart from the one "
+        f"documented write loop, so it buys nothing over the header: {sorted(cmds)}"
+    )
+    assert {"mkdir", "git add", "git commit", "git push"} <= cmds, sorted(cmds)
 
 def test_the_loop_guard_is_not_vacuous():
     """Non-vacuity through the production predicate, across the spellings the first draft

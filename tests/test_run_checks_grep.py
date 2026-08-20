@@ -46,7 +46,7 @@ def test_invert_check_flags_file_missing_neg_pattern(tmp_path):
     )
     findings = rci.run_check(check, str(tmp_path))
     assert len(findings) == 1, findings
-    check_id, file_line, _msg = findings[0]
+    check_id, file_line, _msg, _ident = findings[0]
     assert check_id == "test-check"
     assert file_line == "src/bad.py"  # file-level: bare path, no :lineno
 
@@ -154,7 +154,7 @@ def test_per_line_negative_pattern_filters_matching_lines(tmp_path):
     )
     findings = rci.run_check(check, str(tmp_path))
     assert len(findings) == 1, findings  # line 2 filtered out
-    _check_id, file_line, _msg = findings[0]
+    _check_id, file_line, _msg, _ident = findings[0]
     assert file_line == "src/todos.py:1"
 
 
@@ -169,7 +169,7 @@ def test_simple_pattern_reports_every_hit(tmp_path):
     check = _check(pattern=r"eval\(", paths=["src"], include=["*.py"])
     findings = rci.run_check(check, str(tmp_path))
     assert len(findings) == 1, findings
-    check_id, file_line, _msg = findings[0]
+    check_id, file_line, _msg, _ident = findings[0]
     assert check_id == "test-check"
     assert file_line == "src/danger.py:1"
 
@@ -226,7 +226,7 @@ def test_exclude_dir_drops_subtree_from_grep(tmp_path):
         "description": "f-string SQL",
     }
     findings = rci.run_check(check, str(tmp_path))
-    hit_paths = [fl for _, fl, _ in findings]
+    hit_paths = [f[1] for f in findings]
     assert any("pkg/main.py" in p for p in hit_paths), findings
     assert not any("migrations" in p for p in hit_paths), findings
 
@@ -244,7 +244,7 @@ def test_without_exclude_dir_subtree_still_scanned(tmp_path):
         "description": "f-string SQL",
     }
     findings = rci.run_check(check, str(tmp_path))
-    assert any("migrations" in fl for _, fl, _ in findings), findings
+    assert any("migrations" in f[1] for f in findings), findings
 
 
 def test_iter_check_files_honors_exclude_dirs(tmp_path):
@@ -295,3 +295,251 @@ class TestUnroutableVsSkipped:
         r = RunReport([{"id": "grep-c"}])
         grep_mod.run_check(_min_check(paths=["src/"]), str(tmp_path), r)
         assert r.status_of("grep-c") == "unroutable"
+
+
+# ── Phase 212 / Q-026: the grep hit parse ────────────────────────────────────
+#
+# `grep -rn` emits `path:lineno:content`, which no split can parse: a colon is
+# legal in a path AND ordinary in content. The filed remedy (rsplit instead of
+# split) trades the exotic failure for a common one, so `--null` is used
+# instead. Each test below names the concrete way its absence went wrong.
+
+
+class TestGrepHitParse:
+    """Both defects the pre-212 `split(':', 2)` produced, plus their controls.
+
+    The controls matter more than the attacks here: the repo-root case
+    (`test_colon_in_repo_root_*`) FAILED SILENTLY — the branch produced zero
+    findings while the accounting reported `executed`, which is the one shape
+    a green run cannot be distinguished from.
+    """
+
+    def test_colon_in_source_path_keeps_the_line_number(self, tmp_path):
+        """Filed shape: `src/a:b/c.py:1:code` split from the left put the
+        line number in the path column and shifted the content right by one
+        field, losing the line number entirely."""
+        (tmp_path / "src" / "a:b").mkdir(parents=True)
+        (tmp_path / "src" / "a:b" / "c.py").write_text("code here\n", encoding="utf-8")
+        findings = rci.run_check(
+            _check(pattern="code", paths=["src"], include=["*.py"]), str(tmp_path))
+        assert len(findings) == 1, findings
+        assert findings[0][1] == "src/a:b/c.py:1", findings[0][1]
+
+    def test_colon_in_content_is_not_corrupted(self, tmp_path):
+        """The control that disqualifies the filed rsplit remedy. This hit
+        works correctly pre-212; rsplit(':', 2) would report the path as
+        `src/d.py:1:x = "a` and the content as `c"  code`."""
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "d.py").write_text('x = "a:b:c"  code\n', encoding="utf-8")
+        findings = rci.run_check(
+            _check(pattern="code", paths=["src"], include=["*.py"]), str(tmp_path))
+        assert len(findings) == 1, findings
+        assert findings[0][1] == "src/d.py:1", findings[0][1]
+
+    def test_colon_in_repo_root_still_finds_the_file(self, tmp_path):
+        """The silent one, and the reason this is a gate-truth defect rather
+        than a cosmetic parse bug.
+
+        `invert_file_check` split the ABSOLUTE hit before stripping the repo
+        prefix, so a colon anywhere in `repo_root` — a CI job directory named
+        `job:42` is enough, no source path involved — truncated every path to a
+        fragment. The containment guard then rejected all of them and the
+        branch returned zero findings while reporting `executed`.
+        """
+        root = tmp_path / "job:42"
+        (root / "src").mkdir(parents=True)
+        (root / "src" / "f.py").write_text("createObjectURL(x)\n", encoding="utf-8")
+        findings = rci.run_check(
+            _check(pattern="createObjectURL", negative_pattern="revokeObjectURL",
+                   invert_file_check=True, paths=["src"], include=["*.py"]),
+            str(root))
+        assert len(findings) == 1, (
+            "the whole invert branch went silent on a colon-bearing checkout path"
+        )
+
+    def test_colon_free_repo_root_is_the_control(self, tmp_path):
+        """Non-vacuity control for the test above: identical fixture, clean
+        root. If this ever fails the sibling proves nothing."""
+        root = tmp_path / "job42"
+        (root / "src").mkdir(parents=True)
+        (root / "src" / "f.py").write_text("createObjectURL(x)\n", encoding="utf-8")
+        findings = rci.run_check(
+            _check(pattern="createObjectURL", negative_pattern="revokeObjectURL",
+                   invert_file_check=True, paths=["src"], include=["*.py"]),
+            str(root))
+        assert len(findings) == 1, findings
+
+    def test_anchored_negative_pattern_is_not_defeated_by_a_colon_path(self, tmp_path):
+        """The false POSITIVE half. With the line number stolen into the
+        content column, content began `1:` — so `^SECRET` could never match and
+        a line the check was configured to skip was reported as a finding."""
+        (tmp_path / "a:b").mkdir()
+        (tmp_path / "a:b" / "g.py").write_text("SECRET code\n", encoding="utf-8")
+        findings = rci.run_check(
+            _check(pattern="code", negative_pattern="^SECRET",
+                   paths=["a:b"], include=["*.py"]), str(tmp_path))
+        assert findings == [], (
+            "an anchored negative_pattern was defeated by the stolen line number"
+        )
+
+    def test_anchored_negative_pattern_control_clean_path(self, tmp_path):
+        """Non-vacuity control: same filter, colon-free path."""
+        (tmp_path / "ab").mkdir()
+        (tmp_path / "ab" / "g.py").write_text("SECRET code\n", encoding="utf-8")
+        assert rci.run_check(
+            _check(pattern="code", negative_pattern="^SECRET",
+                   paths=["ab"], include=["*.py"]), str(tmp_path)) == []
+
+    def test_path_containing_a_line_number_shape_needs_the_nul(self, tmp_path):
+        """The ONE fixture that binds `--null` itself.
+
+        Every other case here is resolvable by the colon fallback, so Phase
+        212's review round deleted `--null` from the grep command and the whole
+        suite stayed green — the leg's entire mechanism was unguarded by its own
+        tests. A path segment shaped like `<name>:<digits>:` is genuinely
+        ambiguous under any colon parse: `a:12:b/c.py:3:code` can be read as
+        path `a`, line 12, or as path `a:12:b/c.py`, line 3. Only the NUL
+        separator settles it, so removing the flag reds exactly this test.
+        """
+        d = tmp_path / "a:12:b"
+        d.mkdir()
+        (d / "c.py").write_text("zzz\nzzz\ncode here\n", encoding="utf-8")
+        findings = rci.run_check(
+            _check(pattern="code", paths=["a:12:b"], include=["*.py"]), str(tmp_path))
+        assert len(findings) == 1, findings
+        assert findings[0][1] == "a:12:b/c.py:3", findings[0][1]
+
+    def test_run_grep_back_compat_shape_is_unchanged(self, tmp_path):
+        """`run_grep` is the documented re-export surface. It must keep
+        emitting `path:lineno:content` even though the run now uses --null,
+        because an external caller parses that shape."""
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "d.py").write_text("code here\n", encoding="utf-8")
+        lines = rci.run_grep("code", ["src"], ["*.py"], [], str(tmp_path))
+        assert len(lines) == 1, lines
+        assert "\0" not in lines[0], "NUL leaked into the back-compat contract"
+        assert lines[0].endswith("/src/d.py:1:code here"), lines[0]
+
+
+class TestParseHitUnit:
+    """`parse_hit` directly, including the no-NUL fallback path that only an
+    external caller or a --null-less grep can reach."""
+
+    def test_null_form_is_split_on_the_nul(self):
+        assert grep_mod.parse_hit("src/a:b/c.py\x001:x = 'q:r'") == (
+            "src/a:b/c.py", "1", "x = 'q:r'")
+
+    def test_colon_fallback_reproduces_pre_212_split_exactly(self):
+        """The fallback is a COMPATIBILITY path, so its contract is sameness,
+        not correctness — including the same known-wrong answer on a
+        colon-bearing path.
+
+        The first cut was greedy (last `:<digits>:` boundary wins) on the
+        reasoning that colon-in-path is the thing being fixed. The round
+        measured it: greedy is WORSE than what it replaces on the shapes this
+        module's own commentary calls ordinary content colons. These fixtures
+        are the ones that caught it; `x = 'a:b'` alone did not, because it has
+        no digits between colons."""
+        for hit in ("src/d.py:1:x = 'a:b'",
+                    'src/d.py:1:ts = "10:30:00"',      # timestamp
+                    "src/d.py:1:x = arr[1:2:3]",        # slice step
+                    'src/d.py:1:u = "http://h:8080:x"'):  # host:port
+            assert grep_mod.parse_hit(hit) == tuple(hit.split(":", 2)), hit
+
+    def test_hit_with_no_line_number_still_attributes_a_file(self):
+        assert grep_mod.parse_hit("src/d.py") == ("src/d.py", None, "")
+
+    def test_null_form_without_a_line_number_keeps_the_path(self):
+        """No colon after the NUL — exercises the `sep` arm."""
+        assert grep_mod.parse_hit("src/d.py\x00no-number-here") == (
+            "src/d.py", None, "no-number-here")
+
+    def test_null_form_with_a_non_numeric_first_field_is_not_a_line_number(self):
+        """Exercises the `.isdigit()` arm specifically, which the sibling above
+        cannot reach: here a colon IS present, so `sep` is truthy and only the
+        digit test can reject it. Dropping `.isdigit()` survived the round
+        because every other fixture either had no colon or had real digits.
+
+        `Binary file /x/y.py matches` is the live shape — but grep can also emit
+        a hit whose first post-NUL field is non-numeric, and calling that a line
+        number would put junk in a finding key."""
+        assert grep_mod.parse_hit("src/d.py\x00abc:rest") == (
+            "src/d.py", None, "abc:rest")
+
+    def test_the_unparsed_remainder_is_preserved_not_discarded(self):
+        """`return path, None, rest` — not `path, None, ""`. Flipping it survived
+        the round because every fixture discarded the third element with `_`.
+        The remainder is what a caller needs to tell `Binary file … matches`
+        apart from a genuinely malformed line."""
+        _p, _l, content = grep_mod.parse_hit("src/d.py\x00some remainder text")
+        assert content == "some remainder text"
+
+
+class TestBinaryClassifiedFileIsNotAFinding:
+    """Phase 212's review round, execution lens — a regression this phase
+    introduced and its round caught before merge.
+
+    `grep` prints `Binary file <path> matches` for any file holding a NUL byte
+    — a corrupt or mislabelled `.sql`/`.py` is enough. That line carries no NUL
+    separator and no line number. Pre-212 the plain branch dropped it as a side
+    effect of its `len(parts) >= 2` guard; the first cut of the `parse_hit`
+    rewrite turned that accident into an explicit emit.
+
+    The result was a NEW BLOCKING FINDING on a `severity: critical` check whose
+    key was the literal string `Binary file /abs/path matches` — an absolute
+    path, so it does not survive a move to another checkout and **cannot be
+    baselined portably**. A consumer could not accept it to get green.
+
+    SCORED, because which of these are attacks and which are controls is not
+    obvious and guessing it wrong is how a battery flatters itself. Against the
+    regressed commit, three fail (plain, negative_pattern, and the
+    absolute-path property) and `test_invert_branch_drops_it_too` PASSES — the
+    invert branch was already saved by its `realpath` containment guard, which
+    rejects the mangled path for an unrelated reason. That test is therefore a
+    control here, not an attack: it pins a property that must hold, and it
+    happened to hold before by accident.
+    """
+
+    @staticmethod
+    def _binary_fixture(root):
+        (root / "src").mkdir()
+        # A real NUL byte is what makes grep call this binary.
+        (root / "src" / "tainted.py").write_bytes(b"GRANT SELECT on users\n\x00\n")
+        (root / "src" / "clean.py").write_text("GRANT SELECT on users\n", encoding="utf-8")
+
+    def test_plain_branch_drops_a_binary_classified_file(self, tmp_path):
+        self._binary_fixture(tmp_path)
+        findings = rci.run_check(
+            _check(pattern="GRANT", paths=["src"], include=["*.py"]), str(tmp_path))
+        assert not any("Binary file" in f[1] for f in findings), findings
+        # …and the clean sibling is still reported, so this is not a blanket drop.
+        assert [f[1] for f in findings] == ["src/clean.py:1"], findings
+
+    def test_negative_pattern_branch_drops_it_too(self, tmp_path):
+        self._binary_fixture(tmp_path)
+        findings = rci.run_check(
+            _check(pattern="GRANT", negative_pattern="nothing-matches-this",
+                   paths=["src"], include=["*.py"]), str(tmp_path))
+        assert not any("Binary file" in f[1] for f in findings), findings
+        assert [f[1] for f in findings] == ["src/clean.py:1"], findings
+
+    def test_invert_branch_drops_it_too(self, tmp_path):
+        self._binary_fixture(tmp_path)
+        findings = rci.run_check(
+            _check(pattern="GRANT", negative_pattern="revoked",
+                   invert_file_check=True, paths=["src"], include=["*.py"]),
+            str(tmp_path))
+        assert not any("Binary file" in f[1] for f in findings), findings
+
+    def test_no_finding_key_is_ever_an_absolute_path(self, tmp_path):
+        """The property that made the regression unbaselineable, asserted
+        directly rather than via the one shape that produced it."""
+        self._binary_fixture(tmp_path)
+        for kind in ({}, {"negative_pattern": "zzz"},
+                     {"negative_pattern": "zzz", "invert_file_check": True}):
+            findings = rci.run_check(
+                _check(pattern="GRANT", paths=["src"], include=["*.py"], **kind),
+                str(tmp_path))
+            for _cid, file_line, _msg, _ident in findings:
+                assert not file_line.startswith("/"), (kind, file_line)
+                assert str(tmp_path) not in file_line, (kind, file_line)

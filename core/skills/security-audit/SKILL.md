@@ -183,7 +183,7 @@ Record:
 
 Before launching any audit agents, cross-reference both maps against the actual codebase to find coverage gaps. This is a deterministic check — no LLM needed.
 
-**What this audit is scoped to.** The `<project>/CLAUDE.md` § "Map coverage exclusions" list (used in 2a-1 and 2a-2 below) scopes **this map-coverage audit only** — it names paths *expected* to be unmatched by the maps so they are not reported as coverage gaps. It does **not** change the Step 1 scan manifest, and it is **not a scan-exclusion mechanism**. Whether a given path is actually scanned is decided separately by security-map section membership at Step 3 dispatch (map-keyed) plus the § "Security-critical always-include files" set, not by this list.
+**What this audit is scoped to.** The `<project>/CLAUDE.md` § "Map coverage exclusions" list (used in 2a-1 and 2a-2 below) scopes **this map-coverage audit only** — it names paths *expected* to be unmatched by the maps so they are not reported as coverage gaps. It does **not** change the Step 1 scan manifest, and it is **not a scan-exclusion mechanism**. Whether a given path is actually scanned is decided separately by security-map section membership at Step 3 dispatch (map-keyed) plus the § "Security-critical always-include files" set, not by this list. **Map-keyed is not the same as covered**, and this sentence used to be read as though it were: dispatch is keyed on the *categories* a matching section lists, so a section whose categories no agent owns is matched and unaudited. Step 3-0b is the check for that, and it is the only one that can see it — 2a-1 counts such a file as matched.
 
 ### 2a-0. Top-level inventory completeness (unmapped subtrees)
 
@@ -335,7 +335,7 @@ bash sysop/scripts/run_checks.sh --mode security
 
 **Read the pre-scan accounting block — do not just count findings.** The invocation's stderr summary reports `checks: E executed / S skipped / F failed of N selected`, not a bare finding total: a stage that skipped its precondition (unlocalized paths, no coverage report) or crashed (a semgrep trust-store failure, a timeout) contributes zero findings *without lowering the check count*, so `0 findings from 13 checks` is the exact output of a genuinely clean scan **and** of a run where nothing executed. Carry the block into the round summary — state it as *pre-scan emitted `<findings>` findings from E of N selected checks* — note the letters: `S` is the **skipped** count and `N` is the **selected** total, so the denominator here is `N`, never `S`, and carry **every `failed` stage and every `⚠ BLOCKING CHECK DID NOT RUN` line verbatim** with its reason; unchanged repeat skips may compress to *pre-scan environment unchanged since Round N-1* after their first recording. A `failed` stage means the deterministic layer you are about to trust ran incomplete — treat it as a coverage gap to close (fix the tool/environment and re-run), never as a clean bill.
 
-The `--mode security` invocation runs grep (checks.yml registry), `eslint`, Semgrep AST, and dependency audit (`pip-audit`). All share the same `(check_id, file_line, msg)` shape so baseline matching, `--mode` filtering, and `--fail-on-blocking` apply uniformly. **Security mode's registry deliberately contains no `pyright` entries** — every `pyright-*` check is marked `used_by: [codebase-review]`, so a security run reports fewer selected checks than a quality run, and the type/undefined-name analysis lives in the codebase-review pass. That is by design, not a missing stage; the accounting block's `selected` count reflects it.
+The `--mode security` invocation runs grep (checks.yml registry), `eslint`, Semgrep AST, and dependency audit (`pip-audit`). All share the same `(check_id, file_line, msg, identity)` shape so baseline matching, `--mode` filtering, and `--fail-on-blocking` apply uniformly. **Security mode's registry deliberately contains no `pyright` entries** — every `pyright-*` check is marked `used_by: [codebase-review]`, so a security run reports fewer selected checks than a quality run, and the type/undefined-name analysis lives in the codebase-review pass. That is by design, not a missing stage; the accounting block's `selected` count reflects it.
 
 **Localizing placeholder `paths:` — the substitutions map, not overlay restatement (consumer installs).** Shipped check entries scope via placeholder vocabulary (`<api module>/`, `<scripts dir>/`) that resolves to nothing until localized, so on a never-localized install most grep checks are inert. The sanctioned localization is **one token mapping in `.claude/substitutions.project.yml`** (`substitutions: {"<api module>": "src/app"}`) — the installer re-applies it to every `paths:` line of the assembled `checks.yml` on install and every update (Phase 25/55), localizing all entries at once, durably. When the pre-scan is suspiciously empty or you find yourself recommending path fixes (in a finding's remediation text, a filed task, or an inline fix), point at the substitutions map — do NOT recommend restating shipped entries in `.claude/checks.project.yml` with concrete paths just to localize them (that duplicates every entry and loses upstream pattern updates — the verbose path install.sh's own comments warn against). Reserve `checks.project.yml` overrides for genuinely *changing* an entry: narrowing with `exclude_dir:`, disabling via `paths: ["__disabled_no_op__"]`, or a consumer-authored new check. Granularity note: map each token to the real *source* dirs, not a package root that contains excluded trees (`<api module>` → `pkg` sweeps `pkg/alembic/**` into every check; enumerate `pkg/routes`, `pkg/services`, … or add `exclude_dir: ["alembic", "migrations"]` in an override). See `sysop/docs/WORKFLOW.md` § 8.2b "Phase 25 — placeholder substitution" (loop installs ship no WORKFLOW.md — use the public `docs/configuration.md` § Placeholder substitution).
 
@@ -367,9 +367,38 @@ This capture also applies to the Semgrep (Step 2b) and pip-audit stages — any 
 
 - **Dispatch is the default** whenever the scope is larger than one context can actually read. Count the manifest first (Step 1 already bounded it); if you cannot open those files yourself, per-category agents are the mechanism that covers them.
 - **Solo is legitimate in exactly two cases, and both must be *stated*:** (a) the harness offers no sub-agent primitive, or (b) the scope is small enough to open in full. Nothing else. "I'll just audit it myself" on a scope you cannot read is case (c) — and case (c) does not exist.
-- **A solo audit still owes every OWASP category its pass.** The roster below is the *coverage* contract, not merely a dispatch layout: running solo means you work the categories in sequence yourself, and any category you did not reach is named in the ledger. A silently-unaudited category is the exact failure an OWASP audit exists to prevent.
+- **A solo audit still owes every OWASP category its pass.** The roster below is the *lens* contract, not merely a dispatch layout: running solo means you work the categories in sequence yourself, and any category you did not reach is named in the ledger. A silently-unaudited category is the exact failure an OWASP audit exists to prevent.
+- **The roster is not a coverage contract, and an earlier version of this step said it was.** It is keyed on **categories**; coverage is a property of **files**, and the two do not compose on their own. The roster can be worked to completion — every category passed, every agent reporting — over a manifest containing files no agent was ever assigned, because the sections that matched them carry a category the roster does not hold, or carry no category at all. That is not a hypothetical: at the time this rule was written the shipped maps used **A04** and **A08** under `Check:` and no agent owned either (both now have owners — Agents 3 and 6), and two shipped sections carried **only** `Check:` bullets with no category token for a category-keyed dispatch to route. Step 3-0b reconciles roster against map before anything is dispatched, and is the only step that can see this class.
 - **If the round does not open its declared scope in full, it is `Sampled`, not `Full` — whether you ran solo or dispatched workers.** The test is arithmetic, not judgement: **`Full` means `opened + grepped` reached the manifest**, and a round under a third of it is reported as a self-contradiction by every reader of its receipt. Staffing is not part of that test and may not be read into it — no worker count, however large, converts files nobody opened into covered ones, and `_shared/fanout-evidence.md` § Tier 0 defines kind as *"what the round **actually was**, not what was requested"* while firing *"on **every** round, fan-out or solo"*. A fan-out round that dispatched eight workers and still reached a fraction of its manifest is `Sampled`, and labelling it `Full` is the same overstatement as doing it solo. Name the sampling basis (map-flagged surfaces, pre-scan hits, highest-exposure modules) and carry it into the ledger. **Never report the manifest size as though it were coverage** — "955 files to audit" beside 27 opened is the exact misread this rule forbids.
 - Carry the decision into the Tier-0 ledger as `workers <K>` (with `solo: <reason>` when `K` is 0), rendered in Step 5b's round header and Step 6's summary.
+
+### 3-0b. Assignment reconciliation (roster ↔ map — run before dispatch)
+
+**Deterministic, no LLM, and it runs on every round including solo ones** — a solo audit works the same roster and inherits the same holes. Step 2a asks whether the **map** reaches the code. This asks whether the **roster** reaches the map. They are different questions with different failure modes, and 2a is structurally blind to this one: a file matched by a section nobody audits is *matched*, so 2a-1 reports it as covered.
+
+Derive all three sets from the **assembled** `.claude/security_map.md` — the file this round actually reads — never from the roster's own bullet lists, which are illustrative and have drifted from the map's section names before.
+
+**Read the whole `Check:` region, not just its bullets.** Most sections list categories as `- **A03 Injection**: …` bullets, but the shipped maps use three other shapes and a bullets-only parse silently skips all of them: `**Check:** A05 (…)` and `**Check:** A02 (…)` state the category **inline on the marker line** (`core` §"Container Build" and §"Repo Hygiene"), and `**Check: A01** — …` puts the colon *inside* the bold (`postgres` §"Database Migrations"). A section parsed as having no `Check:` content is indistinguishable from one that is genuinely empty, and it drops out of every class below — so the section that reads as needing no auditor is exactly the one nobody checks. Harvest the text from the `Check:` marker to the `Skip:` marker and take every category token in it, wherever it sits.
+
+**(a) Sections no agent holds.** For each `## <globs> — <Name>` section, take the category tokens appearing anywhere in its `Check:` region and ask which roster agent owns them. A section whose categories match no agent has **no auditor this round**. Two carve-outs, and both must be *stated* rather than assumed: a section whose `Check:` is explicitly **`None`** is intentionally unowned (the shipped `llm` §"LLM Prompt Templates (release-specific and standalone)" is one — its rules are enforced at the interpolation site, not in the template), and a **placeholder** section binds no file, so it needs no auditor until the consumer localizes it. Anything else in this class is a real gap.
+
+**(b) Categories no agent holds.** Collect every category token used under `Check:` across the assembled map and subtract the roster's. A non-empty remainder means the map is asking for an audit the roster cannot staff. **This is a defect in the roster, not in the map** — the map is the consumer's declaration of what matters.
+
+**(c) `Check:` bullets carrying no category token at all.** A category-keyed dispatch cannot route these by construction, however carefully it is worked. They are real rules and they need an owner. **Two cases, and only one is urgent:** where a section's *other* bullets carry categories, the unlabelled ones ride along with the section into whichever agent claimed it — report them so the map can be fixed, but nothing is unaudited. Where **every** bullet in a section is unlabelled, the section has no route at all and its files go to a named agent this round. Count and report the two separately; collapsing them overstates the gap, which is the failure mode of every coverage number in this skill.
+
+Report before dispatching, and carry the counts into the Step 5b round header on their own `Reconciliation:` line (never into the `Coverage` line — see 5b):
+
+```
+Assignment reconciliation:
+  sections with no agent:          <N>  <list, or "none">
+  categories with no agent:        <N>  <list, or "none">
+  sections with no category at all: <N>  <list, or "none">     (no route — assign this round)
+  sections with some unlabelled bullets: <N>  <list, or "none"> (routed; map fix)
+```
+
+**A non-zero count does not halt the round, and must not be silently absorbed either.** Dispatch proceeds — a partial audit beats a refused one — but every unowned section's files go to a named agent as an explicit assignment for this round, and the counts stay on that line so the next round's operator reads the debt rather than rediscovering it. The durable fix is to widen the roster (or add an agent) so the class stops recurring; record which you did.
+
+**What this step does *not* claim.** It reconciles roster against map. It does not establish that the union of the agents' assigned files spans the Step 1 manifest — files matched by **no** section are 2a-1's question, and whether anyone actually read what they were assigned is the Tier-0 arithmetic's (`opened + grepped` vs `manifest`) and Step 3b's per-agent ratio. Three separate checks over three separate populations; none of them substitutes for another, and a round that passes this one has established one thing only.
 
 **CRITICAL: Read `.claude/security_map.md` before launching agents.** The security map specifies which OWASP checks apply to which file areas and which to SKIP. Agents must respect both the "Check" and "Skip" lists.
 
@@ -383,9 +412,11 @@ Launch agents **per OWASP category** (not per file area). Each agent receives:
 3. The **specific checks** to perform from the security map's "Check" list for those files
 4. Instructions to **SKIP** checks the map says are irrelevant **for the sections whose globs matched those files** — never a placeholder section's Skip list, which matches nothing and excludes nothing
 
-This structure ensures every category is checked by a dedicated agent with a narrow, focused mandate.
+This structure ensures every **category** is checked by a dedicated agent with a narrow, focused mandate. It does not by itself ensure every **file** has one — that is Step 3-0b's question, and the difference is the whole reason 3-0b exists.
 
-**Sub-agent return contract (`_shared/fanout-evidence.md`).** The per-agent lists below say what each agent *checks*; the return contract says what it *returns*. Instruct every audit agent to (1) tag each finding with a `file:line` anchor **and** a `[verified]`/`[reported]` self-tag — `[verified]` only when it opened that exact site, `[reported]` when the finding rests on a grep/pre-scan hit it did not open — and (2) end its report with the **evidence footer** (files opened vs. assigned + tool mix). **Copy the footer template from `_shared/fanout-evidence.md` verbatim into each agent's prompt** — the spawned agent never reads that file, so paste the block in exactly as you hand it the map-scoped checks. That footer is what Step 3b audits before merging: an OWASP agent that opened 8 of 82 assigned files is a coverage gap to flag loudly, not a clean pass to merge silently.
+**The pack-section bullets under each agent are illustrative, and the map is authoritative.** They name where a category's files *usually* live; they are hand-maintained, and they have drifted from the shipped maps before — six of them once cited names no section carried, and an entire pack (beancount) appeared in none of them. The binding instruction is the category line at the top of each agent — *all files where this agent's categories are listed under `Check:`* — so a section absent from these bullets is still audited as long as some agent owns its categories. Step 3-0b is what establishes that, and it reads the assembled map rather than these lists.
+
+**Sub-agent return contract (`_shared/fanout-evidence.md`).** The per-agent lists below say what each agent *checks*; the return contract says what it *returns*. Instruct every audit agent to (1) tag each finding with a `file:line` anchor **and** a `[verified]`/`[reported]` self-tag — `[verified]` only when it opened that exact site, `[reported]` when the finding rests on a grep/pre-scan hit it did not open — and (2) end its report with the **evidence footer** (files opened — **enumerated as paths**, not merely counted — vs. assigned, + tool mix). **Copy the footer template from `_shared/fanout-evidence.md` verbatim into each agent's prompt** — the spawned agent never reads that file, so paste the block in exactly as you hand it the map-scoped checks, *including* the paragraph under it that states the arity binding: an agent that gets the template without it will write a bare count. That footer is what Step 3b audits before merging: an OWASP agent that opened 8 of 82 assigned files is a coverage gap to flag loudly, not a clean pass to merge silently.
 
 **Also paste the § Adjudication kill/keep pair** (`_shared/fanout-evidence.md`) into each agent's prompt — agents assign their own severity, so an agent that quietly downgrades its own finding on a control it assumed rather than read has already destroyed the evidence before your merge ever sees it. The two lines to paste: *kill or downgrade only on a mitigation you located and read at a specific `file:line`; keep or escalate only on a path you actually traced — otherwise mark it unassessed and report it anyway.* This is an adjudication instruction, **not** a licence to report less: report every candidate you cannot dispose of on evidence.
 
@@ -418,8 +449,8 @@ commits next, attributed to nobody.
 **Files to read:** All files where A03 is listed under "Check" in `<project>/.claude/security_map.md`. For Sysop-installed projects, these typically come from these pack sections:
 - python pack §"API Endpoints" — SQL from external sources, prompt boundary escaping for LLM-using routes
 - postgres pack §"SQL & Data Layer" — SQL injection, LIKE escaping, SQL from external sources
-- python pack §"Data Pipeline" — alerting-channel message escaping
-- python pack §"CLI Scripts" (covers `<scripts dir>/*.py` + `<datajobs entrypoint>` + `<data seed dir>/*.py`) — SQL from external sources, path containment, JOB_ARGS-style validation
+- python pack §"Data Pipeline (excluding API clients)" — alerting-channel message escaping
+- python pack §"CLI Scripts and Job Entrypoints" (covers `<scripts dir>/*.py` + `<datajobs entrypoint>` + `<data seed dir>/*.py`) — SQL from external sources, path containment, JOB_ARGS-style validation
 - core §"Shell Scripts & Git Hooks" — shell injection, unquoted variable expansions, `eval` on external input
 - llm pack §"LLM-using endpoints" + §"LLM-using pipeline modules" — prompt injection in XML boundary tags
 
@@ -439,7 +470,7 @@ commits next, attributed to nobody.
 - python pack §"Auth" — auth verification completeness, optional vs required auth, token size validation
 - python pack §"API Endpoints" — IDOR, tier enforcement, response filtering
 - python pack §"Payments" — webhook signature verification, audit trail
-- python pack §"Data Pipeline" — pipeline secret validation, OIDC token configuration
+- python pack §"Data Pipeline (excluding API clients)" — pipeline secret validation, OIDC token configuration
 - postgres pack §"Database Migrations" — GRANT/REVOKE correctness, sensitive-table exclusion
 - python pack §"Backend Tests" + nextjs-react pack §"Frontend Tests" — fake-credential hygiene + test isolation
 
@@ -453,20 +484,21 @@ commits next, attributed to nobody.
 
 **Do NOT check:** SQL injection (Agent 1), XSS (Agent 4), SSRF (Agent 3), dependencies.
 
-### Agent 3: SSRF, LLM Security & Configuration (A10, A05, LLM)
+### Agent 3: SSRF, LLM Security, Configuration, Insecure Design & Resilience (A10, A05, A04, LLM)
 
-**Files to read:** All files where A05, A10, or LLM Security is listed under "Check" in `<project>/.claude/security_map.md`. For Sysop-installed projects, these typically come from these pack sections:
+**Files to read:** All files where A04, A05, A10, LLM Security or **Resilience** is listed under "Check" in `<project>/.claude/security_map.md`. For Sysop-installed projects, these typically come from these pack sections:
 - python pack §"App & Middleware" — rate limiting, env var validation, debug endpoints, brute-force thresholds
 - python pack §"Backend Utility Modules" — env var validation correctness, HTTP client lifecycle, thread-safe singleton init
-- llm pack §"LLM-using endpoints" + §"LLM-using pipeline" + §"Backend Utility Modules (LLM-adjacent)" — `max_output_tokens`, response-text guards, retry bounds
+- llm pack §"LLM-using endpoints" + §"LLM-using pipeline modules" + §"Backend Utility Modules (LLM-adjacent)" — `max_output_tokens`, response-text guards, retry bounds
 - python pack §"External API Clients" — `follow_redirects=False`, response size limits, HTTPS enforcement
-- python pack §"Data Pipeline" — HTTP client lifecycle, env var validation
+- python pack §"Data Pipeline (excluding API clients)" — HTTP client lifecycle, env var validation
 - nextjs-react pack §"Security Headers & Proxy" (`<next config>`) — CSP, security headers, Permissions-Policy
-- core §"Dockerfile" + §".gitignore" + §".github/workflows" — base image pinning, secrets exclusion, CI permissions, action version pinning
+- core §"Container Build" + §"Repo Hygiene" + §"CI Configuration" — base image pinning, secrets exclusion, CI permissions, action version pinning
 
 **Specific checks per file area:**
 - **Server / rate_limiting**: `max_output_tokens` on ALL `GenerateContentConfig` calls. CORS `ALLOWED_ORIGINS` not `*` in prod. Env vars validated (fail-fast for prod/staging). Debug endpoints disabled. Rate limiting coverage complete. Retry loops have bounded attempts. Brute-force violation thresholds fire alerts.
 - **LLM & config utility modules**: `max_output_tokens` on all `GenerateContentConfig` calls, `html.escape()` on user content in XML boundary tags, `if not response.text` guard before `json.loads()`, env var fail-fast for prod/staging, safe-default handling documented.
+- **Resilience** (a non-OWASP label the maps use, and one no agent held until it was derived rather than guessed): a batch loop wraps each item in try/except so one failure cannot crash the batch; HTTP clients are reused and closed; responses are size-bounded. Same subject as this agent's client-lifecycle checks, which is why it sits here.
 - **API clients**: `follow_redirects=False` at client level. `https://` scheme on all base URLs. `MAX_RESPONSE_BYTES` enforced. Timeout set. Client cleanup (`close()`).
 - **Ingestion**: HTTP client created once, reused, closed in `finally`/shutdown. `follow_redirects=False` at client level.
 - **ISR/filtering**: `follow_redirects=False`, timeout set. Singleton init uses `threading.Lock()` around the check-and-create pattern.
@@ -501,8 +533,8 @@ commits next, attributed to nobody.
 - python pack §"API Endpoints" — audit trail on state mutations (deletions, tier changes, credit grants), rate-limit violation logging
 - python pack §"Auth" — auth failure logging completeness
 - python pack §"Payments" — audit trail on subscription mutations (with prior-balance capture for credits)
-- python pack §"Data Pipeline" — alerting coverage for critical failure paths, alerting-side sanitization (Slack/PagerDuty redaction)
-- python pack §"CLI Scripts" — exception sanitization on raw exception messages
+- python pack §"Data Pipeline (excluding API clients)" — alerting coverage for critical failure paths, alerting-side sanitization (Slack/PagerDuty redaction)
+- python pack §"CLI Scripts and Job Entrypoints" — exception sanitization on raw exception messages
 
 **Specific checks per file area:**
 - **Routes**: Every content deletion (studio, prompts, embeds) logs at INFO on success with content_type, id, owner. Every credit deduction logs at INFO with uid.
@@ -514,7 +546,9 @@ commits next, attributed to nobody.
 
 **Do NOT check:** SQL injection, XSS, SSRF, dependencies, auth correctness (Agent 2 handles that).
 
-### Agent 6: Dependencies (A06)
+### Agent 6: Dependencies & Supply-Chain Integrity (A06, A08)
+
+**A08 (Software & Data Integrity Failures) belongs here** because its subject is the same one: what you trust that you did not write, and whether a change to it is detectable. Beyond the dependency work below, this agent owns every `Check:` bullet the map tags **A08** — baseline/checksum files that must pair 1:1 with a documented source, integrity checks a parser may not auto-update on mismatch, and whole-file rewrites that must land as one edit rather than a partial one (a half-applied rename can leave a validator green while downstream reports double-count). Trace each to the code that consumes it; a baseline nothing reads is a broken integrity check, not a passing one.
 
 Dependency scanning runs through `run_checks.sh`: the local pre-scan in Step 2b already runs `pip-audit --skip-editable --format json` against the active venv — **consume those `[pip-audit]`-tagged findings rather than re-running**. (The same scan runs in CI when the consumer adds `pip-audit` to the shipped gate template `sysop/scripts/ci/sysop-checks.yml.example` — see WORKFLOW.md § 6.1 "Protecting `main` with CI".) If Step 2b reported `pip-audit not available`, follow the install hint (`pip install pip-audit`) and re-run `bash sysop/scripts/run_checks.sh --mode security` before continuing.
 
@@ -557,8 +591,8 @@ For files >300 lines, review in ~200-line chunks. For files >600 lines, review t
 
 **First, audit the fan-out per `_shared/fanout-evidence.md` § orchestrator merge discipline — do this before amplifying or writing any batch:**
 - **Row provenance (mandatory):** a fan-out finding the orchestrator did **not** itself re-read carries `[reported]` — do **not** copy an OWASP agent's self-`[verified]` onto the row unchallenged (the agent that opened 8 of 82 files self-tags `[verified]` too). Only the sample re-read below upgrades a finding to `[verified]`.
-- **Low-opened-ratio flag (mandatory, cheap):** from each agent's evidence footer, flag an OWASP agent that **opened + grepped < ~⅓ of its assigned files**, or that self-tagged a `[verified]` finding on a file absent from its `Opened` list — record it as a **loud coverage-gap line in this round's summary**, not a clean pass. A silently-absent category is the same silent-degradation shape a security audit exists to prevent. Do not flag an honestly sparse scope (few relevant files, the rest grepped).
-- **Sample re-read (advisory):** re-read **2–3 of each agent's claimed `file:line` findings** against source, reading *inward* to confirm the claim — distinct from the amplification below, which reads *outward* for siblings. A finding that survives carries `[verified]` into its batch row; one that doesn't is dropped or downgraded with a note — **decomposing compound findings first (binds on every drop *and every downgrade*):** if the finding asserts several independent clauses or cites several sites, a failed re-read refutes *that clause only* — adjudicate its remaining clauses (re-checking its other cited sites where they exist) before the row is dropped or downgraded, and record which clauses survived. Partial refutation — refute one clause, silently drop the rest — is the measured way real findings get dismissed as false positives, and it only fires in that direction (real → apparent-FP; `_shared/adversarial-review.md` § Compound findings). On a security round this is doubly load-bearing: the one High-severity finding recovered in the motivating experiment was a compound security claim dismissed by refuting one clause while the clause carrying the vulnerability was silently dropped.
+- **Low-opened-ratio flag (mandatory, cheap):** from each agent's evidence footer, flag an OWASP agent that self-tagged a `[verified]` finding on a file absent from its `Opened` list, or whose `Opened` list is materially shorter than the `<M>` it reported. Record either as a **loud coverage-gap line in this round's summary**, not a clean pass. A silently-absent category is the same silent-degradation shape a security audit exists to prevent. **The look-coverage signal is not a flag — it is an account you owe** (`_shared/fanout-evidence.md` § Tier 2, leg (a)): when an agent's **`Opened` covers < ~⅓ of its assigned files**, say in the round summary which case it is — sparse-by-nature or under-audited — and name what decided it. Do not settle it with the adjective: an honestly sparse scope is real (few relevant files, the rest searched) but any agent can claim it, so "don't flag the honest case" was an exemption anyone could take. Decide it on what the agent did **not** supply — this agent's Step-2b pre-scan hits — you hold them, and you wrote the dispatch prompt, so you know whether they were in it (they are independent evidence only if they were not); its ratio beside its siblings' in this round; how the `Opened` paths distribute across the assigned glob; whether the findings land on the files it opened. None settles it alone, and an agent with no pre-scan hits gets no signal from the first. **A low ratio left unaccounted-for is itself the coverage-gap line.** The ratio reads `Opened`, never a sum: the footer collects no count of files reached by search — `Tools`' `grep=` counts invocations — so the second operand this bullet used to name was never a field it could read. It is named in `_shared/fanout-evidence.md` § Tier 2 and deliberately not written out here, because a guard that tolerates the retired formula as history tolerates it as a restoration.
+- **Sample re-read (advisory):** re-read **2–3 of each agent's claimed `file:line` findings** against source, **prioritising the ones it self-tagged `[verified]` (the claims it is vouching for) and any finding whose cited file is absent from its `Opened` list** — that second arm is the whole reason the footer enumerates paths rather than stating a count, and it is what points your scarce re-reads at the rows nobody has read. Read *inward* to confirm the claim — distinct from the amplification below, which reads *outward* for siblings. A finding that survives carries `[verified]` into its batch row; one that doesn't is dropped or downgraded with a note — **decomposing compound findings first (binds on every drop *and every downgrade*):** if the finding asserts several independent clauses or cites several sites, a failed re-read refutes *that clause only* — adjudicate its remaining clauses (re-checking its other cited sites where they exist) before the row is dropped or downgraded, and record which clauses survived. Partial refutation — refute one clause, silently drop the rest — is the measured way real findings get dismissed as false positives, and it only fires in that direction (real → apparent-FP; `_shared/adversarial-review.md` § Compound findings). On a security round this is doubly load-bearing: the one High-severity finding recovered in the motivating experiment was a compound security claim dismissed by refuting one clause while the clause carrying the vulnerability was silently dropped.
 - **Adjudicate on read evidence, both directions (mandatory — `_shared/fanout-evidence.md` § Adjudication):** the sample re-read above **is** the premise check — if the cited site does not contain what the finding claims, that read refutes it and the clause is dropped. Beyond that, when the premise holds: kill or downgrade only on a mitigation you **located and read** at a specific `file:line`, never an assumed one ("the framework escapes that", "that path is unreachable in production"); and keep or escalate only on an attack path you actually traced — otherwise mark the reachability **unassessed** and say so. When neither can be established, **the finding survives** with the open question recorded: a filed task gets another reader, a dismissal gets none. Decompose compound findings first (above), then hold each surviving clause to this standard separately; on a High or security-relevant dismissal the compound rule's second leg also binds (an independent re-adjudication, or a per-clause record in the summary).
 - **Verify the cited rule (mandatory, cheap):** for any finding that flags code *because a security_map or convention bullet says so*, re-open the cited map section and confirm the bullet actually states that rule, specifically — don't trust the agent's paraphrase. A mis-cited rule finding files a bogus task in that rule's name and mis-records what the map actually requires — corrupting the round evidence the promotion/demotion machinery reasons from, and burning the human review cycle scoped dispatch exists to protect.
 - **Provenance class in the summary (mandatory):** the round summary states the verified/reported split and per-batch opened/assigned ratios — never a bare coverage percentage.
@@ -585,6 +619,7 @@ Report post-scan results:
 ```
 Post-scan amplification: <N> patterns grepped → <N> new siblings found
 Fan-out coverage: <opened/assigned per OWASP agent>; <B> agent(s) flagged low-opened
+                  <for each agent under ~1/3: sparse-by-nature | under-audited — and what decided it>
 Provenance: <V> verified (orchestrator-read + sampled) · <R> reported
 ```
 
@@ -652,6 +687,16 @@ When the disposition is unrecorded, default to filing — the § Adjudication de
 | LLM & AI Security | LLM |
 | Privacy & Data Retention | Privacy |
 | Logging & Monitoring | Logging |
+| Insecure Design | A04 |
+| Supply-Chain & Data Integrity | A08 |
+| Resilience & Fault Isolation | Resilience |
+
+**Every category the roster dispatches needs a row here, and three did not have one.** A04, A08 and
+`Resilience` were given agents before this table was extended, so findings in them had a reader and
+nowhere to be written — the dispatch half of a gap can be closed while the write half stays open,
+and `review_tasks.md` is the layer `/review-close`, `/auto-fix` and `/sitrep` actually read. When
+Step 3-0b reports a category with no agent and you widen the roster, widen this table in the same
+edit.
 
 - Only create batches that have ≥1 task
 - If a scope filter results in few findings per category, consolidate small batches (≤2 tasks) into an "Additional Security Findings" batch
@@ -708,9 +753,25 @@ Check if a Round with today's date already exists (e.g., from a `/codebase-revie
 > **Coverage (security):** <Full | Scoped (<area>) | Sampled (<basis>)> · manifest <N> · opened <M> · grepped <G> · workers <K><, solo: <reason>>
 ```
 
+**The reconciliation counts get their own line, and the receipt does not carry them.** Step 3-0b's
+three counts do **not** belong in the `Coverage` line: that line has a fixed field set
+(`manifest`/`opened`/`grepped`/`workers`) which the Tier-0 receipt writer parses positionally, and
+adding a field to it silently changes what every downstream reader sees. Write them beside it
+instead — the same *beside, never replace* rule a merged round already follows:
+
+```markdown
+> **Reconciliation:** sections-no-agent <N> · categories-no-agent <N> · sections-no-category <N>
+```
+
+This is a durable text record in `review_tasks.md` and **nothing parses it** — the JSON receipt
+schema has no field for it. An earlier version of Step 3-0b said the counts would go "into the
+Step 5b round header" so "the next round inherits the debt", which named a mechanism that did not
+exist: the header template had no such field and the receipt writer drops what it cannot match.
+The line above is what actually survives; treat inheriting the debt as a human reading it.
+
 Use the next Round number (last Round N + 1).
 
-**The coverage line is MANDATORY and is the round's Tier-0 ledger** (`_shared/fanout-evidence.md` § Tier 0) — the durable half of it, and the one that outlives the session. Fill every field from what this round actually did: `manifest` = the scope *this round declared* after exclusions (not the repo total unless this was a full audit), `opened` = files whose bodies you read, `grepped` = files reached by search only (kept separate — grep is looking, not reading), `workers` = the Step 3-0 dispatch count with the stated reason when it is 0. **A round that cannot fill a field writes `unreported` in it, never a guess and never a blank** — an absent number reads as a clean pass, which is the failure this ledger exists to prevent. If any OWASP category went unaudited, name it here too.
+**The coverage line is MANDATORY and is the round's Tier-0 ledger** (`_shared/fanout-evidence.md` § Tier 0) — the durable half of it, and the one that outlives the session. Fill every field from what this round actually did: `manifest` = the scope *this round declared* after exclusions (not the repo total unless this was a full audit), `opened` = files whose bodies were read — **on a fan-out round that is the deduplicated union of your own reads and every agent's enumerated `Opened` list, not your reads alone and not a sum of the footers** (`_shared/fanout-evidence.md` § Tier 0, which also states what a missing footer and an out-of-scope path contribute: nothing), `grepped` = files reached by search only (kept separate — grep is looking, not reading), and **unlike `opened` it does not aggregate: there is no per-worker `Grepped` in the evidence footer, so this is your own review-motivated searching and not the workers'** (`_shared/fanout-evidence.md` § Tier 0). Folding worker searching in here inflates the other operand of the same `Full` test, `workers` = the Step 3-0 dispatch count with the stated reason when it is 0. **A round that cannot fill a field writes `unreported` in it, never a guess and never a blank** — an absent number reads as a clean pass, which is the failure this ledger exists to prevent. If any OWASP category went unaudited, name it here too.
 
 ### 5c. Batch Format
 

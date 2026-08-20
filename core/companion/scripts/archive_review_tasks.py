@@ -11,6 +11,7 @@ import argparse
 import os
 import re
 import sys
+from collections import Counter
 from pathlib import Path
 
 # Single-sourced via sysop/scripts/_log.py (Phase 68) — `sysop/scripts/` is on
@@ -507,6 +508,68 @@ def build_archive_block(rounds):
     return blocks
 
 
+# Lines the emitter drops on purpose, so they are not evidence of loss (Q-116).
+#
+# Derived from the emitter, not guessed. `parse_archivable_batches` consumes the
+# `---` separator without appending it (the `line.strip() == "---"` branch),
+# `build_archive_block` strips each batch's trailing blank lines and re-emits
+# `---` only BETWEEN rounds. Those are the two shapes that can legitimately go
+# missing, so they are the two that are exempt.
+#
+# Measured on every real tracker on this machine with an archivable round —
+# BeanRider (3 rounds, 591 deleted lines) and a second internal tracker
+# (1 round, 202) —
+# **residue 0 in both**. That is the number this exemption set has to earn: the
+# archive path has no `--force`, so a single false positive makes it unusable.
+#
+# A pre-build lens reported 28 strict misses on the BeanRider corpus. Re-derived
+# here that probe returns 0, because "strict" is ambiguous — a membership test
+# counts a blank line as present the moment the block contains any blank, while
+# a multiset check exhausts them. The disagreement is about the probe, not the
+# tree, so no strict figure is asserted; only the residue measurement above,
+# which reproduces.
+_ACCOUNTING_EXEMPT = frozenset({"", "---"})
+
+
+def unaccounted_lines(lines, rounds_to_remove, archive_block):
+    """Content that `update_review_tasks` would DELETE and the archive never receives.
+
+    `parse_archivable_batches` closes the current batch on a bare `---`, so any
+    content between that separator and the next `### Batch` header belongs to no
+    batch. For an `all_merged` round the whole line range is deleted while the
+    emitted block carries only header + preamble + batches — so that content is
+    removed from review_tasks.md and never written to the archive. Reproduced on
+    a real run: a `- [ ] **TASK-9**` and its annotation vanished from both files.
+
+    The round-level instance of this bug already has a targeted fix — the
+    `preamble` capture (Phase 149), added after the same gap swallowed the Tier-0
+    coverage ledger. This is the general form, and it is what would have caught
+    both.
+
+    Accounting is a **content multiset, not positional**: a line that happens to
+    appear elsewhere in the block counts as accounted for. That is a deliberate
+    loosening — the emitter reorders and re-indents nothing today, and a
+    positional check would couple this to the block's layout.
+    """
+    emitted = Counter(ln.rstrip() for ln in archive_block)
+    residue = []
+    for r in rounds_to_remove:
+        if r["all_merged"]:
+            ranges = [(r["start_line"], r["end_line"])]
+        else:
+            ranges = [(b["start_line"], b["end_line"]) for b in r["batches"]]
+        for start, end in ranges:
+            for raw in lines[start:end]:
+                line = raw.rstrip("\n").rstrip()
+                if line.strip() in _ACCOUNTING_EXEMPT:
+                    continue
+                if emitted[line] > 0:
+                    emitted[line] -= 1
+                else:
+                    residue.append(line)
+    return residue
+
+
 def build_grand_total_row(rounds):
     """Build a new row for the Grand Total table in the archive."""
     rows = []
@@ -809,6 +872,21 @@ def main():
     if args.dry_run:
         print("\n[DRY RUN] No files modified.")
 
+        # Q-116: surface the accounting here too. The preview is the one place
+        # where naming the loss costs nothing, and a dry run that reports a clean
+        # archive which the real run then hard-refuses is the worst of both. It
+        # WARNS rather than refusing — a preview writes nothing.
+        would_lose = unaccounted_lines(review_lines, rounds, build_archive_block(rounds))
+        if would_lose:
+            print(
+                f"\n⚠️  {len(would_lose)} line(s) would be deleted without reaching "
+                f"the archive, so the real run will refuse:"
+            )
+            for line in would_lose[:10]:
+                print(f"      {_sanitize_log(line)}")
+            if len(would_lose) > 10:
+                print(f"      … and {len(would_lose) - 10} more")
+
         # Show what the archive block would look like
         archive_block = build_archive_block(rounds)
         print("\n--- Archive block preview (first 20 lines) ---")
@@ -821,6 +899,45 @@ def main():
         for row in build_grand_total_row(rounds):
             print(f"  {row}")
         return
+
+    # Q-116: refuse BEFORE the prompt. Placed here rather than beside the write
+    # for one reason — asking the operator to confirm an archive that is then
+    # refused trains them to answer `y` to a question that does not bind. The
+    # emitted block is pure and cheap to build twice.
+    orphaned = unaccounted_lines(review_lines, rounds, build_archive_block(rounds))
+    if orphaned:
+        print(
+            f"Error: refusing to archive — {len(orphaned)} line(s) would be deleted "
+            f"from {os.path.basename(REVIEW_FILE)} without appearing in "
+            f"{os.path.basename(ARCHIVE_FILE)}.",
+            file=sys.stderr,
+        )
+        print(
+            "       Lines belonging to no batch are removed with the round's "
+            "range and never emitted. A batch is closed by a `---` separator, by "
+            "any `## ` heading, and by any `### ` heading — so content after any "
+            "of those, but still inside the round, is orphaned.",
+            file=sys.stderr,
+        )
+        for line in orphaned[:10]:
+            print(f"         {_sanitize_log(line)}", file=sys.stderr)
+        if len(orphaned) > 10:
+            print(f"         … and {len(orphaned) - 10} more", file=sys.stderr)
+        # The remedy is stated precisely because there is no --force here. An
+        # earlier wording said "move it above the round's first batch header
+        # where the preamble capture will carry it" — that capture is
+        # blockquote-only (`line.lstrip().startswith(">")`), so following the
+        # instruction literally with plain prose or an `### ` heading still
+        # refused. A wrong remedy on a path with no escape hatch is a dead end.
+        print(
+            "       Fix by one of: move the lines INSIDE a batch (above the next "
+            "separator or heading); or, if the content belongs to the round "
+            "rather than a batch, make each line a blockquote (`> …`) and place "
+            "it between the `## Round` header and its first `### Batch` — the "
+            "round-preamble capture takes blockquote lines only.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     # Confirmation prompt — wrap input() so Ctrl-C / EOF produce a clean exit
     # instead of a traceback that looks like a script bug.

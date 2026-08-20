@@ -3,10 +3,19 @@ item 4.
 
 Two silent-drift sites, both converted into a red suite.
 
-**(a) The unresolved Commit cell.** A phase commits, its table row goes in carrying a
-placeholder, and a follow-up PR backfills the squash hash. Roughly 88 phases have had a
-dedicated backfill commit; the window is legitimate, the *lapse* is not — Phase 190's cell
-sat stale through a merge and was repaired only incidentally by Phase 191.
+**(a) The unresolved Commit cell.** A phase commits and its table row goes in carrying a
+placeholder, because the squash hash does not exist yet. The window is legitimate, the
+*lapse* is not — Phase 190's cell sat stale through a merge and was repaired only
+incidentally by Phase 191.
+
+**Who closes the window changed at Phase 202, and this guard is why it could.** Roughly 88
+phases spent a *dedicated backfill PR* on it — and since `main` requires the `pytest` check,
+each one burned a full CI run to write seven characters into one cell. It was never needed:
+the two green states below already mean the placeholder may sit on the newest row
+indefinitely and reds the instant a *newer* row appears without it being backfilled. So the
+backfill now rides the **next phase's own commit**, and this test is the thing that enforces
+it. Nothing here changed to allow that; the ceremony was redundant with the assertions all
+along.
 
 The filed version of this guard keyed on the literal ``_unmerged_``. That would have shipped
 green: ``_unmerged_`` is one of **ten** placeholder forms this column has carried
@@ -144,8 +153,10 @@ def test_only_the_newest_phase_may_have_an_unresolved_commit_cell():
         "Phase log rows carrying an unresolved Commit cell that are not the newest phase "
         f"(newest row is {newest!r}):\n"
         + "\n".join(f"  {lab[:60]}: {cell}" for lab, cell in stale)
-        + "\n\nBackfill the squash hash. The placeholder window is legitimate only between a "
-        "phase's own commit and its backfill."
+        + "\n\nBackfill the squash hash — and note WHERE: since Phase 202 the backfill rides "
+        "the next phase's own commit, not a dedicated PR, so if you are opening a new phase "
+        "row you owe the previous phase's hash in the same edit. Recover it with "
+        "`git log --oneline --grep 'Phase <N>'`."
     )
 
 

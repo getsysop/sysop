@@ -783,3 +783,249 @@ def test_the_ordering_bound_agrees_across_every_surface_that_states_it():
     assert not stale, (
         f"surfaces still stating the old 1–3 ordering bound: {stale!r}"
     )
+
+
+# ── Phase 204 / Q-211: the population restated away from its declaration ──
+#
+# `:62`'s declaration was already pinned, three ways, by the guards at the top of
+# this module — the filing that produced this section claimed no such test
+# existed and was wrong about that. What was NOT pinned is every OTHER site that
+# restates the population. Two had drifted to the survey's narrower pair, and one
+# of them was Step 3's definition of "Outstanding", which governs the report's
+# totals on EVERY run rather than only under `--in-flight`.
+#
+# Two guards, because the two defects are not the same shape and the first
+# cannot see the second.
+
+# Widened Phase 204 (round, F5): the code-span form was the only one recognised,
+# so writing the population in bold (`**Pending**`) or in quotes ("Pending") made
+# the site invisible to the scan entirely. Both are ordinary markdown here.
+_STATUS_TOKEN = re.compile(
+    r'(?:`|\*\*|")(Pending|In Progress|Review Ready)(?:`|\*\*|")'
+)
+
+# A sentence may legitimately name only the survey's subset when it is explicitly
+# about the survey or the payload — that is what makes `:64` correct. Anywhere
+# else, naming the subset as the population silently drops a live status.
+_FLAG_SCOPED = re.compile(r"--in-flight|payload|_classify_review_batches|enrich", re.I)
+
+
+# Clause boundaries, not line boundaries. The first version of this scan was
+# line-scoped, and the author-side battery walked two defects straight through
+# it: this file's paragraph-lines are long, so ANY mention of `Review Ready` or
+# of the payload anywhere in the paragraph exempted the whole line — including a
+# clause several sentences away that stated the population as the narrow pair.
+# A guard whose scope is "the paragraph" is satisfied by a paragraph that
+# contradicts itself, which is precisely the shape Q-211 filed.
+_CLAUSE_SPLIT = re.compile(r"(?<=[.;])\s+|\s+—\s+")
+
+
+def _states_the_subset_as_the_population(
+    clause: str, survey: set[str], unreachable: set[str]
+) -> bool:
+    """The predicate itself, hoisted so the guard and its control share it.
+
+    The round cut six wires in these tests — emptying `_population_sites()`,
+    short-circuiting the condition, blanking a pin lookup — and every one
+    survived, because the "does the guard fire" control had its OWN copy of this
+    logic and could not observe the real guard being disabled. A control that
+    re-implements its subject tests the re-implementation.
+    """
+    names = {m.group(1) for m in _STATUS_TOKEN.finditer(clause)}
+    if len(names) < 2:
+        return False
+    return bool(names >= survey and not (names & unreachable) and not _FLAG_SCOPED.search(clause))
+
+
+def _population_sites() -> list[tuple[int, str]]:
+    """Clauses that name two or more batch statuses — i.e. that state a population.
+
+    Returns (line number, clause) so a failure names a place a human can open.
+    """
+    out: list[tuple[int, str]] = []
+    for i, line in enumerate(_read(ROADMAP).splitlines(), 1):
+        for clause in _CLAUSE_SPLIT.split(line):
+            names = {m.group(1) for m in _STATUS_TOKEN.finditer(clause)}
+            if len(names) >= 2:
+                out.append((i, clause))
+    return out
+
+
+def test_the_population_site_scan_is_not_vacuous():
+    """Vacuity + reach control for the guard below.
+
+    A file count is not a match count, and an empty scan passes every downstream
+    assertion. This asserts the scan finds real sites AND that it reaches the
+    declaration sentence itself — if it cannot see `:62`, it cannot see a site
+    that contradicts `:62` either.
+    """
+    sites = _population_sites()
+    assert len(sites) >= 3, f"population scan found only {len(sites)} sites"
+    declared = _skill_declared_statuses()
+    reaches_declaration = any(
+        {m.group(1) for m in _STATUS_TOKEN.finditer(line)} == declared
+        for _, line in sites
+    )
+    assert reaches_declaration, (
+        "the population scan never matched a site naming the full declared set "
+        f"({sorted(declared)}) — it is not reading the sentence it is keyed to"
+    )
+
+
+def test_every_site_that_states_the_batch_population_names_the_live_set():
+    """The guard the filing asked for by the wrong name.
+
+    Both populations are derived, never spelled: the survey's from
+    `sitrep_survey.py`'s own filter, the skill's from its declaration sentence.
+    So this cannot go stale against a filter change — it re-derives what
+    "the subset" means each run.
+
+    **What this guard does NOT reach**, stated because a guard that hides its
+    blind spot is the failure this module exists to catch: a site that names the
+    subset *and* carries a flag/payload qualifier passes here by construction —
+    the qualifier is exactly what makes naming the subset legal. The falsehood
+    that lived inside such a sentence is the next guard's job.
+    """
+    survey = _survey_batch_statuses()
+    declared = _skill_declared_statuses()
+    unreachable = declared - survey
+    assert unreachable, (
+        "the survey now reaches every status the skill surveys — this guard's "
+        "premise is stale and the sites it protects should be revisited"
+    )
+
+    offenders = [
+        f"  {i}: {line.strip()[:140]}"
+        for i, line in _population_sites()
+        if _states_the_subset_as_the_population(line, survey, unreachable)
+    ]
+    assert offenders == [], (
+        "a site states the batch population as the survey's subset "
+        f"({sorted(survey)}) without naming {sorted(unreachable)} and without "
+        "scoping itself to the payload. A reader following it drops a status "
+        "the tracker declares LIVE:\n" + "\n".join(offenders)
+    )
+
+
+def test_the_population_guard_fires_on_the_shape_that_shipped():
+    """Control, in both directions, against the real pre-fix text.
+
+    The `Q-211` defect verbatim as Step 3 carried it, and the corrected form.
+    Without this the guard above could be satisfied by an empty offender list it
+    arrives at for the wrong reason.
+    """
+    survey = _survey_batch_statuses()
+    declared = _skill_declared_statuses()
+    unreachable = declared - survey
+
+    def offends(line: str) -> bool:
+        return _states_the_subset_as_the_population(line, survey, unreachable)
+
+    shipped = (
+        '"Outstanding" = every roadmap task with `status` in `{open, in_progress}`, '
+        "plus every `Pending` / `In Progress` review batch from Step 1."
+    )
+    assert offends(shipped), "the guard does not fire on the text that shipped"
+
+    corrected = (
+        '"Outstanding" = every roadmap task, plus every `Pending`, `In Progress` '
+        "and `Review Ready` review batch from Step 1."
+    )
+    assert not offends(corrected), "the guard false-fires on the corrected text"
+
+    legal_subset = (
+        "The `--in-flight` payload filters to `Pending` / `In Progress` before "
+        "emitting `review_batches`."
+    )
+    assert not offends(legal_subset), (
+        "the guard false-fires on a payload-scoped sentence, which is the one "
+        "place naming the subset is correct"
+    )
+
+
+def test_step_3s_outstanding_definition_names_every_live_status():
+    """The generic scan cannot see this site's worst failure, so it is pinned.
+
+    `_population_sites` only considers a clause that names TWO or more statuses.
+    The round's sharpest population mutation named just ONE — dropping two live
+    statuses instead of one — and the scan never classified it as a site at all.
+    A threshold of 2 is right for the generic sweep (every mention of `Pending`
+    alone is not a population claim) and wrong for the one sentence whose whole
+    job is to state the population.
+
+    So this site is pinned by name, and its expectation is DERIVED from the
+    skill's own declaration rather than spelled — drop a status from `:62` and
+    `test_the_skill_surveys_every_status_the_tracker_declares_live` reds first.
+    """
+    declared = _skill_declared_statuses()
+    text = " ".join(_deemphasized(_read(ROADMAP)).split())
+    m = re.search(r'"Outstanding" = ([^\n]{0,600}?)(?:\n|\Z|Classify each)', text)
+    assert m, (
+        'roadmap/SKILL.md no longer carries a parseable \'"Outstanding" = …\' '
+        "definition. That sentence governs Step 3's grouping and the report's "
+        "totals; without it nothing checks the population the report counts."
+    )
+    sentence = m.group(1)
+    missing = sorted(s for s in declared if s not in sentence)
+    assert not missing, (
+        f"Step 3's \"Outstanding\" definition omits {missing} — a live status the "
+        "skill says at :62 that it surveys. A reader following it drops that "
+        "work from the strategy view on every run, not just under --in-flight."
+    )
+
+
+def test_the_outstanding_pin_is_not_vacuous():
+    """It must actually find the sentence, and actually fire when one is dropped."""
+    text = " ".join(_deemphasized(_read(ROADMAP)).split())
+    m = re.search(r'"Outstanding" = ([^\n]{0,600}?)(?:\n|\Z|Classify each)', text)
+    assert m and len(m.group(1)) > 40, "the Outstanding pin matched nothing usable"
+    declared = _skill_declared_statuses()
+    assert len(declared) >= 3, f"derived only {declared} — the check would be thin"
+    stripped = m.group(1).replace("Review Ready", "")
+    assert any(s not in stripped for s in declared), (
+        "removing a status from the sentence does not change the verdict"
+    )
+
+
+def test_the_two_halves_are_not_claimed_to_cover_the_same_batches():
+    """The defect that lived INSIDE a correctly-scoped sentence.
+
+    `:96` read: the flag "adds depth, not breadth: it is the same batches (both
+    paths filter to `Pending` / `In Progress`), with cells the base path cannot
+    compute". The parenthetical was true — the payload really does filter to two
+    — and the equality around it was false, because the base path surveys three.
+    A reader carries the equality into Step 3, which is where it did damage.
+
+    Positive and negative together: the subset relation must be stated, and the
+    equality must not be. Pinning only the absence lets the claim come back
+    reworded; pinning only the presence lets both sentences coexist.
+    """
+    # Whitespace-normalised as well as de-emphasised: the round found this guard
+    # keyed to hard single spaces against a ~700-character source line, so any
+    # future author who reflowed the paragraph would have reddened the suite for
+    # a legal edit. The sibling module's `_flat` had this right; `_deemphasized`
+    # alone does not normalise runs of whitespace.
+    text = " ".join(_deemphasized(_read(ROADMAP)).split())
+
+    assert re.search(
+        r"the base path is the broader view, and the two halves do not cover "
+        r"the same batches",
+        text,
+        re.I,
+    ), (
+        "roadmap/SKILL.md no longer states that the payload reaches a SUBSET of "
+        "the base path's batches. That relation is the whole reason Step 3 must "
+        "not take its population from the flag."
+    )
+
+    for inversion in (
+        r"it is the same batches",
+        r"both paths filter to",
+        r"the flag adds breadth",
+    ):
+        m = re.search(inversion, text, re.I)
+        assert not m, (
+            f"roadmap/SKILL.md claims the two halves cover the same batches: "
+            f"{m.group(0)!r}. The payload is a strict subset — "
+            f"`Review Ready` is surveyed and never enriched."
+        )

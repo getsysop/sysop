@@ -98,7 +98,7 @@ def test_coverage_parser_emits_finding_per_violation_line(tmp_path):
         "billing/charge.py:12",
         "billing/charge.py:15",
     }
-    _, _, msg = findings[0]
+    msg = findings[0][2]
     assert "not covered by tests" in msg
     assert "75%" in msg
     assert "MEDIUM" in msg
@@ -536,8 +536,8 @@ def test_write_baseline_excludes_coverage(tmp_path):
     """write_baseline persists blocking non-coverage findings but never coverage."""
     path = str(tmp_path / ".claude" / "checks_baseline.txt")
     findings = [
-        ("todo-vs-deferred", "app/x.py:3", "msg a"),
-        ("coverage-diff-python", "billing/charge.py:12", "msg b"),
+        ("todo-vs-deferred", "app/x.py:3", "msg a", ""),
+        ("coverage-diff-python", "billing/charge.py:12", "msg b", ""),
     ]
     rci.write_baseline(path, findings, {"todo-vs-deferred", "coverage-diff-python"})
     text = open(path, encoding="utf-8").read()

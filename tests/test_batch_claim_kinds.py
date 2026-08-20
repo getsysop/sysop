@@ -28,6 +28,7 @@ prose guards at the bottom cover the one surface with no runtime (the skill's
 claim-ID normalisation) and are scoped to their own sections.
 """
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -84,6 +85,19 @@ def _repo(root, tasks=TASKS):
     _git(root, "config", "commit.gpgsign", "false")
     (root / "review_tasks.md").write_text(tasks)
     (root / "README.md").write_text("# seed\n")
+    # Phase 209: `batch_work.sh` retired its inline parser, so `review_index.py`
+    # must be present or the script refuses. Installed the way a consumer has it.
+    sd = root / "sysop" / "scripts"
+    sd.mkdir(parents=True, exist_ok=True)
+    for _n in ("review_index.py", "_log.py"):
+        _s = SCRIPTS / _n
+        if _s.exists():
+            shutil.copy(_s, sd / _n)
+    # Real consumers ignore the auto-generated index (BeanRider .gitignore:55,
+    # gdp-query-system .gitignore:71). Mirror that, or the rebuild this script
+    # performs after a mutation leaves an untracked file and every clean-tree
+    # assertion below fires on an artifact rather than on a defect.
+    (root / ".gitignore").write_text(".claude/review_index.json\n")
     _git(root, "add", "-A")
     _git(root, "commit", "-qm", "seed")
     return root
@@ -836,15 +850,25 @@ class TestAdversarialRoundRegressions:
     ):
         """MEDIUM — an unguarded `grep` took the assignment's status down under
         `set -euo pipefail`, exiting 1 before its own error message could
-        print. Reachable whenever review_index.py is absent and the header
-        spacing is irregular: the fallback list parser accepts it, the grep
-        does not."""
+        print.
+
+        The invariant under test is **a non-zero exit always carries a
+        diagnostic**, and that is what is asserted. The route to it changed in
+        Phase 209: the original wording scoped this to "whenever
+        review_index.py is absent … the fallback list parser accepts it, the
+        grep does not", and that state no longer exists — the fallback is
+        retired and the index is the only parser. An irregularly-spaced header
+        is still the trigger, because the strict parse pattern rejects
+        ``###  Batch 8`` (two spaces) and the batch never enters the index, so
+        the release path must report rather than die. The exact message is
+        deliberately NOT pinned; asserting non-empty stderr is what keeps this
+        test about the defect instead of about the wording."""
         tasks = TASKS.replace("### Batch 8 — Eight", "###  Batch 8 — Eight")
         repo = _repo(tmp_path / "repo", tasks=tasks)
         r = _run(BATCH_WORK, repo, "--release", "8")
         assert r.returncode == 1
         assert r.stderr.strip(), "a non-zero exit with no diagnostic is the defect"
-        assert "Could not find" in r.stderr
+        assert "8" in r.stderr, "the diagnostic must name the batch it refused"
 
     def test_close_accepts_the_claim_id_and_zero_padded_forms(self, tmp_path):
         """LOW — `close_batch.sh 007` reached review_index.py as batch 7 and

@@ -169,7 +169,7 @@ Record:
 
 Before launching any review agents, cross-reference both maps against the actual codebase and CLAUDE.md Prevention Conventions to find coverage gaps. This is a deterministic check — no LLM needed.
 
-**What this audit is scoped to.** The `<project>/CLAUDE.md` § "Map coverage exclusions" list (used in 2a-1 and 2a-2 below) scopes **this map-coverage audit only** — it names paths *expected* to be unmatched by the maps so they are not reported as coverage gaps. It does **not** change the Step 1 file manifest, and it is **not a review-exclusion mechanism**. Whether a given path is actually reviewed is decided separately by convention/security-map section membership at Step 3 dispatch (which is map-keyed), not by this list.
+**What this audit is scoped to.** The `<project>/CLAUDE.md` § "Map coverage exclusions" list (used in 2a-1 and 2a-2 below) scopes **this map-coverage audit only** — it names paths *expected* to be unmatched by the maps so they are not reported as coverage gaps. It does **not** change the Step 1 file manifest, and it is **not a review-exclusion mechanism**. Whether a given path is actually reviewed is decided separately at Step 3 dispatch, not by this list. **That dispatch is keyed on the table in 3-pre, which is authored by hand and cites map sections by name — it is not computed from the maps.** An earlier version of this sentence called it "map-keyed", and the difference is the whole of Step 3-0b: a section the table does not name has no agent, however cleanly its globs match. Reconcile the two before dispatching rather than assuming they agree.
 
 ### 2a-0. Top-level inventory completeness (unmapped subtrees)
 
@@ -362,7 +362,7 @@ This capture also applies to the LSP/lint pre-scan (Step 2b-2) and the Semgrep p
 
 ## Step 2b-2: LSP / Typechecker / Lint Pre-Scan
 
-Runs as part of the same `run_checks.sh` invocation from Step 2b — no separate command. The LSP and lint stages execute after the grep loop inside `run_checks_impl.py` and emit findings in the same `(check_id, file_line, msg)` shape, so baseline matching, `--mode` filtering, and `--fail-on-blocking` all apply uniformly.
+Runs as part of the same `run_checks.sh` invocation from Step 2b — no separate command. The LSP and lint stages execute after the grep loop inside `run_checks_impl.py` and emit findings in the same `(check_id, file_line, msg, identity)` shape, so baseline matching, `--mode` filtering, and `--fail-on-blocking` all apply uniformly.
 
 This stage catches categories that grep cannot express: unresolved imports, undefined names, unused bindings (Python via `pyright`), TypeScript type errors (via `tsc --noEmit`), and JavaScript/TypeScript convention violations (via `eslint --format json .`). Binaries resolve through the PATH bootstrap in `run_checks.sh` — the main repo's `.venv/bin` (for `pyright`) and `<frontend>/node_modules/.bin` (for `tsc` and `eslint`) are prepended so worktrees and the main checkout both find them. If a binary or `<frontend>/node_modules` is missing, the relevant half silently skips with a warning on stderr; the pre-scan continues.
 
@@ -376,7 +376,7 @@ Tag LSP and lint findings with `[lsp]` source in your notes (distinct from `[gre
 
 ## Step 2b-3: Semgrep AST Pre-Scan
 
-Runs as part of the same `run_checks.sh` invocation — no separate command. The Semgrep stage executes after the LSP stage inside `run_checks_impl.py` and emits findings in the same `(check_id, file_line, msg)` shape, so baseline matching, `--mode` filtering, and `--fail-on-blocking` all apply uniformly.
+Runs as part of the same `run_checks.sh` invocation — no separate command. The Semgrep stage executes after the LSP stage inside `run_checks_impl.py` and emits findings in the same `(check_id, file_line, msg, identity)` shape, so baseline matching, `--mode` filtering, and `--fail-on-blocking` all apply uniformly.
 
 This stage catches patterns that regex cannot express with precision: function-scope guards, JSX-context-only renders, template literal interpolation, and f-string argument detection. It requires `semgrep` (Homebrew: `brew install semgrep`). If the binary is missing, the entire stage silently skips with a one-line warning on stderr; the pre-scan continues. If `.claude/semgrep/` is absent, the stage also skips cleanly.
 
@@ -398,6 +398,27 @@ Tag Semgrep findings with `[semgrep]` source in your notes (distinct from `[grep
 - **If the round does not open its declared scope in full, it is `Sampled`, not `Full` — whether you ran solo or dispatched workers.** The test is arithmetic, not judgement: **`Full` means `opened + grepped` reached the manifest**, and a round under a third of it is reported as a self-contradiction by every reader of its receipt. Staffing is not part of that test and may not be read into it — no worker count, however large, converts files nobody opened into covered ones, and `_shared/fanout-evidence.md` § Tier 0 defines kind as *"what the round **actually was**, not what was requested"* while firing *"on **every** round, fan-out or solo"*. A fan-out round that dispatched eight workers and still reached a fraction of its manifest is `Sampled`, and labelling it `Full` is the same overstatement as doing it solo. Name the sampling basis (highest-exposure modules, pre-scan hits, changed surfaces) and carry it into the ledger. **Never report the manifest size as though it were coverage** — "1,477 reviewable files" beside 13 opened is the exact misread this rule forbids.
 - Carry the decision into the Tier-0 ledger as `workers <K>` (with `solo: <reason>` when `K` is 0), rendered in Step 5b's round header and Step 6's summary.
 
+### 3-0b. Assignment reconciliation (table ↔ map — run before dispatch)
+
+**Deterministic, no LLM, every round including solo ones.** Step 2a asks whether the **map** reaches the code. This asks whether the **dispatch table** reaches the map — a different question, and 2a cannot see this one: a file matched by a section no row names is *matched*, so 2a-2 reports it as covered.
+
+The table in 3-pre is authored by hand and cites sections by name, in the `§`-prefixed quoted form the table uses. Names drift, sections get added by a new pack, and neither event touches the table. So before dispatching, parse the `## <globs> — <Name>` headers of the assembled `.claude/convention_map.md` and compare against the names the table cites:
+
+**(a) Cited names that resolve to no section.** A row asking for bullets that do not exist hands its agent nothing, silently. Fix the citation — do not delete the row.
+
+**(b) Sections no row cites.** Their files have no reviewer this round. Assign them to the nearest row explicitly and say so, or add a row.
+
+**(c) Globs claimed by more than one row.** Not a defect in itself — overlays — sections whose name ends in `(overlay)` — exist by design, and two reviewers on one file duplicate work rather than corrupt it. Report it so the duplication is a decision rather than an accident.
+
+```
+Assignment reconciliation:
+  cited names with no section:  <N>  <list, or "none">
+  sections with no row:         <N>  <list, or "none">
+  globs claimed by >1 row:      <N>  <list, or "none">
+```
+
+Non-zero counts do not block the round; they go on Step 5b's `Reconciliation:` line so the next round's operator reads the debt rather than rediscovering it. **This step establishes one thing only** — that the table and the map agree. Whether anyone read what they were assigned is the Tier-0 arithmetic's question (`opened + grepped` vs `manifest`), and files matched by no section at all are 2a-2's.
+
 ### 3-pre. Convention Scoping (CRITICAL)
 
 **Why:** The full Prevention Conventions list in `CLAUDE.md` has 52+ bullets. Giving all 52 to an agent reviewing 30-50 files produces an 88% noise ratio per file — the agent's attention is diluted across rules that cannot apply. Convention scoping gives each agent ONLY the 5-8 rules relevant to its files, dramatically increasing per-rule attention and catch rate.
@@ -412,30 +433,36 @@ Tag Semgrep findings with `[semgrep]` source in your notes (distinct from `[grep
 
 | Agent scope | Convention_map section(s) | Files |
 |-------------|--------------------------|-------|
-| Backend API | python pack §"API Endpoints" | `<api module>/server.py`, `<api module>/routes/**/*.py`, `<api module>/rate_limiting.py` |
+| Backend API | python pack §"API Endpoints" + llm pack §"LLM-using endpoints" | `<api module>/server.py`, `<api module>/routes/**/*.py`, `<api module>/rate_limiting.py` |
 | Backend SQL & Data | postgres pack §"SQL & Data Layer" | `<sql module>/*.py`, `<sql module>/queries/*.py`, `<db config module>` |
 | Backend Auth | python pack §"Auth" | `<auth module>/*.py` |
 | Backend Payments | python pack §"Payments" | `<payments service module>` *(dedicated if payment-critical)* |
 | Backend Utility Modules | python pack §"Backend Utility Modules" | `<utility modules>/*.py` |
-| Eval Runner | llm pack §"Eval Runner" | `<evals module>/*.py` |
-| Pipeline | python pack §"Data Pipeline" + llm pack §"LLM-using pipeline" | `<data pipeline>/*.py`, `<data pipeline>/api_clients/*.py` |
+| Eval Runner | llm pack §"LLM Eval Runner" | `<evals module>/*.py` |
+| Pipeline | python pack §"Data Pipeline" + llm pack §"LLM-using pipeline modules" | `<data pipeline>/*.py`, `<data pipeline>/api_clients/*.py` |
 | Frontend Components | nextjs-react pack §"React Components" | `<components dir>/**/*.tsx` |
 | Frontend Hooks | nextjs-react pack §"Custom Hooks" | `<hooks dir>/*.ts` |
-| Frontend Pages & API | nextjs-react pack §"Pages & API Routes" + §"Frontend Utilities" | `<app dir>/page.tsx`, `<app dir>/**/page.tsx`, `<app dir>/api/**/*.ts`, `<frontend lib>/*.ts`, `<frontend lib>/*.tsx` |
-| Frontend App Shell | nextjs-react pack §"App Shell" | `<app dir>/(auth)/**/*.tsx`, `<app dir>/layout.tsx`, `<app dir>/global-error.tsx` |
-| Scripts (Python) | python pack §"CLI Scripts" | `<scripts dir>/*.py`, `<datajobs entrypoint>`, `<data seed dir>/*.py` |
+| Frontend Pages & API | nextjs-react pack §"Pages & API Routes" + §"Frontend Utilities" | `<app dir>/page.tsx`, `<app dir>/**/page.tsx`, `<app dir>/api/**/*.ts`, `<app dir>/embed/**/*.tsx`, `<app dir>/chart-render/**/*.tsx`, `<frontend lib>/*.ts`, `<frontend lib>/*.tsx` |
+| Frontend App Shell | nextjs-react pack §"App Shell" | `<app dir>/(auth)/*.tsx`, `<app dir>/layout.tsx`, `<app dir>/global-error.tsx` |
+| Scripts (Python) | python pack §"CLI Scripts and Job Entrypoints" + postgres pack §"CLI Scripts and Job Entrypoints (overlay)" | `<scripts dir>/*.py`, `<datajobs entrypoint>`, `<data seed dir>/*.py` |
 | Scripts (Shell) | core §"Shell Scripts & Git Hooks" | `sysop/scripts/*.sh`, `sysop/scripts/hooks/*` |
 | Database Migrations | postgres pack §"Database Migrations" | `<migrations dir>/*.sql` |
 | Tests (Frontend) | nextjs-react pack §"Frontend Tests" | `<frontend>/**/__tests__/*.ts`, `<frontend>/**/__tests__/*.tsx` |
 | Tests (Backend) | python pack §"Backend Tests" | `<tests dir>/*.py` |
-| Infra & Config | core §"Dockerfile" + §".gitignore" + §".github/workflows" | `Dockerfile`, `.dockerignore`, `.github/workflows/*.yml`, other config files |
+| Prompt Templates | llm pack §"LLM Prompt Templates (release-specific)" + §"Standalone LLM Prompt Templates (non-release)" | `<prompts dir>/releases/*.md`, `<prompts dir>/*.md` |
+| Skill Markdown | core §"Skill Markdown Files (workflow skills)" | `.claude/skills/**/*.md` |
+| Ledger & Vendor Data | beancount pack §"Top-level Beancount ledger" + §"Raw vendor downloads (PII)" + §"Per-vendor intake README" | `<ledger>.beancount`, `<vendor data dir>/**`, `<vendor data dir>/<vendor>/README.md` |
+| Vendor Parsers | beancount pack §"Vendor-data parsers (overlay on python pack)" + §"External-schema baseline hashes" | `<parsers dir>/*.py`, `<parsers dir>/*.sha256` |
+| Infra & Config | *(none — see note)* | `Dockerfile`, `.dockerignore`, `.github/workflows/*.yml`, other config files |
 
 When constructing each agent's prompt:
-- **DO:** Dispatch all review agents in a single tool-call block so they run concurrently. Agents have disjoint file scopes — serial dispatch costs ~5× more wall time with no quality benefit. Skip rows whose file list is empty for the current scope (e.g., incremental scan with no changed files in that area).
+- **DO:** Dispatch all review agents in a single tool-call block so they run concurrently — serial dispatch costs ~5× more wall time with no quality benefit. Skip rows whose file list is empty for the current scope (e.g., incremental scan with no changed files in that area). **Rows are *mostly* disjoint, not provably so, and this line used to claim otherwise**: `<app dir>/(auth)/page.tsx` matches both the Pages & API row (`<app dir>/**/page.tsx`) and the App Shell row (`<app dir>/(auth)/*.tsx`). Concurrency does not depend on disjointness — two agents reviewing one file duplicates work, it does not corrupt it — so dispatch concurrently regardless, and let Step 3-0b report the overlap rather than a `DO:` bullet asserting it away.
 - **DO:** Spawn all review agents with `model: "opus"` — the locality rule (3b-1) and chunked review (3b-2) require sustained multi-step reasoning across sibling functions and large files. Do not omit, per the **reasoning** role (`.claude/served_models.yml`).
 - **DO:** Copy the exact convention bullets from the matching convention_map section into the agent's prompt as "Conventions to enforce"
 - **DO NOT:** Include the full Prevention Conventions list from CLAUDE.md — that defeats the purpose of scoping
 - **DO:** Include the general quality checks (3a) for all agents — these are lightweight universal checks, not convention-specific
+
+**The `Infra & Config` row cites no section on purpose, and that is a real gap rather than a tidy one.** No `convention_map.md` section covers `Dockerfile`, `.dockerignore` or `.github/workflows/*.yml` — they are **`security_map.md`** territory, reviewed by `/security-audit`. Earlier versions of this table cited `core §"Dockerfile"`, `§".gitignore"` and `§".github/workflows"`, which are security-map section *globs* and resolve to no convention_map section at all, so the row silently handed its agent no bullets. Run this row on the general quality checks (3a) only, and say so in the round header; if your project grows conventions for these files, add a real section rather than re-citing a security-map one.
 
 If a file group spans multiple convention_map sections (e.g., "Pages & API Routes" + "Frontend Utilities"), include bullets from ALL matching sections — the combined set is still much smaller than 52.
 
@@ -456,7 +483,7 @@ commits next, attributed to nobody.
 
 **This rule has been measured failing, so send it AND check afterwards.** Two independent instruction texts produced the same breach — a consumer's 13-agent run whose agent created a task file and edited `tasks/index.yml`, and this repo's own Phase 198 pre-build pass, where an agent under an explicit read-only instruction created a scratch file anyway. Where your harness offers `isolation: "worktree"`, use it; that is what contained both. Where it does not, snapshot `git status --porcelain -uall` before dispatch and diff it after — `git diff` in any form is blind to a new untracked file, which is the dominant breach shape. `/review-close` Step 2b prescribes that sequence in full.
 
-**Sub-agent return contract (`_shared/fanout-evidence.md`).** The bullets above tell each agent what to *check*; the return contract tells it what to *return*. Instruct every review agent to (1) tag each finding with a `file:line` anchor **and** a `[verified]`/`[reported]` self-tag — `[verified]` only when it opened that exact site, `[reported]` when the finding rests on a grep hit / pattern match it did not open — and (2) end its report with the **evidence footer** (files opened vs. assigned + tool mix). **Copy the footer template from `_shared/fanout-evidence.md` verbatim into each agent's prompt** — the spawned agent never reads that file, so paste the block in exactly as you copy the scoped convention bullets. That footer is what Step 3c audits before merging: a batch that opened 8 of 82 assigned files is a coverage gap to flag loudly, not a clean pass to merge silently.
+**Sub-agent return contract (`_shared/fanout-evidence.md`).** The bullets above tell each agent what to *check*; the return contract tells it what to *return*. Instruct every review agent to (1) tag each finding with a `file:line` anchor **and** a `[verified]`/`[reported]` self-tag — `[verified]` only when it opened that exact site, `[reported]` when the finding rests on a grep hit / pattern match it did not open — and (2) end its report with the **evidence footer** (files opened — **enumerated as paths**, not merely counted — vs. assigned, + tool mix). **Copy the footer template from `_shared/fanout-evidence.md` verbatim into each agent's prompt** — the spawned agent never reads that file, so paste the block in exactly as you copy the scoped convention bullets, *including* the paragraph under it that states the arity binding: an agent that gets the template without it will write a bare count. That footer is what Step 3c audits before merging: a batch that opened 8 of 82 assigned files is a coverage gap to flag loudly, not a clean pass to merge silently.
 
 **Also paste the § Adjudication kill/keep pair** (`_shared/fanout-evidence.md`) into each agent's prompt — agents assign their own severity, so an agent that quietly downgrades its own finding on a control it assumed rather than read has already destroyed the evidence before your merge ever sees it. The two lines to paste: *kill or downgrade only on a mitigation you located and read at a specific `file:line`; keep or escalate only on a consequence you actually traced — otherwise mark it unassessed and report it anyway.* This is an adjudication instruction, **not** a licence to report less: report every candidate you cannot dispose of on evidence.
 
@@ -565,8 +592,8 @@ For files >600 lines, review the **last third first**, then the middle, then the
 
 **First, audit the fan-out per `_shared/fanout-evidence.md` § orchestrator merge discipline — do this before amplifying or writing any batch:**
 - **Row provenance (mandatory):** a fan-out finding the orchestrator did **not** itself re-read carries `[reported]` — do **not** copy a sub-agent's self-`[verified]` onto the row unchallenged (the agent that opened 8 of 82 files self-tags `[verified]` too). Only the sample re-read below upgrades a finding to `[verified]`.
-- **Low-opened-ratio flag (mandatory, cheap):** from each agent's evidence footer, flag a batch that **opened + grepped < ~⅓ of its assigned files**, or that self-tagged a `[verified]` finding on a file absent from its `Opened` list — record it as a **loud coverage-gap line in this round's summary**, not a clean pass. Do not flag an honestly sparse scope (few relevant files, the rest grepped).
-- **Sample re-read (advisory):** re-read **2–3 of each agent's claimed `file:line` findings** against source, reading *inward* to confirm the claim — distinct from the amplification below, which reads *outward* for siblings. A finding that survives carries `[verified]` into its batch row; one that doesn't is dropped or downgraded with a note — **decomposing compound findings first (binds on every drop *and every downgrade*):** if the finding asserts several independent clauses or cites several sites, a failed re-read refutes *that clause only* — adjudicate its remaining clauses (re-checking its other cited sites where they exist) before the row is dropped or downgraded, and record which clauses survived. Partial refutation — refute one clause, silently drop the rest — is the measured way real findings get dismissed as false positives, and it only fires in that direction (`_shared/adversarial-review.md` § Compound findings).
+- **Low-opened-ratio flag (mandatory, cheap):** from each agent's evidence footer, flag a batch that self-tagged a `[verified]` finding on a file absent from its `Opened` list, or whose `Opened` list is materially shorter than the `<M>` it reported. Record either as a **loud coverage-gap line in this round's summary**, not a clean pass. **The look-coverage signal is not a flag — it is an account you owe** (`_shared/fanout-evidence.md` § Tier 2, leg (a)): when a batch's **`Opened` covers < ~⅓ of its assigned files**, say in the round summary which case it is — sparse-by-nature or under-reviewed — and name what decided it. Do not settle it with the adjective: an honestly sparse scope is real (few relevant files, the rest searched) but any batch can claim it, so "don't flag the honest case" was an exemption anyone could take. Decide it on what the agent did **not** supply — this batch's Step-2b pre-scan hits — you hold them, and you wrote the dispatch prompt, so you know whether they were in it (they are independent evidence only if they were not); its ratio beside its siblings' in this round; how the `Opened` paths distribute across the assigned glob; whether the findings land on the files it opened. None settles it alone, and a batch with no pre-scan hits gets no signal from the first. **A low ratio left unaccounted-for is itself the coverage-gap line.** The ratio reads `Opened`, never a sum: the footer collects no count of files reached by search — `Tools`' `grep=` counts invocations — so the second operand this bullet used to name was never a field it could read. It is named in `_shared/fanout-evidence.md` § Tier 2 and deliberately not written out here, because a guard that tolerates the retired formula as history tolerates it as a restoration.
+- **Sample re-read (advisory):** re-read **2–3 of each agent's claimed `file:line` findings** against source, **prioritising the ones it self-tagged `[verified]` (the claims it is vouching for) and any finding whose cited file is absent from its `Opened` list** — that second arm is the whole reason the footer enumerates paths rather than stating a count, and it is what points your scarce re-reads at the rows nobody has read. Read *inward* to confirm the claim — distinct from the amplification below, which reads *outward* for siblings. A finding that survives carries `[verified]` into its batch row; one that doesn't is dropped or downgraded with a note — **decomposing compound findings first (binds on every drop *and every downgrade*):** if the finding asserts several independent clauses or cites several sites, a failed re-read refutes *that clause only* — adjudicate its remaining clauses (re-checking its other cited sites where they exist) before the row is dropped or downgraded, and record which clauses survived. Partial refutation — refute one clause, silently drop the rest — is the measured way real findings get dismissed as false positives, and it only fires in that direction (`_shared/adversarial-review.md` § Compound findings).
 - **Adjudicate on read evidence, both directions (mandatory — `_shared/fanout-evidence.md` § Adjudication):** the sample re-read above **is** the premise check — if the cited site does not contain what the finding claims, that read refutes it and the clause is dropped. Beyond that, when the premise holds: kill or downgrade only on a mitigation you **located and read** at a specific `file:line`, never an assumed one ("the framework handles that", "callers validate upstream"); and keep or escalate only on a consequence you actually traced — otherwise mark it **unassessed** and say so. When neither can be established, **the finding survives** with the open question recorded: a filed task gets another reader, a dismissal gets none. Decompose compound findings first (above), then hold each surviving clause to this standard separately; on a High-severity dismissal the compound rule's second leg also binds (an independent re-adjudication, or a per-clause record in the summary).
 - **Verify the cited rule (mandatory, cheap):** for any finding that flags code *because a convention bullet says so*, re-open the cited `convention_map.md` section and confirm the bullet actually states that rule, specifically — don't trust the agent's paraphrase. A mis-cited convention finding files a bogus task in that rule's name and mis-records what the map actually requires — corrupting the round evidence the promotion/demotion machinery reasons from, and burning the human review cycle scoped dispatch exists to protect.
 - **Provenance class in the summary (mandatory):** the round summary states the verified/reported split and per-batch opened/assigned ratios — never a bare coverage percentage.
@@ -601,6 +628,7 @@ Report post-scan results:
 ```
 Post-scan amplification: <N> patterns grepped → <N> new siblings found
 Fan-out coverage: <opened/assigned per batch>; <B> batch(es) flagged low-opened
+                  <for each batch under ~1/3: sparse-by-nature | under-reviewed — and what decided it>
 Provenance: <V> verified (orchestrator-read + sampled) · <R> reported
 ```
 
@@ -678,9 +706,25 @@ Check if a Round with today's date already exists (e.g., from a `/security-audit
 > **Coverage (code quality):** <Full | Scoped (<area>) | Sampled (<basis>)> · manifest <N> · opened <M> · grepped <G> · workers <K><, solo: <reason>>
 ```
 
+**The reconciliation counts get their own line, and the receipt does not carry them.** Step 3-0b's
+three counts do **not** belong in the `Coverage` line: that line has a fixed field set
+(`manifest`/`opened`/`grepped`/`workers`) which the Tier-0 receipt writer parses positionally, and
+adding a field to it silently changes what every downstream reader sees. Write them beside it
+instead — the same *beside, never replace* rule a merged round already follows:
+
+```markdown
+> **Reconciliation:** sections-no-agent <N> · categories-no-agent <N> · sections-no-category <N>
+```
+
+This is a durable text record in `review_tasks.md` and **nothing parses it** — the JSON receipt
+schema has no field for it. An earlier version of Step 3-0b said the counts would go "into the
+Step 5b round header" so "the next round inherits the debt", which named a mechanism that did not
+exist: the header template had no such field and the receipt writer drops what it cannot match.
+The line above is what actually survives; treat inheriting the debt as a human reading it.
+
 Use the next Round number (last Round N + 1).
 
-**The coverage line is MANDATORY and is the round's Tier-0 ledger** (`_shared/fanout-evidence.md` § Tier 0) — the durable half of it, and the one that outlives the session. Fill every field from what this round actually did: `manifest` = the scope *this round declared* after exclusions (not the repo total unless this was a full scan), `opened` = files whose bodies you read, `grepped` = files reached by search only (kept separate — grep is looking, not reading), `workers` = the Step 3-0 dispatch count with the stated reason when it is 0. **A round that cannot fill a field writes `unreported` in it, never a guess and never a blank** — an absent number reads as a clean pass, which is the failure this ledger exists to prevent.
+**The coverage line is MANDATORY and is the round's Tier-0 ledger** (`_shared/fanout-evidence.md` § Tier 0) — the durable half of it, and the one that outlives the session. Fill every field from what this round actually did: `manifest` = the scope *this round declared* after exclusions (not the repo total unless this was a full scan), `opened` = files whose bodies were read — **on a fan-out round that is the deduplicated union of your own reads and every agent's enumerated `Opened` list, not your reads alone and not a sum of the footers** (`_shared/fanout-evidence.md` § Tier 0, which also states what a missing footer and an out-of-scope path contribute: nothing), `grepped` = files reached by search only (kept separate — grep is looking, not reading), and **unlike `opened` it does not aggregate: there is no per-worker `Grepped` in the evidence footer, so this is your own review-motivated searching and not the workers'** (`_shared/fanout-evidence.md` § Tier 0). Folding worker searching in here inflates the other operand of the same `Full` test, `workers` = the Step 3-0 dispatch count with the stated reason when it is 0. **A round that cannot fill a field writes `unreported` in it, never a guess and never a blank** — an absent number reads as a clean pass, which is the failure this ledger exists to prevent.
 
 ### 5c. Batch Format
 

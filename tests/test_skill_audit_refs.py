@@ -506,7 +506,11 @@ def test_baseline_key_excludes_line_numbers():
 
     Skill markdown is edited constantly, so a line-keyed entry rots on the first
     unrelated edit above it — the objection `run_checks/baseline.py` already records
-    for diff-relative coverage lines, and the one upstream #235 raises generally.
+    for its own baseline key, and the one upstream #235 raises generally. (This used
+    to attribute that objection to a claim about how coverage numbering shifts. Phase 213
+    retracted that as false — those numbers are absolute source lines — and **this file ships to
+    the public repo**, so it was the live instance of exactly the harm `Q-247` was
+    filed to prevent.)
     """
     mod = _mod()
     key = mod.baseline_key("retired-referent", "core/skills/x/SKILL.md", "run_in_background")

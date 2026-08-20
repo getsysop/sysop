@@ -1,7 +1,7 @@
 """LSP / typechecker diagnostics (pyright + tsc).
 
 Tool-shelling stage — pyright and tsc are invoked as CLIs. Findings are
-emitted in the same ``(check_id, file_line, message)`` shape as grep
+emitted in the same ``(check_id, file_line, message, identity)`` shape as grep
 findings so baseline matching, ``--update-baseline``, and
 ``--fail-on-blocking`` work uniformly.
 """
@@ -13,6 +13,7 @@ import sys
 
 from .accounting import EXECUTED, FAILED, SKIPPED, stderr_excerpt
 from .config import check_paths_by_id, finding_in_scope
+from .baseline import identity_of
 
 
 def run_lsp_diagnostics(repo_root, included_ids, report=None):
@@ -27,7 +28,7 @@ def run_lsp_diagnostics(repo_root, included_ids, report=None):
     subprocess, so per-check `paths:` scoping is applied by post-filtering;
     see config.path_in_scope).
 
-    Returns (check_id, file_line, message) tuples. ``report`` is the optional
+    Returns (check_id, file_line, message, identity) tuples. ``report`` is the optional
     accounting collector — pyright and tsc each record their own id subset
     (one subprocess serves all the ids of its tool). Emits a stderr warning
     and returns partial results when a binary is missing or times out.
@@ -100,8 +101,23 @@ def _run_pyright(repo_root, included_ids, report=None):
         file_line = f"{file_path}:{line}"
         msg_text = diag.get("message", "").replace("\n", " ")[:300]
         sev = {"error": "HIGH", "warning": "MEDIUM"}.get(severity, "LOW")
+        # `rule` is parsed at the top of this loop to pick the check id, and
+        # `pyright-general-warning` is a documented catch-all for every unmapped
+        # warning — so without it the key means "whatever pyright says here".
+        # Same defect as lint's, and the source line is not needed for it: the
+        # re-scoped question is identity, not content.
+        #
+        # The fallback is load-bearing, not defensive. `pyright-general-warning`
+        # is precisely the bucket for diagnostics whose `rule` is absent, so a
+        # bare `rule` would let ONE check id emit both key arities — a two-field
+        # key for the rule-less finding and a three-field one for its neighbour.
+        # `legacy_entries` would then report the legitimate two-field entry as
+        # no-longer-matching, and `--migrate-baseline` would rewrite or drop a
+        # correct entry. That is the ambiguity `identity_of`'s empty-string
+        # branch exists to forbid, and the first cut of this line created it.
         out.append((check_id, file_line,
-                    f"[{check_id}] {sev} {file_line} — {msg_text}"))
+                    f"[{check_id}] {sev} {file_line} — {msg_text}",
+                    rule or identity_of(msg_text) or "no-rule"))
     return out
 
 
@@ -194,8 +210,12 @@ def _emit_tsc_finding(current, frontend_dir, repo_root, included_ids, out):
     tail = " ".join(c.strip() for c in continuations if c.strip())
     msg_text = (f"{head} — {tail}" if tail else head)[:400]
     sev = "HIGH" if m.group(4) == "error" else "MEDIUM"
+    # `tsc-type-error` is one catch-all id for the whole stage, so two different
+    # TS errors on one line shared a key. Group 5 is the TS number — captured by
+    # `_TSC_HEADER_RE` since it was written, and used by nothing until now.
     out.append((check_id, file_line,
-                f"[{check_id}] {sev} {file_line} — {msg_text}"))
+                f"[{check_id}] {sev} {file_line} — {msg_text}",
+                f"TS{m.group(5)}"))
 
 
 def _pyright_rule_to_check_id(rule, severity):

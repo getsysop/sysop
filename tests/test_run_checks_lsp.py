@@ -45,7 +45,7 @@ class TestPyrightParser:
                    return_value=_completed(_pyright_json(tmp_path))):
             out = lsp._run_pyright(str(tmp_path), {"pyright-missing-imports"})
         assert len(out) == 1
-        check_id, file_line, msg = out[0]
+        check_id, file_line, msg, _ident = out[0]
         assert check_id == "pyright-missing-imports"
         # pyright's range.start.line is 0-indexed; the +1 makes it 1-indexed.
         assert file_line == "app/x.py:42"
@@ -121,7 +121,7 @@ class TestTscParser:
                    return_value=_completed(out_line)):
             out = lsp._run_tsc(str(tmp_path), {"tsc-type-error"})
         assert len(out) == 1
-        check_id, file_line, msg = out[0]
+        check_id, file_line, msg, _ident = out[0]
         assert check_id == "tsc-type-error"
         # line is group(2)=12, NOT the column group(3)=5.
         assert file_line == "frontend/src/App.tsx:12"

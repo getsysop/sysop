@@ -31,7 +31,7 @@ Read `.claude/settings.json` (and `.claude/settings.local.json` if present) and 
 - `Bash(python3 sysop/scripts/validate_tasks.py)` — Step 4c's final-guard validator run (bare `python3`; the script self-resolves venv PyYAML via its own `sys.path` bootstrap, so this one form serves both venv-only and non-venv consumers — Sysop Phase 126)
 - `Bash(python3 sysop/scripts/validate_tasks.py:*)` — same with `--quiet` / `--path`
 
-**Deliberate non-entries.** Step 3b's pending-docs collect (`mkdir -p sysop/runtime/pending-docs && cp …`) ships with **no** allow-rule — the compound splits into `mkdir` + `cp` command words (Phase 126 matcher facts) and neither binds a rule here. On purpose: both are plain intra-repo file writes, the bare `cp` has shipped ruleless for as long as the step has existed with no reported halt, and a `Bash(cp:*)`-class rule would pre-authorize far more than this one copy. **If the collect ever *does* halt there, nothing rescues it automatically — ask the user for the escape yourself.** The Phase 36 `PermissionDenied` hook matches only `git push origin main`/`master`, `git push origin --delete <branch>` and `git commit` on a protected branch; a denied `mkdir` or `cp` falls through its matcher loop and it emits **nothing**, so the denial arrives with no guidance attached. Relay the literal `!`-prefixed command (`! mkdir -p sysop/runtime/pending-docs && cp …`) for the user to type at the next prompt, the same route Step 3 uses for a denied verification command, and never `AskUserQuestion`. Step 3b itself forbids proceeding to the worktree remove with the docs uncollected.
+**Deliberate non-entries.** (One of them stopped being one — see the end of this paragraph.) Step 3b's pending-docs collect and its rollback used to run as `mkdir -p … && cp …` and a `for … rm -f … done` loop, which bound **no** allow-rule at all: the compound splits into `mkdir` + `cp` command words (Phase 126 matcher facts) and neither is in the seeded set, nor are `rm`, `mv` or `cmp`. **Phase 210 rebuilt both as `python3 - <<'PY'` heredocs, so they now bind `Bash(python3 -:*)`, which the 71-rule seed already carries.** The permission surface got smaller, not larger — one existing rule replaced four ruleless command words — and the change was driven by correctness rather than permissions: a provenance check is not expressible in that compound. **If some other part of this step ever *does* halt on a denial, nothing rescues it automatically — ask the user for the escape yourself.** The Phase 36 `PermissionDenied` hook matches only `git push origin main`/`master`, `git push origin --delete <branch>` and `git commit` on a protected branch; a denied `mkdir` or `cp` falls through its matcher loop and it emits **nothing**, so the denial arrives with no guidance attached. Relay the literal `!`-prefixed command — **the `python3 -` heredoc as written, never the retired `mkdir -p … && cp …`**, which has no provenance check and is the form this step removed for the user to type at the next prompt, the same route Step 3 uses for a denied verification command, and never `AskUserQuestion`. Step 3b itself forbids proceeding to the worktree remove with the docs uncollected.
 
 **Additionally, under `pr` merge policy only** (read `<project>/CLAUDE.md § Merge policy`; default is `direct` — see Step 4-pre): the PR-routed flow shells out to `gh` and a few extra git verbs. Require these too **only when the policy is `pr`** — a `direct`-policy consumer does not need them and must not be blocked for their absence:
 
@@ -588,6 +588,11 @@ for pd in search_dirs:
     if not pd.is_dir():
         continue
     for md in sorted(pd.glob("*.md")):
+        # Not a branch pending-doc: a fixed-name file the review skills own and delete
+        # themselves. It has no `branch:` and no smoke headings, and counting it here
+        # makes an empty pending-docs dir look populated. Step 4c excludes it too.
+        if md.name == "convention-candidates.md":
+            continue
         if md.name in seen_names:
             continue
         seen_names.add(md.name)
@@ -597,24 +602,31 @@ signals = []
 
 # (a) pending-doc body scan
 for md in pending_files:
-    for sec in extract_sections(md.read_text(encoding="utf-8")):
+    # errors="replace": a pending-doc with non-UTF-8 bytes must not kill the close.
+    for sec in extract_sections(md.read_text(encoding="utf-8", errors="replace")):
         signals.append((label(md), sec))
 
 # (b) index.yml manual_smoke:true cross-check via pending-doc roadmap_ids
 index_path = repo / "tasks" / "index.yml"
 if index_path.is_file():
     try:
-        idx = yaml.safe_load(index_path.read_text(encoding="utf-8")) or {}
+        idx = yaml.safe_load(index_path.read_text(encoding="utf-8", errors="replace")) or {}
     except yaml.YAMLError:
         idx = {}
     tasks = {t["id"]: t for t in (idx.get("tasks") or []) if isinstance(t, dict) and t.get("id")}
     smoke_ids = set()
     for md in pending_files:
-        fm_m = fm_re.match(md.read_text(encoding="utf-8"))
+        fm_m = fm_re.match(md.read_text(encoding="utf-8", errors="replace"))
         if not fm_m: continue
         try:
-            fm = yaml.safe_load(fm_m.group(1)) or {}
+            fm = yaml.safe_load(fm_m.group(1))
         except yaml.YAMLError:
+            continue
+        # `or {}` is NOT enough here: safe_load on a single prose line between the
+        # delimiters returns a truthy `str`, and on a bare list a truthy `list`, so
+        # `.get()` below raised AttributeError and killed the whole close. Test the
+        # type, not the truthiness.
+        if not isinstance(fm, dict):
             continue
         # Phase 23a compat shim — roadmap_ids OR task_ids
         for tid in (fm.get("roadmap_ids") or fm.get("task_ids") or []):
@@ -626,7 +638,7 @@ if index_path.is_file():
         if not body_rel: continue
         body_path = repo / body_rel if body_rel.startswith("tasks/") else repo / "tasks" / body_rel
         if not body_path.is_file(): continue
-        for sec in extract_sections(body_path.read_text(encoding="utf-8")):
+        for sec in extract_sections(body_path.read_text(encoding="utf-8", errors="replace")):
             if sec.lower() in seen_lc: continue
             signals.append((f"tasks/index.yml § {tid}", sec))
 
@@ -667,7 +679,145 @@ Feature branches created by `/claim-task` or `batch_work.sh` live in worktrees. 
 For each approved feature branch:
 1. Check if it has a worktree: `git worktree list` and match the branch name
 2. If a worktree exists:
-   a. **Collect pending-docs**: Copy `sysop/runtime/pending-docs/*.md` from the worktree to main's `sysop/runtime/pending-docs/` (these are untracked files that would be lost when the worktree is removed): `mkdir -p sysop/runtime/pending-docs && cp <worktree>/sysop/runtime/pending-docs/*.md sysop/runtime/pending-docs/ 2>/dev/null`. The `mkdir -p` is load-bearing: main's `sysop/runtime/pending-docs/` often does not exist (it is gitignored — absent from any fresh clone — authored lazily by `/document-work` in the *worktree*, and removed-when-empty by Step 4c's pending-docs cleanup step), so a bare `cp <file> sysop/runtime/pending-docs/` silently fails with the dest-missing error masked by `2>/dev/null`, and the very next `git worktree remove` then deletes the gitignored pending-doc for good — losing the doc metadata with no warning, and invalidating the rollback guard below (which assumes the copy happened). For the same reason, if the collect itself could not run (e.g. a permission halt on the `mkdir`/`cp` — see the pre-flight guard's deliberate-non-entry note), do **NOT** proceed to (b): removing the worktree with the docs uncollected is exactly the data loss this command exists to prevent.
+   a. **Collect pending-docs**: bring each `sysop/runtime/pending-docs/*.md` from the worktree into main's `sysop/runtime/pending-docs/` (these are untracked files that would be lost when the worktree is removed). **The copy is provenance-checked, because the destination is keyed by basename and a basename is not unique to a branch.**
+
+      ```bash
+      # `python3` command word + in-heredoc PyYAML bootstrap (Phase 126) so
+      # `Bash(python3 -:*)` matches as a single simple command. TWO quoted positional
+      # args: the worktree path and **the branch this iteration is processing** — the
+      # same name step 1 above matched from `git worktree list` and item (b) passes to
+      # `git worktree remove`. Run from the repo root; `live` below is relative to CWD.
+      python3 - "<worktree-path>" "<branch name>" <<'PY'
+      import re, shutil, sys
+      from pathlib import Path
+      try:
+          import yaml
+      except ImportError:  # PyYAML lives only in the project venv (BeanRider ISSUE-0049)
+          import glob
+          sys.path[:0] = glob.glob(".venv/lib/python*/site-packages")
+          import yaml
+
+      wt      = Path(sys.argv[1])
+      branch  = sys.argv[2]          # the branch this iteration is processing
+      live    = Path('sysop/runtime/pending-docs')
+      src_dir = wt / 'sysop' / 'runtime' / 'pending-docs'
+
+      # `convention-candidates.md` is NOT a branch pending-doc. It is a fixed-name file
+      # /codebase-review and /security-audit write, append to, and delete themselves; it
+      # carries no `branch:` frontmatter and belongs to no branch. Collecting it moves a
+      # live review round's candidates onto main, where Step 4c consolidates and deletes
+      # them. Never collect it.
+      NOT_A_BRANCH_DOC = {'convention-candidates.md'}
+      fm_re = re.compile(r'^---\n(.*?)\n---', re.DOTALL)
+
+      # A wrong or unsubstituted <worktree-path> must be LOUD. The retired `cp` form
+      # exited 1 on a bad path; a bare glob over a missing dir yields nothing and would
+      # exit 0 with a success-shaped report, after which (b) removes the worktree and the
+      # untracked docs are gone. Step 3c hard-errors on its unsubstituted placeholder for
+      # the same reason. `src_dir` is checked too, not just `wt`: an existing but WRONG
+      # directory is the shape that otherwise reports success over nothing.
+      if ('<worktree' in str(wt) or '<branch' in branch
+              or not branch.strip() or not wt.is_dir() or not src_dir.is_dir()):
+          print(f'PENDING-DOC COLLECT ABORTED: unusable worktree path or branch name '
+                f'({wt}, {branch!r})')
+          sys.exit(4)
+
+      def branch_of(p):
+          """This doc's `branch:`, read with the SAME parser Steps 3c and 4c use.
+
+          Deliberately `yaml.safe_load` and not a hand-rolled line scan. A scan diverges
+          from PyYAML on ordinary YAML — a folded scalar (`branch: >`) yields the literal
+          `>`, duplicate keys pick the wrong one, a trailing `# comment` is kept as part
+          of the value — and two different branches collapsing to one token is precisely
+          the silent overwrite this step exists to prevent. A third divergent reader in a
+          file that already had two is what this phase is fixing; adding one would be the
+          same defect wearing the fix's name.
+
+          None is a real answer, not an error: a doc whose provenance will not parse can
+          never be shown to be the SAME branch as another, and the caller treats
+          unknown-vs-anything as a collision.
+          """
+          try:
+              m = fm_re.match(p.read_text(encoding='utf-8', errors='replace'))
+          except OSError:
+              return None
+          if not m:
+              return None
+          try:
+              fm = yaml.safe_load(m.group(1))
+          except yaml.YAMLError:
+              return None
+          if not isinstance(fm, dict):
+              return None
+          b = fm.get('branch')
+          return b.strip() if isinstance(b, str) and b.strip() else None
+
+      docs = [p for p in sorted(src_dir.glob('*.md')) if p.name not in NOT_A_BRANCH_DOC]
+
+      # STAGE 1 — DECIDE. Nothing is written until every doc has been checked, so there is
+      # no partial state to undo. An earlier draft copied as it went and undid the copies
+      # on a collision; its undo deleted files main already held, because an overwritten
+      # doc was in the same "collected" list as a newly-created one. Deciding first makes
+      # that class impossible rather than handled.
+      collisions = []
+      for src in docs:
+          # Ground truth is the branch being PROCESSED, not what two docs say about each
+          # other. A doc that does not claim this branch is not this branch's to collect.
+          src_b = branch_of(src)
+          if src_b != branch:
+              collisions.append(f'{src.name} (worktree doc claims {src_b!r}, '
+                                f'processing {branch!r})')
+              continue
+          dst = live / src.name
+          if dst.exists():
+              dst_b = branch_of(dst)
+              # Overwrite ONLY main's own stale twin of this same branch. Any other
+              # branch's record is untouchable, however this branch's doc is labelled.
+              if dst_b != branch:
+                  collisions.append(f'{src.name} (main copy belongs to {dst_b!r}, '
+                                    f'processing {branch!r})')
+      if collisions:
+          for c in collisions:
+              print(f'PENDING-DOC COLLISION: {c}')
+          print(f'PENDING-DOC COLLISIONS: {len(collisions)} — refusing; '
+                f'nothing collected, main untouched, worktree left in place')
+          sys.exit(3)
+
+      # STAGE 2 — COPY. Every doc has already been cleared.
+      live.mkdir(parents=True, exist_ok=True)   # load-bearing, see below
+      for src in docs:
+          try:
+              shutil.copy2(src, live / src.name)
+          except OSError as e:
+              # A broken symlink, a directory named *.md, an unreadable file. Report and
+              # halt: (b) must not remove a worktree whose docs are not all on main.
+              print(f'PENDING-DOC COLLECT FAILED: {src.name}: {e}')
+              sys.exit(5)
+          print(f'PENDING-DOC COLLECTED: {src.name}')
+      for p in sorted(src_dir.glob('*.md')):
+          if p.name in NOT_A_BRANCH_DOC:
+              print(f'PENDING-DOC SKIPPED (not a branch doc): {p.name}')
+      print('PENDING-DOC COLLISIONS: 0')
+      PY
+      ```
+
+      **Why provenance and not a content comparison.** The two copies differing is *not* the signal — the overwhelmingly common collision is the **same branch collected twice** (a prior run copied the doc, then died before `git worktree remove`), where main's copy is stale by construction and the worktree must win. Step 3c states exactly that rule for its own dedup, and a byte-comparison would fire loudly on the case where overwriting is correct while staying silent on the case that matters. What matters is whether the two docs came from the **same branch**, and each doc already carries that claim in its own `branch:` field.
+
+      **Print to stdout, and note there is no `2>/dev/null` any more.** The old form masked the dest-missing error, which is what made the failure silent; the collision lines above are the Step 8 `Pending-doc collisions:` row's only source.
+
+      **Any non-zero exit means do NOT proceed to (b).** There are three, and they are not interchangeable:
+
+      | exit | meaning | state of main | what to do |
+      |---|---|---|---|
+      | **3** | a collision — some doc does not belong to this branch | **untouched**; stage 1 writes nothing, so there is no partial work and nothing to undo | SKIP this branch (worktree, lock and branch intact). **Do not run the rollback** — it has nothing to undo. Resolve by correcting the mis-labelled doc, then re-run |
+      | **4** | unusable `<worktree-path>` or `<branch name>` — a placeholder left unsubstituted, a missing directory, an empty branch | **untouched**; nothing ran | fix the invocation and re-run. Never proceed to (b) |
+      | **5** | a copy failed partway through stage 2 (broken symlink, unreadable file) | **partially written** — some docs collected, the rest not | SKIP this branch and **do** run the rollback, which removes this branch's own collected copies by provenance. This is the one exit where there IS partial work |
+
+      An earlier draft of this paragraph named only two exits and said exit 3 *"has undone its own partial work"* — language left over from the retired second design, which copied as it went. This one decides first, so on 3 there is nothing to undo; and it omitted 5, which is the only exit where the sentence would have been true.
+
+      **Why refuse rather than preserve-and-continue.** An earlier draft of this phase moved main's copy into a `sysop/runtime/pending-docs/superseded/` subdirectory and carried on. Its own review round disqualified that: **nothing in the shipped tree reads that directory.** Step 4c step 1 is a non-recursive `ls …/*.md`, so a parked doc is never consolidated — its branch's `roadmap_ids` never flip, its body is never archived, its lock never drops — and the phase had shipped, as the steady-state result of an ordinary collision, the exact end state the rollback note below condemns. Preserving bytes where no reader looks is not preservation. Refusing keeps both records in the two places a reader already checks.
+
+      **The `mkdir` is still load-bearing, for the original reason.** Main's `sysop/runtime/pending-docs/` often does not exist (it is gitignored — absent from any fresh clone — authored lazily by `/document-work` in the *worktree*, and removed-when-empty by Step 4c's cleanup), so a copy into a missing destination fails; the very next `git worktree remove` then deletes the gitignored pending-doc for good. For the same reason, if the collect could not run at all (e.g. a permission halt — see the pre-flight guard's deliberate-non-entry note), do **NOT** proceed to (b): removing the worktree with the docs uncollected is exactly the data loss this step exists to prevent.
    b. **Strip the non-work symlinks Step 1a downgraded**, then **remove the worktree** — **never `--force`**. Step 1a can now classify a worktree `clean-ahead` while a downgraded tooling symlink (an untracked `.venv`-into-the-main-venv, BeanRider ISSUE-0043) is still physically present, and that lone symlink is enough to make an *unforced* `git worktree remove` refuse (`contains modified or untracked files`). So before removing, re-apply the same downgrade rule and delete just those symlinks — removing a symlink deletes only the pointer, never its (gitignored) target, and we stay unforced, so any *real* untracked or modified file still blocks the remove:
 
       ```bash
@@ -689,10 +839,72 @@ For each approved feature branch:
       By Step 1a's classification, an `approved` branch passed through Step 2a's clean-state check, so the unforced remove should now succeed. If `git worktree remove` **still** refuses after the strip, that means the worktree carries a genuine untracked/modified file that appeared between Step 1a and now — **stop**, surface the error, then **roll back the pending-docs this branch copied in step (a)** so a later Step 4c cannot consolidate an unmerged branch's doc and mark its task `done` with the code never merged:
 
       ```bash
-      for f in "<worktree-path>"/sysop/runtime/pending-docs/*.md; do
-        [ -e "$f" ] && rm -f "sysop/runtime/pending-docs/$(basename "$f")"   # re-collected on a later run once mergeable
-      done
+      python3 - "<worktree-path>" "<branch name>" <<'PY'
+      import re, sys
+      from pathlib import Path
+
+      try:
+          import yaml
+      except ImportError:  # PyYAML lives only in the project venv (BeanRider ISSUE-0049)
+          import glob
+          sys.path[:0] = glob.glob(".venv/lib/python*/site-packages")
+          import yaml
+
+      wt     = Path(sys.argv[1])
+      branch = sys.argv[2]
+      live   = Path('sysop/runtime/pending-docs')
+      NOT_A_BRANCH_DOC = {'convention-candidates.md'}   # never collected, so never rolled back
+      fm_re = re.compile(r'^---\n(.*?)\n---', re.DOTALL)
+
+      if '<worktree' in str(wt) or '<branch' in branch or not branch.strip():
+          print('PENDING-DOC ROLLBACK ABORTED: unusable worktree path or branch name')
+          sys.exit(4)
+
+      def branch_of(p):
+          """Identical to the collect's reader — same regex, same `yaml.safe_load`.
+
+          An earlier draft hand-rolled a line scan here while the collect used yaml, so
+          the two halves of one step disagreed on 18 of 33 frontmatter shapes: the
+          rollback could not undo its own collect, and reported a byte-identical doc as
+          'not this branch's'. Two divergent readers twenty lines apart, in the phase
+          whose subject is two divergent readers."""
+          try:
+              m = fm_re.match(p.read_text(encoding='utf-8', errors='replace'))
+          except OSError:
+              return None
+          if not m:
+              return None
+          try:
+              fm = yaml.safe_load(m.group(1))
+          except yaml.YAMLError:
+              return None
+          if not isinstance(fm, dict):
+              return None
+          b = fm.get('branch')
+          return b.strip() if isinstance(b, str) and b.strip() else None
+
+      removed, left = [], []
+      for src in sorted((wt / 'sysop' / 'runtime' / 'pending-docs').glob('*.md')):
+          if src.name in NOT_A_BRANCH_DOC:
+              continue
+          dst = live / src.name
+          if not dst.exists():
+              continue
+          # Ground truth is the branch being processed. Delete main's copy ONLY when
+          # THAT copy claims this branch — the copy step (a) just made. Comparing the two
+          # docs to each other is what let a worktree carrying a foreign-branch doc
+          # delete another branch's only surviving record.
+          if branch_of(dst) == branch:
+              dst.unlink()                              # re-collected on a later run
+              removed.append(src.name)
+          else:
+              left.append(f'{src.name} (main copy claims {branch_of(dst)!r}, processing {branch!r})')
+      print('ROLLED BACK: ' + (', '.join(removed) or 'none'))
+      print('LEFT ALONE (not this branch\'s): ' + (', '.join(left) or 'none'))
+      PY
       ```
+
+      > **Provenance, not basename — that distinction IS the fix.** The previous form was `rm -f sysop/runtime/pending-docs/$(basename "$f")` over the worktree's files, which deleted main's copy by name with no check that this branch ever wrote it. Measured: against a **different** branch's doc it removed a file this branch never authored, and step (a) had already overwritten it, so both records were gone while the victim's worktree was already removed. Reading `branch:` from both copies makes the rollback delete only what step (a) copied. **There is no restore half, because there is nothing to restore**: (a) now refuses a differing-branch collision outright rather than displacing anything, so a doc that is not this branch's is never touched by either step. An earlier draft of this phase parked the displaced copy under a `superseded/` subdirectory; that was withdrawn when its own review round showed the directory had **no consumer anywhere in the tree** — `ls sysop/runtime/pending-docs/*.md` is non-recursive, so Step 4c never sees a parked doc, and the branch's task would never close. Preserving bytes where no reader looks is not preservation.
 
       Then downgrade this branch to SKIP for this run (leave its worktree, lock, and branch intact), and continue with the next approved branch. Silent data loss is the failure mode this guard prevents (BeanRider ISSUE-0016) — the strip never touches a real file, so it cannot cause it. (The rollback matters because step (a) copies before this remove is attempted; without it, a branch SKIP'd here leaves its doc stranded in main's `sysop/runtime/pending-docs/` for the merged branches' Step 4c to consolidate.)
 3. If no worktree exists, the branch is already free for checkout
@@ -908,7 +1120,7 @@ Feature branches MAY modify `review_tasks.md` — typically as single-line task-
 
 **This is the gate whose green means something.** Step 3 ran the same resolved list against `main`; this runs it against the tree that is about to be pushed. Each approved branch was already verified *in its own worktree, at its own tip* — `/claim-task` Step 7e (its executor prompt's Sequence, item 5) and `/auto-build`'s execution-agent sequence (Step 7's prompt template, item 4b) both run the consumer's `## Pre-merge verification` gates there, which is why each of those says `/review-close` runs project-side verification "at merge time." What has never been verified anywhere until this step is the **assembled** result: the branches merged onto the live base and onto each other.
 
-**Placed here on purpose — after the merges, before `close_batch.sh` and before doc consolidation.** A stop at this point consumes nothing. Step 4c deletes each `sysop/runtime/pending-docs/*.md` after routing its content into the shared docs, and those files are **untracked** — so the routed content survives only in 4c's commit. **Under `pr` that commit is on the merge target, which a failed close abandons** (the integration branch is re-cut from `origin/main` next run), leaving the content recoverable from a discarded branch or not at all. Under `direct` the commit stays on local `main` and the recovery below keeps it, so the window is a `pr`-shape window — which is every protected-`main` consumer, and the shape this repo runs. Verifying later would verify a slightly larger tree; it would also put that window under a failing gate.
+**Placed here on purpose — after the merges, before `close_batch.sh` and before doc consolidation.** A stop at this point consumes nothing. Step 4c deletes each pending-doc **it consolidated** — by name, from the set it routed, never by glob (its cleanup step says so explicitly, and a doc it held back or quarantined survives) — after routing that content into the shared docs, and those files are **untracked** — so the routed content survives only in 4c's commit. **Under `pr` that commit is on the merge target, which a failed close abandons** (the integration branch is re-cut from `origin/main` next run), leaving the content recoverable from a discarded branch or not at all. Under `direct` the commit stays on local `main` and the recovery below keeps it, so the window is a `pr`-shape window — which is every protected-`main` consumer, and the shape this repo runs. Verifying later would verify a slightly larger tree; it would also put that window under a failing gate.
 
 1. **Re-resolve the command list** exactly as Step 3 did — the same numbered resolution order, first source wins. Re-read it rather than carrying Step 3's result forward as a remembered value: it costs one file read, and it removes the only way this step can silently run something other than what the consumer declared.
 
@@ -996,6 +1208,8 @@ After all branches are merged but **before** pushing:
 
 1. **Scan for pending docs**: `ls sysop/runtime/pending-docs/*.md 2>/dev/null`
 
+   > **One entry in that glob is not a pending-doc, and consolidating it destroys something.** `convention-candidates.md` is a fixed-name file `/codebase-review` and `/security-audit` write, append to each other's copy of, and delete themselves at their own Step 9; it carries no `branch:` frontmatter and belongs to no branch. **Exclude it by name** — it is the shape the "no `branch:`" rule below reads as benign, so consolidating it routes nothing (no `type`, no `roadmap_ids`) and then deletes an open review round's candidate list. Do **not** quarantine it either: `/codebase-review` Step 9 reads it back at that exact path and would silently report "no candidates". Leave it where it is. `quarantine/` is a subdirectory, so this non-recursive glob does not reach it — that is deliberate, and it is why it is a subdirectory rather than a suffixed `.md` file, which every reader of this glob would pick up as a second doc.
+
 1b. **Drop any pending-doc whose branch did not actually merge — this gate decides task state, so it must not run on an unmerged branch's doc.** Step 3b copies each approved branch's pending-doc into main's `sysop/runtime/pending-docs/` *before* the merge is attempted (that ordering is deliberate — it is what stops `git worktree remove` from destroying the doc). So a branch that is approved, has its doc collected, and then **fails to merge at Step 4a** leaves a doc here that this step would otherwise consolidate — routing its content to the shared docs, flipping its `roadmap_ids` to `status: done`, `git mv`-ing the body to `archive/`, and dropping the task's lock and parked markers, **with the code never merged**. Step 3b's own rollback (its step 2b) covers only the case where *it* skips a branch, and says so; nothing covered a 4a-SKIP until this filter.
 
    For each file found in step 1, read its `branch:` frontmatter value and keep it only if that branch is contained in the merge target:
@@ -1025,16 +1239,28 @@ After all branches are merged but **before** pushing:
    >
    > **Report it even when there is no 4a-SKIP entry to sit beside.** That instruction assumed the only way to be held back is to fail Step 4a, and the cherry-pick case above breaks the assumption: the branch merged, Step 4a recorded no skip, and Step 8's `Remaining:` block has no slot for the doc. Use the `Held-back docs:` line in Step 8's template — one row per doc, naming the branch, the count each test returned, and the reason — and never let the only trace be a smaller `<N>` in `Docs: Consolidated <N> pending-docs`, a number with nothing to compare it against.
 
-   **If `branch:` is absent or the ref no longer resolves, stop and ask — do not guess in either direction.** Step 6 is the only step that deletes feature branches and it runs *after* this one, so at this point every branch this close merged still has a local ref; a missing one is an unexplained state, not a legacy quirk.
+   **If the ref no longer resolves, stop and ask — do not guess in either direction.** Step 6 is the only step that deletes feature branches and it runs *after* this one, so at this point every branch this close merged still has a local ref; a missing one is an unexplained state, not a legacy quirk.
 
-   > **One way to reach that hard stop is this close's own Step 6, one run earlier.** Under `pr` policy Step 6 force-deletes (`git branch -D`) every branch Step 4a recorded as merged. A branch the operator cherry-picked is recorded merged, so it is deleted — while its pending-doc was held back here for scoring non-zero. On the next close the doc is re-collected, its `branch:` no longer resolves, and this rule fires: the close halts on a doc it created the conditions for. Under `direct` the tail is benign, because that path's safe `git branch -d` refuses on a cherry-picked branch and the ref survives. **The `git cherry` fallback above is what prevents the hold-back in the first place**; if you are reading this having already hit the stop, the doc's content is almost certainly in `main` already — verify with `git log --oneline --all --grep` on its summary before deciding, and do not consolidate on the assumption alone. (A legacy-format pending-doc with no `branch:` at all is the one benign shape — see step 3's format detection — and it predates worktree-per-branch, so consolidating it is safe; say which case you hit rather than silently picking.)
+   **If `branch:` is ABSENT, quarantine the doc and carry on — do not stop, and do not consolidate it.** Move it to `sysop/runtime/pending-docs/quarantine/<name>.md` — **create the directory first** (`mkdir -p sysop/runtime/pending-docs/quarantine`; nothing else in the tree creates it, so an `mv` alone fails on the first firing) (a subdirectory, so no `*.md` reader sees it again), report it on Step 8's `Quarantined docs:` row, and continue with the next file.
+
+   > **This rule replaced two opposite ones, and the ambiguity was not theoretical.** Until this phase the paragraph above read, verbatim, *"If `branch:` is absent or the ref no longer resolves, stop and ask — do not guess in either direction"*, while the blockquote two lines below said a doc *"with no `branch:` at all is the one benign shape … so consolidating it is safe"* — opposite dispositions for the identical input, and the second closed with *"say which case you hit rather than silently picking"*, which concedes the ambiguity without resolving it. **Measured:** two independent fresh-context reviewers, reading this same file with no contact between them, implemented one disposition each — one halted the close, the other consolidated the doc and deleted it. That is not a reading dispute; it is a step whose behaviour on a real input depends on which sentence the agent reaches first. Quarantine is chosen over both: *stop-and-ask* turns any such file into a permanent halt on every future close (nothing else in the tree deletes a pending-doc), and *consolidate-as-benign* routes nothing and then deletes the only copy. Quarantine loses no bytes, needs no human turn, and cannot recur — the file is out of the glob the moment it moves.
+
+   > **One way to reach that hard stop is this close's own Step 6, one run earlier.** Under `pr` policy Step 6 force-deletes (`git branch -D`) every branch Step 4a recorded as merged. A branch the operator cherry-picked is recorded merged, so it is deleted — while its pending-doc was held back here for scoring non-zero. On the next close the doc is re-collected, its `branch:` no longer resolves, and this rule fires: the close halts on a doc it created the conditions for. Under `direct` the tail is benign, because that path's safe `git branch -d` refuses on a cherry-picked branch and the ref survives. **The `git cherry` fallback above is what prevents the hold-back in the first place**; if you are reading this having already hit the stop, the doc's content is almost certainly in `main` already — verify with `git log --oneline --all --grep` on its summary before deciding, and do not consolidate on the assumption alone. (**A doc with no `branch:` at all is no longer treated as a benign legacy shape — it is quarantined, per the rule above.** This parenthesis previously said consolidating it was safe, which contradicted the stop-and-ask rule it sat beneath; both are now replaced by the single quarantine disposition. The case this parenthesis was reaching for — a *legacy-format* doc predating worktree-per-branch — is covered there too, and losing its bytes to a quarantine directory costs nothing that consolidating an unroutable doc would have preserved.)
 
 2. **If none found**: check merged history for `docs:` commits (backward compatibility with branches that wrote docs directly). If present, skip doc consolidation — the docs are already in the shared files.
 
 3. **If pending-docs files found**: parse each file's YAML frontmatter and extract:
    - `branch`, `date`, `type`, `roadmap_ids`, `review_task_ids`, `summary`
 
-   **Format detection**: If the file starts with `---` on line 1, parse as YAML frontmatter. Otherwise, fall back to the legacy 5-section markdown format (parse `## Classification`, `## PROJECT_STATUS Entry`, etc.).
+   **Format detection — three arms, and the third one is not optional.** Use the same reader Step 3c already ships (`fm_re = re.compile(r'^---\n(.*?)\n---', re.DOTALL)`), not a `startswith('---')` test:
+
+   1. **Frontmatter matches and `yaml.safe_load` returns a mapping** → parse it. The normal path.
+   2. **No frontmatter match** → the legacy 5-section markdown format (`## Classification`, `## PROJECT_STATUS Entry`, etc.).
+   3. **Frontmatter matches but will not parse, or parses to something that is not a mapping** → **quarantine the file and carry on.** Move it to `sysop/runtime/pending-docs/quarantine/<name>.md` — **create the directory first** (`mkdir -p sysop/runtime/pending-docs/quarantine`; nothing else in the tree creates it, so an `mv` alone fails on the first firing), report it on Step 8's `Quarantined docs:` row, and continue with the next file. Do **not** route it (it has no `type`, so the routing table does nothing), do **not** delete it (its bytes are the only record of what shipped), and do **not** leave it in place (it would be re-encountered on every future close).
+
+   > **Why arm 3 exists, and why `startswith` is the wrong test.** A doc that starts with `---` and fails to parse takes arm 1 under the old two-way rule, where `yaml.safe_load` **raises** — and this step had no error arm at all, so the exception surfaces mid-consolidation, after Step 4a has already merged. The shapes that reach it are not exotic: an unterminated frontmatter block and a `---` used as a markdown horizontal rule both fail the frontmatter match entirely (and raise `ValueError` under a naive three-way `split('---', 2)` unpack, which is why the regex above is the prescribed reader); malformed YAML raises `ScannerError`/`ParserError`; and frontmatter that loads to a **string** rather than a mapping (a single prose line between the delimiters) is *truthy*, so the `or {}` idiom below does not catch it and `.get()` raises `AttributeError`. **Step 3c's shipped reader now handles all four by skipping** (`if not fm_m: continue`, `except yaml.YAMLError: continue`, `if not isinstance(fm, dict): continue`, and `errors="replace"` on all four reads in that heredoc) — it did NOT before this phase: a reviewer ran it and watched a non-mapping frontmatter and a non-UTF-8 doc each kill the close with a traceback at a step that runs BEFORE this one, which would have made arm 3 unreachable for those shapes — this file has carried two divergent pending-doc readers, one defensive with code and one prescriptive with none. Arm 3 is what makes them agree, except that quarantining beats Step 3c's silent skip: a skipped doc is invisible, a quarantined one is reported and its bytes are on disk.
+   >
+   > **`or {}` does not protect against a non-mapping — do not rely on it.** `yaml.safe_load("work in progress")` returns the truthy string `"work in progress"`, so `fm or {}` yields the string and `.get()` raises. Test `isinstance(fm, dict)` explicitly.
    <!-- Legacy format support — remove after all active worktrees are merged -->
 
    **Phase 23a compat shim — read every pending-doc with this fallback:**
@@ -1521,6 +1747,18 @@ Documentation written:
   ✓ changelog.md:         <N> entries         (if any)
   ✓ tasks/index.yml:      <task IDs>          (if any — status flipped to done, body moved to archive/)
   ✓ UI_Iterations.md:     <N> rows            (if any)
+
+Pending-doc collisions: <N> (or "none")
+  - <filename> — main's copy authored by <branch>, worktree's by <branch>. NOTHING was
+     collected for the worktree's branch and main's copy was not touched; the branch is
+     SKIP'd with its worktree, lock and branch intact. Both docs are still where their
+     authors left them. Resolve by renaming one, then re-run; until then neither
+     branch's task closes.
+
+Quarantined docs: <N> (or "none")
+  - <filename> — <no `branch:` frontmatter | frontmatter would not parse: <error>>;
+     moved to sysop/runtime/pending-docs/quarantine/<filename>. Not routed, not deleted.
+     No task IDs flipped. Recover by fixing the frontmatter and moving it back.
 
 Held-back docs: <N> (or "none")
   - <pending-doc filename> — branch <name>; rev-list <count>, git cherry <count> unapplied;
