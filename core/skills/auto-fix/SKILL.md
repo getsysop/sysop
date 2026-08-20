@@ -68,7 +68,7 @@ Each `### Batch N — <title> \`<Status>\`` line gives number, title and status;
 
 So: when a candidate boundary or metadata line sits *inside* a batch you have already bounded, open that region with the scoped read below and look at it before acting on it — a fence is obvious on sight and invisible to `grep`.
 
-**If your boundary disagrees with what `/sitrep` or a claim script reports, do not assume either side is right.** The shipped parsers are fence-aware and you are not, so a *balanced* fenced example explains most disagreements — but not all of them, and the ones it does not explain fail in the opposite direction. An unbalanced fence marker, a column-0 `## ` heading written as prose in a task body, or a batch header whose dash is not an em dash will each make one side see structure the other does not. **Read the region. Do not resolve the disagreement by rule.**
+**If your boundary disagrees with what `/sitrep` or a claim script reports, do not assume either side is right.** The shipped parsers are fence-aware and you are not, so a *balanced* fenced example explains most disagreements — but not all of them, and the ones it does not explain fail in the opposite direction. An unbalanced fence marker, a column-0 `## ` heading written as prose in a task body, or a batch header whose dash is not an em dash will each make one side see structure the other does not. **Read the region. Do not resolve the disagreement by rule.** One narrow shape is now decided for you: when an *unterminated* fence contains a `### Batch <N>` header whose number **also appears outside it**, the claim, release and close paths refuse and name the offending line — that collision is a contradiction in the file, not a judgement call. `--dry-run` warns instead of refusing. Nothing else is decided: a stray fence with no such collision, a bare `## ` heading inside one, the balanced-fence, prose-heading and dash shapes above are all still yours to read.
 
 Select the auto pool from this output alone:
 
@@ -89,7 +89,7 @@ sed -n '<START>,<END>p' review_tasks.md
 
 ### 1c. Tracker size is advisory, never a stop
 
-If `review_tasks.md` is large (**~125KB** is the historical rule of thumb), print an advisory and **continue** — do not halt. `archive_review_tasks.py` selects what to relocate by **merge status**, not by size (`archive_review_tasks.py:100` matches only `Merged`/`Complete`; a Round moves whole only when every batch in it is merged, otherwise it relocates the merged batches individually), so it cannot shrink a tracker whose bulk is *open* work — which is exactly the state this skill exists to clear. Levers, in order: run this skill and `/auto-judge`, then `/review-close`; once batches are merged, run `python3 sysop/scripts/archive_review_tasks.py`.
+If `review_tasks.md` is large (**~125KB** is the historical rule of thumb), print an advisory and **continue** — do not halt. `archive_review_tasks.py` selects what to relocate by **merge status**, not by size (`archive_review_tasks.py:101` matches only `Merged`/`Complete`; a Round moves whole only when every batch in it is merged, otherwise it relocates the merged batches individually), so it cannot shrink a tracker whose bulk is *open* work — which is exactly the state this skill exists to clear. Levers, in order: run this skill and `/auto-judge`, then `/review-close`; once batches are merged, run `python3 sysop/scripts/archive_review_tasks.py`.
 
 ### 1d. Optional `--batches` narrowing
 

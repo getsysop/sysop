@@ -162,7 +162,7 @@ def _scan(repo_root, cwd=None):
             out = semgrep_mod._run_semgrep(repo_root, ids, report)
     finally:
         os.chdir(old)
-    rels = sorted({fl.rsplit(":", 1)[0] for _, fl, _ in out})
+    rels = sorted({f[1].rsplit(":", 1)[0] for f in out})
     return rels, report, seen.get("argv", [])
 
 

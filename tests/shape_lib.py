@@ -117,6 +117,26 @@ def loop_header(match: re.Match) -> str:
     return match.group(0).splitlines()[0].strip()
 
 
+def loop_write_commands(match: re.Match) -> frozenset:
+    """The set of write commands appearing in a loop's BODY (Q-236).
+
+    The staging-discipline allowlist keyed on `loop_header` alone, and a header
+    is not an identity: `while IFS= read -r line; do` is the most ordinary
+    line-reading idiom in bash, so a brand-new write loop reusing it inherited
+    the allowlist entry of an unrelated loop. Measured during Phase 210 — a new
+    loop with `mkdir`/`git add`/`git commit`/`git push origin main` in its body,
+    added to a DIFFERENT skill, passed the entire suite byte-identically.
+
+    Keying on `(header, this set)` closes that without the churn a body hash
+    would cause: these allowlists are maintainer-facing and must stay readable,
+    and the bodies carry heavy explanatory comments that a digest would tie the
+    key to. Adding a new write command to an allowlisted loop churns the key —
+    which is the correct direction, because that is the change worth re-reading.
+    """
+    return frozenset(m.group(0).split()[0] if " " not in m.group(0) else m.group(0)
+                     for m in WRITE_CMD_RE.finditer(match.group("body")))
+
+
 def has_bare_tmpdir(text: str) -> list[str]:
     """Lines using `$TMPDIR` without a `${TMPDIR:-…}` default, live commands only."""
     out = []

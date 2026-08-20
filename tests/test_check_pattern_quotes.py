@@ -285,7 +285,8 @@ def test_no_pattern_bearing_check_escapes_the_sweep():
 @pytest.mark.parametrize(
     "regex",
     [
-        "f['\"](SELECT|INSERT)",                       # the shipped fix
+        "f['\"](SELECT|INSERT)",                       # Phase 172's fix, as it shipped then
+        '([fF][rR]?|[rR][fF])["\']{1,3}(SELECT)\\b',   # Phase 212's widening of the same check
         'APP_ENV.*(==|!=).*["\']prod["\']',            # the pre-existing sibling
         "ROW_NUMBER\\(\\)",                            # no quotes at all
         "fetch\\(`",                                   # backtick: no quote-style twin
@@ -385,7 +386,7 @@ def _run(check_id: str, root: Path, paths: list[str]) -> dict[str, str]:
     check["paths"] = paths
     check.pop("exclude", None)  # the fixture names files `test_*` on purpose
     out = {}
-    for _, file_line, _ in run_check(check, str(root)):
+    for _cid, file_line, _msg, _ident in run_check(check, str(root)):
         path, _, lineno = file_line.rpartition(":")
         out[file_line] = (root / path).read_text().splitlines()[int(lineno) - 1]
     return out
@@ -444,7 +445,7 @@ def test_widening_is_strictly_additive(corpus):
         old_check["paths"] = paths
         old_check["pattern"] = old_pattern
         old_check.pop("exclude", None)
-        old_hits = {fl for _, fl, _ in run_check(old_check, str(corpus))}
+        old_hits = {f[1] for f in run_check(old_check, str(corpus))}
         assert old_hits, f"{check_id}: pre-fix control matched nothing — vacuous"
         assert old_hits <= new_hits, f"{check_id} lost {old_hits - new_hits}"
         assert new_hits > old_hits, f"{check_id} did not widen"
@@ -529,3 +530,208 @@ def test_workflow_sweep_flags_a_planted_bad_example():
 def test_workflow_still_shows_the_sql_fstring_example():
     """The sweep is satisfied by deleting every example — keep the teaching one."""
     assert ("pattern", "f['\"](SELECT|INSERT|UPDATE|DELETE)") in _workflow_pattern_examples()
+
+
+# ── Phase 212 / Q-027: sql-fstring's prefix and quote-count arms ──────────────
+#
+# Phase 172 closed the `'` vs `"` axis on this check. Two more axes stayed open
+# and neither was filed: the QUOTE COUNT (a triple-quoted f-string cannot match
+# `f['"]KW`, because the pattern consumes the first quote and then demands the
+# keyword, which is the second quote) and the PREFIX (`F"…"`, `fr"…"` and `Fr"…"`
+# are all legal Python f-strings; only `rf` matched, by accident of `f` sitting
+# against the quote). Same class as #235 — "scanned half its subject, reported
+# the other half clean" — on one of the registry's FOUR `severity: critical`
+# checks (not the only one: see Q-061, a standing open item about exactly that
+# false phrasing, which this phase re-minted and its own round caught).
+#
+# Measured before shipping, by set comparison over 27,830 .py files in four real
+# corpora: zero hits lost. Honest about the other half of that number: outside
+# test fixtures the widening gained zero real hits, so this is a PREVENTIVE
+# closure of a structural blind spot, not a fix for observed misses. The claim
+# it supports is "a critical check is not blind to legal syntax" — not "this
+# caught live bugs", which the corpora do not support.
+
+# One sample PER KEYWORD, and the keyword set is DERIVED from the shipped
+# pattern below rather than restated here. Phase 212's review round blinded this
+# check four separate ways with all fifteen original fixtures green, because
+# every one of them was `sql = <fstring>` using only SELECT and DROP:
+#   * drop INSERT|UPDATE|DELETE|ALTER from the alternation — green
+#   * drop ALTER alone — green
+#   * require a leading `= ` — green, and that one blinds the check to
+#     `cur.execute(f"SELECT …")`, the canonical injection site
+#   * require a closing quote on the same line — green, and that one drops the
+#     FIRST line of a multi-line f-string, which the check's own notes: name as
+#     a must-not-lose case
+# Each of those is now covered below, and per-keyword coverage is enforced
+# structurally so a seventh keyword cannot be added without a sample.
+_SQL_FSTRING_MUST_MATCH = {
+    # by keyword — the alternation's whole population
+    "kw_select":         'sql = f"SELECT * FROM {t}"',
+    "kw_insert":         'sql = f"INSERT INTO {t} VALUES ({v})"',
+    "kw_update":         'sql = f"UPDATE {t} SET x = {v}"',
+    "kw_delete":         'sql = f"DELETE FROM {t}"',
+    "kw_alter":          'sql = f"ALTER TABLE {t} ADD COLUMN c"',
+    "kw_drop":           'sql = f"DROP TABLE {t}"',
+    # by quote count
+    "plain_single":      "sql = f'SELECT * FROM {t}'",
+    "triple_double":     'sql = f"""SELECT * FROM {t}"""',
+    "triple_single":     "sql = f" + "'" * 3 + "SELECT * FROM {t}" + "'" * 3,
+    # by prefix
+    "capital_f":         'sql = F"DROP TABLE {t}"',
+    "f_raw":             'sql = fr"SELECT * FROM {t}"',
+    "capital_f_raw":     'sql = Fr"SELECT * FROM {t}"',
+    "raw_f":             'sql = rf"SELECT * FROM {t}"',
+    # by SYNTACTIC POSITION — not every hit is an assignment, and the three
+    # below are the shapes a `= `-anchored pattern silently loses.
+    "call_site_execute": 'cur.execute(f"SELECT * FROM {t}")',
+    "call_site_delete":  'conn.execute(f"DELETE FROM {t} WHERE id = {i}")',
+    "returned_directly": 'return f"UPDATE {t} SET c = {v}"',
+    # the FIRST line of a multi-line f-string — reachable by a line-oriented
+    # grep, and distinct from the Q-244 residual (the keyword on the NEXT line,
+    # which grep genuinely cannot see).
+    "multiline_opener":  'sql = f"""SELECT m.id, m.name',
+    "keyword_at_close":  'sql = f"SELECT"',
+}
+
+_SQL_FSTRING_MUST_NOT_MATCH = {
+    # The filed false positive: an English word that merely starts with a keyword.
+    "keyword_is_a_prefix_of_a_word": 'msg = f"SELECTED rows"',
+    "deleted_prose":                 'msg = f"DELETED {n} rows"',
+    "updated_prose":                 'msg = f"UPDATED at {ts}"',
+    # Not an f-string at all — a plain literal is not this check's subject.
+    "plain_string":                  'sql = "SELECT 1"',
+    # Measured false positives that a leading-space allowance would have let in.
+    # Keeping these red is why the pattern tolerates no space after the quote —
+    # and ONE space is a distinct mutation from two, so both are pinned.
+    "print_two_spaces":              'print(f"  INSERT {slug}")',
+    "print_one_space":               'print(f" INSERT {slug}")',
+}
+
+
+def _sql_fstring_pattern() -> str:
+    """The pattern as SHIPPED, read from the fragment — never a copy.
+
+    A copy would let the fragment and the guard drift apart, which is the exact
+    failure mode `_pattern_fields()` above exists to prevent for the quote axis.
+    """
+    return _sql_fstring_check()["pattern"]
+
+
+def _sql_fstring_check() -> dict:
+    """The whole shipped check, and there must be exactly ONE of it.
+
+    Returning on the first id match let the round add a SECOND `- id:
+    sql-fstring` with `pattern: 'ZZZ_NEVER_MATCHES'` and keep every fixture
+    green — the guard read the first definition while the runner is free to
+    read either. Collecting and asserting a single match closes that.
+    """
+    frag = yaml.safe_load(
+        (S.REPO_ROOT / "packs/postgres/companion/checks.yml.fragment").read_text()
+    )
+    matches = [c for c in frag["checks"] if c.get("id") == "sql-fstring"]
+    assert len(matches) == 1, (
+        f"expected exactly one sql-fstring definition, found {len(matches)} — "
+        "a duplicate id makes every fixture below read a definition the runner "
+        "may not be the one using"
+    )
+    return matches[0]
+
+
+def test_sql_fstring_keeps_its_severity_and_scope():
+    """The check's REACH is as mutable as its pattern, and was unpinned.
+
+    Narrowing `paths:` to one directory, or dropping `severity: critical`, blinds
+    or de-prioritises the check just as effectively as breaking the regex — and
+    the round did exactly that with all fixtures green. Pinned to the shipped
+    placeholder vocabulary rather than to concrete paths, because pack maps ship
+    placeholders (Phase 137's half-concrete-map finding)."""
+    check = _sql_fstring_check()
+    assert check["severity"] == "critical", check["severity"]
+    assert set(check["paths"]) == {"<api module>/", "<scripts dir>/"}, check["paths"]
+    assert check["include"] == ["*.py"], check["include"]
+
+
+def _greps(pattern: str, sample: str) -> bool:
+    """Run the REAL grep the runner runs, not Python's `re`.
+
+    The registry's patterns are POSIX ERE executed by `grep -E`, and `\\b`,
+    `{1,3}` and bracket semantics do not all mean the same thing to `re`. A
+    guard that used `re` would be testing a dialect nothing ships.
+    """
+    import subprocess
+    return subprocess.run(
+        ["/usr/bin/grep", "-cE", pattern],
+        input=sample, capture_output=True, text=True,
+    ).stdout.strip() not in ("", "0")
+
+
+@pytest.mark.parametrize("name", sorted(_SQL_FSTRING_MUST_MATCH))
+def test_sql_fstring_matches_every_legal_fstring_spelling(name):
+    """All four missed axes, by name, plus the shapes that already worked."""
+    sample = _SQL_FSTRING_MUST_MATCH[name]
+    assert _greps(_sql_fstring_pattern(), sample), (
+        f"sql-fstring (severity: critical) is blind to {name}: {sample!r}"
+    )
+
+
+@pytest.mark.parametrize("name", sorted(_SQL_FSTRING_MUST_NOT_MATCH))
+def test_sql_fstring_does_not_fire_on_these(name):
+    """The other direction. Without these the widening above could be satisfied
+    by a pattern that matches everything, which would be worse than the gap."""
+    sample = _SQL_FSTRING_MUST_NOT_MATCH[name]
+    assert not _greps(_sql_fstring_pattern(), sample), (
+        f"sql-fstring false-fires on {name}: {sample!r}"
+    )
+
+
+def test_sql_fstring_fixture_sets_are_non_empty_and_disjoint():
+    """Vacuity guard. A parametrized test over an empty dict passes silently."""
+    assert len(_SQL_FSTRING_MUST_MATCH) >= 18
+    assert len(_SQL_FSTRING_MUST_NOT_MATCH) >= 6
+    assert not (set(_SQL_FSTRING_MUST_MATCH.values())
+                & set(_SQL_FSTRING_MUST_NOT_MATCH.values()))
+
+
+def test_every_keyword_in_the_shipped_alternation_has_a_must_match_sample():
+    """COVERAGE floor, not a reversion floor — the distinction that matters.
+
+    The size assertions above are satisfied by eighteen samples for one keyword.
+    Phase 212's round removed four of the six keywords from the shipped pattern
+    and every fixture stayed green, because they all used SELECT or DROP. The
+    population must therefore be derived FROM THE SHIPPED PATTERN, which is
+    rule 1's "derive the population from the source of truth, not from an index
+    or summary of it" applied to a fixture set.
+
+    Consequence by construction: adding a seventh keyword to the check without
+    adding a sample for it reds this test, and removing one reds it too, because
+    the derived set and the covered set must match exactly.
+    """
+    pattern = _sql_fstring_pattern()
+    m = re.search(r"\(([A-Z|]+)\)", pattern)
+    assert m, f"could not derive the keyword alternation from {pattern!r}"
+    keywords = set(m.group(1).split("|"))
+    assert len(keywords) >= 6, f"alternation looks truncated: {sorted(keywords)}"
+
+    covered = {
+        kw for kw in keywords
+        if any(kw in sample for sample in _SQL_FSTRING_MUST_MATCH.values())
+    }
+    assert covered == keywords, (
+        "every keyword the shipped pattern claims to catch needs a MUST_MATCH "
+        f"sample, or it can be silently dropped: missing {sorted(keywords - covered)}"
+    )
+
+
+def test_must_match_covers_non_assignment_syntactic_positions():
+    """A fixture set that is all `sql = …` lets an `= `-anchored pattern ship.
+
+    That mutation survived the first cut and it blinds the check to
+    `cur.execute(f"SELECT …")` — the canonical injection site, and the shape most
+    likely to appear in real code."""
+    values = list(_SQL_FSTRING_MUST_MATCH.values())
+    assert any(".execute(" in v for v in values), "no call-site sample"
+    assert any(v.lstrip().startswith("return ") for v in values), "no return sample"
+    non_assignment = [v for v in values if "= f" not in v and "= F" not in v]
+    assert len(non_assignment) >= 3, (
+        f"fixture set is dominated by assignments: {non_assignment}"
+    )

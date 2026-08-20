@@ -581,11 +581,12 @@ class TestOrphanHeaderDoesNotCorruptItsPredecessor:
             got = ss._read_review_batches(repo)[0]["status"]
             assert got == status, f"sitrep_survey read {got!r}"
 
-            # batch_work.sh, both parser paths — the index present, then absent.
+            # batch_work.sh. Only the index path now — Phase 209 retired
+            # `_parse_batches_fallback`, so the second, index-absent assertion
+            # that used to sit here has no parser left to exercise. Its
+            # replacement is `test_claim_refuses_outright_when_the_index_is_absent`
+            # below, which holds the index-absent path to a refusal instead.
             assert status in _run(repo, BATCH_WORK, "--list-all").stdout
-            bare = _repo(tmp_path / f"px-bare-{status.replace(' ', '_')}",
-                         [(1, status)], with_index=False)
-            assert status in _run(bare, BATCH_WORK, "--list-all").stdout
 
     def test_claim_uses_its_own_branch_python_index_path(self, tmp_path):
         """The measured corruption, through the shadow index: `batch_work.sh 7`
@@ -602,21 +603,38 @@ class TestOrphanHeaderDoesNotCorruptItsPredecessor:
             )
             assert "review/batch-7" in branches, f"[{why}] wrong branch: {branches}"
 
-    def test_claim_uses_its_own_branch_bash_fallback_path(self, tmp_path):
-        """Same assertion with review_index.py absent, because the fallback
-        parser has the same structure and the same defect — the Python index is
-        not a safety net for it."""
+    def test_claim_refuses_outright_when_the_index_is_absent(self, tmp_path):
+        """The replacement for `…_bash_fallback_path`, which asserted the same
+        neighbour-corruption invariant against `_parse_batches_fallback`.
+
+        Phase 209 retired that parser, so there is no second reader left to hold
+        to the invariant — the honest guard is that the script REFUSES rather
+        than parsing inline. Written as a refusal test rather than deleted,
+        because deleting it would have quietly dropped this fixture's coverage
+        of the index-absent path entirely.
+
+        Asserts a mutation-free refusal, not merely a non-zero exit: the failure
+        that would matter is a claim that half-happens — a branch or a lock
+        created before the refusal lands.
+        """
         for header, why in MALFORMED:
-            repo = _repo(tmp_path / f"bash-{abs(hash(header))}", [(1, "Pending")],
+            repo = _repo(tmp_path / f"bare-{abs(hash(header))}", [(1, "Pending")],
                          with_index=False)
             (repo / "review_tasks.md").write_text(_neighbour_fixture(header))
             _git(repo, "commit", "-qam", "fixture")
             r = _run(repo, BATCH_WORK, "7")
-            assert r.returncode == 0, f"[{why}] {r.stdout} {r.stderr}"
-            branches = _git(repo, "branch", "--format=%(refname:short)").stdout.split()
-            assert "review/batch-8" not in branches, (
-                f"[{why}] batch 7 was claimed on batch 8's branch"
+            assert r.returncode != 0, f"[{why}] claimed without a parser: {r.stdout}"
+            # Assert OUR diagnostic, not merely the filename. The first version
+            # of this checked `"review_index.py" in r.stderr`, which CPython's
+            # own "can't open file ..." error satisfies — so the test passed
+            # with the preflight deleted entirely. Found by the review round.
+            assert "only parser for review_tasks.md" in r.stderr, (
+                f"[{why}] the preflight did not refuse; stderr was {r.stderr!r}"
             )
+            branches = _git(repo, "branch", "--format=%(refname:short)").stdout.split()
+            assert branches == ["main"], f"[{why}] a refused claim created {branches}"
+            assert not (repo / "sysop/runtime/locks").exists(), \
+                f"[{why}] a refused claim wrote a lock"
 
     def test_review_index_keeps_each_batchs_own_metadata(self, tmp_path):
         import review_index as ri

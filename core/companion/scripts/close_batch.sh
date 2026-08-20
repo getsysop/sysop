@@ -83,6 +83,17 @@ fi
 # moment the block resolves, and `END` flushes whatever is still pending;
 # nothing is dropped, reordered or coalesced.
 readonly CLOSE_AWK='
+BEGIN {
+  # Q-017. `fenced` arrives as a comma-separated list of 1-based line numbers
+  # from `review_index.py --fenced-lines`, which is _fenced_mask itself rather
+  # than a reimplementation. Empty when there are no fences, and also when
+  # python3 is unavailable -- in which case behaviour is exactly what it was
+  # before this guard existed, so an absent interpreter cannot make things
+  # worse here than they already were.
+  # (No apostrophes in this block: it lives inside a single-quoted shell string.)
+  nfz = split(fenced, fz, ",")
+  for (fi = 1; fi <= nfz; fi++) if (fz[fi] != "") FENCED[fz[fi] + 0] = 1
+}
 function is_open_task(l) { return (l ~ /^- \[ \]/ || l ~ /^- \[\/\]/) }
 function is_failed(l) {
   # Deliberately generous. The adversarial round drove the real script against
@@ -116,7 +127,12 @@ function resolve(protected,   i) {
   # Settle the pending task, then reprint it and every line of its block, in
   # order. Called on every block end and once more at EOF.
   if (!pend) return
-  if (pnr >= s && pnr <= e) {
+  # The fenced test sits HERE, on the one gate both modes share, so the count
+  # and the rewrite can never disagree about which tasks are real -- the
+  # "4 tasks closed" summary on a three-task batch came from this gate being
+  # fence-blind. A fenced task still falls through to out() below and is
+  # reprinted byte-for-byte; it is skipped, never dropped.
+  if (pnr >= s && pnr <= e && !(pnr in FENCED)) {
     if (protected) {
       failed++
       if (mode == "count") print "HELD " pnr " " ptask > "/dev/stderr"
@@ -179,6 +195,7 @@ END { resolve(0); if (mode == "count") printf "%d %d\n", closed + 0, failed + 0 
 
 DRY_RUN=false
 FORCE=false
+ALLOW_OPEN_FENCE=false
 BATCH_NUMS=()
 
 # Parse arguments
@@ -187,6 +204,8 @@ for arg in "$@"; do
     DRY_RUN=true
   elif [[ "$arg" == "--force" ]]; then
     FORCE=true
+  elif [[ "$arg" == "--allow-open-fence" ]]; then
+    ALLOW_OPEN_FENCE=true
   elif [[ "$arg" =~ ^([Bb][Aa][Tt][Cc][Hh]-)?([0-9]+)$ ]]; then
     # Normalise the claim-ID form and any leading zeros. Both matter for the
     # lock: `007` reaches review_index.py as batch 7 and closes it, but would
@@ -195,18 +214,124 @@ for arg in "$@"; do
     BATCH_NUMS+=("$((10#${BASH_REMATCH[2]}))")
   else
     echo "❌ Unknown argument: ${arg}" >&2
-    echo "Usage: close_batch.sh [--dry-run] [--force] <N> [<N2> ...]" >&2
+    echo "Usage: close_batch.sh [--dry-run] [--force] [--allow-open-fence] <N> [<N2> ...]" >&2
     exit 1
   fi
 done
 
 if [[ ${#BATCH_NUMS[@]} -eq 0 ]]; then
   echo "❌ No batch numbers provided." >&2
-  echo "Usage: close_batch.sh [--dry-run] [--force] <N> [<N2> ...]" >&2
+  echo "Usage: close_batch.sh [--dry-run] [--force] [--allow-open-fence] <N> [<N2> ...]" >&2
   exit 1
 fi
 
 INDEX_SCRIPT="${REPO_ROOT}/sysop/scripts/review_index.py"
+
+# ── Helper: refuse when an unterminated fence swallows structure (Q-012) ──
+#
+# Byte-identical to batch_work.sh's copy and pinned equal by
+# tests/test_fence_refusal.py — these scripts install standalone and source no
+# shared library, so duplicate-and-pin is the only shape available (the idiom
+# `_fenced_mask` already uses across four Python modules). Retiring the
+# duplication is the shared-resolver question, filed separately.
+refuse_on_structural_fence() {
+  # $1 is "force" when the caller's own --allow-open-fence was given. It admits
+  # the AMBIGUOUS case (exit 5, any unterminated fence containing a batch
+  # header) and never the PROVEN one (exit 3, a fenced batch header colliding
+  # with a real number). Note the mechanism differs by script and this comment
+  # used to claim batch_work.sh's in both: THERE the check runs above flag
+  # parsing, so no flag can reach exit 3. HERE flags are parsed at :205, well
+  # above this call — what makes exit 3 unforceable is that its branch below
+  # ignores `$forced` entirely. The identity pin strips comments, so it did not
+  # catch the copied claim; the round did.
+  #
+  # It is a DEDICATED flag, not `--force`. `--force` means "skip the merge-base
+  # ancestry check" in close_batch.sh and "admit a terminal status" in
+  # batch_work.sh, and `/review-close` Step 4b mandates it for every `pr`-policy
+  # consumer — so binding the fence escape to it disarmed this gate on the close
+  # path for exactly the consumers it protects. Found by this phase's round,
+  # which closed a fenced example to `Merged` and corrupted the Grand Total.
+  local forced="${1:-}"
+  local rc=0
+  local err=""
+  if command -v python3 &>/dev/null && [[ -f "$INDEX_SCRIPT" ]]; then
+    # `2>&1 >/dev/null` keeps the diagnostic and drops the "fences ok" line, so
+    # the check runs ONCE. Order matters: stderr is duped to the current stdout
+    # (the capture) before stdout is sent to /dev/null.
+    err=$(python3 "$INDEX_SCRIPT" --check-fences 2>&1 >/dev/null) && rc=0 || rc=$?
+    if [[ "$rc" -eq 3 ]]; then
+      echo "❌ review_tasks.md: an unterminated fence contains a duplicate batch header." >&2
+      echo "$err" >&2
+      echo "   Close the fence in review_tasks.md, then re-run. --force does not cover this." >&2
+      return 1
+    fi
+    if [[ "$rc" -eq 5 ]]; then
+      if [[ "$forced" == "force" ]]; then
+        echo "⚠️  review_tasks.md has an unterminated fence — proceeding under --allow-open-fence." >&2
+        echo "$err" >&2
+        return 0
+      fi
+      echo "❌ review_tasks.md: an unterminated fence is open (Q-229, Q-231)." >&2
+      echo "$err" >&2
+      return 1
+    fi
+  fi
+  return 0
+}
+
+# ── Q-017: the fenced-line mask CLOSE_AWK rewrites around ─────
+#
+# `--range` was already fence-aware; CLOSE_AWK was not, so the index path
+# rewrote a fence-aware span with a fence-blind rewriter. Measured 2026-08-16 on
+# a balanced-fence tracker: "4 tasks closed" on a three-task batch, with a task
+# that exists only inside a fenced documentation example marked complete. The
+# grep fallback merely under-reached; the preferred path corrupted data.
+#
+# Computed ONCE, here, rather than per batch. That is safe because neither stage
+# of the rewrite changes the line count -- the sed below is line-addressed
+# substitution only (its own comment records this), and CLOSE_AWK in flip mode
+# reprints every line it reads. So the numbers stay valid across every iteration
+# of the per-batch loop.
+#
+# Empty when python3 or the index is unavailable, which reproduces exactly the
+# pre-existing behaviour on that path. This deliberately does NOT introduce a
+# refusal: close_batch.sh diagnoses by commit presence rather than exit code
+# (see the note above the annotation summary), so a refusal added here could not
+# reach its caller -- that contract is a separate problem and is not touched.
+FENCED_LINES=""
+if command -v python3 &>/dev/null && [[ -f "$INDEX_SCRIPT" ]]; then
+  FENCED_LINES=$(python3 "$INDEX_SCRIPT" --fenced-lines 2>/dev/null) || FENCED_LINES=""
+fi
+
+# `--dry-run` WARNS instead of refusing: it writes nothing, and a read-only
+# preview that refuses is the wrong trade — the operator running it is most
+# likely inspecting the very file they are mid-edit on.
+fence_preflight() {
+  # $FORCE is parsed at the top of this script, well above here, so unlike
+  # batch_work.sh's copies this one can just read it.
+  local _fence_force=""
+  # `if`, not `$ALLOW_OPEN_FENCE && …`: the `&&` form returns 1 when the flag is
+  # false, which is only harmless because this function is invoked in a
+  # `|| exit 1` list where `set -e` is suppressed. That is a property of the
+  # CALL SITE, not of this code, and it would change silently if it ever did.
+  #
+  # It reads its OWN flag, not `--force`. `--force` here means "skip the
+  # merge-base ancestry check", and `/review-close` Step 4b mandates it for
+  # EVERY `pr`-policy consumer — so binding the fence escape to it disarmed this
+  # gate on the close path for exactly the consumers the gate protects. Measured
+  # by the round: a `--force` close rewrote a fenced example to `Merged`,
+  # flipped its illustration task to `[x]`, and corrupted the Grand Total.
+  if $ALLOW_OPEN_FENCE; then _fence_force="force"; fi
+  if refuse_on_structural_fence "$_fence_force"; then
+    return 0
+  fi
+  if $DRY_RUN; then
+    echo "⚠️  --dry-run: continuing anyway; the preview below may describe the" >&2
+    echo "   fenced example rather than the real batch." >&2
+    return 0
+  fi
+  return 1
+}
 
 # ── Helper: find batch section boundaries ─────────────────────
 # Sets BATCH_START, BATCH_END (line numbers) for a given batch number.
@@ -334,6 +459,13 @@ remove_batch_lock() {
 }
 
 # ── Process each batch ────────────────────────────────────────
+# Q-012: once, before the loop. Re-checking per batch would cost a subprocess
+# per iteration to close a window this script cannot open on its own — its own
+# mutations are checkbox flips and header status rewrites, none of which can
+# introduce a fence. The residual is an external editor writing the tracker
+# mid-run, which is named rather than half-guarded.
+fence_preflight || exit 1
+
 CLOSED=()
 SKIPPED=()
 MERGED_UNLOCK=()
@@ -343,6 +475,37 @@ TOTAL_NEARMISSES=0
 
 for BATCH_NUM in "${BATCH_NUMS[@]}"; do
   echo "── Batch ${BATCH_NUM} ──"
+
+  # ── Q-037: this script is the OTHER mutator ──────────────────
+  #
+  # It rewrites review_tasks.md AND commits. `batch_work.sh` refuses an
+  # ambiguous number; without this, `close_batch.sh <N>` resolved the same
+  # number through `--range`, which keys by number and returns the LAST header,
+  # and closed the wrong batch silently. Measured: a tracker with Batch 1 in two
+  # rounds closes Round 2 and commits, leaving Round 1 open under an unchanged
+  # header — so an operator who merged Round 1 has just marked the wrong work
+  # done. No warning was emitted on any stream, because this path calls
+  # `--range` rather than `--list`.
+  #
+  # SKIP rather than exit, with its own explicit reason. The script's contract
+  # is to report and continue (`close_batch.sh:880-884`: annotation warnings
+  # are "deliberately NOT an exit-code change"), so aborting here would
+  # abandon the other batches
+  # in a multi-batch close. This is not the `find_batch_range` refusal problem —
+  # that one is unreachable because its caller overwrites it with a FALSE
+  # "Not found" message; this check owns its own message and its own verdict.
+  if [[ -n "$FENCED_LINES" || -f "$INDEX_SCRIPT" ]] && command -v python3 &>/dev/null; then
+    DUP_ERR=""
+    DUP_RC=0
+    DUP_ERR=$(python3 "$INDEX_SCRIPT" --check-duplicates "$BATCH_NUM" 2>&1 >/dev/null) \
+      && DUP_RC=0 || DUP_RC=$?
+    if [[ "$DUP_RC" -eq 4 ]]; then
+      echo "$DUP_ERR" >&2
+      echo "   ⚠️  Ambiguous batch number. Skipping (nothing was rewritten)."
+      SKIPPED+=("${BATCH_NUM}:ambiguous")
+      continue
+    fi
+  fi
 
   # Find batch header
   if ! find_batch_range "$BATCH_NUM"; then
@@ -468,6 +631,7 @@ for BATCH_NUM in "${BATCH_NUMS[@]}"; do
   # Grand Total, so a failed task is never counted as done.
   BATCH_DIAG="${TASKS_FILE}.diag"
   BATCH_COUNTS=$(awk -v s="$BATCH_START" -v e="$BATCH_END" -v mode=count \
+    -v fenced="$FENCED_LINES" \
     "$CLOSE_AWK" "$TASKS_FILE" 2>"$BATCH_DIAG")
   TASKS_IN_BATCH=${BATCH_COUNTS%% *}
   TASKS_FAILED_IN_BATCH=${BATCH_COUNTS##* }
@@ -533,18 +697,35 @@ for BATCH_NUM in "${BATCH_NUMS[@]}"; do
       -e "/Batch ${BATCH_NUM})/s#| ${BATCH_STATUS} |#| Merged |#" \
       -e "/Batch ${BATCH_NUM})/s#| ${BATCH_STATUS}\$#| Merged#" \
       "$TASKS_FILE" \
-    | awk -v s="$BATCH_START" -v e="$BATCH_END" -v mode=flip "$CLOSE_AWK" > "$TMP_FILE"
+    | awk -v s="$BATCH_START" -v e="$BATCH_END" -v mode=flip \
+        -v fenced="$FENCED_LINES" "$CLOSE_AWK" > "$TMP_FILE"
 
   # `pipefail` catches a stage that *reports* failure; it cannot catch one that
   # exits 0 having written short. That is not hypothetical here — the rewrite is
   # a two-process pipeline, so there are two chances for a silent short write,
   # and the `mv` below is unrecoverable. Assert the output is at least as long
-  # as the input before installing it. Not an equality check: awk appends a
-  # final newline when the source lacks one, so the count can legitimately grow
-  # by one, but it can never legitimately shrink — no expression here deletes a
-  # line.
+  # as the input before installing it.
+  #
+  # `grep -c ''` on BOTH sides, not `wc -l` (Q-115, fourth site — found by Phase
+  # 208's round AFTER that phase had checked this line and wrongly cleared it).
+  # The old reasoning was half right: awk does append a final newline, so the
+  # count can legitimately grow by one and an equality check would be wrong. What
+  # it missed is that `wc -l` also UNDER-reports the *source* by one when the
+  # source lacks a trailing newline — which spends the `-lt` slack in the wrong
+  # direction. Measured: a 3-line source with no trailing newline (`wc -l` = 2)
+  # against output that lost a line but gained a newline (`wc -l` = 2) compares
+  # equal, so `-lt` is false and a one-line silent deletion installs through the
+  # guard that exists to stop exactly that. Counting real lines removes the slack:
+  # 3 vs 2 fires.
+  #
+  # NOT `awk END{print NR}`, which is this repo's usual line counter. **A guard
+  # must not depend on the tool it is guarding against.** The threat here is a
+  # lying `awk` in the rewrite pipeline above, and `tests/test_close_batch_sh.py`
+  # ::TestShortWriteGuard proves it by shimming one onto PATH — so an awk-based
+  # count is computed by the liar and the guard silently stops firing. The first
+  # cut of this fix did exactly that and those two tests caught it.
   if [[ ! -s "$TMP_FILE" ]] || \
-     [[ "$(wc -l < "$TMP_FILE")" -lt "$(wc -l < "$TASKS_FILE")" ]]; then
+     [[ "$(grep -c '' "$TMP_FILE")" -lt "$(grep -c '' "$TASKS_FILE")" ]]; then
     echo "❌ Rewrite of review_tasks.md produced short output — refusing to install it." >&2
     echo "   ${TASKS_FILE} is unchanged. Tempfile kept for inspection: ${TMP_FILE}" >&2
     trap - EXIT

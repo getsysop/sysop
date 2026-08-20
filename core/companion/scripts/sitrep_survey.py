@@ -406,6 +406,59 @@ def _fenced_mask(lines):
 _TASK_LINE_RE = re.compile(r"^- \[( |/|x)\] \*\*(TASK-\d+)\*\*:")
 
 
+def _warn_on_duplicate_batch_numbers(batches, source: str) -> None:
+    """Surface same-numbered batches on stderr, and continue (Q-227).
+
+    This reader keeps BOTH batches where ``review_index.py`` collapses to one
+    (it keys a dict by number, so the later header overwrites the earlier).
+    That divergence is why the index's ``--list`` warning never reached here:
+    this script does not consult the index at all.
+
+    Keeping both is the better *display* behaviour and it is deliberately not
+    changed. It became a routing problem only when Phase 209 taught the
+    mutators to refuse an ambiguous number — after which this script could
+    recommend a batch they refuse, with nothing on any stream to explain why.
+    The warning closes that gap without touching the parse.
+
+    **It points at the check rather than asserting an outcome, and that wording
+    is load-bearing.** The first cut said the shells "REFUSE that number (exit
+    4)". Measured by this phase's round: `batch_work.sh` exits **1**,
+    `close_batch.sh` exits **0** (it skips the batch and reports the run as
+    completed), and 4 is only the internal helper's code — so the sentence was
+    false twice. Worse, on a tracker whose two headers differ in punctuation
+    (an em-dash and an ASCII hyphen) the readers disagree: this one sees two
+    batches and warns, `sitrep_survey` sees one and stays silent, and
+    `--check-duplicates` finds no duplicate at all, so nothing refuses and the
+    advice would have sent an operator to renumber a batch for no reason.
+    Naming the authoritative check is the only form that is true on every shape.
+
+    Derived from this reader's own list rather than by importing the index's
+    ``duplicate_batch_numbers``: these scripts install standalone and import
+    nothing shared, and a sixth copy of a rule already duplicated four times is
+    the trade `close_batch.sh` and `_fenced_mask` both declined.
+    """
+    seen: dict[str, int] = {}
+    for b in batches:
+        num = b.get("number")
+        if num is None:
+            continue
+        seen[str(num)] = seen.get(str(num), 0) + 1
+    dupes = {n: c for n, c in seen.items() if c > 1}
+    if not dupes:
+        return
+    for num in sorted(dupes, key=lambda n: int(n) if n.isdigit() else 0):
+        print(
+            f"WARNING: {source} declares Batch {num} {dupes[num]} times, and this "
+            f"view keeps all of them.\n"
+            f"         Confirm with: python3 sysop/scripts/review_index.py "
+            f"--check-duplicates {num}\n"
+            f"         That check is what the mutating paths key on, and it uses a "
+            f"STRICTER header pattern than this reader — so the two can disagree, "
+            f"and the check is the authority.",
+            file=sys.stderr,
+        )
+
+
 def _read_review_batches(main_root: Path) -> list[dict[str, Any]]:
     p = main_root / "review_tasks.md"
     if not p.is_file():
@@ -484,6 +537,7 @@ def _read_review_batches(main_root: Path) -> list[dict[str, Any]]:
             current["tasks"].append({"checkbox": mt.group(1), "id": mt.group(2)})
     if current is not None:
         out.append(current)
+    _warn_on_duplicate_batch_numbers(out, "review_tasks.md")
     return out
 
 
@@ -918,9 +972,15 @@ def _find_discrepancies(
 # construction, and an incremental round's manifest is its own small scope. What
 # is reported is a round whose own numbers refute its own label, or one that
 # closed with no numbers at all.
-LOW_LOOK_RATIO = 3  # Tier 2's `opened + grepped < ~1/3 of assigned`, applied to
-                    # the round. Deliberately not a new constant: the round-level
-                    # and batch-level measures share one vocabulary.
+LOW_LOOK_RATIO = 3  # The ~1/3 boundary, shared with Tier 2's batch-level leg (a)
+                    # and deliberately not re-derived. The two tiers share this
+                    # THRESHOLD and their vocabulary; they no longer share an
+                    # arithmetic. Tier 0 sums `opened + grepped` because a round
+                    # reports both; Tier 2's leg (a) reads `Opened` against
+                    # `Assigned` alone, because the evidence footer collects no
+                    # count of files reached by search and never has. An earlier
+                    # version of this comment cited Tier 2 as the source of the
+                    # SUM, which was never true of any footer it could read.
 
 
 def _round_coverage_discrepancies(main_root: Path) -> list[Discrepancy]:

@@ -44,81 +44,118 @@ if [[ ! -f "$TASKS_FILE" ]]; then
 fi
 
 # ── Helper: parse all batches ─────────────────────────────────
-# Uses the shadow JSON index (sysop/scripts/review_index.py) for reliable parsing.
-# Falls back to inline bash regex if Python is unavailable.
+# Uses the shadow JSON index (sysop/scripts/review_index.py), which is the ONLY
+# parser — the inline bash regex fallback this comment used to advertise was
+# retired (Q-036, Q-226); see `require_index_parser` for the reasoning.
 # Output: tab-separated lines: NUMBER<tab>TITLE<tab>STATUS<tab>BRANCH<tab>SCOPE<tab>VERIFY
 INDEX_SCRIPT="${REPO_ROOT}/sysop/scripts/review_index.py"
 
-parse_batches() {
-  # Try the JSON index first (auto-rebuilds if stale)
+# ── Helper: refuse when an unterminated fence swallows structure (Q-012) ──
+#
+# `review_index.py` ignores an unterminated fence on purpose, so a fenced
+# EXAMPLE `### Batch <N>` is parsed as a real batch and — because batches are
+# keyed by number — OVERWRITES the real one. Measured: on such a tracker the
+# index path creates a branch, a worktree and a lock for a batch the file says
+# is `Merged`, while this script's own grep fallback correctly refuses. The
+# better-equipped path is the broken one, which is why the fix is a refusal
+# here rather than "route everything through the index".
+#
+# Deliberately NO `--force` arm. The claim path's existing `--force` covers the
+# statuses a doc example carries (`Complete|Merged|Ready for Review`), so a
+# fence bypass would be reachable by a flag that already exists — and unlike the
+# cases where an escape hatch is mercy, the remedy costs nothing: close the
+# fence. Q-213 is the standing example of a hatch that nullified its own check.
+#
+# Callers must invoke this BEFORE flag parsing for that reason.
+#
+# `&& rc=0 || rc=$?`, not `|| true`: under `set -euo pipefail` a bare `|| true`
+# discards the status (verified: `$?` becomes 0), and `local rc=$(cmd) || rc=$?`
+# is masked by `local`'s own exit status. Keep the declaration separate.
+refuse_on_structural_fence() {
+  # $1 is "force" when the caller's own --allow-open-fence was given. It admits
+  # the AMBIGUOUS case (exit 5, any unterminated fence containing a batch
+  # header) and never the PROVEN one (exit 3, a fenced batch header colliding
+  # with a real number). In THIS script Q-012's ordering does the work: the
+  # check runs above flag parsing, so no flag can reach exit 3.
+  #
+  # It is a DEDICATED flag, not `--force`. `--force` means "skip the merge-base
+  # ancestry check" in close_batch.sh and "admit a terminal status" in
+  # batch_work.sh, and `/review-close` Step 4b mandates it for every `pr`-policy
+  # consumer — so binding the fence escape to it disarmed this gate on the close
+  # path for exactly the consumers it protects. Found by this phase's round,
+  # which closed a fenced example to `Merged` and corrupted the Grand Total.
+  local forced="${1:-}"
+  local rc=0
+  local err=""
   if command -v python3 &>/dev/null && [[ -f "$INDEX_SCRIPT" ]]; then
-    python3 "$INDEX_SCRIPT" --list 2>/dev/null && return 0
+    # `2>&1 >/dev/null` keeps the diagnostic and drops the "fences ok" line, so
+    # the check runs ONCE. Order matters: stderr is duped to the current stdout
+    # (the capture) before stdout is sent to /dev/null.
+    err=$(python3 "$INDEX_SCRIPT" --check-fences 2>&1 >/dev/null) && rc=0 || rc=$?
+    if [[ "$rc" -eq 3 ]]; then
+      echo "❌ review_tasks.md: an unterminated fence contains a duplicate batch header." >&2
+      echo "$err" >&2
+      echo "   Close the fence in review_tasks.md, then re-run. --force does not cover this." >&2
+      return 1
+    fi
+    if [[ "$rc" -eq 5 ]]; then
+      if [[ "$forced" == "force" ]]; then
+        echo "⚠️  review_tasks.md has an unterminated fence — proceeding under --allow-open-fence." >&2
+        echo "$err" >&2
+        return 0
+      fi
+      echo "❌ review_tasks.md: an unterminated fence is open (Q-229, Q-231)." >&2
+      echo "$err" >&2
+      return 1
+    fi
   fi
-
-  # Fallback: inline bash regex parser
-  _parse_batches_fallback
+  return 0
 }
 
-_parse_batches_fallback() {
-  local num="" title="" status="" branch="" scope="" verify=""
-  local in_batch=false
-
-  while IFS= read -r line; do
-    # `[^\`]+`, not `[A-Za-z ]+`: a status carrying a hyphen or a digit is a
-    # thing a consumer can write, and a reader that cannot see it does not
-    # prevent it — it just makes the batch invisible. `--release <N>` answered
-    # "not found" for a batch plainly in the file. What the value MEANS is
-    # decided by the status ladder on the claim path, which is where an
-    # undeclared value gets refused by name.
-    if [[ "$line" =~ ^###[[:space:]]+Batch[[:space:]]+([0-9]+)[[:space:]]+—[[:space:]]+(.+)[[:space:]]+\`([^\`]+)\` ]]; then
-      if $in_batch && [[ -n "$num" ]]; then
-        printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$num" "$title" "$status" "$branch" "$scope" "$verify"
-      fi
-      num="${BASH_REMATCH[1]}"
-      title="${BASH_REMATCH[2]}"
-      status="${BASH_REMATCH[3]}"
-      branch="" scope="" verify=""
-      in_batch=true
-      continue
-    fi
-
-    # A `### Batch <N>` line the pattern above could NOT parse still ends the
-    # open batch. Without this it fell through as ordinary content and the
-    # orphan's own `> **Branch:**`/`Scope:`/`Verify:` lines overwrote the
-    # PREVIOUS batch's — so `batch_work.sh 7` built a worktree named
-    # `…-batch-7` on branch `review/batch-8`, with batch 8's scope and batch 8's
-    # verify command. Measured in this parser and in the Python index alike, so
-    # the shadow index was never a safety net for it.
-    #
-    # Widening the status charset above shrinks this class but cannot close it:
-    # a header with no status token at all, or a hyphen where the em-dash
-    # belongs, still fails to parse. Those are authoring slips, not statuses —
-    # they leave the batch invisible, which is honest, but they must not
-    # corrupt a batch that IS visible.
-    if [[ "$line" =~ ^###[[:space:]]+Batch[[:space:]]+[0-9]+ ]]; then
-      if $in_batch && [[ -n "$num" ]]; then
-        printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$num" "$title" "$status" "$branch" "$scope" "$verify"
-      fi
-      num="" title="" status="" branch="" scope="" verify=""
-      in_batch=false
-      echo "⚠️  Unparseable batch header, skipped: ${line}" >&2
-      continue
-    fi
-
-    if $in_batch; then
-      if [[ "$line" =~ ^\>[[:space:]]+\*\*Branch:\*\*[[:space:]]+\`([^\`]+)\` ]]; then
-        branch="${BASH_REMATCH[1]}"
-      elif [[ "$line" =~ ^\>[[:space:]]+\*\*Scope:\*\*[[:space:]]+(.*) ]]; then
-        scope="${BASH_REMATCH[1]}"
-      elif [[ "$line" =~ ^\>[[:space:]]+\*\*Verify:\*\*[[:space:]]+(.*) ]]; then
-        verify="${BASH_REMATCH[1]}"
-      fi
-    fi
-  done < "$TASKS_FILE"
-
-  if $in_batch && [[ -n "$num" ]]; then
-    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$num" "$title" "$status" "$branch" "$scope" "$verify"
+# Q-037: refuse to MUTATE a batch number the tracker declares more than once.
+#
+# Scoped to the one number, not the file, and that is the whole design. A real
+# tracker measured 2026-08-16 restarts batch numbering per round (Round 1: 1-6,
+# Round 2: 1-5); nothing in the shipped tree forbids that — WORKFLOW.md's
+# template nests `### Batch <N>` under `## Round N` and states no numbering
+# scope. (An earlier version of this comment added "and no shipped skill derives
+# the next number from existing headers". That is FALSE and was corrected in
+# Phase 211: `codebase-review/SKILL.md:164` and `security-audit/SKILL.md:179` —
+# the only two writers of batch headers in the tree — both say `next_batch_number`
+# = highest Batch N + 1, i.e. a file-global rule. It does not rescue the
+# whole-file refusal, because nothing ENFORCES that rule and a per-round tracker
+# still parses; but the scoping argument rests on the template's silence alone,
+# which is a narrower claim than the one that was written here.) So
+# refusing the whole file would reject a legal tracker, which is the defect
+# Phase 208 shipped and had to reshape mid-round. Refusing only the number being
+# acted on stops the operator exactly when acting would be a coin flip and
+# leaves every unambiguous batch on that file claimable.
+#
+# NO availability guard, unlike refuse_on_structural_fence: `parse_batches`
+# below now REQUIRES python3 + review_index.py, so there is no path that reaches
+# a mutation without them. A guard here would only add a way to skip the check.
+refuse_on_duplicate_number() {
+  local n="$1" err="" rc=0
+  err=$(python3 "$INDEX_SCRIPT" --check-duplicates "$n" 2>&1 >/dev/null) && rc=0 || rc=$?
+  if [[ "$rc" -eq 4 ]]; then
+    # The diagnostic is the Python side's, verbatim — it carries the line
+    # numbers. Restating it here would be a second wording to keep in sync.
+    echo "$err" >&2
+    return 1
   fi
+  return 0
+}
+
+parse_batches() {
+  # `review_index.py` is the only parser. Availability is established by
+  # `require_index_parser` above the dispatch — deliberately not re-checked
+  # here, because this function's callers cannot observe its exit status.
+  #
+  # stderr is NOT redirected, and that is load-bearing: review_index.py's
+  # duplicate-number warning (Q-037) is the only place an operator learns that a
+  # batch is missing from this very output. The previous `2>/dev/null` would
+  # have swallowed it, which is how the collision stayed invisible.
+  python3 "$INDEX_SCRIPT" --list
 }
 
 # ── Helper: rebuild JSON index after Markdown mutation ─────────
@@ -291,6 +328,66 @@ remove_batch_lock() {
   fi
 }
 
+# ── The parser preflight (Q-036, Q-226) ──────────────────────
+#
+# Runs HERE, above every dispatch, and not inside `parse_batches` — because all
+# three of its callers consume it as `done < <(parse_batches)`, and process
+# substitution discards the exit status. A refusal placed inside the
+# row-producing function would print to stderr, be ignored, and leave the loop
+# reading empty input: the script would render a table header and then behave as
+# though the tracker held no batches. Placing it above the dispatch is what makes
+# the refusal an actual halt.
+#
+# This is the retirement of `_parse_batches_fallback` (Q-036: it had no fence
+# rule, so a fenced `### Batch <N>` was structural to it alone and claimable;
+# Q-226: its `while read` dropped the file's last line when there was no
+# trailing newline, losing a whole batch from --list-all and from the claim
+# path). Both die with the code rather than being patched, because a second
+# divergent parser is the defect and one more fix would not have changed that.
+#
+# The trade, stated rather than buried: the old code fell through to bash on ANY
+# non-zero exit from review_index.py — a corrupt vendor copy, a Python version
+# skew — so it recovered from a FAILING index, not merely a missing interpreter.
+# That recovery is now gone, and the failure is loud instead. python3 is already
+# a documented hard prerequisite (README.md § Prerequisites) and self_check.sh
+# exits non-zero without it, so an install that cannot run this is one Sysop
+# already refuses to certify.
+require_index_parser() {
+  if ! command -v python3 &>/dev/null; then
+    echo "❌ python3 is required to read review_tasks.md and was not found." >&2
+    echo "   It is a hard prerequisite (README.md § Prerequisites)." >&2
+    echo "   Diagnose with: bash sysop/scripts/self_check.sh" >&2
+    return 1
+  fi
+  if [[ ! -f "$INDEX_SCRIPT" ]]; then
+    echo "❌ Missing ${INDEX_SCRIPT}, which is the only parser for review_tasks.md." >&2
+    echo "   Reinstall or update Sysop to restore it." >&2
+    return 1
+  fi
+  # Presence is not usability, and the difference is not academic. A TRUNCATED
+  # or corrupt review_index.py defines nothing, runs nothing, and exits 0 with
+  # empty output — so `--list` printed an empty table and said "No batches
+  # found" on a tracker full of them, at exit 0, with no diagnostic on any
+  # stream. That is the exact silent-degradation this retirement was supposed to
+  # replace with a loud failure, and the phase's own record claimed it had.
+  # Found by this phase's review round.
+  #
+  # The probe is a POSITIVE self-test: `--check-duplicates 0` must print its
+  # one-line answer. A file that parses but does nothing produces no output and
+  # fails here, where an exit-code-only check would pass it.
+  local probe=""
+  probe=$(python3 "$INDEX_SCRIPT" --check-duplicates 0 2>/dev/null) || probe=""
+  if [[ -z "$probe" ]]; then
+    echo "❌ ${INDEX_SCRIPT} did not answer a basic query." >&2
+    echo "   It is present but not usable — a truncated or corrupt copy, or a" >&2
+    echo "   python3 too old to run it. review_tasks.md cannot be read safely." >&2
+    echo "   Diagnose with: python3 ${INDEX_SCRIPT} --list" >&2
+    return 1
+  fi
+  return 0
+}
+require_index_parser || exit 1
+
 # ── Mode: --list / --list-all ─────────────────────────────────
 if [[ "${1:-}" == "--list" || "${1:-}" == "--list-all" ]]; then
   SHOW_ALL=false
@@ -385,41 +482,38 @@ claim_batch() {
     return 0
   }
 
-  # Find batch section boundaries (prefer JSON index, fallback to grep)
-  local batch_start batch_end total_lines
-  local range_line
-  if command -v python3 &>/dev/null && [[ -f "$INDEX_SCRIPT" ]]; then
-    range_line=$(python3 "$INDEX_SCRIPT" --range "$batch_num" 2>/dev/null) || true
+  # Find batch section boundaries. `review_index.py` is the ONLY parser here.
+  #
+  # Q-017/Phase 211 retired the grep fallback that used to occupy the `else`
+  # arm. What it was NOT reachable by, each checked rather than assumed:
+  #   - a missing python3 — `require_index_parser || exit 1`, above the
+  #     dispatch, refuses that for the whole script;
+  #   - a header the index cannot parse (an ASCII hyphen where
+  #     `_BATCH_HEADER_RE` demands an em-dash) — the status lookup upstream
+  #     refuses first, with "Batch N not found". Measured: `close_batch.sh`
+  #     DOES close such a batch through its own surviving fallback, so the
+  #     shape is live there and dead here. That asymmetry is Q-017's remaining
+  #     half and is pinned in tests/test_batch_range_offset_guard.py.
+  # What could reach it was `--range`'s own fence preflight firing in the window
+  # after this script's preflight (a `git pull` between the two), whose `|| true`
+  # then swallowed the refusal and handed the range to a fence-BLIND grep. So the
+  # arm was a silent bypass of a refusal, on a path nothing could construct on
+  # demand. A wrong range is worse than a refusal, and now it is one.
+  local batch_start batch_end
+  local range_line=""
+  range_line=$(python3 "$INDEX_SCRIPT" --range "$batch_num") || true
+
+  if [[ -z "$range_line" ]]; then
+    echo "❌ review_index.py could not locate Batch ${batch_num} in review_tasks.md." >&2
+    echo "   Refusing rather than guessing the range: the retired grep fallback" >&2
+    echo "   bounded batches fence-blind and matched headers the index does not." >&2
+    echo "   The header needs an em-dash and a backticked status, as in:" >&2
+    echo "     ### Batch ${batch_num} — Title \`Pending\`" >&2
+    echo "   Compare against: python3 ${INDEX_SCRIPT} --list" >&2
+    return 1
   fi
-
-  if [[ -n "${range_line:-}" ]]; then
-    batch_start=$(echo "$range_line" | cut -f1)
-    batch_end=$(echo "$range_line" | cut -f2)
-  else
-    # Fallback: grep-based range detection
-    total_lines=$(wc -l < "$TASKS_FILE" | tr -d ' ')
-    # `|| true` for the same reason as the release path's copy: without it the
-    # abort pre-empts the message below.
-    batch_start=$(grep -n "^### Batch ${batch_num} " "$TASKS_FILE" | head -1 | cut -d: -f1 || true)
-
-    if [[ -z "$batch_start" ]]; then
-      echo "⚠️  Could not find Batch ${batch_num} header. Skipping batch claim." >&2
-      return 0
-    fi
-
-    # Trailing `|| true`: when this batch is the file's last section (no
-    # following `^##` line) grep exits 1, which under `set -euo pipefail`
-    # would abort this directly-called function (set -e is active here, unlike
-    # close_batch's find_batch_range which runs under `if !`). Fall through to
-    # the total-lines default below instead. (Same class as the close_batch
-    # ISSUE-0044 grep guards.)
-    batch_end=$(tail -n +"$((batch_start + 1))" "$TASKS_FILE" | grep -n '^##' | head -1 | cut -d: -f1 || true)
-    if [[ -n "$batch_end" ]]; then
-      batch_end=$((batch_start + batch_end - 1))
-    else
-      batch_end=$total_lines
-    fi
-  fi
+  batch_start=$(echo "$range_line" | cut -f1)
+  batch_end=$(echo "$range_line" | cut -f2)
 
   if [[ -z "$batch_start" ]]; then
     echo "⚠️  Could not find Batch ${batch_num} header. Skipping batch claim." >&2
@@ -462,18 +556,27 @@ claim_batch() {
 # claimed rather than as claimable-but-half-reverted.
 if [[ "${1:-}" == "--release" ]]; then
   shift
+  # Q-012: before flag parsing, so --force cannot reach past the exit-3 arm.
+  # The exit-5 arm (Q-229/Q-231: any unterminated fence) IS forceable, so the
+  # flag is pre-scanned here rather than read from RELEASE_FORCE below — that
+  # variable does not exist yet, and moving this call after it would hand
+  # --force the exit-3 bypass the comment above exists to deny.
+  _fence_force=""
+  for _a in "$@"; do [[ "$_a" == "--allow-open-fence" ]] && _fence_force="force"; done
+  refuse_on_structural_fence "$_fence_force" || exit 1
   RELEASE_FORCE=false
   while [[ "${1:-}" == --* ]]; do
     case "$1" in
       --force) RELEASE_FORCE=true; shift ;;
+      --allow-open-fence) shift ;;   # consumed by the fence pre-scan above
       *) echo "❌ Unknown flag: $1" >&2
-         echo "Usage: batch_work.sh --release [--force] <BATCH_NUMBER>" >&2
+         echo "Usage: batch_work.sh --release [--force] [--allow-open-fence] <BATCH_NUMBER>" >&2
          exit 1 ;;
     esac
   done
 
   if [[ -z "${1:-}" ]]; then
-    echo "❌ Usage: batch_work.sh --release [--force] <BATCH_NUMBER>" >&2
+    echo "❌ Usage: batch_work.sh --release [--force] [--allow-open-fence] <BATCH_NUMBER>" >&2
     exit 1
   fi
   REL_NUM="$(normalize_batch_arg "$1")"
@@ -490,6 +593,12 @@ if [[ "${1:-}" == "--release" ]]; then
     echo "❌ Batch number must be a positive integer, got: ${REL_NUM}" >&2
     exit 1
   fi
+
+  # Q-037: as early as the number is known, and before any state is read or
+  # written. `--force` is parsed above but cannot reach past this, matching the
+  # fence refusal's placement rule for the same reason: --force already admits
+  # the statuses an ambiguous batch is likely to carry.
+  refuse_on_duplicate_number "$REL_NUM" || exit 1
 
   # Refuse to run anywhere but the main checkout, BEFORE reading any batch
   # state. `REPO_ROOT` comes from `git rev-parse --show-toplevel`, which in a
@@ -579,32 +688,26 @@ if [[ "${1:-}" == "--release" ]]; then
     exit 1
   fi
 
-  # Locate the batch section.
+  # Locate the batch section. `review_index.py` is the ONLY parser here, for
+  # the reason the claim path's copy states (Q-017/Phase 211) — and the stake is
+  # higher on this path: REL_END bounds the `- [x]` count implementing
+  # "Completed work is not abandonable by default" below, so a range bounded
+  # away from the finished work is a safety-guard BYPASS, not a miscount. The
+  # retired fallback could revert a batch that had results, at exit 0, silently.
   REL_RANGE=""
-  if command -v python3 &>/dev/null && [[ -f "$INDEX_SCRIPT" ]]; then
-    REL_RANGE=$(python3 "$INDEX_SCRIPT" --range "$REL_NUM" 2>/dev/null) || true
+  REL_RANGE=$(python3 "$INDEX_SCRIPT" --range "$REL_NUM") || true
+  if [[ -z "$REL_RANGE" ]]; then
+    echo "❌ review_index.py could not locate Batch ${REL_NUM} in review_tasks.md." >&2
+    echo "   Refusing rather than guessing the range: this range bounds the" >&2
+    echo "   completed-work check that makes --release safe, so a guessed one" >&2
+    echo "   could abandon finished work silently." >&2
+    echo "   The header needs an em-dash and a backticked status, as in:" >&2
+    echo "     ### Batch ${REL_NUM} — Title \`In Progress\`" >&2
+    echo "   Compare against: python3 ${INDEX_SCRIPT} --list" >&2
+    exit 1
   fi
-  if [[ -n "$REL_RANGE" ]]; then
-    REL_START=$(echo "$REL_RANGE" | cut -f1)
-    REL_END=$(echo "$REL_RANGE" | cut -f2)
-  else
-    REL_TOTAL=$(wc -l < "$TASKS_FILE" | tr -d ' ')
-    # Trailing `|| true`: under `set -euo pipefail` a non-matching grep takes
-    # the assignment's status down with it, so the script exits 1 *before* the
-    # message below can print — a zero-diagnostic abort. Same guard the range
-    # grep two lines down already carries.
-    REL_START=$(grep -n "^### Batch ${REL_NUM} " "$TASKS_FILE" | head -1 | cut -d: -f1 || true)
-    if [[ -z "$REL_START" ]]; then
-      echo "❌ Could not find the Batch ${REL_NUM} header in review_tasks.md." >&2
-      exit 1
-    fi
-    REL_END=$(tail -n +"$((REL_START + 1))" "$TASKS_FILE" | grep -n '^##' | head -1 | cut -d: -f1 || true)
-    if [[ -n "$REL_END" ]]; then
-      REL_END=$((REL_START + REL_END - 1))
-    else
-      REL_END=$REL_TOTAL
-    fi
-  fi
+  REL_START=$(echo "$REL_RANGE" | cut -f1)
+  REL_END=$(echo "$REL_RANGE" | cut -f2)
 
   # Completed work is not abandonable by default: `- [x]` inside the batch
   # means an agent finished something, and reverting the header to `Pending`
@@ -697,18 +800,32 @@ fi
 # worse here than there: the operator believes they forced a claim that was
 # actually refused, or — before the status gate below existed — believes they
 # were warned about one that went through anyway.
+#
+# Q-012: the fence refusal runs BEFORE that parsing, for the same reason the
+# comment above gives — `--force` already admits `Complete|Merged|Ready for
+# Review`, which are exactly the statuses a fenced doc example carries, so a
+# refusal placed after it would be bypassable by an existing flag. It also runs
+# before the status gate below, so the operator never reads a `Pending` banner
+# for a batch the file records as `Merged`.
+# The exit-5 arm is forceable and CLAIM_FORCE is parsed below, so the flag is
+# pre-scanned rather than read from it; see the --release copy above.
+_fence_force=""
+for _a in "$@"; do [[ "$_a" == "--allow-open-fence" ]] && _fence_force="force"; done
+refuse_on_structural_fence "$_fence_force" || exit 1
+
 CLAIM_FORCE=false
 while [[ "${1:-}" == --* ]]; do
   case "$1" in
     --force) CLAIM_FORCE=true; shift ;;
+    --allow-open-fence) shift ;;   # consumed by the fence pre-scan above
     *) echo "❌ Unknown flag: $1" >&2
-       echo "Usage: batch_work.sh [--force] <BATCH_NUMBER>" >&2
+       echo "Usage: batch_work.sh [--force] [--allow-open-fence] <BATCH_NUMBER>" >&2
        exit 1 ;;
   esac
 done
 
 if [[ -z "${1:-}" ]]; then
-  echo "❌ Usage: batch_work.sh [--force] <BATCH_NUMBER> | --list | --list-all | --release [--force] <BATCH_NUMBER>" >&2
+  echo "❌ Usage: batch_work.sh [--force] [--allow-open-fence] <BATCH_NUMBER> | --list | --list-all | --release [--force] <BATCH_NUMBER>" >&2
   exit 1
 fi
 BATCH_NUM="$(normalize_batch_arg "$1")"
@@ -724,6 +841,12 @@ if ! [[ "$BATCH_NUM" =~ ^[0-9]+$ ]]; then
   echo "❌ Batch number must be a positive integer, got: ${BATCH_NUM}" >&2
   exit 1
 fi
+
+# Q-037: as early as the number is known, and before the batch is located,
+# before the status gate, and before any branch, worktree or lock exists.
+# `--force` is parsed above and cannot reach past this — same rule as the fence
+# refusal, and for the same reason.
+refuse_on_duplicate_number "$BATCH_NUM" || exit 1
 
 # Find the batch in review_tasks.md
 BATCH_LINE=""
@@ -866,7 +989,12 @@ case "$BATCH_STATUS" in
 esac
 
 # ── Claim batch on main (Pending → In Progress) ──────────────
-claim_batch "$BATCH_NUM" "$BATCH_STATUS"
+# `|| exit 1`, not a bare call: `claim_batch`'s own `return` returns from a
+# FUNCTION, and this script continues to the branch/worktree/lock writes
+# regardless — the mechanism the status-decision comment above spells out.
+# Its range refusal (Q-017) would otherwise print and then be walked past,
+# leaving a lock and a worktree against a batch nothing could bound.
+claim_batch "$BATCH_NUM" "$BATCH_STATUS" || exit 1
 
 WORKTREE_DIR="${REPO_ROOT}/../${WORKTREE_PREFIX:-$(basename "$REPO_ROOT")}-batch-${BATCH_NUM}"
 

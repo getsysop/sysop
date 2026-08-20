@@ -7,8 +7,12 @@ focused modules (``config`` / ``grep`` / ``lsp`` / ``lint`` / ``pip_audit`` /
 * ``run_checks.sh`` invokes this file via ``python run_checks_impl.py`` —
   ``main()`` is re-exported below.
 * Tests do ``import run_checks_impl as rci`` / ``from run_checks_impl import
-  _run_eslint`` — every public and underscore-prefixed symbol from the
-  package is re-exported here.
+  _run_eslint`` — every symbol the pre-split module exposed is re-exported
+  here. That set is the historical API, not everything the package now
+  defines: Phase 213's ``identity_of``, ``legacy_entries``,
+  ``migrate_baseline`` and ``_source_line`` are package-internal and are
+  deliberately not added, since nothing outside the package called them
+  before the split.
 * Tests patch ``run_checks_impl.subprocess.run`` — the ``import subprocess``
   below keeps that attribute resolvable. Because ``subprocess`` is a singleton
   module, the patch applies to every submodule's calls.

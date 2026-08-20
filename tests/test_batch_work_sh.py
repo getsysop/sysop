@@ -1,21 +1,36 @@
 """Integration tests for core/companion/scripts/batch_work.sh (Phase 84).
 
 `batch_work.sh` lists review batches and creates an isolated worktree for one.
-With NO scripts/review_index.py present these tests exercise the inline
-`_parse_batches_fallback` bash regex (the fragile code) directly. They lock:
-the guard ordering (review_tasks.md before arg handling), the arg guards
-(missing / non-integer / not-found / no-Branch-metadata), the `--list` /
+They lock: the guard ordering (review_tasks.md before arg handling), the arg
+guards (missing / non-integer / not-found / no-Branch-metadata), the `--list` /
 `--list-all` parse + Complete-filtering, and the auto-build graceful skip when
 off `main` (which must not abort — the worktree is still created).
+
+**Phase 209 changed what these exercise.** They used to run with NO
+`review_index.py` present, deliberately, so that the inline
+`_parse_batches_fallback` bash regex was the code under test. That parser has
+been retired (Q-036: no fence rule, so a fenced `### Batch <N>` was structural
+to it alone; Q-226: its `while read` silently dropped a final line with no
+trailing newline). `review_index.py` is now the only parser, so the fixture
+installs it and these tests exercise the index path. The refusal that replaced
+the fallback is covered by
+`test_batch_status_gate.py::test_claim_refuses_outright_when_the_index_is_absent`
+and `test_duplicate_batch_numbers.py::test_a_present_but_unusable_parser_fails_loudly`.
+
+(An earlier version of this sentence cited `test_parser_preflight.py`, which has
+never existed in this tree. Caught by the review round; nothing mechanical could
+see it, because the citation guard's scope excludes `tests/` and its pattern
+requires a `:<line>` suffix.)
 """
+import shutil
 import subprocess
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = REPO_ROOT / "core/companion/scripts/batch_work.sh"
+SCRIPTS = REPO_ROOT / "core/companion/scripts"
+SCRIPT = SCRIPTS / "batch_work.sh"
 
-# em-dash header + `> **Branch:**` metadata line — the shape the fallback
-# parser's regexes require.
+# em-dash header + `> **Branch:**` metadata line.
 TWO_BATCHES = """\
 # Review Tasks
 
@@ -46,6 +61,15 @@ def _repo(root, tasks: "str | None" = TWO_BATCHES):
     _git(root, "config", "commit.gpgsign", "false")  # ignore a contributor's global signing
     if tasks is not None:
         (root / "review_tasks.md").write_text(tasks)
+    # Install the vendor scripts the way a consumer has them, so `INDEX_SCRIPT`
+    # resolves. Required since Phase 209 retired the bash fallback: without
+    # review_index.py the script now refuses rather than parsing inline.
+    sd = root / "sysop" / "scripts"
+    sd.mkdir(parents=True, exist_ok=True)
+    for name in ("review_index.py", "_log.py"):
+        src = SCRIPTS / name
+        if src.exists():
+            shutil.copy(src, sd / name)
     (root / "README.md").write_text("# seed\n")
     _git(root, "add", "-A")
     _git(root, "commit", "-qm", "seed")

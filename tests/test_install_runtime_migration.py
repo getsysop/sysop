@@ -38,6 +38,22 @@ def _git(cwd, *args):
     subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True)
 
 
+def _commit_all(root, msg):
+    """Absorb the install output; commit only if something is staged.
+
+    See test_install_concat.py::_commit_all for the full reasoning. Short
+    version: a no-op `--update` leaving a clean tree is the correct Phase-148
+    behaviour, and before Phase 212 this call site was carried by vendored
+    `.pyc` churn rather than by anything the test meant to assert.
+    """
+    _git(root, "add", "-A")
+    staged = subprocess.run(["git", "diff", "--cached", "--quiet"],
+                            cwd=root, capture_output=True)
+    if staged.returncode == 0:
+        return
+    _git(root, "commit", "-qm", msg)
+
+
 def _run_install(target, *extra):
     env = dict(os.environ)
     env["PATH"] = os.path.dirname(sys.executable) + os.pathsep + env["PATH"]
@@ -106,7 +122,7 @@ def test_update_moves_all_four_dirs_and_content_survives(tmp_path):
 def test_second_update_is_a_no_op_resume(tmp_path):
     root = _consumer_with_old_runtime_dirs(tmp_path / "c")
     assert _run_install(root, "--update").returncode == 0
-    _git(root, "add", "-A"); _git(root, "commit", "-qm", "post-migration")
+    _commit_all(root, "post-migration")
     r2 = _run_install(root, "--update")
     assert r2.returncode == 0, r2.stdout + r2.stderr
     assert "runtime-dir consolidation" not in r2.stdout, (

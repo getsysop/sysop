@@ -552,10 +552,15 @@ def test_sitrep_silent_on_a_healthy_full_round(tmp_path):
 
 
 def test_sitrep_counts_grep_as_looking(tmp_path):
-    """Tier 2's rule, inherited: an honestly *sparse* pass — few relevant files
+    """The Tier-0 sum, on its own authority: an honestly *sparse* pass — few relevant files
     opened, the rest grepped — is full coverage of a sparse scope, not a gap.
     Dropping `grepped` from the sum would flag exactly the review discipline the
-    contract endorses, and a check that fires on the good case gets ignored."""
+    contract endorses, and a check that fires on the good case gets ignored.
+
+    Attributed to "Tier 2's rule, inherited" until Phase 206: Tier 2's merge check
+    reads `Opened` against `Assigned` and sums nothing, and the evidence footer has
+    never collected a search-file count, so there was no Tier-2 sum to inherit. The
+    ~1/3 threshold IS shared with Tier 2; the arithmetic is not."""
     root = _repo(tmp_path / "sparse")
     _plant_receipt(root, manifest=100, opened=10, grepped=80, workers=3)
     assert _kinds(root) == []

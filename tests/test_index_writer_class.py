@@ -58,18 +58,81 @@ NON_INDEX_DUMP_SITES = {"install.sh"}
 
 SHIPPED_ROOTS = ("core", "packs")
 
-AUTHORING_SKILLS = {
+# The quoting rule's population, as a PARTITION of a derived universe rather than
+# a hand roster. See § "The authoring class" below for why it is shaped this way.
+#
+# Phase 204: the constant that used to sit here (`AUTHORING_SKILLS`, three files)
+# was DEAD — Phase 201's own review round deleted both of its consumers and
+# re-added the definition, so for three phases it read as coverage while binding
+# nothing, and `/document-work` sat outside it unnoticed. A roster that no test
+# reads is worse than no roster: it answers the question "is this guarded?" wrong.
+TITLE_AUTHORING = {
     "core/skills/add-task/SKILL.md",
     "core/skills/intake/SKILL.md",
     "core/skills/onboard/SKILL.md",
+    "core/skills/document-work/SKILL.md",  # Step 3b — added Phase 204
+    "core/companion/tasks/README.md",
+    "core/companion/tasks/schema.md",  # the `title` row — added Phase 204
+}
+
+# The rest of the universe: they name the index but never ask a reader to compose
+# an entry. `install.sh` is here on purpose — it *writes* a seed, but the seed is
+# a fixed template already covered by `test_every_shipped_title_template_is_quoted`,
+# and no human authors a title from it.
+INDEX_READERS = {
+    "core/companion/.claude/settings.json",
+    "core/companion/docs/WORKFLOW.md",
+    "core/companion/docs/WORKFLOW_GUIDE.md",
+    "core/companion/git-hooks/examples/pre-commit-tasks-validate.example",
+    "core/companion/scripts/backfill_completed_dates.py",
+    "core/companion/scripts/claim_task.sh",
+    "core/companion/scripts/next_task.py",
+    "core/companion/scripts/scope_overlap.py",
+    "core/companion/scripts/sitrep_survey.py",
+    "core/companion/scripts/validate_tasks.py",
+    "core/skills/_shared/adversarial-review.md",
+    "core/skills/auto-build/SKILL.md",
+    "core/skills/claim-task/SKILL.md",
+    "core/skills/codebase-review/SKILL.md",
+    "core/skills/daily-summary/SKILL.md",
+    "core/skills/release/SKILL.md",
+    "core/skills/review-close/SKILL.md",
+    "core/skills/roadmap/SKILL.md",
+    "core/skills/security-audit/SKILL.md",
+    "core/skills/sitrep/SKILL.md",
+    "install.sh",
+    "packs/python/companion/checks.yml.fragment",
+    "packs/python/companion/convention_map.md",
 }
 
 TASKS_README = "core/companion/tasks/README.md"
 
 
 def _flat(text: str) -> str:
-    """Whitespace-normalised, so a reflow never reds a pin but a reword does."""
-    return " ".join(text.split())
+    """Whitespace-normalised, so a reflow never reds a pin but a reword does.
+
+    `*` is stripped too (Phase 204). Without that, every pin below is keyed to
+    where the author put bold and italic rather than to the claim: re-wrapping
+    two words of a pinned clause in `**` silently disarms the guard, and it
+    passes. That is the over-strict direction, and it reads as a green test.
+    Phase 203 shipped a headline guard beaten by exactly one `*` between two
+    words, and its round then found seven more separators doing the same.
+
+    Only `*` — never `_`, which in this repo is overwhelmingly part of an
+    identifier (`tasks/index.yml`'s siblings, `safe_dump`, `_sanitize_log`), so
+    stripping it would make several pins unsatisfiable rather than robust. The
+    cost of that choice, which the round measured: swapping a pinned clause's
+    `*read*` to the equally-legal `_read_` reds the suite. Accepted — a pin is
+    meant to make rewording deliberate — but it is a cost, not a free win.
+
+    **HTML comments are removed before matching** (Phase 204, round finding). A
+    pin is a membership check, so wrapping the rule in `<!-- … -->` satisfied
+    every pin in this module while the reader saw nothing. This repo uses HTML
+    comments routinely, and "temporarily" commenting out guidance is an ordinary
+    edit — it was the cheapest full bypass the round found.
+    """
+    text = re.sub(r"<!--.*?-->", " ", text, flags=re.S)
+    return " ".join(text.replace("*", "").split())
 
 
 def _shipped_files() -> list[Path]:
@@ -366,6 +429,210 @@ def test_the_skill_authored_index_skeleton_carries_no_comments_either():
 
 
 # --------------------------------------------------------------------------
+# The authoring class — a derived universe, partitioned by a named roster
+# --------------------------------------------------------------------------
+#
+# Phase 204. `Q-209` asked for `AUTHORING_SKILLS` to be "derived from the tree".
+# It cannot be, and the attempt is the interesting part of this section.
+#
+# **No mechanical predicate separates authoring paths from readers.** Five were
+# probed against the tree before this shape was chosen, by
+# `tools/phase204_predicate_probe.py` — run it to reproduce these, and read its
+# docstring first, because the counts move with the ground-truth set and the
+# population and the numbers here are meaningless without both. Against ground
+# truth = the 4 authoring SKILLS and population = the 25 git-tracked core/packs
+# files naming the index: "says file/create an entry" (16 FP, 1 miss), "names id
+# and title together" (3 FP, 1 miss), "says new entry" (3 FP, 2 misses), "carries
+# a literal `title:` key" (4 FP, 3 misses), "names `tasks/open/`" (4/4 recall but
+# 7 FP). Every one either misses a known authoring path or drags in files that
+# only read the index. "This surface tells a reader to compose a task entry" is a
+# judgement, and encoding a judgement as a regex produces a guard that is
+# confidently wrong.
+#
+# So the derivation does not classify. It derives the UNIVERSE — every shipped
+# file that names the task index, which is sound by construction, since you
+# cannot instruct someone to author an index entry without naming the index —
+# and asserts set-equality against the partition above. Membership is named;
+# *drift* is detected. A new file entering or leaving the universe reds and a
+# human decides which half it belongs in.
+#
+# This is the same shape as `test_the_index_writer_population_is_exactly_the_five
+# _named_here` at the top of this module, and it is used here for the same
+# reason: the alternative is a roster with a countdown on it.
+#
+# The soundness argument above is about the INDEX being named; the pattern below
+# is the argument's encoding, and Phase 204's round filed it (`Q-214` leg 4) for
+# being narrower than the argument it implements. It was anchored to the full
+# path `tasks/index.yml`, so a new surface writing "the task index (`index.yml`)"
+# never entered the universe and the tripwire never fired — the file owed the
+# quoting rule and nothing said so. Verified before the widening: the bypass
+# surface passed at 65 green; after it, the tripwire names the file.
+#
+# The widening costs nothing here, because on this tree the strict and loose
+# universes are the SAME 29 files, verified by deriving both and diffing — so
+# this is prophylaxis against a surface nobody has written yet, not a fix to a
+# live gap. Read it that way before citing it as one.
+#
+# What it still does NOT reach, stated so the next reader does not have to
+# rediscover it: the match is case-sensitive (`INDEX.yml` escapes), extension-
+# bound (`index.yaml` escapes), and filename-bound — a surface naming the index
+# in prose alone ("the task index under `tasks/`") never enters the universe.
+# That residue is the blacklist-over-English problem `Q-214` legs (1)-(3) park;
+# it is not fixable by widening this pattern further, and widening it toward
+# prose is how the false-fire class gets minted. No shipped file uses any of
+# those spellings today.
+
+_NAMES_INDEX = re.compile(r"\bindex\.yml\b")
+
+
+def _index_naming_files() -> set[str]:
+    """Every shipped file that names `tasks/index.yml`. The universe, derived."""
+    found = set()
+    for path in _shipped_files():
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        if _NAMES_INDEX.search(text):
+            found.add(str(path.relative_to(REPO_ROOT)))
+    return found
+
+
+def test_the_index_naming_universe_is_exactly_the_partition():
+    """The tripwire. Drift reds; it does not silently re-scope the guard below.
+
+    If this fails, a shipped file started or stopped naming the task index.
+    Decide which half it belongs in and add it — do NOT widen the derivation to
+    make the failure go away. A file that instructs an author belongs in
+    `TITLE_AUTHORING` and then owes the quoting rule; one that only reads the
+    index belongs in `INDEX_READERS`.
+    """
+    found = _index_naming_files()
+    named = TITLE_AUTHORING | INDEX_READERS
+    assert found == named, (
+        "the set of shipped files naming `tasks/index.yml` changed.\n"
+        f"  entered the universe (classify these): {sorted(found - named)}\n"
+        f"  left the universe (drop these):        {sorted(named - found)}"
+    )
+
+
+def test_the_universe_pattern_reaches_more_than_the_full_path():
+    """Reach control for the widening — without it, nothing detects a revert.
+
+    On this tree the strict pattern (`tasks/index.yml`) and the widened one
+    select the SAME 29 files, so re-narrowing it reds nothing: measured, the
+    revert survived the whole module. The widening's entire value is against a
+    surface nobody has written yet, which means the only thing that can hold it
+    in place is a direct assertion about the pattern's reach.
+
+    The spellings below are the ones the filed bypass actually used.
+    """
+    reached = "append an entry to the task index (`index.yml`)"
+    assert _NAMES_INDEX.search(reached), (
+        "the universe pattern no longer matches a bare `index.yml`, so a file "
+        "naming the index that way is invisible to the tripwire and silently "
+        "owes none of the authoring obligations. This is `Q-214` leg (4); do "
+        "not re-anchor the pattern to the full path."
+    )
+    assert _NAMES_INDEX.search("see `tasks/index.yml` for the schema"), (
+        "the universe pattern stopped matching the full path — the widening was "
+        "supposed to ADD reach, not trade it."
+    )
+    # The two asserts above pin two LITERALS, and the round walked them by
+    # OR-ing the pre-phase pattern with the control's own string — satisfying
+    # both while a real new file writing `index.yml` bare still never entered
+    # the universe. Delimiter-anchored narrowings (`[/`]index\.yml\b`) do the
+    # same. So the reach has to be probed where no delimiter helps.
+    assert _NAMES_INDEX.search("append an entry to index.yml today"), (
+        "the universe pattern only matches `index.yml` when a delimiter sits "
+        "beside it — a backtick, a slash, a parenthesis. A surface writing the "
+        "filename bare in a sentence is then invisible to the tripwire, which "
+        "is the leg-(4) bypass wearing a narrower mask. Match the filename, "
+        "not the punctuation around it."
+    )
+
+
+def test_the_partition_is_a_partition():
+    """The halves must not overlap, or a file could be 'authoring' and exempt."""
+    both = TITLE_AUTHORING & INDEX_READERS
+    assert both == set(), f"named in both halves of the partition: {sorted(both)}"
+
+
+def test_the_universe_derivation_is_not_vacuous():
+    """Vacuity + reach control.
+
+    An empty derivation satisfies the equality above only if both roster halves
+    are also empty — but a derivation that silently read nothing (a bad glob, an
+    encoding bail) would then be certifying breadth it does not have. This pins
+    that it reads a real corpus and reaches every kind of shipped surface the
+    universe actually spans, not just markdown.
+    """
+    found = _index_naming_files()
+    assert len(found) >= 25, f"universe is only {len(found)} files"
+    assert TITLE_AUTHORING <= found, (
+        "a named authoring surface does not name `tasks/index.yml` — the "
+        f"derivation cannot see it: {sorted(TITLE_AUTHORING - found)}"
+    )
+    exts = {Path(f).suffix for f in found}
+    assert {".md", ".py", ".sh"} <= exts, (
+        f"the universe scan misses a shipped file kind: {sorted(exts)}"
+    )
+
+
+# The authoring half, pinned member-by-member. The round demonstrated why this
+# is not redundant with the tripwire above: it collapsed `TITLE_AUTHORING` to one
+# file, moved the other five into `INDEX_READERS`, dropped their `PINS` and
+# `RULE_STATED` entries in the same edit, deleted the quoting rule outright from
+# four shipped files — and the suite stayed GREEN, 3,704 passed.
+#
+# The union never changed, so `found == named` held; and tying the three
+# constants together is satisfied by editing all three at once, which is a
+# mechanical follow-through rather than an obstacle. **It is also precisely the
+# edit that created `Q-209`** — Phase 201's round deleted the consumers.
+#
+# So the tripwire detects universe *drift*, not *reclassification*, and the
+# record's "the alternative is a roster with a countdown on it" was too kind to
+# this design: the countdown is still here. What this constant buys is that
+# removing a member is now a visible, deliberate act in a file whose whole
+# subject is that rosters rot.
+EXPECTED_TITLE_AUTHORING = frozenset({
+    "core/skills/add-task/SKILL.md",
+    "core/skills/intake/SKILL.md",
+    "core/skills/onboard/SKILL.md",
+    "core/skills/document-work/SKILL.md",
+    "core/companion/tasks/README.md",
+    "core/companion/tasks/schema.md",
+})
+
+
+def test_the_authoring_half_is_exactly_these_six():
+    """`Q-209` stated as an assertion rather than as a comment.
+
+    A file may only leave this roster by editing this literal, which is the
+    deliberate act the phase wants. Adding one is equally visible, and then
+    `test_the_rule_population_is_the_authoring_roster_itself` forces a pattern
+    and a pin for it in the same edit.
+    """
+    assert TITLE_AUTHORING == set(EXPECTED_TITLE_AUTHORING), (
+        "the authoring roster changed.\n"
+        f"  removed: {sorted(set(EXPECTED_TITLE_AUTHORING) - TITLE_AUTHORING)}\n"
+        f"  added:   {sorted(TITLE_AUTHORING - set(EXPECTED_TITLE_AUTHORING))}\n"
+        "Reclassifying a file out of the authoring half silently drops its "
+        "quoting rule — that is the Q-209 regression, and it is the one edit "
+        "the universe tripwire cannot see."
+    )
+
+
+@pytest.mark.parametrize("path", sorted(EXPECTED_TITLE_AUTHORING))
+def test_no_authoring_surface_is_reclassified_as_a_reader(path: str):
+    """The other direction, per-file so the failure names the file."""
+    assert path not in INDEX_READERS, (
+        f"{path} was moved into INDEX_READERS, which exempts it from the "
+        "quoting rule entirely while leaving the derived universe unchanged"
+    )
+
+
+# --------------------------------------------------------------------------
 # Prose that carries the fix — pinned verbatim, because negation is the shape
 # --------------------------------------------------------------------------
 
@@ -397,18 +664,149 @@ PINS: dict[str, tuple[str, ...]] = {
         "### Comments in `index.yml` do not survive",
         "every comment is stripped, quoting is normalised, indentation is rewritten",
         # Inverting this re-seeds the defect the template was moved to escape.
-        "**Copy the fields, not the comments.**",
+        "Copy the fields, not the comments.",
+    ),
+    # Phase 204 — the fourth authoring path. The second clause is the one whose
+    # negation is the whole defect: an author who believes a template exists
+    # goes looking for one instead of applying the rule, and Step 3b ships none.
+    "core/skills/document-work/SKILL.md": (
+        "YAML reads ` #` (space then hash) as the start of a comment",
+        "the title it asks for is composed here, by hand, with no template to copy",
+        "an issue number, a PR number or a heading fragment in the title is the "
+        "ordinary case rather than the edge one",
+    ),
+    # Phase 204 — the reference the other paths route an author to. Its negation
+    # is the row saying nothing, which is the state Q-209 found it in.
+    "core/companion/tasks/schema.md": (
+        "YAML reads ` #` (space then hash) as the start of a comment",
+        "the validator stays green because what survives is still a legal title",
     ),
 }
 
 # `RULE_STATED` holds the same requirement at the level of meaning, so the rule
 # cannot simply be deleted while the reason clause survives. Loose on wording.
+# The round found this pattern wrong in BOTH directions, which is the shape that
+# reads as a working guard. It matched the substring inside "**Never** quote the
+# `title:`" — a statement of the opposite rule — while rejecting five ordinary
+# rewordings including "Every `title:` you write must be quoted". So it accepted
+# the negation and false-killed the reword: exactly the failure the module
+# docstring credits the two-tier scheme with fixing, alive inside the mechanism.
+#
+# Split in two. `_QUOTE_RULE` is deliberately generous about phrasing (a rule can
+# be written imperative or passive), and `_QUOTE_NEGATORS` is the screen that
+# stops generosity from swallowing the inversion.
+_QUOTE_RULE = re.compile(
+    r"quote (?:every|the|each|all)[^.]{0,30}`title:`"
+    r"|`title:`[^.]{0,60}?(?:must|should|has to|needs? to)[^.]{0,30}?quoted"
+    r"|quote[^.]{0,30}`title:`[^.]{0,30}(?:you write|values?)",
+    re.I,
+)
+
+# Sentence-scoped, and required to be about a TITLE. Both constraints were bought
+# with false fires the moment the first version ran against the real tree:
+#
+#   * "…don't overwrite. Quote every `title:` you write" — `/add-task`. A window
+#     of N words crosses a sentence boundary, so a negator in the PREVIOUS
+#     sentence suppressed a correct rule in the next one.
+#   * "Don't quote an item count here" — `/onboard`. A different sense of the
+#     word entirely, nothing to do with YAML titles.
+#
+# So: same sentence, and `title` must be in it. The pattern is deliberately not
+# clever about which side the negator falls on — "quoting … is optional" and
+# "never quote …" are both inversions, and word order is not the signal.
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
+_NEGATOR = re.compile(
+    r"\b(?:never|do not|don't|does not|need not|no need|not required|"
+    r"unnecessary|optional|a style preference|avoid|refrain from)\b",
+    re.I,
+)
+_QUOTE_WORD = re.compile(r"\bquot(?:e|es|ed|ing)\b", re.I)
+
+
+# Co-occurrence inside a sentence is NOT the signal — that was the second false
+# fire, on `tasks/README.md`'s own correct line "…that is the unquoted-title case
+# above, and quoting is its fix. What does not survive the dump is…", where a
+# negator and a quote-word share a sentence while modifying different verbs. The
+# negator has to actually ATTACH to the quote word, so proximity is bounded to a
+# few words in either order.
+_NEG_ATTACHED = re.compile(
+    r"(?:{neg})(?:\W+\w+){{0,2}}\W+{q}"          # never quote / do not ever quote
+    r"|{q}(?:\W+\w+){{0,3}}\W+(?:is|are)\W+(?:{neg})".format(  # quoting … is optional
+        neg=r"never|do not|don't|does not|need not|no need(?: to)?|not required(?: to)?"
+            r"|unnecessary|optional|a style preference|avoid|refrain from",
+        q=r"quot(?:e|es|ed|ing)",
+    ),
+    re.I,
+)
+
+
+def _negated_quote_sentences(flat: str) -> list[str]:
+    """Sentences that tell the reader NOT to quote a title.
+
+    Three conditions, each bought with a measured false fire: same sentence (a
+    window crosses `. `), `title` present (`/onboard`'s "Don't quote an item
+    count" is a different sense), and the negator grammatically attached to the
+    quote word (README's correct line pairs a negator with a different verb).
+    """
+    out = []
+    for sentence in _SENTENCE_SPLIT.split(flat):
+        if "title" in sentence.lower() and _NEG_ATTACHED.search(sentence):
+            out.append(sentence.strip())
+    return out
+
 RULE_STATED: dict[str, re.Pattern[str]] = {
-    "core/skills/add-task/SKILL.md": re.compile(r"quote (every|the|each)[^.]{0,20}`title:`", re.I),
-    "core/skills/intake/SKILL.md": re.compile(r"quote (every|the|each)[^.]{0,20}`title:`", re.I),
-    "core/skills/onboard/SKILL.md": re.compile(r"quote (every|the|each)[^.]{0,20}`title:`", re.I),
+    "core/skills/add-task/SKILL.md": _QUOTE_RULE,
+    "core/skills/intake/SKILL.md": _QUOTE_RULE,
+    "core/skills/onboard/SKILL.md": _QUOTE_RULE,
+    "core/skills/document-work/SKILL.md": _QUOTE_RULE,  # Phase 204
+    "core/companion/tasks/schema.md": _QUOTE_RULE,  # Phase 204
     TASKS_README: re.compile(r"quote the title", re.I),
 }
+
+
+def test_the_rule_population_is_the_authoring_roster_itself():
+    """The hole `AUTHORING_SKILLS` left, closed at the level that caused it.
+
+    Both dicts below are parametrized over their own keys, so a file added to
+    `TITLE_AUTHORING` without an entry here would simply never be checked — the
+    roster would grow and the guard would not, which is exactly how a dead
+    constant reads as coverage. Tying the populations together means adding an
+    authoring path forces a rule pattern and a pin for it, in the same edit.
+    """
+    assert set(RULE_STATED) == TITLE_AUTHORING, (
+        "RULE_STATED and TITLE_AUTHORING disagree.\n"
+        f"  in the roster, unchecked: {sorted(TITLE_AUTHORING - set(RULE_STATED))}\n"
+        f"  checked, not in roster:   {sorted(set(RULE_STATED) - TITLE_AUTHORING)}"
+    )
+    assert set(PINS) == TITLE_AUTHORING, (
+        "PINS and TITLE_AUTHORING disagree.\n"
+        f"  in the roster, unpinned: {sorted(TITLE_AUTHORING - set(PINS))}\n"
+        f"  pinned, not in roster:   {sorted(set(PINS) - TITLE_AUTHORING)}"
+    )
+
+
+def _missing_pins(clauses: tuple[str, ...], flat: str) -> list[str]:
+    """The pin predicate, hoisted so the guard and its control share it.
+
+    `Q-214` leg (5): blanking `PINS[path]` to `()` left the whole suite green,
+    and so did reducing the `RULE_STATED` search below to `is not None`. The
+    roster cross-check above cannot see either — it compares KEY sets, and both
+    mutations leave the keys intact.
+
+    Hoisting alone does not fix it, and the shape that looks right does not
+    work. A control that feeds this predicate its own synthetic clauses never
+    touches `PINS`, so blanking `PINS` still survives — measured, at 66 green.
+    That is the difference from `_states_the_subset_as_the_population` in
+    `tests/test_roadmap_batch_survey.py`, which this was modelled on: that
+    guard's data is DERIVED, so a control re-derives it and observes the real
+    thing. A literal roster has to be observed directly.
+
+    So the control below runs synthetic gutted INPUT through the REAL roster,
+    and asserts the roster is non-empty in the same breath. Both halves are
+    load-bearing: the emptiness assert catches blanked data, the gutted-document
+    assert catches a weakened predicate.
+    """
+    return [clause for clause in clauses if _flat(clause) not in flat]
 
 
 @pytest.mark.parametrize("path", sorted(PINS))
@@ -417,7 +815,7 @@ def test_the_negation_sensitive_clauses_are_present_verbatim(path: str):
     opposite — the round inverted the rule in all three skills and in the README
     and every one stayed green. These clauses are what catch negation."""
     flat = _flat((REPO_ROOT / path).read_text(encoding="utf-8"))
-    missing = [clause for clause in PINS[path] if _flat(clause) not in flat]
+    missing = _missing_pins(PINS[path], flat)
     assert missing == [], (
         f"{path} no longer carries a clause whose negation is the defect. If you "
         "reworded it deliberately, update PINS in this file — that is the point "
@@ -425,10 +823,198 @@ def test_the_negation_sensitive_clauses_are_present_verbatim(path: str):
     )
 
 
+# A pin is a MEMBERSHIP check, and membership is not uniqueness. The author-side
+# battery negated `/document-work`'s reason clause in the prose and the pin stayed
+# green, because the same clause also appears in Step 3b's error message — one
+# copy satisfied the pin while the other told the reader the opposite. Pinning
+# presence cannot see that; forbidding the inversion can.
+# **This blacklist is not exhaustive, and cannot be — no pattern over English is.**
+# Saying so is not a formality: the first version of this tuple had four entries,
+# its docstring asserted the mechanism worked, and the round wrote NINE plausible
+# inversions that all passed ("YAML treats ` #` as ordinary text", "the hash and
+# everything after it is preserved", "No truncation occurs", "an unquoted title
+# round-trips exactly", …). The nine are folded in below and the residual is now
+# declared, matching `_BLOCK_SCALAR_FALSEHOODS`, which got this right first.
+#
+# What this tier IS: a cheap screen for the inversions people actually write.
+# What it is NOT: a proof that the reason is stated correctly. The load-bearing
+# guard is `PINS` — a verbatim clause whose *presence* is checked — and this
+# catches the case where the clause survives and a contradiction is added beside it.
+_REASON_INVERSIONS = (
+    r"YAML (?:does not|doesn't|never) read",
+    r"YAML (?:treats|reads) ` ?#`[^.]{0,40}(?:ordinary|literal|plain) text",
+    r"YAML ignores the ` ?#`",
+    r"is not the start of a comment",
+    r"only applies at the start of a line",
+    r"survives? unquoted",
+    r"unquoted titles? (?:are|is) safe",
+    # These two are TRUE of a quoted title — `tasks/README.md` says both, correctly
+    # — so they are only inversions when predicated of an UNQUOTED one. The first
+    # version omitted that and false-fired on the reference page itself.
+    r"unquoted[^.]{0,60}round-trips exactly",
+    r"(?:no|without) truncation[^.]{0,60}unquoted|unquoted[^.]{0,60}(?:no|without) truncation",
+    r"nothing is lost[^.]{0,60}(?:unquoted|omit the quotes)",
+    r"(?:the hash|everything after it) (?:and everything after it )?is preserved",
+    r"quoting (?:is|are) (?:optional|unnecessary|not required|a style preference)",
+)
+
+
+@pytest.mark.parametrize("path", sorted(TITLE_AUTHORING))
+def test_no_authoring_surface_states_the_reason_backwards(path: str):
+    """Reversal canary across the whole authoring roster.
+
+    Scoped to the roster rather than to the one file that failed: the defect is a
+    property of "a surface that teaches this rule", and the next one to acquire a
+    second copy of the clause will not be `/document-work`.
+
+    **Known residual, declared rather than discovered later:** this is a
+    blacklist over English and cannot be complete. See `_REASON_INVERSIONS`.
+    """
+    flat = _flat((REPO_ROOT / path).read_text(encoding="utf-8"))
+    for inversion in _REASON_INVERSIONS:
+        m = re.search(inversion, flat, re.I)
+        assert not m, (
+            f"{path} states the quoting rule's reason backwards: {m.group(0)!r}. "
+            "A pinned clause elsewhere in the file will keep the presence check "
+            "green while this sentence teaches the opposite."
+        )
+
+
+def test_the_reversal_canary_fires_on_the_shape_that_survived():
+    """Control, both directions, on the shape the battery used.
+
+    (An earlier docstring said "the exact text"; the battery's strings carry no
+    `Unquoted, ` prefix. Substantively the same mutation, but not verbatim, and
+    the round was right to say so.)
+    """
+    real = "Unquoted, YAML reads ` #` (space then hash) as the start of a comment"
+    negated = "Unquoted, YAML does not read ` #` (space then hash) as the start of a comment"
+    fires = lambda s: any(  # noqa: E731
+        re.search(inv, _flat(s), re.I) for inv in _REASON_INVERSIONS
+    )
+    assert not fires(real), "the canary false-fires on the correct sentence"
+    assert fires(negated), "the canary misses the negation the battery planted"
+
+
+def test_flat_normalises_emphasis_so_a_pin_cannot_be_disarmed_by_bold():
+    """The `_flat` hardening, guarded.
+
+    Reverting it reds nothing on its own — every clause pinned today happens to
+    be plain text — so the battery watched the revert survive. This is the test
+    that makes the normalisation a decision rather than an accident: wrapping two
+    words of a pinned clause in `**` must not disarm the pin.
+    """
+    clause = "still a legal title"
+    assert _flat(clause) in _flat("what survives is **still a legal** title")
+    assert _flat(clause) in _flat("what survives is *still a legal title*")
+    assert _flat(clause) in _flat("what survives is still\n  a legal title")
+    # …and `_` must survive, or identifiers stop matching.
+    assert "safe_dump" in _flat("a `safe_dump` call")
+
+
+def test_both_copies_of_step_3bs_hard_fail_carry_the_rule():
+    """`/document-work` ships the Step 3b block TWICE and only one of them runs.
+
+    The prose block is what a reader sees; the "Reference implementation" heredoc
+    at the bottom is the copy-pasteable one an agent actually executes, and it
+    prints its own error message. The round's execute lens ran the shipped
+    heredoc against a scratch project and found its message carried neither the
+    new quoting rule nor the pre-existing "Stub minimum" paragraph — so this
+    phase's first cut stated the rule only on the path that does not run, while
+    the record claimed it shipped "where the author reads it".
+
+    Nothing had ever compared the two copies. This does, for the one clause that
+    matters: both must teach the quoting rule.
+    """
+    text = (REPO_ROOT / "core/skills/document-work/SKILL.md").read_text(encoding="utf-8")
+    marker = "Reference implementation"
+    at = text.index(marker)
+    prose, runnable = text[:at], text[at:]
+
+    for half, label in ((prose, "the prose block"), (runnable, "the runnable heredoc")):
+        assert re.search(r"quote the title", half, re.I), (
+            f"{label} of /document-work's Step 3b hard fail no longer tells the "
+            "author to quote the title. Both copies teach the same contract; a "
+            "rule in only one of them reaches only half the authors, and the "
+            "runnable copy is the half that executes."
+        )
+        assert "space then hash" in half, (
+            f"{label} states the quoting rule without its reason — a bare "
+            "instruction reads as a style preference and gets dropped."
+        )
+
+
+def _states_the_rule(path: str, flat: str) -> bool:
+    """The rule-stated predicate, hoisted so the guard and its control share it.
+
+    Reducing the call site to `RULE_STATED[path] is not None` used to leave the
+    suite green (`Q-214` leg 5). Hoisted, that weakening happens HERE, where the
+    control below observes it by feeding neutral prose and demanding a miss.
+    """
+    return RULE_STATED[path].search(flat) is not None
+
+
 @pytest.mark.parametrize("path", sorted(RULE_STATED))
 def test_the_quoting_rule_is_stated(path: str):
     flat = _flat((REPO_ROOT / path).read_text(encoding="utf-8"))
-    assert RULE_STATED[path].search(flat), f"{path} no longer states the quoting rule"
+    assert _states_the_rule(path, flat), f"{path} no longer states the quoting rule"
+    negated = _negated_quote_sentences(flat)
+    assert not negated, (
+        f"{path} states the quoting rule NEGATED: {negated!r}. The presence "
+        "check above matches the substring inside 'never quote the `title:`', so "
+        "without this screen an inverted rule reads as a stated one."
+    )
+
+
+def test_the_rule_pattern_is_wrong_in_neither_direction():
+    """Both directions, because the round found this pattern failing both.
+
+    The accepted list is ordinary rewordings a maintainer would actually write;
+    the rejected list is the rule inverted. A pattern that fails either way is
+    worse than none: it pressures the next author toward vaguer prose while
+    certifying the opposite rule as compliant.
+    """
+    accepted = (
+        "**Quote every `title:` you write**",
+        "Always quote the `title:` you write",
+        "Every `title:` you write must be quoted",
+        "`title:` must always be quoted",
+        "Quote all `title:` values",
+        "Quote the title",
+    )
+    rejected = (
+        "**Never quote the `title:` you write**",
+        "**Do not quote the `title:` you write**",
+        "You need not quote the `title:` you write",
+        "There is no need to quote the `title:` here",
+        "Quoting the `title:` is optional",
+    )
+    for s in accepted:
+        flat = _flat(s)
+        hit = _QUOTE_RULE.search(flat) or re.search(r"quote the title", flat, re.I)
+        assert hit, f"a legitimate rewording is rejected: {s!r}"
+        assert not _negated_quote_sentences(flat), f"a correct rule reads as negated: {s!r}"
+    for s in rejected:
+        assert _negated_quote_sentences(_flat(s)), f"an inverted rule passes: {s!r}"
+
+    # The two false fires the round's over-strictness direction produced, as controls.
+    assert not _negated_quote_sentences(
+        _flat("don't overwrite. Quote every `title:` you write")
+    ), "a negator in the previous sentence suppresses a correct rule"
+    assert not _negated_quote_sentences(
+        _flat("Don't quote an item count here")
+    ), "an unrelated sense of 'quote' reads as an inverted title rule"
+
+
+def test_a_commented_out_rule_does_not_satisfy_the_pins():
+    """The cheapest full bypass the round found, closed in `_flat`."""
+    live = "**Quote every `title:` you write** — YAML reads ` #` as a comment"
+    hidden = f"<!-- {live} -->"
+    assert _QUOTE_RULE.search(_flat(live))
+    assert not _QUOTE_RULE.search(_flat(hidden)), (
+        "a rule inside an HTML comment still satisfies the presence check — the "
+        "reader sees nothing and the guard is green"
+    )
 
 
 def test_the_rule_check_accepts_a_reword_but_the_pin_rejects_an_inversion():
@@ -487,15 +1073,24 @@ def _title_template_files() -> list[Path]:
     script and in a `.yml` config and both survived. `.py` is handled by its own
     control below, because shipped Python carries ~30 quoted YAML examples plus
     two type annotations.
+
+    `.fragment` and `.example` added Phase 204: `rglob("*.yml")` does NOT match
+    `checks.yml.fragment`, and `pre-commit-tasks-validate.example` was reached by
+    no glob at all — both sit in the derived index-naming universe, so the scan
+    was blind to two files it had already classified as in scope.
     """
     files = [REPO_ROOT / "install.sh"]
     for root in SHIPPED_ROOTS:
-        for ext in ("*.md", "*.sh", "*.yml", "*.yaml"):
+        for ext in ("*.md", "*.sh", "*.yml", "*.yaml", "*.fragment", "*.example"):
             files.extend(sorted((REPO_ROOT / root).rglob(ext)))
     return files
 
 
-_TITLE_LINE = re.compile(r"^[\s>#-]*title:\s*(?P<value>.*?)\s*$")
+# Marker class widened Phase 204. `[\s>#-]` covered `- ` and blockquotes but not
+# `* `, `+ ` or an ordered `1. ` — all legal CommonMark bullets, and the round
+# planted an unquoted title behind each inside `tasks/README.md`'s own template
+# block, the one every authoring path routes the reader to. All three were invisible.
+_TITLE_LINE = re.compile(r"^[\s>#*+-]*(?:\d+[.)]\s*)?title:\s*(?P<value>.*?)\s*$")
 
 
 def _unquoted_titles(paths: list[Path]) -> list[str]:
@@ -741,3 +1336,220 @@ def test_block_scalar_style_really_is_lost():
     )
     assert "|" not in out and ">-" not in out
     assert yaml.safe_load(out) == yaml.safe_load(src)
+
+
+# ---------------------------------------------------------------------------
+# Controls for the pin loops themselves — `Q-214` leg (5).
+#
+# Phase 204's round found five ways to disarm the guards in this module without
+# reddening anything, and Phase 204 fixed the shape for ONE predicate
+# (`_states_the_subset_as_the_population`, in `tests/test_roadmap_batch_survey.py`)
+# by hoisting it so the guard and its control share it. That treatment never
+# reached the rosters here.
+#
+# The brief for this phase prescribed the same hoist-and-share fix. It is
+# DISQUALIFIED, and the disqualification is the transferable part: the roadmap
+# predicate's data is DERIVED, so a control that re-derives it observes the real
+# guard. `PINS`, `RULE_STATED` and `_DUMP_ALIASES` are LITERAL rosters, and a
+# control that supplies its own literals never touches them — the prescribed
+# shape was built and left every survivor alive at 66 green.
+#
+# What works: run synthetic gutted INPUT through the REAL roster, and assert the
+# roster is non-empty in the same breath.
+#
+# Two control shapes were tried and rejected as dead-on-arrival, recorded so they
+# are not re-attempted:
+#   - "the pin fires when the FIRST occurrence is deleted" — `/document-work`
+#     legally carries a pinned clause TWICE, and that duplication is itself
+#     mandated by `test_both_copies_of_step_3bs_hard_fail_carry_the_rule`.
+#   - "`RULE_STATED` rejects an INVERTED rule" — `_QUOTE_RULE` matches inside
+#     "Never quote the `title:` you write" by documented design (see the comment
+#     on `_negated_quote_sentences`). Use neutral prose, not an inversion.
+#
+# **Declared residual — and a correction to how it was first declared.**
+#
+# The first cut of this section named two surviving bypasses — rewriting the
+# call `_missing_pins(PINS[path], flat)` to `_missing_pins((), flat)`, and
+# swapping the neutral input at its call site — and generalized from them to a
+# stopping rule: that the class is unclosable because detecting it means
+# asserting over the guard's own source text.
+#
+# **That generalization was wrong, and the round proved it by walking 22 of 28
+# bypasses through these controls.** It was true of the two cases named and
+# false of nearly everything else, because the rest sit in ordinary DATA, not in
+# source text. Non-emptiness is not substance: `PINS = {k: ("the",)}` passed
+# every assertion here, and so did `("index.yml",)` — true by construction,
+# since every roster member names the index by derivation — and with either in
+# place a real clause could be deleted from a real shipped file at 79 green.
+# `RULE_STATED = {k: re.compile("title")}` did the same, because neutral prose
+# misses every pattern including a useless one. Three data assertions closed the
+# bulk of it: a derived word floor, an on-topic near-miss input, and a reach
+# probe on an undelimited mention. None of them looks at source text.
+#
+# What actually remains is narrower than the first claim and is stated as such:
+# an edit *inside* a guard's own body — changing what it passes, or what it
+# compares against — is not observable by that guard. That is true of any test
+# in any suite, it is a code-review boundary rather than a test one, and it is
+# NOT a licence to leave a data-level hole undescribed. **A survivor reachable
+# through data is a defect wearing a residual's label**, which is the rule
+# `_shared/adversarial-review.md` states and the one this section failed first
+# time round.
+#
+# One further residual, found by the round and absent from the first list:
+# **classification-by-fiat.** A new authoring surface that enters the universe
+# forces a classification, and the cheaper branch discharges it — adding the
+# path to `INDEX_READERS` is one line and carries no pin, no rule pattern and
+# no obligation. The tripwire makes the choice visible; it cannot make it
+# honest. That is a review boundary too, and unlike the first claim it is
+# named here rather than generalized from.
+# ---------------------------------------------------------------------------
+
+# Prose that is about this repo and mentions none of the rule's terms. Feeding
+# this to a pattern that is supposed to detect the quoting rule must MISS.
+_NEUTRAL_PROSE = _flat(
+    "The installer copies the companion tree into the vendor directory and "
+    "records every managed path in the lock file so a later update can tell a "
+    "consumer edit from a stale copy."
+)
+
+# The NEAR MISS, and this is the one that does the work. Neutral prose shares no
+# vocabulary with the subject, so it misses *any* pattern — including a useless
+# one. The round exploited exactly that: `RULE_STATED = {k: re.compile("title")}`
+# passed the neutral-prose check and then let the quoting rule be deleted from
+# two shipped skills with the suite green.
+#
+# This text is ON TOPIC — it names `title:`, `index.yml` and quoting — and
+# states no rule about quoting the title. A pattern that matches it is matching
+# the topic rather than the claim.
+_NEAR_MISS_PROSE = _flat(
+    "Each entry in `index.yml` carries a `title:` field alongside its id and "
+    "status. The title is free prose and is shown by `/sitrep` when it lists "
+    "open work; quoting conventions for YAML scalars are covered elsewhere in "
+    "this document."
+)
+
+
+@pytest.mark.parametrize("path", sorted(PINS))
+def test_the_pin_roster_is_not_silently_emptied(path: str):
+    """Control for `PINS`. Blanking the values left the suite green.
+
+    The roster cross-check compares KEY sets, so `{k: () for k in PINS}` passes
+    it. This asserts the values carry weight and that the shared predicate
+    actually reports them missing when they are gone from the document.
+    """
+    clauses = PINS[path]
+    assert clauses, (
+        f"PINS[{path!r}] is empty, so the presence guard for this file checks "
+        "nothing. If the file genuinely has no negation-sensitive clause left, "
+        "remove it from TITLE_AUTHORING rather than pinning it to nothing."
+    )
+    # Non-emptiness is not substance, and the round proved the gap is not
+    # theoretical: `PINS = {k: ("the",)}` passed every assertion here at 79
+    # green, and so did `("index.yml",)` — which is true *by construction*,
+    # since every TITLE_AUTHORING member is in the index-naming universe by
+    # derivation. With either in place a real pinned clause can be deleted from
+    # a real shipped file and the suite reports clean, which is the filed
+    # `Q-214` leg-(5) defect restored through the door built to close it.
+    #
+    # The floor is derived, not chosen: the shortest of the 16 real clauses is
+    # "Quoting is the whole defence" at 5 words / 28 characters. A clause below
+    # that cannot carry a negation-sensitive claim — which is what a pin is for.
+    for clause in clauses:
+        assert len(clause.split()) >= 5 and len(clause) >= 28, (
+            f"PINS[{path!r}] carries {clause!r}, which is too short to be a "
+            "negation-sensitive claim. A pin is a clause whose NEGATION is the "
+            "defect; a fragment this small is satisfied by prose that says the "
+            "opposite, and the guard then certifies the file while the rule is "
+            "gone. Pin the clause, not a word inside it."
+        )
+    flat = _flat((REPO_ROOT / path).read_text(encoding="utf-8"))
+    gutted = flat
+    for clause in clauses:
+        gutted = gutted.replace(_flat(clause), "")
+    assert _missing_pins(clauses, gutted) == list(clauses), (
+        "the pin predicate no longer reports pinned clauses as missing from a "
+        f"document they were removed from — it cannot detect deletion in {path}."
+    )
+
+
+@pytest.mark.parametrize("path", sorted(RULE_STATED))
+def test_the_rule_pattern_is_not_silently_widened(path: str):
+    """Control for `RULE_STATED` and for its assertion site.
+
+    Catches both mutations the round walked: a pattern widened to match anything
+    (`re.compile("")`), and the call site reduced to a truthiness check on the
+    pattern object instead of on its result.
+    """
+    # The miss below is satisfied by ANY input the pattern does not match,
+    # including an empty string — measured: swapping `_NEUTRAL_PROSE` for
+    # `_flat("")` left this control green. So the input's substance is asserted
+    # first. A control whose input can be silently emptied is the vacuity this
+    # whole section exists to close.
+    assert len(_NEUTRAL_PROSE.split()) >= 20, (
+        "_NEUTRAL_PROSE has been reduced to something too thin to be evidence — "
+        "the miss below would then pass vacuously."
+    )
+    assert not _states_the_rule(path, _NEUTRAL_PROSE), (
+        f"RULE_STATED[{path!r}] matches prose that does not state the quoting "
+        "rule at all, so the guard for this file certifies nothing. Either the "
+        "pattern was widened or the call site stopped testing the match."
+    )
+    assert not _states_the_rule(path, _NEAR_MISS_PROSE), (
+        f"RULE_STATED[{path!r}] matches ON-TOPIC prose that states no rule — it "
+        "names `title:` and `index.yml` and says nothing about quoting. A "
+        "pattern that fires on this is detecting the SUBJECT, not the claim, "
+        "so the rule can be deleted from the file while the guard stays green. "
+        "The neutral-prose check above cannot see this: neutral text misses "
+        "every pattern, including a useless one."
+    )
+
+
+def test_the_dump_alias_patterns_are_not_silently_emptied():
+    """Control for `_DUMP_ALIASES`. Emptying the tuple left the suite green.
+
+    The alias sweep exists because `yaml.safe_dump` can be reached through an
+    import alias; a roster of zero patterns sweeps for nothing while still
+    reporting a clean run.
+    """
+    assert _DUMP_ALIASES, (
+        "_DUMP_ALIASES is empty — the aliased-writer sweep matches nothing and "
+        "every aliased `safe_dump` call in the tree is invisible to it."
+    )
+    # One smuggling route per pattern, each the route the round actually used.
+    # Matched set-wise, NOT positionally: the first cut `zip`ped these against
+    # `_DUMP_ALIASES` in declaration order, so REORDERING the roster — a
+    # behaviour-identical edit, since the sweep unions offenders across all
+    # patterns — reddened the guard. The round caught that as a false kill, and
+    # it is the over-strictness direction this control was supposed to avoid.
+    # SEVERAL spellings per route, not one. A single literal per pattern is
+    # satisfied by a pattern narrowed to exactly that literal — the round
+    # narrowed `\byaml\.dump\s*\(` to the full text of its own control route,
+    # passed every assertion here, and then smuggled a real writer into a
+    # shipped file. A route is a *shape*, so it takes more than one instance to
+    # pin, and the variants below differ in the places a narrowing would bite:
+    # argument text, whitespace, quoting, import spelling.
+    routes = (
+        "from yaml import safe_dump",
+        "from yaml import dump",
+        "from yaml import safe_dump, safe_load",
+        "yaml.dump(payload, Dumper=yaml.SafeDumper)",
+        "yaml.dump(index, fh)",
+        "yaml.dump (rows)",
+        "getattr(yaml, 'safe_dump')(payload)",
+        'getattr(yaml, "dump")(index, fh)',
+        "getattr( yaml , 'safe_dump' )(x)",
+    )
+    for route in routes:
+        assert any(pat.search(route) for pat in _DUMP_ALIASES), (
+            f"no alias pattern matches the smuggling route {route!r} — that "
+            "route is now invisible to the writer sweep. A pattern narrowed to "
+            "one spelling of a route does not cover the route."
+        )
+    # And every pattern must earn its place, or a dead pattern pads the roster
+    # and satisfies the non-emptiness check above while sweeping for nothing.
+    for pat in _DUMP_ALIASES:
+        assert any(pat.search(route) for route in routes), (
+            f"alias pattern {pat.pattern!r} matches none of the known smuggling "
+            "routes. Either it is dead, or a route it exists for is missing "
+            "here — and a route missing here is a route nothing tests."
+        )

@@ -48,9 +48,9 @@
 ## `.claude/skills/**/*.md`, `.claude/checks.yml` — Skill Markdown & Check Registry
 
 **Check:**
-- **No real credentials in skill markdown**: Grep for API keys, access tokens, passwords, webhook URLs — use placeholders (`$VAR`, `<token>`) instead.
-- **No CI-bypass instructions as routine**: `--no-verify`, `SKIP_HOOKS=1`, `--force-with-lease` shortcuts, or equivalent must not be documented as normal workflow. They defeat security pre-commit hooks and reviewer gates. Exceptional emergency procedures must explicitly say "emergency only — requires sign-off from …".
-- **Confirmation gates on destructive operations**: Any documented `rm -rf`, `git reset --hard`, `psql -c DROP`, production migration, or cloud deploy command must include an explicit confirmation step in the skill text.
-- **`checks.yml` registry hygiene**: Each check must have `used_by` populated; `blocking: true` promotions should cite a baseline verification step; regex patterns with high false-positive rates need `notes:` explaining the triage shape.
+- **A02 Data Exposure** (no real credentials in skill markdown): Grep for API keys, access tokens, passwords, webhook URLs — use placeholders (`$VAR`, `<token>`) instead.
+- **A04 Insecure Design** (no CI-bypass instructions as routine): `--no-verify`, `SKIP_HOOKS=1`, `--force-with-lease` shortcuts, or equivalent must not be documented as normal workflow. They defeat security pre-commit hooks and reviewer gates. Exceptional emergency procedures must explicitly say "emergency only — requires sign-off from …".
+- **A04 Insecure Design** (confirmation gates on destructive operations): Any documented `rm -rf`, `git reset --hard`, `psql -c DROP`, production migration, or cloud deploy command must include an explicit confirmation step in the skill text.
+- **A05 Misconfiguration** (`checks.yml` registry hygiene): Each check must have `used_by` populated; `blocking: true` promotions should cite a baseline verification step; regex patterns with high false-positive rates need `notes:` explaining the triage shape.
 
 **Skip:** Everything else

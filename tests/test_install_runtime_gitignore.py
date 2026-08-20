@@ -23,7 +23,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 INSTALL_SH = REPO_ROOT / "install.sh"
-WANT = ("sysop/runtime/",)
+WANT = ("sysop/runtime/", ".claude/review_index.json", "sysop/**/__pycache__/")
 # The pre-133 per-dir entries — the installer must no longer append these.
 OLD_DOT_DIRS = (".subagent-envelopes/", ".auto-build/", ".pending-docs/", ".locks/")
 
@@ -125,18 +125,40 @@ def test_preexisting_legacy_entries_left_in_place_on_update(tmp_path):
         assert lines.count(want) == 1, f"{want} not appended exactly once: {lines}"
 
 
-def _install_sh_want_list():
-    """Parse ensure_runtime_gitignore()'s `want=(...)` array from install.sh."""
-    text = INSTALL_SH.read_text()
-    m = re.search(r"local -a want=\(([^)]*)\)", text)
-    assert m, "could not find ensure_runtime_gitignore's want=(...) in install.sh"
-    return set(re.findall(r'"([^"]+)"', m.group(1)))
+def _appended_sysop_entries(tmp_path):
+    """The entries install.sh ACTUALLY appends, by running it.
+
+    This replaced a regex that read `local -a want=(...)` out of install.sh and
+    pulled double-quoted strings from it. Phase 212's review round scored that
+    parser and it was wrong in both directions:
+
+      * BLIND — a single-quoted (`'node_modules/'`) or unquoted (`secrets.env`)
+        element is appended by bash and invisible to `re.findall(r'"([^"]+)"')`,
+        so the installer could start writing arbitrary rules into a consumer's
+        .gitignore with this guard green. A decoy `local -a want=(...)` earlier
+        in the file bound the regex's first match too — Phase 170's
+        first-occurrence trap — letting the real array be gutted undetected.
+      * OVER-STRICT — `[^)]*` stops at the first `)`, so one-entry-per-line with
+        a trailing comment containing parentheses (`# state (Phase 133)`) and
+        holding the glob in a `local` variable both FALSE-FAILED. A guard that
+        reds on a legal rewrite gets weakened or deleted.
+
+    Reading behaviour instead of source is invariant under every legal bash
+    rewrite, and it is the only form that can see what bash sees.
+    """
+    target = _consumer(tmp_path / "want-probe")  # no .gitignore at all
+    r = _install(target, "--packs", "")
+    assert r.returncode == 0, r.stdout + r.stderr
+    return {
+        ln for ln in _lines(target)
+        if ln.strip() and not ln.lstrip().startswith("#")
+    }
 
 
-def test_want_list_is_the_consolidated_runtime_home():
-    """Locks the Phase-133 consolidation: one entry, sysop/runtime/. Fails if
-    install.sh regresses to per-dir entries (or drops the entry entirely)."""
-    assert _install_sh_want_list() == set(WANT)
+def test_want_list_is_the_consolidated_runtime_home(tmp_path):
+    """Locks the Phase-133 consolidation AND the Phase-212 bytecode entry: the
+    set install.sh appends is exactly WANT — no more, no fewer."""
+    assert _appended_sysop_entries(tmp_path) == set(WANT)
 
 
 def test_gitignore_append_covers_every_skill_asserted_runtime_dir():
@@ -162,7 +184,7 @@ def test_gitignore_append_covers_every_skill_asserted_runtime_dir():
                     )
     claimed -= denylist
     assert claimed, "expected to find at least one gitignored runtime dir in the skills"
-    want = _install_sh_want_list()
+    want = set(WANT)
     missing = {
         c for c in claimed
         if not any(c == w or c.startswith(w) for w in want)
@@ -171,3 +193,200 @@ def test_gitignore_append_covers_every_skill_asserted_runtime_dir():
         f"skills assert these dirs are gitignored but ensure_runtime_gitignore() "
         f"misses them (add to install.sh's want=() AND to WANT here): {sorted(missing)}"
     )
+
+
+# ── Phase 212: untrack_vendor_bytecode ───────────────────────────────────────
+#
+# A gitignore rule does NOTHING for an already-tracked file, so for every
+# consumer who ran a pre-212 install the new `sysop/**/__pycache__/` entry
+# arrives and changes nothing: `--update` still rewrites the `.pyc` and still
+# dirties a clean tree. That population — the one that already has the defect —
+# is exactly the one the ignore rule cannot help, which is why the installer
+# also untracks. This shipped with no coverage until the review round asked
+# where its guards were.
+
+
+def _tracked_pyc(target):
+    out = subprocess.run(["git", "ls-files"], cwd=target,
+                         capture_output=True, text=True, check=True).stdout
+    return sorted(l for l in out.splitlines() if "__pycache__" in l)
+
+
+def _seed_tracked_bytecode(target):
+    """Reproduce a pre-212 consumer: bytecode under sysop/, committed.
+
+    Includes a DEPTH-0 file (`sysop/__pycache__/`). git's default pathspec
+    syntax gives `**` no special meaning, so a bare `sysop/**/__pycache__/*`
+    silently misses that one while the gitignore rule — gitignore syntax, where
+    `**` spans zero directories — covers it. The two halves of the fix
+    disagreed about their own population; this fixture is what makes the
+    disagreement fail loudly.
+    """
+    for rel in ("sysop/__pycache__/top.pyc",
+                "sysop/scripts/__pycache__/a.pyc",
+                "sysop/scripts/run_checks/__pycache__/c.pyc"):
+        p = target / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"stale-bytecode\n")
+    # `-f` because the install under test has ALREADY appended the ignore rule,
+    # so a plain `git add -A` would refuse to stage these and the fixture would
+    # silently not take. The state being reproduced is a consumer who tracked
+    # this bytecode BEFORE any ignore rule existed — which is the whole reason
+    # the untrack is needed, since a gitignore does nothing for a tracked file.
+    _git(target, "add", "-f", *[
+        "sysop/__pycache__/top.pyc",
+        "sysop/scripts/__pycache__/a.pyc",
+        "sysop/scripts/run_checks/__pycache__/c.pyc",
+    ])
+    _git(target, "commit", "-qm", "pre-212 state")
+
+
+def test_untrack_removes_tracked_bytecode_at_every_depth(tmp_path):
+    target = _consumer(tmp_path / "c")
+    assert _install(target, "--packs", "").returncode == 0
+    _seed_tracked_bytecode(target)
+    assert len(_tracked_pyc(target)) == 3, "fixture did not take"
+
+    r = _install(target, "--update")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert _tracked_pyc(target) == [], (
+        "tracked bytecode survived --update; a depth-0 miss is the likely cause"
+    )
+
+
+def test_untrack_never_deletes_the_files_from_disk(tmp_path):
+    """`--cached` is the whole safety argument for passing `-f`. If this ever
+    fails, the installer is destroying files in a consumer's tree."""
+    target = _consumer(tmp_path / "c")
+    assert _install(target, "--packs", "").returncode == 0
+    _seed_tracked_bytecode(target)
+
+    assert _install(target, "--update").returncode == 0
+    for rel in ("sysop/__pycache__/top.pyc",
+                "sysop/scripts/__pycache__/a.pyc",
+                "sysop/scripts/run_checks/__pycache__/c.pyc"):
+        p = target / rel
+        assert p.is_file(), f"installer DELETED {rel} from the working tree"
+        assert p.read_bytes() == b"stale-bytecode\n", f"installer rewrote {rel}"
+
+
+def test_untrack_survives_a_staged_then_remodified_pyc(tmp_path):
+    """The case that made the first cut print a remedy identical to the command
+    that had just failed. `git add -A` then any run that imports the module
+    leaves staged content differing from both the file and HEAD, and git refuses
+    the whole all-or-nothing removal without `-f`."""
+    target = _consumer(tmp_path / "c")
+    assert _install(target, "--packs", "").returncode == 0
+    _seed_tracked_bytecode(target)
+    p = target / "sysop/scripts/__pycache__/a.pyc"
+    p.write_bytes(b"staged-version\n")
+    _git(target, "add", "-f", "sysop/scripts/__pycache__/a.pyc")  # -f: now ignored
+    p.write_bytes(b"worktree-version\n")
+
+    r = _install(target, "--update")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert _tracked_pyc(target) == [], r.stdout
+    assert p.read_bytes() == b"worktree-version\n", "working-tree content lost"
+
+
+def test_untrack_is_silent_and_idempotent_when_nothing_is_tracked(tmp_path):
+    """Non-vacuity control for the three above: on a clean consumer the section
+    must not announce itself. Without this, a function that fired unconditionally
+    would satisfy every other test here."""
+    target = _consumer(tmp_path / "c")
+    assert _install(target, "--packs", "").returncode == 0
+    r = _install(target, "--update")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "vendored bytecode untrack" not in r.stdout, r.stdout
+
+
+def test_untrack_dry_run_mutates_nothing(tmp_path):
+    target = _consumer(tmp_path / "c")
+    assert _install(target, "--packs", "").returncode == 0
+    _seed_tracked_bytecode(target)
+    before = _tracked_pyc(target)
+
+    r = _install(target, "--update", "--dry-run")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "would untrack 3" in r.stdout, r.stdout
+    assert _tracked_pyc(target) == before, "--dry-run changed the index"
+
+
+def test_install_writes_no_bytecode_into_the_vendor_dir(tmp_path):
+    """`install.sh` sets PYTHONDONTWRITEBYTECODE=1 on its model-roles call.
+
+    That call is the one install-time python invocation that runs a FILE from
+    the vendor dir (the others are `"$_py" - <<'PY'` stdin heredocs, which cache
+    nothing), so without the setting CPython leaves
+    `sysop/scripts/__pycache__/{_model_roles,migrate_skill_model}.cpython-*.pyc`
+    in the consumer's tree — the `Q-041` defect, verbatim.
+
+    Asserted on the FILESYSTEM, deliberately, and not via `git status`: this
+    phase also added `sysop/**/__pycache__/` to the consumer's .gitignore, so a
+    porcelain check would report clean while the files were being written. The
+    review round made exactly that point — the obvious assertion is masked by
+    the phase's own other fix.
+
+    Requires a PyYAML-bearing interpreter on PATH (`_install` puts the venv
+    there); on a PyYAML-less one nothing is cached and this would pass
+    vacuously, which the sibling control below rules out.
+    """
+    target = _consumer(tmp_path / "c")
+    r = _install(target, "--packs", "python")
+    assert r.returncode == 0, r.stdout + r.stderr
+    caches = sorted(str(p.relative_to(target)) for p in target.rglob("__pycache__"))
+    assert caches == [], f"install.sh left vendored bytecode: {caches}"
+
+    r2 = _install(target, "--update")
+    assert r2.returncode == 0, r2.stdout + r2.stderr
+    caches = sorted(str(p.relative_to(target)) for p in target.rglob("__pycache__"))
+    assert caches == [], f"--update left vendored bytecode: {caches}"
+
+
+def test_the_model_roles_step_actually_ran(tmp_path):
+    """Non-vacuity control for the test above.
+
+    If `pick_python_with_yaml` finds no PyYAML the model-roles step no-ops, no
+    module is ever imported from the vendor dir, and the assertion above is
+    trivially true no matter what the installer sets. This asserts the step
+    really ran, so a green sibling means the suppression worked rather than that
+    nothing was attempted.
+    """
+    target = _consumer(tmp_path / "c")
+    r = _install(target, "--packs", "python")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "skipping: no python3 with PyYAML" not in r.stdout, (
+        "the model-roles step no-opped, so the bytecode assertion is vacuous:\n"
+        + r.stdout
+    )
+
+
+def test_untrack_stays_inside_the_vendor_dir(tmp_path):
+    """`Q-126` asks for a DECISION — assert a general `__pycache__/` ignore on
+    the consumer's whole repo, or scope it to Sysop's own vendor dir. The phase
+    answered vendor-scoped, consistent with Phase 128's namespace boundary.
+
+    Nothing held that answer: the review round widened the pathspec from
+    `sysop/**/__pycache__/*` to `**/__pycache__/*` and the suite stayed green,
+    which would have Sysop's installer silently untracking a consumer's OWN
+    bytecode — files it does not own and was never asked about.
+    """
+    target = _consumer(tmp_path / "c")
+    assert _install(target, "--packs", "").returncode == 0
+    _seed_tracked_bytecode(target)
+
+    # The consumer's own bytecode, outside the vendor dir. Sysop must not touch it.
+    theirs = target / "app" / "__pycache__" / "theirs.pyc"
+    theirs.parent.mkdir(parents=True)
+    theirs.write_bytes(b"not-ours\n")
+    _git(target, "add", "-f", "app/__pycache__/theirs.pyc")
+    _git(target, "commit", "-qm", "consumer's own bytecode")
+
+    r = _install(target, "--update")
+    assert r.returncode == 0, r.stdout + r.stderr
+    tracked = _tracked_pyc(target)
+    assert tracked == ["app/__pycache__/theirs.pyc"], (
+        "the untrack crossed the vendor boundary and touched files Sysop does "
+        f"not own: {tracked}"
+    )
+    assert theirs.is_file(), "consumer's own bytecode deleted from disk"

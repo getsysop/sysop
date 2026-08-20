@@ -79,12 +79,17 @@ knowing:
   either. That rule is stated in the maps themselves (§ Scope note) and everywhere the skills act on
   a Check/Skip list. It matters most for security: a `Skip:` line under a dead glob otherwise reads
   as settled triage, so an auditor can land on it and stop looking.
-- **What differs is how each skill routes the work.** `/codebase-review` matches the file under
-  review against the section globs and hands its agent that section's convention bullets.
-  `/security-audit` dispatches per OWASP category and hands each agent the Check lists of the
-  sections whose globs resolved to that agent's files. Neither hides the gap: both coverage sweeps
-  report files matched by no section, and both explicitly decline to flag placeholder globs as
-  "stale" — they're an install artifact, not rot.
+- **What differs is how each skill routes the work.** `/codebase-review` dispatches from a table
+  that names convention_map sections and hands each agent that section's bullets. `/security-audit`
+  dispatches per OWASP category and hands each agent the Check lists of the sections whose globs
+  resolved to that agent's files. Both coverage sweeps report files matched by no section, and both
+  explicitly decline to flag placeholder globs as "stale" — they're an install artifact, not rot.
+- **Neither sweep can see the gap that sits one layer in**, so each skill runs a second check before
+  it dispatches. A file *matched* by a section still has no reviewer if nothing routes that section
+  to an agent — a name the table cites that no section carries, a section no row names, or (on the
+  security side) a section whose OWASP categories the agent roster does not hold. The coverage sweep
+  counts that file as covered, because it is matched. The reconciliation step reports it as unowned,
+  because nobody is going to read it.
 
 So a freshly installed pack's map sections are **not yet wired**: they name paths you don't have,
 and until you localize them they carry neither rules nor exclusions. Localizing the globs is real

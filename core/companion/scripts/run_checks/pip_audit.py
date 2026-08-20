@@ -11,6 +11,7 @@ import re
 import subprocess
 import sys
 
+from .baseline import identity_of
 from .accounting import EXECUTED, FAILED, SKIPPED, stderr_excerpt
 
 
@@ -165,8 +166,18 @@ def _run_pip_audit(repo_root, included_ids, report=None):
     for dep in data.get("dependencies", []):
         name = dep.get("name", "?")
         version = dep.get("version", "?")
-        for vuln in dep.get("vulns", []) or []:
-            vid = vuln.get("id", "?")
+        # Two id-less advisories on one package need a discriminator, and it
+        # must be CONTENT. `vuln_index` alone keys a list POSITION: fix an
+        # earlier advisory and every later index shifts, so an accepted key
+        # silently excuses a different, unreviewed advisory — Q-245's exact
+        # failure mode, reintroduced by the fix for Q-245. The description
+        # hash is stable under reordering; the index is the last resort.
+        for vuln_index, vuln in enumerate(dep.get("vulns", []) or []):
+            # `or`, not `.get("id", "?")`: the two-argument form only fires
+            # when the KEY IS ABSENT, so `"id": null` and `"id": ""` — both
+            # legal in this JSON — sailed past the fallback and produced a
+            # two-field key, which is Q-245 alive again on a blocking gate.
+            vid = vuln.get("id") or ""
             aliases = vuln.get("aliases", []) or []
             fix_versions = vuln.get("fix_versions", []) or []
             desc = (vuln.get("description") or "").replace("\n", " ")[:200]
@@ -174,6 +185,18 @@ def _run_pip_audit(repo_root, included_ids, report=None):
             fix_str = (f" — fix: bump to {fix_versions[0]}"
                        if fix_versions else "")
             msg_text = f"{name}=={version} {vid}{alias_str}{fix_str} — {desc}"
+            # The anchor is computed once, OUTSIDE this loop, so every vuln in
+            # the run shares it — one baseline entry swallowed the entire stage,
+            # new critical CVEs included. `vid` is the discriminator; content
+            # hashing could not have fixed this, since the "matched line" is
+            # line 1 of requirements.txt and unrelated to the finding.
             out.append((check_id, anchor,
-                        f"[{check_id}] HIGH {anchor} — {msg_text}"))
+                        f"[{check_id}] HIGH {anchor} — {msg_text}",
+                        # `vid` falls back to "?" when an advisory carries no
+                        # id, which would collapse every id-less vuln in the run
+                        # back onto ONE key — Q-245 alive again for that
+                        # subpopulation. name==version always exists and
+                        # discriminates by package.
+                        vid or f"{name}=={version}#"
+                        f"{identity_of(desc) or vuln_index}"))
     return out

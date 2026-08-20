@@ -18,6 +18,7 @@ House norm (Phases 104/105): each new branch has a test that fails when the
 branch is removed.
 """
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -34,6 +35,8 @@ import run_checks_impl as rci
 from run_checks.accounting import (
     DEGRADED, EXECUTED, FAILED, SKIPPED, UNROUTABLE, RunReport,
 )
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _completed(stdout="", returncode=0, stderr=""):
@@ -167,7 +170,7 @@ class TestRender:
         r.record(["pyr-1", "pyr-2"], EXECUTED, "pyright")
         r.record(["semgrep-x"], FAILED, "semgrep", "nonzero-no-output", "exit 2")
         r.record(["cov-ph"], SKIPPED, "coverage", "not-configured", "unarmed")
-        out = r.render([("pyr-1", "a.py:1", "m")], mode="quality",
+        out = r.render([("pyr-1", "a.py:1", "m", "")], mode="quality",
                        baseline_matched=3, new_blocking=4)
         head = out.splitlines()[0]
         assert "2 executed" in head and "3 skipped" in head and "1 failed" in head
@@ -209,7 +212,7 @@ class TestRender:
     def test_executed_with_findings_not_listed_as_zero(self):
         r = RunReport([{"id": "pyright-a"}, {"id": "pyright-b"}])
         r.record(["pyright-a", "pyright-b"], EXECUTED, "pyright")
-        out = r.render([("pyright-a", "x.py:1", "m")], mode="quality")
+        out = r.render([("pyright-a", "x.py:1", "m", "")], mode="quality")
         zero_lines = [l for l in out.splitlines() if "executed with 0 findings" in l]
         assert len(zero_lines) == 1
         assert "pyright-b" in zero_lines[0] and "pyright-a" not in zero_lines[0]
@@ -630,7 +633,47 @@ class TestGrepRecording:
         grep_mod.run_check(check, str(tmp_path), r)
         assert r.status_of("grep-c") == UNROUTABLE
         assert r._records["grep-c"].reason == "no-executable-form"
-        assert "any environment" in r._records["grep-c"].detail
+        detail = r._records["grep-c"].detail
+        # Phase 212 / internal tracker #438. This used to assert
+        # `"any environment" in detail`, pinning a message whose remedy was
+        # unfollowable: it told the author to "declare a kind", and no `kind:`
+        # field has ever existed — routing is by id prefix
+        # (`cli.py::_classify_checks`).
+        #
+        # The FIRST rewrite of this assertion was a blocklist of the exact
+        # phrase "declare a kind" plus two substring checks, and this phase's own
+        # review round walked three separate messages through it — including one
+        # that re-introduced the fictitious `kind:` field by spelling it
+        # differently, and one that said "Nothing needs doing". That is rule 1's
+        # named failure: *a check requiring N phrases is satisfied by N
+        # disconnected phrases in a sentence asserting the opposite.* Rewritten
+        # to bind to the thing that is actually true — the real routing prefixes,
+        # DERIVED from the shipped classifier rather than restated here.
+        assert "kind:" not in detail, (
+            "the unroutable remedy names a `kind:` field that does not exist in "
+            "the schema at all; routing is by id prefix only. Any spelling of it "
+            "is the falsehood this message was rewritten to remove."
+        )
+        # Derive the prefixes from the source of truth. A hand-copied list here
+        # would let the message and the classifier drift apart silently, which is
+        # the same defect one layer up.
+        cli_src = (REPO_ROOT / "core/companion/scripts/run_checks/cli.py").read_text()
+        prefixes = set(re.findall(r'cid\.startswith\("([a-z-]+-)"\)', cli_src))
+        assert len(prefixes) >= 6, f"classifier prefixes not derived: {prefixes}"
+        named = {p for p in prefixes if p in detail}
+        assert len(named) >= 6, (
+            "the message must NAME the real routing prefixes, not merely contain "
+            f"the word 'prefix'. Derived {sorted(prefixes)}, named {sorted(named)}"
+        )
+        assert "notes:" in detail, (
+            "message must admit the executed-elsewhere case — its own motivating "
+            "example (doc-parity-violation) is a deliberate catalogue stub"
+        )
+        # And it must still say the check did NOT run: a message that reads as
+        # "nothing needs doing" turns the whole bucket into a no-op.
+        assert "did not run" in detail, (
+            "the message must still state that this runner did not run the check"
+        )
 
     def test_pattern_present_but_no_paths_stays_a_skip(self, tmp_path):
         """The other half of the split: a precondition that COULD become true.

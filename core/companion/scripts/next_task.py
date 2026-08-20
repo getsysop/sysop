@@ -576,6 +576,59 @@ def pick_next_task(
 # ---------------------------------------------------------------------------
 # Review batch parsing
 # ---------------------------------------------------------------------------
+def _warn_on_duplicate_batch_numbers(batches, source: str) -> None:
+    """Surface same-numbered batches on stderr, and continue (Q-227).
+
+    This reader keeps BOTH batches where ``review_index.py`` collapses to one
+    (it keys a dict by number, so the later header overwrites the earlier).
+    That divergence is why the index's ``--list`` warning never reached here:
+    this script does not consult the index at all.
+
+    Keeping both is the better *display* behaviour and it is deliberately not
+    changed. It became a routing problem only when Phase 209 taught the
+    mutators to refuse an ambiguous number — after which this script could
+    recommend a batch they refuse, with nothing on any stream to explain why.
+    The warning closes that gap without touching the parse.
+
+    **It points at the check rather than asserting an outcome, and that wording
+    is load-bearing.** The first cut said the shells "REFUSE that number (exit
+    4)". Measured by this phase's round: `batch_work.sh` exits **1**,
+    `close_batch.sh` exits **0** (it skips the batch and reports the run as
+    completed), and 4 is only the internal helper's code — so the sentence was
+    false twice. Worse, on a tracker whose two headers differ in punctuation
+    (an em-dash and an ASCII hyphen) the readers disagree: this one sees two
+    batches and warns, `sitrep_survey` sees one and stays silent, and
+    `--check-duplicates` finds no duplicate at all, so nothing refuses and the
+    advice would have sent an operator to renumber a batch for no reason.
+    Naming the authoritative check is the only form that is true on every shape.
+
+    Derived from this reader's own list rather than by importing the index's
+    ``duplicate_batch_numbers``: these scripts install standalone and import
+    nothing shared, and a sixth copy of a rule already duplicated four times is
+    the trade `close_batch.sh` and `_fenced_mask` both declined.
+    """
+    seen: dict[str, int] = {}
+    for b in batches:
+        num = b.get("number")
+        if num is None:
+            continue
+        seen[str(num)] = seen.get(str(num), 0) + 1
+    dupes = {n: c for n, c in seen.items() if c > 1}
+    if not dupes:
+        return
+    for num in sorted(dupes, key=lambda n: int(n) if n.isdigit() else 0):
+        print(
+            f"WARNING: {source} declares Batch {num} {dupes[num]} times, and this "
+            f"view keeps all of them.\n"
+            f"         Confirm with: python3 sysop/scripts/review_index.py "
+            f"--check-duplicates {num}\n"
+            f"         That check is what the mutating paths key on, and it uses a "
+            f"STRICTER header pattern than this reader — so the two can disagree, "
+            f"and the check is the authority.",
+            file=sys.stderr,
+        )
+
+
 def parse_review_batches(text: str) -> list[dict[str, Any]]:
     """Parse ``review_tasks.md`` into a list of batch dicts.
 
@@ -708,6 +761,7 @@ def parse_review_batches(text: str) -> list[dict[str, Any]]:
             continue
 
     _flush()
+    _warn_on_duplicate_batch_numbers(batches, "review_tasks.md")
     return batches
 
 
