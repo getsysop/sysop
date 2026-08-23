@@ -68,7 +68,7 @@ So: when a candidate boundary or metadata line sits *inside* a batch you have al
 Build the candidate set from this output alone:
 
 - **Candidate** = status is **`Pending`** **and** the batch carries no `> **Triaged:**` line.
-- **Skip** batches with status `In Progress`, `Merged`, `Complete`, or `Ready for Review`.
+- **Skip** batches with status `In Progress`, `Merged`, `Complete`, or `Ready for Review` — and `Review Ready`, which is **live but past triage**: it is waiting on `/review-close`, and re-triaging it would re-open something already reviewed (Phase 222, Q-014; `/roadmap`'s routing table says the same).
 - **Carry forward** `Pending` batches that already have a `> **Triaged:**` line — their verdict is recorded; Step 2 does not re-analyze them.
 
 Note each candidate's `Branch:` and `Overlap:` values (both come from the index pass; `Overlap:` may be absent on older batches) and its body line range. `Overlap:` is `none` or a `batch-<N>, batch-<M>` list, tested **whole** after trimming surrounding whitespace — anything that is not exactly `none`, including an unparseable value, counts as overlapping (`WORKFLOW.md` § Batch metadata fields). This skill only records the value; `/auto-fix` and `/auto-judge` are what route on it.

@@ -132,6 +132,49 @@ BATCH_HEADER_RE = re.compile(
 # must be the loosest thing that still means "batch header".
 ANY_BATCH_HEADER_RE = re.compile(r"^###\s+(Batch\s+\d+)\b")
 
+# The CANONICAL shape, any status — duplicated verbatim from
+# `review_index._BATCH_HEADER_RE` and pinned equal by
+# `tests/test_batch_header_near_miss.py`. Not imported: this module resolves its
+# root via `parents[2]` while `review_index` walks up to the git root, so an
+# import here can raise a non-ImportError in an environmental mismatch — which
+# is why the only existing use of that module (`rebuild_index`) is lazy, inside
+# a try/except, and AFTER the durable writes. A gate may not be built on an
+# import that is allowed to fail.
+#
+# This sits BETWEEN the two patterns above and that is its whole job:
+#   BATCH_HEADER_RE      canonical shape AND an archivable status
+#   CANONICAL_BATCH_RE   canonical shape, ANY status   <- this one
+#   ANY_BATCH_HEADER_RE  anything that looks like a batch header at all
+#
+# A `Pending` batch is not a near-miss — it matches the canonical pattern and is
+# simply not archivable yet. A near-miss is a line that matches ANY and fails
+# CANONICAL: no reader in the tree turns it into a batch, so it is neither
+# archived nor counted, and until Phase 220 nothing said so.
+CANONICAL_BATCH_RE = re.compile(r"^### Batch (\d+) — (.+?) `([^`]+)`$")
+
+
+def near_miss_batch_headers(lines):
+    """Unfenced lines that look like a batch header but that this module's
+    canonical pattern rejects.
+
+    Twin of ``review_index.near_miss_batch_headers``; see that docstring for the
+    canon argument and for why trailing whitespace is normalised away rather
+    than reported (it was a false fire, and a regression against this module's
+    own non-end-anchored ``BATCH_HEADER_RE``). Returns
+    ``[(lineno_1based, text), ...]``.
+    """
+    mask = _fenced_mask(lines)
+    out = []
+    for i, line in enumerate(lines):
+        if mask[i]:
+            continue
+        stripped = line.rstrip()
+        if CANONICAL_BATCH_RE.match(stripped):
+            continue
+        if ANY_BATCH_HEADER_RE.match(stripped):
+            out.append((i + 1, stripped))
+    return out
+
 # Any level-3 heading, whatever whitespace follows the marker. `####` and deeper
 # are deliberately excluded (the char after `###` must be whitespace or EOL), so
 # this stays a level-3 test rather than a prefix test.
@@ -247,6 +290,113 @@ ARCHIVE_GRAND_TOTAL_HEADER = "## Grand Total (Archived)"
 
 # Matches "| **Archive Total** |" in the archive
 ARCHIVE_TOTAL_RE = re.compile(r"^\| \*\*Archive Total\*\*")
+
+
+def _unterminated_fence(lines):
+    """The opener of a fence that is never closed, or ``None``.
+
+    Returns ``(start_index, marker)`` — ``start_index`` 0-indexed.
+
+    Duplicated verbatim from ``review_index.py`` and pinned equal by
+    ``tests/test_archive_fence_refusal.py``, for the same reason ``_fenced_mask``
+    above is duplicated: this module resolves the markdown via ``parents[2]``
+    while ``review_index`` walks up to the git root, so an import here can raise
+    a non-``ImportError`` in an ordinary worktree. A *refusal* that can be
+    skipped by an environmental import failure is worse than no refusal at all —
+    it fails open on exactly the tree that is hardest to reason about.
+
+    Both halves of the close rule are load-bearing: a 4-backtick opener is NOT
+    closed by 3 backticks (length), and a ``~~~`` opener is NOT closed by
+    ``` (char).
+    """
+    start = -1
+    marker = ""
+    for i, line in enumerate(lines):
+        if start < 0:
+            m = _FENCE_OPEN_RE.match(line)
+            if m:
+                start, marker = i, m.group(1)
+        else:
+            m = _FENCE_CLOSE_RE.match(line)
+            if m and marker and m.group(1)[0] == marker[0] and len(m.group(1)) >= len(marker):
+                start, marker = -1, ""
+
+    if start < 0:
+        return None
+    return (start, marker)
+
+
+def unterminated_batch_span(lines):
+    """An unterminated fence whose span contains ANY ``### Batch <N>`` header.
+
+    Returns ``(fence_line, marker, header_line, header_text)`` 1-indexed, or
+    ``None``. Twin of ``review_index.unterminated_batch_span``.
+
+    **Why the archiver needs its own refusal (Q-240).** ``_fenced_mask`` ignores
+    an unterminated fence on purpose — honouring one would disable structural
+    parsing to end-of-file, which is worse than no fence rule — so an example
+    batch inside a fence nobody closed is parsed as a REAL batch. Measured on
+    the shape this entry predicts (fence opener inside a preceding batch, so no
+    orphan line sits above the first header): ``residue []``, 2 batches,
+    ``TOTAL 2 tasks`` — the illustration counted as completed work and
+    archivable, with nothing left to refuse it.
+
+    Until now the only thing standing between that state and a destructive
+    archive was the ``Q-116`` orphaned-lines guard catching the fence opener as
+    a line belonging to no batch. That is **defence by coincidence**: it depends
+    on where the opener happens to sit, and it disappears the moment the opener
+    is inside a batch. This makes the refusal the declared mechanism instead.
+
+    The archiver is the right place for a refusal that ``review_index`` does not
+    make for reads: archiving MOVES content out of the tracker, so acting on the
+    wrong structural answer deletes work. Reading it merely displays it wrong.
+    Closing the fence is always the correct fix — the file is malformed markdown
+    either way — so the remedy is one character.
+    """
+    hit = _unterminated_fence(lines)
+    if hit is None:
+        return None
+    start, marker = hit
+    for j in range(start + 1, len(lines)):
+        if ANY_BATCH_HEADER_RE.match(lines[j]):
+            return (start + 1, marker, j + 1, lines[j].rstrip())
+    return None
+
+
+def unterminated_task_span(lines):
+    """An unterminated fence whose span contains a COUNTED task line.
+
+    Returns ``(fence_line, marker, hit_line, hit_text)`` 1-indexed, or ``None``.
+
+    **Companion to `unterminated_batch_span`, and it exists because that one is
+    not sufficient.** The first cut of this phase refused only when a `### Batch`
+    header sat inside an unterminated fence, and `count_round_tasks`'s docstring
+    then claimed "the unterminated case … is refused outright before this is ever
+    called". That was false, and the review round demonstrated it: an unterminated
+    fence holding only `- [x]` illustration lines is neither masked (by design —
+    `_fenced_mask` ignores unterminated fences) nor refused, so those lines counted
+    as real completed work. Measured on one real task plus one unterminated
+    illustration: `(2, 2)` instead of `(1, 1)`, and that number is what
+    `update_archive_total` writes durably into the archive's Grand Total row.
+
+    Kept SEPARATE from `unterminated_batch_span` rather than folded into it,
+    because that function is duplicated verbatim from `review_index.py` and
+    pinned equal by `tests/test_archive_fence_refusal.py`. Widening it here would
+    break the pin or silently fork the twin.
+
+    Deliberately narrow: a fence holding only prose is NOT refused. Nothing
+    miscounts it, so refusing would be over-strictness on a file the operator has
+    every right to keep — and a refusal that fires on legal input is the kind the
+    next author weakens.
+    """
+    hit = _unterminated_fence(lines)
+    if hit is None:
+        return None
+    start, marker = hit
+    for j in range(start + 1, len(lines)):
+        if COUNTED_TASK_RE.match(lines[j]):
+            return (start + 1, marker, j + 1, lines[j].rstrip())
+    return None
 
 
 def parse_archivable_batches(lines):
@@ -447,10 +597,43 @@ def count_round_tasks(r):
     `task_count` is deliberately NOT reused here. It comes from TASK_RE, which
     requires `**TASK-N**` — fine for the per-batch progress line it feeds, wrong
     for a ratio, because it silently drops a task whose id is not bolded.
+
+    **Fenced lines are masked out, and that is a fix, not a nicety (Phase 217).**
+    `parse_archivable_batches` deliberately accumulates fenced content into
+    whatever batch is open — it has to, or archiving would drop the example text
+    — but it does NOT increment `task_count` for it. This function reads
+    `b["lines"]` directly, so before this mask it counted the task lines inside a
+    *correctly closed, correctly masked* documentation fence. Measured on a batch
+    holding one real task plus a closed ```` ```markdown ```` block containing
+    two illustration tasks: `task_count` said 1 and this said `(2, 3)`.
+
+    The blast radius is why it is worth the extra scan: these numbers feed the
+    per-batch breakdown, the `Archive N tasks?` prompt an operator answers, and
+    `update_archive_total`, which writes the Grand Total row **durably into the
+    archive file**. A wrong number there is not a display bug; it is a permanent
+    record of work that was never done.
+
+    Masking each batch's own lines is sound because a batch can only be opened
+    OUTSIDE a fence — a `### Batch` header inside one is masked and opens
+    nothing — so any fenced run inside `b["lines"]` also opened inside it.
+
+    The UNTERMINATED case is not reachable here, but the first cut of this
+    docstring got the reason wrong and said so confidently: it claimed the case
+    "is refused outright before this is ever called (see
+    `unterminated_batch_span`)". That function refuses only when a `### Batch`
+    header is inside the fence. An unterminated fence holding only task lines was
+    refused by nothing and masked by nothing, and its illustrations counted as
+    completed work — the review round demonstrated `(2, 2)` where `(1, 1)` was
+    correct. `unterminated_task_span` is what actually closes it; BOTH spans are
+    checked before any parsing or accounting runs.
     """
     done = total = 0
     for b in r["batches"]:
-        for line in b["lines"]:
+        lines = b["lines"]
+        fenced = _fenced_mask(lines)
+        for i, line in enumerate(lines):
+            if fenced[i]:
+                continue
             if COUNTED_TASK_RE.match(line):
                 total += 1
                 if COMPLETED_TASK_RE.match(line):
@@ -787,6 +970,114 @@ def main():
             review_lines = f.read().splitlines()
     except FileNotFoundError:
         print(f"Error: {REVIEW_FILE} not found")
+        sys.exit(1)
+
+    # Q-240: refuse before ANYTHING is parsed, counted, previewed or prompted.
+    # The whole parse is untrustworthy in this state, so a refusal placed after
+    # the accounting would print a wrong total first and then decline — which is
+    # the shape of the defect, not a fix for it. Placed ahead of the `--dry-run`
+    # branch too, deliberately: a dry run whose preview counts an illustration as
+    # completed work is exactly the report an operator would act on.
+    # BOTH spans. A batch header inside an unterminated fence becomes a whole
+    # phantom batch; a task line inside one is counted as completed work. The
+    # first cut checked only the former and its own docstring wrongly claimed
+    # that covered the latter.
+    fence_hit = unterminated_batch_span(review_lines)
+    what = "a batch header"
+    if not fence_hit:
+        fence_hit = unterminated_task_span(review_lines)
+        what = "a completed-task line"
+    if fence_hit:
+        f_line, marker, h_line, h_text = fence_hit
+        print(
+            f"Error: refusing to archive — {os.path.basename(REVIEW_FILE)} has an "
+            f"unterminated {marker} fence opened at line {f_line}, with {what} "
+            f"inside it at line {h_line}:",
+            file=sys.stderr,
+        )
+        print(f"         {_sanitize_log(h_text)}", file=sys.stderr)
+        print(
+            "       An unterminated fence is deliberately ignored by the "
+            "structural parser (honouring one would disable parsing to "
+            "end-of-file), so its contents parse as REAL work — counted as "
+            "completed, archived, deleted from the tracker, and written into the "
+            "archive's Grand Total.",
+            file=sys.stderr,
+        )
+        print(
+            f"       Fix by closing the fence: add a line containing {marker} "
+            f"after the example block. The file is malformed markdown until you "
+            f"do, so this is the correct fix regardless of archiving.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    # ── Q-274: refuse on a near-miss batch header ────────────────
+    #
+    # Same placement rule as the fence refusal above, for the same reason:
+    # before anything is parsed, counted, previewed or prompted, and ahead of
+    # the `--dry-run` branch, because a preview whose totals silently omit a
+    # merged batch is exactly the report an operator would act on.
+    #
+    # **The filed entry got the outcome wrong, and the correction is why this is
+    # a refusal rather than a warning.** `Q-274` says `all_merged` goes False
+    # and therefore "the round is never archived ... nothing is lost". Only the
+    # first half reproduces. Measured at Phase 220 on the entry's own stated
+    # fixture — one em-dash `Merged` batch, one ASCII-hyphen `Merged` batch:
+    #
+    #   * `all_merged` is False, correctly; but that flag gates the round's
+    #     WHOLESALE line removal, not the per-batch archive, so the run
+    #     proceeds (`rc=0`, "removed 1 archived tasks");
+    #   * the em-dash batch relocates into the archive under its own
+    #     `## Round 1` heading;
+    #   * the Grand Total row records `Round 1 (Batches 1-1) | 1 | 1 | 0 |
+    #     Complete` — the round stamped **Complete** over a batch range that
+    #     excludes the live one;
+    #   * the hyphen batch stays in review_tasks.md under a SECOND `## Round 1`
+    #     header, so one round now exists in both files;
+    #   * and nothing warns.
+    #
+    # Nothing is deleted, so the entry's "fail-safe on deletion" half stands.
+    # What is lost is the accounting, and a round marked Complete in the archive
+    # while merged work sits live is a state nobody re-opens. A warning would
+    # have left every one of those effects in place, which is why the entry's
+    # own minimum ask ("the archiver should at minimum warn") is necessary and
+    # not sufficient.
+    #
+    # Whole-run rather than per-round: the near-miss makes the ROUND boundary
+    # itself unreliable (`ANY_BATCH_HEADER_RE` closes the open batch, so a
+    # near-miss silently truncates its predecessor), and there is no legal
+    # tracker shape in which a header misses the canonical form on purpose —
+    # `WORKFLOW.md`'s two batch-metadata templates document one spelling and both
+    # operational writers emit it. That is the difference from `--check-duplicates`' scoped
+    # refusal, where per-round renumbering IS legal.
+    near = near_miss_batch_headers(review_lines)
+    if near:
+        print(
+            f"Error: refusing to archive — {os.path.basename(REVIEW_FILE)} has "
+            f"{len(near)} batch header(s) this archiver cannot read:",
+            file=sys.stderr,
+        )
+        for lineno, text in near:
+            print(f"         :{lineno} — {_sanitize_log(text)}", file=sys.stderr)
+        print(
+            "       The canonical shape is: ### Batch <N> — <Title> `<Status>` "
+            "— an em-dash (—, U+2014), not an ASCII hyphen, and a backticked "
+            "status as the last token on the line.",
+            file=sys.stderr,
+        )
+        print(
+            "       Such a line is invisible to this archiver's status test but "
+            "VISIBLE to its batch counter, so archiving would relocate the "
+            "batches around it and stamp the round Complete in the archive's "
+            "Grand Total while the header above still sits in the tracker.",
+            file=sys.stderr,
+        )
+        print(
+            "       Fix the header(s) above and re-run. Confirm with: "
+            "python3 sysop/scripts/review_index.py --check-headers",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     # Parse archivable rounds

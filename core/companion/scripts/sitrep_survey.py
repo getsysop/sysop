@@ -59,7 +59,10 @@ except ImportError:
     # deliberately standalone for pre-commit (see _log.py's header).
     # tests/test_venv_pyyaml_bootstrap.py pins the five copies identical.
     _roots = []
-    for _cand in Path(__file__).resolve().parents[:3]:
+    # `list(...)` before the slice: slicing `PurePath.parents` is 3.10+
+    # (bpo-35498), and on 3.9 it raises TypeError from inside this very
+    # `except ImportError` — the interpreter the block exists to rescue.
+    for _cand in list(Path(__file__).resolve().parents)[:3]:
         if _cand not in _roots:
             _roots.append(_cand)
     try:
@@ -105,7 +108,11 @@ except ImportError:
             ".venv/bin/pip install pyyaml   (PEP-668-safe), or activate the venv.",
             file=sys.stderr,
         )
-        sys.exit(1)
+        # 2, not 1: the house contract is 1 = the caller's input is wrong,
+        # 2 = the environment is. `/review-close` Step 4a routes those two apart
+        # in terms and must not abort a branch over a missing dependency. This
+        # was the one script of the five that exited 1 here (Phase 219 round).
+        sys.exit(2)
 
 
 # ── Constants ────────────────────────────────────────────────────
@@ -198,6 +205,10 @@ class TaskState:
     index_status: str = ""  # from tasks/index.yml
     dirty: bool = False  # uncommitted changes in worktree
     doc_work_ids: list[str] = field(default_factory=list)
+    # Q-019: whether /document-work's pending-doc exists for this branch. The
+    # `Doc-Work:` trailer alone stopped meaning "docs written" when
+    # /claim-task's executor began emitting it too.
+    pending_doc: bool = False
     next_action: str = ""
     notes: list[str] = field(default_factory=list)
 
@@ -661,6 +672,108 @@ def _derive_task_id_from_branch(
     return None
 
 
+def _pending_doc_for(
+    main_root: Path,
+    branch: str,
+    lock: Lock | None,
+    worktree: Worktree | None,
+) -> Path | None:
+    """The branch's `/document-work` pending-doc, if one exists. `Q-019`.
+
+    **Why this read has to exist, and why it is a filesystem walk rather than a
+    git read.** The `Doc-Work:` trailer was a proxy for "`/document-work` has
+    run", and it stayed true only while `/document-work` was its sole emitter.
+    `/claim-task` Step 7e's executor now emits the same trailer from its own
+    commit — deliberately, so the branch is visible mid-pipeline — so a branch
+    where `/document-work` ran and one where it never did became textually
+    identical to this survey, which then routed the operator straight past it.
+
+    A pending-doc is the artifact `/document-work` Step 3 produces, so its
+    presence is the half the trailer cannot supply. **Not the ONLY producer, and
+    the round corrected that**: `/auto-fix` and `/auto-judge` both write one
+    directly for a batch branch, and `/auto-build` writes one by delegating to
+    `/document-work --non-interactive`. It stays a sound signal here because the
+    arm's other conjunct is a `Doc-Work:` trailer, which none of those three
+    emits — but the justification is "the trailer and the doc have disjoint
+    producers", not "only one skill writes the doc". It is NOT on the branch:
+    `sysop/runtime/` is gitignored (the installer's `ensure_runtime_gitignore`
+    seeds exactly that), so the file lives in the workspace's filesystem and
+    `git show <branch>:<path>` would report absent for every branch alike —
+    which is the healthy-and-skipped-look-identical defect again, one layer
+    down.
+
+    Workspace resolution follows `/review-close` Step 0's arms in the same order
+    and mostly for the same reasons: a `--worktree` claim is listed by git; a
+    `--clone` claim is not, and is recoverable from the `workspace:` its lock
+    records.
+
+    **Two corrections from this function's own review round, because the first
+    version's justification was wrong at the root.** It said arm (iii) exists
+    because `USE_LOCK` defaults to false, so a `--clone` without `--lock` is
+    reachable by neither earlier arm. That cannot be why: the only caller
+    iterates `for lock in locks`, so a task with no lock never reaches this
+    function at all. Arm (iii)'s real job is a lock whose `workspace:` is blank
+    or damaged. And it is **not** a mirror of Step 0's arm (iii), which globs
+    sibling directories and verifies each by reading its `HEAD`; this is one
+    computed path with no glob and no verification, which is enough for the
+    narrow case it actually covers.
+
+    The path it computes had to be corrected too: `claim_task.sh` builds
+    `../<prefix>-<task id LOWER-CASED>` and honours `WORKTREE_PREFIX`, so the
+    first version — `<repo name>-<TASK_ID>` verbatim — could never match on a
+    case-sensitive filesystem. `WORKTREE_PREFIX` is not recorded in the lock, so
+    a prefixed workspace is still only reachable via arm (ii); that is a stated
+    limit, not an oversight.
+
+    Read-only by construction — `/sitrep` carries a `disallowed-tools` guard and
+    this function only ever stats paths.
+    """
+    if not branch:
+        return None
+    rel = Path("sysop") / "runtime" / "pending-docs" / f"{branch.replace('/', '-')}.md"
+
+    candidates: list[Path] = []
+    if worktree is not None:                       # (i) git-listed worktree
+        candidates.append(worktree.path)
+    if lock is not None and lock.workspace:        # (ii) the lock's record
+        candidates.append(Path(lock.workspace))
+    # (iii) the conventional sibling directory. `claim_task.sh` lower-cases the
+    # task id when it builds this path, so this must too — `FEAT-0001` produces
+    # `<repo>-feat-0001`, and the un-lowered spelling matched nothing on any
+    # case-sensitive filesystem.
+    if lock is not None and lock.task_id:
+        candidates.append(
+            main_root.parent / f"{main_root.name}-{lock.task_id.lower()}")
+    candidates.append(main_root)
+
+    # A `workspace:` value is whatever a consumer typed, and a read-only survey
+    # may not raise on one — `/sitrep`'s `main()` catches only KeyboardInterrupt,
+    # so an escaping OSError takes the whole report down with a traceback.
+    #
+    # **This handler was deleted by Phase 220's first cut and restored by its own
+    # review round, and the reason is worth keeping.** The deletion rested on a
+    # measurement — `Path.is_file()` returns False for a NUL byte, an over-long
+    # path and a nonexistent parent — that was taken on **3.14 only**, where
+    # `is_file()` delegates to `os.path.isfile()` and swallows `(OSError,
+    # ValueError)` unconditionally. On **3.9 through 3.13** it goes through
+    # `Path.stat()` and re-raises any errno outside `_IGNORED_ERRNOS`
+    # (ENOENT/ENOTDIR/EBADF/ELOOP) — so an over-long path raises `OSError`
+    # ENAMETOOLONG. Re-measured on 3.9, 3.11, 3.12 and 3.14: the first three
+    # raise. `README.md` declares Python 3.9+, CI runs the suite on 3.9, and
+    # stock macOS 3.9 is the interpreter a consumer without a venv actually
+    # runs, so the handler is live on every supported interpreter but the
+    # author's own. Checking one interpreter and generalising is the same defect
+    # class as `Q-263`, which is why this comment names the versions.
+    for base in candidates:
+        try:
+            p = base / rel
+            if p.is_file():
+                return p
+        except (OSError, ValueError):
+            continue
+    return None
+
+
 def _classify_task(
     task_id: str,
     lock: Lock | None,
@@ -672,6 +785,7 @@ def _classify_task(
     dirty: bool,
     stale_days: int,
     phase40_cutoff: datetime,
+    pending_doc: Path | None = None,
 ) -> TaskState:
     state = "unknown"
     marker = ""
@@ -705,6 +819,7 @@ def _classify_task(
                     index_status=str((index_entry or {}).get("status", "")),
                     dirty=dirty,
                     doc_work_ids=doc_work_ids,
+                    pending_doc=pending_doc is not None,
                     next_action=next_action,
                     notes=notes,
                 )
@@ -731,6 +846,7 @@ def _classify_task(
             index_status=str((index_entry or {}).get("status", "")),
             dirty=dirty,
             doc_work_ids=doc_work_ids,
+            pending_doc=pending_doc is not None,
             next_action=next_action,
             notes=notes,
         )
@@ -742,6 +858,33 @@ def _classify_task(
         next_action = (
             f"continue the build pipeline for {task_id} "
             "(see /claim-task Step 7: plan -> review -> classify -> execute)"
+        )
+    elif task_id and task_id in doc_work_ids and pending_doc is None:
+        # ── Q-019: trailer present, pending-doc absent ───────────
+        #
+        # The trailer alone no longer means `/document-work` has run. Since
+        # Phase 171 `/claim-task` Step 7e's executor emits `Doc-Work:` from its
+        # own commit, so this state is the NORMAL terminal state of the build
+        # pipeline — not an error, and deliberately not worded as one.
+        #
+        # Routing it to `/review-close` (which is what this survey did before)
+        # skips: Step 1b's simplify pass; Step 3, which produces the pending-doc
+        # `/review-close` Step 4c consolidates and Step 3c reads for manual-smoke
+        # signals — so the close arrives with no pending-doc at all; and Step 3b's
+        # HARD-FAIL follow-up-stub check, which on one measured run caught four
+        # follow-ups named in task-body prose with no stub in `tasks/index.yml`,
+        # all four of which would have been archived with the parent and never
+        # seen by `/next-task`.
+        #
+        # `/claim-task`'s own final report already ends "Run `/document-work`
+        # next." This arm stops the two shipped surfaces from contradicting each
+        # other in exactly this state.
+        state = "code committed, docs pending"
+        next_action = f"/document-work {task_id}"
+        notes.append(
+            "Doc-Work: trailer present but no pending-doc — the trailer is "
+            "emitted by /claim-task's executor as well as /document-work, so "
+            "it does not by itself mean documentation has been written"
         )
     elif task_id and task_id in doc_work_ids:
         # Doc-Work trailer present for this task_id — distinguish pushed vs not
@@ -787,6 +930,7 @@ def _classify_task(
         index_status=str((index_entry or {}).get("status", "")),
         dirty=dirty,
         doc_work_ids=doc_work_ids,
+        pending_doc=pending_doc is not None,
         next_action=next_action,
         notes=notes,
     )
@@ -1247,6 +1391,14 @@ class Survey:
     discrepancies: list[Discrepancy]
     stale_days: int
     open_roadmap_ids: list[str]  # task IDs with status: open in tasks/index.yml (claimable)
+    # `Review Ready` batches, as (number, title). Kept OUTSIDE review_batches on
+    # purpose: that list (and the --json payload built from it) filters to
+    # Pending/In Progress, and /roadmap documents that filter as a premise. The
+    # recommendation cascade still needs the one live status that waits on a
+    # human (Phase 222, Q-014) — so it rides its own field, read from the raw
+    # headers, and the payload contract is untouched. Defaulted so existing
+    # fixture constructors stay valid; run_survey always populates it.
+    review_ready_batches: list[tuple[int, str]] = field(default_factory=list)
 
 
 def run_survey(stale_days: int = DEFAULT_STALE_DAYS) -> Survey:
@@ -1315,6 +1467,9 @@ def run_survey(stale_days: int = DEFAULT_STALE_DAYS) -> Survey:
                 dirty=dirty,
                 stale_days=stale_days,
                 phase40_cutoff=phase40_cutoff,
+                pending_doc=_pending_doc_for(
+                    main_root, branch, lock, worktree
+                ),
             )
         )
 
@@ -1340,6 +1495,11 @@ def run_survey(stale_days: int = DEFAULT_STALE_DAYS) -> Survey:
         head_short=head_short,
         tasks=classified,
         review_batches=review_states,
+        review_ready_batches=[
+            (b["number"], b.get("title", ""))
+            for b in review_batches_raw
+            if b.get("status") == "Review Ready"
+        ],
         discrepancies=discrepancies,
         stale_days=stale_days,
         open_roadmap_ids=open_roadmap_ids,
@@ -1378,6 +1538,12 @@ def render_text(s: Survey) -> str:
         lines.append("")
 
     # Review batches
+    if s.review_ready_batches:
+        nums = ", ".join(str(n) for n, _ in s.review_ready_batches)
+        lines.append(
+            f"REVIEW READY (waiting on /review-close): batch {nums}"
+        )
+        lines.append("")
     if s.review_batches:
         lines.append(f"REVIEW BATCHES ({len(s.review_batches)})")
         for rb in s.review_batches:
@@ -1474,7 +1640,21 @@ def _recommended_next(s: Survey) -> Recommendation | None:
             ),
         )
 
-    # P2: review batches with all tasks Doc-Work'd
+    # P2: review batches with all tasks Doc-Work'd — or header status
+    # `Review Ready`, the one live status that needs a human (Phase 222,
+    # Q-014). The header arm comes first: it is the batch's own explicit
+    # declaration, and such a batch never enters s.review_batches (the
+    # Pending/In-Progress filter), so without this arm the cascade was blind
+    # to exactly the state that outranks everything below.
+    if s.review_ready_batches:
+        num, _title = s.review_ready_batches[0]
+        return Recommendation(
+            command=f"/review-close (batch {num})",
+            reason=(
+                f"Batch {num} header reads `Review Ready` — review work done, "
+                "waiting on a human to run /review-close"
+            ),
+        )
     ready_batches = [rb for rb in s.review_batches if rb.state == "ready for /review-close"]
     if ready_batches:
         rb = ready_batches[0]
@@ -1570,6 +1750,38 @@ def _recommended_next(s: Survey) -> Recommendation | None:
             clear_nudge=True,
         )
 
+    # P4b: code committed, documentation not yet written (Q-019).
+    #
+    # Placed above P5 because this task is FURTHER along than an in-progress one
+    # — it has a build commit and a `Doc-Work:` trailer, it simply has no
+    # pending-doc — and below P4 so batch work still outranks single-task work,
+    # which is the ordering every tier here already follows.
+    #
+    # **This arm is not optional decoration; without it the state falls through
+    # the whole cascade.** It is not "in progress" (P5 requires the ABSENCE of a
+    # trailer) and not "ready for /review-close" (P1/P3 now require a
+    # pending-doc), so a repo whose only active task sat in this state would
+    # have skipped to P7 and been told to pick up new roadmap work while a
+    # finished build waited to be documented. Adding a state without adding its
+    # routing arm is the same defect one layer up: the survey would know the
+    # answer and not say it.
+    docs_pending = [t for t in s.tasks if t.state == "code committed, docs pending"]
+    if docs_pending:
+        t = docs_pending[0]
+        return Recommendation(
+            command=f"/document-work {t.task_id}",
+            reason=(
+                f"{t.task_id} has {t.commits_ahead} commit(s) and a Doc-Work: "
+                f"trailer, but no pending-doc — /claim-task's executor emits "
+                f"that trailer, so documentation has not been written yet"
+            ),
+            detail_lines=[
+                "skipping straight to /review-close would lose the simplify "
+                "pass, the pending-doc Step 4c consolidates, and the "
+                "follow-up-stub check"
+            ],
+        )
+
     # P5: in-progress tasks (single-task work)
     in_progress = [t for t in s.tasks if t.state == "in progress"]
     if in_progress:
@@ -1644,6 +1856,20 @@ def _suggested_order(s: Survey) -> list[str]:
     for ts in s.tasks:
         if ts.state == "doc-work done, unpushed":
             out.append(f"/review-close {ts.task_id}")
+    # 2b. Code committed, docs pending (Q-019). Between the close tiers and
+    # in-progress, matching `_recommended_next`'s P4b placement: this task is
+    # further along than an in-progress one and not yet closable.
+    #
+    # **This function is the third surface the new state had to reach, and the
+    # first cut reached two.** With the arm absent the task fell out of the
+    # ordered list entirely and the "(no active Sysop work; pick up a new task
+    # with /next-task)" fallback fired — while RECOMMENDED NEXT, three lines
+    # above it, said `/document-work FEAT-1`. One report contradicting itself.
+    # Found by the round; it is verbatim the defect this phase's own routing
+    # comment describes ("a state with no routing arm is worse than no state").
+    for ts in s.tasks:
+        if ts.state == "code committed, docs pending":
+            out.append(f"/document-work {ts.task_id} (trailer present, no pending-doc)")
     # 3. In-progress (Doc-Work next)
     for ts in s.tasks:
         if ts.state == "in progress":
@@ -1678,6 +1904,14 @@ def render_json(s: Survey) -> str:
             "index_status": t.index_status,
             "dirty": t.dirty,
             "doc_work_ids": t.doc_work_ids,
+            # Q-019. Without this the field is WRITE-ONLY — three writes, no
+            # reader outside its own unit tests — on the surface this skill
+            # calls "for orchestrator consumption". The tree already carries the
+            # guard for this exact class one dataclass over
+            # (`test_flag_contract.py::test_json_render_carries_the_triage_record`:
+            # "dropping the three keys from the render is invisible to every
+            # other test"). Found by the round.
+            "pending_doc": t.pending_doc,
             "next_action": t.next_action,
             "notes": t.notes,
         }

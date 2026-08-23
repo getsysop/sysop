@@ -25,7 +25,8 @@ git add .agents/ 2>/dev/null   # only present when the Codex skill links were in
 git commit -m "chore: install Sysop (loop mode)"
 ```
 
-Prerequisites are the same as any Sysop install (git, bash 4+, Python 3 with PyYAML — see the
+Prerequisites are the same as any Sysop install (git, bash 4+ **to run the installer** — the
+companion scripts it installs run on bash 3.2, so stock macOS is fine afterwards — Python 3 with PyYAML — see the
 [README Quickstart](../README.md#quickstart) for the macOS and Windows notes). `--packs auto`
 detects your stack and installs the matching convention packs — packs are entirely loop-side
 content (maps, checks, semgrep rules, and their support files), so every pack applies fully here.

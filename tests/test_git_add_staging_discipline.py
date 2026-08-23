@@ -233,11 +233,16 @@ KNOWN_RUNTIME_SET_LOOPS: dict[str, str] = {
     "while IFS=$'\\t' read -r wt_path branch; do":
         "Step 1a worktree classification — iterates `git worktree list --porcelain` "
         "output. Read-only body.",
-    "for branch in $BRANCHES_TO_MERGE; do":
-        "Step 4a archive-rotation pre-check — iterates refs discovered at runtime. "
-        "Read-only body (merge-base / diff / grep / echo).",
+    "while IFS= read -r branch; do":
+        "Step 1c archive-rotation pre-check — iterates the branch enumeration pipeline. "
+        "Read-only body (merge-base / diff / grep / echo). Was `for branch in "
+        "$BRANCHES_TO_MERGE` until Phase 219 (`Q-233`): the unquoted expansion is "
+        "word-split by bash and NOT by zsh, so the check ran twice under one shell and "
+        "once under the other, and the zsh run emitted zero warnings having evaluated "
+        "nothing. This entry also said *Step 4a*; the loop has only ever been in Step 1c.",
     "while IFS= read -r _b; do":
-        "Step 4a branch enumeration. Read-only body.",
+        "Step 3c worktree-to-branch enumeration (`review-close` § Step 3c, not Step 4a — "
+        "the label was wrong, corrected Phase 219). Read-only body.",
     "while IFS= read -r _line; do":
         "Steps 1a and 3c `git worktree list --porcelain` parsers (Phase 188). Iterate "
         "runtime-discovered worktree records; read-only bodies (`case` + parameter "

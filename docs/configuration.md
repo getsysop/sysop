@@ -39,6 +39,8 @@ The three concat-style managed configs regenerate from upstream + pack sources o
 
 The suffix files are **never written** by the installer and are **never in `managed_paths`** — same protection property as `tasks/index.yml` and `sysop/SYSOP_ISSUES.md`. Author them by hand (or let `/codebase-review` + `/security-audit` Step 9 promote recurring findings into them), commit them normally, and `--update` is incapable of touching them.
 
+> **This table is about durability, not liveness — write both places.** The **review** skills read the **base** files at review time (`.claude/convention_map.md`, `.claude/security_map.md`, `.claude/checks.yml`) — the siblings are merged into the base only at install/update time, so a review round does not see them. (`/contribute-convention` and `/test-audit` *do* read the overlays directly, but they read them as their subject — what this project promoted locally — not as review inputs.) So an overlay-only edit is **durable but inert** — invisible until the next `sysop-update.sh` re-runs the concat. That is why promotion **dual-writes**: the base copy makes the rule live in this round, the overlay copy makes it survive the next update. Retiring a rule has the mirror-image trap — remove it from the overlay, or the next update re-supplies it. Full rules: [`_shared/promotion-write-target.md`](../core/skills/_shared/promotion-write-target.md).
+
 Because these overlay files are where a project's *locally-grown* conventions accumulate, they're also the give-back source: **`/contribute-convention`** reads them, strips your project's fingerprints down to placeholder vocabulary, and files the promotion-grade ones upstream to the Sysop repo as pack/convention proposals (per-pack consent, dry-run by default) — the convention counterpart to `/report-issues`.
 
 **Markdown example** — `.claude/convention_map.project.md`:
@@ -59,15 +61,25 @@ After `bash sysop/scripts/sysop-update.sh`, `.claude/convention_map.md` ends wit
 # consumer wins on id-collision with a ⚠ warn line in the install output.
 checks:
   - id: project-bean-temp-file
+    name: Ledger written without an atomic temp file
+    category: correctness
+    severity: high
+    paths: ["src/parser/"]
+    include: ["*.py"]
+    pattern: 'open\([^)]*ledger\.beancount[^)]*\bw\b'
     description: Use NamedTemporaryFile + atomic write for ledger updates
-    tier: blocking
-    patterns:
-      - 'open\([^)]*ledger\.beancount[^)]*\bw\b'
-    globs:
-      - "src/parser/**/*.py"
+    convention: "Atomic writes"
+    used_by: [codebase-review]
 ```
 
-If a project check declares the same `id` as an upstream check (e.g., to override `tier: advisory` with `tier: blocking`), the installer emits `⚠ id-collision: <id> (consumer overrides upstream)` so the substitution surfaces in the post-update output. The merge is text-level (Phase 55): the colliding upstream entries are removed line-wise and your whole project file is appended verbatim, so comments — including `# OVERRIDE (...):` annotations explaining why an override exists — survive every update cycle. Malformed YAML in the suffix file is a hard install abort.
+> **Use these field names exactly.** `pattern` is singular, `paths` and `include` are both
+> required, and there is no `tier` field — severity is `low` / `medium` / `high` / `critical`,
+> and `blocking: true` is the separate flag that fails the run. An entry with unrecognised keys
+> **still parses and still validates**, and then matches nothing: a check with no `pattern` and
+> no `paths` is a silent no-op, not an error. The full field table is
+> [`WORKFLOW.md` § 6.5](../core/companion/docs/WORKFLOW.md).
+
+If a project check declares the same `id` as an upstream check (e.g., to override an upstream check's `severity`, narrow its `paths`, or set `blocking: true`), the installer emits `⚠ id-collision: <id> (consumer overrides upstream)` so the substitution surfaces in the post-update output. The merge is text-level (Phase 55): the colliding upstream entries are removed line-wise and your whole project file is appended verbatim, so comments — including `# OVERRIDE (...):` annotations explaining why an override exists — survive every update cycle. Malformed YAML in the suffix file is a hard install abort.
 
 **pyyaml dependency for `.claude/checks.project.yml`.** If you author a YAML suffix, install pyyaml in the project's venv: `python3 -m venv .venv && .venv/bin/pip install pyyaml`. The installer auto-discovers `<target>/.venv/bin/python3`, then `<target>/venv/bin/python3`, then `python3` on PATH; the first one that can `import yaml` wins. If none can AND the suffix file exists, the install aborts with the same fix-instruction. The markdown suffix files have no pyyaml dependency.
 
@@ -102,10 +114,36 @@ Skills pin *roles* (`reasoning` / `mechanical` / `quick`), and `.claude/served_m
 
 ```yaml
 roles:
-  reasoning: fable   # or `best`: Fable 5 where your org has access, else latest Opus
+  reasoning: fable
 ```
 
-(One key suffices for `fable` — and for anything else already in the default map's `served:` list. A value *outside* that list — `best`, `inherit`, or a full model id — must *also* be listed under a `served:` key in your local overlay, or `check_skill_models.py` fails loudly; the default map's own comments show the shape.)
+**Map `reasoning` and `mechanical` to one of `opus` / `sonnet` / `haiku` / `fable`.** Those two roles govern *inline* pins — values a skill body hands to the Agent tool's `model` parameter, which is a closed enum. Mapping either to `best`, `inherit`, `opusplan`, a full model id, or a provider-specific id breaks every agent spawn in the skills that role governs, and it breaks them mid-skill at spawn time rather than at install. Adding the value to `served:` does not rescue it: `served:` is Sysop's sunset allowlist, not the harness's enum. `check_skill_models.py` fails loudly on this, and `.claude/served_models.yml` carries an `inline_models:` list you can extend if your harness accepts more. A *frontmatter*-only role (today that is `quick`) is not so constrained — it accepts anything `/model` accepts.
+
+For a value outside the default lists, extend `served:` too, or `check_skill_models.py` fails:
+
+```yaml
+roles:
+  quick: inherit
+served:
+  - inherit
+```
+
+### Spending less
+
+There is no cheap lever hiding in the default map. `mechanical` already resolves to Sonnet and `quick` to Haiku — they are not the expensive part — and they barely govern anything: on a full install they carry 2 of the 32 pins in the skills tree, and the other 30 are `reasoning`. **On a loop-mode install they carry none at all**, because loop mode does not ship `/auto-fix` or `/next-task`, which are the only skills that use them; all 8 pins a loop install carries are `reasoning`.
+
+Either way the only lever with real money behind it is `reasoning` itself — which is also the role that runs adversarial review, judging, and execution. Sysop ships it conservative on purpose and does not recommend a blanket downgrade.
+
+If you want the trade anyway, take it explicitly:
+
+```yaml
+roles:
+  reasoning: sonnet   # cheaper, and shallower where it matters most
+```
+
+Worth knowing before you do: on the one consumer with per-phase spend recorded, the money is concentrated in *execution*, not review — 63.7% of it, against 21.8% for planning and 14.5% for review. Downgrading `reasoning` moves all three at once, so it buys most of its savings from the phase you are least likely to want cheaper. **The role is the unit you can configure.** A finer one exists in the skill files themselves — a trailing `<!-- sysop:role=… -->` marker overrides the role for a single pin, which is how `/auto-fix` runs its fix agents on the mechanical tier while its verification pass stays on reasoning — but that marker lives in managed skill text, so reaching it means forking the skill and giving up upstream updates to it.
+
+That split comes from one project over one window, running the stock mapping, and its `fix` and `verify` rows recorded no spend at all — a gap in what that project logged, not a free phase. Read it as a rough shape, not a budget.
 
 Local keys win, updates never touch the file, and sunset fixes keep flowing through the managed default map. The mapping is applied by the install-time resolver — after creating or changing the file, run `bash sysop/scripts/sysop-update.sh` (or `install.sh <target> --update`) to rewrite the skills' pins. (`fable` needs Claude Code ≥ 2.1.170; where a pinned model isn't available, the session silently keeps its current model.)
 

@@ -201,9 +201,15 @@ def test_the_merged_tree_gate_can_report_having_run_nothing():
     only `ran on <merge target>` or `not reached`, so a doc-only skip at this gate was
     rendered to the human as a completed verification."""
     flat = _flat(_text())
-    assert "| ran nothing: why | not reached: why>" in flat, (
-        "Step 8's 4a-post arm cannot express a gate that executed nothing"
-    )
+    # Pinned as the SET of arms, not as one string ending in `>`. Phase 219 added a
+    # fourth arm (`TIMEOUT:`) and the old form broke on the moved terminator — an
+    # over-strict pin that punished extending the very enumeration it protects.
+    for arm in ("ran on <merge target>: N commands", "ran nothing: why",
+                "not reached: why", "TIMEOUT: <command>"):
+        assert arm in flat, (
+            f"Step 8's 4a-post arm can no longer express {arm!r} — a state the report "
+            "cannot express is a state reported as something else"
+        )
     post = _flat(_slice_4a_post(_text()))
     assert "reports rather than stops" in post, (
         "the zero-commands-on-a-doc-only-diff case has no stated disposition — the risk is "

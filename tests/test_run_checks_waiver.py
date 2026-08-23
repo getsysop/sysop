@@ -177,6 +177,32 @@ def test_shipped_tree_carries_only_the_known_live_markers():
     assert found == {
         # Deliberate: § 6.5 teaches the marker, and a doc example wants real ids.
         "core/companion/docs/WORKFLOW.md": ["raw-row-number", "sql-fstring"],
+        # Phase 215: both checks' `notes:` name the exact waiver string for the
+        # residual false positive each one documents — a consumer told "this
+        # case is waivable" needs the literal to type. Safe for the reason this
+        # test's docstring gives: the hazard is a file-level check being handed
+        # a whole file containing a marker, and both reachable file-level checks
+        # are `*.ts`/`*.tsx`-scoped, so a `.yml.fragment` is not in their
+        # population. If a file-level check ever covers YAML, this line is the
+        # thing that says these two became load-bearing.
+        #
+        # Phase 217 added two more on the same terms, and re-derived the safety
+        # argument rather than inheriting it: the two GRANT siblings each name
+        # their own waiver literal because each documents a residual false
+        # positive a consumer will meet (a `GRANT`/`ON ... TO app_` line inside a
+        # `/* */` block comment — the runner is line-oriented and cannot tell).
+        # The argument still holds, checked at the tip: the ONLY two
+        # `invert_file_check` checks in the tree are `missing-mock-cleanup` and
+        # `createobjecturl-leak`, both `include: ['*.ts', '*.tsx']`, so no
+        # file-level check has a `.yml.fragment` in its population. Both new
+        # checks are line-based `pattern:` checks, which cannot be tripped by a
+        # marker elsewhere in the file at all.
+        "packs/nextjs-react/companion/checks.yml.fragment": ["window-open-noopener"],
+        "packs/postgres/companion/checks.yml.fragment": [
+            "grant-all-tables-in-schema",
+            "grant-sensitive-table",
+            "grant-wrapped-continuation",
+        ],
     }, found
 
 

@@ -93,6 +93,16 @@ WRITE_CAPABLE_SPELLINGS = ("git branch",)
 # installed consumer (install_permissions set-unions), so pruning buys nothing
 # for existing installs — the bar for keeping one is only that it is reachable.
 SEEDED_WITHOUT_SKILL_MENTION = {
+    # ---- Phase 220: the near-miss reporter. Prescribed by WORKFLOW.md in a
+    # fence, by `close_batch.sh`'s grep-fallback warning and by
+    # `archive_review_tasks.py`'s refusal — all three name
+    # `--check-headers` as the way to list the offending headers. No skill
+    # step invokes it: it is what an operator runs after a tool tells them a
+    # header is unreadable.
+    "Bash(python3 sysop/scripts/review_index.py:*)":
+        "Prescribed by WORKFLOW.md \u00a7 4.2's canon block, by close_batch.sh's "
+        "fallback warning and by the archiver's near-miss refusal; no skill "
+        "step runs it (Phase 220).",
     # ---- Phase 184: prescribed by docs and by the installer, not by a skill
     # step. `test_prescribed_command_coverage.py` is the guard that now
     # requires them; each is reachable from shipped instructions.

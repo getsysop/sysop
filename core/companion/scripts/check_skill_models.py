@@ -6,8 +6,19 @@ Phase 65b allowlist guard). Skills pin a ROLE, not a model name; this check
 verifies, for every pin:
 
   1. the pin is governed by a `<!-- sysop:model-roles … -->` marker (no un-roled pins),
-  2. the role is defined in `served_models.yml` `roles:`, and
-  3. the role resolves to a model listed under `served:`.
+  2. the role is defined in `served_models.yml` `roles:`,
+  3. the role resolves to a model listed under `served:`, and
+  4. a role governing an INLINE pin resolves to a value the Agent tool's `model`
+     parameter accepts (Phase 223 — that parameter is a closed enum, so `best`,
+     `inherit`, and full model ids are rejected at spawn time even though they
+     are legal in frontmatter). Overridable via `inline_models:`, and
+  5. the pin's own LITERAL value is one the same enum accepts, checked
+     independently of (4). Rules 1-4 all judge what a role *resolves to*; on the
+     plugin install path nothing rewrites the file, so the literal in the tree is
+     what the harness receives, and a hand-edited one passed all four.
+
+It also refuses to pass an empty population: `--root <dir with no pins>` is a
+broken install, not a clean bill of health.
 
 That third rule is what makes a sunset LOUD instead of silent:
 
@@ -44,9 +55,11 @@ from _model_roles import (  # noqa: E402  (path set above)
     DEFAULT_CONFIG,
     LOCAL_CONFIG,
     REPO_ROOT,
+    ConfigShapeError,
     analyze_text,
     find_role_violations,
     iter_skill_files,
+    load_inline_models,
     load_roles_config,
 )
 from migrate_skill_model import SKILLS_DIR  # noqa: E402
@@ -66,6 +79,10 @@ def main(argv: list[str] | None = None) -> int:
                         help="consumer override layered on top (default: .claude/served_models.local.yml)")
     parser.add_argument("--root", default=str(SKILLS_DIR),
                         help="skills directory to scan (default: .claude/skills/)")
+    parser.add_argument("--managed-only", action="store_true",
+                        help="validate only files carrying a `sysop:model-roles` marker "
+                             "— a consumer's own skills in .claude/skills/ are not Sysop's "
+                             "to judge (used by install.sh's pre-apply gate)")
     parser.add_argument("--list", action="store_true",
                         help="print every pin with its role + resolved model, then exit 0")
     args = parser.parse_args(argv)
@@ -80,8 +97,19 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: skills directory not found: {root}", file=sys.stderr)
         return 2
 
-    roles, served = load_roles_config(config_path, local_path if local_path.is_file() else None)
+    local_or_none = local_path if local_path.is_file() else None
+    # A config that is malformed rather than wrong is a USAGE error (exit 2), not
+    # a finding (exit 1). Reporting a stray bracket through the violation code
+    # told consumers their model pins were unresolvable when the real problem was
+    # a YAML typo — and the shipped pre-commit example repeats that message.
+    try:
+        roles, served = load_roles_config(config_path, local_or_none)
+        inline_models = load_inline_models(config_path, local_or_none)
+    except ConfigShapeError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
     served_set = set(served)
+    inline_set = set(inline_models)
 
     if args.list:
         for path in iter_skill_files(root):
@@ -93,22 +121,48 @@ def main(argv: list[str] | None = None) -> int:
                     mark = "UNDEF"
                 elif resolved not in served_set:
                     mark = "STALE"
+                elif r.kind == "inline" and resolved not in inline_set:
+                    mark = "NOSPAWN"
                 else:
                     mark = "served"
                 detail = f"{r.role or '-'} -> {resolved or '?'}"
                 print(f"  [{mark:7}] {_rel(path)}:{r.lineno}  {detail}  ({r.kind})")
         return 0
 
-    violations = find_role_violations(root, roles, served)
+    # A guard that scanned nothing certifies nothing. `--root <empty dir>` used to
+    # print OK and exit 0 under any mapping, so a consumer whose skills install
+    # failed got a clean bill of health from the check that exists to catch it.
+    population = 0
+    for p in iter_skill_files(root):
+        text = p.read_text(encoding="utf-8")
+        if args.managed_only and "sysop:model-roles" not in text:
+            continue
+        population += len(analyze_text(text))
+    if population == 0:
+        scope = "Sysop-managed " if args.managed_only else ""
+        print(f"error: no {scope}model pins found under {root} — nothing to validate. "
+              f"A skills tree with no pins to check is a broken install, not a "
+              f"passing check.", file=sys.stderr)
+        return 2
+
+    violations = find_role_violations(
+        root, roles, served, inline_models, managed_only=args.managed_only
+    )
     if violations:
         rolemap = ", ".join(f"{k}={v}" for k, v in sorted(roles.items())) or "(none)"
         print(f"FAIL: {len(violations)} skill model pin(s) failed role resolution.")
         print(f"      roles: {rolemap}")
-        print(f"      served: {', '.join(served) or '(none)'}\n")
+        print(f"      served: {', '.join(served) or '(none)'}")
+        print(f"      inline-legal: {', '.join(inline_models) or '(none)'}\n")
         for rel, pin, reason in violations:
             print(f"  {rel}:{pin.lineno}  {reason}")
         print("\nFix: repoint the role in served_models.yml (and update served:), "
               "or add the missing `<!-- sysop:model-roles … -->` marker.")
+        if any("INLINE pin" in reason for _, _, reason in violations):
+            print("     For the INLINE failures above, adding the value to `served:` does "
+                  "NOT help — `served:` is Sysop's own sunset allowlist, not the harness's "
+                  "enum. Map the role to an alias (e.g. `reasoning: fable`), or extend "
+                  "`inline_models:` if your harness really accepts the value.")
         return 1
 
     print(f"OK: all skill model pins resolve to served models "

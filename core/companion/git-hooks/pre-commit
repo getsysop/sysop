@@ -23,13 +23,29 @@ BLOCKING_FAILED=0
 ADVISORY_NOTES=""
 
 # === BLOCKING CHECKS ===
+#
+# Grep the INDEX (`git grep --cached`), never the working tree (Sysop Phase 222,
+# Q-020). The file list above comes from `git diff --cached`, so a working-tree
+# grep checks different content than the commit will carry: stage a violating
+# blob, clean the working tree without re-staging, and a working-tree grep
+# passes while `git show :<file>` (the index) holds the violation (reproduced).
+# Each filename is passed as a QUOTED `:(literal)` pathspec: unquoted, bash
+# glob-expands a name like `d[1].py` against the working tree before git ever
+# sees it, and unmagicked, git glob-matches the pathspec against other index
+# files — both reproduced, both directions of checking the wrong file.
 
 # B1: <description>
 # if [ -n "$STAGED_PY" ]; then
-#     HITS=$(echo "$STAGED_PY" | xargs grep -ln '<anti-pattern>' 2>/dev/null || true)
+#     HITS=""
+#     while IFS= read -r FILE; do
+#         [ -n "$FILE" ] || continue
+#         if git grep --cached -q '<anti-pattern>' -- ":(literal)$FILE" 2>/dev/null; then
+#             HITS="$HITS$FILE"$'\n'
+#         fi
+#     done <<< "$STAGED_PY"
 #     if [ -n "$HITS" ]; then
 #         echo "❌ B1: <description>"
-#         echo "$HITS"
+#         printf '%s' "$HITS"
 #         BLOCKING_FAILED=1
 #     fi
 # fi
@@ -38,7 +54,13 @@ ADVISORY_NOTES=""
 
 # A1: <description>
 # if [ -n "$STAGED_TS" ]; then
-#     HITS=$(echo "$STAGED_TS" | xargs grep -ln '<anti-pattern>' 2>/dev/null || true)
+#     HITS=""
+#     while IFS= read -r FILE; do
+#         [ -n "$FILE" ] || continue
+#         if git grep --cached -q '<anti-pattern>' -- ":(literal)$FILE" 2>/dev/null; then
+#             HITS="$HITS$FILE"$'\n'
+#         fi
+#     done <<< "$STAGED_TS"
 #     if [ -n "$HITS" ]; then
 #         ADVISORY_NOTES+="⚠️  A1: <description>\n"
 #         ADVISORY_NOTES+="$HITS\n\n"

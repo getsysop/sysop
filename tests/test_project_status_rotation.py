@@ -147,7 +147,7 @@ def _rule(step4c):
     )
     assert "rotate the newest" not in rot_line, rot_line
     assert "Insert at the TOP of Section 6" in write_line, write_line
-    assert "changelog.md" in rot_line, ("the rotation must name where entries go, or "
+    assert "CHANGELOG.md" in rot_line, ("the rotation must name where entries go, or "
                                        "the staging note guards nothing: " + rot_line)
     return cap, trigger, keep
 
@@ -258,7 +258,8 @@ def test_consolidation_is_stated_before_the_rotation_it_bounds(step4c):
 
 
 def test_the_staging_note_names_both_writers_of_changelog(step4c):
-    """`changelog.md` now has three writers; staging it off the routing table
+    """The changelog (canonical `CHANGELOG.md` since Phase 222/Q-279) has three
+    writers; staging it off the routing table
     alone drops whichever one ran.
 
     The pre-existing guard (`test_review_close_pr_policy.py`) pins the rotation
@@ -267,7 +268,7 @@ def test_the_staging_note_names_both_writers_of_changelog(step4c):
     """
     lines, lo, hi = step4c
     note = [ln for ln in lines[lo:hi]
-            if "Do not stage `changelog.md` from the routing table alone" in ln]
+            if "Do not stage `CHANGELOG.md` from the routing table alone" in ln]
     assert len(note) == 1, note
     text = note[0]
     assert "Rotation check" in text, text
@@ -375,7 +376,7 @@ def test_the_clause_keeps_the_content_the_defect_removed(step4c):
     # The routing INSTRUCTION, not the word: the consolidated entry's own template
     # names `changelog.md` too, so a line-level check was satisfied while the
     # instruction that puts anything there was deleted (lens 3's A12 — silent loss).
-    assert "route **every** entry's detail to `changelog.md`" in clause, (
+    assert "route **every** entry's detail to `CHANGELOG.md`" in clause, (
         f"the clause no longer routes per-branch detail anywhere: {clause}")
     assert "merged-only set from step 1b" in clause, clause
     assert "batch or branch list" in clause, ("the consolidated entry must name the "
@@ -412,7 +413,7 @@ def test_the_staging_note_is_not_contradicted_beside_itself(step4c):
     """
     lines, lo, hi = step4c
     note = next(ln for ln in lines[lo:hi]
-                if "Do not stage `changelog.md` from the routing table alone" in ln)
+                if "Do not stage `CHANGELOG.md` from the routing table alone" in ln)
     flat = " ".join(note.split()).lower()
     for contradiction in ("table alone is sufficient", "table alone suffices",
                           "is enough on its own", "need not stage"):
@@ -439,7 +440,7 @@ def _canon(s):
 
 
 _CLAUSE_OPERATIVE = (
-    "**Consolidation clause — a wide close writes ONE §6 entry, not one per branch.** Count the pending-docs this run is routing (the merged-only set from step 1b, the same `<N>` the commit subject carries). **If `<N>` is more than 4**, do not write the per-branch entries above. Write a single one-line entry instead — `<date>: <N> branches merged in one close: <batch or branch list> — per-branch detail in changelog.md` — and route **every** entry's detail to `changelog.md` as a bullet under today's date heading, whatever its `type`."
+    "**Consolidation clause — a wide close writes ONE §6 entry, not one per branch.** Count the pending-docs this run is routing (the merged-only set from step 1b, the same `<N>` the commit subject carries). **If `<N>` is more than 4**, do not write the per-branch entries above. Write a single one-line entry instead — `<date>: <N> branches merged in one close: <batch or branch list> — per-branch detail in CHANGELOG.md` — and route **every** entry's detail to `CHANGELOG.md` (see § *The changelog contract* below) as a bullet under `## [Unreleased]`, classed by `type` (feature → `### Added`, bugfix → `### Fixed`, everything else → `### Changed`) with ` (<date>)` appended, whatever its `type`."
 )
 
 

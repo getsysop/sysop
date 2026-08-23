@@ -435,11 +435,25 @@ def main():
                     file=sys.stderr,
                 )
             else:
+                # TWO remedies, cheapest-to-recover first. Naming only the
+                # regenerator sent a consumer whose baseline is mostly
+                # hand-written triage rationale down the one path that
+                # discards it — `write_baseline` stamps a fixed header and
+                # keeps no comment. That is the same defect Phase 213 fixed on
+                # the stale-entry branch above and left standing on this one,
+                # and Phase 215 made it reachable without any consumer edit: a
+                # widened shipped pattern can turn a green gate red on its own.
                 print(
                     f"\nerror: {new_blocking_hits} new blocking finding(s) — "
                     "failing CI.\n"
-                    "   If a finding is known tech debt, regenerate the "
-                    "baseline with:\n"
+                    "   To accept a finding WITHOUT losing the comments in "
+                    "your baseline:\n"
+                    "     bash sysop/scripts/run_checks.sh --print-keys\n"
+                    "   then append the keys you accept, with your reason "
+                    "beside them.\n"
+                    "   To regenerate wholesale instead (accepts every current "
+                    "finding and\n"
+                    "   keeps NO comments):\n"
                     "     bash sysop/scripts/run_checks.sh --mode both "
                     "--update-baseline\n"
                     "   (Review the diff before committing — baseline entries "
@@ -575,12 +589,44 @@ def _run_update_baseline(repo_root, all_checks, baseline_file):
     # copy of its filter. The hand-inlined copy that used to live here was
     # already one edit away from disagreeing with it (internal tracker #363 changed
     # the predicate; a duplicate would have kept printing the old number).
-    written = write_baseline(baseline_file, all_findings, blocking_ids)
+    # Checks that produced nothing this run keep their existing entries. A
+    # wholesale rewrite would delete them and exit 0 — the `Wrote N` line below
+    # reading like success while a consumer's triage verdicts went silently
+    # missing. Refusing instead is NOT available here: this command is
+    # deliberately lenient on `skipped`, because the shipped defaults make
+    # `skipped` the universal starting state on a fresh install. See
+    # `write_baseline`'s docstring for the full argument.
+    # BOTH sets, exactly as `--migrate-baseline` passes both. `non_executed_ids`
+    # is checks that produced nothing; `incomplete_ids` is `degraded` checks —
+    # ones that ran, emitted real findings, and covered less than their declared
+    # inputs. Its own docstring gives the reason this path needs it too: "an
+    # entry it did not match may simply be in the part that was not scanned.
+    # Absence of evidence, so those are held rather than dropped."
+    #
+    # Passing only `non_executed_ids` left the whole `degraded` class still
+    # silently deleted on the ONE command that destroys entries — the exact
+    # failure this fix exists to close, and worse than the original because the
+    # "carried forward unverified" line below would not print either, the set
+    # being empty. Found by this phase's own review round, after the first cut
+    # shipped with the hole.
+    non_executed = set(report.non_executed_ids()) | set(report.incomplete_ids())
+    written = write_baseline(
+        baseline_file, all_findings, blocking_ids, non_executed
+    )
     baseline_rel = baseline_file.replace(repo_root.rstrip("/") + "/", "")
     print(
         f"Wrote {written} baseline finding(s) to {baseline_rel}",
         file=sys.stderr,
     )
+    # Named, not merely counted: the failure this closes was silence, so a run
+    # that carried entries forward has to say which checks it could not verify.
+    if non_executed:
+        print(
+            f"   {len(non_executed)} check(s) did not run this pass; their "
+            f"existing baseline entries were carried forward unverified: "
+            f"{', '.join(sorted(non_executed))}",
+            file=sys.stderr,
+        )
     sys.exit(0)
 
 

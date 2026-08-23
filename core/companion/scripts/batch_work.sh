@@ -120,7 +120,7 @@ refuse_on_structural_fence() {
 # template nests `### Batch <N>` under `## Round N` and states no numbering
 # scope. (An earlier version of this comment added "and no shipped skill derives
 # the next number from existing headers". That is FALSE and was corrected in
-# Phase 211: `codebase-review/SKILL.md:164` and `security-audit/SKILL.md:179` —
+# Phase 211: `codebase-review/SKILL.md:166` and `security-audit/SKILL.md:181` —
 # the only two writers of batch headers in the tree — both say `next_batch_number`
 # = highest Batch N + 1, i.e. a file-global rule. It does not rescue the
 # whole-file refusal, because nothing ENFORCES that rule and a per-round tracker
@@ -142,6 +142,15 @@ refuse_on_duplicate_number() {
     # numbers. Restating it here would be a second wording to keep in sync.
     echo "$err" >&2
     return 1
+  fi
+  # rc 0 with output on stderr is the NEAR-MISS report (Q-242): batch <n> has no
+  # duplicate strict header, but some line declares it in a shape no reader
+  # parses. It is advisory — it must not refuse, because a near miss is not a
+  # duplicate and the claim path already refuses the shapes it can act on — but
+  # it must not be swallowed either. Phase 220's first cut printed it to stdout,
+  # which this capture discards, so the fix reached nobody on the automated path.
+  if [[ -n "$err" ]]; then
+    echo "$err" >&2
   fi
   return 0
 }
@@ -179,6 +188,35 @@ normalize_batch_arg() {
   else
     printf '%s\n' "$raw"
   fi
+}
+
+# ── Helper: refuse a flag sitting AFTER the positional (Q-243) ─
+# Both dispatch paths pre-scan argv for `--allow-open-fence` before parsing
+# flags, because the fence refusal must run before `--force` can reach past it.
+# Phase 220 stopped that pre-scan at the first non-flag argument, which is the
+# fix — but it moved the DIAGNOSIS: with the trailing flag no longer scanned,
+# `batch_work.sh 9 --allow-open-fence` on an open-fenced tracker exits on the
+# fence, telling the operator to close a fence when their actual mistake was
+# flag placement. The two ordering checks that would have said so live ~20 lines
+# further down, after `refuse_on_structural_fence`, so they are unreachable in
+# exactly this case.
+#
+# So the refusal is hoisted here, ahead of the fence gate. It cannot become a
+# bypass: it only ever exits non-zero, and it reads no flag to decide.
+# `$usage_hint` is the caller's own usage line so the two paths keep their own
+# examples rather than sharing a wrong one.
+refuse_trailing_flags() {
+  local usage_hint="$1"; shift
+  local seen_positional=false _a
+  for _a in "$@"; do
+    if $seen_positional && [[ "$_a" == --* ]]; then
+      echo "❌ Flags must come before <BATCH_NUMBER> (e.g. ${usage_hint})." >&2
+      echo "   Saw trailing flag: $_a" >&2
+      return 1
+    fi
+    [[ "$_a" == --* ]] || seen_positional=true
+  done
+  return 0
 }
 
 # ── Helper: resolve the canonical sysop/runtime/locks/ ────────
@@ -561,8 +599,23 @@ if [[ "${1:-}" == "--release" ]]; then
   # flag is pre-scanned here rather than read from RELEASE_FORCE below — that
   # variable does not exist yet, and moving this call after it would hand
   # --force the exit-3 bypass the comment above exists to deny.
+  # Q-243: stop at the first NON-flag argument. Scanning all of "$@" honoured a
+  # flag position the parser below rejects, so `--release 9 --allow-open-fence`
+  # printed the escape's "proceeding under ..." banner and only THEN exited 1
+  # with "Flags must come before <BATCH_NUMBER>". Nothing was written — the
+  # banner preceded every mutation — so the cost was a reader who believes an
+  # escape took effect when the run refused it. `case`, not `[[ ]] &&`: under
+  # `set -e` the AND-list form makes the loop body's status depend on the test,
+  # which is a hazard to re-introduce for no gain.
+  refuse_trailing_flags "batch_work.sh --release --force <BATCH_NUMBER>" "$@" || exit 1
   _fence_force=""
-  for _a in "$@"; do [[ "$_a" == "--allow-open-fence" ]] && _fence_force="force"; done
+  for _a in "$@"; do
+    case "$_a" in
+      --allow-open-fence) _fence_force="force" ;;
+      --*) ;;
+      *) break ;;
+    esac
+  done
   refuse_on_structural_fence "$_fence_force" || exit 1
   RELEASE_FORCE=false
   while [[ "${1:-}" == --* ]]; do
@@ -809,8 +862,17 @@ fi
 # for a batch the file records as `Merged`.
 # The exit-5 arm is forceable and CLAIM_FORCE is parsed below, so the flag is
 # pre-scanned rather than read from it; see the --release copy above.
+# Q-243: stop at the first NON-flag argument — see the --release copy above for
+# why (a trailing flag printed the escape banner and was then rejected).
+refuse_trailing_flags "batch_work.sh --force <BATCH_NUMBER>" "$@" || exit 1
 _fence_force=""
-for _a in "$@"; do [[ "$_a" == "--allow-open-fence" ]] && _fence_force="force"; done
+for _a in "$@"; do
+  case "$_a" in
+    --allow-open-fence) _fence_force="force" ;;
+    --*) ;;
+    *) break ;;
+  esac
+done
 refuse_on_structural_fence "$_fence_force" || exit 1
 
 CLAIM_FORCE=false

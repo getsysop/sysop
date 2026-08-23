@@ -41,6 +41,7 @@ Surface covered:
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
@@ -370,6 +371,13 @@ def test_classify_task_planning_when_no_commits_ahead():
 
 
 def test_classify_task_ready_for_review_close_with_doc_work_trailer():
+    """`pending_doc` is now REQUIRED for this state (Q-019, Phase 220).
+
+    Both this test and its unpushed twin below used to pass with the trailer
+    alone, which is precisely the defect: `/claim-task` Step 7e's executor emits
+    `Doc-Work:` too, so trailer-alone stopped meaning "documentation exists".
+    They were asserting the bug. The trailer-without-pending-doc case they used
+    to cover by accident is now covered on purpose, two tests down."""
     commit = ss.Commit(
         sha="abc", subject="feat: do thing",
         author_date=datetime(2026, 5, 25, tzinfo=timezone.utc),
@@ -386,10 +394,12 @@ def test_classify_task_ready_for_review_close_with_doc_work_trailer():
         dirty=False,
         stale_days=7,
         phase40_cutoff=_CUTOFF,
+        pending_doc=Path("sysop/runtime/pending-docs/feat-feat-1.md"),
     )
     assert ts.state == "ready for /review-close"
     assert ts.next_action == "/review-close FEAT-1"
     assert ts.doc_work_ids == ["FEAT-1"]
+    assert ts.pending_doc is True
 
 
 def test_classify_task_doc_work_done_unpushed_when_trailer_but_unpushed():
@@ -402,9 +412,79 @@ def test_classify_task_doc_work_done_unpushed_when_trailer_but_unpushed():
         task_id="FEAT-1", lock=_lock(), worktree=_wt(), branch="feat/feat-1",
         index_entry={"status": "in_progress"}, commits=[commit],
         unpushed=2, dirty=False, stale_days=7, phase40_cutoff=_CUTOFF,
+        pending_doc=Path("sysop/runtime/pending-docs/feat-feat-1.md"),
     )
     assert ts.state == "doc-work done, unpushed"
     assert "2 unpushed" in ts.next_action
+    assert ts.pending_doc is True
+
+
+def test_classify_task_code_committed_docs_pending_when_no_pending_doc():
+    """`Q-019`: trailer present, pending-doc absent — the normal terminal state
+    of `/claim-task`'s build pipeline, and the state that used to be reported as
+    "ready for /review-close".
+
+    Routing it to `/review-close` skipped Step 1b's simplify pass, Step 3 (which
+    produces the pending-doc Step 4c consolidates and Step 3c reads for
+    manual-smoke signals — so the close arrived with no pending-doc at all), and
+    Step 3b's HARD-FAIL follow-up-stub check. `/claim-task`'s own final report
+    already said "Run `/document-work` next"; the two surfaces contradicted each
+    other in exactly this state."""
+    commit = ss.Commit(
+        sha="abc", subject="feat: do thing",
+        author_date=datetime(2026, 5, 25, tzinfo=timezone.utc),
+        doc_work_ids=["FEAT-1"], subject_task_id=None,
+    )
+    ts = ss._classify_task(
+        task_id="FEAT-1", lock=_lock(), worktree=_wt(), branch="feat/feat-1",
+        index_entry={"status": "in_progress"}, commits=[commit],
+        unpushed=0, dirty=False, stale_days=7, phase40_cutoff=_CUTOFF,
+        pending_doc=None,
+    )
+    assert ts.state == "code committed, docs pending"
+    assert ts.next_action == "/document-work FEAT-1"
+    assert ts.pending_doc is False
+    # The trailer is still reported — this is not a claim that it is absent.
+    assert ts.doc_work_ids == ["FEAT-1"]
+
+
+def test_the_docs_pending_state_is_routed_by_the_recommendation_cascade():
+    """A state with no routing arm is worse than no state: the survey would know
+    the answer and not say it.
+
+    `code committed, docs pending` is not "in progress" (P5 requires the ABSENCE
+    of a trailer) and not "ready for /review-close" (P1/P3 now require a
+    pending-doc), so without its own arm it falls through every tier to P7 and
+    the operator is told to pick up NEW roadmap work while a finished build waits
+    to be documented. Asserts the routing, not the state label."""
+    commit = ss.Commit(
+        sha="abc", subject="feat: do thing",
+        author_date=datetime(2026, 5, 25, tzinfo=timezone.utc),
+        doc_work_ids=["FEAT-1"], subject_task_id=None,
+    )
+    ts = ss._classify_task(
+        task_id="FEAT-1", lock=_lock(), worktree=_wt(), branch="feat/feat-1",
+        index_entry={"status": "in_progress"}, commits=[commit],
+        unpushed=0, dirty=False, stale_days=7, phase40_cutoff=_CUTOFF,
+        pending_doc=None,
+    )
+    survey = ss.Survey(
+        timestamp=datetime(2026, 8, 21, tzinfo=timezone.utc),
+        main_root=Path("/tmp/repo"),
+        head_short="abc1234",
+        tasks=[ts],
+        review_batches=[],
+        discrepancies=[],
+        stale_days=7,
+        # A non-empty roadmap is the point: without its own arm the docs-pending
+        # state falls through to P7 and this recommends picking up FEAT-9.
+        open_roadmap_ids=["FEAT-9"],
+    )
+    rec = ss._recommended_next(survey)
+    assert rec is not None
+    assert rec.command == "/document-work FEAT-1", (
+        f"routed to {rec.command!r} — the docs-pending arm did not fire"
+    )
 
 
 def test_classify_task_in_progress_when_commits_but_no_trailer():
@@ -1040,3 +1120,451 @@ def test_batch_in_progress_zero_trailers_via_rev_parse_branch():
     assert b.state == "in progress"
     assert b.doc_worked_tasks == 0
     assert "0 of 2" in b.next_action
+
+
+# ── Q-019: the pending-doc workspace resolver ──────────────────────────
+#
+# Every test below was added because this phase's own mutation battery walked
+# through the ones above it: the classification tests pass `pending_doc=None` or
+# a bare Path, so they never exercise the RESOLVER that computes it.
+
+def _pd_repo(tmp_path, branch="feat/feat-1"):
+    root = tmp_path / "main"
+    (root / "sysop" / "runtime" / "locks").mkdir(parents=True)
+    return root
+
+
+def _write_pending_doc(base: Path, branch: str) -> Path:
+    d = base / "sysop" / "runtime" / "pending-docs"
+    d.mkdir(parents=True, exist_ok=True)
+    p = d / f"{branch.replace('/', '-')}.md"
+    p.write_text("---\nbranch: x\n---\nbody\n")
+    return p
+
+
+def test_pending_doc_is_found_via_the_locks_recorded_workspace(tmp_path):
+    """Battery gap D37. Arm (ii) exists because `claim_task.sh --clone`
+    produces a workspace `git worktree list` never lists, so the lock's
+    `workspace:` is the only record of where it is.
+
+    The doc is placed ONLY there — not in the main checkout, not in a worktree —
+    so removing arm (ii) makes it unfindable."""
+    main = tmp_path / "main"
+    main.mkdir()
+    clone = tmp_path / "elsewhere-FEAT-1"
+    clone.mkdir()
+    _write_pending_doc(clone, "feat/feat-1")
+
+    lock = ss.Lock(task_id="FEAT-1", path=main / "x.lock",
+                   branch="feat/feat-1", workspace=str(clone))
+    found = ss._pending_doc_for(main, "feat/feat-1", lock, None)
+    assert found is not None, "arm (ii) did not resolve the clone workspace"
+    # .../<clone>/sysop/runtime/pending-docs/<file>.md — four levels up.
+    assert found.parents[3] == clone
+
+
+def test_pending_doc_is_found_via_the_conventional_sibling_directory(tmp_path):
+    """Arm (iii), and **the directory name is lower-cased**, which is the round's
+    correction.
+
+    `claim_task.sh` builds `../<prefix>-<task id LOWER-CASED>`, so the first
+    version's `<repo>-<TASK_ID>` could never match on a case-sensitive
+    filesystem. The fixture uses the real spelling (`main-feat-1`), so a
+    regression to the verbatim id fails here rather than only on Linux.
+
+    The arm's real job is a lock whose `workspace:` is blank or damaged — NOT
+    "a claim with no lock", which was the first version's stated reason and is
+    unreachable: the only caller iterates `for lock in locks`."""
+    main = tmp_path / "main"
+    main.mkdir()
+    sibling = tmp_path / "main-feat-1"          # lower-cased, as claim_task.sh writes it
+    sibling.mkdir()
+    _write_pending_doc(sibling, "feat/feat-1")
+
+    lock = ss.Lock(task_id="FEAT-1", path=main / "x.lock",
+                   branch="feat/feat-1", workspace="")
+    assert ss._pending_doc_for(main, "feat/feat-1", lock, None) is not None
+    # **Assert the spelling the RESOLVER produced, not the filesystem.** On
+    # macOS/APFS `main-FEAT-1` resolves to the lower-cased directory, so both an
+    # `.exists()` check and a directory listing pass whichever spelling the code
+    # computes — which is exactly why the un-lowered version survived this
+    # phase's battery. The returned path keeps the spelling it was built from.
+    found = ss._pending_doc_for(main, "feat/feat-1", lock, None)
+    assert found is not None
+    assert found.parents[3].name == "main-feat-1", (
+        f"arm (iii) built {found.parents[3].name!r}; claim_task.sh lower-cases "
+        f"the task id, so anything else matches nothing on Linux"
+    )
+
+
+def test_pending_doc_filename_sanitises_the_branch_slash(tmp_path):
+    """Battery gap D38. `/document-work` Step 3 writes
+    `<branch with / replaced by ->.md`. Reading the raw branch name looks for a
+    file in a directory that does not exist, and returns None for every branch
+    with a slash — which is every branch the workflow creates."""
+    main = tmp_path / "main"
+    main.mkdir()
+    _write_pending_doc(main, "feat/feat-1")
+
+    assert ss._pending_doc_for(main, "feat/feat-1", None, None) is not None
+    # Non-vacuity: the un-sanitised name must NOT exist on disk, or this
+    # assertion would pass either way.
+    assert not (main / "sysop/runtime/pending-docs/feat/feat-1.md").exists()
+
+
+def test_an_unusable_workspace_candidate_falls_through_to_the_next(tmp_path):
+    """The resolver tries candidates in order and a bad one must not stop it.
+
+    Written this way because the obvious version — assert it does not RAISE —
+    proves nothing: `Path.is_file()` already swallows a NUL byte, an over-long
+    path and a nonexistent parent (measured on this interpreter for all three),
+    so an `except OSError` in the resolver would be unreachable and a test for
+    it would pass against no handler at all. That mutation survived this phase's
+    own battery, which is how the dead handler was found and removed. What is
+    worth guarding is the fall-through itself."""
+    main = tmp_path / "main"
+    main.mkdir()
+    _write_pending_doc(main, "feat/feat-1")      # only the LAST candidate has it
+
+    lock = ss.Lock(task_id="FEAT-1", path=main / "x.lock", branch="feat/feat-1",
+                   workspace="\x00not/a/valid/path")
+    found = ss._pending_doc_for(main, "feat/feat-1", lock, None)
+    assert found is not None, "a bad earlier candidate ended the search"
+    assert found.parents[3] == main
+
+
+def test_pending_doc_returns_none_with_no_branch(tmp_path):
+    main = tmp_path / "main"
+    main.mkdir()
+    assert ss._pending_doc_for(main, "", None, None) is None
+
+
+def test_pending_doc_returns_none_when_no_workspace_has_one(tmp_path):
+    """The false-positive control: the resolver must not invent a doc."""
+    main = tmp_path / "main"
+    main.mkdir()
+    assert ss._pending_doc_for(main, "feat/feat-1", None, None) is None
+
+
+def test_every_state_the_classifier_emits_is_documented_in_the_skill():
+    """Battery gap D40: the `/sitrep` skill's state table is what a consumer
+    reads to interpret the output, and nothing tied it to the code. Phase 220
+    added a state; a phase that adds the next one should not be able to ship it
+    undocumented.
+
+    Scoped at BOTH ends, and both scopings are load-bearing:
+
+    * source side — only `_classify_task`, because `_classify_review_batches`
+      emits its own vocabulary that this table does not describe (it belongs to
+      `/roadmap`'s batch rows). A whole-file sweep demands the table document
+      states it was never about.
+    * doc side — only the state-table block, because a whole-file search passes
+      on a mention in the prose two sections down, which is the "guard with a
+      whole-file fallback is not a guard" shape.
+    """
+    root = Path(__file__).resolve().parents[1]
+    src = (root / "core/companion/scripts/sitrep_survey.py").read_text()
+
+    fn_start = src.index("def _classify_task(")
+    fn_end = src.index("\ndef _phase40_fallback(", fn_start)
+    body = src[fn_start:fn_end]
+
+    emitted = set(re.findall(r'^\s+state = "([^"]+)"', body, re.MULTILINE))
+    # `unknown` is the initialiser, not a classification — it is what remains if
+    # no arm fires, and the table describes arms.
+    emitted.discard("unknown")
+
+    # **Cross-check the extraction against a SECOND, independent count**, rather
+    # than a floor. The first version asserted `>= 6` against a real count of 7,
+    # so it tolerated the regex silently losing exactly one state — which the
+    # round demonstrated by wrapping one assignment in parentheses. A floor set
+    # below the truth is a vacuity check that permits the vacuity it guards.
+    # A SECOND extraction, unanchored, compared as a SET. `ready for
+    # /review-close` is assigned twice, so a count comparison is the wrong shape;
+    # what must hold is that both methods see the same states.
+    loose = set(re.findall(r'state = "([^"]+)"', body))
+    loose.discard("unknown")
+    assert emitted == loose, (
+        f"the two extractions disagree — the anchored one is missing "
+        f"{sorted(loose - emitted)}, so this guard is checking a subset"
+    )
+    assert len(emitted) >= 6, f"only {len(emitted)} states found at all"
+
+    skill = (root / "core/skills/sitrep/SKILL.md").read_text()
+    t_start = skill.index("| State | Deterministic signal |")
+    t_end = skill.index("\n\n", t_start)
+    table = skill[t_start:t_end].lower().replace("`", "")
+    assert table.count("|") > 10, "state-table slice looks wrong"
+
+    missing = sorted(s for s in emitted if s.lower() not in table)
+    assert not missing, (
+        "these states are emitted by sitrep_survey.py but absent from the "
+        "/sitrep skill's state table:\n" + "\n".join(f"  {m}" for m in missing)
+    )
+
+
+def test_the_pending_doc_lookup_survives_a_raising_is_file(tmp_path, monkeypatch):
+    """**The handler this phase deleted and its own round restored.**
+
+    The deletion rested on a real measurement — `Path.is_file()` returns False
+    for a NUL byte, an over-long path and a nonexistent parent — taken on **3.14
+    only**. There `is_file()` delegates to `os.path.isfile()`, which swallows
+    `(OSError, ValueError)` unconditionally. On **3.9-3.13** it goes through
+    `Path.stat()` and re-raises any errno outside `_IGNORED_ERRNOS`, so an
+    over-long path raises `OSError` ENAMETOOLONG. Measured: 3.9, 3.11 and 3.12
+    raise; only 3.14 does not. README declares 3.9+, CI runs 3.9, and stock
+    macOS 3.9 is what a consumer without a venv runs. `sitrep_survey.main()`
+    catches only `KeyboardInterrupt`, so the escape takes all of `/sitrep` down.
+
+    **Forced rather than provoked, deliberately.** A test that builds an
+    over-long path passes on 3.14 for the wrong reason — the interpreter
+    swallows it — so it would guard nothing on the developer's own machine and
+    everything in CI. Monkeypatching `is_file` to raise tests the handler on
+    every interpreter."""
+    main = tmp_path / "main"
+    main.mkdir()
+    _write_pending_doc(main, "feat/feat-1")
+
+    real_is_file = Path.is_file
+    bad = str(tmp_path / "exploding")
+
+    def fake_is_file(self, *a, **kw):
+        if str(self).startswith(bad):
+            raise OSError(63, "File name too long")
+        return real_is_file(self, *a, **kw)
+
+    monkeypatch.setattr(Path, "is_file", fake_is_file)
+
+    lock = ss.Lock(task_id="FEAT-1", path=main / "x.lock",
+                   branch="feat/feat-1", workspace=bad)
+    found = ss._pending_doc_for(main, "feat/feat-1", lock, None)
+    assert found is not None, "a raising candidate ended the search"
+    assert found.parents[3] == main
+
+
+def test_the_pending_doc_lookup_survives_a_valueerror_too(tmp_path, monkeypatch):
+    """`os.path.isfile` swallows ValueError alongside OSError, and an embedded
+    NUL raises ValueError rather than OSError on some interpreters. Catching
+    only one of the two leaves the other live."""
+    main = tmp_path / "main"
+    main.mkdir()
+    _write_pending_doc(main, "feat/feat-1")
+
+    real_is_file = Path.is_file
+    bad = str(tmp_path / "exploding")
+
+    def fake_is_file(self, *a, **kw):
+        if str(self).startswith(bad):
+            raise ValueError("embedded null byte")
+        return real_is_file(self, *a, **kw)
+
+    monkeypatch.setattr(Path, "is_file", fake_is_file)
+
+    lock = ss.Lock(task_id="FEAT-1", path=main / "x.lock",
+                   branch="feat/feat-1", workspace=bad)
+    assert ss._pending_doc_for(main, "feat/feat-1", lock, None) is not None
+
+
+def _survey_with(tasks, *, roadmap=("FEAT-9",)):
+    return ss.Survey(
+        timestamp=datetime(2026, 8, 21, tzinfo=timezone.utc),
+        main_root=Path("/tmp/repo"), head_short="abc1234",
+        tasks=list(tasks), review_batches=[], discrepancies=[],
+        stale_days=7, open_roadmap_ids=list(roadmap),
+    )
+
+
+def _p220_task(state, task_id="FEAT-1"):
+    return ss.TaskState(task_id=task_id, state=state, branch=f"feat/{task_id.lower()}",
+                        commits_ahead=1, pending_doc=(state != "code committed, docs pending"))
+
+
+def test_the_docs_pending_state_appears_in_the_suggested_order():
+    """**Round finding (HIGH): the new state was wired into 2 of 5 surfaces.**
+
+    `_suggested_order` enumerates states by name and did not know this one, so
+    the task fell out of the ordered list entirely and the "(no active Sysop
+    work; pick up a new task with /next-task)" fallback fired — three lines
+    below a RECOMMENDED NEXT that said `/document-work`. One report contradicting
+    itself, which is the defect this phase exists to remove, applied to itself."""
+    order = ss._suggested_order(_survey_with([_p220_task("code committed, docs pending")]))
+    assert any("FEAT-1" in line for line in order), (
+        f"the docs-pending task is absent from the suggested order: {order}"
+    )
+    assert any("/document-work" in line for line in order)
+
+
+def test_the_suggested_order_puts_docs_pending_after_the_close_tiers():
+    """The ordering claim, pinned rather than asserted in prose. `_recommended_next`
+    places P4b above P5 and below the close tiers; this must agree, or the two
+    halves of one report rank the same work differently."""
+    order = ss._suggested_order(_survey_with([
+        _p220_task("in progress", "FEAT-3"),
+        _p220_task("code committed, docs pending", "FEAT-2"),
+        _p220_task("ready for /review-close", "FEAT-1"),
+    ]))
+    idx = {tid: next(i for i, l in enumerate(order) if tid in l)
+           for tid in ("FEAT-1", "FEAT-2", "FEAT-3")}
+    assert idx["FEAT-1"] < idx["FEAT-2"] < idx["FEAT-3"], order
+
+
+def test_the_json_render_carries_pending_doc():
+    """**Round finding: `TaskState.pending_doc` was WRITE-ONLY** — three writes,
+    no reader outside its own unit tests — on the surface `/sitrep`'s skill calls
+    "for orchestrator consumption".
+
+    The tree already carries this guard's twin one dataclass over
+    (`test_flag_contract.py::test_json_render_carries_the_triage_record`, whose
+    docstring says dropping keys from the render "is invisible to every other
+    test"). It was not copied."""
+    import json
+    payload = json.loads(ss.render_json(_survey_with([
+        _p220_task("code committed, docs pending", "FEAT-2"),
+        _p220_task("ready for /review-close", "FEAT-1"),
+    ])))
+    by_id = {t["task_id"]: t for t in payload["tasks"]}
+    assert by_id["FEAT-2"]["pending_doc"] is False
+    assert by_id["FEAT-1"]["pending_doc"] is True
+
+
+def test_run_survey_wires_the_resolver_to_the_classifier(tmp_path, monkeypatch):
+    """**Round finding (HIGH): no test called `run_survey`**, so the ONE line
+    connecting `_pending_doc_for` to `_classify_task` was unguarded in both
+    directions — replacing it with `None` (every task stuck in docs-pending) or
+    with a constant Path (the feature inert) both passed the whole suite.
+
+    Drives `run_survey` with the filesystem stubbed, so it asserts the wiring
+    rather than re-testing the resolver."""
+    seen = {}
+
+    def fake_resolver(main_root, branch, lock, worktree):
+        seen["called"] = True
+        seen["branch"] = branch
+        return Path("/somewhere/pending-docs/x.md") if branch == "feat/has-doc" else None
+
+    monkeypatch.setattr(ss, "_pending_doc_for", fake_resolver)
+    monkeypatch.setattr(ss, "_resolve_main_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(ss, "_git", lambda *a, **k: "abc1234")
+    monkeypatch.setattr(ss, "_read_worktrees", lambda root: [])
+    monkeypatch.setattr(ss, "_read_index", lambda root: {"FEAT-1": {"status": "in_progress"}})
+    monkeypatch.setattr(ss, "_read_review_batches", lambda root: [])
+    monkeypatch.setattr(ss, "_commits_unpushed", lambda b, r: 0)
+    monkeypatch.setattr(ss, "_worktree_dirty", lambda p: False)
+    monkeypatch.setattr(ss, "_find_discrepancies", lambda *a, **k: [])
+    monkeypatch.setattr(ss, "_open_roadmap_ids", lambda idx: [], raising=False)
+    monkeypatch.setattr(ss, "_read_locks", lambda root: [
+        ss.Lock(task_id="FEAT-1", path=tmp_path / "x.lock", branch="feat/no-doc",
+                workspace=str(tmp_path), started="2026-08-21T10:00:00Z")])
+    monkeypatch.setattr(ss, "_commits_ahead_of_main", lambda b, r: [
+        ss.Commit(sha="abc", subject="feat: x",
+                  author_date=datetime(2026, 8, 21, tzinfo=timezone.utc),
+                  doc_work_ids=["FEAT-1"], subject_task_id=None)])
+
+    survey = ss.run_survey()
+
+    assert seen.get("called"), "run_survey never called the pending-doc resolver"
+    assert seen["branch"] == "feat/no-doc", "the resolver got the wrong branch"
+    assert survey.tasks[0].state == "code committed, docs pending"
+    assert survey.tasks[0].pending_doc is False
+
+
+def test_the_worktree_arm_of_the_resolver_is_exercised(tmp_path):
+    """**Round finding: no test passed a non-None worktree**, so arm (i) — the
+    git-listed worktree, which is the DEFAULT claim mode — had zero coverage and
+    could be deleted with the suite green."""
+    main = tmp_path / "main"
+    main.mkdir()
+    wt = tmp_path / "wt"
+    wt.mkdir()
+    _write_pending_doc(wt, "feat/feat-1")
+    worktree = ss.Worktree(path=wt, branch="feat/feat-1", head="abc", is_main=False)
+
+    found = ss._pending_doc_for(main, "feat/feat-1", None, worktree)
+    assert found is not None, "arm (i) did not resolve the git-listed worktree"
+    assert found.parents[3] == wt
+
+
+def test_the_worktree_arm_is_tried_before_the_main_checkout(tmp_path):
+    """**Round finding: candidate ORDER was untested.** Prepending `main_root`
+    let a stale doc in the main checkout shadow the live workspace's."""
+    main = tmp_path / "main"
+    main.mkdir()
+    _write_pending_doc(main, "feat/feat-1")      # stale
+    wt = tmp_path / "wt"
+    wt.mkdir()
+    _write_pending_doc(wt, "feat/feat-1")        # live
+    worktree = ss.Worktree(path=wt, branch="feat/feat-1", head="abc", is_main=False)
+
+    found = ss._pending_doc_for(main, "feat/feat-1", None, worktree)
+    assert found.parents[3] == wt, (
+        f"resolved {found} — the main checkout shadowed the live workspace"
+    )
+
+
+def test_recommended_next_ranks_the_close_tiers_above_docs_pending():
+    """The other half of the ordering claim. `_suggested_order`'s ranking is
+    pinned above; `_recommended_next`'s was not, so hoisting the P4b block above
+    P1 kept the whole suite green — and the two halves of one report would then
+    rank the same work differently.
+
+    A task ready to close outranks one still needing documentation: closing
+    frees a branch and a lock, documenting does not."""
+    rec = ss._recommended_next(_survey_with([
+        _p220_task("code committed, docs pending", "FEAT-2"),
+        _p220_task("ready for /review-close", "FEAT-1"),
+    ]))
+    assert rec is not None
+    assert "/review-close" in rec.command and "FEAT-1" in rec.command, (
+        f"docs-pending outranked a closable task: {rec.command!r}"
+    )
+
+
+def test_recommended_next_ranks_docs_pending_above_in_progress():
+    """The lower bound of the same claim: a task with a build commit and a
+    trailer is further along than one still mid-build."""
+    rec = ss._recommended_next(_survey_with([
+        _p220_task("in progress", "FEAT-3"),
+        _p220_task("code committed, docs pending", "FEAT-2"),
+    ]))
+    assert rec is not None
+    assert "/document-work" in rec.command and "FEAT-2" in rec.command, rec.command
+
+
+# === _recommended_next: the Review Ready header arm (Phase 222, Q-014) ======
+
+
+def test_review_ready_batch_outranks_everything_below_p2():
+    """A `Review Ready` batch never enters s.review_batches (the Pending /
+    In-Progress filter), so before Phase 222 the cascade was blind to the one
+    live status that waits on a human — /sitrep's table documented an arm
+    nothing computed. The arm rides its own Survey field, read from the raw
+    headers, so the payload contract /roadmap documents is untouched."""
+    s = _survey(["FEAT-1"])  # would otherwise reach P7/P8 territory
+    s.review_ready_batches = [(7, "Batch title")]
+    rec = ss._recommended_next(s)
+    assert rec is not None
+    assert rec.command == "/review-close (batch 7)"
+    assert "Review Ready" in rec.reason
+
+
+def test_review_ready_arm_reads_the_raw_headers_not_the_filtered_list():
+    """run_survey must populate the field from the raw batch parse — a
+    filtered-list source would be vacuously empty, which is the pre-222 state."""
+    raw = [
+        {"number": 3, "title": "Live one", "status": "Review Ready"},
+        {"number": 4, "title": "Pending one", "status": "Pending"},
+        {"number": 5, "title": "Finished one", "status": "Ready for Review"},
+    ]
+    ready = [
+        (b["number"], b.get("title", ""))
+        for b in raw
+        if b.get("status") == "Review Ready"
+    ]
+    # The comprehension above is copied from run_survey; keep them in sync.
+    assert ready == [(3, "Live one")]
+    src = (Path(__file__).resolve().parent.parent
+           / "core" / "companion" / "scripts" / "sitrep_survey.py").read_text()
+    assert 'if b.get("status") == "Review Ready"' in src, (
+        "run_survey no longer derives review_ready_batches from the raw headers"
+    )
+    assert src.index('review_batches_raw\n            if b.get("status") == "Review Ready"') > 0

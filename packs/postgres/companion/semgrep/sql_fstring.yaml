@@ -15,3 +15,47 @@ rules:
       - pattern: $CONN.execute(sqlalchemy.text(f"..."), ...)
     # paths: intentionally omitted. Path scoping is declared in the pack's
     # checks.yml.fragment stub entry (see core/companion/semgrep/README.md).
+
+  - id: sql-fstring-multiline
+    message: >
+      Multi-line f-string whose first content line is a SQL DML keyword. The
+      grep check `sql-fstring` is line-oriented and cannot see this shape — the
+      f-string prefix and the keyword are on different lines — and
+      `sql-fstring` above only reaches an f-string handed STRAIGHT to
+      .execute() / sqlalchemy.text(). An f-string built here and executed later
+      is covered by neither. Use a parameterized query:
+      conn.execute(sqlalchemy.text("... :param ..."), {"param": val}).
+    severity: ERROR
+    languages: [python]
+    # Closes Q-244. Two real production sites in the extraction source drove
+    # the shape, and they are NOT the same shape as each other — the filing
+    # described only the first:
+    #
+    #   site A         sql = f"""               <- bound to a variable
+    #                      SELECT ...
+    #   site B         return f"""              <- returned directly, never bound
+    #                      SELECT ...
+    #
+    # A rule written only for `$VAR = f"..."` would have missed half the
+    # measured population, which is why this matches the literal itself rather
+    # than its destination. `pattern-regex` rather than an AST pattern is
+    # deliberate and is the narrow reason semgrep is the right tool here at
+    # all: the defect is entirely about STRING CONTENT spanning a newline, and
+    # semgrep's regex engine is multi-line where the grep runner is not. An AST
+    # pattern cannot constrain the text inside an f-string without a
+    # metavariable to bind it to.
+    #
+    # Scoped tightly to keep this off ordinary prose: the DML keyword must be
+    # the first non-whitespace token on the line IMMEDIATELY after the opening
+    # triple quote. `f"""\n    Deleted {n} rows"""` does not match; neither does
+    # a docstring, which has no f prefix.
+    #
+    # `|-`, not `|`, on the block scalar below. A plain `|` keeps the trailing
+    # newline, which lands INSIDE the regex as a literal `\n` after the `\b` —
+    # so the pattern then demands a line break immediately after the SQL
+    # keyword and matches nothing. It validated clean and reported zero
+    # findings, which is the shape of a guard that is present and inert.
+    patterns:
+      - pattern-regex: |-
+          (?m)(?:[fF][rR]?|[rR][fF])("""|''')[ \t]*\r?\n[ \t]*(?i:SELECT|INSERT|UPDATE|DELETE|ALTER|DROP)\b
+    # paths: intentionally omitted, same as above.

@@ -508,7 +508,7 @@
   <section class="band">
     <p class="sec-mark">§ IV · Start</p>
     <h2>Start with the loop.</h2>
-    <p class="lede">The smallest install — and the recommended first one for an existing codebase — is the convention loop alone: the review and audit skills, the maps, the compiled checks, inside whatever branching and merge workflow you already run. No task queue, no worktrees, no merge gate; nothing you already have is clobbered. Run <code>--packs auto</code> and it detects your stack. Requires bash 4+ (on Windows, run under WSL).</p>
+    <p class="lede">The smallest install — and the recommended first one for an existing codebase — is the convention loop alone: the review and audit skills, the maps, the compiled checks, inside whatever branching and merge workflow you already run. No task queue, no worktrees, no merge gate; nothing you already have is clobbered. Run <code>--packs auto</code> and it detects your stack. Requires bash 4+ to run the installer — the scripts it installs run on bash 3.2, so stock macOS is fine afterwards. (On Windows, run under WSL.)</p>
 
     <div class="install" id="install3" style="margin-top:30px; max-width:720px;"><button class="copy-btn" id="copyBtn3" aria-label="Copy loop-mode install commands">copy</button><span class="prompt">$</span> git clone https://github.com/getsysop/sysop.git
 <span class="prompt">$</span> bash sysop/install.sh <span class="cmt">/path/to/your/project</span> --packs auto --mode loop

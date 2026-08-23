@@ -71,7 +71,7 @@ EXCLUDED_SCRIPTS = {
     "pr_dependabot.py", "scope_overlap.py", "sitrep_survey.py",
     "validate_tasks.py",
 }
-LOOP_ALLOW_COUNT = 21
+LOOP_ALLOW_COUNT = 22
 # The exact loop-mode allow-list (LOOP_ONLY_SPEC § "Leg 1 findings"). Asserting
 # the *set*, not just the count, is what stops a wrong-but-19 permission set
 # (e.g. a dropped `gh release create` swapped in for a loop rule) shipping green.
@@ -94,6 +94,9 @@ EXPECTED_LOOP_ALLOW = {
     "Bash(bash sysop/scripts/sysop-update.sh:*)",
     "Bash(python sysop/scripts/archive_review_tasks.py:*)",
     "Bash(python3 sysop/scripts/archive_review_tasks.py:*)",
+    # Phase 220: `--check-headers`, prescribed by WORKFLOW.md, by
+    # close_batch.sh's fallback warning and by the archiver's refusal.
+    "Bash(python3 sysop/scripts/review_index.py:*)",
     "Bash(.venv/bin/python3 sysop/scripts/archive_review_tasks.py:*)",
     # Phase 144: the claude-security ingest CLI — /security-audit ships in loop
     # mode and calls this at its new Step 3c, so its allow-rule must ship too

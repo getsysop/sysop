@@ -42,6 +42,21 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
+      # The interpreter floor, installed FIRST so the 3.13 setup below wins
+      # `python` on PATH and stays the one the suite runs under. This is a
+      # STEP of the required `pytest` job rather than a job of its own on
+      # purpose: branch protection requires the check named `pytest`, so a
+      # separate job would be advisory — green or red, nothing would gate on
+      # it. `tests/test_python_floor_portability.py` reads the path out of
+      # SYSOP_FLOOR_PYTHONS and fails (not skips) under CI when it is absent.
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        id: floor-python
+        with:
+          python-version: '3.9'
+
+      - name: Install the floor interpreter
+        run: echo "SYSOP_FLOOR_PYTHONS=${{ steps.floor-python.outputs.python-path }}" >> "$GITHUB_ENV"
+
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: '3.13'

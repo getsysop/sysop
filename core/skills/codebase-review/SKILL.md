@@ -37,8 +37,10 @@ A round that dies mid-flight — a model refusing the task class partway in, a c
 
 Run this once, before Step 1. It reports any **prior** markers and then writes this round's:
 
+Substitute `<flags>` in the opener below with the **recognized flags, each with its value where it takes one** (e.g. `--scope backend` — the set Step 1's "Parse `$ARGUMENTS` for flags" names), space-separated, or an empty string if none — never the raw argument string. `$ARGUMENTS` is substituted into this file as text *before* bash parses anything, so a `"` in it closes the quote and the rest of the string parses as shell (Phase 222, Q-013). The value is provenance only — it lands in the marker's `flags:` line — so dropping unrecognized text loses nothing the marker needs.
+
 ```bash
-python3 - <<'PY' "codebase-review" "$ARGUMENTS"
+python3 - <<'PY' "codebase-review" "<flags>"
 import os, subprocess, sys, time
 from pathlib import Path
 
@@ -689,7 +691,7 @@ Create the file with the standard header:
 
 - **Severity**: 🔴 High · 🟡 Medium · 🟢 Low
 - **Status**: `[ ]` Open · `[/]` In Progress · `[x]` Done
-- **Batch status**: Pending · In Progress · Review Ready · Merged
+- **Batch status**: Pending · In Progress · Review Ready (live — waiting on `/review-close`) · Complete · Merged · Ready for Review (finished)
 
 ---
 ```

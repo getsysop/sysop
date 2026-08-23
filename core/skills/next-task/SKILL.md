@@ -11,8 +11,12 @@ Run the deterministic resolver and print its output verbatim.
 
 > **Structural read-only guard (Phase 54):** the `disallowed-tools` frontmatter (Claude Code 2.1.152+) removes the file-write tools while this skill is active. Partial by design — `Bash` stays allowed for the resolver invocation, so the guard covers the dedicated write tools, not shell redirects. Non-Claude-Code harnesses ignore the key.
 
+Your arguments: `$ARGUMENTS`
+
+Substitute `<flags>` below with the **recognized flags** present in those arguments — `--review` and/or `--avoid-inflight`, in any order — and nothing else; with no recognized flags, run the script bare. If the arguments carry anything unrecognized, drop it and print one line naming what was dropped. Never forward the raw argument string: it is substituted into this file as text *before* bash parses anything, so a stray `;`, quote or glob in it rewrites the command instead of erroring (Phase 222, Q-013 — the unquoted form additionally word-splits, which is exactly why a blanket quote is not the fix: the flags must reach `argv` as separate entries).
+
 ```bash
-python3 sysop/scripts/next_task.py $ARGUMENTS
+python3 sysop/scripts/next_task.py <flags>
 ```
 
 The script is the source of truth for the selection algorithm — see the module

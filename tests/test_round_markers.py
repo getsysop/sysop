@@ -60,7 +60,7 @@ def _extract(skill: str, opener: str) -> str:
 
 
 def write_src(skill: str) -> str:
-    return _extract(skill, f"python3 - <<'PY' \"{skill}\" \"$ARGUMENTS\"\n")
+    return _extract(skill, f"python3 - <<'PY' \"{skill}\" \"<flags>\"\n")
 
 
 def clear_src(skill: str) -> str:
@@ -347,7 +347,7 @@ def test_both_skills_ship_the_marker_lifecycle():
     for skill, path in SKILLS.items():
         text = path.read_text(encoding="utf-8")
         assert "## Pre-flight: Round Marker" in text, skill
-        assert f"python3 - <<'PY' \"{skill}\" \"$ARGUMENTS\"" in text, skill
+        assert f"python3 - <<'PY' \"{skill}\" \"<flags>\"" in text, skill  # Phase 222 (Q-013): parse-then-pass placeholder, never raw $ARGUMENTS in a fence
         assert "### 5f. Clear the round marker" in text, skill
         assert MARKER_REL in text, skill
         # Removal is pinned BEFORE the report summary, not at the true end.

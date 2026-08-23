@@ -65,8 +65,29 @@ if [[ -n "$STAGED_TASKS" ]]; then
   elif [[ ! -f sysop/scripts/validate_tasks.py ]]; then
     block "tasks/: sysop/scripts/validate_tasks.py missing (re-run install.sh?)"
   else
-    if ! "$PYTHON3" sysop/scripts/validate_tasks.py --quiet; then
+    # Validate the STAGED tasks/ tree, not the working tree (Sysop Phase 222,
+    # Q-020). The default path reads the filesystem, so this block used to say
+    # "rejected the staged tree" about a validator that never saw it: stage a
+    # bad index.yml, fix the disk copy without re-staging, and the hook passed
+    # while the commit carried the violation. `git checkout-index` exports the
+    # index's tasks/ files; `--path` (the flag built for exactly this) points
+    # the validator at the export. Lock state is runtime (gitignored, never in
+    # the index), and under `--path` the validator's locks-dir resolution
+    # falls back BESIDE the export (its /tmp dir is not a git repo — Phase
+    # 222's round proved the "resolves via git itself" assumption false by
+    # execution: every staged in_progress task read lock-missing). So the
+    # REAL locks are copied in next to the exported tasks/ — from the main
+    # repo root, which is where Phase 32 puts them whichever worktree this
+    # hook runs in.
+    STAGED_TASKS_EXPORT=$(mktemp -d "${TMPDIR:-/tmp}/sysop-staged-tasks.XXXXXX")
+    git ls-files -z -- tasks/ | git checkout-index --prefix="$STAGED_TASKS_EXPORT/" -z --stdin
+    if [[ -n "$MAIN_REPO_ROOT" ]] && [[ -d "$MAIN_REPO_ROOT/sysop/runtime/locks" ]]; then
+      mkdir -p "$STAGED_TASKS_EXPORT/sysop/runtime"
+      cp -R "$MAIN_REPO_ROOT/sysop/runtime/locks" "$STAGED_TASKS_EXPORT/sysop/runtime/"
+    fi
+    if ! "$PYTHON3" sysop/scripts/validate_tasks.py --quiet --path "$STAGED_TASKS_EXPORT/tasks"; then
       block "tasks/: validate_tasks.py rejected the staged tree (see above)"
     fi
+    rm -rf "$STAGED_TASKS_EXPORT"
   fi
 fi

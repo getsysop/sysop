@@ -127,7 +127,7 @@ def test_reader_never_meets_continue_before_the_validator(step_4a: str) -> None:
     """
     body = _norm(step_4a)
     val = body.index("validate_tasks.py")
-    cont = body.index("git rebase --continue")
+    cont = body.index("rebase --continue")
     assert val < cont, (
         "validate_tasks.py must be named BEFORE the first `git rebase --continue` -- "
         "running it after is the shipped defect (it first ran at Step 4c, "
@@ -339,21 +339,46 @@ def test_guards_survive_a_legitimate_reflow(step_4a: str) -> None:
     """Rewrapping the section must not red any ordering property."""
     reflowed = step_4a.replace("\n", "\n   ").replace("  ", " ")
     body = _norm(reflowed)
-    assert body.index("validate_tasks.py") < body.index("git rebase --continue")
+    assert body.index("validate_tasks.py") < body.index("rebase --continue")
 
 
 def test_ordering_guard_is_not_vacuous(step_4a: str) -> None:
     """Plant the defect: swap the two halves and require the property to fail."""
     body = _norm(step_4a)
     val = body.index("validate_tasks.py")
-    cont = body.index("git rebase --continue")
+    cont = body.index("rebase --continue")
     mutated = (
         body[:val]
-        + "git rebase --continue"
+        + "rebase --continue"
         + body[val + len("validate_tasks.py") : cont]
         + "validate_tasks.py"
-        + body[cont + len("git rebase --continue") :]
+        + body[cont + len("rebase --continue") :]
     )
-    assert mutated.index("validate_tasks.py") > mutated.index("git rebase --continue"), (
+    assert mutated.index("validate_tasks.py") > mutated.index("rebase --continue"), (
         "the mutation did not actually invert the order -- this guard proves nothing"
+    )
+
+
+def test_the_continue_is_prescribed_non_interactively(step_4a: str) -> None:
+    """`Q-233`. A bare `git rebase --continue` opens an editor on a conflict-resolved
+    continue — measured on git 2.50.1, and an unchanged commit message does NOT skip it.
+    With no editor configured git falls back to `vi`: inside this harness that **hangs to
+    the tool timeout** (exit 143), and with stdin closed it exits 1 leaving the rebase
+    mid-replay, which is a state Step 4a has no arm for. The autonomous close cannot
+    survive either.
+
+    Asserted as *the bare form is gone*, not *the safe form is present*: shipping both
+    leaves the agent to pick, and the bare one is the shorter, more familiar spelling.
+    """
+    body = step_4a
+    assert "git -c core.editor=true rebase --continue" in body, (
+        "Step 4a no longer prescribes the non-interactive continue"
+    )
+    # Line-anchored: the safe form ends in the bare form's own words, so a plain
+    # `not in` can never distinguish them.
+    import re
+    bare = re.findall(r"(?<!core\.editor=true )git rebase --continue", body)
+    assert not bare, (
+        f"Step 4a still prescribes a bare `git rebase --continue` ({len(bare)} site(s)) — "
+        "that is the form that opens vi and hangs the close"
     )

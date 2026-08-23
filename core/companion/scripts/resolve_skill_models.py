@@ -54,10 +54,23 @@ def _rel(path: Path) -> str:
 
 
 def _unresolvable(root: Path, roles: dict) -> list[tuple[str, int, str]]:
-    """Pins whose role is None or undefined — a structural error; refuse to write."""
+    """Pins whose role is None or undefined — a structural error; refuse to write.
+
+    Scoped to files carrying a `sysop:model-roles` marker (Phase 223). `.claude/
+    skills/` is Claude Code's standard user-skill directory, so a consumer's own
+    skill can sit beside the shipped ones and legitimately carry a `model:` field
+    with no Sysop marker. Judging those made a valid override unappliable forever
+    — the resolver refused to write anything, and the only remedy it named was to
+    add a Sysop marker, which would hand the consumer's private skill to this
+    rewriter on every update. A file Sysop does not mark is a file Sysop does not
+    own; the "never half-applies" guarantee still holds over the files it does.
+    """
     bad: list[tuple[str, int, str]] = []
     for path in iter_skill_files(root):
-        for r in analyze_text(path.read_text(encoding="utf-8")):
+        text = path.read_text(encoding="utf-8")
+        if "sysop:model-roles" not in text:
+            continue
+        for r in analyze_text(text):
             if r.role is None:
                 bad.append((_rel(path), r.lineno, "pin has no sysop:model-roles marker"))
             elif r.role not in roles:

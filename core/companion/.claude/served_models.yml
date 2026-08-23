@@ -35,31 +35,64 @@ served:
              # override stays one key AND still goes loud if fable is ever
              # dropped from this list on a sunset.
 
+# ── inline_models ─────────────────────────────────────────────────────────────
+# The values an INLINE pin may resolve to. A skill's frontmatter `model:` and a
+# skill BODY's `model: "<x>"` are not the same surface, and they do not accept the
+# same values:
+#
+#   * frontmatter — becomes the skill's own `model:` field, which accepts what
+#     `/model` accepts: aliases, full model ids, and meta-values like `best`.
+#     An unrecognized value there falls back to the session model.
+#   * inline — the agent copies the value into the Agent tool's `model`
+#     parameter, which is a CLOSED ENUM. `best`, `inherit`, and full model ids
+#     are each rejected with InputValidationError at spawn time (verified by
+#     making the calls, 2026-08-21). The failure lands mid-skill, at spawn time,
+#     in every skill the role governs — 13 inline pins today, 12 of them on the
+#     `reasoning` role.
+#
+# check_skill_models.py fails (exit 1) when a role governing an inline pin
+# resolves to a value not listed here. If your harness accepts more, extend this
+# list in served_models.local.yml rather than editing this file.
+inline_models:
+  - opus
+  - sonnet
+  - haiku
+  - fable
+
 # ── overriding for your project (without losing sunset updates) ────────────────
 # This file is Sysop-owned: `sysop-update.sh` overwrites it so sunset fixes keep flowing.
 # Do NOT edit the roles above to pick your own models — your edits would be clobbered.
 # Instead create `.claude/served_models.local.yml` with just the keys you want to change.
 # The common case is one key — e.g. run the deep-reasoning skills on Claude Fable 5
-# (`fable` is already in `served:` above, so no `served:` addition is needed; the harness
-# needs Claude Code >= 2.1.170 for fable, and where a pinned model is unavailable the
-# session silently keeps its current model):
+# (`fable` is already in `served:` AND `inline_models:` above, so no additions are
+# needed; the harness needs Claude Code >= 2.1.170 for fable, and where a pinned model
+# is unavailable the session silently keeps its current model):
 #
 #     roles:
 #       reasoning: fable
 #
-# For any value NOT in the default `served:` list, extend it in the same file:
+# `reasoning` and `mechanical` both govern inline pins, so map them to one of the four
+# aliases above. Mapping either to `best`, `inherit`, `opusplan`, a full model id, or a
+# provider-specific id BREAKS every agent spawn in the skills that role governs — adding
+# the value to `served:` does not help, because `served:` is Sysop's sunset allowlist and
+# not the harness's enum. `quick` governs only frontmatter today and is not so constrained,
+# but that is a property of the current pin set, not a promise.
+#
+# For a value outside the default lists: always extend `served:`, and extend
+# `inline_models:` as well if the role governs any inline pin. The example below needs
+# only `served:`, because `quick` is frontmatter-only:
 #
 #     roles:
-#       reasoning: best              # meta-value: Fable 5 where your org has access,
-#       mechanical: inherit          #   else latest Opus; `inherit` follows the session
+#       quick: inherit               # frontmatter-only role: `inherit` follows the session
 #     served:
-#       - best                       # list EVERY non-default value you map a role to,
-#       - inherit                    #   INCLUDING meta-values (inherit/best/…) —
+#       - inherit                    # list EVERY non-default value you map a role to —
 #                                    #   check_skill_models.py requires each role to
 #                                    #   resolve to a served entry, with no exemptions.
 #
-# The local file is never overwritten and layers on top (local keys win). A role's value
-# is an opaque string the harness understands — a short alias (opus/sonnet/haiku/fable),
-# a full model id (claude-opus-4-8), a provider-specific id (Bedrock ARN, Vertex name),
-# or a meta-value (best / inherit / opusplan). Sysop does not constrain it to Claude; only
-# the default mapping above happens to be Claude. That is the seam for non-Claude models.
+# The local file is never overwritten and layers on top (local keys win).
+#
+# On non-Claude models: the role indirection itself does not constrain a value to Claude —
+# only the default mapping above happens to be Claude — but that seam is real for
+# FRONTMATTER pins and not for inline ones. A full model id or a provider-specific id
+# (Bedrock ARN, Vertex name) resolves fine in frontmatter and is rejected by the inline
+# enum, so a role governing an inline pin cannot carry one today.

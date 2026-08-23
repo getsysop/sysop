@@ -68,6 +68,40 @@ _ROLE_CLAUSE_RE = re.compile(r"\b(frontmatter|inline)=([a-z][a-z0-9_-]*)")
 _FM_PIN_RE = re.compile(r'^(\s*model:\s*)(["\']?)([^"\'\s#]+)(["\']?)(\s*)$')
 _INLINE_PIN_RE = re.compile(r'(model[`:\s]*["\'])([^"\']+)(["\'])')
 
+# The two pin kinds do NOT accept the same values, and Phase 223 verified the
+# asymmetry by execution rather than by reading a schema.
+#
+# A FRONTMATTER pin becomes a skill's `model:` field, which the docs describe as
+# accepting the same values as `/model` — short aliases, full model ids, and
+# meta-values such as `best` — plus `inherit`, which is frontmatter-only and not
+# a `/model` alias. An unrecognized value there falls back to the session model
+# rather than failing. (That half is docs-derived, not executed: only the inline
+# half below was verified by making the calls.)
+#
+# An INLINE pin is different in kind: a skill body's `model: "<x>"` is copied by
+# the agent into the Agent tool's `model` parameter, which is a CLOSED ENUM.
+# Passing `best`, `inherit`, or a full model id (`claude-opus-5`) each returns
+# `InputValidationError` — verified 2026-08-21 against Claude Code by making the
+# calls, not by reading the schema. The failure lands mid-skill at spawn time, in
+# every skill the remapped role governs: 13 inline pins today, 12 of them on the
+# `reasoning` role, which covers the adversarial-review, judging and audit spawns.
+#
+# This default is what a consumer's harness accepts today. It is deliberately
+# overridable — a harness that accepts more takes `inline_models:` in
+# served_models.yml (or extends it in the local overlay) rather than patching
+# this tuple, so a widened enum never requires a Sysop release.
+INLINE_MODELS_DEFAULT = ("opus", "sonnet", "haiku", "fable")
+
+
+class ConfigShapeError(ValueError):
+    """A role config is syntactically valid YAML but structurally wrong.
+
+    Distinct from "a pin failed validation": a malformed config is a usage error
+    (exit 2), not a finding (exit 1). Reporting a YAML typo through the
+    violation exit code told consumers their model pins were unresolvable when
+    the real problem was a stray bracket.
+    """
+
 
 @dataclass(frozen=True)
 class PinRole:
@@ -172,13 +206,11 @@ def load_roles_config(
     Local ``roles`` keys override (local wins); local ``served`` entries extend
     the allowlist. PyYAML is required (Sysop's run_checks already depends on it).
     """
-    import yaml
-
-    data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    data = _load_yaml_mapping(config_path)
     roles = {str(k): str(v) for k, v in (data.get("roles") or {}).items()}
     served = [str(s) for s in (data.get("served") or [])]
     if local_path is not None and local_path.is_file():
-        ldata = yaml.safe_load(local_path.read_text(encoding="utf-8")) or {}
+        ldata = _load_yaml_mapping(local_path)
         roles.update({str(k): str(v) for k, v in (ldata.get("roles") or {}).items()})
         for s in (ldata.get("served") or []):
             if str(s) not in served:
@@ -186,25 +218,160 @@ def load_roles_config(
     return roles, served
 
 
+def _load_yaml_mapping(path: Path) -> dict:
+    """Parse a role config, raising `ConfigShapeError` on anything unusable.
+
+    A syntax error used to surface as a raw traceback with exit 1 — the same
+    code as "a pin failed validation" — so the shipped pre-commit example
+    reported a stray bracket to the consumer as a model-pin failure. A config
+    that parses to a list rather than a map raised `AttributeError` from
+    `.get`, one frame further in.
+    """
+    import yaml
+
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as exc:
+        raise ConfigShapeError(f"{path}: not valid YAML — {exc}") from exc
+    if data is None:
+        return {}
+    if not isinstance(data, dict):
+        raise ConfigShapeError(
+            f"{path}: expected a mapping with `roles:` / `served:` keys, "
+            f"got {type(data).__name__}"
+        )
+    return data
+
+
+def load_inline_models(
+    config_path: Path, local_path: Path | None = None
+) -> list[str]:
+    """Load the values an INLINE pin may resolve to.
+
+    Falls back to ``INLINE_MODELS_DEFAULT`` when the config declares no
+    ``inline_models:`` key — absence means "this config predates the key", not
+    "anything goes", so the check still runs on an un-updated consumer config.
+    A local overlay EXTENDS the list, matching ``served:`` semantics: a harness
+    that accepts more values adds them without editing the Sysop-owned file.
+    """
+    data = _load_yaml_mapping(config_path)
+    # Absent and declared are different answers, and the test is key PRESENCE,
+    # not truthiness. A missing key means "this config predates the key" and the
+    # built-in default applies. A key written as `inline_models:` (YAML null) or
+    # `inline_models: []` means the author declared nothing legal, and every
+    # inline pin goes red loudly rather than silently inheriting a default they
+    # wrote the key to replace. Keying on `data.get(...) is None` conflated the
+    # bare-key form with absence, which is the form a consumer reaches by
+    # commenting out the list items.
+    models: list[str] = (
+        _as_model_list(data["inline_models"], config_path)
+        if "inline_models" in data
+        else [str(s) for s in INLINE_MODELS_DEFAULT]
+    )
+    if local_path is not None and local_path.is_file():
+        ldata = _load_yaml_mapping(local_path)
+        if "inline_models" in ldata:
+            for value in _as_model_list(ldata["inline_models"], local_path):
+                if value not in models:
+                    models.append(value)
+    return models
+
+
+def _as_model_list(value: object, source: Path) -> list[str]:
+    """Coerce an `inline_models:` value to a list of names, or refuse it.
+
+    A YAML scalar is a string, and iterating a string yields characters — so
+    `inline_models: opus` silently became the legal set `{o, p, u, s}` and turned
+    every inline pin red with a nonsense diagnostic. A single-value scalar is
+    idiomatic YAML and the shipped docs never show the local file's shape, so
+    this is a shape a consumer reaches by writing the obvious thing.
+    """
+    if value is None:
+        return []
+    if isinstance(value, str) or not isinstance(value, (list, tuple)):
+        raise ConfigShapeError(
+            f"{source}: `inline_models:` must be a list, got {type(value).__name__} "
+            f"({value!r}). Write it as a YAML list:\n  inline_models:\n    - opus"
+        )
+    return [str(s) for s in value]
+
+
 def find_role_violations(
-    root: Path, roles: dict[str, str], served: list[str]
+    root: Path,
+    roles: dict[str, str],
+    served: list[str],
+    inline_models: list[str] | None = None,
+    managed_only: bool = False,
 ) -> list[tuple[str, PinRole, str]]:
     """Return ``[(relpath, pin, reason), ...]`` for every pin that fails validation.
 
-    Three independent failure modes: a pin with no governing role marker; a role
-    that the config does not define; a role that resolves to a non-served model
-    (the loud-sunset signal — drop a model from ``served:`` and any role still
-    mapped to it goes red here).
+    **Five** independent failure modes. Four judge the ROLE's target: a pin with
+    no governing role marker; a role the config does not define; a role that
+    resolves to a non-served model (the loud-sunset signal — drop a model from
+    ``served:`` and any role still mapped to it goes red here); and a role
+    governing an INLINE pin that resolves to a value the Agent tool's closed
+    ``model`` enum rejects (Phase 223 — see ``INLINE_MODELS_DEFAULT``).
+
+    The fifth judges the PIN's own literal value, and it exists because the other
+    four do not. They all ask what a role resolves to; none of them reads what the
+    shipped file says, so a hand-edited literal passed every one of them — and on
+    the plugin install path there is no resolver, so the literal is what the
+    harness receives. Phase 223's round, lens 3.
+
+    Both inline modes are scoped to ``kind == "inline"`` on purpose: the same
+    value that breaks a spawn is legal in frontmatter, so failing both kinds would
+    refuse a correct config.
     """
     served_set = set(served)
+    inline_set = set(inline_models if inline_models is not None else INLINE_MODELS_DEFAULT)
     out: list[tuple[str, PinRole, str]] = []
     for path in iter_skill_files(root):
         rel = str(path.relative_to(REPO_ROOT)) if path.is_relative_to(REPO_ROOT) else str(path)
-        for r in analyze_text(path.read_text(encoding="utf-8")):
+        text = path.read_text(encoding="utf-8")
+        # `.claude/skills/` is Claude Code's standard user-skill directory, not
+        # Sysop's private tree — a consumer's own skill can live beside the
+        # shipped ones and legitimately carry a `model:` field. Such a file has no
+        # `sysop:model-roles` marker, and validating it produced "pin has no
+        # governing marker" for prose Sysop does not own. In `managed_only` mode
+        # those files are skipped, because the alternative is telling a consumer
+        # to hand their private skill to Sysop's resolver.
+        if managed_only and _FILE_MARKER_RE.search(text) is None:
+            continue
+        for r in analyze_text(text):
+            before = len(out)
             if r.role is None:
                 out.append((rel, r, "pin has no governing `<!-- sysop:model-roles … -->` marker"))
             elif r.role not in roles:
                 out.append((rel, r, f"undefined role {r.role!r} (not in served_models.yml roles:)"))
             elif roles[r.role] not in served_set:
                 out.append((rel, r, f"role {r.role!r} -> {roles[r.role]!r} is not in served:"))
+            elif r.kind == "inline" and roles[r.role] not in inline_set:
+                out.append((rel, r, (
+                    f"role {r.role!r} -> {roles[r.role]!r} governs an INLINE pin, but the "
+                    f"Agent tool's `model` parameter is a closed enum "
+                    f"({', '.join(sorted(inline_set))}). This spawn would fail at call "
+                    f"time. Map the role to an alias, or extend `inline_models:` if your "
+                    f"harness accepts it."
+                )))
+
+            # The pin's LITERAL value, checked independently of its role's target
+            # — but only when the arms above found nothing for this pin, so one
+            # broken pin is one finding. Reporting it twice inflated the count
+            # ("24 pin(s)" for 12 pins) under a header that says "pin(s)".
+            # The four arms above all judge what a role *resolves to*; none of them
+            # reads what the shipped file actually says, so a hand-edited or
+            # mis-merged `model: "best"` passed every one of them. That gap is not
+            # academic: on the plugin install path `core/skills/` is consumed
+            # verbatim — no installer, no resolver — so the literal in the file IS
+            # what the harness receives. Phase 223's round, lens 3.
+            if len(out) == before and r.kind == "inline" and r.value not in inline_set:
+                out.append((rel, r, (
+                    f"INLINE pin holds the literal value {r.value!r}, which the Agent "
+                    f"tool's `model` enum rejects ({', '.join(sorted(inline_set))}). "
+                    f"Whatever its role resolves to, this is the value the harness "
+                    f"receives on the plugin path, where nothing rewrites it. On the "
+                    f"bash-installed path, `resolve_skill_models.py --apply` rewrites "
+                    f"literals from the mapping; on the plugin path the file must be "
+                    f"corrected at source."
+                )))
     return out

@@ -84,7 +84,7 @@ Select the flag pool from this output alone — batches with status **`Pending`*
 - Flag reason (text after `> **Flag:**`)
 - **Judgment set** — the bracketed task IDs in `> **Triaged:** <date> flag [TASK-…, TASK-…]`, if present. **Absent brackets mean the whole batch**, which is the pre-existing behaviour and the correct degradation.
 
-**Skip** batches without a `Flag:` line (they belong to `/auto-fix`). Skip batches with status `In Progress`, `Merged`, `Complete`, or `Ready for Review`.
+**Skip** batches without a `Flag:` line (they belong to `/auto-fix`). Skip batches with status `In Progress`, `Merged`, `Complete`, or `Ready for Review` — and `Review Ready`, which is live but waiting on a human to run `/review-close`, not on a judgment agent (Phase 222, Q-014 — do not read it as the near-identical *finished* status `Ready for Review`).
 
 ### 1b. Scoped body pass
 
@@ -354,7 +354,7 @@ Otherwise:
 cd <WORKTREE_PATH> && <VERIFY_COMMAND>
 ```
 
-Pass `timeout: 600000` to the Bash tool. If verify exceeds timeout, treat as failure and report `VERIFY: TIMEOUT`.
+Pass `timeout: 600000` to the Bash tool. If verify exceeds timeout, **do not treat it as a failure.** The command was killed, so it returned no verdict: the work is **unverified**, not verified-broken. Report `VERIFY: TIMEOUT` and **skip § 5 entirely** — that section makes a one-shot code edit against a failure this run does not have. Raise the timeout and re-run if you can, and say so.
 
 ### 5. Handle verify failure
 

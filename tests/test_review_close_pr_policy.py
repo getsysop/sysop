@@ -128,7 +128,16 @@ def test_step6_reset_is_stated_per_shape_and_still_always_run():
     assert "git reset --hard origin/main" in block
     assert "Run the `git reset --hard origin/main` in both shapes" in block
     assert "here the reset is load-bearing" in block          # integration-branch shape
-    assert "here the reset is a harmless no-op" in block       # PR-reuse shape
+    # PR-reuse shape. Phase 219's round measured the old "harmless no-op" claim FALSE for
+    # the widened condition 3: a merge-updated branch takes the reuse shape while local
+    # `main` still holds unpushed commits, so gh's fast-forward fails the same way and the
+    # reset MOVES main. The reset is load-bearing in both shapes now, and the guard pins
+    # the correction rather than the claim it replaced.
+    assert "the reset **moves**" in block
+    assert "here the reset is a harmless no-op" not in block, (
+        "the measured-false no-op claim is back — it is what an operator hitting the "
+        "DIRTY gate in reuse shape would rely on to conclude nothing is at stake"
+    )
     assert "right about that cycle and wrong as a general rule" in block
 
 
@@ -154,11 +163,23 @@ def test_reuse_requires_all_five_conditions():
     for fragment in (
         "**exactly one** branch is still approved **after Step 3b**",  # 1: 2d/3b can demote
         "non-draft, same-repository** PR whose base is `main`",        # 2: fork/draft PRs
-        "git rev-list origin/main..main` is empty",                    # 3: nothing to sweep
+        # 3: nothing to sweep THAT THE BRANCH DOES NOT ALREADY HAVE. Phase 219 widened
+        # this: the unqualified form rejected the case its own rationale was void for —
+        # a commit already an ancestor of the branch needs no sweep, because merging the
+        # branch lands it. Measured on a merge-updated branch: unqualified 1, `--not` 0.
+        "no local-only `main` commits that the branch does not already contain",
         "**not behind** its remote counterpart",                       # 4: stale head
         "not behind `origin/main`",                                    # 5: stale base
     ):
         assert fragment in block, f"reuse condition missing: {fragment!r}"
+    # The widening has to be stated honestly in BOTH directions, or a reader assumes it
+    # covers every "already an ancestor" case. It does not: a branch updated by
+    # `git rebase main` is then behind its own remote, so condition 4 rejects it whatever
+    # condition 3 says (measured 1). Pin the disclosure, not just the widening.
+    assert "inert for a rebase-updated one" in block, (
+        "condition 3 no longer states the case its widening does NOT reach. A widening "
+        "that reads as universal when it is not is worse than the narrow form it replaced"
+    )
     # The probe still computes all four quantities; Phase 153 runs the commands BARE and
     # reads the values off stdout rather than capturing them into `$PR_NUMBER` /
     # `$LOCAL_ONLY` / `$BEHIND_REMOTE` / `$BEHIND_MAIN`, because an allow-rule does not
@@ -174,11 +195,25 @@ def test_reuse_requires_all_five_conditions():
     # reuse shape was unreachable. Pinning the literal form is what keeps it reachable.
     for probe in (
         'gh pr list --head "<approved branch name>" --base main --state open',       # 1 + 2
-        "git rev-list --count origin/main..main",                                    # 3
+        'git rev-list --count origin/main..main --not "<approved branch name>"',     # 3
         'git rev-list --count "<approved branch name>..origin/<approved branch name>"',  # 4
         'git rev-list --count "<approved branch name>..origin/main"',                # 5
     ):
         assert probe in block, f"reuse probe no longer computes: {probe!r}"
+    # …and the unqualified form must be GONE, not merely joined. It is a strict PREFIX of
+    # the widened one, so the membership assert above passes against either — this is the
+    # only check that can tell them apart. Line-anchored, because that prefix appears
+    # inside the widened command by construction.
+    bare = [
+        ln for ln in block.splitlines()
+        if ln.strip() == "git rev-list --count origin/main..main"
+        or ln.strip() == "git rev-list origin/main..main"
+    ]
+    assert not bare, (
+        "Step 4-pre still runs the UNQUALIFIED condition-3 count as a complete command: "
+        f"{bare!r}. That is the form that rejected the safe case; leaving both ships two "
+        "readings and lets the agent pick the wrong one."
+    )
     # And the operands must never go back to being variables: the value is set in an
     # earlier block, so a `$APPROVED_BRANCH` here is empty by construction.
     assert "$APPROVED_BRANCH" not in block.replace("`$APPROVED_BRANCH`", ""), (
@@ -205,7 +240,41 @@ def test_reuse_shape_is_honest_about_how_often_it_fires():
     """#204 calls this "the normal end state"; the precondition usually is not met."""
     block = _section("### 4-pre.", "### 4a.")
     assert "How often this actually fires" in block
-    assert "Falling through is never wrong" in block
+
+
+def test_the_fall_through_is_not_described_as_free():
+    """`Q-265`. The note used to say *"falling through is never wrong, just wasteful"*.
+
+    Measured false, end to end on a real remote: a published branch at `0 0` against
+    `origin/<branch>` comes out of the fall-through **1 behind, 2 ahead** with a rewritten
+    tip, and Rule C forbids the force-push that would reconcile it. The sentence was a
+    licence to stop thinking at exactly the point where the damage happens, so this guard
+    asserts it is GONE — not that a correction has been appended beside it. A rule and its
+    contradiction shipping together is worse than either alone, because the agent picks.
+    """
+    block = _section("### 4-pre.", "### 4a.")
+    flat = " ".join(block.split())
+    assert "Falling through is never wrong" not in flat, (
+        "the measured-false 'falling through is never wrong, just wasteful' claim is back "
+        "in Step 4-pre"
+    )
+    assert "Falling through is not free" in flat
+    # Direction, not presence: the correction is worthless if its two measured endpoints
+    # can be swapped or softened. Both must be stated, and the harm must be attributed to
+    # the PUBLISHED branch rather than to branches in general.
+    assert "1 behind, 2 ahead" in flat, (
+        "the fall-through note no longer carries the measurement it rests on"
+    )
+    assert "published" in flat.lower()
+    assert "closes it as *unmerged*" in flat, (
+        "the note must say what becomes of the branch's own PR. It has already been wrong "
+        "here once: the first version said the PR stays open and a human closes it, and "
+        "Step 6 deletes its head branch three steps later, which closes it as unmerged"
+    )
+    assert "--no-ff" in flat, (
+        "the note points at Step 4a's remedy; if that is no longer a `--no-ff` merge the "
+        "sentence is describing a mechanism that does not ship"
+    )
 
 
 def test_rule_a_guard_covers_the_reuse_shape_without_becoming_tautological():
@@ -485,10 +554,10 @@ def test_4d1_gives_the_reuse_shape_its_own_recovery():
 
 
 def test_step4c_staging_note_covers_the_rotation_path():
-    """`changelog.md` is written by the §6 rotation regardless of entry type, so keying its
+    """The changelog (`CHANGELOG.md`, Phase 222/Q-279) is written by the §6 rotation regardless of entry type, so keying its
     staging off the routing table alone drops the rotation's own edits."""
     block = _section("### 4c. Consolidate Pending Documentation", "### 4d. Land on `main`")
-    assert "Do not stage `changelog.md` from the routing table alone" in block
+    assert "Do not stage `CHANGELOG.md` from the routing table alone" in block
     assert "regardless of entry type" in block
 
 

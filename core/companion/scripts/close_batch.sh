@@ -340,9 +340,23 @@ fence_preflight() {
 find_batch_range() {
   local batch_num="$1"
 
-  # Try JSON index first
-  local range_line=""
+  # Which resolver answered. Read by the caller, which is where the warning is
+  # printed — see `RANGE_SOURCE` at the call site (Q-017).
+  RANGE_SOURCE="index"
+
+  # Try JSON index first.
+  #
+  # `RANGE_SOURCE` distinguishes the two reasons the fallback is taken, and that
+  # distinction is the whole correctness of the warning at the call site. The
+  # first cut set it to `fallback` on ANY empty `range_line` — which covers a
+  # non-canonical header, an absent `python3`, an absent or partial
+  # `$INDEX_SCRIPT`, and a parser crash — and then asserted the first cause
+  # unconditionally. Reproduced by this phase's own round on a byte-perfect
+  # canonical tracker with `python3` off `PATH`: the operator was told their
+  # header was malformed, and pointed at a `python3` remedy that could not run.
+  local range_line="" index_ran=false
   if command -v python3 &>/dev/null && [[ -f "$INDEX_SCRIPT" ]]; then
+    index_ran=true
     range_line=$(python3 "$INDEX_SCRIPT" --range "$batch_num" 2>/dev/null) || true
   fi
 
@@ -350,6 +364,12 @@ find_batch_range() {
     BATCH_START=$(echo "$range_line" | cut -f1)
     BATCH_END=$(echo "$range_line" | cut -f2)
     return 0
+  fi
+
+  if $index_ran; then
+    RANGE_SOURCE="fallback"          # the index ran and did not match this header
+  else
+    RANGE_SOURCE="fallback-no-index" # the index never ran; says nothing about the header
   fi
 
   # Fallback: grep-based range detection
@@ -472,6 +492,7 @@ MERGED_UNLOCK=()
 TOTAL_TASKS_CLOSED=0
 TOTAL_ORPHANS=0
 TOTAL_NEARMISSES=0
+TOTAL_FALLBACK_RANGES=0
 
 for BATCH_NUM in "${BATCH_NUMS[@]}"; do
   echo "── Batch ${BATCH_NUM} ──"
@@ -488,7 +509,7 @@ for BATCH_NUM in "${BATCH_NUMS[@]}"; do
   # `--range` rather than `--list`.
   #
   # SKIP rather than exit, with its own explicit reason. The script's contract
-  # is to report and continue (`close_batch.sh:880-884`: annotation warnings
+  # is to report and continue (`close_batch.sh:954-959`: annotation warnings
   # are "deliberately NOT an exit-code change"), so aborting here would
   # abandon the other batches
   # in a multi-batch close. This is not the `find_batch_range` refusal problem —
@@ -505,6 +526,14 @@ for BATCH_NUM in "${BATCH_NUMS[@]}"; do
       SKIPPED+=("${BATCH_NUM}:ambiguous")
       continue
     fi
+    # rc 0 with output is the NEAR-MISS advisory (Q-242) — not a refusal, but
+    # not something to swallow either. STDOUT here, per this script's own rule
+    # that /review-close Step 4b reads stdout; the Python side writes it to
+    # stderr so the OTHER caller's capture can see it, and this is where it
+    # becomes visible to an operator reading a close.
+    if [[ "$DUP_RC" -eq 0 && -n "$DUP_ERR" ]]; then
+      echo "$DUP_ERR"
+    fi
   fi
 
   # Find batch header
@@ -513,6 +542,53 @@ for BATCH_NUM in "${BATCH_NUMS[@]}"; do
     SKIPPED+=("${BATCH_NUM}:not-found")
     continue
   fi
+
+  # ── Q-017: the fallback range stops being silent ─────────────
+  #
+  # `find_batch_range` prefers `review_index.py --range` and falls back to a
+  # grep when the index cannot answer. On a HEALTHY install the fallback is
+  # still reachable — measured: a header spelled with an ASCII hyphen where
+  # `_BATCH_HEADER_RE` demands an em-dash is invisible to `--range` and matched
+  # by the grep, so this script closes a batch that `batch_work.sh` refuses to
+  # claim. That asymmetry is pinned as current behaviour (not endorsed) by
+  # `tests/test_batch_range_offset_guard.py::test_close_still_closes_a_header_the_index_cannot_match`.
+  #
+  # Ratified 2026-08-21: keep closing, stop doing it silently. Retiring the
+  # fallback is a caller-contract change this entry has declined three times —
+  # a refusal here is overwritten by the FALSE "Not found in review_tasks.md"
+  # message directly above, and this script diagnoses by commit presence rather
+  # than exit code (`close_batch.sh:954-959`). So the honest move is to say which resolver
+  # answered, because the two disagree about what a batch IS.
+  #
+  # STDOUT, not stderr, and that is the file's own rule ~130 lines below: NEARMISS
+  # and ORPHAN used to go to stderr while /review-close Step 4b tells the operator
+  # to read stdout, so the loudness was "addressed to an empty room".
+  #
+  # Deliberately NOT an exit-code change — see the summary-counter rule at the
+  # end of this file, which states it and says why.
+  case "${RANGE_SOURCE:-index}" in
+    fallback)
+      TOTAL_FALLBACK_RANGES=$((TOTAL_FALLBACK_RANGES + 1))
+      echo "   ⚠️  Batch ${BATCH_NUM}'s range came from the GREP FALLBACK, not the index."
+      echo "       review_index.py ran and could not match this batch's header, so the"
+      echo "       header does not have the canonical shape:"
+      echo "         ### Batch <N> — <Title> \`<Status>\`   (em-dash, backticked status)"
+      echo "       The fallback is fence-blind: a \`## \` heading quoted inside the batch"
+      echo "       body ends the range EARLY, so tasks below it stay open under a"
+      echo "       \`Merged\` header. Measured on a 3-task batch: 1 closed, 2 left \`[ ]\`."
+      echo "       This batch WILL still be closed. List every such header with:"
+      echo "         python3 sysop/scripts/review_index.py --check-headers"
+      ;;
+    fallback-no-index)
+      TOTAL_FALLBACK_RANGES=$((TOTAL_FALLBACK_RANGES + 1))
+      echo "   ⚠️  Batch ${BATCH_NUM}'s range came from the GREP FALLBACK, not the index."
+      echo "       review_index.py did NOT run (python3 or ${INDEX_SCRIPT} is missing), so"
+      echo "       this says nothing about your header — it is a partial or stale install."
+      echo "       The fallback is also fence-blind: a \`## \` heading quoted inside the"
+      echo "       batch body ends the range early. This batch WILL still be closed."
+      echo "       Diagnose with: bash sysop/scripts/self_check.sh"
+      ;;
+  esac
 
   # Extract current status from header line. Anchor to end-of-line so a
   # title containing backtick-quoted tokens (e.g. ``Batch 12 — fix `foo`
@@ -886,6 +962,12 @@ if [[ $TOTAL_ORPHANS -gt 0 ]]; then
 fi
 if [[ $TOTAL_NEARMISSES -gt 0 ]]; then
   echo "   ⚠️  Failure-note near misses not honoured: ${TOTAL_NEARMISSES} (see the per-line warnings above)"
+fi
+# Same argument as the two counters above: per-batch warnings scroll, a summary
+# count does not. An operator reading only the tail of a 20-batch run still
+# learns that some batch was closed on a range the index could not produce.
+if [[ $TOTAL_FALLBACK_RANGES -gt 0 ]]; then
+  echo "   ⚠️  Batches closed via the grep fallback: ${TOTAL_FALLBACK_RANGES} (their headers are not canonical — see the warnings above)"
 fi
 if $DRY_RUN; then
   echo "   (dry-run mode — no changes made)"

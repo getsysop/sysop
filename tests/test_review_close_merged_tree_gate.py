@@ -792,7 +792,10 @@ MUTATIONS: list[tuple[str, Callable[[str], str]]] = [
     ("A5 satisfy the report check from the --dry-run mention alone", lambda t: (
         t.replace(
             "               merged-tree (4a-post) <ran on <merge target>: N commands\n"
-            "                                      | ran nothing: why | not reached: why>\n",
+            "                                      | ran nothing: why | not reached: why\n"
+            "                                      | TIMEOUT: <command> — killed, so it returned no\n"
+            "                                        verdict. The tree is UNVERIFIED: neither passed\n"
+            "                                        nor failed, and never folded into \"ran N commands\".>\n",
             "", 1))),
     # ---- the round's survivors. 49 of its 63 mutations lived against the first version;
     # these are the ones that named a distinct bypass rather than a variant of one. ----

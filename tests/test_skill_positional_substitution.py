@@ -396,8 +396,17 @@ def test_step3c_worktree_lookup_finds_the_right_worktree(tmp_path):
     block = _fenced_block_containing(
         REPO_ROOT / "core" / "skills" / "review-close" / "SKILL.md", "SMOKE_WORKTREE_DIRS"
     )
-    start = block.index("  _wt=$(git worktree list --porcelain")
-    lookup = block[start:block.index("\n", block.index("done)", start))]
+    # Phase 218 reshaped this lookup: the `case` reads from a HEREDOC rather than from a
+    # pipe inside `$( )`, because bash 3.2 — stock macOS /bin/bash — cannot parse `case`
+    # inside `while` inside command substitution and died at PARSE time, taking the whole
+    # Step 3c block with it. The substitution hazard this test exists for is unchanged
+    # (no `awk` and no `$<N>`), and the assertions below are the same ones.
+    start = block.index('  _wt=""\n  while IFS= read -r _line; do')
+    lookup = block[start:block.index("\nWT_LIST", start) + len("\nWT_LIST")]
+    assert "awk" not in lookup, (
+        "the awk form is back — the skill runner rewrites its `$<N>` with the "
+        "invocation's argument words before bash sees them (internal tracker #360)"
+    )
 
     for argument_string in ("", "--dry-run", "a b c"):
         script = '_b="task/FEAT-1"\n' + substitute(lookup, argument_string) + '\necho "[$_wt]"\n'

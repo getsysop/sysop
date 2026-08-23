@@ -99,7 +99,10 @@ except ImportError:
     # deliberately standalone for pre-commit (see _log.py's header).
     # tests/test_venv_pyyaml_bootstrap.py pins the five copies identical.
     _roots = []
-    for _cand in Path(__file__).resolve().parents[:3]:
+    # `list(...)` before the slice: slicing `PurePath.parents` is 3.10+
+    # (bpo-35498), and on 3.9 it raises TypeError from inside this very
+    # `except ImportError` — the interpreter the block exists to rescue.
+    for _cand in list(Path(__file__).resolve().parents)[:3]:
         if _cand not in _roots:
             _roots.append(_cand)
     try:

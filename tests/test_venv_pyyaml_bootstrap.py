@@ -87,7 +87,10 @@ _REQUIRED = [
     # Both venv layouts, at EVERY root — not `.venv` or `venv` per root.
     'for _layout in (".venv", "venv"):',
     # Script-anchored roots before the CWD.
-    "Path(__file__).resolve().parents[:3]",
+    # `list(...)` before the slice, not `parents[:3]`: slicing parents is
+    # 3.10+, and this block runs only on interpreters without PyYAML —
+    # stock macOS /usr/bin/python3 3.9 among them.
+    "list(Path(__file__).resolve().parents)[:3]",
     "Path.cwd() not in _roots",
     # The main checkout, with git's discovery vars stripped (BR ISSUE-0048).
     '"git", "rev-parse", "--git-common-dir"',
@@ -416,8 +419,12 @@ class TestItActuallyResolves:
         r = _run(root / "sysop/scripts/sitrep_survey.py", cwd=sub, py=yamlless_python)
         assert "requires PyYAML" not in r.stderr, r.stderr
 
-    @pytest.mark.parametrize("name,code", [(n, 2 if n != "sitrep_survey.py" else 1)
-                                           for n in FATAL])
+    # Uniform 2 since Phase 219. `sitrep_survey.py` was the one of the five that
+    # exited 1 for a missing dependency — found by the round, not by this test,
+    # because the exception was written INTO the parametrization. The house
+    # contract is 1 = the caller's input is wrong, 2 = the environment is, and
+    # `/review-close` Step 4a routes the two apart in terms.
+    @pytest.mark.parametrize("name,code", [(n, 2) for n in FATAL])
     def test_every_fatal_script_names_the_pep668_remedy_when_it_gives_up(
             self, consumer, yamlless_python, name, code):
         """Behavioural twin of the text guard: the remedy must reach stderr from

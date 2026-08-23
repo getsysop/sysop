@@ -34,8 +34,14 @@ You'll need:
 - **Claude Code.** This walkthrough drives Sysop through Claude Code's slash commands — the
   fastest way to see the whole loop. (Sysop's companion scripts and docs are agent-neutral
   and run standalone; see [*Running on another agent*](#running-on-another-agent) at the end.)
-- **Bash 4+.** The installer uses associative arrays. macOS ships `/bin/bash` 3.2 by
-  default — run `bash --version`, and if it's 3.x, `brew install bash` first. On Windows,
+- **Bash 4+ to install; 3.2 to run.** The floor is not one number. `install.sh` uses
+  associative arrays and **refuses to run below bash 4** — and `sysop-update.sh` is a
+  thin shim that `exec`s it, so updating hits the same refusal. The companion scripts
+  they install are held to **bash 3.2**, which is what stock macOS ships as
+  `/bin/bash`. So: run `bash --version`, and if it's 3.x, `brew install bash`
+  before installing — after that the stock shell is fine for day-to-day runs.
+  `sysop/scripts/self_check.sh` tells you which side you are on — on a 3.2 shell it names
+  both floors explicitly; on 4+ it just prints the version. On Windows,
   run the installer and scripts under WSL (Git Bash may work, but its worktree/symlink
   support is flakier and unverified); native Windows isn't supported.
 - **Python 3 with PyYAML.** The check runner (`sysop/scripts/run_checks.sh`) needs it. Install
