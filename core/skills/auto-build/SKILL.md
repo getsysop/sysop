@@ -78,7 +78,23 @@ import os, sys, glob
 try:
     import yaml
 except ImportError:  # PyYAML lives only in the project venv (BeanRider ISSUE-0049)
-    sys.path[:0] = glob.glob(".venv/lib/python*/site-packages")
+    import glob, os, subprocess
+    _sites = []
+    try:
+        _r = subprocess.run(
+            ["git", "rev-parse", "--git-common-dir"],
+            capture_output=True, text=True, timeout=5,
+            env={_k: _v for _k, _v in os.environ.items()
+                 if _k not in ("GIT_DIR", "GIT_WORK_TREE",
+                               "GIT_COMMON_DIR", "GIT_INDEX_FILE")},
+        )
+        _g = _r.stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        _g = ""
+    for _root in ([os.path.dirname(os.path.abspath(_g))] if _g else []) + ["."]:
+        for _layout in (".venv", "venv"):
+            _sites += glob.glob(os.path.join(_root, _layout, "lib/python*/site-packages"))
+    sys.path[:0] = _sites
     import yaml
 from pathlib import Path
 
@@ -383,8 +399,23 @@ import sys
 try:
     import yaml
 except ImportError:  # PyYAML lives only in the project venv (BeanRider ISSUE-0049)
-    import glob
-    sys.path[:0] = glob.glob(".venv/lib/python*/site-packages")
+    import glob, os, subprocess
+    _sites = []
+    try:
+        _r = subprocess.run(
+            ["git", "rev-parse", "--git-common-dir"],
+            capture_output=True, text=True, timeout=5,
+            env={_k: _v for _k, _v in os.environ.items()
+                 if _k not in ("GIT_DIR", "GIT_WORK_TREE",
+                               "GIT_COMMON_DIR", "GIT_INDEX_FILE")},
+        )
+        _g = _r.stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        _g = ""
+    for _root in ([os.path.dirname(os.path.abspath(_g))] if _g else []) + ["."]:
+        for _layout in (".venv", "venv"):
+            _sites += glob.glob(os.path.join(_root, _layout, "lib/python*/site-packages"))
+    sys.path[:0] = _sites
     import yaml
 from pathlib import Path
 task_id = sys.argv[1]

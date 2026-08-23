@@ -227,6 +227,21 @@ def test_the_gate_check_is_not_vacuous():
         assert missing_gates(mutated), f"removing the {label} was not detected"
 
 
+def _discussions_anchor(text: str) -> str:
+    """The `N. **Enable Discussions**` marker, derived rather than pinned.
+
+    Two controls below re-home a gate under this step to prove an unrelated step
+    cannot satisfy the check. Both hardcoded `9.`, and both broke the moment
+    Phase 226 inserted a numbered step above it. The control that announces
+    *"this control needs re-pointing"* was doing its job — but a derived anchor
+    needs no re-pointing at all, which is the same derive-don't-assert rule this
+    module already applies to its pass population.
+    """
+    m = re.search(r"(?m)^(\d+)\. \*\*Enable Discussions\*\*", text)
+    assert m, "the runbook lost its 'Enable Discussions' step, so two controls anchor on nothing"
+    return m.group(0)
+
+
 def test_a_gate_rehomed_under_an_unrelated_step_does_not_count():
     """Round finding E4/E5. The command was moved under 'Enable Discussions on
     wade-cms/sysop-tester' — a title containing the substring `test` — and the first
@@ -251,9 +266,9 @@ def test_a_gate_rehomed_under_an_unrelated_step_does_not_count():
         "the step-title anchor did not match, so this control mutated nothing — it was "
         "silently passing on an unmutated file, which is the shape it exists to catch"
     )
+    anchor = _discussions_anchor(text)
     rehomed = gutted.replace(
-        "9. **Enable Discussions**",
-        f"9. **Enable Discussions**\n   ```bash\n   {fence_line.strip()}\n   ```\n", 1)
+        anchor, f"{anchor}\n   ```bash\n   {fence_line.strip()}\n   ```\n", 1)
     assert rehomed != gutted, "the re-home anchor moved; this control needs re-pointing"
     assert any("suite" in p for p in missing_gates(rehomed)), (
         "a gate command re-homed under an unrelated step satisfied the guard — the "
@@ -645,7 +660,7 @@ def test_the_pass_population_is_derived_and_non_vacuous():
     # `5b` added Phase 197 — the round's nit: without it here, that pass alone
     # dropping out of the EXTRACTOR is silent, and the runbook-coverage guard
     # above then passes by not knowing the pass exists.
-    assert {"1a", "1b", "1c", "2", "2b", "3", "4", "5", "5b"} <= implemented, (
+    assert {"1a", "1b", "1c", "2", "2b", "3", "4", "4b", "5", "5b"} <= implemented, (
         f"the pass extractor found only {sorted(implemented)} — it has stopped seeing the "
         "identifiers in the implementing files, so the runbook check is inert"
     )
@@ -806,10 +821,59 @@ def test_a_pass_mentioned_but_not_listed_does_not_count():
     )
 
     elsewhere = text.replace(bullet, "")
-    assert "9. **Enable Discussions**" in elsewhere, "re-home anchor moved"
-    elsewhere = elsewhere.replace(
-        "9. **Enable Discussions**", "9. **Enable Discussions**\n   - Pass 5 — see above.\n", 1)
+    anchor = _discussions_anchor(text)
+    assert anchor in elsewhere, "re-home anchor moved"
+    elsewhere = elsewhere.replace(anchor, f"{anchor}\n   - Pass 5 — see above.\n", 1)
     assert "5" in implemented_passes() - _passes_named_in(elsewhere), (
         "a pass bulleted under an unrelated step satisfied the check — the "
         "population has been widened past the step that announces the passes"
     )
+
+
+def test_the_sterilized_suite_step_does_not_contaminate_the_tree_it_greps():
+    """`Q-257`, at the step that causes it.
+
+    Steps 3 and 4 both operate on the same built tree: step 3 is the hand-run
+    Pass 2/2b eyeball, step 4 runs the suite. Without these settings step 4
+    writes `__pycache__/*.pyc` and `.pytest_cache/` into the tree step 3 greps,
+    and the tokens Pass 2/2b look for are string literals in shipping test
+    modules — so they end up in the bytecode and a re-run of the eyeball counts
+    them. Measured 2 / 22 new contaminated against 0 / 7 clean.
+
+    Prevention rather than filtering: the eyeball's `-I` is a second line of
+    defence, but nothing stops a reader running the suite by some other means,
+    and the ordering constraint was documented nowhere for the page's whole life.
+    """
+    if not RUNBOOK.exists():
+        pytest.skip("tools/TESTER_MIRROR_RUNBOOK.md is maintainer-side and mirror-excluded")
+    text = RUNBOOK.read_text(encoding="utf-8")
+    # Every pytest invocation that runs INSIDE THE BUILT TREE. Two cuts were
+    # wrong before this one, in opposite directions:
+    #   * filtering on `wf-tester` missed the `--collect-only` pre-check, which
+    #     is described as running "inside the built tree" without naming it and
+    #     contaminates exactly the same;
+    #   * taking every `-m pytest` on the page swept in the Pass 5/5b run, which
+    #     the page explicitly runs in the SOURCE repo — demanding the hardening
+    #     there is over-strictness, the direction that gets a guard deleted.
+    # The discriminator is the source-repo run's own operands: it names specific
+    # test modules because it is a targeted check on this repo, and the built-tree
+    # runs never do.
+    pytest_lines = [
+        ln for ln in text.splitlines()
+        if "-m pytest" in ln
+        and not ln.lstrip().startswith("#")
+        and "tests/" not in ln
+    ]
+    assert len(pytest_lines) >= 2, (
+        f"only {len(pytest_lines)} built-tree pytest invocation(s) found on the "
+        "runbook; there are two (step 4's full run and its --collect-only "
+        "pre-check) and both contaminate. If one was removed, re-derive this "
+        f"floor. Lines seen: {pytest_lines!r}"
+    )
+    for ln in pytest_lines:
+        assert "PYTHONDONTWRITEBYTECODE=1" in ln, (
+            f"step 4 writes bytecode into the tree step 3 greps: {ln.strip()!r}"
+        )
+        assert "no:cacheprovider" in ln, (
+            f"step 4 leaves .pytest_cache/ in the tree step 3 greps: {ln.strip()!r}"
+        )

@@ -2638,6 +2638,11 @@ LOOP_ALLOW = {
     "Bash(bash sysop/scripts/sysop-update.sh:*)",
     "Bash(python sysop/scripts/archive_review_tasks.py:*)",
     "Bash(python3 sysop/scripts/archive_review_tasks.py:*)",
+    # Phase 220: `--check-headers` is prescribed by WORKFLOW.md, by
+    # `close_batch.sh`'s grep-fallback warning and by the archiver's
+    # near-miss refusal — all three name it as the way to list the
+    # offending headers, and loop mode ships this script.
+    "Bash(python3 sysop/scripts/review_index.py:*)",
     "Bash(.venv/bin/python3 sysop/scripts/archive_review_tasks.py:*)",
     "Bash(python3 sysop/scripts/ingest_security_report.py:*)",
     "Bash(.venv/bin/python3 sysop/scripts/ingest_security_report.py:*)",
@@ -2699,13 +2704,13 @@ install_permissions() {
     # would violate the dry-run contract, and the copy note would render the
     # raw /tmp path).
     if [[ "$DRY_RUN" -eq 1 ]]; then
-      note "would write $(rel "$dst") (loop allow-subset: 21 rules, no hooks)"
+      note "would write $(rel "$dst") (loop allow-subset: 22 rules, no hooks)"
       record_managed_path "$dst"
       record "permissions: would write $(rel "$dst") (loop allow-subset)"
       return 0
     fi
     # Fail CLOSED: if the filter can't be built, do NOT fall back to the full
-    # master — that would over-grant the 71-rule allow-list AND re-add the hooks
+    # master — that would over-grant the 74-rule allow-list AND re-add the hooks
     # block referencing scripts loop mode never installs (broken at runtime).
     # Skip settings.json instead (the consumer sees more permission prompts, but
     # no over-grant and no dangling hooks); the loud error keeps it visible.
@@ -2830,7 +2835,21 @@ resolve_skill_models() {
     return 0
   fi
   if [[ "$DRY_RUN" -eq 1 ]]; then
-    note "would resolve skill model-role markers via served_models.yml (no-op under default mapping)"
+    # Preview the GATE too, not just the rewrite. Phase 223's round 2 found this
+    # branch returning before the validation, so `--update --dry-run` with an
+    # invalid override printed "no-op under default mapping" while the real run
+    # refused — and dry-run is the documented way to preview an update.
+    local _dry_py _dry_chk
+    if _dry_py="$(pick_python_with_yaml)" \
+       && [[ -f "$TARGET/sysop/scripts/check_skill_models.py" ]] \
+       && ! _dry_chk="$(PYTHONDONTWRITEBYTECODE=1 "$_dry_py" \
+            "$TARGET/sysop/scripts/check_skill_models.py" \
+            --root "$skills" --config "$config" --local "$localcfg" --managed-only 2>&1)"; then
+      note "⚠ would REFUSE the model-role mapping — your override would NOT be applied; skills would stay at Sysop's shipped defaults:"
+      printf '%s\n' "$_dry_chk" | sed 's/^/    /'
+    else
+      note "would resolve skill model-role markers via served_models.yml (no-op under default mapping)"
+    fi
     return 0
   fi
   local _py
@@ -2842,6 +2861,39 @@ resolve_skill_models() {
     fi
     return 0
   fi
+  # Phase 223: validate the MAPPING before applying it. `check_skill_models.py`
+  # judges what each role resolves to, not what a pin currently holds, so it is
+  # meaningful before the rewrite — and before is the only place it helps. A role
+  # governing an inline pin must resolve to a value the Agent tool's `model` enum
+  # accepts; `best`, `inherit` and full model ids are rejected at spawn time, so
+  # applying such a mapping hands the consumer skills that fail mid-run with a
+  # green install behind them. Refusing here leaves every pin at its working
+  # value, which is this function's stated contract ("degrade gracefully — never
+  # half-apply"). The gate exists because Phase 223's round found the arm had no
+  # invoker on the one path that creates the defect: `--update` after editing
+  # served_models.local.yml, which is the remedy the docs themselves prescribe.
+  local _checker="$TARGET/sysop/scripts/check_skill_models.py"
+  if [[ -f "$_checker" ]]; then
+    local _chk _rc=0
+    _chk="$(PYTHONDONTWRITEBYTECODE=1 "$_py" "$_checker" --root "$skills" --config "$config" --local "$localcfg" --managed-only 2>&1)" || _rc=$?
+    if [[ "$_rc" -ne 0 ]]; then
+      # Preserve the exit-1/exit-2 distinction the checker exists to make: 1 is
+      # "this mapping is wrong", 2 is "this config is malformed". Collapsing them
+      # told a consumer with a stray bracket that their model mapping was invalid.
+      local _why="invalid mapping"
+      [[ "$_rc" -eq 2 ]] && _why="unreadable config"
+      note "⚠ model-role mapping REFUSED ($_why) — your override was NOT applied; skills are at Sysop's shipped defaults, which are valid:"
+      printf '%s\n' "$_chk" | sed 's/^/    /'
+      record "model-roles: refused ($_why; see warning above)"
+      return 0
+    fi
+  else
+    # Every other skip in this function says so. A silent fail-open here would
+    # hand a consumer with a partial vendor dir the rewrite with no gate and no
+    # word about it — which is the state the gate was added to end.
+    note "⚠ check_skill_models.py not present in the vendor dir — applying the mapping UNVALIDATED"
+  fi
+
   local _out
   # PYTHONDONTWRITEBYTECODE: this is the one install-time python invocation that
   # runs FROM the vendor dir, so without it CPython leaves

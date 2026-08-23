@@ -44,27 +44,29 @@ Run these in parallel:
 - `git diff --stat` — unstaged changes summary
 - `git diff --cached --stat` — staged changes summary
 
-Also read `tasks/index.yml` to check if the work maps to a task ID. The body for any referenced ID lives at `tasks/<status>/<TASK-ID>.md` (status resolved from the index entry's `status:` field).
+Also read `tasks/index.yml` to check if the work maps to a task ID. The body for any referenced ID lives **wherever that entry's `body:` field points**, resolved relative to `tasks/` — normally `tasks/open/<TASK-ID>.md`. Do **not** resolve the path from the entry's `status:`: a claim does not move the body, there is no `tasks/in_progress/` directory in any shipped layout, and a flat `tasks/` layout is valid too (`tasks/schema.md`), so `status` predicts the directory for none of the statuses this skill runs against.
 
 ## Step 1b: Simplify Pass
 
-Before committing, review all staged and unstaged changes for inline quality improvements:
+Review the task's full change surface — committed branch work plus anything staged or unstaged — for inline quality improvements:
 
 1. Read `.claude/convention_map.md`. For each file in the diff, note the applicable conventions (4-7 per file section).
-2. Read the diff (`git diff` + `git diff --cached`) and check against:
+2. Read the **full change surface this task introduces**, not just the uncommitted remainder (Phase 222, Q-020): `git diff main...HEAD` (three dots — the committed branch work; on the canonical path the `/claim-task` reviewer-executor has **already committed everything**, so the two commands below alone inspect an empty diff and this whole pass silently reviews nothing) plus `git diff --cached` and `git diff` (anything not yet committed, the solo-path case). Check all of it against:
    - **Convention map violations** — the 4-7 conventions listed for each file's matching section
    - **Duplicated logic** — code that reimplements an existing helper (e.g., `_latest_obs_sql()`, `_escape_like()`, `getDisplayError()`, `useAbortableFetch()`, `isSafeHref()`, `validate_identifier()`)
    - **Unnecessary complexity** — verbose patterns that can be simplified without changing behavior
 3. Fix any issues found inline — edit the source files directly, citing the convention map section
 4. If nothing needs simplifying, proceed silently to Step 2
 
-This step catches reuse and quality issues *before* they're committed, so the review gate in `/review-close` sees clean code.
+This step catches reuse and quality issues *before* `/review-close`'s review gate sees them — on the canonical path the work is already committed, so "before" means before the merge, not before the commit.
 
 ## Step 1c: UI Verification
 
-If the staged + unstaged diff touches `frontend/`, run the shared UI
-verification procedure at `.claude/skills/_shared/ui-verify.md` before
-committing. Hard-fail on console errors; warn on console warnings; skip
+If the change surface touches `frontend/` — the same full basis as Step 1b:
+`git diff main...HEAD` plus staged + unstaged (Phase 222, Q-020 — on the
+canonical path the work is already committed, so a staged+unstaged-only test
+never fires) — run the shared UI verification procedure at
+`.claude/skills/_shared/ui-verify.md` before committing. Hard-fail on console errors; warn on console warnings; skip
 cleanly if the dev server is not running.
 
 This is the same gate `/claim-task` Step 7e's executor runs internally
@@ -161,7 +163,7 @@ If the work closes both kinds of IDs (e.g., a feature that also resolves a revie
 Set the type based on intent, not branch prefix — branch prefixes can mismatch.
 If multiple types could apply, use the primary one.
 
-**Do NOT** modify `PROJECT_STATUS.md`, `changelog.md`, `UI_Iterations.md`, `tasks/index.yml`, or `tasks/**/*.md` body files directly (with one exception, below). Status transitions on `tasks/index.yml` are owned by `/claim-task` and `/review-close`. **Filing a NEW follow-up task entry (id + body file under `tasks/open/`) IS allowed and is required when the work surfaces a follow-up that Step 3b would otherwise hard-fail on.**
+**Do NOT** modify `PROJECT_STATUS.md`, `CHANGELOG.md`, `UI_Iterations.md`, `tasks/index.yml`, or `tasks/**/*.md` body files directly (with one exception, below). Status transitions on `tasks/index.yml` are owned by `/claim-task` and `/review-close`. **Filing a NEW follow-up task entry (id + body file under `tasks/open/`) IS allowed and is required when the work surfaces a follow-up that Step 3b would otherwise hard-fail on.**
 
 <!-- Routing logic (which shared docs to update based on type) lives in /review-close Step 4c -->
 <!-- Canonical process: WORKFLOW.md §2.4 (Documentation) -->
@@ -225,12 +227,29 @@ import os, re, sys, subprocess
 try:
     import yaml
 except ImportError:  # PyYAML lives only in the project venv (BeanRider ISSUE-0049)
-    import glob
-    sys.path[:0] = glob.glob(".venv/lib/python*/site-packages")
+    import glob, os, subprocess
+    _sites = []
+    try:
+        _r = subprocess.run(
+            ["git", "rev-parse", "--git-common-dir"],
+            capture_output=True, text=True, timeout=5,
+            env={_k: _v for _k, _v in os.environ.items()
+                 if _k not in ("GIT_DIR", "GIT_WORK_TREE",
+                               "GIT_COMMON_DIR", "GIT_INDEX_FILE")},
+        )
+        _g = _r.stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        _g = ""
+    for _root in ([os.path.dirname(os.path.abspath(_g))] if _g else []) + ["."]:
+        for _layout in (".venv", "venv"):
+            _sites += glob.glob(os.path.join(_root, _layout, "lib/python*/site-packages"))
+    sys.path[:0] = _sites
     try:
         import yaml
     except ImportError:
-        print("ERROR: Step 3b requires PyYAML. Install: pip install pyyaml", file=sys.stderr)
+        print("ERROR: Step 3b requires PyYAML. Install it in the project venv "
+              "(e.g. `.venv/bin/pip install pyyaml` from the main checkout) — a "
+              "PEP-668 system Python refuses a bare `pip install`.", file=sys.stderr)
         sys.exit(2)
 
 branch = subprocess.check_output(["git", "branch", "--show-current"], text=True).strip()
@@ -336,7 +355,7 @@ Both bypass paths are visible in code review and intentional. `review_task_ids:`
 
 1. Verify `sysop/runtime/pending-docs/<sanitized-branch-name>.md` exists
 2. Display its full contents to the user for review
-3. Confirm the proposed entries look correct before proceeding
+3. Have the user confirm the proposed entries look correct before proceeding
 
 ## Step 5: Prepare for Review
 

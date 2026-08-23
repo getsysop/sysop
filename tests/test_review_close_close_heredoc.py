@@ -372,4 +372,88 @@ def test_step3b_collect_has_loadbearing_mkdir():
 
 def test_final_report_template_carries_parked_markers_row():
     text = SKILL.read_text(encoding="utf-8")
-    assert 'Parked markers: <removed TASK-ID list> (or "none")' in text
+    # Phase 219 (`Q-237`): the row is now sourced from what Step 4c PRINTED, rather than
+    # naming a shape the agent had to fill from memory. Pin the sourcing, not the shape.
+    assert 'Parked markers: <the `PARKED_MARKERS_REMOVED` filenames Step 4c printed>' in text
+    assert 'Locks cleaned: <the `LOCKS_REMOVED` ids Step 4c printed>' in text
+    assert "`CLOSED_IDS`" in text and "`NOT_IN_INDEX`" in text, (
+        "Step 8's tasks/index.yml row must name both emitted sets — reporting only the "
+        "closed ids hides every id this close was asked for and could not find")
+
+
+# ---------------------------------------------------------------------------------------
+# `Q-237` — the heredoc now REPORTS what it did. Step 8 asked it for three values and it
+# printed nothing, so the agent answered from intent. Two of the three are not derivable
+# after the fact at all: `missing_ok=True` erases whether a lock existed, and a removed
+# marker is gone. These assert the VALUES, not the presence of a print.
+# ---------------------------------------------------------------------------------------
+
+def _run_close_capturing(repo: Path, ids: list[str]) -> str:
+    src = CLOSE_SRC.replace(PLACEHOLDER_IDS, f"ids = {ids!r}")
+    assert src != CLOSE_SRC, "placeholder ids line not found in the extracted heredoc"
+    r = subprocess.run(
+        [sys.executable, "-c", src], capture_output=True, text=True, cwd=str(repo),
+        timeout=30, env=_git_env(),
+    )
+    assert r.returncode == 0, f"close heredoc errored ({r.returncode}):\n{r.stderr}"
+    return r.stdout
+
+
+def _row(out: str, key: str) -> list[str]:
+    """The values on one emitted row, or [] for the literal `(none)`."""
+    lines = [ln for ln in out.splitlines() if ln.startswith(key + ": ")]
+    assert len(lines) == 1, f"expected exactly one {key!r} row, got {lines!r}"
+    rest = lines[0][len(key) + 2:].strip()
+    return [] if rest == "(none)" else rest.split()
+
+
+def test_the_close_reports_the_locks_it_actually_removed_not_the_ones_it_tried(tmp_path):
+    """The fixture gives TASK-0001 a lock and TASK-0002 none. Closing both must report
+    one removed and one already-absent — the distinction `missing_ok=True` destroys, and
+    the reason printing `closed` would have been confidently wrong rather than merely
+    unhelpful."""
+    repo = _seed_repo(tmp_path)
+    out = _run_close_capturing(repo, ["TASK-0001", "TASK-0002"])
+    assert _row(out, "LOCKS_REMOVED") == ["TASK-0001"], out
+    assert _row(out, "LOCKS_ALREADY_ABSENT") == ["TASK-0002"], out
+    # Direction, not presence: the two sets must be disjoint and together account for
+    # every closed task. A swap of the two labels passes an `in` check and fails this.
+    removed, absent = _row(out, "LOCKS_REMOVED"), _row(out, "LOCKS_ALREADY_ABSENT")
+    assert not set(removed) & set(absent)
+    assert sorted(removed + absent) == _row(out, "CLOSED_IDS")
+
+
+def test_the_close_reports_the_parked_markers_by_name(tmp_path):
+    """Both of TASK-0001's markers, and not TASK-0002's, when only TASK-0001 closes."""
+    repo = _seed_repo(tmp_path)
+    out = _run_close_capturing(repo, ["TASK-0001"])
+    assert _row(out, "PARKED_MARKERS_REMOVED") == [
+        "TASK-0001__20260719T000000Z.md", "TASK-0001__20260719T010000Z.md",
+    ], out
+    # …and the files really are gone, so the row is a receipt rather than a wish.
+    assert not list((repo / "sysop" / "runtime" / "parked").glob("TASK-0001__*.md"))
+    assert (repo / "sysop" / "runtime" / "parked" / "TASK-0002__20260719T000001Z.md").exists()
+
+
+def test_an_id_with_no_index_entry_is_reported_rather_than_silently_dropped(tmp_path):
+    """`closed` is a strict SUBSET of `ids`: the loop skips any id the index does not
+    carry, silently. Reporting `ids` would over-claim and reporting `closed` alone would
+    hide the drop, so the heredoc emits both and this asserts the arithmetic between
+    them."""
+    repo = _seed_repo(tmp_path)
+    out = _run_close_capturing(repo, ["TASK-0001", "TASK-9999"])
+    assert _row(out, "CLOSED_IDS") == ["TASK-0001"], out
+    assert _row(out, "NOT_IN_INDEX") == ["TASK-9999"], out
+    assert sorted(_row(out, "CLOSED_IDS") + _row(out, "NOT_IN_INDEX")) == [
+        "TASK-0001", "TASK-9999",
+    ], "every requested id must appear in exactly one of the two rows"
+
+
+def test_every_row_is_present_even_when_empty(tmp_path):
+    """A row that vanishes when its set is empty is worse than one that says `(none)`:
+    Step 8 cannot tell an absent row from a forgotten one."""
+    repo = _seed_repo(tmp_path)
+    out = _run_close_capturing(repo, [])
+    for key in ("CLOSED_IDS", "NOT_IN_INDEX", "LOCKS_REMOVED",
+                "LOCKS_ALREADY_ABSENT", "PARKED_MARKERS_REMOVED"):
+        assert _row(out, key) == [], f"{key} should be the literal `(none)` here: {out!r}"

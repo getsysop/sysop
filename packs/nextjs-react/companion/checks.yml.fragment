@@ -24,11 +24,109 @@ checks:
     paths: ["<frontend>/"]
     include: ["*.tsx", "*.ts"]
     pattern: 'window\.open'
-    negative_pattern: 'noopener'
+    negative_pattern: '([''"`])[^''"`\n]*(?<![-\w])noopener(?![-\w])[^''"`\n]*\1'
+    notes: |
+      `negative_pattern` requires `noopener` to sit INSIDE a string literal on
+      the same line, bounded on both sides. The bare word suppressed a real
+      finding whenever the token appeared anywhere on the line — including in a
+      comment naming this very rule, whose id contains the substring, and in
+      `"resizable,noopenerX"`.
+
+      MEASURED HONESTLY. On the author's own 8 cases this scores 8/8, but that
+      matrix was self-selected. An independent 32-case matrix scores the bare
+      form wrong on 12 and this one wrong on 9 — a real improvement, not a
+      clean win, and one of the 9 is a regression this change introduced.
+
+      BOTH failure directions, because an earlier draft of this note named only
+      the cheap one on a check whose own argument is that a missed call is
+      worse than a waivable false positive:
+
+      * FALSE POSITIVE (new, introduced here): a correct call whose features
+        string embeds a quote — `window.open(u,"_blank",'w=5,noopener,t="x"')`
+        — is flagged, because the character class cannot reach the closing
+        delimiter past the inner quote.
+      * FALSE POSITIVE (pre-existing, per-line): a `window.open(` whose
+        arguments wrap onto later lines is reported on its opening line.
+      * FALSE NEGATIVE: any *other* quoted `noopener` on the same line clears
+        the call — a JSX `rel="noopener"` beside an inline handler, a URL
+        containing the word, a nearby options object. A per-line regex cannot
+        tell an argument of THIS call from a string elsewhere on the line.
+
+      The false-negative class is why the per-call semgrep rule is the real
+      fix. It LANDED in Phase 217 as `semgrep-window-open-noopener`
+      (`Q-262` resolved), so this check is now the line-shaped first layer
+      and that rule is the call-shaped one. This check stays
+      `blocking: true` because the semgrep stage needs a binary a
+      consumer's CI may not install; its twin is `blocking: false` for
+      exactly that reason, so the two are not redundant.
+
+      KNOWN LIMIT, stated rather than left to be discovered: this check is
+      per-line, so a `window.open(` whose arguments wrap onto later lines is
+      reported on its opening line even when a later line passes `noopener`.
+      Running it file-level (`invert_file_check: true`) would remove that false
+      positive and introduce a worse false negative — one correct call anywhere
+      in a file would clear every other `window.open` in it, and a file of
+      deliberately-bad calls measured CLEAN. Per-line is the deliberate choice:
+      on a security check, a false positive a reviewer can waive beats a missed
+      call nobody sees.
+
+      To waive the wrapped-call case, put the marker on the line the finding
+      CITES — the `window.open(` opening line, as a trailing comment:
+      `window.open(  // no-check: window-open-noopener`. A marker on the line
+      ABOVE does not waive anything; the runner only reads the reported line.
+      An earlier draft of this note said "waive it with `// no-check:`" without
+      saying where, and the natural placement for a wrapped call is the one
+      that does not work.
     description: "window.open must include noopener,noreferrer in features string"
     convention: "window.open"
     used_by: [codebase-review, security-audit]
     blocking: true
+
+  - id: semgrep-window-open-noopener
+    name: "window.open without noopener in the features string (semgrep)"
+    category: security
+    severity: medium
+    paths: ["<frontend>/"]
+    description: "`window.open(...)` whose features argument is missing or does not contain `noopener`. Covers the 1-arg and 2-arg forms (no features string at all) and the 3-arg form whose features string omits noopener. Pass 'noopener,noreferrer' so the opened document gets no `window.opener` handle back to this origin."
+    convention: "window.open"
+    notes: |
+      PRECISION LAYER for the grep twin `window-open-noopener` above,
+      backported in Phase 217 (Q-262). **Read the twin's own `notes:` first —
+      the gap this closes is the one they already name.** Sysop's twin is
+      per-LINE, so a `window.open(` whose arguments are wrapped onto following
+      lines puts the features string on a different line from the call: the
+      twin's `negative_pattern` cannot see it, the call reports as a blocking
+      MEDIUM finding, and the documented remedy is a hand-placed
+      `// no-check:` marker on the opening line. This rule reads the AST and
+      judges the call on its actual features argument, so the wrapped-but-safe
+      shape is simply not a finding.
+
+      Do NOT describe this as fixing a whole-file check. The extraction source's
+      twin is a file-level invert check and its rule carries that rationale;
+      Sysop's is per-line and the failure mode is different. Copying the
+      upstream sentence here would have shipped a false claim about this pack.
+
+      Rule YAML: `semgrep/window_open_noopener.yaml`; fixtures
+      `semgrep/fixtures/window_open_noopener_{positive,negative}.ts`. The
+      negative fixture includes a multi-line CORRECT call — the exact shape that
+      false-positives under the per-line twin — and a comment containing the
+      word `noopener`, which must not change any verdict. Proven on both:
+      every positive case flagged and every negative case silent — the negative
+      fixture is not empty, which is the half that matters: it carries a
+      multi-line CORRECT call, three safe feature strings, and a comment
+      containing the word `noopener`, and none of them may fire.
+
+      `blocking: false` because a consumer's required CI job installs no semgrep
+      binary — this rule runs locally and via the post-tool hook only, and a
+      blocking semgrep check would record `skipped: tool-missing` and gate
+      nothing. Promote per the graduation path in
+      `core/companion/semgrep/README.md` only after semgrep runs in your CI.
+
+      Measured before adoption against a real 205-file `.tsx` consumer frontend:
+      0 findings, with the two live `window.open` call sites both correctly NOT
+      flagged (both pass 'noopener,noreferrer').
+    used_by: [codebase-review, security-audit]
+    blocking: false
 
   - id: dangerous-inner-html
     name: "dangerouslySetInnerHTML"
@@ -171,8 +269,31 @@ checks:
     category: security
     severity: medium
     paths: ["<frontend>/"]
+    # Test directories are excluded because a mocked fetch has no redirect
+    # surface: `global.fetch = vi.fn()` and friends are assignments, not real
+    # requests, so every hit inside `__tests__/` is a false positive by
+    # construction. It is here rather than in `paths:` for the same reason as
+    # the python pack's `hot-path-regex` precedent — an unlocalized
+    # `<frontend>/` placeholder is stripped as "not yet localized", so a fresh
+    # install scans whole-tree, while `exclude_dir:` survives that strip and
+    # narrows every stage uniformly.
+    #
+    # Measured through the real stage against a 205-file `.tsx` consumer
+    # frontend carrying 178 test files (Phase 217): 8 findings before, ALL 8
+    # inside `__tests__/`, 0 outside — 0 findings after, with no true positive
+    # lost. That consumer had already been forced to add this exact key in its
+    # own overlay, recording "8 findings, all false positives"; the divergence
+    # was invisible upstream until the maintainer-side registry-drift tooling
+    # (which never ships) learned to compare `exclude_dir` at all.
+    #
+    # The rule's own YAML says path scoping is declared in this fragment, so
+    # shipping the fragment without it made that sentence false.
+    # If you override this check in `.claude/checks.project.yml`, your entry
+    # REPLACES this one wholesale (the collision merge is not a deep merge), so
+    # copy `exclude_dir` across or the test-path false positives come back.
+    exclude_dir: ["__tests__"]
     description: "fetch() options literal does not include redirect: 'error' — client-side fetches with Authorization headers can leak via open redirects to attacker-controlled hosts. Pre-set in useAbortableFetch wrapper for hook consumers."
     convention: "Fetch redirect guard"
-    notes: "Variable-passed options (const opts = {...}; fetch(url, opts)) will FP. None today; manual triage if introduced."
+    notes: "Variable-passed options (const opts = {...}; fetch(url, opts)) will FP. None today; manual triage if introduced. Test directories are excluded via exclude_dir (Phase 217) — a mocked fetch has no redirect surface; measured 8 -> 0 on a real consumer frontend with no true positive lost."
     used_by: [codebase-review, security-audit]
     blocking: false

@@ -74,7 +74,7 @@ Select the auto pool from this output alone:
 
 - **Process** batches with status **`Pending`** that have **no** `> **Flag:**` line.
 - **Skip** batches with a `> **Flag:**` line — those belong to `/auto-judge`, including partially-flagged ones (a batch is claimed as a unit, so splitting one across two concurrently-running skills would put two agents on one branch; `/auto-judge` handles the mechanical remainder itself, at Step 4b).
-- **Skip** batches with status `In Progress`, `Merged`, `Complete`, or `Ready for Review`.
+- **Skip** batches with status `In Progress`, `Merged`, `Complete`, or `Ready for Review` — and `Review Ready`, which is **live but not this skill's**: the fix work is done and the batch is waiting on a human to run `/review-close` (Phase 222, Q-014 — the near-identical `Ready for Review` is a *finished* batch; the two are opposites, per WORKFLOW.md § 4's declaration).
 - **Refuse and report** a batch whose `> **Triaged:**` line says `flag` but which carries **no** `> **Flag:**` line, and one whose record says `auto` but which *does* carry a `Flag:` line. Both are malformed records — `/triage` writes the pair together — and the first fails toward *this* skill, since the pool test above is literally "no `Flag:` line". Name the batch, do not claim it, and tell the user to re-run `/triage`. Without this the record can say a batch needs judgment while a mechanical agent claims it.
 
 ### 1b. Scoped body pass
@@ -214,7 +214,7 @@ Each batch is pushed to origin but NOT merged to main. All merging is deferred t
 **For each batch**, use the **Agent tool** to spawn a subagent:
 - `description`: `"Fix review batch <N>"`
 - Do **NOT** set `isolation: "worktree"` — the agent must work in the existing worktree created by `batch_work.sh`
-- Set `model: "sonnet"` <!-- sysop:role=mechanical --> — the **mechanical** role (`.claude/served_models.yml`). These fix agents apply prescriptive, mechanical changes, so they are pinned to the cheap tier, not the reasoning tier (Opus is reserved for adversarial review — the verification pass below and `/review-close`'s convention gate). The sibling scan (Step 1b of the agent prompt) and post-fix convention verification (Step 5) are scoped checks of the just-edited files, not broad adversarial review. A consumer who prefers cost-follows-session can set `mechanical: inherit` in `.claude/served_models.local.yml`.
+- Set `model: "sonnet"` <!-- sysop:role=mechanical --> — the **mechanical** role (`.claude/served_models.yml`). These fix agents apply prescriptive, mechanical changes, so they are pinned to the cheap tier, not the reasoning tier (Opus is reserved for adversarial review — the verification pass below and `/review-close`'s convention gate). The sibling scan (Step 1b of the agent prompt) and post-fix convention verification (Step 5) are scoped checks of the just-edited files, not broad adversarial review. A consumer who wants a different tier here remaps `mechanical` in `.claude/served_models.local.yml` — **to one of `opus`/`sonnet`/`haiku`/`fable`, not to `inherit`.** This pin is *inline*: its value is handed to the Agent tool's `model` parameter, which is a closed enum, so `inherit` (and `best`, and a full model id) is rejected at spawn time and would break this very agent. Cost-follows-session is not available for an inline pin.
 
 Pass this prompt to the agent, filling in all placeholders:
 
@@ -308,7 +308,7 @@ If nothing to commit (all fixes were already applied), skip to step 5 (push) —
 cd <WORKTREE_PATH> && <VERIFY_COMMAND>
 ```
 
-Pass `timeout: 600000` to the Bash tool call (10 min) — the default 120s is too short for full pytest suites or `npm run build`. If the command exceeds the timeout, treat it as a verify failure and report `VERIFY: TIMEOUT` in Step 7.
+Pass `timeout: 600000` to the Bash tool call (10 min) — the default 120s is too short for full pytest suites or `npm run build`. If the command exceeds the timeout, **do not treat it as a verify failure.** A timeout is a statement about the *measurement*, not about the code: the command was killed, so it returned no verdict and the work is **unverified** — not verified-broken. Report `VERIFY: TIMEOUT` in Step 7 and **skip § 4 entirely**; that section makes a one-shot code edit to fix a failure, and there is no failure here to read. Editing code on a timeout changes working code on no evidence. Raise the timeout and re-run if you can, and say that it took two attempts.
 
 If verify output exceeds 150 lines, focus on the first failure only — errors appear near the top.
 
@@ -379,13 +379,15 @@ For each agent (parallel or sequential), read its response. Extract:
 - Number of tasks fixed
 - Any errors
 
-If an agent reports FAIL or TIMEOUT, note the batch as failed and continue.
+If an agent reports `STATUS: FAIL`, note the batch as **failed** and continue. `STATUS: PASS` beside `VERIFY: FAIL` is a malformed report — § 4 re-verifies after its one fix attempt, so a passing status cannot honestly ride a failed verify; treat the batch as **failed** (fail-closed) and name the inconsistency in Step 5's Failed table. If it reports `VERIFY: TIMEOUT`, the batch is **unverified, not failed** (Phase 222, Q-283): the verify command was killed and returned no verdict — the same fact the agent instruction in § 3 states, three sections up — so recording it as failed would be a statement about the code made from a measurement that never ran. Note it as **unverified** and continue; it gets its own Step 5 table, and closing it requires a verify re-run first.
 
-### 4d. Opus Verification Pass (for every PASS batch)
+### 4d. Opus Verification Pass (for every PASS batch — `STATUS: PASS` *and* `VERIFY: PASS`)
+
+A `VERIFY: TIMEOUT` batch is excluded even when its `STATUS` says PASS: this pass certifies a verified diff, and there is no verified diff to certify — re-run verify first (Step 4c's unverified disposition), then send it through here.
 
 Sonnet's sibling-scan (Step 1b of the agent prompt) and post-fix convention check (Step 5) are weaker than Opus's on the same prompts — prior runs have shown Sonnet-missed siblings (`fix(batch-449): ExportEngine setTimeout`) and cross-convention regressions (`fix: truncate before redact_api_keys`) that only Opus catches reliably. This pass is the scoped safety net.
 
-For each batch that reported `STATUS: PASS`, spawn an **Opus** subagent to re-review the branch's committed diff. Run these in parallel across batches (single message, multiple Agent tool calls, all with `run_in_background: true` — same rolling-window refill used in Step 4b).
+For each batch that reported `STATUS: PASS` **and** `VERIFY: PASS` (a `VERIFY: TIMEOUT` batch is unverified and skips this pass — see 4c), spawn an **Opus** subagent to re-review the branch's committed diff. Run these in parallel across batches (single message, multiple Agent tool calls, all with `run_in_background: true` — same rolling-window refill used in Step 4b).
 
 Use the Agent tool with:
 - `subagent_type`: `"general-purpose"`
@@ -533,6 +535,11 @@ After all batches are processed, print:
 |-------|-------|-------------|
 | 203   | Data Exposure & Alerting | TASK-1124: open-ended sanitizer choice |
 | 205   | Security Configuration | TASK-1127: requires GCP LB knowledge |
+
+### Unverified (verify timed out — no verdict; re-run verify before closing)
+| Batch | Title | Verify Command |
+|-------|-------|----------------|
+| (none) | | |
 
 ### Failed (needs investigation)
 | Batch | Title | Error |

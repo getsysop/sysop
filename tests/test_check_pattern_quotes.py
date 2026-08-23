@@ -540,7 +540,7 @@ def test_workflow_still_shows_the_sql_fstring_example():
 # keyword, which is the second quote) and the PREFIX (`F"…"`, `fr"…"` and `Fr"…"`
 # are all legal Python f-strings; only `rf` matched, by accident of `f` sitting
 # against the quote). Same class as #235 — "scanned half its subject, reported
-# the other half clean" — on one of the registry's FOUR `severity: critical`
+# the other half clean" — on one of the registry's `severity: critical`
 # checks (not the only one: see Q-061, a standing open item about exactly that
 # false phrasing, which this phase re-minted and its own round caught).
 #

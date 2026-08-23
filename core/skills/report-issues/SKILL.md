@@ -214,8 +214,18 @@ convention *proposal* still files fine as `bug` and the maintainer relabels it
 would need the `pack_or_convention` body shape, not the `bug_report` one, and
 the friction log's shape is bug-report-shaped — not worth the divergence yet.)
 
-**Body:** map the entry's sections onto the `bug_report` template shape. Render
-it as literal markdown the human can read in full:
+**Body:** render the entry onto the `bug_report` template shape below as
+literal markdown the human can read in full.
+
+**The five headings below are a mapping, not a filter.** Any `###` section the
+entry carries that is not sourced by one of them is appended verbatim, under its
+own heading, in the remainder slot the template marks below — after
+`**Workaround the reporter used (if any)**` and before `**Environment**`. This skill ships in the loop-mode funnel default — it is the
+transport a new user files their first issue with — and a fixed five-heading
+mapping silently discarded everything a reporter wrote outside it. Enumerating
+the extra headings is what fails, because consumers invent them: the entry file
+is explicitly *"deliberately loose, consumer-restructurable markdown"* (see
+§ above), so the rule has to be "carry the remainder", not "carry these names".
 
 ```
 **What happened**
@@ -234,12 +244,22 @@ it as literal markdown the human can read in full:
 <the entry's ### Workaround in <consumer>, if present — useful upstream signal
 that the tester was blocked and how they unblocked>
 
+<every remaining `###` section of the entry, in the entry's own order, each
+ under its own `**<heading text>**` line, verbatim. Omit this block entirely
+ when there are none — do not emit an empty heading.>
+
 **Environment**
 - Reported from: <consumer> (via SYSOP_ISSUES.md / /report-issues)
 - Sysop commit or install date: <from .claude/sysop.lock if readable, else "unknown">
 ```
 
-Include only the sections the entry actually has — a loose entry may omit some.
+**Include only the sections the entry actually has — a loose entry may omit
+some. That means: do not invent a section the entry lacks. It does NOT license
+dropping a section the entry HAS because no heading above names it.** Read
+against a fixed template, that sentence is genuinely two-way, and the resolution
+was being left to the model — which is why the same skill truncated on some runs
+and not others, and why the upstream report could describe the loss as
+run-to-run non-determinism without being able to say what caused it.
 Do not invent content. Keep the reporter's words; don't rewrite their diagnosis
 into your own.
 

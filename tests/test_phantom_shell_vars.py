@@ -376,8 +376,19 @@ def test_claim_task_states_the_rule_its_own_heredocs_broke():
 
 def test_review_close_step4a_merge_operands_are_literals():
     text = _skill("review-close")
-    assert '1. `git checkout <branch> && git rebase "<merge target>"`' in text
-    assert '2. `git checkout "<merge target>" && git merge --ff-only <branch>`' in text
+    # Phase 219 (`Q-265`) split items 1-2 into a published / local-only pair, because
+    # rebasing a PUBLISHED branch in place rewrites history the remote already has. Both
+    # arms of both commands have to stay literal — a `$` in either is the phantom-variable
+    # class this module exists for, and the published arm added two new operand sites.
+    for operand in (
+        '`git checkout <branch> && git rebase "<merge target>"`',           # local-only rebase
+        '`git checkout "<merge target>" && git merge --ff-only <branch>`',  # local-only ff
+        # The published arm never rebases (the temp-ref variant was withdrawn by the
+        # round: it left the branch's commits off the merge target, so Step 4c read a
+        # merged branch as NOT-MERGED and Step 6's `git branch -d` refused).
+        '`git checkout "<merge target>" && git merge --no-ff -m "merge <branch> (published — not rebased)" <branch>`',
+    ):
+        assert operand in text, f"Step 4a merge operand missing or no longer literal: {operand}"
     # Not a bare "`$MERGE_TARGET` appears nowhere" check: the surrounding prose names the
     # variable in order to explain why it is empty here, and a text search cannot tell that
     # from a live command. Ask the production predicate instead — which also means this
@@ -566,3 +577,36 @@ def test_inline_detector_covers_the_command_words_the_corpus_prescribes_in():
     ):
         line = f"Then run `{span}`.\n"
         assert [s for _, s in S.phantom_inline_commands(line)] == [span], span
+
+
+# --------------------------------------------------------------------------------------
+# 5. $ARGUMENTS never inside a fence (Phase 222, Q-013)
+# --------------------------------------------------------------------------------------
+
+def test_arguments_is_never_interpolated_into_a_fence():
+    """`$ARGUMENTS` is ENV_PROVIDED for the *phantom* question — the harness really does
+    supply it — but it is supplied TEXTUALLY, substituted into the skill body before
+    bash parses anything. Inside a fence that makes it a command-rewrite vector: a `"`
+    in the argument string closes any quoting, `;` starts a new command, and the
+    unquoted form word-splits and glob-expands. Three shipped sites did this
+    (`next-task`, `codebase-review`, `security-audit`); Phase 222 converted each to
+    parse-then-pass — the agent substitutes recognized flags into a placeholder, and
+    the raw string never reaches a command line. Prose mentions ("Parse `$ARGUMENTS`")
+    are fine and are most of the corpus; fences are the class this forbids.
+    """
+    offenders = []
+    for f in S.skill_files():
+        text = f.read_text(encoding="utf-8")
+        for start_line, block in S.fenced_blocks(text):
+            for off, ln in enumerate(block.splitlines()):
+                # `${ARGUMENTS}` too (round survivor AR-1): the braced form dodges a
+                # literal substring, ENV_PROVIDED exempts the name from the phantom
+                # check — and per the Phase 188 record the harness does not
+                # substitute it at all, so the fence runs with silently empty args.
+                if re.search(r"\$\{?ARGUMENTS\b", ln):
+                    offenders.append(f"{f.parent.name}/SKILL.md:{start_line + off}: {ln.strip()[:80]}")
+    assert not offenders, (
+        "`$ARGUMENTS` interpolated inside a code fence — textual substitution happens "
+        "before bash parses, so the argument string can rewrite the command (Q-013). "
+        "Use the parse-then-pass placeholder shape instead:\n" + "\n".join(offenders)
+    )

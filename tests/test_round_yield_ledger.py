@@ -211,10 +211,28 @@ def test_the_finalization_check_is_not_vacuous():
     ledger = _ledger()
     row = re.search(r"(?m)^\|\s*174\s*\|.*$", ledger)
     assert row, "no 174 row to exercise the check against"
-    hollowed = ledger.replace(row.group(0), "| 174 | | | | | | | |", 1)
-    assert any("174" in p for p in row_problems(hollowed)), row_problems(hollowed)
-    drafted = ledger.replace(row.group(0), "| 174 | 3 × 1 | yes | pending | pending | pending | pending | pending |", 1)
-    assert any("draft" in p for p in row_problems(drafted)), row_problems(drafted)
+    # **Width is DERIVED, not hardcoded.** The first version wrote eight literal
+    # cells; when Phase 221 added two columns the probe's own rows became
+    # wrong-width, so `row_problems` reported a cell-count problem instead of the
+    # one under test and the draft half silently stopped exercising anything.
+    # A vacuity check that hardcodes the shape it is checking is the defect it
+    # exists to catch, one level up.
+    m = re.search(r"(?m)^\|\s*Phase\s*\|(.*)$", ledger)
+    assert m, "the ledger's schema table header is gone"
+    width = len(_split_cells(m.group(1)))
+    assert width >= 7, f"header derived to {width} cells — the probe is unsound"
+
+    hollowed = ledger.replace(row.group(0), "| 174 |" + " |" * width, 1)
+    assert any("empty cells" in p and "174" in p for p in row_problems(hollowed)), \
+        row_problems(hollowed)
+
+    drafted = ledger.replace(row.group(0), "| 174 |" + " pending |" * width, 1)
+    probs = row_problems(drafted)
+    assert any("draft" in p for p in probs), probs
+    assert not any("cells against" in p for p in probs), (
+        f"the draft row is the wrong WIDTH, so this exercises the cell-count "
+        f"check rather than the draft check: {probs}"
+    )
 
 
 def test_the_backfill_is_present():

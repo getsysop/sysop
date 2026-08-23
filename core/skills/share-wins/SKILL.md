@@ -217,11 +217,53 @@ Each win renders as one section of the comment body:
 
 ```
 ### <entry title>
-<the entry's ### What worked, verbatim>
+<EVERY subsection the entry has, in the entry's own order, verbatim — except
+ `### Environment`, which is dropped — each re-headed one level DEEPER than the
+ win title above, i.e. a `### What worked` in the entry becomes `#### What
+ worked` here>
 ```
 
-Keep the reporter's words; do not rewrite them. Include only what the entry
-actually has. Then print the **full assembled comment** exactly as it would be
+**Demote the carried headings by one level; do not paste them at their source
+depth.** A win entry is `## GOOD-NNNN — <title>` with `###` subsections, while
+this comment is `## Wins from <consumer>` with `###` per win. Carrying a
+subsection verbatim makes `### What worked` a *sibling* of the win titles either
+side of it, so the win boundaries disappear and a reader cannot tell a win from a
+section of one. Only the body text was carried before, so the nesting used to be
+right by accident; carrying the headings is what makes the depth load-bearing.
+
+**Carry every section, not just `### What worked`.** The shape above used to
+name that one section and nothing else, and the loss was permanent: Step 5
+writes a `**Shared:** <url>` line back to the entry, and `:193`'s backstop then
+makes it ineligible *no matter what its `Status:` says* — so the truncated copy
+is the only copy that ever goes upstream and no later run can carry the missing
+half. What got dropped was the half that makes a win a *registry* rather than
+applause — the part that says where a fix must sit to stay durable, or which
+future edit would destroy the property being praised.
+
+**Enumerating the titles is what fails, and the numbers rot too, so neither is
+written here.** Consumers invent their own headings for that half: one real
+corpus carried a protect-rationale under five different spellings (`### Why this
+is worth protecting`, `### Why it is worth protecting`, `### Why it is worth
+protecting from a future change`, `### Why a future change could lose it`, and a
+singleton), and that corpus roughly quadrupled between the measurement that
+motivated this fix and the phase that shipped it. A rule keyed to a list of
+titles would have been wrong on arrival. "Every section except `### Environment`"
+needs no list and no count to stay current, which is the whole reason it is
+phrased that way. If you want the current figures, derive them from the
+consumer's own `SYSOP_ISSUES.md`; do not quote a number from this file.
+
+`### Environment` is the one exclusion because the assembled comment already
+carries the consumer name and the Sysop commit in its own footer, so repeating a
+per-entry environment block is noise, not signal.
+
+Keep the reporter's words; do not rewrite them. **"Include only what the entry
+actually has" means: do not invent a section the entry lacks — it does NOT mean
+narrow the entry to the sections named here.** That sentence used to sit three
+lines below a template naming a single section, where it read both ways, and the
+resolution was left to the model: the same skill truncated on some runs and not
+others, which is exactly the run-to-run non-determinism the upstream report
+described and could not explain. An entry with no `### What worked` at all is
+still shared, under whatever headings it does have. Then print the **full assembled comment** exactly as it would be
 posted if every eligible entry were included — this is the shown-equals-posted
 payload (the consented subset is re-shown in Step 4 before the actual post):
 
@@ -232,10 +274,14 @@ Positive signal captured while running Sysop — things that worked notably well
 and are worth protecting from a future change.
 
 ### <win 1 title>
-<win 1 ### What worked>
+#### <win 1 subsection 1 heading>
+<its text, verbatim>
+#### <win 1 subsection 2 heading>
+<its text, verbatim>
 
 ### <win 2 title>
-<win 2 ### What worked>
+#### <win 2 subsection 1 heading>
+<its text, verbatim>
 
 ---
 Shared from <consumer> via /review-close Step 7 + /share-wins. Sysop commit/install: <from .claude/sysop.lock if readable, else "unknown">.

@@ -9,7 +9,9 @@
 #   1. git repo + install lock (.claude/sysop.lock) + install mode
 #   2. bash version (3.2+ supported; 4+ reported)
 #   3. a python3 that can `import yaml` (the validator / checks dependency),
-#      probed in the installer's own order: .venv → venv → PATH
+#      probed in run_checks.sh's order, not the installer's: the MAIN checkout's
+#      .venv then venv, then this checkout's, then PATH (a worktree carries no
+#      venv, so anchoring on the current root would answer about the wrong tree)
 #   4. git hooks armed (pre-commit / pre-merge-commit present + executable)
 #   5. optional scanners (semgrep, pip-audit, pyright) — advisory only
 #   6. review-round evidence (Phase 143): stale pending markers + asymmetric

@@ -773,8 +773,9 @@ def test_step3c_survives_the_shapes_that_used_to_kill_the_close():
     import tempfile as _tf
 
     text = SKILL.read_text(encoding="utf-8")
-    m = _re.search(r"\npython3 - \"\$SMOKE_WORKTREE_DIRS\" <<'EOF'\n(.*?)\nEOF\n",
-                   text, _re.DOTALL)
+    m = _re.search(
+        r"\npython3 - \"\$SMOKE_WORKTREE_DIRS\" \"\$APPROVED_BRANCHES\" <<'EOF'\n(.*?)\nEOF\n",
+        text, _re.DOTALL)
     assert m, "could not locate Step 3c's smoke-gate heredoc"
     src = m.group(1)
     assert "isinstance(fm, dict)" in src, "Step 3c lost its non-mapping guard"
@@ -792,7 +793,14 @@ def test_step3c_survives_the_shapes_that_used_to_kill_the_close():
         (pd / "prose.md").write_text("---\nwork in progress\n---\n", encoding="utf-8")
         (pd / "binary.md").write_bytes(b"---\nbranch: feat/x\nsummary: \xe9\n---\n")
 
-        r = _sp.run([sys.executable, str(d / "script.py"), ""],
+        # A damaged lock must not kill the close either: the gate now reads locks for
+        # this run's approved branches, and it runs BEFORE anything merges.
+        lk = d / "sysop" / "runtime" / "locks"
+        lk.mkdir(parents=True)
+        (lk / "TASK-0001.lock").write_bytes(b"branch: feat/x\nnotes: \xe9\n")
+        (lk / "damaged.lock").write_text("not a lock at all\n", encoding="utf-8")
+
+        r = _sp.run([sys.executable, str(d / "script.py"), "", "feat/x"],
                     cwd=d, capture_output=True, text=True)
 
     assert r.returncode == 0, (

@@ -5,7 +5,11 @@
 # Drop-in block to add to your project's pre-commit hook. Runs
 # sysop/scripts/check_skill_models.py only when the staged diff touches
 # .claude/skills/ or a .claude/served_models*.yml config, so non-skill
-# commits pay no cost.
+# commits pay no cost. Since Sysop Phase 222 (Q-020) the check runs against a
+# `git checkout-index` export of the staged .claude/ tree — the explicit
+# --root/--config/--local arguments below are load-bearing, NOT optional: the
+# script's defaults read the WORKING TREE, which is the false green this hook
+# was fixed for. Do not trim them.
 #
 # WHY: skills pin a ROLE (reasoning / mechanical / quick), not a model
 # name; served_models.yml maps each role to a model. When a model is
@@ -39,7 +43,7 @@
 # worktrees inherit the main repo's venv), then falls back to system
 # python3. check_skill_models.py defaults to .claude/skills/ +
 # .claude/served_models.yml (+ served_models.local.yml), so no arguments
-# are needed.
+# are needed — but this hook must NOT rely on those defaults; see above.
 STAGED_CLAUDE=$(echo "$STAGED" | grep -E '^\.claude/(skills/|served_models)' || true)
 if [[ -n "$STAGED_CLAUDE" ]]; then
   # Resolve the main repo's git dir (worktrees: .git/worktrees/<name>/
@@ -66,9 +70,21 @@ if [[ -n "$STAGED_CLAUDE" ]]; then
   elif [[ ! -f sysop/scripts/check_skill_models.py ]]; then
     block "skills: sysop/scripts/check_skill_models.py missing (re-run install.sh?)"
   else
-    MODELS_OUT=$("$PYTHON3" sysop/scripts/check_skill_models.py 2>&1) || {
-      block "skills: a model pin's role does not resolve to a served model:"
+    # Check the STAGED .claude/ tree, not the working tree (Sysop Phase 222,
+    # Q-020): this hook gates a commit, so it must read the content the commit
+    # will carry — a working-tree read passes a staged breakage whose disk copy
+    # was fixed without re-staging (and vice versa). `served_models.local.yml`
+    # stays the REAL one: it is gitignored runtime state, never in the index —
+    # the same reasoning the tasks-validate example applies to lock files.
+    STAGED_CLAUDE_EXPORT=$(mktemp -d "${TMPDIR:-/tmp}/sysop-staged-claude.XXXXXX")
+    git ls-files -z -- .claude/ | git checkout-index --prefix="$STAGED_CLAUDE_EXPORT/" -z --stdin
+    MODELS_OUT=$("$PYTHON3" sysop/scripts/check_skill_models.py \
+        --root "$STAGED_CLAUDE_EXPORT/.claude/skills" \
+        --config "$STAGED_CLAUDE_EXPORT/.claude/served_models.yml" \
+        --local .claude/served_models.local.yml 2>&1) || {
+      block "skills: a model pin's role does not resolve to a served model (in the STAGED tree):"
       echo "$MODELS_OUT" | sed 's/^/    /'
     }
+    rm -rf "$STAGED_CLAUDE_EXPORT"
   fi
 fi

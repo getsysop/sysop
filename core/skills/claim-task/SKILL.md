@@ -176,8 +176,23 @@ import sys
 try:
     import yaml
 except ImportError:  # PyYAML lives only in the project venv (BeanRider ISSUE-0049)
-    import glob
-    sys.path[:0] = glob.glob(".venv/lib/python*/site-packages")
+    import glob, os, subprocess
+    _sites = []
+    try:
+        _r = subprocess.run(
+            ["git", "rev-parse", "--git-common-dir"],
+            capture_output=True, text=True, timeout=5,
+            env={_k: _v for _k, _v in os.environ.items()
+                 if _k not in ("GIT_DIR", "GIT_WORK_TREE",
+                               "GIT_COMMON_DIR", "GIT_INDEX_FILE")},
+        )
+        _g = _r.stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        _g = ""
+    for _root in ([os.path.dirname(os.path.abspath(_g))] if _g else []) + ["."]:
+        for _layout in (".venv", "venv"):
+            _sites += glob.glob(os.path.join(_root, _layout, "lib/python*/site-packages"))
+    sys.path[:0] = _sites
     import yaml
 from pathlib import Path
 
@@ -263,6 +278,7 @@ python3 sysop/scripts/scope_overlap.py <TASK_ID>
 - Check its status (the backtick-wrapped status after the batch title):
   - `Pending` → available **unless `sysop/runtime/locks/<CLAIM_ID>.lock` exists**. A lock on a `Pending` batch is not a contradiction: `batch_work.sh` skips the `Pending` → `In Progress` commit when it is off `main`, when `review_tasks.md` is dirty, or when the pull fails, and still creates the worktree. So the lock is the more reliable of the two signals. If locked, report "already claimed" with the lock contents and stop.
   - `In Progress` → check for `sysop/runtime/locks/<CLAIM_ID>.lock`. If locked, report "already claimed" and stop. If no lock, it may be resumable — proceed (the script handles this).
+  - `Review Ready` → live, but past being worked (Phase 222, Q-014 — this ladder previously had **no arm** for it, so an explicit claim was undefined behaviour): the review work is done and the batch is waiting on a human to run `/review-close` on its branch. Report exactly that and stop — claiming it would put an agent on finished work. `batch_work.sh` refuses it without `--force` — and frames that override as claim-anyway over someone's completed review, not as the follow-up-work affordance (that framing belongs to the terminal three). Do **not** read it as the near-identical *terminal* status `Ready for Review` on the next arm.
   - `Merged`, `Complete`, `Ready for Review` → report current status and stop
 
 **`--resume <RUN_ID>` gets a batch past the "already claimed" stop, on the same terms as the roadmap `held` arm.** A batch that parked at Step 7c leaves its lock in place by design, so both locked rows above would otherwise refuse it — and a parked batch is exactly the case internal tracker #220 reported, since a review batch is the claim kind it happened on. When Step 1's `--resume` check passed and a lock exists, print the lock contents and — if the run has one — its `classification.md` verdict, then skip Step 4 (worktree, branch and lock all exist) and re-enter at Step 7-pre.
@@ -307,8 +323,23 @@ import sys
 try:
     import yaml
 except ImportError:  # PyYAML lives only in the project venv (BeanRider ISSUE-0049)
-    import glob
-    sys.path[:0] = glob.glob(".venv/lib/python*/site-packages")
+    import glob, os, subprocess
+    _sites = []
+    try:
+        _r = subprocess.run(
+            ["git", "rev-parse", "--git-common-dir"],
+            capture_output=True, text=True, timeout=5,
+            env={_k: _v for _k, _v in os.environ.items()
+                 if _k not in ("GIT_DIR", "GIT_WORK_TREE",
+                               "GIT_COMMON_DIR", "GIT_INDEX_FILE")},
+        )
+        _g = _r.stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        _g = ""
+    for _root in ([os.path.dirname(os.path.abspath(_g))] if _g else []) + ["."]:
+        for _layout in (".venv", "venv"):
+            _sites += glob.glob(os.path.join(_root, _layout, "lib/python*/site-packages"))
+    sys.path[:0] = _sites
     import yaml
 from pathlib import Path
 
@@ -485,7 +516,7 @@ Two options are offered:
 
 **This is the only entry point to Step 7, on a fresh claim and on a `--resume` alike.** No later stage is entered directly; the routing table below decides which one this run lands on.
 
-Every run of this pipeline gets its own directory. **This is what makes a stale artifact unreachable rather than merely detectable** — a re-invocation never looks in a previous run's directory, so it cannot inherit its `review.md`. That matters most on the batch path: `batch_work.sh`'s `write_batch_lock` is idempotent by design and leaves an existing lock **as-is** (`batch_work.sh:260-264`), and its status gate still admits a re-claim of a *live* batch — `Pending` unconditionally, `In Progress` as the sanctioned resume — so a batch re-invocation would otherwise find yesterday's artifacts sitting under a lock that still looks current. Keying on the lock's `started:` stamp does **not** close this — the stamp is preserved across exactly that re-claim.
+Every run of this pipeline gets its own directory. **This is what makes a stale artifact unreachable rather than merely detectable** — a re-invocation never looks in a previous run's directory, so it cannot inherit its `review.md`. That matters most on the batch path: `batch_work.sh`'s `write_batch_lock` is idempotent by design and leaves an existing lock **as-is** (`batch_work.sh:299-302`), and its status gate still admits a re-claim of a *live* batch — `Pending` unconditionally, `In Progress` as the sanctioned resume — so a batch re-invocation would otherwise find yesterday's artifacts sitting under a lock that still looks current. Keying on the lock's `started:` stamp does **not** close this — the stamp is preserved across exactly that re-claim.
 
 **The directory lives in the MAIN checkout, not the worktree**, resolved through `git rev-parse --git-common-dir`. Three properties depend on that and none of them survive a worktree-side path: Step 1 has to validate `--resume` *before* any lock is read, so the run must be discoverable before a worktree path exists; the artifacts have to outlive `git worktree remove` and `cleanup_worktrees.sh`, which is what the park previously needed a second copy for; and the orchestrator itself runs in the main checkout, alongside the hook-written envelopes. An earlier revision created it under `<WORKTREE_PATH>` while Steps 1 and 2 looked for it in the main checkout — the two never met, and every `--resume` was rejected.
 

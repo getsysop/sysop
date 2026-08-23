@@ -451,13 +451,18 @@ def test_the_caller_prints_the_writers_own_count_not_a_second_derivation(tmp_pat
     """
     cli = (REPO_ROOT / "core" / "companion" / "scripts" / "run_checks" / "cli.py"
            ).read_text(encoding="utf-8")
-    i = cli.index("write_baseline(baseline_file, all_findings, blocking_ids)")
-    call_line = cli[cli.rindex("\n", 0, i) + 1:cli.index("\n", i)]
-    # The variable's NAME is the author's business — renaming it is an ordinary edit
-    # and reddening on it would be over-strictness (lens 3's D15). What matters is
-    # that the call's result is bound and that the printed tally is that binding.
-    m = re.match(r"\s*([A-Za-z_][A-Za-z0-9_]*) = write_baseline\(", call_line)
-    assert m, f"the write_baseline result is not bound at the call site: {call_line!r}"
+    # Anchored on the ASSIGNMENT, not on a literal argument list. The first cut
+    # pinned `write_baseline(baseline_file, all_findings, blocking_ids)` verbatim
+    # and went red in Phase 217 the moment a fourth argument was added — an
+    # ordinary, correct edit. Pinning an argument list to test a binding is the
+    # over-strictness direction: it reports a failure that is not one, and the
+    # cheapest way through a false red is to weaken the guard. The property this
+    # test exists for is unchanged.
+    m = re.search(
+        r"^[ \t]*([A-Za-z_][A-Za-z0-9_]*) = write_baseline\(", cli, re.M
+    )
+    assert m, "no `<var> = write_baseline(` call site found in cli.py"
+    i = m.start()
     var = m.group(1)
     tally = next(ln for ln in cli.splitlines() if "baseline finding(s) to" in ln)
     assert "{" + var + "}" in tally, (

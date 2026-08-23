@@ -192,12 +192,52 @@ def is_baseline_suppressed(check_id, file_line, blocking_ids, baseline,
     return finding_key(check_id, file_line, identity) in baseline
 
 
-def write_baseline(path, all_findings, blocking_ids):
+def write_baseline(path, all_findings, blocking_ids, non_executed_ids=()):
     """Write baseline file containing all current findings. Returns the count.
 
     Atomic rewrite via `<path>.tmp` + `os.replace` so a crash mid-write
     never leaves a truncated baseline that future runs would then load
     as authoritative.
+
+    ``non_executed_ids`` names every check whose verdict this run cannot stand
+    behind: those that PRODUCED NOTHING (skipped, failed, unroutable —
+    `RunReport.non_executed_ids`) **and** those that ran over less than their
+    declared inputs (`degraded` — `RunReport.incomplete_ids`). **Their existing
+    baseline entries are carried forward verbatim instead of being dropped.**
+    The caller passes the union; the parameter keeps its name because what it
+    means to this function is "do not treat this check's silence as evidence".
+
+    The `degraded` half was missing from the first cut and was found by this
+    phase's review round. It mattered more than the arithmetic suggests: a
+    degraded stage produces zero *carried* entries but a non-empty findings
+    list, so the "carried forward unverified" warning the caller prints did not
+    fire either — the deletion was as silent as the one being fixed.
+    Without this the regeneration is a silent delete: a check that did not run
+    contributes zero findings, so a wholesale rewrite discards every entry it
+    owned and exits 0 with a `Wrote N baseline finding(s)` line that reads like
+    success. Measured on the one real corpus (86 entries): regenerating on a
+    machine without semgrep installed silently discarded all five `semgrep-*`
+    verdicts.
+
+    **The fix is to narrow the write, not to refuse the run.** Refusing here —
+    the way `--migrate-baseline` refuses when EVERY baselined check was skipped —
+    looks symmetrical and is not, for a
+    reason visible in this repo's own shipped defaults: `skipped` is the
+    UNIVERSAL STARTING STATE. Both coverage checks ship `blocking: true` with
+    placeholder `critical_path` globs, and five pack grep checks ship
+    `blocking: true` with placeholder paths, so a brand-new install has several
+    non-executed blocking checks before the consumer has done anything wrong.
+    (Do not carry that count without re-deriving it. It read "three" when this
+    docstring was written and was already five in the same commit, because the
+    phase writing it had just added two such checks. Derive it from the pack
+    fragments, never from here.) A
+    refusal keyed to `non_executed_ids` would refuse the baseline write on every
+    fresh install, and would remove the only escape from the `--migrate-baseline`
+    refusal that fires when every baselined check was skipped (see
+    `RunReport.non_executed_ids`).
+    Preserving costs nothing and loses nothing. (The design note recording that
+    trade-off is maintainer-side and does not ship; the argument above is the
+    whole of it.)
 
     Coverage findings are never written (see `_is_coverage`) — a baseline
     entry for a coverage gap would be a back-door around the Phase 61b
@@ -230,6 +270,17 @@ def write_baseline(path, all_findings, blocking_ids):
     # means the findings really are the same finding. Writing it once keeps the
     # file honest and makes the returned tally mean "suppressions recorded" rather
     # than "findings seen", which is what the caller prints it as.
+    # Entries owned by a check that did not run this pass. Read BEFORE the
+    # truncating open below — `tmp_path` is a sibling, but a caller that ever
+    # passes `path` as its own tmp would otherwise read what it just emptied.
+    preserved = set()
+    if non_executed_ids:
+        non_executed = set(non_executed_ids)
+        for key in load_baseline(path):
+            check_id = key.split("|", 1)[0]
+            if check_id in non_executed and not _is_coverage(check_id):
+                preserved.add(key)
+
     seen = set()
     with open(tmp_path, "w", encoding="utf-8") as f:
         f.write(
@@ -254,6 +305,12 @@ def write_baseline(path, all_findings, blocking_ids):
             key = finding_key(check_id, file_line, identity)
             if key in seen:
                 continue
+            seen.add(key)
+            f.write(f"{key}\n")
+        # Carried-forward entries last, sorted, so a diff of two regenerations
+        # is stable. A key already emitted above is not re-written: a check can
+        # be non-executed in one stage and produce findings in another.
+        for key in sorted(preserved - seen):
             seen.add(key)
             f.write(f"{key}\n")
     os.replace(tmp_path, path)

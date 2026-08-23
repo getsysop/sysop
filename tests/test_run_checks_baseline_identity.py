@@ -1734,3 +1734,42 @@ def test_a_genuine_collapse_is_still_dropped(tmp_path):
         str(p), [("lint-error", "a.js:1", "m", "no-unused-vars"),
                  ("lint-error", "a.js:1", "m", "no-new-func")], str(tmp_path))
     assert [r[0] for r in rows] == ["dropped-collapsed"], rows
+
+
+def test_the_failing_gate_offers_the_comment_preserving_route_first():
+    """Both blocking-failure branches must name a route that keeps comments.
+
+    Phase 213 fixed this on the stale-entry branch and left it standing on the
+    other one. Phase 215 made that branch reachable with no consumer edit at
+    all: a widened shipped pattern can turn a green gate red by itself, and the
+    only remedy then named was `--update-baseline`, which stamps a fixed header
+    and keeps no comment — on files that are mostly hand-written triage
+    rationale. `--print-keys` is the non-destructive route and has to be the
+    one the exit path leads with.
+    """
+    src = (Path(__file__).resolve().parents[1] / "core" / "companion"
+           / "scripts" / "run_checks" / "cli.py").read_text(encoding="utf-8")
+    marker = "new blocking finding(s) — "
+    branches = src.split(marker)[1:]
+    assert len(branches) >= 2, "expected both blocking-failure branches"
+    # The comment-preserving route DIFFERS by branch, which is why this asserts
+    # the property and not a literal: with stale entries present it is
+    # `--migrate-baseline` (converts in place, keeps comments); without them it
+    # is `--print-keys` (hand-append the keys you accept). Requiring one
+    # specific flag in both branches was this guard's first cut, and it
+    # false-failed on the branch that was already correct.
+    PRESERVING = ("--migrate-baseline", "--print-keys")
+    for branch in branches:
+        window = branch[:1200]
+        offered = [f for f in PRESERVING if f in window]
+        assert offered, (
+            "a blocking-failure branch offers no comment-preserving remedy; "
+            "`--update-baseline` stamps a fixed header and keeps no comment, "
+            "and a real baseline is mostly hand-written rationale"
+        )
+        if "--update-baseline" in window:
+            first_preserving = min(window.index(f) for f in offered)
+            assert first_preserving < window.index("--update-baseline"), (
+                "the destructive remedy must not be the first one offered"
+            )
+

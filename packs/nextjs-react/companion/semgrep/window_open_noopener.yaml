@@ -1,0 +1,42 @@
+rules:
+  - id: window-open-noopener
+    message: >
+      window.open(...) without `noopener` in the features string. The opened
+      document keeps a live `window.opener` handle back to this origin and can
+      navigate the opener to a phishing page (reverse tabnabbing). Pass
+      'noopener,noreferrer' as the third (features) argument.
+    severity: WARNING
+    languages: [typescript]
+    # AST twin of the `window-open-noopener` grep check in the pack's
+    # checks.yml.fragment. That twin is per-LINE and blocking, and its own
+    # `notes:` name the residual it cannot reach: a `window.open(` whose
+    # arguments are wrapped onto following lines puts the features string on a
+    # different line from the call, so the negative_pattern cannot see it and
+    # the call reports as a finding that has to be waived by hand. This rule is
+    # per-CALL and reads the AST, so a wrapped call is judged on its actual
+    # features argument.
+    #
+    # Four arities, because a missing features argument is as unsafe as a
+    # features argument that omits noopener. $FEATURES is matched as source
+    # text, so a call that passes a features *variable* flags — accepted, the
+    # rule cannot see through the binding and the safe spelling is a literal.
+    #
+    # `noopener` is matched as a WHOLE TOKEN, not as a substring. The bare
+    # substring form the extraction source ships lets unsafe feature strings
+    # through: `"width=200,noopenerX"` and `"my-noopener-thing"` both contain
+    # the letters and neither grants `noopener`. Both were demonstrated passing
+    # by the Phase 217 review round. The boundary spelling here matches the one
+    # the pack's grep twin already uses in its `negative_pattern`, so the two
+    # layers agree on what counts as the token.
+    patterns:
+      - pattern-either:
+          - pattern: window.open()
+          - pattern: window.open($EXPR)
+          - pattern: window.open($EXPR, $TARGET)
+          - patterns:
+              - pattern: window.open($EXPR, $TARGET, $FEATURES)
+              - metavariable-regex:
+                  metavariable: $FEATURES
+                  regex: '^(?!.*(?<![-\w])noopener(?![-\w])).*$'
+    # paths: intentionally omitted. Path scoping is declared in the pack's
+    # checks.yml.fragment stub entry (see core/companion/semgrep/README.md).

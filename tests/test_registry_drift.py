@@ -130,3 +130,120 @@ def test_every_filed_divergence_names_a_real_open_queue_entry(key):
             f"{key} is still suppressed but {qid} is ticked closed — remove the "
             "FILED_DIVERGENCES entry along with the fix"
         )
+
+def test_exclude_dir_is_a_compared_field():
+    """A path-scoping divergence is a real coverage divergence.
+
+    `exclude_dir` was absent from `COMPARED_FIELDS` until Phase 215, and the
+    gap it hid (`Q-261`) is the same shape as `Q-250`: a rule the consumer had
+    to strengthen locally, reported as zero drift. Dropping it again would make
+    that class invisible a second time, silently.
+    """
+    assert "exclude_dir" in registry_drift.COMPARED_FIELDS
+
+
+def test_divergence_provenance_is_derived_not_assumed():
+    """Rows are tagged from the overlay, and an absent overlay yields `unknown`.
+
+    Every entry the first sweep filed argued "upstream moved and we did not";
+    all four were the consumer overriding a shipped id in its own overlay. The
+    tag exists so that argument is derived rather than assumed — which means
+    the no-overlay case must be `unknown`, never `base-drift`. Asserting the
+    honest-default direction is the whole point: a tool that guesses
+    `base-drift` is the one that produced the wrong filings.
+    """
+    ours = {"c": {"pattern": "a"}}
+    theirs = {"c": {"pattern": "b"}}
+
+    no_overlay = registry_drift.divergences(ours, theirs)
+    assert [r[4] for r in no_overlay] == ["unknown"]
+
+    overridden = registry_drift.divergences(ours, theirs, {"c": {"pattern"}})
+    assert [r[4] for r in overridden] == ["overlay-override"]
+
+    # WHOLE-ENTRY: the overlay declaring ANY field of `c` makes every compared
+    # field of `c` the overlay's, because the installer substitutes the whole
+    # colliding entry. The first cut of this guard asserted `base-drift` here
+    # and would have RED-FAILED the fix — it pinned the defect it was written
+    # to prevent, which is why this case is spelled out rather than trimmed.
+    other_field = registry_drift.divergences(ours, theirs, {"c": {"severity"}})
+    assert [r[4] for r in other_field] == ["overlay-override"]
+
+    # An id the overlay does not mention at all IS base drift.
+    elsewhere = registry_drift.divergences(ours, theirs, {"other": {"pattern"}})
+    assert [r[4] for r in elsewhere] == ["base-drift"]
+
+    # `{}` is a real answer (no overrides), `None` is "did not look".
+    assert [r[4] for r in registry_drift.divergences(ours, theirs, {})] == ["base-drift"]
+
+
+def test_overlay_fields_reads_the_sibling_project_yml(tmp_path):
+    """`overlay_fields` looks beside the registry, and is empty when absent."""
+    assert registry_drift.overlay_fields(tmp_path / "checks.yml") == {}
+    (tmp_path / "checks.project.yml").write_text(
+        "checks:\n  - id: x\n    pattern: 'p'\n    severity: high\n",
+        encoding="utf-8",
+    )
+    got = registry_drift.overlay_fields(tmp_path / "checks.yml")
+    assert got == {"x": {"pattern", "severity"}}
+
+
+def test_main_actually_passes_the_overlay_to_divergences(tmp_path, capsys):
+    """The flagship mechanism has to be wired at its ONE real entry point.
+
+    Phase 215's round found `main()` could be changed to call
+    `divergences(ours, theirs)` — dropping the overlay entirely, reverting every
+    row to `unknown` while the header still announced the overrides — with the
+    whole suite green. A mechanism guarded only at the function it lives in is
+    guarded where nobody calls it.
+    """
+    reg = tmp_path / "checks.yml"
+    reg.write_text(
+        "checks:\n  - id: sql-fstring\n    pattern: 'DIVERGENT'\n", encoding="utf-8"
+    )
+    (tmp_path / "checks.project.yml").write_text(
+        "checks:\n  - id: sql-fstring\n    pattern: 'DIVERGENT'\n", encoding="utf-8"
+    )
+    registry_drift.main(["--gdp", str(reg)])
+    out = capsys.readouterr().out
+    assert "(overlay-override)" in out, (
+        "main() rendered no overlay-override row for an id the overlay declares "
+        "— the overlay is not reaching divergences()"
+    )
+    assert "unknown" not in out
+
+
+def test_every_field_the_filed_dict_keys_on_is_actually_compared():
+    """A suppression whose field is not compared silences nothing, silently.
+
+    `FILED_DIVERGENCES` is keyed `(check_id, field)`. Dropping that field from
+    `COMPARED_FIELDS` makes the row disappear, the suppression dead, and the
+    debt invisible — with every existing guard green. `invert_file_check` is the
+    live case: it is the field `Q-251` is entirely about.
+    """
+    keyed = {field for _cid, field in registry_drift.FILED_DIVERGENCES}
+    keyed |= {field for _cid, field in registry_drift.ACCEPTED_DIVERGENCES}
+    missing = sorted(keyed - set(registry_drift.COMPARED_FIELDS))
+    assert not missing, (
+        f"suppressed on field(s) the tool does not compare: {missing} — "
+        "the entry is dead and the divergence is invisible"
+    )
+
+
+def test_overlay_fields_survives_a_hand_authored_file(tmp_path):
+    """This file is consumer-authored, so it can be malformed in ordinary ways.
+
+    A crash here takes down the whole sweep; a silent `{}` would claim "no
+    overrides", which is a stronger statement than the evidence supports. Both
+    unreadable shapes return `None`, which renders as `unknown`.
+    """
+    reg = tmp_path / "checks.yml"
+    (tmp_path / "checks.project.yml").write_text("- a\n- b\n", encoding="utf-8")
+    assert registry_drift.overlay_fields(reg) is None          # top-level list
+    (tmp_path / "checks.project.yml").write_text("checks: [\n", encoding="utf-8")
+    assert registry_drift.overlay_fields(reg) is None          # invalid YAML
+    (tmp_path / "checks.project.yml").write_text(
+        "checks:\n  - id: 123\n    pattern: p\n  - not-a-dict\n", encoding="utf-8"
+    )
+    assert registry_drift.overlay_fields(reg) == {}            # nothing usable
+

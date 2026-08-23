@@ -5,7 +5,17 @@ THE DEFECT, and why it is the hard half of this phase. `claim_task.sh:86` cited
 correct at `adbf0cf~1`; the *same commit* that wrote the citation hoisted
 `MAIN_ROOT` above probe 3 and moved the hazard text to `:75-83`. A citation
 invalidated by its own commit, in a file that installs into consumer repos, and
-nothing could see it: the mirror gate asks whether the tree contains a blocked
+nothing could see it:
+
+It happened AGAIN in Phase 224, which is the argument for this registry pinning the
+literal range rather than only an anchor-in-range: that phase added two comment lines
+to `self_check.sh`'s header, shifting the hazard block to `:77-85`, and the citation
+at `claim_task.sh:86` went stale in the same commit for the second time in two phases.
+The anchor check alone would NOT have caught it — the anchor string stays inside a
+range shifted by less than the block length — but the registered range string no longer
+matched the tree, and that is what reddened. Keep both halves.
+
+Original note: the mirror gate asks whether the tree contains a blocked
 string, never whether a pointer still lands.
 
 LEG C WAS ALLOWED TO CONCLUDE "NOT GUARDABLE". It measured instead, and the
@@ -126,7 +136,7 @@ UNRESOLVED_ALLOWED = {
 # citation that was perfectly correct — a false positive in the guard's own
 # phase, which is how a real check gets an exemption written for it.
 CITATION_ANCHORS = {
-    ("core/companion/scripts/claim_task.sh", "self_check.sh:75-83"):
+    ("core/companion/scripts/claim_task.sh", "self_check.sh:77-85"):
         "then verify PyYAML on THAT interpreter",
     ("core/skills/auto-fix/SKILL.md", "archive_review_tasks.py:101"):
         "Merged|Complete",
@@ -137,7 +147,7 @@ CITATION_ANCHORS = {
     # Phase 209 retired `_parse_batches_fallback` (62 lines), moving this anchor
     # up. The anchor string is what makes that a caught drift rather than a
     # silent one.
-    ("core/skills/claim-task/SKILL.md", "batch_work.sh:260-264"):
+    ("core/skills/claim-task/SKILL.md", "batch_work.sh:299-302"):
         "left as-is",
     # Phase 211: this was written `(`:763-765`)` — a BARE self-citation, which
     # CITATION's regex cannot see because it requires a filename token before
@@ -147,23 +157,23 @@ CITATION_ANCHORS = {
     # Anchored on the rule's CONSEQUENCE clause, not on "NOT an exit-code
     # change" — that phrase also appears in the sentence doing the citing, so it
     # resolved to two lines and the staleness check could not tell them apart.
-    ("core/companion/scripts/close_batch.sh", "close_batch.sh:880-884"):
+    ("core/companion/scripts/close_batch.sh", "close_batch.sh:954-959"):
         "diagnoses failure by commit absence",
     # Phase 211: the duplicate-refusal comment used to assert that no shipped
     # skill derives the next batch number. These two are the only writers of
     # `### Batch` headers in the tree and both do, file-globally, which is why
     # the comment now cites them by line.
-    ("core/companion/scripts/batch_work.sh", "codebase-review/SKILL.md:164"):
+    ("core/companion/scripts/batch_work.sh", "codebase-review/SKILL.md:166"):
         "next_batch_number",
-    ("core/companion/scripts/batch_work.sh", "security-audit/SKILL.md:179"):
+    ("core/companion/scripts/batch_work.sh", "security-audit/SKILL.md:181"):
         "next_batch_number",
     # Phase 211's round found the same struck premise in review_index.py's own
     # docstring — the copy where it is load-bearing, since it justifies the
     # scoping decision. The author-side sweep missed it because the sentence
     # wraps across two lines there and the grep was line-oriented.
-    ("core/companion/scripts/review_index.py", "codebase-review/SKILL.md:164"):
+    ("core/companion/scripts/review_index.py", "codebase-review/SKILL.md:166"):
         "next_batch_number",
-    ("core/companion/scripts/review_index.py", "security-audit/SKILL.md:179"):
+    ("core/companion/scripts/review_index.py", "security-audit/SKILL.md:181"):
         "next_batch_number",
     ("core/skills/review-close/SKILL.md", "intake/SKILL.md:111"):
         "tasks/schema.md",

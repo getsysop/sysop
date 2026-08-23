@@ -261,8 +261,12 @@ class RunReport:
         The baseline migration's only question is "could this check have
         produced a finding?". A check that did not run produces none, so its
         entries look identical to entries whose findings are gone, and migrating
-        against such a run would delete them. `--update-baseline` guards only on
-        *failed* blocking checks and therefore still has that hole.
+        against such a run would delete them. `--update-baseline` guarded only on
+        *failed* blocking checks and had the same hole until Phase 217, which
+        closed it by PRESERVING the entries of every check in this set (and in
+        `incomplete_ids`) rather than by refusing — refusing there would reject
+        a baseline write on every fresh install, where `skipped` is the normal
+        starting state.
 
         **``degraded`` is deliberately NOT here, and the docstring used to say
         so while the code did the opposite.** This returned everything that was

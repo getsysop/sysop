@@ -56,7 +56,10 @@ except ImportError:
     # deliberately standalone for pre-commit (see _log.py's header).
     # tests/test_venv_pyyaml_bootstrap.py pins the five copies identical.
     _roots = []
-    for _cand in Path(__file__).resolve().parents[:3]:
+    # `list(...)` before the slice: slicing `PurePath.parents` is 3.10+
+    # (bpo-35498), and on 3.9 it raises TypeError from inside this very
+    # `except ImportError` — the interpreter the block exists to rescue.
+    for _cand in list(Path(__file__).resolve().parents)[:3]:
         if _cand not in _roots:
             _roots.append(_cand)
     try:
@@ -175,8 +178,28 @@ _AWS_ACCESS_KEY_RE = re.compile(r"\bAKIA[0-9A-Z]{16}\b")
 # Phase 35: manual_smoke heading-presence check (warn-only). Mirrors the
 # regex /review-close Step 3c uses for signal detection, so an author who
 # satisfies the validator's check also satisfies the skill's gate detection.
+# Phase 218 widened BOTH in lockstep, after a consumer report: the
+# original two phrases were an allowlist over free prose, so a procedure headed
+# `OPERATOR ACTION REQUIRED BEFORE MERGE` satisfied neither and the close
+# proceeded without ever asking. `user ops` is deliberately excluded — that
+# heading declares POST-merge operator steps (see schema.md § "User ops"),
+# and firing a pre-merge gate on it would train the operator to waive wholesale.
+# Keep this pattern BEHAVIOURALLY identical to the skill's — that is what
+# tests/test_review_close_smoke_gate.py asserts, over a corpus, in both directions.
+# It is deliberately not byte-identical and never was: the skill's copy wraps the
+# alternation in a capturing group, because it uses `m.group(1)` to measure heading
+# depth, and this one has no such consumer. Change the phrase list in both, together.
 _MANUAL_SMOKE_HEADING_RE = re.compile(
-    r"^#{1,6}\s+.*(manual\s+smoke|smoke\s+required)",
+    r"^#{1,6}\s+.*("
+    r"manual\s+smoke"
+    r"|smoke\s+(?:required|test)"
+    r"|manual\s+(?:verification|verify|test|check|step)"
+    r"|operator\s+action"
+    r"|human\s+action"
+    r"|requires?\s+a\s+human"
+    r"|before\s+merg(?:e|ing)"
+    r"|prior\s+to\s+merg(?:e|ing)"
+    r")",
     re.IGNORECASE | re.MULTILINE,
 )
 

@@ -83,7 +83,7 @@ done
 #
 #   * It PROBES rather than assuming. A blind `PATH=.venv/bin:$PATH` prepend
 #     would shadow a capable system interpreter with an incapable venv one —
-#     trading the reported failure for its mirror image. self_check.sh:75-83
+#     trading the reported failure for its mirror image. self_check.sh:77-85
 #     documents the same hazard, named from the probe side. (Phase 182 wrote
 #     this citation against :61-66 and then, in the same commit, hoisted
 #     MAIN_ROOT above probe 3 — moving the text it points at. It also said
@@ -360,6 +360,15 @@ if $RELEASE; then
   # Recorded at claim time — so the operator supplies only <TASK_ID>.
   LOCK_BRANCH=$(awk '/^branch:/{sub(/^branch: */, ""); print; exit}' "$LOCK_FILE")
   LOCK_WORKSPACE=$(awk '/^workspace:/{sub(/^workspace: */, ""); print; exit}' "$LOCK_FILE")
+  # `mode:` has been written by every claim since it existed and read back by
+  # NOTHING until Phase 220. That was harmless while `--clone` could not
+  # complete a claim (it aborted before the lock block), so no clone lock
+  # existed to release. Phase 220 fixed the claim, which made the release
+  # reachable — and `git worktree remove` fatals on a clone, so `--release`
+  # owned neither half of the reversal for exactly the mode this phase enabled.
+  # Found by the round, which is the "run the consumers, not just the change"
+  # rule doing its job one step downstream.
+  LOCK_MODE=$(awk '/^mode:/{sub(/^mode: */, ""); print; exit}' "$LOCK_FILE")
 
   echo "🔓 Releasing ${TASK_ID}"
   echo "   branch:    ${LOCK_BRANCH:-<none recorded>}"
@@ -382,7 +391,14 @@ if $RELEASE; then
       echo "   Tried .venv/bin/python3 and venv/bin/python3 under ${MAIN_REPO_ROOT} then ${REPO_ROOT}, then python3 on PATH." >&2
       echo "   fix: python3 -m venv .venv && .venv/bin/pip install pyyaml   (PEP-668-safe)" >&2
       echo "   Or run the manual reversal with an interpreter that has PyYAML:" >&2
-      echo "     git worktree remove ${LOCK_WORKSPACE:-<worktree>}   # add --force to discard uncommitted work" >&2
+      if [[ "$LOCK_MODE" == "clone" ]]; then
+        # `git worktree remove` fatals on a clone, so printing it here would
+        # hand the operator a command that cannot work — the same defect the
+        # release path itself carried until this phase's round.
+        echo "     rm -rf ${LOCK_WORKSPACE:-<clone dir>}   # a full clone, not a linked worktree" >&2
+      else
+        echo "     git worktree remove ${LOCK_WORKSPACE:-<worktree>}   # add --force to discard uncommitted work" >&2
+      fi
       echo "     rm ${LOCK_FILE}" >&2
       echo "     # then flip ${TASK_ID}'s status: in_progress → open in tasks/index.yml" >&2
       # Bare python3, NOT .venv/bin/python3: validate_tasks.py self-resolves venv
@@ -396,7 +412,22 @@ if $RELEASE; then
   fi
 
   # ── Remove the worktree (never the main worktree) ──
-  if [[ -n "$LOCK_WORKSPACE" && -d "$LOCK_WORKSPACE" ]]; then
+  if [[ "$LOCK_MODE" == "clone" ]]; then
+    # A clone is not a linked worktree: `git worktree remove` fatals on it
+    # ("is not a working tree"), with or without --force, and the claim is
+    # then left un-released with its lock intact — the state Phase 91 built
+    # --release to prevent. Release the lock and hand the directory back to
+    # the operator rather than deleting a full checkout that may hold work
+    # this script never saw.
+    if [[ -n "$LOCK_WORKSPACE" && -d "$LOCK_WORKSPACE" ]]; then
+      echo "ℹ️  Clone workspace ${LOCK_WORKSPACE} is a full clone, not a linked worktree."
+      echo "   The lock and the task status are being released; the directory is left in"
+      echo "   place because it can hold commits this repository has never seen."
+      echo "   Delete it yourself when you are sure: rm -rf ${LOCK_WORKSPACE}"
+    else
+      echo "ℹ️  No clone directory recorded, or already gone."
+    fi
+  elif [[ -n "$LOCK_WORKSPACE" && -d "$LOCK_WORKSPACE" ]]; then
     WS_REAL="$(cd "$LOCK_WORKSPACE" && pwd -P 2>/dev/null || echo "$LOCK_WORKSPACE")"
     MAIN_REAL="$(cd "$MAIN_REPO_ROOT" && pwd -P 2>/dev/null || echo "$MAIN_REPO_ROOT")"
     # `-ef` and `cwd_is_inside`, not string compares. `pwd -P` resolves symlinks
@@ -621,17 +652,112 @@ if [[ "$MODE" == "worktree" ]]; then
   # state is reported by `bash sysop/scripts/self_check.sh`.
 
 elif [[ "$MODE" == "clone" ]]; then
+  # ── Q-276: the documented invocation used to abort here ──────
+  #
+  # Reproduced by execution, both directions, before this fix. The branch is
+  # created LOCALLY above and never pushed; a clone of `origin` therefore has no
+  # such ref, `git checkout "$BRANCH_NAME"` failed with `pathspec ... did not
+  # match`, and `set -euo pipefail` exited 1 — AFTER creating the branch and the
+  # clone directory and BEFORE the lock block, so nothing recorded `mode:` or
+  # `workspace:`. The only `--clone` workspace that ever worked came from a
+  # branch someone had pushed out of band.
+  #
+  # A SECOND shape was found in the same pass and is the worse of the two,
+  # because it exits 0: with the clone directory already present the block
+  # short-circuited on "already exists" and never checked anything out, so the
+  # script printed `✅ Created branch` and `✅ Lock created`, wrote a lock naming
+  # `branch: <BRANCH_NAME>` and `workspace: <dir>`, and told the operator to
+  # start working — in a clone still sitting on `main`. `/review-close` Step 0
+  # arm (ii) resolves exactly that lock, and Step 3b then collects from it. A
+  # push-before-clone fix alone is INERT for this path, which is why both legs
+  # are here.
   REMOTE_URL=$(git remote get-url origin 2>/dev/null) || {
     echo "❌ No 'origin' remote found. Cannot clone." >&2
     exit 1
   }
+
+  # Publish the branch so the clone can see it. `--clone` is the one mode whose
+  # workspace reads from `origin` rather than from this repository's object
+  # store, so publishing is inherent to the mode, not an extra policy: a branch
+  # that exists only locally cannot be cloned by definition.
+  #
+  # Consequence worth stating rather than discovering: the branch is now a
+  # PUBLISHED branch, so `/review-close` Step 4a takes its published arm (the
+  # `--no-ff` merge, Phase 219 `Q-265`) instead of the local-only arm. That is
+  # the correct routing for a branch that really is on the remote.
+  # The directory refusals run BEFORE the push, so an invocation that is going
+  # to be refused does not first publish a branch. The first cut pushed at the
+  # top of the block, so `--clone` against an existing non-git directory left a
+  # new branch on origin and then exited 1 — a remote-side side effect of a
+  # command that did nothing locally. Pre-220 a claim never touched origin at
+  # all, so this is a new surface and worth ordering deliberately.
   if [[ -d "$WORKTREE_DIR" ]]; then
     echo "ℹ️  Clone directory '${WORKTREE_DIR}' already exists."
+    # Reporting success over a workspace on the wrong branch is the defect
+    # above. Verify, correct if we can, refuse if we cannot — never assume.
+    if ! git -C "$WORKTREE_DIR" rev-parse --git-dir >/dev/null 2>&1; then
+      echo "❌ '${WORKTREE_DIR}' exists but is not a git repository." >&2
+      echo "   Remove it or pick another branch name, then re-run." >&2
+      exit 1
+    fi
+  fi
+
+  # **Identity, not name.** The first cut probed only whether a branch of this
+  # NAME existed on origin and skipped the push if so — which is a different
+  # question from whether it is THIS branch. Reproduced by the round: claim with
+  # `--clone`, `--release --delete-branch` (which runs `git branch -D`, deleting
+  # the LOCAL ref only and leaving origin's), then re-claim. The local branch is
+  # recreated at `main`; origin still carries the abandoned one; the name probe
+  # passes, the push is skipped, and the clone checks out the ABANDONED commits.
+  # The operator is told "Start working!" on resurrected work, and
+  # /review-close Step 0 arm (ii) resolves that lock.
+  #
+  # This block was already written to verify-or-refuse the DIRECTORY ("never
+  # assume"); it assumed for the ref. Same rule, applied to both.
+  REMOTE_SHA=$(git ls-remote --exit-code --heads origin "$BRANCH_NAME" 2>/dev/null | awk '{print $1; exit}') || REMOTE_SHA=""
+  LOCAL_SHA=$(git rev-parse --verify --quiet "refs/heads/${BRANCH_NAME}") || LOCAL_SHA=""
+  if [[ -n "$REMOTE_SHA" && "$REMOTE_SHA" == "$LOCAL_SHA" ]]; then
+    echo "ℹ️  Branch '${BRANCH_NAME}' is already on origin at the same commit."
+  elif [[ -n "$REMOTE_SHA" ]]; then
+    echo "❌ origin already has a DIFFERENT '${BRANCH_NAME}'." >&2
+    echo "   local:  ${LOCAL_SHA:-<none>}" >&2
+    echo "   origin: ${REMOTE_SHA}" >&2
+    echo "   Cloning it would hand you someone else's work — or your own" >&2
+    echo "   abandoned work, if this name was released with --delete-branch" >&2
+    echo "   (which deletes the local ref and leaves origin's)." >&2
+    echo "   Pick another branch name, or reconcile the two refs first." >&2
+    exit 1
+  else
+    git push -u origin "$BRANCH_NAME" || {
+      echo "❌ Could not push '${BRANCH_NAME}' to origin." >&2
+      echo "   --clone builds its workspace by cloning origin, so the branch has" >&2
+      echo "   to exist there. Push it yourself, or use --worktree instead," >&2
+      echo "   which needs no remote." >&2
+      exit 1
+    }
+    echo "✅ Pushed '${BRANCH_NAME}' to origin."
+  fi
+
+  if [[ -d "$WORKTREE_DIR" ]]; then
+    EXISTING_BRANCH=$(git -C "$WORKTREE_DIR" branch --show-current 2>/dev/null || echo "")
+    if [[ "$EXISTING_BRANCH" == "$BRANCH_NAME" ]]; then
+      echo "✅ Existing clone is already on '${BRANCH_NAME}'."
+    else
+      git -C "$WORKTREE_DIR" fetch origin "$BRANCH_NAME" >/dev/null 2>&1 || true
+      if git -C "$WORKTREE_DIR" checkout "$BRANCH_NAME" >/dev/null 2>&1; then
+        echo "✅ Existing clone moved from '${EXISTING_BRANCH:-<detached>}' to '${BRANCH_NAME}'."
+      else
+        echo "❌ '${WORKTREE_DIR}' exists but is on '${EXISTING_BRANCH:-<detached>}'," >&2
+        echo "   and '${BRANCH_NAME}' could not be checked out there." >&2
+        echo "   Refusing to record it as this claim's workspace: a lock naming a" >&2
+        echo "   workspace on the wrong branch sends /review-close Step 3b to" >&2
+        echo "   collect from it. Resolve the directory, then re-run." >&2
+        exit 1
+      fi
+    fi
   else
     git clone "$REMOTE_URL" "$WORKTREE_DIR"
-    cd "$WORKTREE_DIR"
-    git checkout "$BRANCH_NAME"
-    cd "$REPO_ROOT"
+    git -C "$WORKTREE_DIR" checkout "$BRANCH_NAME"
     echo "✅ Cloned to '${WORKTREE_DIR}' and checked out '${BRANCH_NAME}'."
   fi
   WORKSPACE_PATH="$WORKTREE_DIR"

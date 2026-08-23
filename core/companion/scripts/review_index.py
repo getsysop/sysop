@@ -667,7 +667,7 @@ def duplicate_batch_numbers(lines):
     corrected it in ``batch_work.sh`` while missing THIS copy: its sweep
     grepped the sentence as one line, and here it wraps across two, so a
     line-oriented search could not see it. Its own round caught that.
-    ``codebase-review/SKILL.md:164`` and ``security-audit/SKILL.md:179`` — the
+    ``codebase-review/SKILL.md:166`` and ``security-audit/SKILL.md:181`` — the
     only two operational writers of ``### Batch`` headers — both derive
     ``next_batch_number`` = highest Batch N + 1, file-globally. It does not
     change this function's scoping decision, which rests on the template's
@@ -698,6 +698,133 @@ def duplicate_batch_numbers(lines):
             # for a batch the file records twice.
             seen.setdefault(str(int(m.group(1))), []).append(i + 1)
     return {n: ls for n, ls in seen.items() if len(ls) > 1}
+
+
+# Extracts the number from a line the permissive twin matched. Deliberately its
+# OWN pattern rather than a group on `_BATCH_HEADER_ANY_RE`, so the twin's text
+# is left exactly as its three siblings carry it.
+#
+# **The first version of this comment claimed the twin is "pinned byte-identical
+# across four modules" by `test_fenced_mask_bodies_are_identical_in_all_parsers`.
+# That test pins `_fenced_mask`, not the twin, and nothing in the tree compares
+# the twin across modules at all** — the round checked. The four are not even
+# byte-identical: `archive_review_tasks.ANY_BATCH_HEADER_RE` already carries a
+# capture group. Keeping this pattern separate is still right (four hand-kept
+# copies should not diverge on a whim), but it is a convention, not an enforced
+# invariant, and saying otherwise invents a guard a reader would rely on.
+_NEAR_MISS_NUMBER_RE = re.compile(r"^###\s+Batch\s+(\d+)\b")
+
+
+def near_miss_batch_headers(lines):
+    """Lines that LOOK like a batch header but that the strict readers reject.
+
+    Not "that no reader can act on" — an earlier version said that and it is
+    false in two directions this phase established itself: `next_task.py`
+    deliberately keeps an ASCII-hyphen tolerance (so it offers such a batch as
+    claimable, which `batch_work.sh` then refuses), and `close_batch.sh` closes
+    one through its grep fallback. The disagreement IS the defect; "nobody sees
+    it" would be a tidier problem than the one that exists.
+
+    Returns ``[(lineno_1based, number_or_None, text), ...]`` for every UNFENCED
+    line the permissive twin matches and the strict pattern rejects.
+
+    **This is the canon's enforcement surface, and it exists because narrowing
+    a reader is the wrong lever.** `WORKFLOW.md`'s two batch-metadata templates
+    and both operational writers (`codebase-review/SKILL.md`,
+    `security-audit/SKILL.md`) already emit the strict shape — em-dash,
+    backticked status — so the contract was never in doubt. What was missing is
+    that a header MISSING that shape disappears silently: this module's parser
+    and `sitrep_survey.py` drop it without a word, and `next_task.py`'s docstring
+    still claims a stderr warning its code never emits (its only stderr write for
+    a header is a non-integer-number branch that its own digits-only capture
+    group makes unreachable). **Phase 220 did not fix that** — `next_task.py` is untouched by
+    it — and an earlier version of this sentence said "until Phase 220", which
+    asserted a correction that was never made.
+
+    **Why detection rather than tolerance.** Widening the strict patterns to
+    accept an ASCII hyphen would make every currently-invisible header appear at
+    once across `/sitrep`, `/next-task`, `/roadmap`, `/triage`, `/auto-fix` and
+    `/auto-judge` — on consumer trackers nobody can migrate. No shipped tool
+    MIGRATES header spellings: the three that rewrite `review_tasks.md`
+    (`close_batch.sh`, `batch_work.sh`, the archiver) only ever flip a status
+    token or relocate a round, and `install.sh`'s never-sweep guard names the
+    file explicitly. Making things APPEAR silently is the same defect class as
+    making them disappear silently, pointed the other way.
+
+    **Why this is not `duplicate_batch_numbers`' predicate.** That function must
+    use the STRICT pattern and its docstring records why: counting near-misses
+    as declarations produced a false "would silently pick one and discard the
+    other" plus a remedy ("renumber one of them") that did not apply. A
+    near-miss is not a duplicate. It is a line no reader acts on, which is a
+    different fact and gets a different message.
+
+    Fenced lines are excluded via the shared `_fenced_mask`, so a documentation
+    example inside a BALANCED fence is not reported — same rule the parser uses.
+    An unterminated fence is deliberately ignored by `_fenced_mask` (honouring
+    one would disable parsing to end-of-file), so its contents ARE reported;
+    `--check-fences` is the surface for that condition.
+
+    **Trailing whitespace is NOT a near miss, and that is a correction from this
+    function's own review round.** The strict pattern is `$`-anchored, so
+    ``### Batch 1 - Alpha `Merged` `` with one trailing space fails it — but the
+    archiver's own ``BATCH_HEADER_RE`` is *not* end-anchored and has always
+    archived that header. Refusing over it was a regression: a tracker that
+    archived cleanly before Phase 220 refused whole-run after it, and the
+    operator was shown an ``rstrip``ped line that looked perfectly canonical
+    beside a diagnosis about a missing em-dash they were staring at. Trailing
+    whitespace is invisible in rendered markdown and is not what the canon is
+    about, so it is normalised away before the test. (``--range`` still cannot
+    match such a header — that inconsistency predates this phase and is filed,
+    not widened into here.)
+    """
+    mask = _fenced_mask(lines)
+    out = []
+    for i, line in enumerate(lines):
+        if mask[i]:
+            continue
+        stripped = line.rstrip()
+        if _BATCH_HEADER_RE.match(stripped):
+            continue
+        if not _BATCH_HEADER_ANY_RE.match(stripped):
+            continue
+        m = _NEAR_MISS_NUMBER_RE.match(stripped)
+        out.append((i + 1, str(int(m.group(1))) if m else None, stripped))
+    return out
+
+
+def describe_near_misses(near_misses, filename):
+    """The one wording for a near-miss report, so surfaces cannot drift apart.
+
+    Returns a list of lines. Callers decide the stream and the exit code; what
+    they must not do is invent a second phrasing for the same fact.
+    """
+    lines = [
+        f"WARNING: {filename} has {len(near_misses)} batch header(s) that do "
+        f"not match the canonical shape:"
+    ]
+    for lineno, _num, text in near_misses:
+        lines.append(f"         :{lineno} — {text}")
+    lines.append(
+        "         The canonical shape is: ### Batch <N> — <Title> `<Status>` "
+        "(em-dash, backticked status)."
+    )
+    lines.append(
+        "         The readers disagree about these lines, which is the point: "
+        "/sitrep and the"
+    )
+    lines.append(
+        "         archiver do not see them at all; /next-task DOES (it tolerates "
+        "an ASCII hyphen)"
+    )
+    lines.append(
+        "         and will offer one as a claimable batch that batch_work.sh "
+        "then refuses;"
+    )
+    lines.append(
+        "         close_batch.sh closes them via its grep fallback. Nothing "
+        "counts them consistently."
+    )
+    return lines
 
 
 def _read_source_lines(path=None):
@@ -929,6 +1056,11 @@ def main():
              "on purpose: per-round renumbering is legal, so a whole-file "
              "refusal would reject a valid tracker."
     )
+    parser.add_argument(
+        "--check-headers", action="store_true",
+        help="Exit 6 if any unfenced line looks like a batch header but does "
+             "not match the canonical shape (Q-017/Q-037/Q-242/Q-274)."
+    )
 
     args = parser.parse_args()
 
@@ -1035,6 +1167,28 @@ def main():
     # reject a legal shape. Refusing only the number being acted on stops the
     # operator exactly when acting would be a coin flip, and leaves every
     # unambiguous batch on that file usable.
+    # ── Near-miss headers (Q-017/Q-037/Q-242/Q-274) ──────────────
+    #
+    # Exit 6. Codes in use: 1 error, 2 argparse, 3 structural fence, 4 duplicate
+    # batch, 5 open fence. Unlike `--check-duplicates` this is NOT probed by any
+    # caller, so it is free to refuse.
+    #
+    # Whole-file, unlike `--check-duplicates`'s deliberate per-number scoping —
+    # and the asymmetry is the point. That scoping exists because per-round
+    # renumbering is a LEGAL tracker shape, so a whole-file duplicate refusal
+    # would reject valid work. There is no legal shape in which a header misses
+    # the canonical form on purpose: `WORKFLOW.md`'s two batch-metadata
+    # templates document one spelling and both operational writers emit it. So
+    # nothing valid is rejected by reporting all of them.
+    if args.check_headers:
+        near = near_miss_batch_headers(_read_source_lines())
+        if not near:
+            print("no near-miss batch headers")
+            sys.exit(0)
+        for line in describe_near_misses(near, os.path.basename(TASKS_FILE)):
+            print(line, file=sys.stderr)
+        sys.exit(6)
+
     if args.check_duplicates is not None:
         n = str(args.check_duplicates)
         dupes = duplicate_batch_numbers(_read_source_lines())
@@ -1049,6 +1203,43 @@ def main():
                 file=sys.stderr,
             )
             sys.exit(4)
+        # A near-miss for THIS number is not a duplicate and must not be
+        # reported as one (see `duplicate_batch_numbers`' docstring: the false
+        # "renumber one of them" remedy is exactly what a widened predicate
+        # produced). But `next_task.py`'s duplicate warning names this check as
+        # "the authority", so answering a bare "unambiguous" over a line no
+        # reader can act on is the check lying about its own subject — `Q-242`.
+        #
+        # The EXIT CODE deliberately stays 0. Two callers depend on it:
+        # `close_batch.sh`'s per-batch ambiguity check and `batch_work.sh`'s
+        # `refuse_on_duplicate_number` both branch on rc 4 alone, and
+        # `batch_work.sh`'s `require_index_parser` probe runs
+        # `--check-duplicates 0` and clears its result on ANY non-zero
+        # (`|| probe=""`), so a new refusal code here would make a near-miss
+        # numbered 0 refuse every batch_work.sh invocation in the repo.
+        # Refusal belongs to `--check-headers`, which no caller probes with.
+        near = [nm for nm in near_miss_batch_headers(_read_source_lines())
+                if nm[1] == n]
+        if near:
+            # **STDERR for the report, STDOUT for the answer, and the split is
+            # the whole of whether this fix reaches anyone.** The first cut put
+            # the report on stdout — and both automated callers capture stderr
+            # while DISCARDING stdout (`2>&1 >/dev/null`, `close_batch.sh` and
+            # `batch_work.sh`'s `refuse_on_duplicate_number`), so the fix for
+            # "the check lies about its own subject" was visible only on a
+            # hand-run. That is the same "addressed to an empty room" defect
+            # this phase fixes in `close_batch.sh`'s other half, committed in
+            # the same change. Found by the round.
+            #
+            # stdout still carries a one-line answer because
+            # `require_index_parser`'s probe fails an EMPTY stdout.
+            for line in describe_near_misses(near, os.path.basename(TASKS_FILE)):
+                print(line, file=sys.stderr)
+            print(
+                f"batch {n} has no duplicate STRICT header, but the line(s) "
+                f"reported on stderr declare it in a shape no reader parses."
+            )
+            sys.exit(0)
         print(f"batch {n} unambiguous")
         sys.exit(0)
 
