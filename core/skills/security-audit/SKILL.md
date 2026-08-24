@@ -236,7 +236,7 @@ Inventory Completeness — Unmapped Top-Level Entries:
   Exclusions without a stated reason: <entry list, or "none">
 ```
 
-*(`/codebase-review` runs the mirror of this check against `convention_map.md` — the map that keys **its** dispatch. Running both skills audits both maps; running only one leaves the other map's subtree coverage unasserted.)*
+*(`/codebase-review` runs the mirror of this check against `convention_map.md`. Running both skills audits both maps; running only one leaves the other map's subtree coverage unasserted.)*
 
 ### 2a-1. Files not matched by any security_map section
 
