@@ -847,8 +847,8 @@
     <div class="hero-grid">
       <aside class="hero-margin rise">
         <span class="line">Vol. <span class="accent">I</span></span>
-        <span class="line">Issue 185</span>
-        <span class="line">2026.08.05</span>
+        <span class="line">Issue 229</span>
+        <span class="line">2026.08.23</span>
         <span class="line" style="margin-top:22px">An essay on</span>
         <span class="line">software workflow</span>
       </aside>
@@ -871,7 +871,7 @@
             <div class="hero-stat-label">Skills</div>
           </div>
           <div class="hero-stat">
-            <div class="hero-stat-fig">185</div>
+            <div class="hero-stat-fig">229</div>
             <div class="hero-stat-label">Shipped phases</div>
           </div>
           <div class="hero-stat">
@@ -1243,7 +1243,7 @@
           </div>
           <div class="entry">
             <dt>Report &amp; release<span class="model-tag">read-side · person-gated tag</span></dt>
-            <dd>The arc's backward glance. <code>/daily-summary</code> reads the git log and the queue and answers <em>what happened</em> — yesterday in detail, the week in shape. <code>/roadmap</code> answers <em>what's left and in what order</em>, computing up to four orderings from the signals in <em>both</em> queues — roadmap tasks and review batches alike, so open security findings cannot sit outside the strategy view. When enough has merged, <code>/release</code> bundles the commits since the last tag into a proposed semver bump, a changelog entry, and an annotated tag — dry-run by default, person-gated like every merge.</dd>
+            <dd>The arc's backward glance. <code>/daily-summary</code> reads the git log and the queue and answers <em>what happened</em> — yesterday in detail, the week in shape. <code>/roadmap</code> answers <em>what's left and in what order</em>, computing up to four orderings from the signals in <em>both</em> queues — roadmap tasks and review batches alike, so open review work is surfaced in the same view as feature work rather than in a second queue nobody sequences. One honest limit, stated in the skill and worth repeating here: the portable read path reads whichever tree it is invoked in, so a run from a task worktree reports that branch's queues, not the main checkout's. When enough has merged, <code>/release</code> bundles the commits since the last tag into a proposed semver bump, a changelog entry, and an annotated tag — dry-run by default, person-gated like every merge.</dd>
           </div>
         </dl>
 
@@ -1391,6 +1391,38 @@
           <p>A third authoring rule had already shipped part-way through all this — earlier than the run above, which is why the run kept going — and it is the one that pays: <strong>run the commands your change prescribes</strong>, in a throwaway repo, before spawning anyone — with the fixture's inputs built from what the shipped code actually emits rather than from your own model of it. The two halves are not decoration. The same prescribed <code>git show</code> against the same fixture printed the file under the author's assumed path and exited 128 under the path every shipped writer really produces; the change's own new error branch would then have halted every run with a confident, wrong diagnosis. One of three reviewers found it, by building the repo and typing the command. The other two read the same files and did not.</p>
           <p class="muted">And the rule is necessary, not sufficient — which the log demonstrated on itself. Fifteen phases after it shipped, a sweep found sixteen live sites prescribing an interpreter path that is absent on a named and ordinary set of consumer machines — poetry, conda, a plain <code>venv/</code> layout, a system Python that refuses installation — three of those sites being the documentation still teaching the idiom. A rule about the commands you are adding does not sweep the commands already there.</p>
           <p><strong>Addendum (2026-08-11).</strong> The streak has not ended since this snapshot was cut. Two consecutive phases after it built mechanisms their own review rounds then rejected outright: one withdrew its headline fix after the round showed the fix was worse than the defect it closed, and the other built a reference table false for four of its six rows, with a guard that killed 2 of 26 independent mutations while false-killing 12 of 15 negative controls. Neither rejected mechanism merged. The record is kept because the trend is the finding — and because a review gate strong enough to reject its author's own work, with the rejection written down, is the property everything else on this page is trying to buy.</p>
+          <p><strong>Addendum (2026-08-23).</strong> The paragraph above narrates that streak by hand, which is
+          exactly the kind of claim this page keeps arguing should not be narrated by hand. It is now produced by a
+          committed derivation instead: a register recording every round's author-side battery beside the independent
+          lens result, and a test that fails when the register's own summary and the derivation disagree. Run against
+          the record at the time of writing, that derivation reports <strong>sixty-eight numbered phases, forty-six of
+          them claiming an author battery with every mutation killed, forty-four of those falsified by an independent
+          lens, two unchecked, and none intact</strong>. <em>Phases</em>, not rounds: the ledger also holds rounds that
+          are not phases, and conflating the two is a named error the derivation exists to prevent — one this
+          paragraph got wrong on its first draft. Two further honesties, since the subject here is hand-narrated
+          numbers: the derivation is maintainer-side and is not published with this page, so a reader outside the
+          repository is taking these on the record's word; and the figures here are a transcription of its output,
+          guarded by nothing, which is what dating an addendum is for. The register's own first draft was dismantled by its round for the same failure it exists
+          to catch — the first version of it read the denominator out of every &ldquo;N of M surviving&rdquo; cell, on four rows,
+          inflating the number each time.</p>
+          <p>The other thing the record gained is a failure of the round itself. Reviewers dispatched into isolated
+          working copies were landing on the <em>parent</em> commit rather than the one under review, because an isolated copy is
+          created from the repository's default branch rather than from the session's own commit — so under a
+          branch-and-pull-request policy, where a round always runs from a branch that has not merged yet, every
+          reviewer gets the pre-change tree deterministically rather than now and then. A reviewer reading the tree
+          without the change in it can only report that nothing is wrong, which is indistinguishable from a clean pass: a
+          dead review that looks like a healthy one, which is the failure this section exists to describe, arriving
+          inside the mechanism meant to prevent it. The remedy is to pin each reviewer to the exact commit and to
+          require the brief to gate on a symbol the change <em>introduced</em>, so a reviewer standing on the wrong
+          tree fails loudly instead of quietly agreeing.</p>
+          <p>The clearest case for what a round buys came from something no test could have produced. One step of one
+          skill stated two opposite dispositions for the same condition, two lines apart — <em>stop and ask</em>, and
+          <em>this is the benign shape, so proceeding is safe</em> — closing by advising the reader to say which case
+          they hit rather than silently picking, which concedes the ambiguity without resolving it. Two independent
+          reviewers, reading that file with no contact between them, implemented one disposition each: one halted the
+          close, the other consolidated the document and deleted the only copy. A test can check that a file says a
+          thing. It cannot notice that the file says two contradictory things and that which one governs depends on
+          where the reader starts.</p>
         </aside>
 
         <h3>Adjacent skills</h3>
@@ -1761,16 +1793,18 @@
           cross-harness trial, one install reported <code>890 finding(s) from 25 checks</code> while five of those
           twenty-five had actually executed; a security-mode run on the same install reported
           <code>0 findings from 13 checks</code> with every stage dead — output byte-indistinguishable from a
-          genuinely clean scan. Every selected check now ends in exactly one of three states: <em>executed</em>
+          genuinely clean scan. Every selected check now ends in exactly one of five terminal states: <em>executed</em>
           (ran to completion — a zero here is a real zero), <em>skipped</em> (a precondition was absent, so the tool
-          never ran), or <em>failed</em> (it started and broke). The summary reports all three numbers and names
-          each non-executed stage with its reason. A <em>failed</em> blocking check fails the gate outright: a
+          never ran), <em>failed</em> (it started and broke), <em>degraded</em> (it ran, but over less than its
+          declared inputs), or <em>unroutable</em> (it declares no form this runner can execute). The first three are
+          always reported; the other two appear only when non-zero, so the header stays legible on an ordinary run. Each
+          non-executed stage is named with its reason. A <em>failed</em> blocking check fails the gate outright: a
           crashed tool produces zero findings, and a green gate on top of that is a lie. <em>Skipped</em> is loud
           but never fatal, and warns only when the check is actually armed — a warning that fires from the first
           install forever just teaches people to ignore warnings. The gate is a backstop here rather than the fix:
           every shipped <em>semgrep</em> check is advisory — blocking is earned per-project, after a rule proves quiet
-          on your tree — so the crashed semgrep stage that motivated all this would not have tripped it. (Three shipped
-          grep checks do arrive <code>blocking: true</code>, two of them security checks — though their shipped paths are
+          on your tree — so the crashed semgrep stage that motivated all this would not have tripped it. (Five shipped
+          grep checks do arrive <code>blocking: true</code>, four of them security checks — though their shipped paths are
           placeholders, so their gates arm only once a consumer localizes them; on a localized install, a dead grep
           stage would trip it.) What closes that case is the summary contract itself, plus both review skills now being told to
           read it and carry every dead stage into the round. Where the cause is a missing trust store — the crash
@@ -1786,6 +1820,30 @@
           documentation defect and it is fixed as one: both review skills now state that at the point of invocation —
           along with the fact that running the script installs nothing, and that <em>not</em> having run it is a
           coverage gap rather than a clean scan.
+        </p>
+        <p>
+          <strong>Addendum (2026-08-23).</strong> The three-state vocabulary above was not enough, and the case it
+          missed is the one this section is really about. A scanner handed a <em>directory</em> does its own target
+          discovery, against a built-in ignore list that quietly drops test trees — and files excluded at discovery
+          never appear in the tool's own &ldquo;skipped&rdquo; report. So the stage ran, exited cleanly, and reported
+          zero findings over surface it had never read: <em>executed</em>, by every definition the runner had. The
+          fix was not a fourth check but a fourth and fifth <em>state</em> — <em>degraded</em>, for a stage that ran
+          over less than its declared inputs, and <em>unroutable</em>, for one that declares no form the runner can
+          execute. The first attempt at the underlying repair, enumerating every file instead of naming the
+          directory, was built and then withdrawn by its own review round, which named seven ways it was worse than
+          the defect.
+        </p>
+        <p>
+          The sharper finding is where the same silence turned up next. This page holds the deterministic layer up as
+          the part you can trust — one finding shape, one baseline, one blocking gate, no model in the loop. That
+          layer had two instances of exactly this failure inside it. The baseline that records accepted findings was
+          keyed by position rather than by identity, so editing an accepted line silently excused whatever replaced
+          it, and for a whole-stage producer like a dependency audit a single accepted entry suppressed every future
+          finding from that stage — new critical advisories included. Separately, a punctuation character in an
+          absolute path truncated every path in one branch of the runner, the containment guard then rejected all of
+          them, and the branch returned zero findings while the accounting reported it as <em>executed</em>. Both are
+          fixed. The point of recording them here is that the argument this section makes — a miss and a real zero are
+          the same output — was demonstrated inside the one layer the page had offered as the exception to it.
         </p>
         <p>
           <strong>A round that never finished.</strong> On one frontier non-Claude model,
@@ -1815,7 +1873,12 @@
           <code>Unlocalized</code> report line and on the localization backlog until those globs resolve.
           It composes with the map-driven coverage audit rather than replacing it: that one finds files no
           section matches inside territory some section already reaches; this one finds the territory nothing
-          reaches.
+          reaches. A third check, added later, closes the gap between them — it asks whether the <em>dispatch</em>
+          reaches the map. In the quality skill dispatch runs off a hand-authored table rather than being computed
+          from the maps; in the security skill it is keyed on the <em>categories</em> a matching section lists, so a
+          section whose categories no agent owns is matched and unaudited. Either way, a file matched by a section
+          that no reviewer reaches is <em>matched</em> — so both of the other two checks count it covered while nobody
+          reads it.
         </p>
         <p>
           <strong>A round nobody ran — by an agent that knew it should.</strong> The fifth shape is the least
@@ -1874,7 +1937,8 @@
           turning the question on its own publication step. The snapshot published to the public repository passes a set of leak
           gates before it ships. They ask whether the tree contains a blocked identifier, whether an excluded file
           slipped in, whether an excluded <em>class</em> is still tracked, and whether the old project names
-          have left new residue. Every one of them works. (A sixth pass counts known provenance classes and
+          have left new residue. Each of them works at the question it asks — though two turned out to be asking it
+          over less than the whole tree, which is the addendum below. (A sixth pass counts known provenance classes and
           is deliberately <em>not</em> a gate — mechanizing a judgement call as pass/fail would manufacture the
           very confidence this section is about.) None of them asks the
           question a reader actually depends on: <em>is this sentence true of the code beside it?</em> On one cut the
@@ -1889,6 +1953,32 @@
           <span class="muted">Mechanize the decidable half; say out loud that an independent reader owns the rest.
           A green gate that implies a coverage it was never asking about is the same silence as the other seven,
           one level further out.</span>
+        </p>
+        <p>
+          <strong>Addendum (2026-08-23).</strong> Two things about this paragraph were wrong, and the second is the
+          one worth carrying. First, the gates themselves: one of them read a whole tree with a text pipeline that
+          drops binary files, so a blocked identifier inside a binary read clean; another tested for an excluded
+          <em>directory</em> with a pattern that needs a trailing slash, so a plain <em>file</em> of the same name
+          would have published. Both were found by execution against planted fixtures, not by reading, and both are
+          closed. Second, and larger: the residue left over after mechanization was never only the undecidable half.
+          Every pass here reads file <em>content</em> and file <em>names</em>. Nothing read a commit
+          <em>header</em> — and the snapshot commits had been carrying a private author address, on published
+          commits, for weeks, reading green at every cut. That is not a judgement call a gate cannot make. It is a
+          decidable field nobody had thought to ask about, which is a different and more uncomfortable failure than
+          the one this paragraph was written to describe: the gate was not blind to something hard, it was blind to
+          something easy that sat outside the frame.
+        </p>
+        <p>
+          The repair to that is a scanner over commit headers, which now exists. The <em>other</em> half — what to do
+          about commits already published — produced the more transferable result. A history rewrite was built and
+          verified byte-for-byte: every tree hash identical, every message identical, dates unchanged, independently
+          reproduced by a second reader from a fresh clone. It was then refused. A force-push does not remove a
+          commit from a hosting provider: the pull-request refs still carry it, the orphaned commits still resolve by
+          SHA, and the automation run records keep their own copy. The rewrite would have cleared exactly one of those surfaces — a fresh clone of the
+          main branch — and left the same commits exposed on the other three, while permanently destroying the provider's
+          signature verification on nearly every commit in the repository. The reason to refuse it was not that it
+          was expensive. It was that it would have made the repository <em>look</em> clean — which is the one
+          property this entire page argues against, arriving as a remedy rather than as a bug.
         </p>
         <p>
           A miss and a real zero are the same output. That is the whole class, and it is why the fixes here are never
@@ -1930,8 +2020,12 @@
         </p>
         <p>
           The purest case is the contract with the executing agent itself. A skill is markdown an agent runs, and
-          <em>nothing carries from one fenced block to the next</em> — a <code>$VAR</code> that a block does not
-          itself assign is the empty string by the time the command runs. Two audits of the lifecycle skills found thirty-one such
+          <em>nothing carries from one fenced block to the next</em> — a named <code>$VAR</code> that a block does not
+          itself assign is the empty string by the time the command runs. Positional parameters fail in the opposite
+          direction, which is worse: the harness rewrites a bare, in-range <code>$1</code> or <code>$2</code> into a word from
+          the invocation <em>before bash sees the line</em>, fenced code included, so an
+          <code>awk</code> field reference in a skill body quietly becomes something else and prints a plausible wrong
+          answer rather than an empty one. The shipped rule is that a skill body contains no positionals at all. Two audits of the lifecycle skills found thirty-one such
           references, and the second audit's own review round found the last two, in a fifth file nobody had
           looked at. They are quiet in the worst way, because the shell does not object:
           <code>git -C "" rev-parse HEAD</code> does not fail, it runs in the current directory and prints a
@@ -1986,7 +2080,10 @@
           completed review of its whole assigned surface having opened eight of its eighty-two assigned files.
           Merged blind, that ships a clean verdict over a real hole. So each sub-agent returns an evidence footer —
           files opened versus assigned, plus the tool mix — and that is the load-bearing half, because
-          <em>opened 8 / assigned 82</em> is falsifiable in a way that "reviewed everything" is not. Provenance on a
+          <em>opened 8 / assigned 82</em> is falsifiable in a way that "reviewed everything" is not. The opened figure is not a bare count: the footer must <em>enumerate the paths</em>, so the claim's
+          writing cost grows with the claim. An earlier revision let the set be named by reference to the findings
+          instead, which made two of the checks reading it unsatisfiable by construction — dead checks that read as live.
+          Provenance on a
           merged row is then written from the orchestrator's vantage, so a sub-agent's own <code>[verified]</code>
           is never copied through unchallenged.
         </p>
@@ -2001,7 +2098,10 @@
           <em>opened</em> counts bodies actually read, with <em>grepped</em> kept separate so the two can never be
           quietly summed; <em>workers 0</em> means solo, and solo becomes a declared decision with a stated reason
           rather than a default nobody notices. A round that cannot open its whole scope is <code>Sampled</code>, not
-          <code>Full</code>. The numbers are still self-reported — nothing counts file reads for you — and the honest
+          <code>Full</code> — and that label is an exemption, not only a confession: every surface that computes the
+          low-look ratio gates it on <code>Full</code>, so calling a marginal round <code>Sampled</code> switches off
+          the tier's one threshold test. The field-presence and <em>workers 0</em> checks sit outside that gate on
+          purpose, so a bare <code>Sampled</code> cannot turn the tier off wholesale. The numbers are still self-reported — nothing counts file reads for you — and the honest
           claim is narrow: what this buys is that the count must now exist and sit beside its denominator, where a
           reader can see <em>opened 13</em> against <em>manifest 1,477</em> and ask.
         </p>
@@ -2663,7 +2763,10 @@
           <code>quick</code> — rather than a model id (skills without a pin simply inherit the session model). Install resolves roles through
           <code>.claude/served_models.yml</code> (default mapping: opus · sonnet · haiku); a consumer remaps any role in
           <code>served_models.local.yml</code>, which is never overwritten and layered on top — so an upstream model
-          sunset and a local preference both survive the next update. The default <code>served:</code> allowlist
+          sunset and a local preference both survive the next update. A <em>valid</em> preference, at least: since
+          Phase 223 the installer validates the mapping before it applies it, and refuses one it cannot resolve to a
+          model the skills are able to pin — loudly, and leaving the skills at Sysop's shipped defaults rather than
+          writing a mapping that would fail later, mid-skill. The default <code>served:</code> allowlist
           also pre-lists <code>fable</code> — nothing maps to it by default, but opting the deep-reasoning tier into
           Claude Fable 5 is a one-key local override (<code>reasoning: fable</code>).
         </p>
@@ -2723,7 +2826,7 @@
       <aside class="col-rule">Colophon</aside>
       <div>
         <p class="col-body">
-          A monograph on <em>Sysop</em>, as of <em>Phase 185</em> · 2026-08-05, with dated addenda where the record
+          A monograph on <em>Sysop</em>, as of <em>Phase 229</em> · 2026-08-23, with dated addenda where the record
           moved after the snapshot. Phase numbers throughout are iterations
           of the workflow's own development — each one planned, adversarially reviewed, and shipped through the process it
           extends; <a href="https://github.com/getsysop/sysop/blob/main/PHASE_LOG.md">PHASE_LOG.md</a> carries one entry per phase. Set in the reader's native serif —
@@ -2764,7 +2867,7 @@
             <ul>
               <li>Extracted from <em>gdp-query-system</em></li>
               <li>First consumer · BeanRider</li>
-              <li>Phase 185 · 2026-08-05</li>
+              <li>Phase 229 · 2026-08-23</li>
             </ul>
           </div>
           <div>

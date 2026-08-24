@@ -54,6 +54,73 @@ _INSTALL = (_ROOT / "install.sh").read_text(encoding="utf-8")
 _REVIEW_SKILLS = {"codebase-review": _CODEBASE, "security-audit": _SECURITY}
 
 
+# Phase 230 / `Q-296`. Written as character CLASSES rather than literals because the
+# first cut matched a bare ASCII "map-keyed" and its own battery walked two mutations
+# through. An independent lens then walked EIGHT more through the widened class.
+#
+# **The adversary model, stated, because the fraction is meaningless without it.** These
+# guards defend against an AUTHOR honestly re-introducing a retired term — the way Q-296
+# actually happened. They do NOT defend against someone deliberately evading them: a
+# zero-width space, a soft hyphen or a U+2012 figure dash all render as `map-keyed` and
+# all pass, and chasing that zoo invites the next form. What IS in the model is every way
+# an ordinary edit produces the token, and the line wrap below was named in this guard's
+# own first rationale and then not tested — an independent lens had to find it.
+_MAP_KEYED_RE = re.compile(
+    r"map[-\u2010\u2011\u2012\u2013\u2014\u00ad\u200b\u00a0 \t\r\n]{0,2}keyed",
+    re.IGNORECASE,
+)
+
+# The retirement's own SENTENCE. Matched on SHAPE and LENGTH-BOUNDED, for two measured
+# reasons. Byte-exact: the first cut pinned the literal opener, so a legal reword
+# ("This sentence previously used the phrase ...") failed a guard while the retirement
+# stood — over-strictness, and the phase's own battery scored that row as a KILL under
+# "vacuity". Unbounded: `[^.]*\.` lets the writer choose the sentence's end, so extending
+# it (or deleting its period) swallows an arbitrary amount of following prose, including
+# a live premise, before the stray scan ever sees it.
+_RETIREMENT_SENTENCE_RE = re.compile(
+    r"[^.\n]{0,120}?"
+    r"(?:earlier version of this sentence|sentence previously|this sentence used to)"
+    r"[^.\n]{0,200}?map[-\u2011 ]?keyed[^.\n]{0,200}\.",
+    re.IGNORECASE,
+)
+
+# **The token-free paraphrase residual — declared, NOT closed, and the story of why it is
+# declared is the point.**
+#
+# Round 1 called this residual impossible to close in kind, on the reasoning that a guard
+# which tried "would false-fire on the honest mechanism sentence, which is about maps
+# throughout". A lens falsified that by building a predicate in six lines and measuring
+# ZERO false fires on the shipped tree, so the predicate shipped.
+#
+# Round 2 measured it against the thing that actually matters — the class of LEGAL EDITS,
+# not one frozen tree — and it false-fired on **19 of 24** legal sentences (79%). It has no
+# polarity, so `Step 3 dispatch is **not** keyed on the maps` fires; so does
+# `Do not write that dispatch is keyed on the maps`; so does a sentence describing this
+# very retirement in the past tense. And "map" is overloaded across this repo — rule map,
+# weight map, role map, allow-rule map, paths map — so nine of the nineteen were about
+# entirely different machinery. It was reverted.
+#
+# Three things worth keeping from that round trip:
+#   * **The original declaration was right, for the right reason.** It was abandoned
+#     because a lens produced a number, and the number was measured against the wrong
+#     population. "Zero false fires on the current tree" is not "zero false fires".
+#   * **The phase's own over-strictness control could not fire.** It was written in the one
+#     word order the predicate was structurally blind to — a control the verifier cannot
+#     see, which `mutation_battery.py`'s docstring exists to name.
+#   * The predicate was also trivially bypassable in nine ways, so it was simultaneously
+#     too broad and too narrow. That is the signature of the wrong instrument, not of a
+#     pattern needing one more character class.
+#
+# So: a shipped surface CAN still state the retired model in words that avoid the token,
+# and no guard here catches it. That is a real gap, honestly named, and the reason
+# `Q-296` was found by reading rather than by a guard in the first place.
+
+# The sanctioned dispatch divergence in codebase-review's 2a-0 block, matched on shape
+# and LENGTH-BOUNDED — an unbounded tail lets the divergence sentence be extended with
+# arbitrary content that is then stripped before the mirror comparison sees it.
+_DISPATCH_DIVERGENCE_RE = re.compile(
+    r" Since Step 3 dispatch [^.]{0,200}?\*\*no review agent\*\*[^.]{0,160}\."
+)
 def _block_2a0(text: str) -> str:
     start = text.index("### 2a-0. Top-level inventory completeness")
     return text[start : text.index("### 2a-1. Files not matched by")]
@@ -242,9 +309,62 @@ def test_2a0_blocks_stay_mirrored_across_the_two_skills():
     def normalise(text: str, own: str, other: str) -> str:
         b = _block_2a0(text)
         # strip the two sanctioned divergences
-        b = b.replace(
-            " Since Step 3 dispatch is convention-map-keyed, such a subtree also "
-            "receives **no review agent**.", "")
+        # Phase 230: this was a BYTE-EXACT literal, and its own battery scored it a
+        # FALSE KILL — any legal reword of the sentence (retired model still gone,
+        # mechanism still stated) left the strip unmatched, so the sentence survived
+        # normalisation on one side only and this test failed with a diff pointing at
+        # the mirrored block rather than at the edit. That is how it bit the phase that
+        # found it. Match the sentence's SHAPE, and assert the strip actually fired so
+        # a deleted divergence cannot pass by making both sides equally empty.
+        # HIGH-1's guard. The round's single surviving mutation was restoring the FALSE
+        # INFERENCE — "no section names it, so no row can cite one" — which carries
+        # neither the retired token nor a paraphrase of it, so every other guard here is
+        # blind to it. It is false because a 3-pre row needs no section citation to
+        # dispatch: the shipped `Infra & Config` row cites `*(none)*` and covers
+        # `.github/workflows/*.yml`, which no convention_map section names. Pin the TRUE
+        # condition instead — the row's Files column — inside the one sentence the strip
+        # matches, so an addition cannot dodge it the way it dodges a file-wide anchor.
+        divergence = _DISPATCH_DIVERGENCE_RE.search(b)
+        if own == "convention_map.md":
+            # Accepts any wording that makes a ROW's file list the condition — the first
+            # cut pinned the literal "Files column" and a round showed it both ways: a
+            # sentence can NAME the column while DENYING it ("no 3-pre row's Files column
+            # can cite one"), and stating the true condition differently ("names it
+            # directly under **Files**") was a FALSE KILL. So: require the row-and-files
+            # shape, and reject the negated form explicitly.
+            span = divergence.group(0) if divergence else ""
+            names_the_condition = re.search(
+                r"row'?s?\b[^.]{0,40}?\bFiles\b|\bFiles\b[^.]{0,40}?\brow", span, re.I
+            )
+            # `[\w'-]+`, not `\w+`: the round's bypass was "no 3-pre row's Files column
+            # can cite one", and `\w+` cannot cross the hyphen in `3-pre`, so the first
+            # cut of this negation check let the exact demonstrated bypass through.
+            denies_it = re.search(r"\bno\s+(?:[\w'-]+\s+){0,3}row\b", span, re.I)
+            assert divergence and names_the_condition and not denies_it, (
+                "codebase-review's 2a-0 dispatch sentence no longer says an unmapped "
+                "subtree gets an agent when a 3-pre row's FILES COLUMN names it. "
+                "Without that condition the sentence reverts to reasoning from section "
+                "citations — 'no section names it, so no row can cite one' — which is "
+                "false: `Infra & Config` cites no section and dispatches over "
+                "`Dockerfile`, `.dockerignore` and `.github/workflows/*.yml`. Replacing "
+                "a false premise with a false inference is what this guard exists to "
+                "stop; it was a round's surviving mutation, and the first anchor for it "
+                "could be satisfied by a sentence that named the Files column while "
+                "denying it.\n  got: " + (span.strip()[:200] if span else "<no match>")
+            )
+        b, fired = _DISPATCH_DIVERGENCE_RE.subn("", b)
+        expected = 1 if own == "convention_map.md" else 0
+        assert fired == expected, (
+            f"the sanctioned dispatch-divergence strip fired {fired} time(s) on the "
+            f"{'codebase-review' if own == 'convention_map.md' else 'security-audit'} "
+            f"side, expected {expected}. Both directions matter and only one was "
+            "asserted before: on the codebase-review side a 0 means the divergence was "
+            "deleted or reworded past this shape; on the security-audit side a 1 means "
+            "a NEW divergence was introduced there and then silently stripped before "
+            "comparison, so this test would pass over a real divergence. The old "
+            "byte-exact literal could not match in security-audit at all — the shape "
+            "regex can, which is a hole the widening introduced."
+        )
         b = re.sub(r" \((?:the shipped `security_map\.md` keys sections on root files "
                    r"this way — e\.g\. `Dockerfile`, `\.gitignore`|a section glob may name "
                    r"a root-level file directly)\)", " (ROOTEG)", b)
@@ -476,3 +596,188 @@ def test_installer_stub_attribution_is_not_loop_mode_only():
     # seed_claude_md_stub has run in BOTH modes since Phase 131; a full-mode
     # consumer reading "(loop mode)" may treat the stub as deletable cruft.
     assert "Seeded by Sysop (loop mode)" not in _INSTALL
+
+
+# --- (4) Phase 230 / `Q-296` — a term retired in prose, held by prose -----------
+#
+# `codebase-review/SKILL.md:174` retires "map-keyed": dispatch is keyed on the
+# hand-authored 3-pre table, which cites map sections BY NAME, and is not computed
+# from the maps. The same file then used the retired model as a load-bearing premise
+# twice more, at 2a-0 and in the inline-fix step. Both surviving conclusions happened
+# to hold for their narrow case, which is what let them sit there — the Phase-210
+# shape, a skill stating two positions in one file.
+#
+# Prose retired the term and prose did not hold it. These two guards do, and they
+# pull in OPPOSITE directions on purpose: the first stops the term coming back to
+# codebase-review, the second stops a naive class sweep destroying security-audit's
+# use of it, which is TRUE. `security-audit`'s dispatch genuinely is map-keyed —
+# Phase 229's round refuted the suggested twin, and a sweep that "fixed" both files
+# would be the over-strictness direction closing a correct statement.
+
+def test_no_shipped_surface_states_the_retired_map_keyed_model():
+    """`Q-296` + Phase 230's battery: the filed 2 sites were 3, and the third is the spec.
+
+    The filing scoped itself to `codebase-review/SKILL.md`. `WORKFLOW.md`'s § 6.1
+    audit-skill-section table carried the same claim in a row covering BOTH skills,
+    which made it half-true — correct for `/security-audit`, false for
+    `/codebase-review`. A guard that reads one file could never have found that, which
+    is the `where it looks` class: derive the population from the shipped tree, not
+    from the filing.
+    """
+    assert _MAP_KEYED_RE.search(_CODEBASE), (
+        "codebase-review/SKILL.md no longer mentions `map-keyed` at all — including "
+        "the sentence that RETIRES it. Without that sentence the term reads as live "
+        "vocabulary and the premise re-enters on the next edit, which is exactly how "
+        "Q-296 happened. This guard is not asking you to delete the word."
+    )
+    assert _RETIREMENT_SENTENCE_RE.search(_CODEBASE), (
+        "codebase-review/SKILL.md lost the sentence retiring `map-keyed`"
+    )
+
+    # Population: every shipped skill body and the workflow spec. `security-audit` is
+    # excluded and pinned separately by the counterpart guard below — there the term is
+    # TRUE, and a sweep that took it out would be the over-strictness direction.
+    surfaces = {
+        path.relative_to(_ROOT).as_posix(): path.read_text(encoding="utf-8")
+        for path in sorted(_SKILLS.rglob("*.md"))
+        if path != _SKILLS / "security-audit" / "SKILL.md"
+    }
+    # The first cut's population was `core/skills/` plus the one file the phase happened
+    # to touch, while its own docstring said "derive the population from the shipped
+    # tree, not from the filing". An independent lens named five shipped surfaces it
+    # excluded. Two of them are the point:
+    #   * `install.sh` seeds a consumer `CLAUDE.md` stub — that text is written into
+    #     EVERY downstream project, the largest blast radius in the repo;
+    #   * `docs/packs.md` is the public page that ALREADY carried this exact false claim
+    #     about /codebase-review once and had to be corrected (Phase 203).
+    # The one file with a proven history of the defect was outside the guard written to
+    # stop it.
+    # ENFORCED, not best-effort. The first widening used `if path.exists()`, which a round
+    # showed was silently droppable: rename `docs/` away and the guard still passes green,
+    # having quietly stopped covering it. Phase 113 moved content into `docs/` exactly like
+    # that, so this is a real reorg, not a hypothetical. `docs/` is rglob, not glob — the
+    # first version was non-recursive and missed `docs/analysis/`.
+    roots = {
+        "docs": sorted((_ROOT / "docs").rglob("*.md")),
+        "core/companion": sorted((_ROOT / "core" / "companion").rglob("*.md")),
+        "packs": sorted((_ROOT / "packs").rglob("*.md")),
+    }
+    for label, found in roots.items():
+        assert found, (
+            f"the guard's population expected shipped markdown under `{label}/` and found "
+            "none. Either the tree was reorganised and this list needs updating, or the "
+            "widening this guard depends on has silently stopped covering that root — "
+            "which is the failure mode that made it `if path.exists()`-shaped before."
+        )
+    singles = [_ROOT / "README.md", _ROOT / "install.sh", _ROOT / "CONTRIBUTING.md"]
+    for path in singles:
+        assert path.exists(), f"expected shipped file missing from the population: {path}"
+    for path in [*singles, *(q for v in roots.values() for q in v)]:
+        surfaces[path.relative_to(_ROOT).as_posix()] = path.read_text(encoding="utf-8")
+    # WORKFLOW.md joins the population WHOLE. It used to join minus one exempted row,
+    # and that exemption was the hiding place: it was line-scoped and token-triggered,
+    # so any line carrying the token self-exempted, and the guard that read the row
+    # took the FIRST match and could be fed a decoy. The fix was not a better exemption
+    # — it was removing the need for one. The row now states /security-audit's dispatch
+    # as "the OWASP categories a matching section lists under `Check:`" instead of the
+    # retired shorthand, so no shipped surface outside security-audit/SKILL.md and the
+    # retirement sentence uses the term at all, and the scan can be uniform.
+    surfaces["core/companion/docs/WORKFLOW.md"] = _WORKFLOW
+    assert len(surfaces) > 1, "population went empty — this guard would pass by finding nothing"
+
+    stray = []
+    for name, text in surfaces.items():
+        # Cheap pre-filter first. A round measured this test at 7.7s of the module's 7.8s
+        # — a ~110x regression — because both bounded regexes ran over every byte of a
+        # population that now includes all of `packs/`, `docs/` and `core/companion/`. A
+        # file with no `keyed` in it cannot contain the token, so the expensive
+        # sentence-strip never needs to run on it. The scan is unchanged; only the work is.
+        if "keyed" not in text.lower():
+            continue
+        # Strip the retirement SENTENCE, not its paragraph.
+        residue = _RETIREMENT_SENTENCE_RE.sub("", text)
+        for m in _MAP_KEYED_RE.finditer(residue):
+            lo = residue.rfind("\n", 0, m.start()) + 1
+            hi = residue.find("\n", m.end())
+            stray.append(f"{name}: ...{residue[lo:hi if hi != -1 else len(residue)][:200]}")
+
+    assert not stray, (
+        "the retired `map-keyed` dispatch model is stated as live on a shipped surface. "
+        "`/codebase-review` keys Step 3 on the hand-authored 3-pre table, which cites "
+        "convention-map sections BY NAME and is not computed from the maps — a section "
+        "the table does not name has no agent OF ITS OWN — though a path is still "
+        "reviewed if some row's Files column reaches it, as `Infra & Config` does. State "
+        "the mechanism instead of the retired shorthand:\n  " + "\n  ".join(stray)
+    )
+
+
+def test_security_audit_keeps_map_keyed_because_there_it_is_true():
+    # The counterpart, and the direction that hides. security-audit's Step 3 dispatch
+    # IS keyed on security-map section membership; the file says so and then
+    # immediately says why map-keyed is still not the same as covered. A class sweep
+    # that treats `map-keyed` as globally retired deletes a correct statement and the
+    # distinction built on top of it.
+    assert re.search(
+        r"Step 3 dispatch[^.]{0,40}?(?<!never )(?<!not )map[-\u2011 ]?keyed", _SECURITY, re.I
+    ), (
+        "security-audit/SKILL.md lost its `map-keyed` dispatch statement. Unlike "
+        "codebase-review, that skill's dispatch really is map-keyed — Q-296 says so "
+        "explicitly and Phase 229's round refuted the suggested twin. This looks like "
+        "a class sweep applied one file too wide."
+    )
+    assert re.search(
+        r"map[-\u2011 ]?keyed is not the same as (?:being )?covered", _SECURITY, re.I
+    ), (
+        "security-audit/SKILL.md lost the distinction that makes its map-keyed "
+        "dispatch safe to state: a section whose categories no agent owns is matched "
+        "and unaudited, and Step 3-0b is the only check that can see it"
+    )
+
+
+def test_the_workflow_spec_distinguishes_the_two_dispatch_mechanisms():
+    """The § 6.1 row covers BOTH skills, so one claim about dispatch is false for one.
+
+    **Two guards were tried here and both are retired, by measurement — this is the third
+    shape and the first that three independent attacks did not walk through.**
+
+    1. A 120-character *attribution* rule (every use of the term must have `security-audit`
+       nearby). Defeated three ways: the row's own applies-to column literally reads
+       `codebase-review, security-audit` and ends 3 chars before the description, so it
+       supplies the "attribution" for free; any incidental cross-reference does the same;
+       and a row asserting BOTH skills are map-keyed satisfied it outright. It also
+       false-killed legal edits.
+    2. A *positive* anchor on each true statement. This survives inversion but not
+       ADDITION: a reviewer appended the false claim while the true statement stood
+       further along the row, and the anchor found the true half and passed. That is the
+       both-positions defect — the exact shape `Q-296` is an instance of — for the third
+       time in one phase.
+
+    The fix was not a better pattern. It was **removing the need for one**: the row no
+    longer uses the retired shorthand at all, so `WORKFLOW.md` joins the stray scan whole,
+    with no exemption to hide in. Any re-introduction — inverted, prepended, appended or
+    on a decoy line — is now a stray, caught by the scan rather than by a bespoke rule
+    here. What is left for this test is the one thing the scan cannot check: that the row
+    still says the two things it must.
+    """
+    rows = [l for l in _WORKFLOW.splitlines() if "`## Map coverage exclusions`" in l]
+    assert len(rows) == 1, (
+        f"expected exactly one line naming `## Map coverage exclusions`, found {len(rows)}"
+    )
+    row = rows[0]
+
+    assert re.search(
+        r"`?/?security-audit`?[^|]{0,120}?categories[^|]{0,80}?`Check:`", row, re.IGNORECASE
+    ), (
+        "WORKFLOW.md § 6.1's `## Map coverage exclusions` row no longer states how "
+        "/security-audit dispatches: on the OWASP categories a matching security-map "
+        "section lists under `Check:`. Do NOT restore the word 'map-keyed' here — the "
+        "row covers both skills, the term is false for /codebase-review, and stating the "
+        "mechanism instead is what lets the stray scan cover this file with no exemption."
+    )
+    assert re.search(
+        r"`?/?codebase-review`?[^|]{0,80}?keys on[^|]{0,60}?3-pre table", row, re.IGNORECASE
+    ), (
+        "WORKFLOW.md § 6.1's `## Map coverage exclusions` row no longer states that "
+        "/codebase-review keys Step 3 on the hand-authored 3-pre table. Without this the "
+        "row is silent about the skill the retired shorthand was false for."
+    )

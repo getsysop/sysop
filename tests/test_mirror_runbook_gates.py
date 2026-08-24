@@ -107,9 +107,35 @@ def _live_lines(fence: str) -> list[str]:
 
 def _walks_whole_history(lines: list[str]) -> bool:
     """A history walk, not a tree read wearing its name. `git rev-list -n 1 HEAD` and
-    `git rev-list HEAD -- <path>` both passed the first version and are both tree reads."""
+    `git rev-list HEAD -- <path>` both passed the first version and are both tree reads.
+
+    `Q-294` moved the walk out of the page and into
+    `tools/scan_public_history.sh`, so the guard follows it: the lines it is
+    handed no longer contain the loop, only the invocation. Weakening this to
+    "the step mentions the script" would have retired a guard that a later
+    round's battery specifically confirmed was doing work (a `-- <path>`
+    restriction on the walk is one of the mutations it catches). Instead it now
+    reads the script's own `rev-list` with the same predicate. If the page
+    invokes the script, the script IS the walk.
+    """
+    # `not any(shebang)`: the script's own usage comment names the script, so
+    # passing the script's OWN lines here re-injected the pristine file from disk
+    # and the mutated copy walked fine — a guard reading its own source and
+    # finding the string it is looking for. Caught by a control that mutated the
+    # script and watched the predicate stay true.
+    already_the_script = any(ln.startswith("#!") for ln in lines)
+    if not already_the_script and any("scan_public_history.sh" in ln for ln in lines):
+        script = REPO_ROOT / "tools" / "scan_public_history.sh"
+        if script.is_file():
+            lines = list(lines) + script.read_text(encoding="utf-8").splitlines()
     for ln in lines:
-        m = re.search(r"git\s+rev-list\b([^\n|;]*)", ln)
+        # `git -C <dir> rev-list` is the same walk. The original regex required
+        # `git` and `rev-list` adjacent, which was fine while the loop was pasted
+        # into a shell already `cd`-ed into the clone; the extracted script takes
+        # the clone as an argument and must use -C. Widened for the repo-selector
+        # ONLY — the truncation and path-restriction checks below are untouched,
+        # which is what this guard is actually for.
+        m = re.search(r"git\s+(?:-C\s+\S+\s+)?rev-list\b([^\n|;]*)", ln)
         if not m:
             continue
         args = m.group(1)
@@ -219,7 +245,11 @@ def test_the_gate_check_is_not_vacuous():
     text = _runbook()
     for label, mutated in (
         ("suite gate", re.sub(r"(?m)^.*pytest.*$", "", text)),
-        ("history gate", text.replace("git rev-list", "git log --oneline", 1)),
+        # RE-POINTED by `Q-294`: the walk moved into tools/scan_public_history.sh,
+        # so `git rev-list` is no longer on the page and the old mutation was a
+        # silent no-op — the vacuity control itself had gone vacuous. Breaking the
+        # INVOCATION is the equivalent edit now.
+        ("history gate", text.replace("scan_public_history.sh", "scan_nothing.sh")),
         ("refresh binding", re.sub(r"(?m)^## Refreshing\s*$", "## Rebuilding", text)),
         ("announcement binding",
          text.replace("https://github.com/wade-cms/sysop-tester/discussions/1", "REDACTED")),
@@ -277,22 +307,42 @@ def test_a_gate_rehomed_under_an_unrelated_step_does_not_count():
 
 
 def test_a_commented_out_command_does_not_count():
-    """Round finding E2."""
+    """Round finding E2 — text presence is not execution.
+
+    RE-POINTED by `Q-294` for the same reason as its siblings: the walk moved
+    into `tools/scan_public_history.sh`. On the page the equivalent gutting is
+    commenting out the INVOCATION, which is the edit that would leave step 5
+    looking complete while running nothing.
+    """
     text = _runbook()
-    gutted = text.replace("for sha in $(git rev-list HEAD); do",
-                          "# was: for sha in $(git rev-list HEAD); do", 1)
+    gutted = text.replace("   bash tools/scan_public_history.sh",
+                          "   # was: bash tools/scan_public_history.sh", 1)
+    assert gutted != text, "the anchor moved; this control needs re-pointing"
     assert any("history" in p for p in missing_gates(gutted)), (
-        "a commented-out command satisfied the history gate"
+        "a commented-out invocation satisfied the history gate"
     )
 
 
 def test_a_truncated_or_path_scoped_walk_does_not_count():
-    """Round findings E1 and E3 — a tree read wearing the command's name."""
-    text = _runbook()
-    for variant in ("git rev-list -n 1 HEAD", "git rev-list HEAD -- README.md"):
-        mutated = text.replace("git rev-list HEAD", variant, 1)
-        assert any("history" in p for p in missing_gates(mutated)), (
-            f"`{variant}` satisfied the history gate — it is not a history walk"
+    """Round findings E1 and E3 — a tree read wearing the command's name.
+
+    RE-POINTED by `Q-294`: the walk moved out of the page into
+    `tools/scan_public_history.sh`, so mutating the page's text no longer
+    reaches it. The property is unchanged and is asserted against the predicate
+    directly — weakening or deleting this control because its anchor moved would
+    have retired the one guard a later battery confirmed was doing work.
+    """
+    _runbook()  # skip in the sterilized mirror, same as every test here
+    script = REPO_ROOT / "tools" / "scan_public_history.sh"
+    live = script.read_text(encoding="utf-8").splitlines()
+    assert _walks_whole_history(live), (
+        "the shipped script does not walk the whole history; this control is "
+        "testing nothing"
+    )
+    for variant in ("rev-list -n 1 HEAD", "rev-list HEAD -- README.md"):
+        mutated = [ln.replace("rev-list HEAD", variant) for ln in live]
+        assert not _walks_whole_history(mutated), (
+            f"`git … {variant}` satisfied the history gate — it is not a history walk"
         )
 
 
@@ -332,11 +382,19 @@ def test_retitling_a_gate_step_stays_green():
 
 def test_rewriting_the_walk_with_a_different_command_stays_green():
     """Round finding N18 — the property is walking every commit, not a literal spelling."""
-    text = _runbook()
-    rewritten = text.replace("for sha in $(git rev-list HEAD); do",
-                             "git rev-list HEAD | while read -r sha; do", 1)
-    assert rewritten != text
-    assert missing_gates(rewritten) == [], missing_gates(rewritten)
+    _runbook()
+    script = REPO_ROOT / "tools" / "scan_public_history.sh"
+    live = script.read_text(encoding="utf-8").splitlines()
+    rewritten = [
+        ln.replace('for sha in $(git -C "$CLONE" rev-list HEAD); do',
+                   'git -C "$CLONE" rev-list HEAD | while read -r sha; do')
+        for ln in live
+    ]
+    assert rewritten != live, "the anchor moved; this control needs re-pointing"
+    assert _walks_whole_history(rewritten), (
+        "a behaviour-identical rewrite of the loop was rejected — the property is "
+        "walking every commit, not a literal spelling"
+    )
 
 
 def test_renumbering_the_procedure_coherently_stays_green():
@@ -877,3 +935,55 @@ def test_the_sterilized_suite_step_does_not_contaminate_the_tree_it_greps():
         assert "no:cacheprovider" in ln, (
             f"step 4 leaves .pytest_cache/ in the tree step 3 greps: {ln.strip()!r}"
         )
+
+
+# --- `Q-294`: step 5's history scan, now an executable ------------------------
+#
+# The arm itself is tested by EXECUTION in `tests/test_public_history_scan.py`,
+# which builds repositories with known answers and runs the script against them.
+# That module is the guard; this one only has to check that the page still calls
+# it, because a script nothing invokes is a script that does not run.
+#
+# The five prose guards that used to live here were retired by the round that
+# produced them. They asserted properties of a markdown fence — that a line
+# matched `-vcx`, that an allow-list had two members, that `"$sha"` appeared —
+# and an independent battery walked 13 of 18 mutations through them while three
+# NEGATIVE CONTROLS false-killed on legal edits (a line continuation, retitling
+# the step, an earlier step cross-referencing it). Simultaneously bypassable and
+# over-strict is the signature of the wrong instrument, not of a guard needing
+# more patches.
+
+
+def _step5_block(text: str) -> str:
+    """Step 5's body, bounded by the next numbered step.
+
+    Keyed to the step NUMBER, not to its title. The retired prose guards keyed on
+    the literal title and a round's control showed retitling the step false-killed
+    all three of them — while `test_an_ordinary_rewording_stays_green` in this
+    same module already declares retitling legal, using that exact replacement.
+    """
+    m = re.search(r"^5\. \*\*", text, re.M)
+    assert m, "the runbook no longer has a step 5"
+    nxt = re.search(r"^\d+\. \*\*", text[m.end():], re.M)
+    return text[m.start():m.end() + nxt.start()] if nxt else text[m.start():]
+
+
+def test_step_5_invokes_the_history_scan_script():
+    """The page must still call it, and the script must still exist.
+
+    A reversion guard in the strict sense: it fails if the invocation is removed
+    from the page, and it fails if the page keeps calling a script that is gone.
+    """
+    block = _step5_block(_runbook())
+    assert "scan_public_history.sh" in block, (
+        "step 5 no longer invokes tools/scan_public_history.sh. The per-commit "
+        "header arm is the only gate the project has on commit identity — every "
+        "other pass reads a tree — and a step that does not call it reports clean "
+        "over an unscanned history."
+    )
+    script = REPO_ROOT / "tools" / "scan_public_history.sh"
+    assert script.is_file(), (
+        "step 5 invokes tools/scan_public_history.sh but the script is absent "
+        "from the source repo; the step would fail at the point an operator runs "
+        "it, which is the worst moment to discover it"
+    )

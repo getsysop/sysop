@@ -29,6 +29,14 @@ that it's a working log written for the project's own continuity, not an introdu
   ([loop mode](./loop-mode.md)). Before shipping, it was run end-to-end against a real
   ~60k-line open-source codebase — the loop closed on code the model didn't write, and a
   freshly mechanized convention caught an instance no review round had filed.
+- **Aug 2026** — A sustained defect sweep, sequenced by who meets the problem first: the loop
+  surface a newcomer sees in their first hour, then the close path, then the batch machinery
+  underneath both. The install path was certified by running it from a cold clone rather
+  than assumed to work, and the test suite went past 4,900 tests. The pattern worth reporting is the one that
+  held throughout: six phases in this stretch built a mechanism, had their own review round
+  reject it, and shipped the round's record instead of the mechanism — one of them shipping
+  nothing else at all. A review gate strong enough to reject the work of the person running it,
+  with the rejection written down, is the thing the rest of this is trying to buy.
 
 Where to go next: [the monograph](./workflow.html) for why it's built this way,
 [one rule, end to end](./one-rule.md) for the evidence trail behind a single rule, and
