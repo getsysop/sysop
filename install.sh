@@ -94,7 +94,7 @@ LOOP_EXCLUDE_SHARED="decomposition-rubric guided-mode main-push-guard plan-revie
 # (+ run_checks/ dir), _log.py, review_index.py, archive_review_tasks.py,
 # install_hooks.sh, sysop-update.sh, and the model-role set (_model_roles.py,
 # resolve/check/migrate_skill_model.py — mode-agnostic; operate on shipped skills).
-LOOP_EXCLUDE_SCRIPTS="backfill_completed_dates.py batch_work.sh claim_task.sh cleanup_worktrees.sh close_batch.sh next_task.py parse_subagent_envelope.py permission_denied_hook.py pr_dependabot.py scope_overlap.py sitrep_survey.py validate_tasks.py"
+LOOP_EXCLUDE_SCRIPTS="backfill_completed_dates.py batch_work.sh claim_task.sh clear_user_action.py cleanup_worktrees.sh close_batch.sh next_task.py parse_subagent_envelope.py permission_denied_hook.py pr_dependabot.py scope_overlap.py sitrep_survey.py validate_tasks.py"
 # Phase 111: --ref pins the install/update source to a git tag/rev (a reviewed
 # release) instead of the source clone's live HEAD. REF_WORKTREE holds the
 # materialised-rev worktree; SYSOP_SRC_CLONE holds the original clone (needed to
@@ -2646,6 +2646,10 @@ LOOP_ALLOW = {
     "Bash(.venv/bin/python3 sysop/scripts/archive_review_tasks.py:*)",
     "Bash(python3 sysop/scripts/ingest_security_report.py:*)",
     "Bash(.venv/bin/python3 sysop/scripts/ingest_security_report.py:*)",
+    # Phase 231: Step 3-0c's residual assignment. `/security-audit` is a loop skill and the
+    # script ships in both modes, so a loop consumer must not get a prompt a full one avoids.
+    "Bash(python3 sysop/scripts/security_partition.py:*)",
+    "Bash(.venv/bin/python3 sysop/scripts/security_partition.py:*)",
     "Bash(python3 -c:*)",
     "Bash(python3 -:*)",
     # The give-back skills' auth gate. `gh` is NOT in Claude Code's built-in
@@ -2704,13 +2708,13 @@ install_permissions() {
     # would violate the dry-run contract, and the copy note would render the
     # raw /tmp path).
     if [[ "$DRY_RUN" -eq 1 ]]; then
-      note "would write $(rel "$dst") (loop allow-subset: 22 rules, no hooks)"
+      note "would write $(rel "$dst") (loop allow-subset: 24 rules, no hooks)"
       record_managed_path "$dst"
       record "permissions: would write $(rel "$dst") (loop allow-subset)"
       return 0
     fi
     # Fail CLOSED: if the filter can't be built, do NOT fall back to the full
-    # master — that would over-grant the 74-rule allow-list AND re-add the hooks
+    # master — that would over-grant the 78-rule allow-list AND re-add the hooks
     # block referencing scripts loop mode never installs (broken at runtime).
     # Skip settings.json instead (the consumer sees more permission prompts, but
     # no over-grant and no dangling hooks); the loud error keeps it visible.
@@ -3772,7 +3776,7 @@ tmpl = load(template_path)
 # no-op for the ~20 non-path rules (Bash(gh pr merge:*), Bash(git checkout:*),
 # Bash(python3 -c:*), …), so those CURRENT-VALID rules entered the removal set
 # verbatim and got stripped from settings.local.json (where install_permissions
-# never re-adds them) and from loop-mode settings.json (only the 21-rule LOOP_ALLOW
+# never re-adds them) and from loop-mode settings.json (only the 24-rule LOOP_ALLOW
 # subset is re-added) — auto-approved commands silently started prompting again.
 # A rule is a movable vendor-path rule iff its flat and sysop/-namespaced spellings
 # differ; only such a rule's flat spelling is dead. Non-path and consumer-authored

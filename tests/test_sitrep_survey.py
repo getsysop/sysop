@@ -1274,6 +1274,63 @@ def test_every_state_the_classifier_emits_is_documented_in_the_skill():
     # no arm fires, and the table describes arms.
     emitted.discard("unknown")
 
+    # **Phase 237: the extraction went blind and this is the repair, not a second
+    # guard.** `_claim_stall` returns its state through a module constant, so
+    # `_classify_task` assigns `state = stall_state` — an IDENTIFIER, which the
+    # literal-only regex above cannot see. `parked` and `awaiting approval` were
+    # therefore emitted, tabled, and unchecked: a guard that had silently stopped
+    # covering two of the states it names. Adding a *second* states guard would
+    # have been the Phase-204 shape (a roster reading as coverage); repairing the
+    # one that exists is the same work with none of that.
+    #
+    # **Extract from the second EMITTER, not from a naming convention.** The
+    # first cut of this repair required every `_<NAME>_STATE` module constant to
+    # appear in the table, and a mutation renaming `_PARKED_STATE` to
+    # `_PARKED_LABEL` walked straight through it: the state left the convention,
+    # left the guard, and kept being emitted. So the source side is now
+    # `_claim_stall`'s own `return` statements, with identifiers resolved through
+    # module-level string constants whatever they are called. An identifier that
+    # does not resolve fails loudly rather than dropping out.
+    stall_start = src.index("def _claim_stall(")
+    stall_end = src.index("\ndef _classify_task(", stall_start)
+    stall_body = src[stall_start:stall_end]
+
+    consts = dict(
+        re.findall(r'^([A-Za-z_][A-Za-z0-9_]*) = "([^"]*)"$', src, re.MULTILINE)
+    )
+    returned = re.findall(
+        r'return\s*\(?\s*\n?\s*([A-Za-z_][A-Za-z0-9_]*|"[^"]*")\s*,',
+        stall_body,
+    )
+    assert returned, "no state-shaped returns found in _claim_stall"
+
+    stall_states = set()
+    for tok in returned:
+        if tok.startswith('"'):
+            stall_states.add(tok.strip('"'))
+            continue
+        assert tok in consts, (
+            f"_claim_stall returns state `{tok}`, which is not a module-level "
+            f"string constant — this guard cannot resolve it to a value, so the "
+            f"state would escape the table check"
+        )
+        stall_states.add(consts[tok])
+    # "" is the no-evidence arm: it leaves the caller's classification alone and
+    # is not a state the table describes.
+    stall_states.discard("")
+    assert stall_states, "_claim_stall emits no states — the extraction moved"
+    emitted |= stall_states
+
+    # And pin the indirection itself. If a future arm assigns `state` from some
+    # other local, this goes red rather than letting that state escape the table.
+    indirect = set(re.findall(r"^\s+state = ([a-z_][a-z0-9_]*)\s*$", body, re.MULTILINE))
+    assert indirect == {"stall_state"}, (
+        f"unexpected identifier-fed `state =` assignments in _classify_task: "
+        f"{sorted(indirect)}. Each one hides its state from this guard's literal "
+        f"extraction — route it through _claim_stall, or extend this assert "
+        f"deliberately."
+    )
+
     # **Cross-check the extraction against a SECOND, independent count**, rather
     # than a floor. The first version asserted `>= 6` against a real count of 7,
     # so it tolerated the regex silently losing exactly one state — which the
@@ -1282,7 +1339,7 @@ def test_every_state_the_classifier_emits_is_documented_in_the_skill():
     # A SECOND extraction, unanchored, compared as a SET. `ready for
     # /review-close` is assigned twice, so a count comparison is the wrong shape;
     # what must hold is that both methods see the same states.
-    loose = set(re.findall(r'state = "([^"]+)"', body))
+    loose = set(re.findall(r'state = "([^"]+)"', body)) | stall_states
     loose.discard("unknown")
     assert emitted == loose, (
         f"the two extractions disagree — the anchored one is missing "

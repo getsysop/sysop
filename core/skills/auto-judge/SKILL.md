@@ -209,11 +209,11 @@ Parse the output for the **Worktree path** (`Path:`) and **Branch name** (`Branc
 
 **Without `--merge`**: claim ALL eligible batches sequentially (each claim commits on main), collect worktree paths into a queue, then spawn Opus fix agents in a rolling window:
 
-1. **Initial fill**: spawn agents for the first `<cap>` claimed batches in a single message with parallel Agent tool calls, all with `run_in_background: true`.
-2. **Refill on completion**: when a background agent's completion notification arrives, collect its result. If the queue has unstarted batches, spawn one new agent for the next queued batch (`run_in_background: true`). Keep the pool full until the queue drains.
+1. **Initial fill**: spawn agents for the first `<cap>` claimed batches in a single message with parallel Agent tool calls. Sub-agents have run in the background by default since Claude Code 2.1.198, and `run_in_background` <!-- skill-audit-ok: run_in_background --> is **not** a parameter of the `Agent` tool — its schema is closed, so a compliant call raises `InputValidationError`, and a rejected tool call is itself an invitation to proceed without the step (`Q-031`).
+2. **Refill on completion**: when a background agent's completion notification arrives, collect its result. If the queue has unstarted batches, spawn one new agent for the next queued batch. Keep the pool full until the queue drains.
 3. **Finish**: when the queue is empty and all in-flight agents complete, proceed to Step 4c.
 
-**With `--merge`**: claim → spawn one Opus fix agent (`run_in_background: false`) → after report, claim the next. Sequential. Each batch pushes but does NOT merge; `/review-close` handles merging.
+**With `--merge`**: claim → spawn **one** Opus fix agent and spawn nothing else until it reports → after report, claim the next. Sequential — and that sequencing is orchestrator discipline, not a flag: there is no parameter that makes a sub-agent run in the foreground, so it rests on waiting for the completion notification. Each batch pushes but does NOT merge; `/review-close` handles merging.
 
 **For each batch**, use the **Agent tool** to spawn an Opus subagent:
 - `subagent_type`: `"general-purpose"`

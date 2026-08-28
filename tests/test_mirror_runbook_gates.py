@@ -141,8 +141,23 @@ def _walks_whole_history(lines: list[str]) -> bool:
         args = m.group(1)
         if re.search(r"(^|\s)(-n\s*\d+|--max-count[= ]\d+|-\d+)(\s|$)", args):
             continue  # truncated to N commits
-        if "--" in args:
+        # A BARE `--` is the pathspec separator; `--all`, `--tags`, `--max-count`
+        # are not. The substring test rejected any long option at all, so when
+        # Phase 233 widened the walk from `rev-list HEAD` to
+        # `rev-list --all --tags` -- closing a hole where a commit reachable only
+        # from a published release tag was never scanned -- this guard read the
+        # WIDENING as a restriction and went red. An over-strict guard that fires
+        # on a correct change is how a maintainer learns to weaken a correct one.
+        if re.search(r"(^|\s)--(\s|$)", args):
             continue  # path-restricted
+        # `--count` prints a NUMBER; it is not a per-commit walk. The old crude
+        # `"--" in args` test excluded it as a side effect, and narrowing that to
+        # a bare pathspec `--` let it through -- so the truncation control below
+        # went green against a script whose real loop had been truncated, because
+        # the summary's `rev-list --count` satisfied the predicate instead. Caught
+        # by that control, which is exactly what it is for.
+        if re.search(r"(^|\s)--count(\s|=|$)", args):
+            continue
         return True
     return False
 
@@ -339,8 +354,16 @@ def test_a_truncated_or_path_scoped_walk_does_not_count():
         "the shipped script does not walk the whole history; this control is "
         "testing nothing"
     )
-    for variant in ("rev-list -n 1 HEAD", "rev-list HEAD -- README.md"):
-        mutated = [ln.replace("rev-list HEAD", variant) for ln in live]
+    # RE-POINTED again (Phase 233): the walk widened from `rev-list HEAD` to
+    # `rev-list --all --tags`, because a commit reachable only from a published
+    # release tag was never scanned. The old anchor no longer matched, so the
+    # "mutated" copy was identical to live and this control silently stopped
+    # testing anything — the failure mode its own docstring names. Re-pointed,
+    # not weakened, and the substitution is asserted to have bitten.
+    WALK = "rev-list --all --tags"
+    for variant in (f"rev-list -n 1 --all --tags", f"{WALK} -- README.md"):
+        mutated = [ln.replace(WALK, variant) for ln in live]
+        assert mutated != live, "the anchor moved again; re-point, do not weaken"
         assert not _walks_whole_history(mutated), (
             f"`git … {variant}` satisfied the history gate — it is not a history walk"
         )
@@ -386,8 +409,8 @@ def test_rewriting_the_walk_with_a_different_command_stays_green():
     script = REPO_ROOT / "tools" / "scan_public_history.sh"
     live = script.read_text(encoding="utf-8").splitlines()
     rewritten = [
-        ln.replace('for sha in $(git -C "$CLONE" rev-list HEAD); do',
-                   'git -C "$CLONE" rev-list HEAD | while read -r sha; do')
+        ln.replace('for sha in $(git -C "$CLONE" rev-list --all --tags); do',
+                   'git -C "$CLONE" rev-list --all --tags | while read -r sha; do')
         for ln in live
     ]
     assert rewritten != live, "the anchor moved; this control needs re-pointing"

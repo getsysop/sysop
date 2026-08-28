@@ -14,8 +14,12 @@ import sys
 import pytest
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _prose_guard_helpers import normalize, section, states  # noqa: E402
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SKILL = REPO_ROOT / "core" / "skills" / "review-close" / "SKILL.md"
+VALIDATOR = REPO_ROOT / "core" / "companion" / "scripts" / "validate_tasks.py"
 
 
 def _extract_smoke_heredoc() -> str:
@@ -222,7 +226,7 @@ def test_each_accepted_heading_fires_exactly_one_signal(tmp_path, heading):
 # ── negative controls: headings that must stay silent ──
 
 SILENT_HEADINGS = [
-    "## User ops (do these first)",   # post-merge operator steps — deliberately excluded
+    "## User ops (do these first)",   # gate the work, not the merge — deliberately excluded
     "## Summary",
     "## Test decision",
     "## What changed",
@@ -239,12 +243,170 @@ def test_each_excluded_heading_stays_silent(tmp_path, heading):
     assert _signals(out) == 0, f"{heading!r} should not fire the gate:\n{out}"
 
 
+def _exclusion_paragraph(text: str) -> str:
+    """The paragraph that states the exclusion, not the whole file.
+
+    The guards lens deleted the entire rationale clause and stayed green, because
+    `assert "waive" in body` was satisfied by twelve unrelated uses elsewhere in
+    `review-close/SKILL.md`. A rationale guard has to read the rationale's own span.
+    """
+    needle = "`## User ops (do these first)` is deliberately excluded"
+    assert needle in text, "the exclusion sentence is gone"
+    i = text.index(needle)
+    lo = text.rfind("\n\n", 0, i) + 2
+    hi = text.find("\n\n", i)
+    return text[lo: hi if hi != -1 else len(text)]
+
+
 def test_user_ops_exclusion_is_deliberate_and_stated():
-    """`user_action: true` declares POST-merge operator steps. Firing the pre-merge gate
-    on that whole routine class would train the operator to waive wholesale — which is the
-    failure ISSUE-0099 names. If someone adds it to the pattern, this says why not to."""
-    body = SKILL.read_text(encoding="utf-8")
-    assert "`user ops`" in body or "`## User ops (do these first)` is deliberately" in body
+    """`user_action: true` is a large, routine class, and prompting on all of it would
+    train the operator to waive wholesale. That reason is timing-independent and is the
+    whole of it. If someone adds the heading to the pattern, this says why not to.
+
+    Two rewrites deep. The original asserted that one of two phrases appeared *somewhere*
+    in the file, which a bare mention satisfied. Phase 235 pinned the reason instead — and
+    its round showed that pinning a reason by substring is barely better: the phrase
+    survives inside its own negation, and an incidental hit elsewhere in a 2,000-line file
+    satisfies it with the rationale deleted. Both halves are now read out of the exclusion's
+    own paragraph, through `states()`, which refuses a negated occurrence.
+    """
+    para = _exclusion_paragraph(SKILL.read_text(encoding="utf-8"))
+    assert states(para, "large, routine class"), (
+        "the skill no longer asserts the routine-class reason in the exclusion's paragraph"
+    )
+    assert states(para, "waive"), "the waive-wholesale consequence is gone from that paragraph"
+    assert "manual_smoke" in para, (
+        "the paragraph no longer points a pre-merge step at the field that gates it"
+    )
+    # Completeness, which is what stops a second (timing) reason being re-added beside the
+    # first. Battery A04 stripped exactly this clause and survived every other assertion.
+    assert states(para, "whole of it"), (
+        "the paragraph no longer says the routine-class reason is the complete justification"
+    )
+
+    mirror = VALIDATOR.read_text(encoding="utf-8")
+    i = mirror.index("`user ops` is deliberately excluded")
+    comment = mirror[mirror.rfind("\n\n", 0, i) + 2: mirror.index("_MANUAL_SMOKE_HEADING_RE")]
+    assert states(comment, "large and routine"), (
+        "validate_tasks.py's mirror comment no longer asserts the routine-class reason"
+    )
+    assert states(comment, "waive"), "the mirror comment lost the waive-wholesale reason"
+
+
+# The retired claim, swept across every tracked shipped file rather than the four sites that
+# carried it — a guard keyed to remembered sites is keyed to memory, not to the population.
+# Emphasis, dash and wrapping variants are folded by `normalize()` before matching, because
+# the round walked `_post_-merge`, a U+2011 hyphen, "operator actions", and a line break in
+# the middle of the phrase straight through the original per-line literal regex.
+_RETIRED_TIMING_CLAIM = re.compile(
+    r"declares\s+post-merge\s+operator\s+(?:steps|actions|work)", re.IGNORECASE
+)
+
+# The one sanctioned quotation: `tasks/schema.md` § "User ops" records the correction and
+# quotes the wording it retired. Scoped to that section — the round showed a file-wide
+# blockquote exemption lets the claim be re-asserted anywhere in the file on a `> ` line.
+_QUOTING_FILE = "core/companion/tasks/schema.md"
+_QUOTING_SECTION = "### User ops"
+
+_RETIRED_CLAIM_SKIP_PREFIXES = ("tools/", "tests/")
+_RETIRED_CLAIM_SKIP_FILES = {
+    "PHASE_LOG.md", "REVIEW_CHECKLIST.md", "REVIEW_ARCHIVE.md", "CLAUDE.md",
+}
+
+
+def _tracked_files():
+    """Repo-relative tracked paths, from git rather than from a directory walk.
+
+    The author battery planted the claim in `install.sh` and survived a `core/`-only walk;
+    the round then planted it in an extensionless git hook and a `.fragment` and survived
+    the suffix filter that replaced it. Both are population defects, which is
+    `_shared/adversarial-review.md` § *Before you spawn anyone* rule 1, "where it looks".
+    There is no suffix filter now — every tracked text file is read.
+    """
+    out = subprocess.run(
+        ["git", "ls-files", "-z"],
+        cwd=REPO_ROOT, capture_output=True, text=True, check=True,
+    ).stdout
+    return [p for p in out.split("\0") if p]
+
+
+def test_the_retired_post_merge_claim_does_not_return():
+    """Four shipped sites read *"that heading declares POST-merge operator steps"* until
+    Phase 235. It contradicted the heading's own text and all three authoring surfaces, and
+    rested on no independent assertion anywhere — all four were the justification for one
+    decision. Two cited `schema.md § "User ops"` as authority and no such section existed.
+    """
+    visited, offenders = set(), []
+    for rel in _tracked_files():
+        if rel.startswith(_RETIRED_CLAIM_SKIP_PREFIXES) or rel in _RETIRED_CLAIM_SKIP_FILES:
+            continue
+        path = REPO_ROOT / rel
+        if not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue  # binary or unreadable: carries no prose claim
+        visited.add(rel)
+        haystack = text
+        if rel == _QUOTING_FILE:
+            # strip only the sanctioned section, so the rest of the file is still swept
+            haystack = text.replace(section(text, _QUOTING_SECTION), "")
+        if _RETIRED_TIMING_CLAIM.search(normalize(haystack)):
+            offenders.append(rel)
+    swept = len(visited)
+    # Vacuity controls. The floor sits above both prior populations (82 for the original
+    # `core/`-only walk, 155 for the suffix-filtered one), and the membership checks read
+    # what the sweep ACTUALLY visited — the round caught them reading the raw tracked list,
+    # so a filter change could drop a file and they would still pass.
+    assert swept > 170, f"the sweep only reached {swept} files — the population collapsed"
+    for required in (
+        "install.sh",
+        "README.md",
+        "core/companion/git-hooks/pre-commit",          # extensionless, shipped
+        "core/companion/checks.yml.fragment",           # non-standard suffix, shipped
+    ):
+        assert required in visited, f"{required} is tracked but the sweep never visited it"
+    assert any(r.startswith("packs/") for r in visited), "packs/ is outside the swept population"
+    assert any(r.startswith("docs/") for r in visited), "docs/ is outside the swept population"
+    assert not offenders, (
+        "the retired POST-merge timing claim is back in:\n  " + "\n  ".join(sorted(offenders))
+    )
+
+
+def test_schema_states_the_user_ops_timing_canonically():
+    """The two comments that cite `schema.md § "User ops"` need that section to exist — the
+    whole defect was a citation resolving to a line inside the fenced body template."""
+    schema = (REPO_ROOT / "core" / "companion" / "tasks" / "schema.md").read_text(
+        encoding="utf-8"
+    )
+    assert "\n### User ops\n" in schema, "schema.md has no `### User ops` section to cite"
+    assert schema.count("```", 0, schema.index("\n### User ops\n")) % 2 == 0, (
+        "the `### User ops` heading is inside a fenced block"
+    )
+    # `section()` stops at the next heading of the same or higher level and asserts the
+    # heading is unique. The original sliced to the next `## `, so this "section" ran through
+    # `### Solo` as well, and a decoy duplicate heading earlier in the file would have
+    # silently redirected the whole guard.
+    body = section(schema, "### User ops")
+    assert "### Solo" not in body, "the User-ops slice is swallowing a sibling section"
+    assert states(body, "gates *dispatch*"), (
+        "the section does not assert what the flag enforces"
+    )
+    assert states(body, "Nothing verifies the steps were performed"), (
+        "the section no longer states the limit of the enforcement — the half a reader needs "
+        "in order not to treat the heading as a gate"
+    )
+    assert states(body, "convention rather than a"), (
+        "the section asserts the do-these-first timing without marking it a convention"
+    )
+    for citer in (
+        REPO_ROOT / "core" / "companion" / "scripts" / "validate_tasks.py",
+        REPO_ROOT / "core" / "skills" / "review-close" / "SKILL.md",
+    ):
+        assert 'schema.md § "User ops"' in citer.read_text(encoding="utf-8"), (
+            f"{citer.name} no longer cites the section it relies on"
+        )
 
 
 # ── structural declaration 1: the pending doc's own frontmatter ──

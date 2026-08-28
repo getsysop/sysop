@@ -299,8 +299,20 @@ refuse_on_structural_fence() {
 # (see the note above the annotation summary), so a refusal added here could not
 # reach its caller -- that contract is a separate problem and is not touched.
 FENCED_LINES=""
+# `FENCED_OK` distinguishes "the mask is empty because this tracker has no fences"
+# from "the mask is empty because the probe FAILED" -- a parser crash, a damaged
+# tracker, an older installed `review_index.py` without `--fenced-lines`. The `2>/dev/null`
+# swallows the reason, and until Phase 233's round the two were indistinguishable
+# downstream, so the Q-017 warning told an operator the range was fence-aware on a
+# run where no mask had been built. That is the SAME wrong-cause conflation this
+# file indicts 700 lines below -- reintroduced by the fix for it.
+FENCED_OK=false
 if command -v python3 &>/dev/null && [[ -f "$INDEX_SCRIPT" ]]; then
-  FENCED_LINES=$(python3 "$INDEX_SCRIPT" --fenced-lines 2>/dev/null) || FENCED_LINES=""
+  if FENCED_LINES=$(python3 "$INDEX_SCRIPT" --fenced-lines 2>/dev/null); then
+    FENCED_OK=true
+  else
+    FENCED_LINES=""
+  fi
 fi
 
 # `--dry-run` WARNS instead of refusing: it writes nothing, and a read-only
@@ -390,8 +402,109 @@ find_batch_range() {
     return 1
   fi
 
+  # Q-017: the boundary search skips FENCED `##` lines.
+  #
+  # `grep -n '^##'` is kept verbatim -- it still names the boundary rule, and
+  # three source-shape guards in `tests/test_flag_contract.py` pin that literal
+  # (one of them because a first draft re-implemented this fallback in Python
+  # and asserted against the model instead of the script). What changed is that
+  # its hits are now FILTERED: a `## ` heading quoted inside a fenced example is
+  # content, not structure, and bounding on it ends the batch early.
+  #
+  # Reproduced at Phase 233's HEAD on a near-miss header carrying a fenced
+  # `## Deferred`: 1 of 3 tasks closed, the header flipped to `Merged`, TASK-2
+  # and TASK-3 left `[ ]` underneath, exit 0, run committed.
+  #
+  # `$FENCED_LINES` is the SAME mask `CLOSE_AWK` rewrites around -- computed
+  # once at the top of this script from `review_index.py --fenced-lines`, which
+  # is `_fenced_mask` itself. Deliberately not a fence parser in awk: that would
+  # be a sixth implementation of a rule already written four times in Python,
+  # and Phase 209 refused it here for that reason.
+  #
+  # This changes the RANGE, never the verdict. Whether a non-canonical header
+  # should close at all is a separate, ratified question (2026-08-21: keep
+  # closing, stop being silent) and is untouched -- which is why this fix needs
+  # none of the caller-contract change three prior passes declined.
+  #
+  # Availability: the mask is populated under `python3 && -f $INDEX_SCRIPT`,
+  # which is EXACTLY the `fallback` arm's own precondition, so the arm where
+  # this defect was measured always has it. On the `fallback-no-index` arm the
+  # mask is empty and the range degrades to the pre-existing fence-blind
+  # answer -- unavoidable without python3, and pinned as such by
+  # `tests/test_close_awk_fence_masking.py::test_without_python3_behaviour_is_the_old_behaviour`.
+  #
+  # No `head -1`/early `exit`: awk reads the whole stream and reports at END.
+  # An early `exit` closes the pipe under grep, and a SIGPIPE (141) would be
+  # taken by `pipefail` on a bare assignment under `set -e` and abort the run.
   local offset_end
-  offset_end=$(tail -n +"$((BATCH_START + 1))" "$TASKS_FILE" | grep -n '^##' | head -1 | cut -d: -f1)
+  offset_end=$(tail -n +"$((BATCH_START + 1))" "$TASKS_FILE" | grep -n '^##' \
+    | awk -F: -v start="$BATCH_START" -v fenced="$FENCED_LINES" '
+        BEGIN {
+          n = split(fenced, fz, ",")
+          for (i = 1; i <= n; i++) if (fz[i] != "") mask[fz[i] + 0] = 1
+        }
+        !have && !((start + $1) in mask) { have = 1; off = $1 }
+        # `0` is a SENTINEL meaning "ran fine, found no unmasked boundary" -- real
+        # offsets are 1-based so it cannot collide. Without it, that outcome and a
+        # CRASHED awk both arrive as the empty string, and the guard below treats
+        # both as failure. See the note there: that conflation made this whole fix
+        # inert for the last batch of any tracker with no trailing `##` section.
+        END { if (have) print off; else print 0 }
+      ') || offset_end=""
+  # `|| offset_end=""` is load-bearing and its absence FAILED THE WHOLE RUN.
+  # This is a PIPELINE inside a command substitution on a plain assignment: under
+  # `pipefail` the status is awk's, and under `set -e` a non-zero assignment aborts
+  # the script. So a filter awk that EXITS non-zero -- a shimmed one, a build
+  # without `-v`, an out-of-memory kill -- did not degrade, it killed the close
+  # mid-run with a bare shell status. The floor only ever covered an awk that
+  # exited 0 with unusable output. Found by writing the test for the floor:
+  # `test_the_fence_blind_recompute_actually_recomputes` shims awk to exit 3 and
+  # the script returned 3 with the batch half-processed.
+  # A broken `awk` must not change this function's control flow.
+  #
+  # `$(( ))` on a non-numeric operand is a bash SYNTAX ERROR, not a zero, and
+  # under `set -euo pipefail` it aborts the run mid-close with a raw shell
+  # diagnostic and no verdict. Found by
+  # `tests/test_close_batch_sh.py::TestShortWriteGuard`, which shims `awk` with
+  # a lying stub: this filter made `find_batch_range` depend on awk for the
+  # first time (the pre-existing `grep | head -1 | cut` did not), so a broken or
+  # shadowed awk newly reached the arithmetic.
+  #
+  # The first cut of this guard returned 1 here. That was WRONG twice over: the
+  # sole caller renders any non-zero as the FALSE "Not found in review_tasks.md"
+  # with a durable `not-found` reason -- the exact laundering `Q-017` is filed
+  # about -- and skipping meant the downstream short-write guard, whose whole
+  # job is catching a lying awk, never ran. Two guards weakened to protect one.
+  #
+  # So: fall back to the pre-existing fence-BLIND computation, which is today's
+  # shipped behaviour, and let the short-write guard do its job. The fence
+  # filter is an improvement layered on top; when it cannot run, the floor is
+  # exactly what shipped before it, never worse and never a new refusal.
+  # THREE outcomes, not two. Round finding (HIGH, execute lens): the first cut of
+  # this guard had only two, and collapsed the wrong pair.
+  #
+  #   "0"        awk ran and found no UNMASKED boundary -> the batch runs to EOF.
+  #   1,2,3...   awk ran and found one -> use it.
+  #   ""/garbage awk did not run correctly -> fall back, fence-blind, to what shipped.
+  #
+  # Treating "no boundary" as failure re-ran the fence-blind grep and restored the
+  # exact bug this filter exists to fix -- silently, and *while printing the
+  # fence-aware claim*. Reproduced: a non-canonical header whose only `##` is a
+  # fenced example, in a tracker with no `## Statistics` section, closed 1 of 3 and
+  # left TASK-2/TASK-3 `[ ]` under a `Merged` header. Not exotic: this file's own
+  # comment ~150 lines below records that some consumers author no `## Statistics`
+  # block at all, so for them it is the LAST BATCH on every close.
+  case "$offset_end" in
+    0)
+      offset_end=""          # no boundary; BATCH_END falls to $total_lines below
+      ;;
+    ''|*[!0-9]*)
+      offset_end=$(tail -n +"$((BATCH_START + 1))" "$TASKS_FILE" | grep -n '^##' | head -1 | cut -d: -f1)
+      case "$offset_end" in
+        *[!0-9]*) offset_end="" ;;
+      esac
+      ;;
+  esac
   if [[ -n "$offset_end" ]]; then
     BATCH_END=$((BATCH_START + offset_end - 1))
   else
@@ -478,6 +591,90 @@ remove_batch_lock() {
   fi
 }
 
+# ── Helper: remove a closed batch's orchestrated-claim artifacts ──
+# `/claim-task` claims BATCHES as well as roadmap tasks, and since Phase 171 a
+# claim of either kind writes two things outside the worktree, in the MAIN
+# checkout so they outlive `git worktree remove`:
+#
+#   sysop/runtime/claim/BATCH-<N>/<RUN_ID>/   plan.md, review.md, classification.md, ...
+#   sysop/runtime/parked/BATCH-<N>__<RUN_ID>.md   the park marker, when 7c parked
+#
+# **Neither was removed by anything.** `/review-close` Step 4c cleans the
+# roadmap half, but its `closed` list is built from `roadmap_ids` only —
+# `review_task_ids` are excluded there by design — so no batch id ever reaches
+# it. This function is the batch half, sited here rather than taught to Step 4c
+# because Step 4c has no batch-id list to iterate and this script already owns
+# every other batch-close mutation (the lock above included).
+#
+# Same `close_landed_on_main` gate as the lock, for the same reason: under `pr`
+# policy the close commits on an integration branch while `main` still reads the
+# batch `Pending`, and destroying the verdict of a park before the merge lands
+# would take the one record explaining why the work stopped.
+#
+# Reports either way. A removal that is silent when the target is absent cannot
+# be told apart from one that never ran — the rule `remove_batch_lock` states
+# above, and the reason both of these print an `ℹ️` line on the empty case.
+remove_claim_artifacts() {
+  local batch_num="$1"
+  local main_root claim_dir marker markers_removed=0
+
+  if ! main_root="$(resolve_main_root)"; then
+    echo "   ⚠️  Could not resolve the main checkout — claim artifacts for Batch ${batch_num} not removed." >&2
+    return 0
+  fi
+
+  # `batch_num` reached here through the `^([Bb][Aa][Tt][Cc][Hh]-)?([0-9]+)$`
+  # parse and `$((10#...))`, so it is decimal digits and nothing else. Re-assert
+  # it anyway: this is the ONLY place in this script that removes a directory
+  # rather than a file, and a path component that ever became empty, `.` or `..`
+  # would widen the `rm -rf` below from one claim's artifacts to the whole
+  # runtime tree. The guard costs one test and closes the entire class.
+  if [[ ! "$batch_num" =~ ^[0-9]+$ ]]; then
+    echo "   ⚠️  Refusing to remove claim artifacts — batch id '${batch_num}' is not numeric." >&2
+    return 0
+  fi
+
+  # Park markers first. `-e || -L` rather than bare `-e`: `-e` follows symlinks,
+  # so a DANGLING marker symlink would be skipped here while `rm -f` really does
+  # remove it — a report that claims to say what this code did, saying the
+  # opposite (the same trap `/review-close` Step 4c documents for the lock).
+  for marker in "${main_root}/sysop/runtime/parked/BATCH-${batch_num}__"*.md; do
+    [[ -e "$marker" || -L "$marker" ]] || continue
+    # Report what the `rm` DID, not that it was attempted. The call sites are
+    # `remove_claim_artifacts "$n" || true`, so a failing `rm` cannot abort and an
+    # unconditional success line turns a read-only parked/ into a silent loss of the
+    # one record explaining why the work stopped — reproduced by this phase's round,
+    # against this function's own header promising it "reports either way".
+    if rm -f "$marker" 2>/dev/null && [[ ! -e "$marker" && ! -L "$marker" ]]; then
+      echo "   ✅ Removed park marker $(basename "$marker")"
+      markers_removed=$((markers_removed + 1))
+    else
+      echo "   ⚠️  Could NOT remove park marker ${marker} — left in place." >&2
+    fi
+  done
+  if [[ $markers_removed -eq 0 ]]; then
+    echo "   ℹ️  No park markers for Batch ${batch_num}."
+  fi
+
+  # Then the per-run artifact directory. `-d` follows symlinks and `rm -rf` on a
+  # symlink removes the LINK, not the target — which is the safe direction here.
+  claim_dir="${main_root}/sysop/runtime/claim/BATCH-${batch_num}"
+  if [[ -d "$claim_dir" || -L "$claim_dir" ]]; then
+    if rm -rf "$claim_dir" 2>/dev/null && [[ ! -e "$claim_dir" && ! -L "$claim_dir" ]]; then
+      echo "   ✅ Removed claim artifacts ${claim_dir}"
+    else
+      echo "   ⚠️  Could NOT remove claim artifacts ${claim_dir} — left in place." >&2
+    fi
+  elif [[ -e "$claim_dir" ]]; then
+    # A regular file where a directory belongs. Printing the "never ran the pipeline"
+    # line here would state a specific and false cause for something that is still on
+    # disk. Say what was found.
+    echo "   ⚠️  ${claim_dir} exists but is not a directory — left in place." >&2
+  else
+    echo "   ℹ️  No claim artifacts at ${claim_dir} (batch never ran the /claim-task pipeline, or already cleaned)."
+  fi
+}
+
 # ── Process each batch ────────────────────────────────────────
 # Q-012: once, before the loop. Re-checking per batch would cost a subprocess
 # per iteration to close a window this script cannot open on its own — its own
@@ -509,7 +706,7 @@ for BATCH_NUM in "${BATCH_NUMS[@]}"; do
   # `--range` rather than `--list`.
   #
   # SKIP rather than exit, with its own explicit reason. The script's contract
-  # is to report and continue (`close_batch.sh:954-959`: annotation warnings
+  # is to report and continue (`close_batch.sh:1231-1240`: annotation warnings
   # are "deliberately NOT an exit-code change"), so aborting here would
   # abandon the other batches
   # in a multi-batch close. This is not the `find_batch_range` refusal problem —
@@ -557,7 +754,7 @@ for BATCH_NUM in "${BATCH_NUMS[@]}"; do
   # fallback is a caller-contract change this entry has declined three times —
   # a refusal here is overwritten by the FALSE "Not found in review_tasks.md"
   # message directly above, and this script diagnoses by commit presence rather
-  # than exit code (`close_batch.sh:954-959`). So the honest move is to say which resolver
+  # than exit code (`close_batch.sh:1231-1240`). So the honest move is to say which resolver
   # answered, because the two disagree about what a batch IS.
   #
   # STDOUT, not stderr, and that is the file's own rule ~130 lines below: NEARMISS
@@ -573,9 +770,19 @@ for BATCH_NUM in "${BATCH_NUMS[@]}"; do
       echo "       review_index.py ran and could not match this batch's header, so the"
       echo "       header does not have the canonical shape:"
       echo "         ### Batch <N> — <Title> \`<Status>\`   (em-dash, backticked status)"
-      echo "       The fallback is fence-blind: a \`## \` heading quoted inside the batch"
-      echo "       body ends the range EARLY, so tasks below it stay open under a"
-      echo "       \`Merged\` header. Measured on a 3-task batch: 1 closed, 2 left \`[ ]\`."
+      if $FENCED_OK; then
+        echo "       The range itself is sound: review_index.py --fenced-lines answered,"
+        echo "       so the boundary search skips fenced \`## \` headings (Q-017, Phase 233)."
+      else
+        echo "       AND the fenced-line probe FAILED, so there is no mask and the range is"
+        echo "       fence-blind: a \`## \` heading quoted inside the batch body ends it EARLY,"
+        echo "       leaving tasks below open under a \`Merged\` header. Re-run:"
+        echo "         python3 sysop/scripts/review_index.py --fenced-lines"
+        echo "       to see the error this run discarded."
+      fi
+      echo "       What is NOT sound is that the readers disagree about this header --"
+      echo "       /sitrep and the archiver cannot see it, /next-task offers it, and"
+      echo "       batch_work.sh refuses to claim it. Fix the header."
       echo "       This batch WILL still be closed. List every such header with:"
       echo "         python3 sysop/scripts/review_index.py --check-headers"
       ;;
@@ -584,8 +791,11 @@ for BATCH_NUM in "${BATCH_NUMS[@]}"; do
       echo "   ⚠️  Batch ${BATCH_NUM}'s range came from the GREP FALLBACK, not the index."
       echo "       review_index.py did NOT run (python3 or ${INDEX_SCRIPT} is missing), so"
       echo "       this says nothing about your header — it is a partial or stale install."
-      echo "       The fallback is also fence-blind: a \`## \` heading quoted inside the"
-      echo "       batch body ends the range early. This batch WILL still be closed."
+      echo "       Without review_index.py there is no fenced-line mask, so this arm"
+      echo "       -- and only this arm -- is still fence-blind: a \`## \` heading quoted"
+      echo "       inside the batch body ends the range EARLY, leaving tasks below it"
+      echo "       open under a \`Merged\` header. Measured on a 3-task batch: 1 closed,"
+      echo "       2 left \`[ ]\`. This batch WILL still be closed."
       echo "       Diagnose with: bash sysop/scripts/self_check.sh"
       ;;
   esac
@@ -670,13 +880,76 @@ for BATCH_NUM in "${BATCH_NUMS[@]}"; do
     | sed 's/.*`\(.*\)`.*/\1/' || true)
 
   if [[ -n "$BRANCH_NAME" ]]; then
-    # Verify branch is merged into main (skip with --force for cherry-picked branches)
+    # Verify branch is merged into the MERGE TARGET (skip with --force for
+    # cherry-picked branches).
+    #
+    # ── Q-020, the wrong-tree class (Phase 233) ──────────────────────────
+    #
+    # This asked about the literal `main` while the merge it is verifying lands
+    # in whatever branch is checked out. Under `§ Merge policy: pr` those are
+    # different revisions: `/review-close` Step 4a merges each batch branch into
+    # an INTEGRATION branch cut from `origin/main`, Step 4b runs here with that
+    # branch checked out, and the PR is not squashed until Step 4d. So a
+    # correctly-merged branch is not an ancestor of local `main` and never will
+    # be -- and the skill's own remedy was to mandate `--force` on every
+    # `pr`-policy close, which disarms the gate for exactly the consumers it
+    # exists to protect. An unmerged branch was indistinguishable from a merged
+    # one on the dominant path.
+    #
+    # Measured on a `pr`-shaped fixture (integration branch cut from main,
+    # feature merged in with --no-ff):
+    #   merge-base --is-ancestor feat/one main   -> FALSE  (rejects real work)
+    #   merge-base --is-ancestor feat/one HEAD   -> TRUE   (correct)
+    #   merge-base --is-ancestor feat/never HEAD -> FALSE  (still catches it)
+    #
+    # `HEAD` first, `main` retained as a fallback. That ordering is deliberately
+    # WIDER than the shipped predicate and never narrower: every branch the old
+    # code accepted is still accepted, so this cannot introduce a new refusal in
+    # any consumer. Under `direct` policy HEAD *is* main and nothing changes.
+    #
+    # This is what `close_batch.sh` already promises: /review-close Step 4b says
+    # it "commits to whatever branch is current". The write target was HEAD all
+    # along; only the verification was pointed somewhere else.
+    # STRICT containment on the HEAD arm: the branch must be inside HEAD and not BE
+    # HEAD. Round finding (HIGH, execute lens) -- the first cut used plain ancestry,
+    # and `--is-ancestor X HEAD` is trivially TRUE whenever HEAD sits at the branch
+    # tip. Reproduced: checked out on `feat/five`, merged nowhere, `main` does not
+    # contain it -- the gate printed `✓ Branch 'feat/five' verified merged.` and
+    # flipped the header to `Merged`. The shipped gate refused that. So a widening
+    # sold as "cannot introduce a new refusal" had introduced a new ACCEPT, in the
+    # one case the check exists for, and `batch_work.sh` puts an operator exactly
+    # there: it creates the batch worktree checked out ON the batch branch.
+    #
+    # `if`, never `[ … ] && return`: this file's own rule ~250 lines above records
+    # that a false test in an AND-list returns non-zero and `set -e` kills the run.
+    #
+    # What this deliberately does NOT accept is the PR-REUSE shape, where HEAD *is*
+    # the approved branch. That is not an oversight and not a regression -- the
+    # shipped gate refused it too. Before the PR squashes there is genuinely no
+    # ancestry evidence that the work landed, and this skill's own Step 6 note says
+    # so outright: "After a squash there is no ancestry-shaped containment test."
+    # Reuse keeps `--force`, with that as the stated reason.
+    _merged_into_target() {
+      local head_sha branch_sha
+      head_sha="$(git rev-parse HEAD 2>/dev/null)" || head_sha=""
+      branch_sha="$(git rev-parse --verify --quiet "$1^{commit}" 2>/dev/null)" || branch_sha=""
+      if [[ -n "$head_sha" && -n "$branch_sha" && "$head_sha" != "$branch_sha" ]]; then
+        if git merge-base --is-ancestor "$1" HEAD 2>/dev/null; then
+          return 0
+        fi
+      fi
+      if git merge-base --is-ancestor "$1" main 2>/dev/null; then
+        return 0
+      fi
+      return 1
+    }
+
     if git show-ref --verify --quiet "refs/heads/${BRANCH_NAME}" 2>/dev/null; then
-      if ! git merge-base --is-ancestor "$BRANCH_NAME" main 2>/dev/null; then
+      if ! _merged_into_target "$BRANCH_NAME"; then
         if $FORCE; then
           echo "   ⚠️  Branch '${BRANCH_NAME}' not ancestor-merged (--force: accepting cherry-pick)."
         else
-          echo "   ❌ Branch '${BRANCH_NAME}' is NOT merged into main. Skipping. (Use --force for cherry-picked branches.)"
+          echo "   ❌ Branch '${BRANCH_NAME}' is NOT merged into the close target (HEAD) or main. Skipping. (Use --force for cherry-picked branches.)"
           SKIPPED+=("${BATCH_NUM}:unmerged")
           continue
         fi
@@ -684,11 +957,11 @@ for BATCH_NUM in "${BATCH_NUMS[@]}"; do
         echo "   ✓ Branch '${BRANCH_NAME}' verified merged."
       fi
     elif git show-ref --verify --quiet "refs/remotes/origin/${BRANCH_NAME}" 2>/dev/null; then
-      if ! git merge-base --is-ancestor "origin/${BRANCH_NAME}" main 2>/dev/null; then
+      if ! _merged_into_target "origin/${BRANCH_NAME}"; then
         if $FORCE; then
           echo "   ⚠️  Remote branch '${BRANCH_NAME}' not ancestor-merged (--force: accepting cherry-pick)."
         else
-          echo "   ❌ Remote branch '${BRANCH_NAME}' is NOT merged into main. Skipping. (Use --force for cherry-picked branches.)"
+          echo "   ❌ Remote branch '${BRANCH_NAME}' is NOT merged into the close target (HEAD) or main. Skipping. (Use --force for cherry-picked branches.)"
           SKIPPED+=("${BATCH_NUM}:unmerged")
           continue
         fi
@@ -911,12 +1184,15 @@ if ! $DRY_RUN && [[ ${#CLOSED[@]} -gt 0 ]]; then
   if $CLOSE_ON_MAIN; then
     for n in "${CLOSED[@]}"; do
       remove_batch_lock "$n" || true
+      remove_claim_artifacts "$n" || true
     done
   else
     echo "   ⏸  Close committed on '${CB_BRANCH:-detached HEAD}', not main in the main checkout."
-    echo "      Locks kept — the batch is not merged yet, and a lock removed now would let"
-    echo "      /next-task re-offer a batch whose work is sitting on an unmerged branch."
-    echo "      They are released by the next close run from main: bash sysop/scripts/close_batch.sh ${CLOSED[*]}"
+    echo "      Locks kept, and the claim artifacts with them — the batch is not merged yet."
+    echo "      A lock removed now would let /next-task re-offer a batch whose work is sitting"
+    echo "      on an unmerged branch, and a park verdict removed now would destroy the record"
+    echo "      of why the work stopped."
+    echo "      Both are released by the next close run from main: bash sysop/scripts/close_batch.sh ${CLOSED[*]}"
   fi
 fi
 
@@ -939,6 +1215,7 @@ if $FINISHED_UNLOCK_OK; then
   echo "── Batch locks (already finished) ──"
   for n in "${MERGED_UNLOCK[@]}"; do
     remove_batch_lock "$n" || true
+    remove_claim_artifacts "$n" || true
   done
 fi
 
@@ -967,7 +1244,14 @@ fi
 # count does not. An operator reading only the tail of a 20-batch run still
 # learns that some batch was closed on a range the index could not produce.
 if [[ $TOTAL_FALLBACK_RANGES -gt 0 ]]; then
-  echo "   ⚠️  Batches closed via the grep fallback: ${TOTAL_FALLBACK_RANGES} (their headers are not canonical — see the warnings above)"
+  # The cause is split two ways and this line must not pick one. The counter is
+  # incremented by BOTH arms: `fallback` (the index ran and could not match the
+  # header) and `fallback-no-index` (python3 or the index script is missing,
+  # which says nothing about the header). Asserting "not canonical" here told
+  # an operator with a byte-perfect tracker and no python3 that their header was
+  # malformed -- the same wrong-cause conflation Phase 220's round fixed in the
+  # per-batch message above and left standing in this line.
+  echo "   ⚠️  Batches closed via the grep fallback: ${TOTAL_FALLBACK_RANGES} (see the per-batch warnings above for which cause applied)"
 fi
 if $DRY_RUN; then
   echo "   (dry-run mode — no changes made)"

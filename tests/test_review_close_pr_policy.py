@@ -294,11 +294,39 @@ def test_step4a_is_skipped_under_reuse():
 
 def test_step4b_force_rationale_covers_both_shapes():
     block = _section("### 4b. Close Merged Batches", "### 4c.")
-    assert "in *both* Step 4-pre shapes" in block
+    # Phase 233 (`Q-020`) retired the mandate: the gate targeted the literal
+    # `main` while the merge lands in HEAD, so it rejected every correctly-merged
+    # `pr` branch, and the remedy — mandate `--force` — also silenced the
+    # cherry-pick detection. What this test pins is unchanged in PURPOSE: the
+    # rationale must cover BOTH Step 4-pre shapes and must name the actual gate.
+    # COVERAGE of both shapes, not the word "both". The rationale used to say
+    # "in *both* Step 4-pre shapes" when it mandated `--force` for both; after the
+    # round they differ (strict containment passes the integration shape and
+    # refuses reuse), so pinning that phrase would force the prose back to a claim
+    # execution refutes. The two named-shape assertions below test the real
+    # requirement — a reader on either shape must find their case.
+    assert "Step 4-pre" in block, "the rationale no longer references the two shapes at all"
     assert "git merge-base --is-ancestor" in block, (
-        "the --force rationale should name the actual gate it bypasses"
+        "the rationale should name the actual gate it describes"
     )
-    assert "reused PR branch is by definition still unmerged" in block
+    assert "PR-reuse shape:*" in block and "Integration-branch shape:*" in block, (
+        "both shapes must be named explicitly, not merged into one claim"
+    )
+    assert "no longer need `--force` for the ancestry reason" in block, (
+        "Step 4b must not go back to mandating --force for BOTH shapes: a blanket "
+        "mandate is the disarm `Q-020` is filed about"
+    )
+    # ...and it must not overcorrect either. The round reproduced a false ACCEPT
+    # from plain ancestry (HEAD sitting at the batch tip), so the gate requires
+    # STRICT containment and the PR-reuse shape — where HEAD *is* the branch —
+    # genuinely still needs the escape. Saying otherwise strands that operator.
+    assert "reuse still needs" in block and "`--force`" in block, (
+        "Step 4b claims the reuse shape needs no --force; strict containment "
+        "refuses it, so that instruction would fail on the reuse path"
+    )
+    assert "cherry-pick" in block, (
+        "--force's one legitimate use must survive the mandate's retirement"
+    )
 
 
 def test_step4d_reuse_path_never_opens_a_second_pr():

@@ -432,8 +432,20 @@ def test_close_warns_when_the_range_came_from_the_fallback(tmp_path):
     # is how a single-line `>&2` walked this guard in the phase's own battery.
     # The whole block belongs on stdout: /review-close Step 4b reads stdout, and
     # a warning split across two streams is half-addressed to the empty room.
-    for fragment in ("GREP FALLBACK", "review_index.py ran", "canonical shape",
-                     "fence-blind", "WILL still be closed", "--check-headers"):
+    # Fragments span the block top-to-bottom so a mid-block `>&2` is caught.
+    # `fence-blind` was one of these until Phase 233 made THIS arm fence-aware
+    # (Q-017). The claim moved to the no-index arm, where it is still true, and
+    # `test_the_fence_blind_claim_is_made_only_on_the_arm_where_it_is_true`
+    # asserts it there -- and asserts its ABSENCE here.
+    # Every fragment must be UNIQUE to this block. Round finding (MEDIUM, guards
+    # lens): `readers disagree` also appears in `review_index.py:812`'s near-miss
+    # advisory, which prints on the same run -- so the mid-block fragment resolved
+    # OUTSIDE the block, and deleting close_batch.sh's own line left this green.
+    # A fragment with two referents cannot span anything. Replaced with
+    # `refuses to claim it`, which the sweep below asserts is unique.
+    for fragment in ("GREP FALLBACK", "review_index.py ran",
+                     "could not match this batch", "boundary search skips fenced",
+                     "refuses to claim it", "WILL still be closed", "--check-headers"):
         assert fragment in out.stdout, f"{fragment!r} is not on stdout"
         assert fragment not in out.stderr, f"{fragment!r} leaked to stderr"
     # and it still closed, which is the pinned half
@@ -791,3 +803,493 @@ def test_the_report_does_not_claim_a_reader_is_blind_that_demonstrably_is_not():
     )
     # ...and the archiver genuinely is blind, which the message may say.
     assert not art.BATCH_HEADER_RE.match(lines[4] if len(lines) > 4 else "")
+
+
+# === Q-017: the fallback range stops being fence-blind (Phase 233) ==========
+#
+# The headline defect, filed 2026-08-03 and refused three times. All three
+# refusals aimed at the same thing: whether a non-canonical header should be
+# CLOSED or REFUSED, which cannot be changed at `if ! find_batch_range` because
+# a refusal there is overwritten by a FALSE "Not found in review_tasks.md".
+#
+# That verdict is untouched here, and stays as ratified (keep closing, stop
+# being silent). What is fixed is the RANGE: the boundary search now skips
+# fenced `## ` lines, using the same `$FENCED_LINES` mask `CLOSE_AWK` already
+# rewrites around. The mask is populated under `python3 && -f $INDEX_SCRIPT`,
+# which is exactly the `fallback` arm's own precondition -- so the arm where the
+# defect was measured always has it, and no caller contract changes.
+
+
+def _fenced_near_miss_tracker(status="Pending"):
+    """A near-miss header whose batch body QUOTES a `## ` heading.
+
+    Both halves are load-bearing: the ASCII hyphen sends the range to the grep
+    fallback (the index cannot match the header), and the fenced `## Deferred`
+    is what that fallback used to bound on.
+    """
+    return (
+        "# Review Tasks\n"
+        "\n"
+        f"### Batch 1 - Hyphen not em-dash `{status}`\n"
+        "\n"
+        "> **Branch:** `feat/one`\n"
+        "\n"
+        "- [ ] **TASK-1**: first, above the fence\n"
+        "\n"
+        "```markdown\n"
+        "## Deferred\n"
+        "an example heading quoted inside the batch body\n"
+        "```\n"
+        "\n"
+        "- [ ] **TASK-2**: below the fence\n"
+        "- [ ] **TASK-3**: also below the fence\n"
+        "\n"
+        "## Statistics\n"
+        "\n"
+        "Trailing section.\n"
+    )
+
+
+def _assert_the_fixture_can_see_the_defect(tracker: str):
+    """The precondition, asserted rather than assumed. Phase 232 wrote three
+    fixtures that could not reach the defect they were written for; one of them
+    would have passed against the unfixed script and measured nothing.
+
+    Recomputes the OLD fence-blind range with the same shell the script used to
+    run, and requires it to under-reach -- i.e. to stop at the fenced `##` and
+    leave real tasks outside the batch.
+    """
+    lines = tracker.splitlines()
+    start = next(i for i, l in enumerate(lines, 1) if l.startswith("### Batch 1 "))
+    blind_off = next(i for i, l in enumerate(lines[start:], 1) if l.startswith("##"))
+    blind_end = start + blind_off - 1
+    assert lines[blind_end - 1 + 1].strip() == "## Deferred" or \
+        lines[blind_end].strip() == "## Deferred", \
+        "the fence-blind boundary is not the fenced heading -- fixture is wrong"
+    t2 = next(i for i, l in enumerate(lines, 1) if "**TASK-2**" in l)
+    t3 = next(i for i, l in enumerate(lines, 1) if "**TASK-3**" in l)
+    assert t2 > blind_end and t3 > blind_end, (
+        "TASK-2/TASK-3 are inside the fence-blind range, so this fixture cannot "
+        "distinguish a fixed script from a broken one"
+    )
+
+
+def test_the_fallback_range_skips_a_fenced_boundary(tmp_path):
+    """**The headline defect, and it must close every real task.**
+
+    Reproduced at Phase 233's open on the unfixed script: 1 of 3 closed, header
+    flipped to `Merged`, TASK-2 and TASK-3 left `[ ]` underneath it, exit 0, run
+    committed. That is the state `Q-017` was filed for on 2026-08-03.
+    """
+    tracker = _fenced_near_miss_tracker()
+    _assert_the_fixture_can_see_the_defect(tracker)
+    r = _repo(tmp_path / "r", tracker)
+
+    out = _close(r, "1")
+    assert out.returncode == 0, out.stderr
+    after = (r / "review_tasks.md").read_text()
+
+    assert "- [x] **TASK-1**" in after, after
+    assert "- [x] **TASK-2**" in after, (
+        "TASK-2 is still open under a closed header -- the fenced `## Deferred` "
+        f"is still bounding the batch early.\n{after}"
+    )
+    assert "- [x] **TASK-3**" in after, after
+    assert "`Merged`" in after
+    assert "3 tasks closed" in out.stdout, out.stdout
+    # The fenced example is content and must never be rewritten.
+    assert "## Deferred\nan example heading quoted inside the batch body" in after
+
+
+def test_a_real_unfenced_boundary_still_bounds_the_batch(tmp_path):
+    """**The over-strictness control -- the narrow end of the predicate.**
+
+    A filter that skipped `##` lines too eagerly would run batch 1's range on
+    into batch 2 and close its tasks. Phase 232's lesson: the self-serving
+    widening protects the target and breaks the neighbour, so the narrow end is
+    a first-class test, not a footnote.
+    """
+    tracker = (
+        "# Review Tasks\n"
+        "\n"
+        "### Batch 1 - Hyphen not em-dash `Pending`\n"
+        "\n"
+        "> **Branch:** `feat/one`\n"
+        "\n"
+        "- [ ] **TASK-1**: batch one\n"
+        "\n"
+        "```markdown\n"
+        "## Deferred\n"
+        "```\n"
+        "\n"
+        "- [ ] **TASK-2**: still batch one\n"
+        "\n"
+        "### Batch 2 - Also hyphenated `Pending`\n"
+        "\n"
+        "> **Branch:** `feat/two`\n"
+        "\n"
+        "- [ ] **TASK-9**: belongs to batch TWO and must not close\n"
+        "\n"
+        "## Statistics\n"
+    )
+    r = _repo(tmp_path / "r", tracker)
+
+    out = _close(r, "1")
+    assert out.returncode == 0, out.stderr
+    after = (r / "review_tasks.md").read_text()
+
+    assert "- [x] **TASK-1**" in after and "- [x] **TASK-2**" in after, after
+    assert "- [ ] **TASK-9**" in after, (
+        "closing batch 1 closed a task in batch 2 -- the fenced-line filter "
+        f"skipped a REAL `### Batch 2` boundary.\n{after}"
+    )
+    assert "### Batch 2 - Also hyphenated `Pending`" in after, (
+        "batch 2's header was rewritten by batch 1's close"
+    )
+    assert "2 tasks closed" in out.stdout, out.stdout
+
+
+def test_the_fence_blind_claim_is_made_only_on_the_arm_where_it_is_true(tmp_path):
+    """**The direction guard.** Phase 220's round caught this warning asserting
+    the wrong DIRECTION (it said the range could over-reach; the mechanism can
+    only bound EARLY). The claim is now arm-specific and can go stale the same
+    way: `fallback` has the mask and is fence-aware, `fallback-no-index` has no
+    python3 to build one and is still blind. A message that states the wrong
+    arm's behaviour is the same defect wearing the other hat.
+    """
+    # Arm 1: index present, header non-canonical -> fence-AWARE.
+    r1 = _repo(tmp_path / "aware", _fenced_near_miss_tracker())
+    o1 = _close(r1, "1")
+    assert "canonical shape" in o1.stdout, "wrong arm fired"
+    assert "fence-blind" not in o1.stdout, (
+        "this arm consults $FENCED_LINES and is NOT fence-blind; the warning "
+        f"claims otherwise.\n{o1.stdout}"
+    )
+
+    # Arm 2: index absent -> no mask, genuinely still blind, and it must say so.
+    r2 = _repo(tmp_path / "blind", _fenced_near_miss_tracker())
+    (r2 / "sysop/scripts/review_index.py").unlink()
+    o2 = _close(r2, "1")
+    assert "did NOT run" in o2.stdout, "wrong arm fired"
+    assert "fence-blind" in o2.stdout, (
+        "the no-index arm IS still fence-blind and stopped saying so -- an "
+        f"operator on a python3-less host is now told nothing.\n{o2.stdout}"
+    )
+    # ...and the behaviour that claim describes is real, not just described.
+    after2 = (r2 / "review_tasks.md").read_text()
+    assert "- [ ] **TASK-2**" in after2 and "- [ ] **TASK-3**" in after2, (
+        "the no-index arm closed the whole batch, so its fence-blind warning is "
+        f"now the false one.\n{after2}"
+    )
+
+
+def test_the_fallback_summary_does_not_assert_a_cause_it_did_not_check(tmp_path):
+    """One counter, two causes. `TOTAL_FALLBACK_RANGES` is incremented by BOTH
+    arms, and the summary line asserted "their headers are not canonical" for
+    all of them -- telling an operator with a byte-perfect tracker and no
+    python3 that their header was malformed.
+
+    This is the same wrong-cause conflation Phase 220's round fixed in the
+    per-batch message and left standing in the summary 400 lines below: the
+    class recurs at call-site granularity, not file granularity.
+    """
+    r = _repo(tmp_path / "r", _near_miss_tracker().replace(
+        "### Batch 1 - Hyphen not em-dash", "### Batch 1 — Canonical"))
+    (r / "sysop/scripts/review_index.py").unlink()
+
+    out = _close(r, "1")
+    assert out.returncode == 0
+    m = re.search(r"Batches closed via the grep fallback: (\d+)", out.stdout)
+    assert m and m.group(1) == "1", out.stdout
+    assert "headers are not canonical" not in out.stdout, (
+        "the summary blamed the header on a run where the index never ran.\n"
+        f"{out.stdout}"
+    )
+
+
+def test_a_real_boundary_immediately_after_a_fence_close_is_not_skipped(tmp_path):
+    """**Battery survivor `A3-offset-frame-shifted`, closed.**
+
+    The filter converts a grep hit's stream offset to an absolute line as
+    `start + $1`. Shifting that to `start + $1 - 1` changed real behaviour and
+    every guard stayed green -- because `_fenced_mask` masks the fence
+    DELIMITERS as well as their content, so in the ordinary fixture the fenced
+    `## Deferred` (line N) and the ```` ``` ```` opener above it (N-1) are both
+    masked. Consulting the wrong one of two masked lines is invisible.
+
+    This fixture makes the two answers differ: a REAL `### Batch 2` boundary sits
+    immediately after a fence CLOSE. The correct frame asks about the boundary
+    itself (unmasked, so it bounds); the shifted frame asks about the ```` ``` ````
+    above it (masked, so it is skipped) and batch 1's range runs on into batch 2.
+    """
+    tracker = (
+        "# Review Tasks\n"
+        "\n"
+        "### Batch 1 - Hyphen not em-dash `Pending`\n"
+        "\n"
+        "> **Branch:** `feat/one`\n"
+        "\n"
+        "- [ ] **TASK-1**: batch one\n"
+        "\n"
+        "```markdown\n"
+        "## Deferred\n"
+        "```\n"
+        "### Batch 2 - Also hyphenated `Pending`\n"
+        "\n"
+        "> **Branch:** `feat/two`\n"
+        "\n"
+        "- [ ] **TASK-9**: belongs to batch TWO and must not close\n"
+        "\n"
+        "## Statistics\n"
+    )
+    # The precondition that makes this fixture able to see the defect: the real
+    # boundary's PREDECESSOR must be masked, or the two frames agree.
+    import sys as _sys
+    _sys.path.insert(0, str(SCRIPTS))
+    import review_index as _ri
+    lines = tracker.splitlines()
+    mask = _ri._fenced_mask(lines)
+    b2 = next(i for i, l in enumerate(lines, 1) if l.startswith("### Batch 2"))
+    assert not mask[b2 - 1], "the real boundary is itself masked — fixture is wrong"
+    assert mask[b2 - 2], (
+        "the line above the real boundary is NOT masked, so a one-off frame would "
+        "give the same answer and this fixture measures nothing"
+    )
+
+    r = _repo(tmp_path / "r", tracker)
+    out = _close(r, "1")
+
+    assert out.returncode == 0, out.stderr
+    after = (r / "review_tasks.md").read_text()
+    assert "- [x] **TASK-1**" in after, after
+    assert "- [ ] **TASK-9**" in after, (
+        "batch 1's close reached into batch 2 — the fenced-line frame is off by "
+        f"one, so a real boundary read as fenced.\n{after}"
+    )
+    assert "### Batch 2 - Also hyphenated `Pending`" in after, after
+    assert "1 tasks closed" in out.stdout, out.stdout
+
+
+def test_the_fence_aware_claim_is_not_made_when_the_probe_failed(tmp_path):
+    """**Round finding (HIGH, claims lens): a conditional stated as unconditional.**
+
+    The `fallback` arm's warning said *"The range itself is sound: this arm has
+    review_index.py"* -- but `FENCED_LINES` is `$(... --fenced-lines 2>/dev/null)
+    || FENCED_LINES=""`, so a parser crash, a damaged tracker, or an older
+    installed `review_index.py` yields an EMPTY mask while `RANGE_SOURCE` is still
+    `fallback`. The range is then fence-blind and the operator was told it was
+    sound.
+
+    That is the same wrong-cause conflation this phase indicts in the summary
+    line -- reintroduced by the fix for it. `FENCED_OK` now separates "no fences
+    in this tracker" from "the probe failed", and this asserts the warning tracks
+    it in both directions.
+    """
+    tracker = _fenced_near_miss_tracker()
+
+    # Arm A: the probe WORKS -> the fence-aware claim is made, and is true.
+    ok = _repo(tmp_path / "ok", tracker)
+    out_ok = _close(ok, "1")
+    assert "--fenced-lines answered" in out_ok.stdout, out_ok.stdout
+    assert "probe FAILED" not in out_ok.stdout, out_ok.stdout
+    assert "- [x] **TASK-3**" in (ok / "review_tasks.md").read_text()
+
+    # Arm B: the index script is PRESENT but its --fenced-lines exits non-zero.
+    # A stub, because the real failure modes (parser crash, older script without
+    # the flag) are exactly this from the shell's point of view.
+    bad = _repo(tmp_path / "bad", tracker)
+    idx = bad / "sysop" / "scripts" / "review_index.py"
+    idx.write_text(
+        "import sys\n"
+        "if '--fenced-lines' in sys.argv:\n"
+        "    sys.stderr.write('boom\\n'); sys.exit(1)\n"
+        "sys.exit(1)\n",
+        encoding="utf-8",
+    )
+    out_bad = _close(bad, "1")
+
+    assert out_bad.returncode == 0, out_bad.stderr
+    assert "probe FAILED" in out_bad.stdout, (
+        "the fenced-line probe failed and the warning did not say so.\n"
+        f"{out_bad.stdout}"
+    )
+    assert "--fenced-lines answered" not in out_bad.stdout, (
+        "the range was claimed fence-aware on a run that built no mask.\n"
+        f"{out_bad.stdout}"
+    )
+    # ...and the claim it now makes is the true one: without a mask it IS blind.
+    after_bad = (bad / "review_tasks.md").read_text()
+    assert "- [ ] **TASK-2**" in after_bad and "- [ ] **TASK-3**" in after_bad, (
+        "no mask was built yet the range was fence-aware — then the warning "
+        f"above is the false one.\n{after_bad}"
+    )
+
+
+def test_the_stdout_fragments_are_unique_to_close_batchs_own_message(tmp_path):
+    """**Round finding (MEDIUM, guards lens), generalized.**
+
+    `test_close_warns_when_the_range_came_from_the_fallback` asserts a list of
+    fragments "spanning the block top-to-bottom so a mid-block `>&2` is caught".
+    That only works if each fragment has ONE referent. `readers disagree` had two
+    -- `review_index.py:812`'s near-miss advisory prints it on the same run -- so
+    deleting `close_batch.sh`'s own line left the guard green.
+
+    This asserts the property directly against the shipped scripts, so the next
+    fragment borrowed from a sibling reader is caught when it is added, not when
+    something silently stops being tested.
+    """
+    others = [SCRIPTS / n for n in ("review_index.py", "next_task.py", "sitrep_survey.py",
+                                    "archive_review_tasks.py", "batch_work.sh")]
+    corpus = "\n".join(p.read_text(encoding="utf-8") for p in others if p.is_file())
+
+    # `--check-headers` is exempt and the exemption is the interesting part: it is a
+    # FLAG NAME, so it necessarily appears in the module that defines it. A whole-file
+    # corpus check cannot tell a flag definition from printed output, and excluding the
+    # fragment would lose the one that pins the block's last line. It stays in the list
+    # above; what it cannot do alone is prove close_batch printed it, which is why the
+    # six fragments around it must each have exactly one referent.
+    EXEMPT = {"--check-headers"}
+    for fragment in ("GREP FALLBACK", "review_index.py ran",
+                     "could not match this batch", "boundary search skips fenced",
+                     "refuses to claim it", "WILL still be closed", "--check-headers"):
+        if fragment in EXEMPT:
+            continue
+        assert fragment not in corpus, (
+            f"{fragment!r} is emitted by a sibling reader too, so asserting it "
+            "does not establish that close_batch.sh printed its own line"
+        )
+
+    # ...and the direct property, which needs no uniqueness at all: deleting
+    # close_batch.sh's own block must take these fragments off stdout. Run against a
+    # COPY, never the shipped script.
+    import shutil, subprocess as sp
+    src = (SCRIPTS / "close_batch.sh").read_text(encoding="utf-8")
+    start = src.index('      echo "   ⚠️  Batch ${BATCH_NUM}\'s range came from the GREP FALLBACK')
+    end = src.index('      ;;\n    fallback-no-index)', start)
+    stripped = src[:start] + '      :\n' + src[end:]
+    assert stripped != src, "the block anchor moved; re-point, do not weaken"
+    copy = tmp_path / "close_batch_stripped.sh"
+    copy.write_text(stripped, encoding="utf-8")
+
+    r = _repo(tmp_path / "r", _near_miss_tracker())
+    out = sp.run(["bash", str(copy), "1"], cwd=str(r), capture_output=True, text=True)
+    assert "refuses to claim it" not in out.stdout, (
+        "the fragment survived deleting the block that emits it — it has another "
+        f"referent and the span assertion is measuring that one.\n{out.stdout}"
+    )
+
+
+def test_the_fenced_line_frame_is_exact_in_both_directions(tmp_path):
+    """**Round finding (guards lens, survivor A04): the `+1` twin of `A3`.**
+
+    The phase closed the `start + $1 - 1` shift and left `start + $1 + 1`
+    unguarded. This fixture kills both: a real `### Batch 2` boundary whose
+    PREDECESSOR is a fence close and whose SUCCESSOR is a fence opener. Both
+    neighbours are masked, so any off-by-one in either direction reads the real
+    boundary as fenced, skips it, and lets batch 1 run on into batch 2.
+    """
+    tracker = (
+        "# Review Tasks\n"
+        "\n"
+        "### Batch 1 - Hyphen not em-dash `Pending`\n"
+        "\n"
+        "> **Branch:** `feat/one`\n"
+        "\n"
+        "- [ ] **TASK-1**: batch one\n"
+        "\n"
+        "```markdown\n"
+        "## Deferred\n"
+        "```\n"
+        "### Batch 2 - Also hyphenated `Pending`\n"
+        "```markdown\n"
+        "## Another quoted heading\n"
+        "```\n"
+        "\n"
+        "> **Branch:** `feat/two`\n"
+        "\n"
+        "- [ ] **TASK-9**: belongs to batch TWO and must not close\n"
+        "\n"
+        "## Statistics\n"
+    )
+    import sys as _sys
+    _sys.path.insert(0, str(SCRIPTS))
+    import review_index as _ri
+    lines = tracker.splitlines()
+    mask = _ri._fenced_mask(lines)
+    b2 = next(i for i, l in enumerate(lines, 1) if l.startswith("### Batch 2"))
+    assert not mask[b2 - 1], "the real boundary is masked — fixture is wrong"
+    assert mask[b2 - 2], "predecessor not masked — the -1 shift would agree"
+    assert mask[b2], "successor not masked — the +1 shift would agree"
+
+    r = _repo(tmp_path / "r", tracker)
+    out = _close(r, "1")
+
+    assert out.returncode == 0, out.stderr
+    after = (r / "review_tasks.md").read_text()
+    assert "- [x] **TASK-1**" in after, after
+    assert "- [ ] **TASK-9**" in after, (
+        "batch 1's close reached into batch 2 — the fenced-line frame is off by "
+        f"one in some direction.\n{after}"
+    )
+    assert "1 tasks closed" in out.stdout, out.stdout
+
+
+def test_the_fence_blind_recompute_actually_recomputes(tmp_path):
+    """**Round findings (guards lens, survivors B06/B07/B08): the degradation
+    floor was asserted, never exercised.**
+
+    When the awk filter cannot run, the guard falls back to the pre-existing
+    `grep -n '^##' | head -1 | cut -d: -f1`. Nothing drove that path with a
+    tracker whose answer differs from "no boundary", so its `cut -f1`, its
+    `grep '^##'` and its inner numeric re-validation could each be broken and
+    the suite stayed green.
+
+    This shims `awk` to fail, then asserts the fallback produced the OLD answer
+    rather than either a crash or a run-to-EOF: the batch must bound at the real
+    `## Statistics` and leave the next section alone.
+    """
+    tracker = (
+        "# Review Tasks\n"
+        "\n"
+        "### Batch 1 - Hyphen not em-dash `Pending`\n"
+        "\n"
+        "> **Branch:** `feat/one`\n"
+        "\n"
+        "- [ ] **TASK-1**: inside batch one\n"
+        "\n"
+        "## Statistics\n"
+        "\n"
+        "- [ ] **TASK-9**: OUTSIDE the batch and must not close\n"
+    )
+    repo = _repo(tmp_path / "r", tracker)
+    binder = tmp_path / "bin"
+    binder.mkdir()
+    # Fails ONLY the filter's invocation shape, keyed on `-F:` which is unique to
+    # it. The first draft keyed on `-v` and that was too broad: `CLOSE_AWK` -- the
+    # rewriter -- also takes `-v fenced=`, so the shim killed the rewrite path and
+    # the test measured the short-write guard instead of the degradation floor.
+    # `awk 'END { print NR }'` (no flags) must also keep working, or `total_lines`
+    # breaks and the test measures that.
+    shim = binder / "awk"
+    shim.write_text(
+        "#!/bin/sh\n"
+        'for a in "$@"; do case "$a" in -F:) exit 3 ;; esac; done\n'
+        'exec /usr/bin/awk "$@"\n',
+        encoding="utf-8",
+    )
+    shim.chmod(0o755)
+    import os
+    env = dict(os.environ, PATH=f"{binder}:{os.environ['PATH']}")
+    r = subprocess.run(["bash", str(CLOSE_BATCH), "1"], cwd=str(repo),
+                       capture_output=True, text=True, env=env)
+
+    assert r.returncode == 0, f"the fallback crashed instead of degrading\n{r.stderr}"
+    after = (repo / "review_tasks.md").read_text()
+    assert "- [x] **TASK-1**" in after, (
+        f"the fence-blind recompute produced no usable range.\n{after}\n{r.stderr}"
+    )
+    assert "- [ ] **TASK-9**" in after, (
+        "the fallback ran past the real `## Statistics` boundary — the recompute "
+        f"is not bounding at all.\n{after}"
+    )
+    assert "1 tasks closed" in r.stdout, r.stdout

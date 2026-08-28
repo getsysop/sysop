@@ -774,6 +774,180 @@ def _pending_doc_for(
     return None
 
 
+# ── Park + awaiting-approval probe (Phase 237, Q-030 leg (a)) ────
+#
+# `/sitrep` was park-blind. A parked claim and an unstarted one both classified
+# as `planning` (lock + branch, 0 commits ahead) — the Phase 135/143/146 shape,
+# a stalled thing and a fresh thing producing identical evidence. Both park
+# writers use the same `<ID>__<stamp>.md` filename shape on purpose
+# (`claim-task/SKILL.md` § Who removes the marker), so ONE glob covers
+# `/auto-build`'s Phase-6d park and `/claim-task`'s Step-7c park alike. That
+# matters: `/sitrep` was park-blind for `/auto-build` too, and that half is a
+# pre-existing gap rather than one the orchestrator reshape created.
+#
+# **Report unknown, never "not run".** Every probe here returns "" when it finds
+# nothing, and "" leaves the caller's existing classification untouched. Absence
+# is NOT evidence that the pipeline never ran: `sysop/runtime/` is gitignored,
+# so a fresh clone, a `--resume` onto a rebuilt worktree, and any non-Claude-Code
+# harness (the `SubagentStop` envelope is Claude-Code-only) each produce a
+# correct claim with no artifacts on disk. This probe only ever UPGRADES a
+# classification on positive evidence. It never accuses.
+#
+# The orchestrator spec (maintainer-side, and it never ships) preferred riding
+# an unread lock field, on a "zero new I/O" argument. That
+# argument predates Part A and is stale in the consumer's favour: Step 7c now
+# writes a purpose-built park marker carrying the reason, the branch and the
+# `--resume` line, so the glob is both simpler and strictly more informative —
+# and the lock-field route would need an orchestrator write to the lock that
+# appears on none of the spec's lists of orchestrator-level writes.
+
+_PARKED_STATE = "parked"
+_AWAITING_STATE = "awaiting approval"
+
+
+def _park_markers(main_root: Path, claim_id: str) -> list[Path]:
+    """Park markers for a claim, newest first. Empty when absent or unreadable."""
+    d = main_root / "sysop" / "runtime" / "parked"
+    if not d.is_dir():
+        return []
+    try:
+        return sorted(d.glob(f"{claim_id}__*.md"), reverse=True)
+    except OSError:
+        return []
+
+
+def _newest_claim_run(main_root: Path, claim_id: str) -> Path | None:
+    """The most recent per-run artifact directory for a claim, or None.
+
+    Run ids are `<UTC %Y%m%dT%H%M%SZ>-<8 hex>` (`/claim-task` Step 7-pre), so a
+    lexical sort IS chronological. Deliberately not mtime: a clone, a checkout
+    or a copy resets mtime, and this directory is gitignored precisely so it is
+    the kind of thing that gets rebuilt.
+    """
+    d = main_root / "sysop" / "runtime" / "claim" / claim_id
+    if not d.is_dir():
+        return None
+    try:
+        runs = sorted((p for p in d.iterdir() if p.is_dir()), reverse=True)
+    except OSError:
+        return None
+    return runs[0] if runs else None
+
+
+def _classification_verdict(run: Path) -> str:
+    """The verdict recorded in a run's classification.md, upper-cased.
+
+    **Parse the fenced body; do not scan for a line prefix.** `/claim-task`
+    Step 7c — the only writer of this file in the tree — emits
+    `json.dumps(report, indent=2)` inside a ```yaml fence, so the verdict on
+    disk is `  "verdict": "PROCEED"`. The first cut of this function scanned for
+    a line *beginning* `verdict:` and therefore matched **nothing the shipped
+    writer produces**, which made `awaiting approval` unreachable in production
+    — with its own tests green, because every fixture hand-typed a flat
+    `verdict: PROCEED` that nothing in the tree emits. Found by this phase's
+    round; the correct idiom already existed in
+    `tests/test_claim_task_heredocs_execute.py`.
+
+    Returns "" when the file is absent, unreadable, or carries no verdict — the
+    same "cannot tell" the rest of this probe uses. Never a default verdict:
+    guessing PROCEED would invent a human gate nobody is standing at, and
+    guessing BLOCKED would invent a park.
+    """
+    p = run / "classification.md"
+    if not p.is_file():
+        return ""
+    try:
+        text = p.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    # 1. The shipped shape: a fenced JSON body (JSON is a subset of YAML 1.2,
+    #    which is why Step 7c labels the fence `yaml` and writes JSON into it).
+    m = re.search(r"```(?:yaml|json)?[^\n]*\n(.*?)\n```", text, re.S)
+    if m:
+        for _loader in (json.loads, yaml.safe_load):
+            try:
+                doc = _loader(m.group(1))
+            except Exception:
+                continue
+            if isinstance(doc, dict) and isinstance(doc.get("verdict"), str):
+                return doc["verdict"].strip().upper()
+    # 2. A bare `verdict:` line — a hand-written file, or a future flat shape.
+    #    Kept as a fallback rather than as the primary, which is the inversion
+    #    the round corrected.
+    m = re.search(
+        r'^[\s>*_-]*"?verdict"?:[\s*_"]*([A-Za-z_]+)', text, re.MULTILINE | re.IGNORECASE
+    )
+    return m.group(1).upper() if m else ""
+
+
+def _claim_stall(
+    main_root: Path | None, claim_id: str
+) -> tuple[str, str, list[str]]:
+    """Why a 0-commit claim is not moving: (state, next_action, notes).
+
+    ("", "", []) means no positive evidence of a stall — the ordinary case, and
+    the one that leaves `planning` in place. `main_root=None` (a direct caller
+    that cannot probe) takes that arm too, rather than reporting a stall it did
+    not look for.
+    """
+    if main_root is None or not claim_id:
+        return "", "", []
+
+    markers = _park_markers(main_root, claim_id)
+    run = _newest_claim_run(main_root, claim_id)
+    verdict = _classification_verdict(run) if run is not None else ""
+
+    if markers:
+        newest = markers[0]
+        notes = [f"park marker on disk: {newest.name}"]
+        if len(markers) > 1:
+            notes.append(
+                f"{len(markers)} park markers for this claim — the newest is named"
+            )
+        if run is not None:
+            action = (
+                f"read {newest.name}, then "
+                f"/claim-task {claim_id} --resume {run.name}"
+            )
+        else:
+            # An /auto-build park has no claim/<id>/ run directory at all. Do
+            # not print a --resume line naming a run that does not exist.
+            action = (
+                f"read sysop/runtime/parked/{newest.name} — it records why "
+                f"{claim_id} stopped and what it is waiting on"
+            )
+        return _PARKED_STATE, action, notes
+
+    if verdict == "BLOCKED" and run is not None:
+        # Adjudicated blocker, no marker on disk. The claim is parked in
+        # substance; say that, and say the marker is missing rather than
+        # inventing one.
+        return (
+            _PARKED_STATE,
+            f"/claim-task {claim_id} --resume {run.name}",
+            [
+                "classification.md reads verdict: BLOCKED but no park marker is "
+                "on disk — the park is real, its marker is not"
+            ],
+        )
+
+    if (
+        verdict == "PROCEED"
+        and run is not None
+        and not (run / "outcome.md").is_file()
+    ):
+        return (
+            _AWAITING_STATE,
+            f"approve or revise the plan: /claim-task {claim_id} --resume {run.name}",
+            [
+                "plan reviewed and classified clean; Step 7d's human gate has "
+                "not been answered"
+            ],
+        )
+
+    return "", "", []
+
+
 def _classify_task(
     task_id: str,
     lock: Lock | None,
@@ -786,6 +960,7 @@ def _classify_task(
     stale_days: int,
     phase40_cutoff: datetime,
     pending_doc: Path | None = None,
+    main_root: Path | None = None,
 ) -> TaskState:
     state = "unknown"
     marker = ""
@@ -793,8 +968,19 @@ def _classify_task(
     notes: list[str] = []
     doc_work_ids = sorted({tid for c in commits for tid in c.doc_work_ids})
 
+    # **The stall probe runs BEFORE the stale check, and the order is the whole
+    # point.** A park is by construction long-lived — it is waiting on an absent
+    # human — so past `--stale-days` (default 7) the stale arm would classify it
+    # `stale` and advise "confirm dead and rm the lock if abandoned": destructive
+    # advice about a live claim, and the exact opposite of what the park needs.
+    # This phase's round found it, and found that every integration test built
+    # `Lock(started="")`, which short-circuits the stale check and hid it.
+    stall_state, stall_action, stall_notes = _claim_stall(
+        main_root, task_id
+    ) if not commits else ("", "", [])
+
     # Stale check (applies to any state with a lock + worktree)
-    if lock and lock.started:
+    if lock and lock.started and not stall_state:
         try:
             started = datetime.fromisoformat(lock.started.replace("Z", "+00:00"))
             age = datetime.now(timezone.utc) - started
@@ -854,11 +1040,22 @@ def _classify_task(
     commits_ahead = len(commits)
 
     if commits_ahead == 0:
-        state = "planning"
-        next_action = (
-            f"continue the build pipeline for {task_id} "
-            "(see /claim-task Step 7: plan -> review -> classify -> execute)"
-        )
+        # Phase 237, Q-030 leg (a): a park and an unstarted claim used to land
+        # here identically. The probe (run above, before the stale check)
+        # returns "" whenever it has no positive evidence, which is the ordinary
+        # case and leaves `planning` exactly as it was — absence of artifacts is
+        # never read as "the pipeline did not run" (see _claim_stall's docstring
+        # for why that polarity is the whole design).
+        if stall_state:
+            state = stall_state
+            next_action = stall_action
+            notes.extend(stall_notes)
+        else:
+            state = "planning"
+            next_action = (
+                f"continue the build pipeline for {task_id} "
+                "(see /claim-task Step 7: plan -> review -> classify -> execute)"
+            )
     elif task_id and task_id in doc_work_ids and pending_doc is None:
         # ── Q-019: trailer present, pending-doc absent ───────────
         #
@@ -1470,6 +1667,7 @@ def run_survey(stale_days: int = DEFAULT_STALE_DAYS) -> Survey:
                 pending_doc=_pending_doc_for(
                     main_root, branch, lock, worktree
                 ),
+                main_root=main_root,
             )
         )
 
@@ -1624,8 +1822,8 @@ def _recommended_next(s: Survey) -> Recommendation | None:
 
     Priority order: review-close (task) → review-close (batch) → unpushed doc-work →
     /triage if any pending batch lacks a Triaged: record → /auto-fix and/or /auto-judge →
-    continue in-progress → resume planning → /roadmap (deep queue) or /auto-build
-    (shallow) → idle.
+    continue in-progress → parked → awaiting approval → resume planning →
+    /roadmap (deep queue) or /auto-build (shallow) → idle.
     """
     # P1: tasks ready for /review-close
     ready_tasks = [t for t in s.tasks if t.state == "ready for /review-close"]
@@ -1750,7 +1948,7 @@ def _recommended_next(s: Survey) -> Recommendation | None:
             clear_nudge=True,
         )
 
-    # P4b: code committed, documentation not yet written (Q-019).
+    # P4e: code committed, documentation not yet written (Q-019).
     #
     # Placed above P5 because this task is FURTHER along than an in-progress one
     # — it has a build commit and a `Doc-Work:` trailer, it simply has no
@@ -1794,7 +1992,47 @@ def _recommended_next(s: Survey) -> Recommendation | None:
             ),
         )
 
-    # P6: planning tasks
+    # P6a/P6b: stalled claims — parked, or waiting at Step 7d's human gate.
+    #
+    # Ranked here, immediately above `planning`, and NOT above P5, because this
+    # cascade's consistent logic is "further along ranks higher": P1/P3 have a
+    # trailer and a pending-doc, P4e has commits plus a trailer, P5 has commits.
+    # A parked or awaiting-approval claim has ZERO commits ahead — it is a
+    # specialisation of `planning`, which is exactly why it used to be swallowed
+    # by it, so it belongs where `planning` belongs.
+    #
+    # Visibility is not what the rank buys. The ACTIVE WORK table renders every
+    # task with its own state and notes, so a park is legible there whatever the
+    # cascade names; the cascade names one move. Ranking a park above live
+    # in-progress work would tell a human to go answer a question while a build
+    # sits half-finished, which is not the trade this defect was about.
+    parked = [t for t in s.tasks if t.state == _PARKED_STATE]
+    if parked:
+        t = parked[0]
+        more = f" ({len(parked) - 1} more parked)" if len(parked) > 1 else ""
+        return Recommendation(
+            command=t.next_action,
+            reason=(
+                f"{t.task_id} is parked and is waiting on a human decision"
+                f"{more} — see the detail line for what the evidence is"
+            ),
+            detail_lines=list(t.notes),
+        )
+
+    awaiting = [t for t in s.tasks if t.state == _AWAITING_STATE]
+    if awaiting:
+        t = awaiting[0]
+        more = f" ({len(awaiting) - 1} more waiting)" if len(awaiting) > 1 else ""
+        return Recommendation(
+            command=t.next_action,
+            reason=(
+                f"{t.task_id}'s plan was reviewed and classified clean; it is "
+                f"waiting on your approval at /claim-task Step 7d{more}"
+            ),
+            detail_lines=list(t.notes),
+        )
+
+    # P6c: planning tasks
     planning = [t for t in s.tasks if t.state == "planning"]
     if planning:
         t = planning[0]
@@ -1843,7 +2081,8 @@ def _recommended_next(s: Survey) -> Recommendation | None:
 
 def _suggested_order(s: Survey) -> list[str]:
     """Order: ready-to-close first, then in-progress with Doc-Work-needed,
-    then planning, then discrepancies."""
+    then stalled claims (parked, awaiting approval), then planning, then
+    discrepancies."""
     out: list[str] = []
     # 1. Ready for /review-close
     for ts in s.tasks:
@@ -1857,7 +2096,7 @@ def _suggested_order(s: Survey) -> list[str]:
         if ts.state == "doc-work done, unpushed":
             out.append(f"/review-close {ts.task_id}")
     # 2b. Code committed, docs pending (Q-019). Between the close tiers and
-    # in-progress, matching `_recommended_next`'s P4b placement: this task is
+    # in-progress, matching `_recommended_next`'s P4e placement: this task is
     # further along than an in-progress one and not yet closable.
     #
     # **This function is the third surface the new state had to reach, and the
@@ -1874,6 +2113,18 @@ def _suggested_order(s: Survey) -> list[str]:
     for ts in s.tasks:
         if ts.state == "in progress":
             out.append(f"/document-work {ts.task_id} (no Doc-Work trailer yet)")
+    # 3b. Stalled claims — parked, then awaiting approval. Both sit with
+    # `planning` (all three are 0-commits-ahead states) and above it, since a
+    # named human action beats "resume planning". Q-019's round is the reason
+    # this arm exists at all: a state wired into `_recommended_next` and not
+    # into THIS function drops out of the ordered list entirely, and the report
+    # then contradicts itself three lines apart.
+    for ts in s.tasks:
+        if ts.state == _PARKED_STATE:
+            out.append(f"{ts.task_id} is parked — {ts.next_action}")
+    for ts in s.tasks:
+        if ts.state == _AWAITING_STATE:
+            out.append(f"{ts.task_id} awaits your approval — {ts.next_action}")
     # 4. Planning
     for ts in s.tasks:
         if ts.state == "planning":

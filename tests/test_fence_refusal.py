@@ -473,12 +473,18 @@ def test_the_two_shell_copies_of_the_refusal_are_identical():
 def test_force_alone_does_not_open_the_fence_gate_on_the_close_path(tmp_path):
     """`--force` must not carry the fence escape — the close path is the proof.
 
-    `close_batch.sh --force` means "skip the merge-base ancestry check", and
-    `/review-close` Step 4b mandates it in bold for **every** `pr`-policy
-    consumer ("Under `pr` policy, always pass `--force`"). Phase 211's first cut
-    bound the exit-5 escape to that flag, which disarmed this gate on the close
-    path for precisely the consumers it exists to protect — not by operator
-    choice, because the skill leaves none.
+    `close_batch.sh --force` means "skip the merge-base ancestry check". Step 4b
+    used to mandate it in bold for **every** `pr`-policy consumer ("Under `pr`
+    policy, always pass `--force`"), and Phase 211's first cut bound the exit-5
+    escape to that flag — disarming this gate on the close path for precisely
+    the consumers it exists to protect, not by operator choice, because the
+    skill left none.
+
+    **The mandate is retired (Phase 233, `Q-020`):** the ancestry gate now
+    targets `HEAD` rather than the literal `main`, so a `pr`-policy merge passes
+    it and `--force` is back to meaning only what it says. This test is
+    unaffected either way — the point is that `--force` must never carry the
+    fence escape, whoever passes it and for whatever reason.
 
     Measured by the round before the fix: the close rewrote a fenced example's
     header to `Merged`, flipped its illustration task to `[x]` INSIDE the fence,

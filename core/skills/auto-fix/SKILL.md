@@ -197,15 +197,15 @@ If the script exits non-zero, report the error, **skip this batch**, and continu
 2. **Parallel DB contention warning**: if the eligible batches share a verify command that mutates the same database (e.g. `APP_ENV=test pytest` against `<test database name>`), parallel execution can race on schema/seed fixtures and produce flaky FAIL verdicts. For DB-heavy batches, prefer `--merge` (sequential) or invoke `/auto-fix 1` to force concurrency=1.
 
 3. Spawn fix agents using a **rolling window** up to the concurrency cap:
-   a. **Initial fill**: spawn agents for the first `<cap>` claimed batches in a single message with parallel Agent tool calls, all with `run_in_background: true`.
-   b. **Refill on completion**: each background agent's completion triggers an automatic notification. Do NOT poll or sleep. When a notification arrives, collect that agent's result; if the queue still has unstarted batches, immediately spawn one new agent for the next queued batch (`run_in_background: true`). The in-flight pool stays full until the queue drains.
+   a. **Initial fill**: spawn agents for the first `<cap>` claimed batches in a single message with parallel Agent tool calls. Sub-agents have run in the background by default since Claude Code 2.1.198, and `run_in_background` <!-- skill-audit-ok: run_in_background --> is **not** a parameter of the `Agent` tool — its schema is closed, so a compliant call raises `InputValidationError`, and a rejected tool call is itself an invitation to proceed without the step (`Q-031`).
+   b. **Refill on completion**: each background agent's completion triggers an automatic notification. Do NOT poll or sleep. When a notification arrives, collect that agent's result; if the queue still has unstarted batches, immediately spawn one new agent for the next queued batch. The in-flight pool stays full until the queue drains.
    c. **Finish**: when the queue is empty and all in-flight agents have completed, proceed to Step 4c.
 
 **With `--merge`** (all eligible batches are overlapping):
 
 Process batches one at a time — **sequentially** claim, fix, and push:
 1. Claim the first eligible batch via `batch_work.sh`
-2. Spawn one fix agent with `run_in_background: false`
+2. Spawn **one** fix agent, and spawn nothing else until it reports. There is no parameter that makes a sub-agent run in the foreground — sequencing here is orchestrator discipline, not a flag: wait for that agent's completion notification before doing anything further.
 3. After the agent reports (PASS or FAIL), claim and process the next eligible batch
 4. Repeat until all eligible batches are processed
 
@@ -387,7 +387,7 @@ A `VERIFY: TIMEOUT` batch is excluded even when its `STATUS` says PASS: this pas
 
 Sonnet's sibling-scan (Step 1b of the agent prompt) and post-fix convention check (Step 5) are weaker than Opus's on the same prompts — prior runs have shown Sonnet-missed siblings (`fix(batch-449): ExportEngine setTimeout`) and cross-convention regressions (`fix: truncate before redact_api_keys`) that only Opus catches reliably. This pass is the scoped safety net.
 
-For each batch that reported `STATUS: PASS` **and** `VERIFY: PASS` (a `VERIFY: TIMEOUT` batch is unverified and skips this pass — see 4c), spawn an **Opus** subagent to re-review the branch's committed diff. Run these in parallel across batches (single message, multiple Agent tool calls, all with `run_in_background: true` — same rolling-window refill used in Step 4b).
+For each batch that reported `STATUS: PASS` **and** `VERIFY: PASS` (a `VERIFY: TIMEOUT` batch is unverified and skips this pass — see 4c), spawn an **Opus** subagent to re-review the branch's committed diff. Run these in parallel across batches (single message, multiple Agent tool calls — same rolling-window refill used in Step 4b).
 
 Use the Agent tool with:
 - `subagent_type`: `"general-purpose"`

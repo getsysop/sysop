@@ -121,6 +121,28 @@ SEEDED_WITHOUT_SKILL_MENTION = {
     "Bash(bash sysop/scripts/cleanup_worktrees.sh:*)":
         "Same cleanup_worktrees.sh script with --clean / --force (Phase "
         "184), which is the form WORKFLOW.md § 4 actually shows.",
+    # ---- Phase 237 (`Q-314`): the `user_action` clearing. Deliberately has no
+    # skill invoker — it is a HUMAN action, run when the human finishes the
+    # human-only step. `/roadmap` names the command in its
+    # unblock-the-human-first ordering and `tasks/schema.md` § User ops puts it
+    # in a fence, but `/roadmap` is read-only and must not run it. Seeded
+    # anyway because the human routinely asks the agent to run it on their
+    # behalf once the step is done, which is the same operator shape as
+    # `backfill_completed_dates.py` below.
+    # The BARE form is deliberately NOT seeded: `task_id` is a required
+    # positional, so `python3 sysop/scripts/clear_user_action.py` with no
+    # argument always exits 2 on a usage error. A rule matching only an
+    # invocation that cannot succeed binds nothing — Phase 152's finding, and
+    # this phase's round caught it being re-committed here.
+    "Bash(python3 sysop/scripts/clear_user_action.py:*)":
+        "No skill step invokes it (it is a human action). Prescribed by "
+        "tasks/schema.md \u00a7 User ops in a fence and named by /roadmap's "
+        "unblock-the-human-first ordering; the <TASK-ID> form is the only one "
+        "either prescription shows (Phase 237, Q-314).",
+    "Bash(.venv/bin/python3 sysop/scripts/clear_user_action.py:*)":
+        "The PEP-668 spelling. The script needs PyYAML, and on a Homebrew or "
+        "modern-distro host the venv interpreter is the one that has it - the "
+        "same pairing validate_tasks.py carries (Phase 237).",
     "Bash(python3 sysop/scripts/backfill_completed_dates.py)":
         "No skill prescribes it; core/companion/tasks/README.md carries the "
         "one recipe that runs it, and WORKFLOW.md § 8.2a used to claim an "

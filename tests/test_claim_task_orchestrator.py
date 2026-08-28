@@ -67,6 +67,8 @@ from __future__ import annotations
 
 import ast
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -74,6 +76,8 @@ SKILL = REPO_ROOT / "core/skills/claim-task/SKILL.md"
 PARTIAL = REPO_ROOT / "core/skills/_shared/plan-review-preference.md"
 WORKFLOW = REPO_ROOT / "core/companion/docs/WORKFLOW.md"
 GUIDE = REPO_ROOT / "core/companion/docs/WORKFLOW_GUIDE.md"
+GETTING_STARTED = REPO_ROOT / "docs/getting-started.md"
+SCHEMA = REPO_ROOT / "core/companion/tasks/schema.md"
 REVIEW_CLOSE = REPO_ROOT / "core/skills/review-close/SKILL.md"
 
 
@@ -418,14 +422,36 @@ def delete_calls(tree: ast.AST) -> list[str]:
 
 _SHELL_DELETE_RE = re.compile(
     r"\brm\s|\brmdir\b|-delete\b|\bshred\b|\btruncate\s+-s\s*0|"
-    r"\bgit\s+clean\b|^\s*:\s*>|\s>\s*[^|&>]*\.(?:json|md)\s*$|\bcp\s+/dev/null\b",
+    r"\bgit\s+clean\b|^\s*:\s*>|\s>\s*[^|&>]*\.(?:json|md)\s*$|\bcp\s+/dev/null\b|"
+    # `git branch -D` had no arm, and Phase 238 is the phase that introduced a
+    # force delete to this step. A destructive-command guard that cannot see the
+    # destructive command the change adds is the roster-is-not-coverage shape.
+    r"\bgit\s+branch\s+(?:-[a-zA-Z]*[dD])|\bgit\s+worktree\s+remove\b|\bgit\s+push\b[^\n]*--force",
     re.M,
+)
+
+
+# The one destructive command Steps 7-8 legitimately run, enumerated rather than
+# excluded by widening the pattern above. Enumerating what is ALLOWED is this
+# module's standing design (see CONDITIONAL_ALLOWLIST): a widened pattern exempts
+# every future use of the same token, an entry exempts exactly this line.
+#
+# Step 7f's release deletes the feature branch, and that is not "destroying an
+# artifact mid-lifecycle" -- option C never commits to the branch, and leaving it
+# is what produced a real content conflict on the next claim. It is still a FORCE
+# delete (`claim_task.sh` runs `git branch -D`), which is why the Step 7f checks
+# separately require the empty-branch gate that precedes it. This entry exempts
+# the command; it does not exempt the gate.
+SHELL_DELETE_ALLOWLIST = (
+    "bash sysop/scripts/claim_task.sh --release --delete-branch <CLAIM_ID>",
 )
 
 
 def shell_deletes(text: str) -> list[str]:
     """Shell-level destruction among the executable lines, any spelling."""
-    return [ln for ln in bash_text(text).splitlines() if _SHELL_DELETE_RE.search(ln)]
+    return [ln for ln in bash_text(text).splitlines()
+            if _SHELL_DELETE_RE.search(ln)
+            and ln.strip() not in SHELL_DELETE_ALLOWLIST]
 
 
 def branch_containing(tree: ast.AST, callee: str) -> list[tuple[ast.If, str]]:
@@ -562,6 +588,15 @@ CONDITIONAL_ALLOWLIST = (
     # hole this list's own design note warns about (proximity is not identity, and
     # neither is a short span).
     "surface the file list the block just printed, skip the auto-mode chain",  # Step 8 STRANDED arm (Phase 180, #322)
+    # Step 7a's plan-presence skip and Step 7f (option C, Phase 238). Each is bound
+    # to its own sentence for the reason the design note above gives: a short span
+    # would exempt every future use of the same verb anywhere in the file.
+    "Skip the planner when the body already carries a ## Plan",     # 7a skip heading
+    "Four properties of this skip, each load-bearing",              # its rationale list
+    "Skipping the record instead would send an immediate",          # planner-integrity rule
+    "re-plan the task the skip exists to avoid",                    # (same clause, second token)
+    "this skip never applies",                                      # 7a Review batches clause
+    "Reached only when Step 6 resolved to C",                       # 7f precondition
     # WORKFLOW.md § 2.2
     "SUPERSEDED | stop | Step 7d's revise rejected",                # routing row 1 (the word itself)
     "classification write for THIS run with verdict: SUPERSEDED",   # 7d revise instruction
@@ -791,6 +826,98 @@ def _code_problems(t: str) -> list[str]:
             if delete_calls(tree):
                 p.append("Step 7c deletes something -- nothing is removed mid-lifecycle")
 
+    # --- Step 7f: the plan write-back (option C) --------------------------
+    #
+    # This is the ONLY prescribed block in this skill that rewrites a TRACKED
+    # file, so the properties below are not stylistic: a wrong one lands in the
+    # consumer's task queue and is committed on `main` by the next step.
+    hd = heredoc_containing(t, "strip_sections")
+    if hd is None:
+        p.append("Step 7f's plan write-back is gone, re-fenced or commented out")
+    else:
+        _, body = hd
+        tree = parse(body)
+        if tree is None:
+            p.append("Step 7f's plan write-back is not valid python")
+        else:
+            if "yaml" in imports(tree):
+                p.append("Step 7f's plan write-back imports yaml -- it must be stdlib only, "
+                         "or option C crashes AFTER the planner and reviewer have both run")
+            if not calls_named(tree, "write_text"):
+                p.append("Step 7f composes the plan section but never writes it")
+            if delete_calls(tree):
+                p.append("Step 7f deletes something -- the body is rewritten, never removed")
+            if calls_named(tree, "mkdir"):
+                p.append("Step 7f creates a directory -- only Step 7-pre mints runs, and the "
+                         "body it writes must already exist")
+            # The replacement is what stops a second option-C run leaving two
+            # `## Plan` sections for Step 7a's presence test to read the stale
+            # one of. A block that only ever appends satisfies every other check
+            # here, which is why this one is structural rather than textual.
+            # Name matched with a tolerated `_` prefix: renaming a local helper
+            # `strip_sections` -> `_strip_sections` is a legal, behaviour-identical
+            # edit that a formatter or a style pass produces, and exact equality
+            # false-killed it in the round's controls.
+            if not any(isinstance(n, ast.FunctionDef)
+                       and n.name.lstrip("_") == "strip_sections"
+                       for n in ast.walk(tree)):
+                p.append("Step 7f no longer strips the existing sections -- it appends, and a "
+                         "second --plan-only run leaves two `## Plan` sections")
+            # `Path.replace(target)` takes ONE argument; `str.replace(a, b)` takes
+            # two. Distinguishing them is not pedantry: this phase's own CRLF fix
+            # added `out.replace("\n", "\r\n")`, which satisfied a bare
+            # `calls_named(tree, "replace")` and made the atomicity check pass with
+            # the temp-file write deleted. Caught by the battery re-run, after the
+            # fix that introduced it.
+            # `Path.replace(target)` (1 arg) and `os.replace(tmp, body)` (2 args)
+            # are the same syscall, and this check's own message says "os-level
+            # replace" -- so rejecting the two-arg form was a guard refusing the
+            # thing it asks for. `str.replace(a, b)` is excluded by requiring the
+            # receiver to be `os` when there are two args.
+            def _is_os_level_replace(n):
+                if not (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                        and n.func.attr == "replace" and not n.keywords):
+                    return False
+                if len(n.args) == 1:
+                    return True
+                return (len(n.args) == 2 and isinstance(n.func.value, ast.Name)
+                        and n.func.value.id == "os")
+            _atomic = [n for n in ast.walk(tree) if _is_os_level_replace(n)]
+            if not _atomic or not calls_named(tree, "with_suffix"):
+                p.append("Step 7f no longer writes the body atomically via a temp file + "
+                         "os-level replace -- a crash mid-write truncates a tracked task "
+                         "body. (A two-argument str.replace does not satisfy this.)")
+            # Fence awareness is the property, and it is invisible by reading:
+            # a fence-blind strip either stops early or eats every later section.
+            if not any(isinstance(n, ast.FunctionDef)
+                       and n.name.lstrip("_") == "fence_mark"
+                       for n in ast.walk(tree)):
+                p.append("Step 7f's section strip is no longer fence-aware -- a ``` block in "
+                         "the body carrying a `## ` line silently eats the sections after it")
+            # Presence of `fence_mark` is not fence AWARENESS: the battery walked a
+            # mutation that kept the helper and reduced the closer to `elif mark:`.
+            # The closer must require the same character AND at least the opening
+            # length, because this block deliberately writes a fence LONGER than any
+            # backtick run in the plan -- so a plain ``` inside the plan must not
+            # close it.
+            # Scoped to the CLOSER, not to the whole heredoc. The round inverted
+            # `mark[1] >= fence[1]` to `<=` and added a decoy `if len(out) >= 0`,
+            # and an `ast.walk`-wide search for any GtE was satisfied by the decoy
+            # -- while the real closer leaked a previous plan's tail into the task
+            # body as live markdown. The comparison must be between the two
+            # subscripted fence lengths, in that order.
+            def _is_fence_len_cmp(n):
+                if not (isinstance(n, ast.Compare) and len(n.ops) == 1
+                        and isinstance(n.ops[0], ast.GtE)):
+                    return False
+                left, right = n.left, n.comparators[0]
+                return all(isinstance(x, ast.Subscript) for x in (left, right))
+            _closes = [n for n in ast.walk(tree) if _is_fence_len_cmp(n)]
+            if not _closes:
+                p.append("Step 7f's fence closer no longer compares fence LENGTH -- a "
+                         "shorter fence inside the widened wrapper closes it early and the "
+                         "rest of the plan spills into the body as live markdown")
+
     # --- Step 7c: the park marker ----------------------------------------
     hd = heredoc_containing(t, '"parked"')
     if hd is None:
@@ -991,8 +1118,19 @@ def orchestrator_problems(text=None) -> list[str]:
         ):
             p.append("Step 7b no longer states that the reviewer always runs and is never "
                      "inherited or skipped")
-        if not re.search(r"adversarial-review\.md", s7b):
-            p.append("Step 7b no longer hands the reviewer the shared adversarial-review template")
+        # Anchored to the SPAWN INSTRUCTION, not to the section. A bare
+        # `adversarial-review.md in s7b` was satisfied by any mention anywhere in
+        # Step 7b -- and Phase 236 added a rationale blockquote that names the same
+        # file, so the mutation stripping the real citation from the `prompt:` line
+        # started passing. The weakness pre-dated that prose; the prose exposed it.
+        # What must hold is that the line telling the orchestrator what to PASS
+        # cites the shared template.
+        _spawn = re.search(r"^`?prompt`?:.*$", s7b, re.M)
+        if _spawn is None:
+            p.append("Step 7b no longer has a `prompt:` spawn instruction")
+        elif not re.search(r"adversarial-review\.md", _spawn.group(0)):
+            p.append("Step 7b's spawn instruction no longer hands the reviewer the shared "
+                     "adversarial-review template")
         # Two corrections, both exposed by Phase 180's reorder of the tail's fences
         # and both pre-existing. (1) Negation is tested at EACH match's own offset;
         # the first version tested it at `n7b.lower().index("classify")` — the first
@@ -1093,9 +1231,235 @@ def orchestrator_problems(text=None) -> list[str]:
         m = re.search(r"delete the envelopes", n8, re.I)
         if not m or not negated(n8, m.start()):
             p.append("Step 8 no longer forbids deleting the envelopes after consumption")
+        # Phase 237 shipped legs 1+2 and Phase 236 shipped leg 3, so "the readers
+        # do not exist" is no longer the claim to pin -- and it sat here as a
+        # falsehood for a phase, with this guard enforcing it. The rule the
+        # retirement follows: pin the ASSERTION the paragraph now has to make, not
+        # the words it used to. Two assertions, because the dangerous
+        # over-reading is the opposite one now -- "the readers ship" must not be
+        # allowed to read as "a skipped review is prevented".
         if not re.search(r"part b", n8, re.I):
-            p.append("Step 8 no longer says close-time cleanup is unbuilt (part B) -- it must not "
-                     "claim a reader that does not exist")
+            p.append("Step 8 no longer mentions part B -- it must say which legs exist")
+        else:
+            if not re.search(r"all three of part b's legs now ship", n8, re.I):
+                p.append("Step 8 no longer states that all three part-B legs ship -- "
+                         "it carried the opposite falsehood for a phase and must not "
+                         "revert to describing the readers as deferred")
+            # Anchored to the clause making the limit claim, not to the section.
+            # A loose search over the whole of Step 8 was satisfied by an
+            # incidental occurrence elsewhere -- the failure this corpus repeats.
+            _limit = re.search(r"both readers report[^.]*\.", n8, re.I)
+            if _limit is None:
+                p.append("Step 8 no longer states that both part-B readers report "
+                         "rather than reject")
+            elif not re.search(r"neither rejects|never rejects?|not a gate", _limit.group(0), re.I):
+                p.append("Step 8 names the readers but no longer says neither rejects -- "
+                         "reporting a skipped review is not preventing one, and the "
+                         "shape's honest claim is the weaker of the two")
+            if not re.search(r"roadmap.{0,40}path only|only on the roadmap path", n8, re.I):
+                p.append("Step 8 no longer records that /sitrep's predicate is reached "
+                         "on the roadmap path only -- the batch gap is open and stating "
+                         "coverage it does not have is the Phase-155 shape")
+
+    # --- Step 7a's plan-presence skip, and Step 1's batch rejection --------
+    #
+    # BOTH were guarded by NOTHING. The round deleted the whole 7a subsection --
+    # including the forgery defence the phase's own argument rests on -- and
+    # renamed Step 1's rejection heading to "### Reserved", with the suite green
+    # in both cases. `partial_problems` pinned that the PARTIAL says Step 1
+    # rejects the flag; nothing asserted Step 1 does.
+    s7a = section(t, "### Step 7a", "### Step 7b")
+    if s7a is None:
+        p.append("Step 7a is gone")
+    else:
+        n7a = norm(s7a)
+        if not re.search(r"skip the planner when the body already carries", n7a, re.I):
+            p.append("Step 7a lost its `## Plan` presence-skip subsection")
+        else:
+            # The load-bearing half. A `## Plan` marker is a string any agent with
+            # Bash can write; the ENTIRE defence is that forging it buys nothing
+            # because the reviewer still runs. Pin the assertion, both directions.
+            _skips = re.search(r"it skips the planner[^.]*\.", n7a, re.I)
+            if _skips is None:
+                p.append("Step 7a no longer states what the skip skips")
+            elif not re.search(r"never the reviewer|not the reviewer", _skips.group(0), re.I):
+                p.append("Step 7a's skip no longer says it skips the planner and NEVER the "
+                         "reviewer -- that is the whole anti-forgery argument: a body marker "
+                         "is forgeable, so the fix is to remove what forging it would buy")
+            for m in re.finditer(r"(?:skips? (?:the )?(?:reviewer|7b)|"
+                                 r"(?:go|going) straight to 7c|7b is not re-run)", n7a, re.I):
+                if not negated(n7a, m.start()):
+                    p.append(f"Step 7a gained an un-negated instruction to skip the review: "
+                             f"{n7a[max(0, m.start() - 80):m.end() + 40]!r}")
+            if not re.search(r"presence test, not a verdict test", n7a, re.I):
+                p.append("Step 7a no longer states the skip is a PRESENCE test -- a verdict "
+                         "test is exactly the forgeable form the design rejects")
+            if not re.search(r"planner-integrity", n7a, re.I):
+                p.append("Step 7a's skip no longer writes planner-integrity.md -- 7-pre's "
+                         "routing table refuses to review a plan whose integrity file is "
+                         "absent, so an immediate --resume re-plans the task the skip avoided")
+            if not re.search(r"main checkout", n7a, re.I):
+                p.append("Step 7a's skip no longer names the main checkout as where the body "
+                         "is read -- a worktree read gets ENOENT for an /add-task body")
+            if not re.search(r"copy the section's content into", n7a, re.I):
+                p.append("Step 7a's skip no longer says to copy the recovered plan into "
+                         "plan.md -- without the actuating instruction the subsection states "
+                         "a property and prescribes nothing")
+
+    s1 = section(t, "### Reject `--plan-only` on a review batch", "### Normalise the claim ID")
+    if s1 is None:
+        p.append("Step 1's `--plan-only` batch rejection is gone -- tier 1 outranks the Step 6 "
+                 "offer, so Step 6 cannot be where it lands")
+    else:
+        n1 = norm(s1)
+        if not re.search(r"stop\b", n1, re.I):
+            p.append("Step 1's batch rejection no longer stops")
+        if "--plan-only is roadmap-only" not in n1:
+            p.append("Step 1's batch rejection lost its printed message")
+        if not re.search(r"before anything is claimed|not claimed", n1, re.I):
+            p.append("Step 1's batch rejection no longer says it fires BEFORE the claim -- at "
+                     "Step 6 the batch is already locked and committed on main")
+    flags = section(t, "## Step 1: Parse Argument", "### Normalise the claim ID")
+    if flags and not re.search(r"roadmap tasks only; rejected for a batch", norm(flags), re.I):
+        p.append("Step 1's flag table no longer marks --plan-only roadmap-only")
+
+    # --- Step 7f: ordering, abort rules, Rule A (option C) ----------------
+    #
+    # NONE of this was guarded until the author-side battery walked four
+    # mutations through: the four steps reorderable, the abort table deletable,
+    # its never-retry row invertible, and Rule A droppable from the plan commit.
+    # The AST layer above covers the write-back's CODE; this covers the PROSE
+    # that sequences it, which nothing executes.
+    s7f = section(t, "### Step 7f", "## Step 8")
+    if s7f is None:
+        p.append("Step 7f is gone -- option C has no terminal step")
+    else:
+        # Ordering is the property, not presence. The third revision released
+        # before committing, so every failure path lost the plan AND held the
+        # claim; "durable product first" is the whole design of this step.
+        # Anchored on the STEP NUMBER, not the heading text. Rewording
+        # "#### 2. Commit it on `main`" to "#### 2. Commit on `main`" is a legal
+        # copy-edit and broke the whole ordering check in the round's controls.
+        order = [(f"#### {n}.", what) for n, what in (
+            (1, "write the body"), (2, "commit the plan"),
+            (3, "release"), (4, "commit the release flip"))]
+        at = []
+        for heading, what in order:
+            i = s7f.find(heading)
+            if i < 0:
+                p.append(f"Step 7f no longer has a step for {what!r} ({heading!r})")
+            at.append(i)
+        if all(i >= 0 for i in at) and at != sorted(at):
+            p.append("Step 7f's four steps are out of order -- the plan must be committed "
+                     "BEFORE the release, or a refused release loses it")
+        # Heading ORDER is not step order. The round moved a `--release` invocation
+        # INTO step 1 with all four headings in place and the guard green -- which
+        # is verbatim the defect the step's own design paragraph says it exists to
+        # forbid. So check where the COMMANDS fall, not where the headings do.
+        if all(i >= 0 for i in at):
+            body_of = {}
+            bounds = sorted(at) + [len(s7f)]
+            for n, (heading, _what) in enumerate(order):
+                lo = s7f.find(heading)
+                hi = min((b for b in bounds if b > lo), default=len(s7f))
+                body_of[n] = s7f[lo:hi]
+            releases = [n for n, seg in body_of.items()
+                        if re.search(r"claim_task\.sh --release", seg)]
+            commits = [n for n, seg in body_of.items()
+                       if re.search(r"^git commit ", seg, re.M)]
+            if releases and min(releases) < 2:
+                p.append(f"Step 7f invokes `claim_task.sh --release` inside step "
+                         f"{min(releases) + 1} -- the release must not run before the plan "
+                         f"commit, or every failure path loses the plan AND holds the claim")
+            if commits and releases and min(commits) > min(releases):
+                p.append("Step 7f's first git commit comes after its first release -- the "
+                         "durable product must land first")
+            if not releases:
+                p.append("Step 7f prescribes no `claim_task.sh --release` at all")
+        n7f = norm(s7f)
+        if not re.search(r"abort rules", n7f, re.I):
+            p.append("Step 7f lost its abort rules -- `claim_task.sh --release` refuses in "
+                     "five ways and each leaves a different half-done state")
+        else:
+            _retry = re.search(r"never retry automatically[^.]*\.", n7f, re.I)
+            if _retry is None:
+                p.append("Step 7f's abort rules no longer forbid an automatic release retry")
+            elif not re.search(r"never proceed to step 4", _retry.group(0), re.I):
+                p.append("Step 7f's abort rules no longer forbid proceeding to step 4 without "
+                         "step 3 -- that writes `open` while the lock is held, which is "
+                         "validate_tasks.py Invariant 9, a blocking error")
+            # The round kept the pinned sentence verbatim and APPENDED "In practice,
+            # run the release again and then continue to step 4" -- green, because
+            # a presence check cannot see a contradiction next to what it pins.
+            for m in re.finditer(r"(?:run the release again|retry the release|"
+                                 r"continue to step 4|proceed to step 4)", n7f, re.I):
+                if not negated(n7f, m.start()):
+                    p.append(f"Step 7f's abort rules gained an un-negated instruction to "
+                             f"retry the release or continue to step 4: "
+                             f"{n7f[max(0, m.start() - 80):m.end() + 40]!r}")
+            # The step-2 row's do-not-checkout rule is the documented data-loss
+            # path; the round flipped it into a `git checkout --` instruction.
+            if not re.search(r"do not `?git checkout`? it", n7f, re.I):
+                p.append("Step 7f's abort rules no longer forbid `git checkout` on the "
+                         "uncommitted body -- that discards the plan, which is the run's "
+                         "entire product")
+            if re.search(r"run `?git checkout( --)?`?", n7f, re.I):
+                p.append("Step 7f's abort rules now PRESCRIBE a git checkout of the body")
+            if len(re.findall(r"^\| \*\*step \d", s7f, re.M)) < 4:
+                p.append("Step 7f's abort table lost rows -- it must carry one per step, "
+                         "because each leaves a different half-done state")
+        # Rule A guards BOTH commits. One is not enough: the plan commit is the
+        # one a concurrent /review-close under `pr` policy can land on someone
+        # else's integration branch, in this same shared worktree.
+        # The release must delete the branch, and must GATE that on the branch
+        # being empty -- `claim_task.sh` deletes with `git branch -D`, a force
+        # delete. An earlier revision asserted --release already deleted it (it
+        # does not; DELETE_BRANCH defaults false), and the stale branch is then
+        # REUSED by the next claim from a pre-option-C fork point, producing a
+        # real content conflict in the task body at close. Found by execution.
+        if "--release --delete-branch" not in s7f:
+            p.append("Step 7f's release no longer passes --delete-branch -- claim_task.sh "
+                     "defaults DELETE_BRANCH=false, so the branch survives and the next "
+                     "claim reuses it from a stale fork point")
+        if "git rev-list --count main..<BRANCH_NAME>" not in s7f:
+            p.append("Step 7f deletes the branch without first establishing it is empty -- "
+                     "claim_task.sh uses `git branch -D`, and a force delete of a branch "
+                     "carrying work is data loss")
+        # A COUNT cannot see a polarity flip or a softened failure arm, and the
+        # round walked both: `= "main"` -> `!= "main"`, and `|| { ... exit 1; }`
+        # -> `|| echo "warning ... committing anyway"`. Pin the whole assert.
+        # Tolerant of the legal spellings -- `[` IS `test`, and a brace body may be
+        # written across lines -- while still requiring the comparison polarity and
+        # a hard exit. The round false-killed both formattings, which would have
+        # rejected a correct authoring.
+        rule_a = len(re.findall(
+            r'(?:test|\[)\s+"\$\(git rev-parse --abbrev-ref HEAD\)"\s*=\s*"main"\s*\]?'
+            r'\s*\|\|\s*\{(?:[^{}]|\n){0,200}?exit 1;?\s*\}', s7f))
+        if rule_a < 2:
+            p.append(f"Step 7f carries {rule_a} INTACT main-push-guard Rule A assert(s), "
+                     f"not 2 -- both the plan commit and the release commit run in the "
+                     f"shared primary worktree, and a flipped comparison or a warn-and-"
+                     f"continue arm satisfies a bare occurrence count")
+        # A COUNT is still position-blind: deleting step 4's assert and duplicating
+        # step 2's keeps the count at 2 while the commit that flips tasks/index.yml
+        # on shared `main` runs unguarded, and hoisting both into step 1 leaves
+        # neither adjacent to what it guards. So LOCATE them: each committing step
+        # must carry its own assert, before its own commit.
+        if all(i >= 0 for i in at):
+            for _n in (1, 3):  # steps 2 and 4, zero-indexed
+                seg = body_of.get(_n, "")
+                cm = re.search(r"^git commit ", seg, re.M)
+                if cm is None:
+                    p.append(f"Step 7f step {_n + 1} no longer commits")
+                    continue
+                am = re.search(r"git rev-parse --abbrev-ref HEAD", seg)
+                if am is None:
+                    p.append(f"Step 7f step {_n + 1} commits with no main-push-guard Rule A "
+                             f"assert in its own step -- a concurrent /review-close under "
+                             f"`pr` policy holds this same worktree on an integration branch")
+                elif am.start() > cm.start():
+                    p.append(f"Step 7f step {_n + 1}'s Rule A assert comes AFTER the commit "
+                             f"it guards -- the gate that ran after the thing it gated")
 
     # --- Claim kinds: silence reads as not-applicable (Phase 29) ---------
     s7d = section(t, "### Step 7d", "### Step 7e")
@@ -1155,9 +1519,21 @@ def orchestrator_problems(text=None) -> list[str]:
     s6 = section(t, "## Step 6", "## Step 7")
     if s6 is None:
         p.append("Step 6 is gone")
-    elif not re.search(r"specified but (?:not built|unbuilt)", norm(s6), re.I):
-        p.append("Step 6 no longer says option C is unbuilt -- silence about a missing branch is "
-                 "how Steps 7-8 acquired roadmap-only vocabulary in Phase 29")
+    else:
+        # Phase 238 BUILT option C, so "says it is unbuilt" is no longer the claim
+        # to pin -- pinning it would force the file to keep a falsehood, which is
+        # the trap the retired-claim rule names. What must survive is the property
+        # the old guard was really protecting: Step 6 states the batch asymmetry
+        # rather than staying silent about it. Both tokens are required, so a
+        # three-option table alone cannot satisfy a check about the batch path.
+        n6 = norm(s6)
+        if not re.search(r"\bC\s*[-—]\s*plan only\b", n6, re.I):
+            p.append("Step 6 no longer offers option C -- it is built, and a table "
+                     "that omits it sends the human to improvise the branch")
+        if not re.search(r"two options, not three", n6, re.I):
+            p.append("Step 6 no longer states the review-batch asymmetry (two options, "
+                     "not three) -- silence about a missing branch is how Steps 7-8 "
+                     "acquired roadmap-only vocabulary in Phase 29")
     return p
 
 
@@ -1218,12 +1594,29 @@ def partial_problems(text=None) -> list[str]:
                      "wording is not part of the interface")
             break
 
-    if not re.search(r"reviewer runs (?:on|under) both", flat, re.I):
-        p.append("the partial no longer states the reviewer runs on both options")
+    # Three options since Phase 238, so "on both" is the wrong pin now -- but the
+    # PROPERTY is unchanged and is the thing to hold: no option skips the reviewer.
+    if not re.search(r"reviewer runs on all three", flat, re.I):
+        p.append("the partial no longer states the reviewer runs on all three options")
     if not re.search(r"overrides tier 2", flat, re.I) or not re.search(r"never tier 1", flat, re.I):
         p.append("guided mode's precedence (overrides tier 2, never tier 1) is gone")
-    if not re.search(r"specified but (?:not built|unbuilt)", flat, re.I):
-        p.append("the partial no longer says option C is unbuilt")
+    # Option C is BUILT. The old pin ("says it is unbuilt") would now force a
+    # falsehood; what replaces it is the pair of constraints a reader has to meet
+    # to use C correctly -- it is roadmap-only, and the flag is rejected at Step 1
+    # rather than at the Step 6 offer that tier 1 skips.
+    if not re.search(r"option c is roadmap-only", flat, re.I):
+        p.append("the partial no longer says option C is roadmap-only -- a batch has "
+                 "nowhere to persist a plan and offering it there wastes a claim")
+    if not re.search(r"step 1 rejects `?--plan-only`? for a `?batch", flat, re.I):
+        p.append("the partial no longer routes the --plan-only batch rejection to Step 1 -- "
+                 "tier 1 outranks the Step 6 offer, so Step 6 cannot be where it lands")
+    # Tier 2 has three values and C is deliberately not one of them. Said out
+    # loud because silence about a missing branch is the Phase-29 failure this
+    # partial exists to avoid repeating -- and because a project defaulting to C
+    # would plan every task and implement none.
+    if not re.search(r"no config value for option c", flat, re.I):
+        p.append("the partial no longer records that option C has no tier-2 config value -- "
+                 "a project defaulting to plan-only would never implement anything")
     for hit in new_conditionals(t):
         if "guided mode" in hit.lower() or "askUserQuestionTimeout" in hit:
             continue
@@ -1240,10 +1633,12 @@ _SPEC_PROPERTIES = (
     (r"sysop/runtime/claim/<CLAIM_ID>/<RUN_ID>/", "the artifact directory is keyed per run"),
     (r"in the main checkout", "the artifact directory lives in the main checkout"),
     (r"sysop/runtime/parked/<CLAIM_ID>__<RUN_ID>\.md", "the park writes a marker file"),
-    # PRESENT tense on purpose: `were unbuilt as of the last release; they now
-    # ship` satisfied a bare `unbuilt` while asserting the opposite.
-    (r"are unbuilt|are not built|is not built|have not yet shipped|not yet built",
-     "part B's readers and cleanup are unbuilt"),
+    # Phase 238 inverted this property rather than deleting it: part B ships, so
+    # what a reader of § 2.2 must be told is the LIMIT. Present tense is kept for
+    # the reason the retired entry gave -- `were reporting-only as of the last
+    # release` would satisfy a looser pattern while asserting the opposite.
+    (r"neither rejects|never rejects?|not a gate",
+     "part B's readers report and neither rejects"),
     (r"(?:only|sole) entry point", "Step 7-pre is the only entry point to Step 7"),
 )
 
@@ -1255,7 +1650,7 @@ def workflow_problems(text=None) -> list[str]:
     docstring said "the same properties" and that was the same overstatement this
     phase criticised elsewhere. What this covers is the shape's load-bearing
     claims: who reviews, who classifies, where the artifacts live, and that part
-    B is unbuilt.
+    B ships as reporting rather than as prevention.
 
     Population was one file while the rules ship in four. Round 2 found
     `WORKFLOW_GUIDE.md` § 2 unguarded *and written by the same commit* -- the
@@ -1279,10 +1674,21 @@ def workflow_problems(text=None) -> list[str]:
     for m in re.finditer(r"sysop/runtime/claim/<CLAIM_ID>/(?!<RUN_ID>)", n):
         p.append(f"WORKFLOW.md § 2.2 spells an artifact path without its run key: "
                  f"{n[max(0, m.start() - 60):m.end() + 20]!r}")
-    if re.search(r"(?:they now ship|shipped with it|now ships|shipped alongside)", n, re.I):
-        p.append("WORKFLOW.md § 2.2 claims part B ships -- the readers and close-time cleanup "
-                 "are unbuilt, and claiming a reader that does not exist is what its own round "
-                 "disqualified the first build for")
+    # INVERTED by Phase 238, because the falsehood changed direction. Part B ships;
+    # what must not be claimed now is that it PREVENTS anything. A reader that
+    # reports is not a gate, and the Phase-155 attempt died for claiming otherwise.
+    if not re.search(r"all three of part b's legs now ship", n, re.I):
+        p.append("WORKFLOW.md § 2.2 no longer states that part B's three legs ship -- it "
+                 "carried the opposite falsehood for a phase while the same file documented "
+                 "Step 2e two hundred lines below")
+    _limit = re.search(r"both readers report[^.]*\.", n, re.I)
+    if _limit is None:
+        p.append("WORKFLOW.md § 2.2 no longer states that both part-B readers report")
+    elif not re.search(r"neither rejects|never rejects?|not a gate", _limit.group(0), re.I):
+        p.append("WORKFLOW.md § 2.2 names the readers but no longer says neither rejects -- "
+                 "reporting a skipped review is not preventing one")
+    if not re.search(r"roadmap.{0,40}path only|only on the roadmap path", n, re.I):
+        p.append("WORKFLOW.md § 2.2 no longer records that /sitrep's predicate is roadmap-only")
     if not re.search(r"/claim-task` keeps its three|`/claim-task` now reads and keeps them", t):
         p.append("WORKFLOW.md still describes /claim-task's envelopes as deleted after "
                  "consumption -- Step 8 forbids that delete, and the delete is #220's root cause")
@@ -1298,9 +1704,198 @@ def guide_problems(text=None) -> list[str]:
         (r"classifies the findings itself", "the orchestrator classifies the findings itself"),
         (r"sysop/runtime/claim/<CLAIM_ID>/<RUN_ID>/", "artifacts are per-run"),
         (r"manual path", "steps 3-5 are the manual path, not a second set of steps"),
+        # Population, not content: this file restated the orchestrator's shape and
+        # the retired validator warning, and no guard opened it for either.
+        (r"nothing warns you earlier",
+         "nothing warns before /review-close Step 2d (Phase 234 retired the validator check)"),
+        # NOT `both \*report\*`: this runs against norm(t), and norm() strips
+        # emphasis, so that arm could never match. Half the check was inert and
+        # the surviving arm was contradiction-blind. Found by the round.
+        (r"both \*?report\*?[^.]*neither blocks",
+         "the part-B readers report rather than block"),
     ):
         if not re.search(pat, n, re.I):
             p.append(f"WORKFLOW_GUIDE.md no longer states that {why}")
+    return p
+
+
+# The claims Phase 238 retired, and the shape of the guard that keeps them
+# retired. Two of these were reinstatable in files NO guard read -- the tutorial
+# and WORKFLOW_GUIDE.md -- which is the population failure rule 1 names: derive
+# the population from the source of truth, not from the files you happened to
+# edit. So this sweeps the whole SHIPPED tree from `git ls-files`.
+#
+# The exemption is load-bearing and is the trap the retirement rule warns about:
+# a correction has to QUOTE the retired phrase in order to retire it, so a bare
+# `phrase not in file` fails on the fix and passes only if the record of the fix
+# is deleted. Each entry therefore carries the sentence that is allowed to
+# contain it.
+RETIRED_CLAIMS = (
+    ("specified but not built",
+     "option C is built (Phase 238)",
+     ()),
+    ("part B of the reshape and are unbuilt",
+     "part B's three legs all ship (Phases 236-237)",
+     ()),
+    ("Do not describe those readers as existing",
+     "the readers exist; the limit to state is that neither rejects",
+     ()),
+    ("warns when an in-progress task is missing it",
+     "Phase 234 retired that validator invariant",
+     ("Phase 234 retired the check",)),
+    ("test decision is authored at `/claim-task` Step 6",
+     "the planner decides it at 7a; the 7e executor writes it",
+     ()),
+    ("the branch is about to be deleted by `--release`",
+     "`--release` deletes nothing unless --delete-branch is passed "
+     "(claim_task.sh defaults DELETE_BRANCH=false)",
+     ()),
+)
+
+
+def _shipped_text_files() -> list[Path]:
+    """Every shipped text file, derived from git rather than enumerated.
+
+    Excludes the maintainer records, which narrate this history on purpose and
+    must keep quoting the retired wording, and `tools/`+`tests/`, which are
+    mirror-excluded and which include this module and its battery.
+    """
+    out = subprocess.run(["git", "ls-files"], cwd=REPO_ROOT,
+                         capture_output=True, text=True, check=True).stdout.split()
+    skip_dirs = ("tools/", "tests/")
+    skip_files = {"PHASE_LOG.md", "REVIEW_CHECKLIST.md", "REVIEW_ARCHIVE.md", "CLAUDE.md"}
+    # EXCLUDE binaries, do not INCLUDE an extension allowlist. The round showed an
+    # allowlist left 38 tracked files outside the sweep -- both extensionless git
+    # hooks, five `.example` files and 16 `.json` -- and the retired phrase planted
+    # in `core/companion/git-hooks/pre-commit` was invisible. `_prose_guard_helpers`
+    # already names extensionless hooks and `.example` as a known sweep-population
+    # failure class; this population had inherited exactly half the fix.
+    binary = (".png", ".jpg", ".jpeg", ".gif", ".ico", ".pdf", ".woff", ".woff2",
+              ".ttf", ".otf", ".zip", ".gz", ".webp", ".mp4")
+    return [REPO_ROOT / f for f in out
+            if not f.lower().endswith(binary)
+            and not f.startswith(skip_dirs)
+            and f not in skip_files]
+
+
+def retired_claim_problems() -> list[str]:
+    p: list[str] = []
+    for path in _shipped_text_files():
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        flat = norm(text).lower()
+        for phrase, why, exemptions in RETIRED_CLAIMS:
+            # Case-insensitive: `flat.find` was case-SENSITIVE, so sentence-casing
+            # the phrase walked straight through ("Specified but not built:").
+            needle = norm(phrase).lower()
+            i = flat.find(needle)
+            while i >= 0:
+                # SENTENCE-scoped, not a fixed +/-400 character window. An ~800
+                # character window is several paragraphs, so a reinstatement two
+                # paragraphs from an exempting phrase inherited its exemption --
+                # the "proximity is not identity" hole CONDITIONAL_ALLOWLIST's own
+                # design note warns about, reproduced here by the same author who
+                # had just read that note.
+                # NOT "\n": `norm()` collapses all whitespace to single spaces, so a
+                # newline delimiter can never match and that arm was dead code I
+                # wrote. Bullet lists and table rows therefore have no sentence
+                # boundary of their own -- so `|` and `- ` are treated as ones,
+                # which is what stops a list item inheriting a paragraph's exemption.
+                seps = (". ", "! ", "? ", " | ", " - ", "; ")
+                lo = max((flat.rfind(m, 0, i) for m in seps), default=-1)
+                nxt = min((x for x in (flat.find(m, i) for m in seps) if x != -1),
+                          default=len(flat))
+                sentence = flat[lo + 1:nxt]
+                if any(norm(e).lower() in sentence for e in exemptions):
+                    i = flat.find(needle, i + 1)
+                    continue
+                try:
+                    rel = path.relative_to(REPO_ROOT)
+                except ValueError:  # a planted fixture outside the repo
+                    rel = path
+                p.append(f"{rel} reinstates a retired claim ({phrase!r}) -- {why}")
+                break
+    return p
+
+
+def getting_started_problems(text=None) -> list[str]:
+    """The tutorial is a shipped surface and was in no guard's population.
+
+    Its `/claim-task` passage was wrong for a phase: it told a newcomer to go
+    work in the worktree, while the orchestrator runs the pipeline in sub-agents
+    and stands in the main checkout the whole time.
+    """
+    t = GETTING_STARTED.read_text(encoding="utf-8") if text is None else text
+    p: list[str] = []
+    n = norm(t)
+    for pat, why in (
+        (r"stay in your main checkout",
+         "the reader stays in the main checkout -- /claim-task is an orchestrator"),
+        (r"ran the whole\s+pipeline in sub-agents|pipeline in sub-agents",
+         "the pipeline ran in sub-agents on the reader's behalf"),
+        (r"--plan-only",
+         "option C is reachable from the tutorial"),
+        (r"asks how much you want to be in the loop|## Plan review",
+         "Step 6 asks about plan review on a stock install"),
+    ):
+        if not re.search(pat, n, re.I):
+            p.append(f"docs/getting-started.md no longer states that {why}")
+    return p
+
+
+def schema_plan_problems(text=None) -> list[str]:
+    """`tasks/schema.md`'s `### Plan` contract, which nothing read.
+
+    The round rewrote it to say the recovered plan also skips the REVIEWER and
+    that it lives on the feature branch rather than `main` -- both green. Those
+    are the two claims the whole write-back design rests on.
+    """
+    t = SCHEMA.read_text(encoding="utf-8") if text is None else text
+    p: list[str] = []
+    i = t.find("### Plan\n")
+    if i < 0:
+        return ["tasks/schema.md has no `### Plan` section"]
+    j = t.find("\n### ", i + 1)
+    s = norm(t[i:j if j > 0 else len(t)])
+    if not re.search(r"main checkout", s, re.I):
+        p.append("schema.md's `### Plan` no longer says the section lives in the MAIN "
+                 "checkout -- a feature-branch copy is invisible to the next claim, which "
+                 "is the entire thing option C exists to enable")
+    # POLARITY, matched on the affirmative form only. The section legitimately
+    # says a feature-branch copy "would be invisible to the very next claim" --
+    # a correct NEGATIVE use, and a bare occurrence check false-fired on it.
+    for m in re.finditer(r"(?:lives|committed|written|persisted) on (?:the|a) feature branch",
+                         s, re.I):
+        # Skip the COUNTERFACTUAL, which is the section's own argument: "a `## Plan`
+        # committed on a feature branch WOULD BE INVISIBLE to the very next claim".
+        # A bare occurrence check false-fired on the sentence that makes the case.
+        clause_lo = max((s.rfind(x, 0, m.start()) for x in (". ", "\n", "; ")), default=-1)
+        clause_hi = min((x for x in (s.find(y, m.end()) for y in (". ", "\n", "; "))
+                         if x != -1), default=len(s))
+        clause = s[clause_lo + 1:clause_hi].lower()
+        if "would" in clause or "invisible" in clause or " not " in clause:
+            continue
+        p.append(f"schema.md's `### Plan` now says the section lives on the feature "
+                 f"branch: {clause.strip()[:140]!r}")
+    # TWO sentences, not one: the claim splits as "…skips the planner. It does
+    # not skip the reviewer…", and a `[^.]*\.` window stopped at the first period
+    # and could not see the half that matters.
+    _skip = re.search(r"skips the planner(?:[^.]*\.){1,3}", s, re.I)
+    if _skip is None:
+        p.append("schema.md's `### Plan` no longer says what Step 7a skips")
+    elif not re.search(r"not skip the reviewer|never the reviewer", _skip.group(0), re.I):
+        p.append("schema.md's `### Plan` no longer says the reviewer still runs -- that is "
+                 "the anti-forgery argument, and a body marker is forgeable")
+    if not re.search(r"presence.{0,3} test", s, re.I):
+        p.append("schema.md's `### Plan` no longer describes the read as a presence test")
+    if not re.search(r"validator does not check this|zero validator change|will not",
+                     s, re.I):
+        p.append("schema.md's `### Plan` no longer records that the validator does not "
+                 "check it -- that absence is a decision with an argument, not an omission")
+    if not re.search(r"roadmap tasks only|roadmap-only", s, re.I):
+        p.append("schema.md's `### Plan` no longer says the section is roadmap-only")
     return p
 
 
@@ -1341,6 +1936,113 @@ def test_preference_partial_holds():
 
 def test_workflow_spec_states_the_same_shape():
     assert workflow_problems() == []
+
+
+def test_the_schema_plan_contract_holds():
+    """The two claims the write-back design rests on, in the file that documents
+    the section rather than the file that writes it."""
+    assert schema_plan_problems() == []
+
+
+def test_the_tutorial_describes_the_orchestrator_it_actually_ships():
+    """`docs/getting-started.md` was in no guard's population and said the
+    reader goes and works in the worktree. It does not."""
+    assert getting_started_problems() == []
+
+
+def test_the_shell_delete_allowlist_is_exhaustive_and_live():
+    """A stale allowlist entry is a permanent hole that excuses whatever a future
+    author writes on the same line. Every entry must still appear, and the guard
+    must still fire on an UNLISTED destructive command in the same step."""
+    s78 = section(SKILL.read_text(encoding="utf-8"), "## Step 7: Orchestrate", None)
+    assert s78 is not None
+    for entry in SHELL_DELETE_ALLOWLIST:
+        assert entry in s78, (
+            f"allowlisted destructive command {entry!r} no longer appears in Steps 7-8 -- "
+            f"a stale entry excuses whatever a future author writes on that line")
+    planted = s78.replace("bash sysop/scripts/claim_task.sh --release --delete-branch <CLAIM_ID>",
+                          "rm -rf sysop/runtime/claim/<CLAIM_ID>", 1)
+    assert shell_deletes(planted), (
+        "the allowlist swallowed an unlisted destructive command -- it is matching too widely")
+
+
+def test_no_shipped_file_reinstates_a_retired_claim():
+    """Swept from `git ls-files`, not from the files this phase happened to edit.
+
+    Two of the claims below were reinstatable in `WORKFLOW_GUIDE.md` and the
+    tutorial with every other guard green -- the author-side battery's `D02` and
+    `D09`.
+    """
+    assert retired_claim_problems() == []
+
+
+def test_the_retired_claim_sweep_can_actually_fire(tmp_path, monkeypatch):
+    """Non-vacuity, done by PLANTING INTO THE SWEPT POPULATION.
+
+    **The first version of this test was vacuous and the round proved it**: it
+    computed `norm(phrase) in norm(text_it_had_just_written)` -- a substring
+    check on a string it interpolated itself -- and never called
+    `retired_claim_problems()` at all. `return []` at the top of the sweep left
+    the whole suite green. The record then claimed it "checks both directions",
+    which was a falsehood about the phase's own newest guard.
+
+    This version drives the real function over a real population.
+    """
+    for phrase, _why, _ex in RETIRED_CLAIMS:
+        flagged = [pr for pr in retired_claim_problems() if phrase in pr]
+        assert not flagged, f"the tree already reinstates {phrase!r}: {flagged}"
+
+    for phrase, _why, exemptions in RETIRED_CLAIMS:
+        planted = tmp_path / "planted.md"
+        planted.write_text(f"# doc\n\nSome prose. {phrase}. More prose.\n", encoding="utf-8")
+        monkeypatch.setitem(globals(), "_shipped_text_files", lambda: [planted])
+        hits = [pr for pr in retired_claim_problems() if phrase in pr]
+        assert hits, (
+            f"{phrase!r} planted in a swept file was NOT reported -- the sweep does not "
+            f"detect it")
+
+        if exemptions:
+            planted.write_text(
+                f"# doc\n\n{exemptions[0]}, so \"{phrase}\" is retired and no longer true.\n",
+                encoding="utf-8")
+            assert not [pr for pr in retired_claim_problems() if phrase in pr], (
+                f"the exemption for {phrase!r} does not cover its own retiring sentence -- "
+                f"the guard would fail on the fix and pass only on its deletion")
+
+        # And the exemption must NOT be a blanket: the same phrase elsewhere in
+        # the file, far from the retiring sentence, must still fire.
+        filler = "\n".join("padding line %d" % i for i in range(120))
+        planted.write_text(
+            f"# doc\n\n{exemptions[0] if exemptions else 'unrelated'}, so it is retired.\n"
+            f"\n{filler}\n\nBut also: {phrase}.\n", encoding="utf-8")
+        assert [pr for pr in retired_claim_problems() if phrase in pr], (
+            f"a reinstatement of {phrase!r} far from any retiring sentence was swallowed "
+            f"by the exemption window")
+
+
+def test_the_sweep_is_not_deletable_with_the_suite_green():
+    """The round's V01: `return []` at the top of `retired_claim_problems` left
+    every check green. A guard whose removal nothing notices is not a guard."""
+    # (An earlier version of this test opened with
+    # `assert retired_claim_problems.__code__.co_consts is not None`, which is
+    # DECORATIVE: co_consts is a tuple for every function ever compiled -- `(None,)`
+    # even for a bare `return []`. It read as a check and could never fail. Deleted
+    # rather than repaired; the real assertion is below.)
+    #
+    # Drive it over a population that DOES contain a retired claim and require a
+    # report. This is the assertion `return []` cannot satisfy.
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        f = Path(d) / "x.md"
+        f.write_text("prose " + RETIRED_CLAIMS[0][0] + " prose\n", encoding="utf-8")
+        saved = globals()["_shipped_text_files"]
+        globals()["_shipped_text_files"] = lambda: [f]
+        try:
+            assert retired_claim_problems(), (
+                "retired_claim_problems() reported nothing over a population containing a "
+                "retired claim -- the sweep is inert")
+        finally:
+            globals()["_shipped_text_files"] = saved
 
 
 def test_workflow_guide_states_the_same_shape():
@@ -1410,8 +2112,16 @@ def test_guards_are_not_vacuous():
         "envelopes destroyed not moved": ("p.rename(prior / p.name)", "p.unlink()"),
         "park writes a directory": ('"{}__{}.md".format(claim_id, run_id)',
                                     '"{}__{}".format(claim_id, run_id)'),
-        "pyyaml back in the classification write": ("import sys, json, subprocess",
-                                                    "import sys, json, subprocess\nimport yaml"),
+        # Same re-anchoring as `SKILL_MUTATIONS`' twin; see the comment there.
+        "pyyaml back in the classification write": ("report = {",
+                                                    "import yaml\nreport = {"),
+        # Step 7f's write-back is the newest block with the same exposure, and it
+        # runs one step later than 7c on the same PEP-668 consumer.
+        # Anchored on the heredoc's first import line, not on a helper's NAME:
+        # `fence_mark` -> `_fence_mark` is a legal rename the guard above was
+        # explicitly taught to tolerate, and pinning the literal here re-broke it.
+        "pyyaml back in the plan write-back": ("import sys, json, subprocess\nfrom pathlib import Path\n\nclaim_id, run_id, body_rel",
+                                               "import yaml\nimport sys, json, subprocess\nfrom pathlib import Path\n\nclaim_id, run_id, body_rel"),
     }
     undetected = []
     for name, (old, new) in deep.items():
@@ -1427,7 +2137,33 @@ def test_guards_are_not_vacuous():
     for probe in ("", "# nothing\n"):
         assert len(partial_problems(probe)) >= 8, "partial_problems is unreachable on an empty corpus"
     assert len(workflow_problems("")) >= 1
-    assert len(guide_problems("")) >= 4
+    assert len(guide_problems("")) >= 6
+    assert len(getting_started_problems("")) >= 4
+    assert len(schema_plan_problems("")) >= 1
+    # The sweep's population is the thing that can silently empty. Phase 235's
+    # A07 is the precedent: a `core/**` population left install.sh outside it.
+    # Derived floor, not a magic number: the round showed that narrowing the
+    # extension filter to (".md", ".py") left 114 files -- comfortably above a
+    # hardcoded 100 -- while dropping install.sh, the monograph and every
+    # .yml/.fragment out of the sweep. Compare against the actual tracked
+    # population instead, and name the files that must always be in it.
+    swept = {p.relative_to(REPO_ROOT).as_posix() for p in _shipped_text_files()}
+    tracked = subprocess.run(["git", "ls-files"], cwd=REPO_ROOT, capture_output=True,
+                             text=True, check=True).stdout.split()
+    eligible = {f for f in tracked
+                if not f.startswith(("tools/", "tests/"))
+                and f not in {"PHASE_LOG.md", "REVIEW_CHECKLIST.md",
+                              "REVIEW_ARCHIVE.md", "CLAUDE.md"}}
+    missing = {f for f in eligible if not f.lower().endswith(
+        (".png", ".jpg", ".jpeg", ".gif", ".ico", ".pdf", ".woff", ".woff2",
+         ".ttf", ".otf", ".zip", ".gz", ".webp", ".mp4"))} - swept
+    assert not missing, (
+        f"the retired-claim sweep does not read {len(missing)} eligible tracked files: "
+        f"{sorted(missing)[:8]}")
+    for must in ("install.sh", "docs/workflow.html",
+                 "core/companion/git-hooks/pre-commit",
+                 "core/companion/checks.yml.fragment"):
+        assert must in swept, f"the sweep does not read {must}"
 
 
 def _mutate_last(text: str, old: str, new: str) -> str:
@@ -1553,16 +2289,38 @@ SKILL_MUTATIONS = {
     # -- the originals, which still have to die ---------------------------
     "batch abandon misrouted": ("bash sysop/scripts/batch_work.sh --release <BATCH_NUMBER>",
                                 "bash sysop/scripts/claim_task.sh --release <BATCH_NUMBER>"),
-    "7c depends on pyyaml again": ("import sys, json, subprocess",
-                                   "import sys, json, subprocess\nimport yaml"),
+    # Anchored on the classification block's OWN unique line, not on its import.
+    # `import sys, json, subprocess` opens three prescribed blocks now (the
+    # transport check, this one, and Step 7f's write-back), so `rindex` retargeted
+    # onto the newest and the mutation stopped testing what it names. Fourth
+    # appearance in this corpus of "adding text to a file weakens every
+    # occurrence-indexed mutation over it" -- and the first where the text was
+    # added by the same phase that had to notice.
+    "7c depends on pyyaml again": ("report = {",
+                                   "import yaml\nreport = {"),
     "plan mode restored": ("### Step 7a: Spawn the planner",
                            "### Step 7a: Spawn the planner\n\nCall `EnterPlanMode` first."),
     "a second re-entry point appears": (
         "**Orchestrator context exhaustion mid-pipeline**",
         "**On a resume, restart at 7e with the parked artifacts as context.**\n\n**Orchestrator context exhaustion mid-pipeline**"),
-    "part-B readers claimed as existing": (
-        "Close-time cleanup of the artifact set is part B of this reshape and is not built.",
-        "Close-time cleanup of the artifact set is owned by `/review-close` Step 4c today."),
+    # Re-anchored by Phase 236, which BUILT part B leg 3 (close-time cleanup) and
+    # left legs 1+2 (the readers) unbuilt. The old anchor was the sentence saying
+    # cleanup is unbuilt; that sentence is now false and was replaced, which would
+    # have left this mutation a silent no-op. The property the mutation defends is
+    # unchanged — Step 8 must not claim a reader that does not exist — so it moves
+    # onto the sentence that now carries it.
+    # Retired with the claim it inverted: Phase 237 shipped the readers, so
+    # "claimed as existing" is no longer a defect. The dangerous over-reading
+    # inverted here is the opposite one -- reporting upgraded to preventing.
+    "part-B readers upgraded from reporting to gating": (
+        "**Both readers report and neither rejects**",
+        "**Both readers gate and either can reject**"),
+    "part-B reader coverage overclaimed to batches": (
+        "reached on the **roadmap** path only",
+        "reached on every claim path"),
+    "part-B legs claimed as still deferred": (
+        "All three of part B's legs now ship",
+        "Part B's readers are specified and deferred"),
     "7d revise re-plans into the same run": (
         "then go back to Step 7-pre and mint a **new** run", "then re-plan into this run"),
     "batch resume loses the branch": (
@@ -1616,7 +2374,7 @@ def test_orchestrator_guards_kill_semantic_inversions():
 
 PARTIAL_MUTATIONS = {
     "resolution order inverted": (
-        "1. **`--review-plan` / `--no-review-plan`** on the invocation — the per-run override.",
+        "1. **`--review-plan` / `--no-review-plan` / `--plan-only`** on the invocation — the per-run",
         "1. **Ask** — an `AskUserQuestion`; the flag is consulted last."),
     "auto-closed question becomes the decision": (
         "**do not treat the answer as a decision**", "**treat the auto-closed answer as a decision**"),
@@ -1626,21 +2384,34 @@ PARTIAL_MUTATIONS = {
         "as a park, never as an answer", "as a park, never as an answer (in practice, proceed with the selected option)"),
     "literal-string rule inverted": ("**Key on the meaning, not on a literal string.**",
                                      "**Match the exact sentence the harness injects.**"),
-    "reviewer no longer runs on both": ("**The reviewer runs on both.**",
-                                        "**The reviewer runs on option A only.**"),
-    "reviewer optional under B": ("**The reviewer runs on both.**",
-                                  "**The reviewer runs on both.** Under option B you may omit it."),
+    "reviewer no longer runs on all three": ("**The reviewer runs on all three.**",
+                                             "**The reviewer runs on option A only.**"),
+    "reviewer optional under B": ("**The reviewer runs on all three.**",
+                                  "**The reviewer runs on all three.** Under option B you may omit it."),
+    "reviewer dropped on the plan-only path": (
+        "**The reviewer runs on all three.**",
+        "**The reviewer runs on A and B.** Option C returns the plan unreviewed."),
     "guided mode takes tier 1 too": ("**It overrides tier 2, never tier 1.**",
                                      "**It overrides every tier.**"),
     "guided mode made optional": ("**It overrides tier 2, never tier 1.**",
                                   "**It overrides tier 2, never tier 1.** Applying it is optional."),
     "flag demoted to advisory": (
-        "on the invocation — the per-run override.\n   Always wins.",
+        "on the invocation — the per-run\n   override. Always wins.",
         "on the invocation — advisory only; the config below wins."),
     "never-prompt rule dropped": ("**Never prompt when tier 1 or tier 2 resolves.**",
                                   "**Prompt whenever you are unsure.**"),
-    "option C silently offered": ("**A third option, plan-only, is specified but not built**",
-                                  "**A third option, plan-only, is available**"),
+    # Option C is built, so "silently offered" is no longer the defect. What
+    # replaces it is the pair of things a wrong reading of C would cost: offering
+    # it on a batch (a wasted claim), and moving the flag rejection to the offer
+    # that tier 1 skips (the rejection never fires).
+    "option C offered on a batch": ("**Option C is roadmap-only",
+                                    "**Option C is available on every claim kind"),
+    "batch rejection moved to the offer tier 1 skips": (
+        "**Step 1 rejects `--plan-only` for a `BATCH-*` claim**",
+        "**Step 6 declines `--plan-only` for a `BATCH-*` claim**"),
+    "option C config value invented": (
+        "**There is deliberately no config value for option C**",
+        "**Set `§ Plan review` to `plan-only` for option C**"),
 }
 
 
@@ -1663,10 +2434,17 @@ WORKFLOW_MUTATIONS = {
     "artifact dir loses its run key": (
         "`sysop/runtime/claim/<CLAIM_ID>/<RUN_ID>/` **in the main checkout**",
         "`sysop/runtime/claim/<CLAIM_ID>/`"),
-    "part B claimed as built": ("are part B of the reshape and are unbuilt",
-                                "are part B of the reshape and shipped with it"),
-    "part B shipped-as-of-last-release": ("are part B of the reshape and are unbuilt",
-                                          "were unbuilt as of the last release; they now ship"),
+    # Retired with the claim they inverted (Phase 238 -- part B ships). The
+    # dangerous over-reading is now the opposite one.
+    "readers upgraded from reporting to gating": (
+        "**Both readers report and neither rejects**",
+        "**Both readers gate and either can reject**"),
+    "reader coverage overclaimed to batches": (
+        "reached on the **roadmap** path only",
+        "reached on every claim path"),
+    "part B claimed as still deferred": (
+        "All three of part B's legs now ship",
+        "the readers are part B of the reshape and are unbuilt"),
 }
 
 
@@ -1732,7 +2510,8 @@ def test_negative_controls_do_not_fire():
             "Review is not inherited from a prior run and is not skipped", 1),
         "sole entry point": t.replace("the only entry point to Step 7", "the sole entry point to Step 7", 1),
         "never in a shell variable": t.replace("not in a shell variable", "never in a shell variable", 1),
-        "specified but unbuilt": t.replace("specified but not built", "specified but unbuilt", 1),
+        "option C flow reworded": t.replace(
+            "planner → reviewer → **Step 7f**", "planner → reviewer → **step 7f**", 1),
         "reflowed whitespace": t.replace(
             "**Always.** Review is never inherited", "**Always.**  Review is never inherited", 1),
         "Always without the period": t.replace(
@@ -1779,9 +2558,12 @@ def test_partial_negative_controls_do_not_fire():
         "judge-by-intent phrasing": t.replace(
             "**Key on the meaning, not on a literal string.**",
             "**Judge by intent rather than by exact wording.**", 1),
-        "reviewer runs under both options": t.replace(
-            "**The reviewer runs on both.**", "**The reviewer runs under both options.**", 1),
-        "specified but unbuilt": t.replace("specified but not built", "specified but unbuilt", 1),
+        "reviewer runs under all three options": t.replace(
+            "**The reviewer runs on all three.**",
+            "**The reviewer runs on all three options.**", 1),
+        "roadmap-only reworded": t.replace(
+            "**Option C is roadmap-only, and the reason",
+            "**Option C is roadmap-only \u2014 the reason", 1),
     }
     for name, rewritten in rewrites.items():
         assert rewritten != t, f"{name}: no-op rewrite -- the control proves nothing"

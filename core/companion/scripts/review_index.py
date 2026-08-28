@@ -667,7 +667,7 @@ def duplicate_batch_numbers(lines):
     corrected it in ``batch_work.sh`` while missing THIS copy: its sweep
     grepped the sentence as one line, and here it wraps across two, so a
     line-oriented search could not see it. Its own round caught that.
-    ``codebase-review/SKILL.md:166`` and ``security-audit/SKILL.md:181`` — the
+    ``codebase-review/SKILL.md:166`` and ``security-audit/SKILL.md:183`` — the
     only two operational writers of ``### Batch`` headers — both derive
     ``next_batch_number`` = highest Batch N + 1, file-globally. It does not
     change this function's scoping decision, which rests on the template's

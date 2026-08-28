@@ -240,7 +240,7 @@ git commit -am "chore: release <TASK-ID>"
 
 Hand-editing `status:` is normally off-limits (`tasks/README.md` rule 2) precisely because it can desync the lock — but doing it in the *same pass* as the lock removal (exactly what `--release` automates) is the sanctioned reversal, and `validate_tasks.py` confirms nothing is left dangling.
 
-One thing `--release` deliberately leaves behind: if the claim had been parked by `/auto-build`, its plan and verdict stay in `sysop/runtime/parked/`. That archive outlives the claim on purpose — it is the record of *why* the work stopped, and the next claimant reads it. It is gitignored, so it costs you nothing in the tree.
+One thing `--release` deliberately leaves behind: if the claim had been parked, the park record stays in `sysop/runtime/parked/`. It outlives the claim on purpose — it is the record of *why* the work stopped. **Both claim paths park there, and they leave different things.** `/auto-build` archives the plan and the verdict. `/claim-task` writes a **pointer**: the reason, the branch, which artifacts were present, and the `--resume <RUN_ID>` line that re-enters the run — a pointer rather than a copy because its artifacts already live in the main checkout under `sysop/runtime/claim/`, where they survive `git worktree remove`. And the re-entrant is the **same** claimant resuming that run id, not the next claimant picking the work up. It is gitignored, so it costs you nothing in the tree.
 
 ### Reversing a review-batch claim
 

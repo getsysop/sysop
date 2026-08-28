@@ -556,19 +556,41 @@ def test_missing_baseline_means_everything_is_new(tmp_path):
     assert mod.load_baseline(tmp_path / "nope.txt") == {}
 
 
-def test_update_baseline_always_snapshots_the_full_corpus(tmp_path, capsys):
+def test_update_baseline_always_snapshots_the_full_corpus(tmp_path, monkeypatch, capsys):
     """`--update-baseline --loop-only` must not narrow the snapshot.
 
     A loop-scoped snapshot would drop every lifecycle-skill entry, and the next full run
     would then see them as new — or, worse, a later `--update` from the loop corpus would
     quietly widen the baseline to "clean" for files it never looked at.
+
+    **Re-pointed at a SYNTHETIC corpus (Phase 233).** This asserted that the snapshot
+    contained an `auto-build` entry, which held only while `auto-build` carried
+    `run_in_background` debt. `Q-031` paid that off and the shipped baseline is now
+    empty, so the assertion could no longer be satisfied by a CORRECT script -- the
+    guard was measuring the tree's debt, not the flag's behaviour.
     """
     mod = _mod()
+    skills = tmp_path / "core" / "skills"
+    # `demo` is deliberately NOT in LOOP_SKILLS, so the loop corpus excludes it.
+    (skills / "demo").mkdir(parents=True)
+    (skills / "_shared").mkdir(parents=True)
+    doc = skills / "demo" / "SKILL.md"
+    doc.write_text("Spawn an Agent with `run_in_background: true`.\n", encoding="utf-8")
+    monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(mod, "SKILLS_DIR", skills)
+    monkeypatch.setattr(mod, "SHARED_DIR", skills / "_shared")
+
+    # The PRECONDITION, asserted rather than assumed: if the loop corpus already
+    # contained `demo`, this fixture could not tell a narrowed snapshot from a
+    # full one and would pass against the bug.
+    assert doc not in mod.corpus(loop_only=True), "fixture is wrong: demo is loop-scoped"
+    assert doc in mod.corpus(loop_only=False), "fixture is wrong: demo is not in the corpus"
+
     path = tmp_path / "baseline.txt"
     assert mod.main(["--update-baseline", "--loop-only", "--baseline", str(path)]) == 0
     capsys.readouterr()
     loaded = mod.load_baseline(path)
-    assert any("auto-build" in key for key in loaded), (
+    assert any("demo" in key for key in loaded), (
         "the snapshot came from the loop corpus and lost the lifecycle-skill entries"
     )
 
@@ -615,14 +637,37 @@ def test_a_fixed_baselined_defect_is_stale_not_a_failure(tmp_path, monkeypatch, 
     assert "STALE BASELINE (1)" in capsys.readouterr().out
 
 
-def test_baselined_defects_are_named_not_just_counted(capsys):
-    """Accepted debt that prints only a number becomes invisible debt."""
+def test_baselined_defects_are_named_not_just_counted(tmp_path, monkeypatch, capsys):
+    """Accepted debt that prints only a number becomes invisible debt.
+
+    **Re-pointed at a SYNTHETIC corpus (Phase 233).** This drove the real tree and
+    asserted on `run_in_background` debt that `Q-031` has now paid off, leaving the
+    shipped baseline empty. Written that way, the guard died the moment the defect it
+    described was fixed — and the only ways to revive it in place are to re-add debt or
+    to weaken the assertion, both worse than the bug. It now seeds its own defect, so it
+    tests the MECHANISM rather than the incidental state of the tree.
+    """
     mod = _mod()
-    mod.main([])
+    skills = tmp_path / "core" / "skills" / "demo"
+    skills.mkdir(parents=True)
+    (tmp_path / "core" / "skills" / "_shared").mkdir(parents=True)
+    doc = skills / "SKILL.md"
+    doc.write_text(
+        "Spawn an Agent with `run_in_background: true`.\n"
+        "And another Agent with `run_in_background: true`.\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(mod, "SKILLS_DIR", tmp_path / "core" / "skills")
+    monkeypatch.setattr(mod, "SHARED_DIR", tmp_path / "core" / "skills" / "_shared")
+    base = tmp_path / "baseline.txt"
+    assert mod.main(["--update-baseline", "--baseline", str(base)]) == 0
+    capsys.readouterr()
+    assert mod.main(["--baseline", str(base)]) == 0
     out = capsys.readouterr().out
-    # Count derived from the baseline, not hardcoded — see the note on the seeded-sites
-    # guard above: a hardcoded 11 made `--update-baseline` redden the suite.
-    baseline = mod.load_baseline(REPO_ROOT / "tools" / "skill_audit_baseline.txt")
+
+    baseline = mod.load_baseline(base)
+    assert sum(baseline.values()) == 2, baseline
     assert f"BASELINED ({sum(baseline.values())})" in out
     named = out.split("BASELINED")[1]
     for key in baseline:
@@ -667,17 +712,37 @@ def test_the_checker_script_exists_in_the_source_repo():
     )
 
 
-def test_no_baseline_flag_counts_everything_as_new(capsys):
-    """``--no-baseline`` shipped untested and undocumented in the first draft."""
+def test_no_baseline_flag_counts_everything_as_new(tmp_path, monkeypatch, capsys):
+    """``--no-baseline`` shipped untested and undocumented in the first draft.
+
+    **Re-pointed at a SYNTHETIC corpus (Phase 233).** This drove the real tree and
+    asserted on `run_in_background` debt that `Q-031` has now paid off, leaving the
+    shipped baseline empty. Written that way, the guard died the moment the defect it
+    described was fixed — and the only ways to revive it in place are to re-add debt or
+    to weaken the assertion, both worse than the bug. It now seeds its own defect, so it
+    tests the MECHANISM rather than the incidental state of the tree.
+    """
     mod = _mod()
-    assert mod.main(["--no-baseline"]) == 1
+    skills = tmp_path / "core" / "skills" / "demo"
+    skills.mkdir(parents=True)
+    (tmp_path / "core" / "skills" / "_shared").mkdir(parents=True)
+    doc = skills / "SKILL.md"
+    doc.write_text(
+        "Spawn an Agent with `run_in_background: true`.\n"
+        "And another Agent with `run_in_background: true`.\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(mod, "SKILLS_DIR", tmp_path / "core" / "skills")
+    monkeypatch.setattr(mod, "SHARED_DIR", tmp_path / "core" / "skills" / "_shared")
+    base = tmp_path / "baseline.txt"
+    assert mod.main(["--update-baseline", "--baseline", str(base)]) == 0
+    capsys.readouterr()
+    assert mod.main(["--no-baseline", "--baseline", str(base)]) == 1, (
+        "--no-baseline must ignore the baseline and report the seeded defects as new"
+    )
     out = capsys.readouterr().out
-    # Derived, not hardcoded — the first draft of THIS test hardcoded 11 and broke the
-    # ratchet again in the same edit that was fixing it.
-    report = mod.Report()
-    for path in mod.corpus(loop_only=False):
-        mod.check_file(path, report)
-    assert f"NEW DEFECTS ({len(report.defects)})" in out
+    assert "NEW DEFECTS (2)" in out, out
     assert "BASELINED" not in out
 
 
@@ -799,10 +864,33 @@ def test_new_defect_block_lists_the_sites(tmp_path, monkeypatch, capsys):
     assert "path-line-beyond-eof" in out
 
 
-def test_baselined_block_names_the_debt_not_just_the_file(capsys):
-    """Dropping `detail × count` from the per-key line survived the round's mutations."""
+def test_baselined_block_names_the_debt_not_just_the_file(tmp_path, monkeypatch, capsys):
+    """Dropping `detail × count` from the per-key line survived the round's mutations.
+
+    **Re-pointed at a SYNTHETIC corpus (Phase 233).** This drove the real tree and
+    asserted on `run_in_background` debt that `Q-031` has now paid off, leaving the
+    shipped baseline empty. Written that way, the guard died the moment the defect it
+    described was fixed — and the only ways to revive it in place are to re-add debt or
+    to weaken the assertion, both worse than the bug. It now seeds its own defect, so it
+    tests the MECHANISM rather than the incidental state of the tree.
+    """
     mod = _mod()
-    mod.main([])
+    skills = tmp_path / "core" / "skills" / "demo"
+    skills.mkdir(parents=True)
+    (tmp_path / "core" / "skills" / "_shared").mkdir(parents=True)
+    doc = skills / "SKILL.md"
+    doc.write_text(
+        "Spawn an Agent with `run_in_background: true`.\n"
+        "And another Agent with `run_in_background: true`.\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(mod, "SKILLS_DIR", tmp_path / "core" / "skills")
+    monkeypatch.setattr(mod, "SHARED_DIR", tmp_path / "core" / "skills" / "_shared")
+    base = tmp_path / "baseline.txt"
+    assert mod.main(["--update-baseline", "--baseline", str(base)]) == 0
+    capsys.readouterr()
+    assert mod.main(["--baseline", str(base)]) == 0
     named = capsys.readouterr().out.split("BASELINED")[1]
     assert "run_in_background" in named, "the block names files but not what the debt IS"
     assert "×" in named, "the block does not state multiplicity"

@@ -21,6 +21,8 @@ Read `.claude/settings.json` and confirm `permissions.allow` contains:
 - `Bash(python sysop/scripts/archive_review_tasks.py:*)`
 - `Bash(python3 sysop/scripts/archive_review_tasks.py:*)`
 - `Bash(.venv/bin/python3 sysop/scripts/archive_review_tasks.py:*)` — back-compat only for a hand-typed venv invocation. `archive_review_tasks.py` imports no yaml at all, so the bare rule above is what the skills prescribe
+- `Bash(python3 sysop/scripts/security_partition.py:*)` — Step 3-0c's residual assignment
+- `Bash(.venv/bin/python3 sysop/scripts/security_partition.py:*)` — the venv form of the same. Only the **flagged** shapes are seeded: every prescribed invocation carries `--json`, and a rule seeded against an invocation nothing binds is the waste Phase 152 measured
 - `Bash(git add review_tasks.md)` — Step 7's task-loss protection commit
 - `Bash(git add:*)` — Step 7 also stages `review_tasks_archive.md`, whose own name no literal rule covers (it is staged as its **own** command precisely because `git add` is all-or-nothing across pathspecs)
 - `Bash(git commit -m docs:*)` — the `docs:` commit Step 7 and the Step 9 promotion/demotion commits use
@@ -402,6 +404,30 @@ Assignment reconciliation:
 
 **What this step does *not* claim.** It reconciles roster against map. It does not establish that the union of the agents' assigned files spans the Step 1 manifest — files matched by **no** section are 2a-1's question, and whether anyone actually read what they were assigned is the Tier-0 arithmetic's (`opened + grepped` vs `manifest`) and Step 3b's per-agent ratio. Three separate checks over three separate populations; none of them substitutes for another, and a round that passes this one has established one thing only.
 
+### 3-0c. Residual assignment (manifest ↔ dispatch — run before dispatch)
+
+**Deterministic, no LLM, and it runs on every round including solo ones.** 3-0b asks whether the roster reaches the **map**. This asks whether the dispatch reaches the **manifest** — the boundary 3-0b's own closing paragraph names and declines: *"It does not establish that the union of the agents' assigned files spans the Step 1 manifest."* A file that **no** section matches is assigned to nobody, and until this step existed nothing counted it.
+
+```bash
+python3 sysop/scripts/security_partition.py --json
+```
+
+**Why this cannot be keyed on map sections, and why it is keyed on the manifest instead.** **30 of the 36 shipped `security_map` sections are all-placeholder** — `## <api module>/routes/**/*.py — API Endpoints` binds nothing, and markdown is never token-substituted at install time. Section-keyed ownership therefore assigns a real consumer's routes, auth and pipeline to **nobody**, which is strictly worse than the category dispatch it would replace. So the partition is taken over the manifest, which is always real and always complete, and the map is used for what it can actually be when most of its globs are placeholders: a **rule** source, not a **coverage** source. Measured on a realistic four-pack install: six of the consumer's fourteen files owned, eight unowned, and all eight of the unowned were the API server, its routes, auth, the pipeline, a utility module, a frontend component, a SQL migration and the tests.
+
+The residual is a **set difference** — manifest minus mapped minus `CLAUDE.md` § "Map coverage exclusions" — so it is disjoint from the category agents' population by construction and adds no double-counting to `opened <M>`. It is **largest exactly when the map is least localized**, which is the case that was silently empty before.
+
+**Read the three numbers it prints, and do not round any of them into the others:**
+
+- **`residual`** — files no section reaches. These get residual agents this round.
+- **`your code` vs `Sysop's own installed files`** — Sysop's footprint is read from the lock's own `managed_paths` and is **counted, never excluded**: auto-excluding the shipped tool's own code from the audit it ships is a self-serving default, and this code does run in the consumer's repo. It is ranked *last*, so a binding budget spends on the consumer's code first. On a fresh four-pack install 79 of 91 residual files are Sysop's, and without the ranking the sweep never reaches the application.
+- **`Full` / `Sampled`** — **assignment is not coverage.** Each residual agent is handed at most `--per-agent` files and credited for exactly that many; anything past the budget is reported as unreached, with the agent count `Full` would have needed. Packing 436 residual files into four agents and calling it `Full` because every file landed in a bucket is the same overstatement Step 3-0 forbids for the manifest — a partition being *total* says nothing about anyone having *read* it.
+
+Dispatch one agent per `residual-N` assignment alongside the category agents, each handed its own file list. A residual agent has no section, so it has **no `Check:`/`Skip:` lists to inherit** — give it the full OWASP sweep and say so, and never let a placeholder section's `Skip:` reach it.
+
+**Write the verdict onto Step 5b's `Residual:` line — NOT onto its `Coverage:` line.** An earlier version of this sentence said "carry the verdict into Step 5b's `Coverage` line", which contradicts the Step 5b paragraph three hundred lines below that states the residual verdict *is not* the round's `Coverage` verdict, and left an operator with no instruction that produces the `Residual:` line at all. They are different populations: a round can reach its whole manifest (`Coverage: Full`) while leaving residual files unreached, and can sample its manifest while reaching every residual file. **Count the residual agents in `workers <K>`** — they are workers this round dispatched.
+
+**A non-zero `unreached` does not halt the round.** Report it, and name it in the ledger — the durable fix is a localized map (which moves files out of the residual and into the category dispatch, where the curated rules are), not a bigger budget.
+
 **CRITICAL: Read `.claude/security_map.md` before launching agents.** The security map specifies which OWASP checks apply to which file areas and which to SKIP. Agents must respect both the "Check" and "Skip" lists.
 
 **Both lists bind only the files a section's globs actually match** (the map's own § Scope note). A pack section still in placeholder form — a header like `## <evals module>/*.py` — matches nothing on a consumer install, so it authorizes **no skip on any file**, including files a localized `.project.md` section covers with the opposite verdict. Hand each agent the Check/Skip lists of the sections whose globs resolved to that agent's files; never pass a placeholder section's lists, and never let one stand as the reason a category went unaudited.
@@ -559,7 +585,7 @@ Run the supplementary `npm audit` scan (not yet pre-scanned):
 
 Also check (manual inspection, not pre-scanned):
 - All `requirements.txt` files in the project (root + per-service e.g., `<datajobs dir>/requirements.txt`) for `>=` instead of `==` pins
-- Per-service requirements advisories — the local pre-scan only audits the venv on PATH; if the project has separate per-service venvs (e.g., `<datajobs dir>/`), cross-check by reading the CI job log for the most recent main-branch run, or invoke pip-audit manually in the relevant venv if discrepancies are suspected
+- Per-service requirements advisories — the local pre-scan only audits the venv on PATH, so a project with separate per-service venvs (e.g., `<datajobs dir>/`) has un-audited ones. **Prefer invoking pip-audit manually in the relevant venv:** that is the only route here that audits *this* tree. A CI job log is evidence about the commit CI built — the most recent `main` run, which is not the revision under audit whenever you are on a branch, or whenever `main` has moved since. A dependency added, pinned or dropped in between makes a green log certify a tree it never saw, and a resolved advisory read as live. The run's own page names its commit, so if you use the log at all, **state that SHA in the finding and say how it relates to the audited tree**; where you cannot establish that no manifest changed between the two, file the item `Reachability: unassessed` rather than reporting the log's verdict as this tree's
 - GitHub Actions workflows for unpinned action versions or tool installs
 
 Report findings grouped by severity. If tools aren't installed, note this as a gap.
@@ -763,7 +789,14 @@ instead — the same *beside, never replace* rule a merged round already follows
 
 ```markdown
 > **Reconciliation:** sections-no-agent <N> · categories-no-agent <N> · sections-no-category <N>
+> **Residual:** <N> unmapped (<C> yours · <S> Sysop's) · <Full | Sampled (<R>/<N> reviewed)>
 ```
+
+The `Residual:` line is Step 3-0c's, and it goes **beside** the `Reconciliation:` line for the same
+reason that one goes beside `Coverage:` — three populations, three numbers, and folding any of them
+into another is how a coverage claim gets overstated. In particular the residual verdict is **not**
+the round's `Coverage` verdict: a round can reach its whole manifest (`Full`) while leaving residual
+files unreached, and a round can sample its manifest while reaching every residual file.
 
 This is a durable text record in `review_tasks.md` and **nothing parses it** — the JSON receipt
 schema has no field for it. An earlier version of Step 3-0b said the counts would go "into the

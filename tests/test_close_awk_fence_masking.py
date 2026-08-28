@@ -244,10 +244,19 @@ def test_without_python3_behaviour_is_the_old_behaviour(tmp_path):
 
     With no `review_index.py`, `FENCED_LINES` is empty and `close_batch.sh`
     falls back to its grep range — which under-reaches. That is Q-017's filed
-    defect and is deliberately NOT fixed here: close_batch.sh diagnoses by
-    commit presence rather than exit code, so a refusal added on that path
-    cannot reach its caller. Pinned so the phase cannot be read as having
-    closed it.
+    defect.
+
+    **Scoped 2026-08-26 (Phase 233): this is now the ONLY arm where it survives.**
+    `Q-017` was closed on the `fallback` arm by filtering the boundary search
+    through `$FENCED_LINES` — the same mask `CLOSE_AWK` rewrites around. That
+    mask needs `python3` and `$INDEX_SCRIPT`, which is precisely what this test
+    removes, so there is nothing to filter with here and the pre-existing
+    answer is the honest degradation.
+
+    Still pinned, for the reason it always was: so a phase cannot be read as
+    having closed what it did not. See
+    `tests/test_batch_header_near_miss.py::test_the_fence_blind_claim_is_made_only_on_the_arm_where_it_is_true`,
+    which asserts the warning names the right arm in both directions.
     """
     repo = _repo(tmp_path / "noindex", FENCED_BODY, with_index=False)
     r = _close(repo, "--force", "5")

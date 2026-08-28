@@ -17,7 +17,7 @@ at. Two layers:
      than silently leaking into (or dropping out of) the "smallest install".
 
   2. End-to-end — a real `--mode loop` install must ship *exactly* the loop
-     bundle and nothing lifecycle, write the 21-rule hookless settings.json,
+     bundle and nothing lifecycle, write the 24-rule hookless settings.json,
      leave a clean root footprint, record `mode: loop`, and satisfy the full
      mode/update state machine (preserve on --update, additive loop→full
      upgrade, rejected full→loop downgrade).
@@ -62,16 +62,21 @@ LOOP_SCRIPTS = {
     "_log.py", "_model_roles.py", "archive_review_tasks.py",
     "check_skill_models.py", "ingest_security_report.py", "install_hooks.sh",
     "migrate_skill_model.py", "resolve_skill_models.py", "review_index.py",
-    "run_checks_impl.py", "run_checks.sh", "self_check.sh", "sysop-update.sh",
+    "run_checks_impl.py", "run_checks.sh", "security_partition.py",
+    "self_check.sh", "sysop-update.sh",
 }
 EXCLUDED_SCRIPTS = {
     "backfill_completed_dates.py", "batch_work.sh", "claim_task.sh",
+    # Phase 237: a `tasks/index.yml` writer, so it is lifecycle. Loop mode
+    # installs no task queue at all, which is what makes this a classification
+    # rather than a judgement call.
+    "clear_user_action.py",
     "cleanup_worktrees.sh", "close_batch.sh", "next_task.py",
     "parse_subagent_envelope.py", "permission_denied_hook.py",
     "pr_dependabot.py", "scope_overlap.py", "sitrep_survey.py",
     "validate_tasks.py",
 }
-LOOP_ALLOW_COUNT = 22
+LOOP_ALLOW_COUNT = 24
 # The exact loop-mode allow-list (LOOP_ONLY_SPEC § "Leg 1 findings"). Asserting
 # the *set*, not just the count, is what stops a wrong-but-19 permission set
 # (e.g. a dropped `gh release create` swapped in for a loop rule) shipping green.
@@ -103,6 +108,8 @@ EXPECTED_LOOP_ALLOW = {
     # (without it the call is auto-denied with no prompt under `dontAsk`).
     "Bash(python3 sysop/scripts/ingest_security_report.py:*)",
     "Bash(.venv/bin/python3 sysop/scripts/ingest_security_report.py:*)",
+    "Bash(python3 sysop/scripts/security_partition.py:*)",
+    "Bash(.venv/bin/python3 sysop/scripts/security_partition.py:*)",
     "Bash(python3 -c:*)",
     "Bash(python3 -:*)",
     # Phase 152: the give-back skills' auth gate. `gh` is not in Claude Code's

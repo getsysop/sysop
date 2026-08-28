@@ -847,8 +847,8 @@
     <div class="hero-grid">
       <aside class="hero-margin rise">
         <span class="line">Vol. <span class="accent">I</span></span>
-        <span class="line">Issue 229</span>
-        <span class="line">2026.08.23</span>
+        <span class="line">Issue 239</span>
+        <span class="line">2026.08.28</span>
         <span class="line" style="margin-top:22px">An essay on</span>
         <span class="line">software workflow</span>
       </aside>
@@ -871,7 +871,7 @@
             <div class="hero-stat-label">Skills</div>
           </div>
           <div class="hero-stat">
-            <div class="hero-stat-fig">229</div>
+            <div class="hero-stat-fig">239</div>
             <div class="hero-stat-label">Shipped phases</div>
           </div>
           <div class="hero-stat">
@@ -1364,7 +1364,7 @@
           </div>
           <div class="entry">
             <dt>/claim-task<span class="model-tag opus">opus · orchestration</span></dt>
-            <dd>Adjudicates the claim before it creates anything — <code>--entry-state</code> answers <code>claimable</code> / <code>resumable</code> / <code>held</code> / <code>closed</code> / <code>absent</code>, and <code>resumable</code> <em>stops and asks</em> rather than resuming (Phase 159b). Then creates lock + worktree and <em>orchestrates</em> — it never implements, never enters plan mode, and holds no <code>Edit</code> tool: a planner writes the plan, an independent reviewer that did not write it looks for what is wrong, the orchestrator classifies those findings itself, and an executor implements, verifies and commits. Three cold contexts, and a file left behind at each seam in <code>sysop/runtime/claim/&lt;id&gt;/&lt;run&gt;/</code> — the plan, the review, the classification — so a review that ran and a review that was skipped stop producing identical evidence (Phase 171).</dd>
+            <dd>Adjudicates the claim before it creates anything — <code>--entry-state</code> answers <code>claimable</code> / <code>resumable</code> / <code>held</code> / <code>closed</code> / <code>absent</code>, and <code>resumable</code> <em>stops and asks</em> rather than resuming (Phase 159b). Then creates lock + worktree and <em>orchestrates</em> — it never implements, never enters plan mode, and holds no <code>Edit</code> tool: a planner writes the plan, an independent reviewer that did not write it looks for what is wrong, the orchestrator classifies those findings itself, and an executor implements, verifies and commits. Three cold contexts, and a file left behind at each seam in <code>sysop/runtime/claim/&lt;id&gt;/&lt;run&gt;/</code> — the plan, the planner's integrity check, the review, the classification, the outcome, and on option C a marker recording that the plan was written back and the claim released — so a review that ran and a review that was skipped stop producing identical evidence (Phase 171). The reviewed plan itself goes somewhere else on purpose: into the <em>task body</em> in the main checkout, the one write in the skill that is deliberately not a worktree write. Those files are not just a record: <code>--resume</code> reads the stage to re-enter off <em>them</em>, which is why the set grew past the three the reshape first specified. <strong>How much you are in the loop is settled before anything is claimed</strong> — <code>## Plan review</code> in your <code>CLAUDE.md</code>, or the <code>--review-plan</code> / <code>--no-review-plan</code> / <code>--plan-only</code> flags — and resolves to one of three options: <strong>A</strong> puts a human gate between the review and the executor, <strong>B</strong> runs straight through, and <strong>C</strong> (<code>--plan-only</code>, Phase 238) stops after the review, writes the reviewed plan and its sealed verdict back into the task body, and releases the claim — the review <em>is</em> the deliverable there, since nothing is implemented. The reviewer runs on all three; only what follows differs. C is roadmap-only and refused up front for a review batch, which has no body file to persist a plan into. A run that cannot finish <em>parks</em> rather than unwinding: a marker under <code>sysop/runtime/parked/</code> names the reason, the branch, and the <code>--resume &lt;RUN_ID&gt;</code> line that re-enters it — and the stage to re-enter is read off the artifacts on disk rather than remembered, which is what lets the <em>same</em> claimant pick the run back up.</dd>
           </div>
           <div class="entry">
             <dt>/document-work<span class="model-tag">inherits · narration</span></dt>
@@ -1372,7 +1372,7 @@
           </div>
           <div class="entry">
             <dt>/review-close<span class="model-tag opus">opus · gate</span></dt>
-            <dd>Worktree-state classification; project pre-merge gates, run twice on two trees — a cheap fail-fast before the merges and the authoritative one <em>after</em> them, on the assembled result, because a gate that runs before the merge can only ever describe the tree it stood on (Phase 170) — including a <em>crown-jewel coverage gate</em> (Phase 61) that fails the merge when a critical path loses test coverage, with no baseline escape hatch; a verify-the-record check (Phase 59) that reads back the task's <code>## Test decision</code> and confirms it against the actual diff; the manual-smoke gate; the merge; archive the task; clean up branches. <em>How</em> it merges is the project's call — <code>§ Merge policy</code> in your <code>CLAUDE.md</code> selects <code>direct</code> (push <code>main</code>) or <code>pr</code>, which never writes <code>main</code> <em>directly</em> — work routes through an integration branch and one squash PR, making GitHub the sole serialized writer (Phase 63; PR-state-as-verdict and PR reuse, Phase 151).</dd>
+            <dd>Worktree-state classification; project pre-merge gates, run twice on two trees — a cheap fail-fast before the merges and the authoritative one <em>after</em> them, on the assembled result, because a gate that runs before the merge can only ever describe the tree it stood on (Phase 170) — including a <em>crown-jewel coverage gate</em> (Phase 61) that fails the merge when a critical path loses test coverage, with no baseline escape hatch; a verify-the-record check (Phase 59) that reads back the task's <code>## Test decision</code> and confirms it against the actual diff; the manual-smoke gate; the merge; archive the task; clean up branches. <em>How</em> it merges is the project's call — <code>§ Merge policy</code> in your <code>CLAUDE.md</code> selects <code>direct</code> (push <code>main</code>) or <code>pr</code>, which never writes <code>main</code> <em>directly</em> — work routes through an integration branch and one squash PR, making GitHub the sole serialized writer (Phase 63; PR-state-as-verdict and PR reuse, Phase 151). It also <em>reports</em> what each claim left behind (Step 2e, Phase 237): for every branch under review it prints which of <code>plan.md</code>, <code>planner-integrity.md</code>, <code>review.md</code>, <code>classification.md</code> and <code>outcome.md</code> exist, plus any hook envelopes, resolving the branch to a claim id from the <em>lock</em> rather than the branch name. <strong>Five, not the three the pipeline first shipped</strong> — <code>planner-integrity.md</code> and <code>outcome.md</code> are what answer <em>was the plan re-gated?</em> and <em>did the executor already run?</em> <strong>Step 7-pre's resume table routes on six</strong>, and the sixth is the gap worth knowing about: option C's marker is what tells a re-entry the run is finished, and Step 2e does not report it. That report never moves a verdict — a rejecting form of it was built and disqualified by its own round — and an absent artifact renders as <em>unknown</em>, never as &ldquo;did not run&rdquo;, because <code>sysop/runtime/</code> is gitignored and the hook is Claude Code only. At close it reaps them (Phase 236): Step 4c removes a roadmap claim's artifact directory, lock and park marker; <code>close_batch.sh</code>'s <code>remove_claim_artifacts()</code> does the batch half, sited there because Step 4c's id list is built from <code>roadmap_ids</code> alone and no batch id ever reaches it. Both are gated on the close having landed on <code>main</code>, so a <code>pr</code>-policy close sitting on an integration branch defers rather than destroys.</dd>
           </div>
         </dl>
 
@@ -1437,7 +1437,7 @@
           </div>
           <div class="entry">
             <dt>/sitrep<span class="model-tag">inherits · orientation</span></dt>
-            <dd>Read-only survey across worktrees, locks, branches, the index, and pending review batches. Reports lifecycle position per task — queued, claimed, in-progress, documented, awaiting close — and recommends a single next move. Phase 40 introduced the <code>Doc-Work:</code> git trailer that lets it classify documented vs undocumented branches without grepping prose. Phase 54 hardened the read-only intent with a <code>disallowed-tools</code> guard (Claude Code 2.1.152) on both <code>/sitrep</code> and <code>/next-task</code> — partial by design, as both skill files state: it covers the dedicated write tools (<code>Edit</code>, <code>Write</code>, <code>NotebookEdit</code>) while <code>Bash</code> stays allowed for the survey commands, and non-Claude-Code harnesses ignore the key.</dd>
+            <dd>Read-only survey across worktrees, locks, branches, the index, and pending review batches. Reports lifecycle position per task — queued, claimed, in-progress, code committed with docs pending, parked, awaiting approval, documented, awaiting close — and recommends a single next move. The <em>parked</em> and <em>awaiting approval</em> states arrived with Phase 237 and are what stops a stalled claim and an unstarted one producing identical evidence; they are reached on the roadmap path only, so a parked review batch is still classified by the separate batch vocabulary. Phase 40 introduced the <code>Doc-Work:</code> git trailer that lets it classify documented vs undocumented branches without grepping prose. Phase 54 hardened the read-only intent with a <code>disallowed-tools</code> guard (Claude Code 2.1.152) on both <code>/sitrep</code> and <code>/next-task</code> — partial by design, as both skill files state: it covers the dedicated write tools (<code>Edit</code>, <code>Write</code>, <code>NotebookEdit</code>) while <code>Bash</code> stays allowed for the survey commands, and non-Claude-Code harnesses ignore the key.</dd>
           </div>
         </dl>
       </div>
@@ -1879,6 +1879,34 @@
           section whose categories no agent owns is matched and unaudited. Either way, a file matched by a section
           that no reviewer reaches is <em>matched</em> — so both of the other two checks count it covered while nobody
           reads it.
+        </p>
+        <p>
+          <strong>And then the version that unmakes the unit itself.</strong> All three checks above are
+          keyed on map <em>sections</em>, and Phase 231 measured what that assumes: <strong>30 of the 36
+          shipped <code>security_map</code> sections are all-placeholder</strong> —
+          <code>## &lt;api module&gt;/routes/**/*.py</code> — binding nothing until a consumer localizes them,
+          and markdown is never token-substituted at install time. So on a fresh install the six sections
+          that <em>do</em> bind are all infrastructure — shell scripts, <code>Dockerfile</code>,
+          <code>.gitignore</code>, CI workflows, skill markdown, <code>pyrightconfig.json</code>. The audit
+          reaches those and not the application code. Measured on a realistic
+          four-pack install: 6 of the consumer's 14 files owned, <strong>8 unowned — and all eight were the
+          API server, its routes, auth, the pipeline, a utility module, a frontend component, a SQL
+          migration and the tests.</strong> Section-keyed ownership assigns a real consumer's routes and
+          auth to nobody, and every check above this one certifies that tree as covered.
+          The fix inverts the unit. <code>security_partition.py</code> does not partition the map; it
+          partitions the <strong>manifest</strong> — always real, always complete — into bounded,
+          directory-coherent assignments, and demotes the map to what it can be when most of its globs are
+          placeholders: a <em>rule</em> source, not a <em>coverage</em> source. Mapped files keep the
+          category dispatch untouched; the residual is a set difference, and it is largest exactly when the
+          map is least localized, which is the case that was silently empty before. It is advisory and
+          never a gate — every degraded path exits 0 with a stated reason, because a partial audit beats a
+          refused one. What it will not do is conflate assignment with coverage: packing a 486-file
+          residual into four agents and calling that <code>Full</code> because every file landed in a
+          bucket is the laundering the <code>Full</code>/<code>Sampled</code> arithmetic exists to prevent.
+          Each agent is credited with at most its per-agent budget and the rest is reported as a shortfall,
+          with the agent count <code>Full</code> would have needed. That check is why the file has the
+          shape it does: the first cut reported <code>Full</code> over a 533-file repo it had reviewed a
+          quarter of.
         </p>
         <p>
           <strong>A round nobody ran — by an agent that knew it should.</strong> The fifth shape is the least
@@ -2808,7 +2836,8 @@
 │   │   ├── pending-rounds/        <span class="cm"># Phase 143 · round-open markers · a survivor means a round died</span>
 │   │   ├── round-receipts/        <span class="cm"># Phase 149 · closed rounds' Tier-0 coverage ledgers · newest 50</span>
 │   │   ├── auto-build/            <span class="cm"># /auto-build per-worktree plan + review scratch</span>
-│   │   ├── parked/                <span class="cm"># parked-task plan + verdict archive (Phase 65a; Phase 159b moved it out of auto-build/)</span>
+│   │   ├── claim/                 <span class="cm"># Phase 171 · &lt;CLAIM_ID&gt;/&lt;RUN_ID&gt;/ · one file per orchestration seam</span>
+│   │   ├── parked/                <span class="cm"># why a claim stopped — /auto-build archives plan + verdict, /claim-task a --resume pointer (Phase 65a; 159b moved it out of auto-build/)</span>
 │   │   └── subagent-envelopes/    <span class="cm"># Phase 37 · SubagentStop hook writes JSON here · Phase 159a keys it per stage</span>
 │   └── SYSOP_ISSUES.md            <span class="cm"># friction log · seeded once, project-owned · /report-issues files upstream</span></pre>
         </div>
@@ -2826,7 +2855,7 @@
       <aside class="col-rule">Colophon</aside>
       <div>
         <p class="col-body">
-          A monograph on <em>Sysop</em>, as of <em>Phase 229</em> · 2026-08-23, with dated addenda where the record
+          A monograph on <em>Sysop</em>, as of <em>Phase 239</em> · 2026-08-28, with dated addenda where the record
           moved after the snapshot. Phase numbers throughout are iterations
           of the workflow's own development — each one planned, adversarially reviewed, and shipped through the process it
           extends; <a href="https://github.com/getsysop/sysop/blob/main/PHASE_LOG.md">PHASE_LOG.md</a> carries one entry per phase. Set in the reader's native serif —
@@ -2867,7 +2896,7 @@
             <ul>
               <li>Extracted from <em>gdp-query-system</em></li>
               <li>First consumer · BeanRider</li>
-              <li>Phase 229 · 2026-08-23</li>
+              <li>Phase 239 · 2026-08-28</li>
             </ul>
           </div>
           <div>

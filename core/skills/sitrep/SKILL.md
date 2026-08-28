@@ -70,11 +70,20 @@ The `RECOMMENDED NEXT` block applies a priority cascade — first match wins:
 | 4b       | Pending unclaimed batches all triaged, mix of auto + flag              | `/auto-fix` (concurrent with `/auto-judge`)                       | yes          |
 | 4c       | Pending unclaimed batches all triaged, flag-only                       | `/auto-judge`                                                        | yes          |
 | 4d       | Pending unclaimed batches all triaged, auto-only                       | `/auto-fix`                                                       | yes          |
+| 4e       | Any task `code committed, docs pending`                                | `/document-work <ID>`                                                | no           |
 | 5        | Any task `in progress`                                                 | `continue work or /document-work <ID>`                               | no           |
-| 6        | Any task `planning`                                                    | `resume planning for <ID>`                                           | no           |
+| 6a       | Any task `parked`                                                      | read the park marker; `--resume <RUN_ID>` only when a run exists     | no           |
+| 6b       | Any task `awaiting approval`                                           | `/claim-task <ID> --resume <RUN_ID>` — approve or revise the plan    | no           |
+| 6c       | Any task `planning`                                                    | `resume planning for <ID>`                                           | no           |
 | 7a       | No active work, **> 4** open roadmap tasks (deeper than one `/auto-build` batch) | `/roadmap` (strategy view: group + order before batching; with sample of open IDs) | no           |
 | 7b       | No active work, **1–4** open roadmap tasks (fits one batch)            | `/auto-build` (with sample of open IDs)                             | yes          |
 | 8        | Truly idle (no work, no roadmap)                                       | none — block reads `(idle …)`                                        | no           |
+
+**Row `4e` is not a batch row**, despite sitting in the `4` block: `4a`–`4d` route the review-batch queue and `4e` routes a single task whose build is committed but undocumented. It is placed there because that task is *further along* than an in-progress one and still not closable — the same reason the code puts its arm between P4 and P5. **This row was missing from this table until Phase 237**, while the arm had shipped in `_recommended_next`'s cascade since Q-019: the states table was guarded and this one was not, so a state could be wired into the cascade with no routing row and nothing went red. The guard added in Phase 237 closes that, and finding this row absent is what it found first.
+
+**Row `6a` withholds the `--resume` line when there is no run to resume.** An `/auto-build` park writes a marker and no `sysop/runtime/claim/<ID>/` directory at all, so naming a `<RUN_ID>` there would print a command that cannot work; the recommendation names the marker instead.
+
+**Rows `6a`/`6b` report a stall; they never assert one from absence.** `sysop/runtime/` is gitignored, the `SubagentStop` envelope is Claude-Code-only, and a `--resume` onto a rebuilt worktree legitimately carries no artifacts — so a claim with nothing on disk stays `6c planning`, exactly as before. The probe only ever upgrades a classification on positive evidence (a park marker, or a `classification.md` verdict). Absence is *unknown*, never *did not run*.
 
 The `/clear` nudge fires on every recommendation that spawns parallel/Opus agents (`/auto-fix`, `/auto-judge`, `/auto-build`). It is intentionally always-on for those skills because `sitrep` cannot see the caller's context size and the cost of an unneeded nudge is small.
 
@@ -96,6 +105,8 @@ The survey script classifies each discovered task into exactly one state. Listed
 | **Code committed, docs pending** | At least one commit carries `Doc-Work: <TASK_ID>` but **no pending-doc exists** for the branch — the normal terminal state of `/claim-task`'s build pipeline, whose executor emits the trailer without running `/document-work` |
 | **Ready for `/review-close`** | At least one commit ahead of main carries `Doc-Work: <TASK_ID>`, a pending-doc exists for the branch, and the branch is pushed to origin |
 | **Doc-work done, unpushed** | As above with a pending-doc present; local ahead of `origin/<branch>` (or no upstream tracked) |
+| **Parked** | Lock + branch, 0 commits ahead, and a park marker `sysop/runtime/parked/<ID>__*.md` exists — either origin, `/auto-build` Phase 6d or `/claim-task` Step 7c, since both write that filename shape. Also reached when the newest run's `classification.md` reads `verdict: BLOCKED` with no marker on disk, which is reported as the park it is with the missing marker named |
+| **Awaiting approval** | Lock + branch, 0 commits ahead, no park marker, and the newest run under `sysop/runtime/claim/<ID>/` carries a `classification.md` reading `verdict: PROCEED` with no `outcome.md` — `/claim-task` Step 7d's human gate, reached and not answered |
 | **Stale** | Lock or worktree exists, no commit activity in ≥ `--stale-days` (default 7); flagged as a candidate for human triage |
 
 > **The trailer is not by itself a record that `/document-work` ran (`Q-019`).** It was a

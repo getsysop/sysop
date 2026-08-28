@@ -36,7 +36,102 @@ REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || {
   exit 1
 }
 
-TASKS_FILE="${REPO_ROOT}/review_tasks.md"
+# ── Helper: resolve the primary checkout ──────────────────────
+# Locks always live under the MAIN repo (Phase 32), so every worktree and every
+# cwd sees one lock state. `git rev-parse --git-common-dir` returns the `.git`
+# DIRECTORY — the repo root is its dirname — and from a main checkout it
+# answers with the relative `.git`, which has to be absolutised first. Query and
+# `cd` share the ambient cwd, so a relative answer resolves against the same
+# directory it was measured from.
+#
+# Kept inline rather than sourced from a shared helper. The same resolution is
+# duplicated on purpose in claim_task.sh, next_task.py, validate_tasks.py and
+# scope_overlap.py, each carrying a comment naming the others: these files are
+# delivered independently, and a claim that fails because a sourced helper was
+# missing from a partial install is worse than the duplication.
+resolve_main_root() {
+  local common_dir
+  common_dir="$(git rev-parse --git-common-dir 2>/dev/null)" || return 1
+  [[ -n "$common_dir" ]] || return 1
+  if [[ "$common_dir" = /* ]]; then
+    dirname "$common_dir"
+  else
+    dirname "$(cd "$common_dir" && pwd)"
+  fi
+}
+
+# The batch record is a MAIN-side record — the claim is committed on main, the
+# lock lives under the main repo, and `--release` already refuses to run
+# anywhere else because "a worktree carries its branch's own review_tasks.md, so
+# the batch state read here would be stale" (see its guard below). The claim
+# path read `$REPO_ROOT` and so had no such protection: measured, a claim run
+# from a worktree cut before the batch was taken read `Pending` off the branch's
+# frozen copy while main said `In Progress`, walked past every status refusal
+# that record exists to trigger, created a worktree for someone else's batch and
+# reported `Batch lock already present (left as-is)` — at exit 0.
+#
+# So anchor the record paths here, once — and note WHICH path does what, because
+# this phase's first draft credited the wrong one. Every status READ goes through
+# `review_index.py`, which resolves `review_tasks.md` from its own file location
+# (`review_index.py:47`), so `$INDEX_SCRIPT` is what decides which record the claim
+# decision is made against. `$TASKS_FILE` is the WRITE side: the existence check,
+# the sed rewrite, and `--release`'s rewrite. Both must name the same checkout or
+# the script decides against one file and edits another. `$REPO_ROOT` stays as the
+# invocation's own worktree, which is what `--release`'s guard compares against.
+# ── Helper: resolve the PRIMARY WORKING TREE ──────────────────
+# Deliberately NOT `resolve_main_root` above, and the difference is load-bearing.
+# That helper answers `dirname "$(git rev-parse --git-common-dir)"`, which is the
+# repo root only when the git dir is literally `<root>/.git`. Measured in this
+# phase's review round: in a submodule it yields `<super>/.git/modules/<name>`,
+# and under `git init --separate-git-dir` it yields the git dir's PARENT — both
+# real directories, so `-d` passes and the wrong path is used. It was harmless
+# while it only fed the lock path; the moment this phase pointed `$TASKS_FILE`
+# and `$INDEX_SCRIPT` at it, `--list` in those layouts died `❌ review_tasks.md
+# not found` where it had listed fine.
+#
+# So narrow it to the one case the wrong-tree defect lives in. `--git-dir` equals
+# `--git-common-dir` exactly when the caller IS the primary — in a plain checkout,
+# a submodule and a separate-git-dir layout alike — and they differ only inside a
+# linked worktree, which is the only place `$REPO_ROOT` was ever the wrong answer.
+# There the primary is `git worktree list --porcelain`'s first entry, which git
+# documents as the main worktree; a first entry marked `bare` means there is no
+# main working tree, so the caller's own is the best answer available.
+#
+# `resolve_main_root` is left exactly as it is: it resolves the LOCK directory,
+# and that path is duplicated verbatim in claim_task.sh, close_batch.sh,
+# next_task.py, validate_tasks.py and scope_overlap.py. Changing it here alone
+# would put two scripts' locks in different places in precisely the layouts where
+# both are currently wrong-but-agreeing, which is worse than wrong-and-agreeing.
+# That is a real pre-existing defect and it is filed rather than fixed here.
+resolve_primary_worktree() {
+  local gd cd_ first bare
+  gd="$(git -C "$REPO_ROOT" rev-parse --git-dir 2>/dev/null)" || return 1
+  cd_="$(git -C "$REPO_ROOT" rev-parse --git-common-dir 2>/dev/null)" || return 1
+  [[ -n "$gd" && -n "$cd_" ]] || return 1
+  if [[ "$gd" == "$cd_" ]]; then
+    printf '%s\n' "$REPO_ROOT"
+    return 0
+  fi
+  first="$(git -C "$REPO_ROOT" worktree list --porcelain 2>/dev/null \
+           | awk '/^worktree /{print substr($0, 10); exit}')"
+  bare="$(git -C "$REPO_ROOT" worktree list --porcelain 2>/dev/null \
+           | awk '/^worktree /{n++} n==1 && $0=="bare"{print "bare"; exit}')"
+  [[ -n "$first" ]] || return 1
+  if [[ "$bare" == "bare" ]]; then
+    printf '%s\n' "$REPO_ROOT"
+  else
+    printf '%s\n' "$first"
+  fi
+}
+
+MAIN_ROOT="$(resolve_primary_worktree 2>/dev/null)" || MAIN_ROOT=""
+if [[ -z "$MAIN_ROOT" || ! -d "$MAIN_ROOT" ]]; then
+  echo "❌ Could not resolve the primary checkout — refusing to read batch state" >&2
+  echo "   from an unknown checkout. Nothing was written." >&2
+  exit 1
+fi
+
+TASKS_FILE="${MAIN_ROOT}/review_tasks.md"
 
 if [[ ! -f "$TASKS_FILE" ]]; then
   echo "❌ review_tasks.md not found at ${TASKS_FILE}" >&2
@@ -48,7 +143,7 @@ fi
 # parser — the inline bash regex fallback this comment used to advertise was
 # retired (Q-036, Q-226); see `require_index_parser` for the reasoning.
 # Output: tab-separated lines: NUMBER<tab>TITLE<tab>STATUS<tab>BRANCH<tab>SCOPE<tab>VERIFY
-INDEX_SCRIPT="${REPO_ROOT}/sysop/scripts/review_index.py"
+INDEX_SCRIPT="${MAIN_ROOT}/sysop/scripts/review_index.py"
 
 # ── Helper: refuse when an unterminated fence swallows structure (Q-012) ──
 #
@@ -120,7 +215,7 @@ refuse_on_structural_fence() {
 # template nests `### Batch <N>` under `## Round N` and states no numbering
 # scope. (An earlier version of this comment added "and no shipped skill derives
 # the next number from existing headers". That is FALSE and was corrected in
-# Phase 211: `codebase-review/SKILL.md:166` and `security-audit/SKILL.md:181` —
+# Phase 211: `codebase-review/SKILL.md:166` and `security-audit/SKILL.md:183` —
 # the only two writers of batch headers in the tree — both say `next_batch_number`
 # = highest Batch N + 1, i.e. a file-global rule. It does not rescue the
 # whole-file refusal, because nothing ENFORCES that rule and a per-round tracker
@@ -219,28 +314,9 @@ refuse_trailing_flags() {
   return 0
 }
 
-# ── Helper: resolve the canonical sysop/runtime/locks/ ────────
-# Locks always live under the MAIN repo (Phase 32), so every worktree and every
-# cwd sees one lock state. `git rev-parse --git-common-dir` returns the `.git`
-# DIRECTORY — the repo root is its dirname — and from a main checkout it
-# answers with the relative `.git`, which has to be absolutised first.
-#
-# Kept inline rather than sourced from a shared helper. The same resolution is
-# duplicated on purpose in claim_task.sh, next_task.py, validate_tasks.py and
-# scope_overlap.py, each carrying a comment naming the others: these files are
-# delivered independently, and a claim that fails because a sourced helper was
-# missing from a partial install is worse than the duplication.
-resolve_main_root() {
-  local common_dir
-  common_dir="$(git rev-parse --git-common-dir 2>/dev/null)" || return 1
-  [[ -n "$common_dir" ]] || return 1
-  if [[ "$common_dir" = /* ]]; then
-    dirname "$common_dir"
-  else
-    dirname "$(cd "$common_dir" && pwd)"
-  fi
-}
-
+# ── (resolve_main_root is defined at the top, beside MAIN_ROOT) ───
+# It was defined here, next to its first caller, until this phase moved it above
+# TASKS_FILE — the record paths had to be anchored before anything read them.
 resolve_locks_dir() {
   local main_root
   main_root="$(resolve_main_root)" || return 1
@@ -491,20 +567,38 @@ claim_batch() {
     return 0
   fi
 
-  # Must be on main
+  # Must be on main — the PRIMARY's HEAD, not the caller's. The rewrite below
+  # edits `$TASKS_FILE` and the commit runs `git -C "$MAIN_ROOT"`, so the primary
+  # is the checkout this claim lands in, and it is the one that has to be on main.
+  #
+  # Measured (this phase's own mutation battery, row B5): with the primary on a
+  # feature branch and a worktree holding `main`, asking the CALLER's HEAD passes,
+  # and the claim commit lands on the primary's feature branch while the script
+  # prints "✅ Claimed Batch 1 on main" and `main` gains nothing. That was not
+  # reachable before this phase anchored the paths — everything used `$REPO_ROOT`,
+  # so the write followed the same HEAD the check had read. Anchoring the paths
+  # without anchoring the check split them, which is a new WRONG ACCEPTANCE
+  # introduced by a fix for a wrong read: check both ends of a predicate you widen.
   local current_branch
-  current_branch="$(git symbolic-ref --short HEAD 2>/dev/null)" || true
+  current_branch="$(git -C "$MAIN_ROOT" symbolic-ref --short HEAD 2>/dev/null)" || true
   if [[ "$current_branch" != "main" ]]; then
     echo "⚠️  Not on main (on '${current_branch}'). Skipping batch claim." >&2
     echo "   Claim the batch manually by updating review_tasks.md on main." >&2
     echo "   The worktree and the lock are still created — the batch will read" >&2
-    echo "   'Pending' while holding a lock. Clear it with: bash sysop/scripts/batch_work.sh --release ${batch_num}" >&2
+    echo "   'Pending' while holding a lock. Clear it from the primary checkout:" >&2
+    # Naming the directory, not just the command: `--release` refuses to run
+    # anywhere but the primary, so from a worktree — which is now a reachable
+    # place to be standing when this arm fires — the bare command in this hint
+    # was a dead end that printed a second refusal.
+    echo "     cd ${MAIN_ROOT} && bash sysop/scripts/batch_work.sh --release ${batch_num}" >&2
     return 0
   fi
 
-  # Working tree must be clean for review_tasks.md
-  if ! git -C "$REPO_ROOT" diff --quiet -- review_tasks.md 2>/dev/null || \
-     ! git -C "$REPO_ROOT" diff --cached --quiet -- review_tasks.md 2>/dev/null; then
+  # The PRIMARY's copy must be clean for review_tasks.md — that is the copy the
+  # rewrite below edits and the commit below records. `$REPO_ROOT` would ask the
+  # caller's own worktree, which is a different file with a different history.
+  if ! git -C "$MAIN_ROOT" diff --quiet -- review_tasks.md 2>/dev/null || \
+     ! git -C "$MAIN_ROOT" diff --cached --quiet -- review_tasks.md 2>/dev/null; then
     echo "⚠️  review_tasks.md has uncommitted changes. Skipping batch claim." >&2
     echo "   The worktree and the lock are still created — the batch will read" >&2
     echo "   'Pending' while holding a lock. Clear it with: bash sysop/scripts/batch_work.sh --release ${batch_num}" >&2
@@ -513,7 +607,12 @@ claim_batch() {
 
   # Pull latest main
   echo "📥 Pulling latest main..."
-  git pull --ff-only origin main 2>/dev/null || {
+  # `-C "$MAIN_ROOT"`, for the same reason the precondition above reads that
+  # checkout's HEAD: a bare pull runs in the CALLER's worktree, and now that the
+  # on-main check is a fact about the primary, the caller may be on any branch —
+  # so a bare pull here would fast-forward origin/main into a feature branch.
+  # The primary is on main by the check immediately above.
+  git -C "$MAIN_ROOT" pull --ff-only origin main 2>/dev/null || {
     echo "⚠️  git pull --ff-only failed. Skipping batch claim." >&2
     echo "   The worktree and the lock are still created — the batch will read" >&2
     echo "   'Pending' while holding a lock. Clear it with: bash sysop/scripts/batch_work.sh --release ${batch_num}" >&2
@@ -570,9 +669,30 @@ claim_batch() {
   mv -- "$tmp_file" "$TASKS_FILE"
   trap - RETURN
 
-  # Commit the claim
-  git add review_tasks.md
-  git commit -m "docs: claim Batch ${batch_num}"
+  # Commit the claim. Repo-anchored AND pathspec-scoped, the shape `--release`'s
+  # commit has carried since Phase 151 — this was the unhardened sibling, and
+  # Q-020's structural note (a) is that the class recurs at call-site
+  # granularity, not file granularity.
+  #
+  # Anchored because a bare pathspec is CWD-relative: measured from
+  # `<repo>/sysop/scripts/`, `git add review_tasks.md` died `fatal: pathspec
+  # 'review_tasks.md' did not match any files` under `set -e` — AFTER the rewrite
+  # above had landed, leaving disk `In Progress` against HEAD `Pending`. Nothing
+  # rolled that back, and the next run reads the dirty tree, warns, and creates
+  # the worktree and the lock anyway: precisely the claimable-but-half-applied
+  # state `--release`'s mutation ordering exists to prevent.
+  #
+  # Scoped because `git add` + a bare `git commit` sweeps whatever else the
+  # operator had staged into `docs: claim Batch N` (Phase 151's all-or-nothing rule).
+  if ! git -C "$MAIN_ROOT" commit -m "docs: claim Batch ${batch_num}" -- review_tasks.md; then
+    # Put the file back, for the reason `--release`'s identical rollback states:
+    # a rewrite that survives on disk while HEAD disagrees is the worse half of
+    # the failure. Safe because the dirty-tree refusal above has already
+    # established that this rewrite is the ONLY uncommitted change to the file.
+    git -C "$MAIN_ROOT" checkout -- review_tasks.md 2>/dev/null || true
+    echo "❌ git commit failed — the claim was rolled back, nothing was claimed." >&2
+    return 1
+  fi
   echo "✅ Claimed Batch ${batch_num} on main (marked In Progress)."
 
   # Rebuild JSON index after Markdown mutation
@@ -1058,7 +1178,10 @@ esac
 # leaving a lock and a worktree against a batch nothing could bound.
 claim_batch "$BATCH_NUM" "$BATCH_STATUS" || exit 1
 
-WORKTREE_DIR="${REPO_ROOT}/../${WORKTREE_PREFIX:-$(basename "$REPO_ROOT")}-batch-${BATCH_NUM}"
+# Beside the PRIMARY checkout, not beside whichever worktree the caller stood
+# in — the header advertises `../<project basename>-batch-<N>/`, and a batch
+# worktree nested beside another batch's worktree is not that.
+WORKTREE_DIR="${MAIN_ROOT}/../${WORKTREE_PREFIX:-$(basename "$MAIN_ROOT")}-batch-${BATCH_NUM}"
 
 # ── Create branch if needed (check remote too) ───────────────
 if git show-ref --verify --quiet "refs/heads/${BATCH_BRANCH}" 2>/dev/null; then

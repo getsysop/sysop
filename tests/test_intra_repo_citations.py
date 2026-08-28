@@ -136,6 +136,33 @@ UNRESOLVED_ALLOWED = {
 # citation that was perfectly correct — a false positive in the guard's own
 # phase, which is how a real check gets an exemption written for it.
 CITATION_ANCHORS = {
+    # Phase 232: the runtime-artifact probe's comment names the installer line that
+    # makes `sysop/runtime/` gitignored, because the probe's whole correctness rests
+    # on that being true. The anchor is the array literal itself — if the installer
+    # ever stops appending that entry, the probe is scoped to a path nothing ignores
+    # and the comment becomes the false claim it replaced.
+    ("core/companion/scripts/cleanup_worktrees.sh", "install.sh:3212"):
+        'want=("sysop/runtime/"',
+    # Phase 234: cleanup_worktrees.sh's MAIN_ROOT block cites the fail-closed
+    # precedent it follows (claim_task.sh, which exits on the same class of
+    # resolution failure) and the two batch_work.sh lines that put a caller inside
+    # a worktree in the first place; if that prescription moves, the "this is the
+    # prescribed path" claim needs re-checking rather than silently becoming false.
+    # It no longer cites self_check.sh — the round replaced the copied `dirname`
+    # shape outright, so that pointer went with it.
+    # Phase 234: batch_work.sh's MAIN_ROOT block cites the line that makes
+    # `$INDEX_SCRIPT` the READ anchor — review_index.py resolves review_tasks.md
+    # from its own location, so if that ever changes, the comment's split of
+    # read-side vs write-side is no longer true and the anchoring is arguing for
+    # something the code does not do.
+    ("core/companion/scripts/batch_work.sh", "review_index.py:47"):
+        'TASKS_FILE = os.path.join(REPO_ROOT, "review_tasks.md")',
+    ("core/companion/scripts/cleanup_worktrees.sh", "claim_task.sh:208-211"):
+        "cannot resolve canonical",
+    ("core/companion/scripts/cleanup_worktrees.sh", "batch_work.sh:1236"):
+        "cd ${WORKTREE_DIR}",
+    ("core/companion/scripts/cleanup_worktrees.sh", "batch_work.sh:1241"):
+        "cleanup_worktrees.sh --clean",
     ("core/companion/scripts/claim_task.sh", "self_check.sh:77-85"):
         "then verify PyYAML on THAT interpreter",
     ("core/skills/auto-fix/SKILL.md", "archive_review_tasks.py:101"):
@@ -147,7 +174,7 @@ CITATION_ANCHORS = {
     # Phase 209 retired `_parse_batches_fallback` (62 lines), moving this anchor
     # up. The anchor string is what makes that a caught drift rather than a
     # silent one.
-    ("core/skills/claim-task/SKILL.md", "batch_work.sh:299-302"):
+    ("core/skills/claim-task/SKILL.md", "batch_work.sh:375-377"):
         "left as-is",
     # Phase 211: this was written `(`:763-765`)` — a BARE self-citation, which
     # CITATION's regex cannot see because it requires a filename token before
@@ -157,7 +184,7 @@ CITATION_ANCHORS = {
     # Anchored on the rule's CONSEQUENCE clause, not on "NOT an exit-code
     # change" — that phrase also appears in the sentence doing the citing, so it
     # resolved to two lines and the staleness check could not tell them apart.
-    ("core/companion/scripts/close_batch.sh", "close_batch.sh:954-959"):
+    ("core/companion/scripts/close_batch.sh", "close_batch.sh:1231-1240"):
         "diagnoses failure by commit absence",
     # Phase 211: the duplicate-refusal comment used to assert that no shipped
     # skill derives the next batch number. These two are the only writers of
@@ -165,7 +192,7 @@ CITATION_ANCHORS = {
     # the comment now cites them by line.
     ("core/companion/scripts/batch_work.sh", "codebase-review/SKILL.md:166"):
         "next_batch_number",
-    ("core/companion/scripts/batch_work.sh", "security-audit/SKILL.md:181"):
+    ("core/companion/scripts/batch_work.sh", "security-audit/SKILL.md:183"):
         "next_batch_number",
     # Phase 211's round found the same struck premise in review_index.py's own
     # docstring — the copy where it is load-bearing, since it justifies the
@@ -173,11 +200,11 @@ CITATION_ANCHORS = {
     # wraps across two lines there and the grep was line-oriented.
     ("core/companion/scripts/review_index.py", "codebase-review/SKILL.md:166"):
         "next_batch_number",
-    ("core/companion/scripts/review_index.py", "security-audit/SKILL.md:181"):
+    ("core/companion/scripts/review_index.py", "security-audit/SKILL.md:183"):
         "next_batch_number",
     ("core/skills/review-close/SKILL.md", "intake/SKILL.md:111"):
         "tasks/schema.md",
-    ("core/skills/review-close/SKILL.md", "add-task/SKILL.md:62"):
+    ("core/skills/review-close/SKILL.md", "add-task/SKILL.md:63"):
         "open/<TASK-ID>.md",
     ("core/skills/review-close/SKILL.md", "onboard/SKILL.md:95"):
         "Test decision",

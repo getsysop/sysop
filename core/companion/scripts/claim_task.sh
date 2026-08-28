@@ -770,10 +770,32 @@ if $USE_LOCK; then
 
   # Expiry = 4 hours from now (macOS-compatible). Fall back to POSIX
   # shell-arithmetic (`date +%s` + 14400 seconds → reformat) so a `date`
-  # variant that supports neither BSD `-v` nor GNU `-d` still produces
-  # a valid timestamp rather than leaving the lock file with a blank
-  # `expires:` field (which downstream lock-validator tooling treats as
-  # malformed). Abort with a clear error if all three paths fail.
+  # variant that supports neither BSD `-v` nor GNU `-d` still produces a valid
+  # timestamp rather than a blank `expires:` field. Abort with a clear error if
+  # all three paths fail.
+  #
+  # **Why, stated correctly.** This comment used to claim, **incorrectly**, that a
+  # blank `expires:` is what "downstream lock-validator tooling treats as
+  # malformed". **No such
+  # tooling exists, and none ever has** — the field is read by NO runtime
+  # consumer: `sitrep_survey.py` parses it into a `Lock` dataclass field that
+  # nothing reads, and lock staleness is decided from `started:` alone
+  # (`_classify_task`'s stale check). An earlier draft of this comment added
+  # "and mtime", which is false for locks — the only `st_mtime` reads in that
+  # file are pending-round markers and round receipts. Correcting a falsehood
+  # is exactly when a new one gets written in; its own round caught this.
+  # A reader who believed the old sentence would go looking for a validator to
+  # satisfy, or would decide the field is load-bearing and preserve it for the
+  # wrong reason.
+  #
+  # The fallback chain stays, on the two reasons that are real. (1) The lock is
+  # a **human-readable record**: `/claim-task`, `/sitrep`'s stale-claim report
+  # and `--entry-state` all print or surface it, and a field that is blank on
+  # exactly the consumers with the least common `date` is a record that degrades
+  # silently where it is hardest to debug. (2) The field is **pinned by tests**
+  # (`tests/test_claim_task_sh.py`, `tests/test_batch_claim_kinds.py`), so it is
+  # part of the lock's shipped shape whether or not runtime reads it — removing
+  # or blanking it is a contract change, not a cleanup.
   if date -v+4H +"%Y-%m-%dT%H:%M:%SZ" &>/dev/null; then
     EXPIRES_TIMESTAMP=$(date -u -v+4H +"%Y-%m-%dT%H:%M:%SZ")
   elif EXPIRES_TIMESTAMP=$(date -u -d "+4 hours" +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null); then
@@ -789,7 +811,27 @@ if $USE_LOCK; then
     fi
   fi
 
-  cat > "$LOCK_FILE" <<EOF
+  # ── Atomic create — closes the claim-time TOCTOU ──────────
+  # The existence guard (`if [[ -f "$LOCK_FILE" ]]` near the top of the claim
+  # path) runs ~200 lines BEFORE this write, and the window between them is not
+  # a few instructions: branch creation and `git worktree add` both sit inside
+  # it, so it is wide in wall-clock terms, not just in theory. Two agents that
+  # each passed the guard both arrived here, and a plain `cat >` truncates —
+  # the second claimant silently OVERWROTE the first's lock. The result is two
+  # worktrees on one task with a single lock naming only the second agent, which
+  # is precisely the double-claim every reader of this file exists to prevent
+  # (`next_task.py` skips a locked task; `/sitrep` reports one owner).
+  #
+  # `set -C` (noclobber) makes `>` open the file O_EXCL, so the create either
+  # wins outright or fails — there is no truncate-an-existing-file outcome. The
+  # subshell scopes the option so the rest of this script is unaffected, and
+  # stderr is dropped because the shell's own noclobber message ("cannot
+  # overwrite existing file") describes a redirection, not a lost claim.
+  #
+  # Building the content first and writing it in one `printf` also removes a
+  # second failure the heredoc form had: a death mid-heredoc left a PARTIAL lock
+  # on disk, which parses as a lock with missing fields rather than as no lock.
+  LOCK_CONTENT=$(cat <<EOF
 task_id: ${TASK_ID}
 status: in_progress
 agent: ${AGENT_NAME}
@@ -803,6 +845,55 @@ files_impacted:
 plan_summary: (update with a one-line description of the work)
 notes:
 EOF
+)
+  if ! ( set -C; printf '%s\n' "$LOCK_CONTENT" > "$LOCK_FILE" ) 2>/dev/null; then
+    echo "" >&2
+    # Two very different failures reach here and `2>/dev/null` has just discarded
+    # the shell's own message, so DISCRIMINATE before naming a cause. noclobber
+    # refuses because the file exists; everything else (EACCES on the locks dir, a
+    # read-only filesystem, ENOSPC) refuses because the write could not happen at
+    # all. Reporting "claimed by another agent" for a read-only locks/ sends the
+    # operator hunting for a rival that does not exist — this phase's round produced
+    # exactly that, with no second claimant anywhere.
+    if [[ -e "$LOCK_FILE" ]]; then
+      echo "❌ Task ${TASK_ID} was claimed by another agent while this claim was setting up." >&2
+      echo "   Their lock (${LOCK_FILE}):" >&2
+      sed 's/^/     /' "$LOCK_FILE" >&2 2>/dev/null || echo "     (unreadable)" >&2
+    else
+      echo "❌ Could not write the lock file ${LOCK_FILE} — no rival claim; the write itself failed." >&2
+      echo "   Check that ${LOCKS_DIR} exists and is writable, and that the filesystem is not full or read-only." >&2
+    fi
+    echo "" >&2
+    # The recovery is NOT `--release`: that path refuses when the caller does
+    # not hold the lock ("not locked — nothing to release" only fires on an
+    # ABSENT lock, and here the lock exists and belongs to the winner), so
+    # pointing at it would hand the loser a command that either refuses or —
+    # worse — releases the winner's claim. Name the objects this run actually
+    # created instead — and branch on MODE, because `git worktree remove` fatals
+    # on a clone AND on the main checkout. In `--branch` mode no worktree was
+    # created at all and WORKSPACE_PATH is the MAIN CHECKOUT, so the unbranched
+    # form printed the main working tree at the operator: `fatal: is a main
+    # working tree`, verified. This file already branches on mode at the
+    # PyYAML-missing reversal above; the first cut of this block did not, which
+    # re-minted the very defect that guard exists to prevent.
+    case "$MODE" in
+      worktree)
+        echo "   This run already created a branch and a worktree. Remove them by hand:" >&2
+        echo "     git worktree remove \"${WORKSPACE_PATH}\"   # add --force to discard uncommitted work" >&2
+        echo "     git branch -D \"${BRANCH_NAME}\"" >&2
+        ;;
+      clone)
+        echo "   This run already created a branch and a clone. Remove them by hand:" >&2
+        echo "     rm -rf \"${WORKSPACE_PATH}\"   # a full clone, not a linked worktree" >&2
+        echo "     git branch -D \"${BRANCH_NAME}\"" >&2
+        ;;
+      *)
+        echo "   This run already created a branch (no worktree — --branch mode). Remove it by hand:" >&2
+        echo "     git branch -D \"${BRANCH_NAME}\"" >&2
+        ;;
+    esac
+    exit 1
+  fi
 
   echo ""
   echo "✅ Lock created: ${LOCK_FILE}"
