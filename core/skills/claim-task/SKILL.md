@@ -54,14 +54,31 @@ Parse `$ARGUMENTS`:
 
 If `--branch <name>` appears in `$ARGUMENTS`, extract it as the branch override (roadmap tasks only).
 
-**Also extract, here, the three flags the later steps read** — all optional:
+**Also extract, here, the four flags the later steps read** — all optional:
 
 | Flag | Read by | Effect |
 |---|---|---|
 | `--review-plan` / `--no-review-plan` | Step 6 | Forces the plan-review preference to option A / option B, outranking any consumer config. |
+| `--plan-only` | Step 6, Step 7f | Forces the preference to option **C** — plan, review, write the plan back to the task body, release the claim, stop. **Roadmap tasks only; rejected for a batch below.** |
 | `--resume <RUN_ID>` | Step 2, Step 7-pre | Re-enters a parked or abandoned claim at the named run instead of starting a new one. |
 
 `--resume` takes a `<RUN_ID>` exactly as Step 7-pre minted it (`<UTC timestamp>-<8 hex>`). **Validate it below, after `<CLAIM_ID>` is fixed** — the run directory is keyed by the claim id, so the check is not performable until the normalisation table has run.
+
+### Reject `--plan-only` on a review batch — here, before anything is claimed
+
+**If the classification above says *review batch* and `$ARGUMENTS` contains `--plan-only`, stop.** Print exactly this and do not continue:
+
+```
+--plan-only is roadmap-only: option C writes the reviewed plan into the task's body
+file, and a review batch has no body file — its "body" is a `### Batch <N>` section
+inside the shared review_tasks.md, which is not a plan surface.
+
+Re-run without --plan-only to claim this batch under option A or B.
+```
+
+**This check cannot be deferred to Step 6, and that is the whole reason it is here.** Step 6 is where the two-options-not-three offer lives, but `_shared/plan-review-preference.md` resolution tier 1 puts the flag *above* the offer and says "never prompt when tier 1 resolves" — so `/claim-task --plan-only BATCH-5` never reaches the offer that is supposed to make C roadmap-only. Placing it at Step 6 would leave the one path that skips the offer as the one path that gets it wrong. Placing it here also means the batch is **not claimed** when the rejection fires: Step 6 runs after `batch_work.sh` has already taken the lock and committed a `review_tasks.md` mutation on `main`, so a stop there would cost a claim-and-release for a run that could never have produced anything.
+
+**Roadmap tasks are unaffected** — `--plan-only` on a `FEAT-*`/`TECH-*`/… id passes straight through to Step 6, which reads it as tier 1 and resolves to option C.
 
 ### Normalise the claim ID here, not later
 
@@ -489,25 +506,26 @@ being handed the worktree to work in yourself.
 
 Follow `.claude/skills/_shared/plan-review-preference.md` to resolve it. That partial is the single source of truth for the resolution order (flag → `<project>/CLAUDE.md § Plan review` → ask), for the guided-mode interaction, and for the `askUserQuestionTimeout` hazard. **Never prompt when the flag or the config resolves it** — `/claim-task <CLAIM_ID>` on a configured project must stay a single command.
 
-Two options are offered:
+Three options are offered on a roadmap task:
 
 | Option | Flow | For |
 |---|---|---|
 | **A — review the plan first** | planner → reviewer → **human gate** → executor | Work you want to eyeball before it lands. |
 | **B — run it** | planner → reviewer → executor | Mechanical or well-specified work; walk away. |
+| **C — plan only** | planner → reviewer → **Step 7f**: write the plan back to the task body, release the claim, stop | A task you want to think about before committing anyone to it. |
 
-**The reviewer runs on both paths.** Only the gate at Step 7d differs. Collapsing reviewer and executor on the unattended path would give the run *nobody is watching* the weaker review property, and `_shared/adversarial-review.md` § *The reviewer-executor variant is retired* already records collapsed self-classification as a known compromise. The autonomous path needs more fresh-eyes rigour, not less.
+**The reviewer runs on all three paths, and so does Step 7c's classification.** What differs is only what follows: A gates at Step 7d, B goes straight to the executor at 7e, C stops at 7f. Collapsing reviewer and executor on the unattended path would give the run *nobody is watching* the weaker review property, and `_shared/adversarial-review.md` § *The reviewer-executor variant is retired* already records collapsed self-classification as a known compromise. The autonomous path needs more fresh-eyes rigour, not less.
 
-**A third option — plan-only, where the pipeline stops after review and writes the reviewed plan back to the task body — is specified but not built** (`tools/CLAIM_TASK_ORCHESTRATOR_SPEC.md` § *The three options*, option C — a maintainer-side design doc that is not in the public tree; this paragraph carries everything you need, so nothing here depends on reaching it). Do not offer it, and do not improvise it: it needs a `## Plan` body section that `tasks/schema.md` does not yet define and a release ordering this skill does not yet carry. Say so in one line if the human asks for it, rather than silently behaving like option B. **Stating the absence is the point** — silence about a missing branch is exactly how Steps 7–8 acquired roadmap-only vocabulary in Phase 29, and it is the failure internal tracker #220 reported.
+**On option C the review is the deliverable, not a step toward one.** Nothing is implemented, so the artifact the human gets is the reviewed plan — which is why Step 7f writes the sealed `REVIEW_REPORT:` block into the body alongside the plan rather than a trailer line naming the verdict. Discarding the review on the one path that produces nothing else would reproduce the defect this whole shape exists to remove: a review that ran and left nothing durable.
 
-**Review batches:** both options are offered, unchanged. Option C would not have been (a batch has no body file to persist a plan into — its "body" is a `### Batch N` section inside the shared `review_tasks.md`, whose six metadata keys are parsed into a shadow index two scripts consume), but since C is not offered to anyone, no asymmetry arises here yet.
+**Review batches: two options, not three, and say why.** Option C is **not offered** — a batch has no body file to persist a plan into (its "body" is a `### Batch <N>` section inside the shared `review_tasks.md`, whose six metadata keys are parsed into a shadow index two scripts consume, none of which is a plan surface), so C on a batch has no outcome except a wasted claim. State the absence in one line rather than silently offering two options: silence about a missing branch is exactly how Steps 7–8 acquired roadmap-only vocabulary in Phase 29, and it is the failure internal tracker #220 reported. A human who passed `--plan-only` never reaches this step — Step 1 rejected it before the batch was claimed.
 
 ## Step 7: Orchestrate — plan → review → classify → gate → execute
 
 **Why this is three spawns, a classification and a gate rather than one sub-agent.** Internal tracker #220: a real `/claim-task` run on a review batch went `EnterPlanMode` → ~200 tool calls → `ExitPlanMode` with **no `Agent` call at any point**. The adversarial review, the finding classification, the sealed report and the halt-on-blocker gate were all bypassed, and it surfaced only because a human asked. Three distinct failure modes look identical from outside:
 
 1. **Drift** — the skill was read hundreds of tool calls ago and plan mode's own reminder pushes toward `ExitPlanMode`. Attention decay, not intent. This is what internal tracker #220 observed. The split spawns and the artifact set below are what address it.
-2. **Blocked** — the harness forbids the `Agent` tool outright (a system-prompt instruction outranks skill text). The agent *cannot* comply. **This shape does not prevent that, and does not claim to** — it makes it *visible*: an orchestrator whose entire body is "spawn agents" cannot silently degrade into doing the work itself without leaving an empty artifact directory and no envelopes, where a healthy run leaves three of each. Today it degrades into "just implement it", which looks normal. **Stated exactly: nothing reads that difference yet.** The `/review-close` and `/sitrep` readers are specified and deferred (part B of this reshape), so the evidence today is durable and inspectable by a human, and nothing reports on it automatically. Do not describe those readers as existing.
+2. **Blocked** — the harness forbids the `Agent` tool outright (a system-prompt instruction outranks skill text). The agent *cannot* comply. **This shape does not prevent that, and does not claim to** — it makes it *visible*: an orchestrator whose entire body is "spawn agents" cannot silently degrade into doing the work itself without leaving an empty artifact directory and no envelopes, where a healthy run leaves three of each. Today it degrades into "just implement it", which looks normal. **Stated exactly: two skills now read that difference, and neither of them stops anything.** `/review-close` Step 2e reports, per branch, which of this claim's artifacts exist; `/sitrep` classifies a parked or awaiting-approval claim as such instead of as `planning`. Both **report, never reject** — a reporting gate that mis-resolves prints "artifacts: none found" beside a branch that has them, which is wrong, visible and harmless, whereas a rejecting one false-FAILs work already done. So the honest claim is that a blocked run is now conspicuous in two places a human already looks, not that it is prevented.
 3. **Read as not-applicable** — Step 7's prompt opened *"You are executing roadmap task `<TASK_ID>`"* and was threaded with `tasks/index.yml` machinery a review batch does not have, so an agent holding a batch claim reasonably concluded the step was not about it. Every step below is spelled `<CLAIM_ID>` and carries a `Review batches:` clause wherever behaviour differs.
 
 **Say the residual out loud rather than burying it:** a harness that forbids `Agent` produces a claim with no plan, no review and no envelope, and Sysop will *say so* rather than stop it.
@@ -516,7 +534,7 @@ Two options are offered:
 
 **This is the only entry point to Step 7, on a fresh claim and on a `--resume` alike.** No later stage is entered directly; the routing table below decides which one this run lands on.
 
-Every run of this pipeline gets its own directory. **This is what makes a stale artifact unreachable rather than merely detectable** — a re-invocation never looks in a previous run's directory, so it cannot inherit its `review.md`. That matters most on the batch path: `batch_work.sh`'s `write_batch_lock` is idempotent by design and leaves an existing lock **as-is** (`batch_work.sh:299-302`), and its status gate still admits a re-claim of a *live* batch — `Pending` unconditionally, `In Progress` as the sanctioned resume — so a batch re-invocation would otherwise find yesterday's artifacts sitting under a lock that still looks current. Keying on the lock's `started:` stamp does **not** close this — the stamp is preserved across exactly that re-claim.
+Every run of this pipeline gets its own directory. **This is what makes a stale artifact unreachable rather than merely detectable** — a re-invocation never looks in a previous run's directory, so it cannot inherit its `review.md`. That matters most on the batch path: `batch_work.sh`'s `write_batch_lock` is idempotent by design and leaves an existing lock **as-is** (`batch_work.sh:375-377`), and its status gate still admits a re-claim of a *live* batch — `Pending` unconditionally, `In Progress` as the sanctioned resume — so a batch re-invocation would otherwise find yesterday's artifacts sitting under a lock that still looks current. Keying on the lock's `started:` stamp does **not** close this — the stamp is preserved across exactly that re-claim.
 
 **The directory lives in the MAIN checkout, not the worktree**, resolved through `git rev-parse --git-common-dir`. Three properties depend on that and none of them survive a worktree-side path: Step 1 has to validate `--resume` *before* any lock is read, so the run must be discoverable before a worktree path exists; the artifacts have to outlive `git worktree remove` and `cleanup_worktrees.sh`, which is what the park previously needed a second copy for; and the orchestrator itself runs in the main checkout, alongside the hook-written envelopes. An earlier revision created it under `<WORKTREE_PATH>` while Steps 1 and 2 looked for it in the main checkout — the two never met, and every `--resume` was rejected.
 
@@ -594,11 +612,12 @@ The artifacts on disk **are** the resume state.
 | `classification.md` reads `verdict: SUPERSEDED` | **stop** | Step 7d's *revise* rejected this run's plan and minted a successor. Name the successor and stop; resuming a plan a human rejected is worse than doing nothing. |
 | `classification.md` reads `verdict: BLOCKED` | **7c** | The ordinary park, and the executor's `BLOCKED` return. Re-classify **with the human's answer in hand** — the answer is the new input, and 7c is where it lands. |
 | `outcome.md` present | **Step 8** | The executor already ran and Step 8 recorded its terminal status. **Do not re-spawn it** — report `outcome.md`. |
+| `plan-only.md` present | **stop**, or **7f** | Option C already ran here. If it reads `released: yes` the run is finished — report it and stop; the next action is an ordinary fresh `/claim-task <CLAIM_ID>`. If it reads `released: no` the plan is committed and the **release did not complete**: re-enter at **Step 7f step 3** and finish it. Never route an option-C run to 7d or 7e. |
 | no `plan.md` | **7a** | Nothing was planned, or the planner failed before writing. |
 | no `planner-integrity.md`, or it reads `VIOLATED` | **7a** | The plan was never re-gated, or it came from a planner that broke its contract by committing. Re-plan; do not review it. |
 | no `review.md` | **7b** | The plan stands and its integrity is recorded `OK`; it has not been reviewed. |
 | no `classification.md` | **7c** | Findings exist and were never adjudicated. |
-| `verdict: PROCEED` | **7d** (option A) / **7e** (option B) | Already adjudicated clean; the run stalled before the executor returned. |
+| `verdict: PROCEED` | **7d** (option A) / **7e** (option B) / **7f** (option C) | Already adjudicated clean; the run stalled before its terminal step. Re-resolve Step 6 for this re-entry rather than assuming the original option — the flag is not recorded in the run, and `--plan-only` is as re-passable as `--no-review-plan`. |
 
 Print which row matched and why before continuing.
 
@@ -613,6 +632,26 @@ Print which row matched and why before continuing.
 **The artifact directory makes the MAIN checkout untracked-dirty on a consumer that has not run the installer.** `install.sh` seeds `sysop/runtime/` into the consumer's `.gitignore`, and git honours a working-tree `.gitignore` whether or not it has been committed, so on a bootstrapped consumer the directory is ignored and nothing shows. Where the entry is absent, do **not** key any check on the literal string `?? sysop/runtime/` — git collapses to the topmost untracked directory, so it is `?? sysop/` when nothing under `sysop/` is tracked. And do not let this decide whether the pipeline may proceed: it is a bootstrap gap, not a fault.
 
 ### Step 7a: Spawn the planner
+
+#### Skip the planner when the body already carries a `## Plan` — and only the planner
+
+**Before capturing HEAD or spawning anything, read the task body from the main checkout** (the same copy and the same resolution Step 2 used) **and check for a non-empty `## Plan` section.** If one is there, a previous `/claim-task <TASK_ID> --plan-only` run already planned this task and had that plan adversarially reviewed. Copy the section's content into `<ARTIFACT_DIR>/plan.md` verbatim, print one line saying where the plan came from, and go to **Step 7b**.
+
+```
+Plan found in the task body (written by a previous --plan-only run) — skipping the
+planner. The plan is re-reviewed against today's main, not inherited as reviewed.
+```
+
+**Four properties of this skip, each load-bearing:**
+
+- **It is a presence test, not a verdict test.** Non-empty `## Plan` is the whole condition. Nothing reads the `REVIEW_REPORT:` block inside it to decide anything, and no gate anywhere trusts it.
+- **It skips the planner and never the reviewer.** 7b runs on the recovered plan exactly as it runs on a fresh one. This is what makes the marker unforgeable-by-irrelevance rather than unforgeable-by-construction: a body marker is a string any agent with `Bash` can write, so the fix is to remove what forging it would buy, not to defend it. There is no path from this section to skipping a review.
+- **Re-reviewing a day-old plan is correct, not wasteful.** It was reviewed against a `main` that has since moved; today's review is against the tree the work will actually land on. The stale-plan problem and the forgery problem have one solution.
+- **Write `planner-integrity.md` for this run recording `OK` with the reason `plan recovered from body, no planner spawned`.** 7-pre's routing table refuses to review a plan whose integrity file is absent or `VIOLATED`, and the check that file records — did the planner commit during 7a — is vacuously satisfied when no planner ran. Skipping the record instead would send an immediate `--resume` straight back to 7a and re-plan the task the skip exists to avoid.
+
+**Review batches:** this skip never applies. There is no per-task body file to read a `## Plan` out of, and option C is not offered on the batch path (Step 6), so a batch claim always plans fresh.
+
+**If there is no `## Plan`, or it is empty, continue with the spawn below** — the ordinary path, and the one nearly every claim takes.
 
 **Capture the pre-plan HEAD first — before the spawn, not after it.** The integrity check below compares against it, and a SHA captured after the planner has already run proves nothing:
 
@@ -737,6 +776,8 @@ On `VIOLATED` the planner committed, in breach of its contract: **do not proceed
 Same agent parameters as 7a, with `description`: `"Adversarial plan review <CLAIM_ID>"`.
 
 `prompt`: the **contents of `<ARTIFACT_DIR>/plan.md` verbatim**, followed by the **Prompt Template** block copied verbatim from `.claude/skills/_shared/adversarial-review.md`, followed by the two paragraphs below. No other wrapper text — the shared template supplies the framing, and duplicating it here would fork it.
+
+> **Why the plan is INLINED here while Step 7e hands the executor the same file by path — a deliberate asymmetry, not an oversight.** Read on its own this looks like a missed optimisation: the reviewer is already given `<ARTIFACT_DIR>` (it must be, to have somewhere to write `review.md`), so it could be told to read `plan.md` itself, and inlining costs tokens proportional to plan size — measured upstream at ~28k tokens round-trip for a 15-task batch plan, i.e. worst exactly where the review matters most. **It is kept anyway, because the two agents fail differently.** This whole reshape exists because a review once did not happen; a reviewer *told to read a file* can skim it, read part of it, or not read it at all, and nothing downstream can tell — the same undetectable-omission shape one level down. Inlining makes exposure to the plan a property of the prompt rather than a step the reviewer must choose to take. The executor at 7e has no such failure mode available: it cannot implement a plan it did not read, so its non-compliance is visible in its output. **Do not "fix" this asymmetry by making 7b read the path** — the saving is real and the property is the point. If it is ever revisited, the thing to change is the *shared* contract in `_shared/adversarial-review.md`, which `/auto-build` also implements, and not this site alone.
 
 ---
 
@@ -979,13 +1020,13 @@ PY
 
 Worktree and lock stay **intact** on a park. Nothing is deleted mid-lifecycle.
 
-**Who removes the marker.** `/review-close` Step 4c already globs `sysop/runtime/parked/<TASK_ID>__*.md` for each closing roadmap task, so a roadmap park's marker is removed when the task closes — the filename shape above is chosen to match that reader, which the earlier directory-shaped park could never have matched. **A review batch's marker is removed by nothing**: Step 4c's list is built from roadmap ids only (`review-close/SKILL.md`, Step 4c), so `BATCH-<N>__<RUN_ID>.md` markers accumulate. That is a known gap, filed with part B; do not paper over it here.
+**Who removes the marker.** `/review-close` Step 4c already globs `sysop/runtime/parked/<TASK_ID>__*.md` for each closing roadmap task, so a roadmap park's marker is removed when the task closes — the filename shape above is chosen to match that reader, which the earlier directory-shaped park could never have matched. **A review batch's marker is removed by `close_batch.sh`'s `remove_claim_artifacts()`** (part B leg 3), not by Step 4c — Step 4c's list is built from roadmap ids only (`review-close/SKILL.md`, Step 4c), so no batch id can reach it and the two kinds necessarily have two owners. Before that shipped, `BATCH-<N>__<RUN_ID>.md` markers accumulated forever.
 
 **Re-entering a parked claim.** A park leaves the lock in place, so `claim_task.sh --entry-state <CLAIM_ID>` answers `held` and Step 2 stops — correctly, because from the outside a parked claim and someone else's live claim are the same thing. To resume, the human names the run explicitly: re-invoke with `/claim-task <CLAIM_ID> --resume <RUN_ID>`, which Step 2 honours as the explicit go-ahead its `held` arm requires. **Re-entry lands at Step 7-pre**, which adopts the named run and routes to the stage its artifacts call for — see 7-pre's routing table; the ordinary blocker park re-enters at 7c with the human's answer as the new input. **Do not tell the human to "just re-run `/claim-task <CLAIM_ID>`"** — that hits the `held` stop and reads as a bug.
 
 ### Step 7d: The human gate — option A only
 
-Skip this step entirely when Step 6 resolved to **B**.
+Skip this step entirely when Step 6 resolved to **B** or to **C**. On C the pipeline terminates at Step 7f instead; there is nothing to gate, because nothing is going to be implemented on this claim.
 
 Present the plan **as reviewed**: the plan artifact, the reviewer's verdict, and your own classification. Approving a plan that has already survived adversarial review is strictly more useful than approving a raw one, which is what plan mode nominally offered.
 
@@ -1013,6 +1054,8 @@ Three outcomes:
 **Review batches:** the abandon outcome is `bash sysop/scripts/batch_work.sh --release <BATCH_NUMBER>`, **never** `claim_task.sh --release`. That script matches a `BATCH-*` id and a bare integer and **exits 1**, because it owns `tasks/index.yml` and releasing only the lock would leave the batch reading `In Progress` forever. Getting this wrong is a runtime hard error on the gate's own exit path.
 
 ### Step 7e: Spawn the executor
+
+**Not reached on option C.** C stops at Step 7f, which is the terminal step for that option; no executor is spawned and no envelope is produced.
 
 Inputs: the (possibly revised) plan artifact, the review artifact, and your classification.
 
@@ -1087,6 +1130,351 @@ The tempting recovery from a failed reviewer is *"continue to the executor anywa
 
 **Orchestrator context exhaustion mid-pipeline** — the artifacts under `<ARTIFACT_DIR>` are the resume state, and nothing is deleted mid-lifecycle, so re-entry is `/claim-task <CLAIM_ID> --resume <RUN_ID>`, which lands at Step 7-pre and routes off those artifacts. Nothing parked, so there is no park marker — but the claim's **own** lock is still in place, so `--entry-state` answers `held`, and `--resume` is exactly the way past it.
 
+### Step 7f: Option C — write the plan back, then release the claim
+
+**Reached only when Step 6 resolved to C** and Step 7c wrote `verdict: PROCEED`. A `blocker` classification parks at 7c exactly as it does on A and B — a plan with an open blocker is not a plan to hand the next claimant — and 7f is not reached. **Roadmap tasks only:** option C is not offered on a batch and `--plan-only` is rejected at Step 1, so no batch claim can arrive here.
+
+**The ordering commits the durable product first, and that is the whole design.** An earlier revision wrote the body, released, then committed — so every failure path left the plan uncommitted **and** the claim held, losing the 5–25 minutes the run existed to produce. `claim_task.sh --release` refuses in at least five ways (dirty worktree without `--force`; invoked from inside the worktree; lock absent; PyYAML unresolvable; a post-removal index-flip crash), and a planner sub-agent that left one scratch file in the worktree triggers the first. So: **write, commit, release, commit** — and if the release refuses, the plan is already safe.
+
+#### 1. Write `## Test decision` and `## Plan` into the main checkout's body file
+
+**The main checkout, not the worktree — this is the one write in this skill that is deliberately not a worktree write, and the reason is derived rather than stylistic.** Step 2 reads `tasks/open/<TASK_ID>.md` from the main checkout *before any worktree exists*, so a `## Plan` committed on the feature branch would be invisible to the very next `/claim-task <TASK_ID>` — which is the entire thing option C exists to enable. `## Test decision`'s usual path is the opposite (the 7e executor writes the worktree copy, and it lands on the feature branch) because that path has an executor and a merge. This one has neither: no executor runs, so the branch never receives a commit and nothing will ever merge it. **Step 3 below deletes it**, which is not decoration — see the stale-branch note there.
+
+```bash
+# Substitute all four literals, quoted. <BODY_PATH> is the `body:` value exactly as
+# tasks/index.yml records it (canonically `open/<TASK_ID>.md`, relative to `tasks/`; the
+# legacy `tasks/open/<TASK_ID>.md` form is also resolved). <TEST_DECISION> is ONE line of
+# free text from the plan — "test <X> proves <Y>" or "no test because <Z>" — and it is
+# SINGLE-quoted for the same reason Step 7c's <PARK_REASON> is: it came back from a
+# sub-agent, and inside double quotes a `$(…)` in it would run. Collapse it to one line and
+# replace any `'` with a backtick or `’` before substituting.
+#
+# Stdlib only — NO PyYAML (a consumer whose bare `python3` lacks it is the PEP-668
+# default, Phase 131) — and the same MAIN-checkout resolution every other block in Step 7
+# uses. The plan is read from the RUN DIRECTORY rather than passed as an argument: it is a
+# multi-kilobyte sub-agent document, and putting it through the shell is how a quoting bug
+# becomes a code-execution bug.
+python3 - <<'PY' "<CLAIM_ID>" "<RUN_ID>" "<BODY_PATH>" '<TEST_DECISION>'
+import sys, json, subprocess
+from pathlib import Path
+
+claim_id, run_id, body_rel, test_decision = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+if "<" in claim_id or "<" in run_id or "<" in body_rel:
+    print("ERROR: placeholder not substituted: {!r} {!r} {!r}".format(
+        claim_id, run_id, body_rel), file=sys.stderr)
+    sys.exit(2)
+if not test_decision.strip() or "<" in test_decision:
+    print("ERROR: <TEST_DECISION> not substituted -- the plan's Test decision is required "
+          "here, because option C has no executor to write it later", file=sys.stderr)
+    sys.exit(2)
+
+common = subprocess.run(["git", "rev-parse", "--git-common-dir"],
+                        capture_output=True, text=True, check=True).stdout.strip()
+main_root = Path(common).resolve().parent
+run_dir = main_root / "sysop" / "runtime" / "claim" / claim_id / run_id
+if not run_dir.is_dir():
+    print("ERROR: no such run directory {}".format(run_dir), file=sys.stderr)
+    sys.exit(3)
+
+plan_md = run_dir / "plan.md"
+if not plan_md.is_file():
+    print("ERROR: no plan.md in {} -- refusing to write an empty plan back".format(run_dir),
+          file=sys.stderr)
+    sys.exit(4)
+plan_text = plan_md.read_text(encoding="utf-8").strip()
+if not plan_text:
+    print("ERROR: plan.md is empty", file=sys.stderr)
+    sys.exit(4)
+
+# Both body forms, exactly as /review-close Step 2d resolves them. The canonical value
+# every writer emits is `open/<ID>.md` RELATIVE TO `tasks/`; assuming the other form is
+# the documented way to make this block fail on a real queue while passing on a fixture.
+body = main_root / "tasks" / body_rel
+if not body.is_file():
+    body = main_root / body_rel
+if not body.is_file():
+    print("ERROR: body not found for {!r} (tried tasks/-relative and repo-relative)".format(
+        body_rel), file=sys.stderr)
+    sys.exit(5)
+# Write THROUGH a symlink, not over it: `tmp.replace(body)` on a symlinked body would
+# swap the link for a regular file and leave the real target stale.
+body = body.resolve()
+
+# The sealed report is the reviewer's ONE unforgeable channel and it lives only in the
+# envelope. An absent one is RECORDED, never silently dropped -- a missing record and a
+# lost one must not look the same (Step 7c's transport check writes the same distinction
+# to review-transport.md).
+env_path = main_root / "sysop" / "runtime" / "subagent-envelopes" / (claim_id + ".review.json")
+sealed = None
+if env_path.is_file():
+    try:
+        sealed = json.loads(env_path.read_text(encoding="utf-8")).get("review_report_raw")
+    except ValueError:
+        sealed = None
+
+def fence_mark(line):
+    """`(char, length)` if this line opens or closes a fence, else None."""
+    s = line.lstrip()
+    for ch in ("`", "~"):
+        if s.startswith(ch * 3):
+            n = 0
+            while n < len(s) and s[n] == ch:
+                n += 1
+            return ch, n
+    return None
+
+def strip_sections(lines, headings):
+    """Drop each `## <heading>` through the line before the next `## `.
+
+    Returns `(kept, insert_at, unbalanced)`. `insert_at` is where the EARLIEST
+    removed section began, so the rewrite lands back in the position it held
+    rather than at the end of the file; `None` means none of them were present
+    and the caller appends. `unbalanced` reports an unterminated fence, on
+    which the caller REFUSES -- see the note at the return.
+
+    FENCE-AWARE on purpose, and it tracks fence LENGTH rather than just the
+    marker. A task body can carry ``` or ~~~ blocks whose content starts with
+    `## `, and a fence-blind slice either stops early (leaving half a section)
+    or runs to EOF (eating every section after it). Length matters because the
+    block below writes the plan inside a fence made LONGER than any backtick
+    run in it -- so a plain ``` inside that plan must NOT be read as closing
+    it. A closer must use the same character and be at least as long, and
+    carry no info string.
+    """
+    want = {"## " + h.lower() for h in headings}
+    out, fence, skipping, insert_at = [], None, False, None
+    for ln in lines:
+        mark = fence_mark(ln)
+        if fence is None:
+            if mark:
+                fence = mark
+            elif ln.strip().lower() in want:
+                if insert_at is None:
+                    insert_at = len(out)
+                skipping = True
+                continue
+            elif skipping and ln.startswith("## "):
+                skipping = False
+        elif (mark and mark[0] == fence[0] and mark[1] >= fence[1]
+              and not ln.strip().strip(mark[0])):
+            fence = None
+        if not skipping:
+            out.append(ln)
+    # An UNTERMINATED fence means the body's own fencing is unbalanced, and the
+    # scan above cannot then tell a heading from fenced text -- so `skipping`
+    # never resets and every remaining section is dropped. That is silent data
+    # loss in a tracked file, so the caller refuses instead of writing.
+    # This is a BACKSTOP, not the fix: the fence arithmetic below is what stops
+    # this block producing an unbalanced body in the first place. It exists
+    # because an independent reviewer reached it with ordinary reviewer output.
+    return out, insert_at, fence is not None
+
+# newline="" disables universal-newline translation, so a CRLF body is not silently
+# rewritten LF throughout -- which showed as a whole-file diff rather than the ~20 added
+# lines. Normalise for processing, restore on write.
+raw = body.read_text(encoding="utf-8", newline="")
+crlf = "\r\n" in raw
+text = raw.replace("\r\n", "\n")
+# Replace IN PLACE, both sections, at the position the earlier of them held.
+# Appending instead would leave two `## Plan` sections on a second option-C run --
+# and Step 7a's presence test reads whichever comes first, i.e. the stale one --
+# and on the FIRST run it would push both sections below `## Surfaced by`, which
+# is not the order `tasks/schema.md` documents.
+lines, insert_at, unbalanced = strip_sections(text.split("\n"), ("Test decision", "Plan"))
+if unbalanced:
+    print("ERROR: {} has an unterminated code fence -- refusing to rewrite it, because a "
+          "section scan cannot tell a heading from fenced text in that state and would drop "
+          "every section after it. Fix the body's fencing and re-run.".format(body),
+          file=sys.stderr)
+    sys.exit(6)
+if insert_at is None:
+    insert_at = len(lines)
+# Normalise blank lines on BOTH sides of the insertion point, so the block below
+# supplies exactly one separator each way. Without this the rewrite is not
+# idempotent: running option C twice on the same task accretes one blank line per
+# run, which a diff shows and a reader does not. Found by running it twice.
+while insert_at > 0 and not lines[insert_at - 1].strip():
+    lines.pop(insert_at - 1)
+    insert_at -= 1
+while insert_at < len(lines) and not lines[insert_at].strip():
+    lines.pop(insert_at)
+
+# A fence longer than any run of backticks in EITHER embedded document, so an ordinary
+# ```bash block inside them cannot terminate it. Demoting their own headings instead
+# would need a fence-aware rewriter over sub-agent prose; this needs arithmetic.
+#
+# BOTH, not just the plan. An earlier cut computed this over `plan_text` alone and wrapped
+# the sealed report in a bare ```yaml -- and a reviewer quoting a fenced snippet in a
+# finding's `evidence:` field is ordinary output, not an adversarial payload. That broke
+# the wrapper, and the NEXT option-C run's strip then desynced and deleted every section
+# after it. Found by an independent reviewer running two consecutive runs on realistic
+# input; the author's own fence test covered only the plan.
+longest = 0
+for doc in (plan_text, sealed or ""):
+    run = 0
+    for ch in doc:
+        run = run + 1 if ch == "`" else 0
+        longest = max(longest, run)
+fence = "`" * max(3, longest + 1)
+
+block = [
+    "",
+    "## Test decision",
+    "",
+    test_decision.strip(),
+    "",
+    "## Plan",
+    "",
+    "_Written by `/claim-task --plan-only` (option C), run `{}`. The plan below was "
+    "adversarially reviewed before it was written here; the sealed report follows it. "
+    "A later `/claim-task {}` reads this section as a PRESENCE test, skips the planner, "
+    "and re-reviews the plan against today's `main`._".format(run_id, claim_id),
+    "",
+    fence + "markdown",
+    plan_text,
+    fence,
+    "",
+    "### Sealed review report",
+    "",
+]
+if sealed:
+    block += [fence + "yaml", sealed.strip(), fence, ""]
+else:
+    block += [
+        "_No sealed `REVIEW_REPORT:` block reached the orchestrator for this run "
+        "(`review-transport.md` in the run directory records which of `NO_ENVELOPE` or "
+        "`EMPTY_TRANSPORT` applied). The reviewer's full findings were written to "
+        "`review.md` in that directory. This absence is recorded rather than omitted: "
+        "a review whose verdict did not arrive must not read like one that had none._",
+        "",
+    ]
+
+out = "\n".join(lines[:insert_at] + block + lines[insert_at:]).rstrip() + "\n"
+if crlf:
+    out = out.replace("\n", "\r\n")
+tmp = body.with_suffix(body.suffix + ".tmp")
+tmp.write_text(out, encoding="utf-8", newline="")
+tmp.replace(body)
+print("wrote {} ({} bytes)".format(body, len(out)))
+print("sealed_report: " + ("present" if sealed else "ABSENT"))
+PY
+```
+
+**Read the `sealed_report:` line and say it out loud in your final message.** `ABSENT` is not a failure and must not stop the write — Step 8's read-order contract names an unregistered hook and a failed write as supported configurations — but a human reading the task body later deserves to know the verdict reached the record through a file the reviewer wrote rather than one it could not.
+
+#### 2. Commit it on `main`, under `_shared/main-push-guard.md` Rule A
+
+```bash
+test "$(git rev-parse --abbrev-ref HEAD)" = "main" || {
+  echo "HEAD is not main (a concurrent actor moved it) — STOP."; exit 1; }
+git add "<BODY_PATH_AS_RESOLVED>"
+git commit -m "plan: record reviewed plan for <CLAIM_ID>"
+```
+
+**The assert is not boilerplate here.** Under `§ Merge policy: pr`, a concurrent `/review-close` checks out an integration branch **in the shared primary worktree** — the same checkout this block is standing in. Without the assert, an unguarded commit lands this plan on someone else's PR branch, where it is both invisible to the next claim and a surprise in their diff. `<BODY_PATH_AS_RESOLVED>` is the path step 1 printed, not the raw `body:` value.
+
+Then record what has been made durable, before touching the claim:
+
+```bash
+# Substitute all four, quoted. RELEASED is the literal `no` here and `yes` at step 4.
+python3 - <<'PY' "<CLAIM_ID>" "<RUN_ID>" "<PLAN_COMMIT_SHA>" "no"
+import sys, subprocess
+from pathlib import Path
+claim_id, run_id, sha, released = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+if "<" in claim_id or "<" in run_id or "<" in sha:
+    print("ERROR: placeholder not substituted", file=sys.stderr)
+    sys.exit(2)
+common = subprocess.run(["git", "rev-parse", "--git-common-dir"],
+                        capture_output=True, text=True, check=True).stdout.strip()
+run_dir = Path(common).resolve().parent / "sysop" / "runtime" / "claim" / claim_id / run_id
+if not run_dir.is_dir():
+    print("ERROR: no such run directory {}".format(run_dir), file=sys.stderr)
+    sys.exit(3)
+(run_dir / "plan-only.md").write_text(
+    "# Plan-only run — {} run {}\n\n- claim_id: {}\n- run_id: {}\n"
+    "- plan_commit: {}\n- released: {}\n".format(
+        claim_id, run_id, claim_id, run_id, sha, released),
+    encoding="utf-8")
+print("plan-only: released=" + released)
+PY
+```
+
+**This file is what stops a resumed option-C run from being implemented.** Without it, a `--resume` after a refused release reaches 7-pre's routing table, matches `verdict: PROCEED`, and walks to the executor — implementing a task whose human asked only for a plan. 7-pre's `plan-only.md` row exists for exactly that, and it reads `released:` to decide between *stop* and *finish the release*.
+
+#### 3. Release the claim — and delete the branch it never used
+
+**First establish that the branch really is empty**, because the deletion below is a *force*
+delete (`claim_task.sh` runs `git branch -D`) and a force delete of a branch carrying work is
+data loss:
+
+```bash
+git rev-list --count main..<BRANCH_NAME>
+```
+
+**Expect `0`.** Option C never commits to the branch — the planner is forbidden to, and 7a's
+integrity check parks the claim if it did, so this step is unreachable with planner commits on
+it. A non-zero count therefore means something happened that this path does not model: **release
+without `--delete-branch`, report the count and the branch name, and stop.**
+
+On `0`:
+
+```bash
+bash sysop/scripts/claim_task.sh --release --delete-branch <CLAIM_ID>
+```
+
+**Why the branch must go, stated because an earlier revision asserted it already had.** That
+revision claimed `--release` deletes the branch. **It does not** — `claim_task.sh` defaults
+`DELETE_BRANCH=false` and only deletes when the flag is passed, which this step originally did
+not pass. The consequence is not cosmetic, and the mechanism is worth stating precisely because an
+earlier draft of this paragraph put it in the wrong place: **Step 3 of this skill** generates the
+branch name deterministically from the claim id (`FEAT-X` → `feat/feat-x`) — `claim_task.sh`
+takes `<BRANCH_NAME>` as a required positional and generates nothing. What the script does is
+**reuse** an existing branch of that name if it finds one, so the next claim of the same task
+computes the same name, finds the branch still there, and checks it out **as-is**, forked from
+where `main` was *before* option C's two commits. The 7e
+executor then writes `## Test decision` into a body whose `## Plan` section the branch has never
+seen, and the close hits a real content conflict in `tasks/open/<TASK_ID>.md` — on exactly the
+path Step 7f's own final message recommends. Verified by execution in an independent review, not
+reasoned about.
+
+**Why release rather than hold.** Holding a lock overnight on a task nobody is implementing is the state `/sitrep`'s stale-claim path exists to complain about, and it keeps `/next-task` from handing the task out. Releasing makes tomorrow's claim an ordinary fresh one that finds a `## Plan` and skips 7a — the simpler mechanism, and the one that needs no re-entrancy.
+
+#### 4. Commit the release flip, again under Rule A
+
+```bash
+test "$(git rev-parse --abbrev-ref HEAD)" = "main" || {
+  echo "HEAD is not main (a concurrent actor moved it) — STOP."; exit 1; }
+git add tasks/index.yml
+git commit -m "chore: release <CLAIM_ID>"
+```
+
+**Separate from step 2 on purpose**, for two reasons: `claim_task.sh --release` deliberately never commits (it prints the command on its own last line), and two atomic commits fail better than one straddling a release that can refuse. Then re-run step 2's `plan-only.md` block with `"yes"` as the last argument.
+
+#### Abort rules — one per step, because this path has five refusal modes
+
+| Fails | State | Do |
+|---|---|---|
+| **step 1** (the write) | Nothing changed. | Report and stop. The claim is intact and the run is resumable. |
+| **step 2** (the plan commit) | The body carries an **uncommitted** edit in the main checkout. | Report it, **name the file path**, and stop. **Do not `git checkout` it** — that discards the plan, which is the run's entire product. Tell the human to commit or stash it: an uncommitted `main` collides with the next claim's Step 4a rebase and its Step 4d Rule A assert. |
+| **step 3** (the release) | **The plan is committed and durable.** The claim is still held. | Report the refusal **verbatim** — it names which of the five modes fired — leave the claim intact, and tell the human to resolve it and re-run `claim_task.sh --release --delete-branch <CLAIM_ID>` themselves. **Never retry automatically, and never proceed to step 4.** A step-4 commit without step 3 writes `open` into the index while the lock is still held, which is `validate_tasks.py` Invariant 9, a blocking error. |
+| **step 4** (the release commit) | `--release` flipped the index and deleted the lock **in the working tree only**. | Committed `main` reads `in_progress` with no lock for everyone who pulls — Invariant 9 again, plus `/sitrep` index drift. Report loudly and print the exact two commands. |
+
+#### Final message
+
+Option C does **not** reach Step 8: there is no executor, so there is no envelope to receive and no `/document-work` handoff to make. Terminate here with:
+
+```
+## Plan recorded: <CLAIM_ID>  (option C — plan only)
+
+Plan committed on main:  <PLAN_COMMIT_SHA>
+Sealed review report:    present | ABSENT
+Claim released:          yes
+Run artifacts:           sysop/runtime/claim/<CLAIM_ID>/<RUN_ID>/
+
+Nothing was implemented. The task is back to `open` and carries its reviewed plan.
+Next: /claim-task <CLAIM_ID> — it will skip the planner and re-review this plan.
+```
+
 ## Step 8: Receive the executor envelope and hand off
 
 Read the envelope in this order — first hit wins; never go past a clean hit:
@@ -1105,7 +1493,11 @@ Read the envelope in this order — first hit wins; never go past a clean hit:
 
 **Do not delete the envelopes here.** Deleting after consumption is why a review that *did* run left no durable trace: the envelope was the one artifact no agent could forge, and it was removed at the moment it became evidence. The whole artifact set — `<ARTIFACT_DIR>` and the three envelopes — persists.
 
-**What cleans it up, stated as it is rather than as it should be.** Nothing does, yet. `/review-close` Step 4c removes the *lock* and any roadmap park *marker* for a closing task; it does not touch `sysop/runtime/claim/` for either claim kind, and it does not remove a batch's park marker. Close-time cleanup of the artifact set is part B of this reshape and is not built. Until it is, the directory grows one run per claim under a gitignored path — the deliberate trade, since the failure this reshape exists to remove is an artifact that vanished, not one that accumulated. Step 7-pre's move-aside is what keeps the *envelope mailbox* from going stale between runs, and it is the only thing that touches these files mid-lifecycle.
+**What cleans it up — the close, and only the close.** Both claim kinds are covered, by two different owners because the close path has no single list carrying both. A **roadmap** claim is cleaned by `/review-close` Step 4c, which removes the lock, any park marker, and this whole `sysop/runtime/claim/<CLAIM_ID>/` directory when the task closes. A **batch** claim is cleaned by `close_batch.sh`'s `remove_claim_artifacts()`, which removes the same two things for `BATCH-<N>` — sited there because Step 4c's id list is built from `roadmap_ids` only and no batch id can reach it. Both are gated on the close having actually landed on `main`: under `pr` policy the close commits on an integration branch while `main` still reads the work open, and removing a park verdict before the merge lands would destroy the one record of why the work stopped. **Nothing removes any of it mid-lifecycle** — that is the property this reshape exists to hold, since the failure it removes is an artifact that vanished, not one that accumulated. Step 7-pre's move-aside touches the *envelope mailbox* only, to keep a previous run's envelopes from being read as this run's.
+
+**What reads it, said as plainly as the cleanup above — and what that does not buy.** All three of part B's legs now ship: close-time cleanup (leg 3), `/review-close` **Step 2e**'s per-branch artifact report (leg 1), and `/sitrep`'s **park + awaiting-approval** classification (leg 2). So the artifact set is created, read and reaped. **Both readers report and neither rejects**, which is the deliberate shape and not a gap to be closed later: an absent artifact set is surfaced where a human is already looking, and nothing is blocked on it. A blocked run is therefore conspicuous rather than impossible — do not describe either reader as a gate, and do not read "part B shipped" as "a skipped review is now prevented."
+
+**One reader is narrower than its name.** `/sitrep`'s predicate is reached on the **roadmap** path only: `run_survey`'s lock loop skips a `BATCH-`/`TASK-` prefixed id before `_classify_task` runs, so a `/claim-task` park of a *review batch* still classifies under the separate batch vocabulary, which has no park state. That gap is filed and open; say "for roadmap claims" rather than implying batch coverage this does not have.
 
 **On `BLOCKED`, rewrite the classification FIRST — before the outcome record below.** The order is load-bearing and a different-model review of the whole pipeline is what found it: a crash between the two writes must leave the run in the state that routes *back into adjudication*, not the one that reports it as finished. Writing `outcome.md` first and crashing leaves `classification.md` still reading `PROCEED`, and the routing table then matches the outcome row and reports a blocked run as complete. Writing the classification first and crashing leaves `verdict: BLOCKED` with no outcome record, which routes to 7c — correct, and the safe direction.
 

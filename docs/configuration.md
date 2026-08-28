@@ -6,11 +6,12 @@ Everything the installer writes sorts into three tiers on `--update` (update mec
 
 Your project's `CLAUDE.md` is always in context, and every Sysop skill honors it. A section like `## Guided mode` (WORKFLOW.md § 6.1) changes how every skill handles decision gates without touching a single skill file — and the same pattern works for any standing per-project rule ("when running `/review-close`, also check the staging deploy"). This is the sanctioned way to change how a skill *behaves*, and it survives every update because `CLAUDE.md` is yours.
 
-Several sections are read as structured input rather than prose. Four are pure configuration — all optional, each consumed by a named skill (three by the lifecycle, one by the give-back family):
+Several sections are read as structured input rather than prose. Five are pure configuration — all optional, each consumed by a named skill (four by the lifecycle, one by the give-back family):
 
 | Section | Effect |
 |---|---|
 | `## Merge policy` | `direct` (default) or `pr` — how `/review-close` lands work on `main`. Use `pr` when `main` is push-protected. |
+| `## Plan review` | `always`, `never`, or `ask` (default) — how much you are in the loop on a `/claim-task` claim. `always` puts a human gate between the adversarial plan review and implementation; `never` runs it unattended. The plan is adversarially reviewed either way; this only changes what happens after. `--review-plan` / `--no-review-plan` / `--plan-only` override it per run. |
 | `## Sysop upstream repo` | A bare `owner/name` slug naming where the give-back skills (`/report-issues`, `/contribute-convention`, `/share-wins`) file. Default is the **public** `getsysop/sysop`; set it if your friction log or convention overlay carries anything that shouldn't land in a public repo. `--repo` stays the per-run override. |
 | `## Post-deploy verification` | A smoke command `/review-close` runs *after* the merge lands — a Playwright run against staging, a curl on a health endpoint, a synthetic monitor check. Absent → the step is a no-op. |
 | `## Pending documentation routing` | Where `/auto-build` consolidates the per-task pending-docs it accumulates across a batch, so a multi-task run doesn't hand you a pile of unrouted fragments. |

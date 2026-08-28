@@ -181,9 +181,11 @@ _AWS_ACCESS_KEY_RE = re.compile(r"\bAKIA[0-9A-Z]{16}\b")
 # Phase 218 widened BOTH in lockstep, after a consumer report: the
 # original two phrases were an allowlist over free prose, so a procedure headed
 # `OPERATOR ACTION REQUIRED BEFORE MERGE` satisfied neither and the close
-# proceeded without ever asking. `user ops` is deliberately excluded — that
-# heading declares POST-merge operator steps (see schema.md § "User ops"),
-# and firing a pre-merge gate on it would train the operator to waive wholesale.
+# proceeded without ever asking. `user ops` is deliberately excluded — the
+# class is large and routine (see schema.md § "User ops"), so prompting on all of
+# it would train the operator to waive wholesale. That reason is
+# timing-independent; an earlier form of this comment also claimed POST-merge
+# timing, which nothing in the tree supports.
 # Keep this pattern BEHAVIOURALLY identical to the skill's — that is what
 # tests/test_review_close_smoke_gate.py asserts, over a corpus, in both directions.
 # It is deliberately not byte-identical and never was: the skill's copy wraps the
@@ -202,19 +204,6 @@ _MANUAL_SMOKE_HEADING_RE = re.compile(
     r")",
     re.IGNORECASE | re.MULTILINE,
 )
-
-# Phase 58b: test-decision heading-presence check (warn-only). A claimed
-# (in_progress) task's plan records a `## Test decision` section in its body
-# — either "test X proves Y" or "no test because Z". Heading-scan mirrors the
-# manual_smoke pattern so the validator's nudge stays in lockstep with the
-# body convention in tasks/schema.md § Test decision. Warn-only: the
-# read-and-verify gate is /review-close (Phase 59), and absence must never
-# block a commit.
-_TEST_DECISION_HEADING_RE = re.compile(
-    r"^#{1,6}\s+.*test\s+decision",
-    re.IGNORECASE | re.MULTILINE,
-)
-
 
 # ---------------------------------------------------------------------------
 # Findings
@@ -540,8 +529,20 @@ def _validate_tasks(
         # Phase 35: manual_smoke field — warn-only heading-presence check.
         _check_manual_smoke(task, resolved_body_path, loc_id, report)
 
-        # Phase 58b: test-decision recording — warn-only, in_progress only.
-        _check_test_decision(status, resolved_body_path, loc_id, report)
+        # Phase 235 (Q-235): solo field — type guard only.
+        _check_solo(task, loc_id, report)
+
+        # Phase 58b's test-decision check was RETIRED in Phase 234 (Q-022). It
+        # read the body off the FILESYSTEM while the record it looked for is
+        # written by the Step 7e executor inside the worktree and committed on
+        # the feature branch. Run from `main` — where /claim-task Step 4c and
+        # /review-close's final guard both run it — the section was absent for
+        # the entire in_progress window, so the warning fired on every claimed
+        # task on every run: noise in the channel carrying twelve real
+        # invariants. The read-and-verify gate that replaced it reads the right
+        # revision (`/review-close` Step 2d, `git show "<branch>:<path>"`), is a
+        # hard gate rather than a warning, and has its own doc-only skip. See
+        # tasks/schema.md § Test decision.
 
         # archive_summary similar containment check
         archive_summary = task.get("archive_summary")
@@ -671,6 +672,31 @@ def _check_blast_radius(
         )
 
 
+def _check_solo(task: dict, loc: str, report: Report) -> None:
+    """Phase 235 (Q-235): `solo: true` declares that the task mutates state
+    shared outside the filesystem view, so it must not batch with anything — even a
+    task whose paths are disjoint. See schema.md § "Solo".
+
+    Type guard only, and deliberately so. The field's meaning is a claim about runtime
+    state that no static check can confirm or refute, and its one reader (/auto-build
+    Step 2 invariant `d.`) fails safe: an absent or false field simply batches normally,
+    which is the pre-Phase-235 behaviour. There is nothing to warn about that would not
+    be a guess.
+
+    - Absent or `false`: no check fires.
+    - Present but not a bool: hard error, mirroring `manual_smoke`'s type guard. `"yes"`
+      is truthy in Python and would silently solo every batch it touched.
+    """
+    raw = task.get("solo")
+    if raw is None:
+        return
+    if not isinstance(raw, bool):
+        report.error(
+            loc,
+            f"'solo' must be bool, got {_sanitize_log(type(raw).__name__)}",
+        )
+
+
 def _check_manual_smoke(
     task: dict, body_path: Path | None, loc: str, report: Report
 ) -> None:
@@ -709,45 +735,6 @@ def _check_manual_smoke(
             "'manual smoke' or 'smoke required' (case-insensitive). "
             "Add the procedure under '## Manual smoke required' (or similar). "
             "See tasks/schema.md § Manual smoke.",
-        )
-
-
-def _check_test_decision(
-    status: object, body_path: Path | None, loc: str, report: Report
-) -> None:
-    """Phase 58b: an in_progress task's body should record a `## Test decision`.
-
-    The plan-time test decision ("test X proves Y" / "no test because Z") is
-    written into the durable task body during /claim-task planning so that
-    /review-close (Phase 59) can read it back at close time. This is a
-    warn-only backstop — never a block — and fires only for in_progress tasks:
-
-    - `open` tasks are backlog that predate claim-time planning, so the section
-      legitimately doesn't exist yet (warning there would be pure noise);
-    - `done` / `deferred` tasks are terminal or parked.
-
-    Unlike manual_smoke there is no gating field to type-check: the section is
-    expected on every claimed task, with "no test because Z" as the universal
-    escape for non-behavior work. If the body did not resolve (missing/escaping
-    path), skip — body-existence is checked elsewhere; don't double-report.
-    """
-    if status != "in_progress":
-        return
-    if body_path is None or not body_path.is_file():
-        return
-    try:
-        with open(body_path, "r", encoding="utf-8") as fh:
-            text = fh.read()
-    except OSError:
-        return
-    if not _TEST_DECISION_HEADING_RE.search(text):
-        report.warn(
-            loc,
-            "status=in_progress but body lacks a '## Test decision' section "
-            "(heading containing 'test decision', case-insensitive). Record the "
-            "plan's test decision in the body — 'test <X> proves <Y>' or "
-            "'no test because <Z>' — so /review-close can verify it. "
-            "See tasks/schema.md § Test decision.",
         )
 
 
@@ -1264,73 +1251,6 @@ _MANUAL_SMOKE_BAD_TYPE_BODY = """\
 yes.
 """
 
-# Phase 58b fixtures — test-decision recording warn-only check (in_progress only).
-_TEST_DECISION_INDEX = """\
-schema_version: 1
-
-phases:
-  - number: 1
-    title: "Active phase"
-    status: in_progress
-    current_focus: true
-
-tasks:
-  - id: FEAT-TD-WITH
-    title: "In-progress task that records a test decision"
-    phase: 1
-    status: in_progress
-    effort: Medium
-    user_action: false
-    depends_on: []
-    surfaced_by: []
-    body: tasks/open/FEAT-TD-WITH.md
-
-  - id: FEAT-TD-WITHOUT
-    title: "In-progress task missing the section (should warn)"
-    phase: 1
-    status: in_progress
-    effort: Medium
-    user_action: false
-    depends_on: []
-    surfaced_by: []
-    body: tasks/open/FEAT-TD-WITHOUT.md
-
-  - id: FEAT-TD-OPEN
-    title: "Open task missing the section (must NOT warn — not yet claimed)"
-    phase: 1
-    status: open
-    effort: Low
-    user_action: false
-    depends_on: []
-    surfaced_by: []
-    body: tasks/open/FEAT-TD-OPEN.md
-"""
-
-_TEST_DECISION_BODY_WITH = """\
-# FEAT-TD-WITH
-
-## Context
-Adds a guard.
-
-## Test decision
-test test_guard_rejects_empty proves the new guard raises on empty input.
-"""
-
-_TEST_DECISION_BODY_WITHOUT = """\
-# FEAT-TD-WITHOUT
-
-## Context
-in_progress but no recorded test decision.
-"""
-
-_TEST_DECISION_BODY_OPEN = """\
-# FEAT-TD-OPEN
-
-## Context
-Backlog item, not yet claimed/planned.
-"""
-
-
 def _write(p: Path, content: str) -> None:
     p.parent.mkdir(parents=True, exist_ok=True)
     with open(p, "w", encoding="utf-8") as fh:
@@ -1418,25 +1338,6 @@ def _build_manual_smoke_bad_type_fixture(root: Path) -> Path:
     _write(tasks_dir / "index.yml", _MANUAL_SMOKE_BAD_TYPE_INDEX)
     _write(tasks_dir / "open" / "FEAT-SMOKE-BADTYPE.md", _MANUAL_SMOKE_BAD_TYPE_BODY)
     (root / "sysop/runtime/locks").mkdir(parents=True, exist_ok=True)
-    return tasks_dir
-
-
-def _build_test_decision_fixture(root: Path) -> Path:
-    """Phase 58b: test-decision warn-only check fires only for in_progress.
-
-    Two in_progress tasks need locks (invariant 9 is resolved against
-    root/sysop/runtime/locks since the tmpdir is not a git repo — see
-    _resolve_canonical_locks_dir's fallback). The open task needs none.
-    """
-    tasks_dir = root / "tasks"
-    _write(tasks_dir / "index.yml", _TEST_DECISION_INDEX)
-    _write(tasks_dir / "open" / "FEAT-TD-WITH.md", _TEST_DECISION_BODY_WITH)
-    _write(tasks_dir / "open" / "FEAT-TD-WITHOUT.md", _TEST_DECISION_BODY_WITHOUT)
-    _write(tasks_dir / "open" / "FEAT-TD-OPEN.md", _TEST_DECISION_BODY_OPEN)
-    locks = root / "sysop/runtime/locks"
-    locks.mkdir(parents=True, exist_ok=True)
-    _write(locks / "FEAT-TD-WITH.lock", "lock\n")
-    _write(locks / "FEAT-TD-WITHOUT.lock", "lock\n")
     return tasks_dir
 
 
@@ -1633,41 +1534,6 @@ def _self_test() -> int:
                     failures.append("    " + f.format())
             else:
                 print("  manual_smoke bad-type fixture (Phase 35): correctly rejected")
-
-    # Phase 58b: test-decision recording — an in_progress body missing the
-    # `## Test decision` section must WARN (warn-only; overall validation must
-    # still PASS) and name FEAT-TD-WITHOUT, must NOT warn for FEAT-TD-WITH
-    # (section present) or FEAT-TD-OPEN (open status — not yet claimed).
-    with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp)
-        tasks_dir = _build_test_decision_fixture(root)
-        report = validate(tasks_dir, project_root=root)
-        if not report.ok:
-            failures.append("test-decision fixture failed validation (warn-only check must not block):")
-            for f in report.errors:
-                failures.append("  " + f.format())
-        else:
-            warn_blob = " | ".join(f.format() for f in report.warnings)
-            missing_warn = (
-                "(FEAT-TD-WITHOUT)" not in warn_blob or "Test decision" not in warn_blob
-            )
-            spurious_warn = (
-                "(FEAT-TD-WITH)" in warn_blob and "Test decision" in warn_blob
-            ) or (
-                "(FEAT-TD-OPEN)" in warn_blob and "Test decision" in warn_blob
-            )
-            if missing_warn:
-                failures.append("test-decision fixture missing expected warning for FEAT-TD-WITHOUT")
-                failures.append("  actual warnings:")
-                for f in report.warnings:
-                    failures.append("    " + f.format())
-            elif spurious_warn:
-                failures.append("test-decision fixture has spurious warning on a task that should not warn")
-                failures.append("  actual warnings:")
-                for f in report.warnings:
-                    failures.append("    " + f.format())
-            else:
-                print("  test-decision fixture (Phase 58b): correctly warned (warn-only)")
 
     if failures:
         print("SELF-TEST FAILED:")

@@ -51,7 +51,7 @@ Also read `tasks/index.yml` to check if the work maps to a task ID. The body for
 Review the task's full change surface — committed branch work plus anything staged or unstaged — for inline quality improvements:
 
 1. Read `.claude/convention_map.md`. For each file in the diff, note the applicable conventions (4-7 per file section).
-2. Read the **full change surface this task introduces**, not just the uncommitted remainder (Phase 222, Q-020): `git diff main...HEAD` (three dots — the committed branch work; on the canonical path the `/claim-task` reviewer-executor has **already committed everything**, so the two commands below alone inspect an empty diff and this whole pass silently reviews nothing) plus `git diff --cached` and `git diff` (anything not yet committed, the solo-path case). Check all of it against:
+2. Read the **full change surface this task introduces**, not just the uncommitted remainder (Phase 222, Q-020): `git diff main...HEAD` (three dots — the committed branch work; on the canonical path the `/claim-task` Step 7e executor has **already committed everything**, so the two commands below alone inspect an empty diff and this whole pass silently reviews nothing) plus `git diff --cached` and `git diff` (anything not yet committed, the solo-path case). Check all of it against:
    - **Convention map violations** — the 4-7 conventions listed for each file's matching section
    - **Duplicated logic** — code that reimplements an existing helper (e.g., `_latest_obs_sql()`, `_escape_like()`, `getDisplayError()`, `useAbortableFetch()`, `isSafeHref()`, `validate_identifier()`)
    - **Unnecessary complexity** — verbose patterns that can be simplified without changing behavior

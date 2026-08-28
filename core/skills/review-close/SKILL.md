@@ -462,13 +462,13 @@ If main is ahead of origin:
 
 ### 2d. Test-Decision Verification (verify the record — Phase 59, C1)
 
-Every task claimed through `/claim-task` records a **test decision** in its body at plan time (Phase 58b): either `test <X> proves <Y>` (the regression test that pins the changed behavior) or `no test because <Z>` (the reviewable rationale for adding none). See `tasks/schema.md` § Test decision. This step **verifies that record against what the branch actually delivers** — the read-and-verify gate that closes the loop the validator's warn-only Invariant 13 opens at plan time. It does **not** re-judge whether a test *should* exist; that judgment is the adversarial plan reviewer's "Missing invariant tests" dimension (`_shared/adversarial-review.md` finding 7), applied at plan time. Verify the record, don't re-judge.
+Every task claimed through `/claim-task` records a **test decision** in its body at plan time (Phase 58b): either `test <X> proves <Y>` (the regression test that pins the changed behavior) or `no test because <Z>` (the reviewable rationale for adding none). See `tasks/schema.md` § Test decision. This step **verifies that record against what the branch actually delivers**, and since Phase 234 it is the *only* thing that does: `validate_tasks.py` carried a warn-only Invariant 13 on the same fact until then, but it read the body off the working tree while this record lives on the branch, so it warned on every claimed task on every run and told you nothing. Reading the right revision is what makes this gate real. It does **not** re-judge whether a test *should* exist; that judgment is the adversarial plan reviewer's "Missing invariant tests" dimension (`_shared/adversarial-review.md` finding 7), applied at plan time. Verify the record, don't re-judge.
 
-This is the sibling of Step 3c's manual-smoke gate — a per-task body convention, warned by the validator, enforced here — and reuses the same shape: a deterministic classification (like Step 1a's worktree verdict) plus an `AskUserQuestion` halt on mismatch (like Step 3c).
+This is the sibling of Step 3c's manual-smoke gate — a per-task body convention, enforced here and nowhere else since Phase 234 — and reuses the same shape: a deterministic classification (like Step 1a's worktree verdict) plus an `AskUserQuestion` halt on mismatch (like Step 3c).
 
 For each **approved** feature branch (Step 2a verdict), for each task ID it claims (path resolved exactly as in Step 2a step 3 — `tasks/index.yml`'s `body:` per claimed ID):
 
-> **Read the record at the branch tip — not out of the working tree.** `/claim-task` *decides* the test decision at plan time, but the **executor writes it into the body during implementation, inside the worktree** (`claim-task/SKILL.md` Step 7e, Sequence item 3), so the section is committed on the feature branch and nowhere else. Step 2d runs at Step 2; nothing merges until Step 3b/4a. `HEAD` is still `main`, so the working tree's copy of the body is whatever `main` has — and for a task claimed this cycle that copy carries **no test-decision heading at all**, because every shipped body-author is told not to write one (`intake/SKILL.md:111`, `add-task/SKILL.md:62`, `onboard/SKILL.md:95`; the schema's placeholder is a template, not something a real body normally holds). Reading *that* copy therefore classifies the record `missing` for every task on every branch on every run, and each `missing` fires the halt below. **Nothing spares one** — step 0's doc-only skip does not, because a `missing` classification is not the `no-test` its second conjunct requires, so a doc-only branch halts here too. A gate that only ever reports the state of a revision it is not gating. Resolve the *path* from `main`'s `tasks/index.yml` — correct, because a claim does not move the body and Step 4c's archive move runs after this step — and read the *content* from the revision under review:
+> **Read the record at the branch tip — not out of the working tree.** `/claim-task` *decides* the test decision at plan time, but the **executor writes it into the body during implementation, inside the worktree** (`claim-task/SKILL.md` Step 7e, Sequence item 3), so the section is committed on the feature branch and nowhere else. Step 2d runs at Step 2; nothing merges until Step 3b/4a. `HEAD` is still `main`, so the working tree's copy of the body is whatever `main` has — and for a task claimed this cycle that copy carries **no test-decision heading at all**, because every shipped body-author is told not to write one (`intake/SKILL.md:111`, `add-task/SKILL.md:63`, `onboard/SKILL.md:95`; the schema's placeholder is a template, not something a real body normally holds). Reading *that* copy therefore classifies the record `missing` for every task on every branch on every run, and each `missing` fires the halt below. **Nothing spares one** — step 0's doc-only skip does not, because a `missing` classification is not the `no-test` its second conjunct requires, so a doc-only branch halts here too. A gate that only ever reports the state of a revision it is not gating. Resolve the *path* from `main`'s `tasks/index.yml` — correct, because a claim does not move the body and Step 4c's archive move runs after this step — and read the *content* from the revision under review:
 >
 > ```bash
 > # `body:` is canonically relative to `tasks/` — `open/<TASK-ID>.md`, NOT
@@ -486,7 +486,7 @@ For each **approved** feature branch (Step 2a verdict), for each task ID it clai
 
 **0. Per-branch doc-only skip.** If this branch's diff (`git diff main...<branch>` — three dots, per Step 2a's note) touches no code files (the same code-file set Step 3 uses — `.py` / `.ts` / `.tsx` / `.js` / `.jsx` / `.sql` / `.sh` / `.kt` / `.swift` / `.go` / `.rs`), **and** *that task's* recorded decision is a `no-test`, skip verification for it with a one-line note (`2d: <branch>/<task id> — doc-only diff, no-test record`). **The two conjuncts have different granularity, and the skip takes the narrower one.** The diff test is per *branch*; the record is per *task*, and this gate iterates the tasks a branch claims. So a doc-only branch claiming two tasks skips only the task whose record is a `no-test` — the other is verified, which is the point: a record naming a test must not be silenced because a sibling task's record said none was needed. **Resolve step 1's read before deciding this** — the second conjunct is a fact about the record, so the classification has to exist before the skip can be evaluated, and reading it is one `git show` this gate runs either way. What this skip saves is step 2's verification, not the read; a step 0 that fired before the record was classified would be deciding on the extension test alone, which is the defect. An `unreadable` or `missing` classification is **not** a `no-test` and does not earn the skip — those have their own arms below. **A record that names a test is verified whatever the extensions say** — checking that the named test is present costs one read and is exactly as meaningful on a semgrep rule or a `checks.yml` entry as on a `.py` file. The extension test cannot carry this skip alone, because it calls semgrep rules, `checks.yml`, CI workflows and served-model config documentation, and a branch changes behaviour through any of them; Sysop's own `coverage-*` `blocking: true` flip (Phase 61b) had that shape. Step 2b's skip carries a second conjunct too — a different predicate (no `## Prevention Conventions` rule governs the touched types), the same reason: the extension test is evidence about file names, and neither gate is about file names.
 
-**1. Read the record.** Read the body **at the branch tip** (`git show "<branch>:<repo-root-relative body path>"`, resolved and quoted per the note above — never the working-tree copy) and find the section under a heading whose text matches `test\s+decision` (case-insensitive — `## Test decision`, `### Test Decision` both match; same pattern as validator Invariant 13). Classify it:
+**1. Read the record.** Read the body **at the branch tip** (`git show "<branch>:<repo-root-relative body path>"`, resolved and quoted per the note above — never the working-tree copy) and find the section under a heading whose text matches `test\s+decision` (case-insensitive — `## Test decision`, `### Test Decision` both match; the pattern is defined in `tasks/schema.md` § Test decision, which is now its only home). Classify it:
 
 - **`test-proves`** — the section names a test (the `test <X> proves <Y>` shape).
 - **`no-test`** — the section states `no test because <Z>`.
@@ -503,7 +503,7 @@ For each **approved** feature branch (Step 2a verdict), for each task ID it clai
 
 - **`test-proves` → "plan said test X — is it here?"** Confirm the diff adds or modifies a test matching X — a changed file on the project's test path (`tests/`, `*_test.py`, `*.test.ts`, `*.spec.ts`, or the project's documented test location) and, when X names a specific test/function, that name appearing in the diff. If the diff touches **no** test file at all, the record claims a test that wasn't delivered → **discrepancy**. (Record-vs-reality only: a test that is present but weak is out of scope here — that's the reviewer's coverage judgment, not this gate's.)
 - **`no-test` → "plan said no-test-because-Z — does Z still hold?"** Re-read `Z` against the diff. `Z` **holds** when the diff's character still matches the stated rationale (pure rename/move, config-only, docs-only, covered by an existing named test, `manual_smoke:`-only) — **with the caveat that "config-only" and "docs-only" name a file's extension, not its consequence.** A semgrep rule, a `checks.yml` entry, a CI workflow, a lockfile pin and a lint config are all config, and each is behaviour a project checks; where the diff changes one of those, `Z` holds only if the rationale anticipated *that*, not merely that no `.py` file moved. `Z` is **stale** when the diff now carries behavior changes the rationale didn't anticipate (e.g. `Z` said "pure rename" but the diff edits logic) → **discrepancy**. This carries inherent judgment residue — acknowledged and bounded: you are matching the recorded rationale to the diff, **not** forming a fresh opinion that a test ought to exist.
-- **`missing` → record absent.** Invariant 13 already warned at validation time; the gap now reaches the merge gate → treat as a discrepancy to surface.
+- **`missing` → record absent.** This is the **first** notice, not a second one: nothing upstream warns on it any more (Phase 234 retired the validator's Invariant 13, which could not see this record at all from `main`). Treat as a discrepancy to surface.
 
 **3. On a clean match, pass silently** (carry a `verified` note for Step 8). **On any discrepancy, missing record, or unreadable body, halt and ask** via `AskUserQuestion` (one task at a time, mirroring Step 3c). Present the recorded decision text verbatim, the task ID, **the revision you read it from**, and what the diff shows. Three options (single-select):
 
@@ -517,7 +517,189 @@ Waivers and "record holds" do not block. Only "hold for fix" changes the verdict
 
 If the approved-branch set is empty (only unpushed main commits this cycle), Step 2d is a no-op — unpushed main commits don't carry `/claim-task` test-decision records. Skip cleanly.
 
-> **For new projects:** the test decision is authored at `/claim-task` Step 6 into the task body (`tasks/schema.md` § Test decision). This gate reads it back — keep the `Z` in a `no test because Z` rationale concrete so "does Z still hold?" stays answerable.
+> **For new projects:** the test decision is decided by `/claim-task`'s planner at Step 7a and written into the task body by the Step 7e executor during implementation — or, on the plan-only path, by Step 7f, which has no executor to do it later (`tasks/schema.md` § Test decision). This gate reads it back — keep the `Z` in a `no test because Z` rationale concrete so "does Z still hold?" stays answerable.
+
+### 2e. Claim-Artifact Report (report, never reject — Phase 237, part B leg 1)
+
+`/claim-task` Step 7 is an orchestrator: it spawns a planner, an independent reviewer, and an executor, and each stage leaves a file behind. This step **reports which of those files exist for each branch under review**. It is the close-path half of a pair: `/sitrep`'s `_claim_stall` probe (Phase 237, part B leg 2) is the other. They share the report-unknown rule below, not their artifact set — this step reads five run files plus the hook envelopes, the probe reads park markers plus `classification.md` and `outcome.md`.
+
+**It never changes a branch's disposition.** No verdict moves, no branch is rejected, nothing halts. That is a decision with an argument, not caution: a *rejecting* gate must know whether it applies, and getting that wrong is a false FAIL on work already done — which is exactly how the Phase-155 attempt died (a predicate inert on the review-batch claims it was reported for, a false FAIL on the dominant path, and 41 of 53 guard mutations surviving). A *reporting* step that mis-resolves prints "no artifacts found" beside a branch that has them: wrong, visible, and self-correcting. Sysop's settled pattern is **surface the ambiguous class, block the unambiguous one** (Phase 135 blocks `failed`, Phase 143 exits non-zero on a demonstrably-abandoned round, Phase 149 purely surfaces), and artifact absence is squarely the ambiguous class — see the rule below for why.
+
+> **Report unknown. Never report "did not run".** Absence of these files is **not** evidence that the pipeline was skipped, and a report that says otherwise accuses honest consumers:
+>
+> - `sysop/runtime/` is **gitignored**, so a fresh clone, a rebuilt worktree and a `--resume` after an overnight break all legitimately carry nothing.
+> - The envelope is written by the `SubagentStop` hook, which is **Claude Code only** — a Codex or other-harness consumer never produces one, however correctly the claim ran.
+> - A branch may not come from `/claim-task` at all (a hotfix, an `--adopt`, a hand-cut branch).
+>
+> So render three-valued — **present** / **absent** / **cannot tell** — and when the claim directory itself is missing, say *no artifact directory on disk* rather than anything about what ran. The unforgeability of this artifact set is a property of *a Claude Code run inspected before its runtime dir is gone*, not of the design.
+
+**Resolve the branch to a claim id from the lock, not from the branch name.** Branch names are not reversible: Step 3 of `/claim-task` auto-generates one from the task id, but `--branch <name>` and `tasks/index.yml`'s `branch:` field both override it, and a review batch's branch comes from `review_tasks.md`. The lock file is the reverse map that exists — it records `branch:` against its own `task_id` — and locks are still on disk at Step 2 (Step 4c removes them). A branch with no matching lock is reported as such; it is not an error.
+
+Run this once for the whole close, passing every branch Step 2a classified — **approved and rejected alike**, since a report changes nothing and a rejected branch's artifacts are exactly what a human wants when deciding what to do with it.
+
+```bash
+# `python3` command word + positional args — a single simple command, so `Bash(python3 -:*)`
+# matches. Substitute each branch name literally and QUOTED: unquoted, `<…>` is a
+# redirection to bash rather than a placeholder, and the script refuses an
+# unsubstituted one rather than reporting on a claim named `<branch>`.
+python3 - <<'PY' "<branch 1>" "<branch 2>" "<...one argument per branch under review...>"
+import json, re, subprocess, sys
+from pathlib import Path
+
+branches = [b for b in sys.argv[1:] if b.strip()]
+if any("<" in b for b in branches):
+    print("ERROR: placeholder not substituted: {!r}".format(branches), file=sys.stderr)
+    sys.exit(2)
+if not branches:
+    print("2e: no branches under review — nothing to report.")
+    sys.exit(0)
+
+common = subprocess.run(["git", "rev-parse", "--git-common-dir"],
+                        capture_output=True, text=True, check=True).stdout.strip()
+main_root = Path(common).resolve().parent
+runtime = main_root / "sysop" / "runtime"
+
+# branch -> [claim ids]. FIRST `branch:` line per lock wins, matching
+# `claim_task.sh`'s `awk '/^branch:/{...; exit}'` — a lock's free-text `notes:`
+# tail can carry a column-0 `branch:` line, and two readers of that field
+# disagreeing about which one counts is worse than either rule alone.
+# Ambiguity is REPORTED, not resolved: `/sitrep` has no duplicate-lock-branch
+# check (its duplicate check is on batch NUMBERS), so nothing else surfaces it.
+by_branch = {}
+locks_dir = runtime / "locks"
+if locks_dir.is_dir():
+    for lf in sorted(locks_dir.glob("*.lock")):
+        try:
+            lines = lf.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        fields = {}
+        for line in lines:
+            if not line or line[0].isspace() or line.startswith(("-", "#")):
+                continue
+            k, sep, v = line.partition(":")
+            if sep and k.strip() not in fields:
+                fields[k.strip()] = v.strip()
+        if fields.get("branch"):
+            by_branch.setdefault(fields["branch"], []).append(
+                fields.get("task_id") or lf.stem)
+
+# The five files Step 7-pre's own resume router treats as authoritative; with
+# the hook envelope(s) that is the six-artifact set. The spec's Q1 names four —
+# it predates Part A, which shipped `planner-integrity.md` and `outcome.md` as
+# first-class routing artifacts, so a four-item report is blind to the two files
+# answering "was the plan re-gated?" and "did the executor already run?".
+NAMES = ["plan.md", "planner-integrity.md", "review.md",
+         "classification.md", "outcome.md"]
+
+
+def verdict_of(path):
+    """Parse the FENCED body. Step 7c writes `json.dumps(...)` inside a yaml
+    fence, so the line on disk is `  "verdict": "PROCEED"` — a scan for a line
+    beginning `verdict:` matches nothing the shipped writer produces."""
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return "unreadable"
+    # `\x60{3}` rather than a literal fence: this block lives INSIDE a markdown
+    # fence, and three literal backticks here close it early — which silently
+    # reshuffles every later fence pair in the file. A shipped guard
+    # (`test_flag_contract.py`) caught exactly that, by then reading unrelated
+    # prose as a command block.
+    m = re.search(r"\x60{3}(?:yaml|json)?[^\n]*\n(.*?)\n\x60{3}", text, re.S)
+    if m:
+        try:
+            doc = json.loads(m.group(1))
+            if isinstance(doc, dict) and isinstance(doc.get("verdict"), str):
+                return doc["verdict"].strip()
+        except Exception:
+            pass
+    m = re.search(r'^[\s>*_-]*"?verdict"?:[\s*_"]*([A-Za-z_]+)',
+                  text, re.MULTILINE | re.IGNORECASE)
+    return m.group(1) if m else ""
+
+
+for branch in branches:
+    ids = by_branch.get(branch) or []
+    if not ids:
+        print("  {}: no lock names this branch — claim id unknown, "
+              "so no artifacts were looked for".format(branch))
+        continue
+    if len(ids) > 1:
+        print("  {}: AMBIGUOUS — {} locks name this branch ({}). Reporting none; "
+              "reconcile the locks first.".format(branch, len(ids), ", ".join(ids)))
+        continue
+    claim_id = ids[0]
+    claim_root = runtime / "claim" / claim_id
+    if not claim_root.is_dir():
+        print("  {} ({}): no artifact directory on disk — UNKNOWN, not "
+              "'did not run' (sysop/runtime/ is gitignored)".format(branch, claim_id))
+        continue
+    # Per-branch containment for every filesystem call below. One unreadable
+    # claim directory must not abort the whole report and take the healthy
+    # branches' rows with it — that is the Phase-219 shape, and this step's own
+    # three-valued rule makes an unreadable thing "cannot tell", not a crash.
+    try:
+        runs = sorted((q for q in claim_root.iterdir() if q.is_dir()), reverse=True)
+    except OSError as exc:
+        print("  {} ({}): claim directory unreadable ({}) — UNKNOWN"
+              .format(branch, claim_id, exc.__class__.__name__))
+        continue
+    if not runs:
+        print("  {} ({}): claim directory exists but holds no run — UNKNOWN"
+              .format(branch, claim_id))
+        continue
+    run = runs[0]
+    # Containment. This step only READS, so a symlinked run directory risks
+    # disclosure rather than damage — but reporting an arbitrary directory's
+    # contents as this claim's artifacts is a false report either way.
+    try:
+        if not run.resolve().is_relative_to(claim_root.resolve()):
+            print("  {} ({}): newest run {} resolves outside the claim root — "
+                  "skipped, not reported".format(branch, claim_id, run.name))
+            continue
+    except (OSError, ValueError):
+        print("  {} ({}): run path could not be resolved — UNKNOWN"
+              .format(branch, claim_id))
+        continue
+    extra = " (+{} older run(s))".format(len(runs) - 1) if len(runs) > 1 else ""
+    try:
+        present = [n for n in NAMES if (run / n).is_file()]
+    except OSError:
+        print("  {} ({}) run {}: artifacts unreadable — UNKNOWN"
+              .format(branch, claim_id, run.name))
+        continue
+    absent = [n for n in NAMES if n not in present]
+    # Both shapes Step 7-pre globs: the phased `<CLAIM_ID>.<phase>.json` the
+    # build emits, and the bare `<CLAIM_ID>.json` that predates `PHASE:`.
+    env_dir = runtime / "subagent-envelopes"
+    try:
+        envs = sorted(set(env_dir.glob(claim_id + ".*.json"))
+                      | set(env_dir.glob(claim_id + ".json"))) if env_dir.is_dir() else []
+        # An envelope the hook wrote but could not key lands under a different
+        # name. Count those, so absence is never attributed to "the harness does
+        # not write these" when one WAS written and simply failed to key.
+        stray = len([q for q in env_dir.glob("*.json")
+                     if q not in envs]) if env_dir.is_dir() else 0
+    except OSError:
+        envs, stray = [], 0
+    print("  {} ({}) run {}{}".format(branch, claim_id, run.name, extra))
+    print("      present: " + (", ".join(present) or "none"))
+    print("      absent:  " + (", ".join(absent) or "none"))
+    if envs:
+        print("      hook envelopes: " + ", ".join(q.name for q in envs))
+    elif stray:
+        print("      hook envelopes: none matched this claim id ({} other envelope "
+              "file(s) in the mailbox — check whether one failed to key)".format(stray))
+    else:
+        print("      hook envelopes: none on disk — Claude Code only, and transient")
+    cls = run / "classification.md"
+    print("      verdict: " + (verdict_of(cls) if cls.is_file()
+                               else "no classification.md in this run"))
+PY
+```
+
+**Read the block into the Step 8 report — the `Orchestrator artifacts:` line, not `Claim artifacts:`, which is Step 4c's removal tally — and continue.** Nothing here gates anything: a branch with every artifact absent proceeds exactly as it would have, and a branch with every artifact present is not thereby approved. If a consumer ever reports a run where the artifacts were absent, the report was ignored, and the branch merged anyway, *that* is the evidence for revisiting a blocking form — and it should be revisited here, never at `/document-work`, whose Phase-155 hard fail punished at the worst possible moment, after implementation.
 
 ## Step 3: Run Verification
 
@@ -588,7 +770,7 @@ Some features can't be verified by automated checks — UI flows that need a bro
 
 > **Three detection sources, because a phrase list was one.** The gate matched two exact phrases — `manual smoke` and `smoke required` — so a pending doc headed `OPERATOR ACTION REQUIRED BEFORE MERGE`, describing a hard irreversible pre-merge step, scored `NO_SMOKE_REQUIRED` and the close proceeded without ever prompting. Unlike every other gate in this skill the failure was silent *and* terminal: nothing downstream notices the operator was not asked, and the action is by construction the one that cannot be undone after merge. The heading list is now longer, but a longer allowlist over free prose is still an allowlist, so **two of the three sources do not depend on phrasing at all**:
 >
-> 1. **A matching heading** in a pending doc, or in the body of a task this close covers. Widened phrase set; `## User ops (do these first)` is deliberately excluded, because that heading declares *post*-merge operator steps and firing a pre-merge gate on the whole `user_action: true` class would train the operator to waive wholesale.
+> 1. **A matching heading** in a pending doc, or in the body of a task this close covers. Widened phrase set; `## User ops (do these first)` is deliberately excluded, because `user_action: true` is a **large, routine class** whose wholesale prompting would train the operator to waive. That reason is timing-independent and is the whole of it. An earlier form of this sentence also asserted a POST-merge timing that nothing in the tree supports, retired in Phase 235 — see `tasks/schema.md` § "User ops", which carries the correction and is the only place that quotes the retired wording. A step that must happen before *merge* is `manual_smoke:`, which sources 2 and 3 below detect regardless of heading.
 > 2. **`manual_smoke: true` in a pending doc's own frontmatter** — signals whatever the doc's headings say.
 > 3. **`manual_smoke: true` on the `tasks/index.yml` entry** — and it now signals **even when the body carries no matching heading, no readable `body:`, or no `body:` at all.** A declaration is the ask; a missing procedure makes the ask louder, not absent.
 >
@@ -750,9 +932,11 @@ search_dirs.append(repo / "sysop/runtime/pending-docs")
 # MERGE` scored NO_SMOKE_REQUIRED and the close proceeded without ever asking (reported
 # by a consumer). A false positive here costs one AskUserQuestion with a
 # waive option; a false negative is a human never asked about an irreversible step.
-# `user ops` is DELIBERATELY not in this set — `user_action: true` declares POST-merge
-# operator steps (tasks/schema.md § "User ops (do these first)"), a large routine class,
-# and firing the pre-merge gate on it would train the operator to waive wholesale.
+# `user ops` is DELIBERATELY not in this set — `user_action: true` is a large, routine
+# class, and prompting on all of it would train the operator to waive wholesale. That
+# reason is timing-independent and is the whole of it (tasks/schema.md § "User ops"; an
+# earlier form also claimed POST-merge timing, which nothing in the tree supports).
+# A step that must precede the MERGE is `manual_smoke:`, detected by sources 2 and 3.
 heading_re = re.compile(
     r'^(#{1,6})\s+.*('
     r'manual\s+smoke'
@@ -1643,7 +1827,25 @@ Feature branches MAY modify `review_tasks.md` — typically as single-line task-
 
 ### 4b. Close Merged Batches
 
-After all branches are merged and `4a-post` reported green, but **before** doc consolidation:
+After all branches are merged and `4a-post` reported green, but **before** doc consolidation.
+
+**Determine the batch set first — this step never said where `<N1> <N2> <N3>` come from.** The set is the review batches whose branches step 5 actually merged this run, and **the source is `review_tasks.md`**, read through `bash sysop/scripts/review_index.py --list` — which prints every batch with its status and its branch, tab-separated. Intersect that branch column with the branches step 5 merged.
+
+**The locks corroborate; they do not define the set.** `batch_work.sh` writes `sysop/runtime/locks/BATCH-<N>.lock` carrying `task_id: BATCH-<N>` and the `branch:` it claimed, and `close_batch.sh` removes it at close — so a lock is good evidence a batch is in flight, and worth cross-checking against. But **a merged batch with no lock is an ordinary state, not an anomaly**: `close_batch.sh` says so in its own words when it finds none — *"claimed before batch locks shipped, or already released"*. Deriving the set from locks alone therefore drops exactly those batches, and because the empty-set arm below then fires, the close reports `none this cycle` over a batch left `Pending` with its boxes open. That trades this step's old failure — a loud halt — for a silent false record, which is the worse direction. **Where the two disagree, `review_tasks.md` wins and the discrepancy is reported.**
+
+Two lock shapes to be aware of when cross-checking, because both fail quietly: two locks naming the same branch both match, and a lock whose free-text `notes:` tail carries a second column-0 `branch:` line is read differently by a `grep`-style reader (first wins, or nothing) than by PyYAML (last wins). Neither is a reason to prefer locks as the source; both are reasons the corroboration step reports rather than resolves.
+
+**Do not read `review_task_ids` for this.** It is the obvious-looking candidate in the pending-doc frontmatter and it is the wrong namespace — it holds `TASK-NNNN` ids from `review_tasks.md`, and `close_batch.sh` takes a batch number — bare, zero-padded, or the `BATCH-<N>` form, and nothing else. Verified by running it rather than reasoned about: `BATCH-1` is accepted (the prefix is stripped), while `close_batch.sh TASK-0001` is rejected at **argument parsing** — `❌ Unknown argument: TASK-0001`, exit 1 — so it never reaches a batch lookup at all. "It takes integers" is the tempting shorthand and it is wrong in the direction that matters, because it implies the `BATCH-` form fails too. Three shipped sites already say so, which is why this is a convergence and not a new rule: Step 4c's routing note (*"`review_task_ids` is documentary only and never consulted here"*), `/document-work`'s two-namespace section, and `close_batch.sh`'s own `remove_claim_artifacts()` comment (*"Step 4c has no batch-id list to iterate"*).
+
+**The empty set is the ordinary case, not an edge case, and it has its own arm — but it must be *derived*, never inferred from absence.** A `/claim-task` single-task cycle carries no review batch at all, which is the dominant path rather than a corner of it. **Empty means `review_index.py --list` named no batch whose branch step 5 merged** — a positive reading of the authoritative file. It does **not** mean "no locks were found": that is the false-empty above, and it turns a missed batch into a clean-looking report. When the set is genuinely empty: report the one line
+
+```
+4b: no review batches this cycle
+```
+
+run nothing, and **skip the landing gate below** — go straight to Step 4c. Running the script anyway is not the escape: with no operands it exits 1 on `❌ No batch numbers provided.` and commits nothing, so an empty set has no shape in which this step succeeds. The gate looks for a `docs: close Batch …` tip that a zero-batch cycle never produces and never will, so applying it here halts a healthy close permanently, *after* step 5's merges have landed on the integration branch, which is the expensive place to stop. It also stops the compliant agent specifically: the operator who infers a no-op gets through, and the one who follows the step as written does not. Naming the did-not-run state rather than falling silent is the shape Step 2b's `N skipped (doc-only)` and `4a-post`'s `ran nothing: why` already use.
+
+With a non-empty set:
 
 ```bash
 bash sysop/scripts/close_batch.sh <N1> <N2> <N3>
@@ -1651,7 +1853,13 @@ bash sysop/scripts/close_batch.sh <N1> <N2> <N3>
 
 This script updates `review_tasks.md` on the checked-out branch (the merge target — it resolves the repo via `git rev-parse --show-toplevel`, so it commits to whatever branch is current): sets batch headers to `Merged`, marks task checkboxes `[x]`, updates the Statistics table, and adjusts the Grand Total counts. **One exception:** a task annotated `> Failed:` anywhere in its own block keeps its checkbox and is left out of both the flip and the counts. **The block is the task line plus the indented lines under it**, because `/codebase-review` and `/security-audit` emit a two-line task (checkbox + indented `file:line` + provenance) and the annotation lands below that — the one-line reading this sentence used to state was why the protection could not fire at all — a FAIL verdict means the work was attempted and not finished, so the batch closes as "shipped, minus these" (Phase 157). Expect the per-batch line to read `(3 tasks closed, 1 failed — still open)` when that happens. One commit is created for all closed batches.
 
-**Under `pr` policy, always pass `--force`** — in *both* Step 4-pre shapes. The script's gate is `git merge-base --is-ancestor <batch branch> main` against the literal `main`, and under `pr` policy nothing has reached local `main` yet at this point: the integration branch is cut from `origin/main` and is not a descendant of the batch commit tips, and a reused PR branch is by definition still unmerged. Either way the ancestry check would reject the close. (`--force` skips that check; it is the documented escape and lands the close commit on whichever branch is checked out.)
+**Under `pr` policy's integration-branch shape you no longer need `--force` for the ancestry reason** (changed 2026-08-26, `Q-020`; the PR-reuse shape still does — see below). The script's gate used to be `git merge-base --is-ancestor <batch branch> main` against the literal `main`, while the merge it verifies lands in whatever branch is checked out — under `pr` that is the integration branch, cut from `origin/main`, and nothing reaches local `main` until Step 4d. A correctly-merged branch therefore always failed the check, so this step mandated `--force` on every `pr` close — which also silences the cherry-pick detection, disarming the gate for precisely the consumers it exists to protect. **An unmerged branch was indistinguishable from a merged one on the dominant path.**
+
+The gate now resolves against `HEAD` first, with `main` retained as a fallback, so it accepts everything it accepted before plus the `pr`-policy merges it was wrongly refusing. Run Step 4b **without** `--force` and let the gate answer.
+
+**The two Step 4-pre shapes differ here, and the round corrected this paragraph for claiming otherwise.** *Integration-branch shape:* Step 4a merges each batch branch into the integration branch, which is checked out here, so the batch branch is STRICTLY contained in `HEAD` and the gate passes with no `--force` (measured: `--is-ancestor … main` false, `… HEAD` true, on the same fixture). *PR-reuse shape:* `HEAD` **is** the approved branch, so containment is trivially true and therefore says nothing — the gate requires STRICT containment for exactly that reason, and **reuse still needs `--force`.** An earlier draft of this paragraph claimed both shapes were covered; the round reproduced the consequence — checked out on an unmerged batch branch, the gate printed `✓ verified merged` and flipped the header. Before the PR squashes there is no ancestry evidence that the work landed, which is what Step 6 already says in its own words: *"After a squash there is no ancestry-shaped containment test."*
+
+> **If a batch skips with `unmerged`, that is now a real verdict — read it before overriding it.** Under `pr` policy it means the batch branch is an ancestor of neither the checked-out merge target nor `main`, i.e. Step 4a did not merge it. Fix that rather than forcing past it. The one legitimate override is below: work that reached the target by **cherry-pick** rather than merge is genuinely not an ancestor, and `--force` is its documented escape.
 
 If any branches were cherry-picked instead of rebased+merged (e.g., because worktree removal wasn't possible), use `--force` to skip the merge-base ancestry check:
 
@@ -1659,13 +1867,13 @@ If any branches were cherry-picked instead of rebased+merged (e.g., because work
 bash sysop/scripts/close_batch.sh --force <N1> <N2> <N3>
 ```
 
-**Verify the close-batch commit landed before proceeding.** The script wraps its `git commit` in explicit failure handling (Phase 33 / BeanRider ISSUE-0015), but trust-but-verify: confirm a `docs: close Batch …` commit is the new tip and the working tree is clean before continuing to Step 4c.
+**Verify the close-batch commit landed before proceeding — non-empty batch set only.** The script wraps its `git commit` in explicit failure handling (Phase 33 / BeanRider ISSUE-0015), but trust-but-verify: confirm a `docs: close Batch …` commit is the new tip and the working tree is clean before continuing to Step 4c. **If the batch set was empty this gate does not apply and was already skipped above** — it asserts the result of a command this cycle correctly did not run, so reaching it with no batches is a reading error, not a failed close.
 
 ```bash
 git log -1 --pretty=%s | grep -q '^docs: close Batch ' && git diff --quiet && git diff --cached --quiet
 ```
 
-If the check fails (no `docs: close Batch …` tip, or `review_tasks.md` is still modified/staged): the close-batch commit did NOT land. **Halt before Step 4c** — proceeding would fold the close-batch edits silently into the doc-consolidation commit instead of their own atomic commit, and ordering ("after merge but before doc consolidation") is broken. Inspect the script's stderr output (most commonly a pre-commit-hook failure — see Step 4d's venv-prefix pattern). The script's terminal `── close_batch.sh completed — close-batch commit present: N` line (Phase 43a / BeanRider ISSUE-0039) survives tail-truncation and tells you whether the script aborted silently (line absent) or completed with no commit landed (`present: 0`). Two recovery paths, in order:
+If the check fails **on a non-empty batch set** (no `docs: close Batch …` tip, or `review_tasks.md` is still modified/staged): the close-batch commit did NOT land. **Halt before Step 4c** — proceeding would fold the close-batch edits silently into the doc-consolidation commit instead of their own atomic commit, and ordering ("after merge but before doc consolidation") is broken. Inspect the script's stderr output (most commonly a pre-commit-hook failure — see Step 4d's venv-prefix pattern). The script's terminal `── close_batch.sh completed — close-batch commit present: N` line (Phase 43a / BeanRider ISSUE-0039) survives tail-truncation and tells you whether the script aborted silently (line absent) or completed with no commit landed (`present: 0`). Two recovery paths, in order:
 
 1. **Re-run the script** with the same batch list — the rerun is idempotent for review_tasks.md (sed substitutions are no-ops on already-Merged batches) and will re-attempt the commit:
    ```bash
@@ -1753,7 +1961,7 @@ After all branches are merged but **before** pushing:
 
 4. **Route by type and write to shared docs** (single pass, no conflicts since we're on main post-merge):
 
-   Use this routing table to determine which shared docs to update for each entry. The "Roadmap" column shows which frontmatter field drives the `tasks/index.yml` round-trip; `review_task_ids` is **documentary only** and never consulted here (review-task closure happens in Step 4b via `bash sysop/scripts/close_batch.sh`).
+   Use this routing table to determine which shared docs to update for each entry. The "Roadmap" column shows which frontmatter field drives the `tasks/index.yml` round-trip; `review_task_ids` is **documentary only** and never consulted here (review-task closure happens in Step 4b via `bash sysop/scripts/close_batch.sh`) — **nor is it consulted there**, which this sentence used to leave open: Step 4b derives its batch set from the `BATCH-*.lock` files, because these are `TASK-NNNN` ids and that script takes batch integers. Until Phase 239 neither step named a source, so the two pointed at each other.
 
    | Type | PROJECT_STATUS | Changelog | UI_Iterations | Roadmap (`roadmap_ids`) |
    |---|---|---|---|---|
@@ -1796,7 +2004,7 @@ After all branches are merged but **before** pushing:
    # Phase 126) so `Bash(python3 -:*)` matches as a single simple command — no PATH prefix,
    # no `&&` compound, no `.venv/bin/python3` (none of which match that rule).
    python3 - <<'PY'
-   import datetime, os, subprocess, sys
+   import datetime, os, shutil, subprocess, sys
    try:
        import yaml
    except ImportError:  # PyYAML lives only in the project venv (BeanRider ISSUE-0049)
@@ -1904,6 +2112,7 @@ After all branches are merged but **before** pushing:
    # Keyed on the task id, not the body shape, so archive_summary and flat-layout
    # closes — which `continue` past the move above — are still cleaned up.
    locks_removed, locks_absent, markers_removed = [], [], []
+   artifacts_removed, artifacts_failed = [], []
    for tid in closed:
        # Drop the per-task lock file (BeanRider ISSUE-0035). The lock's lifecycle
        # is open → in_progress (claim_task --lock creates it) → done (here). Leaving
@@ -1933,6 +2142,61 @@ After all branches are merged but **before** pushing:
        for marker in Path('sysop/runtime/parked').glob(f'{tid}__*.md'):
            markers_removed.append(marker.name)
            marker.unlink(missing_ok=True)
+       # And the orchestrated-claim artifact set. Since Phase 171 /claim-task writes
+       # sysop/runtime/claim/<CLAIM_ID>/<RUN_ID>/ (plan.md, review.md, classification.md,
+       # ...) into the MAIN checkout so it outlives `git worktree remove` — and until
+       # Phase 236 NOTHING removed it, for either claim kind, so it grew one directory
+       # per run of every claim ever made. This is the roadmap half; the batch half is
+       # `close_batch.sh`'s remove_claim_artifacts(), because `closed` is built from
+       # `roadmap_ids` only and no batch id can reach this loop.
+       #
+       # `tid` comes from the id list this step parsed, so it is not free text — but
+       # this is the one `rm -rf`-shaped operation in the close path, so it is guarded
+       # rather than trusted: a `tid` that ever contained a separator or `..` would walk
+       # the delete out of sysop/runtime/claim/ entirely. Resolve and re-check
+       # containment before removing anything.
+       claim_root = Path('sysop/runtime/claim')
+       claim_dir = claim_root / tid
+       try:
+           inside = claim_dir.resolve().parent == claim_root.resolve()
+       except OSError:
+           inside = False
+       # `inside` gates BOTH arms. The first cut of this block gated only the rmtree
+       # and let the symlink arm run unguarded, so a `tid` of `../../../escaped_link`
+       # unlinked a symlink at the repo root and REPORTED it as a claim artifact —
+       # reproduced by this phase's round, against a comment claiming containment was
+       # re-checked "before removing anything".
+       if not inside:
+           pass
+       elif claim_dir.is_symlink():
+           # Remove the LINK, never what it points at — the target may be anything.
+           try:
+               claim_dir.unlink(missing_ok=True)
+               artifacts_removed.append(tid)
+           except OSError as e:
+               artifacts_failed.append(f'{tid} ({e.__class__.__name__})')
+       elif claim_dir.is_dir():
+           # NEVER let this raise. This loop's own contract, stated at its head, is that
+           # an abort mid-loop must not have already destroyed an earlier task's records —
+           # and every other operation here is non-raising by construction
+           # (`unlink(missing_ok=True)`, `glob`). `shutil.rmtree` over a user tree is the
+           # first that realistically raises, and when this phase's round made one claim
+           # directory unremovable the whole heredoc exited 1 with an earlier task's
+           # unrecreatable park marker already gone, a later task's lock never cleaned,
+           # the index staged, and — worst — NONE of the six report rows printed, which
+           # puts Step 8 straight back to supplying them from memory. Record the failure
+           # and keep going; a leftover directory under a gitignored path is a tidy-up,
+           # a half-done close is not.
+           try:
+               shutil.rmtree(claim_dir)
+               artifacts_removed.append(tid)
+           except OSError as e:
+               artifacts_failed.append(f'{tid} ({e.__class__.__name__})')
+       elif claim_dir.exists():
+           # A regular file where a directory belongs. Neither arm above owns it, and
+           # silently printing "never ran the pipeline" would state a specific, false
+           # cause. Say what was actually found.
+           artifacts_failed.append(f'{tid} (not a directory)')
    # Report what this code DID. Until Phase 219 this heredoc printed nothing at all,
    # while Step 8 asked it for three values — so the agent supplied them from its memory
    # of what it intended, which is not the same list. Two of these are not derivable
@@ -1947,6 +2211,8 @@ After all branches are merged but **before** pushing:
    print('LOCKS_REMOVED: ' + (' '.join(locks_removed) or '(none)'))
    print('LOCKS_ALREADY_ABSENT: ' + (' '.join(locks_absent) or '(none)'))
    print('PARKED_MARKERS_REMOVED: ' + (' '.join(sorted(markers_removed)) or '(none)'))
+   print('CLAIM_ARTIFACTS_REMOVED: ' + (' '.join(sorted(artifacts_removed)) or '(none)'))
+   print('CLAIM_ARTIFACTS_FAILED: ' + (' '.join(sorted(artifacts_failed)) or '(none)'))
    PY
    # Read this BEFORE the validator line below. The heredoc rewrites `tasks/index.yml`,
    # `git add`s it, and only then cleans locks and markers — so a crash in the tail
@@ -2262,6 +2528,11 @@ Pushed:        <under `direct`: the SHA Step 4d confirmed. Under `pr`: the squas
                SHA and its PR number — "<N> commits" is not a quantity that exists on
                that path, where `main` gains exactly one commit however many merged.>
 Branches:      <merged list> (or "none")
+Batches:       <the batch set Step 4b determined, and what it did — "closed N1, N2"
+               / "none this cycle — 4b skipped" / "N closed, M failed — still open">.
+               Never blank: a skipped Step 4b used to leave no trace anywhere in this
+               report, so a close that silently never reached it read exactly like one
+               that had no batches to close.
 Docs:          Consolidated <N> pending-docs files (or "none" / "legacy docs: commits")
 Manual smoke:  <N confirmed, N driven, N waived> (or "none required")
 Verification:  pre-merge <ran | skipped: doc-only | skipped: no changed-file list>;
@@ -2274,6 +2545,12 @@ Verification:  pre-merge <ran | skipped: doc-only | skipped: no changed-file lis
 Unverified surfaces: <changed code files no detected surface claimed> (or "none")
 Conventions:   <N checked, N skipped (doc-only)> (or "none to check")
 Test decisions: <N verified, N waived, N held-for-fix, N unreadable, N doc-only> (or "none to verify")
+Orchestrator artifacts: <Step 2e's per-branch block, verbatim> (or "none — no branch
+               under review resolved to a claim"). Distinct from `Claim artifacts:`
+               below, which is Step 4c's REMOVAL tally: this line is Step 2e's
+               pre-merge READ. It is a report — no line here moved a verdict, and an
+               `absent` row means UNKNOWN, never that a stage was skipped, because
+               sysop/runtime/ is gitignored and the hook is Claude Code only.
 Staging:       <verified / skipped / broken>
 Superseded PRs: <branch #PR, …> (or "none") — published branches whose own PR this
                close bypassed by merging through the integration branch. Still open,
@@ -2282,6 +2559,9 @@ Superseded PRs: <branch #PR, …> (or "none") — published branches whose own P
 Locks cleaned: <the `LOCKS_REMOVED` ids Step 4c printed> (or "none")
                <and, when non-empty, `already absent: <LOCKS_ALREADY_ABSENT ids>`>
 Parked markers: <the `PARKED_MARKERS_REMOVED` filenames Step 4c printed> (or "none")
+Claim artifacts: <the `CLAIM_ARTIFACTS_REMOVED` ids Step 4c printed> (or "none")
+               <and, when non-empty, `could not remove: <CLAIM_ARTIFACTS_FAILED>` — a
+                leftover under a gitignored path, not a failed close>
 Friction:      <N entries appended to SYSOP_ISSUES.md> (or "none" / "log missing")
 Signal:        <N [good] entries appended> (or "none")
 

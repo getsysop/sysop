@@ -60,6 +60,7 @@ FATAL = [
     "sitrep_survey.py",
     "next_task.py",
     "backfill_completed_dates.py",
+    "clear_user_action.py",
 ]
 # The one whose resolution is deliberately non-fatal: every yaml use in it is a
 # local import on a documented degrade path.
@@ -247,6 +248,11 @@ _RESOLVED = {
     "sitrep_survey.py": (0, "SITREP"),
     "next_task.py": (0, "## Next Task"),
     "backfill_completed_dates.py": (0, "done task(s) without completed_date"),
+    # Phase 237. The marker is the DRY-RUN line, which names the task and the
+    # transition — output only a successful parse of the index can produce.
+    # A `--help` arm would pass with the resolution deleted, which is the trap
+    # the backfill arm above already records.
+    "clear_user_action.py": (0, "would set FEAT-UA user_action: true"),
 }
 
 
@@ -315,6 +321,36 @@ class TestItActuallyResolves:
         r = _run(consumer / "sysop/scripts/backfill_completed_dates.py", "--dry-run",
                  cwd=consumer, py=yamlless_python)
         _assert_resolved("backfill_completed_dates.py", r)
+
+    def test_clear_user_action_resolves(self, consumer, yamlless_python):
+        """Phase 237's `user_action` clearing helper.
+
+        Writes its OWN task rather than flagging the shared `FEAT-A`: that task
+        is asserted on by `test_next_task_resolves`, and `user_action: true`
+        would drop it out of the agent pool — a fixture edit that silently
+        weakens a sibling proof is the same class this module exists to catch.
+        """
+        _fake_venv(consumer)
+        index = consumer / "tasks" / "index.yml"
+        index.write_text(
+            index.read_text()
+            + "  - id: FEAT-UA\n    status: open\n    phase: 1\n"
+              "    effort: Low\n    user_action: true\n    body: ua.md\n"
+        )
+        r = _run(consumer / "sysop/scripts/clear_user_action.py", "--dry-run",
+                 "FEAT-UA", cwd=consumer, py=yamlless_python)
+        _assert_resolved("clear_user_action.py", r)
+        assert index.read_text().count("user_action: true") == 1, (
+            "--dry-run wrote to the index"
+        )
+
+    def test_clear_user_action_still_fails_loudly_with_no_venv(
+            self, consumer, yamlless_python):
+        r = _run(consumer / "sysop/scripts/clear_user_action.py", "FEAT-A",
+                 cwd=consumer, py=yamlless_python)
+        assert r.returncode == 2, (r.returncode, r.stdout, r.stderr)
+        assert "requires PyYAML" in r.stderr
+        assert "python3 -m venv .venv" in r.stderr
 
     def test_scope_overlap_runs_under_a_resolved_interpreter(
             self, consumer, yamlless_python):

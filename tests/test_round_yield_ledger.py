@@ -167,7 +167,13 @@ def row_problems(ledger: str) -> list[str]:
         empties = [i for i, c in enumerate(cells) if not c]
         if empties:
             problems.append(f"row {n} has empty cells at positions {empties}")
-        drafts = [c for c in cells if re.search(r"\b(?:pending|provisional|tbd)\b", c, re.I)]
+        # Code spans are content, not drafting. Phase 239's row names the batch
+        # status `Pending` — a legitimate quoted value — and reddened this check.
+        # Rewording the row around a guard is how a guard stops meaning anything,
+        # so strip code spans before looking for draft markers instead.
+        drafts = [c for c in cells
+                  if re.search(r"\b(?:pending|provisional|tbd)\b",
+                               re.sub(r"`[^`]*`", "", c), re.I)]
         if drafts:
             problems.append(f"row {n} still carries draft cells {drafts} — finalize before closing the phase")
 

@@ -288,6 +288,17 @@ Iterate candidates in sorted order. For each, BEFORE adding to batch, check:
       task (weight 16) exceeds it, and all architectural tasks already
       solo via `a.` regardless of weight. Retained for
       correctness/headroom, and it re-arms if K is ever reverted.]
+   d. solo == true  (index field; absent/false means no)
+      [Phase 235, Q-235. The task mutates state shared OUTSIDE the
+      filesystem view — a global lockfile, a singleton registry, a live
+      schema, a shared fixture corpus — so disjoint paths do not make it
+      safe to run alongside anything. This is the one solo condition that
+      is NOT derivable from the tree: `blast_radius` grades surface area
+      and scope_overlap.py grades path overlap, and neither can see it.
+      Invariant `b.` is the hardcoded special case (SQL migrations found by
+      body-text grep) and stays — dropping it would silently unprotect
+      every existing task that never declares the field. Read from the
+      index entry, so unlike `b.` this opens no file.]
    [High-effort tasks are NOT solo — dropped per gdp 04cc2c84 (2026-05-21).
    Six weeks of mined data showed zero conflicts attributable to High-effort
    pairings while the gate was the binding parallelism constraint. High
@@ -314,7 +325,7 @@ Otherwise ADD candidate to batch and continue.
 
 **Worked-example fixtures** (sanity-check reference; the model should be able to reproduce these on demand):
 
-> Examples A–G assume no candidate unblocks another (every `unlock_count` = 0), so the Step 1 sort reduces to effort-ascending then id — the pre-unblocker-first order — and "first candidate" reads as before. Example H shows how a non-zero `unlock_count` reorders the pool.
+> Examples A–G and I assume no candidate unblocks another (every `unlock_count` = 0), so the Step 1 sort reduces to effort-ascending then id — the pre-unblocker-first order — and "first candidate" reads as before. Example H shows how a non-zero `unlock_count` reorders the pool.
 
 - **Example A** — 4× Low + single-file → batch of 4 (sum = 4.0, under K=12). Take all four; the N=4 count ceiling stops further additions (the sum ceiling is slack here — N binds first).
 - **Example B** — 2× Medium + single-module (each weight 3.0) → sum = 6.0, under K=12. Subsequent Low + single-file candidates keep fitting under the sum ceiling until the N=4 count ceiling binds: +Low (7.0, batch 3), +Low (8.0, batch 4 → N=4 STOP). At K=12 the count ceiling, not the sum ceiling, is the binding gate for small-weight tasks. (Under the old K=6 ceiling this example STOPped at sum 6.0 with just the two Mediums.)
@@ -324,6 +335,7 @@ Otherwise ADD candidate to batch and continue.
 - **Example F** — First candidate is High + single-file (weight 4 × 1 = 4.0, under K=12). No solo invariant fires (architectural rule does not match single-file; migrations rule does not match the body; heavy-solo `c.` needs weight > 12). Take it. A subsequent Low + single-file (weight 1.0) fits cleanly (4.0 + 1.0 = 5.0, under K=12) — the High task pairs with the Low task. Further additions are throttled by the **N=4 count ceiling** before the K=12 sum ceiling: another Low + single-file (5.0 + 1.0 = 6.0, batch 3) still fits; a Medium + single-module after that (6.0 + 3.0 = 9.0, under K=12, batch 4 → N=4 STOP). At K=12 the count ceiling binds first for this mix. (Under the old K=6 ceiling the sum reached the ceiling first and STOPped on weight, not count.)
 - **Example G** — First candidate is High + cross-module (weight 4 × 2.5 = 10.0). At K=12 this **no longer trips the heavy-solo invariant `c.`** (10.0 ≤ 12), so — unlike under the old K=6 ceiling, where `c.` forced it solo — the task is taken and can pair: a subsequent Low + single-file (1.0) fits (10.0 + 1.0 = 11.0, under K=12). The cross-module cap (rule 2) would permit a second cross-module task, but here the **sum ceiling binds first** — even the lightest cross-module task (Low + cross-module = 2.5) would push the sum to 12.5 > 12 → STOP — so this batch pairs the heavy task with a single-file Low only. This is the loosened gate's intended change: High × cross-module tasks were the single largest source of forced-solo batches under K=6 (historically, weight 10.0 > K=6 tripped `c.` and forced this shape solo; before rule `c` existed it hit rule 3's STOP-with-empty-batch and `/auto-build` refused to run).
 - **Example H (unblocker-first ordering)** — Active-phase open candidates: `TECH-A` (Low + single-file, weight 1.0, **unlocks 0**), `TECH-B` (Low + single-file, weight 1.0, **unlocks 0**), `TECH-C` (Medium + single-module, weight 3.0, **unlocks 3** — three open same-phase tasks list `TECH-C` in `depends_on`). The Step 1 sort key `(unlock_count desc, effort asc, id)` orders them **`TECH-C`, `TECH-A`, `TECH-B`** — `TECH-C` leads on `unlocks=3` despite being the heaviest and highest-effort; the two leaves tie at `unlocks=0` and fall through to effort-then-id. (Pre-unblocker-first the order was `TECH-A`, `TECH-B`, `TECH-C`.) At the default N=4 all three fit (sum 3.0 + 1.0 + 1.0 = 5.0 < K, count 3 ≤ 4) → same batch *set*, only the claim order differs, so nothing observable changes downstream. **The reorder changes which tasks get claimed only when a ceiling binds:** force `N=2` and the new order claims **`TECH-C` + `TECH-A`** (the unblocker + one leaf; sum 4.0, count 2 stops the rest), leaving `TECH-B`; the old order claimed **`TECH-A` + `TECH-B`** (both leaves), leaving the unblocker `TECH-C` for a later cycle. Claiming `TECH-C` now makes its three dependents eligible next cycle — the pool-enlarging lookahead the sort exists for. **Tradeoff:** unblocker-first spent part of this batch's budget on a heavier task (weight 3.0) ahead of a 1.0 leaf to widen the *next* cycle's pool. When the unblocker is itself a heavy-solo (weight > K, rule `1c`), unblocker-first only changes the order it is *considered* — it still claims alone; the solo invariants and ceilings are unchanged by the sort.
+- **Example I (`solo: true`)** — First candidate is `TECH-LOCKFILE`: Low + single-file, weight 1.0, `solo: true`. Nothing about its *shape* would solo it — `a.` needs `architectural`, `b.` needs a migration in the body, `c.` needs weight > 12, and at 1.0 it is the lightest thing in the pool — but invariant `d.` fires on the declared field, so the batch is **1** and batching STOPs. This is the case the other three invariants structurally cannot reach: the task regenerates a shared lockfile every module resolves against, so a second task editing a completely unrelated file still races it. Had `TECH-LOCKFILE` been considered *second*, with a batch already non-empty, it would have been SKIPped and left for a later cycle — same semantics as `a.`/`b.`/`c.`.
 
 ## Step 3: Surface DB-Contention Warning
 
@@ -484,7 +496,6 @@ In a **single message**, spawn `min(N, len(batch))` plan-only agents via paralle
 
 - `subagent_type`: `"general-purpose"`
 - `model`: `"opus"`
-- `run_in_background`: `true`
 - Do NOT set `isolation: "worktree"`.
 - `description`: `"Plan <TASK_ID>"`
 - `prompt`: the **Plan-Only Agent Prompt** in Step 7a, filled with `(task_id, worktree_path, branch_name)`.
@@ -524,9 +535,8 @@ For each task whose plan-only agent returned cleanly (no Phase-6a violation), sp
 
 - `subagent_type`: `"general-purpose"`
 - `model`: `"opus"`
-- `run_in_background`: `true`
 - `description`: `"Adversarial plan review <TASK_ID>"`
-- `prompt`: the **Adversarial-Reviewer Agent Prompt** in Step 7b — the `PLAN_TEXT[<TASK_ID>]` verbatim, followed by the Prompt Template block from `.claude/skills/_shared/adversarial-review.md`.
+- `prompt`: the **Adversarial-Reviewer Agent Prompt** in Step 7b — the `PLAN_TEXT[<TASK_ID>]` **re-emitted in full**, followed by the Prompt Template block from `.claude/skills/_shared/adversarial-review.md`. See the note under Step 7b on what "in full" can and cannot mean here.
 
 When each reviewer returns, store its findings as `RAW_FINDINGS[<TASK_ID>]`.
 
@@ -596,7 +606,58 @@ For each task:
 
   The UTC timestamp keys the filename: a task parks at most once per cycle and cycles run minutes apart, so `<TASK_ID>__<timestamp>` is unique per park. This archive is the **durable** record — worktree cleanup never touches the project-root `sysop/runtime/parked/`. Closed work does not accumulate here: when a parked task is later resumed and closed, `/review-close` Step 4c removes its marker(s) alongside the lock — historically nothing did, so markers for done tasks piled up and this dir over-reported them as still parked. (A `claim_task.sh --release` of a parked task deliberately leaves its markers — a released park's verdict may still serve the next claimant.) (No telemetry is emitted here; this is the standalone park-archive fix, not the `parked_reason`/`task_outcome` instrumentation it was extracted from.)
 
-- **If all findings are `fixable` (or zero findings)** → the orchestrator builds a `REVISED_PLAN` from `PLAN_TEXT` + `RAW_FINDINGS` by passing both into the Phase-6e execution agent's prompt (one-shot inline absorption). No separate plan-revise agent in v1 — see "Out of scope for v1" below.
+- **If all findings are `fixable` (or zero findings)** → the orchestrator passes `PLAN_TEXT` **and** `RAW_FINDINGS` into the Phase-6e execution agent's prompt and the **executor** absorbs the findings inline. **No `REVISED_PLAN` is produced — not in context, not on disk.** This bullet read *"the orchestrator builds a `REVISED_PLAN`"* until Phase 236, which is the reading its own § *Out of scope for v1* contradicts (*"v1 absorbs `fixable` findings inline by passing `PLAN_TEXT + RAW_FINDINGS` into the execution agent's prompt. A cleaner alternative is a third sub-agent that produces an explicit `REVISED_PLAN`"*) — there is no revise step, and naming one made the classification record below look redundant when it is the only durable trace of this arm. No separate plan-revise agent in v1 — see "Out of scope for v1" below.
+
+  **Write the classification record first — this arm is the dominant path and until Phase 236 it left nothing on disk at all.** `_shared/adversarial-review.md` requires that a finding rejected after consideration have its rationale recorded "so the same issue does not resurface during human review", and — for a High-severity or security-relevant rejection that cannot get a second independent pass — that the **full per-clause** rationale be recorded "in the sealed report / plan so the next reader with independent context (the parent, the human at plan approval, the review-close gate) adjudicates it". On this arm none of those readers could reach anything: Phase 6c is orchestrator-internal, `/auto-build` emits no sealed `REVIEW_REPORT:` anywhere, there is no plan-approval gate (Step 4's single destructive gate fires *before* planning), and the plan reaches disk **only on a park** — where the park arm above writes the *unrevised* `PLAN_TEXT`, because parking happens before absorption. So the mandate had a named reader set and an empty target.
+
+  Write it to the **main checkout**, under the same claim-artifact namespace `/claim-task` Step 7c uses and that `/review-close` Step 4c now reaps at close — no new runtime directory, and closed work does not accumulate:
+
+  ```bash
+  # Run from the project root (where the orchestrator runs), not the worktree — the
+  # record has to outlive `git worktree remove`, which is what destroys the per-worktree
+  # scratch. Substitute this task's id; the timestamp keys one directory per cycle.
+  date -u +%Y%m%dT%H%M%SZ            # the <CYCLE_TS> for the path below
+  # `mkdir -p` is the one command in this skill that does NOT fail on an unsubstituted
+  # placeholder — it would create a directory literally named `<TASK_ID>`, return 0, and the
+  # classification record would land where no reader ever looks, which is indistinguishable
+  # from never writing it. (The two worktree `mkdir -p` sites above gate on a `git rev-parse`
+  # probe instead; that probe cannot work here, because this path is in the main checkout and
+  # does not exist yet. A `case` on the path itself is the equivalent, and is a shell builtin,
+  # so it binds no new permission rule.)
+  #
+  # **The path is substituted ONCE, into a variable, and the gate tests that variable.** The
+  # first cut of this gate wrote the placeholders twice — once in the `case` subject and once
+  # in the `mkdir` — so an agent that substituted only the first passed the gate and then
+  # created the literal `<TASK_ID>` directory anyway: the exact outcome the gate exists to
+  # prevent, reproduced by this phase's own round. A guard must test the value the guarded
+  # command will use, not a second copy of it.
+  CLAIM_DIR="sysop/runtime/claim/<TASK_ID>/<CYCLE_TS>"
+  case "$CLAIM_DIR" in *'<'*|*'>'*) echo "❌ Placeholder not substituted — refusing to write the classification record." >&2; exit 1 ;; esac
+  mkdir -p "$CLAIM_DIR"
+  ```
+
+  Then **`Write`** → `sysop/runtime/claim/<TASK_ID>/<CYCLE_TS>/classification.md`. Again these are values *you* hold in context, subscripted per task — not shell variables, and nothing survives from one fenced block to the next (`WORKFLOW.md` § 8.2a *Persistence boundary*):
+
+  ```markdown
+  # <TASK_ID> — adversarial classification <CYCLE_TS>
+
+  Verdict: ALL FIXABLE (<N> findings) — proceeding to execution.
+
+  ## Findings and dispositions
+
+  <one entry per finding in RAW_FINDINGS[<TASK_ID>]: the finding as the reviewer
+  stated it, then `Disposition: absorbed` or `Disposition: rejected`.>
+
+  ## Rejection rationale (per clause)
+
+  <for each REJECTED finding, every clause it asserted and why each one fails.
+  `_shared/adversarial-review.md` § Compound findings: refuting one clause does not
+  reject the finding, and a rationale naming only the disproved clause is how a real
+  issue is lost. If nothing was rejected, write "none rejected" — an empty section is
+  indistinguishable from a lost one.>
+  ```
+
+  **What this record is and is not.** It is the orchestrator's account of its own 6c classification, durable and readable by a human and by `/review-close`. It is **not** an input to Phase 6e — v1 still hands the executor `PLAN_TEXT` + `RAW_FINDINGS` and lets it absorb inline, so the executor's absorption and this record are two independent readings of the same findings and may differ. Say that rather than implying the executor followed it; a record that claims to bind execution and does not is worse than one that says what it is.
 
 ### Phase 6e: Execution Agents (parallel across tasks)
 
@@ -604,7 +665,6 @@ For each non-parked task, spawn one execution agent. Run these in parallel acros
 
 - `subagent_type`: `"general-purpose"`
 - `model`: `"opus"`
-- `run_in_background`: `true`
 - Do NOT set `isolation: "worktree"`.
 - `description`: `"Execute <TASK_ID>"`
 - `prompt`: the **Execution Agent Prompt** in Step 7c, filled with `(task_id, worktree_path, branch_name, plan_text, raw_findings)`.
@@ -687,9 +747,15 @@ If the consuming project wires up sub-agent cost attribution, also emit `SPEND_U
 
 ### Step 7b: Adversarial-Reviewer Agent Prompt
 
-The orchestrator constructs this prompt as `PLAN_TEXT[<TASK_ID>]` verbatim, immediately followed by the **Prompt Template** block copied verbatim from `.claude/skills/_shared/adversarial-review.md`. The sub-agent returns a prioritized list of concrete `file:line` findings under 500 words.
+The orchestrator constructs this prompt as `PLAN_TEXT[<TASK_ID>]` re-emitted in full, immediately followed by the **Prompt Template** block copied verbatim from `.claude/skills/_shared/adversarial-review.md`. The sub-agent returns a prioritized list of concrete `file:line` findings under 500 words.
 
-Set the same agent params as Step 7a (`subagent_type: "general-purpose"`, `model: "opus"`, `description: "Adversarial plan review <TASK_ID>"`, `run_in_background: true`).
+> **"Verbatim" is the wrong word for what happens here, and using it hid a real failure.** `_shared/adversarial-review.md` tells every caller to pass "the full `PLAN_TEXT` verbatim". For `/claim-task` that is a **copy**: its planner writes `plan.md` to disk before the reviewer is spawned, so there is a file to reproduce. **`/auto-build` has no file.** Phase 6a's plan-only agents return their plans into orchestrator context, and the only `Write` of `plan.md` happens in Phase 6d — *after* this spawn, and only on the park arm. So `PLAN_TEXT[<TASK_ID>]` is a value you hold in context (the same warning Phase 6d gives: not a shell variable, nothing survives between fenced blocks), and emitting it into a prompt is a **retype**, not a copy.
+>
+> **The observed harm, measured on a real 3-task cycle:** with plans of ~200–400 lines the orchestrator abbreviated all three. On one task the retype dropped a clause describing a test fake's differentiated return values, and the reviewer — correctly, against the text it was actually given — returned a finding describing *the transcription*, not the plan. It was caught only because the original text still happened to be in context at classification time. **The failure is bidirectional and leaves identical evidence either way:** dropping a clause manufactures a phantom finding the executor is then dispatched to fix, and smoothing a clause the plan got wrong makes a real finding invisible.
+>
+> **So: emit the plan in full, and if you cannot, say so in the prompt rather than abbreviating silently.** A prompt that opens "the plan below is abridged" produces findings a classifier can discount; an abridgement presented as verbatim does not. The durable fix is pass-by-path, which needs Phase 6a to write `plan.md` before 6b rather than at 6d — filed, not built here.
+
+Set the same agent params as Step 7a (`subagent_type: "general-purpose"`, `model: "opus"`, `description: "Adversarial plan review <TASK_ID>"`).
 
 No additional wrapper text — the shared template already supplies the framing. The orchestrator stores the returned text as `RAW_FINDINGS[<TASK_ID>]`.
 
@@ -844,7 +910,7 @@ Print the result table:
 
 | Task        | Status                          | Worktree                            | Branch        | Spend (plan+rev+exec) | Notes                                            |
 |-------------|---------------------------------|-------------------------------------|---------------|-----------------------|--------------------------------------------------|
-| TECH-X      | EXECUTED                        | ../<project>-tech-x/                | tech/tech-x   | $X.XX                 | sysop/runtime/pending-docs/<branch>.md written; ready for /review-close |
+| TECH-X      | EXECUTED                        | ../<project>-tech-x/                | tech/tech-x   | $X.XX                 | sysop/runtime/pending-docs/<branch>.md written; classification at sysop/runtime/claim/TECH-X/<CYCLE_TS>/classification.md; ready for /review-close |
 | TECH-W      | EXECUTED (envelope-recovered)   | ../<project>-tech-w/                | tech/tech-w   | $X.XX                 | envelope omitted; recovered via Phase 7 filesystem check (N commits, pending-doc found) |
 | TECH-Y      | PARKED                          | ../<project>-tech-y/                | tech/tech-y   | $X.XX                 | <one-line summary>; verdict at sysop/runtime/auto-build/review.md |
 | TECH-Z      | FAILED                          | ../<project>-tech-z/                | tech/tech-z   | $X.XX                 | <error from ERROR>                               |
@@ -866,6 +932,13 @@ Next steps:
     wholesale), the same plan + verdict survive at the
     project root under `sysop/runtime/parked/<TASK_ID>__<timestamp>.md` — the
     durable copy the orchestrator mirrored in Phase 6d.
+  - Read an EXECUTED task's adversarial classification at
+    `sysop/runtime/claim/<TASK_ID>/<CYCLE_TS>/classification.md` (Phase 6d) — which
+    findings the orchestrator absorbed, which it rejected, and the per-clause reason
+    for each rejection. This is the only durable record of that judgment; before
+    Phase 236 the all-fixable path wrote nothing at all, so a rejected finding left
+    no trace for anyone to disagree with. It lives in the main checkout, survives
+    `git worktree remove`, and `/review-close` removes it when the task closes.
   - For EXECUTED tasks: start a fresh session (`/clear`, or a new terminal),
     then run /review-close to merge each branch — `/review-close` is
     context-independent (it reconstructs from the committed branches, the

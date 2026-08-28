@@ -51,6 +51,7 @@ INDEX_WRITERS = {
     "core/companion/scripts/claim_task.sh",  # --release: in_progress -> open
     "core/skills/review-close/SKILL.md",     # Step 4c: -> done + completed_date + body
     "core/companion/scripts/backfill_completed_dates.py",
+    "core/companion/scripts/clear_user_action.py",  # Q-314: user_action true -> false
 }
 
 # `safe_dump` sites in the shipped tree that do NOT write the task index.
@@ -86,6 +87,7 @@ INDEX_READERS = {
     "core/companion/git-hooks/examples/pre-commit-tasks-validate.example",
     "core/companion/scripts/backfill_completed_dates.py",
     "core/companion/scripts/claim_task.sh",
+    "core/companion/scripts/clear_user_action.py",
     "core/companion/scripts/next_task.py",
     "core/companion/scripts/scope_overlap.py",
     "core/companion/scripts/sitrep_survey.py",
@@ -1033,17 +1035,35 @@ def test_the_readme_names_every_writer_it_warns_about():
     readme = (REPO_ROOT / TASKS_README).read_text(encoding="utf-8")
     start = readme.index("### Comments in `index.yml` do not survive")
     section = _flat(readme[start:])
-    for fragment in (
-        "`/claim-task` Step 4a",
-        "`/auto-build` Step 5.1",
-        "`claim_task.sh --release`",
-        "`/review-close` Step 4c",
-        "`backfill_completed_dates.py`",
-    ):
+    # One human-readable fragment per INDEX_WRITERS member, keyed off that
+    # constant rather than hand-listed. A writer added there without a README
+    # mention now reddens HERE, instead of silently leaving the warning section
+    # one writer short — which is how the section came to say "Five" while the
+    # population was six (Phase 237, found by its round).
+    fragments = {
+        "core/skills/claim-task/SKILL.md": "`/claim-task` Step 4a",
+        "core/skills/auto-build/SKILL.md": "`/auto-build` Step 5.1",
+        "core/companion/scripts/claim_task.sh": "`claim_task.sh --release`",
+        "core/skills/review-close/SKILL.md": "`/review-close` Step 4c",
+        "core/companion/scripts/backfill_completed_dates.py":
+            "`backfill_completed_dates.py`",
+        "core/companion/scripts/clear_user_action.py": "`clear_user_action.py`",
+    }
+    assert set(fragments) == INDEX_WRITERS, (
+        "this roster and INDEX_WRITERS disagree — writers with no README "
+        f"fragment: {sorted(INDEX_WRITERS - set(fragments))}; fragments for "
+        f"non-writers: {sorted(set(fragments) - INDEX_WRITERS)}"
+    )
+    for fragment in fragments.values():
         assert _flat(fragment) in section, (
             f"the round-trip warning section omits {fragment}"
         )
-    assert "Five code paths rewrite it whole" in section
+    words = {4: "Four", 5: "Five", 6: "Six", 7: "Seven", 8: "Eight"}
+    expected = f"{words[len(INDEX_WRITERS)]} code paths rewrite it whole"
+    assert expected in section, (
+        f"the warning section's count disagrees with INDEX_WRITERS "
+        f"({len(INDEX_WRITERS)}): expected {expected!r}"
+    )
 
 
 def test_the_reference_entry_moved_into_the_managed_readme():

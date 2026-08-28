@@ -201,7 +201,12 @@ class TestMergeVerification:
         repo = self._repo_with_unmerged_branch(tmp_path)
         r = _run(repo, "7")
         assert r.returncode == 0, r.stderr
-        assert "NOT merged into main" in r.stdout
+        # Phase 233: the predicate is HEAD-first with `main` as a fallback, so the
+        # message names both. Asserted on the VERDICT plus the target words, not on
+        # the old sentence -- pinning the prose would make a correct widening read
+        # as a regression.
+        assert "is NOT merged into" in r.stdout, r.stdout
+        assert "HEAD" in r.stdout and "main" in r.stdout, r.stdout
         assert "7:unmerged" in r.stdout
         # Skipped → file untouched.
         assert "`Review Ready`" in (repo / "review_tasks.md").read_text()
@@ -660,3 +665,283 @@ class TestMatcherAnchoringAndNoOps:
         assert "Grand Total" not in r.stdout, (
             "a batch that closes nothing must not print a Grand Total update"
         )
+
+
+# ── Q-020: the ancestry gate targets the MERGE TARGET, not `main` (Phase 233) ─
+#
+# `git merge-base --is-ancestor <branch> main` asked about a revision the merge
+# does not land in. Under `§ Merge policy: pr`, `/review-close` Step 4a merges
+# each batch branch into an INTEGRATION branch cut from `origin/main`; Step 4b
+# runs here with that branch checked out; the PR is not squashed until Step 4d.
+# So a correctly-merged branch is never an ancestor of local `main`, and the
+# skill's remedy was to mandate `--force` on every `pr` close -- disarming the
+# gate for exactly the consumers it protects.
+#
+# The predicate is now HEAD-first with `main` retained as a fallback: strictly
+# WIDER than what shipped, so no consumer gains a refusal it did not have.
+
+_PR_TASKS = """\
+# Review Tasks
+
+### Batch 1 — First batch `Pending`
+
+> **Branch:** `feat/one`
+
+- [ ] task one
+"""
+
+
+def _pr_shaped_repo(root, *, merge_the_branch: bool):
+    """The `pr`-policy shape: an integration branch cut from `main`, with the
+    batch branch merged into IT rather than into `main`.
+
+    `merge_the_branch=False` is the case the gate exists to catch -- a branch
+    that reached nothing at all.
+    """
+    repo = _repo(root, _PR_TASKS)
+    _git(repo, "checkout", "-qb", "feat/one")
+    (repo / "w.txt").write_text("work\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "batch work")
+    _git(repo, "checkout", "-q", "main")
+    _git(repo, "checkout", "-qb", "review/integration-1")
+    if merge_the_branch:
+        _git(repo, "merge", "-q", "--no-ff", "feat/one", "-m", "merge feat/one")
+    return repo
+
+
+def test_a_branch_merged_into_the_integration_branch_is_accepted(tmp_path):
+    """**The defect.** Without `--force` this used to skip with `unmerged`, on
+    the dominant path, for work that was correctly merged.
+
+    Precondition asserted, not assumed: the branch must genuinely NOT be an
+    ancestor of `main`, or this fixture proves nothing about the change.
+    """
+    repo = _pr_shaped_repo(tmp_path / "repo", merge_the_branch=True)
+    anc_main = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", "feat/one", "main"],
+        cwd=str(repo), capture_output=True)
+    assert anc_main.returncode != 0, (
+        "fixture is wrong: feat/one IS an ancestor of main, so the old "
+        "predicate would have accepted it and this test measures nothing"
+    )
+
+    r = _run(repo, "1")
+
+    assert r.returncode == 0, r.stderr
+    text = (repo / "review_tasks.md").read_text()
+    assert "`Merged`" in text, (
+        "a branch merged into the checked-out integration branch was refused "
+        f"as unmerged.\nstdout={r.stdout}\nstderr={r.stderr}"
+    )
+    assert "- [x] task one" in text, text
+    # The SKIP VERDICT token, not the bare word: the lock-keeping notice below
+    # legitimately explains itself with "an unmerged branch", and a substring
+    # match on that made this assertion fire on a correct run.
+    assert "1:unmerged" not in r.stdout, r.stdout
+    assert "verified merged" in r.stdout, r.stdout
+
+
+def test_a_branch_merged_nowhere_is_still_refused(tmp_path):
+    """**The other end of the predicate.** Widening the target must not turn the
+    gate off. A branch that reached neither HEAD nor `main` is what the check
+    exists for, and it must still skip without writing.
+    """
+    repo = _pr_shaped_repo(tmp_path / "repo", merge_the_branch=False)
+    before = (repo / "review_tasks.md").read_text()
+    head_before = _head(repo)
+
+    r = _run(repo, "1")
+
+    assert r.returncode == 0, r.stderr
+    assert "NOT merged" in r.stdout, (
+        f"the ancestry gate did not fire on an unmerged branch.\n{r.stdout}"
+    )
+    assert "unmerged" in r.stdout, r.stdout
+    assert (repo / "review_tasks.md").read_text() == before, "the file was rewritten"
+    assert _head(repo) == head_before, "a close commit was made for an unmerged branch"
+
+
+def test_direct_policy_behaviour_is_unchanged(tmp_path):
+    """The no-change control. Under `direct` policy HEAD *is* `main`, so the
+    widened predicate must resolve identically -- a merged branch closes.
+    """
+    repo = _repo(tmp_path / "repo", _PR_TASKS)
+    _git(repo, "checkout", "-qb", "feat/one")
+    (repo / "w.txt").write_text("work\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "batch work")
+    _git(repo, "checkout", "-q", "main")
+    _git(repo, "merge", "-q", "--no-ff", "feat/one", "-m", "merge feat/one")
+
+    r = _run(repo, "1")
+
+    assert r.returncode == 0, r.stderr
+    assert "verified merged" in r.stdout, r.stdout
+    assert "`Merged`" in (repo / "review_tasks.md").read_text()
+
+
+def test_the_main_fallback_accepts_work_merged_to_main_from_another_branch(tmp_path):
+    """**Battery survivor `B2-head-only-no-main-fallback`, closed.**
+
+    The predicate is HEAD-first with `main` RETAINED as a fallback, and that
+    fallback is what makes the widening strictly wider than the shipped gate --
+    the property the whole change rests on. Dropping it left every guard green,
+    so the retained arm was a claim rather than a guard.
+
+    The case it covers: the work reached `main`, but `close_batch.sh` is run from
+    a branch that does not contain it. HEAD says no, `main` says yes, and the
+    old gate would have accepted it -- so refusing here would be a REGRESSION
+    introduced by a fix advertised as never narrowing.
+    """
+    repo = _repo(tmp_path / "repo", _PR_TASKS)
+    _git(repo, "checkout", "-qb", "feat/one")
+    (repo / "w.txt").write_text("work\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "batch work")
+    _git(repo, "checkout", "-q", "main")
+    _git(repo, "merge", "-q", "--no-ff", "feat/one", "-m", "merge feat/one")
+    # ...then move off main onto an unrelated branch that does NOT contain it.
+    _git(repo, "checkout", "-q", "-b", "docs/unrelated", "HEAD~1")
+
+    anc_head = subprocess.run(
+        ["git", "-C", str(repo), "merge-base", "--is-ancestor", "feat/one", "HEAD"],
+        capture_output=True)
+    assert anc_head.returncode != 0, (
+        "fixture is wrong: feat/one IS an ancestor of HEAD, so the main fallback "
+        "is never consulted and this test measures nothing"
+    )
+
+    r = _run(repo, "1")
+
+    assert r.returncode == 0, r.stderr
+    assert "1:unmerged" not in r.stdout, (
+        "the `main` fallback was dropped — work that reached main is now refused, "
+        f"which the old gate accepted.\n{r.stdout}"
+    )
+    assert "`Merged`" in (repo / "review_tasks.md").read_text()
+
+
+def test_the_remote_arm_is_widened_too_not_just_the_local_one(tmp_path):
+    """**Battery survivor `B3-remote-arm-unwidened`, closed.**
+
+    `find_batch_range`'s caller has TWO ancestry arms: a local `refs/heads/`
+    branch, and a `refs/remotes/origin/` fallback when the local one is gone.
+    Every other test here exercises the local arm, so reverting the remote arm to
+    the literal `main` left the suite green.
+
+    That is `Q-020`'s own structural note (a) -- *the class recurs at call-site
+    granularity, not file granularity* -- and this phase found a live instance of
+    it in the same file (the summary line — `close_batch.sh:970` on `main` — blaming one
+    cause for a counter both arms increment). A fix that hardens one arm and not
+    its neighbour is the shape the entry warns about.
+    """
+    repo = _pr_shaped_repo(tmp_path / "repo", merge_the_branch=True)
+    # Publish the branch, then delete the LOCAL ref so only origin/ remains.
+    bare = tmp_path / "origin.git"
+    subprocess.run(["git", "init", "--bare", "-q", str(bare)], check=True, capture_output=True)
+    _git(repo, "remote", "add", "origin", str(bare))
+    _git(repo, "push", "-q", "origin", "feat/one")
+    _git(repo, "branch", "-D", "feat/one")
+
+    assert subprocess.run(
+        ["git", "-C", str(repo), "show-ref", "--verify", "--quiet", "refs/heads/feat/one"],
+    ).returncode != 0, "fixture is wrong: the local ref still exists, so the local arm runs"
+    assert subprocess.run(
+        ["git", "-C", str(repo), "show-ref", "--verify", "--quiet",
+         "refs/remotes/origin/feat/one"],
+    ).returncode == 0, "fixture is wrong: no remote ref, so neither arm runs"
+
+    r = _run(repo, "1")
+
+    assert r.returncode == 0, r.stderr
+    assert "1:unmerged" not in r.stdout, (
+        "the REMOTE ancestry arm still asks about `main` — a correctly-merged "
+        f"branch is refused whenever its local ref has been deleted.\n{r.stdout}"
+    )
+    assert "`Merged`" in (repo / "review_tasks.md").read_text()
+
+
+# ── Round findings (HIGH, execute lens): the widening's own false accepts ─────
+#
+# The first cut used plain `--is-ancestor <branch> HEAD`, which is trivially TRUE
+# whenever HEAD sits at the branch tip. A widening advertised as "cannot introduce
+# a new refusal" had introduced a new ACCEPT, in the one case the gate exists for --
+# and `batch_work.sh` puts an operator exactly there, since it creates the batch
+# worktree checked out ON the batch branch.
+#
+# `test_a_branch_merged_nowhere_is_still_refused` above could not see it: its HEAD
+# is the integration branch, never the batch branch. A guard that never places HEAD
+# at the tip passes equally against a gate that always accepts.
+
+def _unmerged_batch_repo(root):
+    repo = _repo(root, _PR_TASKS)
+    _git(repo, "checkout", "-qb", "feat/one")
+    (repo / "w.txt").write_text("work\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "merged NOWHERE")
+    return repo
+
+
+def test_standing_on_the_unmerged_batch_branch_is_not_merged(tmp_path):
+    """HEAD *is* the branch. Ancestry is vacuous; the verdict must be refusal."""
+    repo = _unmerged_batch_repo(tmp_path / "repo")
+    assert subprocess.run(
+        ["git", "-C", str(repo), "merge-base", "--is-ancestor", "feat/one", "main"],
+    ).returncode != 0, "fixture is wrong: the branch IS in main"
+
+    r = _run(repo, "1")
+
+    assert "verified merged" not in r.stdout, (
+        "an unmerged branch was certified merged because HEAD sat at its tip.\n"
+        f"{r.stdout}"
+    )
+    assert "1:unmerged" in r.stdout, r.stdout
+    assert "`Pending`" in (repo / "review_tasks.md").read_text(), "the header was flipped"
+
+
+def test_a_detached_head_at_the_batch_tip_is_not_merged(tmp_path):
+    """Same defect without a branch name — `git rev-parse HEAD` is the real test,
+    not the symbolic ref, and a guard keyed on the name would miss this."""
+    repo = _unmerged_batch_repo(tmp_path / "repo")
+    _git(repo, "checkout", "-q", "--detach", "feat/one")
+
+    r = _run(repo, "1")
+
+    assert "verified merged" not in r.stdout, r.stdout
+    assert "1:unmerged" in r.stdout, r.stdout
+    assert "`Pending`" in (repo / "review_tasks.md").read_text()
+
+
+def test_a_worktree_checked_out_on_the_batch_branch_is_not_merged(tmp_path):
+    """The shape that is one `cd` from the normal path: `batch_work.sh` creates the
+    batch worktree checked out on the batch branch."""
+    repo = _unmerged_batch_repo(tmp_path / "repo")
+    _git(repo, "checkout", "-q", "main")
+    wt = tmp_path / "wt"
+    _git(repo, "worktree", "add", "-q", str(wt), "feat/one")
+    (wt / "review_tasks.md").write_text((repo / "review_tasks.md").read_text())
+
+    r = subprocess.run(["bash", str(SCRIPT), "1"], cwd=str(wt),
+                       capture_output=True, text=True)
+
+    assert "verified merged" not in r.stdout, (
+        f"the batch worktree certified its own unmerged branch.\n{r.stdout}"
+    )
+    assert "1:unmerged" in r.stdout, r.stdout
+
+
+def test_a_genuine_integration_merge_is_still_accepted(tmp_path):
+    """The non-vacuity control for all three above. Strict containment must not
+    turn the gate off for the case `Q-020` was filed to fix."""
+    repo = _unmerged_batch_repo(tmp_path / "repo")
+    _git(repo, "checkout", "-q", "main")
+    _git(repo, "checkout", "-qb", "review/integration-1")
+    _git(repo, "merge", "-q", "--no-ff", "feat/one", "-m", "merge feat/one")
+
+    r = _run(repo, "1")
+
+    assert "verified merged" in r.stdout, (
+        f"strict containment refused a genuine integration merge.\n{r.stdout}"
+    )
+    assert "`Merged`" in (repo / "review_tasks.md").read_text()

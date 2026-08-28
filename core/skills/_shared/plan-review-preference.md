@@ -16,15 +16,24 @@ decision that is always answerable.
 
 Three tiers, highest precedence first. Stop at the first that resolves.
 
-1. **`--review-plan` / `--no-review-plan`** on the invocation — the per-run override.
-   Always wins. `--review-plan` → option **A**; `--no-review-plan` → option **B**.
+1. **`--review-plan` / `--no-review-plan` / `--plan-only`** on the invocation — the per-run
+   override. Always wins. `--review-plan` → option **A**; `--no-review-plan` → option **B**;
+   `--plan-only` → option **C**. `--plan-only` is **roadmap-only** and `/claim-task` Step 1
+   rejects it for a `BATCH-*` claim before anything is claimed — see § B.
 2. **`<project>/CLAUDE.md § Plan review`** — the consumer's durable default. Same
    "consumer declares its shape" pattern as `§ Merge policy` and `§ Pre-merge
    verification`. Read the first non-empty line under the header and match it
    case-insensitively against `always` (→ A), `never` (→ B), or `ask` (→ tier 3).
-3. **Ask** — an `AskUserQuestion` with the two options below. This is the fallback when
+   **There is deliberately no config value for option C**, and the absence is a decision
+   rather than an omission: C stops before implementation and releases the claim, so a
+   project that defaulted to it would never implement anything. C is a per-run choice —
+   tier 1 or tier 3 — and a `§ Plan review` reading `plan-only` (or any other unrecognised
+   value) falls through to the ask below, which is what the unrecognised-value rule already
+   prescribes.
+3. **Ask** — an `AskUserQuestion` with the options below. This is the fallback when
    nothing is configured, which is also the case where a newcomer most benefits from
-   being asked.
+   being asked. **Offer three options on a roadmap task and two on a review batch** —
+   option C has nowhere to persist a plan for a batch, and § B says so in one line.
 
 **Never prompt when tier 1 or tier 2 resolves.** `/claim-task <CLAIM_ID>` on a configured
 project must stay a single command.
@@ -41,31 +50,49 @@ produced it — so the human can see whether their config was actually read:
 ```
 Plan review: A (review the plan before implementing)   (source: CLAUDE.md § Plan review)
 Plan review: B (run it)                                (source: --no-review-plan)
+Plan review: C (plan only — no implementation)         (source: --plan-only)
 Plan review: A (review the plan before implementing)   (source: asked)
 ```
 
-## B. The two options
+## B. The three options
 
 | Option | Flow | For |
 |---|---|---|
 | **A — review the plan first** | planner → reviewer → **human gate** → executor | Work you want to eyeball before it lands. |
 | **B — run it** | planner → reviewer → executor | Mechanical or well-specified work; walk away. |
+| **C — plan only** | planner → reviewer → **stop**; the reviewed plan is written back to the task body and the claim is released | A task you want to think about before committing anyone to it. |
 
-**The reviewer runs on both.** Only the gate differs. This is worth stating because the
-tempting simplification — collapse reviewer and executor on the unattended path, since
-nobody is waiting — gives the run *nobody is watching* the weaker review property.
+**The reviewer runs on all three.** So does the classification at Step 7c. What varies is only
+what happens *after* it: A gates, B executes, C stops and writes the plan back. This is worth
+stating because the tempting simplification — collapse reviewer and executor on the unattended
+path, since nobody is waiting — gives the run *nobody is watching* the weaker review property.
 `_shared/adversarial-review.md` already records collapsed self-classification as a known
-compromise; the autonomous path needs more fresh-eyes rigour, not less.
+compromise; the autonomous path needs more fresh-eyes rigour, not less. And on C the review is
+not a step on the way to something else: it is the deliverable, since nothing is implemented.
 
-**A third option, plan-only, is specified but not built** (`tools/CLAIM_TASK_ORCHESTRATOR_SPEC.md`
-§ *The three options*, option C — a maintainer-side design doc that is not in the public tree;
-its content is summarised here so nothing depends on reaching it: stop after review, write the
-reviewed plan back to the task body, release the claim). It needs a `## Plan` body section
-`tasks/schema.md` does not define
-and a release ordering the skill does not carry. **Say so if a human asks for it rather than
-improvising it or silently running option B** — a missing branch nobody wrote down is how
-`/claim-task` Steps 7–8 acquired roadmap-only vocabulary in Phase 29, which is the defect
-internal tracker #220 reported.
+**Option C is roadmap-only, and the reason is that a batch has nowhere to put a plan.** A
+review batch's "body" is a `### Batch <N>` section inside the shared `review_tasks.md`, whose
+metadata keys are parsed into a shadow index two scripts consume; none of it is a plan surface.
+So on a batch claim **offer two options, not three**, and say in one line why the third is
+absent — silence about a missing branch is exactly how `/claim-task` Steps 7–8 acquired
+roadmap-only vocabulary in Phase 29, which is the defect internal tracker #220 reported.
+`--plan-only` cannot reach that offer at all, since tier 1 outranks it, so `/claim-task`
+**Step 1 rejects `--plan-only` for a `BATCH-*` claim** — before the claim is taken, with the
+message the offer would have given.
+
+> **Not to be confused with `/auto-build`'s "plan-only agents".** That skill uses the same
+> two words for its **Phase 6a planner sub-agent** — one stage of an internal pipeline that
+> goes on to review and execute. Option C here is a *user-facing interaction mode* that stops
+> the whole pipeline. They are unrelated, the collision predates this option, and neither
+> name is worth churning; say which one you mean when both are in scope.
+
+**What C leaves behind, so the next claim is cheaper rather than merely different.** The task
+body gains a `## Plan` section holding the reviewed plan verbatim plus the sealed
+`REVIEW_REPORT:` block that passed it, plus its `## Test decision` — committed on `main` in the
+main checkout, because a feature-branch copy would be invisible to the next claim. The claim is
+then released, so the task goes back to `open` and anyone can pick it up. Tomorrow's
+`/claim-task <TASK_ID>` is an ordinary fresh claim that finds the `## Plan` and **skips the
+planner — never the reviewer** (`tasks/schema.md` § *Plan*).
 
 ## C. Guided mode
 

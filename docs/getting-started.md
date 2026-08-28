@@ -166,17 +166,31 @@ Here's what it does, and why each part matters:
 - **Looks up the conventions that apply** to the files it's about to touch (from
   `.claude/convention_map.md`), so it follows your project's learned rules instead of
   generic defaults.
+- **Asks how much you want to be in the loop** — once, up front, before it spawns
+  anything: review the plan before it's implemented, or let it run unattended. On a fresh
+  install nothing is configured, so it asks; put `## Plan review` in your `CLAUDE.md` (see
+  [Configuration](./configuration.md)) and it stops asking. It's front-loaded because
+  planning plus review takes 5–25 minutes, and asking afterwards asks someone who may have
+  walked away.
 - **Plans, then stress-tests the plan** — it drafts an approach and runs an *adversarial
   review* of that plan (a fresh-eyes pass looking for what's wrong) before writing any code.
   This is the step most likely to feel unfamiliar and most likely to save you: catching a
-  bad approach at the plan stage is far cheaper than at review.
+  bad approach at the plan stage is far cheaper than at review. The review runs whichever
+  option you picked — that choice changes what happens *after* it, never whether it happens.
 - **Implements** the task in the worktree, following the conventions it looked up. (The
   deterministic check gate runs later, at `/review-close` — see step 5.)
 
-When it finishes it prints `Work in: <worktree path>`. That sibling worktree is where this
-task's work lives; the follow-up commands below (`/document-work`) act on that task's
-branch, so Claude Code runs them there within the same session — not against your main
-checkout, which is still sitting on `main`.
+When it finishes it prints a `## Claim complete` summary naming the branch, the worktree and
+the sealed review report. The work lives on that branch in a sibling worktree, but **you
+stay in your main checkout** — `/claim-task` is an orchestrator, and it ran the whole
+pipeline in sub-agents on your behalf. The follow-up commands below are sent from the same
+session you started in; you do not need to go and open the worktree yourself.
+
+> **Just want it planned, not built?** Send `/claim-task <TASK-ID> --plan-only`. It plans,
+> reviews the plan, writes the reviewed plan into the task's body file and releases the
+> claim — so the task goes back to `open` carrying a plan anyone can pick up. Claiming it
+> again later skips the planning and re-reviews the existing plan against a codebase that
+> has moved. Roadmap tasks only.
 
 > **Not sure which task to start with?** Send `/next-task` — it picks the best claimable
 > task for you: unblocked tasks first, favoring the ones that unblock the most other work,

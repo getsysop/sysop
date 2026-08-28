@@ -48,6 +48,7 @@ tasks:
     blast_radius: single-module        # single-file | single-module | cross-module | architectural — surface area
     user_action: false                 # true = requires console / credentials / domain reg
     manual_smoke: false                # true = /review-close Step 3c halts for human smoke
+    solo: false                        # true = mutates shared state; /auto-build batches it alone
     depends_on: []                     # other task IDs this blocks on
     surfaced_by: []                    # IDs that filed this task (e.g., review findings)
     body: open/FEAT-EXAMPLE.md         # required for open/in_progress/deferred
@@ -66,7 +67,7 @@ Validate with `python3 sysop/scripts/validate_tasks.py` — it must exit 0.
 
 ### Comments in `index.yml` do not survive
 
-`index.yml` is a machine-owned file. Five code paths rewrite it whole through `yaml.safe_dump` — `/claim-task` Step 4a, `/auto-build` Step 5.1, `claim_task.sh --release`, `/review-close` Step 4c, and `backfill_completed_dates.py` — and a whole-file dump reproduces the *data*, not the text. On the first write that touches this file, every comment is stripped, quoting is normalised, indentation is rewritten, `|` literal block scalars become quoted folded ones, an anchor that has an alias is renamed (`&base` → `&id001`) while one with no alias is dropped, and a `<<:` merge key is resolved and flattened into the mapping it merged into. The output is a fixed point, so it happens once and then stops changing.
+`index.yml` is a machine-owned file. Six code paths rewrite it whole through `yaml.safe_dump` — `/claim-task` Step 4a, `/auto-build` Step 5.1, `claim_task.sh --release`, `/review-close` Step 4c, `backfill_completed_dates.py`, and `clear_user_action.py` (Phase 237) — and a whole-file dump reproduces the *data*, not the text. On the first write that touches this file, every comment is stripped, quoting is normalised, indentation is rewritten, `|` literal block scalars become quoted folded ones, an anchor that has an alias is renamed (`&base` → `&id001`) while one with no alias is dropped, and a `<<:` merge key is resolved and flattened into the mapping it merged into. The output is a fixed point, so it happens once and then stops changing.
 
 Nothing is lost *in the dump* — every value the parser read is written back, and every reader reads through the same parser. (A value can still be lost earlier, at *read* time: that is the unquoted-title case above, and quoting is its fix.) What does not survive the dump is anything you wrote for a human to read. **Put that here, or in the task's body file, not in `index.yml`.** This is why the reference template above lives in this file: seeded into `index.yml`, it was destroyed by the first whole-file write — `/intake`'s `Write` on a fresh project, the first `/claim-task` otherwise — on every install.
 

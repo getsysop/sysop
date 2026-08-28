@@ -289,8 +289,12 @@ FORBIDDEN: list[tuple[str, str, str]] = [
     ("step3c",
      "If Step 3 was skipped (doc-only diff), skip Step 3c too",
      "the pre-fix coupling. Restoring it disables the manual-smoke gate on nearly every run."),
+    # No terminal punctuation in the banned phrase: Phase 239 changed the shipped
+    # sentence's `:` to `.`, and a colon-bearing ban would have gone quietly inert
+    # against the period-bearing reversal. Strictly wider, and it cannot false-fire
+    # on the shipped text, which carries `and \`4a-post\` reported green,` in between.
     ("step4b",
-     "After all branches are merged but **before** doc consolidation:",
+     "After all branches are merged but **before** doc consolidation",
      "4b's lead-in must name the gate that now precedes it, or the ordering is undocumented "
      "at the one place a reader is standing when they need it."),
 ]
@@ -753,9 +757,13 @@ MUTATIONS: list[tuple[str, Callable[[str], str]]] = [
     ("R6 reconcile the Rule B site away", _sub(
         "**This is the gate `_shared/main-push-guard.md` Rule B re-runs, and Step 3 is not.**",
         "Rule B's re-run is a separate concern and is not addressed here.")),
+    # Anchored on the clause, NOT the whole sentence: Phase 239 changed this
+    # sentence's terminal punctuation (`:` -> `.`, because Step 4b now opens with
+    # prose rather than straight into the fence) and broke a full-sentence pin
+    # that was only ever asserting the `4a-post` reference. Pin the property.
     ("R7 strip 4b's lead-in reference to the gate", _sub(
-        "After all branches are merged and `4a-post` reported green, but **before** doc consolidation:",
-        "After all branches are merged but **before** doc consolidation:")),
+        "and `4a-post` reported green, but **before** doc consolidation",
+        "but **before** doc consolidation")),
     # ---- the round's findings: each survived the first version's whole battery ----
     ("W1 restore Step 4a's route past the gate", _sub(
         "go straight to **`4a-post`** — **not** to Step 4b.", "go straight to Step 4b.")),

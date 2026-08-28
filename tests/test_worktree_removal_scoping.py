@@ -172,9 +172,11 @@ def test_no_prescription_of_a_wholesale_wipe():
     """A document telling a reader to RUN `--force` is telling them to destroy work.
 
     Every legitimate single-worktree removal has an owner already:
-    `git worktree remove <path>` (refuses on uncommitted or untracked changes), or
-    `claim_task.sh --release <TASK_ID>` / `batch_work.sh --release <N>` when a lock
-    and a status also need releasing. This script is neither.
+    `git worktree remove <path>` (refuses on uncommitted or untracked changes — but
+    NOT on gitignored ones; measured in Phase 232, it deletes `sysop/runtime/`
+    content silently and exits 0), or `claim_task.sh --release <TASK_ID>` /
+    `batch_work.sh --release <N>` when a lock and a status also need releasing. This
+    script is neither.
     """
     hits = sorted(
         f"{p}:{n}" for p, n, w in _force_windows() if PRESCRIPTION.search(w)

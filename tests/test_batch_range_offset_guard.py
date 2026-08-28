@@ -287,10 +287,24 @@ def test_close_still_closes_a_header_the_index_cannot_match(tmp_path):
     This is Q-017's remaining half, pinned as CURRENT BEHAVIOUR rather than as
     an endorsement — the twin of
     ``test_without_python3_behaviour_is_the_old_behaviour``. The index cannot
-    see this batch, so the range came from a fence-BLIND grep; on a tracker
-    carrying a fenced example that range can over-reach. Retiring this fallback
-    is a caller-contract change (`if ! find_batch_range` cannot observe a return
-    code), deliberately not taken here.
+    see this batch, so the range comes from the grep fallback.
+
+    **Two corrections, 2026-08-26 (Phase 233).** This docstring said the range
+    "can over-reach". It cannot: the mechanism is `grep -n '^##'` seeing an EXTRA
+    boundary, which can only bound the batch EARLY. Phase 220's round caught that
+    wording in `close_batch.sh`'s warning -- which had inherited it from HERE --
+    and fixed the message while leaving the source of it standing.
+
+    And the grep is no longer fence-BLIND on this arm: `Q-017` was closed by
+    filtering its hits through `$FENCED_LINES`, which is populated under exactly
+    this arm's precondition. The no-index arm is still blind, and its twin above
+    still pins that.
+
+    What this test pins is unchanged and is the VERDICT, not the range: an
+    index-invisible header still closes. Retiring that is a caller-contract
+    change (`if ! find_batch_range` cannot observe a return code) and remains
+    untaken -- it is a ratified decision (2026-08-21: keep closing, stop being
+    silent), not an oversight.
 
     If a later phase retires it, this test must flip to asserting a refusal.
     """

@@ -59,6 +59,7 @@ Every captured entry is `status: open` and carries the full required field set �
 - **`surfaced_by`** — provenance, only when a known task ID actually spawned this one. Default `[]`.
 - **`on_hold_until`** — set when the human names a real external wait ("after the Stripe v2 GA"); it's timing, not a `user_action`.
 - **`manual_smoke`** — `true` when verification is human-eyeball-only (a UI flow, a side-effect-bearing command); then include a `## Manual smoke required` section in the body describing the procedure.
+- **`solo`** — `true` only when the task mutates state shared *outside* the filesystem view (a global lockfile, a singleton registry, a live schema, a shared fixture corpus), so it is unsafe to run alongside work whose paths don't overlap it. It is **not** a restatement of `blast_radius: architectural`, which already solos on surface area, and **not** a way to say "this is important" — omit it unless you can name the shared state. Default absent (`false`). See `tasks/schema.md` § Solo.
 - **`body`** — `open/<TASK-ID>.md`, first heading `# <TASK-ID>` (validator-enforced), sections `## Context` (why this matters, where it came from), `## Requirements` (numbered, falsifiable), `## Key files` (best current guess is fine). **Do not** write a `## Test decision` section — that's recorded at `/claim-task` plan time, not capture time.
 
 Keep the body proportional to the task: a `Low / single-file` fix gets a few lines per section, not a spec. Capture is the point; `/claim-task`'s planning pass fills gaps at claim time.

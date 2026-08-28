@@ -14,11 +14,14 @@ Two sections:
 """
 
 import os
+import re
 import subprocess
 from pathlib import Path
 from unittest import mock
 
 import validate_tasks as vt
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 # === Section 1: gdp-ported _resolve_canonical_locks_dir tests =============
@@ -427,49 +430,76 @@ def _td_warnings(report):
     return [f for f in report.warnings if "test decision" in f.format().lower()]
 
 
-def test_test_decision_warns_when_in_progress_body_lacks_section(tmp_path):
-    """in_progress task whose body has no '## Test decision' → warn, not error.
+def test_retired_invariant_13_is_silent_on_the_case_it_used_to_warn_on(tmp_path):
+    """Phase 234 (Q-022): the exact fixture that used to warn must now be quiet.
 
-    Warn-only is load-bearing: the recording gate is /review-close (Phase 59);
-    a missing section must never block a commit.
-    """
-    repo = _seed_repo_with_lock(tmp_path)  # _VALID_BODY records no test decision
-    report = vt.validate(repo / "tasks", project_root=repo)
-    assert report.ok, [e.format() for e in report.errors]  # never blocks
-    td = _td_warnings(report)
-    assert td, [w.format() for w in report.warnings]
-    assert any("FEAT-LOCKED" in w.format() for w in td)
-
-
-def test_test_decision_no_warn_when_section_present(tmp_path):
-    """in_progress body that records the section → no test-decision warning.
-
-    The 'no test because Z' form must satisfy the check just like a named test.
+    `_VALID_BODY` records no test decision and `_VALID_INDEX` claims FEAT-LOCKED
+    `in_progress`, which is precisely the state Invariant 13 fired on — and it
+    fired on it for every claimed task on every run from `main`, because the
+    record it looked for is committed inside the worktree and is not on the
+    filesystem this reads. The enforcement moved to /review-close Step 2d, which
+    reads the branch tip. Pinned as a *behaviour*, not as an absent function:
+    re-adding the check under any other name reddens this.
     """
     repo = _seed_repo_with_lock(tmp_path)
-    (repo / "tasks" / "open" / "FEAT-LOCKED.md").write_text(
-        "# FEAT-LOCKED\n\n## Test decision\nNo test because this is a config-only change.\n",
-        encoding="utf-8",
-    )
     report = vt.validate(repo / "tasks", project_root=repo)
+    assert report.ok, [e.format() for e in report.errors]
     assert _td_warnings(report) == [], [w.format() for w in report.warnings]
 
 
-def test_test_decision_not_checked_for_open_task(tmp_path):
-    """open (un-claimed) task lacking the section → no warning (scope is in_progress)."""
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    subprocess.run(
-        ["git", "init", "--quiet"], cwd=str(repo), check=True, capture_output=True
+def test_the_warn_channel_still_works(tmp_path):
+    """Negative control for the test above — without it, "no test-decision
+    warning" is also what a validator that reports nothing at all would produce.
+
+    Invariant 12 (manual_smoke) is the surviving warn-only sibling and rides the
+    same `report.warn` path the retired check used, so a fixture that trips it
+    proves the channel is live rather than merely empty."""
+    repo = _seed_repo_with_lock(
+        tmp_path,
+        _VALID_INDEX.replace("    user_action: false\n", "    user_action: false\n    manual_smoke: true\n"),
     )
-    tasks_dir = repo / "tasks"
-    (tasks_dir / "open").mkdir(parents=True)
-    (tasks_dir / "index.yml").write_text(_TD_OPEN_INDEX, encoding="utf-8")
-    (tasks_dir / "open" / "FEAT-OPEN.md").write_text(
-        "# FEAT-OPEN\n\n## Context\nBacklog.\n", encoding="utf-8"
+    assert "manual_smoke: true" in _VALID_INDEX.replace(
+        "    user_action: false\n", "    user_action: false\n    manual_smoke: true\n"
+    ), "fixture edit did not apply — the control would be vacuous"
+    report = vt.validate(repo / "tasks", project_root=repo)
+    smoke = [w for w in report.warnings if "manual smoke" in w.format().lower()]
+    assert smoke, [w.format() for w in report.warnings]
+    assert _td_warnings(report) == [], "test-decision warnings are retired"
+
+
+def test_the_record_agrees_that_there_are_twelve(tmp_path):
+    """Phase 204's lesson: a retired check whose roster still lists it reads as
+    coverage. The three shipped surfaces that named Invariant 13 must not claim
+    a live 13th, and WORKFLOW.md's count must match the numbered list."""
+    schema = (REPO_ROOT / "core/companion/tasks/schema.md").read_text(encoding="utf-8")
+    body = schema.split("## Invariants (validator-enforced)", 1)[1].split("\n## ", 1)[0]
+    numbered = re.findall(r"^(\d+)\. \*\*", body, re.MULTILINE)
+    n = int(numbered[-1])
+    assert n == 12, f"schema.md's invariant list ends at {n}"
+
+    # DERIVED from the list, and swept over the whole shipped tree rather than
+    # asserted against one sentence. The first cut of this guard checked only
+    # `"enforces 13 invariants" not in workflow` — and the round found a SECOND
+    # count site (`WORKFLOW.md`'s § 8.4 row, "13 invariants; 12 and 13 are
+    # warn-only") that the literal string could not see, so the guard passed while
+    # the retired invariant was still advertised. A guard keyed to one phrasing is
+    # a guard keyed to the author's memory of where the fact lives.
+    shipped = sorted(
+        list((REPO_ROOT / "core").rglob("*.md"))
+        + list((REPO_ROOT / "docs").rglob("*.md"))
     )
-    report = vt.validate(tasks_dir, project_root=repo)
-    assert _td_warnings(report) == [], [w.format() for w in report.warnings]
+    assert len(shipped) > 30, f"the sweep found only {len(shipped)} files"
+    stale = []
+    for f in shipped:
+        text = f.read_text(encoding="utf-8", errors="replace")
+        for m in re.finditer(r"\b(\d+) invariants\b", text):
+            if int(m.group(1)) != n:
+                line = text[: m.start()].count("\n") + 1
+                stale.append(f"{f.relative_to(REPO_ROOT)}:{line} says {m.group(1)}")
+    assert not stale, "invariant counts disagree with schema.md's list of %d:\n  %s" % (
+        n, "\n  ".join(stale))
+    assert any("%d invariants" % n in f.read_text(encoding="utf-8", errors="replace")
+               for f in shipped), "no shipped file states the count at all"
 
 
 # ── Phase 88 — surfaced_by 'imported' provenance sentinel (/onboard) ─────
@@ -777,6 +807,70 @@ def test_manual_smoke_true_bool_is_not_a_type_error(tmp_path):
     report = vt.validate(repo / "tasks", project_root=repo)
     messages = [f.format() for f in report.errors]
     assert not any("'manual_smoke' must be bool" in m for m in messages), messages
+
+
+# ── Phase 235 (Q-235 leg #436): _check_solo type guard ──
+#
+# `solo` is type-guarded and nothing more: its meaning is a claim about runtime
+# state no static check can confirm, and its one reader (/auto-build Step 2
+# invariant `d.`) fails safe on absence. The type guard is the part that matters
+# — `"yes"` is truthy in Python, so an unguarded string would silently solo every
+# batch the task landed in, which is a throughput bug with no error message.
+
+
+def test_solo_non_bool_is_hard_error(tmp_path):
+    index = _VALID_INDEX.replace(
+        "    body: tasks/open/FEAT-LOCKED.md\n",
+        "    body: tasks/open/FEAT-LOCKED.md\n    solo: \"yes\"\n",
+    )
+    repo = _seed_repo_with_lock(tmp_path, index)
+    report = vt.validate(repo / "tasks", project_root=repo)
+    assert not report.ok
+    messages = [f.format() for f in report.errors]
+    assert any("'solo' must be bool" in m for m in messages), messages
+
+
+def _solo_errors(tmp_path, value: str) -> list[str]:
+    index = _VALID_INDEX.replace(
+        "    body: tasks/open/FEAT-LOCKED.md\n",
+        f"    body: tasks/open/FEAT-LOCKED.md\n    solo: {value}\n",
+    )
+    repo = _seed_repo_with_lock(tmp_path, index)
+    report = vt.validate(repo / "tasks", project_root=repo)
+    return [f.format() for f in report.errors]
+
+
+def test_solo_true_is_accepted(tmp_path):
+    messages = _solo_errors(tmp_path, "true")
+    assert not any("'solo'" in m for m in messages), messages
+
+
+def test_solo_false_is_accepted(tmp_path):
+    messages = _solo_errors(tmp_path, "false")
+    assert not any("'solo'" in m for m in messages), messages
+
+
+def test_solo_absent_fires_no_check(tmp_path):
+    """Absence is the overwhelmingly common case and must stay silent — the field
+    is optional and every task predating Phase 235 lacks it."""
+    repo = _seed_repo_with_lock(tmp_path, _VALID_INDEX)
+    report = vt.validate(repo / "tasks", project_root=repo)
+    messages = [f.format() for f in report.errors] + [f.format() for f in report.warnings]
+    assert not any("'solo'" in m for m in messages), messages
+
+
+def test_solo_is_not_confused_with_manual_smoke(tmp_path):
+    """Both are optional bools checked in the same pass; a copy-paste that wired
+    `solo` to `manual_smoke`'s checker would report the wrong field name."""
+    index = _VALID_INDEX.replace(
+        "    body: tasks/open/FEAT-LOCKED.md\n",
+        "    body: tasks/open/FEAT-LOCKED.md\n    solo: 3\n",
+    )
+    repo = _seed_repo_with_lock(tmp_path, index)
+    report = vt.validate(repo / "tasks", project_root=repo)
+    messages = [f.format() for f in report.errors]
+    assert any("'solo' must be bool, got int" in m for m in messages), messages
+    assert not any("manual_smoke" in m for m in messages), messages
 
 
 def test_orphan_body_file_under_open_errors(tmp_path):
