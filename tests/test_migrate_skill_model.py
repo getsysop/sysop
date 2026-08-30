@@ -84,3 +84,49 @@ def test_migrate_rejects_identical_from_to(capsys):
     rc = m.main(["--from", "opus", "--to", "opus"])
     assert rc == 2
     assert "identical" in capsys.readouterr().err
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 244 (`Q-346` leg 1), swept across the family rather than fixed at the one
+# filed site: the migrator walks the same `.claude/skills/` tree with the same
+# unguarded read, so a consumer's own non-UTF-8 file aborted a bulk migration.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_read_skill_text_returns_none_on_an_undecodable_file(tmp_path):
+    p = tmp_path / "NOTES.md"
+    p.write_bytes("# Notas del café\n".encode("latin-1"))
+    assert m.read_skill_text(p) is None
+
+
+def test_read_skill_text_returns_none_on_a_missing_file(tmp_path):
+    assert m.read_skill_text(tmp_path / "nope.md") is None
+
+
+def test_read_skill_text_returns_the_text_of_a_normal_file(tmp_path):
+    """The positive control. Without it a helper that returned None
+    unconditionally would satisfy both assertions above."""
+    p = tmp_path / "OK.md"
+    p.write_text("# fine\n")
+    assert m.read_skill_text(p) == "# fine\n"
+
+
+def test_an_undecodable_file_does_not_abort_a_migration(tmp_path, capsys):
+    """The end-to-end half of `read_skill_text`'s migrator site. Without this the
+    helper's unit tests above pass while the migrator's own loop is reverted —
+    the author battery's `RD06` was written to find exactly that, and did."""
+    d = tmp_path / "skills" / "s"
+    d.mkdir(parents=True)
+    good = d / "SKILL.md"
+    good.write_text("---\nname: s\nmodel: opus\n---\nbody\n")
+    (d / "NOTES.md").write_bytes("# Notas del café\n".encode("latin-1"))
+
+    rc = m.main(["--root", str(tmp_path / "skills"), "--from", "opus",
+                 "--to", "sonnet", "--apply"])
+
+    assert rc == 0
+    assert "model: sonnet" in good.read_text(), (
+        "one undecodable file took the whole migration down"
+    )
+    assert "NOTES.md" in capsys.readouterr().err, (
+        "the skipped file was not disclosed"
+    )

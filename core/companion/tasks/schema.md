@@ -177,9 +177,30 @@ it.
 frontier filter over `status: open` tasks, and all three exclude the task from automated pickup:
 `/auto-build` drops it from its executable frontier, `/roadmap` classes it 🔒 blocked-on-human and orders
 on it, and `/next-task` keeps it out of the agent pool and surfaces it separately to the human who can
-perform the step. That is the whole of the enforcement. **Nothing verifies the steps were performed** —
-`/claim-task` gates on `status` alone, so a `user_action: true` task can be claimed, worked and closed
-with the human step still outstanding.
+perform the step. That is the whole of the enforcement *on the dispatch side*.
+**Nothing verifies the steps were performed** — `/claim-task` gates on `status` alone, so a
+`user_action: true` task can be claimed and worked with the human step still outstanding.
+
+**It can no longer be *closed* that way, which is the half Phase 241 changed (`Q-327`).** `/review-close`
+Step 4c **step 1c** now reads this field, and holds the whole close for that task: a pending-doc naming
+a task whose `user_action` is `true` is **held back in `sysop/runtime/pending-docs/`** and not routed at
+all this run. Nothing is written for it — no `PROJECT_STATUS.md` / `CHANGELOG.md` / `UI_Iterations.md`
+entry, no status flip, no body archive move, no lock or parked-marker cleanup. The task stays
+`in_progress`, its body stays under `open/`, its lock stays held, **its feature branch is retained by a
+HARD RULE in Step 6**, and Step 8 reports it under both `Held-back docs:` and `Remaining:`. It closes on
+a later `/review-close`, after the human performs the step and clears the flag with
+`python3 sysop/scripts/clear_user_action.py <TASK_ID>` — which is what that script has always been for.
+
+**Why the WHOLE doc waits rather than just the status flip, because the narrower design is the one you
+would reach for first.** It was built and it strands the task: Step 4c's step 6 deletes the pending-docs
+that step consolidated, and the pending-doc is the only carrier of `roadmap_ids` into the round-trip — so
+routing the doc consumes the carrier, and nothing can ever close the task. The cost of the wider hold is
+real and worth stating: **a held task's documentation lags its merge**, visibly, on every run until the
+human step is done. And a doc naming a held task and an unheld one holds **both** — the conservative
+direction, because the alternative is routing half a doc and re-routing the rest later.
+**Read the two paragraphs together:** dispatch is filtered, closure is held, and the gap that remains is
+the middle — a task can still be *claimed and implemented* before its human step happens, which is
+usually harmless and occasionally not (see the non-prerequisite cases below).
 
 **When they run — usually first, and the heading says so, but that is a convention rather than a
 guarantee.** The authoring surfaces (`/intake`, `/add-task`, the decomposition rubric) all write the

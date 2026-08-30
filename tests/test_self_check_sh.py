@@ -341,3 +341,205 @@ def test_round_history_read_from_main_when_run_from_a_worktree(tmp_path):
     _git(root, "worktree", "add", "-q", "-b", "feat/y", str(wt))
     r = _self_check(root, cwd=wt)
     assert "last security audit: 2026-07-05" in r.stdout, r.stdout + r.stderr
+
+
+# ── Phase 240: agent-isolation residue + core.hooksPath shape ───────────────
+# The post-spawn assertion that catches this residue lives in /review-close
+# Step 2b, so it runs only during a close. An ad-hoc adversarial round spawns
+# the same isolated agents and asserts nothing, so self_check.sh is the
+# invoker outside the close. These are behaviour tests, not text greps: each
+# builds the state and asserts the report changes.
+
+
+def _agent_worktree(root, wt_parent, agent_id):
+    """Reproduce the shape Claude Code's isolation: worktree creates."""
+    path = wt_parent / ".claude" / "worktrees" / f"agent-{agent_id}"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _git(root, "worktree", "add", "-q", "-b", f"worktree-agent-{agent_id}", str(path))
+    return path
+
+
+def test_reports_no_residue_on_a_clean_install(tmp_path):
+    root = _consumer(tmp_path / "c")
+    assert _install(root, "--packs", "").returncode == 0
+    r = _self_check(root)
+    assert "no agent-isolation residue" in r.stdout, r.stdout + r.stderr
+
+
+def test_detects_a_leaked_agent_worktree_and_its_branch(tmp_path):
+    root = _consumer(tmp_path / "c")
+    assert _install(root, "--packs", "").returncode == 0
+    _agent_worktree(root, root, "deadbeef")
+    r = _self_check(root)
+    assert "agent-isolation residue: 1 worktree(s), 1 branch(es)" in r.stdout, r.stdout
+    assert "no agent-isolation residue" not in r.stdout
+
+
+def test_detects_the_half_cleaned_state_worktree_gone_branch_left(tmp_path):
+    """The common residue shape: the worktree is reclaimed and the branch is
+    not. Counting only worktrees would report clean over a real leak."""
+    root = _consumer(tmp_path / "c")
+    assert _install(root, "--packs", "").returncode == 0
+    path = _agent_worktree(root, root, "cafe1234")
+    _git(root, "worktree", "remove", "--force", str(path))
+    r = _self_check(root)
+    assert "agent-isolation residue: 0 worktree(s), 1 branch(es)" in r.stdout, r.stdout
+
+
+def test_residue_report_never_prescribes_a_blind_removal(tmp_path):
+    """Phase 165 removed the wholesale-wipe rollback. Detection here must not
+    reintroduce it: a leaked worktree can hold uncommitted work, and after a
+    squash-merge an ancestry test reports non-zero for merged work too."""
+    root = _consumer(tmp_path / "c")
+    assert _install(root, "--packs", "").returncode == 0
+    _agent_worktree(root, root, "beefcafe")
+    r = _self_check(root)
+    assert "CHECK BEFORE REMOVING" in r.stdout, r.stdout
+    # A denylist of exact spellings is not a property. The round showed
+    # `git worktree remove -f` -- the same blind removal, one flag shorter --
+    # walked straight through the first version of this check.
+    import re as _re
+    forbidden = [
+        _re.compile(r"worktree\s+remove\b[^\n]*(--force|\s-f\b)"),
+        _re.compile(r"git\s+branch\s+-[dD]\b"),
+        _re.compile(r"\brm\s+-[a-zA-Z]*[rf]"),
+        _re.compile(r"worktree\s+prune\b"),
+    ]
+    for pat in forbidden:
+        hit = pat.search(r.stdout)
+        assert not hit, (
+            f"self_check prescribed a blind removal ({hit.group(0)!r}); Phase 165 "
+            "removed exactly this shape and a residue report must not reintroduce it"
+        )
+
+
+def test_relative_hookspath_is_reported_as_the_good_shape(tmp_path):
+    root = _consumer(tmp_path / "c")
+    assert _install(root, "--packs", "").returncode == 0
+    _git(root, "config", "--local", "core.hooksPath", ".githooks")
+    r = _self_check(root)
+    assert "core.hooksPath (--local) is relative ('.githooks')" in r.stdout, r.stdout
+
+
+def test_absolute_hookspath_is_reported_with_the_restore_command(tmp_path):
+    """This is the state an isolated-agent spawn leaves behind. self_check
+    cannot know what the owner originally set, so it reports the property and
+    its consequence rather than asserting a defect."""
+    root = _consumer(tmp_path / "c")
+    assert _install(root, "--packs", "").returncode == 0
+    _git(root, "config", "--local", "core.hooksPath", str(root / ".githooks"))
+    r = _self_check(root)
+    assert "core.hooksPath (--local) resolves ABSOLUTE" in r.stdout, r.stdout
+    assert "git config --local core.hooksPath" in r.stdout
+    assert "is relative" not in r.stdout
+
+
+def test_unset_hookspath_reports_neither_shape(tmp_path):
+    """A repo that sets no core.hooksPath is unaffected by the rewrite; it must
+    not be told about a property it does not have."""
+    root = _consumer(tmp_path / "c")
+    assert _install(root, "--packs", "").returncode == 0
+    r = _self_check(root)
+    assert "resolves ABSOLUTE" not in r.stdout
+    assert "is relative" not in r.stdout
+
+
+def test_residue_check_does_not_change_the_exit_code(tmp_path):
+    """Residue is advisory. A leaked worktree is not a failed prereq, and
+    turning self_check red on it would make the report unusable mid-round."""
+    root = _consumer(tmp_path / "c")
+    assert _install(root, "--packs", "").returncode == 0
+    clean = _self_check(root)
+    _agent_worktree(root, root, "0badcafe")
+    dirty = _self_check(root)
+    assert clean.returncode == dirty.returncode == 0, (clean.stdout, dirty.stdout)
+
+
+def test_a_worktree_under_the_dir_counts_even_without_the_agent_prefix(tmp_path):
+    """The scope question, decided against this phase's first answer.
+
+    The author's battery row B03 dropped the `agent-` prefix and survived, and
+    the first fix read that as "the prefix is load-bearing, it prevents a
+    human's checkout being called residue". The round's execution lens showed
+    the opposite error is the one that matters: `EnterWorktree`'s `name`
+    parameter puts a worktree at `.claude/worktrees/<name>`, so `agent-` is the
+    DEFAULT shape and not the only one — and scoping to it reports clean over a
+    named agent worktree that `/review-close` Step 2b would flag.
+
+    Step 2b's own first assertion greps `-F '/.claude/worktrees/'`. Two
+    detectors for one condition disagreeing is worse than either answer, so
+    this one now matches the skill. The cost is stated rather than hidden: a
+    human who parks a worktree there is reported too, which is why the report
+    is advisory, names what to check, and removes nothing.
+    """
+    root = _consumer(tmp_path / "c")
+    assert _install(root, "--packs", "").returncode == 0
+    other = root / ".claude" / "worktrees" / "mine-in-progress"
+    other.parent.mkdir(parents=True, exist_ok=True)
+    _git(root, "worktree", "add", "-q", "-b", "feat/mine", str(other))
+    r = _self_check(root)
+    assert "agent-isolation residue: 1 worktree(s), 0 branch(es)" in r.stdout, r.stdout
+
+
+def test_the_two_counts_are_independent(tmp_path):
+    """Worktrees and branches are counted separately: a named worktree has no
+    `worktree-agent-*` branch, and a reclaimed lens leaves a branch with no
+    worktree. Collapsing them would hide whichever half is zero."""
+    root = _consumer(tmp_path / "c")
+    assert _install(root, "--packs", "").returncode == 0
+    other = root / ".claude" / "worktrees" / "mine-in-progress"
+    other.parent.mkdir(parents=True, exist_ok=True)
+    _git(root, "worktree", "add", "-q", "-b", "feat/mine", str(other))
+    _agent_worktree(root, root, "facefeed")
+    r = _self_check(root)
+    assert "agent-isolation residue: 2 worktree(s), 1 branch(es)" in r.stdout, r.stdout
+
+
+def test_a_tilde_hookspath_is_not_reported_as_relative(tmp_path):
+    """`~/gh` is not relative: git expands it, so every worktree is pinned to
+    one directory — the exact property this arm warns about. The first version
+    tested only `/*` and gave `~/gh` a green tick."""
+    root = _consumer(tmp_path / "c")
+    assert _install(root, "--packs", "").returncode == 0
+    _git(root, "config", "--local", "core.hooksPath", "~/gh")
+    r = _self_check(root)
+    assert "resolves ABSOLUTE" in r.stdout, r.stdout
+    assert "is relative" not in r.stdout
+
+
+def test_a_global_absolute_hookspath_is_not_blamed_on_a_spawn(tmp_path):
+    """The remedy writes a --local key. If the absolute value came from
+    --global and there is no local key, no spawn rewrote anything, and running
+    the printed restore would shadow the user's deliberate setting."""
+    root = _consumer(tmp_path / "c")
+    assert _install(root, "--packs", "").returncode == 0
+    gitconfig = tmp_path / "gc"
+    gitconfig.write_text("[core]\n\thooksPath = /somewhere/global-hooks\n")
+    env = dict(os.environ)
+    env["PATH"] = os.path.dirname(sys.executable) + os.pathsep + env["PATH"]
+    env["GIT_CONFIG_GLOBAL"] = str(gitconfig)
+    env["GIT_CONFIG_SYSTEM"] = "/dev/null"
+    r = subprocess.run(
+        ["bash", str(root / "sysop/scripts/self_check.sh")],
+        cwd=str(root), capture_output=True, text=True, env=env,
+    )
+    assert "agent spawn rewrote it" not in r.stdout, r.stdout
+    assert "resolves ABSOLUTE" not in r.stdout
+    assert "is relative" not in r.stdout
+
+
+def test_residue_is_reported_even_when_no_hooks_are_armed(tmp_path):
+    """H04: every other fixture installs with hooks armed, so gating the whole
+    residue block on $ARMED survived the round's mutation. A hooks-less
+    consumer -- loop mode, or CI-only enforcement, which this script's own
+    header calls out -- is exactly who would never see the report."""
+    root = _consumer(tmp_path / "c")
+    assert _install(root, "--packs", "").returncode == 0
+    hooks = root / ".git" / "hooks"
+    for f in hooks.glob("*"):
+        if not f.name.endswith(".sample"):
+            f.unlink()
+    _agent_worktree(root, root, "beadfeed")
+    r = _self_check(root)
+    assert "hook armed:" not in r.stdout, "fixture still has hooks armed"
+    assert "agent-isolation residue: 1 worktree(s), 1 branch(es)" in r.stdout, r.stdout

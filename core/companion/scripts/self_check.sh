@@ -147,6 +147,58 @@ if [[ "$ARMED" -eq 0 ]] && [[ -d "$REPO_ROOT/sysop/scripts/hooks" ]]; then
   info "no hooks armed — enforcement runs only where you wire it (CI, or arm the hooks)"
 fi
 
+# ── 4b. agent-isolation residue ─────────────────────────────────────────────
+# Phase 240: the post-spawn assertion that catches this lives in /review-close
+# Step 2b, so it only ever runs during a close. An ad-hoc adversarial round --
+# which this project's own convention requires every phase -- spawns the same
+# isolated agents and asserts nothing afterwards, so its residue accumulates
+# unseen. Detection only: never delete here. A leaked worktree can hold work,
+# and a wholesale wipe as a rollback is the data-loss shape Phase 165 removed.
+# Count the DIRECTORY, matching /review-close Step 2b's own assertion --
+# `EnterWorktree`'s `name` parameter puts a worktree at .claude/worktrees/<name>,
+# so `agent-` is the default shape, not the only one, and scoping to it here
+# would report clean over a named agent worktree the close would flag.
+AGENT_WT="$(git -C "$REPO_ROOT" worktree list --porcelain 2>/dev/null \
+             | grep -c '/\.claude/worktrees/' || true)"
+AGENT_BR="$(git -C "$REPO_ROOT" for-each-ref --format='%(refname:short)' refs/heads/ 2>/dev/null \
+             | grep -c '^worktree-agent-' || true)"
+if [[ "${AGENT_WT:-0}" -gt 0 || "${AGENT_BR:-0}" -gt 0 ]]; then
+  info "agent-isolation residue: ${AGENT_WT:-0} worktree(s), ${AGENT_BR:-0} branch(es)"
+  info "  list them: git worktree list | grep /.claude/worktrees/"
+  info "  each one is a checkout an isolated agent was given and nothing reclaimed."
+  info "  CHECK BEFORE REMOVING: git -C <path> status --porcelain must be empty, and"
+  info "  after a squash-merge an ancestry test reports non-zero for correctly merged"
+  info "  work too -- so non-zero is not evidence the branch is unmerged."
+else
+  ok "no agent-isolation residue (nothing under .claude/worktrees/, no worktree-agent-* branches)"
+fi
+
+# core.hooksPath is rewritten relative -> absolute by isolated-agent spawns and
+# never restored. We cannot know what the owner originally set, so this reports
+# the property and its consequence rather than asserting a defect.
+# Read --local explicitly. HOOKS_PATH_CFG above is the MERGED value (probe 4
+# wants that -- it asks which hooks actually run). The rewrite, and the restore
+# command below, are --local facts: a user whose absolute value comes from
+# --global was never rewritten by a spawn, and running the restore would write a
+# --local key that shadows their deliberate setting.
+HOOKS_PATH_LOCAL=""
+if HOOKS_PATH_LOCAL="$(git -C "$REPO_ROOT" config --local --get core.hooksPath 2>/dev/null)" \
+   && [[ -n "$HOOKS_PATH_LOCAL" ]]; then
+  case "$HOOKS_PATH_LOCAL" in
+    # `~` is not relative: git expands it, so every worktree is pinned to one
+    # directory -- the exact property this arm exists to warn about.
+    /*|"~"|"~/"*)
+      info "core.hooksPath (--local) resolves ABSOLUTE ('${HOOKS_PATH_LOCAL}') — every"
+      info "  worktree runs THAT directory's hooks, not its own branch's. If you set it"
+      info "  relative, an isolated agent spawn rewrote it and did not restore it:"
+      info "  restore with  git config --local core.hooksPath <your relative value>"
+      ;;
+    *)
+      ok "core.hooksPath (--local) is relative ('${HOOKS_PATH_LOCAL}') — each worktree resolves its own"
+      ;;
+  esac
+fi
+
 # ── 5. optional scanners (advisory) ─────────────────────────────────────────
 if command -v semgrep >/dev/null 2>&1; then
   ok "semgrep on PATH (AST checks will run)"

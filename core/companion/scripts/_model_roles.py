@@ -38,6 +38,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from migrate_skill_model import (  # noqa: E402  (path set above)
     REPO_ROOT,
     iter_skill_files,
+    read_skill_text,
 )
 
 # Config lives beside the installed skills tree. In a consumer project the
@@ -233,6 +234,24 @@ def _load_yaml_mapping(path: Path) -> dict:
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
     except yaml.YAMLError as exc:
         raise ConfigShapeError(f"{path}: not valid YAML — {exc}") from exc
+    except UnicodeDecodeError as exc:
+        # `Q-346` leg 1's class, one input over: a config saved in a non-UTF-8
+        # encoding escaped the YAMLError catch as a traceback, which `install.sh`
+        # then printed as a verdict on the mapping. A config it cannot decode is
+        # a config it cannot read — the same answer ConfigShapeError already
+        # carries, and the same exit code (2).
+        raise ConfigShapeError(f"{path}: not valid UTF-8 — {exc}") from exc
+    except OSError as exc:
+        # The OTHER half of the same class, and the first cut of this catch left
+        # it open. `read_skill_text` guards `(UnicodeDecodeError, OSError)` and
+        # this one guarded only the decode; `load_roles_config` gates on
+        # `is_file()`, which a mode-000 file passes. So an unreadable
+        # `served_models.local.yml` — the documented, never-overwritten override
+        # file — raised `PermissionError`, exited 1, and `install.sh` printed
+        # `REFUSED (invalid mapping)` with the traceback under it: byte for byte
+        # the shape this phase says it closed, on a config that parses fine.
+        # Found by this phase's own execution lens.
+        raise ConfigShapeError(f"{path}: cannot be read — {exc}") from exc
     if data is None:
         return {}
     if not isinstance(data, dict):
@@ -327,7 +346,12 @@ def find_role_violations(
     out: list[tuple[str, PinRole, str]] = []
     for path in iter_skill_files(root):
         rel = str(path.relative_to(REPO_ROOT)) if path.is_relative_to(REPO_ROOT) else str(path)
-        text = path.read_text(encoding="utf-8")
+        text = read_skill_text(path)
+        # Unreadable/undecodable is skipped, same as an unmarked file: see
+        # `read_skill_text`. Both loops that walk this tree must agree, or the
+        # population count passes and this one crashes one call later.
+        if text is None:
+            continue
         # `.claude/skills/` is Claude Code's standard user-skill directory, not
         # Sysop's private tree — a consumer's own skill can live beside the
         # shipped ones and legitimately carry a `model:` field. Such a file has no

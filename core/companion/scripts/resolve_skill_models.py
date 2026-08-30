@@ -41,6 +41,7 @@ from _model_roles import (  # noqa: E402  (path set above)
     analyze_text,
     iter_skill_files,
     load_roles_config,
+    read_skill_text,
     resolve_text,
 )
 from migrate_skill_model import SKILLS_DIR  # noqa: E402
@@ -67,8 +68,11 @@ def _unresolvable(root: Path, roles: dict) -> list[tuple[str, int, str]]:
     """
     bad: list[tuple[str, int, str]] = []
     for path in iter_skill_files(root):
-        text = path.read_text(encoding="utf-8")
-        if "sysop:model-roles" not in text:
+        text = read_skill_text(path)
+        # A file this script cannot decode cannot carry a discoverable marker, so
+        # it lands in the same bucket as the unmarked file below. `Q-346` leg 1's
+        # class: guarding only `check_skill_models.py` moved the crash here.
+        if text is None or "sysop:model-roles" not in text:
             continue
         for r in analyze_text(text):
             if r.role is None:
@@ -116,8 +120,18 @@ def main(argv: list[str] | None = None) -> int:
 
     total = 0
     files_changed = 0
+    unreadable: list[Path] = []
     for path in iter_skill_files(root):
-        original = path.read_text(encoding="utf-8")
+        original = read_skill_text(path)
+        if original is None:
+            # `Q-346` leg 1, found by running the checker's fix: with the gate no
+            # longer crashing, the EXECUTOR crashed on the same latin-1 file and
+            # the whole resolution was reported as "skipped". Skipping the one
+            # file it cannot decode keeps the "never half-applies" contract over
+            # the files this script owns, and the skip is disclosed below rather
+            # than absorbed.
+            unreadable.append(path)
+            continue
         new_text, changes = resolve_text(original, roles)
         if not changes:
             continue
@@ -130,6 +144,13 @@ def main(argv: list[str] | None = None) -> int:
         if args.apply and new_text != original:
             path.write_text(new_text, encoding="utf-8")
 
+    if unreadable:
+        print(
+            f"  note: skipped {len(unreadable)} file(s) that are not valid UTF-8 "
+            f"or not readable, so they carry no Sysop marker to resolve: "
+            + ", ".join(_rel(u) for u in unreadable),
+            file=sys.stderr,
+        )
     mode = "APPLIED" if args.apply else "DRY-RUN (no files written)"
     rolemap = ", ".join(f"{k}={v}" for k, v in sorted(roles.items()))
     print(f"{mode}: {total} pin(s) across {files_changed} file(s) resolved [{rolemap}].")

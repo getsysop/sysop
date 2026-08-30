@@ -2714,7 +2714,7 @@ install_permissions() {
       return 0
     fi
     # Fail CLOSED: if the filter can't be built, do NOT fall back to the full
-    # master — that would over-grant the 78-rule allow-list AND re-add the hooks
+    # master — that would over-grant the 79-rule allow-list AND re-add the hooks
     # block referencing scripts loop mode never installs (broken at runtime).
     # Skip settings.json instead (the consumer sees more permission prompts, but
     # no over-grant and no dangling hooks); the loud error keeps it visible.
@@ -2819,6 +2819,240 @@ install_served_models() {
   record "model-roles: wrote $(rel "$dst") (role->model config; override in served_models.local.yml)"
 }
 
+# Phase 242 (Q-330, reported by a consumer): WHICH copy of check_skill_models.py runs the
+# model-role gate decides whether its answer is about the consumer's mapping at
+# all. `--dry-run` copies nothing, so the target's vendor dir still holds the
+# checker from the consumer's LAST install; handing it a flag this Sysop added
+# (`--managed-only`, Phase 223) makes argparse exit 2, and an exit-code-only
+# reading reports that as the mapping being refused. The consumer is then told
+# "your override would NOT be applied" on exactly the installs furthest behind —
+# the ones most worth updating — and the documented reaction to that message is
+# to abort. Reproduced end to end against a pre-Phase-223 install: dry-run said
+# "would REFUSE", the real apply on the same tree said "APPLIED: 0 pin(s) ...
+# resolved".
+#
+# Two independent fixes, because the defect has two independent causes:
+#
+#   1. Validate with the checker the update WOULD install — the SOURCE copy,
+#      already on disk when the installer runs. This closed the whole version-skew
+#      class rather than the --managed-only instance: any future flag change
+#      would otherwise mint the same bug again.
+#      **Superseded by Phase 244 (`Q-345`); corrected rather than deleted.** It
+#      used to end "Both arms now use it, so the preview and the apply run the
+#      same code against the same judge" — false since Phase 242's own round put
+#      the apply arm back on the VENDORED copy, and doubly false now: the preview
+#      runs NO checker, because the config and skills tree it would read are the
+#      ones the update replaces. Only the apply invokes the gate.
+#
+#   2. Never read a checker that could not parse its own invocation as a verdict
+#      on the mapping — in EITHER arm. The apply arm was not hypothetically
+#      exposed: a consumer-modified check_skill_models.py is PRESERVED by the
+#      Phase 24b divergence guard, so install_companion_scripts leaves the stale
+#      copy in place and the gate reported "REFUSED (unreadable config)" — the
+#      arm written specifically to stop conflating causes, conflating them.
+#
+# Phase 223 added the dry-run gate to close the mirror-image FALSE NEGATIVE (a
+# dry-run printing "no-op under default mapping" while the real run refused).
+# **Phase 244 re-opened that direction deliberately** — `Q-345` measured the gate
+# reaching the wrong verdict in BOTH directions, because it judged the tree the
+# update was about to replace, so the preview now states its limit instead. The
+# accepted cost is the lost early warning. This comment used to cite
+# `test_dry_run_previews_the_refusal` as holding one end; that test was replaced
+# by `test_the_preview_states_uncertainty_instead_of_a_verdict`, and a shipped
+# file citing a guard that no longer exists is the defect this line now avoids.
+_model_role_checker_supports() {
+  # Ask the checker to describe itself rather than pattern-matching argparse's
+  # error text, which is localized and version-dependent. $1 python, $2 checker,
+  # $3 the exact flag string.
+  #
+  # PYTHONDONTWRITEBYTECODE: `check_skill_models.py` top-level-imports
+  # `_model_roles` and `migrate_skill_model`, so those run before argparse even
+  # sees `--help`. Without this, every install leaves
+  # `__pycache__/*.pyc` beside whichever copy was probed — and this arm can probe
+  # the SOURCE clone, so the phase that added it started writing bytecode into
+  # the Sysop checkout. That is Phase 212's discipline (already observed ten
+  # lines below) broken one directory over; caught by the adversarial round, and
+  # new because nothing ran the source checker before.
+  # Q-347: capture, then match. As a pipeline this ran under `set -o pipefail`,
+  # and `grep -q` exits at its first match — so a checker that prints the flag
+  # early and a large help text after takes SIGPIPE, `pipefail` returns ITS
+  # status, and a checker that DOES support the flag is reported as not
+  # supporting it (rc 3 -> "applying it UNVALIDATED"). Demonstrated with a 4 MB
+  # help text: the pipeline said unsupported, this form said supported, and both
+  # agreed on the shipped 811-byte help. Not reachable with today's checker,
+  # which is why the entry was filed rather than fixed there; the idiom is
+  # mandated project-wide by convention_map.md, so it recurs.
+  local _help
+  _help="$(PYTHONDONTWRITEBYTECODE=1 "$1" "$2" --help 2>/dev/null)" || true
+  grep -q -- "$3" <<<"$_help"
+}
+
+# Runs the model-role checker and classifies the outcome, so no caller has to
+# infer one from an exit code that two different failures share.
+# Args: <python> <checker> <skills> <config> <localcfg>
+# Echoes the checker's combined output. Returns:
+#   0 valid mapping | 1 invalid mapping | 2 unreadable config | 3 checker unusable
+_check_model_roles() {
+  local py="$1" checker="$2" skills="$3" config="$4" localcfg="$5"
+  if ! _model_role_checker_supports "$py" "$checker" "--managed-only"; then
+    printf '%s\n' "check_skill_models.py does not accept --managed-only, so it cannot run this gate"
+    return 3
+  fi
+  local out rc=0
+  out="$(PYTHONDONTWRITEBYTECODE=1 "$py" "$checker" \
+        --root "$skills" --config "$config" --local "$localcfg" --managed-only 2>&1)" || rc=$?
+  printf '%s\n' "$out"
+  return "$rc"
+}
+
+# Which copy of the checker to run. Phase 242's adversarial round caught a cut
+# using the SOURCE copy on the apply path, which introduced a worse defect than
+# Q-330:
+#
+#   The checker is the JUDGE; `resolve_skill_models.py` (+ `_model_roles.py`) is
+#   the EXECUTOR, and on the apply path the executor is always the VENDORED copy.
+#   Both live at `sysop/scripts/*`, inside the Phase 24b preserve scope — so a
+#   consumer-modified `_model_roles.py` is kept, and judging with the source
+#   stack then certifies a mapping the vendored stack will not produce. Measured:
+#   a consumer whose vendored `_model_roles.py` resolves every role to `best` got
+#   `model: best` written across 21 files with a green install and no refusal,
+#   where the previous release refused and left every pin at `opus`. `best` is
+#   precisely the value the gate below exists to keep out.
+#
+# So: judge with the stack that will execute. `vendored` is the copy that runs
+# beside the executor; a stale one is no longer a false refusal, because
+# `_check_model_roles` classifies "cannot parse its own invocation" as rc 3
+# rather than as a verdict — which is what makes that probe load-bearing rather
+# than defensive. The source copy stays as the FALLBACK, for a target whose
+# vendor dir is partial.
+#
+# Phase 244 removed the `source` mode. It existed for one caller — the dry-run
+# preview's own judge — and `Q-345` retired that judge: every input the gate
+# reads is target-side state the update replaces, so a preview cannot reach a
+# verdict it can stand behind whichever copy it runs. With that caller gone the
+# mode had none, and leaving it would leave a second, unused way to point the
+# gate at the source stack — the exact repointing the paragraph above measures
+# as `model: best` across 21 files. One mode, one meaning.
+_model_role_checker_path() {
+  local source_copy="$REPO_ROOT/core/companion/scripts/check_skill_models.py"
+  local vendored_copy="$TARGET/sysop/scripts/check_skill_models.py"
+  local first second
+  case "${1:-}" in
+    vendored) first="$vendored_copy"; second="$source_copy" ;;
+    # No default. A caller that forgets the argument must fail loudly rather than
+    # silently inherit whichever copy happened to be listed first.
+    *) return 1 ;;
+  esac
+  if [[ -f "$first" ]]; then
+    printf '%s\n' "$first"
+    return 0
+  fi
+  if [[ -f "$second" ]]; then
+    printf '%s\n' "$second"
+    return 0
+  fi
+  return 1
+}
+
+# `--dry-run`'s half of the model-role step (Phase 244: `Q-345` § High + `Q-344`).
+#
+# Every input the gate reads is target-side state THIS RUN writes: the resolver
+# ships to `sysop/scripts/`, the skills tree to `.claude/skills/`, and
+# `served_models.yml` is a standard-overwrite managed path. `--dry-run` writes
+# none of them, so a preview that ran the gate would judge the tree the update is
+# about to REPLACE and print the answer as a verdict. Measured three ways, each
+# on one target minutes apart:
+#
+#   (a) the source adds a model and the consumer takes the documented one-key
+#       override (the flow Phase 95 created for `fable`): preview said
+#       "would REFUSE ... (30 FAIL lines)", apply succeeded and wrote every pin.
+#   (b) the source SUNSETS a model and the consumer maps a role to it: preview
+#       said "no-op under default mapping", apply REFUSED.
+#   (c) a partial install (skills tree present, Sysop skills missing — the state
+#       `--update` repairs): preview said "would REFUSE ... (unreadable config)"
+#       over a perfectly readable config, apply passed.
+#
+# (a) is the one that costs a consumer something: the documented reaction to
+# "your override would NOT be applied" is to abort the update.
+#
+# So the preview states what it can stand behind and stops there. It is NOT a
+# repointing, and the reason is narrower than the filing said — and narrower
+# again than the first cut of this comment claimed. `--config` and `--local`
+# COULD be made to describe the post-update merge: the consumer's
+# `served_models.local.yml` is never overwritten, so it is already correct, and
+# the source's `served_models.yml` is right here. For `--root` the first cut said
+# the tree "cannot" be previewed. That is **cost, not impossibility, and only
+# under `--mode loop` is it even cost** — in `full` mode `install_skills` copies
+# `core/skills` verbatim, so the post-update tree IS the source tree, which this
+# phase's execution lens demonstrated by running the checker against it and
+# getting the apply's verdict. Under loop mode it is filtered by
+# `LOOP_EXCLUDE_SKILLS`, and previewing it means a second copy of
+# `install_skills`' selection rules — the same class of
+# silently-wrong-about-the-future this function is being fixed for. Whether the
+# full-mode case is worth a mode-dependent preview is a design question this
+# phase had no mandate to answer; it is FILED, not decided here.
+#
+# The cost is stated and accepted (Wade, 2026-08-29): a consumer loses early
+# warning of a genuinely bad mapping and meets it at apply, where the gate
+# already refuses without touching a pin.
+_preview_skill_models() {
+  local localcfg="$1"
+  local src_script="$REPO_ROOT/core/companion/scripts/resolve_skill_models.py"
+  local src_config="$REPO_ROOT/core/companion/.claude/served_models.yml"
+  local src_skills="$REPO_ROOT/core/skills"
+  # `Q-344`: the shared precondition tests `$TARGET/...` for the resolver, the
+  # skills tree and served_models.yml — all three of which THIS RUN installs. On
+  # a fresh `--dry-run` none exists, so the preview printed
+  # "skipping: resolver, skills tree, or served_models.yml not present" while the
+  # apply on the same target resolved normally. Measured both ways, same tree.
+  # What actually decides whether the step runs is whether THIS SOURCE ships the
+  # three pieces, so that is what is tested.
+  # Each input is present for the apply if THIS SOURCE installs it OR the TARGET
+  # already has it from an earlier install. Testing only the target was `Q-344`;
+  # testing only the source reversed the direction of the same false skip — a
+  # source clone missing one of the three made the preview announce a skip the
+  # apply did not take, demonstrated by this phase's own execution lens against a
+  # source with `served_models.yml` deleted. Neither half is the predicate; the
+  # disjunction is.
+  if { [[ ! -f "$src_script" ]] && [[ ! -f "$TARGET/sysop/scripts/resolve_skill_models.py" ]]; } \
+     || { [[ ! -d "$src_skills" ]] && [[ ! -d "$TARGET/.claude/skills" ]]; } \
+     || { [[ ! -f "$src_config" ]] && [[ ! -f "$TARGET/.claude/served_models.yml" ]]; }; then
+    note "would skip model-role resolution: neither this Sysop checkout nor the target has a resolver, skills tree, or served_models.yml"
+    return 0
+  fi
+  if ! pick_python_with_yaml >/dev/null; then
+    # Phase 242, kept — and honest here for a reason the rest of this arm is not.
+    # PyYAML availability is a property of the CONSUMER'S environment, which this
+    # run does not change, so the preview's answer IS the apply's answer. Before
+    # Phase 242 this branch fell through to the benign "no-op under default
+    # mapping" line, so the preview understated where the apply arm warns.
+    if [[ -f "$localcfg" ]]; then
+      note "⚠ no python3 with PyYAML — your served_models.local.yml override would NOT be applied (skills would keep default models). Install PyYAML and re-run."
+    else
+      note "would skip model-role resolution: no python3 with PyYAML available (default mapping is a no-op anyway)"
+    fi
+    return 0
+  fi
+  note "would resolve skill model-role markers via served_models.yml (+ served_models.local.yml where present)"
+  # `--adopt` reaches this function too (`cmd_adopt` runs the pipeline under
+  # DRY_RUN to compute managed_paths) and never applies anything, so it must not
+  # forward-reference a step it will not take.
+  [[ "$ADOPT_MODE" -eq 1 ]] && return 0
+  # The second line has to cover EVERY outcome the apply arm can reach, and the
+  # first cut did not: it said "a bad mapping is refused and every pin keeps its
+  # current value" full stop, while THREE of the apply arm's outcomes (rc 3, an
+  # undefined rc, and a checker missing from both trees) print `applying it
+  # UNVALIDATED` and do rewrite pins. On the rc-3 path — a consumer whose vendored
+  # checker is preserved-as-modified, which is `Q-330`'s own population — that
+  # turned a TRUE early warning into a FALSE reassurance: measured at `440dc78`,
+  # `model: best` landed across 21 files behind a preview promising the apply
+  # would refuse it. Caught by this phase's own execution lens. A preview that
+  # states a limit and then overstates what happens next has not stopped making
+  # claims it cannot stand behind — it has moved them one sentence along.
+  note "the mapping is NOT judged here — a preview would have to read the served_models.yml and skills tree that this update replaces."
+  note "an install or update checks it instead: a mapping that is invalid, or that the gate cannot evaluate, is NOT applied and every pin keeps its current value — but if the gate itself cannot RUN, the run says so and applies the mapping UNVALIDATED."
+}
+
 # Phase 69: resolve the skills tree's role markers to concrete models. Skills
 # ship pinning a ROLE (reasoning/mechanical/quick); this rewrites each marked
 # `model:` value to whatever served_models.yml (+ the consumer's never-overwritten
@@ -2834,26 +3068,15 @@ resolve_skill_models() {
   local skills="$TARGET/.claude/skills"
   local config="$TARGET/.claude/served_models.yml"
   local localcfg="$TARGET/.claude/served_models.local.yml"
-  if [[ ! -f "$script" || ! -d "$skills" || ! -f "$config" ]]; then
-    note "skipping: resolver, skills tree, or served_models.yml not present"
+  # The preview runs BEFORE the target-side precondition below, on purpose: that
+  # precondition tests for files THIS RUN creates, which is `Q-344`. See
+  # _preview_skill_models for the source-side test it uses instead.
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    _preview_skill_models "$localcfg"
     return 0
   fi
-  if [[ "$DRY_RUN" -eq 1 ]]; then
-    # Preview the GATE too, not just the rewrite. Phase 223's round 2 found this
-    # branch returning before the validation, so `--update --dry-run` with an
-    # invalid override printed "no-op under default mapping" while the real run
-    # refused — and dry-run is the documented way to preview an update.
-    local _dry_py _dry_chk
-    if _dry_py="$(pick_python_with_yaml)" \
-       && [[ -f "$TARGET/sysop/scripts/check_skill_models.py" ]] \
-       && ! _dry_chk="$(PYTHONDONTWRITEBYTECODE=1 "$_dry_py" \
-            "$TARGET/sysop/scripts/check_skill_models.py" \
-            --root "$skills" --config "$config" --local "$localcfg" --managed-only 2>&1)"; then
-      note "⚠ would REFUSE the model-role mapping — your override would NOT be applied; skills would stay at Sysop's shipped defaults:"
-      printf '%s\n' "$_dry_chk" | sed 's/^/    /'
-    else
-      note "would resolve skill model-role markers via served_models.yml (no-op under default mapping)"
-    fi
+  if [[ ! -f "$script" || ! -d "$skills" || ! -f "$config" ]]; then
+    note "skipping: resolver, skills tree, or served_models.yml not present"
     return 0
   fi
   local _py
@@ -2876,26 +3099,75 @@ resolve_skill_models() {
   # half-apply"). The gate exists because Phase 223's round found the arm had no
   # invoker on the one path that creates the defect: `--update` after editing
   # served_models.local.yml, which is the remedy the docs themselves prescribe.
-  local _checker="$TARGET/sysop/scripts/check_skill_models.py"
-  if [[ -f "$_checker" ]]; then
+  # The VENDORED checker — the copy that runs beside the executor. Phase 244
+  # removed the dry-run arm's SOURCE-checker judge (`Q-345`), so this is now the
+  # only invocation of the gate in the installer, and `_model_role_checker_path`
+  # has only the one mode. The source copy remains as this call's fallback, for a
+  # target whose vendor dir is partial.
+  #
+  # The rc vocabulary is TOTAL, and that is `Q-346` leg 3: this arm used to read
+  # `-eq 3` then `-ne 0`, so every exit code outside {0,1,2,3} became a refusal —
+  # a verdict invented out of a code the gate does not understand. Unreachable
+  # with today's checker (0/1/2 only), and the point is that a future one degrades
+  # to "no verdict" instead of to "your mapping is wrong". Only rc 1 is a verdict.
+  local _checker
+  if _checker="$(_model_role_checker_path vendored)"; then
     local _chk _rc=0
-    _chk="$(PYTHONDONTWRITEBYTECODE=1 "$_py" "$_checker" --root "$skills" --config "$config" --local "$localcfg" --managed-only 2>&1)" || _rc=$?
-    if [[ "$_rc" -ne 0 ]]; then
-      # Preserve the exit-1/exit-2 distinction the checker exists to make: 1 is
-      # "this mapping is wrong", 2 is "this config is malformed". Collapsing them
-      # told a consumer with a stray bracket that their model mapping was invalid.
-      local _why="invalid mapping"
-      [[ "$_rc" -eq 2 ]] && _why="unreadable config"
-      note "⚠ model-role mapping REFUSED ($_why) — your override was NOT applied; skills are at Sysop's shipped defaults, which are valid:"
-      printf '%s\n' "$_chk" | sed 's/^/    /'
-      record "model-roles: refused ($_why; see warning above)"
-      return 0
-    fi
+    _chk="$(_check_model_roles "$_py" "$_checker" "$skills" "$config" "$localcfg")" || _rc=$?
+    case "$_rc" in
+      0)
+        : # the mapping resolves; fall through to the rewrite
+        ;;
+      1)
+        # The one real verdict: the checker read everything it needed and the
+        # mapping is wrong. Refusing leaves every pin at its working value.
+        note "⚠ model-role mapping REFUSED (invalid mapping) — your override was NOT applied; skills are at Sysop's shipped defaults, which are valid:"
+        printf '%s\n' "$_chk" | sed 's/^/    /'
+        record "model-roles: refused (invalid mapping; see warning above)"
+        return 0
+        ;;
+      2)
+        # `Q-346` leg 2. rc 2 is FOUR states — config not found, root not a
+        # directory, a malformed config, and an empty population — and none of
+        # them is a verdict on the mapping. The old headline asserted both halves
+        # wrongly at once ("REFUSED", "unreadable config"): `Q-345`'s reproduction
+        # (c) hit it on a partial install, over a perfectly readable config. The
+        # checker's own diagnostic names the real cause, so the headline stops
+        # guessing at one and the payload carries it.
+        #
+        # The control flow is deliberately UNCHANGED: rc 2 still declines to
+        # apply. Only the claim moves. A gate that could not read its inputs is
+        # not a licence to rewrite pins.
+        note "⚠ cannot evaluate the model-role mapping — the gate could not read what it needs, so nothing is claimed about your mapping. The mapping was NOT applied; your skills keep their current models:"
+        printf '%s\n' "$_chk" | sed 's/^/    /'
+        record "model-roles: not applied (gate could not read its inputs; see warning above)"
+        return 0
+        ;;
+      3)
+        # An unusable checker is not a refusal. Saying so plainly beats inventing a
+        # verdict, which is the whole of Q-330.
+        note "⚠ cannot validate the model-role mapping — applying it UNVALIDATED. The gate could not run, so nothing is claimed about your mapping:"
+        printf '%s\n' "$_chk" | sed 's/^/    /'
+        record "model-roles: applied UNVALIDATED (gate could not run; see warning above)"
+        ;;
+      *)
+        note "⚠ the model-role gate exited $_rc, which is not one of its defined outcomes — nothing is claimed about your mapping; applying it UNVALIDATED:"
+        printf '%s\n' "$_chk" | sed 's/^/    /'
+        record "model-roles: applied UNVALIDATED (gate returned undefined exit $_rc; see warning above)"
+        ;;
+    esac
   else
     # Every other skip in this function says so. A silent fail-open here would
     # hand a consumer with a partial vendor dir the rewrite with no gate and no
     # word about it — which is the state the gate was added to end.
-    note "⚠ check_skill_models.py not present in the vendor dir — applying the mapping UNVALIDATED"
+    # Phase 242: the condition widened to "neither the source tree nor the vendor
+    # dir has it", so the message says that rather than naming only one of them.
+    note "⚠ check_skill_models.py not present in the source tree or the vendor dir — applying the mapping UNVALIDATED"
+    # `Q-346` leg 4: the rc-3 sibling above writes a `record` and this branch did
+    # not, so the install summary read `model-roles: APPLIED: …` with no trace
+    # that the gate had been skipped. The warning scrolls; the summary is what a
+    # consumer reads back.
+    record "model-roles: applied UNVALIDATED (checker not present; see warning above)"
   fi
 
   local _out

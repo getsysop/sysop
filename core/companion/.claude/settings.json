@@ -73,6 +73,7 @@
       "Bash(gh pr create:*)",
       "Bash(gh pr checks:*)",
       "Bash(gh pr merge:*)",
+      "Bash(gh api:*)",
       "Bash(gh pr close:*)",
       "Bash(gh issue list:*)",
       "Bash(gh issue create:*)",

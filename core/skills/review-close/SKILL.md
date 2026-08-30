@@ -32,6 +32,7 @@ Read `.claude/settings.json` (and `.claude/settings.local.json` if present) and 
 - `Bash(python3 -:*)` — Step 3c's smoke-gate detection heredoc **and** Step 4c's yaml-round-trip status flip + git mv + the `git add` of the index it rewrote (those git calls run *inside* the heredoc via `subprocess`, so they bind no Bash rule of their own). Both are single `python3 - <<` commands (literal `python3` command word, no PATH prefix or `&&` compound) so this one rule matches; venv PyYAML is resolved by an in-heredoc `sys.path` bootstrap, not a `.venv/bin/python3` invocation or an env prefix (BeanRider ISSUE-0049; Sysop Phase 126 — a `.venv/bin/python3` command word or a `VAR=… python3` prefix would each bind to no rule)
 - `Bash(python3 sysop/scripts/validate_tasks.py)` — Step 4c's final-guard validator run (bare `python3`; the script self-resolves venv PyYAML via its own `sys.path` bootstrap, so this one form serves both venv-only and non-venv consumers — Sysop Phase 126)
 - `Bash(python3 sysop/scripts/validate_tasks.py:*)` — same with `--quiet` / `--path`
+- `Bash(python3 sysop/scripts/review_index.py:*)` — Step 4b's batch-set derivation (`--list`). Bare `python3`, for the same reason as the validator above: the script self-resolves venv PyYAML, so one form serves venv and non-venv consumers. **The command word is load-bearing** — this step prescribed `bash …review_index.py --list` until Phase 241, which binds no rule *and* cannot run: bash lexes the module's docstring as one quoted word and exits 2 with an empty stdout, indistinguishable from a batch-free cycle.
 
 **Deliberate non-entries.** (One of them stopped being one — see the end of this paragraph.) Step 3b's pending-docs collect and its rollback used to run as `mkdir -p … && cp …` and a `for … rm -f … done` loop, which bound **no** allow-rule at all: the compound splits into `mkdir` + `cp` command words (Phase 126 matcher facts) and neither is in the seeded set, nor are `rm`, `mv` or `cmp`. **Phase 210 rebuilt both as `python3 - <<'PY'` heredocs, so they now bind `Bash(python3 -:*)`, which the 71-rule seed already carries.** The permission surface got smaller, not larger — one existing rule replaced four ruleless command words — and the change was driven by correctness rather than permissions: a provenance check is not expressible in that compound. **If some other part of this step ever *does* halt on a denial, nothing rescues it automatically — ask the user for the escape yourself.** The Phase 36 `PermissionDenied` hook matches only `git push origin main`/`master`, `git push origin --delete <branch>` and `git commit` on a protected branch; a denied `mkdir` or `cp` falls through its matcher loop and it emits **nothing**, so the denial arrives with no guidance attached. Relay the literal `!`-prefixed command — **the `python3 -` heredoc as written, never the retired `mkdir -p … && cp …`**, which has no provenance check and is the form this step removed for the user to type at the next prompt, the same route Step 3 uses for a denied verification command, and never `AskUserQuestion`. Step 3b itself forbids proceeding to the worktree remove with the docs uncollected.
 
@@ -43,6 +44,7 @@ Read `.claude/settings.json` (and `.claude/settings.local.json` if present) and 
 - `Bash(gh pr list:*)` — Step 4-pre's PR-reuse probe (`gh pr list --head … --base main --state open`)
 - `Bash(gh pr create:*)` — open the integration PR against `main` (integration-branch shape only; the PR-reuse shape never calls it)
 - `Bash(gh pr checks:*)` — wait on the PR's required checks
+- `Bash(gh api:*)` — Step 4d command 4b's check-run count on the PR head (`repos/{owner}/{repo}/commits/<sha>/check-runs`), and the ruleset lookup its could-not-measure note points at. Read-only, but `gh api` can POST, so the rule is a deliberate grant rather than an inference from the verb
 - `Bash(gh pr view:*)` — read the PR's merge state
 - `Bash(gh pr merge:*)` — squash-merge the integration PR (non-`--auto`)
 
@@ -264,15 +266,21 @@ Each target has a **diff basis**, used identically by step 0's predicate and ste
 
 If the repo has no `origin` remote, or `HEAD` is not `main`, there is no unpushed-main group — skip that target rather than running a command that will fail or silently diff something else. (Step 1's `git log --oneline origin/main..HEAD` is already qualified "if on main"; this is the same condition.)
 
-**0. Per-target doc-only skip (internal tracker #240).** Compute the target's diff basis first. If it touches **no** code files (the same code-file set Step 3 uses — `.py` / `.ts` / `.tsx` / `.js` / `.jsx` / `.sql` / `.sh` / `.kt` / `.swift` / `.go` / `.rs`) **and** the project's `## Prevention Conventions` contain no rule that governs the file types the diff *does* touch, skip the agent for that target with a one-line note (`2b: <target> — doc-only diff, no code-convention surface`). Docs-only cycles are not an edge case here — Step 7's own friction capture generates them routinely.
+**0. Per-target doc-only skip (internal tracker #240).** Compute the target's diff basis first. If it touches **no** code files (the same code-file set Step 3 uses — `.py` / `.ts` / `.tsx` / `.js` / `.jsx` / `.sql` / `.sh` / `.kt` / `.swift` / `.go` / `.rs`) **and** the project's conventions contain no rule that governs the file types the diff *does* touch, skip the agent for that target with a one-line note (`2b: <target> — doc-only diff, no code-convention surface`). **"The project's conventions" is THREE sources, not one section (`Q-328`).** Until Phase 241 this conjunct named `## Prevention Conventions` alone, which made the skip fire over a target governed solely by a rule living anywhere else — and Sysop's own shipped template puts convention content elsewhere, so this was not a consumer quirk. Read all three before concluding the conjunct holds:
 
-> **Check the second condition; do not assume it.** "Docs cannot violate a convention" is false often enough to be dangerous, and Sysop's own shipped maps are the counter-examples: `core/companion/convention_map.md` routes `.claude/skills/**/*.md` to five conventions including *No secrets in examples*; the beancount pack routes a per-vendor `README.md` to **"Synthetic content only: NO real account numbers, payees, amounts, addresses"** and `<ledger>.beancount` to *No PII in git-tracked ledgers*; the llm pack routes `<prompts dir>/**/*.md` to template rules. **None of those is scanner-shaped** — the beancount rule asks a reader to judge whether a digit string *looks* real, which no entropy or pattern scanner does. So the skip is licensed by the *absence of an applicable rule*, not by the file extension. Read the conventions section (you need it for step 1 anyway), and if any subsection names documentation, config, prompts, fixtures, or committed data, **do not skip** — spawn the agent and let it route. Secret-scanning (`security_map.md` routes root operational docs to **A02**) is a separate expectation covered by the project's scanner, and this skip neither touches nor waives it.
+   1. **`## Prevention Conventions` in `<project>/CLAUDE.md`**, every subsection.
+   2. **The other CLAUDE.md sections that carry convention content.** `WORKFLOW.md` § 6.1's required-sections table lists **`## Testing Patterns` as its own top-level section**, beside `## Prevention Conventions` and not inside it. A consumer who followed the shipped template therefore keeps testing conventions in a section this predicate never read. Treat any required or optional section naming rules the diff's file types could violate as in scope.
+   3. **The convention map** — `.claude/convention_map.project.md` (the consumer overlay `WORKFLOW.md` names as the documented home for path routing) and the shipped `convention_map.md` beneath it. This predicate was **map-blind**: the map is the one artifact that routes *globs* to conventions, which is precisely the question being asked, and it was consulted nowhere. A glob in either map matching a path this diff touches is a governing rule — **do not skip**.
+
+   If any of the three yields a rule that could govern the touched types, spawn the agent and let it route. The skip is licensed by a *searched* absence, across all three, not by the absence of a section you happened to read. Docs-only cycles are not an edge case here — Step 7's own friction capture generates them routinely.
+
+> **Check the second condition; do not assume it.** "Docs cannot violate a convention" is false often enough to be dangerous, and Sysop's own shipped maps are the counter-examples: `core/companion/convention_map.md` routes `.claude/skills/**/*.md` to five conventions including *No secrets in examples*; the beancount pack routes a per-vendor `README.md` to **"Synthetic content only: NO real account numbers, payees, amounts, addresses"** and `<ledger>.beancount` to *No PII in git-tracked ledgers*; the llm pack routes `<prompts dir>/**/*.md` to template rules. **None of those is scanner-shaped** — the beancount rule asks a reader to judge whether a digit string *looks* real, which no entropy or pattern scanner does. So the skip is licensed by the *absence of an applicable rule*, not by the file extension. Read the conventions (you need `## Prevention Conventions` for step 1 anyway; the other two sources are this predicate's alone), and if **any of the three** names documentation, config, prompts, fixtures, or committed data — in a subsection, in another CLAUDE.md section, or as a glob in either convention map — **do not skip** — spawn the agent and let it route. **The escape used to be sealed inside the one section the predicate read**, so a project whose only doc-governing rule lived in a map glob or in `## Testing Patterns` got the skip *and* the escape wrong together, from the same blind spot. Secret-scanning (`security_map.md` routes root operational docs to **A02**) is a separate expectation covered by the project's scanner, and this skip neither touches nor waives it.
 
 Step 2a still reads the diff either way. If every target skips, Step 2b is a clean no-op; say so in one line rather than reporting nothing.
 
 **For each remaining target:**
 
-1. Read the **entire** `## Prevention Conventions` section of `CLAUDE.md` (every subsection — subsection names vary by project: a web project might have `Frontend`/`Backend`/`Testing`; a data-pipeline project might have `Data integrity`/`Privacy`/`Testing Patterns`; an MCP server might have `MCP server boundaries`). Retrieve the full diff — the target's **diff basis** from the table above, three dots, per Step 2a's note. Whichever arm you take below, a two-dot diff hands the reviewer `main`'s newest content as though the branch had torn it out.
+1. Read the **entire** `## Prevention Conventions` section of `CLAUDE.md` (every subsection — subsection names vary by project: a web project might have `Frontend`/`Backend`/`Auth boundaries`; a data-pipeline project might have `Data integrity`/`Privacy`/`Schema evolution`; an MCP server might have `MCP server boundaries`). **`Testing Patterns` used to be the example here and it was the wrong one (`Q-328`)**: `WORKFLOW.md` § 6.1's required-sections table makes `## Testing Patterns` a **top-level section of its own**, so offering it as a subsection of this one put the skill in contradiction with the template it ships — and step 0's skip predicate rode that contradiction into skipping targets governed by it. Read this step as scoped to `## Prevention Conventions` deliberately; what a *sibling* section governs is step 0's question, and step 0 now reads them. Retrieve the full diff — the target's **diff basis** from the table above, three dots, per Step 2a's note. Whichever arm you take below, a two-dot diff hands the reviewer `main`'s newest content as though the branch had torn it out.
 
    **Paste or write-once — the conventions threshold is 10,000 characters of section text (Phase 222, Q-275).** The section is identical for every agent, so above the threshold pasting it N times is pure duplication (measured: 53,456 characters × a 13-agent close ≈ 174k tokens of the same text). Measure it, do not estimate it — the same rule as the diff threshold below, and the command matches the `Bash(python3 -:*)` idiom every other measurement here uses:
 
@@ -316,9 +324,27 @@ Step 2a still reads the diff either way. If every target skips, Step 2b is a cle
 2. **Capture the primary-tree baseline — before any agent is spawned.** Step 3's assertion is a *delta* against this file and there is nothing to compare against if you skip it. It must run here, ahead of the spawn below; a baseline taken afterwards records the breach as though it were pre-existing and the assertion then certifies the tree clean.
 
    ```bash
-   rm -f sysop/runtime/2b-baseline.txt
+   rm -f sysop/runtime/2b-baseline.txt sysop/runtime/2b-config-baseline.txt
+   mkdir -p sysop/runtime && git config --local --list | sort > sysop/runtime/2b-config-baseline.txt
    mkdir -p sysop/runtime && git status --porcelain -uall > sysop/runtime/2b-baseline.txt
    ```
+
+   > **The config capture runs FIRST, and the order is load-bearing.** `>` creates its
+   > file before the command on that line runs, so writing the config baseline *after*
+   > `git status` leaves it absent from the tree snapshot but present in the tree it is
+   > later compared against — the third command then reports the step's own artefact as
+   > an agent mutation, and the remedy below says to revert it. Capturing it first makes
+   > it appear in the baseline and in the comparison alike, so it cancels out, which is
+   > the same self-cancelling property the tree baseline already relies on. (The repeated
+> `mkdir -p` is deliberate and idempotent — it keeps each capture line runnable on its
+> own, and two shipped guards key on the tree capture carrying it.)
+   >
+   > **Two baselines, because a spawn writes to two places.** The tree snapshot catches an agent
+   > that created or edited a file; the config snapshot catches the harness itself. Spawning with
+   > `isolation: "worktree"` rewrites a **relative** `core.hooksPath` to an absolute path in the
+   > repository's shared `--local` config and never restores it — measured, one spawn. Both
+   > captures must run here, before the first spawn, for the same reason: a baseline taken after
+   > the fact records the damage as the starting state.
 
    **`rm -f` first, and `-uall` on both ends.** The delete is what makes a *skipped* capture fail loudly on every close rather than only the first — without it the file persists between runs, and a later close that skips this step silently diffs against a previous close's tree. `-uall` is required because plain `--porcelain` collapses an untracked directory to a single `?? dir/` line, so an agent writing into a directory that was already untracked is invisible; the assertion below uses `-uall` too, and the two must match.
 
@@ -379,7 +405,7 @@ Step 2a still reads the diff either way. If every target skips, Step 2b is a cle
      identify which subsection(s) apply, based on file path, language, and
      domain. A subsection applies when its bullets reference concepts the file
      touches — for example:
-     - parsers/<format>.py → "Data integrity" + "Testing Patterns"
+     - parsers/<format>.py → "Data integrity" + "Schema evolution"
      - mcp_server/tools/*.py → "MCP server boundaries"
      - frontend/components/*.tsx → "Frontend" / "UI components"
      - api/routes/*.py → "Backend" / "API endpoints"
@@ -434,21 +460,24 @@ Step 2a still reads the diff either way. If every target skips, Step 2b is a cle
 >
 > **It must be a delta, not an absolute cleanliness test — that is why step 2 above captures a baseline.** Nothing in this skill establishes that the primary worktree is clean before the agents run: Step 1a excludes it by construction (it skips the worktree whose branch is `main`, as Step 6's `pr` re-sync note also states in its own words), and the only earlier primary-tree reads are both in **Step 1b** — one path-scoped (`git status --porcelain -- review_tasks.md`), one whole-tree but grepped down to `review_tasks_archive.md` — while **Step 1c reads no working tree at all** (`for-each-ref`, `merge-base`, `diff --name-only`). So nothing before the agents run establishes anything about the rest of the tree. A bare `git diff --quiet HEAD --` here would fire on any ordinary uncommitted work and SKIP a close that is fine — a false-FAIL on the dominant path, which is how a gate gets disabled by the first operator who hits it. The baseline is taken after Steps 1b and 1c because both deliberately create commits, so a Step-1 reading is stale by design.
 >
-> After step 4 collects the verdicts, assert all three are clean before continuing:
+> After step 4 collects the verdicts, assert all four are clean before continuing:
 >
 > ```bash
 > git worktree list --porcelain | grep -F '/.claude/worktrees/' || echo "no agent worktrees"
 > git for-each-ref --format='%(refname:short)' refs/heads/ | grep '^worktree-agent-' || echo "no agent branches"
 > diff <(git status --porcelain -uall) sysop/runtime/2b-baseline.txt && echo "primary tree unchanged by 2b"
+> diff <(git config --local --list | sort) sysop/runtime/2b-config-baseline.txt && echo "local config unchanged by 2b"
 > ```
 >
-> **If the third command reports `No such file or directory`, the step-2 baseline was never captured — that is the loud failure, and it is not optional to fix.** Re-running the capture *now* cannot help: it would record whatever the agents did as the starting state. Inspect the tree by hand against `git log`, or re-run Step 2b from a known-clean point.
+> **If the third or fourth command reports `No such file or directory`, that step-2 baseline was never captured — that is the loud failure, and it is not optional to fix.** Re-running the capture *now* cannot help: it would record whatever the agents did as the starting state. Inspect the tree by hand against `git log`, or re-run Step 2b from a known-clean point.
 >
 > **The baseline lives under `sysop/runtime/` because that directory is gitignored** (Phase 133's single runtime home; `install.sh`'s `ensure_runtime_gitignore` appends the entry when missing and runs unconditionally in both modes and on `--update`, so a consumer has it). **It is not there to stop the file reporting itself** — it cannot do that in either location, because `>` creates the file before `git status` runs, so it appears in the baseline *and* in the comparison and cancels out. The reason is downstream: an untracked artefact at a tracked path shows up in the operator's own `git status` for the rest of the close, and is reachable by a later `git add`. Steps 2a–2d run in the primary checkout by construction, so a plain relative path is correct here; there is no worktree to resolve through.
 >
 > **Use `status --porcelain`, not `git diff --quiet HEAD --`.** The dominant observed breach shape is a *new untracked* scratch file, and `git diff` cannot see one — untracked files are invisible to it and to the 4a-post and 4b gates alike, which is why the prompt rule above had to name file creation directly. `status --porcelain` lists them.
 >
 > Anything listed is a leak: remove the worktree (`git worktree remove <path>`) and delete the branch (`git branch -D <name>`) before Step 3b. A **third-command** difference is an agent that mutated the primary tree — inspect each line and revert or set it aside deliberately; do not carry it into Step 3b, where it becomes indistinguishable from the close's own work and rides Step 4c's consolidation commit under that commit's message. **Read the first two commands before acting on the third.** `.claude/worktrees/` is gitignored in Sysop's own repo but not in a consumer install, so a leaked agent worktree surfaces in the delta as well — that line is the leak the first command already named, and its remedy is `git worktree remove`, not "revert an edit". Only lines the first two commands did not account for are tree mutations. **Do not skip this because the harness usually cleans up** — "usually" is what makes the residue arrive on a later run, attached to nobody, in a step that force-deletes branches.
+> **The fourth command's delta is usually not an agent — it is the harness, and its remedy is a restore rather than a revert.** Spawning with `isolation: "worktree"` converts a **relative** `core.hooksPath` to an absolute path in the repository's shared `--local` config and never puts it back. Both spellings name the same directory, so `main`'s hooks keep working and the close is not at risk — but every *worktree* created afterwards runs the **primary** checkout's hooks instead of its own branch's, which is the opposite of the property the relative form was chosen for. Restore it: `git config --local core.hooksPath <the original relative value>`, read from `sysop/runtime/2b-config-baseline.txt` rather than from memory. **Match on the lower-cased key.** `git config --list` renders it `core.hookspath`, so a grep for `core.hooksPath` finds nothing and reports clean — which is why this is a `diff` against a captured baseline and not a targeted probe. **A repo that sets no `core.hooksPath` sees no delta here**, so a clean fourth command is the ordinary result and is not evidence the check is inert.
+>
 >
 > **If your harness offers no `isolation` parameter, the first two commands do not apply — but the third one matters MORE, not less.** With no isolation the agents run directly in this checkout, so the prompt's do-not-mutate rule is the only thing standing between a stray edit and the close, and it has now been measured failing twice. Run the baseline and the delta. (An honest limit, stated so the check is not over-trusted: a tight window still cannot distinguish an agent's edit from a human's edit made while the agents ran.)
 
@@ -484,7 +513,7 @@ For each **approved** feature branch (Step 2a verdict), for each task ID it clai
 >
 > **Getting that prefix wrong is not a cosmetic slip** — it produces `fatal: path … does not exist`, which is exactly the `unreadable` signature below, so a mis-resolved path halts the close wearing a diagnosis that blames the branch. Check the recorded `body:` value before concluding anything from **that** fatal — and read the signature first, because the advice is wrong for the others: `ambiguous argument` and `invalid object name` **cannot** be produced by a prefix mistake, so re-checking `body:` there sends you looking in the one place the fault is not. This is the object-database read Step 2b's prompt already prescribes, and it is the same revision `git diff main...<branch>` reports — both halves of this gate must come from one revision, or the comparison is between two different trees. `WORKFLOW_GUIDE.md` § Merge Process already says to read "**the branch's** `## Test decision`" back against the diff, so the branch-tip read restores the spec rather than inventing a rule; `WORKFLOW.md` § 2.8 ("each approved branch's task body") scopes *whose* body rather than *which revision*, so it is consistent with that reading without compelling it.
 
-**0. Per-branch doc-only skip.** If this branch's diff (`git diff main...<branch>` — three dots, per Step 2a's note) touches no code files (the same code-file set Step 3 uses — `.py` / `.ts` / `.tsx` / `.js` / `.jsx` / `.sql` / `.sh` / `.kt` / `.swift` / `.go` / `.rs`), **and** *that task's* recorded decision is a `no-test`, skip verification for it with a one-line note (`2d: <branch>/<task id> — doc-only diff, no-test record`). **The two conjuncts have different granularity, and the skip takes the narrower one.** The diff test is per *branch*; the record is per *task*, and this gate iterates the tasks a branch claims. So a doc-only branch claiming two tasks skips only the task whose record is a `no-test` — the other is verified, which is the point: a record naming a test must not be silenced because a sibling task's record said none was needed. **Resolve step 1's read before deciding this** — the second conjunct is a fact about the record, so the classification has to exist before the skip can be evaluated, and reading it is one `git show` this gate runs either way. What this skip saves is step 2's verification, not the read; a step 0 that fired before the record was classified would be deciding on the extension test alone, which is the defect. An `unreadable` or `missing` classification is **not** a `no-test` and does not earn the skip — those have their own arms below. **A record that names a test is verified whatever the extensions say** — checking that the named test is present costs one read and is exactly as meaningful on a semgrep rule or a `checks.yml` entry as on a `.py` file. The extension test cannot carry this skip alone, because it calls semgrep rules, `checks.yml`, CI workflows and served-model config documentation, and a branch changes behaviour through any of them; Sysop's own `coverage-*` `blocking: true` flip (Phase 61b) had that shape. Step 2b's skip carries a second conjunct too — a different predicate (no `## Prevention Conventions` rule governs the touched types), the same reason: the extension test is evidence about file names, and neither gate is about file names.
+**0. Per-branch doc-only skip.** If this branch's diff (`git diff main...<branch>` — three dots, per Step 2a's note) touches no code files (the same code-file set Step 3 uses — `.py` / `.ts` / `.tsx` / `.js` / `.jsx` / `.sql` / `.sh` / `.kt` / `.swift` / `.go` / `.rs`), **and** *that task's* recorded decision is a `no-test`, skip verification for it with a one-line note (`2d: <branch>/<task id> — doc-only diff, no-test record`). **The two conjuncts have different granularity, and the skip takes the narrower one.** The diff test is per *branch*; the record is per *task*, and this gate iterates the tasks a branch claims. So a doc-only branch claiming two tasks skips only the task whose record is a `no-test` — the other is verified, which is the point: a record naming a test must not be silenced because a sibling task's record said none was needed. **Resolve step 1's read before deciding this** — the second conjunct is a fact about the record, so the classification has to exist before the skip can be evaluated, and reading it is one `git show` this gate runs either way. What this skip saves is step 2's verification, not the read; a step 0 that fired before the record was classified would be deciding on the extension test alone, which is the defect. An `unreadable` or `missing` classification is **not** a `no-test` and does not earn the skip — those have their own arms below. **A record that names a test is verified whatever the extensions say** — checking that the named test is present costs one read and is exactly as meaningful on a semgrep rule or a `checks.yml` entry as on a `.py` file. The extension test cannot carry this skip alone, because it calls semgrep rules, `checks.yml`, CI workflows and served-model config documentation, and a branch changes behaviour through any of them; Sysop's own `coverage-*` `blocking: true` flip (Phase 61b) had that shape. Step 2b's skip carries a second conjunct too — a different predicate (no rule in `## Prevention Conventions`, in a sibling CLAUDE.md section, or in either convention map governs the touched types), the same reason: the extension test is evidence about file names, and neither gate is about file names.
 
 **1. Read the record.** Read the body **at the branch tip** (`git show "<branch>:<repo-root-relative body path>"`, resolved and quoted per the note above — never the working-tree copy) and find the section under a heading whose text matches `test\s+decision` (case-insensitive — `## Test decision`, `### Test Decision` both match; the pattern is defined in `tasks/schema.md` § Test decision, which is now its only home). Classify it:
 
@@ -1829,7 +1858,7 @@ Feature branches MAY modify `review_tasks.md` — typically as single-line task-
 
 After all branches are merged and `4a-post` reported green, but **before** doc consolidation.
 
-**Determine the batch set first — this step never said where `<N1> <N2> <N3>` come from.** The set is the review batches whose branches step 5 actually merged this run, and **the source is `review_tasks.md`**, read through `bash sysop/scripts/review_index.py --list` — which prints every batch with its status and its branch, tab-separated. Intersect that branch column with the branches step 5 merged.
+**Determine the batch set first — this step never said where `<N1> <N2> <N3>` come from.** The set is the review batches whose branches step 5 actually merged this run, and **the source is `review_tasks.md`**, read through `python3 sysop/scripts/review_index.py --list` — which prints every batch with its status and its branch, tab-separated. Intersect that branch column with the branches step 5 merged.
 
 **The locks corroborate; they do not define the set.** `batch_work.sh` writes `sysop/runtime/locks/BATCH-<N>.lock` carrying `task_id: BATCH-<N>` and the `branch:` it claimed, and `close_batch.sh` removes it at close — so a lock is good evidence a batch is in flight, and worth cross-checking against. But **a merged batch with no lock is an ordinary state, not an anomaly**: `close_batch.sh` says so in its own words when it finds none — *"claimed before batch locks shipped, or already released"*. Deriving the set from locks alone therefore drops exactly those batches, and because the empty-set arm below then fires, the close reports `none this cycle` over a batch left `Pending` with its boxes open. That trades this step's old failure — a loud halt — for a silent false record, which is the worse direction. **Where the two disagree, `review_tasks.md` wins and the discrepancy is reported.**
 
@@ -1837,7 +1866,11 @@ Two lock shapes to be aware of when cross-checking, because both fail quietly: t
 
 **Do not read `review_task_ids` for this.** It is the obvious-looking candidate in the pending-doc frontmatter and it is the wrong namespace — it holds `TASK-NNNN` ids from `review_tasks.md`, and `close_batch.sh` takes a batch number — bare, zero-padded, or the `BATCH-<N>` form, and nothing else. Verified by running it rather than reasoned about: `BATCH-1` is accepted (the prefix is stripped), while `close_batch.sh TASK-0001` is rejected at **argument parsing** — `❌ Unknown argument: TASK-0001`, exit 1 — so it never reaches a batch lookup at all. "It takes integers" is the tempting shorthand and it is wrong in the direction that matters, because it implies the `BATCH-` form fails too. Three shipped sites already say so, which is why this is a convergence and not a new rule: Step 4c's routing note (*"`review_task_ids` is documentary only and never consulted here"*), `/document-work`'s two-namespace section, and `close_batch.sh`'s own `remove_claim_artifacts()` comment (*"Step 4c has no batch-id list to iterate"*).
 
-**The empty set is the ordinary case, not an edge case, and it has its own arm — but it must be *derived*, never inferred from absence.** A `/claim-task` single-task cycle carries no review batch at all, which is the dominant path rather than a corner of it. **Empty means `review_index.py --list` named no batch whose branch step 5 merged** — a positive reading of the authoritative file. It does **not** mean "no locks were found": that is the false-empty above, and it turns a missed batch into a clean-looking report. When the set is genuinely empty: report the one line
+**The empty set is the ordinary case, not an edge case, and it has its own arm — but it must be *derived*, never inferred from absence.** A `/claim-task` single-task cycle carries no review batch at all, which is the dominant path rather than a corner of it. **Empty means `review_index.py --list` named no batch whose branch step 5 merged** — a positive reading of the authoritative file. It does **not** mean "no locks were found": that is the false-empty above, and it turns a missed batch into a clean-looking report. **And it does not mean the reader failed to run** — that is a second false-empty, arriving by a different route. `review_index.py --list` exits **0** whether it names batches or names none, so the exit code is a discriminator that stdout alone cannot be: exit `0` with no lines is a *measured-empty* set, and **any non-zero exit is a could-not-measure, never an empty set.** **Read the exit code before you read the lines.** On any non-zero exit, report it and **STOP** — do not take the empty arm below. A batch the reader could not name is left `Pending`, its task boxes open and its lock in place, while this step reports success.
+
+**Exactly two exit codes are reachable from `--list`, and the enumeration matters because an earlier draft of this paragraph got it wrong.** `0` (it ran) and `1` (`review_tasks.md` not found) — plus `2` from a wrong command word, which is how this arm's own defect presented. The script's other refusal arms (`3`, `5`, `6`) sit behind `--check-duplicates`, `--check-fences` and `--check-headers`; **`--list` itself refuses nothing**, and this step does not prescribe those flags.
+
+**So exit `0` means the reader ran — NOT that its answer is complete, and this is the third state.** `--list` keys batches by number, so a tracker declaring the same batch number twice reports **only the last**, silently, at exit `0`. Measured: a fixture with a real `Batch 7` and a duplicate `Batch 7` printed one row — the duplicate — and the real batch's branch was simply absent from the output. **The only signal is a `WARNING:` line on stderr**, which a caller reading stdout for tab-separated rows never sees. So: **capture stderr as well, and treat any `WARNING:` as a could-not-measure** — same disposition as a non-zero exit, stop and reconcile the tracker. If the dropped batch is the one step 5 merged, the intersection is empty, this step takes its empty arm, and `close_batch.sh` is never called for it — which is precisely the silent false close this arm exists to prevent, arriving at exit `0`. When the set is genuinely empty: report the one line
 
 ```
 4b: no review batches this cycle
@@ -1934,6 +1967,14 @@ After all branches are merged but **before** pushing:
 
    > **One way to reach that hard stop is this close's own Step 6, one run earlier.** Under `pr` policy Step 6 force-deletes (`git branch -D`) every branch Step 4a recorded as merged. A branch the operator cherry-picked is recorded merged, so it is deleted — while its pending-doc was held back here for scoring non-zero. On the next close the doc is re-collected, its `branch:` no longer resolves, and this rule fires: the close halts on a doc it created the conditions for. Under `direct` the tail is benign, because that path's safe `git branch -d` refuses on a cherry-picked branch and the ref survives. **The `git cherry` fallback above is what prevents the hold-back in the first place**; if you are reading this having already hit the stop, the doc's content is almost certainly in `main` already — verify with `git log --oneline --all --grep` on its summary before deciding, and do not consolidate on the assumption alone. (**A doc with no `branch:` at all is no longer treated as a benign legacy shape — it is quarantined, per the rule above.** This parenthesis previously said consolidating it was safe, which contradicted the stop-and-ask rule it sat beneath; both are now replaced by the single quarantine disposition. The case this parenthesis was reaching for — a *legacy-format* doc predating worktree-per-branch — is covered there too, and losing its bytes to a quarantine directory costs nothing that consolidating an unroutable doc would have preserved.)
 
+1c. **Hold back any pending-doc naming a task whose human step is still outstanding (`Q-327`).** After 1b's merged-only filter, read each surviving doc's ids and look each one up in `tasks/index.yml`. **Read `roadmap_ids`, falling back to `task_ids`** — the same Phase-23a compat shim step 3 applies (`pending.get('roadmap_ids') or pending.get('task_ids') or []`), and it is not optional here: a legacy doc keyed on `task_ids` that this gate skipped would be routed and consolidated, and only the round-trip's defence-in-depth arm would then hold the task — which is the stranding path, reached through the gate that exists to close it. **If any of those ids has a truthy `user_action`, do not route this doc at all this run** — truthy, **not** `== true`, matching the round-trip's predicate exactly. The two gates must agree, and a malformed non-bool value is precisely where an equality test and a truthiness test diverge: an equality reading routes the doc, the round-trip then holds the task, and the doc is deleted underneath it. The heredoc records why truthiness is the right bias; this gate inherits that reasoning rather than restating it — leave the file in `sysop/runtime/pending-docs/`, exactly as 1b leaves an unmerged branch's doc, and report it under Step 8's `Held-back docs:` with the reason `user_action outstanding: <TASK_ID>`.
+
+   **Why the WHOLE doc waits, and not just the status flip.** The first cut of this fix did the narrower thing the filing proposed — route the doc entries as normal, hold only the three mutations that assert completion — and it **stranded the task**. The path is worth writing down because nothing about it is obvious: step 6 deletes the pending-docs *this step consolidated*, a routed doc is consolidated, and the pending-doc is the **only** carrier of `roadmap_ids` into this round-trip. So the doc would be gone, the task would sit `in_progress` with its lock held and its body under `open/`, and nothing would ever close it — `clear_user_action.py` flips the flag and says so in its own output (*"status is `in_progress`, so the automated frontier … still will not pick it up"*), and a later `/review-close` has no doc naming the task. **A silent permanent stall, arriving from a fix for a silent false close.** Holding the doc keeps the carrier alive: the human performs the step, clears the flag, and the next `/review-close` consolidates the doc and closes the task through the ordinary path, with no duplicated `CHANGELOG` entry. **The doc is only half the carrier, and the other half is the branch** — the doc's `branch:` is what step 1b resolves, and Step 6 deletes merged feature branches under both policies, so a held doc whose branch was cleaned up does not resume: it **halts** the next close on step 1b's stop-and-ask. Step 6 therefore carries a HARD RULE excluding those branches; that rule and this hold are one mechanism and neither works alone.
+
+   **The cost, stated rather than discovered later:** the code merged this run and its `PROJECT_STATUS.md` / `CHANGELOG.md` entry waits for the human step. That is the honest ordering — those files say a task is **Complete**, and it is not — but it does mean a held task's documentation lags its merge, visibly, in `Held-back docs:` on every run until the step is done.
+
+   **Granularity is the whole doc, deliberately.** A pending-doc naming two tasks, one held and one not, holds **both**. Splitting it would mean routing half a doc and re-routing the other half later, which is the duplication this ordering exists to avoid; the conservative direction is the one that cannot write a false `Complete`. Say so in the Step 8 row — name the held task *and* the siblings waiting on it — so the operator can see the whole doc is waiting on one human step.
+
 2. **If none found**: check merged history for `docs:` commits (backward compatibility with branches that wrote docs directly). If present, skip doc consolidation — the docs are already in the shared files.
 
 3. **If pending-docs files found**: parse each file's YAML frontmatter and extract:
@@ -1971,7 +2012,7 @@ After all branches are merged but **before** pushing:
    | infrastructure | Yes | — | — | if populated |
    | adhoc | Yes | — | — | if populated |
 
-   The Roadmap column is **informational only** — `if populated` means the `tasks/index.yml` round-trip below runs unconditionally for every ID in `roadmap_ids`, regardless of `type`. This is intentional: the round-trip is mechanical (status flip + body move + lock/parked-marker cleanup), driven by data presence, not by type. A pending-doc with `roadmap_ids: []` simply skips the round-trip naturally. (BeanRider ISSUE-0034: tracked-bug close-outs use `type: bugfix` with a populated `roadmap_ids: [BUG-NNNN]` and need the round-trip; the prior `—` reading would have left the BUG entry stuck `in_progress` with the body orphaned under `open/`.)
+   The Roadmap column is **informational only** — `if populated` means the `tasks/index.yml` round-trip below runs unconditionally for every ID in `roadmap_ids`, regardless of `type`. This is intentional: the round-trip is mechanical (status flip + body move + lock/parked-marker cleanup), driven by data presence, not by type. **One condition was added by Phase 241 and it is not a type test either — it is a field test.** A task whose `user_action` is `true` is HELD: its doc entries route exactly as this table says, and the three mutations that assert completion do not run. `type` still governs nothing here; `user_action` governs whether the close may claim the task is finished. See the hold comment in the heredoc below for why the smoke gate is not a backstop for it. A pending-doc with `roadmap_ids: []` simply skips the round-trip naturally. (BeanRider ISSUE-0034: tracked-bug close-outs use `type: bugfix` with a populated `roadmap_ids: [BUG-NNNN]` and need the round-trip; the prior `—` reading would have left the BUG entry stuck `in_progress` with the body orphaned under `open/`.)
 
    For each entry, generate the doc content from `type` + `summary` + `roadmap_ids` + `review_task_ids` + `date`:
 
@@ -2035,8 +2076,50 @@ After all branches are merged but **before** pushing:
    p = Path('tasks/index.yml')
    d = yaml.safe_load(p.read_text(encoding='utf-8'))
    closed = []
+   held = []
    for t in d.get('tasks', []):
        if t['id'] not in ids:
+           continue
+       # HOLD a task whose human step is still outstanding (`Q-327`). `user_action` is
+       # Sysop's OWN schema field — validate_tasks.py requires it as a bool on every
+       # open/in_progress task — and until Phase 241 this round-trip never read it, so a
+       # merged diff alone flipped the task to `done`. Nothing upstream is a backstop:
+       # Step 3c's smoke gate deliberately excludes `## User ops` from its phrase set,
+       # and its waive outcome does not halt, so a waived smoke and a passed smoke are
+       # indistinguishable here. `tasks/schema.md` § User ops already conceded this in
+       # prose ("Nothing verifies the steps were performed"); this is the one step that
+       # writes the durable state, so it is where the concession gets closed.
+       # THIS IS DEFENCE IN DEPTH, not the primary gate. Step 1c above holds the
+       # whole pending-doc back before any routing happens, so on the ordinary path
+       # a held task's ids never reach this loop at all. This arm exists because
+       # `ids` is a written-out literal an operator substitutes by HAND: 1c can be
+       # skipped or mis-read, and the literal can be pasted from a previous run.
+       # If a held id does arrive here, the flip must still not happen.
+       # What is withheld: the status flip, the body archive move, and the
+       # lock/parked-marker/claim-artifact cleanup below — all keyed on `closed`,
+       # so keeping a held id OUT of that list is what withholds them.
+       # NOTE the ordering consequence, because it is not obvious: reaching this arm
+       # means the doc WAS routed, so its PROJECT_STATUS/CHANGELOG entries have
+       # landed for a task that did not close, and the doc is about to be deleted by
+       # step 6 — the stranding Step 1c exists to prevent. Report it loudly at
+       # Step 8 and fix the id list; a hold HERE is an anomaly, not the normal case.
+       # NOT a contradiction of clear_user_action.py (Phase 237): that clears the flag
+       # EARLY so a task rejoins the frontier, and its docstring explicitly declines the
+       # close path. Clearing is the human saying "done"; this is the close path
+       # declining to say it on their behalf.
+       # Truthiness, deliberately, NOT `is True`. `validate_tasks.py` requires a
+       # bool, but that validator runs at the END of this step, so a malformed
+       # index reaches here first. Measured across eight values: a bare `true`
+       # holds; `false`, a missing key and an explicit `null` all close (which is
+       # what a task predating the field needs); and a non-bool truthy value such
+       # as the STRING `"false"` also holds. That last one is wrong-looking and is
+       # the SAFE direction — holding a task that should have closed costs one
+       # `clear_user_action.py`; closing one that should have held is the defect
+       # this hold exists to remove. Do not tighten this to `is True`: a string
+       # `"true"` would then CLOSE a task whose human step is outstanding, which
+       # inverts the bias on exactly the malformed input the strictness was for.
+       if t.get('user_action'):
+           held.append(t['id'])
            continue
        t['status'] = 'done'
        t['completed_date'] = today
@@ -2207,7 +2290,13 @@ After all branches are merged but **before** pushing:
    # skips any id with no matching `tasks/index.yml` entry, silently. Reporting `ids`
    # would over-claim; reporting `closed` alone would hide the drop. Both, or neither.
    print('CLOSED_IDS: ' + (' '.join(closed) or '(none)'))
-   print('NOT_IN_INDEX: ' + (' '.join(t for t in ids if t not in closed) or '(none)'))
+   # `held` is subtracted here as well as `closed`. A held task IS in the index — that is
+   # how its `user_action` was read — so scoring it `NOT_IN_INDEX` would report a task
+   # that exists as one that does not, and send the operator looking for a missing entry
+   # instead of an outstanding human step. `closed`, `held` and NOT_IN_INDEX partition
+   # `ids`; no id may appear in two rows or in none.
+   print('HELD_USER_ACTION: ' + (' '.join(held) or '(none)'))
+   print('NOT_IN_INDEX: ' + (' '.join(t for t in ids if t not in closed and t not in held) or '(none)'))
    print('LOCKS_REMOVED: ' + (' '.join(locks_removed) or '(none)'))
    print('LOCKS_ALREADY_ABSENT: ' + (' '.join(locks_absent) or '(none)'))
    print('PARKED_MARKERS_REMOVED: ' + (' '.join(sorted(markers_removed)) or '(none)'))
@@ -2352,6 +2441,13 @@ Otherwise substitute the printed number for `"<PR>"` below and run the commands 
 #    read-only set while `true` is not, so this keeps the compound authorized while
 #    preserving the do-not-abort semantics the step needs (Phase 153).
 gh pr checks "<PR>" --watch --fail-fast || echo "checks reported non-zero — not the verdict; continue to command 5"
+# 4b. DID ANY CHECK ACTUALLY REGISTER? Command 4 cannot tell you: it exits non-zero both on a
+#     failing check and on a PR that has none, so its `|| echo` tail carries a repo-with-no-checks
+#     and a checks-have-not-registered-yet through to the merge identically. Count what command 4
+#     was waiting on. `statusCheckRollup` is deliberately the SAME data set `gh pr checks` reads —
+#     a union of CheckRun AND StatusContext — so this counts GitHub Actions and the Status API
+#     alike, and resolves the PR head itself rather than making you transcribe a SHA.
+gh pr view "<PR>" --json statusCheckRollup --jq '.statusCheckRollup | length'
 # 5. confirm mergeability, then squash-merge (blocks until landed; deletes the remote branch)
 gh pr view "<PR>" --json state,mergeStateStatus --jq '{state, mergeStateStatus}'
 gh pr merge "<PR>" --squash --delete-branch
@@ -2359,6 +2455,18 @@ gh pr merge "<PR>" --squash --delete-branch
 #    exit status and stderr are NOT the verdict (see the note below). Only `state` is.
 gh pr view "<PR>" --json state,mergedAt --jq '{state, mergedAt}'
 ```
+
+> **Command 4b is a gate, and `0` is not a green light.** Read its number before running command 5, and route on three states, not two:
+>
+> - **a count ≥ 1** — checks registered and command 4 already waited for them. Proceed to command 5.
+> - **the count is `0`** — **STOP. Do not run command 5.** This is *could not measure*, and it covers two different repositories that this step cannot tell apart: one with no CI configured at all, and one whose checks have simply not registered on this head yet. **Registration latency is an ordinary condition, not an incident** — measured by a consumer at roughly 30 minutes across an `opened` and a first `synchronize` event, with the checks then registering on a second `synchronize` and all passing. A repo protected by a server-side ruleset will refuse the merge anyway; one protected only by `enforce_admins`, or one where the actor holds admin bypass, will not. **The merge is the irreversible half, so the unmeasured state resolves against merging.**
+> - **The probe itself errors** (network, auth, a `404` on a head SHA you mis-transcribed) — also *could not measure*. Same answer: stop.
+>
+> **Why this reads `statusCheckRollup` and not `commits/<sha>/check-runs`.** The REST check-runs endpoint counts **only** GitHub's Checks API. A repository whose required checks arrive through the older **Status API** — Jenkins, Buildkite, CircleCI classic, anything posting commit statuses, which is precisely what "required status checks" was built for — has `check-runs.total_count: 0` on a **fully green, fully registered** PR. Measured on a real PR head carrying one passing GitHub Actions check: `check-runs` **1**, `commits/<sha>/status` **0**, `statusCheckRollup` **1** — Sysop is the Checks-API case, and the mirror image is a consumer this gate would have blocked on every single run, with both of its stated remedies pointing the wrong way (waiting never helps, and the ruleset probe answers *yes, checks are required*). **A gate that cannot be satisfied is worse than the hole it closes.** `statusCheckRollup` is the union type — `CheckRun | StatusContext` — which is why it is the right question and why it matches command 4 rather than second-guessing it.
+>
+> **What to do at a `0`.** Report the PR URL and the head SHA, and hand the operator the one distinction the probe cannot make: whether the repository *has* required checks. That is a question about configuration, answered by `gh api "repos/{owner}/{repo}/rulesets"` or the branch-protection settings page — not by waiting longer. **If it answers *yes, checks are required* and the count is still `0` after command 4 returned, suspect the count before you suspect the repo**: that combination is the one shape this probe cannot produce from an honest reading, and it means the rollup and the requirement disagree. If checks are configured, re-run command 4b by hand after a few minutes; when it prints a non-zero count, resume at command 5. **`/review-close` does not need to be re-run for this, and re-running it does not help** — under the integration-branch shape a fresh run cuts a *new* branch and opens a *new* PR, whose head inherits exactly the same registration condition; under the PR-reuse shape it lands on the same PR again. Neither makes a check register.
+>
+> **Why there is no polling loop here.** A `while`/`sleep` retry would be the obvious shape and it is not available: `sleep` is in no seeded allow-rule and not in the harness's documented read-only set, and a loop around a runtime-discovered condition binds no rule at all (§ Invocation shapes). Re-invoking command 4's `--watch` is not a substitute either — with zero checks registered it returns *immediately*, which is the whole defect. The wait is the operator's, deliberately, and it is one re-run of one bare command.
 
 > Here `$(git rev-parse --abbrev-ref HEAD)` is safe and non-tautological: HEAD was already asserted against a non-HEAD-derived value in Step 1 of this same block, so by this line it is *known* to be the right branch. It is a lookup key, not a guard.
 >
@@ -2379,7 +2487,7 @@ gh pr view "<PR>" --json state,mergedAt --jq '{state, mergedAt}'
 
 ##### 4d-1. Stuck-PR handling (report + STOP, never force-merge)
 
-**The trigger is PR state, never the merge command's exit status or stderr.** The PR is **not merged** if the post-merge `gh pr view "<PR>" --json state` (command 6 above) reports anything other than `MERGED`. Typical causes: a required check failed (`gh pr checks` reported a failing check) or `gh pr view` shows `mergeStateStatus: BLOCKED`/`DIRTY`. Do **not** key this branch on `gh pr merge` "refusing" — under `pr` policy that command routinely prints `fatal: Not possible to fast-forward, aborting.` *after a merge that succeeded* (see the note above, internal tracker #208), and reading that as a refusal strands branches, worktrees, and `sysop/runtime/locks/` behind a close-out that actually landed. When `state` is genuinely not `MERGED`:
+**The trigger is PR state, never the merge command's exit status or stderr.** The PR is **not merged** if the post-merge `gh pr view "<PR>" --json state` (command 6 above) reports anything other than `MERGED`. Typical causes: a required check failed (`gh pr checks` reported a failing check) or `gh pr view` shows `mergeStateStatus: BLOCKED`/`DIRTY`. **A third cause is not a stuck PR at all and is handled before the merge, not here: command 4b reported `total_count: 0`.** That is the could-not-measure state, this sub-step never sees it — by construction, since it classifies a merge that already ran — and it is the one arm of the three where nothing has landed and nothing needs unwinding. **Do not re-route a `0` into this section's recovery advice**: there is no failing check to fix, no `BLOCKED`/`DIRTY` state to rebase out of, and re-running `/review-close` inherits the condition rather than clearing it. Stop at command 4b and follow its note. Do **not** key this branch on `gh pr merge` "refusing" — under `pr` policy that command routinely prints `fatal: Not possible to fast-forward, aborting.` *after a merge that succeeded* (see the note above, internal tracker #208), and reading that as a refusal strands branches, worktrees, and `sysop/runtime/locks/` behind a close-out that actually landed. When `state` is genuinely not `MERGED`:
 
 - **Report** the PR URL and the failing check name(s), then **STOP** — do not force-merge, do not fall back to a direct `git push origin main`, do not loop. Authority to merge belongs to the PR's required checks, not this skill.
 - Leave the integration branch, the feature branches, the worktrees, and the `sysop/runtime/locks/` **in place**. **Skip Step 6 entirely** this run — its cleanup is gated on a confirmed merge (see Step 6's merge-policy gate). The human (or a follow-up `/review-close`) fixes the check and re-runs.
@@ -2445,6 +2553,10 @@ Skip this step only if the pushed changes are docs/config only with no code or s
   > **Run the `git reset --hard origin/main` in both shapes once the clean-tracked-tree gate above passes — but know why it matters in each.** `gh pr merge --delete-branch` *attempts* this re-sync itself. **Integration-branch shape:** it fails, because local `main` has diverged by construction (see Step 4d's `fatal:` note, internal tracker #208) — here the reset is load-bearing, and treating `gh` as having already done it leaves local `main` on pre-merge commits now duplicated inside the squash. **PR-reuse shape:** it succeeds, because reuse condition 3 required local `main` to hold nothing the approved branch does not already carry (**not**, since Phase 219, that `origin/main..main` is empty — the widened form admits a branch that was brought up to date with `git merge main`, and such a branch leaves real local-only commits on `main`) — here the reset was described as a harmless no-op, and Phase 219's round measured that false for the widened condition 3: with a merge-updated branch the reuse shape is taken while local `main` still holds unpushed commits, `gh`'s fast-forward fails with the same `fatal:` as the other shape, and the reset **moves** `main` rather than doing nothing. Run it; it is load-bearing in both shapes now. Internal tracker #204's incidental note ("`gh` fast-forwards `main` itself, so Step 6's reset was already a no-op") was reported from a cycle that met condition 3, so it was **right about that cycle and wrong as a general rule**; internal tracker #208, from the same reporter, is the other shape. Neither claim generalizes — which is why this step is stated per shape rather than picking a winner.
 
 > **Lock-as-real-time-signal invariant (`pr` policy).** Step 4c removes each closed task's `sysop/runtime/locks/<TASK-ID>.lock` from disk on the integration branch, before the PR merges — so there is a brief window where, on `main`, the task is still `in_progress` (the `done` flip rides the unmerged PR) with no lock. This does **not** reopen the task for the autonomous paths: `/auto-build` and `next_task` only ever claim `status: open` tasks, so neither can pick it up. **Amended by Phase 159b — the unqualified form of this sentence ("an `in_progress` task is never claimable regardless of its lock") is no longer true.** `/claim-task` gained a third entry state, and `in_progress` + no lock is exactly its `resumable` signature — which this window manufactures for a task that is *finished*. That is why `resumable` **stops and asks** instead of continuing: an explicitly-named `/claim-task <TASK_ID>` during this window would otherwise re-claim already-reviewed work. The other visible effects are a transient `/sitrep` "in_progress without lock" drift flag and a `validate_tasks.py` Invariant 9 error during the in-flight (or stuck-PR) window, both of which clear when the PR merges and the `done` flip lands. No action needed beyond not re-claiming. The same pre-merge timing applies to the task's **parked marker(s)** (`sysop/runtime/parked/<TASK-ID>__*.md`, removed by the same Step 4c cleanup) — with one honest asymmetry: a lock is trivially recreatable (`claim_task.sh --lock`), but a marker's content (the park's plan + adversarial verdict, never committed) is not. Accepted anyway: by the time Step 4c runs, the park was already resolved — the resume that produced this close consumed the verdict — so a stuck PR needs the *code* recoverable (the integration + feature branches Step 4d-1 leaves in place), not the historical park record. A consumer who wants park history durably should copy `parked/` entries somewhere tracked before closing.
+
+**HARD RULE — do not delete a branch whose pending-doc Step 4c step 1c held back (`Q-327`).** This applies under **both** policies below and is checked before either list is built. A `user_action` hold keeps the doc so a later run can consolidate it; that doc carries a `branch:` field, and step 1b resolves it with `git rev-list --count "<branch>" "^HEAD"`. **Delete the branch and the next close does not resume — it halts**, on step 1b's *"If the ref no longer resolves, stop and ask — do not guess in either direction"*, which is the same self-inflicted stop the cherry-pick blockquote above step 1c already describes. The carrier is the doc **and** the branch; holding one without the other converts a deliberate hold into a hard stop on every subsequent close.
+
+So: before cleaning up, list the `branch:` values of every doc still in `sysop/runtime/pending-docs/` and **exclude those branches from both lists below**. Report them in Step 8's `Remaining:` as retained-for-a-held-doc, with the task id waiting on them, so an operator does not read them as leaked. They are deleted by the close that finally consolidates the doc — the ordinary path, one run later. This is the same principle Step 4d-1 already applies when a PR is stuck (*"Leave the integration branch, the feature branches, the worktrees, and the `sysop/runtime/locks/` in place. Skip Step 6 entirely"*): cleanup is gated on the work being finished, and a held task's work is not.
 
 **`direct` policy — per-branch cleanup.** For each merged feature branch (worktrees already removed in Step 3b):
 1. Delete the **remote** branch first: `git push origin --delete <branch>` (if it exists remotely).
@@ -2574,6 +2686,9 @@ Documentation written:
   ✓ tasks/index.yml:      <the `CLOSED_IDS` Step 4c printed>  (if any — status flipped to done, body moved to archive/)
                           <and, when non-empty, `not in index: <NOT_IN_INDEX ids>` — ids this close was
                            asked to close and could not find. Never omit this line by choosing the other row.>
+                          <and, when non-empty, `held (user_action): <HELD_USER_ACTION ids>` — see Remaining.
+                           These three rows PARTITION the ids this close was asked to flip; if they do not
+                           add up, the heredoc did not finish and the rows above are incomplete.>
   ✓ UI_Iterations.md:     <N> rows            (if any)
 
 Pending-doc collisions: <N> (or "none")
@@ -2589,10 +2704,16 @@ Quarantined docs: <N> (or "none")
      No task IDs flipped. Recover by fixing the frontmatter and moving it back.
 
 Held-back docs: <N> (or "none")
-  - <pending-doc filename> — branch <name>; rev-list <count>, git cherry <count> unapplied;
-     held because <reason>. Task IDs NOT flipped to done; doc left in place for a later run.
-     (A doc can be held back WITHOUT a 4a-SKIP — a cherry-picked branch, including the
-      `branch: main` doc under `pr` policy, merges fine and still scores non-zero.)
+  - <pending-doc filename> — branch <name>; held because <reason>. Task IDs NOT flipped to
+     done; doc left in place for a later run.
+     **Two reasons, and they need different evidence — do not force one into the other's fields.**
+     - 1b (unmerged): add `rev-list <count>, git cherry <count> unapplied`. Non-zero is the
+       reason. (A doc can be held back WITHOUT a 4a-SKIP — a cherry-picked branch, including
+       the `branch: main` doc under `pr` policy, merges fine and still scores non-zero.)
+     - 1c (`user_action outstanding: <TASK_ID>`): the branch MERGED, so `rev-list` is `0` and
+       printing it here reads as "merged fine" beside "held" — omit it. The evidence is the
+       task's flag. Add `branch retained by Step 6` so the two halves of the carrier are
+       reported together.
 
 Remaining:
   - <any SKIP'd branches — paused work; include file count + worktree path + recommendation>
@@ -2600,6 +2721,27 @@ Remaining:
      the branch + lock are intact, its pending-doc was held back from consolidation, and its
      task was NOT flipped to done>
   - <any rejected branches with reasons>
+  - <any tasks HELD on `user_action`. **There are two arms and they are not the same event.**
+     ORDINARY (Step 1c): the doc was held back before routing, so `HELD_USER_ACTION` is
+     `(none)` — the ids never reach the heredoc — and the evidence is a `Held-back docs:` row
+     reading `user_action outstanding: <TASK_ID>`. Say plainly what did and did not happen:
+     the code merged, NOTHING was written for this task (no PROJECT_STATUS/CHANGELOG entry,
+     no status flip), its body is still under `open/`, its lock is still held, and its branch
+     was retained by Step 6's HARD RULE. Name the outstanding step from the body's
+     `## User ops` section. ANOMALOUS (the heredoc arm): `HELD_USER_ACTION` is non-empty,
+     which means Step 1c did not run or the id list was substituted by hand from a stale run.
+     Report it as an anomaly — the doc WAS routed, so entries landed for a task that did not
+     close, and step 6 is about to delete that doc. Fix the id list.
+     Either way the task closes on a later `/review-close`, after the human performs the step
+     and clears the flag with `python3 sysop/scripts/clear_user_action.py <TASK_ID>`; the
+     flag-clear alone closes nothing, and `clear_user_action.py` says so in its own output.
+     **The invariant to check is the ordinary arm's:** every `user_action` hold must show a
+     `Held-back docs:` row AND a retained branch. A hold with neither is a stranded task —
+     its carrier is gone and no later run can close it. Do NOT report these under
+     "Documentation written" as closed.>
+  - <any feature branches RETAINED by Step 6's held-doc rule — name the branch and the task
+     waiting on it, so they are not read as leaked. They are deleted by the close that
+     finally consolidates the doc.>
   - <any remote branches needing manual cleanup — the deletions Step 6 ATTEMPTED and that
      did not succeed. Step 6 must record each failure as it happens; a row assembled at
      Step 8 from memory of what Step 6 intended is how this slot stayed empty on runs

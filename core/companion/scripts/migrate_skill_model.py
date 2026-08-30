@@ -95,6 +95,36 @@ def iter_skill_files(root: Path):
     return sorted(p for p in root.rglob("*.md") if p.is_file())
 
 
+def read_skill_text(path: Path) -> str | None:
+    """Return *path*'s text, or ``None`` when it cannot be decoded or read.
+
+    Lives beside ``iter_skill_files`` because it is the other half of the same
+    walk: every consumer of that iterator reads what it yields, and each one of
+    them used a bare ``read_text(encoding="utf-8")``.
+
+    ``.claude/skills/`` is Claude Code's standard USER skill directory, so a
+    consumer's own files sit beside the shipped ones. An unguarded read there
+    turned one latin-1 note into ``⚠ model-role mapping REFUSED (invalid
+    mapping)`` with a ``UnicodeDecodeError`` traceback indented beneath it — on a
+    consumer with no ``served_models.local.yml`` at all, because an uncaught
+    exception exits 1 and ``install.sh`` reads 1 as a verdict (``Q-346`` leg 1,
+    reproduced by execution). Guarding only the checker moved the crash one
+    script over, into the resolver, which is how the other three sites were
+    found: by running the fix, not by reading the filing.
+
+    **Skipping is the correct answer, not merely the safe one.** A file this
+    family cannot decode cannot carry a discoverable ``sysop:model-roles``
+    marker, so it is a file Sysop does not own — the same conclusion the marker
+    check already reaches, arrived at one step earlier. Every caller REPORTS what
+    it skipped rather than dropping it silently, because outside
+    ``--managed-only`` an unreadable file is a real coverage gap.
+    """
+    try:
+        return path.read_text(encoding="utf-8")
+    except (UnicodeDecodeError, OSError):
+        return None
+
+
 def extract_model_pins(text: str) -> list[ModelPin]:
     """Return every operative model pin in *text*.
 
@@ -213,8 +243,15 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Migrating model pins: {args.from_alias!r} -> {args.to_alias!r}")
     print(f"Scanning: {_rel(root)}/\n")
 
+    unreadable: list[Path] = []
     for path in iter_skill_files(root):
-        original = path.read_text(encoding="utf-8")
+        original = read_skill_text(path)
+        if original is None:
+            # Same class as the checker's and the resolver's (`Q-346` leg 1): a
+            # consumer's own non-UTF-8 file under `.claude/skills/` used to abort
+            # the whole migration with a traceback.
+            unreadable.append(path)
+            continue
         new_text, edits, flagged = migrate_text(original, args.from_alias, args.to_alias)
         if not edits and not flagged:
             continue
@@ -235,6 +272,12 @@ def main(argv: list[str] | None = None) -> int:
             if args.apply and new_text != original:
                 path.write_text(new_text, encoding="utf-8")
 
+    if unreadable:
+        print(
+            f"  note: skipped {len(unreadable)} file(s) that are not valid UTF-8 "
+            f"or not readable: " + ", ".join(_rel(u) for u in unreadable),
+            file=sys.stderr,
+        )
     mode = "APPLIED" if args.apply else "DRY-RUN (no files written)"
     print("─" * 60)
     print(f"{mode}: {total_edits} operative pin(s) across {files_changed} file(s); "
