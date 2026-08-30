@@ -41,7 +41,10 @@ beside the scripts dir). In the Sysop source tree run with `--root core/skills
 Requires PyYAML (already a Sysop dependency via run_checks). Touches no database.
 
 Exit codes: 0 = all pins resolve to served models; 1 = at least one violation;
-2 = usage error.
+2 = the check could not be run (config missing, unreadable or malformed; skills
+root missing; nothing to validate). Only 1 is a verdict on the mapping — Phase
+244 made `install.sh` say so, after a rc-2 partial install was reported to a
+consumer as `REFUSED (unreadable config)` over a perfectly readable config.
 """
 from __future__ import annotations
 
@@ -61,6 +64,7 @@ from _model_roles import (  # noqa: E402  (path set above)
     iter_skill_files,
     load_inline_models,
     load_roles_config,
+    read_skill_text,
 )
 from migrate_skill_model import SKILLS_DIR  # noqa: E402
 
@@ -113,7 +117,11 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.list:
         for path in iter_skill_files(root):
-            for r in analyze_text(path.read_text(encoding="utf-8")):
+            text = read_skill_text(path)
+            if text is None:
+                print(f"  [UNREAD ] {_rel(path)}  (not valid UTF-8 or not readable)")
+                continue
+            for r in analyze_text(text):
                 resolved = roles.get(r.role) if r.role else None
                 if r.role is None:
                     mark = "NO-ROLE"
@@ -133,11 +141,29 @@ def main(argv: list[str] | None = None) -> int:
     # print OK and exit 0 under any mapping, so a consumer whose skills install
     # failed got a clean bill of health from the check that exists to catch it.
     population = 0
+    unreadable: list[Path] = []
     for p in iter_skill_files(root):
-        text = p.read_text(encoding="utf-8")
+        # `Q-346` leg 1: this was an unguarded `read_text`, so a consumer's own
+        # latin-1 `.md` anywhere under `.claude/skills/` crashed the checker and
+        # `install.sh` printed the traceback as `REFUSED (invalid mapping)`.
+        text = read_skill_text(p)
+        if text is None:
+            unreadable.append(p)
+            continue
         if args.managed_only and "sysop:model-roles" not in text:
             continue
         population += len(analyze_text(text))
+    if unreadable:
+        # Reported, never silent. In managed-only mode these are out of scope
+        # by definition (an undecodable file carries no discoverable marker); with
+        # the whole tree in scope they are a coverage gap the reader must see.
+        print(
+            f"note: skipped {len(unreadable)} file(s) under {root} that are not "
+            f"valid UTF-8 or not readable — they carry no Sysop model-role marker "
+            f"this check can see: "
+            + ", ".join(_rel(u) for u in unreadable),
+            file=sys.stderr,
+        )
     if population == 0:
         scope = "Sysop-managed " if args.managed_only else ""
         print(f"error: no {scope}model pins found under {root} — nothing to validate. "
@@ -165,8 +191,10 @@ def main(argv: list[str] | None = None) -> int:
                   "`inline_models:` if your harness really accepts the value.")
         return 1
 
+    scope_note = f" ({len(unreadable)} unreadable file(s) skipped)" if unreadable else ""
     print(f"OK: all skill model pins resolve to served models "
-          f"({', '.join(f'{k}={v}' for k, v in sorted(roles.items()))}).")
+          f"({', '.join(f'{k}={v}' for k, v in sorted(roles.items()))})"
+          f"{scope_note}.")
     return 0
 
 

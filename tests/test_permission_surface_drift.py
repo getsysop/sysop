@@ -93,16 +93,15 @@ WRITE_CAPABLE_SPELLINGS = ("git branch",)
 # installed consumer (install_permissions set-unions), so pruning buys nothing
 # for existing installs — the bar for keeping one is only that it is reachable.
 SEEDED_WITHOUT_SKILL_MENTION = {
-    # ---- Phase 220: the near-miss reporter. Prescribed by WORKFLOW.md in a
-    # fence, by `close_batch.sh`'s grep-fallback warning and by
-    # `archive_review_tasks.py`'s refusal — all three name
-    # `--check-headers` as the way to list the offending headers. No skill
-    # step invokes it: it is what an operator runs after a tool tells them a
-    # header is unreadable.
-    "Bash(python3 sysop/scripts/review_index.py:*)":
-        "Prescribed by WORKFLOW.md \u00a7 4.2's canon block, by close_batch.sh's "
-        "fallback warning and by the archiver's near-miss refusal; no skill "
-        "step runs it (Phase 220).",
+    # ---- Phase 220 entry RETIRED by Phase 241 (`Q-329`). It was true when
+    # written: the rule was seeded for `--check-headers`, an operator-only
+    # spelling. But `/review-close` Step 4b HAS prescribed this script since it
+    # gained a batch-set derivation — it just prescribed it as `bash
+    # …review_index.py --list`, which binds no rule and cannot run at all (bash
+    # lexes the module docstring as one quoted word; exit 2, empty stdout).
+    # So the orphan-rule list and the broken command word were the same defect
+    # seen from two ends, and the list entry was the half that looked healthy.
+    # Phase 241 fixed the command word; the skill now mentions the rule.
     # ---- Phase 184: prescribed by docs and by the installer, not by a skill
     # step. `test_prescribed_command_coverage.py` is the guard that now
     # requires them; each is reachable from shipped instructions.

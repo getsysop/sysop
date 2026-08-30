@@ -178,7 +178,9 @@ Here's what it does, and why each part matters:
   bad approach at the plan stage is far cheaper than at review. The review runs whichever
   option you picked — that choice changes what happens *after* it, never whether it happens.
 - **Implements** the task in the worktree, following the conventions it looked up. (The
-  deterministic check gate runs later, at `/review-close` — see step 5.)
+  promoted, computer-run checks bite wherever you have armed them — the pre-commit hook's
+  check slots, the CI template once you copy it in, and every audit round. `/review-close`
+  runs them only if you list the pre-scan there — see step 5.)
 
 When it finishes it prints a `## Claim complete` summary naming the branch, the worktree and
 the sealed review report. The work lives on that branch in a sibling worktree, but **you
@@ -227,14 +229,21 @@ In the fresh session — from your main checkout, where you started — send:
 
 This is the final gate. Because it surveys *every* branch waiting to merge (not just this
 one), run it from your main checkout rather than the worktree. It reviews each pending
-branch against its plan and your conventions, runs the deterministic checks, merges what
-passes to `main`, and cleans up the worktree.
+branch against its plan and your conventions, runs whatever your `## Pre-merge
+verification` section lists on the merged tree, merges what passes to `main`, and cleans
+up the worktree.
 
 > **Have an end-to-end or QA suite?** A Playwright, Cypress, or integration-test run plugs
 > in as one more command under `## Pre-merge verification` → `### Always` in your project's
 > `CLAUDE.md` — `/review-close` runs it on the merged tree on every merge, no Sysop-side
 > wiring. See
 > [`WORKFLOW.md`](../core/companion/docs/WORKFLOW.md) §6.1.
+
+> **Want the promoted checks enforced at the merge?** By default they are not — `/review-close`
+> runs only what that section lists, so a branch that introduces a new `checks.yml` or semgrep
+> finding merges and the finding surfaces on your next audit round. Add
+> `bash sysop/scripts/run_checks.sh --mode both --fail-on-blocking` as an `### Always` line and
+> the merge is refused instead, on any not-yet-baselined finding from a `blocking: true` check.
 
 By default it pushes to `main` directly. If your `main` is push-protected, route it through
 a pull request instead by adding this to your `CLAUDE.md` (create the file at your repo root

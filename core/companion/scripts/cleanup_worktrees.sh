@@ -156,7 +156,7 @@ git worktree prune
 # Every other probe in this script — `status --porcelain` below, `ls-files
 # --others --exclude-standard` in the classifier — EXCLUDES gitignored content,
 # and `sysop/runtime/` is gitignored by construction: it is the first of the three
-# entries `install.sh`'s `ensure_runtime_gitignore` appends (`install.sh:3212`; the
+# entries `install.sh`'s `ensure_runtime_gitignore` appends (`install.sh:3484`; the
 # others are `.claude/review_index.json` and `sysop/**/__pycache__/`). So the park record
 # `/auto-build` writes inside the worktree — `sysop/runtime/auto-build/plan.md`
 # and `review.md` — was invisible to all of them. A parked task's branch carries

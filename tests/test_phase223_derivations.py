@@ -425,6 +425,30 @@ def test_the_installer_validates_the_mapping_before_applying_it():
     because it marks a broken gate compliant. So the wiring is followed instead:
     the variable the existence test guards must be the variable that is assigned
     the real path, and must be the one invoked.
+
+    **Amended by Phase 242 (`Q-330`), and the amendment is the point.** This guard
+    asserted the resolved path equals `$TARGET/sysop/scripts/check_skill_models.py`
+    — the VENDORED copy. That is the defect, not the contract: `--dry-run` copies
+    nothing, so reading the target's copy hands a pre-Phase-223 checker a flag
+    Phase 223 added, argparse exits 2, and the consumer is told their mapping is
+    refused. A guard that pins the broken path makes the fix red, which is how
+    this one arrived — so it is rewritten to the property it was always defending
+    (the gate resolves a real checker, invokes it, and runs before `--apply`).
+    Deleting a guard a phase falsifies is how coverage silently disappears
+    (Phase 204); replacing it is the convention.
+
+    **Amended twice more by Phase 242's own adversarial round, which found the
+    replacement worse than what it replaced.** Two reviewers independently
+    demonstrated that the rewritten ordering assertion was a TAUTOLOGY —
+    `_checker="$(…)"` is a substring of `_dry_checker="$(…)"`, so `body.index`
+    bound to the dry-run arm and the apply-arm gate could be moved past `--apply`
+    with this test green. A third finding: the first rewrite asserted the two path
+    literals in textual order, which a reviewer defeated by inverting the actual
+    preference while preserving that order, and which three legal reformats
+    (POSIX `[`, `-r`, a third candidate) falsely reddened. Both are now wiring
+    assertions rather than textual ones. **The claim "Phase 223's original
+    property, preserved" was false as first written** — the original followed
+    `local {var}="…"` to the assignment; the replacement did not follow anything.
     """
     import re as _re
 
@@ -436,21 +460,130 @@ def test_the_installer_validates_the_mapping_before_applying_it():
     # the local config, and a bare search finds that one instead. A guard keyed to
     # "the first match" is keyed to whatever gets added above it.
     gate = body[body.index("# Phase 223: validate the MAPPING"):]
-    guarded = _re.search(r'if \[\[ -f "\$(\w+)" \]\]; then', gate)
-    assert guarded, "the checker's existence test is gone"
-    var = guarded.group(1)
-
-    assigned = _re.search(rf'local {var}="([^"]+)"', gate)
-    assert assigned, f"${var} is guarded but never assigned — the gate cannot fire"
-    assert assigned.group(1) == "$TARGET/sysop/scripts/check_skill_models.py", (
-        f"${var} points at {assigned.group(1)!r}, not the installed checker"
+    guarded = _re.search(r'if (\w+)="\$\(_model_role_checker_path vendored\)"; then', gate)
+    assert guarded, (
+        "the APPLY arm no longer resolves its checker through "
+        "`_model_role_checker_path vendored`. The mode is not decoration: the "
+        "executor (resolve_skill_models.py + _model_roles.py) is always the "
+        "vendored copy, so judging with the source stack certifies mappings the "
+        "vendored stack will not produce — measured as `model: best` written "
+        "across 21 files with a green install"
     )
-    assert f'"${var}"' in body[guarded.end():], f"${var} is tested but never invoked"
+    var = guarded.group(1)
+    assert f'"${var}"' in gate[guarded.end():], f"${var} is resolved but never invoked"
 
-    assert body.index(f"local {var}=") < body.index("--apply"), (
+    # ORDERING. `body.index(f'{var}=...')` is what the first cut used, and it was
+    # a TAUTOLOGY: `var` is `_checker`, and `_checker="$(...)"` is a substring of
+    # `_dry_checker="$(...)"`, so the index resolved to the dry-run arm hundreds of
+    # lines earlier and the comparison was trivially true. Two independent
+    # reviewers found it the same way — by MOVING the apply-arm gate after
+    # `--apply` and watching this test stay green. Anchor on the line, not on a
+    # fragment that another identifier can contain.
+    apply_gate = _re.search(
+        r'(?m)^  if _checker="\$\(_model_role_checker_path vendored\)"; then$', body)
+    assert apply_gate, "the apply-arm gate line is gone or reshaped"
+    assert apply_gate.start() < body.index("--apply"), (
         "the validation must run BEFORE --apply; after it, the bad pins are already written"
     )
     assert "REFUSED" in body
+
+    # **Amended by Phase 244 (`Q-345`).** This asserted `_model_role_checker_path
+    # source` — the preview arm's own judge. That judge is gone: every input the
+    # gate reads is target-side state the update replaces, so a preview cannot
+    # reach a verdict it can stand behind whichever copy it runs, and the arm now
+    # states the limit instead. Per the Phase 204 convention the guard is
+    # REPLACED, not deleted, and the property that replaces it is strictly
+    # stronger: the gate is invoked EXACTLY ONCE in this function, on the apply
+    # side, so no second call site can drift onto the source stack.
+    # SCOPE, corrected twice, and the second correction is the one that holds.
+    #
+    # Cut 1 checked only `resolve_skill_models`' own body — but this phase MOVED
+    # the preview into `_preview_skill_models`, so the author battery's `CH03`
+    # added a gate invocation inside the preview and survived the whole suite.
+    # Cut 2 widened to those two functions by name. The GUARDS lens then defeated
+    # that too, by putting the judge in a THIRD function (`_preview_judge`) called
+    # from the preview: two named regions is still a list, and a list of places is
+    # not the property. The property is about the FILE — this installer invokes the
+    # model-role gate exactly once, anywhere, and that invocation is the apply arm's.
+    #
+    # COMMENTS ARE STRIPPED FIRST, and that is not tidiness. The same lens produced
+    # two FALSE KILLS by adding ordinary comments that merely NAME these functions —
+    # including one asserting the very property this guard checks. The phase itself
+    # wrote ~90 lines of comment naming them, and today's tree survives only because
+    # the one existing prose reference is followed by a backtick rather than a space.
+    # A guard that reddens when someone writes a sentence about it is not a guard.
+    code = "\n".join(
+        line for line in text.splitlines()
+        if not line.lstrip().startswith("#")
+    )
+    # `_check_model_roles ` with the trailing space matches the INVOCATION and not
+    # the `_check_model_roles() {` definition, so the expected count is 1.
+    assert code.count("_check_model_roles ") == 1, (
+        "the model-role gate is invoked somewhere other than its single apply-arm "
+        "call site. A "
+        "second invocation ANYWHERE in install.sh is how the preview grows a judge "
+        "it cannot stand behind (Q-345) — the guards lens put one in a third "
+        "function and walked through a guard scoped to two"
+    )
+    preview = text[text.index("_preview_skill_models() {"):]
+    preview = preview[:preview.index("\n}\n")]
+    dry = body[body.index('if [[ "$DRY_RUN" -eq 1 ]]; then'):]
+    dry = dry[:dry.index("\n  fi\n")]
+    for region, label in ((dry, "the dry-run arm"), (preview, "_preview_skill_models")):
+        region_code = "\n".join(
+            line for line in region.splitlines()
+            if not line.lstrip().startswith("#")
+        )
+        for forbidden in ("_check_model_roles", "_model_role_checker_path"):
+            assert forbidden not in region_code, (
+                f"{label} reaches for {forbidden} again — a preview that runs the "
+                f"checker judges the tree the update is about to replace"
+            )
+
+    # The chooser itself, because the gate is only as honest as the path it gets.
+    chooser = text[text.index("_model_role_checker_path() {"):]
+    chooser = chooser[:chooser.index("\n}\n")]
+    src = '"$REPO_ROOT/core/companion/scripts/check_skill_models.py"'
+    vendored = '"$TARGET/sysop/scripts/check_skill_models.py"'
+    assert src in chooser and vendored in chooser, (
+        "the chooser no longer names both candidates"
+    )
+    # FOLLOW THE WIRING, not the literals' textual order. The first cut asserted
+    # `chooser.index(src) < chooser.index(vendored)`, which a reviewer defeated by
+    # inverting the actual preference while leaving both literals in the
+    # guard-satisfying order — and which three legal reformats reddened. Resolve
+    # each candidate to the VARIABLE that holds it, then check the modes bind
+    # those variables.
+    src_var = _re.search(
+        r'local (\w+)="\$REPO_ROOT/core/companion/scripts/check_skill_models\.py"', chooser)
+    vend_var = _re.search(
+        r'local (\w+)="\$TARGET/sysop/scripts/check_skill_models\.py"', chooser)
+    assert src_var and vend_var, "the chooser no longer assigns both candidates"
+    # Phase 244 removed the `source` MODE (its only caller was the preview's
+    # judge). The source copy stays as the vendored mode's FALLBACK, which is
+    # what `src_var` is asserted present for above; what must not come back is a
+    # second way to point the gate at the source stack.
+    assert not _re.search(r'(?m)^\s*source\)', chooser), (
+        "the `source` mode is back. Its only caller was the dry-run judge that "
+        "Q-345 retired, and a mode that prefers the source copy is one edit away "
+        "from the apply arm — measured as `model: best` across 21 files"
+    )
+    assert _re.search(rf'\bvendored\)\s+first="\${vend_var.group(1)}"', chooser), (
+        "the `vendored` mode no longer prefers the vendored copy — this is Q-330 "
+        "restored on the preview arm, or the executor/judge split on the apply arm"
+    )
+    assert _re.search(r'\*\)\s+return 1', chooser), (
+        "an unrecognised mode falls through instead of failing loudly"
+    )
+    # Phase 223's original property, stated as the property rather than as a
+    # count. The first cut asserted `len(findall(...)) == 2`, which reddened on
+    # POSIX `[`, on `-r`, and on adding a third candidate — over-strict on the
+    # same axis it was under-strict. What actually matters: no candidate is
+    # printed without first being tested for existence.
+    for emitted in _re.findall(r'printf \'%s\\n\' "\$(\w+)"', chooser):
+        assert _re.search(rf'-f "\${emitted}"', chooser), (
+            f"the chooser prints ${emitted} without testing that it exists"
+        )
 
 
 def test_the_sweep_population_is_not_empty():

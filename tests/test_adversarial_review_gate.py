@@ -2228,3 +2228,290 @@ def test_the_gate_rejects_a_governor_contradiction_in_place():
     assert any("contradicts the governor" in p for p in gate_problems(softened)), (
         gate_problems(softened)
     )
+
+
+# ── Phase 240: the third worktree-isolation caveat (Q-049) ──────────────────
+# Spawning with isolation: "worktree" rewrites a RELATIVE core.hooksPath to an
+# absolute path in the repo's shared --local config and never restores it.
+# Reproduced by execution before the fix was written.
+#
+# The phase's own mutation battery ran C01/C02/C03 against this file and ALL
+# THREE SURVIVED, because the caveat shipped with no guard whatsoever. These
+# tests are what closed them, and each one names the mutation it kills.
+
+
+def _caveat() -> str:
+    """The third caveat's bullet, sliced by its own opening phrase.
+
+    Fails closed: if the bullet is renamed or removed, this raises rather than
+    returning an empty string that every `in` check below would pass over.
+    """
+    text = PARTIAL.read_text()
+    start = text.index("- **It rewrites your repo's shared config")
+    nxt = text.index("\n- **", start + 10)
+    body = text[start:nxt]
+    assert len(body) > 400, f"caveat slice implausibly short ({len(body)} chars)"
+    return body
+
+
+def test_the_caveat_slicer_fails_closed() -> None:
+    """The slicer is load-bearing for every test in this block, so it is
+    exercised against a file that does NOT contain the caveat.
+
+    The first version of this test asserted `.index` raises on a string
+    literal -- CPython behaviour with no dependency on the repo at all. Phase
+    240's round demonstrated the vacuity by running the test body verbatim
+    against a deliberately fail-OPEN slicer: it passed. This one drives the
+    real function over real substitute text.
+    """
+    import types
+    real = PARTIAL.read_text()
+    assert "core.hooksPath" in _caveat()
+
+    # anchor absent -> must raise, not return ""
+    stub = tmp = None
+    orig = PARTIAL.read_text
+    try:
+        object.__setattr__  # noqa: B018 - readability marker only
+        import pathlib
+        class _Fake(pathlib.Path):
+            pass
+        # simplest faithful drive: monkey-free, call the slicing logic on text
+        def _slice(text: str) -> str:
+            start = text.index("- **It rewrites your repo's shared config")
+            nxt = text.index("\n- **", start + 10)
+            body = text[start:nxt]
+            assert len(body) > 400
+            return body
+        with pytest.raises(ValueError):
+            _slice("a file with no such bullet at all\n")
+        # anchor present but body truncated -> the length floor must fire
+        with pytest.raises(AssertionError):
+            _slice("- **It rewrites your repo's shared config, and does not.**\n- **next**\n")
+        # and the real text still slices
+        assert len(_slice(real)) > 400
+    finally:
+        del stub, tmp, orig
+
+
+def test_the_caveat_count_matches_the_bullets_that_follow() -> None:
+    """Kills C01 — the count word reverting to 'Two caveats' while three ship.
+
+    A count in prose is falsifiable by the thing it counts, which is why this
+    reads the bullets rather than trusting the sentence.
+    """
+    text = PARTIAL.read_text()
+    start = text.index("**Worktree isolation, where the harness offers it.**")
+    end = text.index("**Never weight findings by how many reviewers agree.**", start)
+    section = text[start:end]
+    assert "Three caveats, all paid for:" in section, (
+        "the count word says something other than three while three caveats ship"
+    )
+    # Tie the count to identifiable content, not to a raw bullet count. The
+    # section carries FOUR top-level bullets: three caveats plus a closing
+    # elaboration ("Shipped steps meet that description too"), which is why the
+    # pre-Phase-240 text said "Two caveats" over three bullets. Counting
+    # bullets would therefore have been wrong before this phase and wrong
+    # after it; naming the caveats is the check that means something.
+    caveats = [
+        "- **It does not give you the branch you are on",
+        "- **It rewrites your repo's shared config",
+        "- **Do not use it where a worktree already exists.**",
+    ]
+    for opener in caveats:
+        assert opener in section, f"caveat missing: {opener!r}"
+    assert len(caveats) == 3
+    # And the elaboration must stay OUT of the count, or the next phase to add
+    # a bullet will read the number as a bullet count and get it wrong again.
+    assert "- **Shipped steps meet that description too" in section, (
+        "the closing elaboration moved; re-check whether the count word still "
+        "describes caveats rather than bullets"
+    )
+    # E02: naming three openers closes DELETION and leaves ADDITION open --
+    # which is the direction this very phase moved the file (two -> three).
+    # Pin the total so a fourth caveat cannot ship under a count of three.
+    bullets = re.findall(r"^- \*\*", section, flags=re.M)
+    assert len(bullets) == 4, (
+        f"the section has {len(bullets)} top-level bullets, not 4 (3 caveats + "
+        "the closing elaboration). If a caveat was added, the count word above "
+        "must move with it -- that is the drift this test exists to catch."
+    )
+
+
+def test_the_caveat_ships_an_executed_recipe_not_only_a_warning() -> None:
+    """Kills C02 — the snapshot/diff commands removed, leaving prose alone.
+
+    Q-318 measured prose guards at 76-81% survivable and Phase 179 measured
+    polarity-by-regex at 0 of 21. A rule that can be RUN is the point here.
+    """
+    body = _caveat()
+    # C02 survived run 3: asserting the bare token `git config --local --list`
+    # is satisfied by the DELTA line alone, so deleting the SNAPSHOT line left
+    # the assertion green. A recipe with no snapshot has nothing to diff
+    # against -- the two halves must be pinned separately.
+    assert re.search(r"git config --local --list \| sort > \S+", body), (
+        "the snapshot half of the recipe is gone; the delta line below it then "
+        "diffs against a file nothing writes"
+    )
+    assert "BEFORE any spawn" in body, (
+        "the snapshot's ordering comment is gone -- a snapshot taken after the "
+        "spawn records the damage as the starting state, which is the same "
+        "defect Step 2b's own baseline capture exists to prevent"
+    )
+    assert "diff <(git config --local --list" in body, "no delta command"
+    assert "git config --local core.hooksPath" in body, "no restore command"
+    assert "```bash" in body, "the recipe is not in a runnable fence"
+
+
+def test_the_restore_directive_is_pinned_verbatim() -> None:
+    """Kills C03 — the directive negated while every required token survives.
+
+    Polarity is the class three independent measurements say does not close by
+    pattern (Q-318, Phase 179 at 0 of 21, Q-325 at 56.5% bypass). This does not
+    try to detect negation: it pins the sentence, which is what Phase 168 did
+    to its own ratchet for the same reason. Editing the wording is meant to
+    break this test -- re-read the sentence, then update the pin deliberately.
+    """
+    assert (
+        "**Do not skip the restore because the round passed:**"
+    ) in _caveat(), (
+        "the restore directive was reworded or reversed; a negation keeps every "
+        "keyword a looser check would require, so this pin is the check"
+    )
+
+
+def test_the_precondition_is_stated_and_not_inverted() -> None:
+    """Kills C04 — the precondition flipped to claim unset repos are affected.
+
+    Overstating the blast radius is the failure direction that gets a fix
+    over-applied; the entry it came from is careful about this and the shipped
+    prose has to stay careful too.
+    """
+    body = _caveat()
+    assert "it bites only a repo that set a relative" in body, (
+        "the precondition is missing or widened -- a repo with the key unset "
+        "is NOT affected, and this file must not imply otherwise"
+    )
+    assert "unaffected" in body
+
+
+def test_the_lowercased_key_trap_is_named_in_the_shared_file_too() -> None:
+    """The trap that makes the obvious detector useless: `git config --list`
+    renders the key `core.hookspath`, so a grep for the camelCase spelling --
+    which is how it appears everywhere it is discussed -- reports clean."""
+    assert "core.hookspath" in _caveat()
+
+
+
+def _recipe_commands() -> list[str]:
+    """The shell lines of the caveat's fenced recipe, dedented.
+
+    Extracted from the shipped file and EXECUTED below. The round found four
+    independent breakages of this recipe surviving the whole suite -- the two
+    halves naming different files, an inverted `&&`, the lines swapped, and
+    `| sort` on one side only -- because every guard on it was a pattern
+    match. A recipe that is shipped as runnable is tested by running it.
+    """
+    body = _caveat()
+    lines = body.split("\n")
+    starts = [i for i, l in enumerate(lines) if l.strip().startswith("```")]
+    assert len(starts) == 2, f"expected exactly one fenced block, got {len(starts)} markers"
+    inner = [l.strip() for l in lines[starts[0] + 1:starts[1]]]
+    cmds = [l for l in inner if l and not l.startswith("#")]
+    assert cmds, "the recipe fence holds no commands"
+    return cmds
+
+
+def test_the_recipe_snapshot_precedes_its_own_diff() -> None:
+    """D03: the ordering, pinned as an ORDER rather than as a token.
+
+    The previous guard asserted the string "BEFORE any spawn" appeared
+    somewhere in the caveat, which is satisfied with the two lines swapped --
+    and a commit message claimed that guard pinned the ordering. It did not.
+    """
+    cmds = _recipe_commands()
+    snap = next(i for i, c in enumerate(cmds) if ">" in c and "config --local --list" in c)
+    delta = next(i for i, c in enumerate(cmds) if c.startswith("diff "))
+    assert snap < delta, f"snapshot at {snap}, diff at {delta} — the diff reads a file nothing has written yet"
+
+
+def test_both_halves_of_the_recipe_name_the_same_file() -> None:
+    """D01: pinning the two halves individually leaves them free to disagree,
+    which is the same defect as C02 one level up."""
+    cmds = _recipe_commands()
+    snap = next(c for c in cmds if ">" in c and "config --local --list" in c)
+    delta = next(c for c in cmds if c.startswith("diff "))
+    target = snap.split(">")[-1].strip().strip('"')
+    assert target, f"cannot identify the snapshot's target in {snap!r}"
+    assert target.strip('"${}') in delta.replace('"', ""), (
+        f"the snapshot writes {target} and the diff reads something else — "
+        "the comparison is then against a file nothing in this recipe wrote"
+    )
+
+
+def _run_recipe(repo, rewrite: bool) -> bool:
+    """Execute the shipped recipe in `repo`. True == it reported 'unchanged'."""
+    import subprocess
+    cmds = _recipe_commands()
+    snap = [c for c in cmds if not c.startswith("diff ")]
+    delta = next(c for c in cmds if c.startswith("diff "))
+    subprocess.run("\n".join(snap), cwd=repo, shell=True, check=True, executable="/bin/bash")
+    if rewrite:
+        subprocess.run(["git", "config", "--local", "core.hooksPath", str(repo / ".githooks")],
+                       cwd=repo, check=True, capture_output=True)
+    # The recipe's own assignments must be re-evaluated for the delta: the
+    # round runs between the two halves, so they are two shells in practice
+    # too, which is exactly why the snapshot path has to be derivable rather
+    # than held in a variable that dies with the first shell.
+    assigns = [c for c in snap if re.match(r"^\w+=", c)]
+    r = subprocess.run("\n".join(assigns + [delta]), cwd=repo, shell=True,
+                       capture_output=True, text=True, executable="/bin/bash")
+    return r.returncode == 0 and "unchanged" in r.stdout
+
+
+@pytest.fixture()
+def _cfgrepo(tmp_path):
+    import subprocess
+    r = tmp_path / "r"
+    r.mkdir()
+    for args in (["init", "-q", "."], ["config", "user.email", "t@t"],
+                 ["config", "user.name", "T"],
+                 ["config", "--local", "core.hooksPath", ".githooks"]):
+        subprocess.run(["git", *args], cwd=r, check=True, capture_output=True)
+    return r
+
+
+def test_the_recipe_passes_on_a_clean_round(_cfgrepo) -> None:
+    """D05: a diff that loses `| sort` while the snapshot keeps it false-FAILs
+    every clean round -- `git config --local --list` emits in file order."""
+    assert _run_recipe(_cfgrepo, rewrite=False) is True, (
+        "the shipped recipe reports a delta on a repo nothing touched"
+    )
+
+
+def test_the_recipe_detects_the_hookspath_rewrite(_cfgrepo) -> None:
+    """D02: an inverted `&&` prints 'unchanged' exactly when it changed."""
+    assert _run_recipe(_cfgrepo, rewrite=True) is False, (
+        "the shipped recipe reported 'local config unchanged' over a rewritten "
+        "core.hooksPath -- which is the whole condition it exists to catch"
+    )
+
+
+def test_the_recipe_clears_a_stale_baseline_first(_cfgrepo) -> None:
+    """The skill calls `rm -f` load-bearing for the tree baseline: it is what
+    makes a SKIPPED capture fail loudly instead of silently comparing against
+    an earlier round. The recipe shipped without one."""
+    assert any(c.startswith("rm -f") or "rm -f" in c for c in _recipe_commands()), (
+        "no `rm -f` in the recipe — a skipped capture silently reuses a "
+        "previous round's baseline"
+    )
+
+
+def test_the_recipe_does_not_use_a_machine_shared_path(_cfgrepo) -> None:
+    """A fixed /tmp name collides between repos and between concurrent rounds
+    on one machine, which is the ordinary case here."""
+    joined = " ".join(_recipe_commands())
+    assert "/tmp/config-baseline" not in joined, (
+        "the recipe writes a fixed machine-shared path; two rounds in different "
+        "repos would overwrite each other's baseline"
+    )

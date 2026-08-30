@@ -22,6 +22,7 @@ internal tracker: 1 round / 202), the residue check reports **0** on both — th
 `test_real_consumer_corpora_produce_no_residue` pins.
 """
 import importlib.util
+import os
 import subprocess
 from pathlib import Path
 
@@ -179,34 +180,88 @@ def test_the_separator_and_blank_lines_are_the_only_exemptions():
     assert arc._ACCOUNTING_EXEMPT == frozenset({"", "---"}), arc._ACCOUNTING_EXEMPT
 
 
-# Sibling checkouts of this repo, DERIVED rather than written down. An earlier
-# cut hardcoded two absolute paths here and put the author's home directory plus
-# two private project names into a file the public mirror ships —
-# `test_mirror_leak_gate.py::test_pass_1b_no_absolute_home_paths` is a
-# MUST-be-empty gate and went red. It reads git-TRACKED files, so it could not
-# see the leak until the commit that introduced it, which is why several
-# full-suite runs came back clean beforehand.
-def _sibling_trackers():
-    return sorted(REPO_ROOT.parent.glob("*/review_tasks.md"))
+# Consumer corpora are DECLARED, never discovered.
+#
+# `Q-241` was filed when a throwaway `review_tasks.md` beside this checkout was
+# scored as a real consumer corpus — against a zero-false-positive budget, since
+# `archive_review_tasks.py` has no `--force` — and HARD FAILED a baseline clone
+# run. The first fix for it kept discovery and gated each sibling on a
+# real-checkout marker (`.git`, or a `sysop/` vendor dir). **The review round
+# disproved that**, by execution: this module's own fixtures (`_run_archiver`,
+# `test_the_run_refuses_and_writes_nothing`) call `git init` AND create
+# `sysop/scripts` — they must, because the script resolves its repo root as
+# `parents[2]` of itself and cannot run otherwise. 28 test modules build that
+# shape. **Any marker a real consumer has, a runnable fixture has too**, so no
+# heuristic over discovered directories can separate them, and the filed remedy
+# could not close the filed bug.
+#
+# Declaration closes it in every shape: nothing is sampled unless a human named
+# it. An earlier cut hardcoded two absolute paths here instead and put the
+# author's home directory plus two private project names into a file the public
+# mirror ships — `test_mirror_leak_gate.py::test_pass_1b_no_absolute_home_paths`
+# is a MUST-be-empty gate and went red — so the paths come from the environment,
+# never from this file.
+_TRACKERS_ENV = "SYSOP_CONSUMER_TRACKERS"
 
 
-@pytest.mark.parametrize("tracker", _sibling_trackers() or [None])
-def test_real_consumer_corpora_produce_no_residue(tracker):
+def _declared_trackers():
+    raw = os.environ.get(_TRACKERS_ENV, "")
+    return [Path(p) for p in raw.split(os.pathsep) if p.strip()]
+
+
+# NOT parametrized, on purpose. Parametrizing over the corpus list made this
+# module's COLLECTED COUNT a function of where the checkout sits — the same
+# commit collected 15 beside six sibling trackers and 10 in a worktree with
+# none — so a phase measuring its own suite delta across two locations read the
+# environment as a delta. Phase 242's measurement was corrupted exactly that
+# way. One case that loops keeps the count fixed wherever it runs; the tracker
+# is named in the failure message instead of in the test id.
+#
+# The zero-budget assertion lives HERE, in a helper taking its trackers as an
+# argument, rather than inline in the test. That seam is why it can be guarded
+# at all: a healthy machine's corpora are clean, so the assertion is never
+# reached and `assert True` would leave the suite green — an author-side
+# mutation proved exactly that. A fixture can hand this helper a corpus that IS
+# dirty and require the failure.
+def _sample_corpora(trackers):
+    """Assert zero residue across `trackers`; return those actually sampled."""
+    sampled = []
+    for tracker in trackers:
+        # A declared path that is not a readable file is skipped, not fatal.
+        # Dropping this check was a regression the round caught: a sibling whose
+        # `review_tasks.md` was a directory or a dangling symlink raised
+        # IsADirectoryError / FileNotFoundError where it used to skip — the same
+        # spurious-hard-fail class `Q-241` itself was filed for.
+        if not tracker.is_file():
+            continue
+        lines = tracker.read_text(encoding="utf-8", errors="replace").splitlines()
+        rounds = arc.parse_archivable_batches(lines)
+        archivable = [r for r in rounds if r.get("all_merged")]
+        if not archivable:
+            continue
+        block = arc.build_archive_block(archivable)
+        residue = arc.unaccounted_lines(lines, archivable, block)
+        assert residue == [], (
+            f"{len(residue)} false positive(s) in {tracker}: {residue[:5]}"
+        )
+        sampled.append(tracker)
+    return sampled
+
+
+def test_real_consumer_corpora_produce_no_residue():
     """The false-positive budget is zero: there is no `--force` on this path.
 
-    Skipped rather than failed when no sibling checkout is present — these are
-    working checkouts, not fixtures, and CI has none.
+    Opt-in. Point `SYSOP_CONSUMER_TRACKERS` at one or more real consumer
+    `review_tasks.md` paths (os.pathsep-separated) to sample them. Skipped
+    when nothing is declared — CI declares nothing, and neither does a fresh
+    clone, which is the whole point of `Q-241`.
     """
-    if tracker is None or not tracker.is_file():
-        pytest.skip("no sibling review_tasks.md checkout on this machine")
-    lines = tracker.read_text(encoding="utf-8", errors="replace").splitlines()
-    rounds = arc.parse_archivable_batches(lines)
-    archivable = [r for r in rounds if r.get("all_merged")]
-    if not archivable:
-        pytest.skip("no archivable round in this corpus")
-    block = arc.build_archive_block(archivable)
-    residue = arc.unaccounted_lines(lines, archivable, block)
-    assert residue == [], f"{len(residue)} false positive(s): {residue[:5]}"
+    trackers = _declared_trackers()
+    if not trackers:
+        pytest.skip(f"no consumer corpora declared; set {_TRACKERS_ENV}")
+    sampled = _sample_corpora(trackers)
+    if not sampled:
+        pytest.skip("no archivable round in any declared corpus")
 
 
 def test_both_remedies_the_refusal_prescribes_actually_clear_it():
@@ -318,3 +373,140 @@ def test_the_run_refuses_and_writes_nothing(tmp_path):
     assert "THE ORPHAN" in r.stderr, r.stderr
     assert (repo / "review_tasks.md").read_text() == before_tasks, "review_tasks.md was mutated"
     assert (repo / "review_tasks_archive.md").read_text() == before_archive, "archive was mutated"
+
+
+# ---------------------------------------------------------------------------
+# Guards for the `Q-241` fix itself.
+#
+# The fix was first demonstrated by hand in a scratch tree, which is not a
+# guard: an author-side battery of four mutations against it killed 0 of 4,
+# because the sampling test reads machine state and passes on a working check
+# and a dead one alike. The review round then went further and disqualified the
+# fix's *mechanism* — see the note above `_TRACKERS_ENV`. These guards are
+# written against the replacement, and every one of them builds its inputs
+# rather than finding them, so they behave identically in CI, in a worktree,
+# and on a machine with no consumer checkouts at all.
+def test_declared_trackers_reads_the_environment_and_nothing_else(tmp_path, monkeypatch):
+    """The whole point of the mechanism: nothing is sampled unless declared."""
+    monkeypatch.delenv(_TRACKERS_ENV, raising=False)
+    assert _declared_trackers() == [], "undeclared must mean empty, never discovered"
+
+    monkeypatch.setenv(_TRACKERS_ENV, "")
+    assert _declared_trackers() == [], "an empty declaration is not one path"
+
+    a, b = tmp_path / "a.md", tmp_path / "b.md"
+    monkeypatch.setenv(_TRACKERS_ENV, os.pathsep.join([str(a), str(b)]))
+    assert _declared_trackers() == [a, b]
+
+    # blanks and stray separators must not become Path(".")
+    monkeypatch.setenv(_TRACKERS_ENV, os.pathsep.join(["", str(a), "  ", ""]))
+    assert _declared_trackers() == [a]
+
+
+def test_a_fixture_that_looks_exactly_like_a_consumer_is_never_sampled(tmp_path, monkeypatch):
+    """The round's disqualifying case, kept as a guard.
+
+    A fixture built to actually run `archive_review_tasks.py` necessarily has
+    `git init` and `sysop/scripts` — both markers the disproved gate keyed on.
+    Declaration must ignore it anyway, because it was never declared.
+    """
+    fixture = tmp_path / "scratch-fixture"
+    (fixture / "sysop" / "scripts").mkdir(parents=True)
+    (fixture / ".git").mkdir()
+    (fixture / "review_tasks.md").write_text(ORPHANED, encoding="utf-8")
+
+    monkeypatch.delenv(_TRACKERS_ENV, raising=False)
+    assert _declared_trackers() == [], "a marker-perfect fixture must still be invisible"
+
+
+def test_the_zero_budget_assertion_actually_fires(tmp_path):
+    """The assertion is unreachable on a healthy machine, so a fixture forces it.
+
+    Every real corpus is clean, so `assert residue == []` is never evaluated
+    and `assert True` would leave the module green. An author-side mutation
+    proved that. Only a dirty corpus requires the failure.
+    """
+    dirty = tmp_path / "consumer" / "review_tasks.md"
+    dirty.parent.mkdir(parents=True)
+    dirty.write_text(ORPHANED, encoding="utf-8")
+    with pytest.raises(AssertionError, match="false positive"):
+        _sample_corpora([dirty])
+
+    # A ONE-line orphan, so a loosened `len(residue) < 2` threshold still fires.
+    # The module already fixed this class for the archiver; the guard must not
+    # re-open it by only ever testing the two-line fixture.
+    single = tmp_path / "single" / "review_tasks.md"
+    single.parent.mkdir(parents=True)
+    single.write_text(ORPHAN_IS_ONE_LINE_AT_THE_END, encoding="utf-8")
+    with pytest.raises(AssertionError, match="false positive"):
+        _sample_corpora([single])
+
+    clean = tmp_path / "other" / "review_tasks.md"
+    clean.parent.mkdir(parents=True)
+    clean.write_text(CLEAN, encoding="utf-8")
+    assert _sample_corpora([clean]) == [clean], "a clean corpus must sample, not fail"
+
+
+def test_sample_corpora_honours_its_contract_on_the_shapes_that_are_not_clean(tmp_path):
+    """Skips, keeps going, and reports only what it actually read."""
+    missing = tmp_path / "gone" / "review_tasks.md"
+    missing.parent.mkdir(parents=True)
+    dangling = tmp_path / "dangling" / "review_tasks.md"
+    dangling.parent.mkdir(parents=True)
+    dangling.symlink_to(missing)
+    a_dir = tmp_path / "dir" / "review_tasks.md"
+    a_dir.mkdir(parents=True)
+    # Regression the round caught: these used to SKIP, then began raising
+    # IsADirectoryError / FileNotFoundError — the same spurious hard fail
+    # `Q-241` was filed for, in a new shape.
+    assert _sample_corpora([missing, dangling, a_dir]) == []
+
+    # A corpus with no archivable round is skipped WITHOUT stopping the loop —
+    # `break` instead of `continue` would silently drop every later corpus.
+    no_round = tmp_path / "noround" / "review_tasks.md"
+    no_round.parent.mkdir(parents=True)
+    no_round.write_text("# Review Tasks\n\n## Statistics\n", encoding="utf-8")
+    dirty = tmp_path / "dirty" / "review_tasks.md"
+    dirty.parent.mkdir(parents=True)
+    dirty.write_text(ORPHANED, encoding="utf-8")
+    with pytest.raises(AssertionError, match="false positive"):
+        _sample_corpora([no_round, dirty])
+
+    # Returns what it SAMPLED, not what it was handed.
+    clean = tmp_path / "clean" / "review_tasks.md"
+    clean.parent.mkdir(parents=True)
+    clean.write_text(CLEAN, encoding="utf-8")
+    assert _sample_corpora([no_round, clean]) == [clean]
+
+
+def test_the_sampling_test_actually_samples_what_is_declared(tmp_path, monkeypatch):
+    """The wiring, tested by RUNNING the test — not by matching its source.
+
+    The first version of this guard read the module's own text for the literal
+    `_sample_corpora(trackers)`. The round broke it in both directions: the
+    token also occurs inside that guard's own source, so deleting the test it
+    certified still passed; and four legal reformats (a keyword argument, a
+    renamed local, a wrapped call, black's multi-line form) falsely reddened
+    it. Calling the real test function under a declared corpus has neither
+    failure mode.
+    """
+    dirty = tmp_path / "consumer" / "review_tasks.md"
+    dirty.parent.mkdir(parents=True)
+    dirty.write_text(ORPHANED, encoding="utf-8")
+    monkeypatch.setenv(_TRACKERS_ENV, str(dirty))
+    with pytest.raises(AssertionError, match="false positive"):
+        test_real_consumer_corpora_produce_no_residue()
+
+    clean = tmp_path / "other" / "review_tasks.md"
+    clean.parent.mkdir(parents=True)
+    clean.write_text(CLEAN, encoding="utf-8")
+    monkeypatch.setenv(_TRACKERS_ENV, str(clean))
+    test_real_consumer_corpora_produce_no_residue()  # declared and clean: passes
+
+    # `pytest.skip` raises `Skipped`, which derives from BaseException, NOT
+    # Exception — so `pytest.raises(Exception)` does not catch it, the skip
+    # propagates, and THIS guard is reported as skipped rather than passed.
+    # That happened on the first cut of this test and hid it in plain sight.
+    monkeypatch.delenv(_TRACKERS_ENV, raising=False)
+    with pytest.raises(pytest.skip.Exception, match="no consumer corpora declared"):
+        test_real_consumer_corpora_produce_no_residue()

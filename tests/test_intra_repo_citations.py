@@ -26,13 +26,26 @@ measurement split the class in two rather than settling it either way:
   citations, of which **2 were stale** (`claim_task.sh:86` and
   `docs/one-rule.md:117`, whose `grep.py:190` had drifted 41 lines to `:231`).
   Nine is small enough to pin exactly. That is this module.
-* **`PHASE_LOG.md`** carries **220** under this module's own regex, at a sampled
-  **50% stale** rate, and roughly
-  half of those are stale *correctly*: a phase entry's job is to cite the line
-  it changed, so the line stops holding that content by design. A guard there is
-  high-false-positive by construction — the § Planned-phases framing predicted
-  exactly this, and the measurement confirms it rather than assuming it. Not
-  guarded, and the reason is recorded rather than left as silence.
+* **`PHASE_LOG.md`** is not scanned here, and the reason is a measurement
+  rather than a silence. A phase entry's job is to cite the line it changed, so
+  the line stops holding that content by design; an anchor guard there is
+  high-false-positive by construction.
+
+  **RE-DERIVED BY PHASE 245** — the figure that stood here was **220 at a
+  sampled 50% stale**, and `Q-322`'s remedy was being reasoned about from it.
+  Against the tree: **405 unique citations — 386 unambiguous, 15 ambiguous,
+  4 dangling.**
+
+  The 15 are a HARD blocker on ever un-excluding this file, not merely a cost.
+  They name a bare basename resolving to many files (`SKILL.md` matches 23,
+  `README.md` matches 4), and `test_no_registered_citation_is_ambiguous` below
+  refuses to register an ambiguous citation on purpose (round finding M6). No
+  legal registry entry exists for them, so un-excluding would require editing
+  fifteen historical entries or weakening that refusal.
+
+  The checkable sub-property — **does the cited file still exist** — is guarded
+  instead, in `tests/test_phase_log_citation_targets.py`. Line drift stays
+  unguarded, deliberately and for the reason above.
 
 WHY A REGISTRY, AND WHY IT IS NOT A HAND-LIST. A table of citations someone must
 remember to extend is the "derive the population from an index, not the source
@@ -141,7 +154,7 @@ CITATION_ANCHORS = {
     # on that being true. The anchor is the array literal itself — if the installer
     # ever stops appending that entry, the probe is scoped to a path nothing ignores
     # and the comment becomes the false claim it replaced.
-    ("core/companion/scripts/cleanup_worktrees.sh", "install.sh:3212"):
+    ("core/companion/scripts/cleanup_worktrees.sh", "install.sh:3484"):
         'want=("sysop/runtime/"',
     # Phase 234: cleanup_worktrees.sh's MAIN_ROOT block cites the fail-closed
     # precedent it follows (claim_task.sh, which exits on the same class of
