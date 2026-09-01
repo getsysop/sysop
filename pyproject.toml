@@ -1,7 +1,10 @@
 [tool.pytest.ini_options]
 minversion = "9.0"
 testpaths = ["tests"]
-pythonpath = ["core/companion/scripts", "scripts"]
+# `tests` is on the path so guard modules can import the shared reversal layer
+# (`tests/_reversal.py`) rather than re-implementing it — the duplicate-then-diverge
+# shape `Q-367` filed after three modules had already done so.
+pythonpath = ["core/companion/scripts", "scripts", "tests"]
 # `-n auto` (Phase 187): 583s serial -> 123-160s here, ~4x on 14 logical cores.
 # The serial run is already 84% CPU-bound (224s user + 266s sys against 583s wall),
 # so the win is spreading that CPU across cores, NOT reclaiming idle -- and the

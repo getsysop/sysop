@@ -46,8 +46,8 @@ REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || {
 # targeted the primary instead; git refuses (`fatal: … is a main working tree`),
 # so nothing was ever lost, but the run exited 1 having cleaned nothing.
 #
-# That was the prescribed path, not an edge case: batch_work.sh:1236 prints
-# `cd ${WORKTREE_DIR}` and batch_work.sh:1241 names this script five lines later,
+# That was the prescribed path, not an edge case: batch_work.sh:1285 prints
+# `cd ${WORKTREE_DIR}` and batch_work.sh:1290 names this script five lines later,
 # so an operator following those "Next steps" in one shell hit it every time.
 #
 # Resolution, and why it is deliberately NOT the

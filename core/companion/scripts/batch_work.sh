@@ -442,6 +442,53 @@ remove_batch_lock() {
   fi
 }
 
+# ── Helper: remove the batch's park markers ───────────────────
+#
+# The release path's missing half, found by Phase 248's round (execute lens).
+# `close_batch.sh`'s `remove_claim_artifacts()` reaps a batch's park markers, but
+# it runs only when a close LANDS ON `main` — so a batch that was claimed, parked
+# and then RELEASED kept its marker forever, and nothing else looked at it.
+#
+# That was invisible until Phase 248 taught `/sitrep` to read batch parks
+# (`Q-317`). Now it is a live false report, reproduced by the round in both
+# directions: after a release-and-reclaim, a fresh claim with zero commits reads
+# `parked` and points the operator at an abandoned run; between the release and
+# the re-claim, the batch reads `pending (not claimed)` with a park marker still
+# sitting on disk. A release is the batch's own un-claim, so it owns the
+# artifacts the claim created, exactly as the close does.
+#
+# Hardened the same way its `close_batch.sh` twin is, and for the same recorded
+# reasons: the numeric re-assert (this composes a glob from `batch_num`), the
+# `-e || -L` test (bare `-e` follows symlinks, so a DANGLING marker symlink would
+# be reported as absent while `rm -f` really does remove it), and reporting what
+# the `rm` DID rather than that it was attempted.
+remove_batch_park_markers() {
+  local batch_num="$1"
+  local main_root marker removed=0
+
+  if ! main_root="$(resolve_main_root)"; then
+    echo "⚠️  Could not resolve the main checkout — park markers for Batch ${batch_num} not removed." >&2
+    return 0
+  fi
+  if [[ ! "$batch_num" =~ ^[0-9]+$ ]]; then
+    echo "⚠️  Refusing to remove park markers — batch id '${batch_num}' is not numeric." >&2
+    return 0
+  fi
+
+  for marker in "${main_root}/sysop/runtime/parked/BATCH-${batch_num}__"*.md; do
+    [[ -e "$marker" || -L "$marker" ]] || continue
+    if rm -f "$marker" 2>/dev/null && [[ ! -e "$marker" && ! -L "$marker" ]]; then
+      echo "✅ Removed park marker $(basename "$marker")"
+      removed=$((removed + 1))
+    else
+      echo "⚠️  Could NOT remove park marker ${marker} — left in place." >&2
+    fi
+  done
+  if [[ $removed -eq 0 ]]; then
+    echo "ℹ️  No park markers for Batch ${batch_num}."
+  fi
+}
+
 # ── The parser preflight (Q-036, Q-226) ──────────────────────
 #
 # Runs HERE, above every dispatch, and not inside `parse_batches` — because all
@@ -836,6 +883,7 @@ if [[ "${1:-}" == "--release" ]]; then
       # status says it is claimable), so clearing the lock IS the release here.
       echo "ℹ️  Batch ${REL_NUM} is already Pending in review_tasks.md — clearing the lock only."
       remove_batch_lock "$REL_NUM"
+      remove_batch_park_markers "$REL_NUM"
       exit 0
       ;;
     "In Progress"|"Review Ready") ;;
@@ -960,6 +1008,7 @@ if [[ "${1:-}" == "--release" ]]; then
 
   rebuild_index
   remove_batch_lock "$REL_NUM"
+  remove_batch_park_markers "$REL_NUM"
 
   echo ""
   echo "ℹ️  Branch ${REL_BRANCH:-<none>} was left in place (a claim leaves the branch, so an un-claim does too)."

@@ -179,8 +179,8 @@ Here's what it does, and why each part matters:
   option you picked — that choice changes what happens *after* it, never whether it happens.
 - **Implements** the task in the worktree, following the conventions it looked up. (The
   promoted, computer-run checks bite wherever you have armed them — the pre-commit hook's
-  check slots, the CI template once you copy it in, and every audit round. `/review-close`
-  runs them only if you list the pre-scan there — see step 5.)
+  check slots, the CI template once you copy it in, every audit round, and `/review-close`'s
+  merge gate, which runs them whether or not you list them — see step 5.)
 
 When it finishes it prints a `## Claim complete` summary naming the branch, the worktree and
 the sealed review report. The work lives on that branch in a sibling worktree, but **you
@@ -230,8 +230,8 @@ In the fresh session — from your main checkout, where you started — send:
 This is the final gate. Because it surveys *every* branch waiting to merge (not just this
 one), run it from your main checkout rather than the worktree. It reviews each pending
 branch against its plan and your conventions, runs whatever your `## Pre-merge
-verification` section lists on the merged tree, merges what passes to `main`, and cleans
-up the worktree.
+verification` section lists on the merged tree, runs the deterministic checks there too,
+merges what passes to `main`, and cleans up the worktree.
 
 > **Have an end-to-end or QA suite?** A Playwright, Cypress, or integration-test run plugs
 > in as one more command under `## Pre-merge verification` → `### Always` in your project's
@@ -239,11 +239,27 @@ up the worktree.
 > wiring. See
 > [`WORKFLOW.md`](../core/companion/docs/WORKFLOW.md) §6.1.
 
-> **Want the promoted checks enforced at the merge?** By default they are not — `/review-close`
-> runs only what that section lists, so a branch that introduces a new `checks.yml` or semgrep
-> finding merges and the finding surfaces on your next audit round. Add
-> `bash sysop/scripts/run_checks.sh --mode both --fail-on-blocking` as an `### Always` line and
-> the merge is refused instead, on any not-yet-baselined finding from a `blocking: true` check.
+> **`/review-close` runs the promoted checks at the merge, and you do not wire that part.** It
+> runs `bash sysop/scripts/run_checks.sh --mode both --fail-on-blocking` on the merged tree at
+> its `4a-post` gate, **in addition** to whatever your `## Pre-merge verification` section
+> lists — so a branch that introduces a not-yet-baselined finding from a `blocking: true` check
+> is refused, instead of merging and surfacing on your next audit round.
+>
+> **What you do still have to wire is the globs, and until you do, the gate has nothing to
+> fire on.** On a fresh install with every populated pack, 7 checks are `blocking: true` and
+> **none of them can produce a finding**: their `paths:` are placeholders (`<api module>/`,
+> `<migrations dir>/`, `<frontend>/`) and the two coverage checks have no `critical_path`, so
+> the scan reports `paths unresolved: placeholder globs not yet localized` and `gate unarmed`,
+> and exits 0. That is deliberate — a merge gate that reddened on arrival would be worse — but
+> it means "enforced at the merge" describes the wiring, not yet your repo. Localize the globs
+> in `.claude/checks.yml` and the gate starts biting; verified by localizing one and planting a
+> violation, which turns the same command into `1 new blocking finding — failing CI`.
+>
+> The shipped `### Always` template lists the same command, and that is not a duplicate: it is
+> `/claim-task` and `/auto-build` that run *that* section, in each branch's own worktree, which
+> catches a violation before the merge rather than in the assembled result. `/review-close`
+> de-duplicates against it — listing it does not run it twice, and a narrower `--mode` you
+> chose there is honoured rather than overruled.
 
 By default it pushes to `main` directly. If your `main` is push-protected, route it through
 a pull request instead by adding this to your `CLAUDE.md` (create the file at your repo root

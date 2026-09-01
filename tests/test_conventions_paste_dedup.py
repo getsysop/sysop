@@ -108,7 +108,35 @@ def test_the_agent_arm_pins_authority_and_fails_closed():
 
 def test_the_verbatim_requirement_survives_in_both_arms():
     """The original rule — every subsection, unfiltered — must hold whichever arm
-    runs; the dedup must not become a licence to pre-filter."""
-    block = _step2b()
-    assert "do not pre-filter or rename subsections" in block
-    assert "verbatim, every subsection, unfiltered" in block
+    runs; the dedup must not become a licence to pre-filter.
+
+    Re-pointed by `Q-342`, which widened the paste from one section to the
+    rule-bearing set. The property is unchanged and is now strictly stronger:
+    "unfiltered" has to hold across SECTIONS as well as subsections, so the
+    inline arm gained `merge` to the list of things it may not do — a widened
+    paste that silently concatenated two sections under one heading would satisfy
+    the old wording while destroying the citation the ROUTING block depends on.
+    """
+    block = " ".join(_step2b().split())          # the prose wraps; the rule does not
+
+    # BOTH ARMS, scoped -- not a file-level `in block`. The two arms carry nearly
+    # identical wording, so a whole-step assertion is satisfied by whichever arm
+    # was NOT mutated: breaking the write-once arm alone left this green until the
+    # phase's own battery caught it (R4). That is the Phase-176 shape -- a
+    # file-level assertion met by an incidental occurrence elsewhere in the file.
+    write_once = block[block.index("then write **every section in the set"):]
+    write_once = write_once[:write_once.index("**Paste or retrieve")]
+    inline_arm = block[block.index("## Project conventions"):]
+    inline_arm = inline_arm[:inline_arm.index("## Instructions")]
+
+    assert "Do not pre-filter, merge or rename sections or subsections" in inline_arm
+    assert "every section in the set, verbatim, every subsection, unfiltered" in write_once
+
+    # The widening must not have cost the per-section identity: a paste that
+    # concatenated two sections under one heading would satisfy "unfiltered" while
+    # destroying the citation the ROUTING block depends on. Required in EACH arm.
+    for name, arm in (("write-once", write_once), ("inline", inline_arm)):
+        assert "under its own original `## <name>` heading" in arm, (
+            f"the {name} arm no longer requires per-section headings -- the ROUTING "
+            f"block cannot cite a section the paste merged away"
+        )

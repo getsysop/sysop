@@ -407,9 +407,14 @@ def check_the_stranded_probe_is_scoped_to_tracked_task_files(text: str) -> list[
     section = _slice(text, "step8_executed")
     if not section:
         return ["Step 8 EXECUTED arm did not resolve"]
-    blocks = _python_blocks(section)
+    # Selected by what the probe EMITS, not by position. Phase 249 added a second
+    # prescribed block to this arm (the `Q-369` read-back); a count assertion here
+    # would have read as "the probe changed shape" when the probe had not changed
+    # at all — failure-to-locate reported as failure-to-comply.
+    blocks = [b for b in _python_blocks(section) if "STRANDED" in b]
     if len(blocks) != 1:
-        return [f"expected exactly one prescribed python block in the EXECUTED arm, found {len(blocks)}"]
+        return [f"expected exactly one STRANDED-emitting python block in the EXECUTED "
+                f"arm, found {len(blocks)}"]
     tree = ast.parse(blocks[0])
 
     vectors: list[list[str]] = []
@@ -522,10 +527,31 @@ def repo(tmp_path):
     return main, tmp_path / "wt"
 
 
-def _run_python_block(section_key: str, args: str, cwd: Path, text: str | None = None):
+def _run_python_block(section_key: str, args: str, cwd: Path, text: str | None = None,
+                      needle: str | None = None):
+    """Select the block by a NEEDLE in its body, not by there being only one.
+
+    Re-pointed in Phase 249, when `step8_executed` gained a second prescribed block (the
+    `Q-369` test-decision read-back). The old form asserted `len(blocks) == 1`, which is
+    a positional assumption wearing a count: it breaks on any addition to the section,
+    and — worse — had the new block landed BEFORE the stranded probe rather than after
+    it, `blocks[0]` would have silently run the wrong one and every assertion below would
+    have graded a block it was not written for. Anchor on the stable part (a string the
+    intended block emits), not on how many neighbours it has.
+    """
     blocks = _python_blocks(_slice(text if text is not None else _text(), section_key))
-    assert len(blocks) == 1, f"expected one prescribed block in {section_key}"
-    script = f"python3 - <<'PY' {args}\n{blocks[0]}\nPY\n"
+    if needle is None:
+        assert len(blocks) == 1, (
+            f"{len(blocks)} prescribed blocks in {section_key} and no needle to choose "
+            f"between them — pass one rather than trusting document order")
+        body = blocks[0]
+    else:
+        matches = [b for b in blocks if needle in b]
+        assert len(matches) == 1, (
+            f"expected exactly one block in {section_key} containing {needle!r}, "
+            f"found {len(matches)} of {len(blocks)}")
+        body = matches[0]
+    script = f"python3 - <<'PY' {args}\n{body}\nPY\n"
     return subprocess.run(["bash", "-c", script], cwd=cwd, capture_output=True, text=True)
 
 
@@ -655,7 +681,7 @@ def test_the_transport_check_refuses_an_unsubstituted_placeholder(repo):
 def test_the_stranded_probe_sees_a_body_edit_and_names_it(repo):
     main, _ = repo
     (main / "tasks/open/TECH-0007.md").write_text("# TECH-0007\n\n## Test decision\nno test\n")
-    r = _run_python_block("step8_executed", "", main)
+    r = _run_python_block("step8_executed", "", main, needle="STRANDED")
     assert r.returncode == 0, r.stderr
     assert "STRANDED" in r.stdout
     assert "tasks/open/TECH-0007.md" in r.stdout, "the probe must name the files, not just fire"
@@ -663,7 +689,7 @@ def test_the_stranded_probe_sees_a_body_edit_and_names_it(repo):
 
 def test_the_stranded_probe_is_quiet_on_a_clean_tree(repo):
     main, _ = repo
-    r = _run_python_block("step8_executed", "", main)
+    r = _run_python_block("step8_executed", "", main, needle="STRANDED")
     assert r.returncode == 0, r.stderr
     assert "CLEAN" in r.stdout and "STRANDED" not in r.stdout
 
@@ -674,7 +700,7 @@ def test_an_untracked_body_is_not_stranded(repo):
     executor was told to accept and report itself."""
     main, _ = repo
     (main / "tasks/open/TECH-0099.md").write_text("# TECH-0099\n")
-    r = _run_python_block("step8_executed", "", main)
+    r = _run_python_block("step8_executed", "", main, needle="STRANDED")
     assert r.returncode == 0, r.stderr
     assert "CLEAN" in r.stdout and "STRANDED" not in r.stdout
 
@@ -684,7 +710,7 @@ def test_an_ordinary_edit_outside_tasks_is_not_stranded(repo):
     it catches. A probe that fired here would refuse a claim on every live repo."""
     main, _ = repo
     (main / "src.py").write_text("x = 2\n")
-    r = _run_python_block("step8_executed", "", main)
+    r = _run_python_block("step8_executed", "", main, needle="STRANDED")
     assert r.returncode == 0, r.stderr
     assert "CLEAN" in r.stdout and "STRANDED" not in r.stdout
 
@@ -695,7 +721,7 @@ def test_the_stranded_probe_run_from_a_worktree_still_reads_main(repo):
     CLEAN on exactly the run that is broken."""
     main, wt = repo
     (main / "tasks/open/TECH-0007.md").write_text("# TECH-0007\n\n## Test decision\nno test\n")
-    r = _run_python_block("step8_executed", "", wt)
+    r = _run_python_block("step8_executed", "", wt, needle="STRANDED")
     assert r.returncode == 0, r.stderr
     assert "STRANDED" in r.stdout
 
@@ -945,9 +971,9 @@ def test_a_probe_widened_past_tasks_is_caught_by_execution(repo):
     (main / "src.py").write_text("x = 2\n")
     mutated = _text().replace('"--", "tasks/"', '"--", "."', 1)
     assert mutated != _text()
-    r = _run_python_block("step8_executed", "", main, text=mutated)
+    r = _run_python_block("step8_executed", "", main, text=mutated, needle="STRANDED")
     assert "STRANDED" in r.stdout, "the mutation did not change behaviour"
-    clean = _run_python_block("step8_executed", "", main)
+    clean = _run_python_block("step8_executed", "", main, needle="STRANDED")
     assert "CLEAN" in clean.stdout
 
 

@@ -47,7 +47,7 @@ served:
 #     parameter, which is a CLOSED ENUM. `best`, `inherit`, and full model ids
 #     are each rejected with InputValidationError at spawn time (verified by
 #     making the calls, 2026-08-21). The failure lands mid-skill, at spawn time,
-#     in every skill the role governs — 13 inline pins today, 12 of them on the
+#     in every skill the role governs — 14 inline pins today, 13 of them on the
 #     `reasoning` role.
 #
 # check_skill_models.py fails (exit 1) when a role governing an inline pin

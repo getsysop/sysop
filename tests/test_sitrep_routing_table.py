@@ -71,10 +71,18 @@ def _module_string_consts() -> dict[str, str]:
 def _routed_task_states() -> set[str]:
     """Task states `_recommended_next` branches on, literals and constants alike.
 
-    Scoped to `t.state ==` on purpose. `rb.state ==` is the *batch* vocabulary,
-    which the routing table describes in prose ("Any review batch with all tasks
-    Doc-Work'd") rather than by state string; demanding those strings appear
-    would make this guard fail on a table that is correct.
+    Scoped to `t.state ==` on purpose: this is the *task* vocabulary.
+
+    ⚠ **The rationale that used to sit here is spent and was still shipping after
+    the exemption it justified had gone** (Phase 248's round). It read: *"`rb.state
+    ==` is the batch vocabulary, which the routing table describes in prose rather
+    than by state string; demanding those strings appear would make this guard fail
+    on a table that is correct."* That held until `Q-317` named two batch states BY
+    STRING in the table. `_routed_batch_states` below now demands exactly those
+    strings, so the old paragraph was false eight lines above its own refutation.
+    The split survives for a different reason: the two vocabularies have different
+    table shapes, and the batch check has to be positional (a row naming a review
+    batch) where the task check does not.
     """
     body = _recommended_next_body()
     consts = _module_string_consts()
@@ -89,6 +97,36 @@ def _routed_task_states() -> set[str]:
             f"_recommended_next branches on `{tok}`, which is not a module-level "
             f"string constant — this guard cannot resolve it, so the state would "
             f"escape the routing-table check"
+        )
+        out.add(consts[tok])
+    return out
+
+
+def _routed_batch_states() -> set[str]:
+    """Batch states `_recommended_next` branches on, via `rb.state ==`.
+
+    Scoped to `rb.state ==`, the mirror of `_routed_task_states`. Until Phase 248
+    this vocabulary was deliberately EXEMPT from the routing-table check: the
+    table described batches in prose ("Any review batch with all tasks
+    Doc-Work'd") rather than by state string, so demanding the strings would have
+    failed a correct table. `Q-317` added two batch states that ARE named by
+    string in the table (`parked`, `awaiting approval`), and an exemption kept
+    past its warrant is how a state ships with no row — which is the exact class
+    this module exists to close, one vocabulary over. So the check now runs on
+    the states the table names, and only those.
+    """
+    body = _recommended_next_body()
+    consts = _module_string_consts()
+    out: set[str] = set()
+    for tok in re.findall(
+        r'rb\.state == ([A-Za-z_][A-Za-z0-9_]*|"[^"]*")', body
+    ):
+        if tok.startswith('"'):
+            out.add(tok.strip('"'))
+            continue
+        assert tok in consts, (
+            f"_recommended_next branches on `{tok}` for a batch, which is not a "
+            f"module-level string constant — this guard cannot resolve it"
         )
         out.add(consts[tok])
     return out
@@ -120,6 +158,84 @@ class TestRoutingTableIsGuarded:
             "these task states are routed by _recommended_next but have no row "
             "in the /sitrep skill's routing-rules table:\n"
             + "\n".join(f"  {m}" for m in missing)
+        )
+
+    def test_every_stall_batch_state_has_a_routing_row(self):
+        """`Q-317`'s two batch states must each carry a row naming a REVIEW BATCH.
+
+        Asserted positionally, not by presence: `parked` already appears in the
+        table as row `6a`, which is the *task* row, so `"parked" in table` was
+        true before this phase and would be satisfied forever by the row that
+        does not cover batches. The check is that a row exists whose State cell
+        names a review batch AND carries the state.
+        """
+        rows = [ln for ln in _routing_table().splitlines() if ln.startswith("|")]
+        for state in (ss._PARKED_STATE, ss._AWAITING_STATE):
+            batch_rows = [
+                ln for ln in rows
+                if "review batch" in ln and state in ln
+            ]
+            assert batch_rows, (
+                f"batch state {state!r} is routed by _recommended_next but no "
+                f"routing-rules row names a review batch with it. Rows carrying "
+                f"the state at all: "
+                + repr([ln.strip() for ln in rows if state in ln])
+            )
+            # ── The round walked through the two-substring check five ways ────
+            # (guards lens): the recommendation cell was swapped for `/auto-fix`;
+            # the two rows' recommendations were exchanged; both real rows were
+            # deleted and replaced by decoys reading "*(not routed)* … reported in
+            # the table only"; the rows were renumbered `0a`/`0b` and hoisted to
+            # the head of the cascade; and a sentence was added beside them
+            # calling them "a planned behaviour, not emitted today". Membership
+            # cannot see any of that. These check the cell CONTENTS and the row's
+            # position in the priority column.
+            row = batch_rows[0]
+            cells = [c.strip() for c in row.strip().strip("|").split("|")]
+            assert len(cells) == 4, f"routing row is not 4 cells: {row!r}"
+            prio, _st, rec, _nudge = cells
+            assert prio.startswith("6"), (
+                f"the {state!r} batch row sits at priority {prio!r}. These states "
+                f"rank with their task twins in `_recommended_next` (after "
+                f"in-progress work, before planning); a row in the 0s or 1s "
+                f"describes a cascade this repo does not ship"
+            )
+            assert "resume" in rec.lower() or "park marker" in rec.lower(), (
+                f"the {state!r} batch row's recommendation is {rec!r}. A stalled "
+                f"claim is waiting on a HUMAN — routing it to a drainer would "
+                f"claim a batch that already holds a lock"
+            )
+            assert "/auto-fix" not in rec and "/auto-judge" not in rec, (
+                f"the {state!r} batch row routes to a drainer: {rec!r}"
+            )
+            assert "not routed" not in row.lower(), (
+                f"the {state!r} batch row says it is not routed, while "
+                f"`_recommended_next` routes it: {row!r}"
+            )
+        # ...and the two rows must not carry the SAME recommendation, which is
+        # what the swap mutation produced.
+        recs = {}
+        for state in (ss._PARKED_STATE, ss._AWAITING_STATE):
+            row = next(ln for ln in rows if "review batch" in ln and state in ln)
+            recs[state] = [c.strip() for c in row.strip().strip("|").split("|")][2]
+        assert recs[ss._PARKED_STATE] != recs[ss._AWAITING_STATE], (
+            "the parked and awaiting-approval batch rows carry the same "
+            f"recommendation: {recs[ss._PARKED_STATE]!r}"
+        )
+
+    def test_the_batch_states_the_table_names_are_the_ones_that_are_routed(self):
+        """The other direction: the two stall states are actually branched on.
+
+        Without this, deleting the `rb.state == _PARKED_STATE` arm leaves the two
+        table rows standing as a description of behaviour that no longer exists —
+        Phase 204's roster-reads-as-coverage shape.
+        """
+        routed = _routed_batch_states()
+        assert ss._PARKED_STATE in routed, (
+            "_recommended_next no longer routes a parked review batch (Q-317)"
+        )
+        assert ss._AWAITING_STATE in routed, (
+            "_recommended_next no longer routes an awaiting-approval review batch"
         )
 
     def test_the_extraction_is_not_silently_empty(self):
@@ -285,25 +401,51 @@ class TestClaimStallPositiveEvidence:
         (d / "BATCH-3__20260827T120000Z.md").write_text("reason: x")
         assert ss._claim_stall(tmp_path, "BATCH-3")[0] == "parked"
 
-    def test_the_batch_path_does_not_reach_the_probe_and_that_is_recorded(self):
-        """Pins the gap so it cannot be quietly closed or quietly forgotten.
+    def test_the_batch_path_reaches_the_probe(self):
+        """**`Q-317` closed (Phase 248), and this test re-pointed rather than
+        deleted.**
 
-        If a later phase wires batches through, this test reddens and its owner
-        re-reads `Q-317` — which is the point. A gap nothing asserts is a gap
-        the next reader has to rediscover.
+        Its previous form pinned the *gap*: `run_survey`'s lock loop `continue`s
+        on a `BATCH-` prefix before `_classify_task`, so the probe had exactly
+        one call site and a parked batch classified as ordinary in-progress
+        work. It asserted `_claim_stall(` appeared twice — one definition, one
+        call — and reddened the moment the batch path was wired, which is what
+        it was for.
+
+        Deleting it would have left the roster reading as coverage for a
+        behaviour nothing checks (Phase 204). So it now asserts the *closure*,
+        and asserts it POSITIONALLY: the second call site must be inside
+        `_classify_review_batches`, keyed to a `BATCH-` claim id. A whole-file
+        `count == 3` would be satisfied by a call added anywhere — including
+        somewhere that never runs.
         """
         src = SURVEY_PY.read_text(encoding="utf-8")
-        i = src.index("def run_survey(")
-        body = src[i:]
-        assert 'task_id.startswith("BATCH-")' in body, (
-            "run_survey no longer skips BATCH- locks — if the batch path now "
-            "reaches _classify_task, close Q-317 and delete this test"
+        # The lock loop still skips BATCH- locks: batches are classified by
+        # `_classify_review_batches`, not by `_classify_task`, and that
+        # partition is unchanged. Closing Q-317 meant giving the batch
+        # classifier its own call, NOT routing batches through the task path.
+        loop = src[src.index("def run_survey("):]
+        assert 'task_id.startswith("BATCH-")' in loop, (
+            "run_survey no longer skips BATCH- locks — the two classifiers have "
+            "been merged, which is a different design than Q-317's fix"
         )
-        # One definition + exactly one call site. A second call site is the
-        # likely shape of a batch wiring, so it reddens here deliberately.
-        assert src.count("_claim_stall(") == 2, (
-            f"the probe has {src.count('_claim_stall(') - 1} call site(s), not "
-            f"1 — re-check whether the batch path now reaches it (Q-317)"
+
+        start = src.index("def _classify_review_batches(")
+        end = src.index("\ndef ", start + 1)
+        batch_fn = src[start:end]
+        assert "_claim_stall(" in batch_fn, (
+            "the batch classifier no longer calls the park probe — Q-317 has "
+            "regressed and a parked batch is invisible again"
+        )
+        assert 'f"BATCH-{b[\'number\']}"' in batch_fn, (
+            "the batch classifier calls the probe with something other than the "
+            "batch's own claim id; the runtime paths are keyed by BATCH-<N>, so "
+            "any other argument probes a claim that does not exist"
+        )
+        # ...and the answer is actually USED. A call whose result never reaches
+        # a state assignment is the shape Phase 155 shipped: present, inert.
+        assert "state = stall_state" in batch_fn, (
+            "the batch classifier computes a stall state and does not assign it"
         )
 
     def test_the_newest_run_wins_and_it_is_lexical_not_mtime(self, tmp_path):

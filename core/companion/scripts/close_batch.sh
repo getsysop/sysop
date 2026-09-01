@@ -6,9 +6,10 @@
 #   bash sysop/scripts/close_batch.sh <N> [<N2> ...]     # Close specific batches
 #   bash sysop/scripts/close_batch.sh --dry-run <N>       # Preview changes
 #   bash sysop/scripts/close_batch.sh --force <N>         # Skip merge verification (for cherry-picked branches)
+#   bash sysop/scripts/close_batch.sh --merge-target <ref> <N>   # Name the branch the close is landing in
 #
 # For each batch:
-#   1. Verifies the batch branch is merged into main (or already deleted)
+#   1. Verifies the batch branch is merged into the MERGE TARGET (or already deleted)
 #   2. Updates review_tasks.md: header → `Merged`, checkboxes → [x],
 #      Statistics table → Merged, Grand Total done/open counts adjusted
 #   3. Commits the changes
@@ -193,14 +194,89 @@ function resolve(protected,   i) {
 END { resolve(0); if (mode == "count") printf "%d %d\n", closed + 0, failed + 0 }
 '
 
+# ── `--merge-target`'s value is validated, not merely captured ────────────
+#
+# Three refusals, each from a reproduced defect (Phase 248's round, guards lens).
+#
+# 1. EMPTY. `--merge-target "$MERGE_TARGET"` with a variable that did not survive
+#    its fenced block is the hazard `WORKFLOW.md` § 8.2a names at four sites. It
+#    used to fall back to the policy default AND attribute that fallback to a
+#    `§ Merge policy` section the operator never wrote.
+#
+# 2. STARTS WITH `-`. This loop is `for arg in "$@"` with a one-iteration carry,
+#    so the carry takes the next argument WHATEVER IT IS — including the next
+#    flag. `--merge-target --dry-run 1` set the target to `--dry-run` and
+#    SILENTLY DROPPED the dry run, turning a preview into a real close and
+#    commit. Every other flag here is order-free, so nothing warned that this one
+#    is not. `--allow-open-fence` was swallowed the same way.
+#
+# 3. `HEAD` (and `@`). This script's whole thesis is that the merge target is
+#    STATED and `HEAD` is never read for it — and `--merge-target HEAD` read it,
+#    reinstating `Q-308` exactly: on a branch cut FROM the batch branch, the gate
+#    printed `✓ verified merged` again. The refusal message invites the
+#    construction ("the branch this close is landing in"), so the refusal has to
+#    name the alternative. Step 4-pre already records the literal branch name.
+_validate_merge_target() {
+  local v="$1"
+  if [[ -z "$v" ]]; then
+    echo "❌ --merge-target was given an empty value." >&2
+    echo "   A shell variable that did not survive its fenced block expands to nothing;" >&2
+    echo "   write the branch name out as a literal." >&2
+    return 1
+  fi
+  if [[ "$v" == -* ]]; then
+    echo "❌ --merge-target was given '${v}', which is a flag, not a ref." >&2
+    echo "   The value must follow the flag immediately: --merge-target <ref> ${v}" >&2
+    echo "   Left as-is this would have consumed '${v}' and run without it." >&2
+    return 1
+  fi
+  if [[ "$v" == "HEAD" || "$v" == "@" ]]; then
+    echo "❌ --merge-target does not accept 'HEAD'." >&2
+    echo "   The merge target is STATED, never read off the checkout — that is the" >&2
+    echo "   whole point of the flag, and 'HEAD' hands the question back to where" >&2
+    echo "   you happen to be standing. Write the branch name Step 4-pre recorded" >&2
+    echo "   (the integration branch under \`pr\`, the approved branch under PR-reuse," >&2
+    echo "   'main' under \`direct\`); \`git rev-parse --abbrev-ref HEAD\` prints it." >&2
+    return 1
+  fi
+  return 0
+}
+
 DRY_RUN=false
 FORCE=false
 ALLOW_OPEN_FENCE=false
+MERGE_TARGET_REF=""
+MERGE_TARGET_SOURCE=""
+EXPECT_MERGE_TARGET=false
 BATCH_NUMS=()
 
 # Parse arguments
+#
+# `--merge-target` is the one valued flag, and it accepts BOTH the space form
+# and the `=` form. The space form needs a one-iteration carry because this is a
+# `for arg in "$@"` loop with no `shift` to consume the value with; the carry is
+# checked after the loop so a trailing `--merge-target` with no value is a loud
+# exit rather than a silently unset target. Not restructured into a
+# `while`/`case`/`shift` loop like `claim_task.sh`'s: this loop is covered by a
+# large existing battery and rewriting it is scope this change does not need.
 for arg in "$@"; do
-  if [[ "$arg" == "--dry-run" ]]; then
+  if $EXPECT_MERGE_TARGET; then
+    # An EMPTY value is rejected here rather than silently falling back to the
+    # policy default. `--merge-target "$MERGE_TARGET"` with an unset variable is
+    # exactly the hazard `WORKFLOW.md` § 8.2a warns about at four sites, and the
+    # provenance line would then attribute the fallback to a `§ Merge policy`
+    # section the operator never wrote.
+    if ! _validate_merge_target "$arg"; then exit 1; fi
+    MERGE_TARGET_REF="$arg"
+    MERGE_TARGET_SOURCE="operand"
+    EXPECT_MERGE_TARGET=false
+  elif [[ "$arg" == "--merge-target" ]]; then
+    EXPECT_MERGE_TARGET=true
+  elif [[ "$arg" == --merge-target=* ]]; then
+    if ! _validate_merge_target "${arg#*=}"; then exit 1; fi
+    MERGE_TARGET_REF="${arg#*=}"
+    MERGE_TARGET_SOURCE="operand"
+  elif [[ "$arg" == "--dry-run" ]]; then
     DRY_RUN=true
   elif [[ "$arg" == "--force" ]]; then
     FORCE=true
@@ -214,15 +290,82 @@ for arg in "$@"; do
     BATCH_NUMS+=("$((10#${BASH_REMATCH[2]}))")
   else
     echo "❌ Unknown argument: ${arg}" >&2
-    echo "Usage: close_batch.sh [--dry-run] [--force] [--allow-open-fence] <N> [<N2> ...]" >&2
+    echo "Usage: close_batch.sh [--dry-run] [--force] [--allow-open-fence] [--merge-target <ref>] <N> [<N2> ...]" >&2
     exit 1
   fi
 done
 
+if $EXPECT_MERGE_TARGET; then
+  echo "❌ --merge-target requires a value (a branch or ref name)." >&2
+  echo "Usage: close_batch.sh [--dry-run] [--force] [--allow-open-fence] [--merge-target <ref>] <N> [<N2> ...]" >&2
+  exit 1
+fi
+
 if [[ ${#BATCH_NUMS[@]} -eq 0 ]]; then
   echo "❌ No batch numbers provided." >&2
-  echo "Usage: close_batch.sh [--dry-run] [--force] [--allow-open-fence] <N> [<N2> ...]" >&2
+  echo "Usage: close_batch.sh [--dry-run] [--force] [--allow-open-fence] [--merge-target <ref>] <N> [<N2> ...]" >&2
   exit 1
+fi
+
+# ── Merge target resolution (Q-308) ──────────────────────────
+#
+# The gate below asks "did this batch branch's work land in what this close is
+# landing?". It used to answer that by INFERRING the target from `HEAD`, and no
+# purely local ancestry predicate can make that inference safe. Measured on a
+# fixture (`tests/test_close_batch_merge_target.py` builds the same shapes):
+# on Step 4a's LOCAL-ONLY (`--ff-only`) arm — the common case by that step's own
+# words — a legitimate `pr` integration branch and a scratch branch cut FROM the
+# batch branch are INDISTINGUISHABLE on every ancestry column: `is-ancestor
+# <branch> HEAD`, `is-ancestor origin/main HEAD`, SHA identity, containment in
+# `main`, FIRST-PARENT reachability and merge count all agree.
+# On the PUBLISHED (`--no-ff`) arm first-parent does separate them — but a
+# predicate correct on one of Step 4a's two arms and wrong on the other is not a
+# gate, which is why the target is stated rather than inferred. Both arms are
+# pinned; an earlier version of this comment claimed the columns agree
+# universally and demonstrated it on the arm where they do not.
+#
+#   --merge-target <ref>   authoritative; /review-close Step 4b passes the same
+#                          literal it recorded at Step 4-pre
+#   otherwise, `direct`    the target IS `main` — that is what the policy means
+#   otherwise, `pr`        UNRESOLVED, deliberately. Under `pr` the target is an
+#                          integration branch this script cannot name, so the
+#                          target arm is withheld and only the `main` arm runs.
+#                          Fail-closed: a batch that genuinely reached `main` in
+#                          an earlier cycle still verifies; one that did not is
+#                          refused with the flag named in the message.
+_read_merge_policy() {
+  # `<project>/CLAUDE.md § Merge policy` — WORKFLOW.md § 6.1's template: level-2
+  # header, blank line, one bare word. Default `direct` when absent, unreadable,
+  # or carrying anything other than the two documented words.
+  #
+  # Fenced occurrences are SKIPPED. `WORKFLOW.md` ships the section as a
+  # ```markdown example, and a consumer who pastes that template into CLAUDE.md
+  # as an illustration would otherwise have the illustration read as the setting.
+  local f="${REPO_ROOT}/CLAUDE.md" word=""
+  [[ -r "$f" ]] || { echo direct; return 0; }
+  # `sub(/\r$/, "")` first: a CRLF-terminated CLAUDE.md otherwise fails the
+  # end-anchored heading match and reads `direct` for every setting (round finding).
+  word="$(awk '
+    { sub(/\r$/, "") }
+    /^[[:space:]]*(```|~~~)/ { fence = !fence; next }
+    fence  { next }
+    found && NF { print $1; exit }
+    /^## Merge policy[[:space:]]*$/ { found = 1 }
+  ' "$f" 2>/dev/null | tr "[:upper:]" "[:lower:]")" || word=""
+  case "$word" in
+    direct|pr) echo "$word" ;;
+    *)         echo direct ;;
+  esac
+}
+
+MERGE_POLICY="$(_read_merge_policy)"
+if [[ -z "$MERGE_TARGET_REF" ]]; then
+  if [[ "$MERGE_POLICY" == "direct" ]]; then
+    MERGE_TARGET_REF="main"
+    MERGE_TARGET_SOURCE="policy:direct"
+  else
+    MERGE_TARGET_SOURCE="unresolved:pr"
+  fi
 fi
 
 INDEX_SCRIPT="${REPO_ROOT}/sysop/scripts/review_index.py"
@@ -706,7 +849,7 @@ for BATCH_NUM in "${BATCH_NUMS[@]}"; do
   # `--range` rather than `--list`.
   #
   # SKIP rather than exit, with its own explicit reason. The script's contract
-  # is to report and continue (`close_batch.sh:1231-1240`: annotation warnings
+  # is to report and continue (the § Summary counters below: annotation warnings
   # are "deliberately NOT an exit-code change"), so aborting here would
   # abandon the other batches
   # in a multi-batch close. This is not the `find_batch_range` refusal problem —
@@ -754,7 +897,7 @@ for BATCH_NUM in "${BATCH_NUMS[@]}"; do
   # fallback is a caller-contract change this entry has declined three times —
   # a refusal here is overwritten by the FALSE "Not found in review_tasks.md"
   # message directly above, and this script diagnoses by commit presence rather
-  # than exit code (`close_batch.sh:1231-1240`). So the honest move is to say which resolver
+  # than exit code (the § Summary counters below). So the honest move is to say which resolver
   # answered, because the two disagree about what a batch IS.
   #
   # STDOUT, not stderr, and that is the file's own rule ~130 lines below: NEARMISS
@@ -883,58 +1026,114 @@ for BATCH_NUM in "${BATCH_NUMS[@]}"; do
     # Verify branch is merged into the MERGE TARGET (skip with --force for
     # cherry-picked branches).
     #
-    # ── Q-020, the wrong-tree class (Phase 233) ──────────────────────────
+    # ── Lineage: Q-020 (Phase 233), then Q-308 (Phase 248) ───────────────
     #
-    # This asked about the literal `main` while the merge it is verifying lands
-    # in whatever branch is checked out. Under `§ Merge policy: pr` those are
-    # different revisions: `/review-close` Step 4a merges each batch branch into
-    # an INTEGRATION branch cut from `origin/main`, Step 4b runs here with that
-    # branch checked out, and the PR is not squashed until Step 4d. So a
-    # correctly-merged branch is not an ancestor of local `main` and never will
-    # be -- and the skill's own remedy was to mandate `--force` on every
-    # `pr`-policy close, which disarms the gate for exactly the consumers it
-    # exists to protect. An unmerged branch was indistinguishable from a merged
-    # one on the dominant path.
+    # Before Phase 233 this asked about the literal `main` while the merge it
+    # verifies lands in whatever branch is checked out. Under `§ Merge policy:
+    # pr` those are different revisions: Step 4a merges each batch branch into an
+    # INTEGRATION branch cut from `origin/main`, Step 4b runs here, and the PR is
+    # not squashed until Step 4d. A correctly-merged branch was never an ancestor
+    # of local `main`, so the skill mandated `--force` on every `pr` close, which
+    # silences cherry-pick detection too: an unmerged branch was indistinguishable
+    # from a merged one on the dominant path.
     #
-    # Measured on a `pr`-shaped fixture (integration branch cut from main,
-    # feature merged in with --no-ff):
-    #   merge-base --is-ancestor feat/one main   -> FALSE  (rejects real work)
-    #   merge-base --is-ancestor feat/one HEAD   -> TRUE   (correct)
-    #   merge-base --is-ancestor feat/never HEAD -> FALSE  (still catches it)
-    #
-    # `HEAD` first, `main` retained as a fallback. That ordering is deliberately
-    # WIDER than the shipped predicate and never narrower: every branch the old
-    # code accepted is still accepted, so this cannot introduce a new refusal in
-    # any consumer. Under `direct` policy HEAD *is* main and nothing changes.
-    #
-    # This is what `close_batch.sh` already promises: /review-close Step 4b says
-    # it "commits to whatever branch is current". The write target was HEAD all
-    # along; only the verification was pointed somewhere else.
-    # STRICT containment on the HEAD arm: the branch must be inside HEAD and not BE
-    # HEAD. Round finding (HIGH, execute lens) -- the first cut used plain ancestry,
-    # and `--is-ancestor X HEAD` is trivially TRUE whenever HEAD sits at the branch
-    # tip. Reproduced: checked out on `feat/five`, merged nowhere, `main` does not
-    # contain it -- the gate printed `✓ Branch 'feat/five' verified merged.` and
-    # flipped the header to `Merged`. The shipped gate refused that. So a widening
-    # sold as "cannot introduce a new refusal" had introduced a new ACCEPT, in the
-    # one case the check exists for, and `batch_work.sh` puts an operator exactly
-    # there: it creates the batch worktree checked out ON the batch branch.
+    # Phase 233 pointed the check at `HEAD` and required STRICT containment,
+    # because `--is-ancestor X HEAD` is trivially TRUE when HEAD sits at the
+    # branch tip — its round reproduced `✓ verified merged` while standing on an
+    # unmerged branch. Both halves of that repair have since been measured wrong,
+    # and the replacement is documented at the predicate below: strictness reads
+    # SHAs, and after the `--ff-only` merge Step 4a prescribes the target and the
+    # branch SHARE a SHA legitimately. The target is now stated by the caller and
+    # identity is compared by ref name.
     #
     # `if`, never `[ … ] && return`: this file's own rule ~250 lines above records
     # that a false test in an AND-list returns non-zero and `set -e` kills the run.
     #
-    # What this deliberately does NOT accept is the PR-REUSE shape, where HEAD *is*
-    # the approved branch. That is not an oversight and not a regression -- the
-    # shipped gate refused it too. Before the PR squashes there is genuinely no
-    # ancestry evidence that the work landed, and this skill's own Step 6 note says
-    # so outright: "After a squash there is no ancestry-shaped containment test."
-    # Reuse keeps `--force`, with that as the stated reason.
+    # The PR-REUSE shape is still NOT accepted, and now for a reason that holds:
+    # under reuse the merge target IS the approved branch, so target and branch
+    # resolve to the same ref and the target arm is withheld by the identity test.
+    # Before the PR squashes there is genuinely no ancestry evidence that the work
+    # landed — `/review-close` Step 6 says so in its own words: "After a squash
+    # there is no ancestry-shaped containment test." Reuse keeps `--force`.
+    # ── Q-308: the target is STATED, not inferred, and identity is by REF NAME ──
+    #
+    # Two defects died here together, and they were compounding: the false
+    # REFUSE trained the operator to reach for `--force`, and `--force` is what
+    # made the false ACCEPT reachable for every other branch in the same run.
+    #
+    # (1) FALSE ACCEPT (`Q-308`, the filed one). Strict SHA containment in
+    #     `HEAD` accepts a branch cut FROM the batch branch with commits on top:
+    #     the work is in `HEAD`, but nothing establishes `HEAD` reaches `main`.
+    #     Measured: on Step 4a's `--ff-only` arm that shape and a legitimate `pr`
+    #     integration branch agree on every ancestry column, first-parent
+    #     included, so no local predicate separates them there. The fix is not a
+    #     narrower ancestry test — it is to stop inferring the target.
+    #
+    # (2) FALSE REFUSE, on the dominant `pr` path, every run. Step 4a merges a
+    #     local-only branch with `git merge --ff-only`, which moves the merge
+    #     target TO the branch tip — so `head_sha == branch_sha` for the LAST
+    #     branch merged, and for the ONLY branch in a single-branch cycle. Strict
+    #     containment then skips its arm and `main` refuses. Measured on the
+    #     verbatim Step 4a commands: single-branch cycle REFUSED; two-branch
+    #     cycle refused `batch-8` and accepted `batch-7`. `/review-close` Step 4b
+    #     asserted the opposite in shipped prose ("the gate passes with no
+    #     `--force`") and is corrected in the same commit.
+    #
+    # Identity is compared by RESOLVED REF NAME, not by SHA, and that is the
+    # whole of the repair. After an ff-merge the target and the branch share a
+    # SHA while being different refs — the legitimate state. Standing on the
+    # unmerged branch itself, they are the SAME ref — the state Phase 233's round
+    # reproduced, where the gate printed `✓ verified merged` over nothing. SHA
+    # equality cannot tell those apart; ref identity can, in both directions.
+    #
+    # The `main` arm is retained unconditionally and deliberately: a batch that
+    # genuinely landed on `main` in an earlier cycle is merged by any reading,
+    # and that arm cannot produce the `Q-308` shape because `main` is the thing
+    # being established rather than a stand-in for it.
+    _ref_id() {
+      # Resolved identity of a ref, falling back to the literal when the ref does
+      # not resolve.
+      #
+      # The fallback is DEAD CODE TODAY and saying so is the correction. Two
+      # earlier versions of this comment gave two different wrong reasons for it,
+      # and the round refuted both. What is actually true, measured:
+      # `git rev-parse --symbolic-full-name <unresolvable>` prints the ARGUMENT
+      # back on **stdout** and exits 128 — so `grep .` matches, the pipeline
+      # succeeds, and `|| printf` never fires. Git already does what the fallback
+      # was written to do, for every ref shape tried (a missing name, a missing
+      # `refs/heads/…`, a SHA, an empty string).
+      # The first wrong reason was "without it an unresolvable target kills the
+      # run under `set -e`"; the second was "both ids come back empty, which
+      # still compare equal". The errexit half is separately untrue in effect:
+      # this function is called only as `if ! _merged_into_target …`, and bash
+      # suppresses errexit for a function body evaluated in a condition.
+      # Kept, at zero cost, as insurance against a future git changing that
+      # echoing behaviour — but it is not what makes the identity test correct,
+      # and no test can currently distinguish its presence from its absence.
+      git rev-parse --symbolic-full-name "$1" 2>/dev/null | grep . || printf '%s' "$1"
+    }
     _merged_into_target() {
-      local head_sha branch_sha
-      head_sha="$(git rev-parse HEAD 2>/dev/null)" || head_sha=""
+      local branch_sha target_id branch_id
       branch_sha="$(git rev-parse --verify --quiet "$1^{commit}" 2>/dev/null)" || branch_sha=""
-      if [[ -n "$head_sha" && -n "$branch_sha" && "$head_sha" != "$branch_sha" ]]; then
-        if git merge-base --is-ancestor "$1" HEAD 2>/dev/null; then
+      if [[ -n "$branch_sha" && -n "$MERGE_TARGET_REF" ]]; then
+        target_id="$(_ref_id "$MERGE_TARGET_REF")"
+        branch_id="$(_ref_id "$1")"
+        # The target must be a LOCAL BRANCH, and that is not tidiness — it is what
+        # makes the ref-name identity test above mean anything. Round finding
+        # (execute lens): comparing ref *spellings* while `--is-ancestor` compares
+        # *commits* lets any ALIAS for the batch branch's own tip through, and
+        # `--is-ancestor X X` is trivially true. Four reproduced false accepts on a
+        # branch merged nowhere: a raw SHA, a tag at the tip, **`origin/<branch>`**
+        # — the spelling a PR actually tracks, and the one Step 4b says reuse must
+        # be refused on — and `HEAD` while DETACHED at the tip, which is Phase 233's
+        # finding returning through a namespace its fix did not consider.
+        #
+        # Every documented invocation names a local branch: `main` under `direct`,
+        # the integration branch under `pr`, the approved branch under PR-reuse. So
+        # this refuses nothing an operator is told to do, and it fails CLOSED —
+        # an unrecognised target shape simply falls through to the `main` arm.
+        if [[ "$target_id" == refs/heads/* && "$target_id" != "$branch_id" ]] \
+           && git merge-base --is-ancestor "$1" "$MERGE_TARGET_REF" 2>/dev/null; then
           return 0
         fi
       fi
@@ -944,12 +1143,35 @@ for BATCH_NUM in "${BATCH_NUMS[@]}"; do
       return 1
     }
 
+    # One line of provenance, because a refusal is only actionable if the
+    # operator can see which target it was measured against.
+    case "$MERGE_TARGET_SOURCE" in
+      operand)       echo "   merge target: '${MERGE_TARGET_REF}' (--merge-target)" ;;
+      policy:direct) echo "   merge target: 'main' (§ Merge policy: direct)" ;;
+      unresolved:pr) echo "   merge target: UNRESOLVED (§ Merge policy: pr) — verifying against 'main' only; pass --merge-target <ref> to verify against the branch this close is landing in." ;;
+    esac
+
     if git show-ref --verify --quiet "refs/heads/${BRANCH_NAME}" 2>/dev/null; then
       if ! _merged_into_target "$BRANCH_NAME"; then
         if $FORCE; then
           echo "   ⚠️  Branch '${BRANCH_NAME}' not ancestor-merged (--force: accepting cherry-pick)."
         else
-          echo "   ❌ Branch '${BRANCH_NAME}' is NOT merged into the close target (HEAD) or main. Skipping. (Use --force for cherry-picked branches.)"
+          # The remedy named here must match the reason for THIS refusal. Phase 250's
+          # round: the line offered `--force` unconditionally, and on the one shape a
+          # `pr` consumer actually hits — hand-run with no operand, so the target is
+          # UNRESOLVED and only `main` was checked — `--force` is the wrong answer and
+          # the expensive one, because it disarms cherry-pick detection for every batch
+          # in the run. That is the exact trap Phase 248 recorded: a false refuse trains
+          # the operator to reach for --force. `--merge-target` is the one-flag fix, and
+          # it was named only on the provenance line above, which prints on every run
+          # and so could not tell a refusal from a normal close.
+          if [[ "$MERGE_TARGET_SOURCE" == "unresolved:pr" ]]; then
+            echo "   ❌ Branch '${BRANCH_NAME}' is NOT merged into 'main', and no merge target was given. Skipping."
+            echo "      Under § Merge policy: pr the target cannot be derived — name it: --merge-target <ref>"
+            echo "      (--force is NOT the fix here: it accepts the branch unverified and disarms cherry-pick detection for every batch in this run.)"
+          else
+            echo "   ❌ Branch '${BRANCH_NAME}' is NOT merged into the merge target or main. Skipping. (Use --force for cherry-picked branches.)"
+          fi
           SKIPPED+=("${BATCH_NUM}:unmerged")
           continue
         fi
@@ -961,7 +1183,19 @@ for BATCH_NUM in "${BATCH_NUMS[@]}"; do
         if $FORCE; then
           echo "   ⚠️  Remote branch '${BRANCH_NAME}' not ancestor-merged (--force: accepting cherry-pick)."
         else
-          echo "   ❌ Remote branch '${BRANCH_NAME}' is NOT merged into the close target (HEAD) or main. Skipping. (Use --force for cherry-picked branches.)"
+          # Same branch as the local arm above, for the same reason. Phase 250's
+          # round-2 lens: the round-1 fix landed on the local arm only, and this
+          # one is the arm a `pr` consumer reaches ROUTINELY — a fresh clone, a
+          # pruned local branch, a worktree that never had it. Fixing one of two
+          # sibling arms in the same function is this repo's most-repeated shape
+          # (Phase 218: "the same blindness 300 lines away in the same commit").
+          if [[ "$MERGE_TARGET_SOURCE" == "unresolved:pr" ]]; then
+            echo "   ❌ Remote branch '${BRANCH_NAME}' is NOT merged into 'main', and no merge target was given. Skipping."
+            echo "      Under § Merge policy: pr the target cannot be derived — name it: --merge-target <ref>"
+            echo "      (--force is NOT the fix here: it accepts the branch unverified and disarms cherry-pick detection for every batch in this run.)"
+          else
+            echo "   ❌ Remote branch '${BRANCH_NAME}' is NOT merged into the merge target or main. Skipping. (Use --force for cherry-picked branches.)"
+          fi
           SKIPPED+=("${BATCH_NUM}:unmerged")
           continue
         fi

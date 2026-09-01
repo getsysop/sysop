@@ -172,3 +172,68 @@ def test_readopt_rebuilds_no_anchor_lock(tmp_path):
     # the rebuilt lock, so the tree is clean).
     r = _install(consumer, "--update")
     assert r.returncode == 0, f"update after re-adopt should proceed:\n{r.stdout + r.stderr}"
+
+
+def test_readopt_from_a_nongit_source_survives_a_byte_identical_lock(tmp_path):
+    """`Q-360` — and the filing understates its own reach.
+
+    `cmd_adopt` committed the lock with no empty-commit guard, so an adopt whose
+    regenerated lock is byte-identical to the committed one exited 1 with **zero
+    bytes of stderr**: git prints *nothing to commit* to STDOUT, which the site's
+    `>/dev/null` discards, and `set -e` kills the run right after the `• lock:`
+    line with no diagnostic anywhere.
+
+    **The filing reached that state by pinning the clock**, and from that sized
+    consumer reach as *"narrow — a consumer must delete the lock and re-adopt
+    within the same second."* That is wrong, and this test is the
+    counter-example: it controls no clock. A non-git source records
+    `sysop_commit: "unknown"`, which is the anchor that routes `--adopt` into the
+    ISSUE-0047 re-adopt recovery (Phase 125) instead of the *"Lock already
+    exists / use --update"* refusal — and re-adopting from that same non-git
+    source recomputes the same `"unknown"`. Every non-stamp field is then
+    unchanged, so Phase 148's content-anchoring preserves **both** timestamps and
+    the rebuilt lock is byte-identical *by construction*, on any machine, at any
+    speed. Measured pre-fix on this exact shape: rc=1, 0 bytes of stderr.
+
+    So the population was never a same-second race. It is anyone who installed
+    from a tarball or a vendored copy and then ran the `--adopt` recovery this
+    module's sibling test documents — for whom it failed every time.
+    """
+    install_sh = _nongit_source(tmp_path)
+    consumer = tmp_path / "c"
+    _init_consumer(consumer)
+    r = _install_from(install_sh, consumer, "--packs", "")
+    assert r.returncode == 0, r.stdout + r.stderr
+    lock_path = consumer / ".claude/sysop.lock"
+    assert json.loads(lock_path.read_text())["sysop_commit"] == "unknown"
+    _git(consumer, "add", "-A")
+    _git(consumer, "commit", "-qm", "sysop install (non-git source)")
+    before = lock_path.read_bytes()
+
+    # The documented recovery form: --adopt with no --packs, recovered from the lock.
+    r = _install_from(install_sh, consumer, "--adopt")
+    combined = r.stdout + r.stderr
+    assert r.returncode == 0, (
+        "re-adopt died on a byte-identical lock (the Q-360 shape)\n"
+        f"rc={r.returncode}\nstderr({len(r.stderr)} bytes)={r.stderr!r}\n{combined}"
+    )
+
+    # The reproduction CONDITION, asserted rather than assumed. Without this the
+    # test would pass whenever the lock happened to change, which exercises the
+    # ordinary commit path and says nothing about the defect.
+    assert lock_path.read_bytes() == before, (
+        "the regenerated lock differs, so this run never reached the "
+        "empty-commit path the test exists for"
+    )
+
+    # An honest report: the skip must not claim a commit it did not make.
+    assert "Lock committed" not in combined, combined
+    assert "nothing to commit" in combined, combined
+
+    # And the skip is a real no-op, not an uncommitted leftover for the consumer
+    # to trip over at their next --update (which fails closed on a dirty tree).
+    st = subprocess.run(
+        ["git", "status", "--porcelain"], cwd=consumer,
+        capture_output=True, text=True, check=True,
+    )
+    assert st.stdout == "", f"re-adopt left the tree dirty:\n{st.stdout}"

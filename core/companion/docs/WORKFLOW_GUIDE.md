@@ -116,7 +116,7 @@ git push -u origin HEAD
 
 **Frontend diffs also need a UI verification pass** — before committing, start the dev server, load the changed feature in a browser, and check the console + network tab for errors. The `/claim-task` and `/document-work` skills automate this via Playwright when an AI agent is driving; when doing it manually, do it by hand. Hard-fail on console errors and 5xx responses. Skip cleanly if the feature is auth-gated only.
 
-**Record the test decision.** In the task body (`tasks/open/<TASK-ID>.md`), write a `## Test decision` line stating either "test X proves Y" or "no test because Z". **Write it in your worktree's copy** — the merge-time reader looks at the branch, so a copy edited in the main checkout is committed by nothing and never reaches the PR. This is the record the senior reviewer reads back against your actual diff at merge time (see Merge Process below). **Nothing warns you earlier** — `validate_tasks.py` checked this until Phase 234 retired the check, because it read the body off the filesystem while the record is written inside the worktree, so it fired on every claimed task on every run. `/review-close` Step 2d, which reads the branch tip, is the whole enforcement story, and it blocks rather than warns.
+**Record the test decision.** In the task body (`tasks/open/<TASK-ID>.md`), write a `## Test decision` line stating either "test X proves Y" or "no test because Z". **Write it in your worktree's copy** — the merge-time reader looks at the branch, so a copy edited in the main checkout is committed by nothing and never reaches the PR. This is the record the senior reviewer reads back against your actual diff at merge time (see Merge Process below). **Nothing warns you earlier** — `validate_tasks.py` checked this until Phase 234 retired the check, because it read the body off the filesystem while the record is written inside the worktree, so it fired on every claimed task on every run. Since Phase 249 there are **two** readers, and the earlier one is the one you will meet: `/claim-task` Step 8 reads the branch tip before handing off and **halts** if the section is missing or still the schema template, so a missed write stops while your worktree is still open and the commit is still amendable. `/review-close` Step 2d reads the same revision at merge time and blocks rather than warns. Neither composes a replacement for you.
 
 ### 7. Wait for Review
 
@@ -218,6 +218,14 @@ This whole process is what `/review-close` automates; run it by hand when no AI 
 ## Pre-merge Verification Structure
 
 Each project's `CLAUDE.md` declares a `## Pre-merge verification` section listing the commands the senior reviewer (or `/review-close`) runs before push. **They run twice, on two different trees:** once before the merges as a cheap fail-fast on `main` (`/review-close` Step 3), and once after them on the merge target (`4a-post`) — that second run is the authoritative one, because it is the only one whose tree contains the work. It supports two shapes:
+
+**The shipped `### Always` template's first line is the deterministic pre-scan** —
+`bash sysop/scripts/run_checks.sh --mode both --fail-on-blocking` — so the promoted checks run
+in each branch's own worktree via `/claim-task` and `/auto-build`. **`/review-close` also runs
+that scan itself at `4a-post`, declared or not**, de-duplicating against your list, so the
+merge gate enforces the promoted checks whether or not you wired them. On a fresh install the
+blocking checks carry placeholder globs and the gate reports itself unarmed; localize them and
+it starts refusing merges.
 
 - **`### Always`** — full-tree commands (build, full test suite, project-level smoke tests). One command per bullet. **"Always" binds on the authoritative pass**: `4a-post` runs this list whatever the diff looks like, and no diff-shape heuristic skips it there. The cheap pre-merge pass *does* drop it when its own tree's diff touches no code — which on the dominant cycle is every time, since that tree holds only claim flips — and that is deliberate: a pass whose green is explicitly not a verdict is the one that can afford to be skipped.
 - **`### Ratchet (changed files only)`** — a bash code block of project-supplied snippets. Each snippet pipes `git diff --name-only origin/main...HEAD` through a file-type filter and invokes lint or typecheck against only the changed files. Snippets short-circuit and pass when no changed file matches the filter — which is why *which tree they run on* decides whether they check anything: on the pre-merge pass that range is `main`'s local-only commits (often empty), and only on the merge target does it name the work.

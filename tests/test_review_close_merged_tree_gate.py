@@ -93,7 +93,18 @@ SECTIONS: dict[str, tuple[str, str | None]] = {
 # Backticks optional. The round noted the backtick-required form let an extension LIST be
 # restated unfenced, which is under-strictness; the >= 3 distinct threshold below is what
 # keeps the looser pattern from firing on an incidental mention.
-CODE_EXT_RE = re.compile(r"`?\.(py|ts|tsx|js|jsx|sql|sh|kt|swift|go|rs)\b`?")
+# A STANDALONE extension, not a filename suffix. The original pattern matched the
+# `.sh` inside `run_checks.sh` and the `.py` inside `accounting.py`, so any prose
+# that cites three differently-suffixed FILENAMES read as a restatement of Step 3's
+# extension list. Phase 247 surfaced it by naming `run_checks.sh`,
+# `run_checks_impl.py` and `close_batch.sh` in 4a-post.
+#
+# This is a tightening toward the guard's stated intent, not a softening of it:
+# what it exists to catch is 4a-post RESTATING the list (`.py` / `.ts` / `.tsx`),
+# and those are standalone tokens. A filename is not a restatement. The
+# `(?<![\w/])` lookbehind keeps every real restatement matching -- verified
+# against this module's own positive controls, which still go red.
+CODE_EXT_RE = re.compile(r"(?<![\w/])`?\.(py|ts|tsx|js|jsx|sql|sh|kt|swift|go|rs)\b`?")
 
 
 def _text() -> str:
@@ -853,12 +864,18 @@ NON_MUTATIONS: list[tuple[str, Callable[[str], str]]] = [
         '   git rev-parse --verify --quiet origin/main >/dev/null && git diff --name-only origin/main...HEAD || echo "NO_ORIGIN_MAIN"')),
     ("N2 space the redirection (equivalent)", _sub(
         RAW_SCOPE_POST, RAW_SCOPE_POST.replace(">/dev/null", "> /dev/null"))),
+    # N3/N4 re-pointed by Phase 248: Step 4b's primary invocation gained
+    # `--merge-target` (`Q-308`), so the old literal no longer existed and both
+    # controls died on `_sub`'s source assert rather than measuring anything.
+    # The MUTATIONS are unchanged in kind -- add `--force` to the primary
+    # invocation; re-fence a redundant close_batch block -- and N4 now uses the
+    # cherry-pick block, which is the redundant one it was always describing.
     ("N3 Step 4b ships only the --force form the skill mandates under pr", _sub(
-        "```bash\nbash sysop/scripts/close_batch.sh <N1> <N2> <N3>\n```",
-        "```bash\nbash sysop/scripts/close_batch.sh --force <N1> <N2> <N3>\n```")),
+        'bash sysop/scripts/close_batch.sh --merge-target "<merge target>" <N1> <N2> <N3>',
+        'bash sysop/scripts/close_batch.sh --force --merge-target "<merge target>" <N1> <N2> <N3>')),
     ("N4 re-fence ONE redundant close_batch block (invariant intact)", _sub(
-        "```bash\nbash sysop/scripts/close_batch.sh <N1> <N2> <N3>\n```",
-        "```text\nbash sysop/scripts/close_batch.sh <N1> <N2> <N3>\n```")),
+        '```bash\nbash sysop/scripts/close_batch.sh --force --merge-target "<merge target>" <N1> <N2> <N3>\n```',
+        '```text\nbash sysop/scripts/close_batch.sh --force --merge-target "<merge target>" <N1> <N2> <N3>\n```')),
     ("N5 mention one code extension in 4a-post prose (an example, not a list)", _sub(
         "naming the surfaces gated out and the unclaimed files.",
         "naming the surfaces gated out and the unclaimed files (a stray `.sql` file, say).")),

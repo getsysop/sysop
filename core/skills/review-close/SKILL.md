@@ -73,13 +73,44 @@ Identify two categories of pending work:
 
 Branch tips are blind to uncommitted in-progress work. A `/claim-task`-ed branch where the agent did substantial worktree edits but never committed has a tip identical to a freshly-claimed branch with no work yet — Step 2a's commit-based verdict would say "no commits, reject" for both, and Step 6's cleanup would then try to remove the worktree. If a downstream codepath ever reaches for `--force` on `git worktree remove`, uncommitted work is silently destroyed. **No shipped skill does today** — no skill in this install contains `git worktree remove --force`, and the only forced removals anywhere are the opt-in `--force` arms of `claim_task.sh --release` and `batch_work.sh --release` (an earlier version of this sentence attributed such paths to `/auto-judge` and `/document-work`, which have none; corrected Phase 165, the same wrong-capability class as `/auto-build`'s "clears the lock" claim). The guard below is what keeps it that way.
 
-For every worktree from `git worktree list --porcelain` (excluding the worktree whose branch is `main`), classify the state by running `git -C <worktree-path> status --porcelain` and combining with the branch's commit position relative to main:
+For every worktree from `git worktree list --porcelain` (excluding the **primary checkout**, identified by path rather than by branch name — see the loop), classify the state by running `git -C <worktree-path> status --porcelain` and combining with the branch's commit position relative to main:
 
 ```bash
 # Use --porcelain to make the worktree listing machine-parseable.
-# repo_root is the primary (main) worktree — the runner's vantage — and owns the
-# .gitignore rules the symlink downgrade below consults (BeanRider ISSUE-0043).
-repo_root=$(git rev-parse --show-toplevel)
+# main_root is the PRIMARY checkout. It owns the .gitignore rules the symlink
+# downgrade below consults (BeanRider ISSUE-0043), and it is also the worktree this
+# loop skips. Resolve it with `--git-common-dir`, never `--show-toplevel`: the latter
+# answers "which worktree am I standing in", which is the primary only when the runner
+# happens to be standing there (Phase 234, `Q-020`/`Q-307`(b) — the class this file was
+# not swept for). `--git-common-dir` prints a CWD-relative `.git` from inside the
+# primary and an absolute path from a linked worktree; `cd`-ing to its parent resolves
+# both, verified from the primary root, a primary subdirectory, and a linked worktree.
+main_root=$(cd "$(git rev-parse --git-common-dir)/.." && pwd -P)
+
+# The primary is matched two ways, because neither alone covers every layout.
+# `git worktree list --porcelain` lists the MAIN worktree FIRST (documented behaviour),
+# and that is the only handle that survives a `--separate-git-dir` checkout, where the
+# listing names the *gitdir* and `-ef` against `main_root` matches nothing — so the
+# primary would be classified like a feature worktree and `git -C` would fatal inside
+# the loop. `-ef` covers everything else and is the semantic test; this is the fallback.
+primary_wt=$(git worktree list --porcelain \
+  | awk '/^worktree /{sub(/^worktree /, ""); print; exit}')
+
+# Is the primary ITSELF a claim workspace? `claim_task.sh --branch` sets
+# `WORKSPACE_PATH="$REPO_ROOT"`, so on that mode the work-in-progress lives in the primary
+# checkout and IS the paused work this guard exists to protect (BeanRider ISSUE-0016).
+# Skipping the primary unconditionally would hand a half-implemented `--branch` claim to
+# Step 2a as reviewable — restoring the silent-merge this step prevents, for one mode.
+# The lock records `workspace:`, so ask it rather than guessing from the branch.
+# One pipeline, no `for`/`done`: those are not documented command separators, so no
+# allow-rule binds a loop, and Phase 210's precedent is to avoid adding one rather than
+# to claim another exception for it. An exact line match is sound here because BOTH
+# sides are physical paths from git -- `claim_task.sh` records `workspace: $REPO_ROOT`
+# from `git rev-parse --show-toplevel`, which resolves symlinks, and `main_root` above
+# is `pwd -P`. Verified: reached through a symlinked CWD, both still print the same
+# physical spelling, so the `-ef` robustness a loop would buy has nothing to fix.
+primary_claimed=$(grep -lxF "workspace: $main_root" \
+  "$main_root"/sysop/runtime/locks/*.lock 2>/dev/null | head -1)
 
 # Parsed with case/parameter-expansion rather than awk: a bare `$<N>` in a skill body is
 # replaced by the invocation's (N+1)th argument word before bash sees it (internal tracker #360).
@@ -95,8 +126,22 @@ git worktree list --porcelain | while IFS= read -r _line; do
     "branch refs/heads/"*) printf '%s\t%s\n' "$_wt" "${_line#branch refs/heads/}" ;;
   esac
 done | while IFS=$'\t' read -r wt_path branch; do
-  # Skip the main worktree (it's the runner's vantage; not a feature worktree).
-  [[ "$branch" == "main" ]] && continue
+  # Skip the PRIMARY checkout — by identity, never by branch name — UNLESS it is itself a
+  # claim workspace. It is normally the runner's vantage rather than a feature worktree,
+  # and no step in this skill removes it, so it is outside the silent-data-loss guard's
+  # subject. Testing `$branch == "main"` instead misclassifies the ordinary case of a
+  # feature branch checked out in the primary (a change not started through `/claim-task`):
+  # one untracked file there classifies the runner's own vantage `dirty`, and Step 2a step 0
+  # turns that into an automatic SKIP, excluding from Steps 3b, 4 and 6 a branch whose
+  # commits already passed every gate. `-ef` compares device and inode, so a differing
+  # symlink or case spelling of one directory still matches — `close_batch.sh`'s
+  # `close_landed_on_main` tests primary-ness the same way for the same reason.
+  # `$primary_claimed` is the `--branch`-mode carve-out: there the primary IS the workspace,
+  # so its dirty state is exactly the paused work this step must not wave through.
+  if [[ -z "$primary_claimed" ]] \
+     && { [[ "$wt_path" -ef "$main_root" ]] || [[ "$wt_path" == "$primary_wt" ]]; }; then
+    continue
+  fi
 
   porcelain=$(git -C "$wt_path" status --porcelain)
   ahead=$(git log --oneline "main..$branch" 2>/dev/null | wc -l | tr -d ' ')
@@ -126,7 +171,7 @@ done | while IFS=$'\t' read -r wt_path branch; do
           /*) : ;;
           *)  target=$(cd "$wt_path/$(dirname "$entry")" 2>/dev/null && cd "$(dirname "$target")" 2>/dev/null && printf '%s/%s' "$PWD" "$(basename "$target")") ;;
         esac
-        git -C "$repo_root" check-ignore -q "$target" 2>/dev/null && continue
+        git -C "$main_root" check-ignore -q "$target" 2>/dev/null && continue
       fi
     fi
     printf '%s\n' "$line"
@@ -274,24 +319,51 @@ If the repo has no `origin` remote, or `HEAD` is not `main`, there is no unpushe
 
    If any of the three yields a rule that could govern the touched types, spawn the agent and let it route. The skip is licensed by a *searched* absence, across all three, not by the absence of a section you happened to read. Docs-only cycles are not an edge case here — Step 7's own friction capture generates them routinely.
 
+   **This skip is about step 3's agent and does not reach step 3b's** (`Q-352`). The two gates ask different questions of the same diff, and a diff can pass this one while failing that one: the security map routes documentation paths *by design* — the **core** map routes `.claude/skills/**/*.md`, and the llm pack routes `<prompts dir>/**/*.md` — so a target skipped here as doc-only can still match a security glob. (An earlier draft claimed `security_map.md` *"routes root operational docs to **A02**"*. It does not: the core map's five sections are shell scripts and hooks, `Dockerfile`, `.gitignore`/`.env*`, CI workflows and skill markdown, and the only A02-routed root paths among them are configuration, not documentation. Note also that the llm-pack glob is a **placeholder** until a consumer localizes it, so on a stock install `.claude/skills/**/*.md` is the concrete member carrying this argument.) Evaluate step 3b's gate on its own; a cascade would silence the security lens on exactly the diffs it was added for.
+
 > **Check the second condition; do not assume it.** "Docs cannot violate a convention" is false often enough to be dangerous, and Sysop's own shipped maps are the counter-examples: `core/companion/convention_map.md` routes `.claude/skills/**/*.md` to five conventions including *No secrets in examples*; the beancount pack routes a per-vendor `README.md` to **"Synthetic content only: NO real account numbers, payees, amounts, addresses"** and `<ledger>.beancount` to *No PII in git-tracked ledgers*; the llm pack routes `<prompts dir>/**/*.md` to template rules. **None of those is scanner-shaped** — the beancount rule asks a reader to judge whether a digit string *looks* real, which no entropy or pattern scanner does. So the skip is licensed by the *absence of an applicable rule*, not by the file extension. Read the conventions (you need `## Prevention Conventions` for step 1 anyway; the other two sources are this predicate's alone), and if **any of the three** names documentation, config, prompts, fixtures, or committed data — in a subsection, in another CLAUDE.md section, or as a glob in either convention map — **do not skip** — spawn the agent and let it route. **The escape used to be sealed inside the one section the predicate read**, so a project whose only doc-governing rule lived in a map glob or in `## Testing Patterns` got the skip *and* the escape wrong together, from the same blind spot. Secret-scanning (`security_map.md` routes root operational docs to **A02**) is a separate expectation covered by the project's scanner, and this skip neither touches nor waives it.
 
 Step 2a still reads the diff either way. If every target skips, Step 2b is a clean no-op; say so in one line rather than reporting nothing.
 
 **For each remaining target:**
 
-1. Read the **entire** `## Prevention Conventions` section of `CLAUDE.md` (every subsection — subsection names vary by project: a web project might have `Frontend`/`Backend`/`Auth boundaries`; a data-pipeline project might have `Data integrity`/`Privacy`/`Schema evolution`; an MCP server might have `MCP server boundaries`). **`Testing Patterns` used to be the example here and it was the wrong one (`Q-328`)**: `WORKFLOW.md` § 6.1's required-sections table makes `## Testing Patterns` a **top-level section of its own**, so offering it as a subsection of this one put the skill in contradiction with the template it ships — and step 0's skip predicate rode that contradiction into skipping targets governed by it. Read this step as scoped to `## Prevention Conventions` deliberately; what a *sibling* section governs is step 0's question, and step 0 now reads them. Retrieve the full diff — the target's **diff basis** from the table above, three dots, per Step 2a's note. Whichever arm you take below, a two-dot diff hands the reviewer `main`'s newest content as though the branch had torn it out.
+1. Read the **entire** convention-bearing set of `CLAUDE.md`, every subsection — **not `## Prevention Conventions` alone (`Q-342`)**. Subsection names vary by project: a web project might have `Frontend`/`Backend`/`Auth boundaries`; a data-pipeline project might have `Data integrity`/`Privacy`/`Schema evolution`; an MCP server might have `MCP server boundaries`. **The set is `## Prevention Conventions` + `## Testing Patterns`, plus any other section step 0 identified as carrying a rule the diff's file types could violate.** Those two are named because `WORKFLOW.md` § 6.1's required-sections table is what makes them rule-bearing — `## Prevention Conventions` is *"the actual convention rules"*, `## Testing Patterns` is *"test framework, fixture patterns, mock patterns"* — while `## Architecture`, `## Key Files`, `## Commands` and `## Environment Variables` describe the project rather than constrain it. **That is an illustration, not a partition of the table** — § 6.1 lists more rows than those, several of them (`## Pre-merge verification`, `## Merge policy`, `## Plan review`) operational rather than descriptive, and none convention-bearing in the sense this paste needs. **Read the two named members as the floor and step 0's answer as the rest**: the tail is a judgement, step 0 already made it, and this step consumes that answer instead of re-deriving it.
+
+   > **This reverses a scoping Phase 241 took deliberately, and the reversal is the point.** That phase closed `Q-328`'s *skip predicate* — step 0 now reads three sources — but left this paste at one section and wrote here that the narrowing was intentional: *"what a sibling section governs is step 0's question."* It is not. Step 0 decides **whether to spawn**; step 1 decides **what the agent is given**. Splitting them that way produced an agent that runs, routes and reports honestly against a taxonomy missing the very section that kept it from being skipped — a narrower review, arrived at by a gate working exactly as written. Nobody is told a check happened that did not, which is why `Q-342` was filed § Medium and not § High; it is still the wrong answer.
+   >
+   > **The filing's own preferred remedy was option (c) — amend § 6.1 to make `## Testing Patterns` a subsection of `## Prevention Conventions` — and it is refused here.** It settles the template's self-consistency and fixes nothing: a consumer who already followed the shipped template has the section at top level, so the paste would keep missing it. (c) is cheap because it changes no behaviour, and that is also why it is not a fix. Option (b), driving the paste off the convention map, remains the larger reshape the filing calls *"arguably the right shape"*; it is not this phase's.
+   >
+   > **The filing also forbids taking this option without measuring the paste against the threshold below, so it was measured — on both real consumers, not estimated.** GDP (the reference consumer): `## Prevention Conventions` 53,456 chars, `## Testing Patterns` 3,637, widened total **57,093**. BeanRider: 3,662 + 456, widened total **4,118**. **The widening moves neither consumer across the 10,000-character threshold** — GDP was already on the write-once arm and stays there, BeanRider was already on the inline arm and stays there. The worry the filing raised, that widening *"silently moves reviewers onto an unmeasured arm"*, does not materialise on either: for BeanRider to flip, the threshold would have to fall inside a 456-character window. The tail section step 0 may add is unbounded in principle, which is why the measurement command below measures the set it actually assembled rather than these two numbers.
+
+   Retrieve the full diff — the target's **diff basis** from the table above, three dots, per Step 2a's note. Whichever arm you take below, a two-dot diff hands the reviewer `main`'s newest content as though the branch had torn it out.
 
    **Paste or write-once — the conventions threshold is 10,000 characters of section text (Phase 222, Q-275).** The section is identical for every agent, so above the threshold pasting it N times is pure duplication (measured: 53,456 characters × a 13-agent close ≈ 174k tokens of the same text). Measure it, do not estimate it — the same rule as the diff threshold below, and the command matches the `Bash(python3 -:*)` idiom every other measurement here uses:
 
    ```bash
+   # Measure the WIDENED set, not one section (`Q-342`). Add any further
+   # section step 0 identified to SECTIONS before running this -- measuring a
+   # narrower set than you paste is how a prompt silently lands on the wrong arm.
    python3 - <<'PY'
    import re
+   SECTIONS = ["Prevention Conventions", "Testing Patterns"]
    text = open("CLAUDE.md", encoding="utf-8").read()
-   m = re.search(r"^## Prevention Conventions$.*?(?=^## |\Z)", text, re.M | re.S)
-   print(len(m.group(0)) if m else 0)
+   total = 0
+   for name in SECTIONS:
+       m = re.search(rf"^## {re.escape(name)}$.*?(?=^## |\Z)", text, re.M | re.S)
+       n = len(m.group(0)) if m else 0
+       print(f"{n:>8}  ## {name}" + ("" if m else "   (absent)"))
+       total += n
+   print(f"{total:>8}  TOTAL")
    PY
    ```
+
+   A section that is absent contributes 0 and is not an error — `## Testing Patterns` is a required section, but a consumer who has not written one has no testing conventions to route against, which is a different thing from a missing file.
+
+   **A `TOTAL` of 0 means the CLAUDE.md paste has nothing to contribute — say so and CONTINUE, do not stop.** ⚠ **This step's first version said the opposite** (*"you must not proceed on it … a contradiction, not an answer"*), and the round's execution lens disproved it by running the measurement against **this repo's own `CLAUDE.md`**, which has neither section: Sysop is a documented consumer of itself — its `## Merge policy` section exists for exactly that — and a branch touching `install.sh` and `tests/` is not doc-only, does not skip at step 0, reaches here, and measures **0**. The rule as first written would have halted `/review-close` in the repo that ships it, and nobody had run it there.
+
+   **The premise was wrong, not just the threshold.** Step 0 licenses the spawn from **three** sources, and the third is the convention **map** — so a project can legitimately arrive here with every rule in `.claude/convention_map.project.md` and none in `CLAUDE.md`. That is not a contradiction; it is the shape this very repo has. Report `2b: <target> — no CLAUDE.md convention sections; routing against the map alone`, hand the agent the map rather than an empty paste, and continue.
+
+   **What a 0 does oblige is one check, because two of its causes are malformations rather than absences.** Before accepting it, confirm the sections are genuinely absent rather than unmatched: `grep -nE '^#{1,6} *(Prevention Conventions|Testing Patterns)' CLAUDE.md`. A hit the measurement scored 0 means a heading level (`###` instead of `##`, which § 6.1 makes top-level) or trailing whitespace — **a real defect in the consumer's file, and one this step should name rather than absorb.** No hit means genuine absence: the project keeps its conventions somewhere this measurement does not look, which is **the common case and not an error** — Sysop's own repo is the worked example, its rules living under `## Conventions for working in this repo`, a section § 6.1 does not name. Do not report an absence as a malformation you failed to locate. Continue either way, and say which of the two it was. **The measurement is also fence-blind and first-match-wins** — see `Q-361`; those behaviours predate this widening and change only which arm is selected, never what gets pasted.
 
    **At or below 10,000, paste it into every prompt as before** — the dominant small-project path keeps the behaviour in use, and a paste has no failure mode. **Above 10,000, write it ONCE and hand every agent the same copy:**
 
@@ -300,7 +372,7 @@ Step 2a still reads the diff either way. If every target skips, Step 2b is a cle
    mkdir -p sysop/runtime
    ```
 
-   then write the section **verbatim, every subsection, unfiltered** to `sysop/runtime/2b-conventions.md` in the **primary** worktree with the `Write` tool, and substitute that file's **absolute path** into each prompt's `## Prevention Conventions` block (second arm below). The `rm -f` first is the same loud-failure discipline as the baseline capture in step 2: without it, a run that skips the write hands every agent the *previous* close's conventions, silently. The authority question this resolves is stated in the prompt arm: agents read the orchestrator's copy, **never their own worktree's `CLAUDE.md`** — each worktree checks out its *branch's* version of that file, and a branch that edits the conventions would otherwise have each reviewer routing against a different taxonomy.
+   then write **every section in the set, verbatim, every subsection, unfiltered** to `sysop/runtime/2b-conventions.md` in the **primary** worktree with the `Write` tool — each under its own original `## <name>` heading, in the order above, so the agent can still cite which section a rule came from — and substitute that file's **absolute path** into each prompt's `## Project conventions` block (second arm below). The `rm -f` first is the same loud-failure discipline as the baseline capture in step 2: without it, a run that skips the write hands every agent the *previous* close's conventions, silently. The authority question this resolves is stated in the prompt arm: agents read the orchestrator's copy, **never their own worktree's `CLAUDE.md`** — each worktree checks out its *branch's* version of that file, and a branch that edits the conventions would otherwise have each reviewer routing against a different taxonomy.
 
    **Paste or retrieve — the threshold is 1,000 lines of `git diff` output.** Measure it, do not estimate it:
 
@@ -356,8 +428,9 @@ Step 2a still reads the diff either way. If every target skips, Step 2b is a cle
    - `prompt`:
 
      ```
-     You are the final security gate before this branch merges to production. Review
-     the diff below for violations of the project's Prevention Conventions.
+     You are the final convention gate before this branch merges to production.
+     Review the diff below for violations of the project's conventions — EVERY
+     section given to you below, not `## Prevention Conventions` alone.
 
      ## Target
      <branch name, or "unpushed main commits">
@@ -385,14 +458,16 @@ Step 2a still reads the diff either way. If every target skips, Step 2b is a cle
      effects your measurement was taken on. If you cannot tell which side, say so
      rather than reporting a violation.
 
-     ## Prevention Conventions
-     <at or below the 10,000-character threshold in step 1: paste the full
-      ## Prevention Conventions section from CLAUDE.md verbatim, including every
-      subsection — do not pre-filter or rename subsections.
+     ## Project conventions
+     <at or below the 10,000-character threshold in step 1: paste EVERY section
+      in step 1's convention-bearing set from CLAUDE.md verbatim — each under its
+      own original `## <name>` heading, including every subsection. Do not
+      pre-filter, merge or rename sections or subsections: the headings are how
+      the agent cites what it routed against.
       Above it, substitute this arm instead:>
      Read the file at <absolute path to the primary worktree's
-     sysop/runtime/2b-conventions.md> IN FULL before reviewing. It is the
-     project's complete ## Prevention Conventions section, copied verbatim by
+     sysop/runtime/2b-conventions.md> IN FULL before reviewing. It holds the
+     project's complete convention-bearing sections, copied verbatim by
      the orchestrator at spawn time — that copy is the authority you route
      against. Do NOT substitute your own worktree's CLAUDE.md: your checkout
      carries the branch's version of that file, not the orchestrator's read.
@@ -400,18 +475,19 @@ Step 2a still reads the diff either way. If every target skips, Step 2b is a cle
      reviewing — a review against an assumed taxonomy is worse than no review.
 
      ## Instructions
-     For each changed file, scan the Prevention Conventions section (pasted
-     above, or in the file this prompt pointed you at) and
-     identify which subsection(s) apply, based on file path, language, and
-     domain. A subsection applies when its bullets reference concepts the file
+     For each changed file, scan EVERY section given to you above (pasted, or in
+     the file this prompt pointed you at) — there is more than one, and a rule in
+     any of them binds — and identify which section and subsection(s) apply,
+     based on file path, language, and domain. A subsection applies when its bullets reference concepts the file
      touches — for example:
      - parsers/<format>.py → "Data integrity" + "Schema evolution"
      - mcp_server/tools/*.py → "MCP server boundaries"
      - frontend/components/*.tsx → "Frontend" / "UI components"
      - api/routes/*.py → "Backend" / "API endpoints"
 
-     Subsection names vary by project — discover them from the section you
-     were given (pasted or in the file), don't assume a fixed taxonomy.
+     Section and subsection names vary by project — discover them from what you
+     were given (pasted or in the file), don't assume a fixed taxonomy, and don't
+     assume `## Prevention Conventions` is the only section present.
 
      For each changed file, list the subsections you routed it to (one line:
      `<file path> → <subsection names>`), then check each applicable bullet
@@ -420,8 +496,10 @@ Step 2a still reads the diff either way. If every target skips, Step 2b is a cle
      Return your findings in exactly this format:
 
      ROUTING:
-     - <file path> → <subsection name(s)>
-     (one line per changed file)
+     - <file path> → <section> › <subsection name(s)>
+     (one line per changed file; name the SECTION as well as the subsection —
+      more than one section was given to you and a bare subsection name does not
+      say which taxonomy it came from)
 
      VERDICT: APPROVED
      (if no violations)
@@ -430,7 +508,7 @@ Step 2a still reads the diff either way. If every target skips, Step 2b is a cle
 
      VERDICT: BLOCKED
      Violations:
-     - <Convention bullet name> (<subsection>) — <file>:<line> — <one-line explanation>
+     - <Convention bullet name> (<section> › <subsection>) — <file>:<line> — <one-line explanation>
      (one line per violation)
 
      Be thorough. A missed convention ships a security hole or reliability bug to prod.
@@ -452,13 +530,38 @@ Step 2a still reads the diff either way. If every target skips, Step 2b is a cle
      attributed to nobody.
      ```
 
-4. Collect all verdicts. If **any** subagent returns `VERDICT: BLOCKED`, list every violation with its file:line citation and **stop** — do not proceed to Step 3 until violations are fixed or explicitly waived by the user. A target skipped at step 0 has **no verdict** — report it as `skipped (doc-only)`, never as `APPROVED`; an agent that was never spawned has approved nothing.
+3b. **Spawn the security twin — same dispatch, the other map** (`Q-352`).
 
-5. **Record outcomes for Step 8.** Tally `<N checked, N skipped (doc-only)>` for the `Conventions:` line in the final report. Without this, a skip is invisible in the artifact the human reads — the same gap Step 2d's `N doc-only` tally closes for test decisions.
+   **The gap this closes runs the whole length of the chain, not just this step.** `/claim-task` Step 5 has the *planner* read **both** maps into `## Constraints & Risks`; from there the security map is never read again before `main`. The plan reviewer is handed the plan and `_shared/adversarial-review.md`, which **routes** against neither map: dimension 6 checks that a *cited* convention was applied correctly, and dimension 8 checks that `## Constraints & Risks` carries per-file bullets citing both maps — that is **citation coverage**, an audit of the planner's own read, not a fresh routing of the diff. The security map is looked at here and never applied to what the change became. The executor's post-fix verification re-scans changed lines against `convention_map.md` **only** (fixed in the same phase; see `/claim-task` Step 7e). And step 3 above routes against the convention sources and not this one. So a branch touching a path the security map governs — an auth handler, an upload endpoint, a `<prompts dir>` template — reached `main` with no security-map read since the plan was written, and the plan's read was of the *intended* change, not of the diff that resulted.
 
-> **HARD RULE — the agents' worktrees must be gone before Step 3b.** Worktree isolation is not free of side effects: on Claude Code it materializes a **real worktree and a real branch** in this repository's shared namespace (observed shape: a worktree under `.claude/worktrees/` on a branch named `worktree-agent-<id>`). The harness removes them when an agent finishes and left its checkout unchanged — but an agent that wrote a scratch file, or a run that was interrupted, leaks both. **That collides directly with this skill**: Step 1c's `git for-each-ref refs/heads/` sweep, Step 2a's "every non-main local branch", and Step 1a's worktree classification all enumerate whatever exists, so a leaked agent branch is reviewed as though it were someone's feature work — it classifies `clean-merged`, Step 2a finds no commits, and Step 6 offers to delete it. Worse across sessions: a *concurrent* `/review-close` can reach `git worktree remove` on a checkout an agent is still running in.
+   **A second agent, not a bigger prompt.** Phase 166 measured ~15% overlap across **four** lenses on the same diff, with each of the four reaching its sharpest finding alone; folding security into step 3's prompt is the cheap way to lose that, and it would also push the paste toward the threshold for no gain.
+
+   ⚠ **What this reaches on a stock install is much less than the paragraph above implies, and it was measured.** Of the 16 sections in a fresh `--packs python` install's `.claude/security_map.md`, **11 carry placeholder globs** — `<api module>/routes/**/*.py`, `<auth module>/*.py`, `<payments service module>`, `<data pipeline>/*.py` and the rest. The concrete ones are `scripts/*.sh` and hooks, `Dockerfile`/`.dockerignore`, `.gitignore`/`.env*`, `.github/workflows/*.yml`, `.claude/skills/**/*.md` + `.claude/checks.yml`, and `pyrightconfig.json`. **So on an unlocalized install this gate spawns for infra and meta changes and skips application code** — including "an auth handler, an upload endpoint", the two examples the paragraph above names as the gap it closes. Run against a synthetic diff of `src/api/routes/upload.py`, `src/auth/login.py`, `src/models/user.py`, it reports `no security-map glob matches this diff`, which is the *"a map that matches nothing reads like a map nobody consulted"* shape `/security-audit` Step 2a-0 exists for. **This is the shipped map's localization debt, not a defect in this step** — the same debt Phase 203 measured at 30 of 36 sections binding nothing — and the twin becomes as sharp as the consumer's map is localized. **Say which it was.** When the gate skips every target and the map is unlocalized, report `security: skipped — N of M map sections still carry placeholder globs`, not a bare `no map match`: the first tells a consumer they have work to do, the second reads like a clean bill.
+
+   **Gate — spawn only when the map's globs reach this target.** Run step 0's "searched absence" test against the security sources instead of the convention ones: read `.claude/security_map.project.md` (the consumer overlay) and the shipped `.claude/security_map.md` beneath it, and spawn only if some glob in either matches a path in this target's diff basis. The doc-and-glue majority of closes matches nothing and spawns nothing extra; report those as `security: <target> — no security-map glob matches this diff`. **A skip here is a searched absence and never an assumed one** — the same rule step 0 states, for the same reason: `/security-audit`'s own Step 2a-0 exists because a map that matches nothing reads exactly like a map nobody consulted.
+
+   **Write-once, into its own file — and on a stock install that is the only reachable arm.** ⚠ **This step's first draft said *"paste or write-once, on step 1's threshold"* and told you to *"measure the two security sources the same way step 1 measures the convention set"* — which is prose with no command behind it: step 1's shipped measurement reads `CLAUDE.md` sections and has no analogue for a map file. **`Q-342`'s filing forbade widening a paste without measuring it, and this step introduced a new paste in the same edit without applying that discipline to itself.** Measured now: `.claude/security_map.md` on a fresh `--packs python` install is **12,828 characters**, above the 10,000 threshold — so the inline arm is unreachable on a stock install and the write-once arm is the live path. Measure it anyway rather than assuming (`wc -c .claude/security_map.md .claude/security_map.project.md`), because a consumer who trims the map can fall below. At or below 10,000 characters paste them into the prompt; above it, `rm -f sysop/runtime/2b-security.md` first, then write them verbatim to `sysop/runtime/2b-security.md` in the **primary** worktree and hand every agent that absolute path. **A separate file from `2b-conventions.md`, deliberately** — the two prompts are given to different agents and a shared file would let a stale write from either arm satisfy the other's freshness check.
+
+   **Do NOT capture a second baseline.** Step 2's tree and config baselines were taken before the *first* spawn and cover every agent this step spawns as well. Re-capturing here would take the snapshot **after** step 3's agents have run, so a mutation one of them made would be recorded as the starting state and the assertion below would then certify the tree clean over it — the exact inversion step 2's own note warns about.
+
+   Spawn one Agent per surviving target, with the same `subagent_type: "general-purpose"`, the same `model: "opus"` (the **reasoning** role), the same `isolation: "worktree"`, and `description: "Security check: <target>"`. The prompt is step 3's, with four substitutions and nothing else changed:
+
+   - the opening line names the security map as the taxonomy: *"Review the diff below for violations of the project's security conventions — the OWASP-category rules in the security map."*
+   - `## Project conventions` becomes `## Security map`, carrying the security sources (pasted, or the `sysop/runtime/2b-security.md` path) under the same missing-or-empty STOP rule.
+   - the routing example lines become security-shaped (`api/routes/*.py → A01 Broken Access Control`, `<upload handler> → A03 Injection + A08 Data Integrity`), and the `ROUTING:` block reports `<file path> → <map section> (<OWASP categories>)`.
+   - the violation line becomes `- <rule> (<map section> › <OWASP category>) — <file>:<line> — <one-line explanation>`.
+
+   Everything else is carried verbatim, and the two that matter most are the do-not-mutate rule and the do-not-create-files rule: this agent has the same tools and the same measured failure modes as step 3's.
+
+   **It carries the same `VERDICT: BLOCKED` authority, and that is an escalation stated rather than slipped in.** A security lens can now stop a close. The alternative — advisory only — was considered and refused: a gate that reports a routed security violation and merges anyway is the state this entry was filed about, one report louder. Step 4 already treats *any* `BLOCKED` as a stop, so no new disposition is needed; what is new is which agents can raise one.
+
+4. Collect all verdicts, **from both fleets**. If **any** subagent returns `VERDICT: BLOCKED`, list every violation with its file:line citation and **stop** — do not proceed to Step 3 until violations are fixed or explicitly waived by the user. A target skipped at step 0 has **no verdict** — report it as `skipped (doc-only)`, never as `APPROVED`; an agent that was never spawned has approved nothing. **The same rule binds step 3b's gate**: a target with no security-map glob match has no security verdict, and reporting it as approved would claim a review that never ran.
+
+5. **Record outcomes for Step 8.** Tally `<N checked, N skipped (doc-only)>` for the `Conventions:` line, and `<N checked, N skipped (no map match)>` for the `Security map:` line, in the final report. **Two tallies, because they answer different questions and one number cannot carry both** — a close where every target skipped the security twin and every target passed the convention check would otherwise read identically to one where both ran. Without them a skip is invisible in the artifact the human reads, the same gap Step 2d's `N doc-only` tally closes for test decisions.
+
+> **HARD RULE — the agents' worktrees must be gone before Step 3b of the close** (that is **Step 3b of the *skill*, `## Step 3b: Prepare Worktrees for Merge`** — not step 3b of *this* step, which spawns the second fleet. An earlier draft of this clause said *"the manual-smoke gate"*, which is **Step 3c**; a disambiguation that names the wrong step is worse than none, and the rule below — the agents' worktrees must be gone — is about worktree preparation, not about smoke testing). **The assertion below covers BOTH fleets** — it enumerates whatever exists rather than counting what was spawned, so it needs no adjustment for the security twin, and it must run after step 4 has collected from both. Worktree isolation is not free of side effects: on Claude Code it materializes a **real worktree and a real branch** in this repository's shared namespace (observed shape: a worktree under `.claude/worktrees/` on a branch named `worktree-agent-<id>`). The harness removes them when an agent finishes and left its checkout unchanged — but an agent that wrote a scratch file, or a run that was interrupted, leaks both. **That collides directly with this skill**: Step 1c's `git for-each-ref refs/heads/` sweep, Step 2a's "every non-main local branch", and Step 1a's worktree classification all enumerate whatever exists, so a leaked agent branch is reviewed as though it were someone's feature work — it classifies `clean-merged`, Step 2a finds no commits, and Step 6 offers to delete it. Worse across sessions: a *concurrent* `/review-close` can reach `git worktree remove` on a checkout an agent is still running in.
 >
-> **It must be a delta, not an absolute cleanliness test — that is why step 2 above captures a baseline.** Nothing in this skill establishes that the primary worktree is clean before the agents run: Step 1a excludes it by construction (it skips the worktree whose branch is `main`, as Step 6's `pr` re-sync note also states in its own words), and the only earlier primary-tree reads are both in **Step 1b** — one path-scoped (`git status --porcelain -- review_tasks.md`), one whole-tree but grepped down to `review_tasks_archive.md` — while **Step 1c reads no working tree at all** (`for-each-ref`, `merge-base`, `diff --name-only`). So nothing before the agents run establishes anything about the rest of the tree. A bare `git diff --quiet HEAD --` here would fire on any ordinary uncommitted work and SKIP a close that is fine — a false-FAIL on the dominant path, which is how a gate gets disabled by the first operator who hits it. The baseline is taken after Steps 1b and 1c because both deliberately create commits, so a Step-1 reading is stale by design.
+> **It must be a delta, not an absolute cleanliness test — that is why step 2 above captures a baseline.** Nothing in this skill establishes that the primary worktree is clean before the agents run: Step 1a excludes it by construction (it skips the **primary checkout**, matched by path identity, as Step 6's `pr` re-sync note also states in its own words — until this phase both sites said *the worktree whose branch is `main`*, which is the same worktree only while the primary happens to be on `main`), and the only earlier primary-tree reads are both in **Step 1b** — one path-scoped (`git status --porcelain -- review_tasks.md`), one whole-tree but grepped down to `review_tasks_archive.md` — while **Step 1c reads no working tree at all** (`for-each-ref`, `merge-base`, `diff --name-only`). So nothing before the agents run establishes anything about the rest of the tree. A bare `git diff --quiet HEAD --` here would fire on any ordinary uncommitted work and SKIP a close that is fine — a false-FAIL on the dominant path, which is how a gate gets disabled by the first operator who hits it. The baseline is taken after Steps 1b and 1c because both deliberately create commits, so a Step-1 reading is stale by design.
 >
 > After step 4 collects the verdicts, assert all four are clean before continuing:
 >
@@ -492,6 +595,8 @@ If main is ahead of origin:
 ### 2d. Test-Decision Verification (verify the record — Phase 59, C1)
 
 Every task claimed through `/claim-task` records a **test decision** in its body at plan time (Phase 58b): either `test <X> proves <Y>` (the regression test that pins the changed behavior) or `no test because <Z>` (the reviewable rationale for adding none). See `tasks/schema.md` § Test decision. This step **verifies that record against what the branch actually delivers**, and since Phase 234 it is the *only* thing that does: `validate_tasks.py` carried a warn-only Invariant 13 on the same fact until then, but it read the body off the working tree while this record lives on the branch, so it warned on every claimed task on every run and told you nothing. Reading the right revision is what makes this gate real. It does **not** re-judge whether a test *should* exist; that judgment is the adversarial plan reviewer's "Missing invariant tests" dimension (`_shared/adversarial-review.md` finding 7), applied at plan time. Verify the record, don't re-judge.
+
+> **The premise sentence above is accurate about `/claim-task` and it is not the gate's reach.** Every task claimed through that skill records a test decision; **not every task on a branch under review was claimed through it.** Grepping the shipped skills: `/auto-fix` writes the record **0** times, `/auto-judge` **0**, `/auto-build` **1** — an incidental aside about clean sessions, not a write — and manual work on a hand-cut branch writes none. This step nevertheless reads the record for each task ID the branch claims, whatever produced it, so a task that was never owed a record and a task whose record is genuinely missing used to arrive at the same prompt with the same three answers. `Waive` therefore meant two different things and the Step 8 tally conflated them: the one that should be free was priced like the one that should be expensive. The fourth disposition below separates them. **The fix is the disposition, not a rewording of the premise** — narrowing the population instead would stop asking about tasks that genuinely should have carried a record, which is the gate going quiet rather than getting honest.
 
 This is the sibling of Step 3c's manual-smoke gate — a per-task body convention, enforced here and nowhere else since Phase 234 — and reuses the same shape: a deterministic classification (like Step 1a's worktree verdict) plus an `AskUserQuestion` halt on mismatch (like Step 3c).
 
@@ -534,15 +639,45 @@ For each **approved** feature branch (Step 2a verdict), for each task ID it clai
 - **`no-test` → "plan said no-test-because-Z — does Z still hold?"** Re-read `Z` against the diff. `Z` **holds** when the diff's character still matches the stated rationale (pure rename/move, config-only, docs-only, covered by an existing named test, `manual_smoke:`-only) — **with the caveat that "config-only" and "docs-only" name a file's extension, not its consequence.** A semgrep rule, a `checks.yml` entry, a CI workflow, a lockfile pin and a lint config are all config, and each is behaviour a project checks; where the diff changes one of those, `Z` holds only if the rationale anticipated *that*, not merely that no `.py` file moved. `Z` is **stale** when the diff now carries behavior changes the rationale didn't anticipate (e.g. `Z` said "pure rename" but the diff edits logic) → **discrepancy**. This carries inherent judgment residue — acknowledged and bounded: you are matching the recorded rationale to the diff, **not** forming a fresh opinion that a test ought to exist.
 - **`missing` → record absent.** This is the **first** notice, not a second one: nothing upstream warns on it any more (Phase 234 retired the validator's Invariant 13, which could not see this record at all from `main`). Treat as a discrepancy to surface.
 
-**3. On a clean match, pass silently** (carry a `verified` note for Step 8). **On any discrepancy, missing record, or unreadable body, halt and ask** via `AskUserQuestion` (one task at a time, mirroring Step 3c). Present the recorded decision text verbatim, the task ID, **the revision you read it from**, and what the diff shows. Three options (single-select):
+**2‑pre. The ownership probe — before asking about a `missing` record, establish whether one was owed.** Numbered out of the list on purpose: this skill already ships a `### 2b. Prevention Convention Check` as a sibling of `### 2d`, so a sub-step called *2b* would send a reader to the wrong section. It is **one bit, per task ID, from the claim lock**:
+
+```bash
+# For a ROADMAP task id — which is what this gate iterates — `claim_task.sh` writes the
+# lock, and an ordinary close removes it at Step 4c. Both halves need scoping and neither
+# is a "the only": `batch_work.sh` writes `BATCH-<N>.lock` on the batch path, and
+# `claim_task.sh --release`, `batch_work.sh --release` and `close_batch.sh` all remove
+# locks too. `--release` is exactly why absence stays three-valued below rather than
+# becoming proof — a released task legitimately has no lock and may still have been owed
+# a record. Keyed by TASK ID, not by branch, so this needs none of Step 2e's branch->claim
+# resolution and duplicates none of its parsing rules.
+# No `cd` in this command, deliberately. `_shared/permission-guard.md` records that even
+# read-only commands prompt "when `cd` into a different directory is compounded with them",
+# and this is the one standalone one-liner the step asks an operator to run — a gate that
+# prompts on the dominant path is a gate that gets switched off. `--git-common-dir` prints
+# `.git` (or `../../.git` from a subdirectory, or an absolute path from a linked worktree)
+# and the filesystem resolves the `..` in the middle, so no resolution step is needed.
+ls "$(git rev-parse --git-common-dir)/../sysop/runtime/locks/<TASK_ID>.lock" >/dev/null 2>&1 \
+  && echo "OWED — claimed through /claim-task" \
+  || echo "CANNOT TELL — no lock on disk"
+```
+
+- **Lock present → the record was owed.** Do **not** offer *record not owed* for this task. `/claim-task` Step 7e writes the record and re-reads its own write in the worktree before committing, and the orchestrator then re-checks the same fact **at the branch tip** at Step 8 — the revision this gate reads. (Two different reads: 7e greps the worktree copy, Step 8 reads the branch. Attributing the branch-tip read to 7e, as the first draft of this sentence did, would tell a reader the worktree grep already proves what only the Step 8 arm proves.) So a missing record here is a real miss, not an unowed one, and waiving it as *not owed* would launder exactly the failure that read-back exists to surface.
+- **Lock absent → cannot tell, and that is the honest answer.** `sysop/runtime/` is gitignored, so a fresh clone, a rebuilt worktree or a `--resume` after a break all legitimately carry nothing; a non-Claude harness never wrote one; and the branch may not come from `/claim-task` at all. Offer all four options and let the human decide. **Never render absence as "the orchestrator did not run"** — this is the same three-valued rule Step 2e states in full, for the same reason.
+
+> **Why the lock and not the run directory, stated as the argument it actually is.** A *retrospective* survey cannot settle this, and an earlier version of this note claimed it had. Over 476 archived tasks in a live consumer, run-directory presence looks like a strong signal (29/29 carried the record against a 15% base rate); it is confounded (all 29 closed in one month whose base rate was already 71%) and it is useless retrospectively, because every one of the 378 tasks missing a record is in the run-directory-absent bucket. **But the same test is worse for the lock, not better**: Step 4c removes both, and among those 476 tasks **0 locks survive against 29 run directories**. So the corpus disqualifies run directories as a *retrospective* proxy — which is all `Q-368`'s retraction ever claimed — and says nothing about either artifact at gate time, where neither has been reaped yet.
+>
+> The real reason is **structural, and it is about the direction this signal is used in.** A lock exists for *every* `claim_task.sh` claim; a run directory exists only when the Step 7 orchestrator actually ran. The lock is therefore the **broader** signal — and this step uses it only to **withhold** the *record not owed* escape. For a withholding use, over-inclusion costs a waiver and under-inclusion lets a genuine miss be dismissed as unowed, so the broader artifact is the safe one. It is also written by a **script** rather than by an agent, so it cannot be skipped by a run that failed to follow the orchestration — which is precisely the failure `Q-369` documents.
+
+**3. On a clean match, pass silently** (carry a `verified` note for Step 8). **On any discrepancy, missing record, or unreadable body, halt and ask** via `AskUserQuestion` (one task at a time, mirroring Step 3c). Present the recorded decision text verbatim, the task ID, **the revision you read it from**, what the diff shows, and **the ownership-probe verdict**. Options (single-select) — three always, plus a fourth only when the ownership probe said `CANNOT TELL`:
 
 - **"Record holds — proceed"** — the human confirms the record is accurate or the rationale still applies; the branch stays approved.
 - **"Hold for fix — don't merge this run"** — demote this branch from **approved** to **rejected** for this run, with the reason `test-decision record needs fixing — <detail>`. Downstream steps already handle a rejected branch correctly with no special-casing: Step 3b/Step 4 skip it (only approved branches merge), Step 6 leaves its worktree, lock, and branch intact for follow-up, and Step 8 reports it under "Remaining" with the reason. The test can then be added or the record corrected before a later `/review-close`.
-- **"Waive — proceed with noted waiver"** — the branch stays approved; record a waiver (task ID + decision text) for Step 8. Use for accepted judgment calls (e.g. a stale-looking `Z` the human confirms is fine).
+- **"Waive — proceed with noted waiver"** — the branch stays approved; record a waiver (task ID + decision text) for Step 8. Use for accepted judgment calls (e.g. a stale-looking `Z` the human confirms is fine). **A waiver means the record was owed and is being let through anyway** — if it was never owed, the next option is the correct one and this one overstates what happened.
+- **"Record not owed — no orchestrated plan ran"** — *offered only when the ownership probe said `CANNOT TELL`, and only on a `missing` record.* The branch stays approved and **nothing is waived**, because there was nothing to waive: the work came from `/auto-fix`, `/auto-judge`, a hand-cut branch or a manual edit, none of which write this record. Tally it separately (below). This is deliberately **not** a quieter waiver — it is the disposition that makes the tally mean something, so do not reach for it when the ownership probe said `OWED`, or when the record is merely *stale* rather than absent.
 
-Waivers and "record holds" do not block. Only "hold for fix" changes the verdict, and it does so by reusing the existing **reject** disposition — no edits to Steps 3b/4/6 are needed.
+Waivers, "record holds" and "record not owed" do not block. Only "hold for fix" changes the verdict, and it does so by reusing the existing **reject** disposition — no edits to Steps 3b/4/6 are needed.
 
-**4. Record outcomes for Step 8.** Tally per task: `verified`, `waived`, `held for fix` (now rejected), `unreadable`, or `skipped (doc-only)`. This drives the "Test decisions" line in the final report.
+**4. Record outcomes for Step 8.** Tally per task: `verified`, `waived`, `not owed`, `held for fix` (now rejected), `unreadable`, or `skipped (doc-only)`. This drives the "Test decisions" line in the final report. **`waived` and `not owed` are counted separately and must not be merged back into one number** — that conflation is the whole reason the fourth disposition exists, and a report that sums them restores it.
 
 If the approved-branch set is empty (only unpushed main commits this cycle), Step 2d is a no-op — unpushed main commits don't carry `/claim-task` test-decision records. Skip cleanly.
 
@@ -1455,7 +1590,9 @@ PY
  Step 1a can now classify a worktree `clean-ahead` while a downgraded tooling symlink (an untracked `.venv`-into-the-main-venv, BeanRider ISSUE-0043) is still physically present, and that lone symlink is enough to make an *unforced* `git worktree remove` refuse (`contains modified or untracked files`). So before removing, re-apply the same downgrade rule and delete just those symlinks — removing a symlink deletes only the pointer, never its (gitignored) target, and we stay unforced, so any *real* untracked or modified file still blocks the remove:
 
       ```bash
-      repo_root=$(git rev-parse --show-toplevel)
+      # The .gitignore owner is the PRIMARY checkout, so resolve it the way Step 1a
+      # does — `--show-toplevel` would name whichever worktree the runner is standing in.
+      main_root=$(cd "$(git rev-parse --git-common-dir)/.." && pwd -P)
       git -C "<worktree-path>" status --porcelain | while IFS= read -r line; do
         [[ "$line" == '?? '* ]] || continue           # untracked entries only
         entry=${line#'?? '}                           # `entry`, never `path` (zsh $PATH alias)
@@ -1465,7 +1602,7 @@ PY
           /*) : ;;
           *)  target=$(cd "<worktree-path>/$(dirname "$entry")" 2>/dev/null && cd "$(dirname "$target")" 2>/dev/null && printf '%s/%s' "$PWD" "$(basename "$target")") ;;
         esac
-        git -C "$repo_root" check-ignore -q "$target" 2>/dev/null && rm -f "<worktree-path>/$entry"
+        git -C "$main_root" check-ignore -q "$target" 2>/dev/null && rm -f "<worktree-path>/$entry"
       done
       git worktree remove <worktree-path>             # unforced
       ```
@@ -1798,7 +1935,7 @@ python3 sysop/scripts/validate_tasks.py
 
 **What this gate does and does not cover.** It validates `tasks/index.yml` only — `validate_tasks.py` has no knowledge of `review_tasks.md` whatsoever. A `review_tasks.md` conflict is resolved by reading both sides per the paragraph below and has **no automated gate**; do not let this step's green stand in for it. (Git does enforce one thing for free: `git -c core.editor=true rebase --continue` refuses while *any* conflicted path is unresolved, so a half-resolved commit is not reachable even though the two files are documented separately.)
 
-Write the stage extracts to `"${TMPDIR:-/tmp}"`, not the repo root — `"${TMPDIR:-/tmp}/sysop-ours.yml"` and `"${TMPDIR:-/tmp}/sysop-theirs.yml"` — and delete them when the resolution is written. Nothing in the shipped flow stages untracked files, so a repo-root scratch file is not committed; but Step 1a deliberately skips the main worktree, so one left behind is never surfaced and persists indefinitely. `${TMPDIR:-/tmp}` is the house convention (Phase 153 — `TMPDIR` is unset on most Linux shells, so the fallback is required and a drift guard enforces it) and removes the question.
+Write the stage extracts to `"${TMPDIR:-/tmp}"`, not the repo root — `"${TMPDIR:-/tmp}/sysop-ours.yml"` and `"${TMPDIR:-/tmp}/sysop-theirs.yml"` — and delete them when the resolution is written. Nothing in the shipped flow stages untracked files, so a repo-root scratch file is not committed; but Step 1a deliberately skips the primary checkout, so one left behind is never surfaced and persists indefinitely. `${TMPDIR:-/tmp}` is the house convention (Phase 153 — `TMPDIR` is unset on most Linux shells, so the fallback is required and a drift guard enforces it) and removes the question.
 
 #### When a branch really is skipped at 4a
 
@@ -1835,6 +1972,30 @@ Feature branches MAY modify `review_tasks.md` — typically as single-line task-
    **Zero commands on a doc-only assembled diff is a different case, and it reports rather than stops.** A consumer with no declared list and no armed surface has nothing for this gate to run and nothing to be asked about — halting every docs cycle after the merges would be a worse defect than the one above. Report it as `ran nothing` with the reason on Step 8's `Verification:` line; **never as `ran on <merge target>`**, which is what the line's earlier vocabulary forced, having offered only "ran" or "not reached". **Under `NO_ORIGIN_MAIN` neither of those two predicates is evaluable** — there is no changed-file list to hold a code file or not — so the full resolved list runs ungated per step 2, and if that list is empty because nothing was declared and no surface was detected, report `ran nothing: no origin/main, no declared list` and continue. Do not read an uncomputable scope as either a stop or a green. Everything Step 3 says about invocation still holds and is not restated: venv-aware re-invocation on `exit 127` / `ModuleNotFoundError`, the `!`-shell-escape route for a silently-denied command (never `AskUserQuestion`), and the read-only rule — no `pip install`, no state mutation, in a verification command.
 
    > **A command that could not be measured is neither a pass nor a failure — say so, and stop.** Every disposition above assumes the command *ran and answered*: it exited, and the exit code means something. A command killed by the Bash tool's timeout answers nothing. It gets no exit code you can read as a verdict — the harness reports the kill, not the program's own result — so the work it was checking is **unverified**, not verified-clean and not verified-broken. Report it on Step 8's `Verification:` line as `TIMEOUT: <command>` — deliberately the same token `/auto-fix` and `/auto-judge` put in their envelopes for the same event, so the three surfaces name one state one way — and then stop per item 4, because an assembled tree with an unmeasured gate is exactly what this step exists to refuse. **Do not silently re-run with a longer timeout and report the second result as the first**; raise the timeout, re-run, and report *that* it took two attempts. **Do not classify it as a failure either:** `failed` is a claim about the code, this is a claim about the measurement, and merging on one while reporting the other is how a green gate stops meaning anything. (The one shipped precedent agrees: `run_checks`'s accounting module classes its own subprocess timeout as `failed` and says why — *"work was lost, not declined"* — but it owns that subprocess and can tell a kill from an exit. This step does not.)
+
+3a. **Run the Sysop pre-scan on the merged tree** (`Q-353`) — the promoted checks, at the one gate that can refuse a merge:
+
+   ```bash
+   bash sysop/scripts/run_checks.sh --mode both --fail-on-blocking
+   ```
+
+   **This is a Sysop-owned gate and it is deliberately NOT a fourth entry in item 1's resolution chain.** That chain stops at the first source producing a list, so a project with a `## Pre-merge verification` section never reaches auto-detect — and a pre-scan offered as one more source would therefore be invisible to exactly the consumers who already authored that section — everyone who has been running Sysop — because `install.sh` never rewrites a consumer's `CLAUDE.md` at all: the `--update` sweep skips it explicitly as *"the consumer's, not Sysop's"*, and the installer only ever **appends** sections that are absent. (A stronger guarantee than Phase 24b's managed-path preservation, which is scoped to `scripts/*` and `scripts/hooks/*` and does not reach this file — an earlier draft cited 24b, right about the conclusion and wrong about the mechanism.) It runs **in addition to** the consumer's list, after it.
+
+   **What it closes.** `run_checks.sh` was invoked by `/codebase-review` Step 2b and `/security-audit` Step 2b and by nothing else, so the promoted checks — the `checks.yml` registry, the semgrep rules, the LSP and coverage stages this workflow exists to accumulate — ran only at **audit** time, which is after the branch that violated one has merged. The violation then surfaced on the next audit round as a new-vs-baseline finding, post-merge, at the gate `README.md` calls "the single human merge gate". The permission rules for this command have shipped in this skill's own allow-list and in `settings.json` the whole time; nothing bound them.
+
+   **Three dispositions, and only one is a stop:**
+
+   - **Exit 0** — **not automatically clean, and this is the disposition most likely to be reported wrong.** `--fail-on-blocking` keys on `failed` and on new blocking findings; it does **not** key on **`degraded`** — `run_checks/accounting.py`'s third status, *"ran, but over less than its declared inputs"*, which Phase 189 decided must not block. A run in which a `blocking: true` stage saw a fraction of its inputs exits **0** with zero findings, and a zero from a degraded stage is not a real zero. Read the accounting header before reporting: `pre-scan: clean` only when no blocking check is `degraded`; otherwise `pre-scan: clean, but N blocking checks degraded — <ids>`, and continue. **Not hypothetical** — the one consumer that enforced these checks at its merge gate before this step existed wrote a wrapper *because* `run_checks.sh --mode both --fail-on-blocking` exited 0 over sixteen degraded semgrep checks.
+   - **Non-zero** — read the accounting header before reporting, because `--fail-on-blocking` fails on **two different things** and Phase 135 exists to keep them apart (a third status, `degraded`, does not fail at all — see the Exit 0 arm above): a **new blocking finding** (a `blocking: true` check produced a finding not in `.claude/checks_baseline.txt`), or a **`failed` blocking stage** (the check's tool crashed, so a green gate over it would be a lie). Report which, with the check id: `pre-scan: FAILED — new blocking finding <check-id>` or `pre-scan: FAILED — blocking stage did not run: <check-id>`. Both stop, per item 4. They are not the same defect and must not be reported as one.
+   - **The environment cannot run it — a fourth arm, and its absence was a real gap** (the round's execution lens reproduced three shapes). `python3` on `PATH` without PyYAML exits **2** with `ERROR: run_checks requires PyYAML`; a partial `sysop/` install where the wrapper survives but `run_checks_impl.py` does not exits **2** with `can't open file`; a missing `.claude/checks.yml` exits **1** with `Error: … not found`. **None of these produces an accounting header or a check id**, so the non-zero arm above — which tells you to read the header and name the id — has no valid report shape for them, and the step forbids fabricating one. Recognise them by the absence of the `checks: N executed / N skipped / N failed` header: report `pre-scan: could not run — <the tool's own first error line>` and **continue**. This is an environment fault, not a verdict on the work, and halting an assembled close on one is the `TIMEOUT` mistake in a different costume — *"a claim about the measurement, not about the code."* Say plainly in Step 8 that the promoted checks did not run.
+
+   - **The script is absent** (`sysop/scripts/run_checks.sh` does not exist — a partial or pre-`sysop/`-namespace install) — report `pre-scan: skipped — sysop/scripts/run_checks.sh absent` and continue. **Never fabricate the scan or hand-roll a substitute**; a cautious agent that replaced this runner with its own grep once read **none** of a ~974-finding pre-scan, reporting **24** tasks where the reference cell reported **372** (Phase 136).
+
+   **De-duplication — does any resolved command REACH the pre-scan, directly or through a project wrapper?** If one does, this step does not run it again: report `pre-scan: ran via the consumer's list`. **A resolved command only counts if it can actually refuse.** `run_checks.sh` **without** `--fail-on-blocking` exits 0 on any finding, so a consumer whose `### Always` lists the bare form has a scan that reports and never blocks — and `install.sh`'s own post-install footer prescribes exactly `bash sysop/scripts/run_checks.sh  # smoke-test the check registry`, so this is the form a consumer is most likely to have copied. Treat a flagless invocation as **not** de-duplicating: run this step's own gated scan anyway and report `pre-scan: consumer's list runs an ungated scan — ran the gate as well`. **Ask that question, not "does a command contain the string `run_checks.sh`".** A name match is the obvious rule and it is wrong on the live case: the one consumer that already enforced these checks at its merge gate lists `bash scripts/run_checks_gated.sh --mode both --fail-on-blocking`, a **project-owned wrapper** around `sysop/scripts/run_checks.sh` written to add the `degraded` handling the flag does not do — so a name match sees no pre-scan and runs a **second whole-tree scan on every close**, the exact double payment this rule exists to prevent. When a resolved command is a project script you cannot classify by name, read it; one `grep -l run_checks` over the resolved commands' script files answers it. **Flags never enter the decision:** a consumer who wrote `--mode quality` narrowed the scan on purpose, and re-running at `--mode both` would overrule a choice `WORKFLOW.md` § 6.1 invites them to make.
+
+   **No doc-only skip here, and the filing that asked for one was wrong about the step it lands in.** `Q-353` proposed gating this "like Step 3's surface list so a doc-only close does not pay for a whole-tree scan". Item 3 above already refuses that reasoning for this pass, and it refuses it *harder* for a pre-scan than for a test suite: the extension test classes `checks.yml`, semgrep rule files and CI workflows as **documentation**, and those are precisely this scan's own inputs — so the one diff shape the proposed gate would skip includes every change that alters what the checks *are*. The cost is real and it is a whole-tree scan on every close; it is paid here rather than gambled.
+
+   **`NO_ORIGIN_MAIN` does not reach this step** — also contrary to the filing, which asked for that rule to be inherited. It governs a **range**, and this scan takes none: it reads the working tree and the baseline file. There is nothing here for an uncomputable diff scope to narrow, so there is nothing to fail open.
 
 4. **On failure, stop.** Nothing has been pushed, `close_batch.sh` has not run, and no pending-doc has been consumed. Report the failing command with its output. Recovery is per merge policy:
    - **`pr`** — the merges are on the merge target, unpushed. Fix the failure, then re-run `/review-close`: a `pr` run cuts a fresh integration branch from `origin/main` every time, so the abandoned one costs a `git branch -D` and nothing else. Under the PR-reuse shape there is no branch to abandon — the extra commits simply stay local until a later run pushes them.
@@ -1881,23 +2042,30 @@ run nothing, and **skip the landing gate below** — go straight to Step 4c. Run
 With a non-empty set:
 
 ```bash
-bash sysop/scripts/close_batch.sh <N1> <N2> <N3>
+# Substitute the merge target Step 4-pre recorded — the integration branch name
+# under `pr`, the approved branch under PR-reuse, `main` under `direct`. Write it
+# out as a LITERAL: Step 4-pre is a different fenced block and `"$MERGE_TARGET"`
+# is empty here (`WORKFLOW.md` § 8.2a *Persistence boundary*).
+bash sysop/scripts/close_batch.sh --merge-target "<merge target>" <N1> <N2> <N3>
 ```
 
 This script updates `review_tasks.md` on the checked-out branch (the merge target — it resolves the repo via `git rev-parse --show-toplevel`, so it commits to whatever branch is current): sets batch headers to `Merged`, marks task checkboxes `[x]`, updates the Statistics table, and adjusts the Grand Total counts. **One exception:** a task annotated `> Failed:` anywhere in its own block keeps its checkbox and is left out of both the flip and the counts. **The block is the task line plus the indented lines under it**, because `/codebase-review` and `/security-audit` emit a two-line task (checkbox + indented `file:line` + provenance) and the annotation lands below that — the one-line reading this sentence used to state was why the protection could not fire at all — a FAIL verdict means the work was attempted and not finished, so the batch closes as "shipped, minus these" (Phase 157). Expect the per-batch line to read `(3 tasks closed, 1 failed — still open)` when that happens. One commit is created for all closed batches.
 
-**Under `pr` policy's integration-branch shape you no longer need `--force` for the ancestry reason** (changed 2026-08-26, `Q-020`; the PR-reuse shape still does — see below). The script's gate used to be `git merge-base --is-ancestor <batch branch> main` against the literal `main`, while the merge it verifies lands in whatever branch is checked out — under `pr` that is the integration branch, cut from `origin/main`, and nothing reaches local `main` until Step 4d. A correctly-merged branch therefore always failed the check, so this step mandated `--force` on every `pr` close — which also silences the cherry-pick detection, disarming the gate for precisely the consumers it exists to protect. **An unmerged branch was indistinguishable from a merged one on the dominant path.**
+**`--merge-target` is not optional under `pr`, and `--force` is not its substitute** (Phase 248, `Q-308`). The gate asks whether the batch branch's work landed in what this close is landing. It used to answer that by INFERRING the target from `HEAD`, and that inference is unsound in both directions — **both defects were measured on fixtures built from this step's own commands, and both are now guarded by `tests/test_close_batch_merge_target.py`**:
 
-The gate now resolves against `HEAD` first, with `main` retained as a fallback, so it accepts everything it accepted before plus the `pr`-policy merges it was wrongly refusing. Run Step 4b **without** `--force` and let the gate answer.
+- **It accepted work that reaches nothing.** A branch cut FROM the batch branch, with its own commits on top, strictly contains the batch branch — so the gate printed `✓ verified merged` and flipped the header, while nothing established that `HEAD` reaches `main`. On Step 4a's **local-only (`--ff-only`) arm** — the common case in that step's own words — a legitimate integration branch and that scratch branch agree on **every** ancestry column a local check could consult, first-parent reachability included. (On the **published `--no-ff`** arm first-parent does separate them; a predicate right on one of Step 4a's two arms and wrong on the other is not a gate.) That is why the repair is to state the target rather than to narrow the test.
+- **It refused work that landed correctly, on the dominant path, every run.** Step 4a merges a local-only branch with `git merge --ff-only`, which moves the merge target **to the branch tip** — so the target and the branch share a SHA for the LAST branch merged, and for the ONLY branch of a single-branch cycle. Strict SHA containment skipped its arm there and `main` refused. **The two paragraphs previously here asserted the opposite** ("the gate passes with no `--force`", "measured"); the measurement behind that claim was taken on a fixture with an extra commit after the merge, which is not the shape this step produces.
 
-**The two Step 4-pre shapes differ here, and the round corrected this paragraph for claiming otherwise.** *Integration-branch shape:* Step 4a merges each batch branch into the integration branch, which is checked out here, so the batch branch is STRICTLY contained in `HEAD` and the gate passes with no `--force` (measured: `--is-ancestor … main` false, `… HEAD` true, on the same fixture). *PR-reuse shape:* `HEAD` **is** the approved branch, so containment is trivially true and therefore says nothing — the gate requires STRICT containment for exactly that reason, and **reuse still needs `--force`.** An earlier draft of this paragraph claimed both shapes were covered; the round reproduced the consequence — checked out on an unmerged batch branch, the gate printed `✓ verified merged` and flipped the header. Before the PR squashes there is no ancestry evidence that the work landed, which is what Step 6 already says in its own words: *"After a squash there is no ancestry-shaped containment test."*
+So the target is now something you **state**, and `HEAD` is never read for it. Pass the literal Step 4-pre recorded. Identity between target and branch is compared by resolved **ref name**, not by SHA: after an ff-merge they legitimately share a SHA while being different refs, and standing on the unmerged branch itself they are the same ref.
 
-> **If a batch skips with `unmerged`, that is now a real verdict — read it before overriding it.** Under `pr` policy it means the batch branch is an ancestor of neither the checked-out merge target nor `main`, i.e. Step 4a did not merge it. Fix that rather than forcing past it. The one legitimate override is below: work that reached the target by **cherry-pick** rather than merge is genuinely not an ancestor, and `--force` is its documented escape.
+**What each Step 4-pre shape passes.** The gate itself is still `git merge-base --is-ancestor <batch branch> <merge target>`; what changed is where the second operand comes from, and that identity is checked by ref name before it runs. *Integration-branch shape:* `--merge-target <integration branch>`; the gate accepts every branch Step 4a merged, ff or `--no-ff`, and you **no longer need `--force` for the ancestry reason**. *PR-reuse shape:* the merge target **is** the one approved branch, so target and branch resolve to the same ref, the target arm is withheld, and **reuse still needs `--force`** — before the PR squashes there is genuinely no ancestry evidence that the work landed, which is what Step 6 says in its own words: *"After a squash there is no ancestry-shaped containment test."* *`direct`:* the target is `main`, which is also what the script resolves on its own from `§ Merge policy`, so the flag is redundant there — pass it anyway for one shape at both policies.
+
+> **If a batch skips with `unmerged`, that is a real verdict — read it before overriding it.** It means the batch branch is an ancestor of neither the stated merge target nor `main`, i.e. Step 4a did not merge it. Fix that rather than forcing past it. **If the script reports `merge target: UNRESOLVED`, you omitted the flag under `pr` policy** — that is not a reason to reach for `--force`, which would disarm the cherry-pick detection for every batch in the run; supply the target. The one legitimate override is below: work that reached the target by **cherry-pick** rather than merge is genuinely not an ancestor, and `--force` is its documented escape.
 
 If any branches were cherry-picked instead of rebased+merged (e.g., because worktree removal wasn't possible), use `--force` to skip the merge-base ancestry check:
 
 ```bash
-bash sysop/scripts/close_batch.sh --force <N1> <N2> <N3>
+bash sysop/scripts/close_batch.sh --force --merge-target "<merge target>" <N1> <N2> <N3>
 ```
 
 **Verify the close-batch commit landed before proceeding — non-empty batch set only.** The script wraps its `git commit` in explicit failure handling (Phase 33 / BeanRider ISSUE-0015), but trust-but-verify: confirm a `docs: close Batch …` commit is the new tip and the working tree is clean before continuing to Step 4c. **If the batch set was empty this gate does not apply and was already skipped above** — it asserts the result of a command this cycle correctly did not run, so reaching it with no batches is a reading error, not a failed close.
@@ -1910,7 +2078,7 @@ If the check fails **on a non-empty batch set** (no `docs: close Batch …` tip,
 
 1. **Re-run the script** with the same batch list — the rerun is idempotent for review_tasks.md (sed substitutions are no-ops on already-Merged batches) and will re-attempt the commit:
    ```bash
-   bash sysop/scripts/close_batch.sh <N1> <N2> <N3> 2>&1
+   bash sysop/scripts/close_batch.sh --merge-target "<merge target>" <N1> <N2> <N3> 2>&1
    ```
    Read the full output in the tool result — a missing terminal line is then unambiguously visible. **Do not pipe it through `tee`** (this step used to, into a bare `/tmp` path): `|` is a documented separator, so the tail becomes its own invocation, `tee` is not in the harness's read-only set and binds no shipped rule, and the prompt lands *after* the close has already run.
 
@@ -2527,7 +2695,7 @@ Skip this step only if the pushed changes are docs/config only with no code or s
   git diff --quiet HEAD -- && echo "CLEAN — safe to reset" || echo "DIRTY — STOP, see below"
   ```
 
-  **If that printed `DIRTY`, do not run the reset.** Report the file list (`git status --porcelain --untracked-files=no`) and ask the user to commit or stash. **Resume at this gate, not at the top of the skill** — the PR has already merged by this point, so nothing before Step 6 may be repeated: re-run `git diff --quiet HEAD --`, and continue from the reset when it reports `CLEAN`. (Do not re-enter at Step 4-pre. Its PR-reuse probe requires `origin/main..main` to be empty, which is false here by construction — local `main` still carries the pre-merge commits the reset exists to discard.) **Do not stash on their behalf** — a stash this skill creates is consumed by no later step, so it converts a visible refusal into work parked where nobody looks. Two reasons the gate belongs *here* rather than at Step 1: Step 1a's `dirty` classifier never covers this checkout (it excludes the worktree whose branch is `main`), and Step 5's staging-deploy wait is a long idle window — exactly when a human is most likely to have edits open, so a Step 1 reading would already be stale.
+  **If that printed `DIRTY`, do not run the reset.** Report the file list (`git status --porcelain --untracked-files=no`) and ask the user to commit or stash. **Resume at this gate, not at the top of the skill** — the PR has already merged by this point, so nothing before Step 6 may be repeated: re-run `git diff --quiet HEAD --`, and continue from the reset when it reports `CLEAN`. (Do not re-enter at Step 4-pre. Its PR-reuse probe requires `origin/main..main` to be empty, which is false here by construction — local `main` still carries the pre-merge commits the reset exists to discard.) **Do not stash on their behalf** — a stash this skill creates is consumed by no later step, so it converts a visible refusal into work parked where nobody looks. Two reasons the gate belongs *here* rather than at Step 1: Step 1a's `dirty` classifier never covers this checkout (it excludes the primary checkout by path identity, whatever branch that checkout holds), and Step 5's staging-deploy wait is a long idle window — exactly when a human is most likely to have edits open, so a Step 1 reading would already be stale.
 
   > **Narrower than the shipped convention, deliberately.** Both shipped maps name `git reset --hard` by name: `convention_map.md` § *Destructive command gating* requires it "be preceded by an explicit 'ask the user to confirm' instruction in the skill text", and `security_map.md` § *Confirmation gates on destructive operations* requires "an explicit confirmation step in the skill text". This gate confirms *conditionally* — it refuses only when the reset would actually destroy something — because the reset is either a no-op or a load-bearing re-sync (see the both-shapes note below), so an unconditional prompt would land on every close of the dominant `pr` path and buy nothing in the clean case. The conventions' purpose is met; their literal reading is not. Stated rather than silently narrowed.
 
@@ -2653,10 +2821,25 @@ Verification:  pre-merge <ran | skipped: doc-only | skipped: no changed-file lis
                                       | TIMEOUT: <command> — killed, so it returned no
                                         verdict. The tree is UNVERIFIED: neither passed
                                         nor failed, and never folded into "ran N commands".>
+               pre-scan <clean | clean, but N blocking checks degraded — <ids>
+                         | ran via the consumer's list
+                         | skipped: sysop/scripts/run_checks.sh absent
+                         | could not run — <tool's own first error line>
+                         | FAILED — new blocking finding <check-id>
+                         | FAILED — blocking stage did not run: <check-id>>
+                        — 4a-post item 3a. A separate element because it is a
+                        separate gate: the merged-tree element above reports the
+                        CONSUMER's declared list, this one reports the promoted
+                        checks, and folding them would lose which of the two refused.
                <per-surface skips, e.g. "skipped frontend — not in this run's changed files">
 Unverified surfaces: <changed code files no detected surface claimed> (or "none")
-Conventions:   <N checked, N skipped (doc-only)> (or "none to check")
-Test decisions: <N verified, N waived, N held-for-fix, N unreadable, N doc-only> (or "none to verify")
+Conventions:   <N checked, N skipped (doc-only)> (or "none to check") — Step 2b step 3
+Security map:  <N checked, N skipped (no map match)> (or "none to check") — Step 2b
+               step 3b. Its own line, never folded into `Conventions:` above: a
+               cycle where every target skipped the security twin and every
+               target passed the convention check would otherwise read exactly
+               like one where both fleets ran and both approved.
+Test decisions: <N verified, N waived, N not-owed, N held-for-fix, N unreadable, N doc-only> (or "none to verify")
 Orchestrator artifacts: <Step 2e's per-branch block, verbatim> (or "none — no branch
                under review resolved to a claim"). Distinct from `Claim artifacts:`
                below, which is Step 4c's REMOVAL tally: this line is Step 2e's

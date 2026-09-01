@@ -65,7 +65,8 @@ def test_the_conventions_paste_requirement_carries_no_escape_clause():
     """Same shape: the verbatim requirement kept, and *"a condensed summary of the
     subsection headings is acceptable"* appended. Green, and the requirement gone."""
     flat = _flat(_body())
-    i = flat.index("paste the full ## Prevention Conventions section")
+    # Re-pointed by `Q-342` (widened paste); same anchor role, new opening words.
+    i = flat.index("paste EVERY section in step 1's convention-bearing set")
     window = flat[i:i + 700]
     for escape in ("condensed", "summary of the subsection", "is acceptable",
                    "abbreviated", "you may omit"):
@@ -228,7 +229,14 @@ def test_the_do_not_mutate_paragraph_still_gives_a_retrieval_route():
 
 def test_the_prompt_still_pastes_the_conventions_section_verbatim():
     """The threshold is about the diff. Nothing here weakens the requirement that the
-    agent routes against the project's own conventions text, unfiltered."""
+    agent routes against the project's own conventions text, unfiltered.
+
+    Re-pointed by `Q-342` (widened paste). The requirement it guards is the same
+    one and now covers more: every section in the rule-bearing set, verbatim,
+    each under its own heading.
+    """
     flat = _flat(_body())
-    assert ("paste the full ## Prevention Conventions section from CLAUDE.md verbatim, "
-            "including every subsection — do not pre-filter or rename subsections") in flat
+    assert ("paste EVERY section in step 1's convention-bearing set from CLAUDE.md "
+            "verbatim — each under its own original `## <name>` heading, including "
+            "every subsection. Do not pre-filter, merge or rename sections or "
+            "subsections") in flat

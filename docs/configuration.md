@@ -131,7 +131,7 @@ served:
 
 ### Spending less
 
-There is no cheap lever hiding in the default map. `mechanical` already resolves to Sonnet and `quick` to Haiku — they are not the expensive part — and they barely govern anything: on a full install they carry 2 of the 32 pins in the skills tree, and the other 30 are `reasoning`. **On a loop-mode install they carry none at all**, because loop mode does not ship `/auto-fix` or `/next-task`, which are the only skills that use them; all 8 pins a loop install carries are `reasoning`.
+There is no cheap lever hiding in the default map. `mechanical` already resolves to Sonnet and `quick` to Haiku — they are not the expensive part — and they barely govern anything: on a full install they carry 2 of the 33 pins in the skills tree, and the other 31 are `reasoning`. **On a loop-mode install they carry none at all**, because loop mode does not ship `/auto-fix` or `/next-task`, which are the only skills that use them; all 8 pins a loop install carries are `reasoning`.
 
 Either way the only lever with real money behind it is `reasoning` itself — which is also the role that runs adversarial review, judging, and execution. Sysop ships it conservative on purpose and does not recommend a blanket downgrade.
 
