@@ -172,9 +172,9 @@ CITATION_ANCHORS = {
         'TASKS_FILE = os.path.join(REPO_ROOT, "review_tasks.md")',
     ("core/companion/scripts/cleanup_worktrees.sh", "claim_task.sh:208-211"):
         "cannot resolve canonical",
-    ("core/companion/scripts/cleanup_worktrees.sh", "batch_work.sh:1236"):
+    ("core/companion/scripts/cleanup_worktrees.sh", "batch_work.sh:1285"):
         "cd ${WORKTREE_DIR}",
-    ("core/companion/scripts/cleanup_worktrees.sh", "batch_work.sh:1241"):
+    ("core/companion/scripts/cleanup_worktrees.sh", "batch_work.sh:1290"):
         "cleanup_worktrees.sh --clean",
     ("core/companion/scripts/claim_task.sh", "self_check.sh:77-85"):
         "then verify PyYAML on THAT interpreter",
@@ -197,8 +197,14 @@ CITATION_ANCHORS = {
     # Anchored on the rule's CONSEQUENCE clause, not on "NOT an exit-code
     # change" — that phrase also appears in the sentence doing the citing, so it
     # resolved to two lines and the staleness check could not tell them apart.
-    ("core/companion/scripts/close_batch.sh", "close_batch.sh:1231-1240"):
-        "diagnoses failure by commit absence",
+    #
+    # Phase 248 RETIRED the `close_batch.sh:<lines>` self-citation that sat here.
+    # It drifted three times inside one phase — twice from the phase's own edits
+    # and once from its round's fixes — and each repair was arithmetic on the
+    # previous number, which is how it inherited an off-by-5 nobody noticed. The
+    # prose now names the section ("the § Summary counters below") instead, so
+    # there is no coordinate to go stale. A citation that needs re-deriving on
+    # every edit to its own file is a citation that should not carry a line.
     # Phase 211: the duplicate-refusal comment used to assert that no shipped
     # skill derives the next batch number. These two are the only writers of
     # `### Batch` headers in the tree and both do, file-globally, which is why

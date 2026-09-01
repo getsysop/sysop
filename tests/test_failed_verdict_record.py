@@ -341,10 +341,18 @@ def test_workflow_close_step_names_the_exclusion():
     # WORKFLOW.md § 2.8's close step is where a human reads what close_batch.sh
     # will do to the boxes. The round deleted the exclusion clause here with the
     # whole suite green.
-    line = next(
+    # Anchored on the script name plus the first operand placeholder, with the
+    # flags between them free. Phase 248 inserted `--merge-target <merge target>`
+    # there, which a literal `close_batch.sh <N1>` could not survive.
+    lines = [
         l for l in WORKFLOW.read_text(encoding="utf-8").splitlines()
-        if "close_batch.sh <N1>" in l
+        if "close_batch.sh" in l and "<N1>" in l
+    ]
+    assert len(lines) == 1, (
+        f"§ 2.8's close step no longer carries exactly one close_batch.sh "
+        f"invocation line (found {len(lines)})"
     )
+    line = lines[0]
     assert MARKER in line, (
         "WORKFLOW.md's close step no longer says that `> Failed:` tasks stay "
         "open — it describes the flip as unconditional, which it is not"

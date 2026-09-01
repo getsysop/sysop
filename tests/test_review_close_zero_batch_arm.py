@@ -602,9 +602,18 @@ def test_the_workflow_scripts_table_names_the_batch_half_of_the_reaping():
     Phase 236 a `BATCH-<N>` marker was removed by nothing at all.
     """
     text = (REPO_ROOT / "core/companion/docs/WORKFLOW.md").read_text(encoding="utf-8")
-    row = next((ln for ln in text.splitlines()
-                if ln.startswith("| `close_batch.sh <N>")), None)
-    assert row, "§ 8.4's close_batch.sh row is gone or reshaped past this anchor"
+    # Anchored on the row's SCRIPT NAME, not on its argument list. Phase 248
+    # added `--merge-target` to the signature and this anchor went to
+    # StopIteration -- a guard that dies when the thing it guards is edited
+    # legitimately is the fragile axis, and it is the axis that gets guards
+    # deleted. The invariant below is unchanged and is what does the work.
+    rows = [ln for ln in text.splitlines()
+            if ln.startswith("| `close_batch.sh ")]
+    assert len(rows) == 1, (
+        f"§ 8.4's close_batch.sh row is gone, duplicated, or reshaped past this "
+        f"anchor (found {len(rows)})"
+    )
+    row = rows[0]
     assert "remove_claim_artifacts()" in row and "not** call" not in row \
             and "does **not**" not in row, (
         "§ 8.4's close_batch.sh row no longer names remove_claim_artifacts() — the "

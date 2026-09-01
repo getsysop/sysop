@@ -1010,3 +1010,82 @@ def test_step_5_invokes_the_history_scan_script():
         "from the source repo; the step would fail at the point an operator runs "
         "it, which is the worst moment to discover it"
     )
+
+
+def test_every_step_that_needs_the_source_repo_says_so_before_using_it():
+    """Phase 250 — the page's oldest defect, generalized past its fourth instance.
+
+    Steps 4, 5 and 6 each move the operator's working directory: step 4 ends in
+    the BUILD dir, step 6 opens with its own ``cd "$SMOKE"``. The mirror strips
+    ``tools/``, so any *relative* ``tools/…`` invocation after step 4 resolves to
+    nothing — which is what step 5 did until this test: ``exit 127`` from the only
+    gate the project has on commit identity, at the point an operator runs it.
+
+    This asserts the property rather than the one instance. Three earlier
+    instances of the same class are recorded on the page itself (``$PY`` used
+    above its assignment, ``rm -rf`` documented after the step that needs it, the
+    tester-push form), and each was fixed one site at a time.
+    """
+    text = _runbook()
+    # Numbered steps AND the `## Refreshing` section, which is the entry point for
+    # every cut after the first and whose own last line leaves the operator in the
+    # build dir. Treating it as part of step 11 — which an "until the next step or
+    # EOF" walk does — reports the right defect under the wrong name, and the name
+    # is what a reader chases.
+    marks = [(m.start(), m.group(1)) for m in re.finditer(r"^(\d+)\. \*\*", text, re.M)]
+    marks += [(m.start(), m.group(1)) for m in re.finditer(r"^## (\w+)", text, re.M)]
+    marks.sort()
+    assert marks, "the runbook has no numbered steps"
+    # The operator's working directory only leaves the source repo at step 4, whose
+    # own block ends with `cd /tmp/wf-tester`. So the threshold is positional, not a
+    # named allow-list: everything BEFORE step 5 is read with the source repo as CWD
+    # and needs no `cd`; everything after it — numbered step or `## ` section alike —
+    # does. Naming the sections instead (the first version allow-listed only
+    # `## Refreshing`) left a new section with a procedure in it unscrutinised, which
+    # is what Phase 250's round-2 lens demonstrated with a `## Rehearsal`.
+    _fifth = [pos for pos, nm in marks if nm.isdigit() and int(nm) >= 5]
+    assert _fifth, "the runbook no longer has a step 5; this guard's threshold is gone"
+    threshold = min(_fifth)
+    offenders = []
+    for i, (start, name) in enumerate(marks):
+        if start < threshold:
+            continue
+        end = marks[i + 1][0] if i + 1 < len(marks) else len(text)
+        block = text[start:end]
+        n = name
+        # ANY fenced block, not just ```bash. Phase 250's round-2 lens retagged
+        # step 5's fence as ```sh and the guard went blind — the population was
+        # exactly the two sites already fixed.
+        for fence in re.findall(r"```[a-zA-Z]*\n(.*?)```", block, re.S):
+            uses = []
+            for ln in fence.splitlines():
+                if ln.lstrip().startswith("#"):
+                    continue
+                # `tools/x.sh`, `./tools/x.sh` and `$SRC/tools/x.sh` are the same
+                # invocation from the operator's point of view. The first version
+                # excluded the last two with a lookbehind, which is two of the
+                # four escapes the lens drove through.
+                if re.search(r'''(?:^|[\s"'(=])(?:\./|\$\{?\w+\}?/)?tools/[\w.-]+\.(?:sh|py)''', ln):
+                    uses.append(ln)
+            if not uses:
+                continue
+            # EVERY use, not just the first: a block may `cd` correctly, then
+            # `cd` away, then invoke again — which is the Refreshing block's own
+            # shape. Track the working directory across the fence.
+            at_source = False
+            for ln in fence.splitlines():
+                stripped = ln.strip()
+                if stripped.startswith("#"):
+                    continue
+                if re.match(r"(cd|pushd)\s+\S*<\s*(the\s+)?source repo\s*>", stripped):
+                    at_source = True
+                elif re.match(r"(cd|pushd)\s+\S", stripped):
+                    at_source = False
+                if ln in uses and not at_source:
+                    offenders.append((n, stripped))
+    assert offenders == [], (
+        "these steps invoke a relative tools/ path with no `cd <source repo>` "
+        "above it in the same block. After step 4 the operator is in the BUILD "
+        "dir, where tools/ does not exist, so the command is `command not "
+        f"found`:\n{offenders}"
+    )

@@ -997,21 +997,47 @@ def test_the_skill_no_longer_contradicts_the_shipped_template():
         "premise gone: WORKFLOW § 6.1 no longer lists `## Testing Patterns` as its "
         "own required section — re-derive Q-328 before trusting this module"
     )
-    para = _paragraph_containing(_skill(), "subsection names vary by project")
-    # Scope to the whole parenthetical, not to the first `).` — the round showed an
-    # earlier `).` truncates the slice and lets the example be re-added outside it,
-    # reopening exactly the template contradiction Q-328 closed.
-    depth, start_i, span = 0, para.index("(every subsection"), None
-    for i in range(start_i, len(para)):
-        if para[i] == "(":
-            depth += 1
-        elif para[i] == ")":
-            depth -= 1
-            if depth == 0:
-                span = para[start_i:i + 1]
-                break
-    assert span, "the subsection parenthetical is gone or unbalanced"
-    assert "Testing Patterns" not in span, (
+    # `Q-342` REMOVED the parenthetical this test used to scan. That change makes
+    # the guarded property unreachable by the old route and TRUE by a stronger one:
+    # step 1 no longer offers a subsection list at all, because it now pastes
+    # `## Testing Patterns` as the sibling top-level section § 6.1 says it is.
+    # Re-pointed rather than deleted -- a removed guard leaves a roster that reads
+    # as coverage (Phase 204).
+    skill = _skill()
+    assert "The set is `## Prevention Conventions` + `## Testing Patterns`" in skill, (
+        "step 1 no longer names Testing Patterns as a member of the pasted set -- "
+        "Q-328's contradiction is reopened from the other side"
+    )
+    # Scope to the EXAMPLES sentence only. `Q-342` made the surrounding paragraph
+    # name `## Testing Patterns` legitimately -- as the sibling top-level section
+    # it is -- so a whole-paragraph scan now reports the fix as the defect. What
+    # must stay true is narrower and is the actual Q-328 property: it is never
+    # offered as one of the SUBSECTION examples.
+    #
+    # ⚠ The FIRST re-point of this test used a fixed two-anchor window
+    # (`Subsection names…` .. `**The set is`) and that was a NET WEAKENING, caught
+    # by Phase 247's round. The scan it replaced was balanced-delimiter for a
+    # reason an earlier round had already established -- "an earlier `).` truncates
+    # the slice and lets the example be re-added outside it" -- and a fixed window
+    # has the identical hole one clause further out: the round re-added the example
+    # immediately after the bolded set sentence and walked straight through. The
+    # span therefore covers the examples sentence AND the set sentence that follows.
+    para = _paragraph_containing(skill, "Subsection names vary by project")
+    start = para.index("Subsection names vary by project")
+    set_at = para.index("**The set is", start)
+    close = para.index("**", set_at + len("**The set is"))
+    tail = para[close:]
+    end = close + (tail.index(". ") + 2 if ". " in tail else len(tail))
+    span = para[start:end]
+    # Not "the string is absent" -- `Q-342` makes the widened span name it
+    # legitimately, as `## Testing Patterns`, the sibling top-level section § 6.1
+    # says it is. The Q-328 property is that it never appears as a BARE subsection
+    # name: every occurrence in this span must carry its `## ` heading marker.
+    bare = [
+        i for i in range(len(span))
+        if span.startswith("Testing Patterns", i) and not span[:i].endswith("## ")
+    ]
+    assert not bare, (
         "`Testing Patterns` is offered as a subsection of Prevention Conventions "
         "again, contradicting WORKFLOW § 6.1's required-sections table"
     )

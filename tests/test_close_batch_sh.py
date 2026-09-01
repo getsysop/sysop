@@ -201,12 +201,18 @@ class TestMergeVerification:
         repo = self._repo_with_unmerged_branch(tmp_path)
         r = _run(repo, "7")
         assert r.returncode == 0, r.stderr
-        # Phase 233: the predicate is HEAD-first with `main` as a fallback, so the
-        # message names both. Asserted on the VERDICT plus the target words, not on
-        # the old sentence -- pinning the prose would make a correct widening read
-        # as a regression.
+        # Asserted on the VERDICT, not on the sentence. Phase 248 re-pointed this
+        # off the literal word "HEAD": the gate no longer infers its target from
+        # HEAD at all (`Q-308`), so pinning that word would have made a correct
+        # repair read as a regression -- the exact failure this assertion's own
+        # earlier note warned about, arriving one phase later.
+        #
+        # The provenance line is asserted POSITIONALLY: this fixture declares no
+        # `## Merge policy`, so it is a `direct` consumer and the target must be
+        # `main` named as coming from the policy. A bare `"main" in stdout` would
+        # be satisfied by half a dozen unrelated lines.
         assert "is NOT merged into" in r.stdout, r.stdout
-        assert "HEAD" in r.stdout and "main" in r.stdout, r.stdout
+        assert "merge target: 'main' (§ Merge policy: direct)" in r.stdout, r.stdout
         assert "7:unmerged" in r.stdout
         # Skipped → file untouched.
         assert "`Review Ready`" in (repo / "review_tasks.md").read_text()
@@ -691,14 +697,24 @@ _PR_TASKS = """\
 """
 
 
-def _pr_shaped_repo(root, *, merge_the_branch: bool):
+def _pr_shaped_repo(root, *, merge_the_branch: bool, policy: "str | None" = "pr"):
     """The `pr`-policy shape: an integration branch cut from `main`, with the
     batch branch merged into IT rather than into `main`.
 
     `merge_the_branch=False` is the case the gate exists to catch -- a branch
     that reached nothing at all.
+
+    `policy` writes `<repo>/CLAUDE.md § Merge policy` (Phase 248, `Q-308`). It is
+    a real input now: the gate resolves its merge target from the policy when no
+    `--merge-target` operand is given, so a fixture that omits the section is a
+    `direct` consumer and is verified against `main`. Pass `policy=None` to build
+    that (default) consumer deliberately.
     """
     repo = _repo(root, _PR_TASKS)
+    if policy is not None:
+        (root / "CLAUDE.md").write_text(f"# Fixture\n\n## Merge policy\n\n{policy}\n")
+        _git(root, "add", "-A")
+        _git(root, "commit", "-qm", "declare merge policy")
     _git(repo, "checkout", "-qb", "feat/one")
     (repo / "w.txt").write_text("work\n")
     _git(repo, "add", "-A")
@@ -726,7 +742,7 @@ def test_a_branch_merged_into_the_integration_branch_is_accepted(tmp_path):
         "predicate would have accepted it and this test measures nothing"
     )
 
-    r = _run(repo, "1")
+    r = _run(repo, "--merge-target", "review/integration-1", "1")
 
     assert r.returncode == 0, r.stderr
     text = (repo / "review_tasks.md").read_text()
@@ -751,7 +767,14 @@ def test_a_branch_merged_nowhere_is_still_refused(tmp_path):
     before = (repo / "review_tasks.md").read_text()
     head_before = _head(repo)
 
-    r = _run(repo, "1")
+    # The target is STATED, because otherwise this test went inert without
+    # saying so (Phase 248's round, guards lens). When `_pr_shaped_repo` gained
+    # `policy="pr"` as its default, a flagless run here stopped resolving a
+    # target at all — so the target arm never ran and only the `main` fallback
+    # was exercised, while the docstring still claimed to be testing that
+    # "widening the target must not turn the gate off". A fixture change silently
+    # narrowed what the test covers; naming the target restores it.
+    r = _run(repo, "--merge-target", "review/integration-1", "1")
 
     assert r.returncode == 0, r.stderr
     assert "NOT merged" in r.stdout, (
@@ -852,7 +875,7 @@ def test_the_remote_arm_is_widened_too_not_just_the_local_one(tmp_path):
          "refs/remotes/origin/feat/one"],
     ).returncode == 0, "fixture is wrong: no remote ref, so neither arm runs"
 
-    r = _run(repo, "1")
+    r = _run(repo, "--merge-target", "review/integration-1", "1")
 
     assert r.returncode == 0, r.stderr
     assert "1:unmerged" not in r.stdout, (
@@ -939,7 +962,7 @@ def test_a_genuine_integration_merge_is_still_accepted(tmp_path):
     _git(repo, "checkout", "-qb", "review/integration-1")
     _git(repo, "merge", "-q", "--no-ff", "feat/one", "-m", "merge feat/one")
 
-    r = _run(repo, "1")
+    r = _run(repo, "--merge-target", "review/integration-1", "1")
 
     assert "verified merged" in r.stdout, (
         f"strict containment refused a genuine integration merge.\n{r.stdout}"

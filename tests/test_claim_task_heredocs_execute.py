@@ -108,7 +108,7 @@ def heredocs() -> dict[str, tuple[str, str]]:
     out = {}
     for needle in ("MOVED_PRIOR_ENVELOPES", "classified_by", '"parked"',
                    "planner-integrity", "RESUME_OK", "executor_status",
-                   "strip_sections", "plan-only.md"):
+                   "strip_sections", "plan-only.md", "NOT ON BRANCH"):
         matches = [(a, b) for a, b in found if needle in b]
         assert len(matches) == 1, (
             f"expected exactly one prescribed block containing {needle!r}, found "
@@ -311,12 +311,35 @@ def test_an_unsubstituted_placeholder_is_refused_not_materialised(repo):
     """Quoting alone does not make one loud in a block that CREATES its path — it
     would quietly become a directory of that literal name."""
     main, _ = repo
-    for needle in ("MOVED_PRIOR_ENVELOPES", "classified_by", '"parked"'):
+    for needle in ("MOVED_PRIOR_ENVELOPES", "classified_by", '"parked"', "NOT ON BRANCH"):
         arg_spec, body = heredocs()[needle]
         r = subprocess.run(["bash", "-c", f"python3 - <<'PY' {arg_spec}\n{body}\nPY\n"],
                            cwd=main, capture_output=True, text=True)
         assert r.returncode == 2, f"{needle} accepted an unsubstituted placeholder"
     assert not (main / "sysop/runtime/claim/<CLAIM_ID>").exists()
+
+
+def test_the_test_decision_readback_runs_from_the_main_checkout(repo):
+    """Phase 249 (`Q-369`), Step 8's branch-tip read-back. This module's invariant is
+    that a prescribed block RUNS as written; the six outcomes it distinguishes are
+    covered by `tests/test_test_decision_readback.py`. Both matter — a block can be
+    behaviourally correct and still be unrunnable from the CWD its caller occupies,
+    which is the failure this module exists for."""
+    main, _ = repo
+    _mint(main)
+    (main / "tasks" / "open").mkdir(parents=True, exist_ok=True)
+    (main / "tasks" / "open" / "TECH-0007.md").write_text(
+        "# TECH-0007\n\n## Test decision\ntest tests/test_x.py::test_y proves it\n",
+        encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=main, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-qm", "body"], cwd=main, check=True, capture_output=True)
+    branch = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=main,
+                            capture_output=True, text=True, check=True).stdout.strip()
+    r = run_block("NOT ON BRANCH",
+                  {**IDS, "<BRANCH_NAME>": branch,
+                   "<BODY_PATH_AS_RESOLVED>": "tasks/open/TECH-0007.md"}, main)
+    assert r.returncode == 0, (r.returncode, r.stdout, r.stderr)
+    assert "record present" in r.stdout, r.stdout
 
 
 def test_an_uncommitted_gitignore_entry_is_honoured(repo):

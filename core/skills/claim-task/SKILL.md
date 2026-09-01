@@ -1069,6 +1069,8 @@ You are implementing `<CLAIM_ID>`. The orchestrator has already claimed the work
 
 **Working directory:** `<WORKTREE_PATH>` (cd here first; do not run from the project root or any sibling worktree).
 
+**The task body is at `<WORKTREE_PATH>/<BODY_PATH_AS_RESOLVED>`** — the repo-root-relative path the orchestrator resolved at Step 2, substituted into this prompt like every other placeholder. Sequence item 3 writes it and reads it back, so it is named here rather than left to be inferred from the plan.
+
 Read your three inputs from disk rather than from this prompt: `<ARTIFACT_DIR>/plan.md`, `<ARTIFACT_DIR>/review.md`, `<ARTIFACT_DIR>/classification.md`. `<ARTIFACT_DIR>` is an **absolute path in the main checkout, outside your worktree** — read it as given, and do not include it in your commit.
 
 ### Sequence
@@ -1076,8 +1078,20 @@ Read your three inputs from disk rather than from this prompt: `<ARTIFACT_DIR>/p
 1. **Absorb the classification.** For each `fixable` finding, apply its recorded `response` to the plan as you implement. Where a finding was rejected, its rationale is in `classification.md` — do not silently re-litigate it.
 2. **Implement** per the plan. Re-open the files it touches; do not rely on its summaries.
 3. **Persist the `## Test decision`** section into the task's body file, per the plan's step for it. **Write the worktree copy** (`<WORKTREE_PATH>/tasks/…`), never the main checkout's — an edit there is on no branch, so it never reaches the PR, and `/review-close` Step 2d reads this record at the branch tip. **If the plan's step names a main-checkout path, correct it and note the correction** rather than following it. The one exception is a body that is untracked in the main checkout (`/add-task` filed it and nobody committed it): it is on no branch and cannot be put on one, so write the main-checkout copy and **say so in your final message** — that record will not reach the PR and the body needs committing before `/review-close` runs.
-4. **Post-fix convention verification.** `git diff --name-only main...HEAD`; for each changed file look up its section in `.claude/convention_map.md` and scan the **new/changed lines** — not just the original task locations — against those conventions. Common regressions: `fetch()` without `encodeURIComponent()` on dynamic path segments; `str(e)` exposed to API responses; moved code that dropped `_sanitize_log()` wrappers; `useCallback` with incomplete dependency arrays; SELECT queries on a write-only engine. Fix regressions before committing.
-5. **Run the consumer's pre-merge verification gates.** `<project>/CLAUDE.md § Pre-merge verification` may carry `### Always` (full-tree commands) and `### Ratchet (changed files only)`. Run the commands under each subsection present. If both are absent, skip — `/review-close` will run any project-side verification at merge time (its `4a-post` step, on the merged tree). Note the division of labour: this run verifies **this branch in its own worktree** — so when the consumer ships no `## Pre-merge verification` section and this step skips, *nothing* verifies the branch in isolation; `4a-post` verifies the **assembled** result and cannot substitute for it. Treat a non-zero exit like an implementation finding — fix the cause, do not silence it without a justified inline `# type: ignore[...]` or `// eslint-disable-next-line <rule> -- <reason>`.
+
+   **Then read it back, before you go on.** This write is skipped more often than any other step in this sequence — measured on one consumer cycle at **three of four branches**, all claimed the same day through this path, two of them shipping substantial tests. So it is a missing *record*, not missing coverage, and nothing downstream catches it in time: the validator's warn-only invariant on this fact was retired (it read the working tree, where the record does not live), leaving `/review-close` Step 2d as the only enforcement — at the merge, after implementation, where the sole dispositions are waive it or hold otherwise-ready work. The record is cheap here and expensive there. Confirm the heading is really in the file you just wrote:
+
+   ```bash
+   body="<WORKTREE_PATH>/<BODY_PATH_AS_RESOLVED>"
+   case "$body" in *"<"*) echo "ERROR: placeholder not substituted: $body" >&2; exit 2 ;; esac
+   grep -niE -A1 '^#{1,6}[[:space:]]*test[[:space:]]+decision\b' "$body"
+   ```
+
+   **A non-zero exit means the section is not there — go back to step 3 and write it.** The `case` guard is not decoration: without it an unsubstituted `<BODY_PATH_AS_RESOLVED>` makes `grep` exit **2** for a missing *file*, which reads exactly like a missing *record* and sends you into a rewrite loop against a path that does not exist. `-A1` prints the line under the heading, so a section still reading `<recorded at /claim-task plan time …>` is visible here — that is the schema template, not a record, and Step 2d classifies it `missing` too, so replace it. (An earlier version omitted `-A1` while telling you to inspect that text, which its own output could never show.)
+
+   **This check is deliberately shallow, and you should know its limit.** `grep` cannot tell a heading in the body from one inside a fenced block, so on a body carrying a `## Plan` section — whose fence contains its own `## Test decision` line — it can report a hit that is not the record. It is here because it is nearly free and it catches the common miss while the file is still open. **The authority is the orchestrator's Step 8 read-back**, which is fence-aware and reads the branch tip. So a hit here is encouragement, not proof; a *miss* here is conclusive and you must fix it before committing.
+4. **Post-fix convention verification — BOTH maps** (`Q-352`). `git diff --name-only main...HEAD`; for each changed file look up its section in **`.claude/convention_map.md` and `.claude/security_map.md`** (with their `.project.md` overlays where present) and scan the **new/changed lines** — not just the original task locations — against those conventions. **The security map was missing here and the omission had reach:** Step 5 above has the *planner* read both maps into `## Constraints & Risks`, so this step read half of what the plan was written against, and after it nothing else read the security map before `main` — the plan reviewer routes against neither, and `/review-close` Step 2b routed against the convention map alone until its own security twin was added. This step and that twin now close the chain from both ends, and they are not redundant: this one sees **this branch in its own worktree**, that one sees the **assembled** result. Common regressions: `fetch()` without `encodeURIComponent()` on dynamic path segments; `str(e)` exposed to API responses; moved code that dropped `_sanitize_log()` wrappers; `useCallback` with incomplete dependency arrays; SELECT queries on a write-only engine. Fix regressions before committing.
+5. **Run the consumer's pre-merge verification gates.** `<project>/CLAUDE.md § Pre-merge verification` may carry `### Always` (full-tree commands) and `### Ratchet (changed files only)`. Run the commands under each subsection present. If both are absent, skip — `/review-close` will run any project-side verification at merge time (its `4a-post` step, on the merged tree). Note the division of labour: this run verifies **this branch in its own worktree** — so when the consumer ships no `## Pre-merge verification` section and this step skips, *nothing* verifies the branch in isolation; `4a-post` verifies the **assembled** result and cannot substitute for it. **One thing does still run in that case**: `4a-post` runs the Sysop pre-scan itself whether or not the consumer declared it (`Q-353`), so the promoted checks reach the merge even for a project with no declared list — on the assembled tree, which is still not this branch alone. Treat a non-zero exit like an implementation finding — fix the cause, do not silence it without a justified inline `# type: ignore[...]` or `// eslint-disable-next-line <rule> -- <reason>`.
 6. **Post-fix UI verification.** If the diff touches any `frontend/` files, run `.claude/skills/_shared/ui-verify.md`. Hard-fail on console errors and 5xx responses; warn on console warnings; skip cleanly with an explicit note if the dev server is not running, and surface that note verbatim in your final message.
 7. **Commit** — a SINGLE commit on the worktree branch, conventional message derived from the task title plus `<CLAIM_ID>`, with a `Doc-Work: <CLAIM_ID>` trailer on the final line of the body, separated by one blank line. That trailer is the deterministic marker `/sitrep` consumes to classify the branch as ready for `/review-close`.
 
@@ -1558,6 +1572,131 @@ PY
 **If that printed `STRANDED`** — the executor wrote body edits into the main checkout instead of the worktree (internal tracker #322). They are on no branch, so they do not reach the PR, and nothing downstream notices: `/review-close` Step 4c `git mv`s the body into `tasks/archive/`, and the edits never having been staged, the rename stages **`HEAD`'s** content, so the body contributes `0 insertions(+), 0 deletions(-)` to the consolidation commit — the rename lands, the documentation does not. (The commit itself is larger; it also carries `tasks/index.yml` and the pending docs.) The only backstop is Step 6's tracked-tree gate, which fires **after `gh pr merge` has landed**, too late to save the PR. So: surface the file list the block just printed, **skip the auto-mode chain**, and tell the human the edits must be moved onto the branch (still checked out at `<WORKTREE_PATH>`, whose work commit is amendable) before `/review-close` runs. **Do not move them yourself** — which copy is authoritative is the human's call.
 
 **An untracked body is not `STRANDED`, and the probe is scoped so it does not report as one.** `git diff HEAD` ignores untracked files, so an `/add-task` body nobody committed leaves this quiet — correctly, because that body is on no branch and cannot be put on one. The executor reports that case itself, in its own final message.
+
+**Then verify the record the executor was told to write, at the revision that will be graded.** Step 7e's sequence item 3 makes the executor responsible for `## Test decision`, and it now verifies its own write before committing — but the failure this closes *is* an executor skipping a sequence item, so a second reader that is not that agent is the whole point. Read the **branch tip**, because that is the revision `/review-close` Step 2d reads; the working tree and the main checkout can each hold a record the branch does not.
+
+```bash
+# Substitute all three literally and QUOTED. <BODY_PATH_AS_RESOLVED> is the REPO-ROOT-RELATIVE
+# path Step 2 resolved — the same one 7e wrote and Step 2d will read. It is NOT `tasks/` glued
+# onto the raw `body:` value: index.yml records that value canonically as `open/<TASK_ID>.md`
+# relative to `tasks/`, but the legacy `tasks/open/<TASK_ID>.md` spelling is also accepted, and
+# concatenating that one yields `tasks/tasks/open/...`. Pass the resolved path, not a recipe.
+# Stdlib only, heredoc + positional args per Phase 126.
+python3 - <<'PY' "<CLAIM_ID>" "<BRANCH_NAME>" "<BODY_PATH_AS_RESOLVED>"
+import re, subprocess, sys
+from pathlib import Path
+
+claim_id, branch, body_rel = sys.argv[1], sys.argv[2], sys.argv[3]
+if any("<" in a for a in (claim_id, branch, body_rel)):
+    print("ERROR: placeholder not substituted: {!r} {!r} {!r}".format(
+        claim_id, branch, body_rel), file=sys.stderr)
+    sys.exit(2)
+
+common = subprocess.run(["git", "rev-parse", "--git-common-dir"],
+                        capture_output=True, text=True, check=True).stdout.strip()
+main_root = Path(common).resolve().parent
+
+# `<rev>:<path>` -- the literal colon is what makes this a branch-tip read. Without it,
+# `git show <path>` means `git show HEAD -- <path>` and exits 0 off the WRONG revision:
+# the one failure here that can fabricate a pass (Step 2d documents it at length). The
+# operand is built by .format() so it cannot lose the colon.
+r = subprocess.run(["git", "-C", str(main_root), "show", "{}:{}".format(branch, body_rel)],
+                   capture_output=True, text=True)
+if r.returncode != 0:
+    err = (r.stderr or "").strip()
+    # git says "does not exist in '<rev>'" when the path is absent from the worktree too,
+    # and "exists on disk, but not in '<rev>'" when it is present but untracked. The
+    # DOCUMENTED case here -- an /add-task body nobody committed -- always leaves the file
+    # on disk, so it produces the SECOND message. Testing only the first inverted the two
+    # populations: the benign case got a raw fatal and the suspicious one got reassurance.
+    if "does not exist in" in err or "exists on disk, but not in" in err:
+        print("NOT ON BRANCH -- {} is absent at {}.".format(body_rel, branch))
+        print("  Expected ONLY for a body left untracked in the main checkout "
+              "(/add-task filed it, nobody committed it): 7e writes the main-checkout "
+              "copy and says so in its final message. Confirm that is what happened; "
+              "otherwise the body path is wrong, or the branch is not this claim's.")
+    else:
+        print("UNREADABLE -- {}:{}".format(branch, body_rel))
+        print("  " + err)
+    sys.exit(0)
+
+# Headings OUTSIDE fenced blocks. `tasks/schema.md` documents that `## Plan` carries the
+# reviewed plan verbatim in a fence, and that "the fenced plan contains its own
+# '## Test decision' line" -- it orders the real section FIRST so a first-match reader
+# meets it first. A fence-blind reader does not get that guarantee: it matches the plan's
+# copy, so a body with no real record reads as compliant.
+# A leading BOM keeps `^#` from matching and would report a false MISSING, which BLOCKS.
+lines = r.stdout.lstrip("\ufeff").split("\n")
+HEAD = re.compile(r"^(#{1,6})\s*(.*)$")
+WANT = re.compile(r"^\s*test\s+decision\b", re.I)
+
+def fence_mark(line):
+    """`(char, length)` if this line opens or closes a fence, else None.
+
+    This is Step 7f's `fence_mark`, and it is the same function on purpose -- do not
+    re-derive it a third time. Both properties are load-bearing and BOTH were missing
+    from the first version of this block: a body can be fenced with ``` OR ~~~, and a
+    fence is closed only by the SAME character at the SAME length or longer. Step 7f's
+    own writer emits a FOUR-backtick outer fence whenever the plan it wraps contains an
+    ordinary ```-block, so a 3-backtick reader treats the plan's first inner fence as the
+    close, reads the rest of the plan as unfenced, and certifies the plan's own copy of
+    `## Test decision` as the record. Measured: a real option-C body with no record at
+    all passed."""
+    s = line.lstrip()
+    for ch in ("`", "~"):
+        if s.startswith(ch * 3):
+            n = 0
+            while n < len(s) and s[n] == ch:
+                n += 1
+            return ch, n
+    return None
+
+def headings(fence_aware):
+    out, open_mark = [], None
+    for i, ln in enumerate(lines):
+        mark = fence_mark(ln)
+        if mark:
+            if fence_aware:
+                if open_mark is None:
+                    open_mark = mark
+                elif mark[0] == open_mark[0] and mark[1] >= open_mark[1]:
+                    open_mark = None
+            continue
+        if open_mark is not None:
+            continue
+        m = HEAD.match(ln)
+        if m:
+            out.append((i, len(m.group(1)), bool(WANT.match(m.group(2)))))
+    return out, open_mark is not None
+
+heads, unterminated = headings(True)
+if unterminated:
+    # A body whose fence never closes swallowed everything after it. Answering MISSING
+    # there would block a claim over a malformed body, so fall back to a fence-blind
+    # read -- which can only err toward accepting, and Step 2d re-reads this same record
+    # at the merge. Say so either way: the body needs fixing.
+    print("NOTE -- unbalanced ``` fence in {}; read fence-blind.".format(body_rel))
+    heads, _ = headings(False)
+
+wanted = [h for h in heads if h[2]]
+if not wanted:
+    print("MISSING -- no test-decision heading at {}:{}".format(branch, body_rel))
+    sys.exit(1)
+
+# Scope the template test to THAT section, not the whole body: the plan fence can quote
+# the schema, and a whole-body test would refuse a claim whose record is perfectly good.
+start, level, _ = wanted[0]
+end = next((i for i, lv, _ in heads if i > start and lv <= level), len(lines))
+section = "\n".join(lines[start + 1:end])
+if "<recorded at /claim-task plan time" in section:
+    print("TEMPLATE -- the section is still the schema placeholder at {}:{}".format(
+        branch, body_rel))
+    sys.exit(1)
+print("test-decision record present at {}:{}".format(branch, body_rel))
+PY
+```
+
+**If that printed `MISSING` or `TEMPLATE`, stop and say so — do not run `/document-work`.** Nothing else about the branch is wrong: the work is committed and the worktree is still checked out at `<WORKTREE_PATH>`, so the repair is to write the section into the **worktree** copy and **amend** the executor's single commit, then re-run the block. Report which of the two fired and what the plan's recorded decision text was, so the record is restored rather than reinvented. **Do not compose it yourself from the diff** — 7a decided it and 7b scrutinised the `Z`; writing a fresh one here substitutes an unreviewed judgment for a reviewed one, which is the substitution Step 2d exists to catch. `NOT ON BRANCH` and `UNREADABLE` are different in kind and do **not** block: neither asserts anything about the record, so both report and exit 0.
 
 Then:
 

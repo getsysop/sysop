@@ -597,6 +597,18 @@ CONDITIONAL_ALLOWLIST = (
     "re-plan the task the skip exists to avoid",                    # (same clause, second token)
     "this skip never applies",                                      # 7a Review batches clause
     "Reached only when Step 6 resolved to C",                       # 7f precondition
+    # Phase 249 (`Q-369`), the test-decision read-back. Each of these four DESCRIBES the
+    # defect being closed or issues a HALT; none makes a mandatory step optional, which
+    # is what this list gates. Bound to their own clauses per the design note above — a
+    # bare "skipped" or "do not run" would exempt every future use of those words here.
+    "This write is skipped more often than any other step in this sequence",  # 7e read-back rationale
+    "the failure this closes is an executor skipping a sequence item",  # Step 8 arm's rationale
+    "do not run /document-work",                                     # Step 8 arm's halt instruction
+    # The round rewrote 7e's read-back paragraph, which retired the clause that used to
+    # sit here ("so a skip here surfaces either way") and introduced this one. Both are
+    # descriptive: this sentence states what the cheap grep CANNOT do and names Step 8 as
+    # the authority, which is the opposite of making a step optional.
+    "An earlier version omitted -A1 while telling you to inspect that text",
     # WORKFLOW.md § 2.2
     "SUPERSEDED | stop | Step 7d's revise rejected",                # routing row 1 (the word itself)
     "classification write for THIS run with verdict: SUPERSEDED",   # 7d revise instruction

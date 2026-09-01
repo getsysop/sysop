@@ -327,7 +327,7 @@ If verify fails:
 After verify passes but before pushing, re-check that the fixes themselves didn't introduce new convention violations:
 
 1. List all files changed in this branch: `cd <WORKTREE_PATH> && git diff --name-only main...HEAD`
-2. For each changed file, re-read the applicable conventions from `convention_map.md`
+2. For each changed file, re-read the applicable conventions from **`convention_map.md` and `security_map.md`** (`Q-352` — both maps; the third site of the same one-map gap)
 3. Scan the **new/changed lines** (not just the task locations) for violations of those conventions
 4. Common regression patterns to watch for:
    - Fix adds a new `fetch()` call but forgets `encodeURIComponent()` on the path

@@ -74,16 +74,20 @@ The `RECOMMENDED NEXT` block applies a priority cascade — first match wins:
 | 5        | Any task `in progress`                                                 | `continue work or /document-work <ID>`                               | no           |
 | 6a       | Any task `parked`                                                      | read the park marker; `--resume <RUN_ID>` only when a run exists     | no           |
 | 6b       | Any task `awaiting approval`                                           | `/claim-task <ID> --resume <RUN_ID>` — approve or revise the plan    | no           |
-| 6c       | Any task `planning`                                                    | `resume planning for <ID>`                                           | no           |
+| 6c       | Any review batch `parked`                                              | read the park marker; `--resume <RUN_ID>` only when a run exists     | no           |
+| 6d       | Any review batch `awaiting approval`                                   | `/claim-task BATCH-<N> --resume <RUN_ID>` — approve or revise the plan | no           |
+| 6e       | Any task `planning`                                                    | `resume planning for <ID>`                                           | no           |
 | 7a       | No active work, **> 4** open roadmap tasks (deeper than one `/auto-build` batch) | `/roadmap` (strategy view: group + order before batching; with sample of open IDs) | no           |
 | 7b       | No active work, **1–4** open roadmap tasks (fits one batch)            | `/auto-build` (with sample of open IDs)                             | yes          |
 | 8        | Truly idle (no work, no roadmap)                                       | none — block reads `(idle …)`                                        | no           |
 
 **Row `4e` is not a batch row**, despite sitting in the `4` block: `4a`–`4d` route the review-batch queue and `4e` routes a single task whose build is committed but undocumented. It is placed there because that task is *further along* than an in-progress one and still not closable — the same reason the code puts its arm between P4 and P5. **This row was missing from this table until Phase 237**, while the arm had shipped in `_recommended_next`'s cascade since Q-019: the states table was guarded and this one was not, so a state could be wired into the cascade with no routing row and nothing went red. The guard added in Phase 237 closes that, and finding this row absent is what it found first.
 
-**Row `6a` withholds the `--resume` line when there is no run to resume.** An `/auto-build` park writes a marker and no `sysop/runtime/claim/<ID>/` directory at all, so naming a `<RUN_ID>` there would print a command that cannot work; the recommendation names the marker instead.
+**Rows `6a` and `6c` withhold the `--resume` line when there is no run to resume.** An `/auto-build` park writes a marker and no `sysop/runtime/claim/<ID>/` directory at all, so naming a `<RUN_ID>` there would print a command that cannot work; the recommendation names the marker instead.
 
-**Rows `6a`/`6b` report a stall; they never assert one from absence.** `sysop/runtime/` is gitignored, the `SubagentStop` envelope is Claude-Code-only, and a `--resume` onto a rebuilt worktree legitimately carries no artifacts — so a claim with nothing on disk stays `6c planning`, exactly as before. The probe only ever upgrades a classification on positive evidence (a park marker, or a `classification.md` verdict). Absence is *unknown*, never *did not run*.
+**Rows `6a`–`6d` report a stall; they never assert one from absence.** `sysop/runtime/` is gitignored, the `SubagentStop` envelope is Claude-Code-only, and a `--resume` onto a rebuilt worktree legitimately carries no artifacts — so a claim with nothing on disk stays `6e planning`, exactly as before. The probe only ever upgrades a classification on positive evidence (a park marker, or a `classification.md` verdict). Absence is *unknown*, never *did not run*.
+
+**Rows `6c`/`6d` are `6a`/`6b` on the review-batch path, and they are new (`Q-317`, Phase 248).** `_claim_stall` was always claim-kind agnostic — the runtime paths are keyed by `<CLAIM_ID>`, which is `BATCH-<N>` for a batch — but it had exactly one call site, and `run_survey`'s lock loop `continue`s on a `BATCH-` prefix before reaching it. A `/claim-task` Step-7c park of a review batch therefore reported `in progress — continue work; 0 of N tasks have Doc-Work trailers yet`, which is what an unstarted claim reports. The two classifiers stay separate; the batch one now makes its own call, under the same 0-commits gate, so the two paths cannot drift into different answers about what a park is. The batch states are **additive** in `--json`: they are new values of the existing `review_batches[].state` string, with the evidence in the existing `notes` array — no new keys and no reshape, so a consumer that passes the state through is unaffected.
 
 The `/clear` nudge fires on every recommendation that spawns parallel/Opus agents (`/auto-fix`, `/auto-judge`, `/auto-build`). It is intentionally always-on for those skills because `sitrep` cannot see the caller's context size and the cost of an unneeded nudge is small.
 
@@ -95,7 +99,7 @@ When pending batches lack a `> **Triaged:**` record, `/sitrep` recommends `/tria
 
 ## Classification states (reference)
 
-The survey script classifies each discovered task into exactly one state. Listed here so consumers reading the output know what each label means:
+The survey script classifies each discovered task into exactly one state. Listed here so consumers reading the output know what each label means. **Review batches have their own vocabulary** — enumerated in `roadmap/SKILL.md`'s `--json` `state` field, and actuator-keyed in its § *Batch actuators* table — but since `Q-317` it shares this table's **Parked** and **Awaiting approval** signals, read with `<CLAIM_ID>` = `BATCH-<N>`; rows `6c`/`6d` above route them:
 
 | State | Deterministic signal |
 |---|---|

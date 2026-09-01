@@ -1502,6 +1502,29 @@ def _classify_review_batches(
         doc_worked = batch_task_ids & all_dw_ids
         total = len(batch_task_ids)
         done = len(doc_worked)
+        notes: list[str] = []
+
+        # `Q-317`. The same 0-commit condition `_classify_task` applies on the
+        # roadmap path (this one also requires a lock, which that path gets from
+        # its caller), so the two paths cannot drift into different answers about
+        # what a park is.
+        #
+        # ⚠ **The justification this comment used to give was false, and the
+        # limitation it hides is live on BOTH paths.** It said "a park is by
+        # construction the state where nothing has been produced". Two shipped
+        # park sites guarantee the opposite: `claim-task/SKILL.md` parks on
+        # `planner-integrity.md` = `VIOLATED`, whose definition is that the
+        # planner COMMITTED during 7a, and it parks again on an executor
+        # `STATUS: BLOCKED`, after the executor has been running. Reproduced by
+        # Phase 248's round: a park marker plus a lock plus one commit ahead
+        # reports `in progress — continue work; 0 of N tasks have Doc-Work
+        # trailers yet`, which is verbatim the string `Q-317` was filed about.
+        # The gate is kept because widening it here alone would make the two
+        # paths disagree, which is the defect this arm exists to prevent; the
+        # widening is filed for both paths together.
+        stall_state, stall_action, stall_notes = _claim_stall(
+            main_root, f"BATCH-{b['number']}"
+        ) if (has_lock and not commits) else ("", "", [])
 
         if b["status"] == "Pending" and not has_lock:
             state = "pending (not claimed)"
@@ -1538,6 +1561,29 @@ def _classify_review_batches(
         elif total == 0:
             state = "empty batch"
             next_action = "verify review_tasks.md batch contents"
+        elif stall_state:
+            # ── Q-317: the park predicate reaches the BATCH path ──────────
+            #
+            # `_claim_stall` was always claim-kind agnostic as a function — it
+            # treats `BATCH-<N>` as an ordinary claim id, and the runtime paths
+            # agree (`sysop/runtime/parked/<CLAIM_ID>__<RUN_ID>.md`,
+            # `sysop/runtime/claim/<CLAIM_ID>/`, with `<CLAIM_ID>` = `BATCH-<N>`
+            # for a batch). What it had was exactly ONE call site,
+            # `_classify_task`, which `run_survey`'s lock loop never reaches for
+            # a batch: it `continue`s on the `BATCH-`/`TASK-` prefix first. So a
+            # `/claim-task` Step-7c park of a review batch classified as
+            # `in progress — continue work; 0 of N tasks have Doc-Work trailers
+            # yet`, indistinguishable from a claim that had not started.
+            #
+            # Placed AFTER the `empty batch` arm and before the progress arms,
+            # which is collision-free rather than merely tidy: the probe is
+            # gated on `not commits`, and `done` counts Doc-Work trailers borne
+            # by commits, so `not commits` implies `done == 0` and the
+            # `done == total` arm below is reachable only when `total == 0`,
+            # which the arm above has already taken.
+            state = stall_state
+            next_action = stall_action
+            notes = list(stall_notes)
         elif done == total:
             state = "ready for /review-close"
             next_action = f"/review-close (batch {b['number']})"
@@ -1570,6 +1616,7 @@ def _classify_review_batches(
                 doc_worked_tasks=done,
                 state=state,
                 next_action=next_action,
+                notes=notes,
             )
         )
     return out
@@ -1751,6 +1798,17 @@ def render_text(s: Survey) -> str:
             )
             if rb.next_action:
                 lines.append(f"               ↳ next: {rb.next_action}")
+            # `Q-317` follow-up (Phase 248's round, guards lens): the task block
+            # prints its notes and this one did not, so a batch's park evidence
+            # reached `--json` and the cascade and never the report a human
+            # reads. The lost line is the whole message in the marker-less arm —
+            # "classification.md reads verdict: BLOCKED but no park marker is on
+            # disk" — and `_recommended_next`'s own reason string points at it
+            # ("see the detail line for what the evidence is"), which existed
+            # only when the batch happened to win the cascade. Four surfaces were
+            # counted and `render_text` was the fifth.
+            for note in rb.notes:
+                lines.append(f"               · {note}")
         lines.append("")
 
     # Discrepancies
@@ -2032,7 +2090,47 @@ def _recommended_next(s: Survey) -> Recommendation | None:
             detail_lines=list(t.notes),
         )
 
-    # P6c: planning tasks
+    # `Q-317`: the same two states on the BATCH path. Ranked immediately after
+    # their roadmap twins rather than interleaved with them, because a batch
+    # park and a task park are the same human action and the cascade names one
+    # move — ordering between two parks is arbitrary, and stability is worth
+    # more than a coin flip. Both are wired into `_suggested_order` too: Q-019's
+    # round recorded that a state present in one and absent from the other drops
+    # out of the ordered list entirely and the report contradicts itself.
+    parked_batches = [rb for rb in s.review_batches if rb.state == _PARKED_STATE]
+    if parked_batches:
+        rb = parked_batches[0]
+        more = (
+            f" ({len(parked_batches) - 1} more parked)"
+            if len(parked_batches) > 1 else ""
+        )
+        return Recommendation(
+            command=rb.next_action,
+            reason=(
+                f"Batch {rb.batch_number} is parked and is waiting on a human "
+                f"decision{more} — see the detail line for what the evidence is"
+            ),
+            detail_lines=list(rb.notes),
+        )
+
+    awaiting_batches = [rb for rb in s.review_batches if rb.state == _AWAITING_STATE]
+    if awaiting_batches:
+        rb = awaiting_batches[0]
+        more = (
+            f" ({len(awaiting_batches) - 1} more waiting)"
+            if len(awaiting_batches) > 1 else ""
+        )
+        return Recommendation(
+            command=rb.next_action,
+            reason=(
+                f"Batch {rb.batch_number}'s plan was reviewed and classified "
+                f"clean; it is waiting on your approval at /claim-task "
+                f"Step 7d{more}"
+            ),
+            detail_lines=list(rb.notes),
+        )
+
+    # P6e: planning tasks (row 6c/6d are the batch stall states, Q-317)
     planning = [t for t in s.tasks if t.state == "planning"]
     if planning:
         t = planning[0]
@@ -2125,6 +2223,18 @@ def _suggested_order(s: Survey) -> list[str]:
     for ts in s.tasks:
         if ts.state == _AWAITING_STATE:
             out.append(f"{ts.task_id} awaits your approval — {ts.next_action}")
+    # 3c. The same two states on the BATCH path (`Q-317`). Kept in step with
+    # `_recommended_next`, which is the invariant this list exists to hold.
+    for rb in s.review_batches:
+        if rb.state == _PARKED_STATE:
+            out.append(
+                f"Batch {rb.batch_number} is parked — {rb.next_action}"
+            )
+    for rb in s.review_batches:
+        if rb.state == _AWAITING_STATE:
+            out.append(
+                f"Batch {rb.batch_number} awaits your approval — {rb.next_action}"
+            )
     # 4. Planning
     for ts in s.tasks:
         if ts.state == "planning":

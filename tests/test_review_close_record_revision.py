@@ -62,6 +62,8 @@ from typing import Callable
 
 import pytest
 
+from _reversal import assert_no_reversal, slice_between
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SKILL = REPO_ROOT / "core" / "skills" / "review-close" / "SKILL.md"
 WORKFLOW = REPO_ROOT / "core" / "companion" / "docs" / "WORKFLOW.md"
@@ -212,8 +214,44 @@ PINS: list[tuple[str, str, str]] = [
      "**the revision you read it from**",
      "the human cannot adjudicate a record without knowing which tree it came from"),
     ("2d",
-     "Tally per task: `verified`, `waived`, `held for fix` (now rejected), `unreadable`, or `skipped (doc-only)`",
+     "Tally per task: `verified`, `waived`, `not owed`, `held for fix` (now rejected), `unreadable`, or `skipped (doc-only)`",
      "Step 2d's own tally"),
+    # --- the fourth disposition (Phase 249). `waived` and `not owed` answer two different
+    # --- questions; the whole value of the split is that the tally keeps them apart.
+    ("2d",
+     "**`waived` and `not owed` are counted separately and must not be merged back into one number**",
+     "the anti-conflation rule. Merging them restores the exact ambiguity the disposition "
+     "was added to remove, and does it while still listing four dispositions."),
+    ("2d",
+     "*offered only when the ownership probe said `CANNOT TELL`, and only on a `missing` record.*",
+     "the scoping. Offered unconditionally, `not owed` becomes a quieter waiver available "
+     "for a record that was demonstrably owed."),
+    ("2d",
+     "**Lock present → the record was owed.** Do **not** offer *record not owed* for this task.",
+     "the one direction the lock actually decides. Without it 2b is decoration."),
+    ("2d",
+     "**Never render absence as \"the orchestrator did not run\"**",
+     "the three-valued rule. Absence of a gitignored runtime artifact is not evidence, and "
+     "a gate that reads it as evidence accuses honest consumers."),
+    ("2d",
+     "every one of the 378 tasks missing a record is in the run-directory-absent bucket",
+     "the measurement that disqualified the run-directory detector as a RETROSPECTIVE "
+     "proxy. Losing it invites the next phase to rebuild it."),
+    # The round's claims lens found the first version of this note using that measurement
+    # to justify the artifact that shipped. It cannot: the same test is WORSE for the lock.
+    ("2d",
+     "**0 locks survive against 29 run directories**",
+     "the symmetric disclosure. The first version named the reap for run directories and "
+     "not for locks, which let a retrospective measurement read as a reason to prefer the "
+     "lock when it is evidence against it."),
+    ("2d",
+     "The real reason is **structural, and it is about the direction this signal is used in.**",
+     "the argument that actually carries the choice. Without it the paragraph is a "
+     "measurement with no conclusion attached."),
+    ("2d",
+     "For a withholding use, over-inclusion costs a waiver and under-inclusion lets a genuine miss be dismissed as unowed",
+     "why BROADER is correct here. A future reader optimising for precision would swap in "
+     "the narrower artifact and silently re-open the dismissal this step exists to block."),
     ("2a",
      "Read it **at the branch tip**, per Step 2d's revision note: a branch edits its own body, and the working tree is still `main`.",
      "the sibling site — same body, same plain-path defect, one step over"),
@@ -246,7 +284,7 @@ PINS: list[tuple[str, str, str]] = [
      "the both-shapes note; a partial revert here restores 'run the reset in both shapes' "
      "unconditionally and no other pin covers it"),
     ("step8",
-     "Test decisions: <N verified, N waived, N held-for-fix, N unreadable, N doc-only>",
+     "Test decisions: <N verified, N waived, N not-owed, N held-for-fix, N unreadable, N doc-only>",
      "the report a human actually reads. The first version tallied `unreadable` in Step 2d and "
      "never added it here, while the check that claimed to cover 'Step 8's tally' read Step 2d."),
 ]
@@ -259,6 +297,9 @@ FORBIDDEN: list[tuple[str, str, str]] = [
     ("2d", "classify it `missing` and continue", "collapses `unreadable` into `missing`"),
     ("2d", "is *not* a halt condition", "exempts `unreadable` from the halt"),
     ("2d", "fold it into `missing`", "collapses the classification in the tally"),
+    ("2d", "count `not owed` as a waiver", "restores the conflation the split removed"),
+    ("2d", "offer it whenever the record is missing", "unscopes the fourth disposition"),
+    ("2d", "the run directory is the signal", "rebuilds the proxy the measurement rejected"),
     ("2a", "**not at the branch tip**", "reverses the sibling read"),
     ("step6", "stash for them", "reverses the no-stash rule"),
     ("step6", "git clean", "falsifies the untracked-files-are-safe claim in place"),
@@ -469,6 +510,30 @@ MUTATIONS: list[tuple[str, Callable[[str], str]]] = [
         "**Before believing it, re-check the `tasks/` prefix rule above — a mis-resolved path produces this identical fatal, and that is the likelier cause.** ", "")),
     ("P4 drop `unreadable` from the Step 8 report template", _sub(
         "N held-for-fix, N unreadable, N doc-only", "N held-for-fix, N doc-only")),
+    # ---- the fourth disposition (Phase 249) ----
+    ("P8 merge the two tallies back into one number", _sub(
+        "**`waived` and `not owed` are counted separately and must not be merged back into one number**",
+        "Report them together as a single waiver count")),
+    ("P9 unscope the fourth disposition", _sub(
+        "*offered only when the ownership probe said `CANNOT TELL`, and only on a `missing` record.*",
+        "Offer it for any task whose record does not verify.")),
+    ("P10 invert the lock arm so a demonstrably-owed record can be dismissed", _sub(
+        "**Lock present → the record was owed.** Do **not** offer *record not owed* for this task.",
+        "**Lock present → the orchestrator ran.** Offer *record not owed* either way.")),
+    ("P11 turn absence into an assertion about what ran", _sub(
+        '**Never render absence as "the orchestrator did not run"**',
+        "Read a missing lock as proof the orchestrator did not run")),
+    ("P12b re-assert the measurement as the reason for the choice", _sub(
+        "The real reason is **structural, and it is about the direction this signal is used in.**",
+        "The measurement above is therefore why the lock was chosen.")),
+    ("P12c drop the 0-vs-29 symmetry disclosure", _sub(
+        "and among those 476 tasks **0 locks survive against 29 run directories**", "")),
+    ("P12 drop the measurement that disqualified the run-directory proxy", _sub(
+        "every one of the 378 tasks missing a record is in the run-directory-absent bucket",
+        "the run directory separates the two populations cleanly")),
+    ("P13 drop the fourth disposition from Step 2d's tally", _sub(
+        "Tally per task: `verified`, `waived`, `not owed`,",
+        "Tally per task: `verified`, `waived`,")),
     ("P5 drop the resume instruction", _sub(
         "**Resume at this gate, not at the top of the skill**", "Re-run Step 6")),
     # Inverted by Phase 175: the narrowing, not the unscoped form, is now the false claim.
@@ -495,6 +560,95 @@ def test_every_mutation_is_caught(name, mutate):
     assert mutated != shipped, f"mutation {name!r} was a no-op — it no longer matches the shipped text"
     failures = [f for check in CHECKS for f in check(mutated)]
     assert failures, f"mutation {name!r} survived every check"
+
+
+class TestTheOwnershipProbeExecutes:
+    """The round's gap finding: every `D-*` row in this phase's battery is a prose pin, so
+    the one new mechanism with no extract-and-run coverage was the ownership probe — in a
+    phase whose whole method is that prescribed commands get executed. Closed here.
+
+    The probe is EXTRACTED from the skill so it cannot drift from what the operator runs.
+    """
+
+    @staticmethod
+    def _probe_command() -> str:
+        text = _text()
+        start = text.index('ls "$(git rev-parse --git-common-dir)')
+        end = text.index('"CANNOT TELL', start)
+        end = text.index("\n", end)
+        return text[start:end]
+
+    @staticmethod
+    def _repo(tmp_path, with_lock):
+        import subprocess
+        root = tmp_path / "r"
+        root.mkdir()
+        def git(*a, cwd=root):
+            subprocess.run(["git", *a], cwd=str(cwd), check=True, capture_output=True)
+        git("-c", "init.defaultBranch=main", "init", "-q", ".")
+        git("config", "user.email", "t@t"); git("config", "user.name", "t")
+        (root / "README.md").write_text("x\n", encoding="utf-8")
+        git("add", "-A"); git("commit", "-qm", "base")
+        if with_lock:
+            locks = root / "sysop" / "runtime" / "locks"
+            locks.mkdir(parents=True)
+            (locks / "FIX-ALPHA.lock").write_text("task_id: FIX-ALPHA\n", encoding="utf-8")
+        return root
+
+    def _run(self, root, task_id, cwd=None):
+        import subprocess
+        cmd = self._probe_command().replace("<TASK_ID>", task_id)
+        r = subprocess.run(["bash", "-c", cmd], cwd=str(cwd or root),
+                           capture_output=True, text=True)
+        return r.stdout.strip()
+
+    def test_a_claimed_task_reads_owed(self, tmp_path):
+        root = self._repo(tmp_path, with_lock=True)
+        assert self._run(root, "FIX-ALPHA").startswith("OWED")
+
+    def test_an_unclaimed_task_reads_cannot_tell(self, tmp_path):
+        root = self._repo(tmp_path, with_lock=True)
+        assert self._run(root, "FIX-BETA").startswith("CANNOT TELL")
+
+    def test_an_absent_runtime_directory_reads_cannot_tell_not_an_error(self, tmp_path):
+        """A fresh clone carries no `sysop/runtime/` at all. That must read as the
+        three-valued 'cannot tell', never as an error and never as 'not owed'."""
+        root = self._repo(tmp_path, with_lock=False)
+        assert self._run(root, "FIX-ALPHA").startswith("CANNOT TELL")
+
+    def test_the_verdict_does_not_depend_on_the_operators_directory(self, tmp_path):
+        """`--git-common-dir` is CWD-relative inside the primary. A probe that resolved it
+        wrongly would answer CANNOT TELL from a subdirectory and quietly offer the fourth
+        disposition for a task that was demonstrably owed a record."""
+        root = self._repo(tmp_path, with_lock=True)
+        deep = root / "a" / "b"
+        deep.mkdir(parents=True)
+        assert self._run(root, "FIX-ALPHA", cwd=deep).startswith("OWED")
+
+    def test_it_carries_no_cd_compound(self):
+        """`_shared/permission-guard.md`: read-only commands still prompt when a `cd` into
+        another directory is compounded with them. This is the one standalone one-liner
+        Step 2d asks an operator to run, and a gate that prompts on the dominant path is a
+        gate that gets switched off."""
+        assert "cd " not in self._probe_command(), self._probe_command()
+
+
+def test_step_2d_gains_no_reversal_vocabulary():
+    """The softening class, closed generically rather than phrase by phrase.
+
+    The contradiction screen above is a blocklist, and a blocklist is incomplete by
+    construction — this phase's own battery proved it on the entry written the same
+    hour: the screen holds *"offer it whenever the record is missing"*, and
+    *"In practice, offer it whenever the record does not verify"* walked straight
+    past it with all 42 tests green. A second mutation put *"reporting a single
+    combined waiver count is acceptable"* beside the anti-conflation rule and did
+    the same.
+
+    Zero exemptions: the slice was measured clean of the whole vocabulary when this
+    was wired, so anything appearing later is new and deliberate.
+    """
+    step = slice_between(_text(), "### 2d. Test-Decision Verification", "### 2e.", "Step 2d")
+    assert_no_reversal(step, "review-close Step 2d")
 
 
 def test_the_external_population_check_is_not_vacuous():

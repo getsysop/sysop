@@ -3841,15 +3841,41 @@ cmd_adopt() {
   fi
 
   # Commit the lock so future --update runs have a clean anchor.
+  #
+  # Q-360: gate on a staged diff. `iso_now()` is second-granular and Phase 148
+  # made both lock timestamps content-anchored, so a lock deleted and
+  # regenerated inside the same wall-clock second as the committed one is
+  # byte-identical. `git commit` then exits 1 and prints "nothing to commit" to
+  # STDOUT, which the redirect below discards -- under `set -e` the run dies
+  # after the `lock:` line with ZERO bytes of stderr and no diagnostic anywhere
+  # (reproduced by execution). The gate is the in-repo idiom -- the empty-commit
+  # precedents are claim-task Step 4a, auto-fix, auto-judge and batch_work.sh's
+  # two -- and this one site never got it. (A `git grep -c` returns 10 hits over
+  # six files, but half are not this gate: prose ABOUT a gate, and review-close's
+  # post-hoc landing assertions. Counted, not grepped.) `--allow-empty` was
+  # rejected: an empty commit on a consumer's history is its own small rudeness.
+  #
+  # `Q-360` cited /document-work Step 4a/4d as the precedent. That is FALSE and
+  # was checked rather than repeated: that file has no such step, no such gate,
+  # and `git log -S` shows the gate never existed in it. The real precedent is
+  # claim-task Step 4a, whose own note explains the idempotence this buys. The
+  # filing's "third recorded instance" ordinal rested on that miscitation, so it
+  # is dropped rather than restated with a corrected count.
+  #
+  # Verified on an unborn HEAD (no commits yet): `diff --cached --quiet` exits 1
+  # there, so a first-ever lock still commits rather than being skipped.
   local commit; commit="$(get_sysop_commit)"
   git -C "$TARGET" add -- "$LOCK_REL"
-  git -C "$TARGET" commit \
-    --no-verify \
-    -m "sysop: adopt update tracking (lock anchored at ${commit:0:12})" \
-    -- "$LOCK_REL" >/dev/null
-
   say ""
-  say "Done. Lock committed: $(rel "$lock_path")"
+  if git -C "$TARGET" diff --cached --quiet -- "$LOCK_REL"; then
+    say "Done. Lock already matches the committed one — nothing to commit: $(rel "$lock_path")"
+  else
+    git -C "$TARGET" commit \
+      --no-verify \
+      -m "sysop: adopt update tracking (lock anchored at ${commit:0:12})" \
+      -- "$LOCK_REL" >/dev/null
+    say "Done. Lock committed: $(rel "$lock_path")"
+  fi
   say "Future upgrades: bash install.sh $TARGET --update"
 }
 
