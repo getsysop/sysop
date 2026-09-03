@@ -99,13 +99,32 @@ from typing import Any
 
 ENVELOPES_DIR = "sysop/runtime/subagent-envelopes"
 
-# Fenced YAML/text block. We accept the standard ```yaml ... ``` fence as
-# well as a bare ``` ... ``` fence — Phase 28+29 prompt templates show the
-# envelope under ```yaml but agents occasionally emit it under a bare fence.
-_FENCED_BLOCK_RE = re.compile(
-    r"```(?:yaml|yml)?\s*\n(.*?)\n```",
-    re.DOTALL,
-)
+# Fence detection. Shared verbatim with `review_index.py`, `sitrep_survey.py`,
+# `next_task.py` and `archive_review_tasks.py`, and pinned equal by
+# `tests/test_flag_contract.py::test_fence_patterns_are_identical_in_all_parsers`.
+# The close pattern requires nothing but whitespace after the run (CommonMark),
+# so a nested ```` ```python ```` opener does not close the block it is inside.
+#
+# **Why a scanner and not a pair regex (Q-372).** This module used to pair
+# fences with `` ```(?:yaml|yml)?\s*\n(.*?)\n``` ``, which recognises only
+# `yaml`, `yml` and a bare fence as OPENERS. An executor that writes code —
+# the ordinary case for a `/claim-task` Step 7e agent, not an edge case —
+# emits a ```` ```bash ```` block, and that opener is not seen as a fence at
+# all: its CLOSING ``` then pairs with the next opener, every subsequent block
+# shifts by one, and the real envelope ends up inside what the parser reads as
+# prose. Reported from a live consumer: the hook wrote
+# `_unparseable_<session>_<agent>.json` saying "no fenced YAML block with
+# TASK: and STATUS:" while the envelope sat, visible, inside that same
+# diagnostic's own `last_assistant_message_excerpt` — the parser stored the
+# evidence contradicting its own verdict.
+#
+# Widening the info string alone would have fixed the reported case and left
+# the class: a pair regex is also wrong for a 4-backtick opener closed by a
+# 3-backtick run, for a `~~~` fence, and for an indented one. The repo already
+# owns a scanner that gets all of those right, with a grammar table behind it,
+# so this borrows it rather than minting a fifth dialect.
+_FENCE_OPEN_RE = re.compile(r"^ {0,3}(?:> ?)*(`{3,}|~{3,})")
+_FENCE_CLOSE_RE = re.compile(r"^ {0,3}(?:> ?)*(`{3,}|~{3,})[ \t]*$")
 
 # Within a fenced block, the envelope must carry both TASK: and STATUS: to
 # count. Anything else is conversational text or the REVIEW_REPORT block.
@@ -231,20 +250,54 @@ def _last_assistant_message_from_transcript(path: str) -> str:
     return last_text
 
 
+def _fenced_blocks(text: str) -> list[str]:
+    """The body of every **balanced** fenced block, in document order.
+
+    Same open/close predicate as `_fenced_mask` in the four structural readers
+    — marker character AND marker length both load-bearing — but it returns
+    bodies rather than a mask, because this module selects a block by its
+    content and a boolean mask cannot tell two adjacent blocks apart.
+
+    An **unterminated** fence yields nothing, matching `_fenced_mask`'s
+    deliberate choice: a stray opener must not swallow the rest of the message.
+    Here that direction is doubly right, since the envelope is emitted LAST and
+    an unterminated fence earlier in the message would otherwise hide it.
+    """
+    # `\r\n` normalised first. The pair regex this replaced closed on
+    # `\n```\s*`, which matched a CRLF line ending; `_FENCE_CLOSE_RE` ends
+    # `[ \t]*$` and a bare `\r` matches neither, so a CRLF message yielded NO
+    # balanced blocks at all — the same silent-envelope-loss this function was
+    # written to remove, reintroduced through the line ending. Found by this
+    # phase's round driving the hook end-to-end rather than calling in.
+    lines = text.replace("\r\n", "\n").split("\n")
+    out: list[str] = []
+    start = None
+    marker = None
+    for i, line in enumerate(lines):
+        if start is None:
+            m = _FENCE_OPEN_RE.match(line)
+            if m:
+                start, marker = i, m.group(1)
+        else:
+            m = _FENCE_CLOSE_RE.match(line)
+            if m and marker and m.group(1)[0] == marker[0] and len(m.group(1)) >= len(marker):
+                out.append("\n".join(lines[start + 1:i]))
+                start = marker = None
+    return out
+
+
 def _find_envelope_block(text: str) -> str | None:
     """Return the body of the LAST fenced block carrying TASK: + STATUS:."""
-    candidates = []
-    for m in _FENCED_BLOCK_RE.finditer(text):
-        body = m.group(1)
-        if _ENVELOPE_HEAD_RE.search(body) and _STATUS_LINE_RE.search(body):
-            candidates.append(body)
+    candidates = [
+        body for body in _fenced_blocks(text)
+        if _ENVELOPE_HEAD_RE.search(body) and _STATUS_LINE_RE.search(body)
+    ]
     return candidates[-1] if candidates else None
 
 
 def _find_review_report_block(text: str) -> str | None:
     """Return the body of the FIRST fenced block whose top-line key is REVIEW_REPORT."""
-    for m in _FENCED_BLOCK_RE.finditer(text):
-        body = m.group(1)
+    for body in _fenced_blocks(text):
         if _REVIEW_REPORT_HEAD_RE.search(body):
             return body
     return None

@@ -1433,7 +1433,7 @@ def orchestrator_problems(text=None) -> list[str]:
             p.append("Step 7f's release no longer passes --delete-branch -- claim_task.sh "
                      "defaults DELETE_BRANCH=false, so the branch survives and the next "
                      "claim reuses it from a stale fork point")
-        if "git rev-list --count main..<BRANCH_NAME>" not in s7f:
+        if "git rev-list --count <default branch>..<BRANCH_NAME>" not in s7f:
             p.append("Step 7f deletes the branch without first establishing it is empty -- "
                      "claim_task.sh uses `git branch -D`, and a force delete of a branch "
                      "carrying work is data loss")
@@ -1445,8 +1445,12 @@ def orchestrator_problems(text=None) -> list[str]:
         # a hard exit. The round false-killed both formattings, which would have
         # rejected a correct authoring.
         rule_a = len(re.findall(
-            r'(?:test|\[)\s+"\$\(git rev-parse --abbrev-ref HEAD\)"\s*=\s*"main"\s*\]?'
+            r'(?:test|\[)\s+"\$\(git rev-parse --abbrev-ref HEAD\)"\s*=\s*"<default branch>"\s*\]?'
             r'\s*\|\|\s*\{(?:[^{}]|\n){0,200}?exit 1;?\s*\}', s7f))
+        # Phase 254 (`Q-377`): the comparison operand is the RESOLVED placeholder, not
+        # the literal `main`. Requiring `<default branch>` rather than accepting either
+        # spelling is deliberate — accepting the literal would re-admit the defect this
+        # phase closed, where a `master` consumer halted at a branch it does not have.
         if rule_a < 2:
             p.append(f"Step 7f carries {rule_a} INTACT main-push-guard Rule A assert(s), "
                      f"not 2 -- both the plan commit and the release commit run in the "
@@ -2235,9 +2239,12 @@ SKILL_MUTATIONS = {
                             "```bash\ngit clean -fdx sysop/runtime/claim/\n```\n\n**Do not delete the envelopes here.**"),
     "truncation in Step 8": ("**Do not delete the envelopes here.**",
                              "```bash\n: > sysop/runtime/subagent-envelopes/exec.json\n```\n\n**Do not delete the envelopes here.**"),
+    # Anchor re-pinned in Phase 254: the bullet gained the `<default branch>`
+    # resolution instruction (`Q-377`), which made the old anchor a no-op — the
+    # stale-anchor bucket caught it, which is the whole reason that bucket exists.
     "prose delete of the artifact dir": (
-        "- **abandon** → release the claim, **and commit the release**:",
-        "- **abandon** → remove the artifact directory, then release the claim:"),
+        "- **abandon** → release the claim, **and commit the release** (resolve `<default branch>`",
+        "- **abandon** → remove the artifact directory, then release the claim (resolve `<default branch>`"),
     # -- optional-ising outside the previously-scanned slices (13/13) -----
     "7a declared optional": ("### Step 7a: Spawn the planner",
                              "### Step 7a: Spawn the planner\n\n> **This step is OPTIONAL and may be skipped.**"),

@@ -3,9 +3,9 @@
 The defect (upstream #242): Step 3 ran the project's build/test/lint commands while `HEAD`
 was still `main` and before Step 3b removed a worktree or Step 4a merged anything, so no
 approved branch's files were in the tree and its new tests did not exist. Under `pr` policy
-it was worse — Step 4-pre cuts the integration branch from *fresh* `origin/main`, so Step 3's
+it was worse — Step 4-pre cuts the integration branch from *fresh* `origin/<default branch>`, so Step 3's
 tree was not even the base. And the `### Ratchet` snippets a consumer authors filter
-`git diff --name-only origin/main...HEAD` themselves, which on a synced `main` is the empty
+`git diff --name-only origin/<default branch>...HEAD` themselves, which on a synced `main` is the empty
 set: the pass reported green having executed nothing.
 
 The fix keeps Step 3 as a declared **pre-merge** pass and adds `4a-post`, which re-runs the
@@ -49,11 +49,11 @@ GUIDE = REPO_ROOT / "core" / "companion" / "docs" / "WORKFLOW_GUIDE.md"
 # the same way on two trees, so neither pass can drift into a different notion of "changed".
 # The first version pinned only the FIRST physical line, so the round corrupted the second
 # one five ways and every mutation lived: a `-- '*.md'` pathspec (4a-post then doc-only-skips
-# forever), `origin/main...origin/main` (always empty), a `:!tests` exclusion, a two-dot range
+# forever), `origin/<default branch>...origin/<default branch>` (always empty), a `:!tests` exclusion, a two-dot range
 # hidden after a continuation, and the range hoisted into a variable.
 SCOPE_CMD = (
-    'git rev-parse --verify --quiet origin/main >/dev/null '
-    '&& git diff --name-only origin/main...HEAD '
+    'git rev-parse --verify --quiet origin/<default branch> >/dev/null '
+    '&& git diff --name-only origin/<default branch>...HEAD '
     '|| echo "NO_ORIGIN_MAIN"'
 )
 
@@ -68,13 +68,13 @@ CLOSE_BATCH = "bash sysop/scripts/close_batch.sh"
 # Raw shipped forms, for mutation anchoring only (SCOPE_CMD above is the NORMALISED form the
 # checks compare against, so it is not a substring of the file).
 RAW_SCOPE_STEP3 = (
-    "git rev-parse --verify --quiet origin/main >/dev/null \\\n"
-    "  && git diff --name-only origin/main...HEAD \\\n"
+    "git rev-parse --verify --quiet origin/<default branch> >/dev/null \\\n"
+    "  && git diff --name-only origin/<default branch>...HEAD \\\n"
     '  || echo "NO_ORIGIN_MAIN"'
 )
 RAW_SCOPE_POST = (
-    "   git rev-parse --verify --quiet origin/main >/dev/null \\\n"
-    "     && git diff --name-only origin/main...HEAD \\\n"
+    "   git rev-parse --verify --quiet origin/<default branch> >/dev/null \\\n"
+    "     && git diff --name-only origin/<default branch>...HEAD \\\n"
     '     || echo "NO_ORIGIN_MAIN"'
 )
 
@@ -159,8 +159,32 @@ def _normalize_cmd(cmd: str) -> str:
     command onto one line, or writing `> /dev/null` for `>/dev/null`, made the guard go red
     on an edit that changes nothing — and a check that fails on a legitimate rewrite trains
     people to weaken it.
+
+    The redirection collapse must not touch the `>` that CLOSES a placeholder (Phase 255,
+    `Q-381`). Once the scope command reads `origin/<default branch> >/dev/null`, a blind
+    ``>\\s+`` rule eats the space separating the operand from the redirection, the pinned
+    form stops matching the shipped one, and the guard reports "missing or corrupted" over
+    a file that is correct.
+
+    Placeholders are MASKED rather than matched around. The first cut used a negative
+    lookbehind on the word ``branch``, which is a proxy for one placeholder spelling: this
+    skill also carries ``<approved branch name>`` and ``<branch>``, and any future
+    ``<...>`` token ending in some other word would walk straight through it. Masking is
+    keyed to the construct instead of to one of its spellings.
     """
-    return re.sub(r">\s+", ">", re.sub(r"\s+", " ", cmd)).strip()
+    cmd = re.sub(r"\s+", " ", cmd)
+    # Mask `<...>` placeholders so their closing `>` cannot read as a redirection operator.
+    holes: list[str] = []
+
+    def _hide(m):
+        holes.append(m.group(0))
+        return f"\x00{len(holes) - 1}\x00"
+
+    masked = re.sub(r"<[^<>]*>", _hide, cmd)
+    masked = re.sub(r">\s+", ">", masked)
+    for i, original in enumerate(holes):
+        masked = masked.replace(f"\x00{i}\x00", original)
+    return masked.strip()
 
 
 def _exec_commands(section: str) -> list[str]:
@@ -408,16 +432,16 @@ def check_both_passes_share_one_scope_command(text: str) -> list[str]:
         if SCOPE_CMD not in _exec_commands(_slice(text, key)):
             bad.append(f"{key}: the shared changed-file scope command is missing, corrupted, "
                        "or not in a bash fence")
-    # Scoped to `git diff` on purpose. Step 1's `git log --oneline origin/main..HEAD` is a
+    # Scoped to `git diff` on purpose. Step 1's `git log --oneline origin/<default branch>..HEAD` is a
     # LEGITIMATE two-dot — for `log`, two dots already mean "commits not on the base", which
     # is what that line wants (the per-command rule in Step 2a's three-dots note). A blanket
     # substring ban here would have gone red on the shipped tree for a correct command.
     # The gap is flags only, never `[^\n]*`: a permissive gap matched a 700-character
     # paragraph that happened to contain `git diff --quiet HEAD --` near its start and
-    # `origin/main..main` (a `git rev-list` range, correctly two-dot) near its end, and
+    # `origin/<default branch>..main` (a `git rev-list` range, correctly two-dot) near its end, and
     # went red on the shipped tree for two unrelated correct commands.
-    if re.search(r"git diff(?:\s+--?[\w-]+)*\s+origin/main\.\.(?!\.)", text):
-        bad.append("a two-dot `git diff origin/main..HEAD` shipped — everything the base "
+    if re.search(r"git diff(?:\s+--?[\w-]+)*\s+origin/<default branch>\.\.(?!\.)", text):
+        bad.append("a two-dot `git diff origin/<default branch>..HEAD` shipped — everything the base "
                    "gained since the cut renders as a deletion")
     return bad
 
@@ -602,8 +626,8 @@ def test_main_push_guard_reruns_the_merged_tree_gate_not_step_3():
     flat = _flat(GUARD.read_text(encoding="utf-8"))
     span = ("# The base changed → RE-RUN review-close 4a-post (the merged-tree gate: the "
             "# project's § Pre-merge verification commands, run on the merge target) against "
-            "# the new base before pushing. NOT Step 3 — Step 3's tree is `main` before any "
-            "# merge, which is not the tree this rebase moved.")
+            "# the new base before pushing. NOT Step 3 — Step 3's tree is the default branch "
+            "# before any merge, which is not the tree this rebase moved.")
     assert _flat(span) in flat, "Rule B's re-run instruction is not intact"
     assert "RE-RUN review-close Step 3" not in flat, "the pre-fix instruction is back"
     i = flat.index("RE-RUN review-close 4a-post")
@@ -729,7 +753,7 @@ MUTATIONS: list[tuple[str, Callable[[str], str]]] = [
     ("P2 drop the untracked fact that makes placement load-bearing", _sub(
         "those files are **untracked**", "those files are tracked")),
     ("P3 prescribe the destructive `direct` recovery", _sub(
-        "**Do not `git reset --hard`**", "Run `git reset --hard origin/main`")),
+        "**Do not `git reset --hard`**", "Run `git reset --hard origin/<default branch>`")),
     ("P4 skip the gate under the PR-reuse shape", _sub(
         "**Under the Step 4-pre PR-reuse shape this step still runs**",
         "Skip this step entirely under the Step 4-pre PR-reuse shape")),
@@ -748,13 +772,13 @@ MUTATIONS: list[tuple[str, Callable[[str], str]]] = [
     ("R3 let --dry-run's green stand in for the merged gate", _sub(
         "**`4a-post` cannot run under `--dry-run`**", "`4a-post` also runs under `--dry-run`")),
     ("R4 drift 4a-post's scope command to two dots", _sub(
-        RAW_SCOPE_POST, RAW_SCOPE_POST.replace("origin/main...HEAD", "origin/main..HEAD"))),
+        RAW_SCOPE_POST, RAW_SCOPE_POST.replace("origin/<default branch>...HEAD", "origin/<default branch>..HEAD"))),
     ("R4b append a pathspec so 4a-post only ever sees markdown", _sub(
-        RAW_SCOPE_POST, RAW_SCOPE_POST.replace("origin/main...HEAD", "origin/main...HEAD -- '*.md'"))),
+        RAW_SCOPE_POST, RAW_SCOPE_POST.replace("origin/<default branch>...HEAD", "origin/<default branch>...HEAD -- '*.md'"))),
     ("R4c degenerate range — always empty", _sub(
-        RAW_SCOPE_POST, RAW_SCOPE_POST.replace("origin/main...HEAD", "origin/main...origin/main"))),
+        RAW_SCOPE_POST, RAW_SCOPE_POST.replace("origin/<default branch>...HEAD", "origin/<default branch>...origin/<default branch>"))),
     ("R4d hoist the range into a variable", _sub(
-        RAW_SCOPE_POST, '   RANGE=origin/main..HEAD && git diff --name-only "$RANGE"')),
+        RAW_SCOPE_POST, '   RANGE=origin/<default branch>..HEAD && git diff --name-only "$RANGE"')),
     # R5/R5b were written against the pre-Phase-175 sentence, which propagated item 4's
     # doc-only skip into 4a-post. Phase 175 removed that propagation, so both mutations
     # are re-pointed at the sentence that replaced it — the rewrite takes its battery
@@ -861,7 +885,7 @@ MUTATIONS: list[tuple[str, Callable[[str], str]]] = [
 NON_MUTATIONS: list[tuple[str, Callable[[str], str]]] = [
     ("N1 join the scope command onto one line (equivalent)", _sub(
         RAW_SCOPE_POST,
-        '   git rev-parse --verify --quiet origin/main >/dev/null && git diff --name-only origin/main...HEAD || echo "NO_ORIGIN_MAIN"')),
+        '   git rev-parse --verify --quiet origin/<default branch> >/dev/null && git diff --name-only origin/<default branch>...HEAD || echo "NO_ORIGIN_MAIN"')),
     ("N2 space the redirection (equivalent)", _sub(
         RAW_SCOPE_POST, RAW_SCOPE_POST.replace(">/dev/null", "> /dev/null"))),
     # N3/N4 re-pointed by Phase 248: Step 4b's primary invocation gained

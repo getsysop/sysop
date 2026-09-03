@@ -36,6 +36,7 @@ from pathlib import Path
 import pytest
 
 import sitrep_survey as ss
+from _reversal import assert_no_reversal
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "core/companion/scripts/close_batch.sh"
@@ -545,34 +546,18 @@ def test_an_unresolvable_merge_target_refuses_rather_than_crashing(tmp_path):
 
 _SKILL = REPO_ROOT / "core/skills/review-close/SKILL.md"
 
-# The vocabulary a softening uses. Every string the assertions below pin can be
-# preserved while the sentence beside it says the opposite -- that single move was
-# 38 of 53 survivors in Phase 247's round, and `DOC-1` reproduced it here: the
-# contract sentence was inverted word-for-word with the whole suite green.
-# Seeded from `tests/test_prescan_merge_gate.py`'s REVERSAL_VOCAB — the module
-# this guard's own comment names as its precedent — because the first cut listed
-# only phrasings specific to THIS step and dropped every generic softener the
-# precedent carries. The round then walked through with "in practice you can
-# leave the flag off" and "the flag is advisory", using the precedent's own
-# words. A borrowed layer that drops the borrowed vocabulary is not the layer.
-_GENERIC_SOFTENERS = (
-    "is advisory",
-    "are advisory",
-    "advisory only",
-    "in practice",
-    "in day-to-day use",
-    "usually the gate",
-    "no action is needed",
-    "is not needed",
-    "not needed",
-    "is optional",
-    "are optional",
-    "you can leave",
+# THE REVERSAL LAYER lives in `tests/_reversal.py` (Phase 253, `Q-367`). This guard
+# carried a 27-entry private list until then: four generic softeners borrowed from the
+# precedent module, ten more generic ones the round that filed `Q-367` wrote bypasses
+# with, and thirteen phrasings that reverse THIS step and nothing else. The generic
+# ones now live in the shared list; the step-specific ones stay here as `extra=`, so
+# they never redden a step they were not written about. Three entries that read as
+# generic but name this step's own objects (the flag, the gate, the target) stay here
+# for the same reason.
+_STEP_4B_EXTRA = (
     "leave the flag off",
+    "usually the gate",
     "sound target on its own",
-)
-
-_REVERSAL_VOCAB = _GENERIC_SOFTENERS + (
     "optional under `pr`",
     "a fine substitute",
     "the ordinary way through",
@@ -641,18 +626,6 @@ def test_step4b_names_the_merge_target_contract():
         # A declared NEGATIVE use: the step tells the operator NOT to reach for it.
         "that is not a reason to reach for `--force`",
     )
-    haystack = block
-    for phrase in exempt:
-        # `count == 1`, not `in`. `str.replace` strips EVERY occurrence, so a
-        # second copy of an exempted phrase would carve a second hole the
-        # exemption was never granted for — and the round defeated the first cut
-        # of this layer by writing a reversal AROUND an exempted span.
-        assert block.count(phrase) == 1, (
-            f"exemption {phrase!r} appears {block.count(phrase)} times in Step 4b "
-            f"(expected exactly 1) — a stale or duplicated exemption silently "
-            f"widens what this guard permits"
-        )
-        haystack = haystack.replace(phrase, "")
     # Positive claims, because a vocabulary list can only ever catch the phrasings
     # someone thought of. The round's sharpest bypass carried NO flagged word: it
     # rewrote the UNRESOLVED guidance into "that is the normal state under `pr`
@@ -668,14 +641,10 @@ def test_step4b_names_the_merge_target_contract():
         "disarms cherry-pick detection for every batch in the run"
     )
 
-    hits = [v for v in _REVERSAL_VOCAB if v in haystack.lower()]
-    assert not hits, (
-        f"Step 4b carries softening vocabulary {hits} outside its declared "
-        f"exemptions. Every string this test pins survives a sentence beside it "
-        f"saying the opposite; that is how DOC-1 walked through the first version "
-        f"of this guard. If the wording is deliberate, add it to `exempt` in the "
-        f"same commit and say why."
-    )
+    # The reversal layer — shared, with this step's own phrasings as `extra=`. The
+    # exempt spans are asserted present exactly once and stripped before the scan;
+    # the helper carries the `count == 1` rule this guard introduced.
+    assert_no_reversal(block, "review-close Step 4b", exempt=exempt, extra=_STEP_4B_EXTRA)
 
 
 def test_step4b_states_both_defects_it_was_written_from():
@@ -977,19 +946,44 @@ def test_workflow_md_states_the_merge_target_contract():
     """
     text = (REPO_ROOT / "core/companion/docs/WORKFLOW.md").read_text(encoding="utf-8")
 
-    row = next(ln for ln in text.splitlines() if ln.startswith("| `close_batch.sh "))
-    assert "--merge-target <ref>" in row, (
-        "§ 8.4's close_batch.sh signature no longer names --merge-target"
-    )
+    # EVERY close_batch.sh row, and the SIGNATURE cell of each: the description cell
+    # beside a signature also says `--merge-target <ref>`, so `in row` was satisfied
+    # with the flag gone from the signature (the reconstructed reviewer row F1 walked
+    # through it, Phase 253), and a first-match `next()` let a flagless second row
+    # stand (round: C-S02). A row prescribing the script without the flag is the
+    # `Q-308` shape whatever else it documents, so `--dry-run` variants carry it too.
+    cb_rows = [ln for ln in text.splitlines() if ln.startswith("| `close_batch.sh")]
+    assert cb_rows, "§ 8.4 has no close_batch.sh row"
+    for row in cb_rows:
+        # The backticked span, not the first `|`-delimited cell: a signature such as
+        # `[--merge-target <ref>|HEAD]` carries a raw pipe, and a cell split hands
+        # `HEAD` to the next cell where nothing looks (round: C-S03 survived the
+        # first cut for exactly that reason).
+        m = re.match(r"\|\s*`([^`]*)`", row)
+        assert m, f"§ 8.4 close_batch.sh row has no backticked signature: {row[:60]!r}"
+        signature = m.group(1)
+        assert "--merge-target" in signature, (
+            f"a § 8.4 close_batch.sh signature omits --merge-target: {signature.strip()!r}"
+        )
+        # `[--merge-target <ref>|HEAD]` documents the one value the script refuses
+        # (round: C-S03).
+        assert "HEAD" not in signature, (
+            f"a § 8.4 close_batch.sh signature offers HEAD as a target: {signature.strip()!r}"
+        )
+    row = next(r for r in cb_rows if "--merge-target <ref>" in r or "--merge-target=<ref>" in r)
     assert "never inferred from `HEAD`" in row, (
         "§ 8.4 no longer states that the target is never inferred from HEAD — "
         "the sentence the whole Q-308 repair rests on"
     )
-    for banned in ("falls back to `HEAD`", "inferred from `HEAD` when"):
-        assert banned not in row, f"§ 8.4's row now says {banned!r}"
-
     step6 = next(ln for ln in text.splitlines()
                  if "close_batch.sh" in ln and "<N1>" in ln)
+    # The same banned phrasings, over BOTH sites: an aside in § 2.8 licensing the
+    # fallback is the same reversal as one in § 8.4 (round: C-S06 — its own wording,
+    # "derives the target from HEAD", is outside this list on purpose; the layer is a
+    # blocklist of measured phrasings, not a closure).
+    for banned in ("falls back to `HEAD`", "inferred from `HEAD` when"):
+        assert banned not in row, f"§ 8.4's row now says {banned!r}"
+        assert banned not in step6, f"§ 2.8 step 6 now says {banned!r}"
     assert "--merge-target" in step6, (
         "§ 2.8 step 6's command no longer passes --merge-target; under `pr` it "
         "refuses every batch step 5 merged"

@@ -152,7 +152,11 @@ Wait for confirmation. Do not proceed without it.
 
 ## Step 4: Process Auto Batches
 
-**Prerequisite:** Verify you are on `main` with a clean working tree (`git status` shows nothing to commit). If not, stop and report.
+**Prerequisite:** Verify you are on the repository's default branch with a clean working
+tree (`git status` shows nothing to commit). If not, stop and report. Resolve the name with
+`bash sysop/scripts/default_branch.sh` (run bare) rather than assuming `main` —
+`batch_work.sh` refuses the claim off that branch, so checking the wrong name here just
+moves the failure one step later (`Q-377`).
 
 ### 4a. Compute Overlap (if missing)
 
@@ -326,7 +330,7 @@ If verify fails:
 
 After verify passes but before pushing, re-check that the fixes themselves didn't introduce new convention violations:
 
-1. List all files changed in this branch: `cd <WORKTREE_PATH> && git diff --name-only main...HEAD`
+1. List all files changed in this branch: `cd <WORKTREE_PATH> && git diff --name-only <default branch>...HEAD`
 2. For each changed file, re-read the applicable conventions from **`convention_map.md` and `security_map.md`** (`Q-352` — both maps; the third site of the same one-map gap)
 3. Scan the **new/changed lines** (not just the task locations) for violations of those conventions
 4. Common regression patterns to watch for:
@@ -410,7 +414,7 @@ You are reviewing **Batch <N> — "<TITLE>"** after a Sonnet fix pass. Your scop
 ## Step 1: Load the diff
 
 ```bash
-cd <WORKTREE_PATH> && git diff main...HEAD
+cd <WORKTREE_PATH> && git diff <default branch>...HEAD
 ```
 
 Read the diff in full. Note which files changed and what convention each change enforces (e.g., "added `_sanitize_log()` wrapper", "added `useAbortableFetch`", "replaced `str(e)` with generic message").

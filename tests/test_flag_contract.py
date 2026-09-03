@@ -878,10 +878,23 @@ import archive_review_tasks as ar  # noqa: E402
 # round in two at a fenced example.
 FENCE_AWARE_PARSERS = (ri, ss, nt, ar)
 
+import parse_subagent_envelope as pse  # noqa: E402
+
+# Every module that decides where a fence STARTS and ENDS, which is a strictly
+# larger set than the structural readers above. `parse_subagent_envelope.py`
+# does not read review_tasks.md at all — it reads a sub-agent's last message —
+# so it has no `_fenced_mask` and cannot join the body pin below. It does share
+# the open/close PREDICATE, and it has to: it carried its own dialect from
+# Phase 37 (`45b1745`) until this one — including the 70 phases after the
+# shared scanner landed in Phase 181 (`3c4b5f7`) — recognising only `yaml`,
+# `yml` and a bare fence as openers, so a ```bash block from a code-writing
+# executor silently ate a valid envelope (`Q-372`).
+FENCE_PATTERN_MODULES = FENCE_AWARE_PARSERS + (pse,)
+
 
 def test_fence_patterns_are_identical_in_all_parsers():
-    assert len({m._FENCE_OPEN_RE.pattern for m in FENCE_AWARE_PARSERS}) == 1
-    assert len({m._FENCE_CLOSE_RE.pattern for m in FENCE_AWARE_PARSERS}) == 1
+    assert len({m._FENCE_OPEN_RE.pattern for m in FENCE_PATTERN_MODULES}) == 1
+    assert len({m._FENCE_CLOSE_RE.pattern for m in FENCE_PATTERN_MODULES}) == 1
 
 
 def test_fenced_mask_bodies_are_identical_in_all_parsers():

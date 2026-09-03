@@ -33,6 +33,7 @@
       "Bash(bash sysop/scripts/install_hooks.sh)",
       "Bash(bash sysop/scripts/self_check.sh)",
       "Bash(bash sysop/scripts/self_check.sh:*)",
+      "Bash(bash sysop/scripts/default_branch.sh)",
       "Bash(bash sysop/scripts/cleanup_worktrees.sh)",
       "Bash(bash sysop/scripts/cleanup_worktrees.sh:*)",
       "Bash(bash sysop/scripts/sysop-update.sh)",

@@ -198,16 +198,65 @@ def test_an_unclaimed_pending_batch_is_still_pending_not_claimed(tmp_path):
     assert out[0].state == "pending (not claimed)", out[0].state
 
 
-def test_a_batch_with_commits_is_not_probed(tmp_path):
-    """The same 0-commit gate `_classify_task` applies on the roadmap path. A
-    claim that has produced commits is moving; probing it would let a stale
-    marker mask live work."""
+def _commit(when, doc_work_ids=()):
+    return ss.Commit(sha="a" * 7, subject="work", author_date=when,
+                     doc_work_ids=list(doc_work_ids), subject_task_id=None)
+
+
+def _touch(path, when):
+    import os
+    ts = when.timestamp()
+    os.utime(path, (ts, ts))
+
+
+def test_a_batch_that_parked_after_producing_commits_is_parked_with_work(tmp_path):
+    """`Q-362`. This test used to assert `in progress` for a marker beside one
+    commit, on the premise that "a claim that has produced commits is moving".
+    Two shipped park sites refute the premise (`planner-integrity.md` =
+    `VIOLATED` is DEFINED as the planner having committed; an executor
+    `STATUS: BLOCKED` parks after the executor ran), and Phase 248's round
+    reproduced the result this pin protected: a parked batch reporting
+    `in progress — continue work`. The park is the LATEST event here — the
+    marker is newer than the commit — so the batch is parked, with work."""
     _park(tmp_path)
-    commits = [ss.Commit(sha="a" * 7, subject="work",
-                         author_date=datetime(2026, 8, 30, tzinfo=timezone.utc),
-                         doc_work_ids=[], subject_task_id=None)]
+    marker = next((tmp_path / "sysop/runtime/parked").iterdir())
+    _touch(marker, datetime(2026, 8, 30, 13, 0, tzinfo=timezone.utc))
+    commits = [_commit(datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc))]
+    out = _classify(tmp_path, [_batch()], [_lock()], commits=commits)
+    assert out[0].state == ss._PARKED_WIP_STATE, out[0].state
+    assert any("park marker on disk" in n for n in out[0].notes), out[0].notes
+    assert any("park is the latest event" in n for n in out[0].notes), out[0].notes
+    # No run directory in this fixture (an `/auto-build`-shaped park), so the
+    # action names the marker rather than a `--resume` that could not work.
+    assert "BATCH-7__" in out[0].next_action, out[0].next_action
+
+
+def test_a_batch_that_resumed_after_a_park_is_not_parked(tmp_path):
+    """The refinement the old pin was protecting, kept: a `--resume` never
+    removes a park marker (the close does, and `--release` does), so between a
+    `--resume` and the close a live batch carries a marker beside its NEW commits. The commit is newer than the
+    marker → the batch resumed → its ordinary state, with the marker noted so
+    the evidence is not dropped."""
+    _park(tmp_path)
+    marker = next((tmp_path / "sysop/runtime/parked").iterdir())
+    _touch(marker, datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc))
+    commits = [_commit(datetime(2026, 8, 30, 13, 0, tzinfo=timezone.utc))]
     out = _classify(tmp_path, [_batch()], [_lock()], commits=commits)
     assert out[0].state == "in progress", out[0].state
+    assert any("predates the newest commit" in n for n in out[0].notes), out[0].notes
+
+
+def test_a_park_with_work_outranks_ready_for_review_close(tmp_path):
+    """A park is a human decision pending; the trailer state of the commits it
+    parked on does not answer it. Every task Doc-Work'd AND a park newer than
+    the last commit → parked with work, not ready."""
+    _park(tmp_path)
+    marker = next((tmp_path / "sysop/runtime/parked").iterdir())
+    _touch(marker, datetime(2026, 8, 30, 13, 0, tzinfo=timezone.utc))
+    commits = [_commit(datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc),
+                       doc_work_ids=["TASK-601", "TASK-602"])]
+    out = _classify(tmp_path, [_batch()], [_lock()], commits=commits)
+    assert out[0].state == ss._PARKED_WIP_STATE, out[0].state
 
 
 def test_an_empty_batch_still_reports_empty(tmp_path):
@@ -219,9 +268,14 @@ def test_an_empty_batch_still_reports_empty(tmp_path):
 
 
 def test_a_branchless_claim_still_reports_branchless(tmp_path):
+    """Arm ordering (`Q-363`): the branchless diagnosis wins — and since Phase
+    252 the park evidence rides along in `notes` instead of being dropped, and
+    the `next_action` names the release path."""
     _park(tmp_path)
     out = _classify(tmp_path, [_batch()], [_lock()], has_branch=False)
     assert out[0].state == "claimed, no branch", out[0].state
+    assert any("park marker on disk" in n for n in out[0].notes), out[0].notes
+    assert "--release 7" in out[0].next_action, out[0].next_action
 
 
 def test_the_marker_must_match_this_batchs_claim_id(tmp_path):
@@ -343,7 +397,7 @@ def test_releasing_a_batch_reaps_its_park_markers(tmp_path):
     script = REPO_ROOT / "core/companion/scripts/batch_work.sh"
     dest = repo / "sysop/scripts"
     dest.mkdir(parents=True)
-    for name in ("batch_work.sh", "review_index.py"):
+    for name in ("batch_work.sh", "review_index.py", "_git_lib.sh"):
         src = REPO_ROOT / "core/companion/scripts" / name
         if src.is_file():
             shutil.copy(src, dest / name)
@@ -382,7 +436,7 @@ def test_the_in_progress_release_path_reaps_markers_too(tmp_path):
     repo = _repo(tmp_path / "repo", _TASKS.replace("`Pending`", "`In Progress`"))
     dest = repo / "sysop/scripts"
     dest.mkdir(parents=True)
-    for name in ("batch_work.sh", "review_index.py"):
+    for name in ("batch_work.sh", "review_index.py", "_git_lib.sh"):
         src = REPO_ROOT / "core/companion/scripts" / name
         if src.is_file():
             shutil.copy(src, dest / name)
@@ -415,7 +469,7 @@ def test_releasing_a_batch_with_no_marker_says_so(tmp_path):
     repo = _repo(tmp_path / "repo", _TASKS)
     dest = repo / "sysop/scripts"
     dest.mkdir(parents=True)
-    for name in ("batch_work.sh", "review_index.py"):
+    for name in ("batch_work.sh", "review_index.py", "_git_lib.sh"):
         src = REPO_ROOT / "core/companion/scripts" / name
         if src.is_file():
             shutil.copy(src, dest / name)

@@ -60,7 +60,7 @@ Detect the **tag prefix convention** from the last tag so the new tag matches it
 
 A release must mark **shipped** code. Assert the following and **stop with a clear message** if any fails (these are checks, not writes, so they run even in dry-run — a dry-run that would fail these is worth surfacing early):
 
-1. **On the release branch.** Default is `main` (the branch `/review-close` lands work on). Assert `git rev-parse --abbrev-ref HEAD` = `main` (or the project's release branch if its `CLAUDE.md` names one). If not, stop: *"Not on the release branch (`main`) — check out the branch you release from and re-run."* This is Rule A of `_shared/main-push-guard.md` applied to the tag site.
+1. **On the release branch.** Resolve it first — `bash sysop/scripts/default_branch.sh`, run bare — unless the project's `CLAUDE.md` names a dedicated release branch, which wins. Assert `git rev-parse --abbrev-ref HEAD` equals `<default branch>`. If not, stop: *"Not on the release branch — check out the branch you release from and re-run."* **Never the literal `main`** (`Q-377`): this precondition sits upstream of Step 8.3's re-assert, so hard-coding it here halted the whole skill on a `master` consumer before the fixed assert was ever reached. This is Rule A of `_shared/main-push-guard.md` applied to the tag site.
 2. **HEAD is already on `origin/<branch>`.** Fetch and assert the tip you're about to tag is pushed:
    ```bash
    git fetch origin
@@ -162,9 +162,11 @@ Use today's date for the entry: a plain `date +%Y-%m-%d` is portable on both BSD
 
 3. **Re-assert the branch/tip, then create the annotated tag.** The Step 8.1 version-confirmation pause is exactly the window `_shared/main-push-guard.md` Rule A warns about — a concurrent Sysop loop (`/auto-build` batch, another `/claim-task`) or a manual `git checkout` can move `HEAD` in the shared primary worktree while you wait, so the Step 2 guarantee is stale by now. Re-assert at the write site, and pass the tag **message as a file, never inline**: the release summary carries backticks, `$`, and quotes **by design** (Step 7), so `git tag -a … -m "<summary>"` would let bash run substitutions or execute approved text — the same hazard Step 9 and `/report-issues` avoid with a file. Write the Step 7 summary to a temp file outside the repo via `Write`, then run as one block:
    ```bash
-   # Rule A + tip check at the actual write site (use the project's release branch if its CLAUDE.md names one, not literally `main`)
-   test "$(git rev-parse --abbrev-ref HEAD)" = "main" || { echo "HEAD moved off main since Step 2 — STOP"; exit 1; }
-   git merge-base --is-ancestor HEAD origin/main || { echo "HEAD advanced to unpushed work — run /review-close first, then re-run"; exit 1; }
+   # Rule A + tip check at the actual write site. Resolve <default branch> with
+   # `bash sysop/scripts/default_branch.sh` (run bare) and substitute it — or use the
+   # project's release branch if its CLAUDE.md names one. Never the literal `main` (Q-377).
+   test "$(git rev-parse --abbrev-ref HEAD)" = "<default branch>" || { echo "HEAD moved off <default branch> since Step 2 — STOP"; exit 1; }
+   git merge-base --is-ancestor HEAD origin/<default branch> || { echo "HEAD advanced to unpushed work — run /review-close first, then re-run"; exit 1; }
    git tag -a "<prefix><new version>" -F "${TMPDIR:-/tmp}/sysop-tag-<version>.md"
    ```
    Delete the temp file after the call returns. If the tag already exists (`git rev-parse --verify "<tag>"` succeeds), **stop** — do not overwrite an existing release tag; tell the human to pick a different version or delete the old tag deliberately.
@@ -173,7 +175,7 @@ Use today's date for the entry: a plain `date +%Y-%m-%d` is portable on both BSD
    ```bash
    git push origin "<prefix><new version>"
    ```
-   No HEAD re-assert is needed here: the tag is an **immutable ref already created on a commit verified present on `origin/main`** (item 3), so pushing it just publishes that fixed ref — unlike a branch push, it doesn't depend on where `HEAD` now points. Never `--force` a tag push. If the push is rejected because the tag exists on origin, stop and surface it — a re-used release tag is a mistake to resolve deliberately, not to force past.
+   No HEAD re-assert is needed here: the tag is an **immutable ref already created on a commit verified present on `origin/<default branch>`** (item 3), so pushing it just publishes that fixed ref — unlike a branch push, it doesn't depend on where `HEAD` now points. Never `--force` a tag push. If the push is rejected because the tag exists on origin, stop and surface it — a re-used release tag is a mistake to resolve deliberately, not to force past.
 
 ## Step 9 — Publish the GitHub Release (only under `--github-release`)
 
@@ -218,7 +220,7 @@ In dry-run, the Tag/Release/Changelog lines read as "would create / would write"
 ## Design notes
 
 - **Write-side, human-gated.** Unlike the read-only reporting family, `/release` mutates: it writes `CHANGELOG.md`, creates a tag, and can publish a Release. So it follows `/review-close`'s discipline — dry-run default, `AskUserQuestion` at the version gate, confirmation before each outward step, and the public Release behind a second `--github-release` opt-in. Nothing irreversible happens without an explicit pick.
-- **The changelog is left uncommitted — on purpose.** Committing it would either need a direct push to `main` (rejected under `pr` merge policy, where `main` is protected) or a whole PR flow — scope that belongs to `/review-close`, not a lightweight release skill. So `/release` writes the entry and hands the commit to the human's normal merge policy. The **tag** is the durable release marker (it points at already-shipped code on `origin/main`); the changelog is documentation that lands right after. A v2 could route a changelog commit through the `pr` flow — deferred.
+- **The changelog is left uncommitted — on purpose.** Committing it would either need a direct push to the default branch (rejected under `pr` merge policy, where that branch is protected) or a whole PR flow — scope that belongs to `/review-close`, not a lightweight release skill. So `/release` writes the entry and hands the commit to the human's normal merge policy. The **tag** is the durable release marker (it points at already-shipped code on the default branch); the changelog is documentation that lands right after. A v2 could route a changelog commit through the `pr` flow — deferred.
 - **Manifest-aware read, never write (Phase 83 decision).** The base version is seeded from the last tag, or read-only from a detected manifest, or `0.0.0`. `/release` does **not** rewrite `package.json`/`pyproject.toml` — that's stack-specific and risky (arbitrary manifest parsing/writing). Sysop's own plugin manifests stay deliberately unversioned (Phase 111 — release pinning is via git tags + `install.sh --ref`, not manifest `version` fields), so cutting a Sysop release exercises the *tag* path here but never the manifest-rewrite path. Writing the manifest version in the release commit is a filed v2 enhancement.
 - **Reasoning role.** The git-log→classify core is mechanical, but the value is the **synthesis** — enriching commit subjects with task titles, choosing what leads the notes, mapping to changelog classes, judging the right semver bump. That's judgment work in the same class as `/daily-summary` and `/roadmap`, so the skill carries the `reasoning` role. *Revisitable:* a consumer who cuts releases often and wants lower latency can remap the `reasoning` role to a lighter model via `.claude/served_models.local.yml` (Phase 69). There is no per-skill key — the role is the unit, so the remap moves every `reasoning` skill together — and because `reasoning` also governs inline pins, the value must be one of `opus`/`sonnet`/`haiku`/`fable`.
 - **Output quality scales with input discipline.** Clean conventional commits + a maintained `tasks/index.yml` yield polished, task-linked notes. A messy-commit consumer falls back to raw `git log` (still works, just less polished). Git-log-only is the floor, not the design.

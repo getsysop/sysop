@@ -273,12 +273,17 @@ def _read_locks(main_root: Path) -> list[Lock]:
             Lock(
                 task_id=task_id,
                 path=p,
-                status=str(raw.get("status", "")),
-                agent=str(raw.get("agent", "")),
-                branch=str(raw.get("branch", "")),
-                workspace=str(raw.get("workspace", "")),
-                started=str(raw.get("started", "")),
-                expires=str(raw.get("expires", "")),
+                # `or ""`, not a default: a key present with an empty value
+                # loads as None, and `str(None)` is the string "None" — which
+                # made a lock reading `branch:` classify as a claim on a
+                # branch literally named None instead of `claimed, no branch`
+                # (Phase 252's round, execute lens).
+                status=str(raw.get("status") or ""),
+                agent=str(raw.get("agent") or ""),
+                branch=str(raw.get("branch") or ""),
+                workspace=str(raw.get("workspace") or ""),
+                started=str(raw.get("started") or ""),
+                expires=str(raw.get("expires") or ""),
                 raw=raw,
             )
         )
@@ -565,12 +570,26 @@ class Commit:
 
 
 def _commits_ahead_of_main(branch: str, main_root: Path) -> list[Commit]:
-    """List commits on `branch` that are not on `origin/main` (or `main`)."""
-    base = _resolve_main_ref(main_root)
-    if not base:
+    """List commits on `branch` reachable from NEITHER the local default branch
+    nor its remote-tracking ref (`_default_branch_refs`).
+
+    Both, with `--not`, because each excludes a class the other admits. An
+    unpushed claim commit on the LOCAL default branch (`batch_work.sh` commits
+    `docs: claim Batch N` and never pushes; `/claim-task` likewise) is reachable
+    from the local ref but not from `origin/<default>` — counted against the
+    remote-tracking ref alone, every ordinary batch park read as `parked, work
+    in progress` with the claim commit as its "work" (Phase 252's round,
+    execute lens, reproduced). An upstream commit not yet pulled is reachable
+    from `origin/<default>` but not from the local ref — counted against the
+    local ref alone, a branch cut from the remote tip reads other people's
+    commits as its own. No resolvable default branch yields `[]`, and
+    `run_survey` reports that as a discrepancy (`Q-365`).
+    """
+    bases = _default_branch_refs(main_root)
+    if not bases:
         return []
     raw = _git(
-        ["log", f"{base}..{branch}", "--pretty=format:%H%x1f%s%x1f%aI%x1f%B%x1e"],
+        ["log", "--pretty=format:%H%x1f%s%x1f%aI%x1f%B%x1e", branch, "--not", *bases],
         cwd=str(main_root),
     )
     if not raw:
@@ -602,11 +621,107 @@ def _commits_ahead_of_main(branch: str, main_root: Path) -> list[Commit]:
     return out
 
 
+def resolve_default_branch(main_root: Path) -> str:
+    """The repository's default branch NAME — `main`, `master`, `develop` … — or "".
+
+    The Python twin of `_git_lib.sh`'s `resolve_default_branch`, kept to the
+    same steps so the bash lifecycle scripts and this survey cannot disagree
+    about which branch a claim is "ahead of" (`Q-365`). Pinned to the bash side
+    behaviourally, over fixture repos, by `tests/test_default_branch_resolution.py`.
+
+    **Public, and named without the underscore for that reason** (`Q-380`,
+    Phase 255): `scope_overlap.py` imports it rather than growing a third copy.
+    The tree holds exactly two behaviourally-pinned Python/bash resolvers on
+    purpose; an out-of-module caller reaching for a private `_`-prefixed symbol
+    is the shape that invites the third. Importers must guard the import — this
+    module's PyYAML resolution `sys.exit(2)`s at module load, so a plain
+    `import sitrep_survey` would make a missing dependency fatal for the caller.
+
+    1. `refs/remotes/<remote>/HEAD` — `origin`, or the repository's only
+       remote when there is exactly one and it is not called `origin` — when
+       the branch it names also exists locally. When it names a branch that
+       exists on the remote (`refs/remotes/<remote>/<name>`) but not locally,
+       the answer is "" — the remote has declared a default the checkout has
+       not created, and every caller needs the local branch, so the caller
+       says how to create it. When the remote-tracking ref is absent too, the
+       declaration is stale (the branch was deleted) and step 2 decides.
+    2. Exactly one of `main` / `master` exists locally.
+    3. An unborn repository (no commit, so no branch ref) has one branch, the
+       one `HEAD` symbolically names.
+    4. Otherwise "". Nothing here guesses; the caller reports the gap.
+
+    Until Phase 252 the only resolver here was `_resolve_main_ref`, whose body
+    tried `origin/main` then `main` and whose docstring promised a third
+    fallback ("then HEAD on the main worktree") that did not exist. On a
+    `master`-default repo it returned "", every claim read 0 commits ahead,
+    and that satisfied the park gate — silently.
+    """
+    def _local(name: str) -> bool:
+        return bool(_git(["rev-parse", "--verify", "--quiet", f"refs/heads/{name}"],
+                         cwd=str(main_root)))
+
+    remote = _default_remote(main_root)
+    head = _git(["symbolic-ref", "--quiet", "--short", f"refs/remotes/{remote}/HEAD"],
+                cwd=str(main_root)) if remote else ""
+    if head:
+        prefix = f"{remote}/"
+        name = head[len(prefix):] if head.startswith(prefix) else head
+        if name and _local(name):
+            return name
+        if name and _git(["rev-parse", "--verify", "--quiet", f"refs/remotes/{remote}/{name}"],
+                         cwd=str(main_root)):
+            return ""
+    have = [n for n in ("main", "master") if _local(n)]
+    if len(have) == 1:
+        return have[0]
+    if not have and not _git(["rev-parse", "--verify", "--quiet", "HEAD"],
+                             cwd=str(main_root)):
+        unborn = _git(["symbolic-ref", "--quiet", "--short", "HEAD"], cwd=str(main_root))
+        if unborn:
+            return unborn
+    return ""
+
+
+def _default_branch_refs(main_root: Path) -> list[str]:
+    """Every ref that IS the default branch here: the local branch and its
+    remote-tracking ref, whichever exist. `[]` when no default branch resolves.
+    `_commits_ahead_of_main` excludes commits reachable from any of them."""
+    name = resolve_default_branch(main_root)
+    if not name:
+        return []
+    remote = _default_remote(main_root) or "origin"
+    return [
+        ref for ref in (name, f"{remote}/{name}")
+        if _git(["rev-parse", "--verify", "--quiet", ref], cwd=str(main_root))
+    ]
+
+
+def _default_remote(main_root: Path) -> str:
+    """`origin` when it exists; the only remote when there is exactly one;
+    else "". Mirrors `_git_lib.sh`."""
+    if _git(["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"], cwd=str(main_root)):
+        return "origin"  # the symref exists (even dangling) whether or not the remote is configured
+    remotes = [r for r in _git(["remote"], cwd=str(main_root)).splitlines() if r.strip()]
+    if "origin" in remotes:
+        return "origin"
+    return remotes[0] if len(remotes) == 1 else ""
+
+
 def _resolve_main_ref(main_root: Path) -> str:
-    """Prefer origin/main; fall back to main; then HEAD on the main worktree."""
-    for ref in ("origin/main", "main"):
-        r = _git(["rev-parse", "--verify", "--quiet", ref], cwd=str(main_root))
-        if r:
+    """One ref naming the default branch, for callers that want a single name:
+    the remote-tracking ref when it exists, else the local branch, else "".
+
+    Kept for its callers and tests; the commit COUNT does not use it alone —
+    see `_commits_ahead_of_main`, which excludes both refs. Until Phase 252
+    this was `("origin/main", "main")` under a docstring promising a third
+    fallback ("then HEAD on the main worktree") the body never had.
+    """
+    name = resolve_default_branch(main_root)
+    if not name:
+        return ""
+    remote = _default_remote(main_root) or "origin"
+    for ref in (f"{remote}/{name}", name):
+        if _git(["rev-parse", "--verify", "--quiet", ref], cwd=str(main_root)):
             return ref
     return ""
 
@@ -802,6 +917,15 @@ def _pending_doc_for(
 # appears on none of the spec's lists of orchestrator-level writes.
 
 _PARKED_STATE = "parked"
+# `Q-362`: a park with commits ahead of the default branch is its own state,
+# not `parked` (0 commits) and not `in progress` (which is what it read as).
+# The rule, settled at Phase 251's open: the park marker does not simply
+# override the commit count; the claim gets a state saying both things are
+# true, with its own arm in both cascade tables. See `_work_after_park` for
+# the one refinement — a park that PREDATES the newest commit is a claim that
+# resumed and moved, and reporting it as parked would tell the human to
+# re-resume live work.
+_PARKED_WIP_STATE = "parked, work in progress"
 _AWAITING_STATE = "awaiting approval"
 
 
@@ -880,10 +1004,105 @@ def _classification_verdict(run: Path) -> str:
     return m.group(1).upper() if m else ""
 
 
+def _park_evidence_time(main_root: Path | None, claim_id: str) -> datetime | None:
+    """When the park evidence `_claim_stall` reports was written, or None.
+
+    The latest of every marker's mtime and name stamp (`_park_stamps`); in the
+    marker-less `verdict: BLOCKED` arm, the run's `classification.md` mtime and
+    the run id's stamp. Every marker, not the newest-named one: names sort by
+    run START, and a re-park of an older run is a newer event with an older
+    name. The files are written at the moment the claim parks (`/claim-task`
+    Step 7c, `/auto-build` Phase 6d), under the gitignored `sysop/runtime/`,
+    which is never cloned — so the mtime is the park time on the machine that
+    parked, and the name stamp bounds it from below. Neither writer records the
+    park time in the file.
+
+    None when there is no park evidence, or nothing can be dated — the callers
+    treat None as "cannot tell", which keeps the park (the conservative reading).
+    """
+    if main_root is None or not claim_id:
+        return None
+    candidates: list[datetime] = []
+    for m in _park_markers(main_root, claim_id):
+        candidates.extend(_park_stamps(m, m.name))
+    if not candidates:
+        run = _newest_claim_run(main_root, claim_id)
+        if run is not None and _classification_verdict(run) == "BLOCKED":
+            candidates.extend(_park_stamps(run / "classification.md", run.name))
+    return max(candidates) if candidates else None
+
+
+_STAMP_RE = re.compile(r"(?:^|__)(\d{8}T\d{6})Z")
+
+
+def _park_stamps(path: Path, name: str) -> list[datetime]:
+    """The times a piece of park evidence can be dated by: the file's mtime,
+    and the UTC stamp both writers put in the NAME (`<RUN_ID>` = `<stamp>Z-<hex>`
+    from `/claim-task` Step 7-pre; `<stamp>Z` from `/auto-build` Phase 6d).
+
+    Both, and the caller takes the max, because each is wrong in one
+    direction the other is right in: mtime is refreshed by a copy or a restore
+    of `sysop/runtime/`, which reads every park as the latest event (the
+    conservative error); the name's stamp is the run's START, which for a
+    `planner committed during 7a` park precedes the commits it parked on — but
+    a run that started AFTER the newest commit cannot have parked before it,
+    so a name stamp newer than the commit keeps the park even when a restore
+    has put the mtime before it (Phase 252's round, execute lens).
+    """
+    out: list[datetime] = []
+    try:
+        out.append(datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc))
+    except OSError:
+        pass
+    m = _STAMP_RE.search(name)
+    if m:
+        try:
+            out.append(datetime.strptime(m.group(1), "%Y%m%dT%H%M%S").replace(tzinfo=timezone.utc))
+        except ValueError:
+            pass
+    return out
+
+
+def _work_after_park(
+    main_root: Path | None, claim_id: str, commits: list[Commit]
+) -> bool:
+    """True when the claim produced a commit AFTER it parked — i.e. it resumed.
+
+    A `--resume` never removes a park marker — the close does (`/review-close`
+    Step 4c for a roadmap claim, `close_batch.sh` for a batch), and so does
+    `batch_work.sh --release` for a batch (`claim-task/SKILL.md` § "What cleans
+    it up") — so between a `--resume` and the close a live, moving claim carries
+    a marker beside its new commits. Reporting that as `parked, work in progress` would recommend
+    re-reading a marker the human already acted on. The discriminator is the
+    newest commit's author date against the park evidence's mtime: newer
+    commit → resumed. Author date rather than committer date on purpose — a
+    resume that only rebases pre-park commits refreshes their committer dates
+    and has produced nothing new; the executor's own commits carry fresh author
+    dates. False when the park time cannot be read (keep the park).
+    """
+    if not commits:
+        return False
+    parked_at = _park_evidence_time(main_root, claim_id)
+    if parked_at is None:
+        return False
+    newest = max(c.author_date for c in commits)
+    if newest.tzinfo is None:
+        newest = newest.replace(tzinfo=timezone.utc)
+    return newest > parked_at
+
+
 def _claim_stall(
     main_root: Path | None, claim_id: str
 ) -> tuple[str, str, list[str]]:
-    """Why a 0-commit claim is not moving: (state, next_action, notes).
+    """Why a claim is not moving: (state, next_action, notes).
+
+    Reports park / awaiting-approval evidence for ANY claim; the callers decide
+    what it means beside the commit count (`Q-362`: 0 commits → `parked` /
+    `awaiting approval`; commits and the park is the latest event → `parked,
+    work in progress`; commits newer than the park → the ordinary arms, with
+    the evidence carried in `notes`). Until Phase 252 both callers gated this
+    call on 0 commits, on the false premise that a park is "by construction
+    the state where nothing has been produced".
 
     ("", "", []) means no positive evidence of a stall — the ordinary case, and
     the one that leaves `planning` in place. `main_root=None` (a direct caller
@@ -975,9 +1194,21 @@ def _classify_task(
     # advice about a live claim, and the exact opposite of what the park needs.
     # This phase's round found it, and found that every integration test built
     # `Lock(started="")`, which short-circuits the stale check and hid it.
-    stall_state, stall_action, stall_notes = _claim_stall(
-        main_root, task_id
-    ) if not commits else ("", "", [])
+    #
+    # `Q-362`: the probe is no longer gated on `not commits`. Two shipped park
+    # sites guarantee commits (`planner-integrity.md` = `VIOLATED` is DEFINED
+    # as the planner having committed; an executor `STATUS: BLOCKED` parks
+    # after the executor ran), and gating the probe on their absence classified
+    # both as `in progress`. The gate lives in the arms below now, where the
+    # commit count and the park evidence are read TOGETHER — and the batch
+    # path (`_classify_review_batches`) applies the same three-way rule, which
+    # is what keeps the two paths from disagreeing about what a park means.
+    stall_state, stall_action, stall_notes = _claim_stall(main_root, task_id)
+    resumed = (
+        stall_state == _PARKED_STATE
+        and bool(commits)
+        and _work_after_park(main_root, task_id, commits)
+    )
 
     # Stale check (applies to any state with a lock + worktree)
     if lock and lock.started and not stall_state:
@@ -991,7 +1222,7 @@ def _classify_task(
                     f"investigate {task_id}; confirm dead and "
                     f"rm {lock.path} if abandoned"
                 )
-                notes.append(f"lock age {age.days}d; no commits ahead of main")
+                notes.append(f"lock age {age.days}d; no commits ahead of the default branch")
                 return TaskState(
                     task_id=task_id,
                     state=state,
@@ -1012,13 +1243,19 @@ def _classify_task(
         except ValueError:
             notes.append(f"lock has unparseable started='{lock.started}'")
 
-    # Branchless claim
+    # Branchless claim. `Q-363`: the park evidence rides along in `notes` —
+    # this arm precedes the park arms on purpose (a branchless claim is the
+    # more actionable diagnosis, and `--resume` cannot work without the branch),
+    # and dropping the evidence here is how a parked claim with a deleted
+    # branch used to vanish from both routing surfaces.
     if lock and not branch:
         state = "claimed, no branch"
         next_action = (
-            f"branch not yet created for {task_id}; "
-            "verify claim_task.sh completed or recreate"
+            f"branch not yet created for {task_id}; verify claim_task.sh "
+            f"completed or recreate it — or release the claim: "
+            f"bash sysop/scripts/claim_task.sh --release {task_id}"
         )
+        notes.extend(stall_notes)
         return TaskState(
             task_id=task_id,
             state=state,
@@ -1039,6 +1276,22 @@ def _classify_task(
 
     commits_ahead = len(commits)
 
+    # The evidence a park or an unanswered gate leaves beside COMMITS is never
+    # dropped, whichever arm below wins: `Q-362`'s filed reproduction was a
+    # marker plus a lock plus one commit reporting `in progress` with nothing
+    # in the report saying a marker existed.
+    if commits and resumed:
+        notes.append(
+            "park marker on disk predates the newest commit — the claim "
+            "resumed after it parked; the marker is removed at close"
+        )
+    elif commits and stall_state == _AWAITING_STATE:
+        notes.append(
+            "classification.md reads verdict: PROCEED with no outcome.md, and "
+            "commits exist — the executor has run, so Step 7d's gate was "
+            "answered; classified by its commits"
+        )
+
     if commits_ahead == 0:
         # Phase 237, Q-030 leg (a): a park and an unstarted claim used to land
         # here identically. The probe (run above, before the stale check)
@@ -1056,6 +1309,19 @@ def _classify_task(
                 f"continue the build pipeline for {task_id} "
                 "(see /claim-task Step 7: plan -> review -> classify -> execute)"
             )
+    elif stall_state == _PARKED_STATE and not resumed:
+        # `Q-362`: commits exist and the park is the latest event on the claim.
+        # Outranks every commit-shape arm below, including `ready for
+        # /review-close`: a park is a human decision pending, and the trailer
+        # state of the commits it parked on does not answer it.
+        state = _PARKED_WIP_STATE
+        next_action = stall_action
+        notes.extend(stall_notes)
+        notes.append(
+            f"{commits_ahead} commit(s) ahead of the default branch were "
+            "produced before the park — the park is the latest event on this "
+            "claim"
+        )
     elif task_id and task_id in doc_work_ids and pending_doc is None:
         # ── Q-019: trailer present, pending-doc absent ───────────
         #
@@ -1504,27 +1770,41 @@ def _classify_review_batches(
         done = len(doc_worked)
         notes: list[str] = []
 
-        # `Q-317`. The same 0-commit condition `_classify_task` applies on the
-        # roadmap path (this one also requires a lock, which that path gets from
-        # its caller), so the two paths cannot drift into different answers about
-        # what a park is.
-        #
-        # ⚠ **The justification this comment used to give was false, and the
-        # limitation it hides is live on BOTH paths.** It said "a park is by
-        # construction the state where nothing has been produced". Two shipped
-        # park sites guarantee the opposite: `claim-task/SKILL.md` parks on
-        # `planner-integrity.md` = `VIOLATED`, whose definition is that the
-        # planner COMMITTED during 7a, and it parks again on an executor
-        # `STATUS: BLOCKED`, after the executor has been running. Reproduced by
-        # Phase 248's round: a park marker plus a lock plus one commit ahead
-        # reports `in progress — continue work; 0 of N tasks have Doc-Work
-        # trailers yet`, which is verbatim the string `Q-317` was filed about.
-        # The gate is kept because widening it here alone would make the two
-        # paths disagree, which is the defect this arm exists to prevent; the
-        # widening is filed for both paths together.
+        # `Q-317` / `Q-362`. The probe runs for any LOCKED batch, and the
+        # three-way rule below — 0 commits → `parked` / `awaiting approval`;
+        # commits with the park as the latest event → `parked, work in
+        # progress`; commits newer than the park → the progress arms, evidence
+        # in `notes` — is the SAME rule `_classify_task` applies on the roadmap
+        # path, so the two cannot drift into different answers about what a
+        # park is. Until Phase 252 the probe was gated on `not commits` on
+        # both paths, on the false premise that a park is "by construction the
+        # state where nothing has been produced"; `claim-task/SKILL.md` parks
+        # on `planner-integrity.md` = `VIOLATED`, whose definition is that the
+        # planner COMMITTED, and again on an executor `STATUS: BLOCKED` after
+        # the executor ran. Phase 248's round reproduced the result: marker +
+        # lock + one commit read `in progress — continue work; 0 of N tasks
+        # have Doc-Work trailers yet`, verbatim the string `Q-317` was filed
+        # about, and Phase 248 declined to widen one path alone.
+        claim_id = f"BATCH-{b['number']}"
         stall_state, stall_action, stall_notes = _claim_stall(
-            main_root, f"BATCH-{b['number']}"
-        ) if (has_lock and not commits) else ("", "", [])
+            main_root, claim_id
+        ) if has_lock else ("", "", [])
+        resumed = (
+            stall_state == _PARKED_STATE
+            and bool(commits)
+            and _work_after_park(main_root, claim_id, commits)
+        )
+        if commits and resumed:
+            notes.append(
+                "park marker on disk predates the newest commit — the batch "
+                "resumed after it parked; the marker is removed at close"
+            )
+        elif commits and stall_state == _AWAITING_STATE:
+            notes.append(
+                "classification.md reads verdict: PROCEED with no outcome.md, "
+                "and commits exist — the executor has run, so Step 7d's gate "
+                "was answered; classified by its commits"
+            )
 
         if b["status"] == "Pending" and not has_lock:
             state = "pending (not claimed)"
@@ -1554,14 +1834,44 @@ def _classify_review_batches(
             else:
                 next_action = "/auto-fix will pick this up — triaged auto"
         elif not has_branch:
+            # `Q-363`: this arm precedes the park arms on purpose — a branchless
+            # claim is the more actionable diagnosis, and `--resume` cannot
+            # work without the branch — but the park evidence rides along in
+            # `notes` rather than being dropped, and the state has its own arm
+            # in both cascade tables. A parked batch whose branch was deleted
+            # used to classify here and then vanish from `RECOMMENDED NEXT`
+            # and the ordered list alike.
             state = "claimed, no branch"
             next_action = (
-                f"branch {branch} not created; recheck batch_work.sh result"
+                f"branch {branch} not created; recheck batch_work.sh result "
+                f"or release the claim: bash sysop/scripts/batch_work.sh "
+                f"--release {b['number']}"
             )
+            if stall_notes:
+                # `batch_work.sh --release` reaps the batch's park markers
+                # (Phase 248), so the release this line prescribes destroys
+                # the record the note beside it surfaces. Say so, in order.
+                next_action = (
+                    "read the park marker named in the notes first — "
+                    "--release removes it; then " + next_action
+                )
+            notes.extend(stall_notes)
         elif total == 0:
             state = "empty batch"
             next_action = "verify review_tasks.md batch contents"
-        elif stall_state:
+        elif stall_state == _PARKED_STATE and commits and not resumed:
+            # `Q-362`: commits exist and the park is the latest event on the
+            # batch. Outranks `ready for /review-close` below for the same
+            # reason as on the task path: a park is a human decision pending.
+            state = _PARKED_WIP_STATE
+            next_action = stall_action
+            notes.extend(stall_notes)
+            notes.append(
+                f"{len(commits)} commit(s) ahead of the default branch were "
+                "produced before the park — the park is the latest event on "
+                "this batch"
+            )
+        elif stall_state and not commits:
             # ── Q-317: the park predicate reaches the BATCH path ──────────
             #
             # `_claim_stall` was always claim-kind agnostic as a function — it
@@ -1576,14 +1886,14 @@ def _classify_review_batches(
             # yet`, indistinguishable from a claim that had not started.
             #
             # Placed AFTER the `empty batch` arm and before the progress arms,
-            # which is collision-free rather than merely tidy: the probe is
+            # which is collision-free rather than merely tidy: this arm is
             # gated on `not commits`, and `done` counts Doc-Work trailers borne
             # by commits, so `not commits` implies `done == 0` and the
             # `done == total` arm below is reachable only when `total == 0`,
             # which the arm above has already taken.
             state = stall_state
             next_action = stall_action
-            notes = list(stall_notes)
+            notes.extend(stall_notes)
         elif done == total:
             state = "ready for /review-close"
             next_action = f"/review-close (batch {b['number']})"
@@ -1648,6 +1958,7 @@ class Survey:
 def run_survey(stale_days: int = DEFAULT_STALE_DAYS) -> Survey:
     main_root = _resolve_main_repo_root()
     head_short = _git(["rev-parse", "--short", "HEAD"], cwd=str(main_root))
+    default_branch = resolve_default_branch(main_root)
 
     locks = _read_locks(main_root)
     worktrees = _read_worktrees(main_root)
@@ -1729,6 +2040,26 @@ def run_survey(stale_days: int = DEFAULT_STALE_DAYS) -> Survey:
     discrepancies = _find_discrepancies(
         locks, worktrees, index, main_root
     )
+    if not default_branch:
+        # `Q-365`: with no resolvable default branch every claim above read 0
+        # commits ahead — which satisfied the park gate and the `planning`
+        # arm alike — and nothing said so. Report it FIRST: every state in
+        # this survey is conditioned on it.
+        discrepancies.insert(0, Discrepancy(
+            kind="default branch unresolved",
+            detail=(
+                "no remote HEAD with a local branch, nor exactly one of "
+                "main/master, identifies this repository's default branch, so "
+                "every claim above reads 0 commits ahead and its state cannot "
+                "be trusted"
+            ),
+            suggestion=(
+                "declare it: git remote set-head origin <branch> — or, when "
+                "origin/HEAD already names a branch this checkout lacks, create "
+                "it: git branch <branch> origin/<branch>  (the resolution order "
+                "is documented in sysop/scripts/_git_lib.sh)"
+            ),
+        ))
 
     open_roadmap_ids = sorted(
         tid for tid, t in index.items() if t.get("status") == "open"
@@ -1880,8 +2211,20 @@ def _recommended_next(s: Survey) -> Recommendation | None:
 
     Priority order: review-close (task) → review-close (batch) → unpushed doc-work →
     /triage if any pending batch lacks a Triaged: record → /auto-fix and/or /auto-judge →
-    continue in-progress → parked → awaiting approval → resume planning →
-    /roadmap (deep queue) or /auto-build (shallow) → idle.
+    code committed, docs pending → continue in-progress (task, then batch) →
+    parked with work in progress → parked → awaiting approval (task, then the
+    three batch twins) → claimed, no branch (task, batch) → empty batch →
+    resume planning → stale → /roadmap (deep queue) or /auto-build (shallow) → idle.
+
+    **Every state either classifier emits has an arm here AND in
+    `_suggested_order`** — `tests/test_sitrep_park_wip.py` derives the state
+    set from the classifiers and drives one of each through both tables, with
+    no allowlist. `Q-363`'s defect was a state (`claimed, no branch`) with no
+    arm in either: the batch dropped off `RECOMMENDED NEXT` and the ordered
+    list together, and `Q-019`'s round had already recorded the same shape
+    for `code committed, docs pending`. Three more states were orphaned the
+    same way when `Q-363` was taken (`stale`, `empty batch`, batch
+    `in progress`), so the guard covers the class rather than the filing.
     """
     # P1: tasks ready for /review-close
     ready_tasks = [t for t in s.tasks if t.state == "ready for /review-close"]
@@ -2045,12 +2388,30 @@ def _recommended_next(s: Survey) -> Recommendation | None:
         return Recommendation(
             command=f"continue work on {t.task_id} or /document-work {t.task_id}",
             reason=(
-                f"{t.task_id} has {t.commits_ahead} commit(s) ahead of main "
-                f"but no Doc-Work trailer yet"
+                f"{t.task_id} has {t.commits_ahead} commit(s) ahead of the "
+                f"default branch but no Doc-Work trailer yet"
             ),
         )
 
-    # P6a/P6b: stalled claims — parked, or waiting at Step 7d's human gate.
+    # P5b: in-progress review batches — the batch twin of P5. Orphaned until
+    # Phase 252: the classifier emitted it and neither table had an arm.
+    in_progress_batches = [rb for rb in s.review_batches if rb.state == "in progress"]
+    if in_progress_batches:
+        rb = in_progress_batches[0]
+        return Recommendation(
+            command=(
+                f"continue work on batch {rb.batch_number} "
+                f"(branch {rb.branch}) then /document-work"
+            ),
+            reason=(
+                f"Batch {rb.batch_number} is in progress — "
+                f"{rb.doc_worked_tasks} of {rb.total_tasks} tasks carry "
+                f"Doc-Work trailers"
+            ),
+        )
+
+    # P6a–P6f: stalled claims — parked with work, parked, or waiting at Step
+    # 7d's human gate; the task arms first, then their batch twins.
     #
     # Ranked here, immediately above `planning`, and NOT above P5, because this
     # cascade's consistent logic is "further along ranks higher": P1/P3 have a
@@ -2059,11 +2420,33 @@ def _recommended_next(s: Survey) -> Recommendation | None:
     # specialisation of `planning`, which is exactly why it used to be swallowed
     # by it, so it belongs where `planning` belongs.
     #
+    # `parked, work in progress` (`Q-362`) HAS commits, and it still sits here
+    # rather than above P5: it heads the stall block because it is the furthest
+    # along of the stalls, but a park is a human decision pending, and the
+    # cascade names one move — sending the human to answer a parked claim's
+    # question while a live build sits half-finished is the trade the P6
+    # placement was written to refuse. Its arm is first in the block so a park
+    # with work outranks a park with none.
+    #
     # Visibility is not what the rank buys. The ACTIVE WORK table renders every
     # task with its own state and notes, so a park is legible there whatever the
     # cascade names; the cascade names one move. Ranking a park above live
     # in-progress work would tell a human to go answer a question while a build
     # sits half-finished, which is not the trade this defect was about.
+    parked_wip = [t for t in s.tasks if t.state == _PARKED_WIP_STATE]
+    if parked_wip:
+        t = parked_wip[0]
+        more = f" ({len(parked_wip) - 1} more parked)" if len(parked_wip) > 1 else ""
+        return Recommendation(
+            command=t.next_action,
+            reason=(
+                f"{t.task_id} parked after producing {t.commits_ahead} "
+                f"commit(s) and is waiting on a human decision{more} — see "
+                f"the detail line for what the evidence is"
+            ),
+            detail_lines=list(t.notes),
+        )
+
     parked = [t for t in s.tasks if t.state == _PARKED_STATE]
     if parked:
         t = parked[0]
@@ -2090,13 +2473,30 @@ def _recommended_next(s: Survey) -> Recommendation | None:
             detail_lines=list(t.notes),
         )
 
-    # `Q-317`: the same two states on the BATCH path. Ranked immediately after
+    # `Q-317`: the same states on the BATCH path. Ranked immediately after
     # their roadmap twins rather than interleaved with them, because a batch
     # park and a task park are the same human action and the cascade names one
     # move — ordering between two parks is arbitrary, and stability is worth
-    # more than a coin flip. Both are wired into `_suggested_order` too: Q-019's
+    # more than a coin flip. All are wired into `_suggested_order` too: Q-019's
     # round recorded that a state present in one and absent from the other drops
     # out of the ordered list entirely and the report contradicts itself.
+    parked_wip_batches = [rb for rb in s.review_batches if rb.state == _PARKED_WIP_STATE]
+    if parked_wip_batches:
+        rb = parked_wip_batches[0]
+        more = (
+            f" ({len(parked_wip_batches) - 1} more parked)"
+            if len(parked_wip_batches) > 1 else ""
+        )
+        return Recommendation(
+            command=rb.next_action,
+            reason=(
+                f"Batch {rb.batch_number} parked after work began and is "
+                f"waiting on a human decision{more} — see the detail line for "
+                f"what the evidence is"
+            ),
+            detail_lines=list(rb.notes),
+        )
+
     parked_batches = [rb for rb in s.review_batches if rb.state == _PARKED_STATE]
     if parked_batches:
         rb = parked_batches[0]
@@ -2130,13 +2530,70 @@ def _recommended_next(s: Survey) -> Recommendation | None:
             detail_lines=list(rb.notes),
         )
 
-    # P6e: planning tasks (row 6c/6d are the batch stall states, Q-317)
+    # P6g/P6h: a claim holding a lock and no branch (`Q-363`). Below the
+    # stall block — a park that CAN be resumed outranks one whose branch must
+    # first be recreated or released — and above `planning`, because a
+    # branchless claim cannot be planned on. The task-path predicate is "the
+    # lock records no branch"; the batch-path predicate is "the recorded branch
+    # does not exist" (deleted, or never created). Both land here.
+    branchless = [t for t in s.tasks if t.state == "claimed, no branch"]
+    if branchless:
+        t = branchless[0]
+        return Recommendation(
+            command=t.next_action,
+            reason=(
+                f"{t.task_id} holds a lock but no branch — recreate the branch "
+                f"or release the claim"
+            ),
+            detail_lines=list(t.notes),
+        )
+    branchless_batches = [
+        rb for rb in s.review_batches if rb.state == "claimed, no branch"
+    ]
+    if branchless_batches:
+        rb = branchless_batches[0]
+        return Recommendation(
+            command=rb.next_action,
+            reason=(
+                f"Batch {rb.batch_number} holds a lock but its branch "
+                f"{rb.branch!r} does not exist — recreate it or release the claim"
+            ),
+            detail_lines=list(rb.notes),
+        )
+
+    # P6i: an empty batch — a structural problem in review_tasks.md.
+    empty_batches = [rb for rb in s.review_batches if rb.state == "empty batch"]
+    if empty_batches:
+        rb = empty_batches[0]
+        return Recommendation(
+            command=rb.next_action,
+            reason=f"Batch {rb.batch_number} lists no tasks under its header",
+        )
+
+    # P6j: planning tasks
     planning = [t for t in s.tasks if t.state == "planning"]
     if planning:
         t = planning[0]
         return Recommendation(
             command=f"resume planning for {t.task_id}",
             reason=f"{t.task_id} has a branch + lock but 0 commits ahead",
+        )
+
+    # P6k: stale claims — a lock older than `--stale-days` with no commits.
+    # Last of the claim states: every arm above is a live claim with a named
+    # move, and this one's move is to confirm the claim is dead.
+    stale = [t for t in s.tasks if t.state == "stale"]
+    if stale:
+        t = stale[0]
+        more = f" ({len(stale) - 1} more)" if len(stale) > 1 else ""
+        return Recommendation(
+            command=t.next_action,
+            reason=(
+                f"{t.task_id}'s lock is older than the stale threshold with no "
+                f"commits ahead{more} — confirm it is abandoned before removing "
+                f"anything"
+            ),
+            detail_lines=list(t.notes),
         )
 
     # P7: no active work — the roadmap has claimable tasks.
@@ -2179,8 +2636,13 @@ def _recommended_next(s: Survey) -> Recommendation | None:
 
 def _suggested_order(s: Survey) -> list[str]:
     """Order: ready-to-close first, then in-progress with Doc-Work-needed,
-    then stalled claims (parked, awaiting approval), then planning, then
-    discrepancies."""
+    then stalled claims (parked with work, parked, awaiting approval), then
+    the diagnostics (claimed with no branch, empty batch), then planning and
+    stale, then discrepancies.
+
+    Every state either classifier emits appears here — the invariant
+    `_recommended_next`'s docstring states, guarded without an allowlist.
+    """
     out: list[str] = []
     # 1. Ready for /review-close
     for ts in s.tasks:
@@ -2207,10 +2669,31 @@ def _suggested_order(s: Survey) -> list[str]:
     for ts in s.tasks:
         if ts.state == "code committed, docs pending":
             out.append(f"/document-work {ts.task_id} (trailer present, no pending-doc)")
+    # 2c. Pending unclaimed batches — the ordered-list twin of P4a–4d, which
+    # routes them by their `Triaged:` record; the classifier's `next_action`
+    # already carries that routing as prose.
+    for rb in s.review_batches:
+        if rb.state == "pending (not claimed)":
+            out.append(f"Batch {rb.batch_number} is pending — {rb.next_action}")
     # 3. In-progress (Doc-Work next)
     for ts in s.tasks:
         if ts.state == "in progress":
             out.append(f"/document-work {ts.task_id} (no Doc-Work trailer yet)")
+    for rb in s.review_batches:
+        if rb.state == "in progress":
+            out.append(f"Batch {rb.batch_number} is in progress — {rb.next_action}")
+    # 3a. Parked WITH work (`Q-362`) — heads the stall block, task then batch.
+    for ts in s.tasks:
+        if ts.state == _PARKED_WIP_STATE:
+            out.append(
+                f"{ts.task_id} is parked with work in progress — {ts.next_action}"
+            )
+    for rb in s.review_batches:
+        if rb.state == _PARKED_WIP_STATE:
+            out.append(
+                f"Batch {rb.batch_number} is parked with work in progress — "
+                f"{rb.next_action}"
+            )
     # 3b. Stalled claims — parked, then awaiting approval. Both sit with
     # `planning` (all three are 0-commits-ahead states) and above it, since a
     # named human action beats "resume planning". Q-019's round is the reason
@@ -2235,10 +2718,27 @@ def _suggested_order(s: Survey) -> list[str]:
             out.append(
                 f"Batch {rb.batch_number} awaits your approval — {rb.next_action}"
             )
+    # 3d. Diagnostics (`Q-363`): a lock with no branch, task then batch; then
+    # an empty batch. Below the stalls and above planning, matching P6g–P6i.
+    for ts in s.tasks:
+        if ts.state == "claimed, no branch":
+            out.append(f"{ts.task_id} holds a lock but no branch — {ts.next_action}")
+    for rb in s.review_batches:
+        if rb.state == "claimed, no branch":
+            out.append(
+                f"Batch {rb.batch_number} holds a lock but no branch — {rb.next_action}"
+            )
+    for rb in s.review_batches:
+        if rb.state == "empty batch":
+            out.append(f"Batch {rb.batch_number} is empty — {rb.next_action}")
     # 4. Planning
     for ts in s.tasks:
         if ts.state == "planning":
             out.append(f"resume {ts.task_id} planning (0 commits ahead)")
+    # 4b. Stale — last of the claim states, as in `_recommended_next` P6k.
+    for ts in s.tasks:
+        if ts.state == "stale":
+            out.append(f"{ts.task_id} looks stale — {ts.next_action}")
     # 5. Discrepancies
     if s.discrepancies:
         n = len(s.discrepancies)

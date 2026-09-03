@@ -46,12 +46,27 @@ Run these in parallel:
 
 Also read `tasks/index.yml` to check if the work maps to a task ID. The body for any referenced ID lives **wherever that entry's `body:` field points**, resolved relative to `tasks/` — normally `tasks/open/<TASK-ID>.md`. Do **not** resolve the path from the entry's `status:`: a claim does not move the body, there is no `tasks/in_progress/` directory in any shipped layout, and a flat `tasks/` layout is valid too (`tasks/schema.md`), so `status` predicts the directory for none of the statuses this skill runs against.
 
+## Step 0: Resolve the default branch
+
+**Before any step below, run this once and substitute the name it prints wherever a later
+step writes `<default branch>`:**
+
+```bash
+bash sysop/scripts/default_branch.sh
+```
+
+It is not `main` on every consumer (`Q-377`). **If it exits non-zero, stop** — do not
+substitute an empty value: `git diff ...HEAD` and `git rev-list --count ..<branch>` both
+exit 0 on an empty operand, the second printing `0`, so an unresolved name reads as
+"no changes" rather than as an error. This step is Step 0 because four of this skill's
+five sites are upstream of Step 5, where the instruction used to live.
+
 ## Step 1b: Simplify Pass
 
 Review the task's full change surface — committed branch work plus anything staged or unstaged — for inline quality improvements:
 
 1. Read `.claude/convention_map.md`. For each file in the diff, note the applicable conventions (4-7 per file section).
-2. Read the **full change surface this task introduces**, not just the uncommitted remainder (Phase 222, Q-020): `git diff main...HEAD` (three dots — the committed branch work; on the canonical path the `/claim-task` Step 7e executor has **already committed everything**, so the two commands below alone inspect an empty diff and this whole pass silently reviews nothing) plus `git diff --cached` and `git diff` (anything not yet committed, the solo-path case). Check all of it against:
+2. Read the **full change surface this task introduces**, not just the uncommitted remainder (Phase 222, Q-020): `git diff <default branch>...HEAD` (three dots — the committed branch work; on the canonical path the `/claim-task` Step 7e executor has **already committed everything**, so the two commands below alone inspect an empty diff and this whole pass silently reviews nothing) plus `git diff --cached` and `git diff` (anything not yet committed, the solo-path case). Check all of it against:
    - **Convention map violations** — the 4-7 conventions listed for each file's matching section
    - **Duplicated logic** — code that reimplements an existing helper (e.g., `_latest_obs_sql()`, `_escape_like()`, `getDisplayError()`, `useAbortableFetch()`, `isSafeHref()`, `validate_identifier()`)
    - **Unnecessary complexity** — verbose patterns that can be simplified without changing behavior
@@ -63,7 +78,7 @@ This step catches reuse and quality issues *before* `/review-close`'s review gat
 ## Step 1c: UI Verification
 
 If the change surface touches `frontend/` — the same full basis as Step 1b:
-`git diff main...HEAD` plus staged + unstaged (Phase 222, Q-020 — on the
+`git diff <default branch>...HEAD` plus staged + unstaged (Phase 222, Q-020 — on the
 canonical path the work is already committed, so a staged+unstaged-only test
 never fires) — run the shared UI verification procedure at
 `.claude/skills/_shared/ui-verify.md` before committing. Hard-fail on console errors; warn on console warnings; skip
@@ -359,21 +374,21 @@ Both bypass paths are visible in code review and intentional. `review_task_ids:`
 
 ## Step 5: Prepare for Review
 
-**If invoked with `--non-interactive`** (Phase 6e execution agent): do NOT push regardless of branch state. The orchestrator-driven flow defers all pushes to `/review-close`, which the human runs after walking through the final report. Note the number of unpushed commits: `git rev-list --count origin/main..HEAD`. Proceed to Step 6.
+**If invoked with `--non-interactive`** (Phase 6e execution agent): do NOT push regardless of branch state. The orchestrator-driven flow defers all pushes to `/review-close`, which the human runs after walking through the final report. Note the number of unpushed commits: `git rev-list --count origin/<default branch>..HEAD`. Proceed to Step 6.
 
 **Interactive invocation (default):**
 
 **If on a feature branch:**
-1. Assert you are not on `main` before pushing `HEAD` — a concurrent actor moving `HEAD` onto `main` would otherwise make this push land on `main` (`/review-close` owns `main`, never this skill). This is the inverted form of `_shared/main-push-guard.md` Rule A:
+1. Assert you are not on the default branch (Step 0) before pushing `HEAD` — a concurrent actor moving `HEAD` onto it would otherwise make this push land on `main` (`/review-close` owns `main`, never this skill). This is the inverted form of `_shared/main-push-guard.md` Rule A:
    ```bash
-   test "$(git rev-parse --abbrev-ref HEAD)" != "main" || {
-     echo "HEAD is main — Step 5 pushes a feature branch; /review-close owns main. STOP."; exit 1; }
+   test "$(git rev-parse --abbrev-ref HEAD)" != "<default branch>" || {
+     echo "HEAD is <default branch> — Step 5 pushes a feature branch; /review-close owns it. STOP."; exit 1; }
    ```
 2. Push the branch: `git push -u origin HEAD`
 
-**If on `main`:**
+**If on the default branch:**
 1. Do NOT push — that's `/review-close`'s job
-2. Note the number of unpushed commits: `git rev-list --count origin/main..HEAD`
+2. Note the number of unpushed commits: `git rev-list --count origin/<default branch>..HEAD`
 
 ## Step 6: Confirm
 

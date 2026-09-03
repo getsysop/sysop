@@ -92,7 +92,7 @@ def _repo(root, tasks):
     (root / ".gitignore").write_text(".claude/review_index.json\n")
     sd = root / "sysop" / "scripts"
     sd.mkdir(parents=True, exist_ok=True)
-    for name in ("review_index.py", "_log.py", "batch_work.sh"):
+    for name in ("review_index.py", "_log.py", "batch_work.sh", "_git_lib.sh"):
         src = SCRIPTS / name
         if src.exists():
             shutil.copy(src, sd / name)
@@ -371,7 +371,7 @@ def test_close_batch_refuses_an_ambiguous_number_without_rewriting(tmp_path):
     (repo / ".gitignore").write_text(".claude/review_index.json\n")
     sd = repo / "sysop" / "scripts"
     sd.mkdir(parents=True)
-    for n in ("review_index.py", "_log.py", "close_batch.sh"):
+    for n in ("review_index.py", "_log.py", "close_batch.sh", "_git_lib.sh"):
         if (SCRIPTS / n).exists():
             _sh.copy(SCRIPTS / n, sd / n)
     _git(repo, "add", "-A")

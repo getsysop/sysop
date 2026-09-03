@@ -9,18 +9,28 @@ Playwright MCP, and checks the browser console + network for regressions.
 
 ## Step 1: Detect frontend diff
 
-Run:
+Resolve `<default branch>` first — `bash sysop/scripts/default_branch.sh`, run bare — and
+substitute the name it prints (`Q-377`). It is not `main` on every consumer, and
+`git merge-base main HEAD` on a repo without a `main` ref fails outright, which makes the
+diff empty and the whole step a silent no-op.
+
 ```bash
-git diff --name-only "$(git merge-base main HEAD)" -- frontend/
+bash sysop/scripts/default_branch.sh
+```
+
+Then run:
+```bash
+git diff --name-only "$(git merge-base <default branch> HEAD)" -- frontend/
 ```
 
 This covers both committed and uncommitted changes relative to the point this
-branch was cut. **Diff against the merge-base, not `main`** (internal tracker #241): a
-bare `git diff --name-only main` compares `main`'s *tip* to the working tree, so
-frontend files `main` gained after the branch was cut are reported as this
+branch was cut. **Diff against the merge-base, not the branch tip**
+(internal tracker #241): a bare `git diff --name-only <default branch>` compares that
+branch's *tip* to the
+working tree, so frontend files it gained after this branch was cut are reported as this
 branch's changes and drive a browser verification of work it never did. Three
-dots is not the fix here — `main...HEAD` would drop the uncommitted changes this
-step exists to catch; the merge-base form keeps them. If the output is empty,
+dots is not the fix here — `<default branch>...HEAD` would drop the uncommitted changes
+this step exists to catch; the merge-base form keeps them. If the output is empty,
 emit:
 
 ```

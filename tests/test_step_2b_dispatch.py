@@ -25,72 +25,16 @@ import subprocess
 import sys
 import textwrap
 from pathlib import Path
+from _reversal import assert_no_reversal
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 REVIEW_CLOSE = REPO_ROOT / "core/skills/review-close/SKILL.md"
 CLAIM_TASK = REPO_ROOT / "core/skills/claim-task/SKILL.md"
 
-# --------------------------------------------------------------------------
-# The reversal layer (Phase 247's round, guards lens).
-#
-# 53 of 94 independent mutations survived this phase's first guards, and 38 of
-# those 53 were ONE move: keep every string the guard greps for, and add a
-# sentence next to it that reverses the meaning. A presence check cannot see
-# that by construction -- `"not on the flags" in step` is satisfied forever by
-# a step whose next sentence says *match on the flags*.
-#
-# Skills in this repo do not decay by deletion; they decay by softening. Phase
-# 168's 19-character weakening, Phase 179's "shipped remedy unreachable and its
-# replacement inert", Phase 190's column false for 4 of 6 rows -- all this
-# shape. So each bounded step gets a NEGATIVE assertion: the vocabulary of
-# reversal must not appear inside its slice.
-#
-# Deliberately narrow, and the narrowness is the point. A step legitimately
-# says "advisory" when it is *citing* a refused alternative, so each caller
-# passes the exempt phrases it actually ships. A guard that flags its own
-# shipped text gets deleted by the first operator who hits it.
-REVERSAL_VOCAB = (
-    "is advisory",
-    "are advisory",
-    "advisory only",
-    "and continue the close",
-    "the close proceeds",
-    "the close is not held",
-    "skip this step entirely",
-    "skip here too",
-    "does not second-guess",
-    "may be summarised",
-    "may be summarized",
-    "will do",
-    "in practice",
-)
-
-
-def assert_no_reversal(step, name, exempt=()):
-    """Fail if reversal vocabulary appears in *step* outside the exempt spans.
-
-    `exempt` holds the phrases the step ships on purpose -- a refused
-    alternative it names, a disposition it explicitly grants. Everything else
-    reads as a softening added next to a pinned phrase.
-    """
-    haystack = step
-    for phrase in exempt:
-        assert phrase in step, (
-            f"{name}: exemption {phrase!r} is not in the step -- a stale "
-            f"exemption silently widens what this guard permits"
-        )
-        haystack = haystack.replace(phrase, "")
-    low = haystack.lower()
-    hits = [v for v in REVERSAL_VOCAB if v in low]
-    assert not hits, (
-        f"{name}: reversal vocabulary {hits} appears in the step outside its "
-        f"declared exemptions. Every greppable string this module pins can be "
-        f"preserved while the sentence beside it says the opposite; that is "
-        f"how 38 of 53 mutations walked through the first version of these "
-        f"guards. If the new wording is deliberate, add it to `exempt=` in the "
-        f"same commit and say why."
-    )
-
+# THE REVERSAL LAYER lives in `tests/_reversal.py` (Phase 253, `Q-367`). This module
+# carried its own 13-entry copy from Phase 247 until then; the shared list is a
+# superset of it minus `will do`, whose retirement is recorded in that module and in
+# `Q-367`'s archive entry.
 
 
 def _measurement_command():

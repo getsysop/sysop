@@ -10,7 +10,7 @@ to `main`'s copy, which carries no test-decision heading at all — every shippe
 is told not to write one — and the gate classified the record `missing` for every task on
 every code-touching branch, every run.
 
-**Step 6's `git reset --hard origin/main` was ungated tree-wide (folded in per the fix-wave
+**Step 6's `git reset --hard origin/<default branch>` was ungated tree-wide (folded in per the fix-wave
 brief).** Its prose explained only which *commits* it discards; it also discards every
 uncommitted modification to a tracked file in the main checkout, and nothing gated it.
 
@@ -80,7 +80,7 @@ SECTIONS: dict[str, tuple[str, str | None]] = {
 }
 
 GATE_CMD = 'git diff --quiet HEAD -- && echo "CLEAN — safe to reset" || echo "DIRTY — STOP, see below"'
-RESET_CMD = "git reset --hard origin/main"
+RESET_CMD = "git reset --hard origin/<default branch>"
 
 
 def _text() -> str:
@@ -346,7 +346,7 @@ def check_the_gate_is_executable_correctly_armed_and_first(text: str) -> list[st
                 f"`git diff --quiet` exits 0 when CLEAN. Got: {execs[gate_idx[0]]!r}"
             )
     if not reset_idx:
-        bad.append("Step 6 has no executable `git reset --hard origin/main`")
+        bad.append("Step 6 has no executable `git reset --hard origin/<default branch>`")
     if len(reset_idx) > 1:
         # Gating the first occurrence is worthless if a second one ships behind it. Found by
         # a post-rewrite battery: the ordering assertion alone compared first-to-first.
@@ -467,7 +467,7 @@ MUTATIONS: list[tuple[str, Callable[[str], str]]] = [
         'git diff --quiet HEAD -- README.md && echo "CLEAN — safe to reset"')),
     ("R/F12 move the gate into a fence after the reset", lambda t: (
         t.replace("  " + GATE_CMD + "\n", "", 1)
-         .replace("  git reset --hard origin/main\n", "  git reset --hard origin/main\n  " + GATE_CMD + "\n", 1))),
+         .replace("  git reset --hard origin/<default branch>\n", "  git reset --hard origin/<default branch>\n  " + GATE_CMD + "\n", 1))),
     ("R/C1 collapse `unreadable` into `missing`", _sub(
         "**None of the four is `missing`:** nothing has been asserted",
         "**None of the four is `missing`: each is a stricter form of it, so classify them `missing` and continue —** nothing has been asserted")),
@@ -494,7 +494,7 @@ MUTATIONS: list[tuple[str, Callable[[str], str]]] = [
         "This gate confirms *conditionally* — it refuses only when the reset would actually destroy something",
         "This step does not confirm at all")),
     ("R/L1 add `git clean -fd`, falsifying the untracked claim", _sub(
-        "  git reset --hard origin/main\n", "  git reset --hard origin/main\n  git clean -fd\n")),
+        "  git reset --hard origin/<default branch>\n", "  git reset --hard origin/<default branch>\n  git clean -fd\n")),
     ("R/B3 satisfy the causal tokens with the opposite claim", _sub(
         "carries **no test-decision heading at all**",
         "remains correct for every task; the `missing` storm had another cause entirely")),

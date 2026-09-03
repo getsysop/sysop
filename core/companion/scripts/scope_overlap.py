@@ -33,9 +33,12 @@ Two asymmetric scope sources — the load-bearing insight:
   verdict means "no declared overlap," NOT "provably safe."
 - **An in-flight task's scope is a fact** — it is actively building in a
   worktree, so read the real changed set with
-  ``git -C <worktree> diff --name-only main...HEAD`` (plus uncommitted).
-  Fall back to the lock's ``files_impacted:``, then the body's ``## Key files``,
-  when the worktree diff is empty or unreadable.
+  ``git -C <worktree> diff --name-only <default branch>...HEAD`` (plus
+  uncommitted). The base is **resolved**, never assumed to be ``main``
+  (`Q-380`); when it cannot be resolved the committed half is skipped and the
+  assessment says so in a note, rather than quietly reporting uncommitted work
+  as the whole scope. Fall back to the lock's ``files_impacted:``, then the
+  body's ``## Key files``, when the worktree diff is empty or unreadable.
 
 Usage:
     python3 sysop/scripts/scope_overlap.py <CANDIDATE_ID>            # text advisory
@@ -55,6 +58,7 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import glob
+import io
 import json
 import os
 import re
@@ -501,18 +505,76 @@ def _run_git_porcelain(workspace: str) -> list[str]:
     return out
 
 
+def _resolve_default_branch_for(checkout: str) -> str:
+    """The repository's default branch NAME, or "" when it cannot be resolved.
+
+    `Q-380`: this used to be the literal pair ``("main", "origin/main")``, so on
+    a `master`-default consumer both probes failed, the committed half of every
+    advisory came back empty, and nothing said so.
+
+    The tree deliberately holds exactly **two** behaviourally-pinned resolvers
+    (bash `_git_lib.sh`, Python `sitrep_survey.resolve_default_branch`, pinned
+    to each other by `tests/test_default_branch_resolution.py`); a third copy
+    here would be the defect, not the fix. So this imports the survey's rather
+    than re-deriving it — both modules are loop-excluded (`install.sh`), so they
+    always ship together.
+
+    **The import is guarded, and that guard is load-bearing, not defensive
+    boilerplate.** `sitrep_survey` resolves PyYAML at module scope and
+    `sys.exit(2)`s when it cannot find it — so a plain import would convert this
+    module's documented "absent PyYAML degrades to a note" path into a hard exit
+    2, breaking the never-break-the-caller contract stated at the top of this
+    file. `SystemExit` derives from `BaseException`, so it must be named
+    explicitly; a bare ``except Exception`` would not catch it.
+    """
+    if not checkout:
+        return ""
+    _scripts = str(Path(__file__).resolve().parent)
+    _added = _scripts not in sys.path
+    if _added:
+        sys.path.insert(0, _scripts)
+    _stderr = sys.stderr
+    try:
+        # Silence the import, not just its exit: `sitrep_survey` PRINTS a PyYAML fix
+        # message before the `sys.exit(2)` caught below, and swallowing the exit does not
+        # unwrite the message. `/claim-task` Step 2 surfaces this tool's output verbatim,
+        # so that text reached the operator naming a script they never invoked.
+        sys.stderr = io.StringIO()
+        from sitrep_survey import resolve_default_branch
+        return resolve_default_branch(Path(checkout)) or ""
+    except (ImportError, SystemExit, OSError, subprocess.SubprocessError):
+        return ""
+    finally:
+        sys.stderr = _stderr
+        if _added and _scripts in sys.path:
+            sys.path.remove(_scripts)
+
+
 def _worktree_changed_paths(workspace: str) -> list[str]:
     """The single git boundary (mocked in tests). Real changed set of a live
-    worktree: committed-on-branch (main...HEAD, falling back to origin/main) ∪
-    uncommitted. Returns [] when the workspace isn't a readable git worktree."""
+    worktree: committed-on-branch (``<default branch>...HEAD``) ∪ uncommitted.
+    Returns [] when the workspace isn't a readable git worktree.
+
+    **One argument, deliberately.** The suite injects this boundary by two
+    equally-used routes — ``assess(..., worktree_reader=...)`` and
+    monkeypatching this module attribute — and both pass a one-argument
+    callable, so threading a resolved base in as a second parameter breaks the
+    second route. The base is therefore resolved *here*, per workspace, which
+    is also the more correct reading: a workspace is its own checkout and is
+    entitled to its own answer.
+
+    An unresolvable base skips the committed half entirely rather than falling
+    back to a literal `main` — falling back is the `Q-380` defect. ``assess``
+    emits the note that says it happened; dropping silently to uncommitted-only
+    is what made the original wrong answer invisible."""
     if not workspace or not os.path.isdir(workspace):
         return []
     committed: list[str] = []
-    for base in ("main", "origin/main"):
+    base = _resolve_default_branch_for(workspace)
+    if base:
         ok, lines = _run_git_name_only(workspace, base)
         if ok:
             committed = lines
-            break
     uncommitted = _run_git_porcelain(workspace)
     return sorted({_norm_path(p) for p in (committed + uncommitted) if p})
 
@@ -638,8 +700,27 @@ def assess(
         base_tasks_dir = _TASKS_DIR
     if project_root is None:
         project_root = _REPO_ROOT
+    # `Q-380`: the reader resolves its own base per workspace. This second
+    # resolve exists only to decide whether to SAY so — the defect filed was
+    # not the empty answer, it was the silence around it. It runs only on the
+    # real git boundary, because an injected reader means the boundary is faked
+    # and the note would then describe a repository the test never built.
+    # `Q-380`/`M2`: ask each WORKSPACE, not the project root. The reader resolves per
+    # workspace, so a note derived from the root describes a different repository whenever
+    # the two differ — which `mode: clone` makes routine. Resolving here duplicates the
+    # reader's call; that is the price of a single-argument injectable boundary.
+    #
+    # Gated on the workspace being a real directory, NOT on how the reader was injected.
+    # The first cut used `worktree_reader is None` and justified it as "an injected reader
+    # means the boundary is faked" — which is false for the tree's only production
+    # injection: `/auto-build` injects a CACHING WRAPPER around the real
+    # `_worktree_changed_paths`, so the note this entry exists to add was silent on that
+    # whole path (Phase 255 round, guards lens). A workspace that is not a readable
+    # directory has no committed half to lose, so it needs no note either — which is the
+    # same test `_worktree_changed_paths` already makes.
     if worktree_reader is None:
         worktree_reader = _worktree_changed_paths
+    unresolved_workspaces: list[str] = []
 
     notes: list[str] = []
     index_data = _load_index_soft(index_path)
@@ -659,11 +740,17 @@ def assess(
     locks = _read_locks(project_root)
     overlaps: list[Overlap] = []
     in_flight_count = 0
+    in_flight_with_workspace = False
     for raw in locks:
         tid = str(raw.get("task_id") or "")
         if not tid or tid == candidate_id:
             continue  # skip the candidate's own lock (defensive) + unnamed locks
         in_flight_count += 1
+        _ws = str(raw.get("workspace") or "")
+        if _ws:
+            in_flight_with_workspace = True
+            if os.path.isdir(_ws) and not _resolve_default_branch_for(_ws):
+                unresolved_workspaces.append(tid)
         paths, src = _inflight_scope(
             raw, base_tasks_dir, project_root, index_data, worktree_reader
         )
@@ -679,6 +766,15 @@ def assess(
                     branch=str(raw.get("branch") or ""),
                 )
             )
+
+    if unresolved_workspaces:
+        notes.append(
+            "could not resolve the default branch of "
+            + ", ".join(sorted(unresolved_workspaces))
+            + "'s workspace, so THAT task's scope was read from UNCOMMITTED changes only "
+            "— work already committed on its branch is invisible to this advisory. "
+            "fix: run `git remote set-head origin --auto` in that workspace"
+        )
 
     overlaps.sort(key=lambda o: (-_VERDICT_RANK[o.verdict], o.task_id))
     max_verdict = "none"

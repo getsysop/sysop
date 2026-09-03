@@ -460,11 +460,14 @@ bash sysop/scripts/claim_task.sh --lock "<TASK_ID>" "<BRANCH_NAME>"
 python3 sysop/scripts/validate_tasks.py
 # If non-zero: report validator output verbatim; abort the batch.
 
-# 5.4 — commit the claim (Rule A: assert HEAD is still main before each loop commit —
-#        another Sysop session could have moved it; see _shared/main-push-guard.md.
+# 5.4 — commit the claim (Rule A: assert HEAD is still on the DEFAULT BRANCH before each
+#        loop commit — another Sysop session could have moved it; see
+#        _shared/main-push-guard.md. Resolve <default branch> once before this block with
+#        `bash sysop/scripts/default_branch.sh` (bare) and substitute it — it is not `main`
+#        on every consumer, and the literal halted this loop on a `master` repo (Q-377).
 #        On failure STOP and reconcile via git reflog, do not commit onto the wrong branch.)
-test "$(git rev-parse --abbrev-ref HEAD)" = "main" || {
-  echo "HEAD is not main (a concurrent actor moved it) — STOP."; exit 1; }
+test "$(git rev-parse --abbrev-ref HEAD)" = "<default branch>" || {
+  echo "HEAD is not <default branch> (a concurrent actor moved it) — STOP."; exit 1; }
 git add tasks/index.yml && git commit -m "claim: mark <TASK_ID> as in-progress"
 ```
 
@@ -792,10 +795,10 @@ You are executing roadmap task `<TASK_ID>`. The orchestrator has already:
    - **Reject after consideration** — document the rejection rationale inline when you implement, so the same issue does not resurface during human review.
 2. **Call `ExitPlanMode`** with the revised plan as the plan content. This is the agent's only ExitPlanMode call.
 3. **Implement** per the revised plan.
-4. **Post-fix convention verification** (the same gate `/claim-task` Step 7e's executor runs internally): list changed files via `git diff --name-only main...HEAD`, check each against **`.claude/convention_map.md` and `.claude/security_map.md`** (with their `.project.md` overlays where present) for the relevant section — **both maps (`Q-352`), matching what this skill's own planner reads.** The autonomous path had the same one-map gap `/claim-task` Step 7e had, and the parenthetical above claims parity with that step, so fixing one and not this one would have made the claim false as well as the behaviour wrong, scan new lines for the listed conventions, fix any regressions before committing.
+4. **Post-fix convention verification** (the same gate `/claim-task` Step 7e's executor runs internally): list changed files via `git diff --name-only <default branch>...HEAD`, check each against **`.claude/convention_map.md` and `.claude/security_map.md`** (with their `.project.md` overlays where present) for the relevant section — **both maps (`Q-352`), matching what this skill's own planner reads.** The autonomous path had the same one-map gap `/claim-task` Step 7e had, and the parenthetical above claims parity with that step, so fixing one and not this one would have made the claim false as well as the behaviour wrong, scan new lines for the listed conventions, fix any regressions before committing.
 4b. **Run the consumer's pre-merge verification gates.** The consumer project's `<project>/CLAUDE.md` has a `## Pre-merge verification` section (per WORKFLOW.md § 6.1) that may contain two subsections:
    - **`### Always`** — full-tree commands run unconditionally (lint, typecheck, tests).
-   - **`### Ratchet (changed files only)`** — a single bash block that filters `git diff --name-only origin/main...HEAD` to specific file types and invokes lint/typecheck against changed files only (Phase 17 split shape; empty filtered list short-circuits and passes).
+   - **`### Ratchet (changed files only)`** — a single bash block that filters `git diff --name-only origin/<default branch>...HEAD` to specific file types and invokes lint/typecheck against changed files only (Phase 17 split shape; empty filtered list short-circuits and passes).
 
    Run the commands listed under each subsection that is present. If both subsections are absent, skip this step — `/review-close` will run any project-side verification at merge time (its `4a-post` step, on the merged tree), and the consumer accepts the risk. (`4a-post` also runs the Sysop pre-scan on its own, declared or not — `Q-353` — so the promoted checks are not part of what the consumer is accepting risk on; the branch-in-isolation pass is.) Note the division of labour: this run verifies **this branch in its own worktree**, and is the only thing that ever does — so when the consumer ships no `## Pre-merge verification` section and this step skips, *nothing* verifies the branch in isolation; `4a-post` verifies the **assembled** result and cannot substitute for it.
 

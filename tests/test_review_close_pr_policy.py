@@ -10,13 +10,13 @@ read as correct.
 *local* branch too, so after the remote squash lands `gh` switches to the base branch and
 tries to fast-forward it. In the **integration-branch shape** that cannot succeed: Step 4-pre
 cherry-picked every local-only `main` commit onto the integration branch, so those commits
-exist twice at different SHAs and `origin/main` is not a descendant of local `main`. Step 4d-1
+exist twice at different SHAs and `origin/<default branch>` is not a descendant of local `main`. Step 4d-1
 used to key the stuck-PR branch on "`gh pr merge` refuses", which reads that expected `fatal:`
 as a failed merge and skips all cleanup after a merge that already landed.
 
 Both adversarial reviewers independently caught that the first draft of this fix asserted
 "diverged by construction" as a *universal* — false for the PR-reuse shape the same phase
-added, whose condition 3 requires `origin/main..main` to be empty and where gh's fast-forward
+added, whose condition 3 requires `origin/<default branch>..<default branch>` to be empty and where gh's fast-forward
 therefore succeeds. The guards below assert the claims are stated **per shape**; a universal
 in either direction is the regression.
 
@@ -26,7 +26,7 @@ the whole required-check suite, and orphaned the first PR.
 
 #204's incidental note ("`gh` already fast-forwards local `main`, so Step 6's reset is a
 no-op") is neither adopted nor flatly rejected. It is true of the shape its reporter was in
-(they had `origin/main == main` — the reuse shape) and false of #208's shape. Step 6 keeps the
+(they had `origin/<default branch> == main` — the reuse shape) and false of #208's shape. Step 6 keeps the
 reset unconditionally (it is a no-op where the note holds and load-bearing where it does not)
 and states the reason per shape rather than picking a winner.
 """
@@ -87,8 +87,8 @@ def test_step4d_documents_the_expected_fatal_from_delete_branch():
 def test_the_divergence_claim_is_scoped_by_shape_never_stated_as_universal():
     """The falsehood both reviewers caught. `pr` policy does NOT always diverge.
 
-    Reuse condition 3 requires `git rev-list origin/main..main` to be empty, so under the
-    PR-reuse shape local `main` is an ancestor of `origin/main` and gh's post-merge
+    Reuse condition 3 requires `git rev-list origin/<default branch>..<default branch>` to be empty, so under the
+    PR-reuse shape local `main` is an ancestor of `origin/<default branch>` and gh's post-merge
     fast-forward succeeds — no `fatal:` at all. Any wording that attaches "diverged by
     construction" / "always fails" to `pr` policy as a whole is wrong.
     """
@@ -125,8 +125,8 @@ def test_confirmed_merge_no_longer_accepts_a_zero_exit_as_equivalent_to_merged()
 def test_step6_reset_is_stated_per_shape_and_still_always_run():
     """The reset runs in both shapes; only its *reason* differs. See the module docstring."""
     block = _section("## Step 6: Clean Up", "**`direct` policy — per-branch cleanup.**")
-    assert "git reset --hard origin/main" in block
-    assert "Run the `git reset --hard origin/main` in both shapes" in block
+    assert "git reset --hard origin/<default branch>" in block
+    assert "Run the `git reset --hard origin/<default branch>` in both shapes" in block
     assert "here the reset is load-bearing" in block          # integration-branch shape
     # PR-reuse shape. Phase 219's round measured the old "harmless no-op" claim FALSE for
     # the widened condition 3: a merge-updated branch takes the reuse shape while local
@@ -148,9 +148,9 @@ def test_step6_reset_is_stated_per_shape_and_still_always_run():
 def test_step4pre_probes_for_an_existing_pr_before_cutting_a_branch():
     block = _section("### 4-pre.", "### 4a.")
     probe_at = block.index(
-        'gh pr list --head "<approved branch name>" --base main --state open'
+        'gh pr list --head "<approved branch name>" --base <default branch> --state open'
     )
-    cut_at = block.index('git checkout -b "$INTEGRATION_BRANCH" origin/main')
+    cut_at = block.index('git checkout -b "$INTEGRATION_BRANCH" origin/<default branch>')
     assert probe_at < cut_at, (
         "the reuse probe must run BEFORE the integration branch is cut — probing after it "
         "has already been created is the second-PR bug"
@@ -169,7 +169,7 @@ def test_reuse_requires_all_five_conditions():
         # branch lands it. Measured on a merge-updated branch: unqualified 1, `--not` 0.
         "no local-only `main` commits that the branch does not already contain",
         "**not behind** its remote counterpart",                       # 4: stale head
-        "not behind `origin/main`",                                    # 5: stale base
+        "not behind `origin/<default branch>`",                                    # 5: stale base
     ):
         assert fragment in block, f"reuse condition missing: {fragment!r}"
     # The widening has to be stated honestly in BOTH directions, or a reader assumes it
@@ -190,14 +190,14 @@ def test_reuse_requires_all_five_conditions():
     # not `$APPROVED_BRANCH`. These four strings were the *previous* spelling and pinning
     # them had ratcheted the bug in place — the variable was assigned in an earlier fenced
     # block, so all three branch operands expanded EMPTY on every run. `git fetch origin ""`
-    # exits 0 silently and `git rev-list --count "..origin/main"` answers `HEAD..origin/main`,
+    # exits 0 silently and `git rev-list --count "..origin/<default branch>"` answers `HEAD..origin/<default branch>`,
     # so condition 4 printed nothing, `:694` read that as "conditions unmet", and the whole
     # reuse shape was unreachable. Pinning the literal form is what keeps it reachable.
     for probe in (
-        'gh pr list --head "<approved branch name>" --base main --state open',       # 1 + 2
-        'git rev-list --count origin/main..main --not "<approved branch name>"',     # 3
+        'gh pr list --head "<approved branch name>" --base <default branch> --state open',       # 1 + 2
+        'git rev-list --count origin/<default branch>..<default branch> --not "<approved branch name>"',     # 3
         'git rev-list --count "<approved branch name>..origin/<approved branch name>"',  # 4
-        'git rev-list --count "<approved branch name>..origin/main"',                # 5
+        'git rev-list --count "<approved branch name>..origin/<default branch>"',                # 5
     ):
         assert probe in block, f"reuse probe no longer computes: {probe!r}"
     # …and the unqualified form must be GONE, not merely joined. It is a strict PREFIX of
@@ -206,8 +206,8 @@ def test_reuse_requires_all_five_conditions():
     # inside the widened command by construction.
     bare = [
         ln for ln in block.splitlines()
-        if ln.strip() == "git rev-list --count origin/main..main"
-        or ln.strip() == "git rev-list origin/main..main"
+        if ln.strip() == "git rev-list --count origin/<default branch>..<default branch>"
+        or ln.strip() == "git rev-list origin/<default branch>..<default branch>"
     ]
     assert not bare, (
         "Step 4-pre still runs the UNQUALIFIED condition-3 count as a complete command: "
@@ -338,7 +338,7 @@ def test_step4d_reuse_path_never_opens_a_second_pr():
         "the reuse path still invokes gh pr create — that is the second-PR bug"
     )
     # The integration-branch shape, by contrast, must still create one.
-    assert "gh pr create --base main --head" in block[:block.index("*PR-reuse shape:*")]
+    assert "gh pr create --base <default branch> --head" in block[:block.index("*PR-reuse shape:*")]
 
 
 def test_step6_tolerates_the_absent_integration_branch_under_reuse():
@@ -519,8 +519,8 @@ def test_that_pr_handle_guard_is_not_vacuous():
     not counted as a live command."""
     retired = (
         "```bash\n"
-        'PR_REF="$(gh pr create --base main --head "$INTEGRATION_BRANCH" \\\n'
-        'PR_NUMBER="$(gh pr list --head "$APPROVED_BRANCH" --base main --state open \\\n'
+        'PR_REF="$(gh pr create --base <default branch> --head "$INTEGRATION_BRANCH" \\\n'
+        'PR_NUMBER="$(gh pr list --head "$APPROVED_BRANCH" --base <default branch> --state open \\\n'
         'gh pr merge "$PR_REF" --squash --delete-branch\n'
         "gh pr merge $PR --squash\n"
         'gh pr view "$PRNUM" --json state\n'

@@ -103,8 +103,35 @@ def _fixture(tmp_path):
     return primary, linked
 
 
+DEFAULT_BRANCH_SH = REPO_ROOT / "core/companion/scripts/default_branch.sh"
+
+
+def _resolve_placeholders(block: str, cwd: Path) -> str:
+    """Substitute `<default branch>` exactly as the agent does (`Q-381`, Phase 255).
+
+    The shipped block carries a placeholder, not the literal `main`: Rule A tells the
+    agent to run `default_branch.sh` BARE and substitute what it prints. bash cannot
+    resolve a placeholder, so this harness performs the same substitution — which means
+    these tests now exercise the resolve step instead of assuming it, and they would go
+    red if `default_branch.sh` stopped answering for a fixture like this one.
+
+    Non-vacuity is asserted separately by
+    `test_step1a_actually_carries_the_placeholder_this_harness_substitutes`: if the block
+    regressed to a literal, this function would be a silent no-op and every behavioural
+    test below would keep passing while the defect shipped.
+    """
+    if "<default branch>" not in block:
+        return block
+    r = subprocess.run(["bash", str(DEFAULT_BRANCH_SH), str(cwd)],
+                       capture_output=True, text=True)
+    name = r.stdout.strip()
+    assert r.returncode == 0 and name, (
+        f"default_branch.sh could not resolve the fixture's default branch: {r.stderr!r}")
+    return block.replace("<default branch>", name)
+
+
 def _run(block: str, cwd: Path) -> str:
-    r = subprocess.run(["bash", "-c", block], cwd=str(cwd),
+    r = subprocess.run(["bash", "-c", _resolve_placeholders(block, cwd)], cwd=str(cwd),
                        capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     return r.stdout
@@ -230,11 +257,72 @@ class TestTheOtherTwoClassificationArms:
         """`origin/main` does not exist in a consumer that has not fetched, so the count
         silently becomes 0 and every branch classifies MERGED — safe to remove."""
         block = _step_1a_block()
-        assert 'main..$branch' in block
-        broken = block.replace('"main..$branch"', '"origin/main..$branch"')
+        assert '<default branch>..$branch' in block, (
+            "stale mutation anchor: the block no longer spells the range this way, so "
+            "the replace below is a no-op and the assertion proves nothing")
+        broken = block.replace('"<default branch>..$branch"',
+                               '"origin/<default branch>..$branch"')
+        assert broken != block, "the mutation did not apply"
         out = _run(broken, self._clean_worktrees(tmp_path))
         assert "AHEAD" not in out, (
             "with no origin, the mutated count is 0 and unmerged work reads MERGED:\n" + out)
+
+
+def _master_fixture(tmp_path):
+    """The same shape as `_fixture`, on a `master`-default repo.
+
+    Every other fixture in this module is built with `init.defaultBranch=main`, which made
+    `_resolve_placeholders` unfalsifiable: replacing its whole body with
+    `block.replace("<default branch>", "main")` left all 17 tests green, so the module
+    would keep passing if `default_branch.sh` were deleted (Phase 255 round, guards lens).
+    A `master` fixture is what makes the substitution mean something.
+    """
+    primary = tmp_path / "primary"
+    primary.mkdir()
+    _git(primary, "-c", "init.defaultBranch=master", "init", "-q", ".")
+    _git(primary, "config", "user.email", "t@t")
+    _git(primary, "config", "user.name", "t")
+    (primary / "README.md").write_text("base\n", encoding="utf-8")
+    _git(primary, "add", "-A")
+    _git(primary, "commit", "-qm", "base")
+    _git(primary, "checkout", "-qb", "feat/ahead")
+    (primary / "work.txt").write_text("c\n", encoding="utf-8")
+    _git(primary, "add", "-A")
+    _git(primary, "commit", "-qm", "ahead")
+    _git(primary, "checkout", "-q", "master")
+    linked = tmp_path / "wt-ahead"
+    _git(primary, "worktree", "add", "-q", str(linked), "feat/ahead")
+    return primary
+
+
+def test_the_block_classifies_correctly_on_a_master_default_repo(tmp_path):
+    """The whole point of `Q-381`, executed rather than asserted.
+
+    Pre-fix, Step 1a compared against a literal `main` that does not exist here, the ahead
+    count came back 0, and a branch carrying an unreviewed commit reported MERGED — work
+    silently eligible for a close. This is also the test that kills a `_resolve_placeholders`
+    hard-coded to `main`: on this repo that substitution produces the pre-fix behaviour.
+    """
+    primary = _master_fixture(tmp_path)
+    out = _run(_step_1a_block(), primary)
+    assert "AHEAD    feat/ahead" in out, (
+        "a branch one commit ahead of `master` did not classify AHEAD — the block is "
+        "comparing against a branch this repository does not have:\n" + out
+    )
+    assert "MERGED   feat/ahead" not in out
+
+
+def test_step1a_actually_carries_the_placeholder_this_harness_substitutes():
+    """`_resolve_placeholders` is a silent no-op on a block with no placeholder.
+
+    If Step 1a ever regresses to the literal `main`, every behavioural test in this module
+    would keep passing while a `master` consumer's classifier silently reported every
+    branch MERGED — the exact defect `Q-381` closed. Pin the premise the harness rests on.
+    """
+    block = _step_1a_block()
+    assert "<default branch>" in block, (
+        "Step 1a no longer carries the `<default branch>` placeholder — the substitution "
+        "in `_resolve_placeholders` is vacuous and this module measures nothing about it")
 
 
 class TestTheBranchModeCarveOut:

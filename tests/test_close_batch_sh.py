@@ -968,3 +968,437 @@ def test_a_genuine_integration_merge_is_still_accepted(tmp_path):
         f"strict containment refused a genuine integration merge.\n{r.stdout}"
     )
     assert "`Merged`" in (repo / "review_tasks.md").read_text()
+
+
+class TestInterruptedCloseResume:
+    """`Q-364`: the recovery `/review-close` Step 4b prescribes must work.
+
+    Step 4b's recovery path 1 said a re-run of `close_batch.sh` "will
+    re-attempt the commit". It did not. The failed run had already flipped
+    every requested batch to `Merged` in the working tree, so the re-run's
+    status check skipped each one as `already-merged` **before** reaching the
+    commit block — which is gated on a non-empty closed set. The operator
+    following the prescribed recovery got `Skipped: 1:already-merged` and
+    `close-batch commit present: 0`, and only recovery path 2 (commit by hand)
+    actually worked.
+
+    The discriminator is HEAD: a batch `Merged` in the working tree but not in
+    the last commit is an *interrupted* close, not a finished one.
+    """
+
+    def _blocked_close(self, tmp_path):
+        """Run a close whose commit is blocked, leaving the flip uncommitted."""
+        repo = _repo(tmp_path / "repo")
+        hooks_dir = repo / ".git" / "hooks"
+        _git(repo, "config", "core.hooksPath", str(hooks_dir))
+        hook = hooks_dir / "pre-commit"
+        hook.write_text("#!/bin/sh\nexit 1\n")
+        hook.chmod(0o755)
+        first = _run(repo, "1")
+        assert first.returncode == 1, first.stderr
+        hook.unlink()
+        return repo
+
+    def test_the_prescribed_rerun_now_lands_the_commit(self, tmp_path):
+        repo = self._blocked_close(tmp_path)
+        before = _head(repo)
+
+        r = _run(repo, "1")
+
+        assert r.returncode == 0, r.stderr
+        assert "Commit resumed for: 1" in r.stdout, r.stdout
+        assert _head(repo) != before, "the resume did not commit"
+        subject = subprocess.run(["git", "log", "-1", "--pretty=%s"], cwd=str(repo),
+                                 capture_output=True, text=True).stdout.strip()
+        assert subject == "docs: close Batch 1", subject
+        porcelain = subprocess.run(["git", "status", "--porcelain", "review_tasks.md"],
+                                   cwd=str(repo), capture_output=True, text=True).stdout
+        assert porcelain == "", f"tree still dirty after the resume: {porcelain!r}"
+
+    def test_the_landing_gate_line_reports_the_resumed_commit(self, tmp_path):
+        """The false negative this fix introduced on its first cut.
+
+        `close-batch commit present: N` is the line Step 4b reads as proof the
+        commit landed, and it was gated on the closed set — so a resume-only
+        run committed successfully and then reported `0`, failing the very
+        recovery it had just performed. Found by running the recovery rather
+        than by reading it.
+        """
+        repo = self._blocked_close(tmp_path)
+        r = _run(repo, "1")
+        assert "close-batch commit present: 1" in r.stdout, r.stdout
+
+    def test_a_genuinely_merged_batch_is_still_skipped(self, tmp_path):
+        """Batch 2 is `Merged` in the seed commit — HEAD agrees, so no resume."""
+        repo = _repo(tmp_path / "repo")
+        r = _run(repo, "2")
+        assert r.returncode == 0, r.stderr
+        assert "2:already-merged" in r.stdout
+        assert "Commit resumed" not in r.stdout
+
+    def test_an_unrelated_dirty_tracker_is_never_swept_into_a_close_commit(self, tmp_path):
+        """The wrong-acceptance control, and the reason the predicate is HEAD.
+
+        The resume performs `git add review_tasks.md` + commit. If it fired on
+        "already `Merged` and the tree is dirty" it would commit somebody's
+        unrelated edit under a `docs: close Batch` subject. Batch 2 is `Merged`
+        in HEAD, so the edit must survive uncommitted.
+        """
+        repo = _repo(tmp_path / "repo")
+        (repo / "review_tasks.md").write_text(
+            (repo / "review_tasks.md").read_text() + "\nan unrelated edit\n"
+        )
+        before = _head(repo)
+
+        r = _run(repo, "2")
+
+        assert r.returncode == 0, r.stderr
+        assert _head(repo) == before, "an unrelated edit was committed"
+        porcelain = subprocess.run(["git", "status", "--porcelain", "review_tasks.md"],
+                                   cwd=str(repo), capture_output=True, text=True).stdout
+        assert "review_tasks.md" in porcelain, "the unrelated edit was consumed"
+
+    def test_an_unreadable_head_refuses_the_resume_and_says_so(self, tmp_path):
+        """Fail closed. A repo with no commits has no HEAD copy to compare.
+
+        The script must not guess: it skips, and it names the hand-commit that
+        does work — which is exactly what Step 4b's recovery path 2 is for.
+
+        Reached here through `git rev-parse --verify HEAD`, which is the first
+        of the predicate's three refusal arms; the others are an untracked
+        tracker and a failing `git diff`.
+        """
+        repo = tmp_path / "repo"
+        repo.mkdir(parents=True)
+        subprocess.run(["git", "-c", "init.defaultBranch=main", "init", "-q", str(repo)],
+                       check=True, capture_output=True)
+        _git(repo, "config", "user.email", "test@test")
+        _git(repo, "config", "user.name", "test")
+        (repo / "review_tasks.md").write_text(BASE_TASKS.replace("`Pending`", "`Merged`", 1))
+
+        r = _run(repo, "1")
+
+        assert r.returncode == 0, r.stderr
+        assert "Could not compare this batch against HEAD" in r.stdout, r.stdout
+        assert "1:already-merged" in r.stdout
+        assert "Commit resumed" not in r.stdout
+
+
+class TestResumeRoundFindings:
+    """The five defects Phase 251's round found in the `Q-364` fix itself.
+
+    Every one of them was invisible to `TestInterruptedCloseResume` above,
+    which is the point: those fixtures are all under 2 KB, all grep-fallback,
+    all clean-tree, and none is a dry run.
+    """
+
+    def _blocked(self, repo):
+        hooks_dir = repo / ".git" / "hooks"
+        _git(repo, "config", "core.hooksPath", str(hooks_dir))
+        hook = hooks_dir / "pre-commit"
+        hook.write_text("#!/bin/sh\nexit 1\n")
+        hook.chmod(0o755)
+        assert _run(repo, "1").returncode == 1
+        hook.unlink()
+
+    def test_a_tracker_larger_than_the_pipe_buffer_still_resumes(self, tmp_path):
+        """The first cut of the probe was INERT on every real tracker.
+
+        It read HEAD's copy into a variable and piped it to `grep -m1`. Under
+        `set -o pipefail` the early-exiting grep leaves the writer with a full
+        pipe, `printf` takes SIGPIPE (141), and the pipeline is non-zero — so
+        the probe answered "cannot tell" and the batch was skipped. Measured at
+        95 KB: skipped, where the 2 KB fixtures above resumed. No fixture in
+        this file was large enough to see it.
+        """
+        tasks = (
+            "# Review Tasks\n\n"
+            "### Batch 1 — First `Pending`\n\n- [ ] task one\n\n"
+            + "\n".join(f"filler {i}" for i in range(8000))
+            + "\n"
+        )
+        assert len(tasks) > 64 * 1024, "fixture is too small to reach the pipe buffer"
+        repo = _repo(tmp_path / "repo", tasks=tasks)
+        self._blocked(repo)
+
+        r = _run(repo, "1")
+
+        assert r.returncode == 0, r.stderr
+        assert "Commit resumed for: 1" in r.stdout, r.stdout
+        assert "close-batch commit present: 1" in r.stdout
+
+    def test_a_resume_does_not_commit_an_unrelated_worktree_edit(self, tmp_path):
+        """The resume commits the INDEX; it does not re-stage.
+
+        Measured before the fix: `git add -- review_tasks.md` took the whole
+        working-tree file, so an edit made between the failed run and the
+        re-run landed in `docs: close Batch 1`. The prose asserted the opposite
+        in three places, and the fail-closed arm's own rationale named this
+        harm as its reason — while the accepted path incurred it.
+        """
+        repo = _repo(tmp_path / "repo")
+        self._blocked(repo)
+        (repo / "review_tasks.md").write_text(
+            (repo / "review_tasks.md").read_text() + "\nAN UNRELATED EDIT\n"
+        )
+
+        r = _run(repo, "1")
+
+        assert r.returncode == 0, r.stderr
+        assert "Commit resumed for: 1" in r.stdout
+        committed = subprocess.run(["git", "show", "HEAD:review_tasks.md"], cwd=str(repo),
+                                   capture_output=True, text=True).stdout
+        assert "AN UNRELATED EDIT" not in committed, "the unrelated edit was swept in"
+        assert "`Merged`" in committed, "the flip itself did not land"
+        porcelain = subprocess.run(["git", "status", "--porcelain", "review_tasks.md"],
+                                   cwd=str(repo), capture_output=True, text=True).stdout
+        assert "review_tasks.md" in porcelain, "the unrelated edit was consumed"
+
+    def test_a_resume_with_an_empty_index_refuses_rather_than_re_staging(self, tmp_path):
+        """Fail closed in the other direction.
+
+        With the index reset, the only way to commit the flip is to take the
+        worktree copy — which is the sweep. Refuse and name the hand-commit.
+        """
+        repo = _repo(tmp_path / "repo")
+        self._blocked(repo)
+        _git(repo, "reset", "-q")
+        (repo / "review_tasks.md").write_text(
+            (repo / "review_tasks.md").read_text() + "\nAN UNRELATED EDIT\n"
+        )
+        before = _head(repo)
+
+        r = _run(repo, "1")
+
+        assert r.returncode == 1, r.stdout
+        assert "Nothing staged for review_tasks.md" in r.stderr, r.stderr
+        assert _head(repo) == before
+
+    def test_a_dry_run_does_not_claim_a_resumed_commit(self, tmp_path):
+        """`--dry-run` reported `Commit resumed for: 1` and committed nothing.
+
+        The terminal line's own comment says a false claim of work here is the
+        defect it exists to prevent.
+        """
+        repo = _repo(tmp_path / "repo")
+        self._blocked(repo)
+        before = _head(repo)
+
+        r = _run(repo, "--dry-run", "1")
+
+        assert r.returncode == 0, r.stderr
+        assert "Commit resumed for:" not in r.stdout, r.stdout
+        assert "WOULD" in r.stdout
+        assert "close-batch commit present: 0" in r.stdout
+        assert _head(repo) == before
+
+    def test_the_commit_subject_lists_batches_in_numeric_order(self, tmp_path):
+        """The set is CLOSED then RESUME, so a 1-and-2 run read `Batch 2, 1`."""
+        tasks = (
+            "# Review Tasks\n\n"
+            "### Batch 1 — First `Pending`\n\n- [ ] a\n\n"
+            "### Batch 2 — Second `Pending`\n\n- [ ] b\n"
+        )
+        repo = _repo(tmp_path / "repo", tasks=tasks)
+        hooks_dir = repo / ".git" / "hooks"
+        _git(repo, "config", "core.hooksPath", str(hooks_dir))
+        hook = hooks_dir / "pre-commit"
+        hook.write_text("#!/bin/sh\nexit 1\n")
+        hook.chmod(0o755)
+        assert _run(repo, "1").returncode == 1   # batch 1 flipped, uncommitted
+        hook.unlink()
+
+        r = _run(repo, "1", "2")                 # 1 resumes, 2 closes
+
+        assert r.returncode == 0, r.stderr
+        subject = subprocess.run(["git", "log", "-1", "--pretty=%s"], cwd=str(repo),
+                                 capture_output=True, text=True).stdout.strip()
+        assert subject == "docs: close Batch 1, 2", subject
+
+
+class TestResumeIsFenceAware:
+    """A fenced `### Batch <N>` example must not answer for the real batch.
+
+    The first cut read HEAD's copy with a raw `grep`, while the working-tree
+    read reaches the same point through `review_index.py`, which masks balanced
+    fences. Two readers, two answers, and the wrong one COMMITS.
+
+    These fixtures install `sysop/scripts/review_index.py` — unlike every other
+    fixture in this file, which deliberately omits it to exercise the grep
+    fallback. Without the index the fallback is fence-blind at the *range* step
+    and flips the fenced example itself, which is long-standing behaviour that
+    `TOTAL_FALLBACK_RANGES` warns about and is not this phase's subject.
+    """
+
+    def _repo_with_index(self, root, tasks):
+        repo = _repo(root, tasks=tasks)
+        scripts = repo / "sysop" / "scripts"
+        scripts.mkdir(parents=True)
+        src = REPO_ROOT / "core/companion/scripts/review_index.py"
+        (scripts / "review_index.py").write_text(src.read_text(encoding="utf-8"),
+                                                 encoding="utf-8")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "index")
+        return repo
+
+    TASKS = (
+        "# Review Tasks\n\n"
+        "```\n"
+        "### Batch 5 — a fenced example `Pending`\n"
+        "```\n\n"
+        "### Batch 5 — the real one `Merged`\n\n- [x] done\n"
+    )
+
+    def test_a_fenced_pending_example_does_not_force_a_false_resume(self, tmp_path):
+        repo = self._repo_with_index(tmp_path / "repo", self.TASKS)
+        (repo / "review_tasks.md").write_text(
+            (repo / "review_tasks.md").read_text() + "\nAN UNRELATED EDIT\n"
+        )
+        before = _head(repo)
+
+        r = _run(repo, "5")
+
+        assert r.returncode == 0, r.stderr
+        assert "5:already-merged" in r.stdout, r.stdout
+        assert "Commit resumed" not in r.stdout
+        assert _head(repo) == before
+        porcelain = subprocess.run(["git", "status", "--porcelain", "review_tasks.md"],
+                                   cwd=str(repo), capture_output=True, text=True).stdout
+        assert "review_tasks.md" in porcelain, "the unrelated edit was swept in"
+
+
+def _bash_lt_4():
+    """A bash older than 4.0, or None.
+
+    macOS still ships 3.2.57 as `/bin/bash` — the shell `close_batch.sh`'s own
+    comments name — while PATH `bash` on a developer machine and in CI is 5.x.
+    Every other test in this file therefore runs 5.x, and the 3.2-only failure
+    modes (`"${ARR[@]}"` on an empty array under `set -u`) are untested.
+    """
+    for candidate in ("/bin/bash", "/usr/bin/bash"):
+        if not Path(candidate).exists():
+            continue
+        out = subprocess.run([candidate, "--version"], capture_output=True, text=True).stdout
+        m = re.search(r"version (\d+)\.", out)
+        if m and int(m.group(1)) < 4:
+            return candidate
+    return None
+
+
+class TestBash32Portability:
+    """`Q-364`'s resume path is the one place an EMPTY array is expanded.
+
+    A resume-only run has `CLOSED=()`, and `"${CLOSED[@]}"` on an empty array is
+    an unbound-variable error under `set -u` in bash 3.2 — which would abort the
+    script *after* the commit, so the terminal `close-batch commit present: N`
+    line Step 4b reads as proof of completion never prints. That is BeanRider
+    ISSUE-0039's silent abort, reachable only on the shell macOS ships.
+
+    Phase 251's round found the guard that prevents it removable with the whole
+    suite green, because nothing ran an old bash.
+    """
+
+    def test_a_resume_only_run_survives_bash_3_2(self, tmp_path):
+        old_bash = _bash_lt_4()
+        if old_bash is None:
+            import pytest
+            pytest.skip("no bash < 4.0 on this machine; macOS ships 3.2 as /bin/bash")
+        repo = _repo(tmp_path / "repo")
+        hooks_dir = repo / ".git" / "hooks"
+        _git(repo, "config", "core.hooksPath", str(hooks_dir))
+        hook = hooks_dir / "pre-commit"
+        hook.write_text("#!/bin/sh\nexit 1\n")
+        hook.chmod(0o755)
+        first = subprocess.run([old_bash, str(SCRIPT), "1"], cwd=str(repo),
+                               capture_output=True, text=True)
+        assert first.returncode == 1, first.stderr
+        hook.unlink()
+
+        r = subprocess.run([old_bash, str(SCRIPT), "1"], cwd=str(repo),
+                           capture_output=True, text=True)
+
+        assert "unbound variable" not in r.stderr, r.stderr
+        assert r.returncode == 0, r.stderr
+        assert "Commit resumed for: 1" in r.stdout, r.stdout
+        # The terminal line is the proof Step 4b reads; a 3.2 abort loses it
+        # AFTER the commit has landed, which is the silent-abort shape.
+        assert "close-batch commit present: 1" in r.stdout, r.stdout
+
+
+class TestResumeRecoveryMessagesNameTheBatches:
+    """`${COMMIT_SET[*]}`, not `${CLOSED[*]}` — on a resume-only run the latter
+    is empty, so the prescribed recovery degrades to a command with no operand.
+    That is `Q-364`'s own class: a recovery the record prescribes and the state
+    cannot satisfy."""
+
+    def test_a_failed_resume_names_the_batch_in_its_rerun_command(self, tmp_path):
+        repo = _repo(tmp_path / "repo")
+        hooks_dir = repo / ".git" / "hooks"
+        _git(repo, "config", "core.hooksPath", str(hooks_dir))
+        hook = hooks_dir / "pre-commit"
+        hook.write_text("#!/bin/sh\nexit 1\n")
+        hook.chmod(0o755)
+        assert _run(repo, "1").returncode == 1      # flip staged, commit blocked
+
+        r = _run(repo, "1")                          # resume, blocked again
+
+        assert r.returncode == 1
+        assert "close_batch.sh 1`" in r.stderr, r.stderr
+
+    def test_an_off_main_resume_names_the_batch_in_its_deferred_unlock_line(self, tmp_path):
+        repo = _repo(tmp_path / "repo")
+        hooks_dir = repo / ".git" / "hooks"
+        _git(repo, "config", "core.hooksPath", str(hooks_dir))
+        hook = hooks_dir / "pre-commit"
+        hook.write_text("#!/bin/sh\nexit 1\n")
+        hook.chmod(0o755)
+        assert _run(repo, "1").returncode == 1
+        hook.unlink()
+        _git(repo, "checkout", "-q", "-b", "feature")
+
+        r = _run(repo, "1")
+
+        assert r.returncode == 0, r.stderr
+        assert "close_batch.sh 1" in r.stdout, r.stdout
+
+    def test_a_resumed_batch_is_not_also_reported_as_skipped(self, tmp_path):
+        """One batch, one verdict. Reporting both is a self-contradiction."""
+        repo = _repo(tmp_path / "repo")
+        hooks_dir = repo / ".git" / "hooks"
+        _git(repo, "config", "core.hooksPath", str(hooks_dir))
+        hook = hooks_dir / "pre-commit"
+        hook.write_text("#!/bin/sh\nexit 1\n")
+        hook.chmod(0o755)
+        assert _run(repo, "1").returncode == 1
+        hook.unlink()
+
+        r = _run(repo, "1")
+
+        assert "Commit resumed for: 1" in r.stdout
+        assert "1:already-merged" not in r.stdout, r.stdout
+        assert "Skipped:" not in r.stdout, r.stdout
+
+
+class TestFlipPredicateRefusalArms:
+    """All three of `flip_is_uncommitted`'s cannot-tell arms, not just the first.
+
+    The only unreadable-HEAD test used a repo with no commits, which fails at
+    `git rev-parse` — the first arm — leaving the tracked-file and diff arms
+    unexercised. A mutation turning either into a fail-OPEN would then resume,
+    and a resume commits.
+    """
+
+    def test_an_untracked_tracker_refuses_the_resume(self, tmp_path):
+        repo = _repo(tmp_path / "repo", tasks=None)
+        _git(repo, "rm", "-q", "--cached", "README.md")
+        (repo / "review_tasks.md").write_text(
+            BASE_TASKS.replace("`Pending`", "`Merged`", 1)
+        )
+        before = _head(repo)
+
+        r = _run(repo, "1")
+
+        assert r.returncode == 0, r.stderr
+        assert "Could not compare this batch against HEAD" in r.stdout, r.stdout
+        assert "Commit resumed" not in r.stdout
+        assert _head(repo) == before

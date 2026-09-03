@@ -21,7 +21,7 @@ checked that a token was present, never what the token claimed*. Concretely —
 * The two-dot scan exempted any *line* that also showed a three-dot form. Step 2b's
   diff-basis line carries two commands, so regressing one of them was exempt out of the
   box, and every other site could be laundered by appending `(cf. \x60git diff
-  main...<branch>\x60)`.
+  <default branch>...<branch>\x60)`.
 * Nothing asserted the skip's *predicate*, so inverting it at both sites — every
   code-bearing branch skips the gate, docs-only branches get reviewed — passed 32/32.
 
@@ -70,7 +70,8 @@ TWO_DOT_DIFF = re.compile(r"git diff\b[^`\n]*?(?<!\.)\.\.(?!\.)")
 # to them — including appending a corrected form to launder a regression — fails.
 ALLOWED_TWO_DOT: dict[str, set[str]] = {
     # Two entries, two different reasons:
-    #  1. Step 1c's sweep — `:186` sets base=$(git merge-base main "$branch"), so it is
+    #  1. Step 1c's sweep — `:186` sets base=$(git merge-base <default branch> "$branch"),
+    #     so it is
     #     already merge-base-relative and asks the inverse question (what did *main* gain
     #     since the cut).
     #  2. Step 2a's rationale note, which quotes the anti-pattern in order to explain it.
@@ -78,8 +79,8 @@ ALLOWED_TWO_DOT: dict[str, set[str]] = {
     #     could be rewritten to recommend two dots while every other guard stayed green,
     #     and 2b/2d both defer to it ("three dots, per Step 2a's note").
     "core/skills/review-close/SKILL.md": {
-        'if git diff --name-only "$base..main" -- | grep -qE "$ARCHIVE_RE"; then',
-        '> **Three dots on every `git diff` in Step 2 — 2a, 2b and 2d (internal tracker #241).** `git diff main..<branch>` compares the two *tips*, so everything `main` gained after the branch was cut renders as though the branch **deleted** it. That is not a rare condition: `/review-close` manufactures it, because Step 1b commits `review_tasks.md` to `main` before any branch is inspected. `git diff main...<branch>` diffs against the merge-base and shows exactly what the branch contributed. A false BLOCK costs a human round-trip; a **false APPROVE** — real hunks buried under phantom deletions — is the worse direction and gets likelier the staler the branch is. **`git log main..<branch>` keeps two dots**: for `log`, two-dot already means "commits on the branch and not on `main`," which is what step 1 wants. The rule is per-command, not a blanket search-and-replace.',
+        'if git diff --name-only "$base..<default branch>" -- | grep -qE "$ARCHIVE_RE"; then',
+        '> **Three dots on every `git diff` in Step 2 — 2a, 2b and 2d (internal tracker #241).** `git diff <default branch>..<branch>` compares the two *tips*, so everything `main` gained after the branch was cut renders as though the branch **deleted** it. That is not a rare condition: `/review-close` manufactures it, because Step 1b commits `review_tasks.md` to `main` before any branch is inspected. `git diff <default branch>...<branch>` diffs against the merge-base and shows exactly what the branch contributed. A false BLOCK costs a human round-trip; a **false APPROVE** — real hunks buried under phantom deletions — is the worse direction and gets likelier the staler the branch is. **`git log <default branch>..<branch>` keeps two dots**: for `log`, two-dot already means "commits on the branch and not on `main`," which is what step 1 wants. The rule is per-command, not a blanket search-and-replace.',
     },
     "core/companion/docs/WORKFLOW.md": set(),
     "docs/install-and-update.md": set(),
@@ -257,21 +258,21 @@ def test_no_unpinned_two_dot_git_diff_anywhere_in_the_shipped_tree():
     "regression",
     [
         # The four sites this phase fixed.
-        "2. `git diff main..<branch> --stat` — scope of changes",
-        "Retrieve the full diff (`git diff main..<branch>`).",
-        "     <full unified diff from git diff main..<branch>>",
-        "**0. Per-branch doc-only skip.** If this branch's diff (`git diff main..<branch>`)",
-        "1. Review each feature branch: `git diff main..<branch>`",
+        "2. `git diff <default branch>..<branch> --stat` — scope of changes",
+        "Retrieve the full diff (`git diff <default branch>..<branch>`).",
+        "     <full unified diff from git diff <default branch>..<branch>>",
+        "**0. Per-branch doc-only skip.** If this branch's diff (`git diff <default branch>..<branch>`)",
+        "1. Review each feature branch: `git diff <default branch>..<branch>`",
         # Shapes the previous shape-based regex could not see (round finding F7).
         "git diff $MAIN..$BRANCH --stat",
         "git diff HEAD..<branch> --stat",
         "git diff master..<branch> --stat",
         "git diff <branch>..main --stat",
         "git diff main@{u}..<branch> --stat",
-        "git diff origin/main..HEAD",
+        "git diff origin/<default branch>..HEAD",
         # Laundering: appending the correct form no longer buys an exemption (F3).
-        "<full unified diff from git diff main..<branch>>   (see `git diff main...<branch>`)",
-        "`git diff main..<branch>`, formerly `git diff main...<branch>`",
+        "<full unified diff from git diff <default branch>..<branch>>   (see `git diff <default branch>...<branch>`)",
+        "`git diff <default branch>..<branch>`, formerly `git diff <default branch>...<branch>`",
     ],
 )
 def test_two_dot_scan_catches_every_known_regression_shape(regression):
@@ -280,18 +281,18 @@ def test_two_dot_scan_catches_every_known_regression_shape(regression):
 
 def test_two_dot_scan_catches_a_range_split_across_a_line_continuation():
     """`_logical_lines` exists for this; without it the range is invisible."""
-    assert _two_dot_offenders("git diff \\\n    main..<branch> --stat")
+    assert _two_dot_offenders("git diff \\\n    <default branch>..<branch> --stat")
 
 
 @pytest.mark.parametrize(
     "correct",
     [
-        "2. `git diff main...<branch> --stat` — scope of changes",
-        "`git diff --name-only origin/main...HEAD`",
-        "1. `git log main..<branch> --oneline` — what commits are on it",
-        'ahead=$(git log --oneline "main..$branch" 2>/dev/null | wc -l | tr -d \' \')',
-        "`git rev-list --count origin/main..main`",
-        'git diff --name-only "$(git merge-base main HEAD)" -- frontend/',
+        "2. `git diff <default branch>...<branch> --stat` — scope of changes",
+        "`git diff --name-only origin/<default branch>...HEAD`",
+        "1. `git log <default branch>..<branch> --oneline` — what commits are on it",
+        'ahead=$(git log --oneline "<default branch>..$branch" 2>/dev/null | wc -l | tr -d \' \')',
+        "`git rev-list --count origin/<default branch>..main`",
+        'git diff --name-only "$(git merge-base <default branch> HEAD)" -- frontend/',
     ],
 )
 def test_two_dot_scan_does_not_fire_on_correct_forms(correct):
@@ -302,12 +303,12 @@ def test_two_dot_scan_does_not_fire_on_correct_forms(correct):
 def test_the_three_legal_two_dot_ranges_are_still_present_and_still_legal():
     """A ban alone passes on a tree that deleted the correct usages too."""
     rc = REVIEW_CLOSE.read_text()
-    assert 'git diff --name-only "$base..main"' in rc, "Step 1c's merge-base-relative sweep"
-    assert "base=$(git merge-base main \"$branch\")" in rc, (
-        "Step 1c's `$base..main` is only correct because `base` is a merge-base — if that "
-        "assignment goes, the allowlist entry becomes a hole"
+    assert 'git diff --name-only "$base..<default branch>"' in rc, "Step 1c's merge-base-relative sweep"
+    assert "base=$(git merge-base <default branch> \"$branch\")" in rc, (
+        "Step 1c's `$base..<default branch>` is only correct because `base` is a merge-base "
+        "— if that assignment goes, the allowlist entry becomes a hole"
     )
-    assert "`git log main..<branch> --oneline`" in rc, (
+    assert "`git log <default branch>..<branch> --oneline`" in rc, (
         "Step 2a's commit listing must keep TWO dots — three-dot `git log` lists main's "
         "commits as though they were the branch's"
     )
@@ -318,11 +319,11 @@ def test_every_step_2_diff_site_uses_the_merge_base_form():
     that could be regressed together while the count still passed."""
     rc = REVIEW_CLOSE.read_text()
     for site in (
-        "`git diff main...<branch> --stat` — scope of changes",            # 2a
-        "| feature branch `<branch>` | `git diff main...<branch>` |",       # 2b/2d basis table
-        "| unpushed-main group | `git diff origin/main...HEAD` |",          # the group target
+        "`git diff <default branch>...<branch> --stat` — scope of changes",            # 2a
+        "| feature branch `<branch>` | `git diff <default branch>...<branch>` |",       # 2b/2d basis table
+        "| unpushed-main group | `git diff origin/<default branch>...HEAD` |",          # the group target
         "<full unified diff from the target's diff basis>",                 # prompt placeholder
-        "`git diff main...<branch>` — three dots, per Step 2a's note",      # 2d predicate
+        "`git diff <default branch>...<branch>` — three dots, per Step 2a's note",      # 2d predicate
     ):
         assert site in rc, f"missing merge-base diff site: {site!r}"
 
@@ -554,7 +555,7 @@ def test_the_unpushed_main_group_has_a_retrieval_command_not_just_a_predicate():
     "For each remaining **branch**" — reproducing, for its own new work, the exact
     fix-the-placeholder-not-the-generator error it caught for #241."""
     block = _step_2b(REVIEW_CLOSE.read_text())
-    assert "| unpushed-main group | `git diff origin/main...HEAD` |" in block
+    assert "| unpushed-main group | `git diff origin/<default branch>...HEAD` |" in block
     assert "**For each remaining target:**" in block, "loop header still says 'branch'"
     assert "the target's **diff basis** from the table above" in block
     assert '<branch name, or "unpushed main commits">' in block, "prompt is branch-shaped"
@@ -595,12 +596,18 @@ def test_ui_verify_diffs_against_the_merge_base():
     which the scan cannot see by construction. Three dots is the wrong fix here: it would
     drop the uncommitted changes the step exists to catch."""
     text = (SKILLS_DIR / "_shared" / "ui-verify.md").read_text()
-    assert 'git diff --name-only "$(git merge-base main HEAD)" -- frontend/' in text
+    assert 'git diff --name-only "$(git merge-base <default branch> HEAD)" -- frontend/' in text
     assert "git diff --name-only main -- frontend/" not in text
 
 
-@pytest.mark.parametrize("script", ["claim_task.sh", "batch_work.sh"])
-def test_task_body_seed_hints_are_merge_base_relative(script):
+@pytest.mark.parametrize("script,base", [
+    ("claim_task.sh", "main"),
+    # Phase 252 (`Q-365`): batch_work.sh resolves the default branch, so its
+    # seed hint names `${DEFAULT_BRANCH}` rather than a literal `main`.
+    ("batch_work.sh", "${DEFAULT_BRANCH}"),
+])
+def test_task_body_seed_hints_are_merge_base_relative(script, base):
     text = (REPO_ROOT / "core" / "companion" / "scripts" / script).read_text()
-    assert "git diff --name-only main...HEAD" in text
+    assert f"git diff --name-only {base}...HEAD" in text
+    assert f"git diff --name-only {base})" not in text
     assert "git diff --name-only main)" not in text

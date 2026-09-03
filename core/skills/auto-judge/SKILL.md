@@ -175,7 +175,10 @@ Wait for confirmation. Do not proceed without it.
 
 ## Step 4: Process Flagged Batches
 
-**Prerequisite:** Verify you are on `main` with a clean working tree. If not, stop.
+**Prerequisite:** Verify you are on the repository's default branch with a clean working
+tree. If not, stop. Resolve the name with `bash sysop/scripts/default_branch.sh` (run bare)
+rather than assuming `main` — `batch_work.sh` refuses the claim off that branch, so
+checking against the wrong name here just moves the failure one step later (`Q-377`).
 
 ### 4a. Compute Overlap (if missing)
 
@@ -207,7 +210,7 @@ Parse the output for the **Worktree path** (`Path:`) and **Branch name** (`Branc
 
 ---
 
-**Without `--merge`**: claim ALL eligible batches sequentially (each claim commits on main), collect worktree paths into a queue, then spawn Opus fix agents in a rolling window:
+**Without `--merge`**: claim ALL eligible batches sequentially (each claim commits on the default branch), collect worktree paths into a queue, then spawn Opus fix agents in a rolling window:
 
 1. **Initial fill**: spawn agents for the first `<cap>` claimed batches in a single message with parallel Agent tool calls. Sub-agents have run in the background by default since Claude Code 2.1.198, and `run_in_background` <!-- skill-audit-ok: run_in_background --> is **not** a parameter of the `Agent` tool — its schema is closed, so a compliant call raises `InputValidationError`, and a rejected tool call is itself an invitation to proceed without the step (`Q-031`).
 2. **Refill on completion**: when a background agent's completion notification arrives, collect its result. If the queue has unstarted batches, spawn one new agent for the next queued batch. Keep the pool full until the queue drains.

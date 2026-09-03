@@ -208,8 +208,12 @@ class TestClaimOnMain:
             fh.write("\n<!-- local uncommitted edit -->\n")
 
         r = _run(repo, "1", env={"WORKTREE_PREFIX": "bw"})
-        assert r.returncode == 0, r.stderr
+        # Phase 254 (`Q-378`): a refusal, not a skip. The claim used to return 0
+        # here and build the worktree and lock anyway, leaving a `Pending` batch
+        # holding a lock at exit 0.
+        assert r.returncode == 1, r.stderr
         assert "review_tasks.md has uncommitted changes" in r.stderr
+        assert "nothing was written" in r.stderr
         # No claim commit was made…
         subj = subprocess.run(["git", "log", "-1", "--pretty=%s"], cwd=str(repo),
                               capture_output=True, text=True).stdout.strip()
@@ -219,24 +223,138 @@ class TestClaimOnMain:
         body = (repo / "review_tasks.md").read_text()
         assert "`Pending`" in body
         assert "`In Progress`" not in body
-        # …and the worktree was still created (the skip is graceful).
-        assert (tmp_path / "bw-batch-1").is_dir()
+        # …and nothing was built around it: no worktree, no lock, no branch.
+        assert not (tmp_path / "bw-batch-1").exists()
+        assert not (repo / "sysop/runtime/locks/BATCH-1.lock").exists()
+        assert "feat/one" not in subprocess.run(
+            ["git", "branch", "--format=%(refname:short)"], cwd=str(repo),
+            capture_output=True, text=True).stdout
 
 
 class TestWorktreeCreation:
-    def test_off_main_skips_claim_but_still_creates_worktree(self, tmp_path):
+    def test_a_configured_origin_that_will_not_fast_forward_refuses(self, tmp_path):
+        """Phase 254 (`Q-377`/`Q-378`) — the arm nothing covered.
+
+        This phase's own author-side battery scored the failed-pull refusal a SURVIVOR:
+        every other arm had a test and this one did not, because every fixture in the
+        corpus configures no remote and therefore never reaches the pull at all. That is
+        the same fixture blindness that let the defect ship — the suite's ordinary claim
+        path ran *through* this arm without exercising it.
+
+        No remote is deliberately not this case (see
+        `test_a_local_only_repo_still_claims_normally`): a local-only repo has nothing to
+        pull and claims. This is a CONFIGURED origin whose history has diverged, where a
+        claim would commit the status flip onto a base the batch was never reviewed
+        against.
+        """
         repo = _repo(tmp_path / "repo")
-        _git(repo, "checkout", "-q", "-b", "other")  # not on main
+        bare = tmp_path / "origin.git"
+        subprocess.run(["git", "init", "--bare", "-q", str(bare)],
+                       check=True, capture_output=True)
+        _git(repo, "remote", "add", "origin", str(bare))
+        _git(repo, "push", "-q", "origin", "main")
+        # Diverge: the remote gains a commit this checkout can never fast-forward over,
+        # and the local branch gains a different one.
+        #
+        # Nothing here may depend on the ambient `init.defaultBranch`. The first version
+        # did, and it passed locally and failed in CI: `git init --bare` takes its HEAD
+        # from that setting, so on a runner where it is `master` the bare repo's HEAD
+        # names a ref that does not exist, `git clone` cannot check anything out
+        # ("remote HEAD refers to nonexistent ref"), the clone lands on an unborn
+        # `master`, and `git push origin main` fails with "src refspec main does not
+        # match any". So: branch from the remote-tracking ref by name, and push with an
+        # explicit `<src>:<dst>` refspec rather than relying on a local branch called
+        # `main` existing in the clone.
+        clone = tmp_path / "clone"
+        subprocess.run(["git", "clone", "-q", str(bare), str(clone)],
+                       check=True, capture_output=True)
+        _git(clone, "config", "user.email", "test@test")
+        _git(clone, "config", "user.name", "test")
+        _git(clone, "checkout", "-q", "-B", "work", "origin/main")
+        (clone / "theirs.txt").write_text("theirs\n")
+        _git(clone, "add", "-A")
+        _git(clone, "commit", "-qm", "theirs")
+        _git(clone, "push", "-q", "origin", "work:main")
+        (repo / "mine.txt").write_text("mine\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "mine")
+
         r = _run(repo, "1", env={"WORKTREE_PREFIX": "bw"})
-        assert r.returncode == 0, r.stderr
-        # Auto-build skips gracefully (never aborts) when off main — the notice
-        # goes to stderr…
-        assert "Not on main" in r.stderr
-        assert "Skipping batch claim" in r.stderr
-        # …and the worktree is still created.
-        assert "Created worktree" in r.stdout
-        wt = tmp_path / "bw-batch-1"
-        assert wt.is_dir(), f"worktree not created at {wt}"
-        head = subprocess.run(["git", "symbolic-ref", "--short", "HEAD"],
-                              cwd=str(wt), capture_output=True, text=True)
-        assert head.stdout.strip() == "feat/one"
+        assert r.returncode == 1, r.stdout + r.stderr
+        assert "nothing was written" in r.stderr, r.stderr
+        assert "diverged" in r.stderr, (
+            "the refusal must name which of the two reachable causes this is — the "
+            "operator's next command differs between them"
+        )
+        assert not (tmp_path / "bw-batch-1").exists()
+        assert not (repo / "sysop/runtime/locks/BATCH-1.lock").exists()
+        assert "`Pending`" in (repo / "review_tasks.md").read_text()
+
+    def test_a_remote_whose_name_merely_contains_origin_is_not_origin(self, tmp_path):
+        """`grep -qx origin`, anchored — not `grep -q origin`. A repo whose only remote is
+        `upstream-origin` has no `origin` to pull from, so it takes the local-only path and
+        claims. With the unanchored grep it would take the pull path, fail, and refuse —
+        re-introducing the over-reach that reddened 33 tests. The mutation survived this
+        module until the round pointed at it."""
+        repo = _repo(tmp_path / "repo")
+        bare = tmp_path / "elsewhere.git"
+        subprocess.run(["git", "init", "--bare", "-q", str(bare)],
+                       check=True, capture_output=True)
+        _git(repo, "remote", "add", "upstream-origin", str(bare))
+        r = _run(repo, "1", env={"WORKTREE_PREFIX": "bw"})
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert "No 'origin' remote" in r.stdout
+        assert (repo / "sysop/runtime/locks/BATCH-1.lock").is_file()
+
+    def test_claim_batch_returns_success_from_exactly_one_arm(self, tmp_path):
+        """The contract in one sentence: `claim_batch` returns 0 only when it flipped the
+        status, or when the batch was already past `Pending` and this is a re-attach.
+
+        Pinned on the source because one of the arms it covers — the empty `batch_start`
+        case — is unreachable by derivation (`review_index.py --range` prints a 1-indexed
+        int), so no fixture can reach it and a behavioural test cannot exist. The round
+        flipped that arm back to `return 0` and nothing noticed."""
+        body = SCRIPTS.joinpath("batch_work.sh").read_text(encoding="utf-8")
+        start = body.index("claim_batch() {")
+        end = body.index("\n}\n", start)
+        fn = body[start:end]
+        returns_zero = [ln.strip() for ln in fn.splitlines() if ln.strip() == "return 0"]
+        assert len(returns_zero) == 1, (
+            f"claim_batch has {len(returns_zero)} `return 0` arms, not 1. Every non-claim "
+            "outcome must refuse before anything is written (`Q-378`) — the top level's "
+            "`|| exit 1` is what turns that into a clean exit, and a second success arm "
+            "silently restores the half-claim."
+        )
+    def test_a_local_only_repo_still_claims_normally(self, tmp_path):
+        """The control for the arm above, and the mistake this phase made first: refusing
+        every failed pull reddened 33 tests, because a local-only repo has nothing to pull
+        and is not a broken state. Without this test the fix's own over-reach reads as
+        correct."""
+        repo = _repo(tmp_path / "repo")            # no remote configured at all
+        r = _run(repo, "1", env={"WORKTREE_PREFIX": "bw"})
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert "No 'origin' remote" in r.stdout
+        assert (repo / "sysop/runtime/locks/BATCH-1.lock").is_file()
+        assert "`In Progress`" in (repo / "review_tasks.md").read_text()
+
+    def test_off_default_branch_refuses_and_builds_nothing(self, tmp_path):
+        """Phase 254 (`Q-378`) — this test used to assert the defect, and said
+        so in its own comment: *"Auto-build skips gracefully (never aborts)"*.
+
+        What it actually pinned was a claim that returned 0 off the default
+        branch and then built a branch, a worktree and a lock around a batch
+        the tracker still called `Pending`. There is no consistent claim to be
+        made from here — the status flip has to commit on the default branch in
+        the primary — so the graceful outcome is a refusal that writes nothing,
+        which is what `/auto-fix` and `/auto-judge` already handle: *"if the
+        script exits non-zero, report the error, skip this batch, and continue
+        to the next one."*"""
+        repo = _repo(tmp_path / "repo")
+        _git(repo, "checkout", "-q", "-b", "other")  # not on the default branch
+        r = _run(repo, "1", env={"WORKTREE_PREFIX": "bw"})
+        assert r.returncode == 1, r.stderr
+        assert "not on main" in r.stderr.lower()
+        assert "nothing was written" in r.stderr
+        assert "Created worktree" not in r.stdout
+        assert not (tmp_path / "bw-batch-1").exists()
+        assert not (repo / "sysop/runtime/locks/BATCH-1.lock").exists()

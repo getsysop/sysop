@@ -153,6 +153,13 @@ ANY_BATCH_HEADER_RE = re.compile(r"^###\s+(Batch\s+\d+)\b")
 CANONICAL_BATCH_RE = re.compile(r"^### Batch (\d+) — (.+?) `([^`]+)`$")
 
 
+# The near-miss population, wider than `ANY_BATCH_HEADER_RE` on purpose and
+# duplicated from `review_index._NEAR_MISS_HEADER_RE` — see that module for the
+# argument. Kept in step because `tests/test_batch_header_near_miss.py` asserts
+# the two twins agree on WHICH line is a near miss.
+NEAR_MISS_HEADER_RE = re.compile(r"^#{2,4}\s*Batch\s+\d+\b", re.IGNORECASE)
+
+
 def near_miss_batch_headers(lines):
     """Unfenced lines that look like a batch header but that this module's
     canonical pattern rejects.
@@ -171,7 +178,7 @@ def near_miss_batch_headers(lines):
         stripped = line.rstrip()
         if CANONICAL_BATCH_RE.match(stripped):
             continue
-        if ANY_BATCH_HEADER_RE.match(stripped):
+        if NEAR_MISS_HEADER_RE.match(stripped):
             out.append((i + 1, stripped))
     return out
 
@@ -1052,7 +1059,44 @@ def main():
     # operational writers emit it. That is the difference from `--check-duplicates`' scoped
     # refusal, where per-round renumbering IS legal.
     near = near_miss_batch_headers(review_lines)
-    if near:
+    # **The gate is narrower than the report, and Phase 256's round is why.**
+    # `Q-375` widened the near-miss POPULATION to `#{2,4}\s*Batch\s+\d+\b` so
+    # that four shapes written at column 0 stop vanishing. Feeding that straight
+    # into this refusal was wrong twice over:
+    #
+    #   1. The stated harm below — "invisible to the status test but VISIBLE to
+    #      its batch counter, so archiving would relocate the batches around it"
+    #      — is true only of a line `ANY_BATCH_HEADER_RE` matches. The four added
+    #      shapes do NOT bound (the boundary twin was deliberately left alone),
+    #      so they cannot truncate a predecessor and the sentence would have
+    #      been false for four of the five populations it covered.
+    #   2. It made an ordinary prose heading a hard whole-run blocker.
+    #      `## Batch 1 retrospective` matches the widened population, and an
+    #      operator note under that heading would have refused every archive
+    #      run until someone renamed it. Measured by the round.
+    #
+    # So: refuse on the ones that actually bound, and WARN on the rest. That is
+    # `Q-375`'s improvement — the four shapes stop being silent — without a new
+    # false refusal, and it keeps this message true of everything it prints.
+    blocking = [(ln, txt) for ln, txt in near if ANY_BATCH_HEADER_RE.match(txt)]
+    advisory = [(ln, txt) for ln, txt in near if not ANY_BATCH_HEADER_RE.match(txt)]
+    if advisory:
+        print(
+            f"WARNING: {os.path.basename(REVIEW_FILE)} has {len(advisory)} line(s) "
+            f"that look like a batch header but bound nothing — no reader will "
+            f"see the batch:",
+            file=sys.stderr,
+        )
+        for lineno, text in advisory:
+            print(f"         :{lineno} — {_sanitize_log(text)}", file=sys.stderr)
+        print(
+            "         Archiving is NOT blocked by these: they are invisible to "
+            "the batch counter too, so they relocate nothing. Fix them if a "
+            "batch was intended.",
+            file=sys.stderr,
+        )
+    if blocking:
+        near = blocking
         print(
             f"Error: refusing to archive — {os.path.basename(REVIEW_FILE)} has "
             f"{len(near)} batch header(s) this archiver cannot read:",
