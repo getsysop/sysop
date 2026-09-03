@@ -224,7 +224,7 @@ def test_the_class_sweep_actually_sees_the_sites_it_claims_to_cover():
     for probe, why in (
         ('gh pr view "<PR>" --json statusCheckRollup', "the command THIS PHASE added"),
         ('git push origin "$INTEGRATION_BRANCH"', "Step 4d's push"),
-        ("gh pr create --base main", "Step 4d's PR creation"),
+        ("gh pr create --base <default branch>", "Step 4d's PR creation"),
         ("python3 sysop/scripts/validate_tasks.py", "Step 4c's validator"),
     ):
         assert any(probe in r for r in regions), (

@@ -220,6 +220,9 @@ def _wildcard_prefix(inner):
     return None
 
 
+DEFAULT_BRANCH_PLACEHOLDER = "<default branch>"
+
+
 def satisfied(required, allow_rules):
     """Does `allow_rules` satisfy `required`?
 
@@ -229,6 +232,18 @@ def satisfied(required, allow_rules):
     """
     if required in allow_rules:
         return True
+    # `Q-381` (Phase 255): a declared rule may carry the `<default branch>` placeholder.
+    # `install.sh` substitutes the consumer's own branch into the template at install time,
+    # so the seeded rule reads `origin/main` here and `origin/master` on a `master` consumer.
+    # Without this arm the check reports drift against every consumer — and, worse, mirrors a
+    # real failure: `/review-close`'s own Pre-flight guard compares the same two strings and
+    # would hard-stop a correct install. The skill resolves the placeholder before comparing;
+    # this is the same substitution, done for the same reason.
+    if DEFAULT_BRANCH_PLACEHOLDER in required:
+        pat = re.compile("^" + re.escape(required).replace(
+            re.escape(DEFAULT_BRANCH_PLACEHOLDER), r"[^\s()]+") + "$")
+        if any(pat.match(rule) for rule in allow_rules):
+            return True
     r = _inner(required)
     if r is None:
         return False
@@ -328,13 +343,92 @@ def test_every_declared_required_rule_ships_in_the_template():
     )
 
 
+def test_review_close_resolves_the_default_branch_before_its_permission_guard():
+    """`Q-381`/`A15`: ordering, which no guard checked until this one.
+
+    `/review-close`'s Pre-flight rule list carries the `<default branch>` placeholder, so
+    the guard is itself one of the steps that needs the resolved name. Resolve after it and
+    the guard compares a placeholder against a concrete rule and hard-stops a correct
+    install. This phase placed the section after Pre-flight on its first cut, by analogy
+    with every other skill, and only `test_every_declared_required_rule_ships_in_the_template`
+    caught it — by the rule text differing, not by the ordering being wrong.
+
+    Phase 254 found this class by deleting `/document-work`'s only resolve instruction and
+    getting no test failure at all. Ordering is a property prose asserts and nothing
+    verifies; this asserts it.
+    """
+    text = (SKILLS_DIR / "review-close" / "SKILL.md").read_text(encoding="utf-8")
+    resolve = text.find("## Resolve the default branch")
+    preflight = text.find("## Pre-flight: Permission Guard")
+    assert resolve != -1, "the resolve section is gone or renamed"
+    assert preflight != -1, "the permission guard section is gone or renamed"
+    assert resolve < preflight, (
+        "the resolve instruction must PRECEDE the permission guard: Pre-flight's own "
+        "required-rule list carries the placeholder, so a guard that runs first compares "
+        "a placeholder against a concrete rule and hard-stops a correct install"
+    )
+
+
+def test_the_resolve_section_still_says_what_it_is_for():
+    """`Q-381`: the ordering test above compares two offsets and nothing else.
+
+    The round's guards lens emptied the section body, reversed its polarity ("On exit 1,
+    **fall back to `main`**"), replaced the bare invocation with the variable assignment
+    Rule A exists to forbid, and deleted the substitute instruction outright — all four
+    green, because a heading in the right place satisfied everything. That is precisely the
+    class the ordering test's own docstring cites: Phase 254 deleted `/document-work`'s only
+    resolve instruction and got no failure at all.
+
+    So pin the four things the section must actually DO. Each is a separate assertion, not
+    a phrase count, because N disconnected phrases are satisfiable by a sentence asserting
+    the opposite.
+    """
+    text = (SKILLS_DIR / "review-close" / "SKILL.md").read_text(encoding="utf-8")
+    start = text.find("## Resolve the default branch")
+    end = text.find("## Pre-flight: Permission Guard")
+    assert 0 <= start < end, "the resolve section is missing or out of order"
+    body = text[start:end]
+
+    assert "bash sysop/scripts/default_branch.sh" in body, (
+        "the section must name the command that resolves the branch")
+    assert "<default branch>" in body, (
+        "the section must name the placeholder it tells the reader to substitute")
+    # Polarity: an unresolvable branch STOPS. The reversal is the dangerous edit, because
+    # falling back to `main` is right on most consumers and wrong exactly where it matters.
+    assert "do not fall back" in body.lower(), (
+        "the refusal arm lost its polarity — an unresolvable default branch must stop the "
+        "close, not default to `main`")
+    # Rule A's whole point: bare invocation, never a variable. A rule does not match past a
+    # variable assignment, so the assigned form binds nothing.
+    assert "not a variable to set" in body, (
+        "the section no longer says the placeholder is not a shell variable — the one thing "
+        "`_shared/main-push-guard.md` Rule A exists to prevent")
+    assert 'DEFAULT_BRANCH="$(' in body, (
+        "the section should show the assigned form it forbids, so a reader recognises it")
+
+
 # ── direction 2: seeded -> declared or justified ──
 
 def test_every_seeded_rule_is_named_by_a_skill_or_justified():
     mentioned = mentioned_anywhere()
+    # `Q-381`: symmetric with `satisfied()`. A skill that names
+    # `Bash(git reset --hard origin/<default branch>)` HAS named the seeded
+    # `Bash(git reset --hard origin/main)` — install.sh writes the concrete branch into
+    # the template, so the two are the same rule at two stages of the same pipeline.
+    # Fixing only the forward direction leaves this one reporting the rule as an orphan
+    # nobody asked for, which is how a real grant ends up "justified" in a list instead
+    # of named by the step that needs it.
+    def _named(rule):
+        if rule in mentioned:
+            return True
+        return any(
+            DEFAULT_BRANCH_PLACEHOLDER in m and satisfied(m, [rule])
+            for m in mentioned
+        )
+
     orphans = [
         r for r in _seeded()
-        if r not in mentioned and r not in SEEDED_WITHOUT_SKILL_MENTION
+        if not _named(r) and r not in SEEDED_WITHOUT_SKILL_MENTION
     ]
     assert not orphans, (
         "seeded rules that no skill names and that carry no justification in "

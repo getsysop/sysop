@@ -320,3 +320,190 @@ def test_get_batch_range_none_for_missing(tmp_path):
     tasks = _write_tasks(tmp_path)
     data = ri.parse_review_tasks(str(tasks))
     assert ri.get_batch_range(data, 999) is None
+
+
+# === `--list` states its own verdict (`Q-371`) ==============================
+#
+# The reported defect: `review_index.py --list` prints zero bytes and exits 0
+# on a batch-free tracker, so the command `/review-close` Step 4b names as
+# authoritative cannot distinguish *ran, found no batches* from *did not run*.
+# Three states shared that silence — a genuinely empty tracker, a tracker whose
+# headers the strict pattern rejects, and a run that never happened. The
+# reporter had the correct verdict and could only establish it by running two
+# cross-checks the skill does not prescribe.
+#
+# This is the repo's own § Report-and-exit integrity shape, closed for
+# `claimable?` in Phase 191 and for the pre-scan taxonomy in Phase 135.
+
+import subprocess  # noqa: E402
+import sys  # noqa: E402
+
+_SCRIPT = Path(__file__).resolve().parents[1] / "core/companion/scripts/review_index.py"
+
+
+def _list(root: Path, tasks: str):
+    """Drive the real script in a scratch repo.
+
+    The script resolves `REPO_ROOT` by walking up from **its own file** to the
+    nearest `.git`, not from the CWD, so it has to be copied into the scratch
+    tree — running it in place would read this repo's own `review_tasks.md`.
+    That is the same resolution `sysop/scripts/` gets in a real install.
+    """
+    import shutil
+
+    subprocess.run(["git", "-c", "init.defaultBranch=main", "init", "-q", str(root)],
+                   check=True, capture_output=True)
+    scripts = root / "sysop" / "scripts"
+    scripts.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(_SCRIPT, scripts / _SCRIPT.name)
+    (root / "review_tasks.md").write_text(tasks, encoding="utf-8")
+    return subprocess.run(
+        [sys.executable, str(scripts / _SCRIPT.name), "--list"],
+        cwd=str(root), capture_output=True, text=True,
+    )
+
+
+def test_empty_tracker_states_that_it_ran(tmp_path):
+    """Exit 0 and no rows is now a POSITIVE statement, not a silence."""
+    r = _list(tmp_path, "# Review Tasks\n\n## Statistics\n")
+    assert r.returncode == 0
+    assert r.stdout == "", "stdout must stay byte-identical for machine consumers"
+    assert "review_index --list: read review_tasks.md" in r.stderr
+    assert "0 batches listed" in r.stderr
+
+
+def test_the_verdict_names_what_it_read(tmp_path):
+    """The line carries the file and its size, so a wrong-tracker read is visible.
+
+    A run against a 4-line stub and a run against a 400-line tracker both
+    printing `0 batches` are different events, and only the size distinguishes
+    them without a second command.
+    """
+    r = _list(tmp_path, "# Review Tasks\n\n## Statistics\n")
+    assert "(3 lines)" in r.stderr, r.stderr
+
+
+def test_a_populated_tracker_also_states_its_count(tmp_path):
+    """Not an empty-only special case — every run accounts for itself."""
+    r = _list(tmp_path, _TASKS_FIXTURE)
+    assert r.returncode == 0
+    assert r.stdout.count("\n") == 3, r.stdout
+    assert "3 batches listed" in r.stderr
+
+
+def test_singular_is_not_reported_as_plural(tmp_path):
+    tasks = "# Review Tasks\n\n### Batch 5 — only one `Pending`\n\n- [ ] t\n"
+    r = _list(tmp_path, tasks)
+    assert "1 batch listed" in r.stderr, r.stderr
+
+
+def test_a_header_the_strict_pattern_rejects_is_warned_about(tmp_path):
+    """The third state the exit code cannot see.
+
+    A `### Batch` line the parser cannot read is reported by nothing: no row,
+    no error, exit 0 — so the tracker plainly declares a batch and the list is
+    silently short. Step 4b then takes its empty arm and the batch is never
+    closed, its tasks and lock left behind, while the step reports success.
+    """
+    tasks = (
+        "# Review Tasks\n"
+        "\n"
+        "###  Batch 4  — two spaces after ### `Pending`\n"
+        "\n"
+        "- [ ] t\n"
+    )
+    r = _list(tmp_path, tasks)
+    assert r.returncode == 0
+    assert r.stdout == ""
+    assert "WARNING:" in r.stderr
+    assert "review_tasks.md:3" in r.stderr
+    assert "0 batches listed" in r.stderr
+
+
+def test_a_batch_header_inside_a_balanced_fence_is_not_warned_about(tmp_path):
+    """Documentation is not tracker content.
+
+    `WORKFLOW.md` and this repo's own tracker both carry fenced examples of the
+    header shape. Warning on them would train the operator to ignore the
+    warning, which is the failure `Q-366` describes one module over.
+    """
+    tasks = (
+        "# Review Tasks\n"
+        "\n"
+        "```\n"
+        "###  Batch 9  — an example of the WRONG shape `Pending`\n"
+        "```\n"
+    )
+    r = _list(tmp_path, tasks)
+    assert "WARNING:" not in r.stderr, r.stderr
+    assert "0 batches listed" in r.stderr
+
+
+def test_a_readable_header_produces_no_warning(tmp_path):
+    """Vacuity floor: the warning must not fire on the canonical shape."""
+    r = _list(tmp_path, _TASKS_FIXTURE)
+    assert "WARNING:" not in r.stderr, r.stderr
+
+
+def test_a_near_miss_header_is_a_NOTE_when_batches_were_listed(tmp_path):
+    """`WARNING:` only when the list is empty (`Q-371`, corrected by its round).
+
+    `/review-close` Step 4b halts on any `WARNING:`. A near-miss header is a
+    spelling this repo tolerates elsewhere on purpose — `close_batch.sh` closes
+    such a batch anyway through the permissive twin and says so at its own site
+    — so warning unconditionally turned one legacy header into a permanent halt
+    on every future close of unrelated work.
+    """
+    tasks = (
+        "# Review Tasks\n\n"
+        "### Batch 3 - legacy ascii hyphen `Merged`\n\n- [x] t\n\n"
+        "### Batch 5 — a good one `Pending`\n\n- [ ] t\n"
+    )
+    r = _list(tmp_path, tasks)
+    assert r.returncode == 0
+    assert "1 batch listed" in r.stderr
+    assert "NOTE:" in r.stderr, r.stderr
+    assert "WARNING:" not in r.stderr, r.stderr
+
+
+def test_a_near_miss_header_is_a_WARNING_when_nothing_was_listed(tmp_path):
+    """Zero rows plus a visible header is the unambiguous false-empty.
+
+    Step 4b must not take its empty arm here, so this one does halt.
+    """
+    tasks = "# Review Tasks\n\n### Batch 3 - legacy ascii hyphen `Pending`\n\n- [ ] t\n"
+    r = _list(tmp_path, tasks)
+    assert r.returncode == 0
+    assert r.stdout == ""
+    assert "WARNING:" in r.stderr, r.stderr
+    assert "0 batches listed" in r.stderr
+
+
+def test_the_verdict_prints_after_the_rows_when_streams_are_merged(tmp_path):
+    """`sys.stdout.flush()` before the stderr verdict is load-bearing (`Q-371`).
+
+    `/review-close` Step 4b captures both streams (`2>&1` is how the step runs
+    it), and without the flush Python's block-buffered stdout lands AFTER the
+    unbuffered stderr — so the operator reads a verdict, then the rows it is
+    supposed to be summarising. Removing the flush survived Phase 251's first
+    guard set because every assertion was a substring test.
+    """
+    import shutil
+    root = tmp_path
+    subprocess.run(["git", "-c", "init.defaultBranch=main", "init", "-q", str(root)],
+                   check=True, capture_output=True)
+    scripts = root / "sysop" / "scripts"
+    scripts.mkdir(parents=True)
+    shutil.copy2(_SCRIPT, scripts / _SCRIPT.name)
+    (root / "review_tasks.md").write_text(_TASKS_FIXTURE, encoding="utf-8")
+
+    merged = subprocess.run(
+        f"{sys.executable} {scripts / _SCRIPT.name} --list 2>&1",
+        cwd=str(root), shell=True, capture_output=True, text=True,
+    ).stdout
+
+    rows_at = merged.index("Helper rename")
+    verdict_at = merged.index("review_index --list: read")
+    assert rows_at < verdict_at, (
+        "the verdict printed before the rows it summarises:\n" + merged
+    )

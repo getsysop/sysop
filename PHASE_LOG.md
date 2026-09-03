@@ -24420,3 +24420,2225 @@ asserts `".claude" not in p.parts` on an **absolute** path, so it fails for any 
 in `.claude/worktrees/` — which is where this repo mandates that reviewers work. A guard written
 to protect review rounds reddens only during them. It is `Q-366`, already filed as § High, and
 it is why a lens reported two failures where the primary checkout reports one.
+
+### The push, and the record it owed
+
+Executed 2026-08-31 from merged `main` at **`bbd4d5a`**, after every runbook gate ran on that
+SHA rather than on the branch.
+
+| | |
+|---|---|
+| public | **`8a37175`** via `getsysop/sysop` PR **#39**, required `pytest` green in 10m01s, squash-merged |
+| tester | **`87ca714`** force-pushed to a fresh root on `wade-cms/sysop-tester` — **1 commit, 0 parents** |
+| both trees | **`3cef196`, 366 files**, verified on cold clones of both repos from a third directory *after* the push |
+| suite in the sterilized tree | **4984 passed, 408 skipped, 0 failed** |
+| public-history scan | **34 commits, NEW 0/0/0** — re-run *after* the merge |
+| announcement | `sysop-tester` Discussion #1, same day |
+
+**The history scan was re-run after the merge, not only before it, and that is the point of
+the new identity gate.** The public half is a fresh commit built by `reset --soft`, so the
+builder's snapshot commit never ships and nothing downstream had ever read the author of the
+one that does. The gate this phase added passed before the push; the post-merge scan then
+confirmed the *merged* commit clean on all three arms, including the header arm — where
+GitHub's squash-merge substitutes its own author, which the allowlist covers. Two independent
+checks of the same field, one before and one after, on the one thing a force-push cannot undo.
+
+**This record is written in a post-merge commit rather than by Phase 251.** The runbook cuts
+from merged `main`, so the SHA of a push cannot exist inside the branch that triggers it —
+and Phase 247's round established that every prior push record was written by the phase that
+did the push, Phase 239 having used exactly this mechanism. Phase 246 was the one exception,
+and it was an exception because its cut ran from its own merge commit with no post-merge
+commit taken. There is no reason to repeat that here.
+
+**What the push did not do.** No release tag: `v0.2.0` sits inside the deferred `A2-announce`
+slot, and folding one in would have pulled deferred work forward by the back door. No announce
+copy, no demo. The § High refilled by Phase 248's round — eight entries — is the next slot on
+the order line and this phase touched none of it.
+
+## Phase 251 — the reader that cannot report its own state (`Q-366` + `Q-372` + `Q-371` + `Q-364`)
+
+**Members:** four of the eight entries § High held at this phase's open, grouped by what they
+share rather than by the file they sit in — a reader, or a guard, that cannot correctly report
+what it just did. **Non-goals, and they were held:** no announce work (`A2-announce` stays
+deferred on Wade's 2026-08-22 call); no monograph currency pass, which is its own slot and
+whose discontinuity Phase 250 recorded on purpose; `Q-362` + `Q-363` + `Q-365` go to Phase 252
+as one surface, because `Q-362` needs a design rule Wade settled at this open and `Q-365` needs
+a shared bash primitive; `Q-367` goes after those.
+
+**The split was Wade's call at the open**, taken against the order line's single *§ High as
+refilled* slot. The argument offered for it was per-phase evaluability: a round whose surface
+spans four unrelated modules plus a guard refactor has to hold all of it at once. **No
+precedent is cited, and that is deliberate** — the first draft named Phases 178 and 190 as
+having paid for exactly this, and the round checked both: 178's round *did* evaluate its
+surface (four HIGH found by running the recipe), and 190 was disqualified for a wrong mechanism,
+not an unevaluable one. A true conclusion reached by an invented citation is still an invented
+citation, so the citation is gone rather than repaired.
+
+### `Q-366` — the guard was red by construction, and the number says the class is one
+
+`tests/test_semgrep_fixture_proofs.py::test_no_guard_population_reaches_into_a_worktree`
+asserted `".claude" not in p.parts` on **absolute** paths. `REPO_ROOT` resolves through
+whatever checkout the suite runs in, and `CLAUDE.md` mandates `isolation: "worktree"` for every
+review agent — the Phase-153 precedent — with the harness placing those worktrees under
+`.claude/worktrees/`. So the assertion was a claim about the reviewer's sandbox, not about the
+tree under review, and it failed for every reviewer on every round.
+
+The cost is not noise. The round's method is *the suite is green, therefore the mutation
+survived*; a permanently-red module teaches a reviewer to discount reds, which is how a real
+one gets missed. Three of Phase 248's reviewers hit it in the same round.
+
+**The fix is `relative_to(REPO_ROOT)`**, which is the property the guard was always reaching
+for: containment — no derivation escapes the roots it was given into a nested checkout — is a
+statement about the path relative to the root, and never about the root's own location.
+
+**The class was measured rather than asserted.** The full suite was run from a worktree under
+`.claude/worktrees/` at `438da3a`, the tree this phase opened against: **1 failed, 5444 passed,
+172 skipped**, and the single failure was this guard. The filed one site really was one site —
+a result worth writing down precisely because this repo's recurring lesson runs the other way
+(Phases 169, 173, 179, 183, 197 all found the filed count short). A derived class check now
+holds it there: no `assert ".claude" not in <p>.parts` may stand in `tests/` without a
+`relative_to`.
+
+**That class check's first cut flagged its own docstring.** The sentence in the new module
+explaining the defect quotes the bad spelling, so a line scan reported the paragraph *about*
+the bug as the bug. It reads the syntax tree instead and inspects only `assert` statements —
+the only reader that can tell an assertion from a description of one.
+
+### `Q-372` — the fence regex that ate a complying agent's envelope
+
+`parse_subagent_envelope.py` paired fences with `` ```(?:yaml|yml)?\s*\n(.*?)\n``` ``, which
+recognises `yaml`, `yml` and a bare fence as openers and **nothing else**. An executor that
+writes code — the ordinary `/claim-task` Step 7e case, not an edge case — emits a ```` ```bash ````
+block; that opener is not seen as a fence at all, so its *closing* run pairs with the next
+opener, every later block shifts by one, and the envelope ends up inside what the parser reads
+as prose. Reproduced against the fixture this phase ships
+(`test_a_bash_block_before_the_envelope_does_not_eat_it`): the old pattern returns the
+single block `'Envelope:\n'` and finds no envelope, while the hook writes
+`_unparseable_<session>_<agent>.json` whose own `last_assistant_message_excerpt` contains the
+envelope it says is absent — the parser storing the evidence against its own verdict.
+
+**Widening the info string would have closed the report and left the class.** A pair regex is
+also wrong for a four-backtick opener closed by a three-backtick run, for a `~~~` fence, and
+for an indented one. The repo already owns a scanner that gets all of those right, duplicated
+verbatim across four structural readers and pinned equal by `tests/test_flag_contract.py`, with
+a grammar table behind it. This module now shares the open/close predicate and derives block
+bodies from it — bodies rather than a mask, because it selects a block by content and a boolean
+mask cannot separate two adjacent blocks. The pattern pin widens from four modules to five.
+
+**One naive pair regex is deliberately left, and the reason had to be corrected by the round.**
+`sitrep_survey._classification_verdict`'s pattern is `` ```(?:yaml|json)?[^\n]*\n(.*?)\n``` ``,
+and the `[^\n]*` accepts **any** info string — so the desync `Q-372` is filed about, an
+unlisted opener that is not seen as a fence at all, cannot reach it. That is the mechanism.
+The first draft of this paragraph justified the exemption by *JSON escapes newlines*, which is
+true and answers a different question (whether a fence can appear inside the body), leaving the
+actual reason unstated. Two further properties make the site cheap rather than merely safe: its
+only writer is `/claim-task` Step 7c emitting `json.dumps(report, indent=2)`, and it falls back
+to a flat `verdict:` scan, so even a desync degrades rather than loses. None of that holds for
+free-form agent prose, which is why the envelope reader did not get the same treatment.
+
+**One test in this group asserted the opposite of what the code does, and the test was wrong.**
+A fixture built as "an unterminated fence" was nothing of the kind: a ```` ```yaml ```` line is
+not a close (a closer may carry no trailing text), so it is *content* inside the still-open
+```` ```bash ```` block — one balanced block. The envelope's fields are line-anchored, so it
+still parses, with the stray prose attached. That is the right direction and is now asserted as
+such: the old regex **lost** the envelope in that shape; the scanner recovers it with noise.
+
+### `Q-371` — a reader whose silence had three meanings
+
+`review_index.py --list` printed zero bytes and exited 0 on a batch-free tracker, so the command
+`/review-close` Step 4b names as authoritative could not distinguish *ran, found no batches*
+from *did not run*. The reporter had the correct verdict and could establish it only by running
+two cross-checks the skill does not prescribe.
+
+**stdout could not carry the answer**, and the code says so at the site: `--list` is a machine
+format consumed by `batch_work.sh` and by Step 4b, and its comment already promised byte
+identity. The verdict goes to **stderr**, one line on every run — batch-free or not — naming
+the tracker, its size, and the count. A run that produced no such line did not run.
+
+**The third state is the one the exit code cannot see, and it was the more dangerous.** A
+`### Batch` header the strict pattern rejects is reported by nothing: no row, no error, exit 0.
+The tracker plainly declares a batch, the list is silently short, Step 4b takes its empty arm,
+and the batch is never closed — tasks open, lock held — while the step reports success. `--list`
+now emits a `WARNING:` naming file and line for each such header, which **reuses the channel
+Step 4b already treats as could-not-measure** rather than minting a second contract. Headers
+inside *balanced* fences are excluded: those are documentation, and warning on them would train
+the operator to ignore the warning, which is `Q-366`'s failure one module over.
+
+### `Q-364` — the recovery the skill prescribed could not work, and neither could the script's own
+
+Step 4b's recovery path 1 said a re-run of `close_batch.sh` "will re-attempt the commit". It
+did not. The failed run had already flipped every requested batch to `Merged` in the working
+tree, so the re-run skipped each as `already-merged` **before** the commit block, which is gated
+on a non-empty closed set. Reproduced by blocking the commit with a failing `pre-commit` hook:
+first run flips and fails, re-run reports `Skipped: 1:already-merged` and
+`close-batch commit present: 0`.
+
+**The filed one site was two.** `close_batch.sh`'s own commit-failure message prescribed the
+same inert re-run — `Re-run \`bash sysop/scripts/close_batch.sh <N>\` after fixing` — so the
+operator got the false advice from the script even without opening the skill.
+
+**The discriminator is `HEAD`, and it has to be.** A batch `Merged` in the working tree but not
+in the last commit is an *interrupted* close; one `Merged` in both is a finished one. The
+recovery performs `git add review_tasks.md` + commit, so a looser predicate — "already merged
+and the tree is dirty" — would sweep an unrelated edit into a `docs: close Batch` commit. It
+fails closed: when `HEAD`'s copy cannot be read (no commits yet, tracker untracked) the script
+refuses the resume, says so, and names the hand-commit that does work, which is what recovery
+path 2 exists for.
+
+**The fix introduced a false negative and running it is what found that.**
+`close-batch commit present: N` — the line Step 4b reads as proof the commit landed — was gated
+on the closed set, so a resume-only run committed successfully and then reported `0`, failing
+the very recovery it had just performed. A reading pass would not have caught it; the manual
+repro printed it on the first try. This is the author-side rule 3 case in its plainest form.
+
+### The route contradiction, corrected rather than left
+
+**Six** of the eight § High entries filed themselves `Route: E1` — `Q-366`, `Q-367`,
+`Q-362`, `Q-363`, `Q-364`, `Q-365`; only the two consumer filings (`Q-371`, `Q-372`) did not.
+This paragraph said *five* until the round counted them, which is the kind of number this repo
+keeps writing down without deriving. Track E's stated justification is that *every member is
+maintainer-side with zero consumer exposure* —
+deliberately placed **after** announce for that reason. That is false for at least two of them:
+`Q-365` breaks a `master`-default consumer that declares `## Merge policy` `direct` — the
+condition the filing states and this sentence first dropped — and `Q-364` is on the close path. The
+entries' routes are corrected to name the phase taking them, and Track E gains a sentence
+saying its placement argument does not extend to entries filed into § High. The record carried
+two contradictory routes for the same work, and a future session reading either one alone would
+have been misled.
+
+### The round — three lenses, and each of the first two found a High in the fix itself
+
+**Three, by the governor's condition, not by preference.** The phase ships behaviour *and* a
+record making numeric claims (the worktree suite figures, the mutation counts), which is the
+clause `_shared/adversarial-review.md` § *How many reviewers* names for a third lens. Lenses:
+*does it execute* / *are its claims true* / *are its guards real*. Fresh-context
+`general-purpose` agents, each in its own worktree, none a fork.
+
+**Author-side pass first, and it is reported because Phase 166 showed the rule had no invoker.**
+One battery, 24 mutations across the assumption classes rule 1 names. First run **19 of 24**.
+The five survivors were all closable and all closed:
+
+* Gutting the `Q-366` guard's **checks-fragment** arm survived, because the negative control
+  monkeypatched `_rule_files` instead of planting real files — so the second loop was never the
+  thing under test. The control now plants a nested checkout inside `packs/` and `core/`,
+  reached by the shipped `rglob`, with a vacuity assertion on each arm.
+* Dropping the fence predicate's **marker-length** half survived: at envelope level a nested
+  ``` merely splits the outer block into two empty ones and the answer reads the same. Asserted
+  on `_fenced_blocks` bodies instead.
+* Editing this module's fence **pattern**, and dropping it from the **pinned population**, were
+  both invisible to its own suite. A membership-plus-verbatim control now sits there.
+* The fifth is an **equivalent mutant** and is recorded as one rather than closed: the line
+  anchor is enforced twice — `^` in the pattern *and* `re.match` — so removing either alone
+  changes nothing observable. Demonstrated by running the compound that removes both, which
+  three guards kill.
+
+Final: **23 of 24 killed, one equivalent mutant.** As always, that is a measure of
+self-consistency. The round's own numbers are the ones that matter.
+
+#### Execute lens — the fix was inert on every real tracker
+
+**HIGH, and the worst finding of the phase: `head_batch_status` was defeated by SIGPIPE.** The
+first cut read `git show HEAD:<path>` into a variable and piped it to `grep -m1`. Under
+`set -o pipefail`, an early-exiting `grep` leaves the writer with a full pipe, `printf` dies of
+SIGPIPE (141), and the pipeline is non-zero — which the function mapped to *cannot tell*, which
+mapped to *skip*. So on any tracker past the pipe buffer the resume did nothing, and it did it
+with a new message rather than the old bug's silence. Reproduced end-to-end: a **95 KB** tracker
+skipped where a 2 KB one resumed. **Every fixture this phase shipped was under 2 KB**, which is
+why 23 of 24 author mutations could be green over an inert feature.
+
+**HIGH: the probe was fence-blind, and the wrong answer commits.** It compared a *status word*
+found by a raw `grep` over HEAD's copy, while the working-tree read reaches the same point
+through `review_index.py`, which masks balanced fences. A fenced `### Batch <N>` documentation
+example — a shape this repo documents as occurring in real trackers — therefore answered for
+the real batch. Both directions are live: a fenced `Pending` example forces a false resume that
+commits, and a fenced `Merged` one suppresses a resume that was needed.
+
+Both are closed by the same rewrite, and the rewrite is smaller than what it replaces.
+`flip_is_uncommitted` asks **git**, about **the exact header line the fence-aware read already
+located**: is `+<header>` present in `git diff HEAD -- review_tasks.md`? There is no second
+parser, no status vocabulary, and no pipeline. The predicate is also the honest one — the
+question was never *what status does HEAD show*, it was *was this flip committed*.
+
+**MEDIUM: the new `WARNING:` turned one legacy header into a permanent halt.** Step 4b treats
+any `WARNING:` as could-not-measure and stops. A near-miss header — an ASCII hyphen, a doubled
+space — is a spelling this repo tolerates *on purpose*: `close_batch.sh` closes such a batch
+anyway through the permissive twin and says so at its own site. So an already-`Merged` legacy
+header would have blocked every future close of unrelated work. The notice now has two levels
+and the level **is** the disposition: `WARNING:` when the list came back empty (an empty set
+plus a visible header is a false empty, and that must halt), `NOTE:` when batches were listed
+(cross-check, do not stop). Step 4b states both.
+
+**MEDIUM: `--dry-run` claimed a commit it had not made** — `Commit resumed for: 1` with an
+unchanged HEAD, in a summary whose neighbouring comment says a false claim of work here is the
+defect it exists to prevent.
+
+**MEDIUM: a CRLF regression, in the class the phase exists to close.** The pair regex closed on
+`\n```\s*`, and `\s` matches `\r`. `_FENCE_CLOSE_RE` ends `[ \t]*$`, which a bare `\r` does not
+satisfy — so a CRLF message yielded **no balanced blocks at all** and the hook wrote an
+`_unparseable_` diagnostic. That is `Q-372`'s own silent-envelope-loss, reintroduced through the
+line ending by the fix for it, and it was found by driving the hook end-to-end rather than
+calling into it.
+
+**LOW, both taken:** the commit subject listed `CLOSED` before `RESUME` (`docs: close Batch 2, 1`
+on a 1-and-2 run) — now sorted numerically. And the new stderr verdict reaches every
+`batch_work.sh` invocation, since `parse_batches` deliberately leaves stderr unredirected; that
+is **kept** at one line per run, which is the same channel the duplicate-number warning already
+uses and the reason it is unredirected.
+
+**Recorded, not fixed:** without `sysop/scripts/review_index.py` the range step falls back to
+grep and is fence-blind at the *range*, so a fenced example can be flipped outright. That is
+long-standing behaviour which `TOTAL_FALLBACK_RANGES` already warns about, it is not reachable
+through anything this phase changed, and inventing a second fence implementation in bash to
+close it is the fifth-dialect mistake `Q-372` is filed about.
+
+#### Claims lens — a refusal justified on grounds the accepted path violated
+
+**HIGH: the resume swept an unrelated working-tree edit into the close commit.** The commit
+block ran `git add -- review_tasks.md`, which takes the whole file — so an edit made between
+the failed run and the re-run landed under `docs: close Batch 1`. Measured, with the string
+`AN UNRELATED EDIT NOBODY ASKED TO COMMIT` in `git show HEAD:review_tasks.md`.
+
+Three sites asserted the opposite, and the third is the one that matters: **the fail-closed
+arm's own rationale named this exact harm as the reason to refuse a guess** — while the path
+that *is* taken incurred it. A false claim is a defect; a refusal justified by a harm the
+accepted path performs is an incoherent design, and it was mine.
+
+The fix is that a resume-only run **commits the index and does not re-stage**. The failed run's
+own `git add` already put the flip there and nothing else; the later edit is worktree-only, so
+`git commit` alone is exactly right. An empty index on a resume is a **refusal**, not a
+re-stage, because the only way to commit the flip from there is to take the worktree copy —
+which is the sweep. The prose now states the guarantee and its boundary: an ordinary close still
+takes the whole file, which is long-standing behaviour and is not widened here.
+
+**Six record defects, all fixed, and they are the same shape as ever — a number or a citation
+written rather than derived:**
+
+* The `Q-372` reproduction quoted `'And the envelope:\n'`, a string from a scratch repro. The
+  fixture this phase **ships** yields `'Envelope:\n'`. Mechanism true, quotation unverifiable.
+* *"the shape Phases 178 and 190 both paid for"* — **fabricated**. 178's round did evaluate its
+  surface (four HIGH by running the recipe); 190 was disqualified for a wrong mechanism, not an
+  unevaluable surface. The citation is deleted rather than repaired: a true conclusion reached
+  by an invented citation is still an invented citation.
+* *"Five of the eight § High entries filed themselves `Route: E1`"* — **six** do.
+* *"it carried its own dialect for eight phases"* — from Phase 37 (`45b1745`), and it outlived
+  the shared scanner's arrival in Phase 181 (`3c4b5f7`) by 70 phases.
+* The `sitrep_survey` exemption was justified by *JSON escapes newlines*, which is true and
+  answers a different question. The actual reason is that its pattern's `[^\n]*` already accepts
+  any info string, so the desync class cannot reach it — leaving the real mechanism unstated.
+* *"`Q-365` breaks any `master`-default consumer today"* drops the `## Merge policy` `direct`
+  condition the filing states.
+
+**Clean on the lens's own account:** the worktree suite measurement reproduced exactly
+(`1 failed, 5444 passed, 172 skipped`, sole failure the `Q-366` guard); both `CLAUDE.md` rows;
+the archive move (four entries verbatim, zero duplicated ids, none lost); the live order line
+still last in § *The order*; `batch_work.sh:631` and `cleanup_worktrees.sh:203` as `Q-365` class
+members; and every derive command in the next-session brief.
+
+#### Guards lens — 81 mutations, 36 survivors, and both class checks were enumerations
+
+**44% survival against the author's 23 of 24.** The pattern this repo's log records for five
+phases straight held again, and the *shape* of the miss is worth naming: the author battery
+mutated what the guards assert, and the reviewer's mutated what the guards can **see**.
+
+**F1, High — the `.claude` class check matched one spelling out of eight.** Every planted
+alternative survived: single quotes, `str(p)`, `p.resolve().parts`, `assert not (… in …)`, an
+attribute receiver, and an `if … : raise AssertionError` that is not an `ast.Assert` at all.
+Its population was `tests/*.py`, so plants in `tools/` and the shipped scripts survived too.
+It is structural now — a membership test whose literal names `.claude` and whose *container*
+is a path's `.parts` or its `str()`, with no `relative_to` in the expression — over `tests/`,
+`tools/` and `core/companion/scripts/`, recursively. Both directions get parametrized controls,
+including the four legitimate shapes the installer tests already use, and the limit is declared
+rather than implied: a containment claim written some third way is out of reach *in kind*, and
+the real guard against `Q-366` is the two behavioural tests that drive the shipped function
+under a `.claude`-nested root.
+
+**F2, High — the naive-fence class check could not see its own subject.** It gated on the line
+containing `re.compile`, `re.search` or `re.findall`. The removed `_FENCED_BLOCK_RE` used
+**`re.finditer`**. So the check written to stop `Q-372` recurring would not have caught `Q-372`.
+Six more shapes survived, including the exact removed pattern with one quote character changed,
+and the population's non-recursive `glob` left all of `run_checks/` invisible. It reads string
+constants off the syntax tree now — any string carrying a fence and a lazy quantifier — so quote
+style, call site and line breaks stop mattering. Its one allowlisted site is proven load-bearing
+by a test that reddens if the exemption ever shelters nothing.
+
+**F3, High — no test had ever run bash 3.2, the shell macOS ships.** `close_batch.sh`'s
+resume-only path is the one place an *empty* array is expanded, and `"${CLOSED[@]}"` on an empty
+array is an unbound-variable error under `set -u` in 3.2 — which would abort **after** the
+commit, losing the terminal `close-batch commit present: N` line Step 4b reads as proof. That is
+BeanRider ISSUE-0039's silent abort. The shipped code is correct; the *guard* was not, because
+every test ran PATH bash 5.x. `TestBash32Portability` drives `/bin/bash` 3.2.57 and skips where
+no bash below 4 exists.
+
+**Nine further gaps, all closed:** the two recovery commands that expand `${CLOSED[*]}` — empty on
+a resume, so the prescribed re-run degrades to a command with no operand, which is `Q-364`'s own
+class one turn deeper; a resumed batch also recorded as `Skipped:`; two of `flip_is_uncommitted`'s
+three refusal arms untested (the only test reached the first); `sys.stdout.flush()` removable
+without any assertion noticing, though with streams merged — which is how Step 4b runs it — the
+verdict then prints *before* the rows it summarises; marker length `>=` narrowed to `==`, which
+a fixture that opens 4 and closes 4 cannot tell apart; `~{3,}` narrowed to `~{3}` **identically in
+all five modules**, which passes the cross-module equality pin — equal and equally wrong; and
+`_find_review_report_block` returning the LAST block while its docstring says FIRST.
+
+**Re-verified after closing: 11 of 11 killed**, with a no-mutation control green at 455 tests.
+
+**One finding filed rather than fixed — `Q-375`.** The near-miss warning's population is
+`_BATCH_HEADER_ANY_RE`, and five header spellings sit outside it: `## Batch 4`, `#### Batch 4`,
+`###Batch 4`, `### BATCH 4`, and ` ### Batch 4` with one leading space — the sharpest, because
+the fence regex 470 lines up in the same module already encodes `^ {0,3}` as the indent
+CommonMark allows. Each loses the batch silently, which is `Q-371`'s own state. Pre-existing —
+the parser never saw them — but the remedy now advertises coverage it does not have. It is filed
+rather than patched because that twin is duplicated across four parsers and pinned by a shape
+matrix, so widening it in one module is exactly the divergence `Q-367` is about.
+
+#### What the round cost me directly
+
+**The re-verification battery restored its mutated files with `git checkout --`, and two of them
+carried uncommitted work.** The `F1` and `F2` rewrites — the two High fixes — were reverted in
+place, silently, and only surfaced when a mutation that should have been killed came back
+`SURVIVED` and the guard it should have tripped turned out not to exist. Both were rebuilt from
+the scratchpad and nothing shipped from the loss.
+
+This phase's own brief states the rule in so many words: *do not `git checkout <file>` to undo a
+mutation on a file carrying uncommitted phase work.* I read it, wrote it into the next brief,
+and then wrote a harness that does it. The procedure's *commit first* rule exists for exactly
+this and I had followed it for the first battery; the second was written after new work had
+accumulated, and the harness carried the assumption forward from a tree where it was true. **A
+rule that holds at the start of a phase is not a property of the phase**, and a harness that
+mutates files is the wrong place to assume it. It is registered as a new author-defect class,
+first seen here.
+
+**And the register's own instrument then caught this record over-claiming.** The ledger row was
+filed as a recurrence of *battery scored against a red baseline*, whose class row says
+`mechanized` at Phase 220 — so `test_a_mechanized_class_that_keeps_recurring_is_not_silently_ok`
+went red, on the grounds that a mechanized class recurring afterwards must say the guard fell
+short. It does fall short: the gate lives in `tools/phase220_mutations.py`, a **per-phase**
+script, so it protects the phase that wrote it and nothing after — this phase wrote two fresh
+harnesses and inherited none of it. The status cell says that now. The claim itself also needed
+narrowing: the branch was red for the whole round, but the **author batteries were not scored
+against it**, because both ran targeted modules that were green and the second carried an
+explicit no-mutation control. The guards lens's full-suite oracle is the one that had to work
+around it. A recurrence claim is a claim like any other, and this one was looser than the
+evidence.
+
+#### The gate, measured after the record and not before it
+
+**`5521 passed, 170 skipped, 0 failed`** at **`ccb0964`** — the whole suite, run after every
+other record file was written, because a figure measured before the prose around it exists
+cannot change the phase. **Nothing is red at that commit.**
+
+**One commit follows it**, and saying so is the point of stating a SHA at all: the commit that
+adds *this paragraph* cannot be inside the run that produced its number. It touches
+`PHASE_LOG.md` only. The guards that read this file — `test_phase_log_currency`,
+`test_phase_log_citation_targets`, `test_doc_currency`, `test_intra_repo_citations`,
+`test_mirror_leak_gate` — were re-run against it and are green; the rest of the suite is
+unchanged by a prose paragraph and was not re-run for one.
+
+Two tests were red during the phase and both are worth naming rather than leaving as a clean
+final number:
+
+* `test_round_yield_ledger::test_every_phase_from_174_has_a_ledger_row` was red from the moment
+  the `CLAUDE.md` row landed until the ledger row did — the documented state the brief describes,
+  and the reason the row is written *after* the round rather than seeded before it.
+* `test_author_defect_register::test_a_mechanized_class_that_keeps_recurring_is_not_silently_ok`
+  went red when the ledger row claimed a recurrence of a class the register calls `mechanized`.
+  That was the instrument working: it forced the status cell to say the gate is per-phase and
+  protects nobody after, and it forced the recurrence claim itself to be narrowed to what the
+  evidence supports.
+
+**Numbers this phase published, and where each came from.** Author battery **23/24** with one
+demonstrated equivalent mutant (`tools/`-external harness, re-run on the committed tree).
+Guards lens **81 mutations, 36 survivors**; after closing, its survivors re-run **11/11 killed**
+with a no-mutation control green at 455 tests. The worktree baseline **`1 failed, 5444 passed,
+172 skipped` at `438da3a`** — reproduced independently by the claims lens, which is why it is
+quoted rather than merely reported. Sub-agent spend ~591k tokens across the three lenses.
+
+## Phase 252 — the branch and park assumptions (`Q-362` + `Q-363` + `Q-365`)
+
+**Members:** the three § High entries the 2026-09-01 split scheduled as its second phase, one
+surface — `/sitrep`'s two classifier paths and the lifecycle scripts' notion of a default branch.
+**Non-goals, and they were held:** no announce work (`A2-announce` stays deferred on Wade's
+2026-08-22 call); no monograph currency pass (its discontinuity now runs 240–252 and is recorded
+on purpose since Phase 250 — this phase corrected one stale sentence in `WORKFLOW.md` § 2.2 and
+left its twin in `docs/workflow.html` for that slot); no mirror push (251 and 252 are both
+unmirrored at close, the next push's window); and no `Q-367`, which is the slot after this one.
+
+**Two decisions arrived pre-made, from Wade at Phase 251's open, and both were built as
+decided:** `Q-362`'s park rule is a new `parked, work in progress` state with its own arm in
+both cascade tables, landing on both classifier paths together; `Q-365` is a shared sourced bash
+primitive plus a class sweep. Five further decisions were put to Wade at this phase's open with
+options and a recommendation, and every recommendation was taken: the primitive probes git
+(`origin/HEAD`, else exactly one of `main`/`master`, else refuse) and adds no Sysop-side
+setting; the population includes the Python resolver and excludes the shipped git hook (filed as
+`Q-376`); a missing library fails loud rather than falling back to an inline copy; `Q-375` stays
+out, its false premise corrected in place; and `Q-363`'s fix covers every orphan state with a
+guard that carries no allowlist, not the one state the filing named. One design refinement was
+made in the build and is recorded below as such, because the decision it refines was Wade's.
+
+### `Q-365` — the filing's precedent was the third instance of the defect
+
+The entry said the codebase *"already ships `_resolve_main_ref()` … but in Python; the bash side
+has no equivalent."* Read before copying, the Python resolver was `for ref in ("origin/main",
+"main")` and a docstring promising a third fallback — *"then HEAD on the main worktree"* — that
+the body had never had. On a `master` repo it returned `""`, `_commits_ahead_of_main` returned
+`[]`, and every claim read 0 commits ahead: which is the exact condition the park gate `Q-362`
+widens keys on. Two entries in one phase, one of them quietly making the other unreachable for
+the consumer both were filed about. There was no precedent to port; there was a third site.
+
+**The population was derived from the source, and it was larger than every prior count.** The
+entry named two sites; Phase 251's open confirmed `batch_work.sh:631` and
+`cleanup_worktrees.sh:203`; the brief said *run the grep and treat its answer as the
+population*, and the grep answered twelve lines. It was still short. It matches quoted `main`
+only, so it missed `git branch "$BATCH_BRANCH" main` — the first *hard* failure a `master`
+consumer hits in that script, since the site the filing named only warns and returns 0 —
+`pull --ff-only origin main`, and the unquoted `--is-ancestor "$1" main` fallback arm that
+produces the very refusal `Q-365` quotes. And the shipped `pre-merge-commit` hook lives in
+`core/companion/git-hooks/`, a sibling of the directory the grep was pointed at, and carries no
+`.sh` extension besides — no `--include` would have reached it. Ten behavioural sites across the
+three scripts, a lock-template hint, every message string naming the branch, one Python
+resolver; the hook filed (`Q-376`). Two of the
+eleven were silent in the direction that hides: `cleanup_worktrees.sh` swallowed the
+invalid-revision error and classified every worktree ACTIVE, so `--clean` reclaimed nothing and
+said nothing; `close_batch.sh`'s lock sweep deferred with a remedy (*"released by the next close
+run from main"*) that on a `master` repo was permanently unreachable.
+
+**`_git_lib.sh` is the first sourced shell helper in the tree**, and two scripts carry the
+argument against one in writing — *"a sourced helper missing from a partial install would be a
+worse failure than the duplication."* Wade's call at Phase 251's open was a sourced primitive; what the phase
+chose was the failure mode. The installer copies `core/companion/scripts/*` whole, so every full
+install and every `--update` has the library; the one way to lose it is to hand-copy a single
+script, and each script now says so — `_git_lib.sh is missing beside <script> … bash
+sysop/scripts/sysop-update.sh` — and exits 1, rather than sourcing quietly and running with
+`$DEFAULT_BRANCH` unset under `set -u`. **The suite already contained six of those hand-copies.**
+The first fail-loud run reddened two tests in `test_sitrep_batch_park.py` that copy
+`batch_work.sh` alone into a fixture and run the copy, which is precisely the partial-install
+shape the message exists for. A grep for `shutil.copy(...batch_work.sh)` had found none of them;
+the copies are in `for name in (…)` loops, and a grep for those found seven sites across four
+modules. A new sourced dependency is a change to every fixture that mimics an install.
+
+The resolution order, and the case the suite added to it. `origin/HEAD` first — but only when
+the branch it names exists locally, because every caller compares against or branches from the
+local branch, and a stale `origin/HEAD` must not outrank a plainly present `main`. Then exactly
+one of `main`/`master`. Then — added because one existing test runs `close_batch.sh` against
+`git init` with no commit, to reach a `Q-364` refusal arm three steps later, and a resolver that
+refused when no branch ref exists made that test red on arrival — an unborn repository's `HEAD`
+name, which is the only branch the repo will ever have. Then a refusal that names the git
+command that settles it (`git remote set-head origin --auto`). **No Sysop-side setting, on
+purpose**: git owns the answer, and a second place to declare the same fact is a second place
+for it to be wrong. `close_batch.sh` probes quietly and refuses only where the name is needed (no
+`--merge-target`); `batch_work.sh` requires it before the claim writes anything, because the
+old arm warned and *then* left a lock and a worktree behind; `cleanup_worktrees.sh` requires it
+in every mode, since the listing's MERGED column is the predicate the removal modes act on.
+
+**The twins are pinned behaviourally, not textually.** `tests/test_default_branch_resolution.py`
+drives the bash primitive and `sitrep_survey._resolve_default_branch` over eleven fixture shapes —
+main-only, master-only, both with and without `origin/HEAD`, `origin/HEAD` → `develop`, a stale
+`origin/HEAD` with and without a fallback, neither, unborn, a real clone — under every bash the
+runner has (`/bin/bash` is 3.2 on this machine), and requires the same answer, refusal for
+refusal. The three scripts then run end to end on a `master` repo (a merged batch closes under
+`direct` with `merge target: 'master'`; a claim flips the status and branches from `master`; a
+merged worktree classifies MERGED and `--clean` reclaims it), on an undecidable repo (every mode
+refuses, and the claim leaves no lock), and hand-copied without the library. **Every `_repo()` helper that
+exercises the three scripts or the survey passes `-c init.defaultBranch=main`** (two unrelated ones
+do not, and get `main` from the runner's git config) — the suite was blind to this defect, and
+green over it. When a fix is about a value every fixture pins, the
+first test to write is the one that unpins it.
+
+### `Q-362` — the ratified rule was right, and the tree asked for one refinement
+
+The rule as settled: a park with commits gets its own `parked, work in progress` state and cascade
+arm, on both paths together. Building it, the first thing the tree showed was the rationale of
+the pin it overturns — `test_a_claim_with_commits_never_reaches_the_probe`: *"the park archive is
+not cleaned on resume, so a stale marker must not drag a live build backwards."* That half is
+true. A `--resume` never removes a marker: the close does (`/review-close` Step 4c for a roadmap
+claim, `close_batch.sh` for a batch — `claim-task/SKILL.md` § *What cleans it up*: *the close, and
+only the close*), and so does `batch_work.sh --release` for a batch, which the first draft of this
+record and of the shipped docstring left out. So between a `--resume` and the close, every live,
+moving claim carries a park marker beside its new commits. "The park marker overrides the commit count" would have told the human
+to go read a marker they had already acted on, on every resumed claim, until it closed.
+
+**So the rule has three arms, and the third is the refinement.** 0 commits and park evidence →
+`parked` / `awaiting approval`, unchanged. Commits, and the park is the *latest event* → `parked,
+work in progress`, outranking every commit-shape state including `ready for /review-close`,
+because a park is a human decision pending and the trailer state of the commits it parked on
+does not answer it. Commits newer than the park → the claim resumed; it reports its ordinary
+state with the marker named in `notes`. "Latest event" is the later of the marker's write time and the UTC stamp in its
+name, against the newest commit's author date — every marker, not the newest-named one. Neither
+writer records a park time in the file; the `<RUN_ID>` in the name is the run's *start* (Step
+7-pre mints it), which for a `planner committed during 7a` park is *before* the commits it parked
+on, so the stamp alone cannot order the park against the work — but a run that started *after*
+the newest commit cannot have parked before it, so the stamp bounds the park from below when a
+restored `sysop/runtime/` has put the mtime before the commit (the round's execute lens found
+that direction; the first cut read mtime alone). `sysop/runtime/` is gitignored and never cloned,
+so the mtime is the park time on the machine that parked; when nothing can be dated the park
+stands. Author date rather than committer date, deliberately: a resume that only rebases pre-park
+commits refreshes their committer dates and has produced nothing new. `awaiting approval` beside
+commits reports whatever its commits say — `in progress`, or `code committed, docs pending` with a
+trailer — with the gate noted: the executor ran, so Step 7d was answered. (The first cut of the
+note said "treated as in progress" beside a state that was not; the claims lens caught it.)
+
+Both paths apply the rule from the same evidence, and a test drives both classifiers through
+every arm on the same fixtures and requires the same answer, which is the invariant Phase 248
+held the widening back for. The state ranks at the head of the stall block (a park with work
+outranks a park with none) and below live `in progress` work, for the reason the P6 placement
+already recorded. In `--json` it is additive: a new value of the existing `state` string, the
+evidence in the existing `notes`, the key set pinned unchanged.
+
+### `Q-363` — the filing named one orphan and there were four
+
+The batch-path ordering is deliberate and stays: `claimed, no branch` precedes the park arm
+because a branchless claim is the more actionable diagnosis and `--resume` cannot work without the
+branch. What changed is that the arm no longer drops `_claim_stall`'s notes and no longer has
+nowhere to go — on both paths it carries the park evidence through, its `next_action` names the
+release path, and `_recommended_next` / `_suggested_order` gain arms for the task and batch
+forms, below the stall block and above `planning`, with the notes as detail lines. The two paths'
+predicates differ (task: the lock records no branch; batch: the recorded branch does not exist)
+and the docs now say so rather than sharing one sentence that was true of neither.
+
+Re-deriving the class instead of taking the filing's count: task `stale`, batch `empty batch` and
+batch `in progress` had no arm in either table, and batch `pending (not claimed)` had one in
+`_recommended_next` only. Each was the `Q-019` shape — a state that vanishes from `RECOMMENDED
+NEXT` and the ordered list together — one state over. All four gained arms. **The guard covers
+the class.** `tests/test_sitrep_park_wip.py` derives the state set from *both* classifiers
+(literal assignments, module-constant assignments, and `stall_state` resolved through
+`_claim_stall`'s own returns; an identifier it cannot resolve fails loudly) and drives one of
+each through both tables, with no allowlist, plus a structural cross-check that each arm is keyed
+to the right collection. Two pre-existing vocabulary guards were repaired to see identifier-fed
+states: the roadmap enum guard could not see `state = stall_state` on the batch side (so `parked`
+and `awaiting approval` had escaped its set-equality check since Phase 248), and the sitrep
+states-table guard pinned `_classify_task`'s identifier assignments to exactly `stall_state`, so a
+constant assigned by the classifier itself would have reddened it loudly rather than escaped —
+it refused rather than resolved, and now resolves.
+
+### The consumer surfaces, and the one falsehood found on the way
+
+`sitrep/SKILL.md`'s routing table gains row `5b` and rows `6a`–`6k`, renumbered so the table reads
+in the cascade's order, and its states table gains **Parked, work in progress** with the
+predicate stated as the code applies it; `roadmap/SKILL.md`'s `--json` enum and actuator table
+gain the new state and `claimed, no branch` (both *no actuator* — a drainer would claim a batch
+that already holds a lock); `WORKFLOW.md` § 8.4 gains the library's row. And `WORKFLOW.md` § 2.2
+still said `/sitrep`'s park predicate *"is reached on the roadmap path only … so a parked review
+batch is still invisible to it"* — a sentence Phase 248 made false and nothing had corrected.
+Fixed; the same claim in `docs/workflow.html` is left for the monograph slot and named here so it
+is a known debt rather than a rediscovery. The correction itself tripped
+`test_claim_task_orchestrator.py`'s conditional-language detector on *"only when"*, and was
+reworded rather than allowlisted.
+
+### The author-side pass
+
+**Rule 3, run rather than read.** The primitive was run under `/bin/bash` 3.2 on eleven scratch
+shapes before any script sourced it; the three scripts were run on a `master` repo, an
+undecidable repo and a hand-copied install; `git remote set-head origin --auto` and the
+`symbolic-ref` fallback the refusal prescribes were both run and both do what the message says.
+Rule 4's hostile corpus was the fixture matrix above — the unborn repo, the stale `origin/HEAD`,
+the tie — built before the resolver and red before it was written.
+
+**The battery: 53 mutations across rule 1's assumption classes plus 6 controls, snapshotting
+bytes and writing them back (the harness Phase 251's record asked for), with `git status
+--porcelain` verified clean at the end.** First run at `40eb0d3`: **50 killed, 1 survived, 2 not
+applied**, controls 6/6 green. The two unapplied were harness defects — anchors written before
+two later edits to the same lines (a rewording, and a reflowed string) — re-run with corrected
+anchors, both killed. **The survivor was a guard that could not see its own subject:** dropping
+`parked, work in progress` from `roadmap/SKILL.md`'s `--json` enum stayed green, because the
+enum list and the sentence explaining the new state share one bullet line, and both the
+pre-existing whole-file guard and this phase's own line-scoped one found the state in the prose
+beside the list it had just been removed from. Closed by parsing the enum *list* (`one of
+\`…\`, \`…\``) rather than the line; the pre-existing whole-file guard keeps its known weakness
+and is not this phase's to rewrite. Re-run at `97d2700` after the closure: **53/53 killed** (23 under the resolver suite — 19 bash, 4 Python resolver — and 30 under the survey and docs suites, run as two halves after a first full re-run was stopped mid-mutation from outside the session — the stop left one mutation on disk, restored from the commit since every phase change was committed, which is the case the no-checkout rule carves out),
+controls 6/6. Every survivor closed in kind; no residual declared.
+
+**What the pass could not reach, said rather than implied:** whether mtime is the *right* signal
+(it is the only one the writers leave; a copied `sysop/runtime/` would refresh every mtime and
+read every park as the latest event — the conservative direction, and documented); whether the
+row order the docs now state is the order a reader expects (the tables were written from the
+code, top to bottom, and a reviewer reads them cold); and clock skew between a commit authored
+on another machine and a marker written on this one, which no fixture here constructs.
+
+
+### The round — three lenses, and the sharpest finding in each was one the author could not see
+
+Three reviewers, one round, on the governor's escalation arm: the phase ships behaviour (four
+shipped files) *and* a record making numeric claims (the battery fractions, the site counts, the
+suite figure). Independent fresh-context `general-purpose` agents in their own worktrees; two of
+the three found that the harness had placed them at `main`'s tip rather than the branch and
+re-pointed themselves without touching any shared checkout; every finding below was verified by
+me against the tree before it was acted on, and reviewer agreement was not treated as evidence.
+
+#### Execute lens — the claim commit was the "work", and the orchestrator still stops
+
+**HIGH, in the phase's own fix.** Counted against `origin/<default>` alone — the base
+`_resolve_main_ref` preferred, and the base this phase's rebuilt resolver kept — the unpushed
+`docs: claim Batch N` commit `batch_work.sh` makes on the *local* default branch was branch work,
+so every ordinary batch park on a consumer that had not pushed read `parked, work in progress`
+with the claim commit as its evidence. The new docstring said the opposite. Reproduced by me in
+one command: one commit in `origin/master..review/batch-1`, none in `master..review/batch-1`.
+`_commits_ahead_of_main` now excludes commits reachable from *either* the local default branch
+or its remote-tracking ref (`--not`), which also stops an unpulled upstream commit reading as a
+branch's own; the fixture that pins it builds both shapes with a real origin.
+
+**HIGH, record.** The three scripts now run on a `master` consumer and the skill bodies that
+call them do not: `/claim-task` Step 4d asserts `HEAD` is `main` and stops, and `/review-close`,
+`/auto-fix` and `/auto-build` carry dozens of `main` literals of their own. The reviewer ran the
+Step 4d line on a `master` fixture: rc=1. The scope was the scripts and the survey, and the record
+had not said what a `master` consumer can and cannot run. It does now, and **`Q-377` is filed as
+§ High** — a new consumer-facing High out of a round, which resets the announce clock rather
+than moving the stock.
+
+Six MEDIUM, all verified, four fixed: an unresolvable default under `--merge-target` committed
+the close and then prescribed a re-run that refuses (the lock-kept arm now prints the resolver's
+diagnostic and prescribes the declaration); `git remote set-head origin --auto` fails on a bare
+origin whose own `HEAD` names a branch nobody pushed, and a `git clone -o upstream` consumer had
+no path at all (the message names the explicit form, and both twins take the only remote when it
+is not `origin`); the branchless-batch action prescribed a `--release` that reaps the very marker
+the note beside it surfaces (the action now says read it first, and that the release removes
+it); and a restored `sysop/runtime/` can put a marker's mtime *before* the commit it parked on,
+which the mtime-only discriminator read as a resume (every marker is now dated by the later of
+its mtime and the run-start stamp in its name — a run that started after the commit cannot have
+parked before it). Two filed rather than fixed: the claim's pull-failure arm leaves a lock, a
+worktree and an unflipped status at exit 0, and this phase's no-remote recipe routes straight to
+it (`Q-378`); and the survey's repo-root resolver is wrong under `--separate-git-dir` and inside a
+submodule, so the new discrepancy is false there (`Q-312`, pre-existing, updated). One LOW fixed
+in passing: a lock whose `branch:` line is present and empty parsed as the string `None`, so the
+`claimed, no branch` state this phase documents was reachable only when the key was absent.
+
+Declined: `cleanup_worktrees.sh --help` refusing on an undecidable repo — there is no `--help`
+mode; the operand is refused as a path.
+
+#### Claims lens — eighteen findings, none HIGH, and the record was wrong by one in five places
+
+Every count this record carried was re-derived: the brief's grep answered **twelve** lines, not
+thirteen (my own earlier output showed twelve and I wrote thirteen); the behavioural sites were
+**ten**, not eleven (the eleventh was the lock-template hint the same record classed as a
+message); the hand-copy fixtures were **seven in four modules**, not six in five; two scripts
+carry the duplicate-and-pin argument, not three; "seven message strings" was nine in one script
+and sixteen across three, and is now stated without a count. Each is corrected at every site it
+appeared — record, archive, the library's header, the next-session brief — and the brief's "short
+by six" became "short by seven" with it.
+
+**The shipped falsehood:** *"a park marker is removed only at close"*, in a docstring, the
+skill's prose, two test modules and both records, attributed to a section that does not say it.
+`batch_work.sh --release` has reaped a batch's markers since Phase 248. The third arm's reasoning
+survives — a `--resume` still removes nothing — but the sentence did not, and it is corrected
+everywhere with the right section cited. **The contradicting note:** `awaiting approval` beside
+commits said *"treated as in progress"* next to a state that was `code committed, docs pending`;
+the note now says *classified by its commits*, and a test drives the trailer case. **The
+overclaim:** *"every fixture in the suite was built on `main`"* — two unrelated helpers do not
+pin the branch and get `main` from the runner's git config; the true, narrower claim is every
+fixture that exercises the three scripts or the survey. **The wrong mechanism:** the hook was
+missed because it sits in a sibling directory, not because of its extension. **`Q-376`'s fix
+shape** rested on the hook living under `sysop/scripts/`; `install_hooks.sh` copies hooks into
+`.git/hooks/`, so the prescribed `dirname`-relative `source` would have resolved to
+`.git/_git_lib.sh` and the literal fallback would have kept `main` — the class being filed.
+Corrected in the entry. The lens confirmed the two pre-made decisions against Phase 251's record
+and could not verify the five put to Wade at this phase's open from the tree alone; they are
+this session's conversation, and the record says so.
+
+#### Guards lens — 138 mutations, 35 survivors, and the author's 53 of 53 was the wiring set
+
+**44 % of the reviewer's mutations survived against my zero**, the sixth phase running in
+which the author's battery measured self-consistency and the reviewer's measured coverage. The
+survivors were not in what my guards assert; they were in what my guards can *see*:
+
+- **S26, HIGH.** The `close_batch.sh` default-branch arm reverted to a literal `main` behind a
+  trailing `# main checkout` comment — every test green, because every `pr`-policy fixture was a
+  `main` repo and the sweep guard exempted any *line* containing the phrase. The `Q-365` defect,
+  back, under the one policy where that arm is the whole verification. Closed: a `master` + `pr`
+  end-to-end case, and the sweep guard strips trailing comments and removes the exempt *phrases*
+  from a line before testing it, rather than skipping the line.
+- **Ordering.** The parked-with-work arm moved below `code committed, docs pending`; the
+  branchless arm hoisted above the stalls; `stale` hoisted above `planning`; the claim's
+  `require` moved after `claim_batch`; the discrepancy `insert(0)` made an `append`. All green:
+  the docs asserted the order and no two-item test did. Closed with two-item tests for each, and
+  a guard that derives the routing table's row order from `_recommended_next`'s own predicate
+  sequence.
+- **Messages.** Six message strings reverted to `main` on paths no `master` fixture reached —
+  the `pr` provenance line, the `--release` refusal, the claim warning, the lock-sweep deferral.
+  Closed with `master` fixtures for three and the phrase-level sweep for the rest.
+- **Reachability.** `_BASHES = []` made the primitive tests vanish as skips; dropping `/bin/bash`
+  meant 3.2 was never run; and every end-to-end script test ran under PATH's bash 5. Closed: the
+  matrix asserts it is non-empty and, on macOS, contains 3.2; the end-to-end runs use the lowest
+  bash found; and a bash-4 construct that errors on stderr under 3.2 without changing the exit
+  status is caught by requiring an empty stderr on the success path — the text sweep for
+  bash-4 constructs was an enumeration, and the round found `local -n` outside it.
+- **Twin divergence on unbuilt shapes.** Two remotes, or a tag named `main`. Closed with both
+  shapes in the matrix.
+- **Docs.** Priority labels swapped, rows moved, a diagnostic row routed to `/auto-fix`, the batch
+  branchless row naming `claim_task.sh`, the § 8.4 row deleted. Closed by the cascade-order
+  guard, a drainer check over every `6` row, tool-name checks on the branchless rows, and a pin
+  on the row the private-helper exemption's own comment claims exists. Two phrase inversions
+  (the states-table predicate, the roadmap enum's prose) are judgment and stay as phrase pins.
+- **The class question, answered against me.** *"Derived from the source with no allowlist"*
+  held for exactly one spelling. `state="phantom"`, a tuple assignment, a call, and a ternary all
+  shipped a reachable, unrouted state with the suite green. The every-state guard now walks the
+  classifier's AST — every `Assign` whose target is `state`, or a `state` element of a tuple
+  target — resolves constants, module string constants and both ternary branches, and fails
+  loudly on anything else, with `_claim_stall`'s returns walked the same way. This is the shape
+  Phase 251's record prescribed for a class check ("change the subject from text to structure")
+  and I wrote a regex anyway.
+
+One equivalent mutant (`resumed` keyed on any stall state — `_park_evidence_time` is `None`
+whenever the state is `awaiting approval`). Every other survivor was closed in kind; none was
+declared a residual. **Re-verified after closing: 28 of the reviewer's 29 survivors re-run against the closed guards were killed; the one that stood was a duplicate priority label the monotonic check tolerated, closed strictly and re-run killed — 29 of 29**, with the controls green
+and a clean tree.
+
+#### What the round cost me directly
+
+A stopped battery leaves its mutation on disk. The full re-run of my own battery was stopped
+from outside the session mid-mutation, and the `--release` path's `main` literal was sitting in
+the tree when I looked. Every phase change was committed, so `git checkout` of that one file was
+the safe move — the case the no-checkout rule carves out — and the tree was verified against the
+commit before anything else ran. The battery now runs in halves, and the record says which
+figure came from which run.
+
+#### The gate, measured after the record
+
+Suite on the tree this paragraph was committed in, measured after every record edit and
+before the commit: **5616 passed, 172 skipped, 0 failed** (`python3 -m pytest -q`, the run
+that also carries the ledger row and so no longer reddens
+`tests/test_round_yield_ledger.py::test_every_phase_from_174_has_a_ledger_row`). The run
+before it, with the closures in and the round record landed, reported one failure — a second
+`_module_consts` definition my AST rewrite left beside the regex one, which
+`test_no_module_in_the_test_tree_shadows_its_own_helper` caught and which is exactly the shape
+its message describes: the later definition wins, and the repaired one is dead code. The
+required `pytest` check on the PR failed on the ledger-row guard alone at the record commit and
+at the round-1 fix commit, which is the red the brief predicted.
+
+## Phase 253 — the reversal helper, and the 87 that could not be re-run (`Q-367`)
+
+**Members:** `Q-367`, the last § High entry the 2026-09-01 split scheduled, alone. **Scope as
+ratified** (Wade, Phase 251's open; restated at 252's close): single-source the
+reversal-vocabulary helper, have the three guard modules that carried their own copy import it,
+re-run the 87 mutations Phase 248's round wrote against the `Q-308`/`Q-317` surfaces, and let
+the new number decide whether the residue is worth more — explicitly **not** an enumeration of
+the six surfaces the entry names. **Non-goals, and they were held:** no announce work
+(`A2-announce` stays deferred on Wade's 2026-08-22 call); none of `Q-375`, `Q-376`, `Q-377`,
+`Q-378`; no monograph currency pass (its discontinuity now runs 240–253, recorded on purpose
+since Phase 250); no mirror push (251, 252 and 253 are all unmirrored at close — the next push's
+window). **First act:** Phase 252's commit cell backfilled, as the brief ordered.
+
+**Three decisions were put to Wade at the open with options and a recommendation, and every
+recommendation was taken:** (1) the 87 are reconstructed from the reviewer's raw rows into a
+committed battery — prose anchors re-pointed, executable anchors re-pointed where the attack
+still has a site in the current file and retired with a reason where it does not — with the
+prose fraction as the deciding number and the executable rows a drift check on Phases 249–252;
+(2) the disposition rule is pre-registered here before the battery runs, and Wade ratifies it at
+close; (3) Phase 248's stale committed author battery and the ledger cell describing it are
+corrected in-phase rather than filed. Four further calls were the session's own, stated at the
+open and not objected to: the helper gains `extra=` for step-specific phrasings; the Step 4b
+guard's generic softeners are promoted to the shared list only if every caller's shipped text
+stays clean under them; `will do` is dropped from the two originals only if no reconstructed row
+contains it; and the fourth same-shape list the loosest-predicate sweep found is triaged out.
+
+### What the brief got wrong, found before anything was built
+
+- **The 87 could not be re-run, and the brief's contingency was the case, not the fallback.**
+  The guards-lens battery was never committed. The reviewer ran it from a scratch runner in a
+  worktree that no longer exists, printed verdicts to stdout and saved nothing. What survived
+  in the Phase 248 session's scratch directory was the reviewer's raw row modules — **102
+  rows: 85 defect rows and 17 negative controls** — and the reviewer's own 26-module verifier
+  list. **Those modules are not the set the reviewer scored, and the first draft of this
+  record said they were a superset; the round refuted it.** The record's 87 were all defect
+  rows (47 killed + 40 survived), so 87 exceeds the 85 on disk already, and per file the two
+  disagree in both directions: `close_batch.sh` 28 on disk against 25 scored,
+  `sitrep_survey.py` 23 against 26, prose 34 against 36. Rows were added, dropped or
+  re-labelled between what was saved and what was run, and which is not recoverable — so the
+  reconstruction's overlap with the original 87 is unknown, not "102 minus 15". Against the
+  tree this phase opened on, **43 of the 102 rows' anchors no longer resolved** (41 absent, 2
+  ambiguous): Phases 249–252
+  rewrote `close_batch.sh`'s target resolution and `sitrep_survey.py`'s park gate and
+  renumbered `/sitrep`'s routing rows. The record cites no path to any of this; the material
+  was found by date and content, one day before the host's temp-directory cleanup would have
+  reached it.
+- **The committed author battery is stale too.** `tools/phase248_mutations.py` carries **34**
+  defect rows and 4 controls at this phase's open, not the **26** the ledger row states — the
+  row was written before the round's eight `RND2-*` rows landed and never updated — and 9 of
+  its anchors are stale plus one ambiguous after the same rewrites. The two prose rows that no
+  longer match are exactly the roadmap enum paragraph and the `/sitrep` routing row `Q-367`
+  names.
+- **The brief's "six named survivors" were two different sixes.** The author battery's
+  first-run survivors (six, all closed by Phase 248 itself) and `Q-367`'s six unguarded
+  *surfaces*. Nothing in the tree enumerates survivors of the 87, because their verdicts were
+  never saved.
+- **The copy population is three, as filed, and the loosest predicate found five more
+  same-shape lists — the first draft of this record said "a fourth", and the round found four
+  it had missed.** `grep -lE 'assert_no_reversal|_REVERSAL_VOCAB' tests/*.py` names the shared
+  module, two importers and three copies. A sweep for any tuple-of-phrases or blocklist regex
+  under any name adds: `_HEDGES` and `_BLANKET_EXEMPTIONS` in
+  `tests/test_adversarial_review_gate.py` (regex, reviewer-count and skip-exemption prose);
+  `_REASON_INVERSIONS` in `tests/test_index_writer_class.py` (regex, one module's reason
+  clauses); `_REVERSALS` and `_DEMOTION` in `tests/test_placeholder_section_authority.py`
+  (regex, the placeholder-skip rule); and `_NEGATORS` in `tests/_prose_guard_helpers.py` —
+  **plain strings**, so the "would need regex support" reason does not apply to it. Triage:
+  the four regex screens are subject-specific blocklists and stay where they are;
+  `_NEGATORS` is a different predicate — it marks a pinned phrase *negated within its own
+  sentence* (`states()`), the complement of a licence added beside it — and could be composed
+  with this layer later. Recorded, not folded, and the next sweep starts from six.
+- **Two of the three copies were byte-identical to each other.** `Q-367`'s UPDATE says "two of
+  the three have already drifted"; measured, `test_prescan_merge_gate.py` and
+  `test_step_2b_dispatch.py` carried the same 13 entries, and the drift was between *them* and
+  the shared module (which dropped `will do` and added two) and between them and the Step 4b
+  guard (a 27-entry list of its own, 14 generic and 13 step-specific). The claim is true of the
+  shared module's relation to the copies and false of the copies' relation to each other.
+
+### The pre-registered disposition rule — written and committed before the battery ran
+
+The reconstruction's **prose fraction** (rows in `group="prose"`, controls excluded) is the
+number `Q-367` asked for, because the three prose guards are what this phase changed. The
+executable rows (`close_batch.sh`, `sitrep_survey.py`) are reported beside it as a drift check
+on Phases 249–252 and **do not enter the disposition**. The rule:
+
+- **Default: the residue goes to E1**, where `Q-367` already routes it, with the measured
+  number attached.
+- **The one exception:** if at least half of the surviving prose rows attack **one slice of one
+  file**, and one **positional or behavioural** test function over that slice — not a
+  vocabulary entry, not a presence pin on a sentence — would kill them, a scoped follow-up is
+  filed naming that slice and that guard. Otherwise nothing is filed beyond E1.
+- **What this phase will not do whatever the number says:** add a vocabulary entry or a
+  presence pin to close a surviving reviewer row. Phase 249 measured the layer at 25 of 25
+  out-of-vocabulary softenings surviving, Phase 179 measured polarity-by-string-matching at 0
+  of 21, and `Q-374` names the longer list as the wrong remedy. This is Wade's ratified scope
+  overriding the author-side pass's rule 1 for the *reviewer* rows; the author-side `H-*` rows
+  against the helper and the wiring are held to rule 1 in full.
+- **Credit is assigned by which entry killed a row.** A prose row killed only by an entry this
+  phase promoted from the Step 4b guard is evidence for the promotion; a row killed by an entry
+  every copy already carried is not evidence for this phase; a row killed by a positional pin
+  Phase 248 wrote is Phase 248's.
+- **Retired rows are neither.** A row whose surface the current tree cannot host is listed
+  with its reason and is excluded from every fraction. (The round noted that the reviewer's
+  `B1` is retired while its author-battery twin `SS-2` was re-targeted at the successor
+  assumption — one attack, two dispositions. The asymmetry is deliberate and stands: the
+  reviewer's rows are ported verbatim and never re-aimed, because re-aiming them would make
+  them the author's; the author's rows are the author's to re-aim.)
+
+### The build
+
+- **`tests/_reversal.py`.** `assert_no_reversal(step, name, exempt=(), extra=())`: `extra=`
+  carries a caller's step-specific phrasings so they never redden a step they were not written
+  about; the exemption rule is the Step 4b guard's `count == 1` (the stronger of the two
+  precedents — Phase 248's round wrote a reversal *around* an exempted span and `str.replace`
+  strips every copy); the generic list is the shared module's 14 (Phase 249's, which already carried
+  `is acceptable`/`are acceptable` from that phase's round) plus six promoted from the Step
+  4b guard's private list — **14 → 20 entries**; it is not the union of the three copies, as
+  the first draft said: `will do` (retired, above) and `is not needed` (subsumed by
+  `not needed`) were carried by copies and are not in it. The promotion was measured before
+  it was merged: the five caller modules
+  plus the helper's own tests ran green under the union, so no promoted entry false-alarms on
+  shipped text. `will do` stays out: none of the 102 reconstructed rows contains the bigram, so
+  no kill in this battery depended on it, and the reason it was dropped in Phase 249 stands.
+- **`tests/test_reversal_helper.py`** — the helper's first direct tests (it shipped in Phase 249
+  with none; its properties were exercised only through callers whose shipped slices are
+  clean, which cannot tell a working helper from one that never fires). Each test names the
+  `H-*` row it kills. Plus the mechanization `Q-367` asked for: a **redefinition drift guard**
+  that fails if any test module defines `assert_no_reversal` or a `REVERSAL_VOCAB` tuple of its
+  own (needles built by concatenation, so the guard scans itself too), and three
+  **behavioural wiring tests** that hand each migrated caller a copy of the skill softened with
+  a phrasing only the shared list carries — and, for Step 4b, one only its `extra=` list
+  carries — and require the caller's own test to redden. A migrated module that imported a
+  no-op would pass its own tests and fail these.
+- **The three migrations.** The two identical copies are replaced by the import and a
+  four-line pointer. The Step 4b guard keeps its 16 step-specific phrasings as
+  `_STEP_4B_EXTRA` (thirteen it always had, plus `leave the flag off`, `usually the gate` and
+  `sound target on its own`, which read generic but name this step's own objects) and calls
+  the helper with them; its positive claims are untouched.
+- **`tools/phase253_mutations.py`** — the reconstruction, `origin="reviewer"`: 99 runnable rows
+  (102 − 3 retired), the reviewer's ids and descriptions verbatim, 39 anchors re-pointed with
+  the reason in each row's `note`, one (`C3`) kept as written with a note — its first anchor's
+  second occurrence is the recovery re-run, and the span helper now names the first copy
+  explicitly — and the reviewer's 26-module verifier list unchanged. 39 + 3 + 1 = 43. The
+  three retirements, each with its reason in the file: `B1` (Phase 252 removed the `not
+  commits` gate on purpose, so the mutation is now the shipped code), `C9` (its anchor matched no file even at Phase 248's close — mis-targeted when
+  written, one of the rows the reviewer's own run must have refused; the round corrected the
+  first reason given here), `H20` (the fix-shaped edit it proposed has landed). Plus 13
+  `origin="author"` rows against the helper and the wiring and 3 controls.
+
+### The number, and what it decided
+
+**Measured at `9100703`** (the commit that carries the pre-registered rule), reviewer's 26-module
+verifier set, one run, tree clean before and after: **82 defect rows, 61 killed, 21 survived; 17
+negative controls, 0 false kills.** By group: `close_batch.sh` **23 of 27**, `sitrep_survey.py`
+**20 of 22**, **prose 18 of 33**. Phase 248's record — for its own 87, which the modules on disk
+do not reproduce (above) — was 21 of 25, 22 of 26 and 4 of 36: the denominators differ in every
+group, so that comparison is indicative only, and the like-for-like measurement is the control
+below. The author-side `H-*` rows against the helper and the wiring: **13 of 13**, 3 controls
+green. At `9100703` `A13` was scored as a defect row; the shipped file now declares it equivalent
+(below), so a re-run of the shipped file reports 81 scored rows and `close_batch.sh` 23 of 26 —
+the figures above are the first run's, kept because the control was measured against the same
+denominators.
+
+**Then the control, because 4 → 18 is not this phase's number to claim.** Phase 248's prose
+figure was the round's measurement against that phase's *first* guards; Phase 248 then closed
+five bypass classes in-round and never re-measured the 36. So the same 33 prose rows were run
+again with the four guard modules checked out at the pre-phase commit (`6de1581`) and every
+other file at `9100703`: **18 of 33, and the survivor list is identical row for row.** The
+refactor this phase shipped — the union vocabulary, `count == 1` everywhere, `extra=` — **moved
+the prose fraction by zero rows.** Every kill the new guards produce, the old guards produced;
+the three reviewer rows that use the promoted phrasings (*"in practice you can leave the flag
+off"*, *"the flag is advisory"*) were already dead to the Step 4b guard's private list. The
+promotion's value is that those phrasings now redden in five other slices too, which no
+reconstructed row exercises — that is a claim about future drift, not a measured kill, and it
+is recorded as such.
+
+**Three of the survivors were not the vocabulary class. They were two of Phase 248's own
+positional guards, and both guards had lost their subject.**
+
+- `D1`/`D2` (the parked-batch routing row's recommendation swapped for `/auto-fix`; the two
+  rows' recommendations exchanged) were the exact mutations Phase 248's round wrote and Phase
+  248 killed with cell-content assertions. They survived here because
+  `test_every_stall_batch_state_has_a_routing_row` located the row with `state in ln`, and
+  Phase 252 inserted `| 6d | Any review batch \`parked, work in progress\` |` on the line above:
+  a substring match on `parked` now selects the new row first, so **from Phase 252 to this
+  phase every cell assertion in the `parked` iteration of that test ran against the wrong
+  row** (the `awaiting approval` iteration selected row 6f correctly) and the real `parked`
+  batch row could have routed to a drainer unchecked. The lookup now compares the normalized
+  State cell for equality, and the third batch state is checked too.
+- `F1` (§ 8.4's `close_batch.sh` signature drops the flag) survived because the guard Phase
+  248 wrote for it asserts `"--merge-target <ref>" in row` over the **whole table row**, and
+  the description cell beside the signature also says `--merge-target <ref>`. Rule 1's *what
+  it accepts*: a substring satisfied by an incidental use. It now reads the signature cell.
+
+Neither repair is a new pin, which the pre-registered rule forbids for a surviving reviewer row;
+each is an existing pin re-scoped to the subject its own docstring names. Re-run after the
+repairs (`43e923a`): `F1` and `D1` killed; **`D2` still walked through**, because the swap the
+guard's own comment lists as closed was never a swap — the mutation it was closed against had
+put the *same* text in both rows, and a true exchange satisfies `resume|park marker`, names no
+drainer, and leaves the two cells different. The guard now checks per-state content (a parked
+claim's row says *park marker*, an awaiting claim's says *approve*); `D2` killed at `95fbba0`.
+All three are credited to Phase 248, whose pins they are, per the rule. The round then found
+that repair inadequate in its turn (a true 6d↔6e exchange still passed it — below), and the
+full prose set was re-run against the final guards: **21 of 33 at the phase's final
+commit.** `A13` (drop `_ref_id`'s literal fallback) is reclassified a **declared-equivalent
+mutant** — and the round found the reason this record first gave for that was false. Phase
+248's record, its shipped comment and the ledger all said the fallback was dead code because
+`git rev-parse --symbolic-full-name` echoes any unresolvable argument; measured in a scratch
+repo, a full SHA, a short SHA, `<ref>~0` and an empty string all print **nothing**, so the
+fallback fires. The mutation is inert anyway: whichever branch runs, a non-branch spelling
+never yields a `refs/heads/` id and the `refs/heads/*` guard refuses it, so the fallback's
+output cannot change an acceptance decision. **A claim copied from a prior record is a claim
+you now own**: this phase cited Phase 248's measurement without re-taking it, and it was the
+third wrong reason in a row for the same line. The shipped comment, the Phase 248 battery's
+header and the ledger cell are corrected; the harness scores `A13` `inert ok`.
+
+**The residue, against the six surfaces `Q-367` named.** Five of the six reproduced as
+survivors: the roadmap enum's appended contradiction (`E2`) and invented values (`E3`);
+`render_text`'s task-note and batch-next-action loops (`H12`, `H13`); the states-table scope
+sentence (`K9`); `close_batch.sh`'s usage docblock and its two other usage lines (`A26`,
+`A27`). The sixth — the `--dry-run` provenance line — is **killed** now (`K10`), by a guard
+that landed after the entry was filed. Ten survivors the entry did not name: an inversion of
+Step 4b's PR-reuse rule with every pinned string intact (`C6`); a sentence beside the routing
+rows calling them unshipped (`D4`); three `/sitrep` prose rules inverted (`H4`, `H5`, `H6`);
+Step 4b's block re-fenced as `text` (`H19`); a row deleted from each of two documentation
+tables (`K1`, `K3`); § 8.4's never-inferred claim reversed beside itself (`F2`); and the
+UNRESOLVED provenance line losing its remedy clause (`A11`, whose sibling refusal message *is*
+guarded). Each of the prose ten is a sentence-level inversion or deletion that only a presence pin
+or a vocabulary entry would catch; the executable five would close behaviourally (a usage
+assertion over all three sites, a `render_text` fixture) and are not worth a slot.
+
+**One limit on the residue claim, stated because the round asked.** The verifier set is
+frozen at Phase 248's 26 modules; seventeen test modules changed or added since are outside
+it. The claims lens applied the seventeen survivors under eleven of those modules and none
+reddened, so the residue holds as far as measured — "pinned by nothing" means by nothing in
+the set the reviewer ran, which is the set this phase re-ran.
+
+**Disposition, by the rule as pre-registered.** Twelve prose survivors after the repairs. The
+exception asks whether at least half attack one slice of one file: `sitrep/SKILL.md` carries
+six of the twelve — exactly half at the *file* level — but across three slices (the routing
+commentary paragraphs: `D4`, `H4`, `H5`, `H6`; the classification-states table: `K3`; its scope
+sentence: `K9`), and nothing positional or behavioural would kill the four inverted rules. The
+exception does not trigger. **The residue goes to E1 with the number attached** (`Q-379`), and
+`Q-367` closes as scoped: helper single-sourced, three modules importing it, the 87
+re-measured as honestly as their remains allow, and the answer to *"is the residue worth
+more"* is **no — the layer's value is drift-proofing, not kill rate, and a longer list would
+not have moved the number** (`Q-374`).
+
+**The Phase 248 battery, re-pointed (decision 3).** Nine stale anchors and one ambiguous were
+re-pointed; `SS-2` was re-targeted because the 0-commit gate it attacked was removed on purpose
+by Phase 252, and the same assumption now lives in the stall arm's `not commits` term. First
+full re-run at `43e923a`: **33 of 34, 4 controls green — `CB-10` survived.** Reproduced at
+Phase 248's close commit in a throwaway worktree: there it was killed by
+`test_the_pr_handrun_refusal_names_the_flag`, which pinned the remedy clause on the provenance
+line; between that close and the Phase 250 push the test was re-pinned onto the refusal
+message the round itself added (the actionable site — the provenance line prints on every
+run), and nothing pins the informational clause any more. **A kill that had moved, not a
+hole**, and the third guard this phase found whose subject had shifted under it. Re-targeted
+at the refusal line and killed (`e9b8676`); the provenance clause's own loss is the reviewer's
+`A11`, left in the residue with that note. The ledger's `26 rows / 26 killed` cell for Phase
+248 is corrected to 34 in place, with the reason. The full re-run at the phase's final commit is
+stated in the ledger row.
+
+### The round: three lenses, and the repairs were where the defects were
+
+**The governor's three-lens condition held** — the phase changes what five shipped guard
+modules check, and its record publishes fractions — and one round ran, with the claims lens on
+a different model from the author and the other two under the hostile-lens instruction. The
+author-side pass ran first: rule 1's battery (the `H-*` rows) and the reconstruction; rule 2's
+re-read caught three counts in this record that the tree contradicted before anyone was
+spawned (39 re-pointed anchors, not 38; 43 unresolved rows, not 41; three lost-subject guards,
+not two); rule 3 ran every command the new brief prescribes.
+
+**The claims lens** returned 2 HIGH, 5 MEDIUM, 5 LOW, all against the record and all
+verified. The two HIGH were the same finding from two sides: **the 102 raw rows are not a
+superset of the 87** — 85 defect rows and 17 controls on disk, against 87 scored defects, with
+per-file counts disagreeing in both directions — so "the record's 87 were the scored subset"
+was false, and the 4-of-36 → 18-of-33 climb compared populations that were never the same
+rows. Both corrected above; the control (same rows, two guard sets) was the like-for-like
+measurement all along, which is why it was run. The MEDIUMs: the ledger's corrected Phase 248
+cell cites a record that carries no author-battery figure (it now names § Phase 253 as its
+support, and says the original `26` was never record-backed either); the published fractions
+cannot be re-derived from the shipped file after `A13`'s reclassification (now disclosed);
+"a fourth same-shape list" was five more (all named above, with `_NEGATORS` — plain strings —
+triaged on the right reason this time); "the union of the three copies" was not (corrected);
+and 43 ≠ 39 + 3 (the odd row, `C3`, now accounted for). The LOWs: three wording errors fixed;
+the "21 of 33 after" claim, which had been measured one row at a time, replaced by a full
+re-run at the final commit; and the verifier set's frozen membership stated as a limit on the
+residue claim, with the lens's own check under eleven newer modules recorded beside it.
+
+**The guards lens** wrote 39 mutations plus 10 controls against the new guards before reading
+the phase's rows: **25 of 39 killed whole-tree, 20 of 39 by this phase's guards alone** — five
+kills belonged to Phase 252 siblings — with 14 survivors and **6 of 10 controls falsely
+killed**. Six MEDIUM findings, each verified by re-running the lens's own edit:
+
+- **The per-state repair written in this phase to close `D2` could not see a true 6d↔6e
+  exchange**, because it mapped `parked` and `parked, work in progress` to the same token; a
+  task-form `/claim-task <ID>` in the awaiting row passed too. Each state now has a clause no
+  other carries. **A repair made in-phase is new code, and the round treated it as such.**
+- **The equality lookup was over-strict on a clarifying tail** (`— either origin` reddened) and
+  **blind to a decoy row above the real one** (a first-match lookup, again). The lookup now
+  strips a tail and requires exactly one row per state.
+- **`A13`'s "dead code" justification was false** — measured, four ref shapes, all empty
+  stdout. Corrected in the shipped comment, the Phase 248 battery's header, the ledger cell and
+  this record (above).
+- **The redefinition guard was name-bound** and the wiring tests covered three of five
+  callers: a renamed copy, a lambda shadow after the import, a copy in a subdirectory and
+  generic entries re-passed through `extra=` all walked through. The guard now scans
+  recursively, detects a shadow by assignment and a copy by its vocabulary (three or more
+  generic entries as literals), and every caller has a wiring test.
+- **The wiring tests proved reachability at one position** — a guard scanning only the head
+  of its slice passed. They now probe the head and the tail of every slice.
+- **The § 8.4 guard** accepted `[--merge-target <ref>|HEAD]` in the signature and false-killed
+  the `--merge-target=<ref>` form; and its first fix still let the `|HEAD` form through,
+  because a raw pipe in a signature moves `HEAD` into the next cell of a `|`-split. It reads
+  the backticked span now, over every `close_batch.sh` row, with the banned phrases scanned
+  over § 2.8 step 6 as well.
+
+Re-checked after the repairs, one narrow verifier per target so a kill is attributable:
+**16 of 16 of the lens's survivors killed, both controls surviving**, plus the subdirectory
+copy by hand. Three of the lens's items are declined with reasons: an unjustified entry added
+to the vocabulary (undetectable by a list, by design — the pinned set names the measured
+entries and additions are review's job); the step-6 aside *"derives the target from `HEAD`"*
+(the vocabulary class — no new phrasing, per the pre-registered rule, and recorded as the
+§ 8.4 guard's declared residual); and a paraphrase of the pinned *"never inferred from
+`HEAD`"* sentence, which is a presence pin's known cost with the standing remedy of re-pointing
+the pin in the same commit. One of the lens's false kills was reclassified as a true kill: a
+`--dry-run` row without the flag is a flagless prescription, which is the `Q-308` shape
+whatever else it documents. One false kill was a Phase 252 sibling's, not this phase's. Two
+LOW instrument findings fixed: the span helpers raised a bare `AssertionError` the harness
+does not bucket (now `AnchorError`, scored as stale), and `_span` took the first hit of an
+ambiguous anchor silently (now requires uniqueness or an explicit occurrence).
+
+**The execution lens** re-ran the batteries in its own clone — the author set 13 of 13, the
+Phase 248 battery 34 of 34 at the tag, six `--only` rows matching the record, and the
+lost-subject stories for `D1`, `D2` and `CB-10` reproduced at the pre-fix commits and the tag
+— and found three of the same guard holes the guards lens found by construction (the
+one-position wiring, the name-bound drift guard, a case-sensitive `extra=`), plus one of its
+own: **`H-13` had been written to the exact shape the drift guard's needle matched**, so
+"13 of 13" included a row cut to fit its guard. The needles are regexes now, over the
+underscore-prefixed and bracketed forms the lens listed. Its LOWs: `CB-10`'s note said the
+refusal is on stderr (stdout — corrected); `C9`'s retirement reason implied the citation had
+once existed, and the lens showed it never matched any file at Phase 248's close either
+(corrected); `B1` retired while `SS-2` was re-targeted (the asymmetry stands, reason
+recorded above); and `Q-379` called all seventeen survivors pin-or-vocabulary while saying
+the executable five close behaviourally (fixed). It did not reach the old-guards half of the
+control; the claims lens reproduced four rows of it, and the author's two runs with their
+JSON are in the phase's scratch record.
+
+**Suite:** 5661 passed, 173 skipped, 0 failed at `750ba2c`, the phase's final commit, measured
+after the record was written. Nothing is red at that commit: the ledger-row test was red for the
+window between the `CLAUDE.md` row landing and the row being written, as the brief said it would
+be, and the row closed it.
+
+**What the round changed about the number.** Nothing in the reviewer-row fractions moved for
+this phase's credit: the kills the repairs added are Phase 248's pins doing their job. What
+moved is the guards: the helper's first tests now cover the cases the round found, and the
+routing and § 8.4 guards refuse the shapes that walked through their first repairs. The
+residue (`Q-379`) stands as filed, with the limits the round asked for stated on it.
+
+## Phase 255 — the close path's own default branch (`Q-381` + `Q-380`)
+
+Phase 254 closed `Q-377` for eight skill files and split `/review-close` out as `Q-381`,
+because that one file carried 76 of the class's 80 remaining executable sites plus every
+permission-rule literal in it. Wade took `Q-380` — `scope_overlap.py`'s hard-coded diff
+base — into the same phase, **`Q-380` first**, on the argument that they are one class and
+that the ordering is load-bearing: `Q-380`'s fix makes a sentence in `/claim-task` false,
+and that sentence is precisely why Phase 254 left it alone.
+
+### `Q-380` — the resolver contract, and the fatal import
+
+The filing named three options and refused to pick, because a third copy of the resolver
+would itself be the defect: the tree holds exactly two behaviourally-pinned resolvers
+(`_git_lib.sh`, `sitrep_survey._resolve_default_branch`) kept equal by
+`tests/test_default_branch_resolution.py`. Wade chose *import the survey's*, the cheapest
+of the three, with the private symbol promoted off its underscore in the same commit.
+
+**Reading the module before importing it changed the shape of the fix.**
+`sitrep_survey.py` resolves PyYAML at module scope and `sys.exit(2)`s when it cannot find
+it — line 115, top level, inside the `except ImportError`. A plain `import sitrep_survey`
+would therefore have converted `scope_overlap.py`'s documented *"absent PyYAML degrades to
+a note"* path into a hard exit 2, breaking the never-break-the-caller contract stated in
+that module's own docstring. The import is lazy and guarded, and the guard names
+`SystemExit` explicitly because it derives from `BaseException` and a bare
+`except Exception` does not catch it. A test asserts the guard against an import that
+raises `SystemExit`, so the spelling cannot regress to the one that looks equivalent.
+
+**The signature question was settled by the suite, not by preference.** The first cut
+threaded the resolved base in as `_worktree_changed_paths(workspace, base)` and resolved
+once per run. Three tests went red, and the informative one was
+`test_main_json_returns_zero_and_valid_json`: the suite injects that git boundary by *two*
+routes — `assess(..., worktree_reader=...)` at two call sites and monkeypatching the module
+attribute at three — and both pass a one-argument callable. (The first draft said "three
+times each"; a `grep -c` counts lines, and one of the three was the docstring naming the
+route rather than using it.) So the base is resolved per
+workspace inside the reader, which is also the more defensible reading: a workspace is its
+own checkout and is entitled to its own answer.
+
+**The filed defect was the silence, not the empty answer.** An unresolvable base now skips
+the committed half rather than falling back to a literal, and `assess()` appends a note
+naming `git remote set-head origin --auto`. The note is emitted only on the real git
+boundary — an injected reader means the boundary is faked, and a note about a repository
+the test never built is worse than no note.
+
+**One shipped test asserted the defect in its own title.**
+`test_worktree_changed_paths_falls_back_main_to_origin_main` pinned the literal pair
+`("main", "origin/main")` and asserted the fallback order. It was inverted, not deleted,
+and the replacement asserts the *absence of a diff call* when the base is unresolvable —
+not merely the returned paths, because a fallback that happened to resolve nothing would
+look identical from outside.
+
+**`Q-380`(b), the ratchet template, carried a sibling of its own defect.** `WORKFLOW.md`
+and `WORKFLOW_GUIDE.md` ship a snippet a consumer authors into `<project>/CLAUDE.md`'s
+`## Pre-merge verification` section (**not** `checks.project.yml`, which is a YAML grep
+registry with no shell in it — the filing said `checks.project.yml` and this record
+repeated it before the round checked),
+hard-coding `origin/main`; an empty filtered list short-circuits and *passes*, so on a
+`master` consumer the lint/typecheck ratchet reported green over every changed file. Wade
+chose the shell-out shape (`default_branch.sh`). Writing it surfaced that a repository
+with **no remote** has no `origin/<name>` either and produces the identical silent pass, so
+the snippet prefers the remote tip, falls back to the local branch, and refuses when
+neither ref exists. That widening cost three lines and was taken on Phase 254's
+"widen the predicate once, cheaply" rule.
+
+### `Q-381` — the permission decision was the phase, and the filed remedy was wrong
+
+`.claude/settings.json` seeds `Bash(git reset --hard origin/main)`: the only literal-branch
+rule in the template and the only `git reset` grant at all. Once the skill stops emitting
+the literal, a `master` consumer matches no rule and Step 6 is prompted or denied. The
+filing recommended widening to `Bash(git reset --hard origin/:*)` and said explicitly that
+the prefix form's binding *must be confirmed by a probe rather than assumed*.
+
+**The probe refuted it.** Claude Code's permissions doc states the `:*` form
+*"is only recognized at the end of a pattern"*, and that in a pattern like `Bash(git:* push)`
+the colon is treated as a literal character. So `origin/:*` binds **nothing** — shipping it
+would have replaced a working exact-match rule with a dead one on *every* consumer, `main`
+ones included, and the symptom would have been indistinguishable from the bug the phase
+existed to fix. The spelling that does bind, `origin/*`, matches
+`git reset --hard origin/main~50`, which widens the tree's only destructive grant from one
+ref to any revision expression; the same doc confirms an allow rule fully authorizes at the
+permission layer, with no deny rule anywhere in this tree to fall back on. **The round's
+claims lens caught the first draft stating that without qualification**, which contradicts
+`WORKFLOW.md` § 8.2a thirty-seven lines below the sentence it was added to: the auto-mode
+classifier *does* override allow rules for three known-destructive shapes. Both are true of
+different gates; the unqualified form was not true of either.
+
+So the answer is install-time substitution, chosen by Wade at the phase's open over the
+filed recommendation: `install.sh` writes the consumer's own branch into the rule. Two
+things that would have made this infeasible turned out to already be true —
+`.claude/settings.json` is skipped by the divergence sweep and merged set-union on update,
+so a substituted rule survives `--update`. The grant stays exactly as narrow as it was and
+becomes correct off `main`. This is a recurrence, not a run: 212–215 were refused by execution, 254 by
+reading the right page first, and this one by asking a document a question the filing had
+assumed the answer to. **The first draft called it "the fourth phase running", which does
+not derive under any counting** — the named phases are six, the episodes three, and 216–253
+is a 38-phase gap. Phase 230's round falsified this exact sentence shape and recorded the
+lesson; writing it again in a phase whose thesis is that counts must be measured is the
+failure that lesson names, and the round caught it here for the second time.
+
+**Running it found two more.** BOTH consumer-facing notes rendered the raw tempfile path
+(`merge: /var/folders/…/sysop-loop-settings.XXXX → …`, and the same on the fresh-copy
+`copy:` line) — pre-existing in loop mode since Phase 123, and the new filter would have
+made it the norm; both now name the template. The first draft of this paragraph named only
+the merge note, understating the phase's own fix. And
+a consumer who installed before this phase keeps the stale `origin/main` rule alongside the
+new one, because the merge is deliberately set-union to preserve consumer-added rules. The
+stale rule is inert on a `master` repo (the ref does not exist), so it is recorded here
+rather than fixed: pruning would be a new authority to delete rules a consumer added.
+
+### The sweep, and the ordering error the guards caught
+
+All 76 sites were rewritten by the shipped predicate's own shapes and every changed line
+was read back. The interesting failures were not in the skill.
+
+**The resolve instruction belongs before the permission guard, not after it.** The first
+placement put it after Pre-flight, following the model of every other skill.
+`test_permission_surface_drift` went red with *"skills hard-require rules the installer
+never seeds — a fresh install hard-stops at Step 0"*: Pre-flight's own required-rule list
+now carries the placeholder, so it is itself one of the steps that needs the resolved name.
+Phase 254's closing lesson was that a resolve instruction must precede every site it
+governs, discovered there because deleting `/document-work`'s only resolve instruction
+produced no test failure. Here **no** guard caught the ordering either: the red was
+`test_every_declared_required_rule_ships_in_the_template`, firing on the placeholder-vs-
+concrete rule text, which it does whichever side of Pre-flight the section sits on. That is
+why the phase then had to write the ordering assertion that did not exist. The first draft
+of this paragraph said a guard caught it, and the phase's own new test docstring — written
+the same day — says plainly that it did not.
+
+**The placeholder ends in `>`, and a normalizer ate it.**
+`test_review_close_merged_tree_gate._normalize_cmd` collapses `>\s+` to `>` so that
+`> /dev/null` and `>/dev/null` compare equal. With the scope command reading
+`origin/<default branch> >/dev/null`, that rule removed the space separating the operand
+from the redirection, and the guard reported the shipped command *"missing, corrupted, or
+not in a bash fence"* over a file that was correct. The collapse is now placeholder-aware.
+
+**A guard that executes the skill now executes the resolve too.**
+`test_worktree_primary_identity` extracts Step 1a's bash block and runs it against real
+fixture repos. A placeholder is not a ref, so the harness performs the same substitution an
+agent does, by running `default_branch.sh` against the fixture — which makes those tests
+exercise the resolve step rather than assume it. Because that substitution is a silent
+no-op on a block without a placeholder, a separate test asserts the placeholder is present:
+otherwise a regression to the literal would leave every behavioural test in the module
+green while a `master` consumer's classifier reported every branch MERGED.
+
+**`DEFERRED` is now empty**, which was the point. `/review-close` was its only member, and
+the guard's own message had said to remove it once the exclusion covered nothing. The
+invariant is a true zero over every skill with no file-level exemption anywhere. Its
+non-vacuity test had used `/review-close` as a live specimen, counting hits inside and
+outside fences; closing the class removes the specimen, and a specimen-based check could
+then only be greened by reintroducing a defect. It now asserts the two properties directly,
+including the negative case, so a predicate that flags every sentence containing the word
+cannot buy the zero.
+
+**Two of the phase's own edits invalidated the machinery that checks them** — the class
+Phase 254 named. A mutation anchor in the ahead-count test became a no-op (its `replace`
+no longer matched, so the assertion proved nothing; it now asserts the mutation applied),
+and `install.sh` growing by 87 lines staled a line citation in `cleanup_worktrees.sh`.
+Both were caught by guards rather than by reading — and the citation then went stale a
+**second** time inside this phase, because the battery-closure commit added six more lines
+above the same anchor and the record already claimed the class closed. The round's claims
+lens found that one, red on the tree it was reading. The durable fix was to stop citing a
+line at all: `cleanup_worktrees.sh` now names the function, and the registry row is gone. A third was mine and in prose: the new
+resolve section names the literal three times as a counter-example, which the predicate
+correctly flagged. Rewording was taken over three `KEEPS` entries — trading one escape
+hatch for three, immediately after emptying the other one, would have made the zero
+decorative.
+
+### What the round paid for
+
+Three lenses, one round, pinned to a tagged commit in their own clones and gated on a
+phase-introduced symbol — the control Phase 254's round wanted after two of its three
+worktrees landed on the branch base. None landed wrong here.
+
+**The two sharpest findings are one defect: the sweep substituted values that were never
+branch references, and so made shipped text false to satisfy a predicate.**
+`permission_denied_hook.py` hard-codes `PROTECTED_BRANCHES = ("main", "master")` and matches
+`origin\s+(main|master)`; two skill sentences describing that hook were substituted, so on a
+`develop` consumer both halves read false — the hook does not match `develop`, and it does
+match `main`. `shape=main-checkout` is a fixed string the Step 0 heredoc *prints*, and no
+test read the line that named it. Both were **false positives of the predicate that the
+phase resolved by shipping a falsehood** rather than by a keep or a rewording, which is
+exactly what Phase 254's *"never launder it through the docs"* rule forbids — written one
+phase earlier, by the same author, about the same class.
+
+**The record claimed a class closed that was red at HEAD.** The citation this phase fixed
+mid-flight went stale again in its own final commit, six lines above the anchor, while the
+prose said guards had caught it. The durable fix was to stop citing a line: the comment
+names the function now. **And the runway asserted this round's outcome before it ran**,
+citing filings "recorded below" that did not exist — the Phase 153 shape, caught by the
+round it was pre-judging.
+
+**The execute lens found what reading could not.** `scope_overlap.py`'s note asked
+`project_root` whether to warn about a `workspace`; identical for a linked worktree, and
+divergent for `mode: clone`, which is a separate repository. Both wrong directions were
+reproduced: a clone that cannot resolve degrades **silently** — the state the docstring
+claims was removed — and an unresolvable root emits a **false** note whose prescribed fix
+runs in the wrong repo. The sweep had also missed a site, `grep -v \'^main$\'` at Step 1c, on
+a backslash **continuation** line the per-line predicate could not connect to the
+`git for-each-ref` above it. That is an assumption class rule 1 names explicitly and this
+phase's own battery listed and did not mutate for.
+
+**The guards lens ran 83 mutations to the author's 16 and watched 38 survive — 5.2× the
+rows and 19× the survivors.** Three findings mattered most. `_resolve_placeholders` could be
+replaced by a hard-coded `main` with all 17 tests green, because every fixture in the module
+was built `init.defaultBranch=main`: the module would have passed with `default_branch.sh`
+deleted. The resolve section's **content** was pinned by nothing — its body could be emptied,
+its polarity reversed to *"fall back to `main`"*, and the variable assignment Rule A exists
+to forbid inserted, all green, because the new guard compared two offsets. And the span arm
+anchored the git verb at a span's *start*, so 117 spans in the shipped skills carrying a git
+command without opening with one were invisible. It also measured a live defect nobody had
+looked for: a branch name containing `)` yields `Bash(git reset --hard origin/rel)ease)` — a
+malformed rule that binds nothing, silently.
+
+**One finding is the phase's own claim about itself, and chasing it made the answer worse
+than the finding.** The battery closure commit said A09 and A16 were closed *"by
+construction AND by test"*; two lenses showed the `cmp` backstop untested — the fixture
+strips the rule text but leaves its indentation, the one shape `cmp` cannot see, so the test
+passes on `sys.exit(1)` alone. Tracing its preconditions then showed the backstop was not
+merely untested but **unreachable**: the early return guarantees the branch is not `main`,
+the heredoc refuses unless the old rule is present, so the new rule always differs and the
+file always differs. It is deleted rather than left looking like protection — a guard that
+cannot fire is the shipped-inert class Phase 190 was disqualified over. The honest form of
+the original claim is that A09 was closed by one mechanism and one test, and A16 named a
+second mechanism that never existed.
+
+`Q-385` carries the residue: the guard family's remaining survivors, and the population
+question under them — `WORKFLOW.md` holds predicate hits that are *prescriptive twins* of
+lines this phase fixed, so the invariant's zero is narrower than it reads, and widening the
+scan is a contract call rather than an implementation one.
+
+### Suite
+
+**5711 passed, 176 skipped, 0 failed**, measured with `.venv/bin/python3 -m pytest -q` at
+**`8517adb`** — the commit that removed the unreachable backstop, i.e. after the record and
+after every round fix. **Nothing is red at that commit.** The two failures the round's
+lenses reported at `44111d3` are both closed: the stale line citation (fixed durably by
+citing the function instead of a line, and dropping the registry row) and the missing
+round-yield ledger row, which could not be written truthfully until the round had something
+true to put in it.
+
+An earlier measurement was discarded rather than reported: it was started before the last
+two commits and the tree was edited while it ran, which makes its number a description of no
+particular revision.
+
+### Scope held
+
+`WORKFLOW_GUIDE.md`'s by-hand review prose still says `main...<branch>`; a guard expectation
+that my blanket replace had moved was reverted rather than widened, because that file is
+outside `Q-381`'s scope. `Q-376` (the `pre-merge-commit` hook's `PROTECTED_BRANCH`) stays at
+E1 on Wade's call. The doc-prose class — sentences in shipped docs that say `main` where
+they mean the default branch — is deliberately outside
+`tests/test_skill_default_branch_literals.py`, which governs commands rather than sentences,
+and the skill now says so in its own resolve section.
+
+
+## Phase 254 — the skill bodies that hard-code `main` (`Q-377` + `Q-378`)
+
+**Members:** `Q-377` (the skill bodies still assert and diff against the literal `main` after
+Phase 252 made the three lifecycle scripts resolve it) and `Q-378` (`batch_work.sh`'s claim
+path leaves a lock, a worktree and an unflipped `Pending` status at exit 0), which ride
+together because both are the claim path on a non-`main` consumer. **First act:** Phase 253's
+commit cell backfilled to `e882205`, as the brief ordered.
+
+**Non-goals, held:** no announce work (`A2-announce` stays deferred on Wade's 2026-08-22
+call); not `Q-375`, whose own slot follows; not `Q-376` (E1); no monograph currency pass, whose
+discontinuity now runs 240–254 and is recorded on purpose since Phase 250; no mirror push —
+251 through 254 are all unmirrored at close.
+
+**The brief's own § High count was wrong, and it said so.** It asserted *"`Q-377` is the one
+open § High entry"* while instructing the reader to derive it instead of trusting the sentence.
+The derivation returns **two**, `Q-377` and `Q-375`. Deriving rather than reading is the only
+reason that did not become this phase's premise.
+
+### Four decisions went to Wade with options and a recommendation; all four were taken
+
+Two of them had been reshaped by evidence gathered before the ask, which is the part worth
+recording. A triage agent classified all 380 `\bmain\b` line-hits in `core/skills/` before any
+question was posed, and the classification moved the scoping question underneath it.
+
+**Counted with the predicate this phase shipped** — `tests/test_skill_default_branch_literals.py::is_executable_default_branch_literal`, run over `git archive e882205 core/skills`, which is the command a reader can repeat. An earlier draft published 119/80/57/53 from the scoping triage's broader bucket-A definition (it counted fence comments, echo messages and `settings.json` literals alongside commands) while the guard implemented a narrower one; the round caught the record quoting one number and the tree implementing another.
+
+1. **Mechanism.** Recommended a small shipped entry point over an in-skill `python3` heredoc.
+2. **Population.** Every file with an executable site except `/review-close`, plus
+   `/auto-judge`, whose two sites are behavioural prose with no executable form — not the four
+   the entry names. (An earlier draft said "all eight files carrying executable sites", which
+   names a different set of the same size: it includes `/review-close`, which decision 3
+   excludes, and drops `/auto-judge`, which has none.)
+3. **One phase or two.** Recommended splitting at `/review-close`, *reversing* an earlier
+   lean toward one phase once the triage showed `/review-close` holds 76 of the 117 executable
+   sites, four guard modules pinning exact command strings, and all nine permission literals.
+4. **`Q-378`'s shape.** Refuse-before-write on the named arms, plus an explicit verdict on a
+   fourth arm the entry does not mention.
+
+A fifth question — widening the `Bash(git reset --hard origin/main)` exact-match allow rule,
+which the fix would otherwise strand — turned out to be **out of scope by construction**: all
+nine permission literals live in `/review-close`. It moves to Phase 255 untouched.
+
+### Both fix shapes `Q-377` proposed are refuted, and by the same sentence
+
+The entry offered *"a tiny entry point beside the library that prints the name, or the
+`python3 - <<'PY'` idiom calling `sitrep_survey._resolve_default_branch`"*, and the intended
+call site for either was a shell variable. A `claude-code-guide` probe of the permissions
+documentation established that an allow rule **"won't match past an assignment of any other
+variable"**. So `DEFAULT_BRANCH="$(bash sysop/scripts/default_branch.sh)"` binds no rule and
+routes to the auto-mode classifier — and the heredoc variant dies identically, because the
+defect is the assignment, not what is inside the substitution. The Phase 126 memory recorded
+the narrower fact (env *prefixes* are not stripped); the general form is stronger and was not
+on the record.
+
+The second half of the refutation came from the tree. `shape_lib.phantom_inline_commands`
+flags a `$VAR` inside a backticked command in prose — "cross-block by construction", for a
+span that opens with a command word — and **78 of the 117 executable sites are prose
+commands**. No variable-based shape could ever
+have reached them. A fence-scoped sweep reaches 39 of 117; the entry's own remedy would have
+closed under half the class while reading as complete.
+
+**What shipped instead** is the idiom the skill layer already uses throughout — `bash sysop/scripts/<script>` and
+`python3 sysop/scripts/<script>`, whose call sites a reader can count with
+`grep -rlE '(bash|python3) sysop/scripts/' core/skills/`: run the helper bare and read its stdout. `core/companion/scripts/default_branch.sh`
+prints one name and exits 0, or prints nothing, explains itself on stderr and exits 1. Every
+site becomes the placeholder `<default branch>`. One idiom covers fenced and prose sites alike.
+
+### The convention already existed, and the copies ignored it
+
+`_shared/main-push-guard.md` ships this paragraph: *"Substitute `<expected branch>` with the
+branch this step intends to write … It is a placeholder, not a variable to set: nothing
+survives from one fenced block to the next … so a variable here would be empty."* It then
+enumerated its callers as writing **"the literal `main`"**. So at the Rule A sites this was
+never a missing mechanism — five skills declined a mechanism the shared partial already
+argued for, in the file they all cite. The paragraph is now the resolving instruction, its
+normative table says *the default branch* where it said `main`, and the copies honour it.
+
+### `Q-378`: the first cut was too broad, and the suite said so in one number
+
+Refusing on any `git pull --ff-only` failure reddened **33 tests across two modules**. The
+cause was not the tests: `test_batch_claim_kinds.py` and `test_batch_status_gate.py` configure
+**no remote at all**, so the suite's ordinary claim path had been running *through* the very
+arm `Q-378` was filed about. A local-only repository has nothing to pull and still makes a
+completely consistent claim — the flip commits locally, the lock and worktree follow, every
+reader agrees. The arm now separates *no `origin`* (claim normally, with a note) from
+*configured `origin` that will not fast-forward* (refuse). **26 of the 33 were false failures
+produced by the fix, not by the defect.** Measuring the control is what distinguished them.
+
+`claim_batch` now returns 0 in exactly two cases — it flipped the status, or the batch was
+already past `Pending` and the caller is re-attaching — and refuses otherwise, before writing.
+The fourth arm the entry does not name (`batch_start` empty) is **unreachable by derivation**
+(not by measurement — the round was right to correct the word):
+`review_index.py --range` prints a 1-indexed integer, so `cut -f1` of a non-empty range line
+is never empty. It became a refusal anyway, so the contract is one sentence rather than three
+arms and an exception.
+
+**The fix falsified a documented contract, which is the part that needed deciding rather than
+doing.** `/claim-task` told the operator *"the script warns, skips the flip, and still creates
+the worktree **and** the lock … a batch that stayed `Pending` is claimed all the same"*, and
+`test_off_main_skips_claim_but_still_creates_worktree` asserted the defect in its own name and
+comment (*"Auto-build skips gracefully (never aborts)"*). Both are rewritten. The graceful
+behaviour `/auto-fix` and `/auto-judge` actually need was already theirs — *"if the script
+exits non-zero, report the error, skip this batch, and continue"* — and it only works when the
+script exits non-zero, which it now does. Four further fixtures had built their state **by
+exploiting the bug**; two now construct it directly through a `_strand()` helper, and two
+were re-pointed at the flipped status the claim really writes.
+
+### The class sweep found one defect outside the brief's scope
+
+Widening the predicate past `core/skills/` to every shipped script found
+`scope_overlap.py:511` iterating `for base in ("main", "origin/main")` — a fourth script with
+the defect `Q-365` closed in three, missed by Phase 252 and by `Q-376`'s sweep. On a `master`
+consumer both probes fail and the committed-on-branch half of every collision advisory returns
+empty **with no signal**. Filed as `Q-380` (§ High) rather than fixed: the tree deliberately
+holds exactly two behaviourally-pinned resolvers, and where a third instance should live is a
+contract call.
+
+**It also produced a trap worth naming.** `/claim-task` line 289 describes that script as
+using `git diff --name-only main...HEAD`. That sentence is **true today**, so "fixing" it to
+`<default branch>` would have shipped a falsehood in order to cover a bug. It is deliberately
+left, and `Q-380` records why.
+
+### Four defects this phase introduced and caught
+
+Recorded because three of the four were caught by machinery rather than by reading.
+
+- The over-broad `Q-378` refusal, above — caught by 33 tests.
+- The arm-1 recovery hint prescribed `git -C <primary> checkout <default branch>`, which git
+  **refuses** when that branch is checked out in another worktree — and the guard's own
+  fixture is exactly that topology. The message now states the requirement and marks the
+  command as the usual case, naming the collision underneath it.
+- New prose in `main-push-guard.md` introduced a phantom inline command; the Phase 169
+  zero-invariant caught it.
+- Editing `/claim-task`'s abandon bullet silently invalidated a mutation anchor in
+  `test_claim_task_orchestrator.py`. The stale-anchor bucket caught it — the file's own
+  comment predicts this class: *"adding text to a file weakens every occurrence-indexed
+  mutation over it."*
+
+Two guards were **strengthened rather than adjusted**: the Step 4d pins in
+`test_claim_task_orchestrator.py` and `test_batch_claim_kinds.py` now require
+`<default branch>` instead of accepting either spelling, because accepting the literal would
+re-admit the defect this phase closed.
+
+### Deliberate keeps
+
+**Four lines** remain in the eight files under the shipped predicate — the count is predicate-relative and meaningless without it, since a bare `grep -c '\bmain\b'` over the same files returns 138 — each with a reason: `claim-task:289` (accurate
+description of `scope_overlap.py`, see `Q-380`), `ui-verify:14` (this phase's own sentence
+explaining why the literal fails, which must name it), and `main-push-guard` lines 34 and 153,
+where `main` is the canonical example in Rule B/C rationale rather than an instruction.
+
+
+### The round — three lenses, and the author-side battery it disqualified
+
+**Governor: three lenses, one round** (behaviour *and* a record making numeric claims; both
+terms held). Lenses: *does it execute* · *are its claims true* · *are its guards real*.
+
+**The author-side battery reported 21/21 killed, 2 controls clean, 0 false kills. An
+independent battery then ran 46 mutations, scored 42, and watched 31 survive.** The
+diagnosis was exact and is worth more than the number: all eight of the author's sweep rows
+were **reverts of the exact strings this phase had just removed**, so the guard was measured
+only against the shapes it was written from. Twenty-one other spellings —
+`git switch main`, `git rebase main`, `git push --force-with-lease origin main`,
+`git rev-parse main@{u}`, `= 'main'`, a backslash continuation, a markdown line wrap — were
+inserted across all eight in-scope files and left 1279 tests green.
+
+**The harness had already said so, and the phase had silenced it.** `mutation_battery.py`
+prints *"a set composed mostly of reverts reports wiring, not coverage"* alongside a
+declared-revert percentage. The rows were left at the default `kind="assumption"`, so it
+printed **0%** for a set that was mostly reverts. The instrument was right, its label was
+the author's, and the label is what made it quiet. Fixed: those rows now declare
+`kind="revert"`.
+
+**The sharpest finding was a live one.** `release/SKILL.md:63` — Step 2's precondition,
+*"Assert `git rev-parse --abbrev-ref HEAD` = `main`"* — was still the literal, and it sits
+**upstream of** the Step 8.3 re-assert this phase had already converted. On a `master`
+consumer the skill halted at Step 2 and never reached the fix. Two lenses found it
+independently; the guard could not, because the assertion is backticked and the predicate
+only knew `= "main"`.
+
+**The predicate was the wrong shape, not merely incomplete.** It enumerated *command
+shapes* (`checkout main`, `push origin main`, `merge-base main`), so any line with a flag
+between the verb and the operand, a different verb, a quote or a line break was invisible.
+Rewritten as two tiers — ref shapes that are violations wherever they appear, plus `main` as
+a bare operand of a git/gh command, with an inline backtick span counting as a command only
+when it opens with one (the discriminator `shape_lib.phantom_inline_commands` already uses).
+The reviewer's twenty-three attack strings ship as a regression corpus, and six prose lines
+ship as false-positive controls, because over-strictness is the direction that hides: noise
+gets silenced with a `KEEPS` entry.
+
+**Both escape hatches were open.** `KEEPS` matched a *substring* of a line, so a live defect
+appended to a kept line was exempt **while the uniqueness test still passed** — demonstrated,
+not hypothesised. And `DEFERRED`'s membership was asserted nowhere, so a second directory
+could be added and the whole skill exempted silently; its non-vacuity check was aggregate, so
+one populated exclusion satisfied it for every other. Keeps are now whole-line and must
+themselves still be flagged by the predicate; `DEFERRED` is pinned, and non-vacuity is per
+entry.
+
+**The published counts were not reproducible.** 119 / 80 / 57 / 53 came from the scoping
+triage's broader bucket-A definition — it counted fence comments, echo messages and
+`settings.json` literals alongside commands — while the shipped guard implemented a narrower
+one. The record quoted one number and the tree implemented another, at five sites, and the
+brief handed the next phase a derive command returning a third. Re-derived against the
+shipped predicate: **117 executable lines, 76 of them in `/review-close`, 78 prose, 39
+fenced**. `/release` moved 4 → 5 in that recount, which is the live defect above showing up
+in the arithmetic.
+
+**Three record claims were false, and one of them was a regression this phase introduced.**
+"The five Rule A copies honour it" — three do. The `Branch:`/`Path:` box belongs to
+`batch_work.sh`, not `claim_task.sh`. And Rule A's rewritten paragraph said "all four write
+the default branch" two paragraphs above its own statement that `/document-work` *never*
+writes it — **the text this phase replaced had that distinction right**, which is the
+new-prose-is-the-least-reviewed-text rule paying out against the author who had just cited it.
+
+**`Q-380`'s sweep scope was wrong twice.** Its grep globbed `--include='*.py' --include='*.sh'`
+and therefore could not see `core/companion/git-hooks/pre-merge-commit` — an extensionless
+file, and *the exact reason `Q-376` already gives* for that hook escaping the `Q-365` sweep.
+The same miss, repeated one entry later, by a phase whose method section is about widening
+predicates. The class is also not confined to scripts: `WORKFLOW.md` ships a ratchet template
+that silently passes over every changed file on a `master` consumer. Both folded into `Q-380`.
+
+**Three coverage gaps closed after the round pointed at them**: `--help` (documented in the
+header, tested nowhere — two mutations survived), `grep -qx origin` versus `grep -q origin`
+(a repo whose only remote is `upstream-origin` would have taken the pull path and refused,
+re-introducing the over-reach), and the unreachable fourth arm, now pinned by a source-shape
+contract test since no fixture can reach it.
+
+**Round-integrity note, recorded because it nearly cost the round.** Two of the three
+reviewer worktrees were created at `e882205` — the branch *base*, not the work. Both lenses
+would have reported "this file does not exist" as findings. Caught by reading
+`git worktree list` before reading any results rather than after; both were corrected
+mid-flight, and one had independently worked around it by exporting the right commit with
+`git archive`. Check the reviewers' commit before you read their findings.
+
+
+**The execute lens found what neither reading lens could, and two of its three High findings
+were against sentences this phase had just written.**
+
+- **A half-claim still ships at exit 0.** `Q-378`'s fix stopped at `claim_batch`'s return; the
+  branch/worktree/lock writes below it were never in its scope. Because worktree creation is
+  gated on `[[ -d "$WORKTREE_DIR" ]]`, *any* directory at that path makes the claim skip
+  `git worktree add` and write the lock anyway — and `--release` **guarantees** such an orphan
+  directory, so it is a two-command sequence with shipped commands, not a built fixture. Both
+  halves of the invariant the code states are defeated: the path exists (so `/sitrep` sees no
+  stale lock) but is not a worktree (so `scope_overlap.py` measures an empty diff), while the
+  summary box tells the agent to `cd` there and start work. **This falsified the sentence this
+  phase had just shipped** — *"A claim is all-or-nothing"* — which is now scoped to the status
+  decision, with the remainder filed as `Q-382`.
+- **`default_branch.sh`'s load-bearing safety argument was false.** The header claimed an
+  ignored exit code yields "a command that fails loudly". Measured: `git diff ...HEAD` exits 0
+  silently, `git log --oneline ..HEAD` exits 0 silently, and **`git rev-list --count ..<branch>`
+  prints `0`** — the exact value `/claim-task`'s pre-delete check is told to expect before it
+  runs `git branch -D`. The empty substitution is *safe from comparing the wrong branch* and
+  *not self-announcing*, and the second half is what the comment got wrong. The contract is now
+  stated as the exit code, and the inverted `!= "<default branch>"` assert is noted as passing
+  unconditionally on an empty value rather than failing loud.
+- **The resolve instruction sat downstream of four of the five sites it governs.**
+  `/document-work` resolved at Step 5 while Steps 1b and the `--non-interactive` arm used the
+  placeholder above it — and a mutation deleting that skill's only resolve instruction produced
+  **no test failure**, so the ordering was unguarded as well as wrong. Now a Step 0.
+- Three further reproduced states are filed rather than fixed (`Q-382`, `Q-383`, `Q-384`): a
+  foreign lock adopted at exit 0, an untracked tracker silently rewritten under a message
+  saying nothing was claimed, branch names carrying shell metacharacters printed verbatim into
+  unquoted substitution sites, and `<default branch>` appearing inside verbatim sub-agent
+  prompts whose resolve instruction lives outside them.
+
+**The clean negatives are part of the result and are recorded as such.** Across 24 hostile
+repository fixtures `default_branch.sh` never printed a confidently-wrong name — every failure
+was an empty stdout and a non-zero exit. Every *resolved* command in the installed skills
+executes correctly on a `master` consumer, driven end to end including Rule B's full five-step
+push sequence against a real remote. Loop mode is consistent: script excluded, no loop-shipped
+file references it, allow rule filtered out. And the lens corrected one of its own earlier
+findings after a wider run — the allow rule and the resolve-instruction class *are* guarded.
+
+**Stated coverage limits, because a round that implies completeness is worse than one that
+admits its edges:** `/review-close` was not exercised at all (it is `Q-381`); whether an LLM
+orchestrator really substitutes into sub-agent prompts is structural-only; `close_batch.sh` and
+`cleanup_worktrees.sh` were not driven end to end under the new refusal semantics; and a
+suspected concurrent-claim lost update through a shared `${TASKS_FILE}.tmp` could not be forced
+and is filed as suspected, not reproduced.
+
+
+## Phase 256 — the claim path's remaining writes, and the escape hatch the filing wanted removed (`Q-382` + `Q-375`)
+
+Both open § High in one phase, on Wade's call at the open. The runway line had left the
+order to this phase and named neither first; Wade took both, and the second one is where
+the phase spent its judgement.
+
+### `Q-382` — three reproduced states, and two filing claims that did not survive execution
+
+Phase 254 closed `Q-378` by making `claim_batch` refuse before writing. Everything *below*
+that call — branch, worktree, lock — was outside its scope, so a claim could still
+half-succeed at exit 0. All three states the filing named reproduced on the first attempt
+with shipped commands, which is the filing's real contribution:
+
+- **(a)** the worktree gate was `[[ -d "$WORKTREE_DIR" ]]`. A directory is not a worktree:
+  `mkdir` at that path, then claim, and the run skipped `git worktree add`, wrote the lock
+  anyway and exited 0 — advertising a `workspace:` that is not a repository, while the
+  summary box told the agent to `cd` there and work.
+- **(b)** a `Pending` batch carrying a lock adopted it verbatim. Measured with
+  `branch: feat/SOMEONE-ELSE` and `workspace: /tmp/not-mine`: exit 0, no warning, the lock
+  untouched and now describing a claim that is not yours.
+- **(c)** an **untracked** `review_tasks.md` defeated the precondition. `git diff` and
+  `git diff --cached` are both blind to one, so the rewrite landed, the commit died on a
+  pathspec matching nothing known to git, and the rollback — `git checkout --` on that same
+  pathspec, with `|| true` — could not restore a file git had never seen. The run ended
+  printing *"the claim was rolled back, nothing was claimed"* over a tracker reading
+  `In Progress`.
+
+**The fix is placement, not detection.** Every one of these refuses now, and all three
+refusals sit **above the commit** — (a) and (b) above the `claim_batch` call, (c) inside its
+own precondition block, ahead of the rewrite — because `claim_batch` flips *and commits* the
+status. (An earlier draft said all three sat "above `claim_batch`", which the same paragraph
+then contradicted two sentences later.)
+A check below it that returns 1 leaves the batch committed as `In Progress` with no lock and
+no worktree — a half-claim of a different shape. So `WORKTREE_DIR` moved up to where the
+check needs it, and the tracked-ness precondition joined the clean check inside
+`claim_batch`'s own precondition block. That is Phase 210's decide-then-write discipline
+applied to the writes Phase 254's scope left behind, and it is the whole design.
+
+**One of the filing's claims looked refutable and was not, and the round is what established
+that — this is the phase's sharpest lesson and it is against the phase.** The filing said
+`--release` *guarantees* state (a)'s orphan directory, citing its own *"No worktree holds …
+(already removed, or never created)"* message, and called it reachable in two shipped
+commands. The first draft of this record called that false and listed four measured paths:
+plain `--release` removes the directory, `--release --force` over a dirty worktree removes
+it, `cleanup_worktrees.sh --clean` removes it, and a failed `git worktree add` never creates
+one. All four measurements are correct. **None of them is the arm the filing quoted.**
+
+The quoted `else` — the one that prints that exact message, at the bottom of the release's
+worktree block — does leave the directory, at exit 0, and it is two shipped commands away
+exactly as filed: `cleanup_worktrees.sh` runs `git worktree prune` **unconditionally in every
+mode**, which de-registers a worktree whose `.git` is gone while leaving the directory on
+disk, and the next `--release` then takes that `else`. Verified end to end after the round
+raised it. The word *"guarantees"* is the only thing wrong with the filing — every
+`--release` does not do this — and the record had converted an overstated quantifier into a
+false mechanism. **Refuting a filing by measuring around the mechanism it cited is a failure
+mode worth naming**, and it is the same shape as the thing this project keeps catching in
+filings, pointed the other way.
+
+Chasing the actual producer is what turned up **the defect this phase did not set out to
+find**. A worktree whose directory has lost its `.git` is registered but invalid;
+`git worktree remove` refuses it — *"validation failed … .git does not exist"* — and so does
+`--force`. Both arms of `--release` therefore exited 1 with *"Nothing was released — the
+claim is intact"*, the lock was never removed, and the remedy the message offered was the one
+that had just failed, while `next_task.py` skips a locked batch forever.
+
+**The first draft of this paragraph said "unreleasable by any shipped command", and the round
+disproved it in the same breath as the paragraph above.** `cleanup_worktrees.sh` prunes
+unconditionally, so prune-then-`--release` did recover the batch — two commands, which is the
+standard this phase had just held the filing to and failed itself. The true claim is
+narrower: **`--release` alone could not recover it in either arm**, and the only recovery ran
+through another script's incidental repo-global prune. That is still worth fixing, and the
+fix is one targeted command instead of two untargeted ones. A recovery arm now prunes
+the stale registration and removes the leftover **only when it is empty**; a directory
+holding files is an operator's data and is left alone, named rather than deleted, because the
+claim-side refusal is already the thing that stops work happening in it.
+
+**The suspected half was taken and its sibling swept.** `claim_batch` rewrote through a
+fixed `${TASKS_FILE}.tmp` — one path for every concurrent claim. The round that filed it
+could not force the window and neither could this phase, so this is hardening rather than a
+reproduced fix. `--release` carried the identical fixed path and the filing named only the
+claim site; both are PID-qualified now. **`mktemp` was the obvious tool and is the wrong
+one**: it creates at 0600, and the `mv` would have carried that mode onto the file every
+reader in the tree opens. The redirect keeps the caller's umask, which is what the file
+already had, and a test pins the mode across a claim.
+
+**A shipped test was green because of `Q-382`(b).**
+`test_batch_id_forms_are_interchangeable` built `repo-BATCH-7` and `repo-batch-7` — the
+**same directory** on a case-insensitive filesystem, which is macOS's default. The second
+iteration re-entered the first's repo: the fixture rewrote `review_tasks.md` back to
+`Pending` while the first iteration's `BATCH-7.lock` survived, and the test then asserted
+that claiming a Pending batch holding a lock returns 0. It did — by adopting it. The test
+went red on the fix, and it had never exercised what its name says on a case-sensitive
+filesystem, which is why CI never said so. Fixed by naming the two fixtures `upper` and
+`lower`.
+
+### `Q-375` — the filing's sharpest case was the one shape that must not change
+
+The entry offered a contract call: does the boundary twin widen for everyone, or does the
+warning get its own broader detector? It ranked ` ### Batch 4` — one leading space — as **the
+sharpest of the five**, arguing that `_FENCE_OPEN_RE` 300 lines up in the same module
+already encodes `^ {0,3}` as the indent CommonMark allows, so the twin not doing so was an
+inconsistency inside one file.
+
+That argument was taken, at the open, and built: `^ {0,3}` added to all four twin copies plus
+`archive_review_tasks.H3_HEADER_RE`, which has to move with them — the Phase 191 note at
+`archive_review_tasks.py:521` records that widening `ANY_BATCH_HEADER_RE` **alone** made
+`all_merged` hold True for a round with an OPEN batch and archived it.
+
+**Then `WORKFLOW.md` § 4 line 624 refuted the premise, and the build was reverted.** It is a
+shipped, ratified rule:
+
+> **Indent the example by two spaces.** `### Batch` is matched at **column 0 only**, so a
+> two-space-indented example is invisible to every reader — `batch_work.sh`,
+> `close_batch.sh`, `review_index.py`, `next_task.py`, `sitrep_survey.py` and
+> `archive_review_tasks.py` alike. It needs no fence at all, and it is the only form that
+> cannot be misread.
+
+Column 0 is not an oversight; it is the contract that makes the escape hatch work, and it was
+chosen over a fence because Phase 208 measured fence-based separation false-firing on
+**98.2%** of opener positions on a real tracker. Widening the twin would have turned every
+correctly-written example on every consumer tracker into a live batch boundary — silently,
+which `near_miss_batch_headers`' own docstring names as the same defect class as losing one,
+pointed the other way. The filing was wrong about its own sharpest case, and the tree had
+said so in a shipped document the whole time.
+
+So the split is by **what each shape is**, and the two patterns now answer two questions:
+
+    boundary twin  (unchanged)   ^###\s+Batch\s+\d+\b          "does a batch END here?"
+    near-miss      (widened)     ^#{2,4}\s*Batch\s+\d+\b  (i)  "did someone MEAN one here?"
+
+Four shapes written **at column 0** — `## Batch 4`, `#### Batch 4`, `###Batch 4`,
+`### BATCH 4` — are an author meaning a header and losing one, and they report now. The
+indented form means *example* and stays invisible to both. Reporting it would be the
+over-reporting `test_non_batch_headings_are_not_reported` exists to prevent, and its fixture
+comment — *"WORKFLOW.md's blessed form"* — was right, against a first sweep of `core/` that
+found no indented header and briefly read the annotation as unsupported. The rule states the
+convention; it does not demonstrate it.
+
+`archive_review_tasks.py` is a **second consumer** of the population — its own
+`near_miss_batch_headers` used the boundary twin as its source — and
+`tests/test_batch_header_near_miss.py` asserts the two twins agree on which line is a near
+miss, so it moved in the same commit. **An earlier draft of this sentence called it a "fifth
+copy the filing's four-copy inventory missed". That is wrong twice:** the boundary twin has
+exactly four copies, and the filing named all four including this file, and even flagged that
+this one carries a capture group. The filing's inventory was right; what it did not
+distinguish was the second *consumer*.
+
+### What this phase leaves
+
+- **A guard cannot see its own premise deleted**, so
+  `test_the_workflow_rule_this_depends_on_is_still_shipped` pins the two sentences in
+  `WORKFLOW.md` that the whole `Q-375` design rests on. If that rule is ever retired, the
+  behavioural tests above are defending something that no longer exists, and the failure says
+  so rather than going quietly green.
+- **`PHASE_LOG.md`'s sections are out of order and nothing checks it.** Phase 255's entry sits
+  *before* Phase 254's. Found while appending this one; filed as `Q-386` rather than swept,
+  because moving a 255-line block is a mechanical risk with no functional payoff and it is not
+  this phase's contract.
+- **The doc-prose class and `Q-376` stay filed**, unchanged from Phase 255's handoff.
+
+### The round — three lenses, one round, and it went against the phase
+
+Governor's behaviour-plus-numeric-record arm: this phase ships bash, Python and guards *and*
+a record asserting counts. Three fresh-context `general-purpose` lenses in isolated
+worktrees — execution, guards, record — told not to mutate and to verify their revision
+first. **Author-side pass first**, per `_shared/adversarial-review.md`: rule 2 (re-read new
+prose against the code) checked four factual claims and found them sound; rule 1's battery is
+`tools/phase256_mutations.py`, which took three runs — 21/25, then 23/25, then **24/25** with
+one declared no-op survivor, 3 controls surviving, 0 false kills.
+
+**The battery's own two corrections are the argument for running it.** The first cut's `N03`
+was a comment-only edit on a Python target, which the harness refused as a BLIND CONTROL — a
+control the verifier cannot see measures nothing. And `M02` survived twice: the first
+replacement test used a symlink into another checkout, which has no `.git` of its own, so it
+refused under **both** spellings and measured nothing. A direct probe separated a live hole
+from a no-op — an empty `.git` directory passes `-e`, and `rev-parse --show-toplevel` then
+walks up and answers with the enclosing repository's root. The `-ef` comparison is what stops
+that, and nothing tested it until the probe.
+
+**The execution lens found three HIGH, two of them in code this phase added.**
+
+1. **`git worktree prune` takes no target.** The recovery arm ran it bare, so it de-registered
+   *every* prunable worktree in the repository. Measured: a bystander worktree that had merely
+   been moved aside lost its admin directory — index, `HEAD`, reflog — and `git worktree
+   repair` could not recover it. The comment beside it asserted prune was scoped to *"this
+   one"*, which is false of a command that takes no argument. `cleanup_worktrees.sh` already
+   carried the rule this broke: its modes act on ALL worktrees, and it points at
+   `--release <N>` as the single-batch tool. Replaced with a targeted removal of the one admin
+   record whose `gitdir` points at this worktree.
+2. **The same defect from the other side.** Releasing one broken batch de-registered a second,
+   so *its* `--release` took the "No worktree holds" branch, reported success at exit 0, and
+   left the orphan directory the claim-side refusal rejects — the arm manufacturing the state
+   it exists to clear, for every batch but the first.
+3. **"The concurrency window is unforceable" was false**, and this phase wrote it in three
+   places. Two concurrent claims on different batches strand one in about half of trials —
+   4 of 8 measured here, 6 of 10 **pre-fix** by the lens. The stranded batch is committed
+   `In Progress` with no lock, under *"the claim was rolled back, nothing was claimed"*: state
+   (c)'s exact harm, from a producer the filing never considered, and invisible to both
+   recovery routes (not `Pending`, so nothing offers it; no lock, so nothing reports it).
+   Pre-existing, **not fixed here** — the mechanism is an unlocked read-modify-write plus one
+   shared git index, not the tempfile — and filed as `Q-387` § High.
+
+Plus two more it found: guard (a) was blind to a **dangling symlink** (`-e` follows the link,
+`git worktree add` lstats and refuses, putting the failure back below the commit), and the
+`Q-375` widening fed `archive_review_tasks.py`'s **hard whole-run refusal** — making an
+ordinary `## Batch 1 retrospective` heading a blocker, with a stated reason (*"VISIBLE to its
+batch counter"*) false for the shapes that do not bound. The gate is now the bounding subset;
+the rest warn and say they are not blocking.
+
+**The record lens found the phase's record worse than its code, which is the point of
+reviewing the record.** Eighteen findings; the four that matter are corrected above — the
+`--release` refutation that measured around the arm the filing cited, the "unreleasable by any
+shipped command" headline that two shipped commands disprove, the "fifth copy" that is four
+copies and a second consumer, and an inverted causality in the Phase 191 note (widening was an
+insufficient **fix**, not the **cause**). It also caught `Q-386` claiming a "single
+misplacement" where `PHASE_LOG.md` has **six** descending transitions — phases 224–228 sit in
+full reverse order across ~3,000 lines — and three docstring overclaims: "none matches source
+text" (false of seven methods), a class claiming four end-to-end tests where one is, and
+"reporting a shape costs nothing" (true in `review_index.py`, false in the twin that refuses).
+
+**What the round did not change.** The three `Q-382` reproductions, the `Q-375` reversal and
+its `WORKFLOW.md` § 4:624 grounding, the 98.2% figure, the six-reader enumeration, the
+case-insensitive-filesystem mechanism, and the battery's 24/25 were all independently
+reproduced and stand.
+
+**The guards lens stalled twice and delivered nothing, and that is a hole in this phase's
+numbers rather than an absence of findings.** It was the lens instructed to build an
+independent mutation set and ignore the author's, which on this project's record is the lens
+that finds the worst number — five consecutive phases where an author's near-zero met an
+independent battery's 27 to 99 survivors. Its last emitted line said it was about to check
+whether survivors were caught elsewhere in the suite, so it plausibly held findings nothing
+here records. **It was not replaced by an equivalent.** What stands in its place is a second
+*author* battery (`tools/phase256b_mutations.py`) written against the round-fix code, which
+the first battery could not have covered because none of that code existed when it ran:
+21/23 killed, two declared equivalent mutants, two controls surviving, 0 false kills. That
+is a real measurement of newly-written code and it is still self-consistency, not exhaustion.
+
+**Battery B found three things the round's own fixes had introduced or left**, which is the
+argument for measuring a fix rather than trusting it:
+
+- **`P06` — the CWD-relative class, at a fourth site in this repo.**
+  `git rev-parse --git-common-dir` answers *relative to the CWD*, so the new admin-record
+  scan looked under `.git/worktrees` and found it only when the caller stood at the repo
+  root. From any subdirectory it silently found nothing and still reported success. Now
+  asked and resolved against `$REPO_ROOT` explicitly, with a test that runs `--release` from
+  `sysop/scripts/`.
+- **`L02` — and the mutation asked a better question than it was written to ask.** It
+  proposed `-f` → `-e` on the lock preflight, expecting the answer to be "`-f`, because a
+  directory is not a claim". The answer was neither alone: a directory there is not a claim,
+  *and* it is still fatal, because `write_batch_lock` fails on it **after** `claim_batch` has
+  committed the flip. Two states now get two messages and both refuse above the commit — one
+  instance of the § Medium `Q-388` class closed as a byproduct.
+- **`P08`/the `rm -rf` validation.** The scan removes a computed path. `dirname ""` is `.`,
+  and while `set -u` aborts on an unbound variable before reaching it, a guard that leans on
+  another guard for the difference between "one admin record" and "the current directory" is
+  not worth the three lines it saves. The path is now matched against
+  `${REL_COMMON}/worktrees/?*` before removal.
+
+**And its first run's FALSE KILL was the author's declaration, not a strict guard.** `N01`
+renamed the loop variable at three of its four occurrences, leaving `dirname "$REL_GITDIR"`
+unbound; `set -u` aborted and the harness reported a control that died. The harness was
+right. Declaring a mutation a *control* is a claim that the edit preserves behaviour, and
+that claim was false — so the row is now `B01`, a declared defect, and the real control
+renames `REL_ADMIN` at all four of its sites and survives. The rule this pays for:
+**a control is an edit you have checked is behaviour-preserving, not an edit you intended to
+be.**
+
+**Both remaining survivors are declared equivalent mutants**, with the argument recorded on
+the row rather than a label: `P01` (dropping the `break` — at most one admin record can name
+a given path, and two records naming one path would both be stale for it) and `L02b` (the
+claim arm widening to `-e` — unreachable, because the non-file arm above it now exits first).
+`L02b` is an equivalent mutant *created by this phase's own fix*, which is the honest way to
+report it: it was a live hole before the non-file arm existed, and `L02` is that hole, killed.
+
+**Numbers, and the commit they were measured at.** Full suite at `bebcf9b`, run **after** this
+record was written: **5763 passed, 177 skipped, 0 failed.** Nothing is red at that commit.
+
+The one expected red — `test_round_yield_ledger.py::test_every_phase_from_174_has_a_ledger_row`
+— stood for the whole round, as the convention requires: the row cannot be filled in
+truthfully before the round produces something to put in it, and the guard reddens the moment
+the `CLAUDE.md` row lands without it. It went green when the row was appended. Two
+`test_ledger_stats.py` guards then reddened on the new row and were closed by re-deriving the
+population with `tools/ledger_stats.py` (110 rounds, 96 numbered phases, 161–256); the
+65/63/2 all-killed figures did **not** move, because neither of this phase's batteries is an
+all-killed row.
+
+**`test_intra_repo_citations.py` reddened three separate times in this phase**, each time
+because a later commit of my own grew `batch_work.sh` past an anchor I had just re-pointed.
+That is Phase 255's recorded lesson arriving on schedule, and the third occurrence is what
+made the right answer obvious: the two `cleanup_worktrees.sh` → `batch_work.sh` anchors now
+cite **by name**, which the guard's own failure text offers as the alternative and which this
+phase should have taken at the first re-point rather than the third.
+
+## Phase 257 — the mirror push (the Phase-250 record tail + 251–257), and the window nobody had derived
+
+Seven phases' worth of shipped-file changes sat unmirrored at the open. The next-session brief and
+`tools/ANNOUNCE_RUNWAY.md` § *The order* both named the work `mirror push (251–256+, owed)`,
+and Wade took it at the open over the alternative candidate.
+
+### The choice at the open, and the argument that decided it was not the one on offer
+
+The brief put two candidates up — the push, or `Q-387`, the concurrency defect Phase 256's
+own round filed against `batch_work.sh` — and recommended the push. Its stated
+counter-argument was that "pushing a mirror while a known § High stands publishes the defect
+to testers."
+
+**That counter-argument is false — though not for the reason the first draft gave, and the
+round is what established the difference.** The draft said "the filing says so in its own
+text." It does not. `Q-387` carries the tag **PRE-EXISTING**, but scoped to the phase under
+review — it means Phase 256 did not introduce it — and the reviewer's pre-fix trials were run
+against Phase 255's tree, five phases *after* the snapshot base. Neither reaches the published
+tree, so the inference from the tag to "already public" is invalid however true the conclusion.
+
+The conclusion is true, and the evidence is structural rather than quoted: `git show
+bbd4d5a:core/companion/scripts/batch_work.sh` has no lock primitive at all, and `claim_batch`
+there already performs the unlocked read → rewrite → `git add` → `git commit` with only a
+dirty-file precheck. The defect is in the published tree. Nobody has *measured* it there, and
+this record should not imply anyone has. The push does not publish the defect; the push
+publishes fixes to a tree that already carries it. So the trade the brief described — debt against exposure — does not
+exist in this direction, and the decision was taken on the debt alone.
+
+Recorded because a runway that argues a slot from a false premise is how the next reader
+mis-ranks it, and this file has had to make that correction before.
+
+### The window was wrong in the brief, in the runway, and in this phase's first draft
+
+`251–256` is not the window. The snapshot base is private `bbd4d5a`, which is Phase 250's
+**push** commit; Phase 250's **record** commit landed after it and touches `PHASE_LOG.md`,
+which ships. So the window is **the Phase-250 record tail plus 251–257** — **eight phase
+labels**, the same shape the Phase-214 push had to name separately rather than absorb.
+
+The `+257` half is not a subtlety either, and Phase 250 already wrote down why: the criterion
+is *touches mirrored files*, `PHASE_LOG.md` is mirrored, and a push phase's cut runs from
+merged `main` — so a push phase is **always inside its own window**. Both the brief and the
+runway wrote `251–256+`, with the `+` doing the work of a derivation nobody had run.
+
+Derived, not read: `git log --oneline bbd4d5a..HEAD | grep -oE 'Phase [0-9]+' | sort -u -V`
+is eight labels, and `git diff --name-only bbd4d5a HEAD` is 81 files, **68 of them shipped**
+once `tools/`, `CLAUDE.md` and the checklist/archive pair come out.
+
+**The raw commit count is deliberately not quoted, and the author-side pass is why.** The
+first draft of this section said "nine commits", measured at `bf80ba7`; one further commit of
+this phase's own made it ten before the round was even spawned, and it climbs again at every
+close-out commit. The phase-label count and the shipped-file count are stable under this
+phase's own record commits — they touch `PHASE_LOG.md`, which was already in the changed set,
+plus mirror-excluded paths. That is the difference between a fact and a reading, and this page
+bans the second.
+
+**That 68 is the number the brief did not have**, and the first draft's decomposition of it
+was wrong twice. The real surface is **10** companion scripts, **11** skill files (nine
+`SKILL.md` plus two `_shared/`), `WORKFLOW.md`, `WORKFLOW_GUIDE.md`, `install.sh`,
+`settings.json`, 42 test modules — **and `PHASE_LOG.md`**, which sums to 68. The draft said
+"14 companion scripts, 10 skills" and omitted `PHASE_LOG.md` entirely, summing to 70 against
+the 68 the sentence exists to explain. Omitting that one file is the sharp half: its shipping
+status is the entire `+257` argument sixteen lines above.
+
+The brief's handoff is a fair sample rather than a bad list — it says "several are
+consumer-visible" and names eight or so files, never claiming to size the cut. What it could
+not give a reader is the scale, and the scale is what a cut is planned against. Note too that
+**42 of the 68 are test modules**, so the non-test shipped surface is 26; a comparison that
+elides that is flattering itself.
+
+### The preflight battery, and what it is evidence about
+
+Phase 246's cut was red on arrival. So the whole gate battery ran **before** any record work,
+against the branch, purely to rule that class out early — and it is labelled a preflight
+rather than a certification, because this page's own step 1 says a gate run on a branch is
+evidence about a tree nobody will ever clone. Every number below is re-derived at the merged
+`main` cut SHA before anything is pushed.
+
+Measured at branch commit `bf80ba7`. Both builders produced the identical tree
+`f162ffe53f6582545c0d7d22d1bb814a32ca4fc4` — checked rather than assumed, which is what makes
+gating one build a gate on the other:
+
+- **Seven hard gates green** — Passes 1a, 1b, 1c, 3, 4, 4b and the rename residue, all empty.
+  Pass 1b carries no allowlist and must not.
+- **Population diff empty** — `test_mirror_leak_gate._shipped_files()` and the built mirror's
+  `git ls-files` return the same paths, run with `LC_ALL=C sort` on both sides against `diff`,
+  which does not collate. This is the only quantity on the page that can disagree silently.
+- **Pass 2 zero new hits.** Pass 2b's new hits are BeanRider issue-number citations in prose —
+  the accepted consumer-provenance class, eyeballed as intended credit rather than counted
+  against a baseline. **The count is deliberately not quoted, and this is the second time this
+  phase has had to learn that.** The draft said "two", measured at `bf80ba7`; writing that
+  sentence into `PHASE_LOG.md` — which Pass 2b scans — made it three, and the third new hit
+  *is the sentence claiming there are two*. The commit count got this discipline in the
+  author-side pass and Pass 2b did not, because nobody asked which of the quoted numbers were
+  measured over a file the phase writes into.
+- **Source-repo leak gates** (Passes 5 and 5b): 104 passed.
+- **Step 4, the suite inside the sterilized tree: 5298 passed, 416 skipped, 0 failed** in
+  414.92s. The failure mode this step exists to catch is a test that reads an excluded file and
+  raises rather than skipping — `FileNotFoundError`, three of them, unseen until a cut. None
+  here.
+
+  **But "every skip names a mirror-excluded file" — which the first draft asserted — is
+  false, and the round caught it.** Thirteen of the 416 skip for an unrelated reason, and four
+  of those skip on the *environment*: no `.venv`, a `python3` that cannot import PyYAML, no
+  `main` ref, no sub-3.10 interpreter. The public snapshot PR's required `pytest` check runs
+  with a full history and PyYAML present, so **those tests execute in public having never
+  executed in the preflight** — which is the Phase-160 shape this step exists to close, from
+  the opposite direction. The step is still worth running and still found nothing red; what it
+  cannot claim is total coverage of what the public check will run.
+- **Step 5, the public-history scan: `NEW content=0, names=0, header=0`, exit 0** over 34
+  commits. The 16 accepted content rows and 16 accepted header rows are the known set; the
+  gate is for a *new* non-zero commit and there is none.
+- **Step 6, the cold-clone install** — the one gate that runs the product, from a third
+  directory. Both modes exit 0; hooks armed in both targets; no stray `.git` beside the clone;
+  the README's own commit line exits 0; full mode ships `tasks/`.
+
+**Step 6's two documented non-defects both reproduced, which is the point of writing them
+down.** `self_check.sh` reported `9 passed, 1 failed` on a target with no venv, naming its own
+remedy; running that remedy gave **`10 passed, 0 failed`** — the same pair Phase 250 measured,
+and the reason the passed count is not a threshold. And `run_checks.sh` executed 8 / skipped
+11 / **failed 0** while reporting one HIGH against Sysop's *own* vendored `sysop/scripts/`,
+which is the finding Phase 226's first execution of this step filed rather than fixed: on a
+fresh install whose `paths:` are still placeholders, the pyright and semgrep stages fall back
+to whole-tree scanning while the grep stage skips. A reader meeting either of those cold would
+file a regression.
+
+### What this phase does not do
+
+- **No monograph pass**, and the first draft described the gap wrongly — this is the round's
+  sharpest catch, because it is this phase's own headline lesson landing on this phase.
+  The draft said `docs/workflow.html` "cites no phase above **239**". It cites **247, 248 and
+  249**; the citations are written with `&nbsp;`, so the obvious grep misses them. **Phase
+  250's own record states this in as many words** — it left the monograph "in the odd state of
+  citing 247–249 while skipping the seven phases before them" — and this record cited Phase 250
+  for the discontinuity in the same breath as it flattened the range Phase 250 had
+  deliberately recorded as non-contiguous.
+
+  The claim was inherited verbatim from the previous brief and re-asserted unchecked, in the
+  phase whose stated lesson is that **a brief is a filing too**. The real gap is **240–246 plus
+  250–257 — fifteen phases, in two runs**, not the contiguous eighteen the draft implied. Wade's
+  call at this phase's open was to schedule the pass as its own later phase rather than fold it
+  in — a cut carrying a doc rewrite is how a cut goes red — and that call is unchanged; only the
+  shape of what it defers is.
+- **No announce work.** `A2-announce` stays deferred on Wade's 2026-08-22 call.
+- **`Q-387` is not fixed here**, and the announce clock stays reset by it.
+
+### The runbook, run rather than reconstructed
+
+Phase 202 established that this page's Pass-5 command had never been runnable in reading
+order, so the page is executed as written and a step that cannot be is itself the finding.
+Nothing on the page failed to run this time. One collision worth naming rather than fixing:
+the publish sequence both builders print ends in `gh pr checks --watch`, a blocking watch
+against a check that takes ten minutes. It is a preference collision, not a defect — the
+maintainer's standing practice is to background-poll on `bucket` rather than `state`.
+
+**Three things the first draft got wrong about its own observation, all caught by the round.**
+It is **one** builder, not both — `cut_public_release.sh` contains no `--watch` and says its
+sequence ends at `gh pr merge`. The printed line does not *end* in the watch either; the watch
+is the left operand of an `&&`. And the runbook contains no `--watch` at all, so "the page is
+not wrong" was defending a page that was never the subject: the text lives in a script.
+
+### The round — two lenses, one round, and it went against the phase
+
+Governor's default arm, and the call is recorded rather than assumed: this phase ships **no
+behaviour** — no code, no guards, no tests — and the governor is explicit that *"prose alone
+does not qualify, however much of it there is."* So two lenses, not three, on distinct
+questions: **is the record true**, and **does the gate battery actually gate**. Both were
+fresh-context `general-purpose` agents in isolated worktrees, told not to mutate, pinned to
+`42d299d`. Both reported honestly that their worktree resolved to `fa598b8` and said how they
+read the phase's content anyway — which is the disclosure the round wants.
+
+**The author-side pass ran first and found the first defect**, which is the point of having
+it. Rule 1's battery does not apply (nothing ships that a mutation could break). Rule 3 ran
+the five commands the new brief prescribes — all five work as written. Rule 2 caught the
+record asserting *"nine commits"*, measured at `bf80ba7`, already ten by the time the round
+was spawned.
+
+**The record lens outproduced the gates lens on findings, as it did in Phase 256.** Its
+sharpest is corrected above and is worth restating as the phase's own lesson landing on the
+phase: **the monograph claim was inherited from the brief and re-asserted unchecked, in the
+phase whose stated lesson is that a brief is a filing too.** Phase 250's record had already
+written down the true state, one file away.
+
+**The two lenses disagreed, and the disagreement is the argument for verifying rather than
+counting.** The gates lens reported *"every skip names a mirror-excluded file"*; the record
+lens reported thirteen that do not. The record lens is right — three counterexamples are
+visible in the phase's own captured suite output — and a round scored by reviewer agreement
+would have recorded the wrong answer with two votes behind it.
+
+**The gates lens found the thing no pass reads, and it is filed as `Q-392` § High.**
+`tools/scan_public_history.sh` scopes its header arm to `--format='%ae%n%ce'`; every other pass
+reads a tree or a path; nothing reads `%s` or `%B`. Both builders then prompt the operator for
+`gh pr create … --body '<what changed + gates run>'`, and GitHub folds a squash-merge's title
+and body into the public commit message — immutable, exactly as `Q-294` argues. **Phase 228
+found the author field; this is the same class one field over**, and it was reproduced on a
+fixture whose message carried three separate hard-gate classes and scanned clean at exit 0.
+
+**A fix was built and reverted in-session, and that is recorded rather than quietly dropped.**
+The identity gate in the printed publish block refuses without blocking — `|| { …; false; }`
+and then `git push` on the next line, no `&&`, no `set -e`. The obvious repair reddened
+`test_the_identity_check_in_the_publish_block_actually_refuses`, which extracts the check and
+its arm and runs them as bash: a trailing continuation leaves the snippet ending in a dangling
+`\`, and that test's own comment names that class as the defect a paste would hit. A correct
+fix reshapes the block **and** the guard's extraction together — new material no reviewer has
+seen, which is the governor's condition for its own phase. Filed as `Q-394` § Medium, with the
+refusal in the entry so the next attempt does not repeat it.
+
+**And the gates lens found the runbook's canonical class again, at a site the walk missed.**
+`make_public_mirror.sh` prints a complete publish-to-**public** sequence with the **tester**
+build dir substituted in, at step 2, before a single hard gate has run — and `reset --soft`
+there would re-parent the tester snapshot onto public history, destroying the "1 commit, 0
+parents" property every cut record verifies. The corrective sits at step 7, five steps below
+the print site: a remedy documented after the step that needs it, which is the same shape as
+the `rm -rf`, the `$PY`, the `cd <source repo>` and the `-u`-vs-`-f` cases. **This phase walked
+the page and reported only the `gh pr checks --watch` collision**, so the walk is not
+sufficient on its own. Filed as `Q-393` § Medium.
+
+**What the round did not change.** The seven hard gates, the empty population diff, the
+identical trees from both builders, the suite's 5298 / 416 / 0, the public-history scan's
+`NEW 0/0/0` and the eight-label / 68-shipped-file window derivation were all independently
+reproduced by the gates lens and stand. The gates lens could not run step 6, the cold-clone
+install, and said so rather than reporting the round as complete without it — so that gate
+rests on the author's run alone, which is stated here rather than left to look like two
+confirmations.
+
+**Two § High are now open where the phase opened with one.** `Q-387` stood and `Q-392` is new;
+the two other filings are § Medium. The announce clock stays reset — the criterion working as
+ratified, not a failure.
+
+**The first draft of that sentence said "three", and I had derived two ten minutes earlier.**
+It is recorded rather than silently corrected because it is the exact class this round spent
+its budget on: a count written from impression while the command that answers it was already
+in the transcript.
+
+### Numbers, and the commit they were measured at
+
+Full suite at `dd6b6c5`, run **after** this record was written and after every round fix:
+**5763 passed, 177 skipped, 0 failed.** Nothing is red at that commit.
+
+The one expected red — `test_round_yield_ledger.py::test_every_phase_from_174_has_a_ledger_row`
+— stood for the whole round, as the convention requires: the row cannot be filled in truthfully
+before the round produces something to put in it, and the guard reddens the moment the
+`CLAUDE.md` row lands without it. It went green when the row was appended. Two
+`test_ledger_stats.py` guards then reddened on the new row and were closed by re-deriving with
+`tools/ledger_stats.py` — **111 rounds, 97 numbered phases (161–257)** — at both the ledger's
+reading note and the register's population line. The 65/63/2 all-killed figures did **not**
+move, because this phase has no author battery to be all-killed: nothing ships that a mutation
+could break.
+
+**The cut's own numbers are deliberately absent from this section.** Everything above was
+measured at a branch commit, and the shipping cut runs from merged `main` at a SHA that does
+not exist while this branch is open. They are recorded in `REVIEW_CHECKLIST.md` § *Before
+announce* in a post-merge commit — the mechanism Phase 239 established and Phase 250 used.

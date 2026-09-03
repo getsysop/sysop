@@ -32,10 +32,11 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = REPO_ROOT / "core/companion/docs/WORKFLOW.md"
 SCRIPTS_DIR = REPO_ROOT / "core/companion/scripts"
 
-# Underscore-prefixed shared helpers — imported by other scripts, never invoked
-# directly. Exempt from the row requirement; both are in fact described (`_log.py`
-# has its own row, `_model_roles.py` inside the `resolve_skill_models.py` row).
-PRIVATE_HELPERS = {"_log.py", "_model_roles.py"}
+# Underscore-prefixed shared helpers — imported (or, for `_git_lib.sh`, sourced)
+# by other scripts, never invoked directly. Exempt from the row requirement; all
+# three are in fact described (`_log.py` and `_git_lib.sh` have their own rows,
+# `_model_roles.py` inside the `resolve_skill_models.py` row).
+PRIVATE_HELPERS = {"_log.py", "_model_roles.py", "_git_lib.sh"}
 
 # First cell of a table row, e.g. "| `claim_task.sh <TASK_ID> <BRANCH>` | ..." —
 # the name may carry a usage signature, so match only the filename that starts it.

@@ -154,8 +154,6 @@ CITATION_ANCHORS = {
     # on that being true. The anchor is the array literal itself — if the installer
     # ever stops appending that entry, the probe is scoped to a path nothing ignores
     # and the comment becomes the false claim it replaced.
-    ("core/companion/scripts/cleanup_worktrees.sh", "install.sh:3484"):
-        'want=("sysop/runtime/"',
     # Phase 234: cleanup_worktrees.sh's MAIN_ROOT block cites the fail-closed
     # precedent it follows (claim_task.sh, which exits on the same class of
     # resolution failure) and the two batch_work.sh lines that put a caller inside
@@ -172,12 +170,13 @@ CITATION_ANCHORS = {
         'TASKS_FILE = os.path.join(REPO_ROOT, "review_tasks.md")',
     ("core/companion/scripts/cleanup_worktrees.sh", "claim_task.sh:208-211"):
         "cannot resolve canonical",
-    ("core/companion/scripts/cleanup_worktrees.sh", "batch_work.sh:1285"):
-        "cd ${WORKTREE_DIR}",
-    ("core/companion/scripts/cleanup_worktrees.sh", "batch_work.sh:1290"):
-        "cleanup_worktrees.sh --clean",
     ("core/companion/scripts/claim_task.sh", "self_check.sh:77-85"):
         "then verify PyYAML on THAT interpreter",
+    # Phase 256. `Q-375`'s design rests on this note: widening the batch-header
+    # counter without its `H3_HEADER_RE` sibling leaves the counter unreachable
+    # while a batch is open, and the round is archived with an OPEN batch.
+    ("core/companion/scripts/review_index.py", "archive_review_tasks.py:521"):
+        "Widening ANY_BATCH_HEADER_RE alone did NOT fix this",
     ("core/skills/auto-fix/SKILL.md", "archive_review_tasks.py:101"):
         "Merged|Complete",
     ("core/skills/auto-judge/SKILL.md", "archive_review_tasks.py:101"):
@@ -187,7 +186,7 @@ CITATION_ANCHORS = {
     # Phase 209 retired `_parse_batches_fallback` (62 lines), moving this anchor
     # up. The anchor string is what makes that a caught drift rather than a
     # silent one.
-    ("core/skills/claim-task/SKILL.md", "batch_work.sh:375-377"):
+    ("core/skills/claim-task/SKILL.md", "batch_work.sh:413-417"):
         "left as-is",
     # Phase 211: this was written `(`:763-765`)` — a BARE self-citation, which
     # CITATION's regex cannot see because it requires a filename token before

@@ -66,6 +66,16 @@ LOOP_SCRIPTS = {
     "self_check.sh", "sysop-update.sh",
 }
 EXCLUDED_SCRIPTS = {
+    # Phase 252 (`Q-365`): the shared bash primitive sourced by batch_work.sh,
+    # close_batch.sh and cleanup_worktrees.sh — all three lifecycle, so it
+    # ships with them and not without them.
+    "_git_lib.sh",
+    # Phase 254 (`Q-377`): the skill-facing entry point for that same library.
+    # Excluded for the library's reason and one of its own — it sources
+    # `_git_lib.sh` from beside itself, so shipping it without the library
+    # would install a script whose only behaviour is to fail loudly. No
+    # loop-mode skill has a branch-name site to resolve.
+    "default_branch.sh",
     "backfill_completed_dates.py", "batch_work.sh", "claim_task.sh",
     # Phase 237: a `tasks/index.yml` writer, so it is lifecycle. Loop mode
     # installs no task queue at all, which is what makes this a classification

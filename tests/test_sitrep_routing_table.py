@@ -148,6 +148,25 @@ def _survey_with(*tasks):
     )
 
 
+def _names_batch_state(row: str, state: str) -> bool:
+    """True when the row's State cell IS `Any review batch <state>` — equality on the
+    normalized cell, not a substring. `state in ln` matched Phase 252's new
+    `parked, work in progress` row for `parked` (it sorts first), so from Phase 252 to
+    Phase 253 every cell assertion below ran against the wrong row and the real
+    `parked` batch row could carry `/auto-fix` unchecked. Found by Phase 253's
+    reconstruction of Phase 248's reviewer battery: the two routing-row mutations that
+    battery had killed walked straight through."""
+    cells = [c.strip() for c in row.strip().strip("|").split("|")]
+    if len(cells) != 4:
+        return False
+    cell = cells[1].replace("`", "").strip().lower()
+    # A clarifying tail after the state (" — either origin", " (legacy)") is not a
+    # different state; a comma IS ("parked, work in progress"). The round's C-R03
+    # false-killed on exactly such a tail.
+    head = re.split(r"\s+[—(]", cell)[0].strip()
+    return head == f"any review batch {state}".lower()
+
+
 class TestRoutingTableIsGuarded:
     def test_every_routed_task_state_has_a_routing_row(self):
         routed = _routed_task_states()
@@ -170,16 +189,23 @@ class TestRoutingTableIsGuarded:
         names a review batch AND carries the state.
         """
         rows = [ln for ln in _routing_table().splitlines() if ln.startswith("|")]
-        for state in (ss._PARKED_STATE, ss._AWAITING_STATE):
-            batch_rows = [
-                ln for ln in rows
-                if "review batch" in ln and state in ln
-            ]
+        for state in (ss._PARKED_STATE, ss._PARKED_WIP_STATE, ss._AWAITING_STATE):
+            # Equality on the State cell (see `_names_batch_state`); the third batch
+            # state, Phase 252's, is checked too.
+            batch_rows = [ln for ln in rows if _names_batch_state(ln, state)]
             assert batch_rows, (
                 f"batch state {state!r} is routed by _recommended_next but no "
                 f"routing-rules row names a review batch with it. Rows carrying "
                 f"the state at all: "
                 + repr([ln.strip() for ln in rows if state in ln])
+            )
+            # Exactly one: a decoy above the real row or a duplicate below it carries
+            # its own recommendation for a state the cascade emits once (round: C-R01,
+            # C-R02 walked through a first-match lookup).
+            assert len(batch_rows) == 1, (
+                f"{len(batch_rows)} routing rows name a review batch {state!r}; the "
+                f"cascade emits that state once and routes it once: "
+                + repr([ln.strip() for ln in batch_rows])
             )
             # ── The round walked through the two-substring check five ways ────
             # (guards lens): the recommendation cell was swapped for `/auto-fix`;
@@ -205,7 +231,35 @@ class TestRoutingTableIsGuarded:
                 f"claim is waiting on a HUMAN — routing it to a drainer would "
                 f"claim a batch that already holds a lock"
             )
-            assert "/auto-fix" not in rec and "/auto-judge" not in rec, (
+            # Per-state content, because a TRUE swap of the two rows' recommendations
+            # satisfies every check above and the inequality below: both cells say
+            # `--resume`, neither names a drainer, and they still differ from each
+            # other. The docstring comment above listed the exchange as closed; the
+            # mutation it was closed against had put the SAME text in both rows,
+            # which is not a swap. Phase 253's reconstruction of the reviewer's real
+            # swap (`D2`) walked through. A parked claim is read from its marker; an
+            # awaiting claim is a plan waiting for approval — each row must say so.
+            # Each state's recommendation has a clause no other state's carries, so
+            # any pairwise exchange reddens — including 6d<->6e, which a shared
+            # "park marker" token could not see (round: C-R04), and the task-form
+            # `/claim-task <ID>` standing in for the batch form (round: C-R05).
+            expected, forbidden = {
+                ss._PARKED_STATE: (("park marker",), ("committed before it parked",)),
+                ss._PARKED_WIP_STATE: (("park marker", "committed before it parked"), ()),
+                ss._AWAITING_STATE: (("approve", "batch-<n>"), ()),
+            }[state]
+            for phrase in expected:
+                assert phrase in rec.lower(), (
+                    f"the {state!r} batch row's recommendation no longer says "
+                    f"{phrase!r}: {rec!r} — the rows' recommendations may have been "
+                    f"exchanged"
+                )
+            for phrase in forbidden:
+                assert phrase not in rec.lower(), (
+                    f"the {state!r} batch row carries {phrase!r}, which belongs to a "
+                    f"different state's row: {rec!r}"
+                )
+            assert not any(d in rec for d in ("/auto-fix", "/auto-judge", "/auto-build")), (
                 f"the {state!r} batch row routes to a drainer: {rec!r}"
             )
             assert "not routed" not in row.lower(), (
@@ -216,7 +270,7 @@ class TestRoutingTableIsGuarded:
         # what the swap mutation produced.
         recs = {}
         for state in (ss._PARKED_STATE, ss._AWAITING_STATE):
-            row = next(ln for ln in rows if "review batch" in ln and state in ln)
+            row = next(ln for ln in rows if _names_batch_state(ln, state))
             recs[state] = [c.strip() for c in row.strip().strip("|").split("|")][2]
         assert recs[ss._PARKED_STATE] != recs[ss._AWAITING_STATE], (
             "the parked and awaiting-approval batch rows carry the same "
@@ -613,25 +667,72 @@ class TestClassifierIntegration:
         )
         assert ts.state == "stale"
 
-    def test_a_claim_with_commits_never_reaches_the_probe(self, tmp_path):
-        """The probe is scoped to the 0-commit arm. A claim that has built
-        something is `in progress` whatever is sitting in its park archive —
-        the park archive is not cleaned on resume, so a stale marker must not
-        drag a live build backwards."""
+    @staticmethod
+    def _marker_and_commit(tmp_path, marker_at, commit_at):
+        import os
+        from datetime import datetime, timezone
+
+        d = tmp_path / "sysop/runtime/parked"
+        d.mkdir(parents=True, exist_ok=True)
+        m = d / "FEAT-1__20260827T120000Z.md"
+        m.write_text("reason: x")
+        os.utime(m, (marker_at.timestamp(), marker_at.timestamp()))
+        return ss.Commit(
+            sha="a" * 40, subject="feat: work", author_date=commit_at,
+            doc_work_ids=[], subject_task_id="",
+        )
+
+    def test_a_claim_that_parked_after_committing_is_parked_with_work(self, tmp_path):
+        """`Q-362` on the ROADMAP path. This test used to pin the opposite —
+        `in progress` for any claim with commits, "whatever is sitting in its
+        park archive" — and that pin is what let a `planner committed during
+        7a` park report as live work. The marker is NEWER than the commit
+        here: the park is the latest event, and the state says so."""
+        from datetime import datetime, timezone
+
+        commit = self._marker_and_commit(
+            tmp_path,
+            marker_at=datetime(2026, 8, 27, 13, tzinfo=timezone.utc),
+            commit_at=datetime(2026, 8, 27, 12, tzinfo=timezone.utc),
+        )
+        ts = self._classify(tmp_path, [commit], tmp_path)
+        assert ts.state == ss._PARKED_WIP_STATE, ts.state
+        assert any("park marker on disk" in n for n in ts.notes), ts.notes
+        assert ts.commits_ahead == 1
+
+    def test_a_claim_that_resumed_after_a_park_is_in_progress(self, tmp_path):
+        """The half of the old pin that was RIGHT, kept: the park archive is
+        not cleaned on resume (the close removes a marker; nothing earlier does), so a marker
+        OLDER than the newest commit is a claim that resumed and moved. It is
+        `in progress`, and the marker is noted rather than dropped."""
+        from datetime import datetime, timezone
+
+        commit = self._marker_and_commit(
+            tmp_path,
+            marker_at=datetime(2026, 8, 27, 12, tzinfo=timezone.utc),
+            commit_at=datetime(2026, 8, 27, 13, tzinfo=timezone.utc),
+        )
+        ts = self._classify(tmp_path, [commit], tmp_path)
+        assert ts.state == "in progress", ts.state
+        assert any("predates the newest commit" in n for n in ts.notes), ts.notes
+
+    def test_a_branchless_parked_claim_keeps_its_park_evidence(self, tmp_path):
+        """`Q-363` on the roadmap path: `claimed, no branch` precedes the park
+        arms, and the park notes must survive the early return."""
         d = tmp_path / "sysop/runtime/parked"
         d.mkdir(parents=True)
         (d / "FEAT-1__20260827T120000Z.md").write_text("reason: x")
-        commit = ss.Commit(
-            sha="a" * 40,
-            subject="feat: work",
-            author_date=__import__("datetime").datetime(
-                2026, 8, 27, tzinfo=__import__("datetime").timezone.utc
-            ),
-            doc_work_ids=[],
-            subject_task_id="",
+        lock = ss.Lock(task_id="FEAT-1", path=tmp_path / "l.lock", started="")
+        ts = ss._classify_task(
+            task_id="FEAT-1", lock=lock, worktree=None, branch="",
+            index_entry=None, commits=[], unpushed=0, dirty=False, stale_days=7,
+            phase40_cutoff=__import__("datetime").datetime(
+                2020, 1, 1, tzinfo=__import__("datetime").timezone.utc),
+            main_root=tmp_path,
         )
-        ts = self._classify(tmp_path, [commit], tmp_path)
-        assert ts.state == "in progress"
+        assert ts.state == "claimed, no branch"
+        assert any("park marker on disk" in n for n in ts.notes), ts.notes
+        assert "--release FEAT-1" in ts.next_action
 
 
 # ── The round's HIGH finding, and the fixture that would have caught it ──

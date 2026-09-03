@@ -117,7 +117,7 @@ def _repo(root, entries, with_index=True):
     # review_index.py forces the inline bash fallback — both are exercised.
     sd = root / "sysop" / "scripts"
     sd.mkdir(parents=True)
-    names = ["batch_work.sh", "close_batch.sh", "_log.py"]
+    names = ["batch_work.sh", "close_batch.sh", "_log.py", "_git_lib.sh"]
     if with_index:
         names.append("review_index.py")
     for name in names:

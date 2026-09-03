@@ -133,6 +133,24 @@ def _claim(repo, n=7, force=False):
     return r
 
 
+def _strand(repo, n=7):
+    """Produce the stranded state: batch `Pending` in the tracker, lock held.
+
+    Phase 254 (`Q-378`) removed the claim path's ability to CREATE this state —
+    every non-claim arm now refuses before writing, so a lock can no longer
+    outlive a skipped status flip. It is still reachable as legacy debris (a
+    lock written by a pre-254 Sysop) or by hand, which is what `--release`'s
+    stranded-batch recovery is for, so the tests that exercise that recovery
+    build the state directly instead of provoking a bug that no longer exists.
+    """
+    p = repo / "review_tasks.md"
+    before = p.read_text()          # snapshot, not a global search-replace: the
+    _claim(repo, n)                 # fixture has OTHER batches already `In
+    p.write_text(before)            # Progress`, and rewriting every occurrence
+    _git(repo, "add", "review_tasks.md")   # stranded those too — which showed up
+    _git(repo, "commit", "-qm", "strand: revert the flip, keep the lock")
+
+
 def _head(repo):
     return _git(repo, "rev-parse", "HEAD").stdout.strip()
 
@@ -230,8 +248,19 @@ class TestLockWrite:
         )
 
     def test_batch_id_forms_are_interchangeable(self, tmp_path):
-        for arg in ("BATCH-7", "batch-7"):
-            repo = _repo(tmp_path / f"repo-{arg}")
+        """One repo per form, and the directory names must not differ ONLY by
+        case. `repo-BATCH-7` and `repo-batch-7` are the SAME directory on a
+        case-insensitive filesystem (macOS's default), so the second iteration
+        re-entered the first's repo: `_repo` rewrote review_tasks.md back to
+        `Pending` while the first iteration's BATCH-7.lock survived, and the
+        claim was then asserted to succeed over a Pending batch that already
+        held a lock. It did — silently adopting it — which is `Q-382`(b), so
+        this test was green BECAUSE of the defect and went red when Phase 256
+        refused that state. On a case-sensitive filesystem it never exercised
+        it at all, which is why CI never said so.
+        """
+        for slug, arg in (("upper", "BATCH-7"), ("lower", "batch-7")):
+            repo = _repo(tmp_path / f"repo-{slug}")
             r = _run(BATCH_WORK, repo, arg)
             assert r.returncode == 0, r.stderr
             assert _lock(repo, 7).is_file(), f"{arg} form did not claim batch 7"
@@ -447,12 +476,16 @@ class TestRelease:
         assert not _lock(repo, 8).exists()
 
     def test_release_of_a_pending_batch_clears_the_lock_only(self, tmp_path):
-        """The stranded-batch recovery. batch_work.sh skips the Pending -> In
-        Progress commit when it is off main / dirty / the pull fails, so a
-        Pending batch can hold a lock — and next_task.py skips a locked batch
-        whatever its status says, which strands it."""
+        """The stranded-batch recovery: a `Pending` batch holding a lock, which
+        next_task.py skips whatever the status says.
+
+        Until Phase 254 the claim path MADE this state — it skipped the
+        Pending -> In Progress commit when off main / dirty / the pull failed
+        and wrote the lock anyway (`Q-378`). Those arms refuse before writing
+        now, so the state survives only as legacy debris or hand-damage, and
+        the fixture builds it directly. The recovery it tests is unchanged."""
         repo = _repo(tmp_path / "repo")
-        _claim(repo, 7)
+        _strand(repo, 7)
         assert "### Batch 7 — Seven `Pending`" in (repo / "review_tasks.md").read_text()
         before = _head(repo)
         r = _run(BATCH_WORK, repo, "--release", "7")
@@ -528,7 +561,11 @@ class TestReadersSeeTheLock:
         but it means only a real invocation can isolate this. Filed separately.
         """
         repo = _repo(tmp_path / "repo")
-        _claim(repo, 7)
+        # Stranded, not merely claimed: the `pending (not claimed)` line this
+        # asserts on is only emitted for a batch the tracker still calls
+        # `Pending`. Phase 254 made the claim path flip or refuse, so a plain
+        # claim now reads `In Progress` and that line never appears.
+        _strand(repo, 7)
         survey = SCRIPTS / "sitrep_survey.py"
 
         def _report():
@@ -885,18 +922,33 @@ class TestAdversarialRoundRegressions:
             assert "`Merged`" in (repo / "review_tasks.md").read_text()
             assert not _lock(repo, 7).exists(), f"{arg} closed but stranded the lock"
 
-    def test_a_skipped_claim_says_how_to_clear_the_lock_it_wrote(self, tmp_path):
-        """MEDIUM — the status flip is best-effort and the lock is not, so a
-        claim off `main` / with a dirty file / with no reachable origin leaves a
-        `Pending` batch holding a lock. next_task.py then skips it forever and
-        nothing tells the operator the way out."""
-        repo = _repo(tmp_path / "repo")  # no origin -> the pull path fails
+    def test_a_refused_claim_writes_nothing_at_all(self, tmp_path):
+        """Phase 254 (`Q-378`) — this test used to assert the defect.
+
+        It was written when the status flip was best-effort and the lock was
+        not, and it pinned the consolation prize: a claim that left a `Pending`
+        batch holding a lock had to at least NAME `--release`. The half-claim
+        is gone, so the assertion inverts — the refusal writes no lock, no
+        worktree and no branch, and exits non-zero so that `/auto-fix` and
+        `/auto-judge`, whose only stated arm is "if the script exits non-zero,
+        skip this batch", actually see it.
+
+        No remote is deliberately NOT the case under test: a local-only repo
+        has nothing to pull and claims normally. The refusal is for a
+        configured origin that will not fast-forward — here, off the default
+        branch."""
+        repo = _repo(tmp_path / "repo")
+        _git(repo, "checkout", "-q", "-b", "elsewhere")
         r = _run(BATCH_WORK, repo, "7")
-        assert r.returncode == 0, r.stderr
-        assert _lock(repo, 7).is_file()
+        assert r.returncode == 1, r.stderr
+        assert not _lock(repo, 7).exists(), "a refused claim must not write a lock"
+        assert not (tmp_path / "repo-batch-7").exists(), "nor a worktree"
+        assert "review/batch-7" not in _git(
+            repo, "branch", "--format=%(refname:short)").stdout, "nor a branch"
         assert "`Pending`" in (repo / "review_tasks.md").read_text()
-        assert "--release 7" in r.stderr, (
-            "the skip must name the command that clears the lock it just wrote"
+        assert "nothing was written" in r.stderr, (
+            "the refusal must say the tree is untouched — the old message "
+            "promised the opposite and was true when it did"
         )
 
 
@@ -915,7 +967,9 @@ class TestRoundTwoRegressions:
             _git(repo, "worktree", "remove", "--force",
                  str(tmp_path / f"repo-{status.replace(' ', '-')}-batch-7"), check=False)
             p = repo / "review_tasks.md"
-            p.write_text(p.read_text().replace("Seven `Pending`", f"Seven `{status}`"))
+            # `In Progress`, not `Pending`: the claim above flips the status
+            # now that it can no longer silently skip the flip (Phase 254).
+            p.write_text(p.read_text().replace("Seven `In Progress`", f"Seven `{status}`"))
             _git(repo, "add", "review_tasks.md")
             _git(repo, "commit", "-qm", "finish")
 
@@ -958,17 +1012,24 @@ class TestRoundTwoRegressions:
         `In Progress` on main — the state the guard actually protects, where
         the downstream checks would let the lock-only path run."""
         repo = _repo(tmp_path / "repo")
-        # The scratch repo has no origin, so claim_batch skips the status flip:
-        # the branch (and its worktree) are cut while the file still reads
-        # Pending. Flipping main afterwards reproduces the divergence exactly.
+        # Built on the batch BRANCH, not by provoking a skipped flip. Until
+        # Phase 254 the scratch repo's missing origin made `claim_batch` skip
+        # the status commit, so the worktree was cut while the file still read
+        # `Pending` and flipping main afterwards produced the divergence for
+        # free. The claim flips before it cuts the branch now, so the worktree
+        # inherits `In Progress` and the divergence is made where it really
+        # occurs — on the batch branch, which is free to move.
         _claim(repo, 7)
         wt = tmp_path / "repo-batch-7"
-        p = repo / "review_tasks.md"
-        p.write_text(p.read_text().replace("Seven `Pending`", "Seven `In Progress`"))
-        _git(repo, "add", "review_tasks.md")
-        _git(repo, "commit", "-qm", "claim by hand")
-        assert "Seven `Pending`" in (wt / "review_tasks.md").read_text(), (
-            "precondition: the worktree copy is frozen at Pending"
+        wp = wt / "review_tasks.md"
+        wp.write_text(wp.read_text().replace("Seven `In Progress`", "Seven `Pending`"))
+        _git(wt, "add", "review_tasks.md")
+        _git(wt, "commit", "-qm", "worktree copy diverges back to Pending")
+        assert "Seven `Pending`" in wp.read_text(), (
+            "precondition: the worktree copy reads Pending"
+        )
+        assert "Seven `In Progress`" in (repo / "review_tasks.md").read_text(), (
+            "precondition: main reads In Progress"
         )
         r = _run(BATCH_WORK, wt, "--release", "7")
         assert r.returncode == 1
@@ -1227,7 +1288,8 @@ def entry_state_problems(text=None):
             "Step 4d lost the staged-diff test on tasks/index.yml, so either a "
             "resume's empty commit aborts or the claim commit never runs"
         )
-    if not re.search(r'rev-parse --abbrev-ref HEAD.*?=\s*"?main', step4d, re.S):
+    # Phase 254 (`Q-377`): the operand is `<default branch>`, resolved at run time.
+    if not re.search(r'rev-parse --abbrev-ref HEAD.*?=\s*"?<default branch>', step4d, re.S):
         problems.append("Step 4d lost main-push-guard Rule A")
     return problems
 

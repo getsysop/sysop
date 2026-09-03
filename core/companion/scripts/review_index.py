@@ -700,9 +700,70 @@ def duplicate_batch_numbers(lines):
     return {n: ls for n, ls in seen.items() if len(ls) > 1}
 
 
-# Extracts the number from a line the permissive twin matched. Deliberately its
-# OWN pattern rather than a group on `_BATCH_HEADER_ANY_RE`, so the twin's text
-# is left exactly as its three siblings carry it.
+# The near-miss population, and it is DELIBERATELY WIDER than the boundary twin
+# (`Q-375`). The two patterns answer different questions and Phase 256 stopped
+# conflating them:
+#
+#   `_BATCH_HEADER_ANY_RE`  — "does a batch END here?"    (boundary semantics)
+#   `_NEAR_MISS_HEADER_RE`  — "did someone MEAN a batch header here?" (reporting)
+#
+# Widening the boundary twin to every near-miss shape was the other option and
+# it is the wrong lever, for the reason `near_miss_batch_headers` states below:
+# promoting `## Batch 4` to a boundary MOVES where the previous batch ends on
+# consumer trackers nobody can migrate. `archive_review_tasks.py:521` is the
+# evidence that the twin does not move alone — a literal `startswith("### ")`
+# let `###\tBatch 8` slip past the arm that CLOSES an open batch, so the counter
+# below was never reached, `all_merged` held True for a round with an OPEN
+# batch, and the round was archived. That note's own point is that **widening
+# `ANY_BATCH_HEADER_RE` alone did NOT fix it** — the `H3_HEADER_RE` sibling is
+# what closes the batch, and either pattern moving without the other is a data
+# loss. (An earlier draft of this comment stated that causality backwards, as
+# though widening had CAUSED the bad archive. The round caught it.)
+#
+# **Reporting a shape is not free, and an earlier draft said it "costs nothing
+# and loses nothing".** That is true here — this module's near-miss output has
+# no automated caller — and false in the twin: `archive_review_tasks.py` feeds
+# the same population into a whole-run refusal. Widening it there turned an
+# ordinary `## Batch 1 retrospective` heading into a hard blocker until the
+# round caught it, and that gate is now scoped to the shapes which actually
+# bound. A population is only as cheap as its most consequential consumer.
+#
+# The boundary twin therefore gained NOTHING, and the leading-space shape the
+# filing called the sharpest of the five is the one shape this must NOT report.
+# `Q-375` argued it from `_FENCE_OPEN_RE`'s `^ {0,3}` 300 lines up — CommonMark
+# allows three leading spaces before a `#`, so an indented header is "really" an
+# h3 and the twin looked internally inconsistent. `WORKFLOW.md` § 4 line 624
+# refutes that: **indenting an example by two spaces is the shipped, ratified
+# way to write a batch header that no reader parses**, chosen over a fence
+# because Phase 208 measured fence-based separation false-firing on 98.2% of
+# opener positions on a real tracker, and the rule names all six readers
+# explicitly. Column 0 is not an oversight here; it is the contract that makes
+# the escape hatch work. Widening either pattern to `^ {0,3}` would turn every
+# correctly-written example on every consumer tracker into a live boundary —
+# silently, which is the harm below, pointed the other way.
+#
+# So this reports the four shapes written AT column 0, where the author meant a
+# header and lost one, and stays blind to the indent that means "example".
+#
+# `archive_review_tasks.py` duplicates this pattern because its own
+# `near_miss_batch_headers` is a second consumer of the population — NOT because
+# the boundary twin has a fifth copy. It has exactly four
+# (`review_index`, `next_task`, `sitrep_survey`, `archive_review_tasks`), which
+# is what `Q-375` said; an earlier draft of this phase's record claimed the
+# filing had miscounted, and it had not.
+#
+# `#{2,4}` spans h2–h4 and `\s*` admits the no-space form, which is not a
+# heading at all under CommonMark — a paragraph starting `###Batch 4` is
+# invisible to every reader, which is precisely why it is worth reporting.
+# `IGNORECASE` is for `### BATCH 4`; it applies to `Batch` alone, `#` having no
+# case. h1 and h5+ are out: `# Batch 4` is a document title and nothing in the
+# tracker's shape suggests a batch.
+_NEAR_MISS_HEADER_RE = re.compile(r"^#{2,4}\s*Batch\s+\d+\b", re.IGNORECASE)
+
+# Extracts the number from a line the near-miss population matched. Deliberately
+# its OWN pattern rather than a group on the population regex above, so that
+# regex stays a bare predicate — and never a group on `_BATCH_HEADER_ANY_RE`,
+# whose text is left exactly as its three siblings carry it.
 #
 # **The first version of this comment claimed the twin is "pinned byte-identical
 # across four modules" by `test_fenced_mask_bodies_are_identical_in_all_parsers`.
@@ -712,7 +773,7 @@ def duplicate_batch_numbers(lines):
 # capture group. Keeping this pattern separate is still right (four hand-kept
 # copies should not diverge on a whim), but it is a convention, not an enforced
 # invariant, and saying otherwise invents a guard a reader would rely on.
-_NEAR_MISS_NUMBER_RE = re.compile(r"^###\s+Batch\s+(\d+)\b")
+_NEAR_MISS_NUMBER_RE = re.compile(r"^#{2,4}\s*Batch\s+(\d+)\b", re.IGNORECASE)
 
 
 def near_miss_batch_headers(lines):
@@ -785,7 +846,7 @@ def near_miss_batch_headers(lines):
         stripped = line.rstrip()
         if _BATCH_HEADER_RE.match(stripped):
             continue
-        if not _BATCH_HEADER_ANY_RE.match(stripped):
+        if not _NEAR_MISS_HEADER_RE.match(stripped):
             continue
         m = _NEAR_MISS_NUMBER_RE.match(stripped)
         out.append((i + 1, str(int(m.group(1))) if m else None, stripped))
@@ -862,6 +923,90 @@ def _warn_on_duplicate_numbers():
             f"here and the earlier one(s) are invisible to this command.",
             file=sys.stderr,
         )
+
+
+def _warn_on_unparsed_batch_headers(listed):
+    """Surface every `### Batch <N>` line the STRICT pattern rejected.
+
+    The second half of `Q-371`. A header the strict pattern cannot read is not
+    reported by `--list` at all — no row, no warning, exit 0 — so a tracker
+    that plainly declares batches is indistinguishable on stdout from one that
+    declares none. `/review-close` Step 4b then takes its empty-set arm, the
+    batch is never closed, and its tasks and lock stay behind while the step
+    reports success.
+
+    **The predicate is the twin minus the strict pattern, outside BALANCED
+    fences.** A `### Batch` inside a balanced fence is a documentation example
+    and must not warn — `WORKFLOW.md` and this repo's own tracker both carry
+    them. A header inside an *unterminated* fence is unmasked here on purpose:
+    `_fenced_mask` ignores unterminated fences, so such a header IS structural
+    to `parse_review_tasks` too, and if the strict pattern also rejects it the
+    loss is real. (The separate `--check-fences` arm covers the case where the
+    strict pattern *accepts* it and the fence hides it.)
+
+    Never changes the exit code, for the reason `_warn_on_duplicate_numbers`
+    states: six routing surfaces sit downstream of this data, and a reader that
+    refuses takes them all offline over a heading.
+    """
+    lines = _read_source_lines()
+    mask = _fenced_mask(lines)
+    bad = [
+        (i + 1, ln)
+        for i, ln in enumerate(lines)
+        if not mask[i]
+        and _BATCH_HEADER_ANY_RE.match(ln)
+        and not _BATCH_HEADER_RE.match(ln)
+    ]
+    if not bad:
+        return
+    # **`WARNING:` only when the list is EMPTY, and the distinction is not
+    # cosmetic.** `/review-close` Step 4b treats any `WARNING:` as a
+    # could-not-measure and halts. A near-miss header is a spelling this repo
+    # elsewhere tolerates on purpose — `close_batch.sh` closes such a batch
+    # anyway through the permissive twin, and says so at its own site — so
+    # emitting `WARNING:` unconditionally would turn one legacy header into a
+    # permanent halt on every future close of unrelated work. Filed against this
+    # phase by its own round, with an ASCII-hyphen header as the reproduction.
+    #
+    # Zero rows plus a visible header is the one unambiguous case: the empty set
+    # is FALSE, and Step 4b must not take its empty arm. That halts.
+    level = "WARNING" if not listed else "NOTE"
+    name = os.path.basename(TASKS_FILE)
+    for line_num, text in bad:
+        print(
+            f"{level}: {name}:{line_num} declares a batch this command cannot "
+            f"read, so it is absent from the list above: {text!r}\n"
+            f"         Expected `### Batch <N> \u2014 <title> `<status>``.",
+            file=sys.stderr,
+        )
+
+
+def _report_list_verdict(rows):
+    """State on stderr that `--list` RAN, and what it read (`Q-371`).
+
+    stdout is a machine format consumed by `batch_work.sh` and by
+    `/review-close` Step 4b, and an empty batch set is legitimately zero bytes
+    there — so the run's own account of itself has to go somewhere else. Three
+    states used to share that silence: a genuinely batch-free tracker, a
+    tracker whose headers this command could not parse, and a run that never
+    happened at all. Only the third is distinguishable by exit code.
+
+    This is the same shape `Q-371` names in the record: the repo closed it for
+    `claimable?` in Phase 191 and for the pre-scan's executed/skipped/failed
+    taxonomy in Phase 135. A reader must be able to say *I ran and found
+    nothing* in a way a reader that did not run cannot forge.
+    """
+    name = os.path.basename(TASKS_FILE)
+    try:
+        source_lines = len(_read_source_lines())
+    except OSError:
+        source_lines = -1
+    where = f"{name} ({source_lines} lines)" if source_lines >= 0 else name
+    print(
+        f"review_index --list: read {where}; {len(rows)} batch"
+        f"{'' if len(rows) == 1 else 'es'} listed.",
+        file=sys.stderr,
+    )
 
 
 def _finalize_batch(batch):
@@ -1270,8 +1415,15 @@ def main():
         # operator learns a batch is missing. stdout stays byte-identical so
         # every existing consumer of this format is unaffected.
         _warn_on_duplicate_numbers()
-        for line in list_batches(data):
+        rows = list_batches(data)
+        _warn_on_unparsed_batch_headers(rows)
+        for line in rows:
             print(line)
+        sys.stdout.flush()
+        # `Q-371`: stdout stays byte-identical (the comment above is still
+        # true); the run's account of itself goes to stderr, which Step 4b
+        # already captures because it must see `WARNING:` lines.
+        _report_list_verdict(rows)
         sys.exit(0)
 
     # --batch N

@@ -126,12 +126,12 @@ def test_the_paste_threshold_is_stated_with_a_measured_command():
 def test_the_threshold_command_is_runnable_as_written():
     """The diff basis is defined in the table above as a WHOLE COMMAND. The first form
     of this block wrote `git diff <diff-basis>`, which substitutes to
-    `git diff git diff main...<branch>` — `fatal: ambiguous argument`, swallowed by the
+    `git diff git diff <default branch>...<branch>` — `fatal: ambiguous argument`, swallowed by the
     pipe, `DIFF_LINES=0`, every target below the threshold, the gate silently inert.
     Found by executing it, and this is the assertion that would have caught it."""
     body = _body()
-    assert "DIFF_LINES=$(git diff main...<branch> | wc -l | tr -d ' ')" in body
-    assert "DIFF_LINES=$(git diff origin/main...HEAD | wc -l | tr -d ' ')" in body
+    assert "DIFF_LINES=$(git diff <default branch>...<branch> | wc -l | tr -d ' ')" in body
+    assert "DIFF_LINES=$(git diff origin/<default branch>...HEAD | wc -l | tr -d ' ')" in body
     assert "git diff <diff-basis>" not in body, (
         "the diff basis is being substituted as an argument to `git diff` again — the "
         "table defines it as the whole command, so this expands to `git diff git diff ...`"

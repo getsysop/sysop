@@ -22,6 +22,7 @@ Surface covered:
 
 from __future__ import annotations
 
+import ast
 import json
 import re
 import subprocess
@@ -988,3 +989,333 @@ def test_claim_task_carries_no_run_in_background_agent_parameter():
         f"line(s) {unprohibited} -- if it is being described rather than forbidden, "
         f"say why it must not be passed."
     )
+
+
+# === Fence grammar (`Q-372`) ===============================================
+#
+# The reported defect: the module paired fences with
+# `` ```(?:yaml|yml)?\s*\n(.*?)\n``` ``, which recognises only `yaml`, `yml`
+# and a bare fence as OPENERS. A ```bash block — what a code-writing executor
+# emits on the ordinary path — is therefore not seen as a fence at all, its
+# CLOSING run pairs with the next opener, and every later block shifts by one,
+# so the real envelope lands inside what the parser reads as prose. A live
+# consumer's `SubagentStop` hook wrote `_unparseable_<session>_<agent>.json`
+# saying "no fenced YAML block with TASK: and STATUS:" while the envelope sat
+# visible inside that same diagnostic's `last_assistant_message_excerpt`.
+#
+# The fix borrows the scanner the four structural readers already share rather
+# than widening the info string, because widening alone leaves the rest of the
+# class: a 4-backtick opener, a `~~~` fence, an indented one. The dialect dates
+# from Phase 37 (`45b1745`) and outlived the shared scanner's arrival in Phase
+# 181 (`3c4b5f7`) by 70 phases.
+
+
+def test_a_bash_block_before_the_envelope_does_not_eat_it():
+    """The reported case, verbatim in shape.
+
+    Under the old pair regex this returned None and the hook wrote an
+    `_unparseable_` diagnostic for an agent that had complied.
+    """
+    text = (
+        "Done. Here is what I ran:\n"
+        "\n"
+        "```bash\n"
+        "pytest -q\n"
+        "```\n"
+        "\n"
+        "Envelope:\n"
+        "\n"
+        "```yaml\n"
+        "TASK: FEAT-0123\n"
+        "STATUS: EXECUTED\n"
+        "```\n"
+    )
+    assert pse._find_envelope_block(text) == "TASK: FEAT-0123\nSTATUS: EXECUTED"
+
+
+def test_any_info_string_opens_a_block():
+    """Not an allowlist. `bash` was the reported one; it is not the only one."""
+    for info in ("bash", "sh", "python", "json", "diff", "text", "console", ""):
+        text = f"```{info}\nnoise\n```\n\n```yaml\nTASK: T-1\nSTATUS: EXECUTED\n```\n"
+        assert pse._find_envelope_block(text) == "TASK: T-1\nSTATUS: EXECUTED", info
+
+
+def test_envelope_inside_a_longer_fence_is_not_closed_by_a_shorter_run():
+    """Marker LENGTH is load-bearing, exactly as in `_fenced_mask`."""
+    text = "````markdown\n```\nnot the end\n```\n````\n\n```yaml\nTASK: T-2\nSTATUS: EXECUTED\n```\n"
+    assert pse._find_envelope_block(text) == "TASK: T-2\nSTATUS: EXECUTED"
+
+
+def test_a_shorter_run_does_not_close_a_longer_opener():
+    """The LENGTH half asserted directly, because the case above cannot see it.
+
+    Dropping `len(m.group(1)) >= len(marker)` survived the author-side battery:
+    with the length check gone the nested ``` merely splits the outer block into
+    two empty ones, the ```yaml block is still found, and an envelope-level
+    assertion reads the same either way. Asserting the BODIES is what makes the
+    predicate observable.
+    """
+    assert pse._fenced_blocks("````\n```\ninner\n```\n````\n") == ["```\ninner\n```"]
+
+
+def test_this_module_carries_the_shared_fence_patterns_verbatim():
+    """A vacuity + membership control for the cross-module pin (`Q-372`).
+
+    `tests/test_flag_contract.py` asserts the five modules' patterns are equal,
+    which is satisfied when they are all equally WRONG, and its population is a
+    tuple somebody can shorten. Two mutations survived the author-side battery
+    on exactly that: editing this module's pattern was invisible to its own
+    suite, and dropping this module from the pinned tuple was invisible to both.
+    """
+    import review_index as _ri
+    import test_flag_contract as _fc
+
+    assert pse in _fc.FENCE_PATTERN_MODULES, (
+        "parse_subagent_envelope dropped out of the pinned fence population"
+    )
+    assert pse._FENCE_OPEN_RE.pattern == _ri._FENCE_OPEN_RE.pattern
+    assert pse._FENCE_CLOSE_RE.pattern == _ri._FENCE_CLOSE_RE.pattern
+    # The indent boundary, spelled out rather than left to the shared pattern:
+    # a 4-space indent is an indented code block, not a fence, and mutating
+    # ONE of the two patterns to `{0,4}` leaves the block unterminated rather
+    # than visible — so the boundary needs an assertion of its own.
+    assert "^ {0,3}" in pse._FENCE_OPEN_RE.pattern
+    assert "^ {0,3}" in pse._FENCE_CLOSE_RE.pattern
+
+
+def test_a_tilde_run_does_not_close_a_backtick_fence():
+    """Marker CHARACTER is load-bearing too."""
+    blocks = pse._fenced_blocks("```\n~~~\nstill inside\n```\n")
+    assert blocks == ["~~~\nstill inside"]
+
+
+def test_an_unterminated_fence_yields_nothing():
+    """Matches `_fenced_mask`'s deliberate choice.
+
+    Honouring an unterminated opener would swallow the rest of the message —
+    and the envelope is emitted LAST, so that is precisely the wrong direction
+    here.
+    """
+    assert pse._fenced_blocks("prose\n```bash\nnobody closed this\n") == []
+
+
+def test_an_unclosed_code_block_degrades_to_recovery_not_to_loss():
+    """The honest outcome when an executor forgets a closing fence.
+
+    **This test asserted the opposite first, and the assertion was wrong about
+    its own fixture.** A ```` ```yaml ```` line is not a CLOSE (it carries
+    trailing text, which CommonMark forbids of a closer), so it is *content*
+    inside the still-open ```` ```bash ```` block — one balanced block, not an
+    unterminated one. The body therefore carries the stray prose AND the
+    envelope, and because the field extractors are line-anchored the envelope
+    still parses. That is the right direction: the old pair regex LOST the
+    envelope in this shape; the scanner recovers it with noise attached.
+    """
+    text = "```bash\nan opener nobody closed\n\n```yaml\nTASK: T-3\nSTATUS: EXECUTED\n```\n"
+    block = pse._find_envelope_block(text)
+    assert block is not None
+    assert pse._extract_field(block, "TASK") == "T-3"
+    assert pse._extract_field(block, "STATUS") == "EXECUTED"
+
+
+def test_a_mid_line_fence_is_not_a_fence():
+    """CommonMark, and the same row the shared grammar table pins."""
+    assert pse._fenced_blocks("see this ```yaml\nTASK: X\nSTATUS: Y\n```\n") == []
+
+
+def test_four_space_indent_is_a_code_block_not_a_fence():
+    assert pse._fenced_blocks("    ```\nx\n    ```\n") == []
+
+
+def test_adjacent_blocks_stay_separate():
+    """The reason this returns bodies rather than a boolean mask."""
+    assert pse._fenced_blocks("```\na\n```\n```\nb\n```\n") == ["a", "b"]
+
+
+def test_review_report_reads_through_the_same_scanner():
+    """`Q-372` hit both consumers, not just the envelope one."""
+    text = "```bash\nls\n```\n\n```yaml\nREVIEW_REPORT:\n  verdict: PASS\n```\n"
+    assert pse._find_review_report_block(text) == "REVIEW_REPORT:\n  verdict: PASS"
+
+
+# The one shipped script allowed to keep a fence-pair regex, and the reason it
+# is load-bearing rather than decorative: emptying this set reddens the check on
+# `sitrep_survey.py:865`, which the round confirmed.
+_NAIVE_FENCE_EXEMPT = {"sitrep_survey.py"}
+
+
+def _naive_fence_offenders(src, label):
+    """Every STRING CONSTANT that pairs fences with a lazy group.
+
+    **A shape, not a call.** The first cut gated on the line containing
+    `re.compile`, `re.search` or `re.findall` — and the module this rule exists
+    for used `re.finditer`, so the check could not see the exact code it was
+    written about. Seven planted shapes survived it in Phase 251's round:
+    `finditer` and `match` one-liners, a single-quoted `r'...'` inside a
+    multi-line `re.compile(`, a named group, a `[\\s\\S]*?` body, and a pattern
+    held in a variable and compiled on the next line.
+
+    Reading string constants off the syntax tree removes all of that at once:
+    quote style, call site, line breaks and whether the pattern is compiled
+    where it is written are all irrelevant to it. Comments are excluded for
+    free, which matters here — the fixed module's own header quotes the removed
+    regex while explaining it.
+
+    **Declared limit:** a pattern assembled by concatenation, or built at
+    runtime, is out of reach in kind.
+    """
+    found = []
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return found
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
+            continue
+        text = node.value
+        if "```" not in text:
+            continue
+        # A lazy quantifier between the fences is what makes it a PAIR regex.
+        if re.search(r"[*+]\?", text):
+            found.append(f"{label}:{node.lineno}: {text.strip()[:90]!r}")
+    return found
+
+
+def test_no_shipped_script_pairs_fences_with_a_naive_regex():
+    """The class check (`Q-372`), derived over the shipped scripts.
+
+    A `` ```…(.*?)…``` `` pair regex is wrong in four independent ways — an
+    unlisted info string, a longer opener, a `~~~` fence, an indented one — and
+    this module carried one for eight phases. One site is allowed, and the
+    allowance names its mechanism rather than asserting an exception:
+    `sitrep_survey._classification_verdict`'s pattern accepts **any** info
+    string (`(?:yaml|json)?[^\\n]*`), so the unlisted-opener desync this rule
+    is about cannot reach it. Its only writer is `/claim-task` Step 7c emitting
+    `json.dumps(report, indent=2)`, and it falls back to a flat `verdict:`
+    scan, so even a desync would degrade rather than lose. None of that holds
+    for free-form agent prose.
+    """
+    offenders = []
+    scripts = _REPO_ROOT / "core" / "companion" / "scripts"
+    for path in sorted(scripts.rglob("*.py")):
+        if path.name in _NAIVE_FENCE_EXEMPT or "__pycache__" in path.parts:
+            continue
+        offenders += _naive_fence_offenders(path.read_text(encoding="utf-8"), path.name)
+    assert not offenders, (
+        "a shipped script pairs fences with a regex instead of the shared "
+        "scanner (Q-372). Use the `_FENCE_OPEN_RE`/`_FENCE_CLOSE_RE` predicate:\n  "
+        + "\n  ".join(offenders)
+    )
+
+
+def test_a_crlf_message_still_yields_its_envelope():
+    """A regression the scanner introduced, found by driving the hook (`Q-372`).
+
+    The pair regex this replaced closed on `\\n```\\s*`, and `\\s` matches `\\r` —
+    so CRLF input worked. `_FENCE_CLOSE_RE` ends `[ \\t]*$`, which a bare `\\r`
+    does not satisfy, so a CRLF message yielded NO balanced blocks at all and
+    the hook wrote an `_unparseable_` diagnostic. That is the same silent
+    envelope loss `Q-372` is filed about, reintroduced through the line ending
+    by the fix for it.
+    """
+    crlf = (
+        "Done.\r\n\r\n"
+        "```bash\r\necho hi\r\n```\r\n\r\n"
+        "```yaml\r\nTASK: FEAT-0123\r\nSTATUS: EXECUTED\r\n```\r\n"
+    )
+    assert pse._find_envelope_block(crlf) == "TASK: FEAT-0123\nSTATUS: EXECUTED"
+    assert pse._fenced_blocks(crlf) == ["echo hi", "TASK: FEAT-0123\nSTATUS: EXECUTED"]
+    # And the LF form is unchanged, so this is not a CRLF-only code path.
+    assert pse._find_envelope_block(crlf.replace("\r\n", "\n")) == (
+        "TASK: FEAT-0123\nSTATUS: EXECUTED"
+    )
+
+
+@pytest.mark.parametrize("shape", [
+    'BLOCK = re.compile(r"```(?:yaml|yml)?\\s*\\n(.*?)\\n```", re.DOTALL)',
+    "BLOCK = re.compile(r'```(?:yaml|yml)?\\s*\\n(.*?)\\n```', re.DOTALL)",
+    'for m in re.finditer(r"```\\w*\\n(.*?)\\n```", text, re.S): pass',
+    'm = re.match(r"```\\w*\\n(.*?)\\n```", text, re.S)',
+    'BLOCK = re.compile(\n    r"```(?:yaml)?\\s*\\n(.*?)\\n```",\n    re.DOTALL,\n)',
+    'BLOCK = re.compile(r"```\\w*\\n(?P<body>.*?)\\n```")',
+    'BLOCK = re.compile(r"```\\w*\\n([\\s\\S]*?)\\n```")',
+    'PAT = r"```\\w*\\n(.*?)\\n```"\nBLOCK = re.compile(PAT)',
+])
+def test_the_naive_fence_check_can_actually_see_these(shape):
+    """The vacuity control, and the seven shapes that survived the first cut.
+
+    The first entry is the pattern this module actually carried; the third is
+    the call it actually used. A class check that cannot see its own subject is
+    the failure this control exists to make impossible.
+    """
+    assert _naive_fence_offenders(shape, "planted.py"), f"cannot see: {shape!r}"
+
+
+@pytest.mark.parametrize("shape", [
+    '_FENCE_OPEN_RE = re.compile(r"^ {0,3}(?:> ?)*(`{3,}|~{3,})")',
+    'x = "a ``` fence in prose, with no lazy group"',
+    'y = re.compile(r"^\\s*(```|~~~)")',
+])
+def test_the_naive_fence_check_does_not_fire_on_legitimate_shapes(shape):
+    """Over-strictness control: the shared scanner's own patterns must pass."""
+    assert not _naive_fence_offenders(shape, "planted.py"), f"false positive: {shape!r}"
+
+
+def test_the_naive_fence_allowlist_is_load_bearing():
+    """Emptying the exemption must redden on the one site it names.
+
+    An allowlist nothing would catch is decorative, and a decorative allowlist
+    is indistinguishable from a check whose population went empty.
+    """
+    src = (_REPO_ROOT / "core/companion/scripts/sitrep_survey.py").read_text(encoding="utf-8")
+    assert _naive_fence_offenders(src, "sitrep_survey.py"), (
+        "the exempted site no longer carries a fence-pair regex — drop it from "
+        "_NAIVE_FENCE_EXEMPT rather than leaving an exemption that shelters nothing"
+    )
+
+
+def test_the_naive_fence_population_reaches_the_run_checks_package():
+    """`rglob`, not `glob` — the package's modules were invisible."""
+    scripts = _REPO_ROOT / "core/companion/scripts"
+    seen = {p.relative_to(scripts).as_posix() for p in scripts.rglob("*.py")}
+    assert any(n.startswith("run_checks/") for n in seen), (
+        "the population no longer reaches core/companion/scripts/run_checks/"
+    )
+
+
+def test_a_longer_closing_run_does_close_a_shorter_opener():
+    """The `>=` half of the length rule, which only `<` was pinning.
+
+    A fixture that opens 4 and closes 4 cannot tell `>=` from `==`, so
+    `>=`→`==` survived. CommonMark says a closing run must be AT LEAST as long
+    as the opener, not equal to it.
+    """
+    assert pse._fenced_blocks("```\nbody\n````\n") == ["body"]
+
+
+def test_the_fence_markers_accept_runs_longer_than_three():
+    """`` `{3,} `` and `~{3,}`, asserted as shapes AND driven.
+
+    Narrowing both patterns to `{3}` **identically in all five modules** passes
+    the cross-module equality pin — equal and equally wrong — and the only
+    shape assertion in this file was about the indent. Both halves are pinned
+    now, and a 4-tilde fence exercises the behaviour.
+    """
+    for pattern in (pse._FENCE_OPEN_RE.pattern, pse._FENCE_CLOSE_RE.pattern):
+        assert "`{3,}" in pattern, pattern
+        assert "~{3,}" in pattern, pattern
+    assert pse._fenced_blocks("~~~~\nbody\n~~~~\n") == ["body"]
+
+
+def test_the_review_report_reader_returns_the_FIRST_matching_block():
+    """Its docstring says FIRST; the fixture had one block, so LAST survived.
+
+    The contract matters: a reviewer that restates its report later in the
+    message would otherwise have the restatement win over the report proper.
+    """
+    text = (
+        "```yaml\nREVIEW_REPORT:\n  verdict: PASS\n```\n\n"
+        "and here it is again, abbreviated:\n\n"
+        "```yaml\nREVIEW_REPORT:\n  verdict: FAIL\n```\n"
+    )
+    assert pse._find_review_report_block(text) == "REVIEW_REPORT:\n  verdict: PASS"

@@ -358,11 +358,43 @@ def _survey_payload_keys() -> set[str]:
 
 
 def _survey_batch_states() -> set[str]:
-    """The `state` vocabulary `_classify_review_batches` can emit."""
+    """The `state` vocabulary `_classify_review_batches` can emit.
+
+    Literal assignments AND identifier assignments resolved through module
+    string constants. Phase 252: the literal-only regex could not see
+    `state = _PARKED_WIP_STATE` (nor `state = stall_state`, which carries
+    `parked` / `awaiting approval` from `_claim_stall`'s returns), so a new
+    constant-named batch state would have shipped undocumented — the same
+    blindness `tests/test_sitrep_survey.py` repaired on the task side in
+    Phase 237, never repaired here.
+    """
     text = _read(SURVEY)
     start = text.index("def _classify_review_batches")
     end = text.index("\ndef ", start + 10)
-    states = set(re.findall(r'state\s*=\s*"([^"]+)"', text[start:end]))
+    body = text[start:end]
+    states = set(re.findall(r'state\s*=\s*"([^"]+)"', body))
+    consts = dict(re.findall(r'^([A-Za-z_][A-Za-z0-9_]*) = "([^"]*)"$', text, re.M))
+    for ident in re.findall(r'^\s+state\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\s*$', body, re.M):
+        if ident in consts:
+            states.add(consts[ident])
+        elif ident == "stall_state":
+            # `_claim_stall`'s own returns, resolved the same way.
+            s0 = text.index("def _claim_stall(")
+            s1 = text.index("\ndef _classify_task(", s0)
+            for tok in re.findall(
+                r'return\s*\(?\s*\n?\s*([A-Za-z_][A-Za-z0-9_]*|"[^"]*")\s*,',
+                text[s0:s1],
+            ):
+                val = tok.strip('"') if tok.startswith('"') else consts.get(tok)
+                assert val is not None, f"_claim_stall returns unresolvable state `{tok}`"
+                if val:
+                    states.add(val)
+        else:
+            raise AssertionError(
+                f"_classify_review_batches assigns state = {ident}, which this "
+                f"guard cannot resolve to a value — the state would escape the "
+                f"roadmap enum check"
+            )
     assert states, "could not parse the batch `state` vocabulary from the survey"
     return states
 

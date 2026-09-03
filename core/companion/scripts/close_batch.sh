@@ -22,7 +22,8 @@
 # round resolved. The batch still becomes `Merged` — "this batch shipped, but
 # this item in it did not."
 #
-# Must be run on main after branches are merged.
+# Must be run on the default branch (`main` or `master` — resolved by
+# `_git_lib.sh`, never assumed) after branches are merged.
 # ──────────────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -30,6 +31,24 @@ REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || {
   echo "❌ Not inside a git repository." >&2
   exit 1
 }
+
+# ── The default branch (`Q-365`) ──────────────────────────────
+# `main` was hard-coded here at three behavioural sites and in every message naming
+# the branch, so
+# a `master`-default consumer declaring `## Merge policy` `direct` had every
+# batch refused as "NOT merged into … main" — naming a branch the repo does not
+# have. The shared primitive resolves it (origin/HEAD, else exactly one of
+# main/master, else refuse); see `_git_lib.sh` for the order and the reasons.
+#
+# Resolved QUIETLY here because this script has one path that does not need
+# the answer: an explicit `--merge-target` is authoritative for the verify
+# arm. The sites that DO need it fail loudly below, with the diagnostic.
+source "$(dirname "${BASH_SOURCE[0]}")/_git_lib.sh" || {
+  echo "❌ _git_lib.sh is missing beside close_batch.sh — it ships with every install." >&2
+  echo "   Restore the scripts directory: bash sysop/scripts/sysop-update.sh" >&2
+  exit 1
+}
+DEFAULT_BRANCH="$(resolve_default_branch "$REPO_ROOT" 2>/dev/null)" || DEFAULT_BRANCH=""
 
 TASKS_FILE="${REPO_ROOT}/review_tasks.md"
 
@@ -236,7 +255,7 @@ _validate_merge_target() {
     echo "   whole point of the flag, and 'HEAD' hands the question back to where" >&2
     echo "   you happen to be standing. Write the branch name Step 4-pre recorded" >&2
     echo "   (the integration branch under \`pr\`, the approved branch under PR-reuse," >&2
-    echo "   'main' under \`direct\`); \`git rev-parse --abbrev-ref HEAD\` prints it." >&2
+    echo "   the default branch under \`direct\`); \`git rev-parse --abbrev-ref HEAD\` prints it." >&2
     return 1
   fi
   return 0
@@ -326,13 +345,21 @@ fi
 #
 #   --merge-target <ref>   authoritative; /review-close Step 4b passes the same
 #                          literal it recorded at Step 4-pre
-#   otherwise, `direct`    the target IS `main` — that is what the policy means
+#   otherwise, `direct`    the target IS the default branch — that is what the
+#                          policy means. `main` or `master`, whichever
+#                          `_git_lib.sh` resolves; it was a literal `main` until
+#                          `Q-365`.
 #   otherwise, `pr`        UNRESOLVED, deliberately. Under `pr` the target is an
 #                          integration branch this script cannot name, so the
-#                          target arm is withheld and only the `main` arm runs.
-#                          Fail-closed: a batch that genuinely reached `main` in
-#                          an earlier cycle still verifies; one that did not is
-#                          refused with the flag named in the message.
+#                          target arm is withheld and only the default-branch
+#                          arm runs. Fail-closed: a batch that genuinely reached
+#                          the default branch in an earlier cycle still
+#                          verifies; one that did not is refused with the flag
+#                          named in the message.
+#   no default branch      With no `--merge-target` there is nothing to verify
+#                          against, under either policy: REFUSE, with the
+#                          resolver's own diagnostic. Silently assuming `main`
+#                          is the defect this replaces.
 _read_merge_policy() {
   # `<project>/CLAUDE.md § Merge policy` — WORKFLOW.md § 6.1's template: level-2
   # header, blank line, one bare word. Default `direct` when absent, unreadable,
@@ -360,8 +387,15 @@ _read_merge_policy() {
 
 MERGE_POLICY="$(_read_merge_policy)"
 if [[ -z "$MERGE_TARGET_REF" ]]; then
+  if [[ -z "$DEFAULT_BRANCH" ]]; then
+    # Re-run the resolver for its diagnostic — the quiet probe above swallowed it.
+    resolve_default_branch "$REPO_ROOT" >/dev/null || true
+    echo "   close_batch.sh cannot verify a merge without it — pass --merge-target <ref>," >&2
+    echo "   or declare the branch to git as above and re-run." >&2
+    exit 1
+  fi
   if [[ "$MERGE_POLICY" == "direct" ]]; then
-    MERGE_TARGET_REF="main"
+    MERGE_TARGET_REF="$DEFAULT_BRANCH"
     MERGE_TARGET_SOURCE="policy:direct"
   else
     MERGE_TARGET_SOURCE="unresolved:pr"
@@ -687,8 +721,12 @@ resolve_locks_dir() {
   printf '%s/sysop/runtime/locks\n' "$main_root"
 }
 
-# True only when this close committed to `main` in the MAIN checkout — the one
-# state in which the batch is really merged and its lock is really dead.
+# True only when this close committed to the DEFAULT BRANCH in the MAIN checkout
+# — the one state in which the batch is really merged and its lock is really
+# dead. `$DEFAULT_BRANCH` may be empty (unresolvable, close run with an explicit
+# `--merge-target`); that is a `false` here, and the lock-kept arm below prints
+# the resolver's diagnostic in that case rather than prescribing a re-run that
+# would refuse.
 #
 # `-ef` (same device+inode), NOT `==`. `pwd -P` resolves symlinks but NOT CASE:
 # `here` comes from `git rev-parse --show-toplevel` (the ON-DISK spelling) while
@@ -705,8 +743,53 @@ close_landed_on_main() {
   here="$(cd "$REPO_ROOT" && pwd -P 2>/dev/null)" || return 1
   [[ "$here" -ef "$main_root" ]] || return 1
   branch="$(git symbolic-ref --short HEAD 2>/dev/null)" || return 1
-  [[ "$branch" == "main" ]]
+  [[ -n "$DEFAULT_BRANCH" && "$branch" == "$DEFAULT_BRANCH" ]]
 }
+
+# ── Helper: was this batch's `Merged` flip ever committed? ────
+# The discriminator for `Q-364`. When a close run flips batches to `Merged` and
+# the COMMIT then fails, the working tree says `Merged` and the last commit does
+# not. That state is indistinguishable, on the working tree alone, from a batch
+# someone closed and committed days ago — which is why the re-run this script
+# itself prescribed skipped it as `already-merged` and never reached the commit
+# block.
+#
+# Exit: 0 = the flip is uncommitted (resume), 1 = HEAD already carries this
+# header (finished, skip), 2 = cannot tell (refuse and say so).
+#
+# **It asks git, and it asks about THIS header line.** Two rewrites, both from
+# this phase's round, both measured:
+#
+#   1. The first cut read `git show HEAD:<path>` into a variable and piped it to
+#      `grep -m1`. Under `set -o pipefail` an early-exiting `grep` leaves the
+#      writer with a full pipe, `printf` dies of SIGPIPE (141), and the pipeline
+#      is non-zero — so on any tracker past the pipe buffer the probe reported
+#      "cannot tell" and the resume was **inert**. Measured: a 95 KB tracker
+#      skipped where a 2 KB one resumed, which is every real tracker and no test
+#      fixture. There is no pipeline here now.
+#   2. That cut also compared a *status word* found by a raw `grep` over HEAD's
+#      copy — fence-blind, while the working-tree read reaches this point through
+#      `review_index.py`, which masks balanced fences. A fenced `### Batch <N>`
+#      documentation example earlier in the file therefore answered for the real
+#      batch, and the wrong answer COMMITS. Comparing the exact header line the
+#      fence-aware read already located removes the second reader entirely.
+#
+# **Fail closed:** a resume must never be offered on a guess. It commits a
+# `docs: close Batch N` for a batch the record does not yet call closed.
+flip_is_uncommitted() {
+  local header="$1"
+  local diff_text
+  git -C "$REPO_ROOT" rev-parse --verify -q HEAD >/dev/null 2>&1 || return 2
+  git -C "$REPO_ROOT" ls-files --error-unmatch -- "$TASKS_FILE" >/dev/null 2>&1 || return 2
+  diff_text="$(git -C "$REPO_ROOT" diff HEAD -- "$TASKS_FILE" 2>/dev/null)" || return 2
+  # A here-string, not a pipe: `grep -q` exits on the first match, and a pipe
+  # writer would take SIGPIPE — the defect above, one line over.
+  if grep -qxF "+${header}" <<<"$diff_text"; then
+    return 0
+  fi
+  return 1
+}
+
 
 # ── Helper: remove a closed batch's lock ──────────────────────
 # `batch_work.sh` writes `BATCH-<N>.lock` at claim time; a merged batch is no
@@ -829,6 +912,10 @@ fence_preflight || exit 1
 CLOSED=()
 SKIPPED=()
 MERGED_UNLOCK=()
+# `Q-364`: batches already `Merged` in the tree whose flip never reached a
+# commit. They are not closed by THIS run and not skipped by it either — the
+# run finishes an interrupted one.
+RESUME=()
 TOTAL_TASKS_CLOSED=0
 TOTAL_ORPHANS=0
 TOTAL_NEARMISSES=0
@@ -967,8 +1054,30 @@ for BATCH_NUM in "${BATCH_NUMS[@]}"; do
   BATCH_STATUS=$(echo "$BATCH_HEADER" | grep -oE '`[^`]+`[[:space:]]*$' | tr -d '`' | sed 's/[[:space:]]*$//' || true)
 
   if [[ "$BATCH_STATUS" == "Merged" ]]; then
-    echo "   ℹ️  Already Merged. Skipping."
-    SKIPPED+=("${BATCH_NUM}:already-merged")
+    # `Q-364`. Ask git whether this flip was ever committed. Three outcomes,
+    # and the cannot-tell one is NOT treated as a resume.
+    FLIP_STATE=0
+    flip_is_uncommitted "$BATCH_HEADER" || FLIP_STATE=$?
+    if [[ $FLIP_STATE -eq 2 ]]; then
+      echo "   ℹ️  Already Merged. Skipping."
+      echo "      ⚠️  Could not compare this batch against HEAD, so an interrupted-close"
+      echo "          resume cannot be offered. If review_tasks.md has uncommitted edits,"
+      echo "          commit them by hand after checking what is in the file:"
+      echo "            git add review_tasks.md && git commit -m 'docs: close Batch ${BATCH_NUM}'"
+      SKIPPED+=("${BATCH_NUM}:already-merged")
+    elif [[ $FLIP_STATE -eq 0 ]]; then
+      if $DRY_RUN; then
+        echo "   ↻  Merged in the working tree, NOT in HEAD — an earlier run flipped this"
+        echo "      batch and its commit did not land. WOULD re-attempt the commit."
+      else
+        echo "   ↻  Merged in the working tree, NOT in HEAD — an earlier run flipped this"
+        echo "      batch and its commit did not land. Re-attempting the commit."
+      fi
+      RESUME+=("${BATCH_NUM}")
+    else
+      echo "   ℹ️  Already Merged. Skipping."
+      SKIPPED+=("${BATCH_NUM}:already-merged")
+    fi
     # ...but a Merged batch must not hold a lock. `batch_work.sh --force <N>`
     # lets a Merged batch through for follow-up work and writes one, and every
     # other removal path refuses a Merged batch — so without this the lock is
@@ -1094,22 +1203,23 @@ for BATCH_NUM in "${BATCH_NUMS[@]}"; do
       # Resolved identity of a ref, falling back to the literal when the ref does
       # not resolve.
       #
-      # The fallback is DEAD CODE TODAY and saying so is the correction. Two
-      # earlier versions of this comment gave two different wrong reasons for it,
-      # and the round refuted both. What is actually true, measured:
-      # `git rev-parse --symbolic-full-name <unresolvable>` prints the ARGUMENT
-      # back on **stdout** and exits 128 — so `grep .` matches, the pipeline
-      # succeeds, and `|| printf` never fires. Git already does what the fallback
-      # was written to do, for every ref shape tried (a missing name, a missing
-      # `refs/heads/…`, a SHA, an empty string).
-      # The first wrong reason was "without it an unresolvable target kills the
-      # run under `set -e`"; the second was "both ids come back empty, which
-      # still compare equal". The errexit half is separately untrue in effect:
-      # this function is called only as `if ! _merged_into_target …`, and bash
-      # suppresses errexit for a function body evaluated in a condition.
-      # Kept, at zero cost, as insurance against a future git changing that
-      # echoing behaviour — but it is not what makes the identity test correct,
-      # and no test can currently distinguish its presence from its absence.
+      # The fallback is LIVE for a SHA, a short SHA, a `<ref>~N` spelling and an
+      # empty string: for those `git rev-parse --symbolic-full-name` prints
+      # NOTHING (there is no symbolic name to print), `grep .` fails, and
+      # `|| printf` echoes the argument back. Only for an unresolvable NAME does
+      # git print the argument itself (exit 128), where the fallback is redundant.
+      # Three earlier versions of this comment gave three wrong reasons: "an
+      # unresolvable target kills the run under `set -e`", "both ids come back
+      # empty and compare equal", and — the version that shipped from Phase 248 —
+      # "dead code: git echoes every shape tried, including a SHA and an empty
+      # string". Phase 253's round measured the last one false on all four shapes.
+      # What IS true, and what the identity test rests on: whichever branch runs,
+      # a non-branch spelling never yields a `refs/heads/` id, so the
+      # `refs/heads/*` guard below refuses it either way — the fallback's output
+      # cannot change an acceptance decision, which is why dropping it is an
+      # equivalent mutant, not a hole. (The errexit point stands: this function
+      # is called only as `if ! _merged_into_target …`, where bash suppresses
+      # errexit for the function body.)
       git rev-parse --symbolic-full-name "$1" 2>/dev/null | grep . || printf '%s' "$1"
     }
     _merged_into_target() {
@@ -1128,16 +1238,22 @@ for BATCH_NUM in "${BATCH_NUMS[@]}"; do
         # be refused on — and `HEAD` while DETACHED at the tip, which is Phase 233's
         # finding returning through a namespace its fix did not consider.
         #
-        # Every documented invocation names a local branch: `main` under `direct`,
-        # the integration branch under `pr`, the approved branch under PR-reuse. So
-        # this refuses nothing an operator is told to do, and it fails CLOSED —
-        # an unrecognised target shape simply falls through to the `main` arm.
+        # Every documented invocation names a local branch: the default branch
+        # under `direct`, the integration branch under `pr`, the approved branch
+        # under PR-reuse. So this refuses nothing an operator is told to do, and
+        # it fails CLOSED — an unrecognised target shape simply falls through to
+        # the default-branch arm.
         if [[ "$target_id" == refs/heads/* && "$target_id" != "$branch_id" ]] \
            && git merge-base --is-ancestor "$1" "$MERGE_TARGET_REF" 2>/dev/null; then
           return 0
         fi
       fi
-      if git merge-base --is-ancestor "$1" main 2>/dev/null; then
+      # The default-branch arm. Guarded on the name being known: with an
+      # explicit `--merge-target` and no resolvable default, the target arm
+      # above is the whole verification, and probing a branch named "" would
+      # be `--is-ancestor X ""` — an error git reports as "not merged".
+      if [[ -n "$DEFAULT_BRANCH" ]] \
+         && git merge-base --is-ancestor "$1" "$DEFAULT_BRANCH" 2>/dev/null; then
         return 0
       fi
       return 1
@@ -1147,8 +1263,8 @@ for BATCH_NUM in "${BATCH_NUMS[@]}"; do
     # operator can see which target it was measured against.
     case "$MERGE_TARGET_SOURCE" in
       operand)       echo "   merge target: '${MERGE_TARGET_REF}' (--merge-target)" ;;
-      policy:direct) echo "   merge target: 'main' (§ Merge policy: direct)" ;;
-      unresolved:pr) echo "   merge target: UNRESOLVED (§ Merge policy: pr) — verifying against 'main' only; pass --merge-target <ref> to verify against the branch this close is landing in." ;;
+      policy:direct) echo "   merge target: '${DEFAULT_BRANCH}' (§ Merge policy: direct)" ;;
+      unresolved:pr) echo "   merge target: UNRESOLVED (§ Merge policy: pr) — verifying against '${DEFAULT_BRANCH}' only; pass --merge-target <ref> to verify against the branch this close is landing in." ;;
     esac
 
     if git show-ref --verify --quiet "refs/heads/${BRANCH_NAME}" 2>/dev/null; then
@@ -1166,11 +1282,11 @@ for BATCH_NUM in "${BATCH_NUMS[@]}"; do
           # it was named only on the provenance line above, which prints on every run
           # and so could not tell a refusal from a normal close.
           if [[ "$MERGE_TARGET_SOURCE" == "unresolved:pr" ]]; then
-            echo "   ❌ Branch '${BRANCH_NAME}' is NOT merged into 'main', and no merge target was given. Skipping."
+            echo "   ❌ Branch '${BRANCH_NAME}' is NOT merged into '${DEFAULT_BRANCH}', and no merge target was given. Skipping."
             echo "      Under § Merge policy: pr the target cannot be derived — name it: --merge-target <ref>"
             echo "      (--force is NOT the fix here: it accepts the branch unverified and disarms cherry-pick detection for every batch in this run.)"
           else
-            echo "   ❌ Branch '${BRANCH_NAME}' is NOT merged into the merge target or main. Skipping. (Use --force for cherry-picked branches.)"
+            echo "   ❌ Branch '${BRANCH_NAME}' is NOT merged into the merge target or ${DEFAULT_BRANCH:-the default branch}. Skipping. (Use --force for cherry-picked branches.)"
           fi
           SKIPPED+=("${BATCH_NUM}:unmerged")
           continue
@@ -1190,11 +1306,11 @@ for BATCH_NUM in "${BATCH_NUMS[@]}"; do
           # sibling arms in the same function is this repo's most-repeated shape
           # (Phase 218: "the same blindness 300 lines away in the same commit").
           if [[ "$MERGE_TARGET_SOURCE" == "unresolved:pr" ]]; then
-            echo "   ❌ Remote branch '${BRANCH_NAME}' is NOT merged into 'main', and no merge target was given. Skipping."
+            echo "   ❌ Remote branch '${BRANCH_NAME}' is NOT merged into '${DEFAULT_BRANCH}', and no merge target was given. Skipping."
             echo "      Under § Merge policy: pr the target cannot be derived — name it: --merge-target <ref>"
             echo "      (--force is NOT the fix here: it accepts the branch unverified and disarms cherry-pick detection for every batch in this run.)"
           else
-            echo "   ❌ Remote branch '${BRANCH_NAME}' is NOT merged into the merge target or main. Skipping. (Use --force for cherry-picked branches.)"
+            echo "   ❌ Remote branch '${BRANCH_NAME}' is NOT merged into the merge target or ${DEFAULT_BRANCH:-the default branch}. Skipping. (Use --force for cherry-picked branches.)"
           fi
           SKIPPED+=("${BATCH_NUM}:unmerged")
           continue
@@ -1357,17 +1473,64 @@ if [[ $TOTAL_TASKS_CLOSED -gt 0 ]]; then
 fi
 
 # ── Commit ────────────────────────────────────────────────────
-if ! $DRY_RUN && [[ ${#CLOSED[@]} -gt 0 ]]; then
-  # Build comma-separated list without mutating IFS.
+# `Q-364`: the commit set is what THIS run flipped plus what an earlier run
+# flipped without committing. Gating on `CLOSED` alone is what made the
+# re-run this script prescribes inert — on the second run every batch reads
+# `Merged`, so `CLOSED` is empty and the commit block was never entered.
+#
+# Built with `if` rather than `[[ … ]] && arr+=(…)`: under `set -e` a false
+# `[[ … ]]` at statement level is a failed command and aborts the script.
+COMMIT_SET=()
+if [[ ${#CLOSED[@]} -gt 0 ]]; then COMMIT_SET+=("${CLOSED[@]}"); fi
+if [[ ${#RESUME[@]} -gt 0 ]]; then COMMIT_SET+=("${RESUME[@]}"); fi
+if ! $DRY_RUN && [[ ${#COMMIT_SET[@]} -gt 0 ]]; then
+  # Build comma-separated list without mutating IFS. Sorted numerically: the
+  # set is `CLOSED` then `RESUME`, so a run closing 2 and resuming 1 read
+  # `docs: close Batch 2, 1`. Harmless to the `^docs: close Batch ` gate, and
+  # misleading in the log.
+  COMMIT_SET_SORTED=()
+  while IFS= read -r n; do COMMIT_SET_SORTED+=("$n"); done < <(
+    printf '%s\n' "${COMMIT_SET[@]}" | sort -n
+  )
+  COMMIT_SET=("${COMMIT_SET_SORTED[@]}")
   BATCH_LIST=""
-  for n in "${CLOSED[@]}"; do
+  for n in "${COMMIT_SET[@]}"; do
     if [[ -z "$BATCH_LIST" ]]; then
       BATCH_LIST="$n"
     else
       BATCH_LIST="${BATCH_LIST}, ${n}"
     fi
   done
-  git -C "$REPO_ROOT" add -- review_tasks.md
+  # A resume-only run must NOT re-stage. The failed run already ran `git add`,
+  # so the INDEX holds the flip and nothing else, while the WORKING TREE may
+  # since have gained an unrelated edit. Re-adding takes the worktree copy —
+  # measured, it committed `AN UNRELATED EDIT NOBODY ASKED TO COMMIT` under
+  # `docs: close Batch 1` — and sweeping somebody's work into a close commit is
+  # the exact harm `flip_is_uncommitted`'s fail-closed arm exists to avoid, so
+  # incurring it on the path that IS taken made that refusal incoherent.
+  #
+  # An empty index on a resume is a refusal, not a re-stage: something reset the
+  # index between the two runs, and committing the flip from there means taking
+  # the worktree copy, which is the sweep. `/review-close` Step 4b's recovery
+  # path 2 (commit by hand) exists for exactly this.
+  #
+  # A run that closed something itself still stages: it produced the change, so
+  # there is no prior index state to preserve. That path takes the whole file,
+  # which is this script's long-standing behaviour and is not widened here.
+  if [[ ${#CLOSED[@]} -eq 0 ]]; then
+    if git -C "$REPO_ROOT" diff --cached --quiet -- review_tasks.md; then
+      echo "" >&2
+      echo "❌ Nothing staged for review_tasks.md, so this resume cannot commit the flip" >&2
+      echo "   without taking the working-tree copy — which would sweep any unrelated" >&2
+      echo "   edit into a close commit. Refusing." >&2
+      echo "   Commit by hand once you have checked what is in the file:" >&2
+      echo "     git add review_tasks.md && git commit -m \"docs: close Batch ${BATCH_LIST}\"" >&2
+      exit 1
+    fi
+    echo "   ℹ️  Committing the staged flip; the working tree is not re-staged."
+  else
+    git -C "$REPO_ROOT" add -- review_tasks.md
+  fi
   # Wrap the commit in explicit failure handling. `set -euo pipefail` would
   # otherwise abort the script silently mid-flow on hook failure (e.g., a
   # pre-commit hook missing a venv-installed CLI), and the caller (typically
@@ -1381,7 +1544,8 @@ if ! $DRY_RUN && [[ ${#CLOSED[@]} -gt 0 ]]; then
     echo "   Inspect git status and the pre-commit-hook output above; common causes:" >&2
     echo "     • pre-commit hook missing a venv-installed CLI (re-run with PATH=.venv/bin:\$PATH)" >&2
     echo "     • commit signing failure" >&2
-    echo "   Re-run \`bash sysop/scripts/close_batch.sh ${CLOSED[*]}\` after fixing." >&2
+    echo "   Re-run \`bash sysop/scripts/close_batch.sh ${COMMIT_SET[*]}\` after fixing —" >&2
+  echo "   the re-run detects the uncommitted flip and re-attempts the commit (Q-364)." >&2
     exit 1
   fi
   echo ""
@@ -1416,17 +1580,34 @@ if ! $DRY_RUN && [[ ${#CLOSED[@]} -gt 0 ]]; then
   # one-liner that /review-close Step 4b reads as proof the script completed —
   # making a successful close look like a silent mid-flow abort (ISSUE-0039).
   if $CLOSE_ON_MAIN; then
-    for n in "${CLOSED[@]}"; do
-      remove_batch_lock "$n" || true
-      remove_claim_artifacts "$n" || true
-    done
+    # `CLOSED`, not `COMMIT_SET`: a RESUME batch already read `Merged`, so it
+    # went into `MERGED_UNLOCK` and the finished-batch sweep below releases it.
+    # Guarded for emptiness because a resume-only run has no `CLOSED` at all,
+    # and `"${CLOSED[@]}"` on an empty array is an unbound-variable error under
+    # `set -u` in bash 3.2 — the shell macOS still ships.
+    if [[ ${#CLOSED[@]} -gt 0 ]]; then
+      for n in "${CLOSED[@]}"; do
+        remove_batch_lock "$n" || true
+        remove_claim_artifacts "$n" || true
+      done
+    fi
   else
-    echo "   ⏸  Close committed on '${CB_BRANCH:-detached HEAD}', not main in the main checkout."
+    if [[ -z "$DEFAULT_BRANCH" ]]; then
+      # The quiet probe at the top swallowed the resolver's diagnostic, and a
+      # re-run of this script would only refuse — so print the diagnostic
+      # HERE and prescribe the declaration, not the re-run (round finding).
+      echo "   ⏸  Close committed on '${CB_BRANCH:-detached HEAD}', and this repository's default branch could not be resolved."
+      resolve_default_branch "$REPO_ROOT" >/dev/null 2>&1 || resolve_default_branch "$REPO_ROOT" >/dev/null || true
+      echo "      Locks kept, and the claim artifacts with them. Declare the default branch to git"
+      echo "      (above), then release both with: bash sysop/scripts/close_batch.sh ${COMMIT_SET[*]}"
+    else
+    echo "   ⏸  Close committed on '${CB_BRANCH:-detached HEAD}', not ${DEFAULT_BRANCH} in the main checkout."
     echo "      Locks kept, and the claim artifacts with them — the batch is not merged yet."
     echo "      A lock removed now would let /next-task re-offer a batch whose work is sitting"
     echo "      on an unmerged branch, and a park verdict removed now would destroy the record"
     echo "      of why the work stopped."
-    echo "      Both are released by the next close run from main: bash sysop/scripts/close_batch.sh ${CLOSED[*]}"
+    echo "      Both are released by the next close run from ${DEFAULT_BRANCH}: bash sysop/scripts/close_batch.sh ${COMMIT_SET[*]}"
+    fi
   fi
 fi
 
@@ -1458,6 +1639,16 @@ echo ""
 echo "── Summary ──"
 if [[ ${#CLOSED[@]} -gt 0 ]]; then
   echo "   Closed: ${CLOSED[*]}"
+fi
+# Reported separately from `Closed:` on purpose. A resumed batch was closed by
+# an earlier run; saying otherwise would make this run's report claim work it
+# did not do, which is the shape `Q-371` is filed about one script over.
+if [[ ${#RESUME[@]} -gt 0 ]]; then
+  if $DRY_RUN; then
+    echo "   Commit WOULD be resumed for: ${RESUME[*]} (flipped by an earlier run, not committed)"
+  else
+    echo "   Commit resumed for: ${RESUME[*]} (flipped by an earlier run, committed by this one)"
+  fi
 fi
 if [[ ${#SKIPPED[@]} -gt 0 ]]; then
   echo "   Skipped: ${SKIPPED[*]}"
@@ -1499,8 +1690,14 @@ fi
 # `set -euo pipefail`, and the commit-present count proves the close-batch
 # commit actually landed (vs. the banner printing but the commit being reverted
 # by a hook). Operators see this whether they pipe through `tail` or not.
+#
+# `COMMIT_SET`, not `CLOSED` (Q-364). A resume-only run has an empty `CLOSED`
+# and yet lands a real `docs: close Batch N` commit, so gating on `CLOSED` here
+# reported `0` for the one run whose whole purpose was to make the commit
+# exist — Step 4b's landing gate would then fail the very recovery it had
+# prescribed. Found by running the recovery rather than by reading it.
 CLOSE_BATCH_PRESENT=0
-if [[ ${#CLOSED[@]} -gt 0 ]] && ! $DRY_RUN; then
+if [[ ${#COMMIT_SET[@]} -gt 0 ]] && ! $DRY_RUN; then
   CLOSE_BATCH_PRESENT=$(git log -1 --pretty=%s 2>/dev/null | grep -c '^docs: close Batch ' || true)
 fi
 echo "── close_batch.sh completed — close-batch commit present: ${CLOSE_BATCH_PRESENT}"

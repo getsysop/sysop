@@ -94,7 +94,7 @@ LOOP_EXCLUDE_SHARED="decomposition-rubric guided-mode main-push-guard plan-revie
 # (+ run_checks/ dir), _log.py, review_index.py, archive_review_tasks.py,
 # install_hooks.sh, sysop-update.sh, and the model-role set (_model_roles.py,
 # resolve/check/migrate_skill_model.py — mode-agnostic; operate on shipped skills).
-LOOP_EXCLUDE_SCRIPTS="backfill_completed_dates.py batch_work.sh claim_task.sh clear_user_action.py cleanup_worktrees.sh close_batch.sh next_task.py parse_subagent_envelope.py permission_denied_hook.py pr_dependabot.py scope_overlap.py sitrep_survey.py validate_tasks.py"
+LOOP_EXCLUDE_SCRIPTS="_git_lib.sh default_branch.sh backfill_completed_dates.py batch_work.sh claim_task.sh clear_user_action.py cleanup_worktrees.sh close_batch.sh next_task.py parse_subagent_envelope.py permission_denied_hook.py pr_dependabot.py scope_overlap.py sitrep_survey.py validate_tasks.py"
 # Phase 111: --ref pins the install/update source to a git tag/rev (a reviewed
 # release) instead of the source clone's live HEAD. REF_WORKTREE holds the
 # materialised-rev worktree; SYSOP_SRC_CLONE holds the original clone (needed to
@@ -232,6 +232,9 @@ NS_SWEPT_COUNT=0
 # Phase 123: temp file holding the loop-mode-filtered settings.json template
 # (cleaned by _cleanup_install_temp on the EXIT trap).
 LOOP_SETTINGS_TMP=""
+# Phase 255 (`Q-381`): temp file holding the settings.json template with the
+# default-branch allow rule rewritten for THIS consumer (cleaned on the same trap).
+BRANCH_SETTINGS_TMP=""
 
 usage() {
   cat <<'EOF'
@@ -478,6 +481,7 @@ do_or_say() {
 _cleanup_install_temp() {
   [[ -n "$DIVERGENCE_SHADOW" ]] && rm -rf "$DIVERGENCE_SHADOW"
   [[ -n "$LOOP_SETTINGS_TMP" ]] && rm -f "$LOOP_SETTINGS_TMP"
+  [[ -n "$BRANCH_SETTINGS_TMP" ]] && rm -f "$BRANCH_SETTINGS_TMP"
   # Phase 142: the Codex symlink probe writes a dir INSIDE the target (it must
   # test the consumer's filesystem, not /tmp's). A mid-probe crash would
   # otherwise strand it and trip the next install's dirty-tree check.
@@ -2603,6 +2607,114 @@ install_checks_yml() {
 # command substitution, so the assignment survives in the parent shell. Filters
 # permissions.allow to the loop subset (LOOP_ONLY_SPEC § "Leg 1 findings") and
 # drops the hooks block (both Sysop hooks are lifecycle-only). Non-zero on failure.
+# ── Phase 255 (`Q-381`): the default-branch allow rule ──────────────────────
+#
+# `.claude/settings.json` seeds `Bash(git reset --hard origin/main)` for
+# `/review-close` Step 6 under `pr` policy. It is the only literal-branch rule
+# in the template and the only `git reset` grant at all, and it is an EXACT
+# match: "a rule with no `*` matches one exact command" (Claude Code
+# permissions doc). So on a `master`-default consumer it binds nothing once the
+# skill stops emitting the literal `main` — Step 6 is then prompted or denied.
+#
+# **Why substitution and not a wildcard.** The obvious widening,
+# `Bash(git reset --hard origin/:*)`, DOES NOT BIND: the docs state the `:*`
+# form "is only recognized at the end of a pattern", and mid-pattern the colon
+# is a literal character. The spelling that does bind, `origin/*`, also matches
+# `git reset --hard origin/main~50` — it widens the tree's only destructive
+# grant from one ref to any revision expression, and an allow rule fully
+# authorizes at the permission layer (the auto-mode classifier is a separate
+# gate that overrides allow rules for a few known-destructive shapes, WORKFLOW
+# § 8.2a — narrowness is what protects this one). Substituting the
+# consumer's own branch keeps the grant exactly as narrow as it is today while
+# making it correct off `main`.
+#
+# Sets BRANCH_SETTINGS_TMP to the temp path (cleaned on EXIT) and returns 0 when
+# a rewrite happened; returns 1 when none was needed or possible, in which case
+# the caller keeps the template as-is. A stale rule costs a prompt, never a
+# break, so failing to resolve is a note rather than an abort.
+# `Q-381`/`M4`: drop `git reset --hard origin/<name>` grants this installer seeded on an
+# earlier run whose <name> is no longer this repo's default branch. Scoped tightly on
+# purpose — a rule of any other shape, or one naming the CURRENT default, is untouched.
+_prune_stale_branch_grants() {
+  local dst="$1" branch=""
+  branch="$(bash "$REPO_ROOT/core/companion/scripts/default_branch.sh" "$TARGET" 2>/dev/null)" || return 0
+  [[ -n "$branch" ]] || return 0
+  python3 - "$dst" "$branch" <<'PRUNEPY' || return 0
+import json, re, sys
+dst, branch = sys.argv[1], sys.argv[2]
+with open(dst) as f:
+    data = json.load(f)
+perms = data.get("permissions", {})
+allow = perms.get("allow", [])
+keep, dropped = [], []
+pat = re.compile(r"^Bash\(git reset --hard origin/([^)\s]+)\)$")
+for rule in allow:
+    m = pat.match(rule)
+    if m and m.group(1) != branch:
+        dropped.append(rule)
+        continue
+    keep.append(rule)
+if not dropped:
+    sys.exit(1)
+perms["allow"] = keep
+data["permissions"] = perms
+with open(dst, "w") as f:
+    json.dump(data, f, indent=2)
+    f.write("\n")
+print("\n".join(dropped))
+PRUNEPY
+  return 0
+}
+
+_branch_settings_template() {
+  local src="$1" branch=""
+  branch="$(bash "$REPO_ROOT/core/companion/scripts/default_branch.sh" "$TARGET" 2>/dev/null)" || return 1
+  [[ -n "$branch" && "$branch" != "main" ]] || return 1
+  # A branch name may legally contain characters that break an allow rule. `(` and `)`
+  # terminate the `Bash(...)` form, so `origin/rel)ease` yields a malformed rule that binds
+  # NOTHING, silently — the exact failure mode this whole function exists to prevent.
+  # `satisfied()` in tests/test_permission_surface_drift.py already assumes parens cannot
+  # appear (its pattern is `[^\s()]+`). Refuse rather than seed an inert grant; the
+  # template's literal then stays and the caller's note explains it.
+  case "$branch" in
+    *[\(\)]*|*[[:space:]]*)
+      note "default branch name '$branch' cannot be expressed as an allow rule — keeping the template's"
+      return 1 ;;
+  esac
+  BRANCH_SETTINGS_TMP="$(mktemp "${TMPDIR:-/tmp}/sysop-branch-settings.XXXXXX")" || return 1
+  python3 - "$src" "$BRANCH_SETTINGS_TMP" "$branch" <<'BRANCHPY' || return 1
+import json, sys
+src, out, branch = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(src) as f:
+    data = json.load(f)
+perms = data.get("permissions", {})
+allow = perms.get("allow", [])
+# Rewrite by exact string, not by regex over the file: the rule is a JSON value
+# and the surrounding document must survive apart from it.
+old = "Bash(git reset --hard origin/main)"
+new = "Bash(git reset --hard origin/%s)" % branch
+if old not in allow:
+    # The template no longer carries the rule this function exists to fix.
+    # Fail rather than write an unchanged temp that silently claims success.
+    sys.exit(1)
+perms["allow"] = [new if r == old else r for r in allow]
+data["permissions"] = perms
+with open(out, "w") as f:
+    json.dump(data, f, indent=2)
+    f.write("\n")
+BRANCHPY
+  # NO second "did it actually change?" check here, and that is deliberate. The author's
+  # battery added a `cmp -s "$src" "$BRANCH_SETTINGS_TMP" && return 1` backstop and called
+  # it belt-and-braces; two round lenses then showed it was untested, and tracing the
+  # preconditions showed it was UNREACHABLE: the early return above guarantees
+  # `branch != main`, the heredoc `sys.exit(1)`s unless the old rule is present, and the
+  # new rule therefore always differs from the old — so the file always differs and `cmp`
+  # was always false. A guard that cannot fire is the "shipped inert" class this repo keeps
+  # filing against itself, so it is gone rather than left looking like protection. The
+  # heredoc's exit IS the whole mechanism, and it is the arm the tests cover.
+  return 0
+}
+
 _loop_settings_template() {
   local src="$1"
   LOOP_SETTINGS_TMP="$(mktemp "${TMPDIR:-/tmp}/sysop-loop-settings.XXXXXX")" || return 1
@@ -2678,6 +2790,12 @@ install_permissions() {
   hdr "permissions (.claude/settings.json)"
   local src="$REPO_ROOT/core/companion/.claude/settings.json"
   local dst="$TARGET/.claude/settings.json"
+  # Notes name the TEMPLATE, never $src: the loop filter and the Q-381
+  # default-branch filter both re-point $src at a tempfile, and a note reading
+  # `merge: /var/folders/…/sysop-branch-settings.Krx3Gi` tells the consumer
+  # their permissions came from somewhere they cannot look at. Pre-existing on
+  # the loop-mode apply path; the Q-381 filter would have made it the norm.
+  local src_display="$src"
   if [[ ! -f "$src" ]]; then
     note "skipping: template not found at $(rel "$src")"
     return 0
@@ -2714,7 +2832,7 @@ install_permissions() {
       return 0
     fi
     # Fail CLOSED: if the filter can't be built, do NOT fall back to the full
-    # master — that would over-grant the 79-rule allow-list AND re-add the hooks
+    # master — that would over-grant the 80-rule allow-list AND re-add the hooks
     # block referencing scripts loop mode never installs (broken at runtime).
     # Skip settings.json instead (the consumer sees more permission prompts, but
     # no over-grant and no dangling hooks); the loud error keeps it visible.
@@ -2727,8 +2845,44 @@ install_permissions() {
     fi
   fi
 
+  # `Q-381`: re-point $src at a template whose default-branch allow rule names
+  # THIS consumer's branch, and drop any stale sibling we seeded on an earlier install. Placed after the loop filter so both modes inherit
+  # it, and before both write paths so the copy AND the merge get it for free.
+  # Under --dry-run nothing is built: the temp path would render raw in the copy
+  # note below, which is the same reason the loop filter skips it there.
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    _dbr="$(bash "$REPO_ROOT/core/companion/scripts/default_branch.sh" "$TARGET" 2>/dev/null || true)"
+    if [[ -n "$_dbr" && "$_dbr" != "main" ]]; then
+      note "would seed the reset grant as 'git reset --hard origin/$_dbr' (this repo's default branch)"
+    elif [[ -z "$_dbr" ]]; then
+      note "could not resolve this repo's default branch — the reset grant would keep 'origin/main'"
+      note "  (a stale allow rule costs a prompt at /review-close Step 6, not a failure)"
+    fi
+    unset _dbr
+  elif _branch_settings_template "$src"; then
+    src="$BRANCH_SETTINGS_TMP"
+    note "allow-list: reset grant seeded for this repo's default branch, not the literal 'main'"
+  elif ! bash "$REPO_ROOT/core/companion/scripts/default_branch.sh" "$TARGET" >/dev/null 2>&1; then
+    # `L7`: --dry-run warned here and the apply path was silent, so a consumer who
+    # previewed and then applied lost the warning at exactly the moment it took effect.
+    note "could not resolve this repo's default branch — the reset grant keeps 'origin/main'"
+    note "  Fix with 'git remote set-head origin --auto'. Until then /review-close stops at"
+    note "  its first step, which resolves the same name and refuses rather than guessing."
+  fi
+
+  # The permissions merge below is a deliberate set-union, so it preserves rules the
+  # consumer added — and, without this, every stale `git reset --hard origin/<name>` this
+  # installer seeded on an earlier run. Measured by an independent lens: a pre-255 install
+  # then two updates across a branch rename left THREE reset grants, with the note claiming
+  # a seeding while `origin/main` sat untouched at the top of the file. Pruning is scoped to
+  # rules of exactly this shape naming a branch that is NOT the current default: those are
+  # ours, not the consumer's. Anything else in `allow` is left alone.
+  if [[ "$DRY_RUN" -eq 0 && -f "$dst" ]]; then
+    _prune_stale_branch_grants "$dst" || true
+  fi
+
   if [[ ! -f "$dst" ]]; then
-    do_or_say "copy: $(rel "$src") → $(rel "$dst")" cp "$src" "$dst"
+    do_or_say "copy: $(rel "$src_display") → $(rel "$dst")" cp "$src" "$dst"
     record_managed_path "$dst"
     record "permissions: wrote $(rel "$dst") (Sysop allow-list)"
     return 0
@@ -2738,7 +2892,7 @@ install_permissions() {
   # the user's existing rules, append Sysop rules not already present) AND
   # merge hooks.<event> entries (Phase 36: presence-keyed by Sysop's hook
   # script filename, so consumer customizations of the same event are preserved).
-  note "merge: $(rel "$src") → $(rel "$dst") (existing file)"
+  note "merge: $(rel "$src_display") → $(rel "$dst") (existing file)"
   record_managed_path "$dst"
   if [[ "$DRY_RUN" -eq 1 ]]; then
     record "permissions: would merge Sysop allow-list + hooks into $(rel "$dst")"

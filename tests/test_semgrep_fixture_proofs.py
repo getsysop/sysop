@@ -353,9 +353,23 @@ def test_no_guard_population_reaches_into_a_worktree():
     satisfied by a stale copy. This asserts BOTH derivations in this module are
     scoped, and it is written to be meaningful even on a clean clone where no
     worktrees exist — it checks the paths, not the count.
+
+    **Relative to ``REPO_ROOT``, never absolute (Q-366).** The first cut
+    asserted ``".claude" not in p.parts`` on the *absolute* path, which is a
+    different claim: it fails whenever the checkout is ITSELF under a
+    ``.claude`` directory, which is exactly where every review agent works —
+    ``CLAUDE.md`` mandates ``isolation: "worktree"`` for reviewers, and the
+    harness puts those worktrees in ``.claude/worktrees/``. So this module went
+    red for every reviewer on every round, on a claim about the reviewer's
+    sandbox rather than about the tree under review. That is worse than a
+    useless guard: the round's whole method is *the suite is green, therefore
+    the mutation survived*, and a permanently-red module trains a reviewer to
+    discount reds. The property actually wanted is **containment** — no
+    derivation reaches out of the roots it was given into a nested checkout —
+    and containment is a statement about the path relative to the root.
     """
     for p in _rule_files():
-        assert ".claude" not in p.parts, p
+        assert ".claude" not in p.relative_to(REPO_ROOT).parts, p
     for root in (REPO_ROOT / "packs", REPO_ROOT / "core"):
         for frag in root.rglob("checks.yml.fragment"):
-            assert ".claude" not in frag.parts, frag
+            assert ".claude" not in frag.relative_to(REPO_ROOT).parts, frag

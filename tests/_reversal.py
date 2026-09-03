@@ -16,22 +16,37 @@ three modules had re-implemented this check inline (two defining `assert_no_reve
 one open-coding the same vocabulary), which is the duplicate-then-diverge
 shape `Q-256` recorded for the Pass-1a token list, and two of the copies had already
 drifted apart. Phase 249 needed the check for two more steps and would have made a
-fourth copy, so it built this instead. **`Q-367` is not closed by this file** — its
-remaining scope is the two existing in-module copies adopting it, which is a refactor
-of guards this phase does not otherwise touch, and doing it here would put a rewrite
-of three unrelated modules inside a phase about `/claim-task` and `/review-close`.
+fourth copy, so it built this instead. **Phase 253 closed `Q-367`**: the three in-module
+copies now import this, and the vocabulary below is the shared list plus the generic entries the Step 4b
+copy carried and the others lacked, measured against every caller's shipped text
+before it was merged (a caller that
+false-alarms on its own shipped prose gets deleted by the first operator who hits it).
+
+**Two kinds of vocabulary, and the split is deliberate.** `REVERSAL_VOCAB` holds the
+*generic* softeners — phrasings that read as a licence in any bounded step. A phrasing
+that softens one specific step (*"leave the flag off"* is a reversal of Step 4b and
+noise anywhere else) is passed by that caller as `extra=`, so it never reddens a step
+it was not written about. The Step 4b guard carried both kinds in one list before
+this split; the round that filed `Q-367` walked through it with the generic entries
+the precedent module had and Step 4b's copy had dropped.
 
 **Deliberately narrow, and the narrowness is the point.** A step legitimately says
 "advisory" when it is *citing* a refused alternative, so each caller passes the exempt
 phrases it actually ships. A guard that flags its own shipped text gets deleted by the
 first operator who hits it.
+
+**What this layer is not.** Phase 249's round wrote 25 out-of-vocabulary softenings
+against two freshly wired steps and all 25 survived; Phase 179 measured
+polarity-by-string-matching at 0 of 21 before abandoning it. The value here is that the
+phrasings this project has already been burned by cannot recur silently. It is not a
+general closure, and a longer list is not the remedy (`Q-374`).
 """
 
-# Kept in sync with the in-module copies by intent, not by machinery — see `Q-367`.
-# The last two entries were added by Phase 249, each justified by a mutation that
-# walked through the pins without them: a disposition list gaining "reporting a single
-# combined waiver count is acceptable", and a fixed predicate gaining "either form is
-# acceptable". Both preserve every pinned string.
+# The generic softeners. Every entry is here because a mutation walked through a guard
+# without it: the first eleven from Phase 247's round, `in practice` and the two
+# `acceptable` forms from Phase 249's, and the block after them from Phase 248's round
+# against Step 4b (*"in practice you can leave the flag off"*, *"no action is needed"*),
+# which the Step 4b guard alone carried until Phase 253 merged the copies.
 REVERSAL_VOCAB = (
     "is advisory",
     "are advisory",
@@ -44,20 +59,31 @@ REVERSAL_VOCAB = (
     "does not second-guess",
     "may be summarised",
     "may be summarized",
-    # `will do` is DELIBERATELY ABSENT here, and the two in-module copies still carry it.
-    # It is a bare English bigram with no softening signal, and the round measured it
-    # false-alarming on a sentence that REINFORCES the shipped rule ("whoever runs the
-    # close will do so from the primary in most cases, but not all — hence the identity
-    # test"). A guard that reddens on prose defending the rule is the shape that teaches
-    # the next author to delete it. The divergence is recorded in `Q-367` rather than
-    # silently introduced.
+    # `will do` is DELIBERATELY ABSENT here. Two in-module copies carried it until Phase
+    # 253 retired them in favour of this module; it is a bare English bigram with no
+    # softening signal, and Phase 249's round measured it false-alarming on a sentence
+    # that REINFORCES the shipped rule ("whoever runs the close will do so from the
+    # primary in most cases, but not all — hence the identity test"). A guard that
+    # reddens on prose defending the rule is the shape that teaches the next author to
+    # delete it. Phase 253 measured the cost of dropping it before dropping it: none of
+    # the 102 reconstructed reviewer mutations from Phase 248's round contains the
+    # bigram, so no kill in that battery depended on it. The divergence is recorded in
+    # `Q-367`'s archive entry rather than silently introduced.
     "in practice",
     "is acceptable",
     "are acceptable",
+    # Promoted from the Step 4b guard's private list by Phase 253 (Phase 248's round
+    # wrote the bypasses these close). Generic: each reads as a licence in any step.
+    "in day-to-day use",
+    "no action is needed",
+    "not needed",
+    "is optional",
+    "are optional",
+    "you can leave",
 )
 
 
-def assert_no_reversal(step: str, name: str, exempt=()) -> None:
+def assert_no_reversal(step: str, name: str, exempt=(), extra=()) -> None:
     """Fail if reversal vocabulary appears in *step* outside the exempt spans.
 
     `exempt` holds the phrases the step ships on purpose — a refused alternative it
@@ -65,20 +91,33 @@ def assert_no_reversal(step: str, name: str, exempt=()) -> None:
     added next to a pinned phrase. A stale exemption is itself an assertion failure:
     an exemption that no longer matches anything silently widens what this permits.
 
+    **Each exemption must occur exactly once.** `str.replace` strips EVERY occurrence,
+    so a second copy of an exempted phrase would carve a second hole the exemption was
+    never granted for — Phase 248's round defeated the first cut of the Step 4b layer
+    by writing a reversal AROUND an exempted span. The Step 4b guard adopted
+    `count == 1` in response; when Phase 253 merged the copies it kept the stricter
+    rule for every caller rather than the `in` check the two older copies had.
+
+    `extra` holds the step-specific reversal phrasings this caller adds to the generic
+    list — softenings of *this* step that would be noise anywhere else.
+
     **`in practice` is kept and it WILL false-alarm.** The round wrote two reinforcing
     sentences containing it and both reddened. It stays because it is the highest-signal
-    entry on this list -- it closed this phase's own surviving mutation -- and the remedy
+    entry on this list -- it closed Phase 249's own surviving mutation -- and the remedy
     for a legitimate use is `exempt=`, in the same commit, with the reason. A cost paid
     knowingly, not an oversight.
     """
     haystack = step
     for phrase in exempt:
-        assert phrase in step, (
-            f"{name}: exemption {phrase!r} is not in the step — a stale exemption "
-            f"silently widens what this guard permits"
+        n = step.count(phrase)
+        assert n == 1, (
+            f"{name}: exemption {phrase!r} occurs {n} times in the step (expected exactly "
+            f"1) — a stale exemption silently widens what this guard permits, and a "
+            f"duplicated one carves a second hole the exemption was never granted for"
         )
         haystack = haystack.replace(phrase, "")
-    hits = [v for v in REVERSAL_VOCAB if v in haystack.lower()]
+    low = haystack.lower()
+    hits = [v for v in (*REVERSAL_VOCAB, *extra) if v.lower() in low]
     assert not hits, (
         f"{name}: reversal vocabulary {hits} appears in the step outside its declared "
         f"exemptions. Every greppable string the pins hold can be preserved while the "

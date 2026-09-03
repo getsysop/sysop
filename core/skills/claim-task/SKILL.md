@@ -89,6 +89,9 @@ Fix **both** identifiers now, before any step addresses a file by name:
 | `<TASK_ID>` | the task ID (`TECH-0007`) | — not defined; a batch has no roadmap task ID |
 | `<BATCH_NUMBER>` | — | the bare number (`116`), what `batch_work.sh` takes |
 | `<CLAIM_ID>` | the task ID (`TECH-0007`) | **`BATCH-<N>`** (`BATCH-116`) |
+| `<default branch>` | the repository's default branch name | same |
+
+**`<default branch>` is resolved, never assumed** (`Q-377`): run `bash sysop/scripts/default_branch.sh` — bare, reading its stdout — and substitute the name it prints. It is `main` on many consumers and `master` or `develop` on others, and every step below that compares against it or diffs from it halts on the wrong name. Run it bare rather than into a variable: an allow rule does not match past a variable assignment, and nothing survives between fenced blocks anyway.
 
 **`<CLAIM_ID>` is what every lock, runtime artifact, and envelope is keyed by**, for both kinds. `<BATCH_NUMBER>` is only ever a script argument. The distinction is load-bearing: `/claim-task 116` on a batch leaves an agent holding `116`, and a step that addresses `sysop/runtime/locks/<TASK_ID>.lock` with it looks for `116.lock` while `batch_work.sh` wrote `BATCH-116.lock` — a check that reads as "not claimed" for every batch that ever was. Normalising at Step 7 instead of here is how that class of miss happens, so it is done once, at the top, for both kinds.
 
@@ -283,7 +286,7 @@ Read the body file `tasks/open/<TASK_ID>.md` in full so it is loaded as context 
 python3 sysop/scripts/scope_overlap.py <TASK_ID>
 ```
 
-(Bare `python3` is the command word: `scope_overlap.py` self-resolves venv PyYAML via its own `sys.path` bootstrap — script-anchored first (this file's ancestors, then the main checkout via git-common-dir), and only then the CWD, across both `.venv/` and `venv/` layouts — so this one form serves venv-only *and* non-venv consumers, Sysop Phase 182. A `.venv/bin/python3` command word would instead be `command not found` on a `venv/`-layout, poetry, conda or system-python project. Both permission rules exist.) It infers the candidate's likely scope from its `## Key files` + `blast_radius` (a *pre-plan guess*), reads the **actual** changed set of each in-flight worktree (`git diff --name-only main...HEAD` + uncommitted), and prints a per-in-flight verdict — `likely` (exact path match) / `possible` (same directory or glob) / `none`.
+(Bare `python3` is the command word: `scope_overlap.py` self-resolves venv PyYAML via its own `sys.path` bootstrap — script-anchored first (this file's ancestors, then the main checkout via git-common-dir), and only then the CWD, across both `.venv/` and `venv/` layouts — so this one form serves venv-only *and* non-venv consumers, Sysop Phase 182. A `.venv/bin/python3` command word would instead be `command not found` on a `venv/`-layout, poetry, conda or system-python project. Both permission rules exist.) It infers the candidate's likely scope from its `## Key files` + `blast_radius` (a *pre-plan guess*), reads the **actual** changed set of each in-flight worktree (`git diff --name-only <default branch>...HEAD` + uncommitted — the base is resolved, not assumed, and an unresolvable one degrades to uncommitted-only, and prints a note whenever the *project root* is the checkout that could not be resolved; a workspace that disagrees with the root degrades silently, which is the residue rather than the fix, `Q-380`), and prints a per-in-flight verdict — `likely` (exact path match) / `possible` (same directory or glob) / `none`.
 
 - **Surface the output verbatim** if it reports any overlap, then continue. This is **advisory, not a gate** — overlap is a recoverable rework cost, not corruption, so the human owns the call (the guided-mode "genuine tradeoff → human owns it" branch, in contrast to the lock collision above, which *is* a false choice and correctly hard-fails). Do **not** block the claim on it.
 - The primitive is **non-blocking by construction**: it exits 0 on every degrade path (no in-flight work, missing index, absent PyYAML, an unreadable worktree). Treat *any* non-zero exit or error as "advisory unavailable — proceed"; never halt the claim because the overlap check couldn't run.
@@ -421,7 +424,7 @@ The lock file is **required** by the schema for `in_progress` tasks (see `tasks/
 bash sysop/scripts/claim_task.sh --lock <TASK_ID> <BRANCH_NAME>
 ```
 
-This also creates the git worktree on `<BRANCH_NAME>`, branched from current HEAD (main if you ran the skill from main).
+This also creates the git worktree on `<BRANCH_NAME>`, branched from current HEAD (the default branch, if you ran the skill from there).
 
 **Take `<WORKTREE_PATH>` off this script's output and hold it in context** — it prints the lock it wrote, whose `workspace:` field is the absolute path. Do **not** derive it from a shape: the conventional location is `../<project>-<task-id-lower>/`, but `WORKTREE_PREFIX` overrides that, and every later site — Step 7a's `git -C`, all three prompts, the executor's working directory — needs the real absolute path rather than a guess.
 
@@ -435,13 +438,22 @@ python3 sysop/scripts/validate_tasks.py
 
 If it fails, **do not proceed to 4d**. Report the validator output verbatim and fall through to the rollback below. Common causes: lock file missing (4b silently failed), body file moved, ID collision introduced upstream.
 
-### 4d. Commit the claim on main
+### 4d. Commit the claim on the default branch
 
-This commit lands on `main` in the shared **primary** worktree, so apply `_shared/main-push-guard.md` **Rule A** first — assert `HEAD` is still `main` (a concurrent `/auto-build` batch or another `/claim-task` session could have moved it). If it is not, STOP and reconcile via `git reflog` rather than committing the claim onto the wrong branch:
+**Resolve `<default branch>` before the block below and substitute the name it prints** —
+`bash sysop/scripts/default_branch.sh`, run bare (see `_shared/main-push-guard.md` Rule A;
+it is not `main` on every consumer, and asserting the literal is what stopped this step on
+a `master` repo, `Q-377`). If it exits non-zero, stop: the claim commits on that branch.
 
 ```bash
-test "$(git rev-parse --abbrev-ref HEAD)" = "main" || {
-  echo "HEAD is not main (a concurrent actor moved it) — STOP."; exit 1; }
+bash sysop/scripts/default_branch.sh
+```
+
+This commit lands on the default branch in the shared **primary** worktree, so apply `_shared/main-push-guard.md` **Rule A** first — assert `HEAD` is still on that branch (a concurrent `/auto-build` batch or another `/claim-task` session could have moved it). If it is not, STOP and reconcile via `git reflog` rather than committing the claim onto the wrong branch:
+
+```bash
+test "$(git rev-parse --abbrev-ref HEAD)" = "<default branch>" || {
+  echo "HEAD is not <default branch> (a concurrent actor moved it) — STOP."; exit 1; }
 git add tasks/index.yml
 git diff --cached --quiet -- tasks/index.yml \
   || git commit -m "claim: mark <TASK_ID> as in-progress"
@@ -472,7 +484,7 @@ bash sysop/scripts/batch_work.sh <BATCH_NUMBER>
 ```
 The script handles `Pending` → `In Progress` transition in `review_tasks.md` and commits on main automatically, creates the worktree, and writes `sysop/runtime/locks/<CLAIM_ID>.lock` — the same lock file, in the same main-repo-anchored directory, that `claim_task.sh --lock` writes for a roadmap task. (Review-batch state still lives in `review_tasks.md` — only roadmap tasks live in `tasks/index.yml`. The *lock* is the one thing both kinds share, which is what makes `/next-task`, `/sitrep` and `scope_overlap.py` able to see a batch and a task the same way.)
 
-The status commit is best-effort and the lock is not: off `main`, or with a dirty `review_tasks.md`, the script warns, skips the flip, and still creates the worktree **and** the lock. Read the output — a batch that stayed `Pending` is claimed all the same.
+**The claim's STATUS DECISION is all-or-nothing** (Phase 254, `Q-378`) — and only that; the writes after it are unchanged and are not (`Q-382`). Off the default branch, or with a dirty `review_tasks.md`, the script now **refuses before writing anything** — no branch, no worktree, no lock — and exits non-zero, because there is no consistent claim to be made from either state: the status flip has to commit on the default branch in the primary. A repo with no `origin` is not one of those cases and claims normally; only a configured remote that will not fast-forward refuses. Until this phase the flip was best-effort while the lock was not, so a skipped flip left a `Pending` batch holding a lock at exit 0 and five readers disagreeing about whether it was claimed.
 
 **Take `<BRANCH_NAME>` and the worktree path off this script's summary box and hold both in context** — the `│  Branch:` and `│  Path:` lines. This is not optional bookkeeping: the roadmap path establishes `<BRANCH_NAME>` at Step 3, the batch path has no equivalent, and Step 7's three prompts and all three envelopes name it. If the script exited before printing the box, both values are in the lock it wrote — `sysop/runtime/locks/<CLAIM_ID>.lock`, fields `branch:` and `workspace:`.
 
@@ -534,7 +546,7 @@ Three options are offered on a roadmap task:
 
 **This is the only entry point to Step 7, on a fresh claim and on a `--resume` alike.** No later stage is entered directly; the routing table below decides which one this run lands on.
 
-Every run of this pipeline gets its own directory. **This is what makes a stale artifact unreachable rather than merely detectable** — a re-invocation never looks in a previous run's directory, so it cannot inherit its `review.md`. That matters most on the batch path: `batch_work.sh`'s `write_batch_lock` is idempotent by design and leaves an existing lock **as-is** (`batch_work.sh:375-377`), and its status gate still admits a re-claim of a *live* batch — `Pending` unconditionally, `In Progress` as the sanctioned resume — so a batch re-invocation would otherwise find yesterday's artifacts sitting under a lock that still looks current. Keying on the lock's `started:` stamp does **not** close this — the stamp is preserved across exactly that re-claim.
+Every run of this pipeline gets its own directory. **This is what makes a stale artifact unreachable rather than merely detectable** — a re-invocation never looks in a previous run's directory, so it cannot inherit its `review.md`. That matters most on the batch path: `batch_work.sh`'s `write_batch_lock` is idempotent by design and leaves an existing lock **as-is** (`batch_work.sh:413-417`), and its status gate still admits a re-claim of a *live* batch — `Pending` unconditionally, `In Progress` as the sanctioned resume — so a batch re-invocation would otherwise find yesterday's artifacts sitting under a lock that still looks current. Keying on the lock's `started:` stamp does **not** close this — the stamp is preserved across exactly that re-claim.
 
 **The directory lives in the MAIN checkout, not the worktree**, resolved through `git rev-parse --git-common-dir`. Three properties depend on that and none of them survive a worktree-side path: Step 1 has to validate `--resume` *before* any lock is read, so the run must be discoverable before a worktree path exists; the artifacts have to outlive `git worktree remove` and `cleanup_worktrees.sh`, which is what the park previously needed a second copy for; and the orchestrator itself runs in the main checkout, alongside the hook-written envelopes. An earlier revision created it under `<WORKTREE_PATH>` while Steps 1 and 2 looked for it in the main checkout — the two never met, and every `--resume` was rejected.
 
@@ -1034,15 +1046,16 @@ Three outcomes:
 
 - **approve** → Step 7e.
 - **revise** → **first re-run Step 7c's classification write for THIS run with `verdict: SUPERSEDED`**, then go back to Step 7-pre and mint a **new** run, and spawn the planner into it with the human's note appended to the Planner Prompt, running 7b and 7c over it — a revised plan has not been reviewed. **Do not re-plan into this run's directory.** A revised `plan.md` sitting beside the previous plan's `review.md` and `classification.md` is exactly the state 7-pre's routing table cannot tell from a reviewed one. The `SUPERSEDED` flip is the other half and is not bookkeeping: without it the rejected run keeps reading `verdict: PROCEED`, and a later `--resume` naming it walks straight to the executor with **a plan a human explicitly rejected**. One run, one plan; the superseded run stays on disk as the record of what was rejected, and 7-pre's first row refuses to resume it.
-- **abandon** → release the claim, **and commit the release**:
+- **abandon** → release the claim, **and commit the release** (resolve `<default branch>`
+  first with `bash sysop/scripts/default_branch.sh`, run bare, and substitute it):
 
   ```bash
   bash sysop/scripts/claim_task.sh --release <CLAIM_ID>
   ```
 
   ```bash
-  test "$(git rev-parse --abbrev-ref HEAD)" = "main" || {
-    echo "HEAD is not main (a concurrent actor moved it) — STOP."; exit 1; }
+  test "$(git rev-parse --abbrev-ref HEAD)" = "<default branch>" || {
+    echo "HEAD is not <default branch> (a concurrent actor moved it) — STOP."; exit 1; }
   git add tasks/index.yml
   git commit -m "chore: release <CLAIM_ID>"
   ```
@@ -1090,7 +1103,7 @@ Read your three inputs from disk rather than from this prompt: `<ARTIFACT_DIR>/p
    **A non-zero exit means the section is not there — go back to step 3 and write it.** The `case` guard is not decoration: without it an unsubstituted `<BODY_PATH_AS_RESOLVED>` makes `grep` exit **2** for a missing *file*, which reads exactly like a missing *record* and sends you into a rewrite loop against a path that does not exist. `-A1` prints the line under the heading, so a section still reading `<recorded at /claim-task plan time …>` is visible here — that is the schema template, not a record, and Step 2d classifies it `missing` too, so replace it. (An earlier version omitted `-A1` while telling you to inspect that text, which its own output could never show.)
 
    **This check is deliberately shallow, and you should know its limit.** `grep` cannot tell a heading in the body from one inside a fenced block, so on a body carrying a `## Plan` section — whose fence contains its own `## Test decision` line — it can report a hit that is not the record. It is here because it is nearly free and it catches the common miss while the file is still open. **The authority is the orchestrator's Step 8 read-back**, which is fence-aware and reads the branch tip. So a hit here is encouragement, not proof; a *miss* here is conclusive and you must fix it before committing.
-4. **Post-fix convention verification — BOTH maps** (`Q-352`). `git diff --name-only main...HEAD`; for each changed file look up its section in **`.claude/convention_map.md` and `.claude/security_map.md`** (with their `.project.md` overlays where present) and scan the **new/changed lines** — not just the original task locations — against those conventions. **The security map was missing here and the omission had reach:** Step 5 above has the *planner* read both maps into `## Constraints & Risks`, so this step read half of what the plan was written against, and after it nothing else read the security map before `main` — the plan reviewer routes against neither, and `/review-close` Step 2b routed against the convention map alone until its own security twin was added. This step and that twin now close the chain from both ends, and they are not redundant: this one sees **this branch in its own worktree**, that one sees the **assembled** result. Common regressions: `fetch()` without `encodeURIComponent()` on dynamic path segments; `str(e)` exposed to API responses; moved code that dropped `_sanitize_log()` wrappers; `useCallback` with incomplete dependency arrays; SELECT queries on a write-only engine. Fix regressions before committing.
+4. **Post-fix convention verification — BOTH maps** (`Q-352`). `git diff --name-only <default branch>...HEAD`; for each changed file look up its section in **`.claude/convention_map.md` and `.claude/security_map.md`** (with their `.project.md` overlays where present) and scan the **new/changed lines** — not just the original task locations — against those conventions. **The security map was missing here and the omission had reach:** Step 5 above has the *planner* read both maps into `## Constraints & Risks`, so this step read half of what the plan was written against, and after it nothing else read the security map before `main` — the plan reviewer routes against neither, and `/review-close` Step 2b routed against the convention map alone until its own security twin was added. This step and that twin now close the chain from both ends, and they are not redundant: this one sees **this branch in its own worktree**, that one sees the **assembled** result. Common regressions: `fetch()` without `encodeURIComponent()` on dynamic path segments; `str(e)` exposed to API responses; moved code that dropped `_sanitize_log()` wrappers; `useCallback` with incomplete dependency arrays; SELECT queries on a write-only engine. Fix regressions before committing.
 5. **Run the consumer's pre-merge verification gates.** `<project>/CLAUDE.md § Pre-merge verification` may carry `### Always` (full-tree commands) and `### Ratchet (changed files only)`. Run the commands under each subsection present. If both are absent, skip — `/review-close` will run any project-side verification at merge time (its `4a-post` step, on the merged tree). Note the division of labour: this run verifies **this branch in its own worktree** — so when the consumer ships no `## Pre-merge verification` section and this step skips, *nothing* verifies the branch in isolation; `4a-post` verifies the **assembled** result and cannot substitute for it. **One thing does still run in that case**: `4a-post` runs the Sysop pre-scan itself whether or not the consumer declared it (`Q-353`), so the promoted checks reach the merge even for a project with no declared list — on the assembled tree, which is still not this branch alone. Treat a non-zero exit like an implementation finding — fix the cause, do not silence it without a justified inline `# type: ignore[...]` or `// eslint-disable-next-line <rule> -- <reason>`.
 6. **Post-fix UI verification.** If the diff touches any `frontend/` files, run `.claude/skills/_shared/ui-verify.md`. Hard-fail on console errors and 5xx responses; warn on console warnings; skip cleanly with an explicit note if the dev server is not running, and surface that note verbatim in your final message.
 7. **Commit** — a SINGLE commit on the worktree branch, conventional message derived from the task title plus `<CLAIM_ID>`, with a `Doc-Work: <CLAIM_ID>` trailer on the final line of the body, separated by one blank line. That trailer is the deterministic marker `/sitrep` consumes to classify the branch as ready for `/review-close`.
@@ -1376,11 +1389,13 @@ PY
 
 **Read the `sealed_report:` line and say it out loud in your final message.** `ABSENT` is not a failure and must not stop the write — Step 8's read-order contract names an unregistered hook and a failed write as supported configurations — but a human reading the task body later deserves to know the verdict reached the record through a file the reviewer wrote rather than one it could not.
 
-#### 2. Commit it on `main`, under `_shared/main-push-guard.md` Rule A
+#### 2. Commit it on the default branch, under `_shared/main-push-guard.md` Rule A
+
+Resolve `<default branch>` first — `bash sysop/scripts/default_branch.sh`, run bare — and substitute what it prints.
 
 ```bash
-test "$(git rev-parse --abbrev-ref HEAD)" = "main" || {
-  echo "HEAD is not main (a concurrent actor moved it) — STOP."; exit 1; }
+test "$(git rev-parse --abbrev-ref HEAD)" = "<default branch>" || {
+  echo "HEAD is not <default branch> (a concurrent actor moved it) — STOP."; exit 1; }
 git add "<BODY_PATH_AS_RESOLVED>"
 git commit -m "plan: record reviewed plan for <CLAIM_ID>"
 ```
@@ -1422,7 +1437,7 @@ delete (`claim_task.sh` runs `git branch -D`) and a force delete of a branch car
 data loss:
 
 ```bash
-git rev-list --count main..<BRANCH_NAME>
+git rev-list --count <default branch>..<BRANCH_NAME>
 ```
 
 **Expect `0`.** Option C never commits to the branch — the planner is forbidden to, and 7a's
@@ -1455,9 +1470,11 @@ reasoned about.
 
 #### 4. Commit the release flip, again under Rule A
 
+Resolve `<default branch>` first — `bash sysop/scripts/default_branch.sh`, run bare — and substitute what it prints.
+
 ```bash
-test "$(git rev-parse --abbrev-ref HEAD)" = "main" || {
-  echo "HEAD is not main (a concurrent actor moved it) — STOP."; exit 1; }
+test "$(git rev-parse --abbrev-ref HEAD)" = "<default branch>" || {
+  echo "HEAD is not <default branch> (a concurrent actor moved it) — STOP."; exit 1; }
 git add tasks/index.yml
 git commit -m "chore: release <CLAIM_ID>"
 ```
@@ -1724,7 +1741,7 @@ worktree and NOT pushed. Run `/document-work` next. Do NOT merge to main —
 
 **The rewrite is not bookkeeping — without it the resume is a no-op that re-runs the executor.** `classification.md` still reads `verdict: PROCEED` at this point, because it had to for 7e to have been spawned at all. Leaving it there sends 7-pre's routing table to its last row, which re-spawns the executor with byte-identical inputs and gives the human's answer nowhere to land — so the one runtime path that actually produces a blocker question would never reach the row written for it.
 
-**On `STATUS: FAILED`** — print the `ERROR` verbatim, run `git log --oneline main..HEAD` and `git status --short` in the worktree and surface both. If substantive work landed despite the failure, let the human decide whether to recover or discard. **Do not auto-retry.**
+**On `STATUS: FAILED`** — print the `ERROR` verbatim, run `git log --oneline <default branch>..HEAD` and `git status --short` in the worktree and surface both. If substantive work landed despite the failure, let the human decide whether to recover or discard. **Do not auto-retry.**
 
 **On a malformed envelope** — print `Executor returned with a malformed envelope — treating as FAILED`, surface its prose body (which likely contains the implementation output), and check for an `_unparseable_*.json` diagnostic. Do not auto-retry.
 

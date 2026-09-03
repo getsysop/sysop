@@ -264,7 +264,11 @@ class TestTheClaimWritesWhereItRead:
     def test_a_claim_is_refused_when_the_primary_is_not_on_main(self, tmp_path):
         main, wt = self._split(tmp_path)
         r = _run(BATCH, wt, "1")
-        assert "Not on main" in r.stderr, r.stdout + r.stderr
+        # Phase 254 (`Q-378`): a refusal, not a warn-and-continue. The claim
+        # used to return 0 here and build branch/worktree/lock anyway.
+        assert r.returncode == 1, r.stdout + r.stderr
+        assert "is not on main" in r.stderr, r.stdout + r.stderr
+        assert "nothing was written" in r.stderr, r.stderr
         for ref in ("main", "feat/x"):
             log = subprocess.run(["git", "log", "--oneline", ref], cwd=str(main),
                                  capture_output=True, text=True).stdout
@@ -309,7 +313,9 @@ class TestTheClaimWritesWhereItRead:
         main = _project(tmp_path, TASKS)
         (main / "review_tasks.md").write_text(TASKS + "\n<!-- uncommitted -->\n")
         r = _run(BATCH, main, "1")
-        assert "Skipping batch claim" in r.stderr, r.stdout + r.stderr
+        assert r.returncode == 1, r.stdout + r.stderr
+        assert "review_tasks.md has uncommitted changes" in r.stderr, r.stdout + r.stderr
+        assert "nothing was written" in r.stderr, r.stderr
         head = subprocess.run(["git", "show", "HEAD:review_tasks.md"], cwd=str(main),
                               capture_output=True, text=True).stdout
         assert "`Pending`" in head, "a dirty primary was claimed anyway"
@@ -547,7 +553,8 @@ class TestFixtureShapesTheFirstBatteryMissed:
         (main / "review_tasks.md").write_text(TASKS + "\n<!-- staged, not committed -->\n")
         _git(main, "add", "review_tasks.md")
         r = _run(BATCH, main, "1")
-        assert "Skipping batch claim" in r.stderr, r.stdout + r.stderr
+        assert r.returncode == 1, r.stdout + r.stderr
+        assert "review_tasks.md has uncommitted changes" in r.stderr, r.stdout + r.stderr
         head = subprocess.run(["git", "show", "HEAD:review_tasks.md"], cwd=str(main),
                               capture_output=True, text=True).stdout
         assert "staged, not committed" not in head, "a staged edit was swept into the claim commit"
@@ -565,15 +572,30 @@ class TestFixtureShapesTheFirstBatteryMissed:
         assert "`In Progress`" in head, head
 
     def test_the_recovery_hint_names_the_primary(self, tmp_path):
-        """The hint exists because `--release` refuses outside the primary. Pointing
-        it at `$REPO_ROOT` sends the operator back to the checkout that was just
-        refused — and, after a `--clean`, possibly to a directory that is gone."""
+        """The hint must name the PRIMARY, not the caller's own checkout: pointing
+        it at `$REPO_ROOT` sends the operator back to the directory that was just
+        refused — and, after a `--clean`, possibly to one that is gone.
+
+        Phase 254 (`Q-378`) changed which hint this is. The arm used to write a
+        lock and then say how to clear it (`cd <primary> && … --release N`); it
+        now refuses before writing, so the hint says where the claim has to be
+        made from instead. Same invariant, different sentence — and note the
+        fixture's own topology (primary on `feat/x`, `main` held by a worktree)
+        is the case where a flat `git checkout` recipe would be refused by git,
+        which is why the message offers it as the usual case and names the
+        worktree collision underneath."""
         main = _project(tmp_path, TASKS)
         _git(main, "checkout", "-q", "-b", "feat/x")
         wt = tmp_path / "wt-main"
         _git(main, "worktree", "add", "-q", str(wt), "main")
         r = _run(BATCH, wt, "1")
-        assert f"cd {main} &&" in r.stderr, r.stderr
+        assert r.returncode == 1, r.stderr
+        assert str(main) in r.stderr, r.stderr
+        assert f"git -C {main} checkout" in r.stderr, r.stderr
+        assert "checked out in another worktree" in r.stderr, (
+            "the fixture IS that collision — the hint must not stop at a "
+            "command git will refuse here"
+        )
 
     def test_the_force_loop_reports_the_callers_own_directory(self, tmp_path):
         """`--force` has its own loop; the author's battery declared it unreached.

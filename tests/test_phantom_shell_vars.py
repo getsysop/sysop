@@ -406,9 +406,9 @@ def test_review_close_step4pre_probes_use_the_branch_name_as_a_literal():
     for probe in (
         'git fetch origin "<approved branch name>"',
         'git rev-list --count "<approved branch name>..origin/<approved branch name>"',
-        'git rev-list --count "<approved branch name>..origin/main"',
+        'git rev-list --count "<approved branch name>..origin/<default branch>"',
         'git checkout "<approved branch name>"',
-        'gh pr list --head "<approved branch name>" --base main --state open',
+        'gh pr list --head "<approved branch name>" --base <default branch> --state open',
     ):
         assert probe in text, f"Step 4-pre no longer runs: {probe!r}"
     assert "APPROVED_BRANCH=" not in text, (

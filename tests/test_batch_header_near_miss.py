@@ -142,14 +142,35 @@ NEAR_MISSES = [
     "###\tBatch 1 — Title `Pending`",         # tab after ###
     "###  Batch 1 — Title `Pending`",         # two spaces after ###
     "### Batch  1 — Title `Pending`",         # two spaces before number
+    # `Q-375`: four shapes written AT column 0 that no reader saw and nothing
+    # warned about. Each is an author meaning a batch header and losing one —
+    # the batch's tasks silently join its predecessor, which is the state
+    # `Q-371` was filed about and the state its warning did not reach.
+    "#### Batch 1 — Title `Pending`",         # h4, not h3
+    "## Batch 1 — Title `Pending`",           # h2, not h3
+    "###Batch 1 — Title `Pending`",           # no space: not a heading at all
+    "### BATCH 1 — Title `Pending`",          # wrong case
 ]
 
 NOT_A_BATCH_HEADER_AT_ALL = [
     "### A01: Broken Access Control",
     "### Some other section",
-    "#### Batch 1 — Title `Pending`",         # h4, not h3
-    "## Batch 1 — Title `Pending`",           # h2, not h3
-    "  ### Batch 1 - indented example `Pending`",   # WORKFLOW.md's blessed form
+    # **The indent is the contract, not an oversight, and this line is the one
+    # thing in this module that must not move.** `WORKFLOW.md` § 4 (line 624)
+    # ships it as a rule: "Indent the example by two spaces. `### Batch` is
+    # matched at column 0 only, so a two-space-indented example is invisible to
+    # every reader" — and it names all six. It is the sanctioned way to write a
+    # batch header in a tracker without creating a batch, preferred over a fence
+    # because Phase 208 measured fence-based separation false-firing on 98.2% of
+    # opener positions.
+    #
+    # `Q-375` proposed the opposite — it called this "the sharpest of the five"
+    # and argued from `_FENCE_OPEN_RE`'s `^ {0,3}` that the parsers should
+    # tolerate the indent. Phase 256 built that, then found this rule and
+    # reverted it: reporting an indented example is over-reporting, and BOUNDING
+    # on one would turn every correctly-written example on every consumer tracker
+    # into a live batch. The filing was wrong about its own sharpest case.
+    "  ### Batch 1 - indented example `Pending`",   # WORKFLOW.md § 4:624
 ]
 
 

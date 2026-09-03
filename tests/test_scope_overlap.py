@@ -312,22 +312,164 @@ def test_worktree_changed_paths_unions_committed_and_uncommitted(monkeypatch, tm
     assert so._worktree_changed_paths(ws) == ["src/api/new.py", "src/api/routes.py"]
 
 
-def test_worktree_changed_paths_falls_back_main_to_origin_main(monkeypatch, tmp_path):
+def test_worktree_changed_paths_diffs_against_the_RESOLVED_default_branch(
+    monkeypatch, tmp_path
+):
+    """`Q-380`: the base is whatever the repository's default branch is.
+
+    This inverts `test_worktree_changed_paths_falls_back_main_to_origin_main`,
+    which pinned the defect — an iteration over the literal pair
+    ``("main", "origin/main")``. On a `master`-default consumer neither literal
+    resolved, the committed half came back empty, and nothing said so.
+    """
     ws = str(tmp_path)
     calls: list[str] = []
+    monkeypatch.setattr(so, "_resolve_default_branch_for", lambda c: "master")
 
     def fake_run(cmd, **kw):
         if "diff" in cmd:
-            base = cmd[-1]  # e.g. "main...HEAD"
-            calls.append(base)
-            if base.startswith("main"):
-                return _FakeProc(1, "")  # main doesn't resolve
-            return _FakeProc(0, "src/x.py\n")  # origin/main resolves
+            calls.append(cmd[-1])
+            return _FakeProc(0, "src/x.py\n")
         return _FakeProc(0, "")
 
     monkeypatch.setattr(so.subprocess, "run", fake_run)
     assert so._worktree_changed_paths(ws) == ["src/x.py"]
-    assert calls == ["main...HEAD", "origin/main...HEAD"]
+    assert calls == ["master...HEAD"]
+    assert not any(c.startswith("main") or c.startswith("origin/") for c in calls)
+
+
+def test_worktree_changed_paths_skips_committed_half_when_base_unresolvable(
+    monkeypatch, tmp_path
+):
+    """An unresolvable base must NOT fall back to a literal `main` (`Q-380`).
+
+    Falling back is what produced the wrong answer; the committed half is
+    skipped and ``assess`` says so. Asserted by the absence of any ``diff``
+    call, not merely by the returned paths — a fallback that happened to
+    resolve nothing would look identical from the outside.
+    """
+    ws = str(tmp_path)
+    calls: list[str] = []
+    monkeypatch.setattr(so, "_resolve_default_branch_for", lambda c: "")
+
+    def fake_run(cmd, **kw):
+        if "diff" in cmd:
+            calls.append(cmd[-1])
+            return _FakeProc(0, "src/committed.py\n")
+        return _FakeProc(0, "?? src/u.py\n")
+
+    monkeypatch.setattr(so.subprocess, "run", fake_run)
+    assert so._worktree_changed_paths(ws) == ["src/u.py"]
+    assert calls == []
+
+
+def test_resolve_default_branch_survives_a_survey_that_exits_at_import(monkeypatch):
+    """The guarded import is load-bearing, not boilerplate (`Q-380`).
+
+    ``sitrep_survey`` resolves PyYAML at module scope and ``sys.exit(2)``s when
+    it cannot find it. An unguarded ``import sitrep_survey`` would convert this
+    module's documented "absent PyYAML degrades to a note" path into a hard
+    exit 2, breaking the never-break-the-caller contract in its own docstring.
+    ``SystemExit`` derives from ``BaseException``, so ``except Exception``
+    would not catch it — this test fails against that spelling.
+    """
+    import builtins
+
+    real_import = builtins.__import__
+
+    def exploding_import(name, *a, **kw):
+        if name == "sitrep_survey":
+            raise SystemExit(2)
+        return real_import(name, *a, **kw)
+
+    monkeypatch.delitem(__import__("sys").modules, "sitrep_survey", raising=False)
+    monkeypatch.setattr(builtins, "__import__", exploding_import)
+    assert so._resolve_default_branch_for("/tmp") == ""
+
+
+def test_assess_notes_an_unresolvable_default_branch(monkeypatch, tmp_path):
+    """The signal `Q-380` says was missing: degrading must be visible.
+
+    The pre-fix behaviour returned uncommitted-only with no note at all, so a
+    `master` consumer read a confident-looking advisory built from half the
+    evidence.
+    """
+    repo = _build_repo(
+        tmp_path,
+        _index(_task("FEAT-CAND") + _task("TECH-B")),
+        {"FEAT-CAND.md": "# FEAT-CAND\n\n## Key files\n- `a.py`\n", "TECH-B.md": "# TECH-B\n"},
+        {"TECH-B.lock": _lock("TECH-B", workspace=str(tmp_path / "ws-tb"))},
+    )
+    (tmp_path / "ws-tb").mkdir()
+    _patch_module_paths(monkeypatch, repo)
+    monkeypatch.setattr(so, "_resolve_default_branch_for", lambda c: "")
+    monkeypatch.setattr(so, "_worktree_changed_paths", lambda ws: [])
+    a = so.assess(
+        "FEAT-CAND",
+        index_path=repo / "tasks" / "index.yml",
+        base_tasks_dir=repo / "tasks",
+        project_root=repo,
+    )
+    assert any("could not resolve the default branch" in n for n in a.notes)
+    assert any("git remote set-head origin --auto" in n for n in a.notes)
+    # Names WHICH task's workspace, because the operator has to go and fix that one.
+    assert any("TECH-B" in n for n in a.notes)
+
+
+def test_the_note_follows_the_WORKSPACE_not_the_project_root(monkeypatch, tmp_path):
+    """`M2`: the gate used to ask `project_root` whether to warn about a `workspace`.
+
+    Identical for a linked worktree; NOT for `mode: clone`, which `claim_task.sh --clone`
+    creates as a separate repository. An independent lens reproduced both wrong directions
+    against real repos: a clone that could not resolve degraded SILENTLY — the exact state
+    `_worktree_changed_paths`'s docstring claims was removed — and a main repo that could
+    not resolve emitted a FALSE note whose prescribed fix runs in the wrong repository.
+
+    This pins the false direction: the root is unresolvable, every workspace resolves, and
+    the advisory must say nothing about default branches.
+    """
+    repo = _build_repo(
+        tmp_path,
+        _index(_task("FEAT-CAND") + _task("TECH-B")),
+        {"FEAT-CAND.md": "# FEAT-CAND\n\n## Key files\n- `a.py`\n", "TECH-B.md": "# TECH-B\n"},
+        {"TECH-B.lock": _lock("TECH-B", workspace=str(tmp_path / "ws-tb"))},
+    )
+    (tmp_path / "ws-tb").mkdir()
+    _patch_module_paths(monkeypatch, repo)
+    # The root cannot be resolved; the workspace can.
+    monkeypatch.setattr(so, "_resolve_default_branch_for",
+                        lambda c: "" if str(c) == str(repo) else "master")
+    monkeypatch.setattr(so, "_worktree_changed_paths", lambda ws: ["a.py"])
+    a = so.assess(
+        "FEAT-CAND",
+        index_path=repo / "tasks" / "index.yml",
+        base_tasks_dir=repo / "tasks",
+        project_root=repo,
+    )
+    assert not any("default branch" in n for n in a.notes), (
+        "warned about the project root's default branch while every in-flight workspace "
+        "resolved fine — the note describes a repository the advisory never read"
+    )
+
+
+def test_assess_stays_silent_about_the_base_when_it_resolves(monkeypatch, tmp_path):
+    """The note is a degrade signal, not a banner — a healthy repo prints none."""
+    repo = _build_repo(
+        tmp_path,
+        _index(_task("FEAT-CAND") + _task("TECH-B")),
+        {"FEAT-CAND.md": "# FEAT-CAND\n\n## Key files\n- `a.py`\n", "TECH-B.md": "# TECH-B\n"},
+        {"TECH-B.lock": _lock("TECH-B", workspace="/ws/tb")},
+    )
+    _patch_module_paths(monkeypatch, repo)
+    monkeypatch.setattr(so, "_resolve_default_branch_for", lambda c: "master")
+    monkeypatch.setattr(so, "_worktree_changed_paths", lambda ws: [])
+    a = so.assess(
+        "FEAT-CAND",
+        index_path=repo / "tasks" / "index.yml",
+        base_tasks_dir=repo / "tasks",
+        project_root=repo,
+    )
+    assert not any("default branch" in n for n in a.notes)
 
 
 def test_worktree_changed_paths_returns_empty_for_nonexistent_workspace():
@@ -591,3 +733,40 @@ def test_main_missing_index_still_returns_zero(monkeypatch, capsys, tmp_path):
     monkeypatch.setattr(so, "_worktree_changed_paths", lambda ws: [])
     assert so.main(["FEAT-CAND"]) == 0
     capsys.readouterr()
+
+
+def test_an_injected_wrapper_around_the_real_reader_still_gets_the_note(monkeypatch, tmp_path):
+    """`/auto-build` is the tree's only production injection, and it wraps the REAL reader.
+
+    The first cut gated the note on `worktree_reader is None`, justified as "an injected
+    reader means the boundary is faked". `auto-build/SKILL.md:199` passes a caching wrapper
+    around `_so._worktree_changed_paths`, so the entire `Q-380` product — a degrade that
+    announces itself — was silent on that path (Phase 255 round, guards lens).
+    """
+    ws = tmp_path / "ws-tb"
+    ws.mkdir()
+    repo = _build_repo(
+        tmp_path,
+        _index(_task("FEAT-CAND") + _task("TECH-B")),
+        {"FEAT-CAND.md": "# FEAT-CAND\n\n## Key files\n- `a.py`\n", "TECH-B.md": "# TECH-B\n"},
+        {"TECH-B.lock": _lock("TECH-B", workspace=str(ws))},
+    )
+    _patch_module_paths(monkeypatch, repo)
+    monkeypatch.setattr(so, "_resolve_default_branch_for", lambda c: "")
+    cache: dict = {}
+
+    def _wrapper(w):                       # the /auto-build shape, verbatim
+        if w not in cache:
+            cache[w] = so._worktree_changed_paths(w)
+        return cache[w]
+
+    a = so.assess(
+        "FEAT-CAND",
+        index_path=repo / "tasks" / "index.yml",
+        base_tasks_dir=repo / "tasks",
+        project_root=repo,
+        worktree_reader=_wrapper,
+    )
+    assert any("could not resolve the default branch" in n for n in a.notes), (
+        "an injected wrapper around the REAL reader got no degrade note — the note is "
+        "gated on how the reader was injected rather than on the workspace")

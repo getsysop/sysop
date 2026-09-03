@@ -1273,6 +1273,23 @@ def test_every_state_the_classifier_emits_is_documented_in_the_skill():
     # `unknown` is the initialiser, not a classification — it is what remains if
     # no arm fires, and the table describes arms.
     emitted.discard("unknown")
+    # Phase 252: `_classify_task` itself now assigns a module constant
+    # (`state = _PARKED_WIP_STATE`), not only `state = stall_state`. Resolve
+    # every identifier assignment through the module's string constants, and
+    # fail loudly on one that does not resolve — the repair below covers
+    # `_claim_stall`'s returns, and this covers the classifier's own arms.
+    module_consts = dict(
+        re.findall(r'^([A-Za-z_][A-Za-z0-9_]*) = "([^"]*)"$', src, re.MULTILINE)
+    )
+    for ident in re.findall(r'^\s+state = ([A-Za-z_][A-Za-z0-9_]*)\s*$', body, re.MULTILINE):
+        if ident == "stall_state":
+            continue  # resolved from `_claim_stall`'s returns below
+        assert ident in module_consts, (
+            f"_classify_task assigns state = {ident}, which is not a module-level "
+            f"string constant — this guard cannot resolve it, so the state would "
+            f"escape the table check"
+        )
+        emitted.add(module_consts[ident])
 
     # **Phase 237: the extraction went blind and this is the repair, not a second
     # guard.** `_claim_stall` returns its state through a module constant, so
@@ -1323,12 +1340,16 @@ def test_every_state_the_classifier_emits_is_documented_in_the_skill():
 
     # And pin the indirection itself. If a future arm assigns `state` from some
     # other local, this goes red rather than letting that state escape the table.
-    indirect = set(re.findall(r"^\s+state = ([a-z_][a-z0-9_]*)\s*$", body, re.MULTILINE))
-    assert indirect == {"stall_state"}, (
+    indirect = set(re.findall(r"^\s+state = ([A-Za-z_][A-Za-z0-9_]*)\s*$", body, re.MULTILINE))
+    # Phase 252 extended this deliberately: `_PARKED_WIP_STATE` is assigned by
+    # `_classify_task` itself (the park-with-commits arm, `Q-362`), and it is
+    # resolved above through the module's string constants — so it is pinned
+    # here by name, not admitted by a pattern.
+    assert indirect == {"stall_state", "_PARKED_WIP_STATE"}, (
         f"unexpected identifier-fed `state =` assignments in _classify_task: "
         f"{sorted(indirect)}. Each one hides its state from this guard's literal "
-        f"extraction — route it through _claim_stall, or extend this assert "
-        f"deliberately."
+        f"extraction — route it through _claim_stall, resolve it through a "
+        f"module constant above, and extend this assert deliberately."
     )
 
     # **Cross-check the extraction against a SECOND, independent count**, rather
@@ -1340,6 +1361,14 @@ def test_every_state_the_classifier_emits_is_documented_in_the_skill():
     # /review-close` is assigned twice, so a count comparison is the wrong shape;
     # what must hold is that both methods see the same states.
     loose = set(re.findall(r'state = "([^"]+)"', body)) | stall_states
+    # The unanchored twin of the constant resolution above — a different regex
+    # over the same body, so an assignment one extraction loses is still seen
+    # by the other.
+    loose |= {
+        module_consts[i]
+        for i in re.findall(r'state = ([A-Z_][A-Z0-9_]*)', body)
+        if i in module_consts
+    }
     loose.discard("unknown")
     assert emitted == loose, (
         f"the two extractions disagree — the anchored one is missing "

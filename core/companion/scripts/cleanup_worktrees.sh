@@ -26,7 +26,7 @@
 #   MAIN   — the repo's PRIMARY worktree (never touched). Resolved via
 #            git-common-dir, so it is the same worktree no matter which one
 #            this script is run from.
-#   MERGED — branch is ancestor of main (safe to remove)
+#   MERGED — branch is ancestor of the default branch (safe to remove)
 #   ACTIVE — has uncommitted changes, or holds sysop/runtime/ artifacts
 #            (skipped by --clean)
 #   STALE  — directory missing (pruned automatically)
@@ -46,9 +46,16 @@ REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || {
 # targeted the primary instead; git refuses (`fatal: … is a main working tree`),
 # so nothing was ever lost, but the run exited 1 having cleaned nothing.
 #
-# That was the prescribed path, not an edge case: batch_work.sh:1285 prints
-# `cd ${WORKTREE_DIR}` and batch_work.sh:1290 names this script five lines later,
-# so an operator following those "Next steps" in one shell hit it every time.
+# That was the prescribed path, not an edge case: `batch_work.sh`'s claim summary
+# box prints `cd ${WORKTREE_DIR}` under "Next steps" and names this script a few
+# lines below it as the cleanup command, so an operator following those steps in
+# one shell hit it every time.
+#
+# Cited by NAME rather than by line on purpose. Phase 256 re-pointed these two
+# anchors three times in one phase as `batch_work.sh` grew, which is the signal
+# `tests/test_intra_repo_citations.py` exists to produce and the point at which
+# its own guidance says to stop citing lines. `grep -n 'Next steps' batch_work.sh`
+# finds the block in one command.
 #
 # Resolution, and why it is deliberately NOT the
 # `dirname "$(git rev-parse --git-common-dir)"` idiom five sibling SHELL scripts use
@@ -106,6 +113,22 @@ if [[ ! -d "$MAIN_ROOT" ]]; then
   exit 1
 fi
 
+# ── The default branch (`Q-365`) ──────────────────────────────
+# `classify_worktree` hard-coded `main` as the branch a worktree's branch had to
+# be an ancestor of, and both removal modes hard-coded it as the one branch
+# never to `git branch -d`. On a `master`-default repo `--is-ancestor X main`
+# errors, the error is swallowed, and every worktree classified ACTIVE — so
+# `--clean` reclaimed nothing and said nothing. Required in every mode, like
+# the primary-checkout probe above: the listing's MERGED/ACTIVE column is the
+# same predicate the removal modes act on, and a listing that cannot compute
+# it would print a verdict it does not have.
+source "$(dirname "${BASH_SOURCE[0]}")/_git_lib.sh" || {
+  echo "❌ _git_lib.sh is missing beside cleanup_worktrees.sh — it ships with every install." >&2
+  echo "   Restore the scripts directory: bash sysop/scripts/sysop-update.sh" >&2
+  exit 1
+}
+DEFAULT_BRANCH="$(require_default_branch "$MAIN_ROOT")" || exit 1
+
 # Anchor the process at the primary before anything removes a directory. A
 # worktree is removable while it IS the current directory — git exits 0 and
 # deletes it (measured) — and the bare `git worktree prune` closing each
@@ -156,7 +179,7 @@ git worktree prune
 # Every other probe in this script — `status --porcelain` below, `ls-files
 # --others --exclude-standard` in the classifier — EXCLUDES gitignored content,
 # and `sysop/runtime/` is gitignored by construction: it is the first of the three
-# entries `install.sh`'s `ensure_runtime_gitignore` appends (`install.sh:3484`; the
+# entries `install.sh`'s `ensure_runtime_gitignore` appends (see that function; the
 # others are `.claude/review_index.json` and `sysop/**/__pycache__/`). So the park record
 # `/auto-build` writes inside the worktree — `sysop/runtime/auto-build/plan.md`
 # and `review.md` — was invisible to all of them. A parked task's branch carries
@@ -200,7 +223,7 @@ note_if_invocation_worktree() {
 classify_worktree() {
   local wt_path="$1"
   local wt_branch="$2"
-  local main_branch="main"
+  local main_branch="$DEFAULT_BRANCH"
 
   # The primary worktree. `$MAIN_ROOT`, never `$REPO_ROOT`: the latter is
   # whichever worktree the caller happened to be standing in, which is how this
@@ -245,7 +268,7 @@ classify_worktree() {
     return
   fi
 
-  # Branch merged into main?
+  # Branch merged into the default branch?
   if [[ -n "$wt_branch" ]] && git merge-base --is-ancestor "$wt_branch" "$main_branch" 2>/dev/null; then
     echo "MERGED"
     return
@@ -347,7 +370,7 @@ if [[ "$ACTION" == "--clean" ]]; then
       fi
 
       # Delete merged branch (safe -d, not -D)
-      if [[ -n "$wt_branch" && "$wt_branch" != "main" ]]; then
+      if [[ -n "$wt_branch" && "$wt_branch" != "$DEFAULT_BRANCH" ]]; then
         git branch -d "$wt_branch" 2>/dev/null && \
           echo "   🌿 Deleted merged branch: ${wt_branch}" || \
           echo "   ℹ️  Branch '${wt_branch}' not deleted (not fully merged or still in use)"
@@ -431,7 +454,7 @@ if [[ "$ACTION" == "--force" ]]; then
       continue
     fi
 
-    if [[ -n "$wt_branch" && "$wt_branch" != "main" ]]; then
+    if [[ -n "$wt_branch" && "$wt_branch" != "$DEFAULT_BRANCH" ]]; then
       git branch -d "$wt_branch" 2>/dev/null && \
         echo "   🌿 Deleted branch: ${wt_branch}" || \
         echo "   ℹ️  Branch '${wt_branch}' not deleted (not fully merged)"

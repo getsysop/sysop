@@ -91,7 +91,7 @@ def _repo(root, tasks, *, with_index=True):
     (root / ".gitignore").write_text(".claude/review_index.json\n")
     sd = root / "sysop" / "scripts"
     sd.mkdir(parents=True, exist_ok=True)
-    names = ["close_batch.sh", "_log.py"] + (["review_index.py"] if with_index else [])
+    names = ["close_batch.sh", "_log.py", "_git_lib.sh"] + (["review_index.py"] if with_index else [])
     for name in names:
         src = SCRIPTS / name
         if src.exists():
