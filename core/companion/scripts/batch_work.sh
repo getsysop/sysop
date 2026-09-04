@@ -644,7 +644,50 @@ fi
 # ── Helper: claim a Pending batch on main ─────────────────────
 # Marks the batch as In Progress in review_tasks.md and commits on main.
 # Skips gracefully if not on main, tree is dirty, or batch is already claimed.
+# `claim_batch` is a thin serializing wrapper; the body is `_claim_batch_locked`.
+#
+# The whole read-modify-write-commit is the critical section, not just the
+# commit: the measured failure is claim B's `sed` reading claim A's UNCOMMITTED
+# flip off the shared worktree and A's pathspec commit then recording both, so a
+# narrower window still loses the edit. The pre-claim pull is inside it too — it
+# moves the base the flip commits onto.
+#
+# A wrapper rather than an acquire/release pair inline, because the body has eight
+# early returns and this function already spends its RETURN trap on the tempfile
+# (`trap - RETURN` below would clear a second one). The wrapper releases on every
+# path the body can leave by; the EXIT trap armed at the call site covers the one
+# it cannot — `set -e` killing the script mid-section.
 claim_batch() {
+  local rc=0
+  local _locks_dir=""
+  _locks_dir="$(resolve_locks_dir 2>/dev/null)" || _locks_dir=""
+  tracker_lock_acquire "$_locks_dir" "the claim of Batch ${1}" \
+    "nothing was written: no flip, no branch, no worktree, no lock" || return 1
+  # An EXIT trap, because the comment above USED to claim one was "armed at the
+  # call site" and no such trap existed — a reviewer grepped and found only the
+  # INT/TERM pair. INT/TERM alone also misses SIGHUP, which is the terminal
+  # closing, the SSH session dropping and the tmux window being killed: measured,
+  # that leaked the mutex and wedged every later claim, while `close_batch.sh`
+  # survived the same signal because it has a real EXIT trap. EXIT covers HUP,
+  # TERM and INT together, so it is strictly more than the pair it replaces.
+  trap 'tracker_lock_release' EXIT
+  trap 'tracker_lock_release; exit 130' INT TERM
+  # `|| rc=$?` also suppresses errexit for the whole body — which is what the
+  # call site's own `|| exit 1` already did before this wrapper existed, so the
+  # body's error handling is unchanged rather than newly relaxed.
+  _claim_batch_locked "$@" || rc=$?
+  trap - INT TERM
+  # The EXIT trap is deliberately NOT disarmed. `tracker_lock_release` is
+  # idempotent — it returns immediately once `TRACKER_LOCK_FILE` is empty — so
+  # leaving it armed costs a no-op at script exit and buys coverage of every path
+  # between here and the end of the script. Disarming it would also reintroduce a
+  # bare `trap - EXIT` into this file, which is the pattern that silently cleared
+  # a whole handler in `close_batch.sh` and which the guard now forbids in both.
+  tracker_lock_release
+  return "$rc"
+}
+
+_claim_batch_locked() {
   local batch_num="$1"
   local batch_status="$2"
 
@@ -955,6 +998,28 @@ if [[ "${1:-}" == "--release" ]]; then
     exit 1
   fi
 
+  # ── Serialize the release too (`Q-387`, found by this phase's round) ────
+  #
+  # `--release` is the THIRD writer of review_tasks.md and the second one inside
+  # this file: below it does the same `sed` → tempfile → `mv` → `git commit --
+  # review_tasks.md` the claim does. The first cut of this phase locked
+  # `claim_batch` and left this path open, and the record's "both writers of
+  # review_tasks.md" was wrong on its own file. Two reviewers reproduced it
+  # independently — a `--release` racing a claim was defective in 7 of 8 and
+  # 12 of 12 trials, producing both of `Q-387`'s symptoms: a batch committed
+  # under a message denying it, and an orphan lock over a `Pending` batch that
+  # `next_task.py` then skips forever while this script's own preflight refuses
+  # to re-claim it. `--release` is not exotic: `/claim-task` prescribes it as the
+  # abandon outcome, and `/roadmap` and `/review-close` both relay it.
+  #
+  # Acquired here — before the worktree removal below, not just around the
+  # rewrite — because the mutations this phase's battery ran on the claim showed
+  # that a section drawn narrowly enough to look right still races.
+  REL_LOCKS_DIR="$(resolve_locks_dir 2>/dev/null)" || REL_LOCKS_DIR=""
+  tracker_lock_acquire "$REL_LOCKS_DIR" "the release of Batch ${REL_NUM}" \
+    "nothing was released — the claim is intact" || exit 1
+  trap 'rm -f "${REL_TMP:-}" 2>/dev/null; tracker_lock_release' EXIT
+
   # Q-037: as early as the number is known, and before any state is read or
   # written. `--force` is parsed above but cannot reach past this, matching the
   # fence refusal's placement rule for the same reason: --force already admits
@@ -1227,13 +1292,18 @@ if [[ "${1:-}" == "--release" ]]; then
   # filing named only the claim site, and a class fixed at one of its two call
   # sites is the shape `Q-020`'s structural note is about.
   REL_TMP="${TASKS_FILE%.md}.$$.md.tmp"
-  trap 'rm -f "$REL_TMP"' EXIT
+  # No trap here, and no `trap - EXIT` after the `mv`: the combined handler armed
+  # at the acquire above already removes `$REL_TMP` and releases the mutex. A bare
+  # `trap - EXIT` clears the WHOLE handler, so leaving this pair in place would
+  # silently disarm the release — the same class the close path hit, flagged here
+  # by a reviewer as latent the moment this path took the lock. It is no longer
+  # latent, so it is no longer a bare disarm.
   sed -e "${REL_START}s/\`${REL_STATUS}\`/\`Pending\`/" \
       -e "${REL_START},${REL_END}s#^- \[/\]#- [ ]#" \
       -e "/Batch ${REL_NUM})/s/| ${REL_STATUS} |/| Pending |/" \
       "$TASKS_FILE" > "$REL_TMP"
   mv -- "$REL_TMP" "$TASKS_FILE"
-  trap - EXIT
+  REL_TMP=""
 
   # Repo-anchored AND pathspec-scoped. Anchored because a bare pathspec is
   # CWD-relative — from a subdirectory this failed `fatal: pathspec ... did not

@@ -162,7 +162,9 @@ Here's what it does, and why each part matters:
 - **Claims the task** — flips it to `in_progress` and takes a lock so parallel sessions
   don't collide.
 - **Creates an isolated worktree** — a sibling checkout at `../<your-project>-feat-…` on a
-  fresh feature branch. Your main checkout stays untouched; you can keep working in it.
+  fresh feature branch. Every line of *code* it writes lands there, not in your main
+  checkout. Your main checkout isn't left completely untouched, though — a claim
+  commits the `in_progress` flip above to it. You can keep working in it.
 - **Looks up the conventions that apply** to the files it's about to touch (from
   `.claude/convention_map.md`), so it follows your project's learned rules instead of
   generic defaults.

@@ -3635,7 +3635,13 @@ ensure_runtime_gitignore() {
   # shallow one). Naming only the shallow
   # path leaves that one untracked-and-unignored, which is the shape the filing
   # proposed. The glob covers both plus any vendor subdir added later. Phase 212.
-  local -a want=("sysop/runtime/" ".claude/review_index.json" "sysop/**/__pycache__/")
+  # `.claude/review_index.json.*.tmp` is a separate entry, not covered by the
+  # line above: the literal path does not match `review_index.json.<pid>.tmp`.
+  # Phase 258 PID-qualified that tempfile and a round measured the consequence —
+  # a killed writer leaks a file that is untracked AND unignored, one per pid,
+  # accumulating in the consumer's `git status`. The writer now cleans up in a
+  # `finally`, so this covers only the crash it cannot reach (SIGKILL mid-write).
+  local -a want=("sysop/runtime/" ".claude/review_index.json" ".claude/review_index.json.*.tmp" "sysop/**/__pycache__/")
   local -a missing=()
   local entry
   for entry in "${want[@]}"; do

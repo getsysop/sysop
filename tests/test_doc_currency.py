@@ -238,3 +238,101 @@ def test_a_dated_phase_reference_in_prose_is_not_a_stamp():
     assert monograph_phase_sites(with_prose)["colophon stamp"] == before, (
         "a dated phase reference in body prose was counted as a currency stamp"
     )
+
+
+# --------------------------------------------------------------------------
+# docs/history.md — the timeline, and the one number in it that rots.
+#
+# Phase 259 found this page stale in a way no citation grep sees: its terminal
+# entry said "Aug 2026" in September. Nothing in `tests/` read this file at all.
+#
+# Its suite total is the subtler half, and the first version of this comment got
+# it wrong in a way worth keeping: it called "past 4,900 tests" *several hundred
+# short*, which is only true against the source suite (Phase 250's August cut
+# measured 5,448) and not against the sterilized mirror the same cut measured at
+# 4,983. Two populations, one sentence. The number is not false either way — it
+# is a floor — so the ratchet below is not about accuracy at all. It is about the
+# terminal bullet being a claim that goes stale on its own.
+#
+# The ratchet is Phase 118's, applied one file over. A total in a bullet that
+# describes a CLOSED month is a historical fact and stays; a total in the
+# TERMINAL bullet is a claim about now, and it is false the week after it is
+# written. So the guard is scoped to the terminal entry rather than to the page
+# — the narrower rule, and the one that does not force the history out of a
+# history page.
+#
+# NOT MECHANIZED, and stated rather than left to be discovered: nothing here
+# checks that the terminal entry names a RECENT month. Every shape of that test
+# was either flaky (it fails on a quiet fortnight) or circular (it derives
+# "current" from the file it is checking). The recency of this page is a
+# currency-pass responsibility, and this comment is the handoff.
+# --------------------------------------------------------------------------
+
+HISTORY = "docs/history.md"
+
+# The shapes a suite total takes. The first version required comma-grouping and
+# `tests` immediately after whitespace, and its own comment claimed it handled
+# `"900+ tests"` — which it did not match, and which is live on the page. A round
+# also walked `6100 tests` and `4,900 automated tests` through it. Widened to
+# four digits or comma-grouped, with a short qualifier allowed between.
+SUITE_TOTAL_CLAIM = re.compile(
+    r"\b\d[\d,]{2,}\+?(?:\s+[a-z-]+){0,2}\s+tests?\b", re.I)
+
+
+def _history_bullets():
+    """The timeline's top-level bullets, in order.
+
+    The TAIL — everything after the last bullet — is appended to the final
+    entry rather than dropped. A round pointed out that the page's closing
+    prose is the natural home for a "current state" number and sat entirely
+    outside the population, so a total moved three lines down was invisible.
+    """
+    out = []
+    tail = []
+    for line in _read(HISTORY).splitlines():
+        if line.startswith("- **"):
+            out.append(line)
+            tail = []
+        elif out and line.startswith("  "):
+            out[-1] += " " + line.strip()
+        elif out:
+            tail.append(line.strip())
+    assert out, f"{HISTORY} has no timeline bullets; this guard has gone vacuous"
+    out[-1] += " " + " ".join(tail)
+    return out
+
+
+def test_the_history_timeline_is_still_parseable():
+    """Vacuity control. A reformat that stops matching `- **` would empty the
+    bullet list and make every assertion below pass over nothing — which is the
+    decorative-guard shape this repo keeps finding in its own checks.
+    """
+    bullets = _history_bullets()
+    assert len(bullets) >= 5, f"only {len(bullets)} timeline bullets found"
+    # Exercised against a SYNTHETIC string, not against whatever the page happens
+    # to say. Keying this on a live bullet made a copy edit to a closed month —
+    # "4,900 tests" to "4,900 automated tests" — redden CI on a prose page, which
+    # is the over-strict direction that gets a correct guard deleted rather than
+    # fixed. A round measured that as one of three false kills.
+    assert SUITE_TOTAL_CLAIM.search("the suite passed 5,973 tests"), (
+        "the detector no longer matches an ordinary suite-total sentence, so the "
+        "ratchet below would pass over one"
+    )
+
+
+def test_the_terminal_history_entry_carries_no_suite_total():
+    """The number that is false the week after it is written.
+
+    An earlier bullet may quote a total: "900+ tests by mid-July" describes a
+    month that has ended and cannot become wrong. The LAST bullet is a claim
+    about the present, and this page's version of it was stale by several
+    hundred while the same month's cut record carried the measured figure.
+    """
+    last = _history_bullets()[-1]
+    hit = SUITE_TOTAL_CLAIM.search(last)
+    assert not hit, (
+        f"the terminal entry of {HISTORY} states a suite total ({hit.group(0)!r}). "
+        "That number is false the week after it is written and nothing re-derives "
+        "it. Say what changed, not how many tests there are — or close the entry "
+        "with a month and open a new one"
+    )

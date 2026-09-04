@@ -23,7 +23,8 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 INSTALL_SH = REPO_ROOT / "install.sh"
-WANT = ("sysop/runtime/", ".claude/review_index.json", "sysop/**/__pycache__/")
+WANT = ("sysop/runtime/", ".claude/review_index.json",
+        ".claude/review_index.json.*.tmp", "sysop/**/__pycache__/")
 # The pre-133 per-dir entries — the installer must no longer append these.
 OLD_DOT_DIRS = (".subagent-envelopes/", ".auto-build/", ".pending-docs/", ".locks/")
 

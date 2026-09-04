@@ -1055,22 +1055,53 @@ def _build_summary(batches):
 def write_index(data, path=None):
     """Write the parsed data to the JSON index file.
 
-    Atomic rewrite via `<path>.tmp` + `os.replace` so a crash mid-write
+    Atomic rewrite via `<path>.<pid>.tmp` + `os.replace` so a crash mid-write
     cannot leave truncated JSON that `read_index` would then raise on.
     See CLAUDE.md § Data integrity.
+
+    PID-qualified (`Q-387`, Phase 258 — the third instance of `Q-382`'s class,
+    after `batch_work.sh` and `close_batch.sh`). A FIXED `<path>.tmp` is the same
+    path for every concurrent process, and this function runs on the READ path:
+    `ensure_fresh()` calls it whenever the index is staler than the Markdown, so
+    two concurrent `--list`/`--range` readers both write the one tempfile and the
+    loser's `os.replace` raises `FileNotFoundError` because the winner already
+    consumed it. Measured, not reasoned about: over two independent measurements
+    it crashed `review_index.py` in **50 of 60** claim-path trials and 26 of 30 in
+    an isolated reader race, so the caller reported "Batch N not found in
+    review_tasks.md" for a batch that was plainly there. (An earlier draft of this
+    docstring said "every trial" — a universal that shipped to consumers until a
+    reviewer measured it. It is common, not universal.)
+    That is why serializing the WRITERS was not sufficient on its own — this one
+    fires before a claim reaches any lock.
     """
     path = path or INDEX_FILE
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp_path = path + ".tmp"
+    tmp_path = "%s.%d.tmp" % (path, os.getpid())
     # ``errors=`` applies to decoding, not encoding; dropping the param
     # rather than switching to ``"strict"`` mirrors the standard-library
     # default for write-mode handles.
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
-        f.write("\n")
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp_path, path)
+    # `try/finally`, because PID-qualifying traded a BOUNDED orphan for an
+    # unbounded one and a reviewer measured it: pre-change, a repeatedly failing
+    # write left exactly one `review_index.json.tmp`, overwritten each run;
+    # post-change each failing process leaked its own. Worse, `install.sh` seeds
+    # the gitignore line as the literal path `.claude/review_index.json`, which
+    # does not match `...json.<pid>.tmp` — so the leaked files are untracked AND
+    # unignored, and they accumulate in the consumer's `git status`. The close
+    # path's tempfile got exactly this reasoning (its name keeps `.md.tmp` so the
+    # orphan class still recognises it) and this site did not.
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
+    finally:
+        if os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
 
 
 def read_index(path=None):

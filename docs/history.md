@@ -32,11 +32,28 @@ that it's a working log written for the project's own continuity, not an introdu
 - **Aug 2026** — A sustained defect sweep, sequenced by who meets the problem first: the loop
   surface a newcomer sees in their first hour, then the close path, then the batch machinery
   underneath both. The install path was certified by running it from a cold clone rather
-  than assumed to work, and the test suite went past 4,900 tests. The pattern worth reporting is the one that
+  than assumed to work, and the month ended with the suite past 4,900 tests. The pattern worth reporting is the one that
   held throughout: six phases in this stretch built a mechanism, had their own review round
   reject it, and shipped the round's record instead of the mechanism — one of them shipping
   nothing else at all. A review gate strong enough to reject the work of the person running it,
   with the rejection written down, is the thing the rest of this is trying to buy.
+- **Sep 2026** — Two findings about things that had been assumed rather than checked. The
+  claim path turned out not to survive concurrent use: two sessions claiming at the same
+  moment share one checkout, so the second one's rewrite of the shared tracker quietly
+  includes the first one's uncommitted edit, and whichever commits first commits both. The
+  other run then has nothing to commit, fails, and reports that nothing was claimed — over a
+  status change that had in fact just landed. In 97 of 100 trials a harness ran; three got
+  through, which is the part worth stating, because an intermittent failure is the kind a
+  team argues about rather than fixes. Worktree isolation had been quietly read as isolation of the whole operation, on this
+  project's own documentation pages included. Claims and closes now take a lock before they
+  touch the tracker, and a lock left behind by a killed process is refused rather than broken:
+  a claim's critical section contains a network fetch, so a live holder and a dead one look
+  alike, and breaking it blind would restore the bug. Two members of the same class are known,
+  unfixed and written down. Separately, the publication path's last unread surface was closed —
+  every other gate here read a file tree or a path, and the one that read a commit read only
+  its author and committer addresses, so nothing had ever read a commit *message*,
+  while a squash-merge folds a pull request's title and body into a public commit that a
+  force-push cannot take back.
 
 Where to go next: [the monograph](./workflow.html) for why it's built this way,
 [one rule, end to end](./one-rule.md) for the evidence trail behind a single rule, and
