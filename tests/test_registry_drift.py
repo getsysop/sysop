@@ -31,8 +31,10 @@ sys.path.insert(0, str(REPO_ROOT / "tools"))
 # reddens the whole run, and on the public snapshot PR that is the required
 # `pytest` check going red on a tree nobody can fix from the mirror. Excluding the
 # file from the mirror instead was considered and rejected: it needs five gate
-# sites rather than three, and it falsifies the "eleven arms" count at four
-# maintainer-doc sites. In the source repo this line is an exact no-op.
+# sites rather than three, and it falsified the then-"eleven arms" count at four
+# maintainer-doc sites. (Phase 259 excluded a different module and paid exactly
+# that cost — seven sites, and the count is twelve now. The reasoning held; only
+# the number moved.) In the source repo this line is an exact no-op.
 registry_drift = pytest.importorskip(
     "registry_drift",
     reason="tools/registry_drift.py is maintainer-side and excluded from the "

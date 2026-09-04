@@ -26642,3 +26642,917 @@ could break.
 measured at a branch commit, and the shipping cut runs from merged `main` at a SHA that does
 not exist while this branch is open. They are recorded in `REVIEW_CHECKLIST.md` § *Before
 announce* in a post-merge commit — the mechanism Phase 239 established and Phase 250 used.
+
+### The cut, as executed
+
+Cut SHA **`87a53a0`**, merged `main`. Every gate re-run there rather than inherited from the
+branch preflight, and the numbers moved where they should have: Pass 2b's live count went
+242 (the record's own new prose is inside it), and both builders resolved to tree
+**`73ee45d`** rather than the preflight's `f162ffe`, because two record commits touch shipped
+`PHASE_LOG.md`.
+
+Published: public **`acd7370`**, tester **`90e3ce7`**, **both resolving to tree `73ee45d`,
+376 files**, verified on cold clones of both repos from a third directory after the push —
+along with the absence of `tools/`, `CLAUDE.md` and both queue files from the public tree.
+
+**Order was tester-first, and it is not arbitrary.** `reset --soft origin/main` re-parents the
+snapshot onto public history, which destroys the fresh-root property the tester repo requires;
+the tester force-push therefore has to precede it, or run from the separate gate build dir.
+This cut did both — tester from the step-2 build, public from the gate build.
+
+**`Q-392` was mitigated by hand, and the mitigation paid for itself.** No pass reads a
+published commit's message, and the publish sequence prompts the operator to author one. The
+snapshot title and PR body were checked against the Pass-1a token list, the Pass-1b home-path
+pattern, the stripped-path class and the issue-number class — all zero — and the check caught
+a wrong phase count in the body before it became an immutable public commit. **That is a
+manual check standing in where a gate should be**, which is the whole argument of the filing.
+
+**The tester half has no CI.** It shipped on the local gates alone. That is the documented
+shape rather than a gap, and it is the reason the full battery was re-run at the shipping SHA
+instead of resting on the preflight.
+
+## Phase 258 — the claim path does not survive concurrency (`Q-387`)
+
+Wade took `Q-387` at the open over the monograph currency pass, on the brief's own
+recommendation and the runway's `Q-387` **or** the monograph line. The reasoning stated at
+the open: it is consumer-facing, a consumer can hit it today, and `Q-354`'s paused
+overnight-agent discussion records it as a **prerequisite** rather than a queue item — *one
+at a time* is the only safe configuration while concurrent claims strand a batch, and any
+future parallelism hits it immediately.
+
+### The brief was wrong about the board, in the way its own header warns about
+
+The brief calls `Q-387` "the only open § High". There are two. It names `Q-392` as § High
+four paragraphs later, and `tools/ANNOUNCE_RUNWAY.md`'s own 2026-09-03 amendment says *"Its
+round filed one § High out of it, so the announce clock is reset: `Q-392`."* The derivation
+the brief itself prints returns `2`. This is the twelfth edition of a page whose header says
+**"a brief is a filing too, and it gets read with the same suspicion"**, and the sentence that
+ranks the work is the one that was wrong. It did not change the choice — `Q-387` is still the
+sharper item — but a brief that miscounts the board is how the *next* slot gets argued from a
+state that does not exist. Wade's call at the open routed `Q-392` to ride with the monograph
+pass instead, on the grounds that both are publication-surface work.
+
+### The filing was wrong about its own severity, and wrong in the safe direction
+
+`Q-387` reports the defect at "about half of trials — 4 of 8 by the author and 6 of 10
+PRE-fix by the reviewer". A saved harness (`tests/test_tracker_write_mutex.py`, and the
+scratch driver it grew out of) measured it two ways:
+
+* on **the filing's own criterion** — a batch committed `In Progress` holding no lock —
+  **5 of 40**, or 12.5%. Not half.
+* on **the criterion that matters** — did both concurrent claims actually succeed — **40 of
+  40 defective**. Two concurrent claims on different batches never both worked.
+
+The filing was counting the one symptom it had noticed. The honest headline is not "half the
+time a batch strands"; it is **that a pair of concurrent claims almost never both
+succeed**, and the stranding is one of several ways it fails. The 40-of-40 sample is
+reproducible — a reviewer re-measured 40 of 40 on their own harness — but the universal
+is not: over 100 trials the same reviewer measured **97 defective**, so "never" is wrong
+and this entry said it. Three of a hundred get through. A second symptom the filing does not name also
+appears: an **orphan lock** — a batch holding a `BATCH-N.lock` whose flip was never
+committed. That one is arguably worse, because `next_task.py` skips a locked batch
+forever, so the batch reads `Pending` and is permanently unofferable. **It is
+uncommon**: an independent reviewer measured it in 3 of 100 pre-fix trials. An earlier
+draft of this entry said it "appeared in every defective trial, paired with the first",
+which was both false and self-contradictory — a symptom *paired* with a 5-of-40 event
+cannot occur 40 of 40, and the round is what noticed the arithmetic.
+
+### Three causes, not one, and the filed one was not sufficient
+
+The filing's fix shape — "serialize the read-modify-write-commit under a lock, or
+compare-and-swap on the tracker blob" — names one cause. Running it found three.
+
+**1. The unlocked read-modify-write-commit.** As filed. The mechanism, which the filing does
+not state and which decides the fix shape: both claims share one working tree, so claim B's
+`sed` reads `review_tasks.md` **including claim A's uncommitted flip** and writes both back,
+and A's pathspec `git commit -- review_tasks.md` records BOTH. B's commit then has nothing to
+commit, exits non-zero, prints *"the claim was rolled back, nothing was claimed"*, and its
+`git checkout --` restores from a state that already contains B's flip.
+
+**This defeats the compare-and-swap half of the filing's fix shape *as the current code would
+implement it*** — and that qualifier is the round's, replacing a flat "refutes" this entry
+carried first. Within the existing sequence there is no point where B holds a blob it could
+have compared and swapped: its edit was swallowed by A's commit before it ever reached one,
+because the read came from the shared worktree and was already contaminated.
+
+**But a CAS design is not obliged to keep that sequence, and a reviewer built one that works.**
+Reading the committed blob (`git show HEAD:review_tasks.md`) instead of the worktree, staging
+through a private `GIT_INDEX_FILE`, and installing with `git update-ref <ref> <new> <old>` —
+git's own compare-and-swap — measured **40 of 40 trials clean from one shared working tree**.
+So the honest argument for the lock is that it is **far simpler**, not that it is the only
+thing that could work: the CAS route needs a private index, a hand-built commit and a worktree
+resync afterwards, against a primitive both writers already share. Choosing it on simplicity is
+a defensible engineering call; asserting it was forced is a false one, and this entry asserted
+it until the round measured otherwise.
+
+**2. `review_index.py.write_index()` used a fixed `<path>.tmp`** — the third instance of
+`Q-382`'s class, after `batch_work.sh` (fixed by Phase 256) and `close_batch.sh` (below).
+This one is on the **read** path: `ensure_fresh()` writes the index whenever it is staler than
+the Markdown, so two concurrent `--list`/`--range` readers both wrote the one tempfile and the
+loser's `os.replace` raised `FileNotFoundError`. It surfaced as **"Batch N not found in
+review_tasks.md"** for a batch plainly present. **This is why a lock alone was not sufficient:
+it fires before a claim reaches any lock**, and a first cut that shipped only the mutex
+measured 0 defects while one claim was silently dying here every time.
+
+**3. `close_batch.sh`'s two fixed `${TASKS_FILE}.tmp` sites** — the un-ported half of Phase
+256's `Q-382` fix. Phase 256 PID-qualified the claim path's tempfile and left the other writer
+of the same file on the shared name. **This one is a third instance of the CLASS, not a third
+cause of the measured defect**, and the distinction is the round's: two concurrent claims never
+invoke `close_batch.sh`, so nothing in the 40-of-40 measurement runs through it. It is fixed
+because it is the same latent shape in the other writer, not because it produced the symptom.
+
+### The mutex, and the three decisions inside it
+
+`tracker_lock_acquire` / `tracker_lock_release` in `_git_lib.sh` — the one sourced helper,
+which both writers already source, established as such by Phase 251 on Wade's call.
+
+**`set -C` noclobber, not `flock`.** There is no `flock` on macOS and this tree has a hard
+bash 3.2 floor (`self_check.sh`, `_git_lib.sh`'s own header). `claim_task.sh`'s lock write is
+the in-repo precedent, and this borrows its discriminate-before-naming-a-cause discipline:
+noclobber refuses because the file exists, everything else (EACCES, read-only fs, ENOSPC)
+refuses because the write could not happen — and reporting a rival that does not exist sends
+the operator hunting for nothing.
+
+**Bounded wait, then refuse loudly. No auto-break.** Wade's call at the open, from three
+options. The critical section is milliseconds, so a lock older than the wait is a corpse — but
+the operator makes that call, not the script. An auto-break is a path a reviewer must trust on
+every run to save a hand-removal that happens almost never, and a PID liveness check is
+unsound the moment a checkout is shared across containers. The refusal names the holder and
+prints the `rm -f` that clears it.
+
+**Anchored on the shared locks dir, not on either script's own root — and this was nearly the
+phase's shipped defect.** The first cut passed `$MAIN_ROOT`. `batch_work.sh` records that
+`resolve_main_root` and `resolve_primary_worktree` disagree, and that changing one script
+alone would *"put two scripts' locks in different places in precisely the layouts where both
+are currently wrong-but-agreeing, which is worse than wrong-and-agreeing."* A mutex whose two
+holders compute different paths is not a mutex. It now takes the locks dir both writers
+already share, so agreement is structural: if the batch locks agree, the mutex agrees.
+
+**One combined EXIT trap in `close_batch.sh`**, replacing three arm/disarm pairs. `trap - EXIT`
+clears the *whole* handler, so a lock-release trap armed before the loop would have been
+silently disarmed by the first rewrite that finished — and the mutex would then survive the
+process and wedge every later close. Folding both jobs into one handler removes the class
+rather than ordering around it; the site that deliberately keeps its tempfile for inspection
+now clears `TMP_FILE` instead of the trap.
+
+### Measured
+
+**Pre-fix 40 of 40 trials defective; post-fix 0 of 100.** Both on the full criterion (each
+batch committed `In Progress`, with a lock and a branch), plus a check that the mutex does not
+survive the run.
+
+### Four things this phase got wrong about itself before anything else caught them
+
+**The first post-fix measurement was vacuous, and scored a perfect 0.** The harness counted
+failure signatures with no positive assertion, so it passed when *both* claims failed. Adding
+"both must actually be claimed" is what exposed cause 2 — and it invalidated the pre-fix
+baseline too, which was re-measured rather than kept. A harness that only counts bad outcomes
+passes when there are no outcomes at all.
+
+**The flagship detector was weak in exactly the configuration CI uses.** Run serially, the
+concurrency class fails 9 of 9 against pre-fix source. Run under the suite's own `-n auto`,
+the *same* pre-fix source passed 5 of 6 — xdist saturates the machine, the two claims get
+scheduled far enough apart that the winner finishes its whole critical section before the
+loser starts, and the window never opens. A defect that exists only when two processes
+interleave stops being detectable exactly when nothing lets them interleave. Restructured to 8
+internal trials per case: now 6 of 6 fail pre-fix under `-n auto`. **The module says this
+about itself** rather than implying it is a hard gate, and names the source-pinned guards as
+what actually holds the line in any scheduler.
+
+**The battery's one survivor was a guard checking spelling.** `W03` — anchor the mutex on
+`$MAIN_ROOT` instead of `resolve_locks_dir` — survived, and it is the exact bug the phase
+nearly shipped. The guard asserted the *variable name* `_locks_dir` appeared on the acquire
+line, and the mutation still assigns to `_locks_dir`. Replaced by two: the source pin now
+requires the assignment to call `resolve_locks_dir`, and a behavioural test builds a
+`git init --separate-git-dir` repo — the layout where the two resolvers genuinely diverge
+(`<x>` vs `<x>/work`) — holds the mutex where a close would write it, and asserts the claim
+**refuses**. Held-lock rather than happy-path, because a claim that succeeds proves nothing
+about where it looked. Both kill `W03`; the second re-ran at 19/19.
+
+**The battery ran while the tree was being edited, and that run is void.** `CLAUDE.md`'s
+close-out constraints say plainly: commit before every battery, and do not edit the tree while
+it runs. Six `file:NN` citations added by this phase had reddened
+`test_intra_repo_citations`, and the fix was applied mid-run. The battery restored its
+snapshot over one of those edits and left the tree mid-mutation. The run was discarded, the
+tree reset to the commit, the fix re-applied and committed, and the battery re-run on a
+verified-clean tree. No work was lost and no number from the first run is reported anywhere.
+The citation fix itself took the shape Phase 256 settled on: **cite by name**, so the pointer
+cannot go stale rather than needing registry upkeep.
+
+### Author-side battery
+
+**19 of 19 killed, 3 negative controls clean, 0 false kills, 0% declared reverts**, across
+five attack classes: only one writer takes the mutex (`W*`), it is never released (`R*`), the
+critical section is drawn too narrowly (`S*`), the acquire is not exclusive (`A*`), and the
+tempfile half is reverted (`T*`). Every row is unprobed, so a survivor could not have been
+distinguished from a no-op — recorded because the battery says so about itself and the one
+survivor was verified live by hand before being closed.
+
+**The first draft's controls were not controls.** Two were comment-only, which
+`mutation_battery`'s `BLIND-CONTROL` arm refuses on sight and is right to — Phase 189 scored
+two unseeable comment-only controls as evidence its guards discriminate. A third renamed the
+`waited` local at its declaration only, leaving the loop reading an unset variable under
+`set -u`: not behaviour-preserving, so not a control whatever it was labelled. All three were
+replaced with equivalent-form rewrites in real code.
+
+### The suite
+
+**5795 passed, 178 skipped, 0 failed**, measured at `6c43714` — after the record, on a clean
+tree, and **nothing is red at that commit**. The number is stated here because the close-out
+constraint asks for it and an earlier draft of this entry gave none, which a lens caught: for
+most of the phase `tests/test_round_yield_ledger.py::test_every_phase_from_174_has_a_ledger_row`
+WAS red, deliberately — the `CLAUDE.md` row lands before the round and the ledger row cannot be
+written truthfully until after it. That red is now closed by the row itself.
+
+### The round — three lenses, and it found the phase incomplete
+
+Governor's three-lens arm, because the phase ships behaviour and a numeric record. One round.
+Independent fresh-context agents, each in its own worktree, none a fork.
+
+**The HIGH: `batch_work.sh --release` is a third writer, and I locked one of two writers inside
+the file I was fixing.** Two lenses found it independently. `--release` does the same
+`sed` → tempfile → `mv` → `git commit -- review_tasks.md` the claim does, and took no mutex.
+Reproduced by both at **7 of 8** and **12 of 12** trials, producing both of `Q-387`'s symptoms —
+a batch committed under a message denying it, and an orphan lock over a `Pending` batch that
+`next_task.py` skips forever while this script's own preflight refuses to re-claim it. The
+record's *"both writers of `review_tasks.md`"* was wrong about its own file. `--release` is not
+exotic: `/claim-task` prescribes it as the abandon outcome, `/roadmap` and `/review-close` relay
+it. Now locked, with the `--release` tempfile's bare `trap - EXIT` folded into the same combined
+handler — a reviewer flagged that as latent, and it went live the moment this path took the lock.
+
+**The guards were 20% bypassable.** An independent battery of 39 mutations left **8 surviving**,
+against my own set's 19 of 19. The author's zero measures self-consistency; this is the
+measurement that counts. Every survivor is closed:
+
+* `|| return 1` → `|| true` on the acquire — the claim proceeds *unserialized* while printing
+  "Refusing … nothing was written". It survived because my one behavioural test of that path
+  asserted `not _lock(work, 1).exists()` at a path that layout never writes to, so a
+  **successful** claim satisfied it. A vacuous assertion inside the test written to catch
+  exactly this.
+* The same mutation on the close side, where there was **no behavioural test of the refusal at
+  all**.
+* A *shadowing* second `CLOSE_LOCKS_DIR=` assignment satisfied the provenance pin, because it
+  asked whether *any* assignment called `resolve_locks_dir`. That is `W03` one layer up — the
+  same guard-checks-spelling defect I had already fixed once, in a new disguise.
+* Deleting the inspection-path line the test is named for still passed: the 400-character
+  window it greps contains **two** `TMP_FILE=""`.
+* The signal traps, the tempfile half of the combined handler, and the release's
+  `TRACKER_LOCK_FILE` clear were all unguarded.
+
+**A false kill in my own guards.** `test_the_mutex_is_not_inside_the_globbed_locks_dir` pinned
+the literal `runtime_dir="$(dirname "$locks_dir")"`, and a reviewer's byte-identical control
+`${locks_dir%/*}` was killed by it. A guard that reds on a legal rewrite gets weakened or
+deleted; it is now behavioural.
+
+**Four more live defects, each fixed:** `tracker_lock_release` deleted whatever sat at the path
+rather than the lock it took, so an operator taking the printed `rm -f` while a holder was alive
+could have a third process's live lock deleted out from under it. A **directory** at the mutex
+path wedged every claim and close behind a remedy that cannot work (`rm -f` on a directory
+fails). `close_batch.sh --dry-run` took the write mutex, so a preview that writes nothing could
+block a real claim. And PID-qualifying `review_index.py`'s tempfile traded a **bounded** orphan
+for an unbounded one — one per crashing process, untracked *and* unignored, because the seeded
+gitignore line is the literal `.claude/review_index.json`.
+
+**Eight false claims in the record, and five of them were in shipped files.** The sharpest:
+
+* **The CAS refutation was too strong, and a reviewer earned the correction by building one.**
+  See cause 1 above — the corrected text is the round's, not mine.
+* *"an orphan lock appeared in every defective trial"* — 3 of 100, and the sentence was
+  self-contradictory besides: a symptom *paired* with a 5-of-40 event cannot occur 40 of 40.
+* *"crashed `review_index.py` outright in every trial"* — 50 of 60, and it shipped in a
+  docstring that reaches consumers.
+* *"inside a linked worktree the two resolvers disagree"* — a linked worktree is the one layout
+  where they provably **agree**. They diverge under `--separate-git-dir` and in a submodule,
+  which `batch_work.sh`'s own comment says and which my *test* got right while my *comment* did
+  not. It appeared three times: the helper, and twice in the battery.
+* *"the EXIT trap armed at the call site"* — no such trap existed. Found by the author-side pass
+  and confirmed by two lenses.
+* *"the body has ten early returns"* — eight. *"three arm/disarm pairs"* — two arms, three
+  disarms.
+* *"6 of 6 fail pre-fix under `-n auto`"* — true module-only; under the **full** suite it is 4
+  of 6, because two of the class's tests were never given internal trials. The sentence framed
+  itself as the suite's configuration and measured the module's.
+
+**And one the round corrected in my favour, which is worth recording because it cuts the other
+way.** My detector docstring cited "the same pre-fix source passed 5 of 6 of these" as evidence
+of weakness. Read correctly, one test failing means the **module went red** — a detection, not a
+miss. A reviewer also measured `TRIALS_PER_CASE` as over-provisioned: pre-fix source was red in
+10 of 10 runs at every value from 1 to 8, at a cost of 4.6s → 16.5s. The value stays, because
+that measurement is one machine's and the failure mode it guards is load-dependent by nature —
+but the docstring now says which claim is measured and which is precautionary.
+
+### Scope held, and what is filed rather than fixed
+
+Wade scoped the mutex to `batch_work.sh` + `close_batch.sh` at the open — both writers of
+`review_tasks.md`, because a mutex one writer skips is not a mutex. Two siblings are filed
+rather than folded in:
+
+* **`archive_review_tasks.py` is a third writer of `review_tasks.md`** with a fixed `.tmp`,
+  found by this phase's class sweep. It is a discrete operator command rather than part of the
+  claim/close loop, so its exposure is genuinely lower — but it is the same class and it does
+  not take the mutex.
+* **The `/claim-task` twin.** Steps 4a and 4d rewrite and commit `tasks/index.yml` with the
+  same unlocked read-modify-write-commit shape, guarded only by a `HEAD`-assert that catches a
+  *moved branch*, not a lost update. `WORKFLOW.md` § 4.4 already names it. It lives in skill
+  prose rather than a script, so it cannot take the same bash lock and needs its own shape.
+
+---
+
+## Phase 259 — the gate that reads no message, and the monograph that describes none of it (`Q-392` + the currency pass)
+
+Wade set this slot at Phase 258's open, routing `Q-392` to ride with the monograph pass on
+the grounds that both are publication-surface work. Confirmed at this phase's open, together
+with three scoping calls: the fix shape for `Q-392` (gate the authored text, not only the
+published history), the depth of the doc pass (argument-first plus a full number sweep, the
+house shape rather than phase-by-phase coverage), and that the owed mirror push is **not**
+this phase. `Q-397` and `Q-398` were explicitly left out.
+
+### The filed fix shape was wrong, and only running it showed that
+
+`Q-392`'s entry prescribes: *"extend the header arm to scan `%B` … and run it over the commit
+about to be pushed rather than only over published history."* The second half of that gates a
+string that is never at risk. The commit about to be pushed carries a message the builder
+generates — `sysop public snapshot (private <sha>)` — and the operator never touches it. The
+text that actually reaches published history is the **pull request's title and body**, which
+GitHub folds into the squash commit, and which never exists as a local commit at all. A
+scanner pointed at the pending commit would have reported clean forever while the live path
+stayed open.
+
+**The fold is not hypothetical, and the evidence was already published.** `getsysop/sysop`
+carries **34 commits on its default branch and 35 reachable through `--all --tags`** — the
+population the history scan walks, one commit being tag-only. Exactly one of them, the Phases
+144–145 snapshot `6d479ea`, carries a multi-line message: 12 lines of folded PR body. Both
+figures are recorded because they differ by one and this phase's own two files quoted
+different ones until the discrepancy was chased. That body is clean; it was checked token by token
+against all four classes. So the mechanism has fired once, in immutable history, and happened
+not to be carrying anything. The private commit that opened this window (`1d7f7f2`) carries
+four queue ids in its own message, which is what the natural source for "what changed + gates
+run" looks like.
+
+### What shipped
+
+**`tools/scan_message.py`** — one scanner, six arms, **zero restated patterns**. It imports
+`PASS_1A`, `PASS_1B`, `PASS_1C`, `PATH_TOKEN`, `ISSUE_TOKEN` and the `gdp` token census from
+`tests/test_mirror_leak_gate.py`, which is itself the derived reader of `P1A=` in
+`tools/cut_public_release.sh`. A second copy of the token list is the state `Q-256` is about
+and the one Phase 225 found already drifted at two of five sites; re-typing six patterns into
+a new gate would have been that defect wearing a gate's clothes.
+
+Three properties are deliberate and each is pinned by a test:
+
+- **The header-disclaimer exemption is not wired up.** `_pointer_hits` and `_issue_hits` let a
+  *file* discharge a whole class by writing a sentinel sentence in its first 30 lines. That is
+  built for historical records. A commit message has no header, is written at the moment of
+  publication, and cannot be edited afterwards — so the scanner uses the primitives directly
+  and no message can buy its way out.
+- **Every failure is a refusal, not a pass.** No arguments, a missing file, an interpreter that
+  cannot reach the detectors: exit 2, never 0. A bare `python3` (no venv, so no pytest) refuses
+  rather than reporting clean, which matters because the publish chain reads its exit status.
+- **`--published` names the surface.** See the measurement below.
+
+**The publish block gates the body.** `tools/make_public_mirror.sh` printed
+`--body '<what changed + gates run>'`; it now prints a `--body-file`, and chains the scanner
+to `gh pr create` with `&&`. The chaining is not style. A refusing arm that prints a warning
+and returns, followed by the next command on its own line, is `Q-394` — printed a few lines
+above this one in the same block — and `tests/test_cut_release_gate.py` pins that the block
+carries exactly one `|| {` arm, so a second one was not available even if it had been right.
+
+**`tools/scan_public_history.sh` gains a fourth arm.** `message:N` per commit, delegating to
+the scanner (one commit's `%B` per invocation over stdin) rather than restating patterns in
+bash. The `--all --tags` decision about *which* commits get scanned stays in the shell script,
+where it is already documented and tested. The arm adjudicates on its own accepted list
+(`message <sha>`), which **starts empty**: the published history was scanned when the arm was
+built and every message came back clean, so nothing is grandfathered.
+
+### The measurement that changed the design
+
+The arm's first run against the real published repository returned **33 findings across 35
+commits**. Every one was GitHub's own `(#N)` squash trailer — a number that resolves perfectly
+in the repository being scanned. A gate wrong 33 times out of 35 does not get tightened, it
+gets switched off, and this repo has already written down what a false positive on a public
+surface costs.
+
+`--published` exempts **the last `(#N)` on the first line, and only when the line ends there**.
+GitHub always appends its trailer last, so a private number the operator put in the title ahead
+of it still fires: `fix (#241) (#40)` reports `#241` and exempts `#40`. The flag is **off** for
+the authoring gate, because nothing appends a trailer before the merge — exempting a trailing
+`(#N)` there would exempt only a number the operator typed, in exactly the position the
+exemption blesses. Re-run after the fix: **`NEW:content=0,names=0,header=0,message=0`** across
+all 35 commits.
+
+### Two defects the phase introduced, both caught by running it
+
+1. **A marker silently overwritten.** The message block was written first in the per-commit
+   chain. The header arm *assigns* `mark` and every arm after it *appends*, so
+   `ACCEPTED(message)` was clobbered by the header arm's assignment — the SUMMARY counts stayed
+   correct while the per-commit row named only one of the two arms that had fired. A row that
+   under-reports which gates fired is the shape this file keeps finding. Moved last, changed to
+   append.
+2. **A test that passed for the wrong reason** — the refusal case ran a copy of the script
+   whose `$SRC` no longer resolved, so it refused over the Pass 1a list rather than over the
+   missing scanner. Both real sources are now handed in explicitly and the assertion names the
+   refusal it expects.
+
+A third was caught by an assertion of mine that was simply wrong: the scanner echoes the whole
+offending line, so reading the raw output for the exempted `#40` tested nothing. The finding's
+class field is parsed instead. Worth recording because the test failed on *correct* code.
+
+### The record tripped the gate the phase is about
+
+`PHASE_LOG.md` ships, and the `gdp` token census — the arm that inverts the question so a new
+private name is loud by default — reads it. Writing the detector's name with a hyphen in this
+entry minted a token nobody had reviewed, and the suite went red on the census test. Reworded, not allowlisted: the allowlist is for
+ordinary provenance, and this was neither provenance nor a name — it was prose about the
+detector, matching its own pattern. Worth recording because the phase's whole subject is a
+gate reading text nobody thought of as text, and the first thing that caught this phase out
+was exactly that, one file over.
+
+### The canary problem, and the criterion that settles it
+
+`tests/test_message_scan_gate.py` plants a canary for all six arms — a Pass 1a token, an
+absolute home path, the embargoed dogfood name, an unreviewed gdp token, a stripped path and a
+bare issue number. Every one of those is a hard-gate failure in a shipped file, and the leak
+gate caught it immediately: the module had to be **excluded from the mirror**, joining
+`test_mirror_leak_gate.py` and `test_cut_release_gate.py`.
+
+The criterion those two exclusions actually state is *"it plants blocked identifiers as
+literals"* — not *"its subject is `tools/`"*. That distinction decides the sibling case:
+`tests/test_public_history_scan.py` tests a `tools/` script too and **ships**, because it
+plants only the allowlisted public address. Phase 259 added message-arm tests to it, and its
+canary is therefore **derived from `P1A=` at runtime** rather than typed, which also means the
+fixture cannot drift from the list it exercises.
+
+Adding the exclusion moved **seven** mechanical sites: the builder's header comment and its
+`rm` list, Pass 3's `find`, Pass 4's alternation, `SHIPPED_EXCLUSIONS`, `PASS4_CANARIES`, and
+`tests/test_cut_release_gate.py`'s `BASE_TREE` fixture. **This sentence said six until rule 2
+was run against it** — the enumeration omitted `BASE_TREE`, which is one of the two the guards
+actually caught, so the count was wrong about the very sites it was citing as evidence the
+guards work. The guards named both misses, which is what they exist for. The change also
+**falsified four prose counts**. The
+Pass 4 alternation went from eleven arms to twelve, and "eleven" was stated as a live fact in
+`tools/TESTER_MIRROR_RUNBOOK.md` and `tools/PUBLIC_RELEASE_SPEC.md`. Both of those sentences
+are *about* the danger of restating a count, and both had gone stale the moment an arm was
+added; only a `>= 11` floor was mechanized. Corrected in place, and the historical clauses
+marked *then-eleven* rather than silently renumbered.
+
+### The author-side battery
+
+`tools/phase259_mutations.py`, 19 defect rows + 2 negative controls across four targets.
+**First run: 13 of 19 killed, 6 survivors, 0 false kills, 0% declared reverts.** One survivor
+(`A02`) was a **no-op** — `scan()` always passes `published=` explicitly, so `_pass_5b`'s
+default is unreachable; the row was re-pointed at the call site. The other five were real, and
+**three of them were tests that could not see the thing they were named for**:
+
+- `A03` — the body case used a line the anchored regex never matches, so a first-line-only
+  exemption and an any-line one select the identical token.
+- `A11` — the bare-basename control used `REVIEW_CHECKLIST.md`, which `_is_excluded` catches
+  directly; the basename arm it was written for was never reached.
+- `B04` — asserting one marker cannot see an arm erasing its neighbour's.
+- `B02` / `B05` — the missing-scanner test is caught by a `[ -f … ]` preflight, so neither
+  runtime check (a refusal, a missing SUMMARY) was ever exercised.
+
+All five closed; re-run **19/19, 0 false kills, controls clean**.
+
+**That 19/19 was not reproducible, and the round is what established it.** The battery aborts on
+a red verifier, and one of the tests written to close `B05` was itself red roughly half the time
+under load (§ *lens 1* below) — so the run that produced the number happened to catch a green
+window, and two later attempts from the tagged tree aborted outright. After the stub fix the
+battery re-runs cleanly and reports **19/19, 0 false kills, 2 controls green, 0% declared
+reverts**, with the per-verifier split moved (`history-arm` 6 killed / 4 uniquely, against 8/5
+before) because the fixed tests now reach the branch they name. **It is still an author's number
+and it still measures self-consistency**, which is why both runs are reported: this project's
+ledger has recorded an all-killed author battery falsified by an independent lens every time one
+has been checked.
+
+**One flake is recorded uncharacterized rather than resolved.** A single run of the four-module
+combination failed in `test_cut_release_gate.py`'s Pass-4b parametrization. It did not recur in
+12 combo runs after the stub fix, 6 runs of that test alone, or 6 runs on the pre-phase base. The
+honest reading is one observation, plausibly interference from the flaky sibling it ran beside —
+but plausibly is not measured, and a rate of "seen once, never again in 24 attempts" is not a
+diagnosis.
+
+### The doc half
+
+**The monograph.** Its stamp read Phase 239 while its highest citation was 249 — two different
+staleness problems, and the citation gap was 240–246 and 250–258, sixteen phases. The pass is
+argument-first, the house shape (Phases 185 and 229: dated addenda appended in place, glossary
+entries extended, hand-counted numerals moved; never a restructure). Three threads:
+
+- **§ II — isolation of the workspace is not isolation of the bookkeeping.** The section's own
+  prose and Fig. 8's caption claimed that claiming work from a second session "is safe — it
+  only ever creates more worktrees." True of the workspaces, false of the shared tracker files
+  every claim and close writes on the primary checkout. The caption is qualified at source and
+  an addendum carries the 40-of-40 measurement, the refusing lock, and — named rather than
+  waited for — the two open twins.
+- **§ III — the same blind spot, one field over.** The existing addendum ends *"the repair to
+  that is a scanner over commit headers, which now exists."* That scanner reads two email
+  fields. The message was outside the frame twice, the second time immediately after the frame
+  had been widened on purpose.
+- **§ VI — and, deliberately, no setting for the default branch.** The mirror image of
+  *model roles, not model pins*, and the better half of the pair: `resolve_default_branch`
+  refuses with the git command that settles it rather than guessing, and there is no Sysop-side
+  key for the answer because git already owns the fact. Contrast `§ Merge policy`, which is a
+  key because *how you want work to land* is a preference no tool can read off the repository.
+
+**Two numbers in this phase's own new prose were wrong before the round saw them**, and a
+digest of the window caught both. The monograph draft said the 40-of-40 measurement turned the
+question into *"this does not work concurrently at all"*, and `docs/history.md` said the loss
+happened *"in every trial a harness ran"*. Phase 258's record qualifies its own figure: over
+100 trials the same reviewer measured **97 defective**, so three runs in a hundred come out
+clean. Both sentences now carry 97-of-100 beside the 40-of-40, and the monograph says why the
+gap matters — an intermittent failure is the kind a single green run certifies as absent. This
+is the class the currency pass exists for, produced by the currency pass, in the same session.
+
+**`Q-386`'s count was re-derived rather than inherited, and both prior numbers are wrong.**
+The entry claims six descending `## Phase` transitions; Phase 256 corrected it *to* six from
+"a single misplacement". Parsed by the **first** number on each heading line the answer is
+**five** (`228→227→226→225→224`, and `255→254`). Parsed by the **last** — the documented bug in
+`Q-386`'s own script — it is **11**, six of them spurious titles citing an earlier phase. The
+one heading that is not `## Phase <n>` is `## Phases 1 through 25`, and a regex that fails to
+match it strands the previous value and invents a transition, which is how this session's own
+first attempt produced a phantom row. Nothing is fixed here; the derivation is carried into the
+brief so the next attempt does not re-litigate it.
+
+**`docs/history.md`** was stale in a way no citation grep sees: its terminal entry said
+"Aug 2026" in September, and nothing in `tests/` read the file at all. August is closed (its
+suite figure anchored to the month rather than left reading as current) and a September entry
+added. A ratchet now holds the **terminal** bullet clear of a suite total — Phase 118's
+inverted guard, one file over, scoped to the terminal entry so the page keeps its history.
+Terminal-entry *recency* is deliberately not mechanized: every shape of that test was flaky or
+circular, and the guard says so in a comment rather than leaving it to be discovered.
+
+**One number I "corrected" and then put back, which is the sharper half.** `CLAUDE.md`'s Phase
+123 row says the loop-mode dogfood ran against a "~63k-line" codebase where both public docs say
+~60k, and this phase changed it to match them on the stated ground that *"the record says
+`~60k-line`, twice, and never 63k."* **That premise is false** — `REVIEW_ARCHIVE.md` records the
+target at "~63k LOC" as measured, and **Phase 229 — the previous currency pass, which is what makes it
+sting — considered this exact discrepancy and declined it**: *"All three public surfaces agree on ~60k, it is a legitimate
+rounding … Recorded rather than silently skipped."* The two figures are not a contradiction: 63k is
+the internal measurement and 60k is the de-identified public rounding the naming rule requires, so
+each is right for its surface and `CLAUDE.md` is maintainer-side. Reverted. A prior phase's recorded
+decision was reversed here on a premise a single grep would have refuted, and the grep was run —
+against `PHASE_LOG.md` only, which is not where the measurement lives.
+
+### Filed
+
+`Q-399` (§ Medium) — Passes 1b and 1c exist in two copies each and only Pass 1a is derived from
+`cut_public_release.sh`; this phase's own scanner imports the copies, so the blast radius grew.
+`Q-400` (§ Low) — the tracker mutex Phase 258 shipped is documented in no shipped file, and
+`WORKFLOW.md` § 8.4's `_git_lib.sh` row describes half the file. The entry names what is *not*
+wrong as well: § 4.4's *"a concurrent manual claim isn't serialized against it"* is scoped to
+`tasks/index.yml`, which is `Q-397` and genuinely still unserialized, so that sentence is true
+and must not be "fixed".
+
+### The round — lens 2 (are the claims true)
+
+Every measurement in this record reproduced exactly under an independent re-run: the 34/35 commit
+split, the one 12-line folded body, **33 of 35** without `--published` and **0 of 35** with it, the
+`fix (#241) (#40)` split, the bare-`python3` refusal at exit 2, seven exclusion sites, twelve Pass-4
+arms, and all five sub-claims of the `Q-386` re-derivation. What the lens found instead was **prose**,
+and the two sharpest are the kind no test in this repo can catch.
+
+- **The § II addendum had the concurrency mechanism backwards, in public prose.** It said *"the second
+  to commit would carry the first's change away … a claim that reported success."* Both halves are
+  wrong. Phase 258's record: whichever commits **first** records **both** flips; the other's commit is
+  empty, fails, and prints *"the claim was rolled back, nothing was claimed"* — so the loser reports
+  **failure**, over a status change that has in fact landed. The harm is a contradiction, not a silent
+  success, and the addendum described the one shape the defect does not take. Rewritten; `history.md`
+  carried the same directional error and is rewritten with it.
+- **`resolve_default_branch` was attributed to the wrong phase.** The § VI subsection said the shipped
+  scripts carried the literal *"until Phase 254"*; `_git_lib.sh` was created whole by **Phase 252**
+  (`dfc26ee`), and one shipped script outlasted both, to Phase 255.
+- **"Exits non-zero exactly the way 'not merged' does" is false as published.** Measured on a fixture:
+  no `main` gives **128** with a `fatal:` on stderr; a genuine not-merged gives **1**, silent. The
+  source comment writes the command with `2>/dev/null`, which is what makes the sentence true at the
+  call site; the public prose dropped the redirect and kept *"exactly"*. Now states both codes and why
+  the callers cannot tell them apart.
+- **Fig. 8's rewritten caption named the one file the mutex does not cover.** It said the shared
+  tracker files "are serialized by a lock" while naming the task index in the same sentence — and
+  `tasks/index.yml` is `Q-397`, still unserialized. A caption is read standalone, so the disclosure
+  forty lines below did not save it.
+- **The archive kept the count the previous commit had corrected** — `Q-392`'s resolution entry still
+  said six mechanical sites after `PHASE_LOG.md` and the brief said seven.
+- **The brief's regex did not produce the brief's number.** It said *"the last `Phase \d+`"* gives 11;
+  that literal gives **8**, and only `Phase[s]? (\d+)` gives 11. A passage written so the next reader
+  need not re-derive would have cost them the same attempts.
+- **`history.md` contradicted the monograph one page over** — *"every gate here read a file tree or a
+  path"*, where the monograph correctly says *every **other*** pass, the exception being the header
+  arm's two email fields.
+- **The guard's own comment and the page disagreed about a number written in the same commit.** The
+  comment called "past 4,900 tests" *several hundred short*; that is true against the source suite
+  (5,448 in August) and false against the sterilized mirror (4,983) — two populations, one sentence.
+  The ratchet is not about accuracy and now says so.
+
+Two further filings came out of it: the fifth and sixth *"eleven"* the sweep missed — one in
+`tests/test_mirror_leak_gate.py`'s comment, one in `tests/test_registry_drift.py`'s, the latter
+carrying a cost estimate this phase then paid in full (it predicted excluding a module needs five
+gate sites and falsifies the count at four doc sites; the real bill was seven sites and the same
+four) — both now marked like their siblings; and `Q-400` widened to name a **third** site — `WORKFLOW.md` § 4.4's safety
+table tells a consumer that `/claim-task` leaves the default branch untouched, which Step 4d has
+never done.
+
+### The round — lens 1 (does it execute)
+
+Everything the phase claims about behaviour reproduced: the chain blocks a leaking body and passes a
+clean one, pasted in reading order, from the mirror directory, and from a source path containing a
+space; all six arms fire individually; the token-scoped allowlist holds; the venv refusal really
+halts the history arm; the real cut gate is green and re-prints the scanner chain; and the 33-of-35
+and 0-of-35 figures reproduced against the live public repo. The findings were in the parts I had
+not run enough times.
+
+- **A test I wrote false-FAILED on correct code, and it took my own battery down with it.**
+  `test_a_scanner_that_prints_no_summary_halts_rather_than_reading_zero` pipes a commit's `%B` into a
+  stub that never reads stdin. `git log` takes a SIGPIPE, `set -o pipefail` promotes the 141 into the
+  pipeline status, and `msg_rc=141` satisfies the `>= 2` refusal branch — so the test **reached the
+  wrong branch**, failed roughly half the time under load, and in those runs never exercised the
+  check it is named for. Reproduced here at **2 of 6**, and 0 of 8 after both stubs were made to
+  drain stdin; the branch is now confirmed exercised by deleting it and watching the test go red.
+  **The consequence for this record is the part that matters: `tools/phase259_mutations.py` aborts
+  on a red verifier, so the 19/19 reported above was not reproducible from the tagged tree.** It is
+  re-run below. The sibling refusal test had the same blind spot — a 141 and a real exit 2 are both
+  `>= 2` and both print the same diagnostic — and now pins the distinction.
+- **A traceback is not a refusal.** One undecodable byte in a message raised `UnicodeDecodeError`:
+  traceback, **exit 1**, no SUMMARY — falsifying this module's own *"every failure is a refusal,
+  exit 2"* contract and handing the publish chain a code it reads as findings. git does not enforce
+  UTF-8 on commit messages. Now decoded with `errors="replace"`, matching the leak-gate census, and
+  guarded by a test whose load-bearing half is that a blocked identifier **beside** the bad byte is
+  still found — a byte the decoder cannot read is exactly where something would hide.
+- **A trailing `#` is not a comment in the shell the operator is actually in.** The printed
+  `BODY="$(mktemp)" && ${EDITOR:-vi} "$BODY"   # what changed + gates run` hands six junk operands to
+  `$EDITOR` under an interactive zsh, which has `INTERACTIVE_COMMENTS` off. The pre-existing instance
+  of this class two lines up fails *loudly*; this one would have failed silently. Hint moved to its
+  own line.
+- **`Q-401`, and it lands inside this phase's own reasoning.** `wade@cedarmountainsystems.com` — the
+  address `Q-294` is about — is a fixture literal in `tests/test_public_history_scan.py`, which
+  **ships**, and is already in the published tree. Pass 1a's six tokens do not match that domain and
+  the header allow-list governs `%ae`/`%ce` only, so no pass reads it. Exposure is nil (`Q-294`
+  already made it permanent), but this phase decided that module needed no exclusion **on the ground
+  that it plants only the allowlisted address** — a judgement made against a list that does not
+  contain the address it plants.
+
+### The round — lens 3 (are the guards real)
+
+**30 independent mutations, 8 killed, 22 survived, and 3 of 7 negative controls false-killed
+(43%).** The lens re-ran the author battery's own **rows** and could not falsify those — 18 of 19
+killed with the flake deselected, and `B05` killed 3 of 3 against the full module. **That is a
+narrower result than it first reads, and the ledger's own derivation is what forced the correction.**
+An earlier draft of this paragraph called it *"the first author battery in this ledger's checked
+history to survive."* It is not: `tools/ledger_stats.py` classifies this row among the **65
+falsified**, because the independent battery found 22 survivors against the same guards — and it is
+right to. Re-executing an author's chosen rows measures the rows. What was falsified is the
+**coverage those rows imply**: at every site the phase pinned one property and the neighbouring
+property in the same site was open. The exemption's *position* was pinned and its *shape* was not;
+the arms' *deletion* was pinned and their *input sources* were not; the marker fix was pinned at
+one arm of four; the chain's `&&` was pinned and the three lines above it were not.
+
+**Two live holes, no mutation required for either.**
+
+- **A pull-request body could buy the markdown-anchor exemption.** `See [the regression](#241).`
+  and `<a href="#241">` both scanned clean. `_issue_exempt_by_shape`'s arms are written for
+  **files**; a PR body is markdown, so two of the three were fully reachable — and GitHub does not
+  render markdown in a commit message, it autolinks the raw number. This module's own docstring
+  said *"no message can buy its way out"* while calling them. The helper is no longer called at
+  all, and both shapes are planted as positive controls.
+- **`--published` exempts any subject ending in `(#N)`, not just GitHub's trailer.** Measured:
+  `Revert "Phase 258" (#241)` scans clean. Nothing in a message says who wrote its trailer, so this
+  cannot be closed from inside the text, and widening it back costs the 33-of-35 rate the flag
+  exists for. Recorded as a stated residual on a backstop arm rather than left implied.
+
+**The guard gaps that mattered.** The **PR title** — the one line a squash-merge always folds into
+the subject — was ungated at both ends: droppable from the argument surface *and* from the printed
+chain with every guard green, and the lens published a leaking title end-to-end through a stubbed
+`gh`. The `message:N` count was parsed from any line carrying `findings:`, so a message quoting that
+word put a second candidate in the stream; it is anchored to `^SUMMARY` now, with zero-or-many
+collapsed into one check because two stacked checks made the second unreachable.
+
+**And the fix for the chain test had to be made twice.** The test re-authored the block's `PY=`,
+`BODY=` and `TITLE=` lines instead of pasting them, so the interpreter-fallback arm the builder
+documents at length was asserted by nothing — and my docstring said *"THE ONE SUBSTITUTION"* where
+there were four. The first repair pasted the block but **overrode `PY=` to force the no-venv case**,
+which replaces the very line under test: the mutation survived a second time, and only re-pointing
+`$SRC` at a tree with no `.venv` exercised the block's own fallback. Verified by mutation
+afterwards: dropping `--title` fails 1 of 2, `PY=true` fails 1 of 2, `&&` → newline fails 2 of 2.
+
+**The false-kill rate is the other half and it is not decoration.** Three of seven controls reddened
+on edits a maintainer would plausibly make: a doc comment naming the scanner broke the chain test
+(the extractor keyed on any mention of the filename, not the runnable line), a consistent rename of
+`$BODY` desynced it, and a copy edit to a **closed** month's prose — *"4,900 tests"* to *"4,900
+automated tests"* — reddened CI on a documentation page. All three are loosened; the ratchet's
+vacuity control now exercises a synthetic string rather than whatever the page happens to say.
+
+Nine further survivors are filed as `Q-402` with no live defect behind any of them. **What the lens
+could not break is worth as much as what it could:** every one of the six arms dies when deleted,
+and the strongest subsumption candidate does not hold — the Pass 1a canary sits outside the gdp
+census's regex shape, so neither arm can carry the other. The six arms really are six arms.
+
+### The suite, and the silence the round found in this record
+
+**The record carried no suite figure at all** until the round pointed at the gap — not here, not in
+the `CLAUDE.md` row, not in the archive entry — while nearly every recent phase's record carries one.
+That silence is the finding, not the number: a record that does not state a total cannot be caught
+overstating one, and the `gdp` token above sat red in six consecutive commits with nothing in the
+written record obliged to notice.
+
+Measured at `9c84ed1`, **after** the record was written: **5836 passed, 178 skipped, 2 failed**. The
+two reds were the census gate (closed at `7b47462`, § *The record tripped the gate the phase is
+about*) and the ledger row, which is red by design while a round runs and closes when the round's row
+lands. The lens reading the tagged commit inferred from the same red that *"the full suite was
+evidently not run after the prose landed"*; it had been — that run is how the token was found — but
+the inference was available only because the record was silent, which is the point.
+
+**Closing figure: 5844 passed, 178 skipped, 0 failed at `c792e48`** — measured after the record and after the round's fixes, with nothing red. The intermediate run at `bda6b8d` was **5 failed**: the ledger row had moved `tools/ledger_stats.py`'s derived headlines at four sites plus the register's population line, which is the documented cost of appending a row and is why the row goes in last.
+
+### What this phase did not do
+
+The mirror push (owed: the Phase-257 record tail plus 258 and this phase), `Q-397`, `Q-398`,
+`Q-386`, and any announce work. `Q-392`'s fix is what a push now depends on.
+
+---
+
+## Phase 260 — the mirror push (the Phase-257 record tail + 258 + 259 + this phase), and the core principle that said the opposite
+
+The push was owed at the open and Wade took it, with one addition the brief had not proposed:
+`Q-400`'s doc sites, folded in because this push is what publishes their subject.
+
+### The window, derived at both ends — and it includes this phase
+
+Snapshot base is private **`87a53a0`**, Phase 257's *push* commit. `git log --oneline
+87a53a0..HEAD` returns **four commits**, not three: Phases 259, 258, the non-phase docs commit
+`1d7f7f2`, and Phase 257's *record* commit `7a42a04`. `1d7f7f2` touches only
+`REVIEW_ARCHIVE.md`, `REVIEW_CHECKLIST.md` and `tools/NEXT_SESSION_PROMPT.md` — all
+mirror-excluded — so it contributes no phase label; `7a42a04` touches `PHASE_LOG.md`, which
+ships, so Phase 257's tail is in. **The commit is named here rather than silently dropped,
+because a derivation whose printed command returns a different count than its prose is a
+derivation the next reader cannot check.**
+
+**And the window includes Phase 260 itself.** The criterion is *touches mirrored files*, and
+this phase changes three: `core/companion/docs/WORKFLOW.md`, `docs/getting-started.md` and
+`PHASE_LOG.md`. Phase 257's record states the rule — a push phase whose cut runs from merged
+`main` is always inside its own window — and the round caught this record citing that rule
+and then naming a window that stopped at 259. It cuts twice: the scope rationale below (*"this
+push is what publishes their subject"*) is **only true if 260 is in the window**, so the short
+label would have falsified the phase's own reason for existing. The same class was corrected
+by name at Phases 250 and 257 and is corrected again here.
+
+The shipped diff across that window is substantial rather than clerical. The largest single
+changes are `PHASE_LOG.md` (+724 — the public development history) and
+`tests/test_tracker_write_mutex.py` (+730); the consumer-facing ones are `_git_lib.sh` (+196,
+the tracker mutex), `batch_work.sh`, `close_batch.sh`, `review_index.py`, `install.sh`, and
+both public pages, `docs/workflow.html` and `docs/history.md`. That list is illustrative, not
+an enumeration — the mirror builder strips only `tools/`, `CLAUDE.md`, the two queue files and
+four named test modules, so everything else in the window ships.
+
+### The addition: a shipped doc told consumers the exact opposite of what the claim path does
+
+`Q-400` was routed **§ Low** on the ground that "no behaviour is wrong, and the refusal
+explains itself at the point of use." That is right about two of its three legs and wrong
+about the third, and the third is not a documentation *gap* — it is a shipped **falsehood**.
+
+`WORKFLOW.md` § 4.4's *"What you can safely do while a build runs"* table said `/claim-task`
+"builds in a *fresh* worktree, leaving `main` untouched." The claim path's own skill says the
+opposite in as many words: `claim-task/SKILL.md:703` — *"`main` **is** committed to directly
+here — Step 4d does it"* — and `:1063`, *"Step 4d **committed** `status: in_progress` onto
+`main`."* Step 4d runs `git add tasks/index.yml` and `git commit -m "claim: …"` in the
+**primary checkout**, on the default branch, before the worktree builds anything. A consumer
+reading the safety table was told the one thing that is untrue about the operation, in the
+table whose entire purpose is telling them what is safe to run concurrently.
+
+**The filed one site was three, and the round found the one that mattered.** A sweep keyed to
+the word *untouched* found a second: `docs/getting-started.md` — the tutorial, on the public
+site — *"Your main checkout stays untouched; you can keep working in it."* Same defect, softer
+words, wider audience.
+
+But that sweep's **vocabulary was the estimate**, which is a failure this log has recorded
+before under other subjects. The round's claims lens re-swept on the *proposition* instead of
+the phrasing and returned `WORKFLOW.md:57` — item 4 of § 1 **Core principles**, the first page
+of the authoritative spec: *"The main branch is never committed to directly."* Flat,
+unqualified, and false for at least seven shipped writers — `/claim-task` Step 4d,
+`batch_work.sh`'s batch claim, `close_batch.sh`, `/review-close` Step 1b, `/codebase-review`
+Step 7, and `/auto-build`'s pre-claims. It is a stronger instance than either filed site, and
+left in place it would have shipped `WORKFLOW.md` contradicting itself at two altitudes twenty
+lines apart. Corrected to say what the default branch actually is: not a *build* surface, but
+the home of every coordination write, each under a `HEAD` assert.
+
+`WORKFLOW_GUIDE.md:79` — *"Never commit to `main` directly"* — was examined and **left
+alone**. It sits in a numbered list of things the operator does, so it is advice to a human,
+and it is the same advice § 4.4 gives under *"The one thing to avoid: freehand work on
+`main`."* True as an instruction; it was never a description of the tool.
+
+### The mutex's scope, and a correction that over-reached in my own favour
+
+The next-session brief said a stale `sysop/runtime/tracker.write.lock` "makes every claim and
+close refuse, by design," and `Q-400` said the refusal is "operator-visible on every claim and
+close." Both are loose, and writing the doc exposed it: `tracker_lock_acquire` is *defined*
+in `_git_lib.sh` and *called* at three places — `batch_work.sh`'s batch claim and batch
+release, and `close_batch.sh` on a real (non-`--dry-run`) close. (`grep -rn
+tracker_lock_acquire core/` returns **six** lines; three are the definition and its two
+comments. The command is named with its real output because a reader who runs it and gets six
+would otherwise conclude this record is wrong.)
+
+**The first draft of that correction then over-reached, and the round caught it.** It said "an
+ordinary `/claim-task` cannot meet the refusal." False: `/claim-task` claims two kinds, and
+`BATCH-<N>` (or a bare integer) routes to `bash sysop/scripts/batch_work.sh`, which takes the
+mutex — the skill says so itself at `:79`, *"Step 6 runs after `batch_work.sh` has already
+taken the lock."* A stale lock **does** refuse a `/claim-task` on a review batch. What is true
+is narrower: the mutex does not cover a **task** claim, because `claim_task.sh` does not
+source `_git_lib.sh` at all. That script does take a lock — the per-task claim lock at
+`sysop/runtime/locks/<TASK-ID>.lock` — so "takes no lock" was the wrong phrase for it; it
+takes no *tracker mutex*. Precision about lock vocabulary was this passage's whole product,
+and the first draft spent it in the direction that flattered the correction.
+
+**A second over-statement, in the shipped prose rather than the record.** The § 4.4 bullet was
+first headed *"`review_tasks.md` writes are serialized"* and § 8.4's row said the lock covers
+those writers *"and nothing else."* Both are false permissively: `archive_review_tasks.py`
+takes no lock (that is `Q-398`, open and unmeasured), and neither do `/review-close`'s
+pending-tasks save nor the review skills' round appends. A consumer reading *"serialized"* in
+a list of **ceilings** would conclude the tracker is safe under concurrency, which is the
+opposite of what that section is for. Both passages now scope the lock to the *batch* writers,
+name what it does not reach, and end on *"one ceiling raised, not the class closed."*
+
+### The author-side pass, and the correction that was itself the next falsehood
+
+Reported here because the convention requires the pass's *result*, not merely that it ran, and
+because a commit message does not ship.
+
+The pass caught two things. One was real and stands: § 4.4 asserted `batch_work.sh`'s
+`consequences` string as if it were universal, when it is per-caller — `_git_lib.sh`'s own
+comment records that a single hard-coded sentence was already wrong for the close, which names
+a commit rather than a branch and a worktree.
+
+**The other was wrong, and it made a true sentence false.** `docs/getting-started.md` said a
+claim commits to the default branch *"exactly once"*; `grep -n 'git commit'
+claim-task/SKILL.md` showed a second site at `:1400`, *"plan: record reviewed plan"*, and the
+correction went in: *"and commits the reviewed plan to it too."* Line 1400 lives under `###
+Step 7f: Option C — write the plan back, then release the claim`. Step 7d says so plainly —
+*"Skip this step entirely when Step 6 resolved to B or to C. On C the pipeline terminates at
+Step 7f instead… nothing is going to be implemented on this claim."* On options A and B —
+every claim that actually starts work — the plan goes only to `<ARTIFACT_DIR>/plan.md`, under
+a gitignored runtime directory the skill twice instructs the reader **not** to `git add`. So a
+sentence describing *"Start new work"* was handed the one behaviour that path excludes.
+
+The mechanism deserves naming because it was not carelessness: the pass ran the right grep and
+read the right line, then **never asked which step contained it**. A `grep -n` answers where a
+string is; it never answers whether the branch holding it is reachable on the path under
+discussion. Both sites now say one write and name `--plan-only` separately as the different
+path it is.
+
+### The correction is mechanized, and the battery says what it does not reach
+
+The round's last finding was that a falsehood corrected in three places and pinned by nothing
+can re-accrete. `tests/test_default_branch_isolation_claims.py` now scans every shipped
+`.md`/`.html`/`.txt` for the *proposition*, not one wording, with a population-vacuity floor
+and a non-vacuity test naming the three removed sentences verbatim.
+
+Author-side battery, eleven mutations: **9 killed, 2 surviving, 2 controls clean.** The kills
+cover the three reversions, a claim reflowed across a newline (the Phase-254 class), the same
+claim planted in an unrelated shipped doc, the `.html` surface, and three paraphrases the
+first cut walked straight through (*"is not written to"*, *"nothing is ever committed to
+main"*, *"main is read-only"*) which were then closed.
+
+**The two survivors are residual and must stay that way.** The battery also tried *"The build
+never happens on `main`"* and *"your clone stays put"* — both survive, and both are live at
+`docs/workflow.html:1580`, where they are **true**: that sentence scopes itself to the *build*
+and then names the two coordination files by path. An arm wide enough to catch them
+false-fires on the most careful prose in the tree. Telling a true scoped claim from a false
+unscoped one is a judgement no pattern encodes, so the guard closes the concrete falsehoods
+and does not claim the class. Recorded rather than reported as a zero, because an author's
+own battery measures self-consistency and this one is mine.
+
+### Three prescribed steps that cannot run as printed
+
+`tools/make_public_mirror.sh`'s publish block is written for a human at a terminal. Stated
+here as constraints on the cut, not as an account of one:
+
+- **The PR body is authored in `vi`.** The block prints `BODY="$(mktemp)" && ${EDITOR:-vi}
+  "$BODY"`. An interactive editor cannot be driven, so the body is written to the same
+  tempfile non-interactively and the rest of the chain run exactly as printed. Named rather
+  than quietly worked around, per the rule Phase 168 put in the author-side pass.
+- **`gh pr checks --watch` blocks.** Replaced with a background poll keyed on `bucket`, per
+  the standing preference against blocking watch commands.
+- **`Q-394` is live inside the block.** The identity gate uses `|| { echo 'STOP…'; false; }`,
+  which does not stop the `git push` on the following line — so the block mixes Phase 259's
+  blocking `&&` chain with a non-blocking arm. It is treated as a real stop regardless of what
+  the shell does. The entry stays open.
+
+**Closing figure: 5847 passed, 179 skipped, 0 failed at `a1cfdfa`** — measured after the
+record and after the round's fixes, with nothing red. The +3 over Phase 259's 5844 is this
+phase's own guard module. Two intermediate states were red and both were the documented cost
+of the close-out order: `test_phase_log_currency` from the moment the `CLAUDE.md` row landed
+until `tools/NEXT_SESSION_PROMPT.md` was rewritten, and two `test_ledger_stats` assertions
+from the moment the ledger row landed until the derived headline and the register's
+population line were re-derived.
+
+### What this phase did not do
+
+**The push had not run when this record was first written, and the first draft of the section
+above described it in the past tense** — a claim of accomplished execution sitting in a file
+that ships, which is the Phase-153 class and was caught by the round rather than by me. The
+cut evidence lands in this phase's post-merge record commit, the mechanism Phase 239
+established, because the cut runs from merged `main` and that SHA does not exist while the
+branch is open.
+
+Not done, by decision: `Q-397` (the only open § High), `Q-398`, `Q-399`, `Q-401`, `Q-402`,
+`Q-393`, `Q-396`, `Q-386`, and any announce work — `A2-announce` remains deferred on Wade's
+2026-08-22 call. `Q-401` was left open deliberately: the address it names is already published,
+and `Q-294` adjudicated **commit-header** leakage while `Q-401` is **file content** in a
+shipped test module, so what is nil is the *incremental* exposure, not the gate gap itself.

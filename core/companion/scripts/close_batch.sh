@@ -921,6 +921,41 @@ TOTAL_ORPHANS=0
 TOTAL_NEARMISSES=0
 TOTAL_FALLBACK_RANGES=0
 
+# ── Serialize the tracker write (`Q-387`, Phase 258) ─────────
+#
+# `close_batch.sh` is the OTHER writer of review_tasks.md: it reads the file,
+# rewrites it and commits, exactly as `batch_work.sh`'s claim does. A mutex only
+# the claim path takes is not a mutex, so the close takes the same one, over the
+# same span — the rewrite loop plus the commit below.
+#
+# ONE combined EXIT trap rather than the tempfile traps this script used to arm and
+# disarm around each rewrite — TWO arms and THREE disarms, not the "three pairs" an
+# earlier draft of this comment claimed; a reviewer counted them. Those `trap - EXIT` calls clear the WHOLE
+# handler, so a lock-release trap armed here would have been silently disarmed by
+# the first rewrite that finished — the mutex would then survive the process and
+# wedge every later close. Folding both jobs into one handler removes the class
+# instead of ordering around it; the sites that used to disarm now just clear
+# `TMP_FILE`, which preserves the one place that deliberately KEEPS the tempfile
+# for inspection.
+_close_exit_cleanup() {
+  [ -n "${TMP_FILE:-}" ] && rm -f "$TMP_FILE" 2>/dev/null
+  tracker_lock_release
+  return 0
+}
+TMP_FILE=""
+trap '_close_exit_cleanup' EXIT
+
+# `--dry-run` does NOT take the mutex, and that was a round finding rather than a
+# design choice: the first cut acquired unconditionally, so a preview — which
+# writes nothing — created `sysop/runtime/`, held the write lock for the whole run
+# and could block a real claim, or be refused itself after the full wait. A
+# read-only preview has no business in a write mutex.
+if ! $DRY_RUN; then
+  CLOSE_LOCKS_DIR="$(resolve_locks_dir 2>/dev/null)" || CLOSE_LOCKS_DIR=""
+  tracker_lock_acquire "$CLOSE_LOCKS_DIR" "this close" \
+    "nothing was written: no status flip, no commit, no lock released" || exit 1
+fi
+
 for BATCH_NUM in "${BATCH_NUMS[@]}"; do
   echo "── Batch ${BATCH_NUM} ──"
 
@@ -1386,8 +1421,20 @@ for BATCH_NUM in "${BATCH_NUMS[@]}"; do
   # place. CLAUDE.md § Data integrity requires `<path>.tmp` + atomic move so a
   # mid-flow interrupt cannot leave review_tasks.md half-edited (downstream
   # readers — review_index.py, /next-task — treat the file as canonical).
-  TMP_FILE="${TASKS_FILE}.tmp"
-  trap 'rm -f "$TMP_FILE"' EXIT
+  # PID-qualified (`Q-387`, Phase 258). Phase 256 PID-qualified `batch_work.sh`'s
+  # tempfile for `Q-382` and this — the OTHER writer of the same file — kept the
+  # fixed name, so two concurrent writers still collided on one path here.
+  #
+  # `${TASKS_FILE%.md}.$$.md.tmp`, character for character the shape
+  # `batch_work.sh` uses for its claim tempfile, NOT `${TASKS_FILE}.$$.tmp`:
+  # the name has to keep
+  # its `.md.tmp` ending to stay inside the `review_tasks*.md.tmp` shape
+  # `archive_review_tasks.py` documents as the orphan it recognises at the
+  # repo root. `review_tasks.md.<pid>.tmp` ends in `.tmp` but not `.md.tmp`, so
+  # it would fall out of that class silently.
+  TMP_FILE="${TASKS_FILE%.md}.$$.md.tmp"
+  # No trap here: the combined EXIT handler armed before the loop already removes
+  # `$TMP_FILE` and releases the tracker lock.
   # sed handles the line-addressed header + statistics-row edits; awk handles the
   # checkboxes, which need lookahead (see CLOSE_AWK). sed changes no line count,
   # so the line numbers awk is given still hold downstream of the pipe.
@@ -1427,12 +1474,12 @@ for BATCH_NUM in "${BATCH_NUMS[@]}"; do
      [[ "$(grep -c '' "$TMP_FILE")" -lt "$(grep -c '' "$TASKS_FILE")" ]]; then
     echo "❌ Rewrite of review_tasks.md produced short output — refusing to install it." >&2
     echo "   ${TASKS_FILE} is unchanged. Tempfile kept for inspection: ${TMP_FILE}" >&2
-    trap - EXIT
+    TMP_FILE=""   # keep it for inspection; the lock is still released on exit
     exit 1
   fi
 
   mv -- "$TMP_FILE" "$TASKS_FILE"
-  trap - EXIT
+  TMP_FILE=""
 
   TOTAL_TASKS_CLOSED=$((TOTAL_TASKS_CLOSED + TASKS_IN_BATCH))
   if [[ $TASKS_FAILED_IN_BATCH -gt 0 ]]; then
@@ -1463,11 +1510,10 @@ if [[ $TOTAL_TASKS_CLOSED -gt 0 ]]; then
       echo "   [dry-run] Would update: ${CURRENT_DONE} done → ${NEW_DONE} done, ${CURRENT_OPEN} open → ${NEW_OPEN} open"
     else
       # Atomic rewrite per CLAUDE.md § Data integrity.
-      TMP_FILE="${TASKS_FILE}.tmp"
-      trap 'rm -f "$TMP_FILE"' EXIT
+      TMP_FILE="${TASKS_FILE%.md}.$$.md.tmp"
       sed "s/${CURRENT_DONE} done, ${CURRENT_OPEN} open/${NEW_DONE} done, ${NEW_OPEN} open/" "$TASKS_FILE" > "$TMP_FILE"
       mv -- "$TMP_FILE" "$TASKS_FILE"
-      trap - EXIT
+      TMP_FILE=""
     fi
   fi
 fi

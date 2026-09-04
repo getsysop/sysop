@@ -315,15 +315,41 @@ class TestWorktreeCreation:
         int), so no fixture can reach it and a behavioural test cannot exist. The round
         flipped that arm back to `return 0` and nothing noticed."""
         body = SCRIPTS.joinpath("batch_work.sh").read_text(encoding="utf-8")
-        start = body.index("claim_batch() {")
+        # Bound to `_claim_batch_locked`, not `claim_batch`. Phase 258 (`Q-387`)
+        # split the function: `claim_batch` is now a serializing wrapper and the
+        # contract this test pins lives in the body. Re-pointed rather than
+        # relaxed — binding the wrapper made the assertion read 0 arms and the
+        # honest reading of that is "the guard lost its subject", not "the
+        # contract changed".
+        start = body.index("_claim_batch_locked() {")
         end = body.index("\n}\n", start)
         fn = body[start:end]
         returns_zero = [ln.strip() for ln in fn.splitlines() if ln.strip() == "return 0"]
         assert len(returns_zero) == 1, (
-            f"claim_batch has {len(returns_zero)} `return 0` arms, not 1. Every non-claim "
-            "outcome must refuse before anything is written (`Q-378`) — the top level's "
-            "`|| exit 1` is what turns that into a clean exit, and a second success arm "
-            "silently restores the half-claim."
+            f"_claim_batch_locked has {len(returns_zero)} `return 0` arms, not 1. Every "
+            "non-claim outcome must refuse before anything is written (`Q-378`) — the top "
+            "level's `|| exit 1` is what turns that into a clean exit, and a second success "
+            "arm silently restores the half-claim."
+        )
+
+        # And the wrapper must not become a second success arm in its own right:
+        # it has to propagate the body's status, and release the mutex on BOTH
+        # paths. A wrapper that returned 0 unconditionally would restore exactly
+        # the half-claim the assertion above exists to prevent, while leaving
+        # every arm of the body intact.
+        wstart = body.index("claim_batch() {")
+        wfn = body[wstart:body.index("\n}\n", wstart)]
+        assert 'return "$rc"' in wfn, (
+            "claim_batch must propagate the body's exit status verbatim; anything "
+            "else turns a refusal into a claimed batch with no flip."
+        )
+        assert "tracker_lock_release" in wfn, (
+            "claim_batch must release the tracker mutex; a wrapper that acquires "
+            "and does not release wedges every later claim and close."
+        )
+        assert wfn.count("return 0") == 0, (
+            "claim_batch has an unconditional success arm — the body's refusals "
+            "would stop reaching the caller."
         )
     def test_a_local_only_repo_still_claims_normally(self, tmp_path):
         """The control for the arm above, and the mistake this phase made first: refusing

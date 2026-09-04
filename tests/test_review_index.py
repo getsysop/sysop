@@ -234,10 +234,17 @@ def test_write_index_then_read_index_round_trips(tmp_path):
 
 
 def test_write_index_is_atomic(tmp_path):
-    """write_index must not leave a ``.tmp`` file behind after success."""
+    """write_index must not leave ANY ``.tmp`` file behind after success.
+
+    Globbed rather than naming ``review_index.json.tmp``: Phase 258 PID-qualified
+    the tempfile (`Q-387`), so the fixed name this test used to assert against can
+    no longer exist and the assertion had gone vacuous -- it would have passed
+    against a function that leaked one tempfile per call.
+    """
     index_path = tmp_path / ".claude" / "review_index.json"
     ri.write_index({"x": 1}, str(index_path))
-    assert not (tmp_path / ".claude" / "review_index.json.tmp").exists()
+    assert index_path.exists()
+    assert list((tmp_path / ".claude").glob("*.tmp")) == []
 
 
 def test_read_index_returns_none_when_missing(tmp_path):

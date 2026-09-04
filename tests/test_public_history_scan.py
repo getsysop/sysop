@@ -591,3 +591,318 @@ def test_an_accept_entry_may_carry_a_trailing_comment(tmp_path):
         f"an entry with a trailing comment was not parsed.\n{p.stdout}\n{p.stderr}"
     )
     assert re.search(r"ACCEPTED\s*\(header\)", p.stdout), p.stdout
+
+
+# ── Q-392: the MESSAGE arm ──────────────────────────────────────────────────
+#
+# The header arm above reads `%ae%n%ce` — the two EMAIL fields. Every other pass
+# in the cut reads a tree or a path. So nothing read `%s` or `%B`, and the
+# filing reproduced the consequence: a commit whose MESSAGE carried a Pass-1a
+# token, a maintainer-side path and an absolute home path scanned `content:0
+# names:0 header:0`, `NEW:0,0,0`, exit 0.
+#
+# The arm delegates to `tools/scan_message.py` rather than restating six
+# patterns here — the two-copies state `Q-256` is about. What stays in the shell
+# script is the decision about WHICH commits get scanned (`--all --tags`, bought
+# by a round that found a tag-only commit unscanned), so that decision keeps
+# living in exactly one place.
+#
+# The detectors themselves are covered by `tests/test_message_scan_gate.py`.
+# What is asserted HERE is the wiring: that the column is computed for every
+# commit, that a finding gates, that the arm adjudicates separately from the
+# other three, and that an unrunnable scanner refuses rather than reporting a
+# clean column it never computed.
+
+CUT_SRC = REPO_ROOT / "tools" / "cut_public_release.sh"
+
+
+def _leaky_message():
+    """A message carrying a real Pass 1a token — DERIVED, never typed.
+
+    **This module SHIPS.** A literal blocked identifier here would be a Pass 1a
+    finding in the public tree — the canary becoming the leak, which is the
+    first of the two reasons `tests/test_mirror_leak_gate.py`,
+    `tests/test_cut_release_gate.py` and `tests/test_message_scan_gate.py` are
+    all stripped from the mirror. This module does not need that exclusion
+    precisely because it plants nothing it has to type.
+
+    Deriving it from the same `P1A=` assignment the scanner reads has a second
+    virtue: the fixture cannot drift from the list it is meant to exercise. A
+    token retired upstream retires here in the same edit.
+    """
+    m = re.search(r"(?m)^P1A='([^']*)'$", CUT_SRC.read_text(encoding="utf-8"))
+    assert m, "the Pass 1a source of truth moved; this fixture is now blind"
+    token = m.group(1).split("|")[0]
+    assert token, "the Pass 1a token list is empty; the fixture would plant nothing"
+    return f"snapshot (private def5678)\n\nPorted the {token} pipeline.\n"
+
+
+def _repo_msgs(tmp_path, messages, ident=None):
+    """A repo whose commit MESSAGES are exactly `messages`.
+
+    `_repo` above fixes the message at `commit {i}` and varies the identity;
+    this varies the message and fixes the identity to the ratified one, so a
+    message finding cannot be confused with a header finding.
+    """
+    an, ae, cn, ce = ident or ("Wade Petty", RATIFIED, "GitHub", GITHUB)
+    r = tmp_path / "clone"
+    r.mkdir(parents=True, exist_ok=True)
+    env = {
+        "PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin",
+        "HOME": str(tmp_path), "GIT_CONFIG_GLOBAL": "/dev/null",
+        "GIT_CONFIG_SYSTEM": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1",
+    }
+
+    def git(*a, **kw):
+        return subprocess.run(["git", "-C", str(r), *a],
+                              env={**env, **kw.pop("extra", {})},
+                              check=True, capture_output=True, encoding="utf-8")
+
+    git("init", "-q", "-b", "main")
+    for i, msg in enumerate(messages):
+        (r / f"f{i}.txt").write_text(f"body {i}\n", encoding="utf-8")
+        git("add", "-A")
+        git("commit", "-q", "--no-gpg-sign", "-m", msg, extra={
+            "GIT_AUTHOR_NAME": an, "GIT_AUTHOR_EMAIL": ae,
+            "GIT_COMMITTER_NAME": cn, "GIT_COMMITTER_EMAIL": ce,
+        })
+    return r
+
+
+def _msg_counts(stdout):
+    return [int(m) for m in re.findall(r"\bmessage:(\d+)\b", stdout)]
+
+
+def test_a_clean_history_gets_a_message_column_on_every_commit(tmp_path):
+    """Vacuity control, and it is the one that matters.
+
+    An arm that never runs reports the same thing as an arm that runs and finds
+    nothing. `grep -vxF` exiting 1 on a clean commit is how the HEADER arm
+    failed open here once already — the scan died on commit one, printed no
+    rows, and read as green. So this asserts a computed column PER COMMIT, not
+    just a zero in the summary.
+    """
+    _scan_available()
+    p, rows, _ = _run(_repo_msgs(tmp_path, ["clean snapshot"] * 4))
+    assert p.returncode == 0, f"{p.stdout}{p.stderr}"
+    assert len(rows) == 4, f"scanned {len(rows)} of 4 commits:\n{p.stdout}"
+    assert _msg_counts(p.stdout) == [0, 0, 0, 0], (
+        f"the message column was not computed for every commit:\n{p.stdout}"
+    )
+    assert "message=0" in p.stdout, f"the summary carries no message arm:\n{p.stdout}"
+
+
+def test_a_leaking_commit_MESSAGE_is_found_and_the_scan_exits_non_zero(tmp_path):
+    """`Q-392`'s own reproduction, inverted into an assertion."""
+    _scan_available()
+    p, rows, _ = _run(_repo_msgs(tmp_path, ["clean", _leaky_message(), "clean"]))
+    assert len(rows) == 3, f"did not scan all 3 commits:\n{p.stdout}"
+    assert p.returncode == 1, (
+        "a message carrying a blocked identifier and a maintainer-side path did "
+        f"not gate — this is the exit 0 the filing reproduced:\n{p.stdout}{p.stderr}"
+    )
+    assert sorted(_msg_counts(p.stdout))[-1] >= 1, (
+        f"the leaking commit reported no findings at all:\n{p.stdout}"
+    )
+    assert "NEW:content=0,names=0,header=0,message=1" in p.stdout, (
+        f"the summary did not attribute the finding to the message arm:\n{p.stdout}"
+    )
+
+
+def test_the_github_squash_trailer_does_not_flag_published_history(tmp_path):
+    """The measured false-positive class, pinned so nobody re-mints it.
+
+    The arm's first run against the real published repo returned 33 findings
+    across 35 commits, every one of them GitHub's own `(#N)` squash trailer — a
+    number that resolves perfectly in the repo being scanned. A gate wrong 33
+    times out of 35 does not get tightened, it gets switched off.
+    """
+    _scan_available()
+    p, rows, _ = _run(_repo_msgs(tmp_path, [
+        "sysop public snapshot (private d769247) (#2)",
+        "sysop public snapshot (private 3954031) (#1)",
+    ]))
+    assert p.returncode == 0, (
+        "GitHub's squash trailer gated the scan. Every published commit carries "
+        f"one:\n{p.stdout}{p.stderr}"
+    )
+    assert _msg_counts(p.stdout) == [0, 0], p.stdout
+
+
+def test_a_message_finding_is_adjudicated_on_its_own_arm(tmp_path):
+    """A SHA accepted for a message leak is not thereby accepted for a header
+    one, and vice versa. That is the whole reason these are separate lists.
+    """
+    _scan_available()
+    clone = _repo_msgs(tmp_path, [_leaky_message()], ident=LEAK)
+    sha = _shas(clone)[0]
+
+    # Accepted for the message only: the HEADER leak must still gate.
+    p = _run_accept(clone, f"message {sha}\n", tmp_path)
+    assert p.returncode == 1, (
+        f"a message acceptance silently covered a header leak:\n{p.stdout}{p.stderr}"
+    )
+    # BOTH markers, on the SAME row. Asserting only the message marker cannot see
+    # the accumulation bug: the arms build one `mark` string, the first ASSIGNS and
+    # the rest APPEND, so an arm written to assign silently erases its neighbour's
+    # marker while its own stays present. That is the defect this phase shipped and
+    # removed, and the author battery walked it straight back through a test that
+    # only looked for one of the two.
+    row = next(l for l in p.stdout.splitlines() if l.startswith(sha[:8]))
+    assert "ACCEPTED(message)" in row and "** NEW header finding **" in row, (
+        "the per-commit row names only one of the two arms that fired. An arm that "
+        f"assigns `mark` rather than appending erases its neighbour:\n{row}"
+    )
+
+    # Accepted for the header only: the MESSAGE leak must still gate.
+    p = _run_accept(clone, f"header {sha}\n", tmp_path)
+    assert p.returncode == 1, (
+        f"a header acceptance silently covered a message leak:\n{p.stdout}{p.stderr}"
+    )
+    assert "** NEW message finding **" in p.stdout, p.stdout
+
+    # Both adjudicated: green, and reported as accepted rather than absent.
+    p = _run_accept(clone, f"header {sha}\nmessage {sha}\n", tmp_path)
+    assert p.returncode == 0, f"{p.stdout}{p.stderr}"
+    assert "message=1" in p.stdout, p.stdout
+
+
+def test_every_arm_appends_its_marker_rather_than_assigning(tmp_path):
+    """Marker accumulation, across THREE arms rather than one pair.
+
+    The arms build a single `mark` string: the first assigns and every later one
+    appends. The phase found and fixed that at the *message* arm, and a round
+    then reverted it at the *content* arm and watched the guards stay green —
+    the header marker vanished from the row while the summary counts stayed
+    right. Pinning one pair cannot see a third arm doing it.
+    """
+    _scan_available()
+    clone = _repo_msgs(tmp_path, [_leaky_message()], ident=LEAK)
+    sha = _shas(clone)[0]
+    p, rows, _ = _run(clone)
+    row = next(l for l in rows if l.startswith(sha[:8]))
+    # This commit trips the header arm (a private address) and the message arm
+    # (a Pass 1a token in the message). Both markers must survive on one row.
+    assert row.count("**") >= 4, (
+        "fewer than two arms are named on a row that trips two — an arm is "
+        f"assigning `mark` instead of appending to it:\n{row}"
+    )
+    assert "NEW header finding" in row and "NEW message finding" in row, (
+        f"a marker was overwritten by a later arm:\n{row}"
+    )
+
+
+def test_the_scan_refuses_when_the_message_scanner_cannot_run(tmp_path):
+    """Fail CLOSED, the same rule the allow-list derivation follows.
+
+    A missing or unrunnable scanner must stop the scan, not silently leave the
+    message column uncomputed — which would report exactly what a clean history
+    reports.
+    """
+    _scan_available()
+    clone = _repo_msgs(tmp_path, [_leaky_message()])
+    # A copy of the script whose scanner path cannot resolve.
+    stray = tmp_path / "scan_copy.sh"
+    stray.write_text(
+        SCAN.read_text(encoding="utf-8").replace(
+            'SCAN_MSG="$SRC/tools/scan_message.py"',
+            'SCAN_MSG="$SRC/tools/no_such_scanner.py"',
+        ),
+        encoding="utf-8",
+    )
+    # The copy sits outside the repo, so `$SRC` no longer resolves to it. Both
+    # of the script's OTHER derivations are handed their real sources here on
+    # purpose: without that the copy refuses over the Pass 1a list or the accept
+    # file, exit 2 for a reason that has nothing to do with this test — a test
+    # that passes for the wrong reason is not a test.
+    p = subprocess.run(
+        ["bash", str(stray), str(clone), str(REPO_ROOT / "tools" / "cut_public_release.sh")],
+        capture_output=True, encoding="utf-8",
+        env={**os.environ, "ACCEPT_FILE": str(ACCEPT_LIST)},
+    )
+    assert p.returncode == 2, (
+        f"expected a refusal (2), got {p.returncode} — a missing message scanner "
+        f"must not degrade into a passing scan:\n{p.stdout}{p.stderr}"
+    )
+    assert "no message scanner" in (p.stdout + p.stderr), (
+        "the scan refused, but not over the missing scanner — this case is "
+        f"passing for the wrong reason:\n{p.stdout}{p.stderr}"
+    )
+
+
+def _scan_with_stub(tmp_path, clone, stub_body):
+    """Run the arm against a scanner that EXISTS but misbehaves at runtime.
+
+    The missing-scanner case above is caught by a `[ -f … ]` preflight, so it
+    never reaches the two runtime checks — which is why the author battery
+    walked both of them through. A stub that exists and then refuses, or exits
+    without a SUMMARY, is what exercises them.
+
+    **The stub MUST drain stdin, and the first version did not.** The arm pipes
+    one commit's `%B` into the scanner. A stub that exits without reading gives
+    `git log` a SIGPIPE, `set -o pipefail` promotes that 141 into the pipeline
+    status, and `msg_rc=141` takes the `>= 2` refusal branch — so the test
+    reached the wrong branch, false-FAILED on correct code roughly half the time
+    under load, and in those runs never exercised the check it is named for.
+    Found by a review lens that traced `msg_rc`; reproduced here at 2 of 6.
+    """
+    stub = tmp_path / "stub_scanner.py"
+    stub.write_text(stub_body, encoding="utf-8")
+    copy = tmp_path / "scan_copy.sh"
+    copy.write_text(
+        SCAN.read_text(encoding="utf-8").replace(
+            'SCAN_MSG="$SRC/tools/scan_message.py"',
+            f'SCAN_MSG="{stub}"',
+        ),
+        encoding="utf-8",
+    )
+    return subprocess.run(
+        ["bash", str(copy), str(clone),
+         str(REPO_ROOT / "tools" / "cut_public_release.sh")],
+        capture_output=True, encoding="utf-8",
+        env={**os.environ, "ACCEPT_FILE": str(ACCEPT_LIST)},
+    )
+
+
+def test_a_scanner_that_refuses_at_runtime_halts_the_scan(tmp_path):
+    """Exit 2 is a refusal and must stop the walk, not be read as a finding.
+
+    A refusal means the arm could not run. Folding it into the finding count
+    would report a leak that was never looked for; ignoring it would report a
+    clean message column nobody computed. Both are the fail-open shape this
+    file's header is about.
+    """
+    _scan_available()
+    p = _scan_with_stub(tmp_path, _repo_msgs(tmp_path, ["clean"]),
+                        "import sys; sys.stdin.read(); sys.exit(2)\n")
+    assert p.returncode == 2, (
+        f"a scanner refusal did not halt the scan (rc={p.returncode}):\n"
+        f"{p.stdout}{p.stderr}"
+    )
+    assert "could not run" in (p.stdout + p.stderr), f"{p.stdout}{p.stderr}"
+    # A SIGPIPE 141 also satisfies `>= 2` and also prints "could not run", so
+    # without the stub's `sys.stdin.read()` above this assertion passes for a
+    # reason that has nothing to do with a refusal. Pin the code the stub
+    # actually returns, so the two are distinguishable.
+    assert "scanner could not run" in (p.stdout + p.stderr), f"{p.stdout}{p.stderr}"
+    assert "141" not in p.stderr.split("\n")[0], (
+        "the halt came from a broken pipe, not the stub's exit 2 — the stub is "
+        f"not draining stdin:\n{p.stderr}"
+    )
+
+
+def test_a_scanner_that_prints_no_summary_halts_rather_than_reading_zero(tmp_path):
+    """The count is parsed out of the scanner's SUMMARY line.
+
+    No SUMMARY means the parse yields an empty string, and empty read as `0` is
+    indistinguishable from a clean commit — a miss and a real zero being the
+    same output, which is the class this project keeps finding. It must refuse.
+    """
+    _scan_available()
+    p = _scan_with_stub(tmp_path, _repo_msgs(tmp_path, ["clean"]),
+                        "import sys; sys.stdin.read()\nprint('some output with no summary line')\n")
+    assert p.returncode == 2, (
+        f"a scanner emitting no SUMMARY was read as zero findings (rc={p.returncode}):\n"
+        f"{p.stdout}{p.stderr}"
+    )
+    assert "no SUMMARY" in (p.stdout + p.stderr), f"{p.stdout}{p.stderr}"
