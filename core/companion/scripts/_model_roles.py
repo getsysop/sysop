@@ -84,7 +84,7 @@ _INLINE_PIN_RE = re.compile(r'(model[`:\s]*["\'])([^"\']+)(["\'])')
 # Passing `best`, `inherit`, or a full model id (`claude-opus-5`) each returns
 # `InputValidationError` — verified 2026-08-21 against Claude Code by making the
 # calls, not by reading the schema. The failure lands mid-skill at spawn time, in
-# every skill the remapped role governs: 13 inline pins today, 12 of them on the
+# every skill the remapped role governs: 14 inline pins today, 12 of them on the
 # `reasoning` role, which covers the adversarial-review, judging and audit spawns.
 #
 # This default is what a consumer's harness accepts today. It is deliberately
@@ -216,7 +216,69 @@ def load_roles_config(
         for s in (ldata.get("served") or []):
             if str(s) not in served:
                 served.append(str(s))
-    return roles, served
+    return _resolve_role_aliases(roles), served
+
+
+# How deep a chain of role-to-role references may go. Two is enough for every
+# shape Sysop ships and the limit is stated rather than implied, so a longer
+# chain is a loud error instead of a silent truncation.
+_MAX_ALIAS_DEPTH = 8
+
+
+class RoleAliasError(ValueError):
+    """A cycle or an over-long chain in the `roles:` alias graph.
+
+    Distinct from the ValueError `_load_yaml_mapping` raises for a malformed
+    config, because the two are different exit codes the callers pin: a YAML
+    typo is a USAGE error (2) and must not be reported as the consumer's model
+    mapping being wrong (1). Catching the base class here collapsed that
+    distinction and reddened three pre-existing guards.
+    """
+
+
+def _resolve_role_aliases(roles: dict[str, str]) -> dict[str, str]:
+    """Let a role's value name ANOTHER ROLE, and resolve it to that role's model.
+
+    Phase 262. A narrow role split — `convention-gate`, which governs one pin —
+    needed a default, and a hard-coded one was WRONG in a way that only showed up
+    on upgrade. A consumer who had set `reasoning: sonnet` (the documented cheap
+    lever) had both Step 2b agents on sonnet; adding `convention-gate: opus` as a
+    literal silently moved the convention agent — the most-run deep spawn, and the
+    expensive one — back to opus on their next `--update`, with nothing in the
+    output naming it. Two keys would then be needed to buy what one key used to.
+
+    `convention-gate: reasoning` expresses the thing that is actually true: this
+    role FOLLOWS `reasoning` unless the consumer says otherwise. A local override
+    of `reasoning` flows through; a local override of `convention-gate` wins over
+    it; and the default install resolves to exactly the literals already in the
+    shipped skills, so it stays a zero-byte no-op.
+
+    Fail-closed is preserved, which is why this is an alias table and not a
+    fallback: a value that is neither a role name nor a served model still
+    reaches `check_skill_models.py` as-is and is rejected there, so a MISSPELLED
+    role name does not silently inherit anything. A cycle raises rather than
+    looping or picking a winner.
+    """
+    out: dict[str, str] = {}
+    for role in roles:
+        seen = [role]
+        value = roles[role]
+        depth = 0
+        while value in roles and value not in seen:
+            seen.append(value)
+            value = roles[value]
+            depth += 1
+            if depth > _MAX_ALIAS_DEPTH:
+                raise RoleAliasError(
+                    f"role alias chain from {role!r} exceeds {_MAX_ALIAS_DEPTH} hops: "
+                    + " -> ".join(seen)
+                )
+        if value in roles and value in seen:
+            raise RoleAliasError(
+                "role alias cycle: " + " -> ".join(seen + [value])
+            )
+        out[role] = value
+    return out
 
 
 def _load_yaml_mapping(path: Path) -> dict:

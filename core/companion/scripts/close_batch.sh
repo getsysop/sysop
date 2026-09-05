@@ -711,7 +711,11 @@ resolve_main_root() {
   if [[ "$common_dir" = /* ]]; then
     dirname "$common_dir"
   else
-    dirname "$(cd "$common_dir" && pwd)"
+    # `CDPATH= cd`: git answers with the RELATIVE `.git` from a primary checkout,
+    # and `cd .git` consults `CDPATH`. The sixth and last member of the class
+    # Phase 264 swept — the lock directory this resolves would otherwise be a
+    # decoy under an exported `CDPATH`, and the doubled echo would corrupt it.
+    dirname "$(CDPATH= cd "$common_dir" && pwd)"
   fi
 }
 

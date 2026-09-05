@@ -49,7 +49,7 @@ if [[ -n "$STAGED_TASKS" ]]; then
     if [[ "$GIT_COMMON_DIR" = /* ]]; then
       MAIN_REPO_ROOT="$(dirname "$GIT_COMMON_DIR")"
     else
-      MAIN_REPO_ROOT="$(dirname "$(cd "$GIT_COMMON_DIR" && pwd)")"
+      MAIN_REPO_ROOT="$(dirname "$(CDPATH= cd "$GIT_COMMON_DIR" && pwd)")"
     fi
   fi
 

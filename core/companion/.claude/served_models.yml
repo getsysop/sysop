@@ -12,6 +12,22 @@
 # mechanical — prescriptive, scoped fix agents (e.g. /auto-fix). Pinned, not
 #              inherited, so cost is deterministic regardless of the session model.
 # quick      — trivial read-only surveys (e.g. /next-task). Latency over depth.
+# convention-gate
+#            — /review-close Step 2b's convention agent, and nothing else. Split out
+#              of `reasoning` (Phase 262) so its model can be chosen separately from
+#              the security twin beside it, which stays on `reasoning`. It is the
+#              deep spawn that runs on EVERY target of every close — the security
+#              twin beside it is gated on a security-map glob and skips most
+#              targets on a stock install — so it is the one a consumer is most
+#              likely to want cheaper on its own.
+#
+#              Its value is the ROLE NAME `reasoning`, not a model: a role may name
+#              another role and resolves to whatever that role resolves to. So it
+#              FOLLOWS your `reasoning` choice by default — if you set
+#              `reasoning: sonnet`, this moves with it — and a `convention-gate:`
+#              key of your own wins over that. A literal `opus` here would instead
+#              have silently RAISED this pin back to opus, on update, for exactly
+#              the consumers who had chosen the cheap lever.
 #
 # Skills that carry no pin (and no marker) inherit the session model. That is
 # deliberate — roles govern pinned skills only; an un-pinned skill rides whatever
@@ -20,6 +36,7 @@ roles:
   reasoning:  opus
   mechanical: sonnet
   quick:      haiku
+  convention-gate: reasoning   # follows `reasoning` unless you override it
 
 # ── served ────────────────────────────────────────────────────────────────────
 # The models the roles above are allowed to resolve to. sysop/scripts/check_skill_models.py
@@ -47,8 +64,8 @@ served:
 #     parameter, which is a CLOSED ENUM. `best`, `inherit`, and full model ids
 #     are each rejected with InputValidationError at spawn time (verified by
 #     making the calls, 2026-08-21). The failure lands mid-skill, at spawn time,
-#     in every skill the role governs — 14 inline pins today, 13 of them on the
-#     `reasoning` role.
+#     in every skill the role governs — 14 inline pins today, 12 of them on the
+#     `reasoning` role, 1 on `convention-gate` and 1 on `mechanical`.
 #
 # check_skill_models.py fails (exit 1) when a role governing an inline pin
 # resolves to a value not listed here. If your harness accepts more, extend this
@@ -71,8 +88,9 @@ inline_models:
 #     roles:
 #       reasoning: fable
 #
-# `reasoning` and `mechanical` both govern inline pins, so map them to one of the four
-# aliases above. Mapping either to `best`, `inherit`, `opusplan`, a full model id, or a
+# `reasoning`, `convention-gate` and `mechanical` all govern inline pins, so map them to
+# one of the four aliases above — or, for `convention-gate`, to the name of another role.
+# Mapping any of them to `best`, `inherit`, `opusplan`, a full model id, or a
 # provider-specific id BREAKS every agent spawn in the skills that role governs — adding
 # the value to `served:` does not help, because `served:` is Sysop's sunset allowlist and
 # not the harness's enum. `quick` governs only frontmatter today and is not so constrained,

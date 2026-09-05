@@ -40,6 +40,7 @@ from _model_roles import (  # noqa: E402  (path set above)
     REPO_ROOT,
     analyze_text,
     iter_skill_files,
+    RoleAliasError,
     load_roles_config,
     read_skill_text,
     resolve_text,
@@ -107,7 +108,13 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: config not found: {config}", file=sys.stderr)
         return 2
 
-    roles, _ = load_roles_config(config, local if local.is_file() else None)
+    try:
+        roles, _ = load_roles_config(config, local if local.is_file() else None)
+    except RoleAliasError as exc:
+        print(f"\u274c {exc}", file=sys.stderr)
+        print("   Fix the `roles:` map so no role's value chains back to itself.",
+              file=sys.stderr)
+        return 1
 
     bad = _unresolvable(root, roles)
     if bad:

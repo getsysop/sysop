@@ -21,8 +21,8 @@ Read `.claude/settings.json` and confirm `permissions.allow` contains:
 - `Bash(bash sysop/scripts/claim_task.sh:*)` — Step 5.2 sequential pre-claim (also invoked transitively by every spawned execution agent's local context).
 - `Bash(python3 -:*)` — Step 1's queue-read/readiness-filter heredoc and Step 5.1's yaml-round-trip status flip (both single `python3 - <<` commands; venv PyYAML is resolved by an in-heredoc `sys.path` bootstrap, not a `.venv/bin/python3` command word or an env prefix — either of which would bind to no rule; Sysop Phase 126).
 - `Bash(python3 sysop/scripts/validate_tasks.py)` / `Bash(python3 sysop/scripts/validate_tasks.py:*)` and the `.venv/bin/python3 sysop/scripts/validate_tasks.py` / `.venv/bin/python3 sysop/scripts/validate_tasks.py:*` venv variants — Step 5.3 post-claim validator. Bare `python3` is the command word the step prescribes: the script self-resolves venv PyYAML via its own `sys.path` bootstrap (Phase 182), so one form serves every consumer. The `.venv/bin/python3` rules stay only so a hand-typed venv invocation is not denied.
-- `Bash(git add tasks/index.yml)` — Step 5.4 commits each claim.
-- `Bash(git commit -m claim:*)` — Step 5.4 commit message shape.
+- `Bash(git add tasks/index.yml)` — **bound by no step in this skill since Phase 263**, which moved Step 5.4's staging and commit inside `claim_task.sh --commit-claim` (covered by `Bash(bash sysop/scripts/claim_task.sh:*)` above). Step 5's rollback path does **not** bind it either: it runs `git checkout` then `git commit`, and stages nothing. Retained on the same grounds as the rule below, and bound elsewhere — `/claim-task` Step 7d and Step 7f Option C, `/review-close` — so it is live, just not from here.
+- `Bash(git commit -m claim:*)` — retained, but **no step in this skill binds it** since Phase 263 moved Step 5.4 inside `claim_task.sh`. Kept because removing a template rule never removes it from an installed consumer (`WORKFLOW.md` § 8.2a), and a rule that grants nothing requested costs nothing; filed for retirement rather than left implicitly justified.
 - `Bash(git commit -m rollback:*)` — Step 5 rollback path on pre-claim failure.
 - `Bash(git checkout:*)` — Step 5 rollback path (`git checkout tasks/index.yml`).
 
@@ -404,6 +404,20 @@ For each task in the confirmed batch:
 # a redirection — a syntax error in final position, and in mid-command position a silent
 # read from a file of that name if one happens to exist.
 #
+# 5.0 — this loop WRITES cwd-relative (5.1) and COMMITS primary-relative (5.4), and in
+#        a linked worktree those are two different trees: 5.1 flips the worktree's index,
+#        `--commit-claim` finds the primary one unflipped, re-flips it, commits there —
+#        reporting "the Step 4a edit was not on disk" when it was, in a checkout it never
+#        looked at — and leaves the worktree dirty with the claim committed somewhere the
+#        operator is not standing. The inline HEAD test that 5.4 carried until Phase 263
+#        halted on this by ACCIDENT (a linked worktree is not on the default branch); this
+#        step is that guard made explicit, because `--commit-claim`'s own Rule A check
+#        reads the primary checkout's HEAD and so cannot see where the caller stands.
+#        `--git-dir` equals `--git-common-dir` only in the primary checkout.
+test "$(git rev-parse --git-dir)" = "$(git rev-parse --git-common-dir)" || {
+  echo "/auto-build Step 5 must run in the PRIMARY checkout, not a linked worktree — STOP."
+  exit 1; }
+
 # 5.1 — flip index.yml status open → in_progress. `python3` command word + in-heredoc
 # PyYAML bootstrap so `Bash(python3 -:*)` matches as a single simple command (Phase 126).
 python3 - <<'PY' "<TASK_ID>"
@@ -429,11 +443,21 @@ except ImportError:  # PyYAML lives only in the project venv (BeanRider ISSUE-00
             _sites += glob.glob(os.path.join(_root, _layout, "lib/python*/site-packages"))
     sys.path[:0] = _sites
     import yaml
+import os, tempfile
 from pathlib import Path
 task_id = sys.argv[1]
 index_path = Path("tasks/index.yml")
 with index_path.open(encoding="utf-8") as f:
     data = yaml.safe_load(f)
+# A concurrent writer that truncates in place leaves this file zero-length for a
+# moment, and `safe_load("")` returns None — which then dies on `.get` with a raw
+# AttributeError and loses the claim (Phase 261, `Q-397`). Until Phase 263 this
+# step WAS such a writer, which is why the guard is paired with the atomic write
+# below: converting only one of the two leaves the other half of the race open.
+if data is None:
+    print("ERROR: tasks/index.yml read as empty — a concurrent writer was mid-write. "
+          "Nothing was changed; re-run this step.", file=sys.stderr)
+    sys.exit(1)
 found = False
 for t in data.get("tasks", []):
     if t.get("id") == task_id:
@@ -446,8 +470,35 @@ for t in data.get("tasks", []):
 if not found:
     print(f"ERROR: {task_id} not in index", file=sys.stderr)
     sys.exit(1)
-with index_path.open("w", encoding="utf-8") as f:
-    yaml.safe_dump(data, f, sort_keys=False, default_flow_style=False, allow_unicode=True, width=120)
+# tempfile + os.replace, NOT `open(path, "w")`. A truncate in place is not just
+# non-atomic for THIS writer — it makes every concurrent READER see a zero-length
+# file, which is the crash the `data is None` guard above reports. `mkstemp` rather
+# than a fixed `<path>.tmp`, so two writers cannot collide on the temp name either
+# (`Q-382`'s class). Same directory, so the replace is atomic; `realpath` so a
+# symlinked index is written THROUGH rather than replaced, and the mode is carried
+# across. The shape Phase 261 converted `/claim-task` Step 4a and `--release` to, and
+# gave `--commit-claim` when it added it; this step was the last in-place writer
+# (Phase 263, `Q-404`).
+real = os.path.realpath(index_path)
+mode = os.stat(real).st_mode & 0o7777
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(real),
+                           prefix=os.path.basename(real) + ".", suffix=".tmp")
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        yaml.safe_dump(
+            data,
+            f,
+            sort_keys=False,
+            default_flow_style=False,
+            allow_unicode=True,
+            width=120,
+        )
+    os.chmod(tmp, mode)
+    os.replace(tmp, real)
+except BaseException:
+    if os.path.exists(tmp):
+        os.unlink(tmp)
+    raise
 PY
 
 # 5.2 — create worktree + lock
@@ -460,20 +511,32 @@ bash sysop/scripts/claim_task.sh --lock "<TASK_ID>" "<BRANCH_NAME>"
 python3 sysop/scripts/validate_tasks.py
 # If non-zero: report validator output verbatim; abort the batch.
 
-# 5.4 — commit the claim (Rule A: assert HEAD is still on the DEFAULT BRANCH before each
-#        loop commit — another Sysop session could have moved it; see
-#        _shared/main-push-guard.md. Resolve <default branch> once before this block with
-#        `bash sysop/scripts/default_branch.sh` (bare) and substitute it — it is not `main`
-#        on every consumer, and the literal halted this loop on a `master` repo (Q-377).
-#        On failure STOP and reconcile via git reflog, do not commit onto the wrong branch.)
-test "$(git rev-parse --abbrev-ref HEAD)" = "<default branch>" || {
-  echo "HEAD is not <default branch> (a concurrent actor moved it) — STOP."; exit 1; }
-git add tasks/index.yml && git commit -m "claim: mark <TASK_ID> as in-progress"
+# 5.4 — commit the claim, through the owner `/claim-task` Step 4d already uses. This
+#        step was hand-rolled until Phase 263 (`Q-404`), and the script is stronger in
+#        three ways. It holds the tracker write mutex across the whole read-flip-commit,
+#        so a rival claim cannot interleave. It applies `_shared/main-push-guard.md`
+#        Rule A INSIDE that critical section — the inline `test` it replaced ran as its
+#        own command, so HEAD could move between the check and the commit. And it
+#        RE-FLIPS when the status has come back `open`, repairing a rival's clobber of
+#        5.1's uncommitted edit instead of committing over it; 5.1's atomic write closes
+#        the torn read, but only this arm repairs a lost flip. It resolves the default
+#        branch itself, so nothing here substitutes `<default branch>` any more — the
+#        literal `main` halted this loop on a `master` repo (`Q-377`), and resolving it
+#        is now the script's job rather than the operator's. Commit message unchanged.
+#        One protection this LOSES, stated because it was real: the hand-rolled
+#        commit failed with `nothing to commit` whenever 5.1 had refused, so it
+#        was an accidental second tripwire on the no-`set -e` hazard the preamble
+#        names. `--commit-claim` exits 0 on an already-`in_progress` task (its
+#        resume path), so the loop now runs green past a refused 5.1 and the
+#        preamble's rule — read each step's status, stop on the first non-zero —
+#        is the only thing standing there.
+#        On a non-zero exit STOP and reconcile; do not hand-commit the flip.
+bash sysop/scripts/claim_task.sh --commit-claim "<TASK_ID>"
 ```
 
 Branch-name generation (matches `/claim-task` Step 3): lowercase task ID with prefix `feat/` / `tech/` / `data/` / `ux/` / `fix/` based on the ID prefix; or honour `branch:` field in `index.yml` if present.
 
-Collect `(task_id, worktree_path, branch_name)` tuples. Worktree path is `../${WORKTREE_PREFIX:-$(basename "$REPO_ROOT")}-<task-id-lowercase>/` relative to the project root — note the `WORKTREE_PREFIX` override, which the script honors and an earlier version of this sentence omitted. The path is computed by `sysop/scripts/claim_task.sh` itself, at its `WORKTREE_DIR=` assignment (cited by symbol, not line — the line number in this sentence went stale at Phase 32 and stayed wrong until Phase 163), so the orchestrator just records what the script printed rather than recomputing.
+Collect `(task_id, worktree_path, branch_name)` tuples. Worktree path is `${WORKTREE_ROOT:-..}/${WORKTREE_PREFIX:-$(basename "$REPO_ROOT")}-<task-id-lowercase>/` — note **both** overrides the script honors: `WORKTREE_PREFIX` on the leaf (an earlier version of this sentence omitted it) and `WORKTREE_ROOT` (Phase 262) on the parent directory, which is why the default is written here as a defaulted `..` rather than a literal one. The path is computed by `sysop/scripts/claim_task.sh` itself, at its `WORKTREE_DIR=` assignment (cited by symbol, not line — the line number in this sentence went stale at Phase 32 and stayed wrong until Phase 163), so the orchestrator just records what the script printed rather than recomputing.
 
 **Abort handling:** if any pre-claim step fails, roll back the partial state for **that one task** (`git checkout tasks/index.yml` then `git commit -m "rollback: <TASK_ID> claim failed"`, plus — if a worktree was created — `bash sysop/scripts/claim_task.sh --release <TASK_ID>` when its lock exists, or `git worktree remove <worktree-path>` when the failure preceded the lock write; `--force`, if needed, goes **before** the task ID) and report which task failed. **Never `cleanup_worktrees.sh --force` here.** It takes no path operand, so it removes every non-main worktree: it would wipe the worktrees of the tasks pre-claimed earlier in *this* batch — the ones the next sentence says stay claimed — plus any other session's in-flight work (WORKFLOW.md § 8.4). Tasks already pre-claimed earlier in the batch stay claimed — the human can either run `/auto-build` again to spawn agents for them, or `/document-work` / `/review-close` them manually.
 

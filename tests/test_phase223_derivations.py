@@ -80,10 +80,30 @@ def test_the_published_pin_counts_match_the_census():
 
 def test_the_cheap_tier_really_is_two_pins():
     """The claim that carries the recommendation: there is no cheap lever hiding
-    in the default map, because the cheap roles govern almost nothing."""
+    in the default map, because the cheap roles govern almost nothing.
+
+    **The partition assertion used to be `reasoning + cheap == total`, and that
+    silently encoded "the tree has exactly two tiers."** Phase 262 added
+    `convention-gate` as a third and this test went red with `30 + 2 == 33` —
+    correctly, but for a reason the message did not name. It now asserts the
+    census partitions COMPLETELY, so a fourth role is accounted for by
+    construction rather than by someone remembering to widen a sum. The
+    two-tier claim the docs make is still asserted, as its own line.
+    """
     c = _load(CENSUS, "phase223_role_census").census()
     assert c["cheap_tier_pins"] == 2
-    assert c["reasoning_pins"] + c["cheap_tier_pins"] == c["total"]
+    assert sum(c["by_role"].values()) == c["total"], (
+        f"the census does not partition: {c['by_role']} sums to "
+        f"{sum(c['by_role'].values())}, total is {c['total']}"
+    )
+    # Every pin not on a cheap role and not on `reasoning` belongs to some role
+    # the docs must constrain — naming them, so an unexplained one is visible.
+    other = {r: n for r, n in c["by_role"].items()
+             if r not in ("reasoning", "mechanical", "quick")}
+    assert other == {"convention-gate": 1}, (
+        f"a role outside the documented tiers governs pins: {other}. Widen "
+        f"docs/configuration.md's mapping sentence before widening this."
+    )
 
 
 def test_the_loop_mode_counts_are_derived_and_published():
@@ -111,8 +131,8 @@ def test_inline_governing_roles_are_the_ones_the_docs_constrain():
     `mechanical` because those govern inline pins. If a future pin puts a third
     role inline, that sentence is silently wrong and this goes red."""
     c = _load(CENSUS, "phase223_role_census").census()
-    assert c["inline_governing_roles"] == ["mechanical", "reasoning"]
-    assert "Map `reasoning` and `mechanical` to one of" in _doc()
+    assert c["inline_governing_roles"] == ["convention-gate", "mechanical", "reasoning"]
+    assert "Map `reasoning`, `mechanical` and `convention-gate` to one of" in _doc()
 
 
 # ── the spend split ───────────────────────────────────────────────────────────
@@ -213,7 +233,7 @@ def test_the_doc_does_not_re_advertise_the_broken_values():
     doc = _doc()
 
     sentence = _re.search(
-        r"\*\*Map `reasoning` and `mechanical` to one of ([^*]+)\.\*\*", doc
+        r"\*\*Map `reasoning`, `mechanical` and `convention-gate` to one of ([^*]+)\.\*\*", doc
     )
     assert sentence, "the mapping constraint sentence is gone from the public page"
     advertised = set(_re.findall(r"`([^`]+)`", sentence.group(1)))

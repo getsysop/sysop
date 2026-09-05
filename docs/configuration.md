@@ -111,14 +111,14 @@ The substitutions file is consumer-authored, NOT in `managed_paths`, and `--upda
 
 ## Models
 
-Skills pin *roles* (`reasoning` / `mechanical` / `quick`), and `.claude/served_models.yml` maps each role to a model — `reasoning` → Opus by default. To swap the model behind a role — say, run all the deep-reasoning skills on Claude Fable 5 — one key in `.claude/served_models.local.yml` is enough:
+Skills pin *roles* (`reasoning` / `convention-gate` / `mechanical` / `quick`), and `.claude/served_models.yml` maps each role to a model — `reasoning` → Opus by default. To swap the model behind a role — say, run all the deep-reasoning skills on Claude Fable 5 — one key in `.claude/served_models.local.yml` is enough:
 
 ```yaml
 roles:
   reasoning: fable
 ```
 
-**Map `reasoning` and `mechanical` to one of `opus` / `sonnet` / `haiku` / `fable`.** Those two roles govern *inline* pins — values a skill body hands to the Agent tool's `model` parameter, which is a closed enum. Mapping either to `best`, `inherit`, `opusplan`, a full model id, or a provider-specific id breaks every agent spawn in the skills that role governs, and it breaks them mid-skill at spawn time rather than at install. Adding the value to `served:` does not rescue it: `served:` is Sysop's sunset allowlist, not the harness's enum. `check_skill_models.py` fails loudly on this, and `.claude/served_models.yml` carries an `inline_models:` list you can extend if your harness accepts more. A *frontmatter*-only role (today that is `quick`) is not so constrained — it accepts anything `/model` accepts.
+**Map `reasoning`, `mechanical` and `convention-gate` to one of `opus` / `sonnet` / `haiku` / `fable`.** Those three roles govern *inline* pins — values a skill body hands to the Agent tool's `model` parameter, which is a closed enum. Mapping any of them to `best`, `inherit`, `opusplan`, a full model id, or a provider-specific id breaks every agent spawn in the skills that role governs, and it breaks them mid-skill at spawn time rather than at install. Adding the value to `served:` does not rescue it: `served:` is Sysop's sunset allowlist, not the harness's enum. `check_skill_models.py` fails loudly on this, and `.claude/served_models.yml` carries an `inline_models:` list you can extend if your harness accepts more. A *frontmatter*-only role (today that is `quick`) is not so constrained — it accepts anything `/model` accepts.
 
 For a value outside the default lists, extend `served:` too, or `check_skill_models.py` fails:
 
@@ -131,7 +131,7 @@ served:
 
 ### Spending less
 
-There is no cheap lever hiding in the default map. `mechanical` already resolves to Sonnet and `quick` to Haiku — they are not the expensive part — and they barely govern anything: on a full install they carry 2 of the 33 pins in the skills tree, and the other 31 are `reasoning`. **On a loop-mode install they carry none at all**, because loop mode does not ship `/auto-fix` or `/next-task`, which are the only skills that use them; all 8 pins a loop install carries are `reasoning`.
+There is no cheap lever hiding in the default map. `mechanical` already resolves to Sonnet and `quick` to Haiku — they are not the expensive part — and they barely govern anything: on a full install they carry 2 of the 33 pins in the skills tree; the other 30 are `reasoning` and 1 is `convention-gate`. **On a loop-mode install they carry none at all**, because loop mode does not ship `/auto-fix` or `/next-task`, which are the only skills that use them; all 8 pins a loop install carries are `reasoning`.
 
 Either way the only lever with real money behind it is `reasoning` itself — which is also the role that runs adversarial review, judging, and execution. Sysop ships it conservative on purpose and does not recommend a blanket downgrade.
 
@@ -142,7 +142,14 @@ roles:
   reasoning: sonnet   # cheaper, and shallower where it matters most
 ```
 
-Worth knowing before you do: on the one consumer with per-phase spend recorded, the money is concentrated in *execution*, not review — 63.7% of it, against 21.8% for planning and 14.5% for review. Downgrading `reasoning` moves all three at once, so it buys most of its savings from the phase you are least likely to want cheaper. **The role is the unit you can configure.** A finer one exists in the skill files themselves — a trailing `<!-- sysop:role=… -->` marker overrides the role for a single pin, which is how `/auto-fix` runs its fix agents on the mechanical tier while its verification pass stays on reasoning — but that marker lives in managed skill text, so reaching it means forking the skill and giving up upstream updates to it.
+Worth knowing before you do: on the one consumer with per-phase spend recorded, the money is concentrated in *execution*, not review — 63.7% of it, against 21.8% for planning and 14.5% for review. Downgrading `reasoning` moves all three at once, so it buys most of its savings from the phase you are least likely to want cheaper. **The role is the unit you can configure**, and one pin has been split onto a role of its own for exactly this reason. `convention-gate` governs a single spawn — `/review-close` Step 2b's convention agent, which runs on every target of every close (the security twin beside it is gated on a security-map glob and skips most targets on a stock install) — so you can move it without moving the security twin beside it or anything else on `reasoning`:
+
+```yaml
+roles:
+  convention-gate: sonnet   # the 2b convention agent only
+```
+
+Finer still exists in the skill files themselves — a trailing `<!-- sysop:role=… -->` marker overrides the role for a single pin, which is how `/auto-fix` runs its fix agents on the mechanical tier while its verification pass stays on reasoning. But that marker lives in managed skill text, so reaching a pin that has *no* named role means forking the skill and giving up upstream updates to it. Naming a role, as `convention-gate` does, is what turns a marker into a knob you can reach from `served_models.local.yml`.
 
 That split comes from one project over one window, running the stock mapping, and its `fix` and `verify` rows recorded no spend at all — a gap in what that project logged, not a free phase. Read it as a rough shape, not a budget.
 

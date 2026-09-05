@@ -63,6 +63,7 @@ from _model_roles import (  # noqa: E402  (path set above)
     find_role_violations,
     iter_skill_files,
     load_inline_models,
+    RoleAliasError,
     load_roles_config,
     read_skill_text,
 )
@@ -107,7 +108,13 @@ def main(argv: list[str] | None = None) -> int:
     # told consumers their model pins were unresolvable when the real problem was
     # a YAML typo — and the shipped pre-commit example repeats that message.
     try:
-        roles, served = load_roles_config(config_path, local_or_none)
+        try:
+            roles, served = load_roles_config(config_path, local_or_none)
+        except RoleAliasError as exc:
+            print(f"\u274c {exc}", file=sys.stderr)
+            print("   Fix the `roles:` map so no role's value chains back to itself.",
+                  file=sys.stderr)
+            return 1
         inline_models = load_inline_models(config_path, local_or_none)
     except ConfigShapeError as exc:
         print(f"error: {exc}", file=sys.stderr)
