@@ -1157,8 +1157,42 @@ def _skill_subsection(heading_prefix, text=None):
     return m.group(1)
 
 
-def entry_state_problems(text=None):
-    """Returns a list of problems; empty means clean."""
+def _fenced_bash_blocks(text):
+    """The ```bash fenced blocks in `text`, bodies only.
+
+    Step 4d's prose names `--commit-claim` several times in sentences; matching
+    the invocation against the whole subsection would go green on the narrative
+    alone with the command deleted.
+    """
+    out, buf, live = [], [], False
+    for raw in text.splitlines():
+        m = re.match(r"^\s*```(\S*)", raw)
+        if m:
+            if live:
+                out.append("\n".join(buf))
+            buf, live = [], (not live) and m.group(1).lower() in ("bash", "sh", "shell")
+            continue
+        if live:
+            buf.append(raw)
+    return out
+
+
+def _commit_claim_block(text=None):
+    """`claim_task.sh`'s `--commit-claim` body — from `if $COMMIT_CLAIM; then` to
+    its closing `fi`, scoped so a match cannot drift into `--release` below it."""
+    text = text if text is not None else CLAIM_TASK.read_text(encoding="utf-8")
+    m = re.search(r"^if \$COMMIT_CLAIM; then$(.*?)^fi$", text, re.M | re.S)
+    assert m, "the --commit-claim block is gone from claim_task.sh entirely"
+    return m.group(1)
+
+
+def entry_state_problems(text=None, claim_task_text=None):
+    """Returns a list of problems; empty means clean.
+
+    `claim_task_text` injects a mutated `claim_task.sh` so the script-side checks
+    can be shown to FAIL on a broken subject. Without it those four checks had no
+    non-vacuity control at all, and two of them were measurably loose.
+    """
     problems = []
     step2 = _skill_section("Step 2", text)
 
@@ -1271,26 +1305,93 @@ def entry_state_problems(text=None):
         )
 
     step4d = _skill_subsection("4d.", text)
-    # Match the COMMAND, not a mention of it. The paragraph below the snippet
-    # explains why the test is there and contains the literal string, so a bare
-    # substring check stays green with the command deleted — the exact
-    # "narrative mention keeps the gate green" failure Phase 155 shipped, which
-    # this guard reproduced on its first draft.
-    # The PATHSPEC is part of the mechanism, not decoration: `git diff --cached
-    # --quiet -- <a-path-that-is-never-staged>` exits 0, the `||` short-circuits,
-    # and the claim commit silently never happens. `[^\n]*` swallowed it, so a
-    # reviewer repointed the pathspec with the suite green.
+    # Phase 261 (`Q-397`) moved Step 4d's mechanism into `claim_task.sh
+    # --commit-claim`, because an unlocked `git add` + `git commit` over an index
+    # Step 4a had rewritten in place lost 6-19 of 100 concurrent claims SILENTLY.
+    # The two properties these guards were written for did not go away — they
+    # moved — so the guards move with them rather than relaxing. Checking only
+    # the skill now would certify a step whose whole mechanism lives elsewhere.
+    #
+    # Match the COMMAND, not a mention of it: the prose below the snippet names
+    # `--commit-claim` several times, so a bare substring check stays green with
+    # the command deleted — the "narrative mention keeps the gate green" failure
+    # Phase 155 shipped and this guard reproduced on its first draft.
+    step4d_bash = "\n".join(_fenced_bash_blocks(step4d))
     if not re.search(
-        r"git diff --cached --quiet -- tasks/index\.yml\s*\\\n\s*\|\|\s*git commit",
-        step4d,
+        r"^\s*bash sysop/scripts/claim_task\.sh --commit-claim <TASK_ID>\s*$",
+        step4d_bash, re.M,
     ):
         problems.append(
-            "Step 4d lost the staged-diff test on tasks/index.yml, so either a "
-            "resume's empty commit aborts or the claim commit never runs"
+            "Step 4d no longer invokes `claim_task.sh --commit-claim <TASK_ID>`, "
+            "so the claim commit runs unlocked again"
         )
-    # Phase 254 (`Q-377`): the operand is `<default branch>`, resolved at run time.
-    if not re.search(r'rev-parse --abbrev-ref HEAD.*?=\s*"?<default branch>', step4d, re.S):
-        problems.append("Step 4d lost main-push-guard Rule A")
+
+    # The mechanism itself, at its new home. All three are load-bearing and each
+    # is the whole of a defect this phase measured:
+    cc = _commit_claim_block(claim_task_text)
+    #  (a) the mutex. Without it two claims interleave and one is lost.
+    if not re.search(r"tracker_lock_acquire\s+\"\$CC_LOCKS_DIR\"", cc):
+        problems.append(
+            "--commit-claim no longer takes the tracker write mutex, so two "
+            "concurrent claims can interleave over tasks/index.yml"
+        )
+    #  (b) idempotence, staged, and against `$CC_REL` — the path the WRITER says it
+    #      wrote, never the literal `tasks/index.yml`. Phase 261's round found that
+    #      probing and committing the tracked literal, with no `git add`, reported
+    #      "nothing to commit" and exited 0 over an uncommitted flip whenever the
+    #      index was a symlink or untracked. Both halves are pinned: the `git add`
+    #      (the only thing that stages an untracked index at all) and the staged
+    #      probe on the same variable.
+    if not re.search(r'git -C "\$MAIN_REPO_ROOT" add -- "\$CC_REL"', cc):
+        problems.append(
+            "--commit-claim no longer stages the written path, so an untracked or "
+            "symlinked index commits nothing and still exits 0"
+        )
+    if not re.search(
+        r'git -C "\$MAIN_REPO_ROOT" diff --cached --quiet -- "\$CC_REL"', cc
+    ):
+        problems.append(
+            "--commit-claim lost the staged-diff test on the written path, so either "
+            "a resume's empty commit aborts or the claim commit never runs"
+        )
+    if re.search(r'diff --(cached --)?quiet (HEAD )?-- tasks/index\.yml', cc):
+        problems.append(
+            "--commit-claim probes the literal tasks/index.yml rather than the path "
+            "the writer resolved; a symlinked index reads as unchanged"
+        )
+    #  (c) the SELF-HEAL. This is what makes the fix work without reordering the
+    #      steps: a mutex taken at 4d cannot protect the write 4a already made
+    #      outside it, so 4d must re-flip a task that came back `open`. Deleting
+    #      this arm restores ~16% silent claim loss with every other check green.
+    # `changed = True` is part of the arm, not decoration: the write is gated on it,
+    # so keeping the two lines below and flipping it to False computes the repair and
+    # never writes it — a Q-397 false success with this guard green. Measured as a
+    # survivor by Phase 261's round.
+    if not re.search(
+        r'elif cur == "open":\s*\n\s*t\["status"\] = "in_progress"\s*\n\s*changed = True',
+        cc,
+    ):
+        problems.append(
+            "--commit-claim no longer re-flips a task that came back `open` (or "
+            "computes the flip without recording it), so a clobbered Step 4a edit "
+            "is committed as a successful claim of nothing"
+        )
+    #  (d) Rule A, against a RESOLVED branch and never the literal `main`
+    #      (Phase 254, `Q-377`).
+    # Both operands, on ONE comparison. The first version used `re.S` with `.*?`
+    # between the fragments, so they could sit lines apart: rewriting the test as
+    # `[[ "$CC_DEFAULT_BRANCH" != "$CC_DEFAULT_BRANCH" ]]` — a comparison that can
+    # never fire, with CC_HEAD merely assigned somewhere above — passed. Measured as
+    # a survivor by Phase 261's round.
+    if not re.search(
+        r'\[\[\s*"\$CC_HEAD"\s*!=\s*"\$CC_DEFAULT_BRANCH"\s*\]\]', cc
+    ):
+        problems.append(
+            "--commit-claim lost main-push-guard Rule A, or no longer compares the "
+            "resolved HEAD against the resolved default branch in one test"
+        )
+    if re.search(r'CC_HEAD"?\s*!=\s*"main"', cc):
+        problems.append("--commit-claim asserts the literal `main` (`Q-377`)")
     return problems
 
 
@@ -1380,10 +1481,72 @@ class TestEntryStateProseGuards:
         assert any("no longer refuses a done/deferred" in p
                    for p in entry_state_problems(softened))
 
-    def test_guard_catches_a_step4d_without_the_empty_commit_tolerance(self):
+    def test_guard_catches_a_step4d_that_stops_invoking_the_commit_owner(self):
         text = CLAIM_SKILL.read_text(encoding="utf-8")
         softened = text.replace(
-            'git diff --cached --quiet -- tasks/index.yml \\\n  || git commit',
-            'git commit', 1)
+            "bash sysop/scripts/claim_task.sh --commit-claim <TASK_ID>",
+            "git add tasks/index.yml && git commit -m x", 1)
         assert softened != text
-        assert any("staged-diff test" in p for p in entry_state_problems(softened))
+        assert any("no longer invokes" in p for p in entry_state_problems(softened))
+
+    def test_guard_catches_a_commit_claim_that_drops_the_mutex(self):
+        text = CLAIM_TASK.read_text(encoding="utf-8")
+        softened = text.replace(
+            'tracker_lock_acquire "$CC_LOCKS_DIR"', ': "$CC_LOCKS_DIR"', 1)
+        assert softened != text
+        assert any("no longer takes the tracker write mutex" in p
+                   for p in entry_state_problems(claim_task_text=softened))
+
+    def test_guard_catches_a_self_heal_that_computes_the_flip_but_never_records_it(self):
+        """The shape that walked the first version of this guard: both pinned lines
+        present, `changed` left False, so the repair is computed and never written."""
+        text = CLAIM_TASK.read_text(encoding="utf-8")
+        softened = text.replace(
+            '            t["status"] = "in_progress"\n            changed = True',
+            '            t["status"] = "in_progress"\n            changed = False', 1)
+        assert softened != text
+        assert any("computes the flip without recording it" in p
+                   for p in entry_state_problems(claim_task_text=softened))
+
+    def test_guard_catches_a_rule_a_that_can_never_fire(self):
+        """`CC_HEAD` assigned above, but compared against itself — the DOTALL hole."""
+        text = CLAIM_TASK.read_text(encoding="utf-8")
+        softened = text.replace(
+            'if [[ "$CC_HEAD" != "$CC_DEFAULT_BRANCH" ]]; then',
+            'if [[ "$CC_DEFAULT_BRANCH" != "$CC_DEFAULT_BRANCH" ]]; then', 1)
+        assert softened != text
+        assert any("Rule A" in p for p in entry_state_problems(claim_task_text=softened))
+
+    def test_guard_catches_a_commit_claim_that_stops_staging(self):
+        text = CLAIM_TASK.read_text(encoding="utf-8")
+        softened = text.replace('git -C "$MAIN_REPO_ROOT" add -- "$CC_REL"',
+                                'true "$CC_REL"', 1)
+        assert softened != text
+        assert any("no longer stages the written path" in p
+                   for p in entry_state_problems(claim_task_text=softened))
+
+    def test_guard_catches_a_probe_repointed_at_the_tracked_literal(self):
+        """HIGH-1's shape: probing `tasks/index.yml` rather than the resolved path."""
+        text = CLAIM_TASK.read_text(encoding="utf-8")
+        softened = text.replace(
+            'git -C "$MAIN_REPO_ROOT" diff --cached --quiet -- "$CC_REL"',
+            'git -C "$MAIN_REPO_ROOT" diff --cached --quiet -- tasks/index.yml', 1)
+        assert softened != text
+        assert any("probes the literal tasks/index.yml" in p
+                   for p in entry_state_problems(claim_task_text=softened))
+
+    def test_the_step4d_guard_is_not_satisfied_by_a_prose_mention(self):
+        """Replace the FENCED command with a sentence naming it.
+
+        This is the shape Phase 155 shipped and this guard family exists for: the
+        words survive, the command does not, and a substring check goes green over
+        a step that runs nothing. Constructed rather than found, because Step 4d's
+        own prose deliberately says "the script" instead of repeating the flag.
+        """
+        text = CLAIM_SKILL.read_text(encoding="utf-8")
+        softened = text.replace(
+            "```bash\nbash sysop/scripts/claim_task.sh --commit-claim <TASK_ID>\n```",
+            "Run `bash sysop/scripts/claim_task.sh --commit-claim <TASK_ID>` yourself.", 1)
+        assert softened != text, "the fenced invocation is not shaped as assumed"
+        assert "--commit-claim" in softened, "the mention must survive, or this proves nothing"
+        assert any("no longer invokes" in p for p in entry_state_problems(softened))

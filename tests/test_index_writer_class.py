@@ -48,7 +48,9 @@ CANONICAL_KWARGS = {
 INDEX_WRITERS = {
     "core/skills/claim-task/SKILL.md",       # Step 4a: open -> in_progress
     "core/skills/auto-build/SKILL.md",       # Step 5.1: open -> in_progress
-    "core/companion/scripts/claim_task.sh",  # --release: in_progress -> open
+    # --release: in_progress -> open, and --commit-claim: open -> in_progress
+    # (Phase 261, `Q-397` — both now under the tracker write mutex).
+    "core/companion/scripts/claim_task.sh",
     "core/skills/review-close/SKILL.md",     # Step 4c: -> done + completed_date + body
     "core/companion/scripts/backfill_completed_dates.py",
     "core/companion/scripts/clear_user_action.py",  # Q-314: user_action true -> false
@@ -1040,29 +1042,38 @@ def test_the_readme_names_every_writer_it_warns_about():
     # mention now reddens HERE, instead of silently leaving the warning section
     # one writer short — which is how the section came to say "Five" while the
     # population was six (Phase 237, found by its round).
+    # A FILE may hold more than one writer, and since Phase 261 one does:
+    # `claim_task.sh` writes the index from `--release` and again from
+    # `--commit-claim`. The README sentence counts CODE PATHS, so counting
+    # `len(INDEX_WRITERS)` — a set of paths — against it was a category error that
+    # forced the README to say "Six" over a true seven. Phase 261's round found it
+    # by deriving the population itself instead of trusting either number.
     fragments = {
-        "core/skills/claim-task/SKILL.md": "`/claim-task` Step 4a",
-        "core/skills/auto-build/SKILL.md": "`/auto-build` Step 5.1",
-        "core/companion/scripts/claim_task.sh": "`claim_task.sh --release`",
-        "core/skills/review-close/SKILL.md": "`/review-close` Step 4c",
+        "core/skills/claim-task/SKILL.md": ["`/claim-task` Step 4a"],
+        "core/skills/auto-build/SKILL.md": ["`/auto-build` Step 5.1"],
+        "core/companion/scripts/claim_task.sh": [
+            "`claim_task.sh --release`", "`claim_task.sh --commit-claim`"],
+        "core/skills/review-close/SKILL.md": ["`/review-close` Step 4c"],
         "core/companion/scripts/backfill_completed_dates.py":
-            "`backfill_completed_dates.py`",
-        "core/companion/scripts/clear_user_action.py": "`clear_user_action.py`",
+            ["`backfill_completed_dates.py`"],
+        "core/companion/scripts/clear_user_action.py": ["`clear_user_action.py`"],
     }
     assert set(fragments) == INDEX_WRITERS, (
         "this roster and INDEX_WRITERS disagree — writers with no README "
         f"fragment: {sorted(INDEX_WRITERS - set(fragments))}; fragments for "
         f"non-writers: {sorted(set(fragments) - INDEX_WRITERS)}"
     )
-    for fragment in fragments.values():
-        assert _flat(fragment) in section, (
-            f"the round-trip warning section omits {fragment}"
-        )
-    words = {4: "Four", 5: "Five", 6: "Six", 7: "Seven", 8: "Eight"}
-    expected = f"{words[len(INDEX_WRITERS)]} code paths rewrite it whole"
+    for group in fragments.values():
+        for fragment in group:
+            assert _flat(fragment) in section, (
+                f"the round-trip warning section omits {fragment}"
+            )
+    code_paths = sum(len(g) for g in fragments.values())
+    words = {4: "Four", 5: "Five", 6: "Six", 7: "Seven", 8: "Eight", 9: "Nine"}
+    expected = f"{words[code_paths]} code paths rewrite it whole"
     assert expected in section, (
-        f"the warning section's count disagrees with INDEX_WRITERS "
-        f"({len(INDEX_WRITERS)}): expected {expected!r}"
+        f"the warning section's count disagrees with the code-path roster "
+        f"({code_paths}): expected {expected!r}"
     )
 
 
@@ -1222,6 +1233,13 @@ def test_the_loss_this_phase_fixes_is_real_and_the_fix_works():
 # --------------------------------------------------------------------------
 
 
+def _step4c_region() -> str:
+    """Step 4c's heredoc, comments INCLUDED — the roster lives in a comment."""
+    text = (REPO_ROOT / "core/skills/review-close/SKILL.md").read_text(encoding="utf-8")
+    start = text.index('   ids = ["<ROADMAP_ID_1>"')
+    return text[start:text.index("\n   PY\n", start)]
+
+
 def _step4c_body() -> str:
     """The Step 4c heredoc's Python, extracted.
 
@@ -1286,13 +1304,83 @@ def test_the_step4c_extractor_sees_code_and_drops_comments():
     assert "Atomic rewrite (Phase 201)" not in code, "extractor kept comment text"
 
 
-def test_the_atomic_shape_is_stated_where_the_class_is_not_yet_converted():
-    """The three claim-side writers still truncate in place, and the record said
-    otherwise. This pins the honest statement rather than the fix."""
-    code_comment = (REPO_ROOT / "core/skills/review-close/SKILL.md").read_text(encoding="utf-8")
-    assert "still truncate in place" in _flat(code_comment), (
-        "Step 4c's comment no longer states that the sibling writers are unconverted"
+def test_the_corrected_writer_rosters_stay_corrected():
+    """Two `Records corrected` items this phase shipped with nothing pinning them.
+
+    Round lens 3 reverted both and the suite stayed green — which is how the
+    `clear_user_action.py` sentence survived being false from Phase 261 to Phase
+    263 in the first place. Declining to guard a corrected sentence is how it
+    un-corrects itself.
+    """
+    installer = (REPO_ROOT / "install.sh").read_text(encoding="utf-8")
+    for name in ("claim_task.sh --commit-claim", "clear_user_action.py"):
+        assert name in installer, (
+            f"install.sh's tasks/index.yml writer roster stopped naming {name}; it "
+            "listed five of a seven-path population until Phase 263"
+        )
+
+    cua = (REPO_ROOT / "core/companion/scripts/clear_user_action.py").read_text(encoding="utf-8")
+    assert "Phase 261 converted" in _flat(cua), (
+        "clear_user_action.py's comment stopped recording that `--release` was "
+        "converted; it asserted the opposite, unpinned, for two phases"
     )
+
+
+def test_the_auto_build_guard_module_actually_collects_its_tests():
+    """Reachability, asserted from OUTSIDE the module it protects.
+
+    `test_auto_build_index_write.py` carries its own collection guard, which
+    counts `def test_...` lines in its source text. Round lens 3 put a
+    module-level `pytest.skip(..., allow_module_level=True)` at the top: all its
+    tests went dark, its own guard went dark with them, and the suite stayed
+    green. A guard inside the thing it guards cannot see the thing being
+    switched off. This one runs collection in a subprocess and asserts a floor —
+    the shape `test_claim_commit_mutex.py` already documents for the same reason.
+    """
+    import subprocess
+    import sys as _sys
+
+    r = subprocess.run(
+        [_sys.executable, "-m", "pytest", "--collect-only", "-q", "-p", "no:cacheprovider",
+         "tests/test_auto_build_index_write.py"],
+        cwd=str(REPO_ROOT), capture_output=True, text=True, timeout=180,
+    )
+    assert r.returncode == 0, f"collection failed:\n{r.stdout}\n{r.stderr}"
+    collected = [ln for ln in r.stdout.splitlines() if "::test_" in ln]
+    assert len(collected) >= 17, (
+        f"tests/test_auto_build_index_write.py collected {len(collected)} tests, "
+        "expected at least 17 — a module-level skip or an import error switches the "
+        "whole Q-404 guard off without reddening anything inside it"
+    )
+
+
+def test_the_roster_separates_the_closed_class_from_the_open_one():
+    """Phase 263 closed the in-place-write class. The mutex class is still open.
+
+    The predecessor pinned the sentence naming `/auto-build` Step 5.1 as the last
+    writer that truncated in place, and that sentence went false the moment the
+    conversion landed. Its replacement is pinned here **including the half that is
+    not done**: an unqualified "converted" reads as coverage `Q-404` does not have,
+    which is the exact shape the original guard was written to stop.
+    """
+    # Scoped to Step 4c's REGION, not the whole file. Round lens 3 restored the
+    # pre-263 falsehood verbatim and this guard passed, because four of its five
+    # substrings occur elsewhere in a 2,600-line skill — only `MUTEX, not
+    # atomicity` was unique, and that is the one substring the author's own
+    # battery row attacked, so the kill was self-selected. `_step4c_body()` is no
+    # use here: it strips comments, and the roster IS a comment.
+    comment = _flat(_step4c_region())
+    assert "truncates in place" in comment and "any more" in comment, (
+        "Step 4c's roster no longer states that the in-place-write class is closed"
+    )
+    assert "MUTEX, not atomicity" in comment, (
+        "Step 4c's roster stopped distinguishing the closed class (atomicity) from "
+        "the open one (the tracker mutex) — without it `Q-404` reads as resolved"
+    )
+    for still_unlocked in ("backfill_completed_dates.py", "clear_user_action.py"):
+        assert still_unlocked in comment, (
+            f"the roster stopped naming {still_unlocked} as an unserialized writer"
+        )
 
 
 # --------------------------------------------------------------------------

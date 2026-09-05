@@ -296,7 +296,7 @@ tracker_lock_acquire() {
   if ! mkdir -p "$runtime_dir" 2>/dev/null; then
     echo "❌ Could not create ${runtime_dir} — refusing to serialize the tracker write." >&2
     echo "   Proceeding without the lock is what ${what} must not do: two concurrent" >&2
-    echo "   writers of review_tasks.md strand one of them. ${consequences}." >&2
+    echo "   writers of the same tracker file strand one of them. ${consequences}." >&2
     return 1
   fi
 
@@ -330,7 +330,13 @@ tracker_lock_acquire() {
   done
 
   holder="$(sed 's/^/     /' "$lock_file" 2>/dev/null)" || holder="     (unreadable)"
-  echo "❌ review_tasks.md is locked by another Sysop process; waited ${max_wait}s." >&2
+  # "The tracker", NOT a filename. Since Phase 261 this mutex also serializes the
+  # task-index writers in `claim_task.sh`, so naming one tracker file made every
+  # task-claim refusal cite a file the caller had not touched. `${what}` says which
+  # operation was refused and `${consequences}` says what it would have lost, and
+  # both are the caller's to supply. The phrase "locked by another Sysop process"
+  # is pinned by `tests/test_tracker_write_mutex.py` at two sites — keep it.
+  echo "❌ The tracker is locked by another Sysop process; waited ${max_wait}s." >&2
   echo "   Refusing ${what} — ${consequences}." >&2
   echo "   The holder:" >&2
   echo "${holder}" >&2
@@ -356,4 +362,213 @@ tracker_lock_release() {
     rm -f "$TRACKER_LOCK_FILE" 2>/dev/null || true
   fi
   TRACKER_LOCK_FILE=""
+}
+
+# ── git_common_dir_abs <dir> ──────────────────────────────────
+#
+# Prints the ABSOLUTE, symlink-resolved path of <dir>'s `--git-common-dir` and
+# returns 0; prints nothing and returns 1 when <dir> is not in a repository.
+#
+# The common dir is a repository's IDENTITY: every linked worktree of one repo
+# reports the same one (the primary's `.git`), and two different checkouts of the
+# same upstream report different ones. That is the question `path_is_worktree_of`
+# below needs answered, and `--show-toplevel` cannot answer it — it reports the
+# tree you are standing in, which is `Q-020`/`Q-307`'s class (Phase 234).
+#
+# Absolutising is not optional. From a PRIMARY checkout git answers with the
+# relative `.git`; from a LINKED worktree it answers with an absolute path. A
+# comparison that skips this step matches two unrelated repos on the string
+# `.git`, which is a false ACCEPT — the fail-open direction.
+#
+# **The git-env scrub is deliberate and is the one place in these scripts that
+# does it.** Every other git call here asks about the repository the script is
+# running in, where an ambient `GIT_DIR` is plausibly the caller's intent. These
+# two helpers ask about a FOREIGN path handed to them, where it never is: with
+# `GIT_DIR` exported, `git -C <foreign> rev-parse` answers about the ambient repo
+# and the predicate silently grades the wrong tree.
+#
+# **The list is five, not three, and the last two were found by execution in this
+# phase's round.** `GIT_DIR`/`GIT_WORK_TREE`/`GIT_COMMON_DIR` REDIRECT discovery;
+# the other two STOP it. `worktree_root_parent`'s arm 2 walks UPWARD looking for
+# an enclosing working tree, so `GIT_CEILING_DIRECTORIES` naming that tree makes
+# the walk find nothing and the guard ACCEPT — reproduced end to end, leaving the
+# `?? sandbox/` untracked content in a neighbouring checkout that `Q-406` exists
+# to prevent. `GIT_DISCOVERY_ACROSS_FILESYSTEM` is the same class at a mount
+# boundary. `GIT_CONFIG_*` is deliberately NOT scrubbed: the test suites set it to
+# isolate themselves from the operator's global config, and removing it would
+# point these probes at the real one.
+git_common_dir_abs() {
+  # `local CDPATH=` is load-bearing, not hygiene. From a PRIMARY checkout git
+  # answers with the relative `.git`, and `cd .git` consults `CDPATH` because the
+  # operand does not begin with `/`, `./` or `../`. With a `CDPATH` exported —
+  # ordinary in an interactive shell's environment — this resolved to a DECOY
+  # `.git` elsewhere, and `cd` also ECHOES the directory it reached that way, so
+  # the function returned two lines. Both halves are harmful and the first is
+  # worse: the identity test then compared the wrong repository, so `claim_task.sh`
+  # and `batch_work.sh` both REFUSED the operator's own worktree, accused it of
+  # belonging to another checkout, and advised removing it. Found by execution in
+  # this phase's round; `local` scopes the empty value to this call and its
+  # subshells without touching the caller's environment.
+  local CDPATH= d="$1" cd_
+  [ -d "$d" ] || return 1
+  cd_="$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR \
+                 -u GIT_CEILING_DIRECTORIES -u GIT_DISCOVERY_ACROSS_FILESYSTEM \
+         git -C "$d" rev-parse --git-common-dir 2>/dev/null)" || return 1
+  [ -n "$cd_" ] || return 1
+  if [ "${cd_#/}" != "$cd_" ]; then
+    ( cd "$cd_" 2>/dev/null && pwd -P ) || return 1
+  else
+    ( cd "$d" 2>/dev/null && cd "$cd_" 2>/dev/null && pwd -P ) || return 1
+  fi
+}
+
+# ── path_is_worktree_of <candidate> <checkout> ────────────────
+#
+# 0 when <candidate> is the ROOT of a working tree belonging to the SAME
+# repository as <checkout>. 1 otherwise, silently — the caller writes the
+# message, because the two callers refuse for different reasons.
+#
+# Three tests, and each rejects a case the others let through:
+#
+#   1. `-e "${candidate}/.git"` — a LINKED worktree's `.git` is a file holding a
+#      `gitdir:` pointer and only a primary checkout has it as a directory, so
+#      `-e`, never `-d` (`batch_work.sh`'s `path_is_worktree` states this too).
+#   2. toplevel `-ef` candidate — stops a SUBDIRECTORY of a working tree from
+#      passing. `--is-inside-work-tree` is true anywhere inside one, so it
+#      answers a different question.
+#   3. common dir `-ef` common dir — the identity test, and the one nothing in
+#      this tree performed before Phase 264. Without it a live worktree of
+#      ANOTHER checkout of the same project passes tests 1 and 2 (measured: two
+#      checkouts sharing a workspace parent, the second claim adopting the
+#      first's tree, exit 0, and a lock recording a workspace whose commits
+#      belong to the other checkout — `Q-405` in `claim_task.sh`, `Q-415` in
+#      `batch_work.sh`).
+#
+# `-ef` rather than `=` throughout, for the reason `--release`'s main-worktree
+# guard gives: a case-divergent or symlinked spelling must not make an identity
+# test MISS.
+path_is_worktree_of() {
+  local CDPATH= candidate="$1" checkout="$2" top mine theirs
+  [ -e "${candidate}/.git" ] || return 1
+  top="$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR \
+                 -u GIT_CEILING_DIRECTORIES -u GIT_DISCOVERY_ACROSS_FILESYSTEM \
+         git -C "$candidate" rev-parse --show-toplevel 2>/dev/null)" || return 1
+  [ -n "$top" ] && [ "$top" -ef "$candidate" ] || return 1
+  theirs="$(git_common_dir_abs "$candidate")" || return 1
+  mine="$(git_common_dir_abs "$checkout")" || return 1
+  [ "$theirs" -ef "$mine" ]
+}
+
+# ── worktree_root_parent <primary-root> ───────────────────────
+#
+# Validates `WORKTREE_ROOT` and prints the absolute parent directory to build
+# workspaces under. Returns 1 with a diagnostic on stderr when the value is
+# unusable; the caller exits, so a refusal never reaches `git worktree add`.
+#
+# Callers MUST have established that `WORKTREE_ROOT` is non-empty. It is scoped
+# to the modes that BUILD a workspace: validating it for a mode that never reads
+# the path would refuse work the variable does not govern, and the variable is
+# meant to live in a sandbox's persistent environment where a stale value would
+# then block a mode that never touches it.
+#
+# Extracted from `claim_task.sh` at Phase 264 so `batch_work.sh` could honour the
+# same variable (`Q-407`) without re-deriving four guards, three of which were
+# defects found by EXECUTION rather than by design in Phase 262's round.
+worktree_root_parent() {
+  # `CDPATH` again, and here it also broke the *validate one path, use another*
+  # invariant: `[ -d "$WORKTREE_ROOT" ]` resolves against the CWD while
+  # `cd "$WORKTREE_ROOT"` consults `CDPATH` for a relative value, so the function
+  # validated one directory and returned a different one — with the echoed path
+  # making the result two lines, which is the very newline the guard at the top of
+  # this function exists to refuse.
+  local CDPATH= primary_root="$1" wr_abs rr_abs owner
+  # A newline survives the assignment and then splits the lock's `workspace:`
+  # field, which every reader parses line-anchored — `--release`'s awk and
+  # /review-close's `partition(":")` both silently take the first line, so the
+  # claim succeeds and the release reports success over an orphan.
+  # `$'\n'` (bash 3.2 ANSI-C quoting), NOT `"$(printf '\n')"` — command
+  # substitution strips trailing newlines, so that spelling yields the EMPTY
+  # string and the pattern collapses to `**`, refusing every root ever set.
+  # Caught by re-reading this block before running it.
+  case "$WORKTREE_ROOT" in
+    *$'\n'*)
+      echo "❌ WORKTREE_ROOT contains a newline; the lock's workspace: field is line-anchored." >&2
+      return 1
+      ;;
+  esac
+  if [ ! -d "$WORKTREE_ROOT" ]; then
+    echo "❌ WORKTREE_ROOT='${WORKTREE_ROOT}' is not an existing directory." >&2
+    echo "   Create it first — this script will not mkdir a path that may be a typo." >&2
+    return 1
+  fi
+  # Writability is checked HERE rather than left to `git worktree add`, because
+  # git fails at a point where the caller has already created the branch: the
+  # observed shape was rc=128, a bare `fatal: could not create leading
+  # directories`, an orphan branch and no guidance. This is also the most likely
+  # real failure for the variable's whole purpose — a sandbox declares a path and
+  # the process cannot actually write it.
+  if [ ! -w "$WORKTREE_ROOT" ]; then
+    echo "❌ WORKTREE_ROOT='${WORKTREE_ROOT}' is not writable by this process." >&2
+    echo "   Nothing was created. Fix the permission, or declare a different directory." >&2
+    return 1
+  fi
+  # `pwd -P` rather than `realpath`, which stock macOS does not ship (bash 3.2).
+  wr_abs="$( cd "$WORKTREE_ROOT" && pwd -P )" || return 1
+  # ── Arm 1: inside THIS repository ───────────────────────────
+  #
+  # A worktree here shows up as untracked content in the main checkout, is not
+  # covered by the `sysop/runtime/` gitignore set, and would be swept by the very
+  # cleanup paths meant to remove it.
+  #
+  # COMPARE AGAINST THE PRIMARY CHECKOUT, not the invocation's own toplevel.
+  # `git rev-parse --show-toplevel` answers "which worktree am I standing in", so
+  # from inside a linked worktree the guard compared against the wrong tree and
+  # ACCEPTED a root inside the main checkout — `Q-020`/`Q-307`'s class (Phase
+  # 234), recurring in a guard written after it. The caller resolves the primary
+  # and passes it in.
+  #
+  # **ARM 2 DOES NOT SUBSUME THIS ONE.** An earlier version of this comment said it
+  # did, and a review lens falsified it by execution: arm 2 asks
+  # `rev-parse --show-toplevel`, which inside a `.git` DIRECTORY exits 128
+  # (`fatal: this operation must be run in a work tree`), so it cannot see a root
+  # there at all. With this arm removed, `WORKTREE_ROOT=<repo>/.git/nested` is
+  # ACCEPTED. This arm's prefix match is the only thing that refuses it.
+  #
+  # So arm 1 carries coverage, not merely a better message — though it carries that
+  # too, and deliberately: a root inside THIS repository has a specific cause and a
+  # specific remedy, and a guard that reports the nearest true reason is the one an
+  # operator can act on. `test_arm_one_carries_coverage_arm_two_cannot` pins the
+  # coverage half, because a test asserting only the message measures the wrong
+  # property — which is exactly how the false claim survived its own battery.
+  rr_abs="$( cd "$primary_root" && pwd -P )" || return 1
+  case "$wr_abs" in
+    "$rr_abs"|"$rr_abs"/*)
+      echo "❌ WORKTREE_ROOT='${WORKTREE_ROOT}' resolves inside the repository (${rr_abs})." >&2
+      echo "   A worktree there is untracked content in the main checkout. Pick a path outside it." >&2
+      return 1
+      ;;
+  esac
+  # ── Arm 2: inside ANY working tree (`Q-406`) ────────────────
+  #
+  # Direction ratified by the maintainer 2026-09-04. Arm 1's stated rationale —
+  # untracked content in a checkout, outside the `sysop/runtime/` gitignore set,
+  # swept by the cleanup paths — is repo-AGNOSTIC, so the predicate must be too.
+  # Phase 262 shipped arm 1 alone and a root inside a NEIGHBOURING repository was
+  # accepted, producing the same harm one repository over (its round observed the
+  # resulting `?? nested/` untracked there).
+  #
+  # THE COST IS ACCEPTED, NOT OVERLOOKED: a consumer whose sandbox directory
+  # legitimately sits inside a larger checkout — a monorepo — must now point
+  # `WORKTREE_ROOT` outside it. That is the fail-closed direction, and the
+  # message names the tree so the remedy is obvious rather than mysterious.
+  if owner="$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR \
+                 -u GIT_CEILING_DIRECTORIES -u GIT_DISCOVERY_ACROSS_FILESYSTEM \
+              git -C "$wr_abs" rev-parse --show-toplevel 2>/dev/null)" \
+     && [ -n "$owner" ]; then
+    echo "❌ WORKTREE_ROOT='${WORKTREE_ROOT}' resolves inside a git working tree (${owner})." >&2
+    echo "   A worktree there is untracked content in THAT checkout, which its own" >&2
+    echo "   cleanup paths would sweep. Pick a path outside every repository." >&2
+    return 1
+  fi
+  printf '%s\n' "$wr_abs"
 }

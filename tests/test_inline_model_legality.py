@@ -401,7 +401,10 @@ def test_malformed_yaml_is_a_usage_error_not_a_violation(tmp_path):
 # claimed a per-skill remap key that has never existed.
 
 _ADVICE_ROOTS = ("core/skills", "core/companion/docs", "docs")
-_ROLE_MAPPING = re.compile(r"\b(reasoning|mechanical|quick)\s*:\s*([A-Za-z][\w.:-]*)")
+# Role names are ENUMERATED here, so a role added to `served_models.yml` is
+# invisible to this arm until it is added. Phase 262 added `convention-gate`
+# and this line was one of five sites that had baked in the three-role set.
+_ROLE_MAPPING = re.compile(r"\b(reasoning|mechanical|quick|convention-gate)\s*:\s*([A-Za-z][\w.:-]*)")
 
 
 def _advice_files():
@@ -486,7 +489,7 @@ def test_sysop_tree_has_inline_pins_for_the_arm_to_govern():
              for p in m.analyze_text(f.read_text(encoding="utf-8"))]
     inline = [p for p in kinds if p.kind == "inline"]
     assert len(inline) >= 10, f"expected the inline pin population, got {len(inline)}"
-    assert {p.role for p in inline} == {"reasoning", "mechanical"}
+    assert {p.role for p in inline} == {"reasoning", "mechanical", "convention-gate"}
 
     # Named, not just counted. The round narrowed the arm to skip `_shared/` and
     # every floor above still held (13 pins → 12, violations 12 → 11), while the

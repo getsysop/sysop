@@ -1353,7 +1353,7 @@
           </div>
           <figcaption>
             <span class="fig-num">Fig. 2</span>
-            <span class="fig-cap">The single-task lifecycle. Solid arrows: skill handoff. Dashed: filesystem coordination. Pinned skills declare <em>roles</em> — reasoning, mechanical, quick — not models (Phase 69); the parenthesized model is the default mapping, remappable per project (§ VI). Un-pinned skills (like <code>/document-work</code>) inherit the session model.</span>
+            <span class="fig-cap">The single-task lifecycle. Solid arrows: skill handoff. Dashed: filesystem coordination. Pinned skills declare <em>roles</em> — reasoning, convention-gate, mechanical, quick — not models (Phase 69); the parenthesized model is the default mapping, remappable per project (§ VI). Un-pinned skills (like <code>/document-work</code>) inherit the session model.</span>
           </figcaption>
         </figure>
 
@@ -2853,7 +2853,7 @@
 
         <h3>Model roles, not model pins</h3>
         <p class="muted">
-          Since Phase 69, skills that pin a model declare a <em>role</em> — <code>reasoning</code>, <code>mechanical</code>, or
+          Since Phase 69, skills that pin a model declare a <em>role</em> — <code>reasoning</code>, <code>convention-gate</code>, <code>mechanical</code>, or
           <code>quick</code> — rather than a model id (skills without a pin simply inherit the session model). Install resolves roles through
           <code>.claude/served_models.yml</code> (default mapping: opus · sonnet · haiku); a consumer remaps any role in
           <code>served_models.local.yml</code>, which is never overwritten and layered on top — so an upstream model

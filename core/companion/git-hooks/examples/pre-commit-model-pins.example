@@ -11,7 +11,8 @@
 # script's defaults read the WORKING TREE, which is the false green this hook
 # was fixed for. Do not trim them.
 #
-# WHY: skills pin a ROLE (reasoning / mechanical / quick), not a model
+# WHY: skills pin a ROLE (reasoning / convention-gate / mechanical /
+# quick), not a model
 # name; served_models.yml maps each role to a model. When a model is
 # sunset you repoint the role in one place — but a stale role mapping, an
 # undefined role, or a missing marker fails ONLY when the skill is next
@@ -54,7 +55,7 @@ if [[ -n "$STAGED_CLAUDE" ]]; then
     if [[ "$GIT_COMMON_DIR" = /* ]]; then
       MAIN_REPO_ROOT="$(dirname "$GIT_COMMON_DIR")"
     else
-      MAIN_REPO_ROOT="$(dirname "$(cd "$GIT_COMMON_DIR" && pwd)")"
+      MAIN_REPO_ROOT="$(dirname "$(CDPATH= cd "$GIT_COMMON_DIR" && pwd)")"
     fi
   fi
 

@@ -3768,7 +3768,8 @@ install_tasks_scaffold() {
 
   # The seed carries NO comments, on purpose (Phase 201). Every writer of this
   # file — /claim-task Step 4a, /auto-build Step 5.1, claim_task.sh --release,
-  # /review-close Step 4c, backfill_completed_dates.py — rewrites it whole via
+  # claim_task.sh --commit-claim, /review-close Step 4c,
+  # backfill_completed_dates.py, clear_user_action.py — rewrites it whole via
   # yaml.safe_dump, which strips every comment. A seeded reference block is
   # therefore destroyed by the first whole-file write, on every install: that is
   # /intake's `Write` on a fresh project (the documented on-ramp) and the first

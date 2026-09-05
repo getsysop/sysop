@@ -12,8 +12,11 @@
 # caller holding a claim ID does not have to strip the prefix.
 #
 # Creates a git worktree at ../<project basename>-batch-<N>/ with the
-# branch specified in review_tasks.md. Override the prefix by exporting
-# WORKTREE_PREFIX (e.g. WORKTREE_PREFIX=foo → ../foo-batch-<N>).
+# branch specified in review_tasks.md. Two env vars move it, the same pair
+# claim_task.sh honours: WORKTREE_PREFIX renames the leaf (WORKTREE_PREFIX=foo
+# → ../foo-batch-<N>), and WORKTREE_ROOT relocates the parent directory
+# (Phase 264, `Q-407`) — for a sandboxed harness that must declare a writable
+# path and would otherwise have to declare the repo's whole parent.
 # Prints next-step instructions.
 #
 # Designed for parallel agent sessions — each batch gets its own
@@ -56,7 +59,13 @@ resolve_main_root() {
   if [[ "$common_dir" = /* ]]; then
     dirname "$common_dir"
   else
-    dirname "$(cd "$common_dir" && pwd)"
+  # `CDPATH= cd`, not bare `cd`: git answers with the RELATIVE `.git` from a
+  # primary checkout, and `cd .git` consults `CDPATH` because the operand starts
+  # with neither `/`, `./` nor `../`. An exported `CDPATH` therefore resolved this
+  # to a decoy elsewhere AND made `cd` echo the directory it reached, doubling the
+  # value. Found by execution in Phase 264's round, in the guard path that made
+  # this helper newly load-bearing.
+    dirname "$(CDPATH= cd "$common_dir" && pwd)"
   fi
 }
 
@@ -1223,7 +1232,7 @@ if [[ "${1:-}" == "--release" ]]; then
         case "$REL_COMMON" in
           "") ;;
           /*) ;;
-          *) REL_COMMON="$(cd "$REPO_ROOT" && cd "$REL_COMMON" 2>/dev/null && pwd -P)" \
+          *) REL_COMMON="$(CDPATH= cd "$REPO_ROOT" && CDPATH= cd "$REL_COMMON" 2>/dev/null && pwd -P)" \
                || REL_COMMON="" ;;
         esac
         REL_PRUNED=false
@@ -1573,7 +1582,23 @@ esac
 # worktree the caller stood in — the header advertises
 # `../<project basename>-batch-<N>/`, and a batch worktree nested beside
 # another batch's worktree is not that.
-WORKTREE_DIR="${MAIN_ROOT}/../${WORKTREE_PREFIX:-$(basename "$MAIN_ROOT")}-batch-${BATCH_NUM}"
+# `Q-407`: honour `WORKTREE_ROOT` here too. Phase 262 added the variable to
+# `claim_task.sh` on the argument that a sandboxed harness is handed a
+# writable-path allow-list and the sibling construction "forces that list to
+# include the repo's whole parent directory — every sibling checkout with it."
+# This script kept building into the parent regardless, so a REVIEW-BATCH claim
+# still required the parent on the allow-list and the stated problem was solved
+# for one of the two claim paths. Neither Phase 262's record nor its shipped
+# prose mentioned this script.
+#
+# `worktree_root_parent` is the same validator `claim_task.sh` calls — reused,
+# not re-derived, because three of its four guards were defects found by
+# EXECUTION in Phase 262's round rather than by design.
+WORKTREE_PARENT="${MAIN_ROOT}/.."
+if [[ -n "${WORKTREE_ROOT:-}" ]]; then
+  WORKTREE_PARENT="$(worktree_root_parent "$MAIN_ROOT")" || exit 1
+fi
+WORKTREE_DIR="${WORKTREE_PARENT}/${WORKTREE_PREFIX:-$(basename "$MAIN_ROOT")}-batch-${BATCH_NUM}"
 
 # (a) A plain directory at the worktree path. Reproduced: `mkdir`, then claim —
 # exit 0, no worktree, lock written, `workspace:` pointing at it.
@@ -1600,8 +1625,32 @@ WORKTREE_DIR="${MAIN_ROOT}/../${WORKTREE_PREFIX:-$(basename "$MAIN_ROOT")}-batch
 # this path is invisible to it — while `git worktree add` lstats and refuses,
 # which put the failure back below the commit. `-L` is what sees the link
 # itself. Found by this phase's round.
+# `Q-415` (Phase 264): `path_is_worktree` asks whether the path is A worktree,
+# never WHOSE. `git -C <foreign worktree> rev-parse --show-toplevel` answers with
+# that tree's own toplevel, so a live worktree of ANOTHER checkout satisfies it
+# and this preflight waves it through. Reproduced by execution: two sibling
+# checkouts sharing a `WORKTREE_PREFIX` (reachable today; `Q-407` above makes it
+# as likely here as `Q-405` made it in `claim_task.sh`) — the second claim printed
+# "Worktree already exists", exited 0, and wrote a `BATCH-<N>.lock` whose
+# `workspace:` names a tree whose `--git-common-dir` belongs to the other
+# checkout, while `git worktree list` here knows nothing about it. The operator is
+# then told to `cd` there and work.
+#
+# `path_is_worktree_of` adds the identity test the helper's own comment never
+# claimed to make (it says the toplevel comparison stops a SUBDIRECTORY of
+# another repository — a different case, correctly handled, and not this one).
 if { [[ -e "$WORKTREE_DIR" ]] || [[ -L "$WORKTREE_DIR" ]]; } \
-   && ! path_is_worktree "$WORKTREE_DIR"; then
+   && ! path_is_worktree_of "$WORKTREE_DIR" "$MAIN_ROOT"; then
+  if path_is_worktree "$WORKTREE_DIR"; then
+    echo "❌ ${WORKTREE_DIR} is a git worktree of a DIFFERENT repository." >&2
+    echo "   Refusing the claim — nothing was written: no status flip, no branch," >&2
+    echo "   no worktree, no lock." >&2
+    echo "   Claiming over it would record another checkout's tree as this batch's" >&2
+    echo "   workspace, and this repository cannot release what it never created." >&2
+    echo "   Set WORKTREE_ROOT / WORKTREE_PREFIX to a path this checkout does not" >&2
+    echo "   share with another one, then re-run." >&2
+    exit 1
+  fi
   echo "❌ ${WORKTREE_DIR} exists but is not a git worktree." >&2
   echo "   Refusing the claim — nothing was written: no status flip, no branch," >&2
   echo "   no worktree, no lock." >&2
@@ -1677,12 +1726,14 @@ else
 fi
 
 # ── Create worktree ───────────────────────────────────────────
-# `path_is_worktree`, not `-d`: the two tests have to agree, or the preflight
-# refuses a shape this arm would have accepted (or worse, the reverse). The
-# preflight has already established that this path is absent or a real
-# worktree, so this is the same decision restated at the point of use, and it
-# is what keeps that true if either site moves.
-if path_is_worktree "$WORKTREE_DIR"; then
+# `path_is_worktree_of`, not `-d` and not `path_is_worktree`: the two tests have
+# to agree, or the preflight refuses a shape this arm would have accepted (or
+# worse, the reverse). The preflight has already established that this path is
+# absent or a real worktree OF THIS REPOSITORY (`Q-415`), so this is the same
+# decision restated at the point of use, and it is what keeps that true if either
+# site moves. Narrowed with the preflight at Phase 264 — leaving this one at
+# `path_is_worktree` would have re-opened the adoption on the arm that acts.
+if path_is_worktree_of "$WORKTREE_DIR" "$MAIN_ROOT"; then
   echo "ℹ️  Worktree already exists: ${WORKTREE_DIR}"
 else
   git worktree add "$WORKTREE_DIR" "$BATCH_BRANCH"

@@ -84,7 +84,10 @@ REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || {
 # Fail closed. Every mode below decides what it must never touch by comparing
 # against this value, so an unanswerable probe means the script cannot tell the
 # primary from a linked worktree at the moment it is about to remove worktrees.
-# `claim_task.sh:208-211` exits on the same class of failure for the same reason.
+# `claim_task.sh`'s `--entry-state` block exits on the same class of failure for
+# the same reason — cited by NAME, not by line: the line numbers moved when
+# Phase 261 added `--commit-claim`, and a pinned range is a citation that goes
+# stale on any edit above it.
 MAIN_ROOT="$REPO_ROOT"
 _git_dir="$(git -C "$REPO_ROOT" rev-parse --git-dir 2>/dev/null)" || _git_dir=""
 _common_dir="$(git -C "$REPO_ROOT" rev-parse --git-common-dir 2>/dev/null)" || _common_dir=""

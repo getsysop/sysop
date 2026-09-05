@@ -161,6 +161,12 @@ CITATION_ANCHORS = {
     # prescribed path" claim needs re-checking rather than silently becoming false.
     # It no longer cites self_check.sh — the round replaced the copied `dirname`
     # shape outright, so that pointer went with it.
+    # Phase 261: it no longer cites `claim_task.sh:208-211` either. Adding
+    # `--commit-claim` shifted every line below it, and the pinned range then named
+    # unrelated code — the exact staleness this module exists to catch, arriving by
+    # an edit that had nothing to do with the citation. The comment now cites the
+    # `--entry-state` block BY NAME, which is the form that survives an insertion,
+    # so there is nothing left here to pin.
     # Phase 234: batch_work.sh's MAIN_ROOT block cites the line that makes
     # `$INDEX_SCRIPT` the READ anchor — review_index.py resolves review_tasks.md
     # from its own location, so if that ever changes, the comment's split of
@@ -168,8 +174,6 @@ CITATION_ANCHORS = {
     # something the code does not do.
     ("core/companion/scripts/batch_work.sh", "review_index.py:47"):
         'TASKS_FILE = os.path.join(REPO_ROOT, "review_tasks.md")',
-    ("core/companion/scripts/cleanup_worktrees.sh", "claim_task.sh:208-211"):
-        "cannot resolve canonical",
     ("core/companion/scripts/claim_task.sh", "self_check.sh:77-85"):
         "then verify PyYAML on THAT interpreter",
     # Phase 256. `Q-375`'s design rests on this note: widening the batch-header
@@ -183,11 +187,14 @@ CITATION_ANCHORS = {
         "Merged|Complete",
     ("core/skills/triage/SKILL.md", "archive_review_tasks.py:101"):
         "Merged|Complete",
-    # Phase 209 retired `_parse_batches_fallback` (62 lines), moving this anchor
-    # up. The anchor string is what makes that a caught drift rather than a
-    # silent one.
-    ("core/skills/claim-task/SKILL.md", "batch_work.sh:413-417"):
-        "left as-is",
+    # RETIRED AT PHASE 264, and the retirement is the fix rather than a loss.
+    # Phase 209 had already moved this anchor once (`_parse_batches_fallback`,
+    # 62 lines); Phase 264 moved it again by five, from a header comment in a
+    # different function entirely. Twice is a pattern, and the pattern is that a
+    # line range into a 1700-line script drifts whenever anything above it
+    # changes. The citing sentence now names `write_batch_lock` and quotes the
+    # arm's literal message, which is stable under insertion and reads better —
+    # so there is no `file:NN` left here to register.
     # Phase 211: this was written `(`:763-765`)` — a BARE self-citation, which
     # CITATION's regex cannot see because it requires a filename token before
     # the colon. It had drifted 90 lines and nothing could tell. Qualifying it

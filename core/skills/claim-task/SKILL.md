@@ -28,8 +28,8 @@ Read `.claude/settings.json` and confirm `permissions.allow` contains:
 - `Bash(python3 -:*)` — Step 1's `--resume` validation, Step 2's `tasks/index.yml` lookup, Step 4a's yaml-round-trip status flip, Step 7a's post-plan integrity check, **and every write the orchestrator makes at Steps 7-pre, 7c and its park path** (all are `python3 - <<'PY'` heredocs, single simple commands, so one rule covers them). This is deliberate: routing the orchestrator's reads and writes through an interpreter it is already permitted to run means the reshape adds **no** new permission surface, and it does not depend on the auto-classifier's treatment of bare `mkdir` / `cp` / `test`. It also survives this skill's `disallowed-tools: Edit, Write, NotebookEdit` frontmatter, which a `Write`-tool artifact write would not.
 - `Bash(python3 sysop/scripts/validate_tasks.py)` / `Bash(python3 sysop/scripts/validate_tasks.py:*)` and the `.venv/bin/python3 sysop/scripts/validate_tasks.py` / `.venv/bin/python3 sysop/scripts/validate_tasks.py:*` venv variants — Step 4c post-claim validator. Bare `python3` is the command word the step prescribes: the script self-resolves venv PyYAML via its own `sys.path` bootstrap (Phase 182), so one form serves every consumer. The `.venv/bin/python3` rules stay only so a hand-typed venv invocation is not denied.
 - `Bash(python3 sysop/scripts/scope_overlap.py:*)` (and the `.venv/bin/python3` variant) — Step 2's non-blocking overlap advisory. The `git -C <worktree> diff` it shells out to needs **no** separate rule (it's a subprocess of the permitted python call, and read-only `git` auto-passes per `_shared/permission-guard.md` § Notes). This rule is **not** load-bearing — a missing rule (or any non-zero exit) just means the advisory is skipped; the claim still proceeds.
-- `Bash(git add tasks/index.yml)` — Step 4d commits the claim.
-- `Bash(git commit -m claim:*)` — Step 4d commit message shape.
+- `Bash(git add tasks/index.yml)` — Step 7d's human gate and Step 7f's Option C stage the index directly. It is **not** Step 4d's rule any more: Phase 261 moved that commit inside `claim_task.sh --commit-claim`, which stages and commits under the script rule above.
+- `Bash(git commit -m claim:*)` — retained, but **no step in this skill binds it** since Phase 261 moved Step 4d inside `claim_task.sh`. This is precisely the shape the `claim_task.sh` bullet above warns about, and it had been sitting five lines below that warning ever since. Kept rather than deleted because removing a template rule never removes it from an installed consumer (`WORKFLOW.md` § 8.2a) and a rule granting nothing requested costs nothing — but recorded as unbound instead of carrying a false attribution.
 
 If any are missing, stop with the `_shared/permission-guard.md` § Algorithm step 5 message (one-line reason: "creates an isolated worktree and a feature branch for the claimed task; queries + updates `tasks/index.yml` via heredoc'd python; runs the schema validator before committing the claim"). Do not proceed — unless the guard's step 3 mode check applies.
 
@@ -361,6 +361,7 @@ except ImportError:  # PyYAML lives only in the project venv (BeanRider ISSUE-00
             _sites += glob.glob(os.path.join(_root, _layout, "lib/python*/site-packages"))
     sys.path[:0] = _sites
     import yaml
+import os, tempfile
 from pathlib import Path
 
 task_id = sys.argv[1]
@@ -368,6 +369,16 @@ index_path = Path("tasks/index.yml")
 
 with index_path.open(encoding="utf-8") as f:
     data = yaml.safe_load(f)
+
+# A concurrent writer that truncates in place leaves this file zero-length for a
+# moment, and `safe_load("")` returns None — which then died on `.get` with a raw
+# AttributeError traceback and lost the claim (Phase 261, `Q-397`). Rate disputed —
+# 4-5 of 100 concurrent trials author-side, 0 of 500 on an independent reconstruction
+# — but the traceback was captured, so the crash is real. Refuse in words.
+if data is None:
+    print("ERROR: tasks/index.yml read as empty — a concurrent writer was mid-write. "
+          "Nothing was changed; re-run this step.", file=sys.stderr)
+    sys.exit(1)
 
 found = False
 resumed = False
@@ -401,15 +412,33 @@ if resumed:
     # dirty classifier would react to.
     print(f"OK: {task_id} already in_progress — resuming, index untouched")
 else:
-    with index_path.open("w", encoding="utf-8") as f:
-        yaml.safe_dump(
-            data,
-            f,
-            sort_keys=False,
-            default_flow_style=False,
-            allow_unicode=True,
-            width=120,
-        )
+    # tempfile + os.replace, NOT `open(path, "w")`. A truncate in place is not
+    # just non-atomic for THIS writer — it makes every concurrent READER see a
+    # zero-length file, which is the crash the `data is None` guard above
+    # reports. `mkstemp` rather than a fixed `<path>.tmp`, so two writers cannot
+    # collide on the temp name either (`Q-382`'s class). Same directory, so the
+    # replace is atomic; `realpath` so a symlinked index is written THROUGH
+    # rather than replaced, and the mode is carried across.
+    real = os.path.realpath(index_path)
+    mode = os.stat(real).st_mode & 0o7777
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(real),
+                               prefix=os.path.basename(real) + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            yaml.safe_dump(
+                data,
+                f,
+                sort_keys=False,
+                default_flow_style=False,
+                allow_unicode=True,
+                width=120,
+            )
+        os.chmod(tmp, mode)
+        os.replace(tmp, real)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
     print(f"OK: flipped {task_id} → in_progress in tasks/index.yml")
 PY
 ```
@@ -426,7 +455,7 @@ bash sysop/scripts/claim_task.sh --lock <TASK_ID> <BRANCH_NAME>
 
 This also creates the git worktree on `<BRANCH_NAME>`, branched from current HEAD (the default branch, if you ran the skill from there).
 
-**Take `<WORKTREE_PATH>` off this script's output and hold it in context** — it prints the lock it wrote, whose `workspace:` field is the absolute path. Do **not** derive it from a shape: the conventional location is `../<project>-<task-id-lower>/`, but `WORKTREE_PREFIX` overrides that, and every later site — Step 7a's `git -C`, all three prompts, the executor's working directory — needs the real absolute path rather than a guess.
+**Take `<WORKTREE_PATH>` off this script's output and hold it in context** — it prints the lock it wrote, whose `workspace:` field is the absolute path. Do **not** derive it from a shape: the conventional location is `../<project>-<task-id-lower>/`, but `WORKTREE_PREFIX` overrides the leaf and `WORKTREE_ROOT` (Phase 262) overrides the parent directory, and every later site — Step 7a's `git -C`, all three prompts, the executor's working directory — needs the real absolute path rather than a guess.
 
 ### 4c. Validate state with `sysop/scripts/validate_tasks.py`
 
@@ -440,28 +469,27 @@ If it fails, **do not proceed to 4d**. Report the validator output verbatim and 
 
 ### 4d. Commit the claim on the default branch
 
-**Resolve `<default branch>` before the block below and substitute the name it prints** —
-`bash sysop/scripts/default_branch.sh`, run bare (see `_shared/main-push-guard.md` Rule A;
-it is not `main` on every consumer, and asserting the literal is what stopped this step on
-a `master` repo, `Q-377`). If it exits non-zero, stop: the claim commits on that branch.
+**There is no `<default branch>` to substitute here any more, and that is the point** — the
+script below resolves it itself via `_git_lib.sh`'s `resolve_default_branch`, so this step
+can no longer be stopped by a hard-coded `main` on a `master` repo (`Q-377`). Nothing to
+run bare first; `_shared/main-push-guard.md` Rule A is applied *inside* the mutex, where
+`HEAD` cannot move between the check and the commit.
+
+This commit lands on the default branch in the shared **primary** worktree, and it is the one step here that writes a file every other agent is also reading. Run the script that owns it:
 
 ```bash
-bash sysop/scripts/default_branch.sh
+bash sysop/scripts/claim_task.sh --commit-claim <TASK_ID>
 ```
 
-This commit lands on the default branch in the shared **primary** worktree, so apply `_shared/main-push-guard.md` **Rule A** first — assert `HEAD` is still on that branch (a concurrent `/auto-build` batch or another `/claim-task` session could have moved it). If it is not, STOP and reconcile via `git reflog` rather than committing the claim onto the wrong branch:
+**Why a script, and not the four bash lines this step used to print.** Those lines did an unlocked `git add` + `git commit` over an index Step 4a had already rewritten in place. Between 4a and here, a concurrent claim's whole-file `safe_dump` can overwrite your flip — and the old block's `git diff --cached --quiet ||` then found nothing to commit and **exited 0**, reporting a successful claim over a task still `open` at `HEAD`. Measured over 100 concurrent trials with **two claims starting together and nothing between 4a and 4d**, it happened between 6 and 25 times depending on machine and load — silently, with the losing session going on to build against a task `/next-task` would hand to somebody else (`Q-397`, Phase 261). **State the window with the number.** With 4b and 4c running in between — the shape an operator actually types — the same harness measured **0 of 100 before the fix**, because the longer gap lets one claim finish first. Two claims that start seconds apart are the real hazard, and the range is the honest figure for it: the *loss* reproduces, the *rate* does not. Post-fix the harness measures 0 of 100 in both windows on every run, and its serial control is clean in every state.
 
-```bash
-test "$(git rev-parse --abbrev-ref HEAD)" = "<default branch>" || {
-  echo "HEAD is not <default branch> (a concurrent actor moved it) — STOP."; exit 1; }
-git add tasks/index.yml
-git diff --cached --quiet -- tasks/index.yml \
-  || git commit -m "claim: mark <TASK_ID> as in-progress"
-```
+**What the script does that the inline block could not.** It takes the **tracker write mutex** (`sysop/runtime/tracker.write.lock` — the same one `batch_work.sh` and `close_batch.sh` take), and inside it: applies `_shared/main-push-guard.md` **Rule A** by resolving the default branch and asserting the primary checkout's `HEAD` is still on it; **re-reads the index and re-flips if your task came back `open`**; then commits `tasks/index.yml` and only that path. The re-flip is the half that matters — a mutex taken here cannot retroactively protect the write Step 4a already made outside it, so the script repairs rather than merely serializes. It says so out loud when it re-flips, because a silent repair would look exactly like a clean run.
 
-**Resume path (Step 2 entry state `resumable`): there is nothing to commit, and that is not an error.** Step 4a wrote no change, so `tasks/index.yml` is already staged-clean and `git commit` would abort with *nothing to commit* — which reads as a failed claim. The `git diff --cached --quiet` test above is what makes the step idempotent; keep it rather than letting the commit fail and be interpreted. Rule A's `HEAD` assert still runs on both paths, because a resume commits nothing but every *later* step still assumes it is standing on `main`.
+If it refuses because another writer holds the mutex, it names the holder and writes nothing — wait and re-run rather than editing `tasks/index.yml` by hand.
 
-Run on the main checkout (the worktree at `../<project>-<task-id-lower>/` will pick this up via the shared object DB).
+**Resume path (Step 2 entry state `resumable`): there is nothing to commit, and that is not an error.** Step 4a wrote no change, so the index already matches `HEAD`; the script reports `nothing to commit (resume path)` and exits 0. Rule A's `HEAD` assert still runs on both paths, because a resume commits nothing but every *later* step still assumes it is standing on the default branch.
+
+Run on the main checkout. The script resolves the primary checkout itself via `git-common-dir`, so it commits main-side wherever you invoke it from — but its Rule A assert reads that checkout's `HEAD`, so a primary checkout parked on a feature branch is refused rather than worked around.
 
 ### Rollback on failure of 4b or 4c
 
@@ -546,7 +574,7 @@ Three options are offered on a roadmap task:
 
 **This is the only entry point to Step 7, on a fresh claim and on a `--resume` alike.** No later stage is entered directly; the routing table below decides which one this run lands on.
 
-Every run of this pipeline gets its own directory. **This is what makes a stale artifact unreachable rather than merely detectable** — a re-invocation never looks in a previous run's directory, so it cannot inherit its `review.md`. That matters most on the batch path: `batch_work.sh`'s `write_batch_lock` is idempotent by design and leaves an existing lock **as-is** (`batch_work.sh:413-417`), and its status gate still admits a re-claim of a *live* batch — `Pending` unconditionally, `In Progress` as the sanctioned resume — so a batch re-invocation would otherwise find yesterday's artifacts sitting under a lock that still looks current. Keying on the lock's `started:` stamp does **not** close this — the stamp is preserved across exactly that re-claim.
+Every run of this pipeline gets its own directory. **This is what makes a stale artifact unreachable rather than merely detectable** — a re-invocation never looks in a previous run's directory, so it cannot inherit its `review.md`. That matters most on the batch path: `batch_work.sh`'s `write_batch_lock` is idempotent by design and leaves an existing lock **as-is** (`batch_work.sh`'s `write_batch_lock`, the arm printing `Batch lock already present (left as-is)`), and its status gate still admits a re-claim of a *live* batch — `Pending` unconditionally, `In Progress` as the sanctioned resume — so a batch re-invocation would otherwise find yesterday's artifacts sitting under a lock that still looks current. Keying on the lock's `started:` stamp does **not** close this — the stamp is preserved across exactly that re-claim.
 
 **The directory lives in the MAIN checkout, not the worktree**, resolved through `git rev-parse --git-common-dir`. Three properties depend on that and none of them survive a worktree-side path: Step 1 has to validate `--resume` *before* any lock is read, so the run must be discoverable before a worktree path exists; the artifacts have to outlive `git worktree remove` and `cleanup_worktrees.sh`, which is what the park previously needed a second copy for; and the orchestrator itself runs in the main checkout, alongside the hook-written envelopes. An earlier revision created it under `<WORKTREE_PATH>` while Steps 1 and 2 looked for it in the main checkout — the two never met, and every `--resume` was rejected.
 

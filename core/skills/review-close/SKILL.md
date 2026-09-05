@@ -467,7 +467,7 @@ Step 2a still reads the diff either way. If every target skips, Step 2b is a cle
 
 3. Spawn an Agent with:
    - `subagent_type: "general-purpose"`
-   - `model: "opus"` (always — the **reasoning** role: adversarial convention review; do not omit, per `.claude/served_models.yml`)
+   - `model: "opus"` (always — the **convention-gate** role, which defaults to `opus`: adversarial convention review; do not omit, per `.claude/served_models.yml`) <!-- sysop:role=convention-gate -->
    - `isolation: "worktree"` — give each agent its own checkout (internal tracker #234). Steps 2a–2d run in the user's **primary** worktree, which has a single `HEAD`; a full-tool agent that decides to compare two revisions will reach for `git checkout` unless something stops it, and in a real run one did, moving `HEAD` off the branch the close was working on. Step 4's HARD RULE already names this hazard but frames the actor as *external*; here it is this skill's own agents, spawned two steps earlier. (The reported run had an integration branch checked out at 2b, which this skill's step order does not produce — 4-pre cuts it two steps later — so read the incident as "off the expected branch", not as evidence about which branch that is. What the misplaced commit would have cost also depends on policy: Step 6 deletes a merged feature branch with a safe `git branch -d`, and force-deletes only the integration branch under `pr`.) Isolation is available here because these agents have **no** pre-existing worktree, so `_shared/adversarial-review.md` § *Running more than one reviewer* applies directly — its "do not use it where a worktree already exists" caveat is about `/claim-task`, `/auto-build`, `/auto-fix` and `/auto-judge`, which spawn into a worktree an earlier step created, not about this step. **Where the harness offers no isolation parameter, the prompt's do-not-mutate rule below is the portable floor** — all that is available, which is not the same as sufficient. Measured twice, on two different instruction texts: a consumer's 13-agent run had one agent create `tasks/open/<ID>.md` and edit `tasks/index.yml`, with several others leaving scratch scripts in the worktree root; and this repo's own pre-build pass, under a more emphatic read-only instruction, had an agent create a scratch file inside its worktree anyway. Both were contained only because the run passed `isolation: "worktree"`. So isolation is the structural hardening the floor does not provide, not a redundant extra on top of it — and a harness without it **must** expect a dirty tree and re-assert cleanliness rather than trust the prompt.
    - `description: "Convention check: <target>"`
    - `prompt`:
@@ -1117,6 +1117,13 @@ for _b in _approved:
             if _f.get("branch") == _b and _f.get("workspace"):
                 _ws = Path(_f["workspace"]); break
     if _ws is None:
+        # Sibling-glob fallback, reached only when the lock has no `workspace:`.
+        # It cannot see WORKTREE_PREFIX exported by another session, and cannot
+        # see WORKTREE_ROOT (Phase 262) at all — a relocated workspace is not a
+        # sibling. Both limits are the same one: neither variable is recorded,
+        # so with `workspace:` gone there is nothing to reconstruct from. A
+        # LINKED worktree is still found, because the lock-less path above reads
+        # the porcelain listing; the residue is a relocated --clone.
         import os
         _prefix = os.environ.get("WORKTREE_PREFIX") or repo.name
         for _cand in sorted(repo.parent.glob(f"{_prefix}-*")):
@@ -1439,7 +1446,14 @@ if ws is None:
     # Two passes. The prefixed glob first, because it is what `claim_task.sh` computes —
     # then EVERY sibling directory, because `WORKTREE_PREFIX` is read from the *claiming*
     # session's environment and recorded nowhere except a lock that `--lock` may not have
-    # written. Without the second pass, a consumer who exports that variable at claim time
+    # written. `WORKTREE_ROOT` (Phase 262) is the same kind of variable and carries the same
+    # caveat, with one narrower reach: BOTH passes glob siblings of the repo, so neither
+    # finds a workspace built under a relocated root. That residue is only `--clone`,
+    # because a linked worktree appears in the `git worktree list --porcelain` this step is
+    # handed as argv[2] wherever it sits, and a clone does not — a clone is its own
+    # repository, not a worktree git tracks. So: relocated + `--clone` + no `--lock`
+    # is the one combination this arm cannot resolve, and it resolves to `<none>`,
+    # which this step already reports rather than guessing at. Without the second pass, a consumer who exports that variable at claim time
     # and not at close time gets `<none>` — the same silent incompletion this step exists
     # to remove. The widening is safe because the arm verifies `HEAD`: a directory only
     # counts if it is a git checkout standing on this exact branch.
@@ -2373,8 +2387,12 @@ After all branches are merged but **before** pushing:
        # Atomic rewrite (Phase 201). `p.write_text` truncates in place, so an interrupted
        # write leaves a half-written index — the one file carrying every task's status.
        # `backfill_completed_dates.py` has used tempfile + os.replace since Phase 108 and is
-       # the shape copied here. The three claim-side writers (claim-task Step 4a, auto-build
-       # Step 5.1, claim_task.sh --release) still truncate in place via open(..., "w"); this
+       # the shape copied here. Phase 261 converted claim-task Step 4a and
+       # claim_task.sh --release (and gave --commit-claim the same shape when it added
+       # it); Phase 263 converted auto-build Step 5.1, which was the last one, so NO
+       # writer of tasks/index.yml truncates in place via open(..., "w") any more.
+       # What `Q-404` still has open is the MUTEX, not atomicity: this site,
+       # backfill_completed_dates.py and clear_user_action.py all write without it; this
        # site was done first because it is the one that has already `git mv`d the bodies, so
        # a torn write there strands staged renames against an index that never recorded them.
        # Same directory, so the replace is atomic and no reader sees a partial file.

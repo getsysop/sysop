@@ -178,9 +178,12 @@ def _write_atomically(path: Path, data: dict) -> None:
     # replaces the link itself, leaving the canonical file untouched while this
     # script reports success — and `mkstemp` creates 0600, so a plain rewrite
     # silently narrowed a 0644 `tasks/index.yml` to 0600, which git does not
-    # track and nothing would have surfaced. `claim_task.sh --release` writes
-    # through `open(path, "w")` and has neither problem; both were found by this
-    # phase's round, which ran the two writers side by side.
+    # track and nothing would have surfaced. Both were found by Phase 237's round,
+    # which ran two writers side by side: `claim_task.sh --release` wrote through
+    # `open(path, "w")` at the time and so had neither problem. Phase 261 converted
+    # it to this same mkstemp shape, so it now carries both fixes too — the older
+    # sentence claiming it still writes in place outlived the conversion by two
+    # phases with nothing pinning it (`Q-404`).
     path = path.resolve()
     try:
         mode = stat.S_IMODE(path.stat().st_mode)

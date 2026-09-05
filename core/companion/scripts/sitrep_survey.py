@@ -834,11 +834,17 @@ def _pending_doc_for(
     narrow case it actually covers.
 
     The path it computes had to be corrected too: `claim_task.sh` builds
-    `../<prefix>-<task id LOWER-CASED>` and honours `WORKTREE_PREFIX`, so the
+    `<root>/<prefix>-<task id LOWER-CASED>` and honours `WORKTREE_PREFIX`, so the
     first version — `<repo name>-<TASK_ID>` verbatim — could never match on a
-    case-sensitive filesystem. `WORKTREE_PREFIX` is not recorded in the lock, so
-    a prefixed workspace is still only reachable via arm (ii); that is a stated
-    limit, not an oversight.
+    case-sensitive filesystem. Neither `WORKTREE_PREFIX` nor `WORKTREE_ROOT`
+    (Phase 262, which overrides the `..` parent) is recorded in the lock as such,
+    so a workspace built with either is reachable via arms (i) and (ii) — arm (i)
+    because git lists a linked worktree wherever it sits, arm (ii) because the lock
+    records the resulting absolute `workspace:` when `--lock` wrote one. That
+    is a stated limit of THIS arm, not a gap in the survey: arm (iii) exists for
+    a lock whose `workspace:` is blank or damaged, and in that case there is no
+    record of the override to reconstruct from. Arms (i) and (ii) are
+    location-agnostic and need nothing from either variable.
 
     Read-only by construction — `/sitrep` carries a `disallowed-tools` guard and
     this function only ever stats paths.
