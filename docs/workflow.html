@@ -847,8 +847,8 @@
     <div class="hero-grid">
       <aside class="hero-margin rise">
         <span class="line">Vol. <span class="accent">I</span></span>
-        <span class="line">Issue 259</span>
-        <span class="line">2026.09.03</span>
+        <span class="line">Issue 267</span>
+        <span class="line">2026.09.08</span>
         <span class="line" style="margin-top:22px">An essay on</span>
         <span class="line">software workflow</span>
       </aside>
@@ -871,7 +871,7 @@
             <div class="hero-stat-label">Skills</div>
           </div>
           <div class="hero-stat">
-            <div class="hero-stat-fig">259</div>
+            <div class="hero-stat-fig">267</div>
             <div class="hero-stat-label">Shipped phases</div>
           </div>
           <div class="hero-stat">
@@ -1482,7 +1482,7 @@
               <!-- Pre-claim band -->
               <g class="node">
                 <rect x="200" y="124" width="600" height="40" rx="2" class="fill-plate"/>
-                <text x="500" y="148" class="smallserif">Step 5 · sequential pre-claim on main · <tspan font-family="var(--mono)" font-size="11" font-style="normal">yaml round-trip + claim_task.sh --lock</tspan></text>
+                <text x="500" y="148" class="smallserif">Step 5 · sequential pre-claim on main · <tspan font-family="var(--mono)" font-size="11" font-style="normal">yaml round-trip + claim_task.sh --lock/--commit-claim</tspan></text>
               </g>
               <path d="M 500 88 L 500 124" class="arrow" marker-end="url(#ah2)"/>
 
@@ -1632,7 +1632,7 @@
           </div>
           <figcaption>
             <span class="fig-num">Fig. 8</span>
-            <span class="fig-cap">Where the work lives. One clone stays on <code>main</code> (holding <code>sysop/runtime/locks/</code> and the task index); each task builds in its own sibling worktree. <code>/claim-task</code> and <code>/auto-build</code> create worktrees; <code>/review-close</code> merges them back. Adding tasks or claiming new work from another session only ever creates more worktrees — but those operations also write shared tracker files on this clone, and only the review-batch tracker is serialized by a lock. The task index is not. See the 2026-09-03 addendum below.</span>
+            <span class="fig-cap">Where the work lives. One clone stays on <code>main</code> (holding <code>sysop/runtime/locks/</code> and the task index); each task builds in its own sibling worktree. <code>/claim-task</code> and <code>/auto-build</code> create worktrees; <code>/review-close</code> merges them back. Adding tasks or claiming new work from another session only ever creates more worktrees — but those operations also write shared tracker files on this clone, and which of those writes a lock covers has changed twice since this figure was drawn. See the 2026-09-03 and 2026-09-08 addenda below.</span>
           </figcaption>
         </figure>
 
@@ -1673,15 +1673,36 @@
           and breaking the lock blind reintroduces exactly the lost update the lock exists to prevent. A refusal
           that names its cause is the honest outcome; an automatic break would be the bug wearing a fix's clothes.</p>
 
-        <p class="muted">Two members of the same class are known and open, and saying so is the point of writing
+        <p class="muted">Two members of the same class were known and open when this was written, and saying so is the point of writing
           this down. The task queue's own index is written by the claim path with the identical
           read-modify-write-commit shape and no mutex over it — the write lives in skill prose rather than in a
           script, so it cannot simply take the same lock and needs its own design. And the archiver is a third
           writer of the review tracker that the new mutex does not cover; its exposure is genuinely lower, because
           it is a discrete command an operator runs between closes rather than something the loop invokes. Neither
-          is fixed, neither has been measured, and both are filed. The reason to publish that rather than wait for
+          is fixed, neither has been measured, and both are filed. <em>The first of the two has since been fixed and
+          measured — see the 2026-09-08 addendum below.</em> The reason to publish that rather than wait for
           it to be tidy is the same reason the rejected mechanisms above are on this page: a claim that concurrent
           use is safe is worth exactly as much as the last thing that was checked.</p>
+
+        <p><strong>Addendum (2026-09-08).</strong> The first of those two is closed, and the forecast above is
+          the interesting part of how. It said the task index <em>“cannot simply take the same lock and needs its
+          own design”</em> — because the write lived in skill prose rather than in a script. The design turned out
+          to be moving the write into a script that could take the lock: the claim path's commit became a mode of
+          a script, and that script took the tracker mutex the batch writers already used — it had been taking no
+          part in that mutex before, though it had always held its own per-task claim lock, which is a different
+          lock protecting a different thing — and a batch loop's own claim became a caller of that same mode two
+          phases later rather than keeping a second copy. Measured before and after on the
+          real script, not reasoned about: two claims started together, with nothing between the index edit and
+          its commit, left a task <code>open</code> at <code>HEAD</code> while its own process exited 0 in 6 to 19
+          of 100 trials; the same pair with the worktree and validator steps in between — the window an operator's
+          own typing opens — measured 0 of 100. After, 0 of 100 in both. That spread is the reason the number was
+          worth taking: a defect whose common timing is benign is the kind a single green run certifies as absent.
+          What remains is narrower and still stated, in two parts. Three <em>other</em> writers of the index take
+          no mutex — all three write atomically — and the archiver on the review tracker is unchanged from the
+          paragraph above. Separately, the claim-side edit that <em>precedes</em> the commit is still unlocked in
+          both paths, by design: its lost flip is <em>repaired</em> downstream by the commit's re-flip rather than
+          prevented, which is a different property from serialization and is worth naming because it is the very
+          edit the paragraph above describes being clobbered. The class is not closed; two ceilings were raised.</p>
 
         <p class="muted">The isolation is only worth what the <em>recovery</em> instructions are worth, and this project
           shipped a counterexample for a while. Three skill sites offered the same rollback for a failed claim: a
@@ -1696,6 +1717,24 @@
           the very case the worst of the three sites was conditioned on — that same command <em>refuses</em>, and
           only a plain worktree removal applies. The rollback prose had to split in two, and a documentation row had
           to stop licensing the wholesale form.</p>
+
+        <p><strong>Addendum (2026-09-08).</strong> There is a question one step earlier than recovery, and it went
+          unasked for longer: not <em>how do I get out of this workspace</em>, but <em>whose workspace is this</em>.
+          Both the single-task claim and the batch loop build at a computed path, and both, finding something
+          already there, would adopt it rather than fail — where “already there” had been checked by asking whether
+          it was a directory. It is the wrong question. A second checkout of the same project, parked beside the
+          first, computes the same path; adopting it silently wires two sessions into one tree, and the lock then
+          records a workspace that is not the one being built in. The check is now an identity comparison against
+          the repository itself, and it had to be made twice in the second script, because on both occasions the
+          report named only the first. The identity half the fixing phase caught itself, by asking whether the
+          class was wider than its brief; the branch half, a phase later, only its review round did. Two
+          narrower cases followed the same way: a workspace that really is ours but sits on a different branch than
+          the lock claims, and a cloned workspace whose <code>origin</code> points at a different repository
+          altogether. The second is refused outright; the first is put right where it can be — the workspace is
+          moved onto the branch the lock names — and refused only when it cannot be, which is the shape worth
+          copying: verify, correct if that is possible, refuse if it is not. The general shape is the one this section
+          keeps arriving at — isolation is an assumption about a specific directory, and an assumption about a
+          directory is worth what the check that identifies it is worth.</p>
       </div>
     </div>
   </div>
@@ -2855,7 +2894,9 @@
         <p class="muted">
           Since Phase 69, skills that pin a model declare a <em>role</em> — <code>reasoning</code>, <code>convention-gate</code>, <code>mechanical</code>, or
           <code>quick</code> — rather than a model id (skills without a pin simply inherit the session model). Install resolves roles through
-          <code>.claude/served_models.yml</code> (default mapping: opus · sonnet · haiku); a consumer remaps any role in
+          <code>.claude/served_models.yml</code> (default mapping: <code>reasoning</code> → opus, <code>mechanical</code> → sonnet,
+          <code>quick</code> → haiku, with <code>convention-gate</code> following <code>reasoning</code> until you separate them);
+          a consumer remaps any role in
           <code>served_models.local.yml</code>, which is never overwritten and layered on top — so an upstream model
           sunset and a local preference both survive the next update. A <em>valid</em> preference, at least: since
           Phase 223 the installer validates the mapping before it applies it, and refuses one it cannot resolve to a
@@ -2888,6 +2929,23 @@
           can read off the repository, while <em>what the default branch is called</em> is not a preference at all.
           <span class="muted">A config key is the right answer only when the fact is genuinely yours to state.</span>
         </p>
+
+        <p><strong>Addendum (2026-09-08).</strong> A key that passes that test arrived shortly after, and it is
+          useful precisely because it is the contrast case. Workspaces were built at a fixed offset from the
+          repository — its parent directory — which is a sensible default and not a fact git owns. It becomes a
+          problem under a sandboxed harness, where the agent is handed an explicit list of writable paths: a
+          workspace in the repository's parent forces that list to include the parent, and with it every unrelated
+          checkout sitting beside it. So the parent is now nameable — <code>WORKTREE_ROOT</code>, honoured by both
+          the single-task claim and the batch loop — defaulting to exactly what it was before.
+          Where you want scratch workspaces to live is a preference no tool can read off the repository — which is
+          the whole of the argument above, arriving at the opposite answer because the fact is a different kind of
+          fact. It refuses rather than repairs at every arm, because each failure is otherwise silent: a root that
+          does not exist is refused rather than created, since a typo would otherwise scatter directories and
+          succeed; one that is not writable is refused before a claim comes to depend on it; one containing a
+          newline is refused because the lock's record of it is line-anchored; and a root inside <em>any</em> git
+          working tree is refused — widened a phase later from “this repository's” once the reason was stated
+          plainly, since a workspace there is untracked content the checkout's own cleanup paths would sweep, and
+          that reason does not care which checkout it is.</p>
 
         <h3>Where things live in a consumer repo</h3>
         <div class="listing" data-label="consumer repo · filesystem layout">
@@ -2945,7 +3003,7 @@
       <aside class="col-rule">Colophon</aside>
       <div>
         <p class="col-body">
-          A monograph on <em>Sysop</em>, as of <em>Phase 259</em> · 2026-09-03, with dated addenda where the record
+          A monograph on <em>Sysop</em>, as of <em>Phase 267</em> · 2026-09-08, with dated addenda where the record
           moved after the snapshot. Phase numbers throughout are iterations
           of the workflow's own development — each one planned, adversarially reviewed, and shipped through the process it
           extends; <a href="https://github.com/getsysop/sysop/blob/main/PHASE_LOG.md">PHASE_LOG.md</a> carries one entry per phase. Set in the reader's native serif —
@@ -2986,7 +3044,7 @@
             <ul>
               <li>Extracted from <em>gdp-query-system</em></li>
               <li>First consumer · BeanRider</li>
-              <li>Phase 259 · 2026-09-03</li>
+              <li>Phase 267 · 2026-09-08</li>
             </ul>
           </div>
           <div>

@@ -259,7 +259,7 @@ def test_an_existing_non_repo_directory_is_refused_without_a_lock(tmp_path):
     out = _run(CLAIM_TASK, r, "--clone", "--lock", "FEAT-0003", "feat/three")
 
     assert out.returncode == 1
-    assert "not a git repository" in (out.stdout + out.stderr)
+    assert "not the root of a git repository" in (out.stdout + out.stderr)
     assert not (r / "sysop/runtime/locks/FEAT-0003.lock").exists(), (
         "a refusal that still writes the lock is not a refusal"
     )
@@ -402,7 +402,7 @@ def test_the_non_repo_refusal_is_the_one_that_fires(tmp_path):
     both = out.stdout + out.stderr
 
     assert out.returncode == 1
-    assert "not a git repository" in both
+    assert "not the root of a git repository" in both
     assert "could not be checked out there" not in both, (
         "fell through to the checkout refusal — the non-repo arm did not stop it"
     )
@@ -411,27 +411,48 @@ def test_the_non_repo_refusal_is_the_one_that_fires(tmp_path):
 def test_an_existing_clone_that_cannot_reach_the_branch_is_refused(tmp_path):
     """**Guard gap found by the battery (D30): no test reached this arm at all.**
 
-    An existing git repo that is NOT a clone of this origin cannot fetch the
-    branch, so the checkout fails. Recording it would write a lock naming a
-    workspace on the wrong branch — which is the whole of `Q-276`'s second
-    shape, arriving by a different route."""
+    An existing clone whose checkout of the branch cannot succeed must be
+    refused: recording it would write a lock naming a workspace on the wrong
+    branch — the whole of `Q-276`'s second shape, arriving by a different route.
+
+    **The fixture was re-pointed by Phase 266 and the assertion was not.** It
+    used to be a stranger `git init` — a repo that is not a clone of this origin,
+    which could not fetch the branch. `Q-417` then gave the block an ORIGIN
+    identity gate that sits ABOVE this one, so that fixture is now refused a step
+    earlier, with a truer message, and stopped reaching the arm this test exists
+    for. Its stranger case moved to
+    `test_workspace_adoption_identity.py::TestCloneAdoptionIdentity`.
+
+    The replacement is the realistic live path and it is not a contrivance: a
+    LEGITIMATE clone of our own origin, sitting on the default branch with an
+    uncommitted change that the target branch also touches. It passes the
+    identity gate — it really is ours — and `git checkout` refuses rather than
+    discard the work."""
     r = _repo(tmp_path / "w", task_id="FEAT-0007")
-    stranger = r.parent / f"{r.name}-feat-0007"
-    subprocess.run(["git", "-c", "init.defaultBranch=main", "init", "-q", str(stranger)],
-                   check=True, capture_output=True)
-    _git(stranger, "config", "user.email", "t@t")
-    _git(stranger, "config", "user.name", "t")
-    _git(stranger, "config", "commit.gpgsign", "false")
-    (stranger / "f.txt").write_text("x")
-    _git(stranger, "add", "-A")
-    _git(stranger, "commit", "-qm", "unrelated")
+
+    # A real branch on origin whose content collides with the dirty file below.
+    _git(r, "checkout", "-q", "-b", "feat/seven")
+    (r / "README.md").write_text("# on the branch\n")
+    _git(r, "commit", "-qam", "branch work")
+    _git(r, "push", "-q", "-u", "origin", "feat/seven")
+    _git(r, "checkout", "-q", "main")
+
+    clone = r.parent / f"{r.name}-feat-0007"
+    subprocess.run(["git", "clone", "-q", str(r.parent / f"{r.name}-origin.git"),
+                    str(clone)], check=True, capture_output=True)
+    (clone / "README.md").write_text("# uncommitted, and it conflicts\n")
 
     out = _run(CLAIM_TASK, r, "--clone", "--lock", "FEAT-0007", "feat/seven")
 
     assert out.returncode == 1, (out.stdout + out.stderr)
-    assert "could not be checked out there" in (out.stdout + out.stderr)
+    assert "could not be checked out there" in (out.stdout + out.stderr), (
+        "did not reach the checkout arm — has a gate above it started firing?"
+    )
     assert not (r / "sysop/runtime/locks/FEAT-0007.lock").exists(), (
         "a lock was written naming a workspace on the wrong branch"
+    )
+    assert (clone / "README.md").read_text() == "# uncommitted, and it conflicts\n", (
+        "the refusal discarded the uncommitted work it exists to protect"
     )
 
 

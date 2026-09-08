@@ -459,6 +459,207 @@ path_is_worktree_of() {
   [ "$theirs" -ef "$mine" ]
 }
 
+# ── remote_identity <url> [<base-dir>] ────────────────────────
+#
+# Prints a comparable IDENTITY token for a git remote URL and returns 0; prints
+# nothing and returns 1 when <url> is empty.
+#
+# The question this answers is `Q-417`'s. `claim_task.sh --clone` adopted an
+# existing directory on `git -C <dir> rev-parse --git-dir`, which answers *is
+# this a repository* and never *whose*: a stranger `git init` at the computed
+# clone path was adopted at exit 0, told the operator "Start working!", and wrote
+# a lock whose `workspace:` named a tree with one file in it. The identity test
+# for a `--clone` workspace cannot be `path_is_worktree_of` above — a clone is a
+# SEPARATE repository by construction, so that predicate would refuse every
+# legitimate one — so it has to be identity of ORIGIN. Comparing the two
+# configured strings is not enough: git spells one GitHub repository at least
+# four ways (`git@host:o/r.git`, `ssh://git@host/o/r`, `https://host/o/r.git`,
+# `https://user@host/o/r`), and one checkout mixing two of them is ordinary
+# rather than exotic: `gh auth status` reports a `Git operations protocol`, a
+# hand-written runbook prescribes whichever spelling its author used, and the two
+# disagree. An exact-string test would refuse a correct clone on such a machine —
+# a false ACCEPT is the defect this closes, but a false REFUSAL would be a new one.
+#
+# Normalisation, and the decision behind each step (Wade's call, Phase 266):
+#
+#   * scheme, `user@` and `:port` are dropped — they are transport, not identity.
+#   * the HOST is case-folded; the PATH is NOT. Case-folding the path would
+#     conflate two distinct repositories on a case-sensitive host, and the two
+#     error directions are not symmetric: a false REFUSAL costs the operator one
+#     message and a re-run, a false ACCEPT is the whole defect this closes.
+#   * one trailing `.git` and any trailing `/` are stripped — in that order, and
+#     the slashes again afterwards, because `https://h/o/r.git/` occurs.
+#
+# The token carries its own FORM (`url` or `path`) as a tab-separated first
+# field, so a local path and a network URL can never compare equal by accident.
+#
+# bash 3.2: `tr` for the case fold, not `${var,,}`.
+remote_identity() {
+  local url="$1" base="${2:-}" rest hostport host path
+  [ -n "$url" ] || return 1
+
+  case "$url" in
+    file://*)
+      remote_path_identity "${url#file://}" "$base"
+      return 0
+      ;;
+    *://*)
+      rest="${url#*://}"
+      case "$rest" in
+        */*) hostport="${rest%%/*}" ; path="${rest#*/}" ;;
+        *)   hostport="$rest"       ; path="" ;;
+      esac
+      ;;
+    /*|./*|../*|~*)
+      remote_path_identity "$url" "$base"
+      return 0
+      ;;
+    */*:*)
+      # A `/` BEFORE the colon means git reads this as a local path, not as an
+      # scp-like remote (`git ls-remote a/b:c` answers "does not appear to be a
+      # git repository"; `h:c` answers "could not resolve hostname"). Found by
+      # the round's execution lens: without this arm `a/b:c` was parsed as
+      # host `a/b`, and since the token is `host` + `/` + `path`, it collided
+      # with `https://a/b/c`. The scp arm is the only way a `/` can reach the
+      # host field, so this is the whole of that collision.
+      remote_path_identity "$url" "$base"
+      return 0
+      ;;
+    *:*)
+      # scp-like `[user@]host:path`. No scheme and no port — everything after
+      # the FIRST colon is the path, which is why this arm cannot be folded into
+      # the one above: there `:` introduces a port, here it introduces a path.
+      hostport="${url%%:*}"
+      path="${url#*:}"
+      ;;
+    *)
+      # No scheme, no colon: a bare relative path.
+      remote_path_identity "$url" "$base"
+      return 0
+      ;;
+  esac
+
+  host="${hostport##*@}"
+  case "$host" in
+    # An IPv6 literal is bracketed (`ssh://[::1]:22/o/r`); `%%:*` on `[::1]`
+    # would leave `[`. Keep the brackets, drop anything after them.
+    \[*\]*) host="${host%%\]*}]" ;;
+    *)      host="${host%%:*}" ;;
+  esac
+  host="$(printf '%s' "$host" | tr '[:upper:]' '[:lower:]')"
+
+  while [ "${path#/}" != "$path" ]; do path="${path#/}"; done
+  while [ "${path%/}" != "$path" ]; do path="${path%/}"; done
+  path="${path%.git}"
+  while [ "${path%/}" != "$path" ]; do path="${path%/}"; done
+
+  printf 'url\t%s/%s\n' "$host" "$path"
+}
+
+# ── remote_path_identity <path> [<base-dir>] ──────────────────
+#
+# The LOCAL half of `remote_identity`, and it is not an edge case: every fixture
+# in this tree uses a bare repository on disk as `origin`, and so does any
+# consumer whose remote is a path. Compared as a PATH, never as `host/path`.
+#
+# Physical resolution is the point. On macOS `/tmp` is a symlink to
+# `/private/tmp`, so one bare repo reached by two spellings must not read as two
+# remotes — the same reason `git_common_dir_abs` above ends in `pwd -P`. A path
+# that does not exist is normalised as a string and compared that way; that is a
+# fail-toward-refusal, which is the safe direction here.
+#
+# <base-dir> resolves a RELATIVE remote, because git resolves one against the
+# repository that declares it and not against the caller's CWD. With no
+# <base-dir> a relative path is left as written.
+#
+# `.git` is deliberately NOT stripped from a path, unlike the URL arm: `.git` is
+# part of a bare repository's real directory name (`/srv/origin.git`), and
+# stripping it would send `cd` at a directory that does not exist.
+remote_path_identity() {
+  local CDPATH= p="$1" base="${2:-}" abs resolved
+  while [ "${p%/}" != "$p" ] && [ "$p" != "/" ]; do p="${p%/}"; done
+  case "$p" in
+    # A literal `~` is left UNRESOLVED, and the honest reason is not the one the
+    # first cut gave. That comment said "neither does git for a remote it
+    # stores"; the round measured otherwise — git stores the tilde verbatim but
+    # RESOLVES it (`git ls-remote` on a `~/x.git` origin exits 0). So the cost is
+    # real and is stated rather than denied: a consumer spelling one origin
+    # `/srv/git/x.git` on one side and `~/x.git` on the other gets a false
+    # REFUSAL. That is the safe direction — the accept is what this exists to
+    # deny — and expanding `$HOME` here would resolve it against the SCRIPT's
+    # environment, not the ssh account's, which is a different bug.
+    /*|~*) abs="$p" ;;
+    *)     if [ -n "$base" ]; then abs="${base%/}/$p"; else abs="$p"; fi ;;
+  esac
+  if [ -d "$abs" ]; then
+    resolved="$( cd "$abs" 2>/dev/null && pwd -P )" && abs="$resolved"
+  fi
+  printf 'path\t%s\n' "$abs"
+}
+
+# ── origin_identity <dir> ─────────────────────────────────────
+#
+# Prints <dir>'s `origin` identity token and returns 0; prints nothing and
+# returns 1 when <dir> is not the ROOT of a working tree, or has no usable
+# `origin`. A repository with no `origin` is UNIDENTIFIABLE, not innocent — the
+# caller refuses on 1.
+#
+# The git-env scrub is the same five variables and the same reason as
+# `git_common_dir_abs` above: this asks about a FOREIGN directory handed to the
+# script, where an exported `GIT_DIR` would silently answer about the ambient
+# repository instead — and here that reads a stranger's directory as ours, which
+# is the fail-open direction.
+#
+# **The toplevel test is not decoration, and the first cut shipped without it.**
+# `git -C <dir>` performs UPWARD DISCOVERY, and the scrub above actively unsets
+# `GIT_CEILING_DIRECTORIES`, so an empty non-repository directory sitting inside
+# some other checkout answered rc=0 with the ENCLOSING repository's origin. The
+# function's own header said it returned 1 for "not a repository" and it did
+# not. Two consequences, both measured by the round: a directory that is not a
+# repository at all could satisfy an identity check, and the caller's refusal
+# messages then stated falsehoods about it ("is a git repository with no
+# 'origin'" for a plain directory; "its origin: <url>" naming a remote that
+# belongs to a different repository). This is the same hazard
+# `path_is_worktree_of` above documents for `--is-inside-work-tree`, and the
+# same remedy — `--show-toplevel -ef <dir>`.
+#
+# **`config --get`, not `remote get-url`, and that is a defect fix too.**
+# `git remote get-url origin` prints the remote NAME at rc=0 when
+# `remote.origin.url` is unset or empty, so the first cut turned such a repo
+# into a fabricated `path\t<dir>/origin` token AT SUCCESS — the one case the
+# caller's no-origin message exists for. `config --get` returns 1 when the key
+# is absent and prints empty when it is blank, which the `-n` test below then
+# catches.
+# ── path_is_worktree_root <dir> ───────────────────────────────
+#
+# 0 when <dir> is the ROOT of some working tree — any repository's, not
+# necessarily ours. That is the weaker half of `path_is_worktree_of` above, and
+# it is separate because two callers need exactly it: `origin_identity` below,
+# and `claim_task.sh --clone`, whose whole question is about a directory that is
+# a DIFFERENT repository by construction.
+#
+# It exists because `rev-parse --git-dir` — what `--clone` used to ask — answers
+# yes from anywhere inside a working tree, including a plain empty subdirectory
+# of an unrelated checkout. Same env scrub, same `-ef`, same reasons as above.
+path_is_worktree_root() {
+  local dir="$1" top
+  [ -d "$dir" ] || return 1
+  top="$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR \
+                 -u GIT_CEILING_DIRECTORIES -u GIT_DISCOVERY_ACROSS_FILESYSTEM \
+         git -C "$dir" rev-parse --show-toplevel 2>/dev/null)" || return 1
+  [ -n "$top" ] && [ "$top" -ef "$dir" ]
+}
+
+origin_identity() {
+  local dir="$1" url
+  path_is_worktree_root "$dir" || return 1
+  url="$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR \
+                 -u GIT_CEILING_DIRECTORIES -u GIT_DISCOVERY_ACROSS_FILESYSTEM \
+         git -C "$dir" config --get remote.origin.url 2>/dev/null)" || return 1
+  [ -n "$url" ] || return 1
+  remote_identity "$url" "$dir"
+}
+
 # ── worktree_root_parent <primary-root> ───────────────────────
 #
 # Validates `WORKTREE_ROOT` and prints the absolute parent directory to build
