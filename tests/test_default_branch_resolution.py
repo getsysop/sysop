@@ -23,6 +23,7 @@ Two layers:
 import shutil
 import subprocess
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -304,7 +305,14 @@ def test_a_lock_with_an_empty_branch_value_is_claimed_no_branch(tmp_path, monkey
     when the key was absent."""
     repo = _repo(tmp_path / "repo", "master")
     locks = repo / "sysop/runtime/locks"; locks.mkdir(parents=True)
-    (locks / "FEAT-1.lock").write_text("task_id: FEAT-1\nbranch:\nstarted: 2026-08-30T12:00:00Z\n")
+    # `started:` MUST be relative to now, not a literal. This test's subject is the
+    # empty `branch:` value; the date is scaffolding. But `sitrep_survey` classifies a
+    # lock older than DEFAULT_STALE_DAYS (7) with no commits ahead as `stale`, which
+    # wins over `claimed, no branch` — so a literal date under the threshold when it was
+    # written becomes a failure the day it crosses. The original `2026-08-30T12:00:00Z`
+    # was 6 days old at authoring and reddened every PR from day 8 (Q-427).
+    started = (datetime.now(timezone.utc) - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    (locks / "FEAT-1.lock").write_text(f"task_id: FEAT-1\nbranch:\nstarted: {started}\n")
     monkeypatch.chdir(repo)
     s = ss.run_survey()
     assert s.tasks and s.tasks[0].state == "claimed, no branch", [t.state for t in s.tasks]

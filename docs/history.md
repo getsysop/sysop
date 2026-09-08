@@ -48,12 +48,26 @@ that it's a working log written for the project's own continuity, not an introdu
   project's own documentation pages included. Claims and closes now take a lock before they
   touch the tracker, and a lock left behind by a killed process is refused rather than broken:
   a claim's critical section contains a network fetch, so a live holder and a dead one look
-  alike, and breaking it blind would restore the bug. Two members of the same class are known,
-  unfixed and written down. Separately, the publication path's last unread surface was closed —
+  alike, and breaking it blind would restore the bug. Two members of the same class were known and
+  unfixed when that was written. One of them — the task queue's own index — was closed within the
+  month, by moving the write into a script and giving that script the tracker lock the batch writers
+  already used — it had held its own per-task claim lock all along, but took no part in that one; the
+  first write-up had
+  guessed it would need a design of its own, and it did not. The other is still open and still
+  written down. Separately, the publication path's last unread surface was closed —
   every other gate here read a file tree or a path, and the one that read a commit read only
   its author and committer addresses, so nothing had ever read a commit *message*,
   while a squash-merge folds a pull request's title and body into a public commit that a
-  force-push cannot take back.
+  force-push cannot take back. The rest of the month ran the same instinct over directories
+  rather than files. A workspace already sitting at the path a claim wanted was adopted on the
+  strength of being a directory — but it can just as easily belong to a second checkout of the
+  same project, and adopting that one wires two sessions into a single tree while the lock
+  records a workspace nobody is building in. Identity is now established before adoption: that
+  the directory is this repository's, that it is on the branch the lock claims, and, for a
+  cloned workspace, that its origin is the same repository. It had to reach the second of the two scripts
+  that build workspaces twice over, because both reports named only the first: the fixing phase caught
+  the identity half itself by asking whether the class was wider than its brief, and a phase later a
+  review round caught the branch half.
 
 Where to go next: [the monograph](./workflow.html) for why it's built this way,
 [one rule, end to end](./one-rule.md) for the evidence trail behind a single rule, and

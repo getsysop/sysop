@@ -1735,6 +1735,45 @@ fi
 # `path_is_worktree` would have re-opened the adoption on the arm that acts.
 if path_is_worktree_of "$WORKTREE_DIR" "$MAIN_ROOT"; then
   echo "ℹ️  Worktree already exists: ${WORKTREE_DIR}"
+
+  # ── `Q-416`'s other half, and the population lesson repeating ──
+  #
+  # The predicate above answers WHOSE tree this is and stops — so an adopted
+  # worktree's BRANCH went unchecked here exactly as it did in `claim_task.sh`,
+  # and `write_batch_lock` below then recorded `$BATCH_BRANCH` over a tree
+  # sitting on a different one. Reproduced: claim batch 1 on `feat/one`, remove
+  # the lock (the documented `resumable` state), re-point the batch's
+  # `> **Branch:**` to `feat/two`, re-run — exit 0, "Start working!", a lock
+  # reading `branch: feat/two` over a tree on `feat/one`, and a printed
+  # `git push -u origin feat/two`. `/review-close` Step 3b collects from that
+  # workspace on the strength of the lock's pair.
+  #
+  # **This is the second time the pair has split.** `Q-415` was the identity
+  # half: Phase 264 fixed `claim_task.sh` and this script had the same defect.
+  # Phase 266's first cut then took its population from the `Q-416` filing —
+  # which names only `claim_task.sh` — and left this one again. The class, not
+  # the filing, is the population.
+  #
+  # Same three arms as there, and no dirty probe for the same reason: `git
+  # checkout` already refuses rather than discard uncommitted work, and it also
+  # refuses a branch checked out in another worktree, which a `status
+  # --porcelain` test would not see.
+  EXISTING_BATCH_BRANCH=$(git -C "$WORKTREE_DIR" branch --show-current 2>/dev/null || echo "")
+  if [[ "$EXISTING_BATCH_BRANCH" == "$BATCH_BRANCH" ]]; then
+    echo "✅ Existing worktree is already on '${BATCH_BRANCH}'."
+  elif git -C "$WORKTREE_DIR" checkout "$BATCH_BRANCH"; then
+    echo "✅ Existing worktree moved from '${EXISTING_BATCH_BRANCH:-<detached>}' to '${BATCH_BRANCH}'."
+  else
+    echo "❌ '${WORKTREE_DIR}' exists but is on '${EXISTING_BATCH_BRANCH:-<detached>}'," >&2
+    echo "   and '${BATCH_BRANCH}' could not be checked out there (see git's" >&2
+    echo "   message above — uncommitted work, or the branch is checked out" >&2
+    echo "   in another worktree)." >&2
+    echo "   Refusing to record it as this batch's workspace: a lock naming a" >&2
+    echo "   workspace on the wrong branch sends /review-close Step 3b to" >&2
+    echo "   collect from it." >&2
+    echo "   No batch lock was written. Resolve the directory, then re-run." >&2
+    exit 1
+  fi
 else
   git worktree add "$WORKTREE_DIR" "$BATCH_BRANCH"
   echo "✅ Created worktree at ${WORKTREE_DIR}"

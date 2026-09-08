@@ -1011,6 +1011,47 @@ if [[ "$MODE" == "worktree" ]] \
   exit 1
 fi
 
+# ── The workspace must not BE the primary checkout (round, § High) ──
+#
+# `path_is_worktree_of` answers *is this a working tree of this repository*, and
+# the PRIMARY checkout is one — its whole job is repository identity, and the
+# primary passes that test by construction. Before this phase that only produced
+# a wrong record: the claim adopted the primary at exit 0 and wrote a lock naming
+# it. The branch correction below turned the same input into a MUTATION — it
+# checked the operator's own main checkout out onto the claim branch and reported
+# success, and nothing puts it back.
+#
+# Reachable without a symlink and without privileges: `WORKTREE_PREFIX=proj` in a
+# checkout named `proj-t-0001` computes this path onto itself. Reproduced both
+# ways in the round.
+#
+# `-ef`, and against `resolve_primary_root` rather than `$REPO_ROOT`, for the two
+# reasons this file already gives elsewhere: `--show-toplevel` answers *which
+# worktree am I standing in* and claiming FROM a worktree is a prescribed
+# invocation, and a case-divergent or symlinked spelling must not make an
+# identity test MISS. `--release` has treated this exact state as one that must
+# be checked since Phase 91 ("Recorded workspace is the main worktree — refusing
+# to remove it"); the check belongs here too, where it can still refuse for free.
+#
+# Refuse rather than skip the correction: skipping would restore the wrong-lock
+# behaviour this phase exists to remove, and there is no legitimate invocation
+# that lands here — `git worktree add` refuses to build a worktree over the
+# primary checkout anyway.
+if [[ "$MODE" == "worktree" || "$MODE" == "clone" ]] && [[ -d "$WORKTREE_DIR" ]]; then
+  _primary_for_ws="$(resolve_primary_root)" || _primary_for_ws="$REPO_ROOT"
+  if [[ "$WORKTREE_DIR" -ef "$_primary_for_ws" ]]; then
+    echo "❌ '${WORKTREE_DIR}' resolves to this repository's PRIMARY checkout." >&2
+    echo "   Adopting it would record your main checkout as this claim's" >&2
+    echo "   workspace — and this claim would then check it out onto" >&2
+    echo "   '${BRANCH_NAME}', which nothing puts back. /review-close Step 3b" >&2
+    echo "   would also collect from it." >&2
+    echo "   Set WORKTREE_ROOT or WORKTREE_PREFIX to a path that is not this" >&2
+    echo "   checkout, then re-run." >&2
+    echo "   Nothing was created." >&2
+    exit 1
+  fi
+fi
+
 # ── Create branch (if needed) ────────────────────────────────
 if git show-ref --verify --quiet "refs/heads/${BRANCH_NAME}" 2>/dev/null; then
   echo "ℹ️  Branch '${BRANCH_NAME}' already exists."
@@ -1029,6 +1070,55 @@ if [[ "$MODE" == "worktree" ]]; then
     # a stranger's tree. The verification lives up there, not here, so that a
     # refusal happens before the branch is created.
     echo "ℹ️  Worktree directory '${WORKTREE_DIR}' already exists (this repository's — resuming)."
+
+    # ── `Q-416`: ours is not the same question as the right one ──
+    #
+    # The preflight answers WHOSE tree this is and stops. It never answers which
+    # BRANCH the tree is on, so a resume recorded whatever branch the invocation
+    # named over a worktree sitting on another one. Reproduced by execution:
+    # claim `T-0001` on `feat/a`, remove the lock, re-claim `T-0001` on `feat/b`
+    # — exit 0, "resuming", and a lock reading `branch: feat/b` over a worktree
+    # on `feat/a`. `/review-close` Step 3b then collects from that workspace on
+    # the strength of the lock's pair, so the wrong branch's work is what gets
+    # closed. Removing the lock by hand is how the reproduction reaches it, but
+    # lock-absent-worktree-present is a DOCUMENTED state, not a contrived one:
+    # `--entry-state` calls it `resumable`, and `WORKFLOW.md` records
+    # `/review-close` unlinking the lock on the integration branch while the
+    # `done` flip rides the PR.
+    #
+    # The remedy is `--clone`'s, not a new one. `Q-276` settled that mode's
+    # version of this question — a not-a-repo directory refuses, a wrong-branch
+    # one is fetched and checked out, and a checkout that cannot succeed refuses
+    # — and the block ~100 lines below has shipped it since Phase 220. This is
+    # the same three arms with the fetch dropped: a worktree SHARES this
+    # repository's object store, so there is nothing to fetch; the branch was
+    # either created or found immediately above.
+    #
+    # No dirty-tree probe. `git checkout` already refuses a checkout that would
+    # lose uncommitted work, and it refuses a branch that is checked out in
+    # ANOTHER worktree of this repository ("already checked out at ..."), which
+    # is a second legitimate refusal a `status --porcelain` probe would miss
+    # entirely. One catch-all arm covers both, and it reports git's own reason
+    # rather than a paraphrase of it — the shape `--release`'s worktree removal
+    # already uses ("see git message above").
+    EXISTING_BRANCH=$(git -C "$WORKTREE_DIR" branch --show-current 2>/dev/null || echo "")
+    if [[ "$EXISTING_BRANCH" == "$BRANCH_NAME" ]]; then
+      echo "✅ Existing worktree is already on '${BRANCH_NAME}'."
+    elif git -C "$WORKTREE_DIR" checkout "$BRANCH_NAME"; then
+      echo "✅ Existing worktree moved from '${EXISTING_BRANCH:-<detached>}' to '${BRANCH_NAME}'."
+    else
+      echo "❌ '${WORKTREE_DIR}' exists but is on '${EXISTING_BRANCH:-<detached>}'," >&2
+      echo "   and '${BRANCH_NAME}' could not be checked out there (see git's" >&2
+      echo "   message above — uncommitted work, or the branch is checked out" >&2
+      echo "   in another worktree)." >&2
+      echo "   Refusing to record it as this claim's workspace: a lock naming a" >&2
+      echo "   workspace on the wrong branch sends /review-close Step 3b to" >&2
+      echo "   collect from it." >&2
+      echo "   No lock was written and no status was flipped. Branch" >&2
+      echo "   '${BRANCH_NAME}' is left as it was — resolve the directory and" >&2
+      echo "   re-run; this script is safe to re-run." >&2
+      exit 1
+    fi
   else
     git worktree add "$WORKTREE_DIR" "$BRANCH_NAME"
     echo "✅ Created worktree at '${WORKTREE_DIR}' on branch '${BRANCH_NAME}'."
@@ -1096,9 +1186,89 @@ elif [[ "$MODE" == "clone" ]]; then
     echo "ℹ️  Clone directory '${WORKTREE_DIR}' already exists."
     # Reporting success over a workspace on the wrong branch is the defect
     # above. Verify, correct if we can, refuse if we cannot — never assume.
-    if ! git -C "$WORKTREE_DIR" rev-parse --git-dir >/dev/null 2>&1; then
-      echo "❌ '${WORKTREE_DIR}' exists but is not a git repository." >&2
+    # `path_is_worktree_root`, not `rev-parse --git-dir`. The round measured the
+    # difference: `--git-dir` answers yes from ANYWHERE inside a working tree,
+    # so a plain empty subdirectory of some unrelated checkout passed this gate,
+    # and the identity check below then answered about the ENCLOSING repository.
+    # A `--clone` workspace is always the root of its own tree.
+    if ! path_is_worktree_root "$WORKTREE_DIR"; then
+      echo "❌ '${WORKTREE_DIR}' exists but is not the root of a git repository." >&2
       echo "   Remove it or pick another branch name, then re-run." >&2
+      exit 1
+    fi
+
+    # A worktree of THIS repository is not a clone, and origin identity cannot
+    # tell them apart — a linked worktree shares the primary's config, so it
+    # passes the origin test below. Reachable by the documented route: claim
+    # `--worktree`, lose the lock (`--entry-state`'s `resumable`), re-claim
+    # `--clone`. The lock then says `mode: clone` over a registered worktree,
+    # and `--release` tells the operator to `rm -rf` it — which destroys the
+    # tree and strands the registration git still holds.
+    if path_is_worktree_of "$WORKTREE_DIR" "$REPO_ROOT"; then
+      echo "❌ '${WORKTREE_DIR}' is a WORKTREE of this repository, not a clone." >&2
+      echo "   Recording it as \`mode: clone\` makes --release advise 'rm -rf'," >&2
+      echo "   which destroys a tree git still has registered." >&2
+      echo "   Claim it with --worktree instead, or remove the worktree first" >&2
+      echo "   (git worktree remove '${WORKTREE_DIR}')." >&2
+      exit 1
+    fi
+
+    # ── `Q-417`: a repository, but not necessarily OURS ──────────
+    #
+    # `rev-parse --git-dir` answers *is this a repository* and never *whose* —
+    # `Q-405` verbatim, in the other mode. Reproduced by execution: a stranger
+    # `git init` at the computed clone path, already on the claim's branch name,
+    # then `claim_task.sh --lock --clone T-0001 feat/a` → exit 0, "Start
+    # working!", and a lock whose `workspace:` named a tree whose only tracked
+    # file was `stranger.txt`. `/review-close` Step 3b collects from it.
+    #
+    # The predicate CANNOT be `path_is_worktree_of` — the fix for the worktree
+    # half. A `--clone` workspace is a separate repository by construction, so
+    # that test would refuse every legitimate clone. The right question is
+    # identity of ORIGIN, and `$REMOTE_URL` is the honest right-hand side: it is
+    # the exact URL the fresh-clone arm below hands to `git clone`, so this asks
+    # "is this the directory a clone here would have produced" rather than
+    # something adjacent to it.
+    #
+    # Comparing the two configured strings is not enough, and this machine is
+    # the counterexample — see `_git_lib.sh` § remote_identity, which owns the
+    # normalisation and the decision behind each step.
+    #
+    # A clone with NO origin refuses rather than passes. It is unidentifiable,
+    # not innocent, and `--clone` cannot have produced it: `git clone` always
+    # writes one.
+    #
+    # Placement: with the other directory refusal, BEFORE the push — the reason
+    # this block already gives for its own ordering ("an invocation that is going
+    # to be refused does not first publish a branch"). The local branch created
+    # above does survive this refusal, exactly as it survives the not-a-repo
+    # refusal it sits under and the wrong-branch refusal further down; the
+    # message says so, and the residue is filed rather than fixed here because
+    # hoisting three refusals past branch creation is a third design.
+    THEIR_ORIGIN=$(origin_identity "$WORKTREE_DIR") || {
+      echo "❌ '${WORKTREE_DIR}' is a git repository with no 'origin' remote." >&2
+      echo "   --clone builds its workspace by cloning origin, so a clone this" >&2
+      echo "   script made always has one. This directory is something else," >&2
+      echo "   and adopting it would record a stranger's tree as this claim's" >&2
+      echo "   workspace for /review-close Step 3b to collect from." >&2
+      echo "   Remove it or pick another branch name, then re-run." >&2
+      echo "   No lock was written and no status was flipped." >&2
+      exit 1
+    }
+    OUR_ORIGIN=$(remote_identity "$REMOTE_URL" "$REPO_ROOT") || OUR_ORIGIN=""
+    if [[ -z "$OUR_ORIGIN" || "$THEIR_ORIGIN" != "$OUR_ORIGIN" ]]; then
+      echo "❌ '${WORKTREE_DIR}' exists but is a DIFFERENT repository." >&2
+      echo "   its origin:  $(git -C "$WORKTREE_DIR" remote get-url origin 2>/dev/null)" >&2
+      echo "   this repo's: ${REMOTE_URL}" >&2
+      echo "   Adopting it would record another project's tree as this claim's" >&2
+      echo "   workspace, and /review-close Step 3b would collect from it." >&2
+      echo "   ssh and https spellings of one remote compare EQUAL here, so a" >&2
+      echo "   difference in transport alone is not what you are seeing. The" >&2
+      echo "   host is compared case-insensitively and the PATH is not, so two" >&2
+      echo "   spellings differing only in the case of the owner or repository" >&2
+      echo "   name will also land here." >&2
+      echo "   Remove it or pick another branch name, then re-run." >&2
+      echo "   No lock was written and no status was flipped." >&2
       exit 1
     fi
   fi

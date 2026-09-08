@@ -19,6 +19,22 @@ name: tests
 # If `strict` is ever turned off, this reasoning lapses and the trigger
 # should come back.
 #
+# The nightly `schedule:` below is NOT that trigger and does not reopen the
+# question above. That reasoning is about re-testing the SAME BYTES: `strict`
+# guarantees the tree was green at merge time, so a push-triggered run adds
+# nothing. It says nothing about the tree staying green as the CLOCK ADVANCES.
+# A scheduled run tests the same bytes at a DIFFERENT TIME, which is the only
+# way to catch a time-dependent failure, and nothing else here can.
+# `Q-427` is the instance: a fixture wrote a lock with a literal
+# `started: 2026-08-30`, `sitrep_survey` classifies a lock older than 7 days
+# as `stale`, and the test asserting a non-stale state passed for six days and
+# then reddened every PR from day eight. Because this workflow only ran on
+# `pull_request`, `main`'s own breakage was invisible until two unrelated PRs
+# — a docs-only brief revision and a prompt edit, neither touching `tests/` —
+# picked it up and PRESENTED AS THE CAUSE. It cost a cross-repo debugging
+# cycle before anyone suspected `main`. A nightly run would have named it
+# against `main` before it touched anyone's branch.
+#
 # Do NOT add `paths-ignore` for Markdown either. This repo's tests read
 # Markdown as a matter of course — the suite is largely a *doc* test (phase-log currency,
 # the mirror leak gate, queue-entry IDs, the ledger schema, the prose pins),
@@ -28,6 +44,13 @@ name: tests
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+  # 09:17 UTC daily. Off the hour on purpose: GitHub queues scheduled jobs
+  # hardest at :00, and a delayed nightly is a nightly nobody trusts.
+  schedule:
+    - cron: '17 9 * * *'
+  # So a suspected time bomb can be checked without waiting for the night or
+  # opening a throwaway PR — which is what this workflow's absence forced.
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -39,6 +62,38 @@ permissions:
 jobs:
   pytest:
     runs-on: ubuntu-latest
+    # Scoped to the EVENT, never to the job: a skipped job never reports, and
+    # the required `pytest` check would then block forever (see the note above
+    # about `paths-ignore`). `pull_request` and `workflow_dispatch` always run
+    # and always report; only the nightly is confined.
+    #
+    # Written as a DENY of the mirrors rather than an ALLOW of this repo,
+    # because `.github/` is mirrored and both this repo and its org have been
+    # renamed (twice for the repo). An allow-list keyed to this repo's name
+    # would SILENTLY STOP the nightly on the next rename — exactly the
+    # invisible-failure shape Q-427 is about. A deny-list fails the other way:
+    # after a rename the nightly keeps running, and the worst case is a visible
+    # run on a repo that did not want one.
+    #
+    # BOTH mirrors are named, not just the public one. `.github/` ships to the
+    # private tester mirror too, that repo has Actions enabled, and its default
+    # branch IS the snapshot — so a single-mirror deny starts a daily billed run
+    # on a private repo and falsifies the runbook's step-4 premise that the
+    # tester repo has no CI. Found by Phase 268's round, before the first cut
+    # that would have published the nightly.
+    #
+    # The former project and org names are deliberately NOT spelled here.
+    # `.github/` is mirrored, and the cut's `rename residue` gate is a HARD
+    # blocker keyed to those names, exempting only PHASE_LOG.md and the
+    # extraction tag — not this file. Spelling them turned the gate red on
+    # arrival, and so did spelling the gate's own pattern in this comment
+    # (Phase 268 hit both, one after the other, then tripped a third gate by
+    # citing the maintainer-side cut script here — it is mirror-excluded, so
+    # naming its path pointed a public reader at a file they did not clone).
+    if: >-
+      github.event_name != 'schedule'
+      || (github.repository != 'getsysop/sysop'
+          && github.repository != 'wade-cms/sysop-tester')
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
