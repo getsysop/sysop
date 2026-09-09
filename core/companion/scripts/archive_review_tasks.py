@@ -11,6 +11,7 @@ import argparse
 import os
 import re
 import sys
+import tempfile
 from collections import Counter
 from pathlib import Path
 
@@ -31,18 +32,86 @@ REVIEW_FILE = os.path.join(_REPO_ROOT, "review_tasks.md")
 ARCHIVE_FILE = os.path.join(_REPO_ROOT, "review_tasks_archive.md")
 
 
-def _atomic_write_text(path, content):
-    """Write `content` to `path` via tmp + fsync + os.replace.
+def _unlink_quietly(path):
+    """Best-effort removal of a temp file that never made it to `os.replace`.
 
-    A crash mid-write must never leave a truncated file that downstream
-    readers will then raise on. See CLAUDE.md § Data integrity.
+    Deliberately silent: it runs on an error path that is already reporting a
+    cause, and a failure to clean up must not replace that cause with its own.
     """
-    tmp_path = path + ".tmp"
-    with open(tmp_path, "w", encoding="utf-8") as f:
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+
+
+def _mode_for(real):
+    """The mode the rewritten file should carry.
+
+    The target's own mode when it exists — `mkstemp` creates 0600, so a plain
+    conversion silently narrows a 0644 tracked file to 0600, which git does not
+    record (Phase 237's round). For a target that does not exist yet, what
+    `open(path, "w")` would have created: 0666 masked by the process umask,
+    which is exactly what the fixed-name form gave.
+    """
+    try:
+        return os.stat(real).st_mode & 0o7777
+    except OSError:
+        umask = os.umask(0)
+        os.umask(umask)
+        return 0o666 & ~umask
+
+
+def _mkstemp_beside(real):
+    """A uniquely named temp file in the target's own directory.
+
+    `dir=` the target's directory keeps `os.replace` same-filesystem (a temp in
+    the system temp dir makes it raise `EXDEV`). The name is
+    `<stem>.<random>.md.tmp` for a `.md` target, NOT `<name>.<random>.tmp`: it
+    keeps the `.md.tmp` ending so a leftover still falls inside the
+    `review_tasks*.md.tmp` shape that `batch_work.sh` and `close_batch.sh`
+    keep for the same reason — one recognisable class of orphan at the repo
+    root. (`review_index.py`'s own temp is `review_index.json.<pid>.tmp`; its
+    comment cites the close path's `.md.tmp` name, it does not share it.)
+    """
+    stem, ext = os.path.splitext(os.path.basename(real))
+    return tempfile.mkstemp(dir=os.path.dirname(real), prefix=stem + ".", suffix=ext + ".tmp")
+
+
+def _write_durably(fd, content):
+    """Write `content` through `fd`, flushed and fsynced, and close it."""
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write(content)
         f.flush()
         os.fsync(f.fileno())
-    os.replace(tmp_path, path)
+
+
+def _atomic_write_text(path, content):
+    """Write `content` to `path` via mkstemp + fsync + os.replace.
+
+    A crash mid-write must never leave a truncated file that downstream
+    readers will then raise on. See CLAUDE.md § Data integrity.
+
+    `mkstemp` rather than a fixed `<path>.tmp` (`Q-448`): a temp name derived
+    from its target collides when two writers run at once. The four elements
+    the converted siblings carry (`backfill_completed_dates.py`,
+    `clear_user_action.py`, `/claim-task` Step 4a): `realpath`, so a symlinked
+    tracker is written THROUGH rather than having the link itself replaced;
+    the mode carried across (`_mode_for`); `dir=` the target's own directory
+    (`_mkstemp_beside`); and a cleanup arm that reaches past `OSError`, because
+    a fixed-name leak self-healed on the next run and a uniquely named one
+    never will. The arm re-raises: archival is fatal on a write error, and
+    `KeyboardInterrupt` must still interrupt.
+    """
+    real = os.path.realpath(path)
+    mode = _mode_for(real)
+    fd, tmp_path = _mkstemp_beside(real)
+    try:
+        _write_durably(fd, content)
+        os.chmod(tmp_path, mode)
+        os.replace(tmp_path, real)
+    except BaseException:
+        _unlink_quietly(tmp_path)
+        raise
 
 
 def _atomic_write_pair(path_a, content_a, path_b, content_b):
@@ -60,37 +129,42 @@ def _atomic_write_pair(path_a, content_a, path_b, content_b):
     Note: this is not transactional — a hard crash between the two
     ``os.replace`` calls can still leave duplicated state. Recovery
     procedure: ``git status`` will show the duplicated rows in both
-    files; revert one with ``git checkout -- <path>`` and re-run
-    ``python sysop/scripts/archive_review_tasks.py``. The helper documents
+    files; revert one with ``git checkout HEAD -- <path>`` and re-run
+    ``python sysop/scripts/archive_review_tasks.py``. ``HEAD --`` and not the bare form: ``git checkout -- <path>`` restores from the index, which after a crash is the one state an operator cannot assume, and over a staged copy it exits 0 having changed nothing (``Q-447``). The helper documents
     rather than prevents the residual risk.
     """
-    tmp_a = path_a + ".tmp"
-    tmp_b = path_b + ".tmp"
+    real_a = os.path.realpath(path_a)
+    real_b = os.path.realpath(path_b)
+    mode_a = _mode_for(real_a)
+    mode_b = _mode_for(real_b)
+    # Same four elements as `_atomic_write_text`, on two files. `tmps` holds
+    # whatever has been minted so far, so a failure between the two `mkstemp`
+    # calls cleans up one file and a failure after both cleans up both; a temp
+    # already renamed in by a successful `os.replace` is gone, and unlinking
+    # its old name is a silent no-op.
+    tmps = []
     try:
-        with open(tmp_a, "w", encoding="utf-8") as f:
-            f.write(content_a)
-            f.flush()
-            os.fsync(f.fileno())
-        with open(tmp_b, "w", encoding="utf-8") as f:
-            f.write(content_b)
-            f.flush()
-            os.fsync(f.fileno())
+        fd_a, tmp_a = _mkstemp_beside(real_a)
+        tmps.append(tmp_a)
+        _write_durably(fd_a, content_a)
+        os.chmod(tmp_a, mode_a)
+        fd_b, tmp_b = _mkstemp_beside(real_b)
+        tmps.append(tmp_b)
+        _write_durably(fd_b, content_b)
+        os.chmod(tmp_b, mode_b)
         # Both tmp files are now durable on disk; perform replaces back-to-back.
-        os.replace(tmp_a, path_a)
-        os.replace(tmp_b, path_b)
-    except OSError:
-        # Best-effort cleanup so a failed write never orphans a `.tmp` beside
-        # the real file — an untracked `review_tasks*.md.tmp` at the repo root
-        # would trip /review-close Step 1a dirty-classification (the same class
-        # Phases 65a/106 guarded). A `.tmp` already renamed in by a successful
-        # os.replace is gone; whatever remains is removed here. The write
-        # failure itself is re-raised (archival is fatal on a write error).
-        for _t in (tmp_a, tmp_b):
-            try:
-                if os.path.exists(_t):
-                    os.unlink(_t)
-            except OSError:
-                pass
+        os.replace(tmp_a, real_a)
+        os.replace(tmp_b, real_b)
+    except BaseException:
+        # Cleanup so a failed write never orphans a temp beside the real file —
+        # an untracked `review_tasks*.md.tmp` at the repo root would trip
+        # /review-close Step 1a dirty-classification (the same class Phases
+        # 65a/106 guarded). Under the fixed name a leak self-healed on the next
+        # run; a uniquely named one would not, so the arm is `BaseException`,
+        # not `OSError`. The failure itself is re-raised (archival is fatal on a
+        # write error, and `KeyboardInterrupt` must still interrupt).
+        for _t in tmps:
+            _unlink_quietly(_t)
         raise
 
 # Matches "## Round 20 (2026-03-05) — Code Quality Review + OWASP Security Audit"

@@ -2274,7 +2274,7 @@ After all branches are merged but **before** pushing:
    # Phase 126) so `Bash(python3 -:*)` matches as a single simple command — no PATH prefix,
    # no `&&` compound, no `.venv/bin/python3` (none of which match that rule).
    python3 - <<'PY'
-   import datetime, os, shutil, subprocess, sys
+   import datetime, os, shutil, subprocess, sys, tempfile
    try:
        import yaml
    except ImportError:  # PyYAML lives only in the project venv (BeanRider ISSUE-0049)
@@ -2403,16 +2403,39 @@ After all branches are merged but **before** pushing:
        # close, which is the residue hazard Step 2b names. Two properties `write_text`
        # had for free and `os.replace` does not are restored explicitly: it writes
        # THROUGH a symlink rather than replacing it, and it keeps the old file's mode.
-       target = Path(os.path.realpath(p))
-       tmp = target.with_suffix(target.suffix + '.tmp')
+       #
+       # `mkstemp` rather than a fixed `<path>.tmp` (`Q-414`, Phase 269, finishing
+       # `Q-382`'s job). It is the last of the four SKILL/claim-path writers to convert:
+       # /claim-task Step 4a, /auto-build Step 5.1, and claim_task.sh's --release and
+       # --commit-claim all use mkstemp precisely so two concurrent writers cannot
+       # collide on the temp NAME — a collision that survives os.replace's atomicity,
+       # because the losing writer's replace still runs.
+       #
+       # NOT the last writer of this file, and an earlier draft of this comment said it
+       # was — corrected by a review lens in the same phase. `backfill_completed_dates.py`
+       # still derives `<path>.tmp` from the target (`Q-442`), and the roster three lines
+       # above names it. The falsehood sat six lines from its own counter-evidence, which
+       # is the same shape Phase 263 fixed here when the roster called Step 5.1 last.
+       # Exposure here is lower than the claim paths' (once per close, not once per
+       # claim, so it needs two closes overlapping), which is why this one was last,
+       # not why it was exempt.
+       #
+       # `dir=os.path.dirname(real)` is what keeps the replace SAME-FILESYSTEM. That
+       # was the stated reason the old fixed-name form was pinned in place — a tmp in
+       # the system temp dir makes os.replace raise EXDEV — and `dir=` answers it
+       # directly, so the property is preserved rather than traded away.
+       real = os.path.realpath(p)
+       mode = os.stat(real).st_mode & 0o7777
+       fd, tmp = tempfile.mkstemp(dir=os.path.dirname(real),
+                                  prefix=os.path.basename(real) + '.', suffix='.tmp')
        try:
-           mode = target.stat().st_mode & 0o7777
-           tmp.write_text(yaml.safe_dump(d, sort_keys=False, default_flow_style=False, allow_unicode=True, width=120), encoding='utf-8')
+           with os.fdopen(fd, 'w', encoding='utf-8') as f:
+               yaml.safe_dump(d, f, sort_keys=False, default_flow_style=False, allow_unicode=True, width=120)
            os.chmod(tmp, mode)
-           os.replace(tmp, target)
+           os.replace(tmp, real)
        except BaseException:
-           if tmp.exists():
-               tmp.unlink()
+           if os.path.exists(tmp):
+               os.unlink(tmp)
            raise
        # Stage the rewrite here, in the same code that performed it. `git mv` above already
        # staged both halves of each body rename, but `Path.write_text` does not stage

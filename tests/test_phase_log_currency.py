@@ -215,9 +215,13 @@ def test_the_commit_cell_guard_has_rows_to_see():
 def test_the_next_session_prompt_briefs_the_next_phase():
     claude_md = _claude_md()
     line1 = _prompt().split("\n", 1)[0]
-    if PROMPT_UNNUMBERED_RE.match(line1):
-        return  # explicitly declared a non-phase session; nothing to keep in step
+    # Phase form FIRST. `PROMPT_UNNUMBERED_RE`'s `.*` is unanchored, so a numbered
+    # brief whose subtitle merely quotes "(not a numbered phase)" — this repo writes
+    # about its own conventions constantly — matches the opt-out too. Whichever regex
+    # is asked first wins, and the opt-out returning early disabled the check outright.
     m = PROMPT_PHASE_RE.match(line1)
+    if not m and PROMPT_UNNUMBERED_RE.match(line1):
+        return  # explicitly declared a non-phase session; nothing to keep in step
     assert m, (
         "tools/NEXT_SESSION_PROMPT.md line 1 does not declare its phase. Expected "
         "`# Next-session prompt — Phase <N>, <subtitle>`, or a title ending "
@@ -297,4 +301,198 @@ def test_every_commit_hash_in_the_table_resolves():
     assert not bad, (
         "Phase log Commit cells naming commits that do not exist in this repo:\n"
         + "\n".join(f"  {lab[:60]}: {h}" for lab, h in bad)
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# (c) The brief must dispose of every filing the phase before it left open.
+#
+# `Q-419`, leg 1, mechanized after the procedural fix failed a fourth time. A brief
+# names the filings its phase made; four times now (Phases 264, 267, and — in the
+# brief that carried `Q-419`'s own warning about population claims — 269) it named
+# fewer than it filed, so the next session ranked a four-item tail as two or three.
+#
+# **Why "appears in the brief" is not the check.** Phase 269's brief DID contain the
+# string `Q-444` — in the very sentence claiming all four were ranked. A whole-file
+# grep passes on the defect. The discriminator is *disposition*: a ranked item lives
+# in a list item (or a table row); a merely-mentioned one sits in a paragraph. That
+# is the difference between a brief that hands the next session a decision and one
+# that hands it a name.
+#
+# **Deliberately not required to START the item.** Phase 269's own ranking bullets
+# carry two ids each — `Q-408`/`Q-410` and `Q-441`/`Q-443` — so a start-anchored
+# rule would have reddened on two correctly-ranked entries. That is the
+# over-strictness direction this module's `UNRESOLVED_RE` comment already names as
+# the way a guard gets deleted rather than fixed.
+#
+# **The limit, stated rather than left to be discovered.** The population is derived
+# from entries that say `by Phase <N>` in their own body. 174 of 250 open entries did at Phase 270's close;
+# the rest record provenance in free prose (`Filed by main-session/<date>`), and no
+# pattern recovers a filing phase that was never written down. So this narrows the
+# class, it does not close it — an entry filed by phase N-1 that omits the phase is
+# still invisible here, and `test_the_filing_phase_population_is_not_vacuous` below
+# is what keeps a *parser* regression from looking like that same absence.
+CHECKLIST = REPO_ROOT / "REVIEW_CHECKLIST.md"
+
+OPEN_ENTRY_RE = re.compile(r"^- \[ \] <!-- id: (Q-\d+) -->(.*)$", re.M)
+FILED_BY_PHASE_RE = re.compile(r"by Phase (\d+)")
+LIST_MARKER_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
+HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.S)
+
+
+def _checklist() -> str:
+    return _read(CHECKLIST, "the brief's filing-disposition guard")
+
+
+def open_entries_filed_by(checklist: str, phase: int) -> list[str]:
+    """Ids of still-open entries whose body records `by Phase <phase>`.
+
+    Reads the queue file itself — the source of truth the brief's own
+    `Derive, don't read` block points at — rather than any curated list.
+    """
+    out = []
+    for qid, body in OPEN_ENTRY_RE.findall(checklist):
+        if any(int(n) == phase for n in FILED_BY_PHASE_RE.findall(body)):
+            out.append(qid)
+    return out
+
+
+def disposition_text(prompt: str) -> str:
+    """The brief's list items and table rows, joined.
+
+    A list item runs from its marker to the next marker, blank line or heading, so an
+    id named on a bullet's *continuation* line counts — bullets here wrap at ~95 cols
+    and routinely carry their second id on line 2. Table rows count as well: nothing
+    ranks in a table today, but a guard that reds on a legal reformat is one that gets
+    deleted, so the shape is admitted in advance.
+    """
+    chunks, in_item, fenced, blank_before = [], False, False, True
+    for raw in prompt.splitlines():
+        line = re.sub(r"^\s*>\s?", "", raw)          # briefs are written blockquoted
+        # An id inside an HTML comment is invisible to a reader, so it disposes of
+        # nothing — and a comment sitting under a bullet was being read as that
+        # bullet's continuation text (round lens 3, B2).
+        line = HTML_COMMENT_RE.sub("", line)
+        stripped = line.strip()
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            # The brief ships a `Derive, don't read` bash block. A `- ` line inside a fence
+            # is shell, not a ranking, and counting it would let an id be "disposed of" by
+            # sitting in a command comment. BOTH fence characters: keying on backticks
+            # alone left `~~~` counting as prose (round lens 3, B5).
+            fenced = not fenced
+            in_item = False
+            continue
+        if fenced:
+            continue
+        if not stripped or stripped.startswith("#"):
+            in_item = False
+            blank_before = not stripped
+            continue
+        # An indented code block is 4+ spaces after a blank line and cannot interrupt a
+        # list item. A deeply-nested bullet is also indented — but it FOLLOWS its parent,
+        # so `in_item` is live and it is kept (round lens 3, B4). The pair of conditions
+        # is what separates them; indentation alone would reject legal nesting.
+        if not in_item and blank_before and len(line) - len(line.lstrip(" ")) >= 4:
+            blank_before = False
+            continue
+        blank_before = False
+        if stripped.startswith("|"):
+            chunks.append(line)
+            in_item = False
+            continue
+        if LIST_MARKER_RE.match(line):
+            in_item = True
+            chunks.append(line)
+        elif in_item:
+            chunks.append(line)
+    return "\n".join(chunks)
+
+
+def test_the_brief_ranks_every_filing_the_previous_phase_left_open():
+    prompt, checklist = _prompt(), _checklist()
+    line1 = prompt.split("\n", 1)[0]
+    m = PROMPT_PHASE_RE.match(line1)          # phase form first — see the sibling guard
+    if not m and PROMPT_UNNUMBERED_RE.match(line1):
+        return  # a non-phase session files nothing under a phase number
+    assert m, "line 1 does not declare its phase; test_the_next_session_prompt_briefs_the_next_phase owns that message"
+    briefed = int(m.group(1))
+    filed = open_entries_filed_by(checklist, briefed - 1)
+    if not filed:
+        return  # a phase may legitimately file nothing
+    disposed = disposition_text(prompt)
+    # `q in disposed` would be substring containment, and `Q-44` sits inside `Q-441` —
+    # a two-digit id in the population would be satisfied by any three-digit id sharing
+    # its prefix. The trailing `(?!\d)` is what makes the match the id and not a prefix.
+    missing = [q for q in filed
+               if not re.search(re.escape(q) + r"(?!\d)", disposed)]
+    assert not missing, (
+        f"tools/NEXT_SESSION_PROMPT.md briefs Phase {briefed}, but Phase {briefed - 1} left "
+        f"these filings open without disposing of them in the brief: {', '.join(missing)}.\n"
+        "Naming an id in a paragraph is not disposition — put it in a list item (or a table "
+        "row), even one that says it is deferred and not ranked. A brief that names a filing "
+        "without ranking it hands the next session a four-item tail it will read as two "
+        "(`Q-419`, three instances: Phases 264, 267 and 269 — Phase 266 got it right).\n"
+        f"Filed by Phase {briefed - 1} and still open: {', '.join(filed)}"
+    )
+
+
+def test_the_filing_phase_population_is_not_vacuous():
+    """The guard above passes silently when its population is empty.
+
+    So this asserts the population *exists* across the file. A regex that stops matching
+    entry bodies — a heading reflow, a provenance rewording — would otherwise turn the
+    disposition guard into a no-op that reports green, which is the failure mode the
+    whole module was written for.
+    """
+    checklist = _checklist()
+    entries = OPEN_ENTRY_RE.findall(checklist)
+    assert len(entries) >= 100, (
+        f"only {len(entries)} open queue entries parsed; the entry parser has stopped "
+        "matching the file's shape (the queue has carried >200 for many phases)"
+    )
+    with_phase = [q for q, b in entries if FILED_BY_PHASE_RE.search(b)]
+    # PROPORTIONAL, not a flat floor. The first version asked for >= 50 against a live
+    # population of 174, which tolerated losing 71% of it — so the round reworded 60
+    # provenances (this docstring's own named regression) and the control stayed green.
+    # A share is what actually detects a vocabulary drift, because the denominator moves
+    # with the queue.
+    share = len(with_phase) / len(entries)
+    assert share >= 0.55, (
+        f"only {len(with_phase)} of {len(entries)} open entries ({share:.0%}) record a "
+        "filing phase; the `by Phase <N>` provenance convention has drifted and this "
+        "guard's population went with it. It has run at ~70% since Phase 270"
+    )
+
+
+def test_the_disposition_parser_sees_the_briefs_list_items():
+    """Non-vacuity for the other half: an extractor that returns nothing passes everything.
+
+    A flat line-count floor did not do this job — the first version asked for >= 5 against
+    a brief that yields ~36, so the round truncated the ranking to four bullets and it
+    stayed green. This instead asserts FIDELITY: every list-marker line the brief actually
+    contains outside a fence must survive into the disposed text. A parser that starts
+    dropping items reds on the first one it drops, whatever the brief's size.
+    """
+    prompt = _prompt()
+    disposed = disposition_text(prompt)
+    fenced, expected = False, []
+    for raw in prompt.splitlines():
+        line = HTML_COMMENT_RE.sub("", re.sub(r"^\s*>\s?", "", raw))
+        if line.strip().startswith("```") or line.strip().startswith("~~~"):
+            fenced = not fenced
+            continue
+        # An INDEPENDENT marker pattern, written out here rather than reusing
+        # LIST_MARKER_RE. Sharing the constant would make this control blind to the one
+        # regression it most needs to see: a change to that regex moves the oracle and
+        # the subject together, and the check stays green while items go missing.
+        if not fenced and re.match(r"^ *(?:[-*+]|[0-9]+[.)]) +\S", line):
+            expected.append(line)
+    assert expected, (
+        "the brief contains no list items at all; a brief is written as blockquoted "
+        "bullets, so this means the parser — or the brief — changed shape"
+    )
+    dropped = [l for l in expected if l not in disposed]
+    assert not dropped, (
+        f"disposition_text dropped {len(dropped)} of {len(expected)} list items the brief "
+        f"actually contains; first dropped: {dropped[0][:100]!r}"
     )

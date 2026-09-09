@@ -278,8 +278,15 @@ class TestAnyWorkTreeContainment:
 
         Arm 2 asks `rev-parse --show-toplevel`, which inside a `.git` DIRECTORY
         exits 128 (`fatal: this operation must be run in a work tree`) — so it
-        cannot see a root there at all. Arm 1's prefix match can, and does. With
-        arm 1 stripped, `WORKTREE_ROOT=<repo>/.git/nested` is ACCEPTED.
+        cannot see a root there at all. Arm 1's prefix match can, and does.
+
+        AMENDED at Phase 269 (`Q-418`): this docstring used to end "with arm 1
+        stripped, `WORKTREE_ROOT=<repo>/.git/nested` is ACCEPTED", and arm 3 makes
+        that false — stripping arm 1 now leaves the path refused by arm 3's
+        generic message. The claim this test still carries is the one about arm 2,
+        which is unchanged and is what the name says. Arm 1's remaining unique
+        property is PRECEDENCE, pinned separately by
+        `TestBareRepositoryContainment::test_this_repositorys_own_git_dir_still_gets_arm_ones_message`.
 
         The earlier test here asserted only that arm 1's *message* still appears,
         which measured the wrong property: a reader who believed the shipped
@@ -347,6 +354,219 @@ class TestAnyWorkTreeContainment:
         assert r.returncode == 0, r.stderr
         # `_seeded` names the checkout `repo/`, so the leaf is `repo-t-0001`.
         assert (free / "repo-t-0001").is_dir(), sorted(x.name for x in free.iterdir())
+
+
+# ── Q-418: the root guard covers a git dir with no work tree ──────────────
+
+class TestBareRepositoryContainment:
+    """Phase 269, SECOND ratification (2026-09-08).
+
+    The 2026-09-04 call was work-tree-scoped, and so was arm 2's rationale, so
+    this is a separate decision rather than the same one applied consistently:
+    the harm here is polluting git's own storage, not a checkout that would
+    sweep the workspace itself.
+
+    Every refusal test asserts the workspace was NOT created, not merely that
+    the exit code was 1 — arm 2's own class was an exit-0 path whose damage was
+    the residue it left.
+    """
+
+    @staticmethod
+    def _bare(tmp_path, name="bare.git"):
+        """A bare repo with a directory inside it — the filed reproduction."""
+        bare = tmp_path / name
+        subprocess.run(["git", "init", "--bare", "-q", str(bare)], check=True)
+        nested = bare / "sandbox"
+        nested.mkdir()
+        return bare, nested
+
+    def test_claim_task_refuses_a_root_inside_a_bare_repository(self, tmp_path):
+        """`Q-418`'s reproduction verbatim: before arm 3 this was accepted, rc=0."""
+        _bare, nested = self._bare(tmp_path)
+        root = _seeded(tmp_path / "claimer")
+        r = _run(root, "T-0001", "feat/t1",
+                 env={**_path_env(_py3_bin(tmp_path)), "WORKTREE_ROOT": str(nested)})
+        assert r.returncode == 1, r.stdout
+        assert "resolves inside a git directory" in r.stderr, r.stderr
+        assert list(nested.iterdir()) == [], sorted(x.name for x in nested.iterdir())
+
+    def test_batch_work_refuses_a_root_inside_a_bare_repository(self, tmp_path):
+        """`Q-407` gave `batch_work.sh` the same variable, so it inherits the same
+        arm. A fix that reached one caller would leave the other open."""
+        _bare, nested = self._bare(tmp_path)
+        root = _batch_repo(tmp_path / "bw")
+        r = _batch_run(root, "1", env={"WORKTREE_ROOT": str(nested)})
+        assert r.returncode == 1, r.stdout
+        assert "resolves inside a git directory" in r.stderr, r.stderr
+        assert list(nested.iterdir()) == [], sorted(x.name for x in nested.iterdir())
+
+    def test_a_root_inside_a_neighbours_git_directory_is_refused(self, tmp_path):
+        """The case NEITHER pre-existing arm could reach, and the reason arm 3 is
+        not merely a bare-repo special case.
+
+        Arm 1's prefix match is repo-SPECIFIC — it catches `<this repo>/.git/x`
+        and accepts `<neighbour>/.git/x`. Arm 2 exits 128 in any `.git` directory.
+        So this path was accepted by both."""
+        host = _repo(tmp_path / "host")
+        nested = host / ".git" / "nested"
+        nested.mkdir(parents=True)
+        root = _seeded(tmp_path / "claimer")
+        r = _run(root, "T-0001", "feat/t1",
+                 env={**_path_env(_py3_bin(tmp_path)), "WORKTREE_ROOT": str(nested)})
+        assert r.returncode == 1, r.stdout
+        assert "resolves inside a git directory" in r.stderr, r.stderr
+        assert list(nested.iterdir()) == [], sorted(x.name for x in nested.iterdir())
+
+    def test_arms_one_and_two_are_both_structurally_blind_here(self, tmp_path):
+        """Establish the premise, so this class cannot silently start passing for
+        another arm's reason — the property `test_arm_one_carries_coverage_arm_two_cannot`
+        exists to protect, applied to the arm added after it.
+
+        Arm 2 is blind because `--show-toplevel` exits non-zero with no work tree.
+        Arm 1 is blind because the bare repo is not under the claiming repository,
+        so its prefix match cannot match."""
+        bare, nested = self._bare(tmp_path)
+        root = _seeded(tmp_path / "claimer")
+        probe = subprocess.run(["git", "-C", str(nested), "rev-parse", "--show-toplevel"],
+                               capture_output=True, text=True)
+        assert probe.returncode != 0, (
+            "arm 2 can now see inside a bare repository; arm 3 no longer carries "
+            "unique coverage and the ratification must be re-derived"
+        )
+        assert not str(bare.resolve()).startswith(str(root.resolve()) + os.sep), (
+            "the fixture put the bare repo inside the claiming repo; arm 1 would "
+            "refuse it and this class would measure the wrong arm"
+        )
+
+    def test_a_ceiling_cannot_switch_off_the_bare_repository_arm(self, tmp_path):
+        """`Q-406`'s STOP class, re-run against the arm written after it.
+
+        `GIT_CEILING_DIRECTORIES` stops the upward walk rather than redirecting
+        it, so an unscrubbed `--git-dir` returns 128 and the arm falls through —
+        measured: with the ceiling and no scrub the bare repo is ACCEPTED again."""
+        bare, nested = self._bare(tmp_path)
+        root = _seeded(tmp_path / "claimer")
+        r = _run(root, "T-0001", "feat/t1",
+                 env={**_path_env(_py3_bin(tmp_path)), "WORKTREE_ROOT": str(nested),
+                      "GIT_CEILING_DIRECTORIES": str(bare)})
+        assert r.returncode == 1, r.stdout
+        assert "resolves inside a git directory" in r.stderr, r.stderr
+
+    def test_an_ambient_git_dir_cannot_refuse_a_legal_root(self, tmp_path):
+        """The scrub's OTHER direction, and the one that would break the feature
+        outright rather than merely leak.
+
+        `--git-dir` succeeds from ANY directory when `GIT_DIR` is exported, so an
+        unscrubbed arm 3 refuses EVERY legal root — measured. Arm 2's scrub list
+        was pinned against a leak; this half is pinned against a false refusal,
+        which is why the legal direction is asserted here and not only in the
+        acceptance test below."""
+        host = _repo(tmp_path / "host")
+        root = _seeded(tmp_path / "claimer")
+        free = tmp_path / "free"
+        free.mkdir()
+        r = _run(root, "T-0001", "feat/t1",
+                 env={**_path_env(_py3_bin(tmp_path)), "WORKTREE_ROOT": str(free),
+                      "GIT_DIR": str(host / ".git")})
+        assert r.returncode == 0, r.stderr
+        assert (free / "repo-t-0001").is_dir(), sorted(x.name for x in free.iterdir())
+
+    def test_a_root_outside_every_repository_is_still_accepted(self, tmp_path):
+        """Arm 3 narrows what is legal, so the test that the narrowing did not
+        swallow the feature is the load-bearing one."""
+        root = _seeded(tmp_path / "claimer")
+        free = tmp_path / "free"
+        free.mkdir()
+        r = _run(root, "T-0001", "feat/t1",
+                 env={**_path_env(_py3_bin(tmp_path)), "WORKTREE_ROOT": str(free)})
+        assert r.returncode == 0, r.stderr
+        assert (free / "repo-t-0001").is_dir(), sorted(x.name for x in free.iterdir())
+
+    def test_injected_git_config_cannot_switch_off_the_bare_repository_arm(self, tmp_path):
+        """`Q-406`'s STOP class, third instance — found by a review lens, not by
+        the author's battery, against the arm whose own comment claimed to have
+        closed it.
+
+        `GIT_CONFIG_COUNT` + `GIT_CONFIG_KEY_n`/`VALUE_n` inject config into the
+        `rev-parse` this arm runs. `safe.bareRepository=explicit` (git >= 2.38)
+        makes it REFUSE a bare repo: exit 128, swallowed by `2>/dev/null`, the
+        `&&` chain falls through, and the bare repo is accepted. Arm 2's
+        five-variable scrub does not cover it, which is why this arm's scrub is
+        longer than its neighbour's rather than copied from it.
+
+        Scrubbing `GIT_CONFIG_COUNT` alone is sufficient — git reads
+        `KEY_0..COUNT-1` — so the unbounded numbered pairs need no enumeration.
+        """
+        _bare, nested = self._bare(tmp_path)
+        root = _seeded(tmp_path / "claimer")
+        r = _run(root, "T-0001", "feat/t1",
+                 env={**_path_env(_py3_bin(tmp_path)), "WORKTREE_ROOT": str(nested),
+                      "GIT_CONFIG_COUNT": "1",
+                      "GIT_CONFIG_KEY_0": "safe.bareRepository",
+                      "GIT_CONFIG_VALUE_0": "explicit"})
+        assert r.returncode == 1, (
+            f"injected safe.bareRepository switched the arm off:\n{r.stdout}\n{r.stderr}"
+        )
+        assert "resolves inside a git directory" in r.stderr, r.stderr
+
+    def test_a_symlinked_root_pointing_into_a_bare_repo_is_still_refused(self, tmp_path):
+        """The bypass arm 1 already has a test for, applied to arm 3.
+
+        `wr_abs` is `pwd -P`'d before any arm runs, so the resolution happens
+        once for all three — which means this passes for a reason that lives
+        OUTSIDE arm 3 and would be lost by a refactor that moved the resolution
+        after the arms, or dropped `-P`. Nothing else in this class would notice."""
+        _bare, nested = self._bare(tmp_path)
+        link = tmp_path / "link"
+        link.symlink_to(nested)
+        root = _seeded(tmp_path / "claimer")
+        r = _run(root, "T-0001", "feat/t1",
+                 env={**_path_env(_py3_bin(tmp_path)), "WORKTREE_ROOT": str(link)})
+        assert r.returncode == 1, r.stdout
+        assert "resolves inside a git directory" in r.stderr, r.stderr
+
+    @pytest.mark.parametrize("kind", ["bare", "dotgit"])
+    def test_the_message_names_a_real_path_when_the_root_IS_the_git_dir(self, tmp_path, kind):
+        """The normalisation half, which no other test in this class reaches —
+        found by mutation: deleting the `CDPATH= cd … && pwd -P` block left all
+        eight of them green.
+
+        `rev-parse --git-dir` answers RELATIVE to the directory it was asked
+        from, so when `WORKTREE_ROOT` is itself the git directory the answer is
+        the bare string `.` and the refusal reads "resolves inside a git
+        directory (.)" — which names nothing an operator can act on. Every other
+        case here passes a SUBdirectory, where git happens to answer absolutely.
+        """
+        if kind == "bare":
+            target = tmp_path / "bare.git"
+            subprocess.run(["git", "init", "--bare", "-q", str(target)], check=True)
+        else:
+            target = _repo(tmp_path / "host") / ".git"
+        root = _seeded(tmp_path / "claimer")
+        r = _run(root, "T-0001", "feat/t1",
+                 env={**_path_env(_py3_bin(tmp_path)), "WORKTREE_ROOT": str(target)})
+        assert r.returncode == 1, r.stdout
+        assert "resolves inside a git directory" in r.stderr, r.stderr
+        assert "(.)" not in r.stderr, (
+            f"the refusal named a relative git dir instead of a real path: {r.stderr}"
+        )
+        assert str(target.resolve()) in r.stderr, r.stderr
+
+    def test_this_repositorys_own_git_dir_still_gets_arm_ones_message(self, tmp_path):
+        """PRECEDENCE, which is what arm 3 actually changed about arm 1.
+
+        `<this repo>/.git/nested` is now reachable by two arms. Arm 1 runs first
+        and is repo-specific, so the operator still gets the nearest true reason.
+        A reordering that put arm 3 first would keep every refusal test above
+        green and silently degrade this message — nothing else would catch it."""
+        root = _seeded(tmp_path / "claimer")
+        nested = root / ".git" / "nested"
+        nested.mkdir(parents=True)
+        r = _run(root, "T-0001", "feat/t1",
+                 env={**_path_env(_py3_bin(tmp_path)), "WORKTREE_ROOT": str(nested)})
+        assert r.returncode == 1, r.stdout
+        assert "resolves inside the repository" in r.stderr, r.stderr
+        assert "resolves inside a git directory" not in r.stderr, r.stderr
 
 
 # ── Q-407: WORKTREE_ROOT reaches the review-batch claim ───────────────────

@@ -18,6 +18,7 @@ import subprocess
 from pathlib import Path
 from unittest import mock
 
+import pytest
 import yaml
 
 import backfill_completed_dates as bcd
@@ -278,13 +279,32 @@ def test_main_unreadable_index_exits_1(tmp_path, capsys):
 # === atomic write durability (Phase 108) ===================================
 
 
+def _stray_files(index):
+    """Everything in the index's directory that is not the index itself.
+
+    Asserting `not (parent / "index.yml.tmp").exists()` was the shape before
+    Phase 271, and under `mkstemp` (`Q-442`) it is VACUOUS: the fixed name can
+    no longer be produced, so the assertion is true whether or not a temp leaked.
+    A directory census cannot go vacuous that way — it names whatever was left,
+    under whatever random suffix.
+    """
+    return sorted(p.name for p in index.parent.iterdir() if p.name != index.name)
+
+
 def test_main_write_leaves_no_tmp_file(tmp_path):
-    """A successful write renames the tmp away — no `<index>.tmp` remains."""
+    """A successful write renames the tmp away — nothing else is left behind."""
     index = _write_index(tmp_path)
     with mock.patch.object(bcd, "find_completion_date", return_value="2026-04-01"):
         rc = bcd.main(["--index", str(index)])
     assert rc == 0
-    assert not (index.parent / "index.yml.tmp").exists()
+    assert _stray_files(index) == [], (
+        "the mkstemp temp file survived a successful write — under a fixed name a "
+        "leak self-healed on the next run, under mkstemp every run leaks a new one"
+    )
+    # Non-vacuity: the census must be able to SEE a stray, or the assertion above
+    # is a statement about an empty search.
+    (index.parent / "index.yml.decoy").write_text("x", encoding="utf-8")
+    assert _stray_files(index) == ["index.yml.decoy"]
 
 
 def test_main_write_failure_leaves_original_intact_and_cleans_tmp(tmp_path, capsys):
@@ -299,9 +319,53 @@ def test_main_write_failure_leaves_original_intact_and_cleans_tmp(tmp_path, caps
     # The staged write went to a tmp file that os.replace never swapped in, so
     # the original is byte-for-byte intact.
     assert index.read_text(encoding="utf-8") == original
-    # Best-effort cleanup removed the tmp.
-    assert not (index.parent / "index.yml.tmp").exists()
+    # Best-effort cleanup removed the tmp — by census, not by fixed name, which
+    # `mkstemp` made unobservable (`Q-442`, Phase 271).
+    assert _stray_files(index) == [], (
+        "os.replace failed and the mkstemp temp file was left behind"
+    )
     assert "ERROR: cannot write" in capsys.readouterr().err
+
+
+def test_main_non_oserror_write_failure_also_cleans_the_tmp(tmp_path):
+    """The arm the conversion OWED, and the reason it is not `except OSError` alone.
+
+    Under the pre-Phase-271 fixed name a leaked temp self-healed: the next run
+    wrote `<index>.tmp` again. Under `mkstemp` it does not — every failed run
+    leaks a new uniquely-named file into `tasks/`. `yaml.safe_dump` raises
+    `RepresenterError`, which is not an `OSError`, so the OSError arm alone
+    would not have reached it.
+    """
+    index = _write_index(tmp_path)
+    boom = RuntimeError("representer exploded")
+    with mock.patch.object(bcd, "find_completion_date", return_value="2026-04-01"), \
+         mock.patch.object(bcd.yaml, "safe_dump", side_effect=boom):
+        with pytest.raises(RuntimeError):
+            bcd.main(["--index", str(index)])
+    assert _stray_files(index) == [], (
+        "a non-OSError failure leaked a mkstemp temp file — the cleanup arm is missing "
+        "or no longer reaches this path"
+    )
+
+
+def test_a_keyboard_interrupt_also_cleans_the_tmp(tmp_path):
+    """The arm must be `BaseException`, not `Exception`, and this is the only test
+    that can tell them apart.
+
+    A review battery widened `except BaseException` to `except Exception` and the
+    sibling test above stayed green — because it raises `RuntimeError`, which IS
+    an `Exception`. `KeyboardInterrupt` and `SystemExit` are not, and a Ctrl-C
+    mid-write is exactly when a leaked temp is least likely to be noticed.
+    """
+    index = _write_index(tmp_path)
+    with mock.patch.object(bcd, "find_completion_date", return_value="2026-04-01"), \
+         mock.patch.object(bcd.yaml, "safe_dump", side_effect=KeyboardInterrupt):
+        with pytest.raises(KeyboardInterrupt):
+            bcd.main(["--index", str(index)])
+    assert _stray_files(index) == [], (
+        "a KeyboardInterrupt leaked a mkstemp temp file — the cleanup arm is narrower "
+        "than BaseException"
+    )
 
 
 def test_main_reads_invalid_utf8_without_crashing(tmp_path, capsys):
@@ -326,3 +390,94 @@ def test_main_reads_invalid_utf8_without_crashing(tmp_path, capsys):
     # The read decoded with replacement instead of raising; the run finished.
     assert rc == 0
     assert "Found 1 done task(s) without completed_date" in capsys.readouterr().out
+
+
+# ── the four elements the conversion owed (`Q-442`, Phase 271) ──────────────
+#
+# An independent review battery dropped `os.chmod`, `dir=`, `realpath` and
+# widened `except BaseException` to `except Exception`, and ALL FOUR survived
+# this module: it had no `chmod`, `st_mode` or symlink assertion anywhere. The
+# phase's own record calls these elements load-bearing, so they are asserted by
+# BEHAVIOUR here rather than described in a comment.
+
+def _write_index_in(d):
+    d.mkdir(parents=True, exist_ok=True)
+    return _write_index(d)
+
+
+def test_the_index_mode_is_carried_across_the_rewrite(tmp_path):
+    """`mkstemp` creates 0600. Without the carry a 0644 index is silently
+    narrowed — and git does not track the bit, so nothing downstream surfaces it."""
+    index = _write_index(tmp_path)
+    index.chmod(0o644)
+    with mock.patch.object(bcd, "find_completion_date", return_value="2026-04-01"):
+        assert bcd.main(["--index", str(index)]) == 0
+    assert index.stat().st_mode & 0o777 == 0o644, (
+        "the file mode was not carried across the temp file — mkstemp's 0600 won"
+    )
+    # A non-default mode too, so the assertion is not satisfied by a `0o644`
+    # literal. **On a FRESH index**, because the second run over the same file is
+    # a no-op: run 1 sets `completed_date`, so run 2 reports "Found 0 done task(s)"
+    # and never writes — the 0o664 then survives because nothing touched it. A
+    # review battery measured that directly; the arm asserted nothing.
+    index2 = _write_index_in(tmp_path / "second")
+    index2.chmod(0o664)
+    with mock.patch.object(bcd, "find_completion_date", return_value="2026-04-02"):
+        assert bcd.main(["--index", str(index2)]) == 0
+    assert "2026-04-02" in index2.read_text(encoding="utf-8"), (
+        "the second fixture was not actually rewritten, so the mode assertion below "
+        "would pass over a file nothing touched"
+    )
+    assert index2.stat().st_mode & 0o777 == 0o664, (
+        "the mode is hard-coded rather than read from the target"
+    )
+
+
+def test_a_symlinked_index_is_written_through_not_replaced(tmp_path):
+    """`realpath`: without it `os.replace` swaps the LINK for a regular file and
+    leaves the canonical target stale while the script reports success."""
+    real = tmp_path / "canonical.yml"
+    index = _write_index(tmp_path)
+    index.rename(real)
+    index.symlink_to(real)
+    with mock.patch.object(bcd, "find_completion_date", return_value="2026-04-01"):
+        assert bcd.main(["--index", str(index)]) == 0
+    assert index.is_symlink(), "the symlink was replaced by a regular file"
+    assert "2026-04-01" in real.read_text(encoding="utf-8"), (
+        "the canonical target was not updated — the write went to the link"
+    )
+
+
+def test_the_temp_file_is_created_beside_the_target(tmp_path):
+    """`dir=`: a temp in the system temp dir makes `os.replace` raise EXDEV across
+    filesystems. Asserted by observing WHERE the temp is created, since the
+    failure only reproduces on a real cross-device layout.
+
+    **Through a symlink whose target lives in a DIFFERENT directory**, which is
+    what makes the assertion discriminating. The first version put the link and
+    its target in one directory, so `dirname(real)` and `dirname(index)` were the
+    same string and a battery swapped one for the other with the test green — the
+    fixture could not tell the two apart, which is the whole property.
+    """
+    canon_dir = tmp_path / "canonical"
+    canon_dir.mkdir()
+    index = _write_index(tmp_path)
+    real = canon_dir / "canonical.yml"
+    index.rename(real)
+    index.symlink_to(real)
+    seen = {}
+    real_mkstemp = bcd.tempfile.mkstemp
+
+    def spy(*a, **kw):
+        seen["dir"] = kw.get("dir")
+        return real_mkstemp(*a, **kw)
+
+    with mock.patch.object(bcd, "find_completion_date", return_value="2026-04-01"), \
+         mock.patch.object(bcd.tempfile, "mkstemp", side_effect=spy):
+        assert bcd.main(["--index", str(index)]) == 0
+    assert seen.get("dir") == str(real.parent), (
+        f"mkstemp was given dir={seen.get('dir')!r}, not the RESOLVED target's own "
+        f"directory ({str(real.parent)!r}) — os.replace can then cross a filesystem "
+        "boundary and raise EXDEV. Note this must be the symlink TARGET's directory, "
+        "not the link's."
+    )

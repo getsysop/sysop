@@ -682,7 +682,7 @@ worktree_root_parent() {
   # validated one directory and returned a different one — with the echoed path
   # making the result two lines, which is the very newline the guard at the top of
   # this function exists to refuse.
-  local CDPATH= primary_root="$1" wr_abs rr_abs owner
+  local CDPATH= primary_root="$1" wr_abs rr_abs owner gitdir
   # A newline survives the assignment and then splits the lock's `workspace:`
   # field, which every reader parses line-anchored — `--release`'s awk and
   # /review-close's `partition(":")` both silently take the first line, so the
@@ -732,15 +732,27 @@ worktree_root_parent() {
   # did, and a review lens falsified it by execution: arm 2 asks
   # `rev-parse --show-toplevel`, which inside a `.git` DIRECTORY exits 128
   # (`fatal: this operation must be run in a work tree`), so it cannot see a root
-  # there at all. With this arm removed, `WORKTREE_ROOT=<repo>/.git/nested` is
-  # ACCEPTED. This arm's prefix match is the only thing that refuses it.
+  # there at all.
   #
-  # So arm 1 carries coverage, not merely a better message — though it carries that
-  # too, and deliberately: a root inside THIS repository has a specific cause and a
-  # specific remedy, and a guard that reports the nearest true reason is the one an
-  # operator can act on. `test_arm_one_carries_coverage_arm_two_cannot` pins the
-  # coverage half, because a test asserting only the message measures the wrong
-  # property — which is exactly how the false claim survived its own battery.
+  # AMENDED BY ARM 3 (Phase 269, `Q-418`), and the amendment is narrow. This
+  # comment used to end "this arm's prefix match is the only thing that refuses
+  # it", and arm 3 makes that sentence false: a root in `<repo>/.git/nested` is
+  # now reachable by two arms. What is UNCHANGED is the claim that matters —
+  # arm 2 still cannot see it, so the two arms that cover this case are 1 and 3,
+  # never 2, and neither of them is redundant with the other. Arm 1 is
+  # repo-SPECIFIC and runs FIRST, so it is what decides which message an operator
+  # gets; arm 3 is the general case and is what would catch this if arm 1 were
+  # deleted. `test_arm_one_carries_coverage_arm_two_cannot` therefore now pins
+  # arm 1's ORDERING as well as its coverage: with arm 1 removed the path is
+  # still refused, but by the generic message, which is why that test asserts the
+  # specific one.
+  #
+  # So arm 1 carries a better message and the precedence that delivers it: a root
+  # inside THIS repository has a specific cause and a specific remedy, and a guard
+  # that reports the nearest true reason is the one an operator can act on. The
+  # test pins that property rather than the exit code alone, because a test
+  # asserting only the refusal measures the wrong thing — which is exactly how the
+  # original false claim survived its own battery.
   rr_abs="$( cd "$primary_root" && pwd -P )" || return 1
   case "$wr_abs" in
     "$rr_abs"|"$rr_abs"/*)
@@ -769,6 +781,81 @@ worktree_root_parent() {
     echo "❌ WORKTREE_ROOT='${WORKTREE_ROOT}' resolves inside a git working tree (${owner})." >&2
     echo "   A worktree there is untracked content in THAT checkout, which its own" >&2
     echo "   cleanup paths would sweep. Pick a path outside every repository." >&2
+    return 1
+  # ── Arm 3: inside a git DIRECTORY with no work tree (`Q-418`) ──
+  #
+  # SECOND ratification, 2026-09-08, and deliberately recorded as a separate one:
+  # the 2026-09-04 call was "refuse a root inside any git WORK TREE", and arm 2's
+  # rationale — untracked content a checkout's own cleanup paths would sweep — does
+  # not reach here, because a bare repository has no checkout and no such sweep.
+  # The harm is different in KIND, not degree: polluting git's own object storage
+  # rather than someone's working tree. Widening arm 2's predicate silently would
+  # have shipped a second decision under the first one's ratification.
+  #
+  # ARM 2 CANNOT COVER THIS, for the same structural reason arm 1 is not subsumed
+  # by arm 2: `rev-parse --show-toplevel` exits 128 wherever there is no work tree,
+  # so arm 2 falls through and ACCEPTS. Measured before the fix — `git init --bare
+  # bare.git && mkdir bare.git/sandbox`, then `WORKTREE_ROOT=<...>/bare.git/sandbox`
+  # → accepted, rc=0. Arm 1 does not cover it either: its prefix match is
+  # repo-SPECIFIC, so it catches a root inside THIS repository's `.git` and accepts
+  # one inside a NEIGHBOUR's.
+  #
+  # This arm therefore fires only where both others are structurally blind: a
+  # git dir reachable with no work tree. Inside a work tree arm 2 has already
+  # returned, so the ordering is what keeps the two messages distinct.
+  #
+  # ARM 2'S ENV SCRUB PLUS THREE MORE, and each was measured, because they break
+  # this arm in OPPOSITE directions:
+  #   * an ambient `GIT_DIR` makes `--git-dir` succeed from ANY directory, so
+  #     unscrubbed this arm refuses every legal root — a false refusal that would
+  #     break the feature outright for anyone who exports it;
+  #   * `GIT_CEILING_DIRECTORIES` STOPS the upward walk, so unscrubbed it switches
+  #     this arm OFF and the bare repo is accepted again — `Q-406`'s STOP class,
+  #     recurring in the arm written after it;
+  #   * `GIT_CONFIG_COUNT` + `GIT_CONFIG_KEY_n`/`VALUE_n` inject config into this
+  #     very command, and `safe.bareRepository=explicit` (git >= 2.38) makes
+  #     `rev-parse` REFUSE a bare repo — exit 128, swallowed by `2>/dev/null`, arm
+  #     falls through, bare repo accepted. Arm 2's five-variable list does not
+  #     cover it, so this arm carries a longer scrub than its neighbour rather
+  #     than the same one. `GIT_CONFIG_COUNT` alone disables the injection (git
+  #     reads `KEY_0..COUNT-1`), so the unbounded numbered pairs need no
+  #     enumeration; `GIT_CONFIG_GLOBAL`/`_SYSTEM` redirect the config FILES and
+  #     go with it.
+  #
+  # RESIDUAL, stated because it cannot be closed here and a silent gap is worse
+  # than a named one: the same setting in the user's OWN config file
+  # (`~/.gitconfig`) produces the identical fall-through and is NOT scrubbable —
+  # it is the caller's real configuration, not injected state. Measured. So this
+  # arm is a guard against an ACCIDENT, and on a host that has hardened
+  # `safe.bareRepository` it stops firing. Filed as `Q-441`; arms 1 and 2 are
+  # unaffected, since neither consults bare-repository policy.
+  #
+  # `--git-dir` NOT `--absolute-git-dir`: this repo states no minimum git version,
+  # and the plain form answers `.` when the root IS the git directory — which would
+  # print "resolves inside a git directory (.)". (An earlier draft of this comment
+  # also said the repo "uses that flag nowhere"; a review lens found
+  # `tests/test_git_env_hermeticity.py` using it, so that half was struck rather
+  # than left as a load-bearing reason that was false.) The `CDPATH= cd … && pwd -P`
+  # normalisation below is the same shape `claim_task.sh`'s `resolve_primary_root`
+  # and this file's `git_common_dir_abs()` use on `--git-common-dir` — neither is a
+  # verbatim twin (`resolve_primary_root` uses bare `pwd`), so this is the family,
+  # not a copy. `CDPATH=`, not bare `cd`:
+  # a relative operand consults `CDPATH`, which is the defect the top of this
+  # function documents.
+  elif gitdir="$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR \
+                    -u GIT_CEILING_DIRECTORIES -u GIT_DISCOVERY_ACROSS_FILESYSTEM \
+                    -u GIT_CONFIG_COUNT -u GIT_CONFIG_GLOBAL -u GIT_CONFIG_SYSTEM \
+                 git -C "$wr_abs" rev-parse --git-dir 2>/dev/null)" \
+     && [ -n "$gitdir" ]; then
+    # git answers relative to `$wr_abs`, not to the caller's CWD.
+    case "$gitdir" in
+      /*) : ;;
+      *)  gitdir="$( CDPATH= cd "$wr_abs/$gitdir" && pwd -P )" || gitdir="$wr_abs/$gitdir" ;;
+    esac
+    echo "❌ WORKTREE_ROOT='${WORKTREE_ROOT}' resolves inside a git directory (${gitdir})." >&2
+    echo "   That repository has no work tree — it is bare, or this is a .git directory —" >&2
+    echo "   so a workspace there pollutes git's own storage rather than a checkout." >&2
+    echo "   Pick a path outside every repository." >&2
     return 1
   fi
   printf '%s\n' "$wr_abs"

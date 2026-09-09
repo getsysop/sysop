@@ -710,7 +710,7 @@ def duplicate_batch_numbers(lines):
 # Widening the boundary twin to every near-miss shape was the other option and
 # it is the wrong lever, for the reason `near_miss_batch_headers` states below:
 # promoting `## Batch 4` to a boundary MOVES where the previous batch ends on
-# consumer trackers nobody can migrate. `archive_review_tasks.py:521` is the
+# consumer trackers nobody can migrate. `archive_review_tasks.py:595` is the
 # evidence that the twin does not move alone — a literal `startswith("### ")`
 # let `###\tBatch 8` slip past the arm that CLOSES an open batch, so the counter
 # below was never reached, `all_merged` held True for a round with an OPEN

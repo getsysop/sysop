@@ -613,3 +613,93 @@ def test_workflow_no_longer_claims_git_add_is_a_conscious_omission():
             f"{rule} is named in a conscious-omission bullet but ships in the "
             f"template: {bullets}"
         )
+
+
+# ── Q-412: a rule that stops being bound is deleted, not retained ──────────
+
+
+def test_the_unbound_claim_commit_rule_stays_deleted():
+    """Phase 269 (`Q-412`). `Bash(git commit -m claim:*)` was bound by nothing
+    after Phase 261 and 263 moved both commits inside `claim_task.sh
+    --commit-claim`, subsumed by nothing (there is no `Bash(git commit:*)`), and
+    headroom for nothing. Two skills carried a bullet explaining the keep and
+    `WORKFLOW.md` § 8.2a carried a row and its illustrative JSON block carried a
+    second copy; all five went with the rule.
+
+    Pinned because the entry sat open for two phases on the strength of a keep
+    argument that read as settled — nothing stops it being re-added by the same
+    reasoning."""
+    assert "Bash(git commit -m claim:*)" not in _seeded(), (
+        "the unbound claim-commit rule is back in the template; if a step binds "
+        "it again, say which step in the same commit"
+    )
+    # EVERY skill, not the two that happened to declare it. A review lens found
+    # this reading 2 of 19 rule-declaring skills, so re-declaring the rule in
+    # `/review-close` or `/auto-judge` would have survived.
+    offenders = [
+        path.parent.name for path in sorted(SKILLS_DIR.glob("*/SKILL.md"))
+        if "git commit -m claim" in path.read_text()
+    ]
+    assert offenders == [], (
+        f"these skills declare the deleted claim-commit rule again: {offenders}"
+    )
+    # Scoped to DECLARATION sites — the illustrative JSON block and the table
+    # rows — not to any mention. The delete-rule's own worked example names the
+    # rule while documenting its removal, and a whole-file check forbids the
+    # record of the decision along with the decision's reversal. (Caught by this
+    # guard firing on the prose Phase 269 wrote three paragraphs earlier.)
+    text = WORKFLOW.read_text()
+    block = re.search(r"### 8\.2a.*?```json\n(.*?)\n```", text, re.S)
+    assert block, "§ 8.2a illustrative settings.json block not found"
+    assert "git commit -m claim" not in block.group(1), (
+        "WORKFLOW.md § 8.2a's settings block lists the deleted claim-commit rule again"
+    )
+    rows = [ln for ln in text.splitlines()
+            if ln.startswith("| `Bash(") and "git commit -m claim" in ln]
+    assert not rows, f"§ 8.2a has a table row for the deleted claim-commit rule: {rows}"
+
+
+def test_the_delete_rule_is_stated_with_all_three_keep_grounds():
+    """The DURABLE half of `Q-412`. The entry's complaint was not the dead rule —
+    it was that the next reader had to re-derive the disposition, because the
+    only thing written down was "removing a template rule never removes it from
+    an installed consumer", which reads as a general keep argument and is not one.
+
+    Each ground is pinned separately: a rule matching none of the three is
+    deleted, so dropping any one ground silently widens what may be kept."""
+    text = WORKFLOW.read_text()
+    m = re.search(r"\*\*When a rule stops being bound: delete it\.\*\*(.*?)(?=\n\*\*|\n### )",
+                  text, re.S)
+    assert m, "§ 8.2a's delete-rule is gone; `Q-412`'s decision is unrecorded again"
+    block = m.group(1)
+    for ground in ("Subsumed and bound elsewhere",
+                   "Deliberate operator headroom",
+                   "A twin of a rule that is bound"):
+        assert ground in block, f"the delete-rule dropped the keep-ground {ground!r}"
+    assert "worse than no rule" in block, (
+        "the delete-rule stopped citing Phase 152's finding, which is what makes "
+        "deletion the default rather than a preference"
+    )
+    assert "not a reason to leave the template asserting a binding that does not exist" in block, (
+        "the delete-rule stopped correcting the installed-consumer sentence — the "
+        "misreading it exists to close"
+    )
+    # A review lens found the first draft claiming all three grounds were visible
+    # "in the rows above". Only ground 1 is a row; 2 and 3 live in the bullets
+    # after the table. Pin the CORRECTED shape, or the convenient version returns.
+    assert "each visible in the rows above" not in block, (
+        "the delete-rule went back to claiming all three keep-grounds are table "
+        "rows; grounds 2 and 3 are bullets, and one of them has no row at all"
+    )
+
+
+def test_the_delete_rule_names_the_count_guard_that_enforces_it():
+    """A deletion moves the allow-list size, and the comment stating it lives in
+    `install.sh` while the guard deriving it lives in the test suite. Phase 269
+    hit this in its own commit; the next deletion should not have to."""
+    text = WORKFLOW.read_text()
+    m = re.search(r"\*\*Deleting a rule moves the count\*\*(.*?)(?=\n\*\*|\n### )", text, re.S)
+    assert m, "§ 8.2a no longer warns that a deletion moves the rule count"
+    assert "test_installer_rule_count_comments_track_the_template" in m.group(1), (
+        "the count warning stopped naming the guard that enforces it"
+    )

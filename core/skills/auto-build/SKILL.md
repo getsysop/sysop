@@ -21,10 +21,8 @@ Read `.claude/settings.json` and confirm `permissions.allow` contains:
 - `Bash(bash sysop/scripts/claim_task.sh:*)` — Step 5.2 sequential pre-claim (also invoked transitively by every spawned execution agent's local context).
 - `Bash(python3 -:*)` — Step 1's queue-read/readiness-filter heredoc and Step 5.1's yaml-round-trip status flip (both single `python3 - <<` commands; venv PyYAML is resolved by an in-heredoc `sys.path` bootstrap, not a `.venv/bin/python3` command word or an env prefix — either of which would bind to no rule; Sysop Phase 126).
 - `Bash(python3 sysop/scripts/validate_tasks.py)` / `Bash(python3 sysop/scripts/validate_tasks.py:*)` and the `.venv/bin/python3 sysop/scripts/validate_tasks.py` / `.venv/bin/python3 sysop/scripts/validate_tasks.py:*` venv variants — Step 5.3 post-claim validator. Bare `python3` is the command word the step prescribes: the script self-resolves venv PyYAML via its own `sys.path` bootstrap (Phase 182), so one form serves every consumer. The `.venv/bin/python3` rules stay only so a hand-typed venv invocation is not denied.
-- `Bash(git add tasks/index.yml)` — **bound by no step in this skill since Phase 263**, which moved Step 5.4's staging and commit inside `claim_task.sh --commit-claim` (covered by `Bash(bash sysop/scripts/claim_task.sh:*)` above). Step 5's rollback path does **not** bind it either: it runs `git checkout` then `git commit`, and stages nothing. Retained on the same grounds as the rule below, and bound elsewhere — `/claim-task` Step 7d and Step 7f Option C, `/review-close` — so it is live, just not from here.
-- `Bash(git commit -m claim:*)` — retained, but **no step in this skill binds it** since Phase 263 moved Step 5.4 inside `claim_task.sh`. Kept because removing a template rule never removes it from an installed consumer (`WORKFLOW.md` § 8.2a), and a rule that grants nothing requested costs nothing; filed for retirement rather than left implicitly justified.
-- `Bash(git commit -m rollback:*)` — Step 5 rollback path on pre-claim failure.
-- `Bash(git checkout:*)` — Step 5 rollback path (`git checkout tasks/index.yml`).
+- `Bash(git add tasks/index.yml)` — **bound by no step in this skill since Phase 263**, which moved Step 5.4's staging and commit inside `claim_task.sh --commit-claim` (covered by `Bash(bash sysop/scripts/claim_task.sh:*)` above). Step 5's rollback path does **not** bind it either: since Phase 270 it runs `git checkout` alone, and stages nothing — and Phase 271 kept it that way: the `HEAD --` form, which would have *un*-staged, was refused for destroying a concurrent session's staged claim (`Q-445`). Retained because it is **subsumed by `Bash(git add:*)`** and **bound elsewhere** — `/claim-task` Step 7d and Step 7f Option C, `/review-close` — so it is live, just not from here. Those are its own grounds, stated inline: until Phase 269 this bullet deferred to "the same grounds as the rule below", and the rule below was deleted as unbound. Grounds 1 in `WORKFLOW.md` § 8.2a *When a rule stops being bound*.
+- `Bash(git checkout:*)` — Step 5 rollback path (`git checkout tasks/index.yml`, verified by a `git diff --cached --quiet` check; the wider `HEAD --` form was refused because it destroys a concurrent session's staged claim — `Q-445`).
 
 Read-only git operations (`git rev-parse`, `git log`, `git branch --show-current`) used by Phase 6a/6e HEAD capture and Phase 7 envelope recovery are auto-passed by the classifier and do not require allow-rules; they are documented here for completeness. The Step 1 heredoc's in-flight overlap check (Leg B, Phase 103) imports `sysop/scripts/scope_overlap.py` **in-process** — it runs inside the same already-permitted `python3 -` heredoc, and its `git -C <worktree> diff --name-only` reads are read-only subprocesses inside that process — so it adds **no** new permission rule.
 
@@ -503,9 +501,18 @@ PY
 
 # 5.2 — create worktree + lock
 bash sysop/scripts/claim_task.sh --lock "<TASK_ID>" "<BRANCH_NAME>"
-# If non-zero exit: roll back the index.yml flip with `git checkout tasks/index.yml`,
-# commit the rollback with `git commit -m "rollback: <TASK_ID> claim failed"`,
+# If non-zero exit: roll back the index.yml flip as § Abort handling prescribes —
+# the checkout AND the verification that follows it, which are one unit,
 # and abort the batch (don't leave half-claimed). Report which task failed.
+# There is nothing to COMMIT here, and no `git commit` belongs on this path. 5.1's flip
+# is uncommitted (5.4 commits it, and this path is entered before 5.4), so the checkout
+# leaves the tree clean and a bare `git commit` exits 1 over a rollback that SUCCEEDED —
+# in the middle of an abort, against a block that says stop on the first non-zero
+# (`Q-413`). A `git diff --cached --quiet ||` guard is worse, not safer: the predicate is
+# satisfied only when something ELSE is staged, which the commit then captures under a
+# `rollback:` subject, and it is the same predicate Phase 261 removed from `/claim-task`
+# Step 4d for exiting 0 over a task still `open` at HEAD (`Q-397`). `/claim-task`'s own
+# rollback for this identical flip is the checkout alone; this step now matches it.
 
 # 5.3 — validate schema invariants
 python3 sysop/scripts/validate_tasks.py
@@ -538,7 +545,23 @@ Branch-name generation (matches `/claim-task` Step 3): lowercase task ID with pr
 
 Collect `(task_id, worktree_path, branch_name)` tuples. Worktree path is `${WORKTREE_ROOT:-..}/${WORKTREE_PREFIX:-$(basename "$REPO_ROOT")}-<task-id-lowercase>/` — note **both** overrides the script honors: `WORKTREE_PREFIX` on the leaf (an earlier version of this sentence omitted it) and `WORKTREE_ROOT` (Phase 262) on the parent directory, which is why the default is written here as a defaulted `..` rather than a literal one. The path is computed by `sysop/scripts/claim_task.sh` itself, at its `WORKTREE_DIR=` assignment (cited by symbol, not line — the line number in this sentence went stale at Phase 32 and stayed wrong until Phase 163), so the orchestrator just records what the script printed rather than recomputing.
 
-**Abort handling:** if any pre-claim step fails, roll back the partial state for **that one task** (`git checkout tasks/index.yml` then `git commit -m "rollback: <TASK_ID> claim failed"`, plus — if a worktree was created — `bash sysop/scripts/claim_task.sh --release <TASK_ID>` when its lock exists, or `git worktree remove <worktree-path>` when the failure preceded the lock write; `--force`, if needed, goes **before** the task ID) and report which task failed. **Never `cleanup_worktrees.sh --force` here.** It takes no path operand, so it removes every non-main worktree: it would wipe the worktrees of the tasks pre-claimed earlier in *this* batch — the ones the next sentence says stay claimed — plus any other session's in-flight work (WORKFLOW.md § 8.4). Tasks already pre-claimed earlier in the batch stay claimed — the human can either run `/auto-build` again to spawn agents for them, or `/document-work` / `/review-close` them manually.
+**Abort handling:** if any pre-claim step fails, roll back the partial state for **that one task** (`git checkout tasks/index.yml` plus the verification below, which is the whole rollback: no `git commit` belongs here, guarded or not. Entered from 5.2 or 5.3 there is literally nothing to commit — see the note at 5.2.
+
+**Verify the rollback; do not widen the command (`Q-445`).** The bare checkout restores from the **index**, so over a *staged* flip it is a silent no-op: measured, `Updated 0 paths from the index`, **exit 0**, task still `in_progress`. Nothing in 5.1–5.3 stages the index, so on those entries there is usually nothing to detect — but an external stager reaches this path (a concurrent `/claim-task` Step 7d or 7f Option C `git add`, `/review-close`'s staging, an operator's `git add -A`).
+
+`git checkout HEAD -- tasks/index.yml` was built as the fix and **disqualified by execution**: it restores the index too, so when the staged content is *another session's* claim it silently resets that task as well — measured, exit 0, no output, a second task's `in_progress` reverted to `open`. Since the one state where the staged flip is reliably *ours* (a failed `--commit-claim`) is the state this section already tells you not to roll back in, a wider command only ever destroys someone else's work. So the rollback stays precise and gains a check:
+
+```bash
+git checkout tasks/index.yml
+git diff --cached --quiet -- tasks/index.yml || {
+  echo "ROLLBACK UNVERIFIED: tasks/index.yml is staged, so the checkout restored the"
+  echo "staged copy rather than HEAD's — the task may still be in_progress. STOP."
+  exit 1; }
+```
+
+`git diff` is read-only and the existing `Bash(git diff:*)` / `Bash(git checkout:*)` rules cover both by prefix.
+
+**Entered after a 5.4 failure, still do not run the checkout at all — follow 5.4's own note and stop and reconcile.** The `HEAD --` fix removes one of the two reasons Phase 270 recorded here and it would be wrong to leave that reason standing: the checkout is **no longer** a silent no-op over `--commit-claim`'s staged flip, and the `git commit` that would have *applied* the failed claim under a `rollback:` subject was deleted in that phase. What remains is the reason that does not depend on either — **a non-zero `--commit-claim` does not tell you which state you are in.** It holds the tracker write mutex across a read-flip-commit and refuses for several distinct causes (a rival holds the mutex, `HEAD` is off the default branch, the task is absent or not claimable, the commit itself failed). Rolling the index back from here would, in the rival-holds-the-mutex case, clobber a write another session is making to the same file — which is the hazard the mutex exists for. 5.4's non-zero exits each say what was written; read that and reconcile, rather than applying a blind rollback. The checkout is the whole rollback only for the 5.2 and 5.3 entries; plus — if a worktree was created — `bash sysop/scripts/claim_task.sh --release <TASK_ID>` when its lock exists, or `git worktree remove <worktree-path>` when the failure preceded the lock write; `--force`, if needed, goes **before** the task ID) and report which task failed. **Never `cleanup_worktrees.sh --force` here.** It takes no path operand, so it removes every non-main worktree: it would wipe the worktrees of the tasks pre-claimed earlier in *this* batch — the ones the next sentence says stay claimed — plus any other session's in-flight work (WORKFLOW.md § 8.4). Tasks already pre-claimed earlier in the batch stay claimed — the human can either run `/auto-build` again to spawn agents for them, or `/document-work` / `/review-close` them manually.
 
 ## Step 6: Per-Task Plan → Review → Execute (orchestrator-driven, three sequential phases)
 

@@ -90,6 +90,8 @@ BACKED_UP=()
 # Explicit allowlist: only these tracked filenames are ever copied into
 # .git/hooks/ so stray files (.DS_Store, *.swp, README.md, accidentally
 # pasted hook files) cannot get installed and executed on git events.
+TMP=""
+trap 'rm -f -- "${TMP:-}"' EXIT
 for BASENAME in pre-commit pre-merge-commit pre-push; do
   HOOK="${HOOKS_SRC}/${BASENAME}"
   [[ -f "$HOOK" ]] || continue
@@ -104,9 +106,19 @@ for BASENAME in pre-commit pre-merge-commit pre-push; do
     BACKED_UP+=("${BASENAME} → $(basename "$BACKUP")")
   fi
 
-  # Atomic install: write to .tmp and mv into place so a partial copy
-  # never leaves a half-written executable. See CLAUDE.md § Atomic file rewrites.
-  TMP="${DST}.tmp"
+  # Atomic install: write beside the destination and mv into place so a
+  # partial copy never leaves a half-written executable (the same convention
+  # as the trackers' writers, CLAUDE.md § Data integrity). The name carries
+  # `$$`, this shell's PID, rather than coming from `mktemp` — the device
+  # `batch_work.sh` uses, on the same premise: `mktemp` creates 0600, and
+  # `chmod +x` on that yields a 0711 hook under the usual umask (0700 under
+  # 077) — unreadable to group and others either way — where `cp` carries the
+  # source's mode under the umask and `chmod +x` lands on 0755. The PID makes
+  # the name unique per process, which a
+  # fixed `<hook>.tmp` was not (`Q-448`). The EXIT trap set before the loop
+  # removes an in-flight copy if a step fails under `set -e`; after `mv` the
+  # path no longer exists and `rm -f` is a no-op.
+  TMP="${DST}.$$.tmp"
   cp "$HOOK" "$TMP"
   chmod +x "$TMP"
   mv "$TMP" "$DST"

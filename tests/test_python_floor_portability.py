@@ -320,13 +320,36 @@ def test_the_readme_states_the_floor_this_module_enforces():
 # Demonstrated by mutation: `parents[:3]` inside Step 3c's program survived the whole
 # suite.
 
-_HEREDOC = re.compile(r"^([ \t]*)(?:\.venv/bin/)?python3\s+-\s*<<\s*'?(\w+)'?[^\n]*$", re.M)
+# The `python3 - <<PY` invocation, ANYWHERE on the line rather than at its start.
+# `claim_task.sh` runs two of these as `CC_OUT=$(VAR=x ... python3 - <<'PY' 2>&1`,
+# and a start-anchored pattern cannot see a command-substitution prefix — so two
+# blocks of shipped Python that execute on a consumer's bare `python3` were never
+# floor-checked at all. Found by an independent review battery, which planted a
+# 3.13-only kwarg in one of them and watched it survive.
+# Redirects may sit between the `-` and the `<<`, and the delimiter may be
+# double-quoted. `claim_task.sh:312` runs `python3 - 2>"$ES_ERR" <<'PY'`, a THIRD
+# heredoc the start-anchored, redirect-blind version never found.
+_HEREDOC = re.compile(
+    r"^([ \t]*).*?(?:\.venv/bin/)?python3\s+-\s*(?:[0-9]?[<>]+\s*\S+\s*)*<<\s*['\"]?(\w+)['\"]?[^\n]*$",
+    re.M)
 
 
 def _skill_heredocs() -> list[tuple[str, str]]:
-    """(label, source) for every `python3 - <<PY … PY` block under core/skills/."""
+    """(label, source) for every `python3 - <<PY … PY` block in the shipped tree.
+
+    Population is skills AND companion shell scripts: both carry Python that runs
+    on the consumer's interpreter, and only the first was ever scanned.
+    """
     out: list[tuple[str, str]] = []
-    for f in sorted((REPO_ROOT / "core" / "skills").rglob("*.md")):
+    # `install.sh` carries eight of these and the git hooks carry more; both run
+    # on the consumer's bare `python3` exactly as a skill heredoc does, and both
+    # were outside the population.
+    sources = (sorted((REPO_ROOT / "core" / "skills").rglob("*.md"))
+               + sorted((REPO_ROOT / "core" / "companion" / "scripts").rglob("*.sh"))
+               + sorted((REPO_ROOT / "core" / "companion" / "git-hooks").rglob("*"))
+               + [REPO_ROOT / "install.sh"])
+    sources = [f for f in sources if f.is_file()]
+    for f in sources:
         body = f.read_text(encoding="utf-8")
         for m in _HEREDOC.finditer(body):
             term = m.group(2)
@@ -395,4 +418,169 @@ def test_no_skill_heredoc_slices_path_parents():
     assert not offenders, (
         "slicing `PurePath.parents` is 3.10+ and these skill heredocs would raise "
         "TypeError on the interpreter floor: " + ", ".join(offenders)
+    )
+
+
+# ── the second runtime class: stdlib kwargs added above the floor ────────────
+#
+# `Q-449`, Phase 271. `parents[:3]` was one instance of a general shape — a
+# construct that COMPILES on 3.9 and raises at runtime — and the sweeps above
+# close exactly that one instance. A keyword argument added to a stdlib method
+# in a later release is the same shape and was not covered: measured on four
+# interpreters, `/claim-task` Step 7f called `Path.read_text(newline="")`
+# (3.13+) and `Path.write_text(newline="")` (3.10+), so its option-C body
+# rewrite raised `TypeError` on 3.9.6, 3.11.12 AND 3.12.13 — every currently
+# supported Python below 3.13 — while compiling cleanly on all of them. It went
+# unseen because this suite's own interpreter is 3.14.
+#
+# `open()` / `os.fdopen()` accept `newline` on every version back to 3.0, and are
+# what both sites now use.
+# `re.S` so `[^)]*` crosses newlines: the wrapped call is the shape a formatter
+# emits, and it was the first version's biggest hole. The `\*\*` alternative
+# catches a dict splat carrying the key, which is contrived but free to cover.
+_ABOVE_FLOOR_KWARGS = (
+    # `[^)]*` stops at the FIRST `)`, so a nested call before the kwarg —
+    # `read_text(encoding=enc(), newline="")` — hid it. `(?:[^()]|\([^()]*\))*`
+    # allows one level of nesting, which covers every real call site here. And
+    # `**kw` by NAME, not only an inline dict literal: a battery passed the kwarg
+    # through a variable.
+    (re.compile(r"\.write_text\s*\((?:[^()]|\([^()]*\))*?"
+                r"(?:\bnewline\s*=|\*\*\s*(?:\{[^}]*['\"]newline['\"]|\w+))", re.S),
+     "Path.write_text(newline=) is 3.10+"),
+    (re.compile(r"\.read_text\s*\((?:[^()]|\([^()]*\))*?"
+                r"(?:\bnewline\s*=|\*\*\s*(?:\{[^}]*['\"]newline['\"]|\w+))", re.S),
+     "Path.read_text(newline=) is 3.13+"),
+)
+
+
+def _strip_comments(src: str) -> str:
+    """Drop `#` comment lines, keeping line structure.
+
+    A comment explaining why a construct is NOT used is not a use — several of
+    this phase's own comments name `read_text(newline=)` in order to reject it.
+    """
+    out = []
+    for ln in src.splitlines():
+        if ln.lstrip().startswith("#"):
+            out.append("")
+            continue
+        # Trailing comments too: a review battery reddened this sweep with
+        # `# was: body.read_text(newline="")` appended to a live line, and with a
+        # docstring naming the retired call. Both are annotations, not uses.
+        if "#" in ln:
+            ln = ln.split("#", 1)[0]
+        out.append(ln)
+    text = "\n".join(out)
+    # Drop triple-quoted blocks, which is where the "do not use this" prose lives.
+    return re.sub(r'"""[\s\S]*?"""|\'\'\'[\s\S]*?\'\'\'', "", text)
+
+
+def _kwarg_offenders(label: str, src: str) -> list[str]:
+    """Scanned over the WHOLE text, not line by line.
+
+    A line-at-a-time scan is defeated by the shape any formatter produces:
+
+        body.read_text(
+            encoding="utf-8",
+            newline="",
+        )
+
+    An independent battery walked both wrapped calls and a `**{"newline": ""}`
+    splat straight through the first version. The patterns below therefore match
+    across newlines, and the call's argument list is bounded by the closing paren
+    so a `newline=` belonging to some later call cannot be attributed to this one.
+    """
+    body = _strip_comments(src)
+    out = []
+    for pattern, why in _ABOVE_FLOOR_KWARGS:
+        for m in pattern.finditer(body):
+            snippet = " ".join(m.group(0).split())[:90]
+            out.append(f"{label}: {why} — {snippet}")
+    return out
+
+
+def test_no_skill_heredoc_uses_a_kwarg_above_the_floor():
+    offenders = []
+    for label, src in HEREDOCS:
+        offenders += _kwarg_offenders(label, src)
+    assert not offenders, (
+        "skill heredoc(s) pass a stdlib keyword argument that does not exist on the "
+        f"{FLOOR_STR} floor. These COMPILE everywhere and raise TypeError at run time, "
+        "so neither the compile sweep above nor a green suite on a modern interpreter "
+        "can see them. Use `open(...)`/`os.fdopen(...)`, which accept `newline` on "
+        "every supported version:\n  " + "\n  ".join(offenders)
+    )
+
+
+def test_no_shipped_script_uses_a_kwarg_above_the_floor():
+    offenders = []
+    for p in [*(REPO_ROOT / "core").rglob("*.py"), *(REPO_ROOT / "packs").rglob("*.py")]:
+        offenders += _kwarg_offenders(
+            str(p.relative_to(REPO_ROOT)), p.read_text(encoding="utf-8")
+        )
+    assert not offenders, (
+        "shipped script(s) pass a stdlib keyword argument above the "
+        f"{FLOOR_STR} floor:\n  " + "\n  ".join(offenders)
+    )
+
+
+def test_the_kwarg_sweep_reds_on_the_text_it_was_written_to_prevent():
+    """Non-vacuity against the REAL pre-fix text, not a hand-written negative.
+
+    Both patterns must fire on `/claim-task` Step 7f as it stood before this
+    phase — the read and the write — or this sweep is not detecting the class it
+    was added for. A hand-written positive would prove only that the regex
+    matches itself.
+
+    **The revision is a LITERAL SHA, not `HEAD` and not `HEAD~1`.** The first cut
+    used `git show HEAD:<path>` and was green — but only because it was run on a
+    DIRTY tree, where `HEAD` was still the pre-fix commit. The moment the phase
+    committed, `HEAD` became the fixed tree and this control went red having
+    tested nothing: a non-vacuity check that silently depends on uncommitted
+    state is the exact failure it exists to detect, one level up. `HEAD~1` is no
+    better — it moves under a squash-merge. `22d4a9b` is Phase 270's commit, the
+    last tree that carried the defect, and `tests/test_rollback_commit_stays_deleted.py`
+    already uses a literal SHA for the same reason.
+    """
+    r = subprocess.run(["git", "show", "22d4a9b:core/skills/claim-task/SKILL.md"],
+                       cwd=REPO_ROOT, capture_output=True, text=True)
+    if r.returncode != 0:
+        pytest.skip(
+            "22d4a9b is not reachable here (a shallow clone, or a tree published without "
+            "this history). CI uses actions/checkout at its default fetch-depth of 1, so "
+            "this is the NORMAL path there — asserting reds the required check on every "
+            "push. `test_rollback_commit_stays_deleted.py` sets the precedent."
+        )
+    found = _kwarg_offenders("HEAD:claim-task", r.stdout)
+    assert any("read_text" in f for f in found), (
+        f"the read_text pattern does not fire on the pre-fix text: {found}"
+    )
+    assert any("write_text" in f for f in found), (
+        f"the write_text pattern does not fire on the pre-fix text: {found}"
+    )
+
+
+@pytest.mark.parametrize("py", [p for p, _ in BELOW_FLOOR_PLUS_ONE] or [None])
+def test_the_kwargs_really_are_unavailable_below_the_floor(py, tmp_path):
+    """The claim is about interpreters, so it is checked against one rather than
+    asserted from documentation. Skips when no sub-3.10 interpreter exists, which
+    `test_a_sub_floor_interpreter_was_actually_exercised` already refuses to let
+    pass silently."""
+    if py is None:
+        pytest.skip("no sub-3.10 interpreter discovered")
+    f = tmp_path / "probe.txt"
+    f.write_text("x\n", encoding="utf-8")
+    prog = (
+        "import sys, pathlib\n"
+        "p = pathlib.Path(sys.argv[1])\n"
+        "try:\n"
+        "    p.write_text('y\\n', encoding='utf-8', newline='')\n"
+        "    print('ACCEPTED')\n"
+        "except TypeError:\n"
+        "    print('REJECTED')\n"
+    )
+    r = subprocess.run([py, "-c", prog, str(f)], capture_output=True, text=True, timeout=60)
+    assert "REJECTED" in r.stdout, (
+        f"{py} accepted Path.write_text(newline=), so the floor claim in this sweep is "
+        f"wrong for this interpreter: {r.stdout!r} {r.stderr!r}"
     )

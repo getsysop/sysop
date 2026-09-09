@@ -870,7 +870,7 @@ Pass the `ROUND_MARKER=` path from the Pre-flight step. **The coverage line is n
 
 ```bash
 python3 - <<'PY' "<ROUND_MARKER path from Pre-flight>"
-import json, os, re, subprocess, sys, time
+import json, os, re, subprocess, sys, tempfile, time
 from pathlib import Path
 
 p = Path(sys.argv[1]).resolve()
@@ -998,10 +998,29 @@ try:
     # outside the gitignored runtime dir and dirty the tree.
     safe = lambda s: (re.sub(r"[^A-Za-z0-9._-]", "_", str(s))[:64] or "unknown")
     dst = d / f"{safe(receipt['skill'])}.{safe(receipt['nonce'])}.json"
-    tmp = d / (dst.name + ".tmp")
-    tmp.write_text(json.dumps(receipt, indent=2, ensure_ascii=False) + "\n",
-                   encoding="utf-8")
-    os.replace(tmp, dst)  # atomic: a concurrent reader never sees a torn file
+    # mkstemp, not a fixed `<dst>.tmp` (`Q-448`): a temp name derived from its
+    # target is the class that entry closed tree-wide. Here `dst` already carries
+    # the round's nonce, so two sessions could only collide by closing the same
+    # round at once — this finishes the class rather than stopping a bleed.
+    # `dir=d` keeps the replace same-filesystem;
+    # the suffix is `.tmp`, never `.json`, so a reader's `*.json` glob cannot open
+    # a half-written receipt; the mode is what `open()` would have created
+    # (mkstemp makes 0600); and the cleanup arm re-raises after unlinking,
+    # because a uniquely named leak is never overwritten by a later run.
+    fd, tmp = tempfile.mkstemp(dir=str(d), prefix=dst.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(json.dumps(receipt, indent=2, ensure_ascii=False) + "\n")
+        umask = os.umask(0)
+        os.umask(umask)
+        os.chmod(tmp, 0o666 & ~umask)
+        os.replace(tmp, dst)  # atomic: a concurrent reader never sees a torn file
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
     try:  # bounded history: keep the newest 50, prune the rest
         def age(f):
             try:

@@ -23,6 +23,7 @@ would remove the documented escape from a `--migrate-baseline` refusal.
 `test_a_fresh_install_shaped_run_still_writes` below is that argument as a test.
 """
 
+import re
 import sys
 from pathlib import Path
 
@@ -465,17 +466,30 @@ def test_preservation_matches_check_ids_exactly_not_by_prefix(tmp_path):
 def test_the_existing_baseline_is_read_before_the_file_is_truncated(tmp_path):
     """The ordering the docstring calls load-bearing, asserted rather than stated.
 
-    Moving the `load_baseline` read inside the truncating `open(...,"w")` block
-    survived the author's battery because `tmp_path` is a sibling file. It stops
-    being a sibling the moment a caller passes a path whose `.tmp` twin is the
-    path itself, and the failure mode is a silently emptied baseline.
+    Moving the `load_baseline` read inside the write block survived the author's
+    battery because the temp was a sibling file. Under the fixed `<path>.tmp`
+    name it stopped being a sibling the moment a caller passed a path whose
+    `.tmp` twin was the path itself; under `mkstemp` (Phase 272, `Q-448`) the
+    name is minted fresh and that collision is gone, but the order is still the
+    property: the preserved set must come from the file as it was, before this
+    function has minted anything it will replace the file with.
     """
     import run_checks.baseline as B
     src = (SCRIPTS / "run_checks" / "baseline.py").read_text(encoding="utf-8")
     body = src[src.index("def write_baseline("):]
     body = body[:body.index("\ndef ")]
-    read_at = body.index("load_baseline(path)")
-    open_at = body.index('open(tmp_path, "w"')
+    # ONE read, and the last one before the mint — `index` alone pinned the
+    # first occurrence, so a second effective read added after the mint passed
+    # (Phase 272's round, `W08`). A position is not the property; the property
+    # is that nothing reads the file after this function has started replacing it.
+    assert body.count("load_baseline(") == 1, "write_baseline reads the baseline more than once"
+    read_at = body.rindex("load_baseline(path)")
+    # `mkstemp(` regardless of module spelling: `import tempfile as tf` is a
+    # legal rewrite, and the literal reddened this guard on it (Phase 272's
+    # battery). The call is the property, not the receiver.
+    m = re.search(r"\bmkstemp\s*\(", body)
+    assert m, "write_baseline no longer mints its temp with mkstemp"
+    open_at = m.start()
     assert read_at < open_at, (
         "write_baseline now opens the output file before reading the existing "
         "baseline; a path whose tmp twin collides truncates before the read and "

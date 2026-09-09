@@ -22,9 +22,13 @@ Phase-61b carve-out unit tests and the coverage gate's CLI tests; this module
 owns baseline I/O and the #363 contract. The carve-out appears in both, at
 different levels, on purpose.
 """
+import os
 import re
+import stat
 import sys
 from pathlib import Path
+
+import pytest
 
 import run_checks.baseline as baseline
 import run_checks_impl as rci
@@ -503,6 +507,126 @@ def test_the_baseline_write_is_atomic(tmp_path, monkeypatch):
         "the original baseline was modified in place — the write is not atomic"
     )
     assert baseline.load_baseline(str(p)) == {"old-check|src/a.py:1"}
+    # And nothing minted survives. Under the fixed `<path>.tmp` a leak was
+    # overwritten by the next run; under `mkstemp` (Phase 272) it never is.
+    assert sorted(x.name for x in p.parent.iterdir()) == ["checks_baseline.txt"], (
+        "the cleanup arm did not remove the minted temp"
+    )
+
+
+# ── Q-448 (Phase 272): write_baseline's mkstemp shape, asserted as PROPERTIES ──
+# Presence of `mkstemp(` is not the property. Each element is driven: where the
+# temp is minted, what mode the result carries, what a failure leaves behind.
+
+_ONE = [("chk", "src/a.py:3", "m", "")]
+
+
+def test_write_baseline_keeps_a_read_only_baseline_read_only(tmp_path):
+    """A consumer who locked the file read-only stayed locked through
+    `migrate_baseline` and was silently reset to 0644 by `write_baseline` on
+    every `--update-baseline`. The mode carry the conversion needs (mkstemp
+    creates 0600) closes both directions at once."""
+    p = tmp_path / ".claude" / "checks_baseline.txt"
+    p.parent.mkdir()
+    p.write_text("# old\n\nold-check|src/a.py:1\n")
+    os.chmod(p, 0o444)
+    baseline.write_baseline(str(p), _ONE, blocking_ids={"chk"})
+    assert stat.S_IMODE(p.stat().st_mode) == 0o444
+    assert baseline.load_baseline(str(p)) == {"chk|src/a.py:3"}
+
+
+def test_write_baseline_does_not_narrow_a_0644_baseline_to_0600(tmp_path):
+    p = tmp_path / ".claude" / "checks_baseline.txt"
+    p.parent.mkdir()
+    p.write_text("old-check|src/a.py:1\n")
+    os.chmod(p, 0o644)
+    baseline.write_baseline(str(p), _ONE, blocking_ids={"chk"})
+    assert stat.S_IMODE(p.stat().st_mode) == 0o644
+
+
+def test_a_fresh_baseline_gets_the_mode_open_would_have_given(tmp_path):
+    """No target to carry a mode from: the result must be what the fixed-name
+    `open(tmp, "w")` produced — 0666 under the umask — not a hard-coded 0644
+    (which WIDENS for a 077 umask) and not mkstemp's 0600."""
+    for umask, want in ((0o022, 0o644), (0o077, 0o600)):
+        p = tmp_path / f"u{umask:o}" / "checks_baseline.txt"
+        old = os.umask(umask)
+        try:
+            baseline.write_baseline(str(p), _ONE, blocking_ids={"chk"})
+        finally:
+            os.umask(old)
+        assert stat.S_IMODE(p.stat().st_mode) == want, oct(umask)
+
+
+def test_write_baseline_mints_its_temp_beside_the_target(tmp_path, monkeypatch):
+    seen = {}
+    real_replace = os.replace
+
+    def spy(src, dst):
+        seen["src"], seen["dst"] = str(src), str(dst)
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(baseline.os, "replace", spy)
+    p = tmp_path / ".claude" / "checks_baseline.txt"
+    baseline.write_baseline(str(p), _ONE, blocking_ids={"chk"})
+    assert os.path.dirname(seen["src"]) == str(p.parent), (
+        "the temp was minted outside the target's directory — os.replace can "
+        "raise EXDEV across filesystems")
+    assert seen["src"] != str(p) + ".tmp", "the fixed name is back"
+    name = os.path.basename(seen["src"])
+    assert name.startswith("checks_baseline.txt.") and name.endswith(".tmp"), name
+
+
+def test_write_baseline_writes_through_a_symlink(tmp_path):
+    real = tmp_path / "real.txt"
+    real.write_text("old-check|src/a.py:1\n")
+    d = tmp_path / ".claude"
+    d.mkdir()
+    link = d / "checks_baseline.txt"
+    link.symlink_to(real)
+    baseline.write_baseline(str(link), _ONE, blocking_ids={"chk"})
+    assert link.is_symlink(), "the symlink was replaced by a regular file"
+    assert "chk|src/a.py:3" in real.read_text()
+
+
+def test_write_baseline_mints_beside_the_real_file_not_beside_the_link(tmp_path, monkeypatch):
+    """Link and target in DIFFERENT directories, so `dir=dirname(path)` and
+    `dir=dirname(real)` are distinguishable (`W10`)."""
+    sub = tmp_path / "elsewhere"
+    sub.mkdir()
+    real = sub / "real.txt"
+    real.write_text("old-check|src/a.py:1\n")
+    d = tmp_path / ".claude"
+    d.mkdir()
+    link = d / "checks_baseline.txt"
+    link.symlink_to(real)
+    seen = {}
+    real_replace = os.replace
+
+    def spy(src, dst):
+        seen["src"] = str(src)
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(baseline.os, "replace", spy)
+    baseline.write_baseline(str(link), _ONE, blocking_ids={"chk"})
+    assert os.path.dirname(seen["src"]) == str(sub), seen
+    assert link.is_symlink() and "chk|src/a.py:3" in real.read_text()
+
+
+def test_a_non_oserror_failure_cleans_up_the_minted_temp_and_still_raises(
+        tmp_path, monkeypatch):
+    p = tmp_path / ".claude" / "checks_baseline.txt"
+    p.parent.mkdir()
+    p.write_text("old-check|src/a.py:1\n")
+
+    def boom(*_a, **_k):
+        raise RuntimeError("not an OSError")
+
+    monkeypatch.setattr(baseline.os, "chmod", boom)
+    with pytest.raises(RuntimeError):
+        baseline.write_baseline(str(p), _ONE, blocking_ids={"chk"})
+    assert p.read_text() == "old-check|src/a.py:1\n"
+    assert sorted(x.name for x in p.parent.iterdir()) == ["checks_baseline.txt"]
 
 
 def test_the_baseline_is_written_in_sorted_order(tmp_path):

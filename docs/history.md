@@ -67,7 +67,23 @@ that it's a working log written for the project's own continuity, not an introdu
   cloned workspace, that its origin is the same repository. It had to reach the second of the two scripts
   that build workspaces twice over, because both reports named only the first: the fixing phase caught
   the identity half itself by asking whether the class was wider than its brief, and a phase later a
-  review round caught the branch half.
+  review round caught the branch half. Later in the month the same instinct turned on the project's own
+  documented advice. A rollback step was restoring a file the wrong way: it restored from what had
+  been staged rather than from the last commit, so a rollback over an already-staged change
+  reported success and changed nothing. The obvious repair was the form the project's own workflow
+  spec already recommended — and running it showed why that form was worse. Where the staged change
+  belongs to a second session, it throws that work away; measured, one session's rollback silently
+  reset another session's claimed task back to unclaimed, exiting successfully and printing
+  nothing. What ships instead checks the outcome rather than choosing between the two forms. The
+  postscript is the part worth keeping: one phase later, checking something by hand, the same
+  mistake was made again — a file restored the first way, discarding work that had not been
+  committed — by the session that had read the warning written down the day before. The other
+  thread of the month was a class of files with predictable temporary names, where a writer that
+  saves by writing alongside its target and renaming collides with any second writer doing the
+  same; nine of those were found and converted. The instrument that certified that sweep complete
+  turned out to be reading about nine-tenths of the lines it reported reading, and it was not
+  review that found it — review had read it closely more than once — but a probe that measured its
+  reach.
 
 Where to go next: [the monograph](./workflow.html) for why it's built this way,
 [one rule, end to end](./one-rule.md) for the evidence trail behind a single rule, and

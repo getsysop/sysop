@@ -30,10 +30,14 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import stat
 import subprocess
 import sys
 import time
 from pathlib import Path
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SKILLS = {
@@ -50,6 +54,7 @@ FULL_LINE = "Full · manifest 1477 · opened 13 · grepped 220 · workers 0, sol
 from tests.test_round_markers import (  # noqa: E402
     _marker_path, _repo, _run, clear_src, write_src,
 )
+from tests.test_python_floor_portability import INTERPRETERS  # noqa: E402
 
 
 # ── helpers ─────────────────────────────────────────────────────────────────
@@ -472,11 +477,93 @@ def test_the_receipt_write_leaves_no_temp_file(tmp_path):
     # Atomicity itself cannot be observed from outside a completed write, so
     # the property is pinned at the source: BOTH halves, because keeping the
     # `os.replace` while aiming `tmp` at the destination is a silent no-op that
-    # leaves no stray file for the check above to catch.
+    # leaves no stray file for the check above to catch. The minted form since
+    # Phase 272 (`Q-448`): `dir=str(d)` is the same-filesystem half, and the
+    # `.tmp` suffix is what keeps a half-written receipt out of every `*.json`
+    # reader's glob.
+    # Whitespace-normalised, and keyed to the CALL rather than the module
+    # spelling: a reflow onto two lines and `import tempfile as tf` are both
+    # legal rewrites, and the literal one-liner reddened on the first (Phase
+    # 272's battery). The three properties the pattern carries are the ones
+    # that matter — `dir=str(d)` (same filesystem), `prefix=dst.name + "."`
+    # (minted, not fixed) and `suffix=".tmp"` (outside every `*.json` glob).
+    minted = re.compile(
+        r'fd,\s*tmp\s*=\s*\w+\.mkstemp\(\s*dir=str\(d\),\s*'
+        r'prefix=dst\.name\s*\+\s*"\.",\s*suffix="\.tmp"\s*\)')
     for skill, path in SKILLS.items():
         src = path.read_text()
-        assert 'tmp = d / (dst.name + ".tmp")' in src, skill
+        assert minted.search(src), skill
         assert "os.replace(tmp, dst)" in src, skill
+        assert 'tmp = d / (dst.name + ".tmp")' not in src, skill
+
+
+# ── Q-448 (Phase 272): the receipt writer's mkstemp shape, asserted by execution ──
+# The heredoc is extracted from the shipped SKILL.md and RUN, so each element is
+# a property of the thing that ships: what mode the receipt carries, what a
+# failed replace leaves behind, and whether it runs on every interpreter this
+# machine has — a heredoc is otherwise only ever COMPILED on the floor (`Q-449`).
+
+
+def _close_with(interp: str, root: Path, marker: Path,
+                skill: str = "codebase-review", umask: int | None = None
+                ) -> subprocess.CompletedProcess:
+    kw = {} if umask is None else {"umask": umask}
+    return subprocess.run([interp, "-c", clear_src(skill), str(marker)],
+                          cwd=root, capture_output=True, text=True, **kw)
+
+
+def test_the_receipt_carries_the_mode_open_would_have_given_not_mkstemps_0600(tmp_path):
+    for umask, want in ((0o022, 0o644), (0o077, 0o600)):
+        root = _repo(tmp_path / f"umask-{umask:o}")
+        marker = _open_round(root)
+        _write_round(root, FULL_LINE)
+        r = _close_with(sys.executable, root, marker, umask=umask)
+        assert r.returncode == 0, r.stderr
+        found = _receipts(root)
+        assert len(found) == 1, found
+        assert stat.S_IMODE(found[0].stat().st_mode) == want, oct(umask)
+
+
+def test_a_failed_receipt_replace_leaves_no_minted_temp_and_is_reported(tmp_path):
+    """The destination pre-exists as a DIRECTORY, so `os.replace` raises. The
+    receipt is best-effort by design — the enclosing `except Exception` prints
+    `round-receipt: skipped (…) — clearing anyway` and the marker is still
+    cleared, because a stranded marker is the worse outcome — so the properties
+    are three: the cleanup arm unlinked the minted temp (under the fixed name a
+    leak was overwritten by the next round; a minted one never is), the arm
+    RE-RAISED so the failure reached that report instead of being swallowed
+    into a silent "receipt written", and the clear still happened."""
+    root = _repo(tmp_path / "cleanup")
+    marker = _open_round(root)
+    _write_round(root, FULL_LINE)
+    d = root / RECEIPT_REL
+    d.mkdir(parents=True, exist_ok=True)
+    nonce = marker.name.split(".")[-2]
+    (d / f"codebase-review.{nonce}.json").mkdir()
+    r = _close_with(sys.executable, root, marker)
+    assert r.returncode == 0, r.stderr
+    assert "round-receipt: skipped (IsADirectoryError)" in r.stdout, r.stdout
+    assert "opened 13/1477" not in r.stdout, "reported a receipt it did not write"
+    assert not marker.exists(), "the marker must still be cleared"
+    assert list(d.glob("*.tmp")) == [], (
+        "the cleanup arm did not run: " + str(sorted(x.name for x in d.iterdir())))
+
+
+@pytest.mark.parametrize("interp,ver", INTERPRETERS,
+                         ids=[f"{p}@{v[0]}.{v[1]}" for p, v in INTERPRETERS])
+def test_the_receipt_writer_runs_on_every_interpreter_this_machine_has(
+        tmp_path, interp, ver):
+    """`Q-449`'s structural finding, closed for THIS heredoc: it is executed on
+    the floor interpreter when the machine has one, not merely compiled."""
+    root = _repo(tmp_path / f"py-{ver[0]}{ver[1]}")
+    marker = _open_round(root)
+    _write_round(root, FULL_LINE)
+    r = _close_with(interp, root, marker)
+    assert r.returncode == 0, f"{interp}: {r.stderr}"
+    found = _receipts(root)
+    assert len(found) == 1, found
+    assert json.loads(found[0].read_text())["opened"] == 13
+    assert list((root / RECEIPT_REL).glob("*.tmp")) == []
 
 
 def test_both_skills_ship_the_identical_receipt_writer():

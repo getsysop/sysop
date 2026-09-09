@@ -22,8 +22,6 @@
       "Bash(git add:*)",
       "Bash(git add tasks/index.yml)",
       "Bash(git add review_tasks.md)",
-      "Bash(git commit -m claim:*)",
-      "Bash(git commit -m rollback:*)",
       "Bash(git commit -m docs:*)",
       "Bash(bash sysop/scripts/claim_task.sh:*)",
       "Bash(bash sysop/scripts/batch_work.sh:*)",
