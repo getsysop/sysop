@@ -21,7 +21,7 @@ Verify `.claude/settings.json` carries the allow-rules this skill depends on. Un
 
 Read `.claude/settings.json` and confirm `permissions.allow` contains:
 
-- `Bash(git checkout:*)` — Step 4 rollback path on 4b/4c failure (`git checkout tasks/index.yml`).
+- `Bash(git checkout:*)` — Step 4 rollback path on 4b/4c failure (`git checkout tasks/index.yml`, followed by a `git diff --cached --quiet` check: the checkout restores from the index and no-ops over a staged flip, and the wider `HEAD --` form was refused because it destroys a concurrent session's staged claim — `Q-445`).
 - `Bash(git worktree add:*)` — transitively invoked by `sysop/scripts/claim_task.sh`.
 - `Bash(bash sysop/scripts/claim_task.sh:*)` — Step 2's `--entry-state` query **and** Step 4b's worktree + lock creation. One rule covers both: the trailing `:*` is a prefix match over the whole argument string, so no separate `--entry-state` rule is needed (and adding one would be dead). Verified against Phase 152's finding that rules seeded against invocations which bind none are worse than no rule.
 - `Bash(bash sysop/scripts/batch_work.sh:*)` — Step 4 review-batch path.
@@ -29,7 +29,6 @@ Read `.claude/settings.json` and confirm `permissions.allow` contains:
 - `Bash(python3 sysop/scripts/validate_tasks.py)` / `Bash(python3 sysop/scripts/validate_tasks.py:*)` and the `.venv/bin/python3 sysop/scripts/validate_tasks.py` / `.venv/bin/python3 sysop/scripts/validate_tasks.py:*` venv variants — Step 4c post-claim validator. Bare `python3` is the command word the step prescribes: the script self-resolves venv PyYAML via its own `sys.path` bootstrap (Phase 182), so one form serves every consumer. The `.venv/bin/python3` rules stay only so a hand-typed venv invocation is not denied.
 - `Bash(python3 sysop/scripts/scope_overlap.py:*)` (and the `.venv/bin/python3` variant) — Step 2's non-blocking overlap advisory. The `git -C <worktree> diff` it shells out to needs **no** separate rule (it's a subprocess of the permitted python call, and read-only `git` auto-passes per `_shared/permission-guard.md` § Notes). This rule is **not** load-bearing — a missing rule (or any non-zero exit) just means the advisory is skipped; the claim still proceeds.
 - `Bash(git add tasks/index.yml)` — Step 7d's human gate and Step 7f's Option C stage the index directly. It is **not** Step 4d's rule any more: Phase 261 moved that commit inside `claim_task.sh --commit-claim`, which stages and commits under the script rule above.
-- `Bash(git commit -m claim:*)` — retained, but **no step in this skill binds it** since Phase 261 moved Step 4d inside `claim_task.sh`. This is precisely the shape the `claim_task.sh` bullet above warns about, and it had been sitting five lines below that warning ever since. Kept rather than deleted because removing a template rule never removes it from an installed consumer (`WORKFLOW.md` § 8.2a) and a rule granting nothing requested costs nothing — but recorded as unbound instead of carrying a false attribution.
 
 If any are missing, stop with the `_shared/permission-guard.md` § Algorithm step 5 message (one-line reason: "creates an isolated worktree and a feature branch for the claimed task; queries + updates `tasks/index.yml` via heredoc'd python; runs the schema validator before committing the claim"). Do not proceed — unless the guard's step 3 mode check applies.
 
@@ -497,7 +496,22 @@ If 4b's script exits non-zero, or 4c's validator exits non-zero, undo 4a's uncom
 
 ```bash
 git checkout tasks/index.yml
+# VERIFY the rollback actually happened. `git checkout <path>` restores from the
+# INDEX, not from HEAD, so if anything had staged the flip this exits 0 having
+# changed nothing and the task is still `in_progress` (`Q-445`, reproduced).
+# The staged state IS the precondition, so test it directly rather than guessing.
+git diff --cached --quiet -- tasks/index.yml || {
+  echo "ROLLBACK UNVERIFIED: tasks/index.yml is staged, so the checkout above restored"
+  echo "the staged copy rather than HEAD's. The task may still be in_progress."
+  echo "Inspect with: git diff --cached -- tasks/index.yml — then STOP and reconcile."
+  exit 1; }
 ```
+
+**Why a check and not `git checkout HEAD --` (`Q-445`, and the fix that was refused).** The bare checkout restores from the **index**. If anything has staged the flip — a concurrent `/claim-task` Step 7d or 7f Option C `git add`, a `/review-close` staging pass, an operator's `git add -A` — it is a **silent no-op**: measured, `Updated 0 paths from the index`, **exit 0**, task still `in_progress`, so this step would report a rollback that did not happen.
+
+`git checkout HEAD -- tasks/index.yml` was built as the fix and **disqualified by execution**. It restores the index too, so where the staged content belongs to *another session* it destroys that session's claim: measured with session A rolling back while session B held a staged flip for a different task, the bare form left B `in_progress` (correct) and the `HEAD --` form silently reset B to `open`, exit 0, no output. And the one state in which the staged content is reliably *our own* failed claim — after `claim_task.sh --commit-claim` stages and then fails — is the state Step 4d's own note tells you not to run a rollback in at all. So wherever this checkout runs, staged content is somebody else's, and the wider command trades a false report for silent data loss.
+
+The check above closes the real defect instead: it tests the exact precondition the no-op needs, destroys nothing, and needs no new permission (`git diff` is read-only).
 
 If 4b got as far as creating anything, undo **only this task's** artifacts. Do **not** reach for `cleanup_worktrees.sh --force`: it takes no path operand, so it removes *every* non-main worktree — ACTIVE ones included — and would destroy any concurrent claim's uncommitted work (WORKFLOW.md § 8.4). Which command applies depends on how far 4b got, because `claim_task.sh` writes the lock **last** (branch → worktree → lock):
 
@@ -1210,7 +1224,7 @@ The tempting recovery from a failed reviewer is *"continue to the executor anywa
 # multi-kilobyte sub-agent document, and putting it through the shell is how a quoting bug
 # becomes a code-execution bug.
 python3 - <<'PY' "<CLAIM_ID>" "<RUN_ID>" "<BODY_PATH>" '<TEST_DECISION>'
-import sys, json, subprocess
+import os, sys, json, subprocess, tempfile
 from pathlib import Path
 
 claim_id, run_id, body_rel, test_decision = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
@@ -1327,7 +1341,17 @@ def strip_sections(lines, headings):
 # newline="" disables universal-newline translation, so a CRLF body is not silently
 # rewritten LF throughout -- which showed as a whole-file diff rather than the ~20 added
 # lines. Normalise for processing, restore on write.
-raw = body.read_text(encoding="utf-8", newline="")
+#
+# `open(...)` rather than `Path.read_text(..., newline="")`: `read_text` did not
+# accept `newline` until Python 3.13, and this tree's floor is 3.9
+# (`tests/test_python_floor_portability.py`). Measured on four interpreters --
+# 3.9.6, 3.11.12 and 3.12.13 all raise `read_text() got an unexpected keyword
+# argument 'newline'`; only 3.13 accepts it. So this read FATALED on the floor
+# AND on every currently-supported Python below 3.13, taking the whole option-C
+# body rewrite with it. It went unseen because the suite's venv is 3.14.
+# `open` has accepted `newline` since 3.0.
+with open(body, encoding="utf-8", newline="") as _f:
+    raw = _f.read()
 crlf = "\r\n" in raw
 text = raw.replace("\r\n", "\n")
 # Replace IN PLACE, both sections, at the position the earlier of them held.
@@ -1407,9 +1431,42 @@ else:
 out = "\n".join(lines[:insert_at] + block + lines[insert_at:]).rstrip() + "\n"
 if crlf:
     out = out.replace("\n", "\r\n")
-tmp = body.with_suffix(body.suffix + ".tmp")
-tmp.write_text(out, encoding="utf-8", newline="")
-tmp.replace(body)
+# `mkstemp` rather than a fixed `<path>.tmp` (`Q-444`): the same collision class
+# `Q-382` closed for the claim paths and `Q-414` for the close path, on the task
+# BODY rather than on `tasks/index.yml`. Exposure is lower here -- a body is
+# written by the one session that claimed that task -- but the shape is the
+# tree's. THREE of the four elements answer a defect the conversion would
+# otherwise INTRODUCE: the mode carried across (`mkstemp` creates 0600 and would
+# silently narrow a 0644 tracked body), `dir=` the target's own directory (same
+# filesystem, so `os.replace` cannot raise `EXDEV`), and the cleanup arm (a
+# fixed-name leak self-heals on the next run, because the next run writes the
+# same path; a `mkstemp` leak does not). The fourth, `realpath`, is REDUNDANT
+# here and kept only for shape: `body = body.resolve()` already ran above, so
+# this block was never writing over a symlink. Measured: the pre-fix form left
+# the link intact and grew the real file, same as this one.
+#
+# `os.fdopen(..., newline="")` rather than `Path.write_text(..., newline="")`:
+# `write_text` did not accept `newline` until Python 3.10, and this tree's floor
+# is 3.9 (`tests/test_python_floor_portability.py`). Measured on stock macOS
+# /usr/bin/python3 3.9.6: `write_text() got an unexpected keyword argument
+# 'newline'` -- so this write FATALED on the floor interpreter, taking the whole
+# option-C plan write with it. `open`/`fdopen` have accepted `newline` since 3.0.
+real = os.path.realpath(body)
+try:
+    mode = os.stat(real).st_mode & 0o7777
+except OSError:
+    mode = 0o644
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(real),
+                           prefix=os.path.basename(real) + ".", suffix=".tmp")
+try:
+    with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
+        f.write(out)
+    os.chmod(tmp, mode)
+    os.replace(tmp, real)
+except BaseException:
+    if os.path.exists(tmp):
+        os.unlink(tmp)
+    raise
 print("wrote {} ({} bytes)".format(body, len(out)))
 print("sealed_report: " + ("present" if sealed else "ABSENT"))
 PY

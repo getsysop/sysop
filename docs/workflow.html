@@ -847,7 +847,7 @@
     <div class="hero-grid">
       <aside class="hero-margin rise">
         <span class="line">Vol. <span class="accent">I</span></span>
-        <span class="line">Issue 267</span>
+        <span class="line">Issue 273</span>
         <span class="line">2026.09.08</span>
         <span class="line" style="margin-top:22px">An essay on</span>
         <span class="line">software workflow</span>
@@ -871,7 +871,7 @@
             <div class="hero-stat-label">Skills</div>
           </div>
           <div class="hero-stat">
-            <div class="hero-stat-fig">267</div>
+            <div class="hero-stat-fig">273</div>
             <div class="hero-stat-label">Shipped phases</div>
           </div>
           <div class="hero-stat">
@@ -2121,6 +2121,35 @@
           <em>visible</em>, which is the only property a reader downstream can act on.</span>
         </p>
 
+        <p>
+          <strong>Addendum (2026-09-08, Phases&nbsp;271&ndash;272).</strong> The sharpest instance of that rule since
+          arrived from a direction this section did not anticipate: the instrument wrong about its population was a
+          <em>test</em>, and it was wrong four times before anyone measured it. A guard listed the writers of one defect
+          class &mdash; a temp file named from its target, so two concurrent writers collide on one name &mdash; and it
+          found them by matching a single spelling of the assignment. Grepping for the <em>class</em> instead turned up
+          seven more writers spelled another way, across four files, none of which that pattern could match at all; a
+          review lens then found an eighth shape in two shipped skills. Each discovery had been read, at the time, as the
+          list being one entry short.
+        </p>
+        <p>
+          So the guard stopped enumerating spellings and asked a structural question instead &mdash; does an assignment's
+          right-hand side end in a temp extension, whatever built it. That is the fix this section prescribes, and it was
+          still not enough, because the <em>detector</em> then had a population problem of its own. Measured rather than
+          reviewed: it counted parentheses before stripping comments and never reset, so one <code>(</code> in a comment
+          or a shell regex put the remainder of a file behind its skip &mdash; <strong>4,881 of the 51,110 lines it
+          reported scanning were never examined</strong>, and five files were blind from partway down. The rewrite for
+          that was measured too, and had moved the hole rather than closed it: its own reach guard probed only column 0,
+          where the blindness was zero, while <strong>650 of 20,199 interior positions</strong> were still invisible. The
+          third version measures 0 of 21,589, and ships that probe as a test rather than the claim as a sentence.
+        </p>
+        <p class="muted">
+          Two things are worth taking from it. The population found is byte-for-byte identical across all three versions,
+          which is why nothing downstream ever looked wrong &mdash; a blind instrument and a complete one returned the
+          same answer, which is this section's whole subject arriving one level up, inside the check rather than the
+          scan. And the number exists only because a reviewer wrote a probe instead of reading the code. Every version of
+          that detector was read carefully first, by people looking for exactly this, and reading found none of it.
+        </p>
+
         <h3 id="unstated-contract">One writer, many readers, and a contract written down nowhere</h3>
         <p>
           Those silences are not independent accidents, and a run of phases through August 2026 kept landing on the
@@ -2313,6 +2342,49 @@
           the most contested text in the file it lives in, which is the expected outcome: the numbers it names are
           exactly the ones a session under pressure wants to raise. Its own review round disqualified the first version
           of it.
+        </p>
+
+        <p>
+          <strong>Addendum (2026-09-08, Phases&nbsp;271&ndash;272).</strong> What a round buys got a sharper
+          demonstration than the overlap number above, and it came from the lens that <em>executes</em> rather than the
+          one that reads. A phase set out to fix a real defect in a rollback path: the bare
+          <code>git checkout &lt;path&gt;</code> restores from the <strong>index</strong>, not from the commit, so a
+          rollback over a change that was already staged prints <code>Updated 0 paths from the index</code>, exits 0, and
+          leaves the thing it was asked to undo exactly where it was. The fix it reached for was
+          <code>git checkout HEAD -- &lt;path&gt;</code> &mdash; not an invention, but the idiom this project's own
+          workflow spec already carried as house style.
+        </p>
+        <p>
+          Its round refuted that by running it. Where the staged content belongs to a <em>second session</em>,
+          <code>HEAD --</code> reverts the index too: measured, one session's rollback silently reset another session's
+          claimed task from <code>in_progress</code> back to <code>open</code> &mdash; exit 0, no output. And the one
+          state in which the staged change is reliably your own is the state both skills already tell you not to roll
+          back in at all, so wherever the documented idiom actually ran, the content it discarded was somebody else's.
+          The fix had traded a false report for silent data loss, and the documentation is what licensed it. What ships
+          instead does not choose between the two forms &mdash; it verifies the postcondition. The bare, precise checkout
+          stays and gains a check that nothing is staged for that path, which detects the no-op the original defect was
+          about and destroys nothing. <span class="muted">The round's product was the disqualification, not the
+          fix.</span>
+        </p>
+        <p>
+          Then the same shape closed on the author. One phase later, checking a mutation by hand, a session restored a
+          file with the bare <code>git checkout -- &lt;path&gt;</code> and discarded that phase's own uncommitted work,
+          because the index still held the pre-change content &mdash; which is precisely the sentence the phase before it
+          had just written down. The lesson had been recorded, in prose, by the person who then failed it. That is the
+          argument this page keeps making about prose, arriving once more at the expense of the people making it.
+        </p>
+        <p>
+          <strong>The second round measured worse than the first.</strong> The
+          governor warrants a second round on one ground: that the fixes themselves produced substantial new material.
+          They had &mdash; the round-1 fixes rewrote the guards rather than patching them. The second round put 54
+          mutations through the rewritten guards and <strong>42 survived</strong>, against 39 of 62 through the ones they
+          replaced. The honest reading of that is the modest one, and it is the one the record itself reaches:
+          freshly rewritten material measures like freshly rewritten material. It is evidence that the condition
+          <em>selects</em> for unreviewed work, which is what a condition is for; it is not evidence that two rounds
+          are better than one, and nothing here establishes that. <span class="muted">What the second round did buy
+          is concrete: it found that two controls the first round had just pinned to a literal commit would fail under
+          CI, whose checkout is shallow by default and does not have that commit &mdash; a red required check on every
+          push, introduced by a fix.</span>
         </p>
 
         <h3 id="outside-scanner">Folding in an outside scanner</h3>
@@ -3003,7 +3075,7 @@
       <aside class="col-rule">Colophon</aside>
       <div>
         <p class="col-body">
-          A monograph on <em>Sysop</em>, as of <em>Phase 267</em> · 2026-09-08, with dated addenda where the record
+          A monograph on <em>Sysop</em>, as of <em>Phase 273</em> · 2026-09-08, with dated addenda where the record
           moved after the snapshot. Phase numbers throughout are iterations
           of the workflow's own development — each one planned, adversarially reviewed, and shipped through the process it
           extends; <a href="https://github.com/getsysop/sysop/blob/main/PHASE_LOG.md">PHASE_LOG.md</a> carries one entry per phase. Set in the reader's native serif —
@@ -3044,7 +3116,7 @@
             <ul>
               <li>Extracted from <em>gdp-query-system</em></li>
               <li>First consumer · BeanRider</li>
-              <li>Phase 267 · 2026-09-08</li>
+              <li>Phase 273 · 2026-09-08</li>
             </ul>
           </div>
           <div>

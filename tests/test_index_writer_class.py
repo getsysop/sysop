@@ -1262,11 +1262,26 @@ def _step4c_body() -> str:
 def test_step4c_writes_the_index_atomically():
     code = _flat(_step4c_body())
     assert "os.replace(" in code, "Step 4c no longer replaces atomically"
-    assert re.search(r"tmp\s*=\s*target\.with_suffix", code), (
-        "Step 4c's tempfile must be derived from the target, so the replace stays "
-        "same-filesystem — a tmp in the system temp dir makes os.replace raise"
+    # `Q-414` (Phase 269) replaced the fixed `<path>.tmp` with `mkstemp`. The old
+    # assertion pinned `tmp = target.with_suffix(...)` and gave its reason as
+    # "so the replace stays same-filesystem". That reason is REAL and is kept —
+    # a tmp in the system temp dir makes os.replace raise EXDEV — but the fixed
+    # name was never what secured it. `dir=` is, and it secures it without the
+    # collision the fixed name creates. So the property is asserted directly
+    # instead of through the weaker form that happened to imply it.
+    assert re.search(r"tempfile\.mkstemp\s*\(", code), (
+        "Step 4c's tempfile must come from mkstemp — a name derived from the target "
+        "collides when two closes overlap (`Q-382`'s class, `Q-414`'s site)"
     )
-    assert not re.search(r"(?<![\w.])(p|target)\.write_text\s*\(", code), (
+    assert re.search(r"dir\s*=\s*os\.path\.dirname\(", code), (
+        "Step 4c's tempfile left the target's own directory, so the replace is no "
+        "longer guaranteed same-filesystem — a tmp elsewhere makes os.replace raise"
+    )
+    assert not re.search(r"tmp\s*=\s*\w+\.with_suffix", code), (
+        "Step 4c derived its temp name from the target again — the fixed-name "
+        "collision `Q-414` removed"
+    )
+    assert not re.search(r"(?<![\w.])(p|target|real)\.write_text\s*\(", code), (
         "Step 4c writes the index in place again"
     )
     assert not re.search(r"shutil\.(copyfile|copy|move)", code), (
@@ -1275,14 +1290,138 @@ def test_step4c_writes_the_index_atomically():
 
 
 def test_step4c_preserves_what_write_text_gave_for_free():
-    """Three properties the round found `os.replace` silently drops."""
+    """Three properties the round found `os.replace` silently drops.
+
+    The cleanup assertion moved from `tmp.unlink()` to `os.unlink(tmp)` at Phase
+    269: `mkstemp` returns a `str`, not a `Path`, so the method form is no longer
+    available. Same property, different spelling — the guard is re-pointed rather
+    than dropped, because the failure arm is what keeps a surviving `.tmp` from
+    sitting untracked beside a tracked path for the rest of the close.
+    """
     code = _flat(_step4c_body())
     assert "os.path.realpath(p)" in code, "Step 4c stopped writing through a symlink"
     assert "os.chmod(" in code, "Step 4c stopped preserving the index's mode"
-    assert "tmp.unlink()" in code, "Step 4c stopped cleaning up its tempfile on failure"
+    assert re.search(r"os\.unlink\(\s*tmp\s*\)|tmp\.unlink\(\)", code), (
+        "Step 4c stopped cleaning up its tempfile on failure"
+    )
+    assert re.search(r"os\.path\.exists\(\s*tmp\s*\)|tmp\.exists\(\)", code), (
+        "Step 4c's cleanup lost its existence check and will raise from the except "
+        "arm when the failure preceded the temp file"
+    )
     assert "read_text(encoding='utf-8')" in code, (
         "Step 4c's read half lost its encoding, leaving the pair locale-dependent "
         "in one direction while allow_unicode=True opts the write into non-ASCII"
+    )
+    # Both found unguarded by a review lens, and both are properties the mkstemp
+    # conversion INTRODUCED — `write_text` carried the first for free and the old
+    # `stat()` line carried the second, so neither had ever needed a pin.
+    assert re.search(r"os\.fdopen\([^)]*encoding\s*=\s*'utf-8'", code), (
+        "Step 4c's WRITE half lost its encoding. The read half is pinned above; "
+        "dropping it here leaves the pair locale-dependent in the other direction, "
+        "while allow_unicode=True opts the dump into non-ASCII"
+    )
+    assert "0o7777" in code, (
+        "Step 4c's mode mask narrowed (0o7777 -> 0o777?), so setgid/sticky bits on "
+        "the index are dropped on every close — mkstemp creates 0600, so the chmod "
+        "is the only thing carrying the old mode across"
+    )
+
+
+def test_step4c_joins_the_mkstemp_roster_rather_than_standing_apart():
+    """`Q-414`'s actual subject: the roster of `tasks/index.yml` writers, and
+    which of them still derive a temp name from the target.
+
+    Asserted as a POPULATION rather than as one more site, so the next writer
+    added to the roster cannot quietly reintroduce the fixed name — which is how
+    Step 4c itself stayed the odd one out through two phases that converted its
+    neighbours.
+
+    **The population is the whole point, and this test's first version got it
+    wrong twice.** It listed four files, and a review lens found a fifth writer
+    of the same file still using the fixed name — so the roster is now split:
+    `CONVERTED` is asserted, `STILL_FIXED_NAME` is asserted to be *exactly* the
+    known remainder. A converted holdout must be MOVED between the two lists,
+    which makes closing `Q-442` a visible edit rather than a silent one.
+
+    **And membership is COUNTED, not tested with `in`** — a second lens found the
+    first version scoring zero unique kills. `claim_task.sh` holds TWO index
+    writers (`--commit-claim` and `--release`), so `"tempfile.mkstemp(" in body`
+    stays true when one of them is reverted to a fixed name: measured, the whole
+    module went 83 passed / 0 failed with `--release` reverted. A per-file count
+    catches that; a membership check cannot, in any file with two writers — and
+    both SKILL.md files are large enough that a mere *comment* mentioning
+    `tempfile.mkstemp(` would satisfy `in` as well."""
+    # (file, how many index writers it holds)
+    CONVERTED = {
+        # Step 4a (the index) + Step 7f (the task BODY, `Q-444`, Phase 271).
+        "claim-task Step 4a + Step 7f": (REPO_ROOT / "core/skills/claim-task/SKILL.md", 2),
+        "auto-build Step 5.1": (REPO_ROOT / "core/skills/auto-build/SKILL.md", 1),
+        "claim_task.sh --commit-claim + --release":
+            (REPO_ROOT / "core/companion/scripts/claim_task.sh", 2),
+        "review-close Step 4c": (REPO_ROOT / "core/skills/review-close/SKILL.md", 1),
+        "clear_user_action.py":
+            (REPO_ROOT / "core/companion/scripts/clear_user_action.py", 1),
+        # `Q-442`, Phase 271 — moved here out of `STILL_FIXED_NAME`.
+        "backfill_completed_dates.py":
+            (REPO_ROOT / "core/companion/scripts/backfill_completed_dates.py", 1),
+    }
+    # EMPTY BY DESIGN as of Phase 271, which closed `Q-442` (the last
+    # `tasks/index.yml` writer deriving its temp name from its target) and
+    # `Q-444` (the task-body writer). Kept rather than deleted, and asserted
+    # empty rather than merely iterated: an empty dict makes the loop below
+    # vacuous, so the emptiness itself has to be the assertion.
+    STILL_FIXED_NAME: dict = {}
+    # Deliberately INDEX-scoped, and that scoping is exactly why it needs the
+    # companion detector in `test_no_new_fixed_name_temp_writers`. This pattern
+    # sees ONE idiom on ONE variable-name family. The roster has now been wrong
+    # about its own population three times: a fifth index writer found by a lens,
+    # then `Q-444` on a different file, then Phase 271's sweep turning up seven
+    # concat-shape writers (`tmp = path + ".tmp"`) that this regex cannot match
+    # at all. The counts stay because they catch what a tree-wide detector
+    # cannot — a commented-out writer, and one of two writers in a file reverted
+    # — and the detector catches what the counts cannot: a writer in a file
+    # nobody remembered to list.
+    _FIXED_NAME = re.compile(
+        r"\b(tmp|tmp_path|_tmp)\s*=\s*(target|real|_real|p|index_path)\.with_suffix"
+    )
+    def _live(text: str) -> str:
+        """Comment lines dropped before counting.
+
+        A count over raw text is satisfied by a COMMENTED-OUT call, which is
+        exactly how a writer gets disabled: the mutation that first exposed this
+        inserted a fixed-name assignment and commented the `mkstemp` out, leaving
+        the raw count unchanged and the module green. Both `#`-comment languages
+        here (shell, and Python inside markdown fences) use the same marker.
+        """
+        return "\n".join(
+            "" if ln.lstrip().startswith("#") else ln for ln in text.splitlines()
+        )
+
+    for name, (path, expected) in CONVERTED.items():
+        body = _live(path.read_text(encoding="utf-8"))
+        # `mkstemp(` regardless of module spelling: `import tempfile as tf` is a
+        # legal rewrite and the literal count reddened on it. The receiver is not
+        # the property — the call is.
+        got = len(re.findall(r"\bmkstemp\s*\(", body))
+        assert got == expected, (
+            f"{name} has {got} mkstemp call(s), expected {expected} — a writer of "
+            f"tasks/index.yml was removed or added without updating this roster"
+        )
+        assert not _FIXED_NAME.search(body), (
+            f"{name} derives a temp name from its target again — the collision class "
+            f"`Q-382` closed for the claim paths and `Q-414` closed for the close path"
+        )
+    for name, path in STILL_FIXED_NAME.items():
+        body = _live(path.read_text(encoding="utf-8"))
+        assert _FIXED_NAME.search(body), (
+            f"{name} was converted to mkstemp but is still listed as a holdout — move "
+            f"it into CONVERTED and close its entry in the same commit"
+        )
+    assert not STILL_FIXED_NAME, (
+        "STILL_FIXED_NAME is non-empty again. Re-opening the holdout list is legal, "
+        "but it must be a deliberate edit here rather than a silent one — the loop "
+        "above is vacuous while the dict is empty, so this line is what asserts the "
+        "closure. Delete it in the same commit that adds the holdout."
     )
 
 
@@ -1661,3 +1800,702 @@ def test_the_dump_alias_patterns_are_not_silently_emptied():
             "routes. Either it is dead, or a route it exists for is missing "
             "here — and a route missing here is a route nothing tests."
         )
+
+
+# ---------------------------------------------------------------------------
+# `Q-447` / `Q-448`, Phase 271 — the class detector the roster above cannot be.
+# ---------------------------------------------------------------------------
+
+# The population is this module's EXISTING `_shipped_files()`, reused rather than
+# re-derived, for the reason `_shared/adversarial-review.md` rule 1 gives: "derive
+# the population from the source of truth, not from an index or summary of it".
+# The roster above is such a summary and has been wrong about itself three times.
+#
+# Reusing it is also the fix for a self-inflicted regression this pass caught: the
+# first draft defined its own `_shipped_files()` at module level, silently
+# SHADOWING the one above, and because that copy scanned only `core/` it dropped
+# `install.sh` from the population of two unrelated guards — which went red
+# immediately. A second copy of a population is a second thing to get wrong.
+# `.yml`/`.yaml`/`.fragment` carry shell (`checks.yml.fragment` run lines, the CI
+# template) and were never opened — 41 of 153 shipped files (round 2, `P34`).
+_SCANNED_SUFFIXES = (".py", ".sh", ".md", ".yml", ".yaml", ".fragment")
+# Shipped executables with NO suffix. `core/companion/git-hooks/pre-commit` and
+# its siblings are shell scripts that git requires to be extensionless, so a
+# suffix filter never opens them — an independent battery planted a fixed-name
+# temp in `pre-commit` and it survived every regex change, because the gap is in
+# the POPULATION, not the pattern. Matched by shebang rather than by a filename
+# list, so a new hook is covered on the day it is added.
+# Python too: an extensionless `#!/usr/bin/env python3` script under
+# `core/companion/scripts/` was a population gap an independent battery walked
+# through (Phase 272's round, `D09`).
+_SHEBANG = re.compile(rb"^#!.*\b(?:(?:ba)?sh|python3?)\b")
+_PY_SHEBANG = re.compile(rb"^#!.*\bpython3?\b")
+
+
+def _is_shipped_script_without_suffix(p) -> bool:
+    # `.example` counts: `core/companion/git-hooks/examples/*.example` are shipped
+    # hook bodies a consumer copies into place, and a suffix filter skipped all
+    # four. The test is the SHEBANG, so what matters is whether it is a script.
+    if p.suffix and p.suffix != ".example":
+        return False
+    try:
+        return bool(_SHEBANG.match(p.read_bytes()[:120]))
+    except OSError:
+        return False
+
+# Both shapes, because the filed one was never the population. `Q-442`/`Q-444`
+# were `<path>.with_suffix(<path>.suffix + ".tmp")`; Phase 271's sweep found
+# seven more writers spelled `<path> + ".tmp"`, which no `with_suffix` pattern
+# can see. A third shape (shell `"${VAR}.tmp"`) is matched too.
+# **Shape-GENERAL, after two rounds of the narrow version being wrong.**
+# The first cut matched one idiom (`x.with_suffix(x.suffix + ".tmp")`); a review
+# lens found two shipped sites it could not see. The second cut added a concat
+# branch anchored at `=`; an independent battery then walked FOUR more spellings
+# through it — `f"{real}.tmp"`, `str(real) + ".tmp"`, `"%s.tmp" % real`,
+# `"{}.tmp".format(real)`. Enumerating spellings is losing this game, so the
+# predicate no longer tries: it asks whether an ASSIGNMENT's right-hand side
+# carries a string literal ending in a temp extension, whatever builds it.
+#
+# Two exclusions, both narrow and both necessary:
+#   - a line containing `mkstemp` is the SANCTIONED shape, whose own
+#     `suffix=".tmp"` argument would otherwise match;
+#   - spaces are required around `=`, so a keyword argument (`suffix=".tmp"`) on
+#     a continuation line is not read as an assignment. This tree is PEP8 and the
+#     distinction holds; it is stated here so the next reader knows it is load
+#     bearing rather than incidental.
+# LHS may be dotted (`self.tmp`) or annotated (`tmp: str = …`) — both were
+# walked through the first version by a review battery. Spaces around `=` are
+# still required for the multi-space form, because that is what separates an
+# assignment from a keyword argument on a wrapped call; the no-space form is
+# accepted only when the line does NOT end in a comma, which is what a wrapped
+# kwarg does.
+_PY_ASSIGN = re.compile(
+    r"^\s*(?P<lhs>[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)"
+    r"(?:\s*:\s*[A-Za-z_][A-Za-z0-9_\[\], .]*)?"
+    r"(?:\s+=\s+|=(?!=))(?P<rhs>.*?)\s*$"
+)
+# Spaces REQUIRED. Used for markdown and shell, where the enclosing text is prose
+# or shell and paren depth cannot be tracked, so a wrapped `prefix=...` keyword
+# argument inside an embedded python heredoc would otherwise read as a writer.
+_PY_ASSIGN_SPACED = re.compile(
+    r"^\s*(?P<lhs>[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)"
+    r"(?:\s*:\s*[A-Za-z_][A-Za-z0-9_\[\], .]*)?"
+    r"\s+=\s+(?P<rhs>.*?)\s*$"
+)
+# `.part` and `~` join the family: both are ordinary "work in progress" suffixes
+# and both survived the first list.
+_TEMP_EXT = r"(?:tmp|temp|new|bak|part|partial|swp)"
+_TEMP_LITERAL = re.compile(r"""['"][^'"]*\.""" + _TEMP_EXT + r"""['"]|['"][^'"]*~['"]""", re.I)
+# Shell: no spaces around `=`, and a `local`/`export`/`declare`/`readonly`
+# prefix, all three of which the first version's start-anchor missed. Quoting is
+# optional — `TMP=$HOME.tmp` is legal shell and was a survivor.
+_SH_ASSIGN = re.compile(
+    r"""^\s*(?:(?:local|export|declare|readonly|typeset)(?:\s+-[A-Za-z]+)*\s+)?"""
+    r"""(?P<lhs>[A-Za-z_][A-Za-z0-9_]*)=["']?[^"'\s]*\.""" + _TEMP_EXT + r"""["']?\s*$""",
+    re.I,
+)
+# A temp literal handed straight to a writing call, no assignment (`P28`):
+# `open(path + ".tmp", "w")`. Reported under the call's name.
+_WRITE_CALL = re.compile(
+    r"""\b(?P<call>open|Path|os\.open|shutil\.copy\w*|shutil\.move)\(.*?['"][^'"]*\.""" + _TEMP_EXT + r"""['"]""",
+    re.I,
+)
+
+# DECLARED DEBT — real fixed-name temp writers not yet converted, with an
+# occurrence COUNT per (file, name). Counted rather than listed because
+# `run_checks/baseline.py` once held two writers sharing the name `tmp_path`, and
+# a set of pairs collapsed them, so reverting one would have passed unseen.
+#
+# EMPTY AS OF PHASE 272, which converted all nine — the seven Phase 271's sweep
+# found plus the two its round found — to the four-element mkstemp shape
+# (`Q-448`). Kept as a dict rather than deleted, and still asserted in both
+# directions below: a writer this predicate can see that is in neither list
+# reds as `new`, so the debt can only grow by a visible edit here, which is the
+# review. The shell site, `install_hooks.sh`, moved to `ASSESSED_NOT_THE_CLASS`
+# rather than leaving the population: its temp name now carries `$$`, the
+# device `batch_work.sh` uses on the same premise — `mktemp` creates 0600, and
+# `chmod +x` on that makes a 0711 hook (0700 under a 077 umask), where `cp` +
+# `chmod +x` makes 0755. The vacuity control for the predicate itself is
+# `test_the_fixed_name_detector_is_not_vacuous`, not this dict.
+KNOWN_FIXED_NAME_TEMPS: dict = {}
+
+# MATCHED BUT ASSESSED AS NOT THE CLASS. Listed rather than excluded by pattern,
+# so the judgement is visible and reviewable instead of hidden in a regex. Each
+# builds a temp name that carries the PROCESS ID — `"%s.%d.tmp" % (path,
+# os.getpid())`, or shell `"${TASKS_FILE%.md}.$$.md.tmp"` — which makes it unique
+# per process, the exact property the collision class is about. (Two THREADS in
+# one process would still collide; these scripts are single-threaded.)
+#
+# **The PID is VERIFIED, not assumed, and the first version of this list did
+# assume it.** Its comment claimed "if someone drops the PID, this list is wrong
+# and the suite says so" — false: the key was `(file, lhs)`, the PID was never
+# inspected, and a round dropped it at all three sites with the suite green. That
+# made the carve-out an ignore list for precisely the edit it advertised catching.
+# `_PID_TOKENS` below is what makes the claim true.
+_PID_TOKENS = ("getpid", "$$", "os.getpid()")
+ASSESSED_NOT_THE_CLASS = {
+    # `"%s.%d.tmp" % (path, os.getpid())`
+    ("core/companion/scripts/review_index.py", "tmp_path"): 1,
+    # `"${TASKS_FILE%.md}.$$.md.tmp"` — `$$` is the shell's PID.
+    ("core/companion/scripts/batch_work.sh", "REL_TMP"): 1,
+    ("core/companion/scripts/close_batch.sh", "TMP_FILE"): 2,  # :1439 and :1517
+    # `local tmp_file="${TASKS_FILE%.md}.$$.md.tmp"` — invisible to the first
+    # predicate because of the `local` prefix, so it was in neither list.
+    ("core/companion/scripts/batch_work.sh", "tmp_file"): 1,
+    # `TMP="${DST}.$$.tmp"` — Phase 272 (`Q-448`); previously declared debt.
+    # Not `mktemp`: it creates 0600, and `chmod +x` on that is 0711, not 0755.
+    ("core/companion/scripts/install_hooks.sh", "TMP"): 1,
+}
+
+
+_MINTING_CALL = re.compile(r"\b(?:mkstemp|mkdtemp|NamedTemporaryFile|TemporaryDirectory)\s*\(")
+_BARE_STRING = re.compile(r"""\s*['"][^'"]*['"]\s*""")
+
+
+_COMMENT_START = re.compile(r"(?:^|(?<=\s))#")
+
+
+def _strip_comment(ln: str) -> str:
+    """Drop a comment — a `#` at the start of the line or preceded by whitespace.
+
+    Comments are the documentation OF this class — every converted writer
+    explains in-comment what it replaced, and counting those would make the
+    detector fire on its own rationale. An independent battery reddened the
+    first version with `real = os.path.realpath(index_path)  # was: tmp_path =
+    index_path + ".tmp"` — a legal annotation, and exactly the kind a conversion
+    leaves behind. ONLY a whitespace-preceded `#`: the first rewrite split at
+    any `#`, so a markdown anchor `(#anchor)`, a `re.compile(r"(#…")` and a
+    shell `grep -qE '(…str\\()'` each lost their closer and folded the lines after
+    them (Phase 272's round 2). Still naive on quoting by design: a ` #` inside
+    a string literal truncates the line early, which can only cause a MISS,
+    never a false alarm — and since every physical line is also matched on its
+    own (below), a miss here cannot hide a writer, only a closer.
+    """
+    m = _COMMENT_START.search(ln)
+    return ln[:m.start()] if m else ln
+
+
+def _paren_delta(ln: str) -> int:
+    """Net `(` minus `)` OUTSIDE quoted spans, quoting tracked naively per line."""
+    depth, quote = 0, None
+    for ch in ln:
+        if quote:
+            if ch == quote:
+                quote = None
+        elif ch in ("'", '"'):
+            quote = ch
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+    return depth
+
+
+def _logical_lines(text: str):
+    """Yield (logical line, its stripped physical lines) with parens balanced ACROSS lines.
+
+    Why joining rather than skipping: the first version tracked paren depth per
+    physical line and SKIPPED every line inside parens, which is what separates
+    `suffix=".tmp"` (a keyword argument of the sanctioned `mkstemp` call) from
+    `tmp=".tmp"` (an assignment). Two defects, both found by Phase 272's round
+    1: the depth was counted BEFORE comments were stripped and never reset, so
+    a `(` in a comment, a docstring or a shell regex put the rest of the file
+    behind the skip — 4,881 of 51,110 scanned lines, five files blind to their
+    own tail; and a temp literal on a continuation line
+    (`tmp = (str(real)\n    + ".tmp")`) was inside parens and so never seen.
+    Joining answers both: the kwarg is folded into the call that contains
+    `mkstemp(` and excluded with it, and the continuation is folded into its
+    assignment and matched with it.
+
+    Round 2 then measured the fold itself blind INSIDE files — 650 of 20,199
+    sampled legal positions — wherever an unbalanced `(` survived the naive
+    rules above. So the fold is no longer allowed to HIDE anything: `_scan_text`
+    matches every physical line on its own as well as the logical line, and the
+    fold's only remaining power is to attach a wrapped kwarg to the minting call
+    that owns it. Two resets bound the fold regardless: an UNINDENTED physical
+    line that does not open with a closer starts a new logical line whatever
+    the depth, and a logical line is flushed after 40 physical lines.
+    """
+    buf, depth = [], 0
+    for raw in text.splitlines():
+        ln = _strip_comment(raw)
+        unindented = bool(raw) and not raw[0].isspace() and not raw.lstrip().startswith((")", "]", "}"))
+        if buf and (depth <= 0 or unindented or len(buf) >= 40):
+            yield " ".join(x.strip() for x in buf), list(buf)
+            buf, depth = [], 0
+        if not ln.strip():
+            continue
+        buf.append(ln)
+        depth += _paren_delta(ln)
+    if buf:
+        yield " ".join(x.strip() for x in buf), list(buf)
+
+
+def _match_writer(line: str, kind: str):
+    """The lhs of a fixed-name temp assignment on ONE line (logical or physical), or None.
+
+    `kind` is "py", "sh" or "md". Shell grammar FIRST for shell and markdown
+    (both carry shell), Python only for Python: `TMP="${DST}.tmp"` is a shell
+    assignment whose RHS is one quoted string, and the Python path's bare-string
+    exclusion swallowed it as a constant when it ran first — every PID-named
+    shell site went `gone` at once. A `.py` file never gets the shell regex,
+    because there `S=".tmp"` IS a constant. The Python regex is applied to all
+    three kinds — markdown and shell both embed Python heredocs, and a no-space
+    `tmp=str(p)+".tmp"` inside one was a survivor when markdown used the spaced
+    form only. A line ending in a comma is a wrapped keyword argument, never an
+    assignment.
+    """
+    if line.rstrip().endswith(","):
+        return None
+    if kind in ("sh", "md"):
+        sh = _SH_ASSIGN.match(line)
+        if sh:
+            return sh.group("lhs")
+    m = _PY_ASSIGN.match(line)
+    if not m:
+        w = _WRITE_CALL.search(line)
+        return (w.group("call") + "(") if w else None
+    # A bare string constant is not a temp PATH — `suffix = ".tmp"` passed to
+    # `mkstemp` is the sanctioned idiom and reddened this guard. The cost is
+    # real and recorded: a two-step construction (`S = ".tmp"` … `tmp = str(p)
+    # + S`) is invisible, because neither line carries both a path reference
+    # and the literal (`Q-451`).
+    if _BARE_STRING.fullmatch(m.group("rhs")):
+        return None
+    return m.group("lhs") if _TEMP_LITERAL.search(m.group("rhs")) else None
+
+
+_KWARG_SHAPE = re.compile(r"^\s*[A-Za-z_][A-Za-z0-9_]*=(?!=)")
+_MINTING_LOOKBACK = 6
+
+
+def _scan_text(text: str, kind: str) -> dict:
+    """{lhs: occurrences} of fixed-name temp writers in `text`.
+
+    Every physical line is matched on its own, and the logical line only for a
+    name no physical line produced (the continuation case) — so a fold that went
+    wrong (an unbalanced `(` in prose, a docstring, a regex) can hide nothing.
+    The sanctioned shape is excluded per PHYSICAL line: a keyword-argument-
+    shaped line (`name=…`, no spaces) within a few lines after a MINTING call is
+    that call's wrapped argument, and skipped. Not "a fold containing a minting
+    call is skipped" — round 2 of Phase 272 measured that rule hiding 16
+    legal positions, every one a line inside 40 of a `mkstemp(` where a
+    docstring's stray `(` had folded the two together. The minting call is
+    narrowed to a real call: `"mkstemp" in ln` let any line mentioning the word
+    opt out (`… if not use_mkstemp else …`), which a battery used as a bypass;
+    and every stdlib API that MINTS a unique name is sanctioned, not just
+    `mkstemp` — `NamedTemporaryFile(suffix=".tmp")` reddened this guard and is
+    the opposite of the defect. The stated cost: a no-space, keyword-shaped
+    line (`tmp=path+".tmp"`) folded together with an UNCLOSED minting call —
+    within six physical lines of it — is read as its argument; a spaced writer
+    never is, and neither is anything after the call has closed.
+    """
+    found: dict = {}
+    for logical, physicals in _logical_lines(text):
+        phys = []
+        for i, ph in enumerate(physicals):
+            if _MINTING_CALL.search(ph):
+                continue  # a line that mints on its own is the sanctioned shape
+            if _KWARG_SHAPE.match(ph) and any(
+                _MINTING_CALL.search(prev) for prev in physicals[max(0, i - _MINTING_LOOKBACK):i]
+            ):
+                continue
+            h = _match_writer(ph, kind)
+            if h:
+                phys.append(h)
+        for lhs in phys:
+            found[lhs] = found.get(lhs, 0) + 1
+        if not _MINTING_CALL.search(logical):
+            lhs = _match_writer(logical, kind)
+            if lhs and lhs not in phys:
+                found[lhs] = found.get(lhs, 0) + 1
+    return found
+
+
+def _kind_for(p) -> str:
+    """"py", "sh" or "md" — how the detector reads a file, or "" if it does not."""
+    if p.suffix == ".py":
+        return "py"
+    if p.suffix == ".md":
+        return "md"
+    if p.suffix in _SCANNED_SUFFIXES:
+        return "sh"
+    if _is_shipped_script_without_suffix(p):
+        try:
+            head = p.read_bytes()[:120]
+        except OSError:
+            return ""
+        return "py" if _PY_SHEBANG.match(head) else "sh"
+    return ""
+
+
+def _scanned_files():
+    """(path, kind) for every shipped file the detector reads."""
+    for p in sorted(_shipped_files()):
+        kind = _kind_for(p)
+        if kind:
+            yield p, kind
+
+
+def _scan_fixed_name_temps():
+    """{(repo-relative path, lhs name): occurrences} for every derived-temp site."""
+    found: dict = {}
+    for p, kind in _scanned_files():
+        try:
+            text = p.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        for lhs, n in _scan_text(text, kind).items():
+            found[(str(p.relative_to(REPO_ROOT)), lhs)] = n
+    return found
+
+
+def test_no_new_fixed_name_temp_writers():
+    """A temp path derived from its target is the collision class `Q-382`,
+    `Q-414`, `Q-442` and `Q-444` closed writer by writer.
+
+    **What this asserts, stated at the strength it was MEASURED at rather than
+    the strength it was first written at.** It pins the population *its predicate
+    can see*, exactly and in both directions — not "the population", which is a
+    claim this guard has now failed four times and which two independent review
+    batteries falsified again after each rewrite. Known reach limits, measured and
+    filed as `Q-451`: a shell `local`/`export` prefix, a temp suffix outside
+    `.tmp/.temp/.new/.bak`, an attribute target (`self.tmp = …`), an annotated
+    assignment (`tmp: str = …`), a shell assignment with no spaces, and any line
+    that happens to contain the token `mkstemp`.
+
+    Why an exact set rather than a ceiling, which is the part that does hold:
+    `Q-409` records that a count "could be widened to 400/400/300 with a green
+    suite", so a count is the wrong primitive. A set cannot be widened without
+    naming what was added, and naming it is the review.
+    """
+    found = _scan_fixed_name_temps()
+    # The two lists together are the whole matched population. Anything outside
+    # both is new — either a real writer, or a shape that needs assessing and
+    # then recording in one of them. Neither list is an ignore list: both are
+    # asserted exactly, in both directions, below.
+    accounted = dict(KNOWN_FIXED_NAME_TEMPS)
+    for k, n in ASSESSED_NOT_THE_CLASS.items():
+        accounted[k] = accounted.get(k, 0) + n
+    new = {k: n for k, n in found.items() if accounted.get(k, 0) < n}
+    assert not new, (
+        "new fixed-name temp writer(s) — a temp path derived from its target "
+        "collides when two writers run at once (`Q-382`/`Q-414`/`Q-442`/`Q-444`). "
+        "Use the shipped shape: realpath, carry the mode across (mkstemp creates "
+        "0600), `tempfile.mkstemp(dir=<target's own dir>)` so os.replace cannot "
+        "raise EXDEV, and a cleanup arm — a fixed-name leak self-heals on the next "
+        "run, a mkstemp leak does not. Sites: " + ", ".join(sorted(map(str, new)))
+    )
+    gone = {k: n for k, n in accounted.items() if found.get(k, 0) < n}
+    # Every ASSESSED site must still carry a PID token on the matched line. This
+    # is the assertion the carve-out's own comment used to only claim.
+    unpidded = []
+    for (rel, lhs) in ASSESSED_NOT_THE_CLASS:
+        body = (REPO_ROOT / rel).read_text(encoding="utf-8")
+        for ln, _n in _logical_lines(body):
+            if _MINTING_CALL.search(ln):
+                continue
+            m = _PY_ASSIGN.match(ln)
+            hit = (m and m.group("lhs") == lhs and _TEMP_LITERAL.search(m.group("rhs")))
+            sh = _SH_ASSIGN.match(ln)
+            hit = hit or (sh and sh.group("lhs") == lhs)
+            if hit and not any(tok in ln for tok in _PID_TOKENS):
+                unpidded.append(f"{rel}: {ln.strip()[:90]}")
+    assert not unpidded, (
+        "a site in ASSESSED_NOT_THE_CLASS no longer carries a PID in its temp name, so "
+        "the judgement that put it there — unique per process, therefore not a collision "
+        "hazard — no longer holds. Move it to KNOWN_FIXED_NAME_TEMPS or restore the PID:\n  "
+        + "\n  ".join(unpidded)
+    )
+    assert not gone, (
+        "declared-debt entr(ies) no longer present — converted, moved or renamed. "
+        "Remove them from KNOWN_FIXED_NAME_TEMPS in the same commit, so the list "
+        "keeps naming exactly the debt that is really there: " +
+        ", ".join(sorted(map(str, gone)))
+    )
+
+
+def test_the_fixed_name_detector_is_not_vacuous():
+    """Non-vacuity in the direction that actually fails.
+
+    An exact-population assertion passes trivially if the predicate matches
+    nothing — every known entry would simply be reported as `gone`, which is why
+    that direction is asserted too. This pins the SHAPES, and it is deliberately
+    a list of spellings rather than one idiom: the narrow version of this
+    predicate reported a clean, exact population three separate times and was
+    wrong each time (two sites a review lens found, then four spellings an
+    independent battery walked through).
+    """
+    must_match = [
+        ('tmp_path = index_path.with_suffix(index_path.suffix + ".tmp")', "tmp_path"),
+        ('    tmp = body.with_suffix(body.suffix + ".tmp")', "tmp"),
+        ('    tmp_a = path_a + ".tmp"', "tmp_a"),
+        ('tmp_path = path + ".new"', "tmp_path"),
+        # The shape a review lens found: the concat is not adjacent to `=`.
+        ('    tmp = d / (dst.name + ".tmp")', "tmp"),
+        # The four an independent battery walked through the previous version.
+        ('    tmp = f"{real}.tmp"', "tmp"),
+        ('    tmp = str(real) + ".tmp"', "tmp"),
+        ('    tmp = "%s.tmp" % real', "tmp"),
+        ('    tmp = "{}.tmp".format(real)', "tmp"),
+        ('    tmp = p.with_name(p.name + ".tmp")', "tmp"),
+        # Round 2 of Phase 272: spellings the docstring claimed and nothing pinned.
+        ('    self.tmp = path + ".tmp"', "self.tmp"),
+        ('    tmp: str = path + ".tmp"', "tmp"),
+        ("    tmp = path + '.tmp'", "tmp"),
+        ('    tmp = path + ".TMP"', "tmp"),
+        ('    tmp = path + ".temp"', "tmp"),
+        ('    tmp = path + ".swp"', "tmp"),
+        ('    tmp = path + ".bak"', "tmp"),
+        ('    tmp = path + "~"', "tmp"),
+        ('    tmp = os.path.join(d, name + ".tmp")', "tmp"),
+        # The WORD `mkstemp` on a line is not the sanctioned call (`M10`): `\\b`
+        # does not separate `use_mkstemp`, so that spelling never tested it —
+        # `mkstemp is None` does.
+        ('    tmp = path + ".tmp" if mkstemp is None else mk()', "tmp"),
+    ]
+    for line, lhs in must_match:
+        m = _PY_ASSIGN.match(line)
+        assert m and _TEMP_LITERAL.search(m.group("rhs")), f"detector missed: {line!r}"
+        assert m.group("lhs") == lhs, f"wrong lhs for {line!r}: {m.group('lhs')!r}"
+
+    # Shell branch, including the unquoted form, `declare` with flags and
+    # `export` (round 2: `M16`, `P20`).
+    for line in ('  TMP="${DST}.tmp"', "  TMP=$DST.tmp", '  declare -r TMP="$DST.tmp"',
+                 '    export TMP="${DST}.tmp"', '  local -r TMP="${DST}.tmp"'):
+        sh = _SH_ASSIGN.match(line)
+        assert sh and sh.group("lhs") == "TMP", f"detector missed the shell shape {line!r}"
+    # The literal handed to a writing call with no assignment (`P28`).
+    assert _scan_text('open(path + ".tmp", "w").write(data)\n', "py") == {"open(": 1}
+    assert _scan_text('with open(path + ".tmp", "w", encoding="utf-8") as f:\n', "py") == {"open(": 1}
+    # The line-level shapes that must NOT fire, through the real scanner:
+    # a Python constant is not a shell assignment (`M09`); a wrapped kwarg with
+    # its trailing comma (`M17`); the single-target sanctioned one-liner (`M26`);
+    # the word `mkstemp` without a call does not exempt a line (`M10`, above).
+    assert _scan_text('S=".tmp"\n', "py") == {}
+    assert _scan_text('    prefix=os.path.basename(real) + ".", suffix=".tmp",\n', "py") == {}
+    assert _scan_text('tmp = NamedTemporaryFile(suffix=".tmp")\n', "py") == {}
+    assert _scan_text('    tmp = path + ".tmp" if mkstemp is None else mk()\n', "py") == {"tmp": 1}
+    # …and a nested call inside the write call's argument does not end the search
+    assert _scan_text('open(os.path.join(d, name) + ".tmp", "w").close()\n', "py") == {"open(": 1}
+
+    must_not_match = [
+        # A keyword argument on a continuation line of the SANCTIONED call. The
+        # `mkstemp` line-exclusion covers the call itself; the spaces-around-`=`
+        # requirement covers its wrapped arguments.
+        '        dir=os.path.dirname(real), prefix=os.path.basename(real) + ".", suffix=".tmp"',
+        # `.tmpl` is a template: the closing quote must follow the extension.
+        'label = name + ".tmpl"',
+        # No string literal with a temp extension at all.
+        'out = path + ".yml"',
+    ]
+    for line in must_not_match:
+        # `_PY_ASSIGN_SPACED` is the form used for markdown and shell, where a
+        # wrapped keyword argument of the sanctioned `mkstemp` call is the shape
+        # that must not fire. In real `.py` files the same line is excluded by the
+        # paren-depth check in `_scan_fixed_name_temps`, which this unit test
+        # cannot see — so it exercises the predicate that stands alone.
+        m = _PY_ASSIGN_SPACED.match(line)
+        assert not (m and _TEMP_LITERAL.search(m.group("rhs"))), (
+            f"detector false-positives on {line!r}"
+        )
+    # And the paren-depth exclusion is asserted where it actually lives — on
+    # the real scanner, not a replica of it: a wrapped kwarg inside a call must
+    # not be reported as a writer, and (Phase 272's round, `D16`) a temp literal
+    # on a CONTINUATION line of an assignment must be.
+    assert _scan_text(
+        "import os, tempfile\n"
+        "def w(real):\n"
+        "    fd, tmp = tempfile.mkstemp(\n"
+        "        dir=os.path.dirname(real),\n"
+        '        prefix=os.path.basename(real) + ".", suffix=".tmp"\n'
+        "    )\n"
+        "    return tmp\n", "py") == {}, "a wrapped mkstemp kwarg was reported as a writer"
+    assert _scan_text('tmp = (str(real)\n    + ".tmp")\n', "py") == {"tmp": 1}, (
+        "a temp literal on a continuation line was not seen")
+    # Markdown heredocs get the no-space rule too (`D10`).
+    assert _scan_text('tmp=str(p)+".tmp"\n', "md") == {"tmp": 1}
+    # A `.partial` joins the family; `.tmpl` still does not.
+    assert _scan_text('out = path + ".partial"\n', "py") == {"out": 1}
+    assert _scan_text('label = name + ".tmpl"\n', "py") == {}
+    # Extensionless Python scripts are population, not just shell ones (`D09`).
+    assert _SHEBANG.match(b"#!/usr/bin/env python3\n") and _PY_SHEBANG.match(b"#!/usr/bin/env python3\n")
+    assert _SHEBANG.match(b"#!/usr/bin/env bash\n") and not _PY_SHEBANG.match(b"#!/usr/bin/env bash\n")
+
+    # And the population it reports must be non-empty.
+    assert _scan_fixed_name_temps(), "detector scanned the tree and matched nothing"
+
+
+def _legal_positions(text: str, kind: str):
+    """(line index, indent) pairs where a statement may legally be inserted."""
+    lines = text.splitlines()
+    if kind == "py":
+        import ast
+        try:
+            tree = ast.parse(text)
+        except SyntaxError:
+            return []
+        seen = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.stmt):
+                ln = node.lineno - 1
+                seen.add((ln, len(lines[ln]) - len(lines[ln].lstrip())))
+        return sorted(seen)
+    out = []
+    for i, ln in enumerate(lines):
+        if ln.rstrip().endswith("\\"):
+            continue
+        nxt = lines[i + 1] if i + 1 < len(lines) else ""
+        out.append((i + 1, len(nxt) - len(nxt.lstrip()) if nxt.strip() else 0))
+    return out
+
+
+def test_the_detector_reaches_every_position_it_is_given():
+    """The detector sees a writer wherever one can legally be written, by execution.
+
+    Round 1 of Phase 272 measured the first version blind to 4,881 of 51,110
+    scanned lines — every line after a stray `(` — and the guard written for
+    it probed the TAIL of each file only. Round 2 then measured the rewrite
+    blind at 650 of 20,199 sampled INTERIOR positions, where the tail probe
+    could not look. So this probes both: the tail, and a deterministic sample
+    of legal interior positions per file (statement starts for Python, line
+    boundaries for shell and markdown), each with the canonical writer
+    indented like its neighbour. The probe NAME is random per run (`M28`: a
+    scanner that returns the probe's fixed name for every input satisfied the
+    first guard). Windowed scans first, a full-file scan to confirm any miss,
+    so a fold state at the window's edge cannot fake one.
+    """
+    import random
+    import secrets
+    import string
+    rnd = random.Random(272)
+    # No fixed prefix: a scanner that recognised `zz_probe_…` satisfied the
+    # first draft (`M28`). Reach is what this guard measures; TRUTH is the
+    # exact-population guard's job, which a scanner faking a hit cannot pass.
+    name = "".join(secrets.choice(string.ascii_lowercase) for _ in range(10))
+    probe = {"py": f'{name} = path + ".tmp"', "md": f'{name} = path + ".tmp"',
+             "sh": f'{name.upper()}="${{DST}}.tmp"'}
+    lhs_of = {"py": name, "md": name, "sh": name.upper()}
+    blind, scanned, probed = [], 0, 0
+    for p, kind in _scanned_files():
+        try:
+            text = p.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        scanned += 1
+        lines = text.splitlines()
+        positions = _legal_positions(text, kind)
+        if len(positions) > 12:
+            positions = rnd.sample(positions, 12)
+        positions.append((len(lines), 0))  # the tail, always
+        for ln, indent in positions:
+            prev = lines[ln - 1] if 0 < ln <= len(lines) else ""
+            if _MINTING_CALL.search(prev):
+                continue  # inside the sanctioned call's own arguments is not a legal position
+            new = lines[:ln] + [" " * indent + probe[kind]] + lines[ln:]
+            probed += 1
+            lo, hi = max(0, ln - 120), min(len(new), ln + 120)
+            if _scan_text("\n".join(new[lo:hi]) + "\n", kind).get(lhs_of[kind], 0) == 1:
+                continue
+            if _scan_text("\n".join(new) + "\n", kind).get(lhs_of[kind], 0) != 1:
+                blind.append(f"{p.relative_to(REPO_ROOT)}:{ln + 1}")
+    assert scanned > 120, f"the scanned population collapsed to {scanned} files"
+    assert probed > 1500, f"only {probed} positions probed"
+    assert not blind, (
+        "the detector cannot see a writer at these positions:\n  " + "\n  ".join(blind[:40]))
+
+
+def test_the_scanned_population_holds_what_the_rounds_planted_in():
+    """Population, asserted as membership rather than as a count that could be
+    widened or narrowed unseen: the four shipped hook examples (`M22` dropped
+    `.example` and the reach guard could not tell), an extensionless Python
+    script is read as Python (`M06`), and the shell-bearing YAML fragments are
+    read at all (`P34`)."""
+    files = {str(p.relative_to(REPO_ROOT)): kind for p, kind in _scanned_files()}
+    examples = [f for f in files if f.startswith("core/companion/git-hooks/examples/")]
+    assert len(examples) >= 4, examples
+    assert all(files[f] == "sh" for f in examples)
+    assert files["core/companion/git-hooks/pre-commit"] == "sh"
+    assert files["install.sh"] == "sh"
+    fragments = [f for f in files if f.endswith("checks.yml.fragment")]
+    assert len(fragments) >= 4, fragments
+    import tempfile as _tf
+    with _tf.TemporaryDirectory() as d:
+        py = Path(d) / "tool"
+        py.write_bytes(b"#!/usr/bin/env python3\nimport os\n")
+        assert _kind_for(py) == "py"
+        sh = Path(d) / "hook"
+        sh.write_bytes(b"#!/usr/bin/env bash\nset -e\n")
+        assert _kind_for(sh) == "sh"
+        none = Path(d) / "data"
+        none.write_bytes(b"plain\n")
+        assert _kind_for(none) == ""
+
+
+def test_the_fold_is_bounded_and_cannot_hide_a_line():
+    """The mechanisms round 2 found unpinned, pinned on synthetic input.
+
+    The 40-line cap and the unindented reset bound a fold (`M02`/`M31`); a
+    closer at column 0 does NOT reset (`M32`); parens are counted AFTER the
+    comment is stripped (`M03`); a stray `(` in a docstring, a markdown anchor
+    `(#x)`, a regex `r"(#…"` and a shell `'(…\\('` do not fold the writer
+    after them out of sight; and a kwarg-shaped line right after a minting call
+    is the call's argument while a spaced writer there is still a writer.
+    """
+    # cap: 45 INDENTED lines inside an unclosed paren still flush (the unindented
+    # reset cannot be what flushes them), and the writer after is seen
+    body = "    x = (\n" + "".join("        1,\n" for _ in range(45)) + '    tmp = p + ".tmp"\n'
+    assert len(list(_logical_lines(body))) >= 2, "the 40-line cap did not flush"
+    assert _scan_text(body, "py") == {"tmp": 1}
+    # a column-0 closer does not reset
+    assert len(list(_logical_lines("x = (\n    1\n)\n"))) == 1
+    # comment stripped BEFORE the paren count — an indented pair, so the
+    # unindented reset cannot be what separates them
+    assert len(list(_logical_lines('    x = 1  # (\n    tmp = p + ".tmp"\n'))) == 2
+    # the four stray-opener shapes, each followed by an indented writer
+    for opener in ['    """A docstring (with a stray opener\n',
+                   'See the [phases](#2-lifecycle-phases) section.\n',
+                   '    pat = re.compile(r"(#\\d+")\n',
+                   "    grep -qE '(foo\\()' file\n",
+                   '    print("(")\n']:
+        text = opener + "    y = 1\n" + '    tmp = p + ".tmp"\n'
+        assert _scan_text(text, "sh" if "grep" in opener else "py").get("tmp") == 1, opener
+    # kwarg after a minting call: argument; spaced writer after it: writer
+    text = ('fd, t = tempfile.mkstemp(\n    dir=d,\n    suffix=".tmp"\n)\n'
+            'tmp = p + ".tmp"\n')
+    assert _scan_text(text, "py") == {"tmp": 1}
+    # a no-space writer after a COMPLETE minting call is still a writer — the
+    # lookback runs inside one fold, so only a kwarg-shaped line folded together
+    # with an UNCLOSED minting call reads as its argument (the stated cost)
+    assert _scan_text('fd, t = tempfile.mkstemp(dir=d)\ntmp=p+".tmp"\n', "py") == {"tmp": 1}
+    assert _scan_text('fd, t = tempfile.mkstemp(\n    dir=d,\n    tmp=p+".tmp"\n)\n', "py") == {}
+
+
+def test_the_two_population_lists_are_disjoint_and_both_used():
+    """Neither list may quietly absorb the other's entries.
+
+    `ASSESSED_NOT_THE_CLASS` is a judgement ("PID-qualified, so not a collision
+    hazard"); `KNOWN_FIXED_NAME_TEMPS` is debt. Letting a real writer drift into
+    the assessed list is how an exact assertion becomes an ignore list, so the
+    two are checked disjoint and the assessed list is checked non-empty. The
+    debt list is ALLOWED to be empty — it has been since Phase 272 converted the
+    last nine — because its exactness is carried by the `new` direction of
+    `test_no_new_fixed_name_temp_writers` (a visible writer in neither list
+    reds) and the predicate's own vacuity is asserted separately.
+    """
+    overlap = set(KNOWN_FIXED_NAME_TEMPS) & set(ASSESSED_NOT_THE_CLASS)
+    assert not overlap, f"a site is in both population lists: {overlap}"
+    assert ASSESSED_NOT_THE_CLASS, "the assessed list is empty; the carve-out is unused"
+    # And the lists mean what they say in BOTH directions: an assessed site
+    # must carry a PID (checked in `test_no_new_fixed_name_temp_writers`), and
+    # a DEBT site must not — round 2 moved `install_hooks.sh` into the debt
+    # list with its `$$` intact and nothing objected (`M30`).
+    pidded_debt = []
+    for (rel, lhs) in KNOWN_FIXED_NAME_TEMPS:
+        body = (REPO_ROOT / rel).read_text(encoding="utf-8")
+        for ln, _ in _logical_lines(body):
+            if _match_writer(ln, _kind_for(REPO_ROOT / rel)) == lhs and any(t in ln for t in _PID_TOKENS):
+                pidded_debt.append(f"{rel}: {ln.strip()[:80]}")
+    assert not pidded_debt, (
+        "a KNOWN_FIXED_NAME_TEMPS entry carries a PID in its temp name — that is the "
+        "assessed shape, not debt; move it to ASSESSED_NOT_THE_CLASS:\n  " + "\n  ".join(pidded_debt))

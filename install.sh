@@ -2832,7 +2832,7 @@ install_permissions() {
       return 0
     fi
     # Fail CLOSED: if the filter can't be built, do NOT fall back to the full
-    # master — that would over-grant the 80-rule allow-list AND re-add the hooks
+    # master — that would over-grant the 78-rule allow-list AND re-add the hooks
     # block referencing scripts loop mode never installs (broken at runtime).
     # Skip settings.json instead (the consumer sees more permission prompts, but
     # no over-grant and no dangling hooks); the loud error keeps it visible.

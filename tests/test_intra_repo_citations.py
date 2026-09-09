@@ -179,13 +179,13 @@ CITATION_ANCHORS = {
     # Phase 256. `Q-375`'s design rests on this note: widening the batch-header
     # counter without its `H3_HEADER_RE` sibling leaves the counter unreachable
     # while a batch is open, and the round is archived with an OPEN batch.
-    ("core/companion/scripts/review_index.py", "archive_review_tasks.py:521"):
+    ("core/companion/scripts/review_index.py", "archive_review_tasks.py:595"):
         "Widening ANY_BATCH_HEADER_RE alone did NOT fix this",
-    ("core/skills/auto-fix/SKILL.md", "archive_review_tasks.py:101"):
+    ("core/skills/auto-fix/SKILL.md", "archive_review_tasks.py:175"):
         "Merged|Complete",
-    ("core/skills/auto-judge/SKILL.md", "archive_review_tasks.py:101"):
+    ("core/skills/auto-judge/SKILL.md", "archive_review_tasks.py:175"):
         "Merged|Complete",
-    ("core/skills/triage/SKILL.md", "archive_review_tasks.py:101"):
+    ("core/skills/triage/SKILL.md", "archive_review_tasks.py:175"):
         "Merged|Complete",
     # RETIRED AT PHASE 264, and the retirement is the fix rather than a loss.
     # Phase 209 had already moved this anchor once (`_parse_batches_fallback`,

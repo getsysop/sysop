@@ -24,7 +24,9 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import re
+import stat
 import subprocess
 from pathlib import Path
 from unittest import mock
@@ -787,6 +789,159 @@ def test_task_shape_is_checked_before_sanitizing_not_after(monkeypatch, tmp_path
 # prompt emits it yet, so Step 8's un-phased read is CORRECT today — which is
 # why this slice makes the read tolerant rather than repointing it. Repointing
 # now would break the working path for a shape nothing produces.
+
+# ── Q-448 (Phase 272): `_write_json`'s mkstemp shape, asserted as PROPERTIES ──
+# Presence of `mkstemp(` is not the property (Phase 271's round bypassed every
+# presence check). Each element is driven: where the temp is minted and what it
+# is called, what mode the result carries, what a symlinked target gets, and
+# what a failure — OSError or not — leaves behind and reports.
+
+
+def test_write_json_mints_its_temp_beside_the_envelope_not_at_a_fixed_name(
+        tmp_path, monkeypatch):
+    seen = {}
+    real_replace = os.replace
+
+    def spy(src, dst):
+        seen["src"], seen["dst"] = str(src), str(dst)
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(pse.os, "replace", spy)
+    target = tmp_path / "envelopes" / "TASK-1.json"
+    assert pse._write_json(str(target), {"a": 1}) is True
+    assert json.loads(target.read_text()) == {"a": 1}
+    assert os.path.dirname(seen["src"]) == str(target.parent), (
+        "the temp was minted outside the mailbox — os.replace can raise EXDEV")
+    assert seen["src"] != str(target) + ".tmp", "the fixed name is back"
+    name = os.path.basename(seen["src"])
+    assert name.startswith("TASK-1.json.") and name.endswith(".tmp"), name
+    # never `.json`: readers open `<TASK_ID>.json` by exact name (the claim
+    # skills) or glob `*.json` (`/review-close` Step 2e's stray count), and a
+    # `.json`-suffixed temp would be a torn read for the second kind
+    assert not name.endswith(".json")
+
+
+def test_write_json_carries_an_existing_envelopes_mode(tmp_path):
+    target = tmp_path / "envelopes" / "TASK-1.json"
+    target.parent.mkdir()
+    target.write_text("{}\n")
+    os.chmod(target, 0o640)
+    assert pse._write_json(str(target), {"b": 2}) is True
+    assert stat.S_IMODE(target.stat().st_mode) == 0o640
+    assert json.loads(target.read_text()) == {"b": 2}
+
+
+def test_a_fresh_envelope_gets_the_mode_open_would_have_given(tmp_path):
+    """No target to carry a mode from: the result must be what the fixed-name
+    `open(tmp, "w")` produced — 0666 under the umask — not a hard-coded 0644
+    (which WIDENS for a 077 umask) and not mkstemp's 0600."""
+    for umask, want in ((0o022, 0o644), (0o077, 0o600)):
+        target = tmp_path / f"u{umask:o}" / "TASK-1.json"
+        old = os.umask(umask)
+        try:
+            assert pse._write_json(str(target), {"a": 1}) is True
+        finally:
+            os.umask(old)
+        assert stat.S_IMODE(target.stat().st_mode) == want, oct(umask)
+
+
+def test_write_json_writes_through_a_symlink(tmp_path):
+    real = tmp_path / "real.json"
+    real.write_text("{}\n")
+    d = tmp_path / "envelopes"
+    d.mkdir()
+    link = d / "TASK-1.json"
+    link.symlink_to(real)
+    assert pse._write_json(str(link), {"c": 3}) is True
+    assert link.is_symlink(), "the symlink itself was replaced"
+    assert json.loads(real.read_text()) == {"c": 3}
+
+
+def test_write_json_reports_false_and_leaves_no_temp_when_the_replace_fails(
+        tmp_path, monkeypatch, capsys):
+    def boom(src, dst):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(pse.os, "replace", boom)
+    target = tmp_path / "envelopes" / "TASK-1.json"
+    assert pse._write_json(str(target), {"a": 1}) is False
+    assert "failed to write" in capsys.readouterr().err
+    assert list(target.parent.iterdir()) == [], "the cleanup arm did not run"
+
+
+def test_write_json_cleans_up_when_the_payload_is_unserializable(tmp_path):
+    """`json.dump` raises `TypeError` — not an `OSError` — after it has already
+    streamed a partial document into the temp. Under the fixed name that leak
+    was overwritten by the next hook run; a minted name never is, so the arm
+    must reach past `OSError`, and must still re-raise: the hook's failure is
+    the hook's failure."""
+    target = tmp_path / "envelopes" / "TASK-1.json"
+    with pytest.raises(TypeError):
+        pse._write_json(str(target), {"a": object()})
+    assert not target.exists()
+    assert list(target.parent.iterdir()) == [], "the partial temp survived"
+
+
+def test_write_json_leaves_the_process_umask_as_it_found_it(tmp_path):
+    """`_umask_mode` reads the umask by setting it; a round dropped the restore
+    and the hook process ran on at umask 0 (`P09`).
+
+    Against a KNOWN value this test sets, not "unchanged from whatever it was":
+    the first draft compared before and after, and with the restore dropped an
+    EARLIER test's fresh write had already zeroed the umask, so 0 == 0 passed —
+    the mutation survived the whole module and died only when run alone, which
+    read as a caching artefact until the order was the explanation."""
+    original = os.umask(0o027)
+    try:
+        target = tmp_path / "envelopes" / "TASK-1.json"
+        assert pse._write_json(str(target), {"a": 1}) is True
+        now = os.umask(0)
+        os.umask(now)
+        assert now == 0o027, f"umask left at {now:o}, expected 27"
+    finally:
+        os.umask(original)
+
+
+def test_write_json_mints_beside_the_real_file_not_beside_the_link(tmp_path, monkeypatch):
+    """Link and target in DIFFERENT directories, so `dir=dirname(path)` and
+    `dir=dirname(real)` are distinguishable (`P11`)."""
+    sub = tmp_path / "elsewhere"
+    sub.mkdir()
+    real = sub / "real.json"
+    real.write_text("{}\n")
+    d = tmp_path / "envelopes"
+    d.mkdir()
+    link = d / "TASK-1.json"
+    link.symlink_to(real)
+    seen = {}
+    real_replace = os.replace
+
+    def spy(src, dst):
+        seen["src"] = str(src)
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(pse.os, "replace", spy)
+    assert pse._write_json(str(link), {"c": 3}) is True
+    assert os.path.dirname(seen["src"]) == str(sub), seen
+    assert link.is_symlink() and json.loads(real.read_text()) == {"c": 3}
+
+
+def test_an_unwritable_mailbox_is_reported_not_a_traceback(tmp_path, capsys):
+    """`mkstemp` is the likeliest place an OSError arises, and it sits in its
+    own arm — the hole Phase 271's round found in the sibling conversion."""
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        pytest.skip("root ignores directory modes")
+    d = tmp_path / "envelopes"
+    d.mkdir()
+    os.chmod(d, 0o555)
+    try:
+        ok = pse._write_json(str(d / "TASK-1.json"), {"a": 1})
+    finally:
+        os.chmod(d, 0o755)
+    assert ok is False
+    assert "failed to write" in capsys.readouterr().err
+    assert list(d.iterdir()) == []
+
 
 import re as _re
 from pathlib import Path as _Path

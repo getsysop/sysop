@@ -21,10 +21,14 @@ tree rather than asserting on source, because every claim above is a property of
 what the gate *does*. `tests/test_run_checks_baseline.py` owns baseline I/O and
 the internal-tracker-#363 contract; this module owns the identity key.
 """
+import os
 import re
+import stat
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 import run_checks.baseline as baseline
 import run_checks_impl as rci
@@ -1460,30 +1464,133 @@ def test_a_single_pipe_in_a_path_is_named_not_read_as_migrated(tmp_path):
     assert p.read_text() == "grant-x|migrations/we|ird.sql:2\n"
 
 
-def test_the_migration_survives_a_leftover_tmp(tmp_path):
-    """A killed earlier run leaves a `.tmp` behind. A leftover SYMLINK was
-    followed — writing the consumer's baseline to an arbitrary path and making
-    the baseline itself a symlink — and a leftover directory raised a bare
-    traceback."""
+def test_a_leftover_of_the_old_fixed_name_cannot_interfere(tmp_path):
+    """The migration once wrote to `<path>.tmp`, a name a killed earlier run
+    could leave behind — a leftover SYMLINK there was followed, writing the
+    consumer's baseline to an arbitrary path and making the baseline itself a
+    symlink, and a leftover DIRECTORY raised a bare traceback. The first answer
+    was a pre-clear block that unlinked the one and refused on the other;
+    Phase 272 removed the fixed name itself (`Q-448`), so neither object is on
+    the write path at all. Asserted by execution against both plants: the
+    migration succeeds, writes nothing outside the baseline, leaves the plants
+    exactly where they were, and leaves no minted temp behind."""
     p = tmp_path / "b.txt"
     p.write_text("grant-x|m.sql:2\n")
     outside = tmp_path / "elsewhere.txt"
     outside.write_text("do not touch\n")
-    (tmp_path / "b.txt.tmp").symlink_to(outside)
-    baseline.migrate_baseline(
+    stale = tmp_path / "b.txt.tmp"
+    stale.symlink_to(outside)
+    rows, refusal = baseline.migrate_baseline(
         str(p), [("grant-x", "m.sql:2", "m", "aa")], str(tmp_path))
+    assert refusal is None, refusal
     assert not p.is_symlink(), "the baseline became a symlink"
     assert outside.read_text() == "do not touch\n", "wrote outside the baseline"
     assert "grant-x|m.sql:2|aa" in p.read_text()
+    assert stale.is_symlink(), "the migration touched a file it no longer owns"
 
     p.write_text("grant-x|m.sql:2\n")
-    # The migration already cleared the leftover symlink above.
-    (tmp_path / "b.txt.tmp").unlink(missing_ok=True)
-    (tmp_path / "b.txt.tmp").mkdir()
+    stale.unlink()
+    stale.mkdir()
     rows, refusal = baseline.migrate_baseline(
         str(p), [("grant-x", "m.sql:2", "m", "aa")], str(tmp_path))
-    assert refusal and "is a directory" in refusal, refusal
+    assert refusal is None, refusal
+    assert "grant-x|m.sql:2|aa" in p.read_text()
+    assert stale.is_dir(), "the migration removed a directory it does not own"
+    assert sorted(x.name for x in tmp_path.iterdir()) == [
+        "b.txt", "b.txt.tmp", "elsewhere.txt"], "a minted temp survived the migration"
+
+
+# ── Q-448 (Phase 272): the migration's mkstemp shape, asserted as PROPERTIES ──
+# Presence of `mkstemp(` is not the property (Phase 271's round bypassed every
+# presence check). Each element is driven: where the temp is minted, what mode
+# the result carries, what a failure leaves behind, and how a refusal reads.
+
+
+def test_the_migration_mints_its_temp_beside_the_baseline_not_in_tempdir(
+        tmp_path, monkeypatch):
+    seen = {}
+    real_replace = os.replace
+
+    def spy(src, dst):
+        seen["src"], seen["dst"] = str(src), str(dst)
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(baseline.os, "replace", spy)
+    p = tmp_path / "b.txt"
+    p.write_text("grant-x|m.sql:2\n")
+    rows, refusal = baseline.migrate_baseline(
+        str(p), [("grant-x", "m.sql:2", "m", "aa")], str(tmp_path))
+    assert refusal is None, refusal
+    assert os.path.dirname(seen["src"]) == str(tmp_path), (
+        "the temp was minted outside the baseline's directory — os.replace can "
+        "raise EXDEV across filesystems")
+    assert seen["src"] != str(p) + ".tmp", "the fixed name is back"
+    name = os.path.basename(seen["src"])
+    assert name.startswith("b.txt.") and name.endswith(".tmp"), name
+
+
+def test_the_migration_does_not_narrow_a_0644_baseline_to_0600(tmp_path):
+    """`mkstemp` creates 0600. The existing preservation test pins 0444; this
+    pins the ORDINARY case, where a plain conversion narrows silently."""
+    p = tmp_path / "b.txt"
+    p.write_text("grant-x|m.sql:2\n")
+    os.chmod(p, 0o644)
+    rows, refusal = baseline.migrate_baseline(
+        str(p), [("grant-x", "m.sql:2", "m", "aa")], str(tmp_path))
+    assert refusal is None, refusal
+    assert stat.S_IMODE(p.stat().st_mode) == 0o644
+    assert "grant-x|m.sql:2|aa" in p.read_text()
+
+
+def test_a_failed_replace_refuses_and_leaves_no_minted_temp(tmp_path, monkeypatch):
+    """Under the fixed name a leaked temp was overwritten by the next run; a
+    minted name never is, so the cleanup arm is load-bearing now."""
+    def boom(src, dst):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(baseline.os, "replace", boom)
+    p = tmp_path / "b.txt"
+    p.write_text("grant-x|m.sql:2\n")
+    rows, refusal = baseline.migrate_baseline(
+        str(p), [("grant-x", "m.sql:2", "m", "aa")], str(tmp_path))
+    assert refusal and refusal.startswith("REFUSED: cannot write"), refusal
+    assert p.read_text() == "grant-x|m.sql:2\n", "the baseline was touched"
+    assert sorted(x.name for x in tmp_path.iterdir()) == ["b.txt"], (
+        "the cleanup arm did not remove the minted temp")
+
+
+def test_a_non_oserror_failure_still_cleans_up_and_still_raises(tmp_path, monkeypatch):
+    def boom(*_a, **_k):
+        raise RuntimeError("not an OSError")
+
+    monkeypatch.setattr(baseline.os, "chmod", boom)
+    p = tmp_path / "b.txt"
+    p.write_text("grant-x|m.sql:2\n")
+    with pytest.raises(RuntimeError):
+        baseline.migrate_baseline(
+            str(p), [("grant-x", "m.sql:2", "m", "aa")], str(tmp_path))
     assert p.read_text() == "grant-x|m.sql:2\n"
+    assert sorted(x.name for x in tmp_path.iterdir()) == ["b.txt"]
+
+
+def test_an_unwritable_directory_is_a_refusal_not_a_traceback(tmp_path):
+    """`mkstemp` is the likeliest place an OSError arises, and it sits in its
+    own arm — the hole Phase 271's round found in the sibling conversion."""
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        pytest.skip("root ignores directory modes")
+    d = tmp_path / "ro"
+    d.mkdir()
+    p = d / "b.txt"
+    p.write_text("grant-x|m.sql:2\n")
+    os.chmod(d, 0o555)
+    try:
+        rows, refusal = baseline.migrate_baseline(
+            str(p), [("grant-x", "m.sql:2", "m", "aa")], str(tmp_path))
+    finally:
+        os.chmod(d, 0o755)
+    assert refusal and refusal.startswith("REFUSED: cannot write"), refusal
+    assert p.read_text() == "grant-x|m.sql:2\n"
+    assert sorted(x.name for x in d.iterdir()) == ["b.txt"]
 
 
 def test_the_migration_reports_the_reasons_it_records(tmp_path, monkeypatch, capsys):

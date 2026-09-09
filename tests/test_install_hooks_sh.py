@@ -18,6 +18,7 @@ takes no path argument), so `_run` sets `cwd=repo_root` — unlike the install.s
 tests, which pass the target as an argument.
 """
 import os
+import stat
 import subprocess
 from pathlib import Path
 
@@ -58,11 +59,13 @@ def _seed_hooks(root, contents):
     return src
 
 
-def _run(cwd, *args):
+def _run(cwd, *args, env_extra=None, umask=None):
+    kw = {} if umask is None else {"umask": umask}
     return subprocess.run(
         ["bash", str(SCRIPT), *args],
         cwd=str(cwd), capture_output=True, text=True,
-        env={**os.environ, **_GIT_ISOLATION},
+        env={**os.environ, **_GIT_ISOLATION, **(env_extra or {})},
+        **kw,
     )
 
 
@@ -111,11 +114,48 @@ class TestInstall:
         assert not (repo / ".git/hooks/pre-push").exists()
 
     def test_no_tmp_file_left_behind(self, tmp_path):
-        # Atomic install writes .tmp then mv's it into place — nothing lingers.
+        # Atomic install writes beside the hook then mv's it into place —
+        # nothing lingers. Any `*.tmp`, not one fixed name: since Phase 272
+        # (`Q-448`) the name carries the PID, and a fixed-name check would pass
+        # vacuously over a leak.
         repo = _init_repo(tmp_path / "repo")
         _seed_hooks(repo, {"pre-commit": "#!/bin/sh\nexit 0\n"})
         _run(repo)
-        assert not (repo / ".git/hooks/pre-commit.tmp").exists()
+        assert not list((repo / ".git/hooks").glob("*.tmp"))
+
+    # ── Q-448 (Phase 272): the PID-named temp, asserted as PROPERTIES ──────
+
+    def test_installed_hook_is_0755_not_mktemps_0711(self, tmp_path):
+        """Why the name is `$$` and not `mktemp`: `mktemp` creates 0600, and
+        `chmod +x` on that yields 0711 under umask 022 (0700 under 077) — a hook
+        only its installer can read either way. Measured, not assumed: the first
+        draft of this test's name said 0700 and lens 2 of the round ran it."""
+        repo = _init_repo(tmp_path / "repo")
+        _seed_hooks(repo, {"pre-commit": "#!/bin/sh\nexit 0\n"})
+        r = _run(repo, umask=0o022)
+        assert r.returncode == 0, r.stderr
+        dst = repo / ".git" / "hooks" / "pre-commit"
+        assert stat.S_IMODE(dst.stat().st_mode) == 0o755
+
+    def test_a_failed_copy_leaves_no_temp_beside_the_hook(self, tmp_path):
+        """A `cp` shim on PATH copies and then exits 1: `set -e` aborts the
+        script, and the EXIT trap must remove the in-flight copy. Under the
+        fixed name a leak was overwritten by the next run; a PID-named one is
+        not."""
+        repo = _init_repo(tmp_path / "repo")
+        _seed_hooks(repo, {"pre-commit": "#!/bin/sh\nexit 0\n"})
+        shim = tmp_path / "bin"
+        shim.mkdir()
+        fake_cp = shim / "cp"
+        fake_cp.write_text('#!/bin/sh\n/bin/cp "$@"\nexit 1\n')
+        fake_cp.chmod(0o755)
+        r = _run(repo, env_extra={"PATH": f"{shim}{os.pathsep}{os.environ['PATH']}"})
+        assert r.returncode != 0, "the failed copy was not fatal"
+        hooks = repo / ".git" / "hooks"
+        assert not list(hooks.glob("*.tmp")), (
+            "the EXIT trap did not remove the in-flight copy: "
+            + str(sorted(x.name for x in hooks.iterdir())))
+        assert not (hooks / "pre-commit").exists(), "a failed copy was installed"
 
 
 class TestAllowlist:

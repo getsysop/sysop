@@ -94,6 +94,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from typing import Any
 
 
@@ -338,20 +339,74 @@ def _sanitize_for_filename(value: str, fallback: str) -> str:
     return cleaned or fallback
 
 
+def _unlink_quietly(path: str) -> None:
+    """Best-effort removal of a temp file that never made it to `os.replace`.
+
+    Deliberately silent: it runs on an error path that is already reporting a
+    cause, and a failure to clean up must not replace that cause with its own.
+    """
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+
+
+def _umask_mode() -> int:
+    """What `open(path, "w")` would have created: 0666 masked by the umask."""
+    umask = os.umask(0)
+    os.umask(umask)
+    return 0o666 & ~umask
+
+
 def _write_json(path: str, payload: dict[str, Any]) -> bool:
+    # `mkstemp` rather than a fixed `<path>.tmp` (`Q-448`): the temp name was
+    # derived from its target, which is the class `Q-382`/`Q-414`/`Q-442`/`Q-444`
+    # closed writer by writer — here the mailbox is keyed by claim id and phase
+    # with no run component, so every hook run for one claim derived the same
+    # name. The exposure was assessed low (one writer per claim id at a time)
+    # and the conversion finishes the class rather than stopping a bleed. `dir=`
+    # the target's directory keeps `os.replace` same-filesystem; the name ends
+    # in `.tmp`, never `.json`, so no reader of `<TASK_ID>.json` can open a
+    # half-written envelope; the mode is carried from an existing envelope, else
+    # it is what `open()` would have given (mkstemp creates 0600); and the
+    # cleanup arm reaches past `OSError`, because a uniquely named leak is never
+    # overwritten by a later run the way the fixed name was. `mkstemp` sits in
+    # its own arm so a read-only runtime dir still reaches the sanitized
+    # `failed to write` line rather than a raw traceback — the hole Phase 271's
+    # round found in the sibling conversion.
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        tmp_path = path + ".tmp"
-        with open(tmp_path, "w", encoding="utf-8") as f:
+        real = os.path.realpath(path)
+        try:
+            mode = os.stat(real).st_mode & 0o7777
+        except OSError:
+            mode = _umask_mode()
+        fd, tmp_path = tempfile.mkstemp(
+            dir=os.path.dirname(real), prefix=os.path.basename(real) + ".", suffix=".tmp"
+        )
+    except OSError as e:
+        print(f"parse_subagent_envelope: failed to write {path}: {e}", file=sys.stderr)
+        return False
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2, sort_keys=True)
             f.write("\n")
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp_path, path)
+        os.chmod(tmp_path, mode)
+        os.replace(tmp_path, real)
         return True
     except OSError as e:
+        _unlink_quietly(tmp_path)
         print(f"parse_subagent_envelope: failed to write {path}: {e}", file=sys.stderr)
         return False
+    except BaseException:
+        # Not swallowed — re-raised after cleanup, so `KeyboardInterrupt` still
+        # interrupts and a `TypeError` from an unserializable payload is still
+        # the hook's failure. Present only so a non-`OSError` failure does not
+        # leak a uniquely-named temp that no later run will overwrite.
+        _unlink_quietly(tmp_path)
+        raise
 
 
 def main() -> int:

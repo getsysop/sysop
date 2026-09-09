@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import os
 import re
+import stat
 import sys
 from pathlib import Path
 
@@ -657,9 +658,240 @@ def test_atomic_write_pair_cleans_up_tmp_on_replace_failure(tmp_path, monkeypatc
     # Neither replace succeeded, so both originals are untouched...
     assert a.read_text(encoding="utf-8") == "old-a"
     assert b.read_text(encoding="utf-8") == "old-b"
-    # ...and both staged tmp files were cleaned up, not orphaned.
-    assert not (tmp_path / "a.txt.tmp").exists()
-    assert not (tmp_path / "b.txt.tmp").exists()
+    # ...and both minted temps were cleaned up, not orphaned. Asserted over the
+    # whole directory, not two fixed names: since Phase 272 (`Q-448`) the names
+    # are minted, and a fixed-name check would pass vacuously over a leak.
+    assert sorted(x.name for x in tmp_path.iterdir()) == ["a.txt", "b.txt"]
+
+
+# === Q-448 (Phase 272): the mkstemp shape, asserted as PROPERTIES ==========
+# Presence of `mkstemp(` is not the property (Phase 271's round bypassed every
+# presence check). Each element is driven: where the temp is minted and what it
+# is called, what mode the result carries, what a symlinked target gets, and
+# what a failure — including a non-OSError one — leaves behind.
+
+
+def test_atomic_write_text_mints_its_temp_beside_the_target_in_the_md_tmp_class(
+        tmp_path, monkeypatch):
+    """`dir=` the target's own directory (a temp in the system temp dir makes
+    `os.replace` raise EXDEV), never the fixed name, and inside the
+    `review_tasks*.md.tmp` orphan shape that `batch_work.sh` and `close_batch.sh`
+    keep for the same reason."""
+    target = tmp_path / "review_tasks.md"
+    target.write_text("old", encoding="utf-8")
+    seen = {}
+    real_replace = os.replace
+
+    def spy(src, dst):
+        seen["src"], seen["dst"] = str(src), str(dst)
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(art.os, "replace", spy)
+    art._atomic_write_text(str(target), "new")
+    assert target.read_text(encoding="utf-8") == "new"
+    assert os.path.dirname(seen["src"]) == str(tmp_path)
+    assert seen["src"] != str(target) + ".tmp", "the fixed name is back"
+    name = os.path.basename(seen["src"])
+    assert name.startswith("review_tasks.") and name.endswith(".md.tmp"), name
+    assert name != "review_tasks.md.tmp"
+
+
+def test_atomic_write_text_carries_the_targets_mode_not_mkstemps_0600(tmp_path):
+    for mode in (0o644, 0o600, 0o444):
+        target = tmp_path / f"t{mode:o}.md"
+        target.write_text("old", encoding="utf-8")
+        os.chmod(target, mode)
+        art._atomic_write_text(str(target), "new")
+        assert stat.S_IMODE(target.stat().st_mode) == mode, oct(mode)
+        assert target.read_text(encoding="utf-8") == "new"
+
+
+def test_a_fresh_target_gets_the_mode_open_would_have_given(tmp_path):
+    """No target to carry a mode from: the result must be what the fixed-name
+    `open(tmp, "w")` produced — 0666 under the umask — not a hard-coded 0644
+    (which WIDENS for a 077 umask) and not mkstemp's 0600."""
+    for umask, want in ((0o022, 0o644), (0o077, 0o600)):
+        target = tmp_path / f"fresh-{umask:o}.md"
+        old = os.umask(umask)
+        try:
+            art._atomic_write_text(str(target), "new")
+        finally:
+            os.umask(old)
+        assert stat.S_IMODE(target.stat().st_mode) == want, oct(umask)
+
+
+def test_atomic_write_text_writes_through_a_symlink(tmp_path):
+    real = tmp_path / "real.md"
+    real.write_text("old", encoding="utf-8")
+    link = tmp_path / "review_tasks.md"
+    link.symlink_to(real)
+    art._atomic_write_text(str(link), "new")
+    assert link.is_symlink(), "the symlink itself was replaced"
+    assert real.read_text(encoding="utf-8") == "new"
+
+
+def test_atomic_write_text_cleans_up_on_a_non_oserror_failure(tmp_path, monkeypatch):
+    """Under the fixed name a leaked temp was overwritten by the next run; a
+    minted name never is, so the arm must reach past `OSError` — and must still
+    re-raise, so the failure is not swallowed."""
+    target = tmp_path / "review_tasks.md"
+    target.write_text("old", encoding="utf-8")
+
+    def boom(*_a, **_k):
+        raise RuntimeError("not an OSError")
+
+    monkeypatch.setattr(art, "_write_durably", boom)
+    with pytest.raises(RuntimeError):
+        art._atomic_write_text(str(target), "new")
+    assert target.read_text(encoding="utf-8") == "old"
+    assert sorted(x.name for x in tmp_path.iterdir()) == ["review_tasks.md"]
+
+
+def test_atomic_write_pair_cleans_up_the_first_temp_when_the_second_mint_fails(
+        tmp_path, monkeypatch):
+    """The pair mints two temps in sequence. A failure between them must clean
+    up the one that exists and not trip over the one that does not."""
+    a = tmp_path / "a.txt"
+    b = tmp_path / "b.txt"
+    a.write_text("old-a", encoding="utf-8")
+    b.write_text("old-b", encoding="utf-8")
+    real_mint = art.tempfile.mkstemp
+    calls = []
+
+    def mint(*a, **k):
+        calls.append(k.get("dir"))
+        if len(calls) == 2:
+            raise OSError("second mint refused")
+        return real_mint(*a, **k)
+
+    # The stdlib call, not the private helper: a round's control renamed
+    # `_mkstemp_beside` and this test reddened on the rename alone (`C14`).
+    monkeypatch.setattr(art.tempfile, "mkstemp", mint)
+    with pytest.raises(OSError):
+        art._atomic_write_pair(str(a), "new-a", str(b), "new-b")
+    assert a.read_text(encoding="utf-8") == "old-a"
+    assert b.read_text(encoding="utf-8") == "old-b"
+    assert sorted(x.name for x in tmp_path.iterdir()) == ["a.txt", "b.txt"]
+
+
+def test_atomic_write_pair_writes_through_symlinks(tmp_path):
+    """The single-file writer's symlink test did not cover the pair, and a
+    round dropped both `realpath` calls there unseen (`A12`/`A20`)."""
+    real_a = tmp_path / "real_a.md"
+    real_b = tmp_path / "real_b.md"
+    real_a.write_text("old-a", encoding="utf-8")
+    real_b.write_text("old-b", encoding="utf-8")
+    a = tmp_path / "review_tasks.md"
+    b = tmp_path / "review_tasks_archive.md"
+    a.symlink_to(real_a)
+    b.symlink_to(real_b)
+    art._atomic_write_pair(str(a), "new-a", str(b), "new-b")
+    assert a.is_symlink() and b.is_symlink(), "a link itself was replaced"
+    assert real_a.read_text(encoding="utf-8") == "new-a"
+    assert real_b.read_text(encoding="utf-8") == "new-b"
+
+
+def test_atomic_write_pair_cleans_up_on_a_non_oserror_failure(tmp_path, monkeypatch):
+    """The pair's arm narrowed to `OSError` leaked a minted temp (`A14`)."""
+    a = tmp_path / "a.md"
+    b = tmp_path / "b.md"
+    a.write_text("old-a", encoding="utf-8")
+    b.write_text("old-b", encoding="utf-8")
+
+    def boom(*_a, **_k):
+        raise RuntimeError("not an OSError")
+
+    monkeypatch.setattr(art.os, "chmod", boom)
+    with pytest.raises(RuntimeError):
+        art._atomic_write_pair(str(a), "new-a", str(b), "new-b")
+    assert a.read_text(encoding="utf-8") == "old-a"
+    assert b.read_text(encoding="utf-8") == "old-b"
+    assert sorted(x.name for x in tmp_path.iterdir()) == ["a.md", "b.md"]
+
+
+def test_atomic_write_pair_cleans_up_when_the_first_write_fails(tmp_path, monkeypatch):
+    """`tmps` must record a temp the moment it is minted, not after it is
+    written: an `ENOSPC` during the FIRST write leaked it when the append
+    came later (`A15`)."""
+    a = tmp_path / "a.md"
+    b = tmp_path / "b.md"
+    a.write_text("old-a", encoding="utf-8")
+    b.write_text("old-b", encoding="utf-8")
+    real_write = art._write_durably
+    calls = []
+
+    def write(fd, content):
+        calls.append(content)
+        if len(calls) == 1:
+            os.close(fd)
+            raise OSError("disk full")
+        return real_write(fd, content)
+
+    monkeypatch.setattr(art, "_write_durably", write)
+    with pytest.raises(OSError):
+        art._atomic_write_pair(str(a), "new-a", str(b), "new-b")
+    assert sorted(x.name for x in tmp_path.iterdir()) == ["a.md", "b.md"]
+
+
+def test_the_writers_still_fsync_before_replacing(tmp_path, monkeypatch):
+    """The fsync moved into `_write_durably` and nothing pinned it there (`A17`).
+    Durability is the reason the tmp + replace shape exists at all."""
+    synced = []
+    real_fsync = os.fsync
+
+    def spy(fd):
+        synced.append(fd)
+        return real_fsync(fd)
+
+    monkeypatch.setattr(art.os, "fsync", spy)
+    target = tmp_path / "review_tasks.md"
+    target.write_text("old", encoding="utf-8")
+    art._atomic_write_text(str(target), "new")
+    assert len(synced) == 1, "the single writer did not fsync its temp"
+    a = tmp_path / "a.md"
+    b = tmp_path / "b.md"
+    a.write_text("old-a", encoding="utf-8")
+    b.write_text("old-b", encoding="utf-8")
+    art._atomic_write_pair(str(a), "new-a", str(b), "new-b")
+    assert len(synced) == 3, "the pair did not fsync both temps"
+
+
+def test_the_temp_is_minted_beside_the_real_file_not_beside_the_link(tmp_path, monkeypatch):
+    """Every earlier symlink test put link and target in ONE directory, so
+    `dir=dirname(path)` and `dir=dirname(real)` were indistinguishable and a
+    round swapped them unseen (`A19`). Same-filesystem is a property of the
+    REAL file's directory."""
+    sub = tmp_path / "elsewhere"
+    sub.mkdir()
+    real = sub / "real.md"
+    real.write_text("old", encoding="utf-8")
+    link = tmp_path / "review_tasks.md"
+    link.symlink_to(real)
+    seen = {}
+    real_replace = os.replace
+
+    def spy(src, dst):
+        seen["src"] = str(src)
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(art.os, "replace", spy)
+    art._atomic_write_text(str(link), "new")
+    assert os.path.dirname(seen["src"]) == str(sub), seen
+    assert real.read_text(encoding="utf-8") == "new" and link.is_symlink()
+
+
+def test_atomic_write_pair_carries_each_targets_own_mode(tmp_path):
+    a = tmp_path / "a.md"
+    b = tmp_path / "b.md"
+    a.write_text("old-a", encoding="utf-8")
+    b.write_text("old-b", encoding="utf-8")
+    os.chmod(a, 0o600)
+    os.chmod(b, 0o644)
+    art._atomic_write_pair(str(a), "new-a", str(b), "new-b")
+    assert stat.S_IMODE(a.stat().st_mode) == 0o600
+    assert stat.S_IMODE(b.stat().st_mode) == 0o644
+    assert a.read_text(encoding="utf-8") == "new-a"
+    assert b.read_text(encoding="utf-8") == "new-b"
 
 
 # === repo-root path resolution (Phase 108) =================================
@@ -772,9 +1004,8 @@ def test_main_archives_round_via_atomic_pair(tmp_path, monkeypatch):
     assert "TASK-201" in archive_after
     assert "Batch 21" in archive_after
     assert "**202**" in archive_after
-    # No leftover tmp files from the atomic pair.
-    assert not (tmp_path / "review_tasks.md.tmp").exists()
-    assert not (tmp_path / "review_tasks_archive.md.tmp").exists()
+    # No leftover temp from the atomic pair — any name, since Phase 272 mints them.
+    assert list(tmp_path.glob("*.tmp")) == []
 
 
 def test_main_rebuild_failure_is_non_fatal(tmp_path, monkeypatch, capsys):

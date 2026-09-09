@@ -67,6 +67,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 try:
@@ -155,6 +156,18 @@ except ImportError:
 # bound into this module's namespace, so `backfill_completed_dates._sanitize_log`
 # (the test patch path) keeps resolving.
 from _log import _sanitize_log  # noqa: E402
+
+
+def _unlink_quietly(path: str) -> None:
+    """Best-effort removal of a temp file that never made it to `os.replace`.
+
+    Deliberately silent: it runs on an error path that is already reporting a
+    cause, and a failure to clean up must not replace that cause with its own.
+    """
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
 
 
 def _default_index() -> Path:
@@ -292,19 +305,62 @@ def main(argv: list[str] | None = None) -> int:
         print("--dry-run: not writing.")
         return 0
 
-    # Atomic rewrite via `<path>.tmp` + `os.replace` so a crash mid-write
-    # cannot leave truncated YAML — `tasks/index.yml` is load-bearing for
+    # Atomic rewrite via `mkstemp` + `os.replace` so a crash mid-write cannot
+    # leave truncated YAML — `tasks/index.yml` is load-bearing for
     # `/next-task`, `/claim-task`, `/review-close`. See CLAUDE.md
     # § Data integrity and the sibling `_atomic_write_text` in
-    # archive_review_tasks.py. Belt-and-braces durability: `os.fsync` on the
-    # file fd flushes the data; an `os.fsync` on the parent dir fd flushes the
-    # rename itself so the post-crash directory entry points at the new inode
-    # rather than the old one. One-time migration script (rerunnable on miss),
-    # so the cost of getting this wrong is low — but the pattern is the
-    # documented atomic-rewrite shape.
-    tmp_path = index_path.with_suffix(index_path.suffix + ".tmp")
+    # archive_review_tasks.py.
+    #
+    # `mkstemp` rather than a fixed `<path>.tmp` (`Q-442`): this was the last
+    # writer of `tasks/index.yml` deriving its temp name from its target, so two
+    # concurrent writers could collide on one temp path. It is operator-invoked
+    # rather than on a claim or close path, which lowered the exposure without
+    # changing the class. The four elements below are the shape the converted
+    # siblings already carry (`/claim-task` Step 4a, `/auto-build` Step 5.1,
+    # `claim_task.sh`, `/review-close` Step 4c, `clear_user_action.py`). THREE of
+    # them answer a defect the conversion would otherwise INTRODUCE; the first
+    # fixes one that was already here:
+    #   - `realpath` so a symlinked index is written THROUGH rather than having
+    #     the link itself replaced (Phase 237's round). PRE-EXISTING — the
+    #     fixed-name form had the same exposure, so this is a fix the conversion
+    #     carries along rather than one it owes.
+    #   - the mode carried across, because `mkstemp` creates 0600 and a plain
+    #     conversion silently narrows a 0644 index — which git does not track,
+    #     so nothing downstream would have surfaced it (Phase 237's round).
+    #   - `dir=` the target's own directory, which is what keeps the replace
+    #     SAME-FILESYSTEM; a tmp in the system temp dir makes `os.replace` raise
+    #     `EXDEV`. That was the stated reason the fixed-name form was pinned in
+    #     place, and `dir=` answers it directly.
+    #   - a non-`OSError` cleanup arm. Under the fixed name a leaked tmp
+    #     self-healed, because the next run wrote the same path; under `mkstemp`
+    #     every failed run would leak a NEW uniquely-named file into `tasks/`.
+    #     `except OSError` alone does not reach a `yaml` representer error.
+    #
+    # Belt-and-braces durability, kept from the pre-conversion form: `os.fsync`
+    # on the file fd flushes the data; an `os.fsync` on the parent dir fd
+    # flushes the rename itself so the post-crash directory entry points at the
+    # new inode rather than the old one.
+    real = os.path.realpath(index_path)
     try:
-        with open(tmp_path, "w", encoding="utf-8", errors="replace") as f:
+        mode = os.stat(real).st_mode & 0o7777
+    except OSError:
+        mode = 0o644
+    # `mkstemp` INSIDE the try, and its own arm, because it is the most likely
+    # place an OSError arises on this path — a read-only `tasks/`, a full disk, a
+    # bad permission. The first cut left it outside, which made the sanitized
+    # `ERROR: cannot write …` + `return 1` contract below UNREACHABLE for exactly
+    # that case: measured against a 0555 `tasks/`, the pre-fix script printed the
+    # sanitized line and this one printed a raw `PermissionError` traceback. A
+    # separate arm because there is no `tmp_path` to clean up yet.
+    try:
+        fd, tmp_path = tempfile.mkstemp(
+            dir=os.path.dirname(real), prefix=os.path.basename(real) + ".", suffix=".tmp"
+        )
+    except OSError as e:
+        print(f"ERROR: cannot write {index_path.name}: {_sanitize_log(e)}", file=sys.stderr)
+        return 1
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", errors="replace") as f:
             yaml.safe_dump(
                 data,
                 f,
@@ -315,21 +371,23 @@ def main(argv: list[str] | None = None) -> int:
             )
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp_path, index_path)
-        dir_fd = os.open(str(index_path.parent), os.O_RDONLY)
+        os.chmod(tmp_path, mode)
+        os.replace(tmp_path, real)
+        dir_fd = os.open(os.path.dirname(real), os.O_RDONLY)
         try:
             os.fsync(dir_fd)
         finally:
             os.close(dir_fd)
     except OSError as e:
-        # Best-effort cleanup of the tmp file if it survived.
-        try:
-            if tmp_path.exists():
-                tmp_path.unlink()
-        except OSError:
-            pass
+        _unlink_quietly(tmp_path)
         print(f"ERROR: cannot write {index_path.name}: {_sanitize_log(e)}", file=sys.stderr)
         return 1
+    except BaseException:
+        # Not swallowed — re-raised after cleanup, so `KeyboardInterrupt` still
+        # interrupts. Present only so a non-`OSError` failure does not leak a
+        # uniquely-named tmp that no later run will overwrite.
+        _unlink_quietly(tmp_path)
+        raise
     print(f"Wrote {index_path.name}.")
     return 0
 

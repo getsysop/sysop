@@ -2,6 +2,37 @@
 import hashlib
 import os
 import re
+import tempfile
+
+
+def _unlink_quietly(path):
+    """Best-effort removal of a temp file that never made it to `os.replace`.
+
+    Deliberately silent: it runs on an error path that is already reporting a
+    cause, and a failure to clean up must not replace that cause with its own.
+    """
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+
+
+def _mode_for(real):
+    """The mode a rewritten baseline should carry.
+
+    The target's own mode when it exists — `mkstemp` creates 0600, so a plain
+    conversion silently narrows a 0644 baseline to 0600, which git does not
+    record; and a consumer who locked the file read-only keeps it locked, which
+    `write_baseline` used to undo on every `--update-baseline`. For a target
+    that does not exist yet, what `open(path, "w")` would have created: 0666
+    masked by the process umask, which is exactly what the fixed-name form gave.
+    """
+    try:
+        return os.stat(real).st_mode & 0o7777
+    except OSError:
+        umask = os.umask(0)
+        os.umask(umask)
+        return 0o666 & ~umask
 
 
 def load_baseline(path):
@@ -260,7 +291,6 @@ def write_baseline(path, all_findings, blocking_ids, non_executed_ids=()):
     properties make this function unusable for converting an existing baseline.
     """
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp_path = path + ".tmp"
     # Deduplicated, because the key is what `load_baseline` returns and it returns a
     # SET: two findings sharing a key are one suppression however many lines get
     # written. The catch-all ids used to make that ordinary rather than exotic —
@@ -271,8 +301,9 @@ def write_baseline(path, all_findings, blocking_ids, non_executed_ids=()):
     # file honest and makes the returned tally mean "suppressions recorded" rather
     # than "findings seen", which is what the caller prints it as.
     # Entries owned by a check that did not run this pass. Read BEFORE the
-    # truncating open below — `tmp_path` is a sibling, but a caller that ever
-    # passes `path` as its own tmp would otherwise read what it just emptied.
+    # rewrite below is minted, so the preserved set comes from the file as it
+    # was; the order is pinned by a test, because moving the read inside the
+    # write block was a silent survivor once.
     preserved = set()
     if non_executed_ids:
         non_executed = set(non_executed_ids)
@@ -282,38 +313,57 @@ def write_baseline(path, all_findings, blocking_ids, non_executed_ids=()):
                 preserved.add(key)
 
     seen = set()
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        f.write(
-            "# Pre-scan baseline — known findings accepted as tech debt or "
-            "triaged as non-issues.\n"
-            "# Format: check_id|path:line|identity  (identity absent when a check has none)\n"
-            "# Print the exact key for a live finding: "
-            "bash sysop/scripts/run_checks.sh --print-keys\n"
-            "# Regenerate: bash sysop/scripts/run_checks.sh --mode both --update-baseline\n"
-            "# A `blocking: true` check's new findings — ones NOT in this file "
-            "— fail CI.\n"
-            "# A `blocking: false` check's entries record a triage verdict: "
-            "they tag the\n"
-            "# finding `[baseline]` instead of hiding it, and gate nothing "
-            "either way.\n"
-            "# (coverage-* findings are never baselined — see write_baseline.)\n"
-            "\n"
-        )
-        for check_id, file_line, _msg, identity in sorted(all_findings):
-            if _is_coverage(check_id):
-                continue
-            key = finding_key(check_id, file_line, identity)
-            if key in seen:
-                continue
-            seen.add(key)
-            f.write(f"{key}\n")
-        # Carried-forward entries last, sorted, so a diff of two regenerations
-        # is stable. A key already emitted above is not re-written: a check can
-        # be non-executed in one stage and produce findings in another.
-        for key in sorted(preserved - seen):
-            seen.add(key)
-            f.write(f"{key}\n")
-    os.replace(tmp_path, path)
+    # `mkstemp` rather than a fixed `<path>.tmp` (`Q-448`): a temp name derived
+    # from its target collides when two writers run at once. `dir=` the target's
+    # own directory keeps `os.replace` same-filesystem; the write goes to
+    # `realpath` so a symlinked baseline is written THROUGH rather than replaced;
+    # the mode is carried across (`_mode_for`); and the cleanup arm reaches past
+    # `OSError`, because a fixed-name leak self-healed on the next run and a
+    # uniquely named one never will. It re-raises: this path has no refusal
+    # contract — an `OSError` here already propagated out of the one caller
+    # (`cli.py`'s `--update-baseline` arm) uncaught, and still does.
+    real = os.path.realpath(path)
+    mode = _mode_for(real)
+    fd, tmp_path = tempfile.mkstemp(
+        dir=os.path.dirname(real), prefix=os.path.basename(real) + ".", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(
+                "# Pre-scan baseline — known findings accepted as tech debt or "
+                "triaged as non-issues.\n"
+                "# Format: check_id|path:line|identity  (identity absent when a check has none)\n"
+                "# Print the exact key for a live finding: "
+                "bash sysop/scripts/run_checks.sh --print-keys\n"
+                "# Regenerate: bash sysop/scripts/run_checks.sh --mode both --update-baseline\n"
+                "# A `blocking: true` check's new findings — ones NOT in this file "
+                "— fail CI.\n"
+                "# A `blocking: false` check's entries record a triage verdict: "
+                "they tag the\n"
+                "# finding `[baseline]` instead of hiding it, and gate nothing "
+                "either way.\n"
+                "# (coverage-* findings are never baselined — see write_baseline.)\n"
+                "\n"
+            )
+            for check_id, file_line, _msg, identity in sorted(all_findings):
+                if _is_coverage(check_id):
+                    continue
+                key = finding_key(check_id, file_line, identity)
+                if key in seen:
+                    continue
+                seen.add(key)
+                f.write(f"{key}\n")
+            # Carried-forward entries last, sorted, so a diff of two regenerations
+            # is stable. A key already emitted above is not re-written: a check can
+            # be non-executed in one stage and produce findings in another.
+            for key in sorted(preserved - seen):
+                seen.add(key)
+                f.write(f"{key}\n")
+        os.chmod(tmp_path, mode)
+        os.replace(tmp_path, real)
+    except BaseException:
+        _unlink_quietly(tmp_path)
+        raise
     return len(seen)
 
 
@@ -605,35 +655,43 @@ def migrate_baseline(path, all_findings, repo_root, skipped_ids=(),
                          f"{len(matches)} findings share this key; accepting "
                          f"all would accept {len(matches) - 1} never reviewed"))
 
-    tmp_path = path + ".tmp"
-    # Remove any pre-existing scratch file FIRST. `open(tmp, "w")` follows a
-    # symlink, so a planted `.tmp` symlink wrote the consumer's baseline to an
-    # arbitrary path and `os.replace` then made the baseline itself a symlink;
-    # a planted `.tmp` DIRECTORY raised a bare traceback. Neither is hostile in
-    # the usual case — a killed earlier run leaves one behind.
+    # `mkstemp` rather than a fixed `<path>.tmp` (`Q-448`). The pre-clear block
+    # this replaces existed because a fixed name could be PLANTED: a leftover
+    # `.tmp` symlink from a killed run was followed by `open(tmp, "w")`, writing
+    # the consumer's baseline to an arbitrary path and then making the baseline
+    # itself a symlink, and a leftover directory raised a bare traceback. A name
+    # minted fresh in the target's directory is never a leftover, so neither can
+    # happen and there is nothing to clear; `dir=` keeps `os.replace`
+    # same-filesystem. `path` is already the real path — this function resolves
+    # it on entry, which is what keeps a symlinked baseline written THROUGH
+    # rather than replaced (the preservation test pins that) — so it is not
+    # resolved again here; Phase 272's battery found a second resolve
+    # equivalent, not protective. `mkstemp` gets its own arm: it is the
+    # likeliest place an OSError arises (a read-only `.claude/`, a full disk),
+    # there is no temp to clean up yet, and a raw traceback here reads as a
+    # crash where this is an ordinary, actionable condition.
     try:
-        if os.path.islink(tmp_path) or os.path.isfile(tmp_path):
-            os.unlink(tmp_path)
-        elif os.path.isdir(tmp_path):
-            return [], (f"REFUSED: {tmp_path} is a directory — remove it and "
-                        "re-run; the baseline is untouched.")
+        fd, tmp_path = tempfile.mkstemp(
+            dir=os.path.dirname(path), prefix=os.path.basename(path) + ".", suffix=".tmp"
+        )
     except OSError as exc:
-        return [], f"REFUSED: cannot clear {tmp_path}: {exc}"
-
+        return [], f"REFUSED: cannot write {path}: {exc}"
     try:
-        with open(tmp_path, "w", encoding="utf-8", errors="surrogateescape",
-                  newline="") as f:
+        with os.fdopen(fd, "w", encoding="utf-8", errors="surrogateescape",
+                       newline="") as f:
             f.writelines(out)
+        # Carry the original mode across: a read-only baseline was silently reset
+        # to 0644 by the replace, which is a permission change the consumer never
+        # asked for on a file they had deliberately locked — and `mkstemp`
+        # creates 0600, so without this a 0644 baseline would be narrowed instead.
+        os.chmod(tmp_path, _mode_for(path))
+        os.replace(tmp_path, path)
     except OSError as exc:
-        # A raw traceback here reads as a crash; this is an ordinary,
-        # actionable condition (a read-only `.claude/`, a full disk).
-        return [], f"REFUSED: cannot write {tmp_path}: {exc}"
-    # Carry the original mode across: a read-only baseline was silently reset
-    # to 0644 by the replace, which is a permission change the consumer never
-    # asked for on a file they had deliberately locked.
-    try:
-        os.chmod(tmp_path, os.stat(path).st_mode & 0o7777)
-    except OSError:
-        pass
-    os.replace(tmp_path, path)
+        _unlink_quietly(tmp_path)
+        return [], f"REFUSED: cannot write {path}: {exc}"
+    except BaseException:
+        # Re-raised after cleanup so `KeyboardInterrupt` still interrupts; present
+        # only so a non-`OSError` failure does not leak a uniquely-named temp.
+        _unlink_quietly(tmp_path)
+        raise
     return rows, None

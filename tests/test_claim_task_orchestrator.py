@@ -855,10 +855,50 @@ def _code_problems(t: str) -> list[str]:
             if "yaml" in imports(tree):
                 p.append("Step 7f's plan write-back imports yaml -- it must be stdlib only, "
                          "or option C crashes AFTER the planner and reviewer have both run")
-            if not calls_named(tree, "write_text"):
+            # The property is that the composed text REACHES DISK, not that it
+            # does so through one API. Phase 271 converted this block off
+            # `Path.write_text` (`Q-444` for the temp name, and because
+            # `write_text` did not accept `newline=` until 3.10 while this tree's
+            # floor is 3.9 -- measured, it raised TypeError on 3.9.6), so the
+            # write is now `f.write(out)` inside an `os.fdopen` context. Both
+            # spellings are accepted; NEITHER being present is still the finding.
+            if not calls_named(tree, "write_text", "write"):
                 p.append("Step 7f composes the plan section but never writes it")
-            if delete_calls(tree):
-                p.append("Step 7f deletes something -- the body is rewritten, never removed")
+            # `unlink` on the TEMP file is the mkstemp shape's cleanup arm and is
+            # required, not merely tolerated: a fixed-name leak self-heals because
+            # the next run writes the same path, and a mkstemp leak does not. What
+            # must stay forbidden is deleting the BODY -- so the check is scoped by
+            # ARGUMENT rather than dropped.
+            # Keyed to the temp VARIABLE, whatever it is called, and tolerant of
+            # `Path(tmp).unlink()`. The first version hard-coded the name `tmp`,
+            # so renaming it to `tmp_path` — a legal edit — reported the block as
+            # deleting the body. The temp's name is read from the mkstemp
+            # assignment rather than assumed.
+            _tmp_names = set()
+            for n in ast.walk(tree):
+                # `.attr` alone misses `from tempfile import mkstemp` — a legal
+                # import that left `_tmp_names` empty, so the block's own cleanup
+                # `unlink` read as deleting the BODY and the guard false-killed.
+                _f = n.value.func if isinstance(getattr(n, "value", None), ast.Call) else None
+                _name = getattr(_f, "attr", None) or getattr(_f, "id", None)
+                if isinstance(n, ast.Assign) and _name == "mkstemp":
+                    for _tgt in n.targets:   # NOT `t` — that is the skill text here
+                        _elts = _tgt.elts if isinstance(_tgt, ast.Tuple) else [_tgt]
+                        _tmp_names |= {e.id for e in _elts if isinstance(e, ast.Name)}
+            def _delete_target(c):
+                a = c.args[0] if c.args else getattr(c.func, "value", None)
+                while isinstance(a, ast.Call):          # Path(tmp).unlink()
+                    a = a.args[0] if a.args else None
+                return a.id if isinstance(a, ast.Name) else None
+            # Fall back to any name bound from a mkstemp tuple; if the block has
+            # no mkstemp at all the atomicity check above already fired, so an
+            # empty `_tmp_names` must not additionally false-kill here.
+            _bad_deletes = [] if not _tmp_names else [
+                c for c in calls_named(tree, *DELETE_CALLS)
+                if _delete_target(c) not in _tmp_names]
+            if _bad_deletes:
+                p.append("Step 7f deletes something other than its own temp file -- the "
+                         "body is rewritten, never removed")
             if calls_named(tree, "mkdir"):
                 p.append("Step 7f creates a directory -- only Step 7-pre mints runs, and the "
                          "body it writes must already exist")
@@ -895,10 +935,98 @@ def _code_problems(t: str) -> list[str]:
                 return (len(n.args) == 2 and isinstance(n.func.value, ast.Name)
                         and n.func.value.id == "os")
             _atomic = [n for n in ast.walk(tree) if _is_os_level_replace(n)]
-            if not _atomic or not calls_named(tree, "with_suffix"):
+            # `mkstemp`, not `with_suffix`: Phase 271 closed `Q-444` here, so a
+            # `with_suffix`-derived temp name is now the DEFECT rather than the
+            # requirement. Both halves stay asserted -- a temp file AND an os-level
+            # replace -- because either alone is not atomicity.
+            if not _atomic or not calls_named(tree, "mkstemp"):
                 p.append("Step 7f no longer writes the body atomically via a temp file + "
                          "os-level replace -- a crash mid-write truncates a tracked task "
                          "body. (A two-argument str.replace does not satisfy this.)")
+            if calls_named(tree, "with_suffix"):
+                p.append("Step 7f derives its temp name from the target again -- the "
+                         "collision class `Q-382`/`Q-414`/`Q-444` closed")
+            # The mode carry is a CONSEQUENCE of mkstemp, not decoration, and nothing
+            # asserted it until the author battery dropped `os.chmod(tmp, mode)` and
+            # watched the change survive every guard in the repo. `mkstemp` creates
+            # 0600, so without this the task body -- a TRACKED file -- is silently
+            # narrowed from 0644. Git does not record the mode bit that changes, so
+            # no diff, no test and no reviewer reading the diff would see it.
+            # PRESENCE of `chmod` is not the mode carry, and an independent
+            # battery proved it: `os.chmod(tmp, 0o600)` and a `mode = 0o644`
+            # literal with the `os.stat` dropped both satisfied a presence check
+            # while destroying the property. The mode must be READ FROM THE
+            # TARGET and applied to the temp.
+            _chmods = calls_named(tree, "chmod")
+            # `st_mode` read from the TARGET. `os.stat(tmp).st_mode` reads the
+            # mode mkstemp just created (0600) and chmods it back onto itself --
+            # a perfect no-op that satisfied a presence check.
+            _tmp_ids = {n.id for n in ast.walk(tree)
+                        if isinstance(n, ast.Name) and n.id in ("tmp", "tmp_path")}
+            _mode_read = [
+                n for n in ast.walk(tree)
+                if isinstance(n, ast.Attribute) and n.attr == "st_mode"
+                and not (isinstance(n.value, ast.Call) and n.value.args
+                         and isinstance(n.value.args[0], ast.Name)
+                         and n.value.args[0].id in _tmp_ids)
+            ]
+            if not _chmods or not _mode_read:
+                p.append("Step 7f no longer carries the file mode across the temp file -- "
+                         "mkstemp creates 0600, so the task body is silently narrowed "
+                         "from 0644 and git does not track the change. The mode must be "
+                         "read from the target (os.stat(...).st_mode) and chmod'd onto "
+                         "the temp; a literal mode is not the carry.")
+            elif not any(
+                isinstance(c.args[0], ast.Name) and c.args[0].id == "tmp"
+                and not (len(c.args) > 1 and isinstance(c.args[1], ast.Constant))
+                for c in _chmods if c.args
+            ):
+                p.append("Step 7f chmods a LITERAL mode onto the temp file rather than "
+                         "the mode it read from the target -- the carry is gone")
+            # `dir=` is the element that keeps os.replace same-filesystem; without
+            # it mkstemp uses the system temp dir and os.replace raises EXDEV.
+            # The record calls this load-bearing, so it is asserted rather than
+            # described: the battery dropped it and nothing noticed.
+            _mk = calls_named(tree, "mkstemp")
+            _dirs = [k.value for c in _mk for k in c.keywords if k.arg == "dir"]
+            if _mk and not _dirs:
+                p.append("Step 7f's mkstemp lost its `dir=` argument -- the temp file "
+                         "moves to the system temp dir and os.replace raises EXDEV "
+                         "across filesystems")
+            elif _dirs and not any(
+                # It must be the TARGET's directory, not any directory.
+                # `dir=tempfile.gettempdir()` satisfied a presence check while
+                # reintroducing the exact EXDEV hazard the argument exists to
+                # remove -- a battery walked it straight through.
+                (isinstance(d, ast.Call)
+                 and getattr(d.func, "attr", None) in ("dirname", "parent")
+                 and any(isinstance(a, ast.Name) for a in d.args))
+                or isinstance(d, ast.Attribute) and d.attr == "parent"
+                for d in _dirs
+            ):
+                p.append("Step 7f's mkstemp `dir=` no longer names the TARGET's own "
+                         "directory -- a system temp dir puts the replace across a "
+                         "filesystem boundary and os.replace raises EXDEV")
+            # The cleanup arm was forbidden-if-wrong and never REQUIRED, so
+            # deleting it outright passed. A mkstemp leak does not self-heal.
+            # The arm must actually CLEAN UP and RE-RAISE. A battery reduced the
+            # handler body to `pass` and separately dropped the bare `raise`, and
+            # a handler-type-only check accepted both -- the first leaks the temp,
+            # the second swallows the error entirely, which is worse than the
+            # defect the arm exists for.
+            _arms = [h for n in ast.walk(tree) if isinstance(n, ast.Try) for h in n.handlers
+                     if isinstance(h.type, ast.Name) and h.type.id == "BaseException"]
+            _ok_arm = any(
+                any(isinstance(x, ast.Call) and getattr(x.func, "attr", None) in ("unlink", "remove")
+                    for x in ast.walk(h))
+                and any(isinstance(x, ast.Raise) for x in ast.walk(h))
+                for h in _arms
+            )
+            if _mk and not _ok_arm:
+                p.append("Step 7f's cleanup arm no longer removes the temp file AND "
+                         "re-raises -- a failed write leaks a uniquely-named temp that "
+                         "(unlike a fixed name) no later run overwrites, and a swallowed "
+                         "exception hides the failure that caused it")
             # Fence awareness is the property, and it is invisible by reading:
             # a fence-blind strip either stops early or eats every later section.
             if not any(isinstance(n, ast.FunctionDef)
@@ -2133,11 +2261,14 @@ def test_guards_are_not_vacuous():
                                                     "import yaml\nreport = {"),
         # Step 7f's write-back is the newest block with the same exposure, and it
         # runs one step later than 7c on the same PEP-668 consumer.
-        # Anchored on the heredoc's first import line, not on a helper's NAME:
-        # `fence_mark` -> `_fence_mark` is a legal rename the guard above was
-        # explicitly taught to tolerate, and pinning the literal here re-broke it.
-        "pyyaml back in the plan write-back": ("import sys, json, subprocess\nfrom pathlib import Path\n\nclaim_id, run_id, body_rel",
-                                               "import yaml\nimport sys, json, subprocess\nfrom pathlib import Path\n\nclaim_id, run_id, body_rel"),
+        # Anchored on the argv UNPACK, not on a helper's NAME and not on the
+        # import line. `fence_mark` -> `_fence_mark` is a legal rename the guard
+        # above was taught to tolerate — but pinning the literal import line is
+        # brittle the same way in the other direction: a review battery added
+        # `from tempfile import mkstemp`, a legal edit, and this anchor went stale,
+        # reporting "this floor proves nothing" over correct code.
+        "pyyaml back in the plan write-back": ("claim_id, run_id, body_rel",
+                                               "import yaml\nclaim_id, run_id, body_rel"),
     }
     undetected = []
     for name, (old, new) in deep.items():

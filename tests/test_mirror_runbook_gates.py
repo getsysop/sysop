@@ -241,6 +241,46 @@ def missing_gates(text: str) -> list[str]:
     return problems
 
 
+
+def _pinned_runbook(sha: str) -> str:
+    """The runbook's blob at a pinned commit, for a non-vacuity control.
+
+    SKIPS when the COMMIT is unreachable — CI's `actions/checkout` takes its
+    default `fetch-depth: 1`, and Phase 271 pinned two controls to a literal SHA
+    that Phase 272's round then measured failing on a real depth-1 clone, which
+    would have reddened the required check on every push.
+
+    FAILS when the commit is reachable and the PATH is not.
+
+    **The reason first given for that half was wrong and is corrected here.** It
+    said a rename of the runbook would turn these controls into silent passes. It
+    does not: a rename at HEAD leaves history untouched, so `git show
+    <sha>:tools/TESTER_MIRROR_RUNBOOK.md` still resolves — measured on a real
+    clone with the file renamed and committed. A rename is caught, loudly, by
+    `_runbook()`'s own assert (23 failures), which is the guard that docstring
+    already credits. What this branch actually catches is a pin that PREDATES the
+    file — re-pointing a control at an older commit, which is an ordinary
+    authoring slip and which the old code turned into a silent skip. Narrower than
+    claimed, real, and stated at its true width. Found by an independent lens.
+    """
+    if subprocess.run(["git", "cat-file", "-e", f"{sha}^{{commit}}"],
+                      cwd=REPO_ROOT, capture_output=True).returncode != 0:
+        pytest.skip(
+            f"{sha} is not reachable here (a shallow clone, or a tree published "
+            "without history); the non-vacuity control needs the pre-fix blob"
+        )
+    blob = subprocess.run(
+        ["git", "show", f"{sha}:tools/TESTER_MIRROR_RUNBOOK.md"],
+        cwd=REPO_ROOT, capture_output=True, text=True,
+    )
+    assert blob.returncode == 0, (
+        f"commit {sha} is reachable but tools/TESTER_MIRROR_RUNBOOK.md is not "
+        f"present in it: {blob.stderr.strip()}. If the runbook was renamed, this "
+        "control and its siblings need re-pointing — do not let a rename read as "
+        "a skip"
+    )
+    return blob.stdout
+
 # --- the guards -------------------------------------------------------------------
 
 
@@ -1088,4 +1128,613 @@ def test_every_step_that_needs_the_source_repo_says_so_before_using_it():
         "above it in the same block. After step 4 the operator is in the BUILD "
         "dir, where tools/ does not exist, so the command is `command not "
         f"found`:\n{offenders}"
+    )
+
+
+# --- Phase 273 (`Q-437`) — the PUBLIC push must stay announced -----------------
+#
+# Steps 1-11 route the tester half. The public repo accumulates history and its
+# main is protected, so its push is a *different* operation on the same built
+# tree — and for the life of this page it had no numbered step at all: it existed
+# only as a contrast paragraph inside step 7 and as a block the builder prints.
+#
+# Phase 273's own review round wrote 19 mutations against the new step and 16
+# survived, because nothing constrained it but the shared `cd <source repo>` rule
+# above. Three of those survivors are the ones that matter, and they are the ones
+# this guard closes: DELETE the step, MOVE it into `## Refreshing`, or RENUMBER it
+# away. Each returns the page to the exact state `Q-437` was filed against, and
+# each read green.
+#
+# What this guard deliberately does NOT try to do is judge whether the step's
+# prose is *true* — that is the class the round found (a claim that a non-blocking
+# `|| { …; false; }` arm is a gate; an ordering rule stated as universal), and no
+# pattern encodes it. Those are filed, not mechanized. See `Q-453`.
+_PUBLIC_REPO = "getsysop/sysop"
+
+
+def _public_push_steps(text: str) -> list[tuple[int, str, str]]:
+    """Numbered steps whose bolded TITLE announces the public push.
+
+    Keyed on the title, matching this module's existing `missing_gates` idiom: a
+    step whose *body* happens to mention the public repo is not an announcement,
+    and step 7's contrast paragraph is exactly that shape — it names the public
+    mirror in order to say it is NOT that step.
+    """
+    return [s for s in numbered_steps(text)
+            if re.search(r"public", s[1], re.I) and re.search(r"push|append", s[1], re.I)]
+
+
+def missing_public_push(text: str) -> list[str]:
+    problems = []
+    steps = _public_push_steps(text)
+    if not steps:
+        problems.append(
+            "no numbered step announces the PUBLIC push. Steps 1-11 route the tester half; "
+            "the public repo is a separate append via PR, and describing it only inside "
+            "another step's body — which is the state Q-437 was filed against — leaves the "
+            "irreversible half of the procedure with no step an operator walks"
+        )
+        return problems
+
+    # The step must live in `## Steps`. Moving it into `## Refreshing` or past the
+    # end of the numbered list demotes it to an aside, which is the same defect
+    # wearing the step's own title.
+    if not any(f"{n}. **" in _steps_section(text) for n, _, _ in steps):
+        problems.append(
+            "the public-push step is not inside the '## Steps' section — a numbered step "
+            "that has been moved out of the walked list is an aside with a number on it"
+        )
+
+    # It must name the public repo somewhere in its own body. A step titled for the
+    # public push that never says which repo is not routing anything.
+    #
+    # The span ends at the next numbered step OR the next `## ` heading, whichever
+    # comes first. Bounding it only by the next step is the header-eats-neighbour
+    # defect this project has hit on four parsers: the public-push step is the LAST
+    # numbered one, so an EOF-bounded span swallows `## Refreshing` — and since that
+    # section now names the public repo too, the body check passed on its neighbour's
+    # text. Caught by this guard's own battery, not by reading it.
+    marks = [(m.start(), m.group(1)) for m in re.finditer(r"(?m)^(\d+)\. \*\*", text)]
+    marks += [(m.start(), None) for m in re.finditer(r"(?m)^## ", text)]
+    marks.sort()
+    announced = {n for n, _, _ in steps}
+    for i, (pos, name) in enumerate(marks):
+        if name is None or int(name) not in announced:
+            continue
+        end = marks[i + 1][0] if i + 1 < len(marks) else len(text)
+        if _PUBLIC_REPO not in text[pos:end]:
+            problems.append(
+                f"step {name} is titled for the public push but never names "
+                f"{_PUBLIC_REPO} in its body"
+            )
+
+    # `## Refreshing` is the entry point for EVERY cut after the first — the guard
+    # above already encodes that for the gate steps. A refresh that stops at the
+    # tester force-push has shipped to testers and not to the public, and the
+    # filing measured this section at zero mentions of the public repo.
+    m = re.search(r"(?m)^## Refreshing\s*$", text)
+    if m:
+        end = text.find("\n## ", m.end())
+        refresh = text[m.start(): end if end != -1 else len(text)]
+        if _PUBLIC_REPO not in refresh:
+            problems.append(
+                "'## Refreshing' never names the public repo, so the section every cut "
+                "after the first actually follows routes only the tester half — the "
+                "measurement in Q-437's own filing, which a numbered step alone does not fix"
+            )
+    return problems
+
+
+def test_the_runbook_keeps_a_numbered_step_for_the_public_push():
+    assert missing_public_push(_runbook()) == []
+
+
+def test_the_public_push_guard_is_not_vacuous():
+    """Red against the tree the filing was written about.
+
+    Pinned to the literal pre-fix commit, and SKIPPED rather than failed when that
+    commit is unreachable — CI's `actions/checkout` takes its default
+    `fetch-depth: 1`, where it is not present. That is not a hypothetical: Phase
+    271 pinned two controls to a literal SHA and Phase 272's round measured both
+    failing on a real `--depth 1` clone, which would have reddened the required
+    check on every push. The precedent this follows is
+    `test_rollback_commit_stays_deleted.py`.
+    """
+    if not _in_source_repo():
+        pytest.skip("not the source repo")
+    pre = _pinned_runbook("8fcdd05")
+    problems = missing_public_push(pre)
+    assert problems, (
+        "the predicate found nothing wrong with the PRE-FIX runbook, which had no "
+        "numbered public-push step at all — the guard is not measuring what it claims"
+    )
+    assert any("no numbered step announces" in p for p in problems), (
+        f"the control fired, but not on the absence this guard exists for: {problems}"
+    )
+
+
+def test_the_post_push_arms_each_fire_on_their_own_defect():
+    """One control per ARM, because a guard nobody can revert is not guarded.
+
+    An independent lens reverted each of this predicate's three mechanisms
+    separately — `n > push` to `n >= push`, the fresh-clone arm to `if False:`,
+    and command-position back to a substring test — and the whole module stayed
+    green at 29 passed. The non-vacuity control above pins only the
+    *count* arm, against a tree that had one scan step. Three mechanisms, zero
+    controls, is the "guard-of-the-guard" gap this project has now paid for twice.
+
+    Each mutation below is applied to the LIVE runbook, so the controls cannot
+    drift away from the text they are about.
+    """
+    text = _runbook()
+    inv = [ln for ln in text.splitlines() if _runs_scan(ln) and "$A" in ln]
+    assert len(inv) == 1, f"expected one post-push invocation to mutate, saw {inv!r}"
+    line = inv[0]
+
+    # (1) ordering — the post-push step demoted into the push step's own body.
+    m13 = re.search(r"(?m)^13\. \*\*", text)
+    assert m13, "the post-push step is no longer numbered 13; re-point this control"
+    demoted = text[:m13.start()] + "    **(e) " + text[m13.end():]
+    assert any("at or before the" in p for p in missing_post_push_scan(demoted)), (
+        "demoting the post-push step into the push step's body did not fire the "
+        "ordering arm — `12 < 12` again"
+    )
+
+    # (2) the fresh-clone arm — scan pointed at the pre-push build dir.
+    stale = text.replace(line, line.replace('"$A"', "/tmp/sysop-gate"), 1)
+    assert any("fresh clone" in p for p in missing_post_push_scan(stale)), (
+        "pointing the post-push scan at the pre-push build dir did not fire the "
+        "fresh-clone arm — taking a clone is not scanning it"
+    )
+
+    # (2b) repo IDENTITY, not merely that a clone happened. Control (2) moves the
+    # scan's ARGUMENT, so it fires on the target-token rule whatever the slug
+    # says — which left `if slug != _PUBLIC_REPO` revertible in silence. Here the
+    # target is untouched and only the repo changes, so nothing but the slug
+    # check can catch it.
+    clone_lines = [ln for ln in text.splitlines()
+                   if "git clone" in ln and '"$A"' in ln]
+    assert clone_lines, "the post-push clone anchor moved; re-point this control"
+    wrong_repo = text.replace(
+        clone_lines[0],
+        clone_lines[0].replace("getsysop/sysop.git", "wade-cms/sysop-tester.git"), 1)
+    assert any("fresh clone" in p for p in missing_post_push_scan(wrong_repo)), (
+        "cloning the TESTER repo into the same target did not fire — repo "
+        "identity is not being checked, only that some clone happened"
+    )
+
+    # (3) a display fence is not a prescribed command. A lens widened
+    # `_EXEC_TAGS` to accept ` ```text ` and the module stayed at 31 passed,
+    # while the retag it exists to catch went from killed to surviving — the
+    # only one of the predicate's mechanisms that could be reverted in silence.
+    retagged = text.replace("    ```bash\n    cd <source repo>", "    ```text\n    cd <source repo>", 1)
+    assert retagged != text, "the leg-(a) fence anchor moved; re-point this control"
+    assert any("not two" in p for p in missing_post_push_scan(retagged)), (
+        "retagging the post-push fence as a non-executable display block did not "
+        "fire — `_EXEC_TAGS` has been widened and nothing else says so"
+    )
+
+    # (4) command position — the script mentioned rather than run.
+    # `cat`, deliberately flagless. The first version of this control used
+    # `grep -n …`, and the `-n` killed it through `_NOT_A_RUN_FLAGS` rather than
+    # through the wrapper allowlist — so `return all(w in _WRAPPERS …)` could be
+    # replaced by `return True` with this whole module green. A control that fires
+    # through a mechanism it is not testing pins nothing, and this one was found
+    # by reverting each mechanism in turn rather than by reading it.
+    mention = text.replace(line, "    cat tools/scan_public_history.sh", 1)
+    assert any("not two" in p for p in missing_post_push_scan(mention)), (
+        "replacing the run with a grep of the script did not fire the count arm — "
+        "a mention is not a run"
+    )
+
+
+def test_the_post_push_controls_stay_green_on_legal_edits():
+    """The direction that gets a correct guard deleted rather than fixed.
+
+    A lens measured the previous version at 8 false-reds on edits a maintainer
+    would really make. Each of these must stay green.
+    """
+    text = _runbook()
+    invs = [ln for ln in text.splitlines() if _runs_scan(ln) and "$A" in ln]
+    clones = [ln for ln in text.splitlines() if "git clone" in ln and "$A" in ln]
+    assert invs and clones, (
+        f"this control needs the post-push invocation and its clone to anchor on; "
+        f"saw {len(invs)} invocation(s) and {len(clones)} clone(s). Re-point it "
+        "rather than letting an IndexError stand in for a message"
+    )
+    inv, clone = invs[0], clones[0]
+    legal = {
+        "time-prefixed": text.replace(inv, inv.replace("bash ", "time bash "), 1),
+        "bash -x": text.replace(inv, inv.replace("bash ", "bash -x "), 1),
+        "bare command word": text.replace(inv, inv.replace("bash tools/", "tools/"), 1),
+        "output captured": text.replace(
+            inv, '    OUT=$(bash tools/scan_public_history.sh "$A")', 1),
+        "clone and scan merged with &&": text.replace(
+            clone + "\n" + inv, clone + " \\\n      && " + inv.strip(), 1),
+        "fence retagged ```sh": text.replace("```bash", "```sh"),
+        "gh repo clone": text.replace(
+            clone, '    A=$(mktemp -d)/after && gh repo clone getsysop/sysop "$A"', 1),
+    }
+    red = {k: missing_post_push_scan(v) for k, v in legal.items()}
+    red = {k: v for k, v in red.items() if v}
+    assert not red, f"legal edits reddened the guard: { {k: v[0][:110] for k, v in red.items()} }"
+
+
+# --- Phase 273 — the page's own two piping rules, applied to its own fences ----
+#
+# The page states both in prose and had, until this guard, enforced neither:
+#   * "Never pipe a push" (step 7) — in a shell without `pipefail`, `git push … |
+#     tail` reports TAIL's status, so a failed push reads as exit 0. That is how
+#     the SSH failure behind `Q-424` got past its first run and had to be found
+#     twice.
+#   * Never `head` a gate — `head` closes the pipe early and SIGPIPEs the producer,
+#     so a gate can be truncated into looking clean.
+#
+# Phase 273's own new fence broke the first rule in its first draft (it piped the
+# builder into `sed`, masking a refusal behind sed's exit 0) and the author caught
+# it only by running it. A round then wrote both violations as mutations and both
+# survived, because nothing here read fences for this.
+#
+# Green on arrival: zero fence lines in the page match either shape.
+_PIPE_TO_PAGER = re.compile(r"\|\s*(?:head|tail)\b")
+_PUSH_THEN_PIPE = re.compile(r"\bgit\s+push\b[^|]*\|")
+
+
+def piping_violations(text: str) -> list[str]:
+    out = []
+    for fence in re.findall(r"```[a-zA-Z]*\n(.*?)```", text, re.S):
+        for ln in fence.splitlines():
+            stripped = ln.strip()
+            if stripped.startswith("#") or not stripped:
+                continue
+            if _PIPE_TO_PAGER.search(stripped):
+                out.append(f"pipes into head/tail (truncates a producer via SIGPIPE): {stripped}")
+            if _PUSH_THEN_PIPE.search(stripped):
+                out.append(f"pipes a push (reports the pipe's status, not git's): {stripped}")
+    return out
+
+
+def test_the_runbook_never_pipes_a_push_or_heads_a_gate():
+    assert piping_violations(_runbook()) == []
+
+
+def test_the_piping_guard_fires_on_both_shapes():
+    """Non-vacuity, planted rather than pinned to a commit.
+
+    Both plants are the literal shapes the page's prose forbids and that a review
+    round drove through the page unguarded.
+    """
+    text = _runbook()
+    anchor = "    ```bash\n"
+    assert anchor in text, "no bash fence to plant into; this control's anchor needs revisiting"
+    for plant, want in (
+        ("    bash tools/make_public_mirror.sh \"$D/reprint\" | head -20\n", "head/tail"),
+        ("    git push origin main:snapshot-refresh-x | tee /tmp/log\n", "push"),
+    ):
+        mutated = text.replace(anchor, anchor + plant, 1)
+        found = piping_violations(mutated)
+        assert any(want in f for f in found), (
+            f"planting {plant.strip()!r} did not fire the {want} arm: {found}"
+        )
+
+
+# --- Phase 274 (`Q-452`) — the POST-push half must stay on the page -----------
+#
+# `Q-437` closed "the page has no numbered step for the public push". `Q-452` is
+# its sibling, found while fixing it: the page ended at two pushes and prescribed
+# nothing after them. Three things were done at each of the three most recent cuts
+# (250, 265, 268) and were carried by the operator's memory rather than by this
+# page — re-running the history scan against the PUSHED history, cold-clone
+# verification of both published repos, and archiving the cut record in a
+# post-merge commit.
+#
+# This guard is keyed to the MECHANISM, not to a title. Phase 273's public-push
+# guard keys on words ("public" + "push") that are semantically forced; nothing is
+# forced about the wording of a verification step, and this module already
+# declares retitling and coherent renumbering legal in two negative controls. So
+# the property asserted is the one `Q-452` actually measured: the history scan is
+# invoked by TWO numbered steps, and the second of them comes after the step that
+# announces the public push. One invocation is the pre-push gate (step 5, "is the
+# published history clean before I append to it"). The second is a different
+# question — "did the commit I just merged introduce one" — and no clone taken
+# before the merge can answer it.
+#
+# What this does NOT assert is that the step's prose is true, which is `Q-453`'s
+# open class for the neighbouring step and is no more mechanizable here.
+
+
+_SCAN = "scan_public_history.sh"
+
+# Three independent lenses shaped this predicate and the first two versions were
+# each wrong in the same direction: they accepted something that is not the thing
+# they want.
+#
+#   v1 asked whether the bare NAME appeared in a live fence line. `grep -nE …
+#      tools/scan_public_history.sh`, `ls -l` and `echo bash …` all read green —
+#      a mention is not a run, and marking a non-running step compliant is worse
+#      than a gap.
+#   v2 asked for the name in COMMAND position plus "a git clone somewhere in the
+#      same fence". Taking a clone is not scanning it: pointing the scan at the
+#      pre-push gate build dir, at step 5's own clone, or at nothing at all, all
+#      read green beside an untouched clone line. Presence is not property.
+#
+# v3 asks the question the step is actually about: **is a freshly cloned copy of
+# the PUBLIC repo the thing being scanned.** The clone's target token and the
+# scan's argument must be the same token, and the clone's URL must name the
+# public repo — otherwise the step is step 5's question wearing a later number,
+# which is the phrase the failure message uses because it is the defect.
+#
+# The other direction is the one that gets a correct guard deleted rather than
+# fixed, and v2 was measured at 8 false-reds on legal edits. So:
+#   * command position is decided by an EXCLUDER, not by an anchored prefix. A
+#     line runs the script unless a word that would consume it as an ARGUMENT
+#     appears before it. `time bash …`, `bash -x …`, `cd "$A" && bash …`,
+#     `OUT=$(bash …)` and an `&&`-merged clone-and-scan are all runs.
+#   * locality is the STEP, not the fence. Splitting a prose-heavy step's fence
+#     in two is an ordinary edit and v2 reddened on it.
+#   * the fence tag must be one a reader would execute. ` ```text ` is a display
+#     block, and v2's hand-rolled parser accepted it while the module's own
+#     `numbered_steps` would not have — two parsers, one charclass apart.
+
+# v3 asked "is a word that would consume the script as an argument in front of
+# it" (an open denylist) and "is the public repo named on the clone line" (a
+# substring of the RAW line, comment included). A fourth lens walked 13 of 37
+# mutations through both. v4 replaces each with the narrower question:
+#
+#   * command position is decided inside the SEGMENT that contains the script —
+#     the line split on `;`, `&&`, `||`, `|` — and the only words allowed in
+#     front of it are exec wrappers. An open denylist could not name `bash -n`,
+#     `xargs`, `bat` or `python3 -c`; an allowlist over a segment also fixes the
+#     false-red on `echo "..."; bash tools/…`, where v3 read a mention word from
+#     a different command on the same line.
+#   * repo identity is the parsed `owner/name` SLUG, not a substring. v3 accepted
+#     `getsysop/sysop-archive.git` and `getsysop/sysop-fork.git`, and — because it
+#     kept the raw line — accepted a clone of ANYTHING carrying the words
+#     `getsysop/sysop` in a trailing comment. Its failure message named that exact
+#     defect as the thing it caught.
+_WRAPPERS = {"bash", "sh", "zsh", "time", "env", "exec", "cd", "then", "do",
+             "else", "elif", "if", "sudo", "nohup", "command", "!", "{", "("}
+_NOT_A_RUN_FLAGS = {"-n"}      # `bash -n <script>` parses it; it does not run it
+_EXEC_TAGS = {"", "bash", "sh", "shell", "zsh", "console"}
+_CLONE = re.compile(r"\b(?:git\s+clone|gh\s+repo\s+clone)\b(?P<rest>.*)$")
+_SEGMENT = re.compile(r";|&&|\|\||\|")
+
+
+def _token(s: str) -> str:
+    """A shell word with quoting, braces and trailing punctuation normalised.
+
+    The trailing strip is not cosmetic and every character in it was put there by
+    a negative control that reddened — the author-side rule's point about a guard
+    keyed to a physical line:
+
+      * a line-continuation `\\` is its own word, so `git clone … "$A" \\` made the
+        BACKSLASH the clone's target;
+      * `OUT=$(bash … "$A")` carries the subshell's closing paren into the argument;
+      * `git clone … "$A" 2>/dev/null` and `… "$A" || exit 1` put a redirect or an
+        exit status where the target should be.
+    """
+    s = s.strip().rstrip("\\);&|")
+    s = s.strip("'\"").replace("${", "$").rstrip("}")
+    return "" if s.startswith((">", "<", "2>", "&>")) else s
+
+
+def _segment_with(line: str, needle: str) -> str | None:
+    """The one command in `line` that contains `needle`, or None.
+
+    A line is not a command; it is a list of them. v3 read the whole prefix, so
+    `echo "post-push scan"; bash tools/…` was rejected because another command's
+    verb sat to the left of this one.
+    """
+    body = line.split("#", 1)[0]
+    if needle not in body:
+        return None
+    for seg in _SEGMENT.split(body):
+        if needle in seg:
+            return seg
+    return None
+
+
+def _words_before(seg: str, needle: str) -> tuple[list[str], list[str]]:
+    """(command words, flags) appearing before `needle` in one command segment."""
+    head = seg[:seg.find(needle)].replace("$(", " ").replace("`", " ")
+    words, flags = [], []
+    for raw in head.split():
+        if raw.startswith("-"):
+            flags.append(raw)
+            continue
+        w = _token(raw)
+        if not w or "=" in w:
+            continue
+        w = w.rsplit("/", 1)[-1]
+        if w:                 # `tools/` is the script's own path prefix, not a word
+            words.append(w)
+    return words, flags
+
+
+def _runs_scan(line: str) -> bool:
+    seg = _segment_with(line, _SCAN)
+    if seg is None:
+        return False
+    words, flags = _words_before(seg, _SCAN)
+    if any(f in _NOT_A_RUN_FLAGS for f in flags):
+        return False
+    return all(w in _WRAPPERS for w in words)
+
+
+def _scan_arg(line: str) -> str | None:
+    """The path the scan is pointed at, or None when it is pointed at nothing.
+
+    Flags are skipped, which `_clone_targets` already did — v3's asymmetry made
+    `bash … --strict "$A"` read its own flag as the target.
+    """
+    seg = _segment_with(line, _SCAN)
+    if seg is None:
+        return None
+    rest = seg[seg.find(_SCAN) + len(_SCAN):].split()
+    for raw in rest:
+        if raw.startswith("-"):
+            continue
+        tok = _token(raw)
+        if tok:
+            return tok
+    return None
+
+
+def _clone_slug(line: str) -> str | None:
+    """`owner/name` for a clone of a GitHub repo, or None.
+
+    Parsed from the URL rather than matched as a substring, and read from the
+    line with its COMMENT REMOVED. v3 did neither, so a clone of the tester repo,
+    of step 5's clone, or of the local checkout all passed by carrying the words
+    `getsysop/sysop` in a trailing comment — and `getsysop/sysop-archive.git`
+    passed with no comment at all.
+    """
+    body = line.split("#", 1)[0]
+    m = _CLONE.search(body)
+    if not m:
+        return None
+    for raw in m.group("rest").split():
+        if raw.startswith("-"):
+            continue
+        w = _token(raw)
+        if not ("github.com" in w or re.fullmatch(r"[\w.-]+/[\w.-]+", w)):
+            continue
+        # The last two path components, parsed — never a substring match. `:` is a
+        # separator too, so an ssh remote resolves the same as an https one.
+        parts = [c for c in w.replace(":", "/").split("/") if c]
+        if len(parts) < 2:
+            continue
+        owner, name = parts[-2], parts[-1]
+        return f"{owner}/{name[:-4] if name.endswith('.git') else name}"
+    return None
+
+
+def _clone_targets(live: list[str]) -> list[tuple[str, str | None]]:
+    """[(target token, cloned repo slug or None)] for every clone in the block."""
+    out = []
+    for ln in live:
+        body = ln.split("#", 1)[0]
+        m = _CLONE.search(body)
+        if not m:
+            continue
+        words = [_token(w) for w in _SEGMENT.split(m.group("rest"))[0].split()
+                 if not w.startswith("-")]
+        words = [w for w in words if w]      # a bare continuation normalises away
+        if words:
+            out.append((words[-1], _clone_slug(ln)))
+    return out
+
+
+def _scan_runs(text: str) -> list[tuple[int, bool]]:
+    """[(step number, scans a fresh clone of the PUBLIC repo)] per running step.
+
+    Locality is the step, so a clone in one fence pairs with a scan in the next.
+    """
+    steps = _steps_section(text)
+    marks = list(re.finditer(r"(?m)^(\d+)\. ", steps))
+    out = []
+    for i, m in enumerate(marks):
+        end = marks[i + 1].start() if i + 1 < len(marks) else len(steps)
+        body = steps[m.start():end]
+        live: list[str] = []
+        for tag, fence in re.findall(r"```([a-zA-Z-]*)\n(.*?)```", body, re.S):
+            if tag.lower() in _EXEC_TAGS:
+                # `_live_lines` drops whole commented-out lines. It is belt to the
+                # braces of `_runs_scan`/`_scan_arg`/`_clone_targets`, which each
+                # split on `#` themselves — a lens measured removing it as a no-op,
+                # so it is kept as the module's shared idiom, not as the mechanism.
+                live += _live_lines(fence)
+        runs = [ln for ln in live if _runs_scan(ln)]
+        if not runs:
+            continue
+        clones = _clone_targets(live)
+        fresh = False
+        for r in runs:
+            arg = _scan_arg(r)
+            if arg is None:
+                continue
+            for tgt, slug in clones:
+                if slug != _PUBLIC_REPO:
+                    continue
+                # `cd "$A" && bash … .` scans the clone it just entered.
+                cd_here = arg == "." and any(
+                    _token(w) == tgt for w in
+                    re.findall(r"\bcd\s+(\S+)", r.split("#", 1)[0]))
+                if tgt == arg or cd_here:
+                    fresh = True
+        out.append((int(m.group(1)), fresh))
+    return out
+
+
+def missing_post_push_scan(text: str) -> list[str]:
+    runs = _scan_runs(text)
+    steps = sorted({n for n, _ in runs})
+    if len(steps) < 2:
+        return [
+            f"tools/{_SCAN} is RUN by {len(steps)} numbered step(s), not two. The "
+            "pre-push run gates the cut; the post-push run answers a different "
+            "question — whether the commit just merged introduced a finding — and "
+            "step 5's clone predates that commit by construction, so it cannot. "
+            "Carried by operator memory at the 250, 265 and 268 cuts and by no "
+            "step until Q-452"
+        ]
+    announced = [n for n, _, _ in _public_push_steps(text)]
+    if not announced:
+        # missing_public_push owns the absence and fails independently, so the
+        # suite still reddens; this arm simply has no push step to order against.
+        return []
+    # The FIRST announcing step, not the last. A lens retitled step 13 to
+    # `**Verify the public push landed, …**` — a title this module's own docstring
+    # lists as a legitimate edit — and `max()` made the scan step its own push
+    # step, so the ordering arm reddened on a correct page. `min()` is also the
+    # right reading: the push is announced once, and anything after that first
+    # announcement is post-push.
+    push = min(announced)
+    # STRICTLY after. v1 asked `max(steps) < push`, which is False when the
+    # post-push step has been demoted into the push step's own body — scanners
+    # [5, 12] against push 12 — and that demotion is the exact state both Q-437
+    # and Q-452 were filed against. `12 < 12` read green.
+    after = [n for n in steps if n > push]
+    if not after:
+        return [
+            f"every history-scan run (steps {steps}) is at or before the "
+            f"public-push step (step {push}), so the page has no run against the "
+            "PUSHED history. A leg demoted into the push step's own body is not a "
+            "numbered step an operator walks — the shape Q-437 and Q-452 name"
+        ]
+    if not any(fresh for n, fresh in runs if n in after):
+        return [
+            f"the post-push scan (step {min(after)}) is not pointed at a fresh "
+            f"clone of {_PUBLIC_REPO} that the same step takes. Scanning the "
+            "pre-push build dir, reusing step 5's clone, cloning the tester repo, "
+            "or passing no path at all are each step 5's question wearing a later "
+            "number — and each read green until an independent lens ran them"
+        ]
+    return []
+
+
+def test_the_runbook_re_runs_the_history_scan_after_the_push():
+    assert missing_post_push_scan(_runbook()) == []
+
+
+def test_the_post_push_scan_guard_is_not_vacuous():
+    """Red against the tree `Q-452` was filed about.
+
+    Pinned to Phase 273's squash — the commit that shipped step 12 and left the
+    post-push half unwritten — and SKIPPED rather than failed when unreachable.
+    CI's `actions/checkout` takes its default `fetch-depth: 1`; Phase 271 pinned
+    two controls to a literal SHA and Phase 272's round measured both failing on a
+    real depth-1 clone, which would have reddened the required check on every push.
+    """
+    if not _in_source_repo():
+        pytest.skip("not the source repo")
+    pre = _pinned_runbook("0da3fd6")
+    problems = missing_post_push_scan(pre)
+    assert problems, (
+        "the predicate found nothing wrong with the PRE-FIX runbook, which invoked "
+        "the history scan from exactly one step — the guard is not measuring what "
+        "it claims"
+    )
+    assert any("not two" in p for p in problems), (
+        f"the control fired, but not on the absence this guard exists for: {problems}"
     )

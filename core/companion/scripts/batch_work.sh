@@ -929,7 +929,27 @@ _claim_batch_locked() {
     # to it. The first half was missing until `Q-382` — the clean checks are
     # blind to an untracked file, and `git checkout --` cannot restore one, so
     # the `|| true` turned an unrecoverable state into a silent one.
+    #
+    # The second half above is established AT CHECK TIME and then assumed to hold
+    # here, and the tracker mutex does not buy it: it serializes this script
+    # against `close_batch.sh`, not against an operator's `git add -A` or
+    # `/review-close`'s staging. In that window the restore-from-INDEX puts back
+    # the rewrite rather than HEAD's content — measured: the file stays
+    # `In Progress` on disk while HEAD says `Pending`, and the caller reports a
+    # rollback that did not happen (`Q-447`).
+    #
+    # `git checkout HEAD --` was built as the fix and REFUSED: it restores the
+    # index too, so it discards whatever the other actor had staged, and in a
+    # conflicted merge it resolves the conflict (exit 0) where the bare form
+    # correctly refuses. The rollback stays precise and is VERIFIED instead.
     git -C "$MAIN_ROOT" checkout -- review_tasks.md 2>/dev/null || true
+    if ! git -C "$MAIN_ROOT" diff --quiet HEAD -- review_tasks.md 2>/dev/null; then
+      echo "❌ git commit failed AND the rollback did not restore review_tasks.md." >&2
+      echo "   The working copy still differs from HEAD — most likely the file was" >&2
+      echo "   staged, so the checkout restored the staged copy. Do NOT re-run;" >&2
+      echo "   inspect with: git -C ${MAIN_ROOT} diff HEAD -- review_tasks.md" >&2
+      return 1
+    fi
     echo "❌ git commit failed — the claim was rolled back, nothing was claimed." >&2
     return 1
   fi
@@ -1326,10 +1346,21 @@ if [[ "${1:-}" == "--release" ]]; then
     # re-run prescribed below takes the Pending arm — which clears the lock and
     # never commits, leaving exactly the claimable-but-half-reverted state the
     # mutation ordering above exists to prevent.
+    # See the claim path's rollback for the measurement (`Q-447`). This site was
+    # the sharper of the two, because the message below ASSERTED "restored to
+    # HEAD" unconditionally — it printed even when the checkout had failed (the
+    # `|| true`, e.g. an untracked file) or had silently restored a staged copy.
+    # The assertion is now earned rather than stated.
     git -C "$REPO_ROOT" checkout -- review_tasks.md 2>/dev/null || true
     echo "" >&2
-    echo "❌ git commit failed — the release was rolled back." >&2
-    echo "   review_tasks.md is restored to HEAD and the batch lock was NOT removed," >&2
+    if git -C "$REPO_ROOT" diff --quiet HEAD -- review_tasks.md 2>/dev/null; then
+      echo "❌ git commit failed — the release was rolled back." >&2
+      echo "   review_tasks.md is restored to HEAD and the batch lock was NOT removed," >&2
+    else
+      echo "❌ git commit failed AND the rollback did not restore review_tasks.md." >&2
+      echo "   The working copy still differs from HEAD — most likely it was staged, so" >&2
+      echo "   the checkout restored the staged copy. The batch lock was NOT removed," >&2
+    fi
     echo "   so the batch still reads as claimed. NOTE: the worktree was already removed." >&2
     echo "   Fix the commit failure and re-run: bash sysop/scripts/batch_work.sh --release ${REL_NUM}" >&2
     exit 1

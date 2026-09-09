@@ -36,6 +36,7 @@ the first is usually a typo and the second puts untracked content in the main
 checkout that the cleanup paths would then sweep.
 """
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -444,6 +445,113 @@ def test_the_any_work_tree_arm_has_no_exemption_condition():
         f"the any-work-tree arm's condition is not the documented one: {tests}. An "
         f"added conjunct is an exemption — `Q-406`'s widening is ratified, so a "
         f"narrowing belongs in a phase that argues for it, not in a `&&`."
+    )
+
+
+def test_the_bare_repository_arm_has_no_exemption_condition():
+    """S3's twin for `Q-418`'s arm (Phase 269). Written because the test above
+    says, in its own words, that an arm carrying a ratified widening with no
+    structural guard is "the one arm of the four with no structural guard" — and
+    arm 3 carries a SECOND ratification, so it inherits the same reasoning.
+
+    The scrub list is checked as a REQUIRED SUBSET, not as an exact list, and
+    that is a correction: a review lens showed the exact-list form false-killed
+    four legal reformats, one of which was *adding a sixth scrub variable* — a
+    pin that forbids strengthening the very list it exists to protect is worse
+    than no pin, because the next person to harden the arm reverts the hardening
+    to get green. Removal is still caught, which is the direction that matters.
+
+    Each required variable was measured breaking the arm, and in OPPOSITE
+    directions, which is what distinguishes this pin from arm 2's: dropping
+    `GIT_CEILING_DIRECTORIES` switches the arm OFF (`Q-406`'s STOP class);
+    dropping `GIT_DIR` makes it refuse EVERY legal root; dropping
+    `GIT_CONFIG_COUNT` lets injected `safe.bareRepository` switch it off again
+    (`Q-441`, found by a review lens after the author's battery reported clean).
+    """
+    text = LIB.read_text()
+    start = text.index('  elif gitdir="$(env -u GIT_DIR')
+    cond = text[start:text.index("; then", start)]
+    for var in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR",
+                "GIT_CEILING_DIRECTORIES", "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+                "GIT_CONFIG_COUNT", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM"):
+        assert f"-u {var}" in cond, (
+            f"the bare-repository arm stopped scrubbing {var}. `Q-418`'s widening "
+            f"is ratified and each variable here was measured breaking the arm, so "
+            f"a narrowing belongs in a phase that argues for it. Condition:\n{cond}"
+        )
+    assert 'rev-parse --git-dir 2>/dev/null)"' in cond, "the arm's probe changed shape"
+    assert '&& [ -n "$gitdir" ]' in cond, "the arm's non-empty check is gone"
+    # An exemption is an added conjunct. Count them rather than pinning the text,
+    # so a reflow passes and a third `&&` does not.
+    assert cond.count("&&") == 1, (
+        f"the bare-repository arm's condition gained a conjunct — that is an "
+        f"exemption in the sense `Q-406`'s pin was written for:\n{cond}"
+    )
+
+
+def test_the_bare_repository_arm_has_no_escape_hatch_in_its_BODY():
+    """The hole the condition pin above cannot see, found by a review lens.
+
+    Pinning the `elif` line constrains what the arm TESTS, not what it DOES. A
+    mutation inserting
+
+        if [ -n "${SYSOP_ALLOW_GITDIR_ROOT:-}" ]; then printf '%s\n' "$wr_abs"; return 0; fi
+
+    as the arm's first body statement left the pinned condition text intact and
+    every behavioural test green — the most natural escape-hatch shape there is,
+    and exactly the class Phase 205 shipped and had to revert.
+
+    So the body is constrained too: it may refuse and it may normalise, and it
+    may not RETURN SUCCESS. `return 0` anywhere between the arm's `then` and its
+    closing `fi` is the signature of every hatch of this shape.
+    """
+    text = LIB.read_text()
+    start = text.index('  elif gitdir="$(env -u GIT_DIR')
+    body = text[text.index("; then", start):text.index("\n  fi\n", start)]
+    assert "return 1" in body, "the bare-repository arm stopped refusing"
+    assert "return 0" not in body, (
+        "the bare-repository arm's body can return SUCCESS — an escape hatch that "
+        "the condition pin cannot see. `Q-418`'s widening is ratified; an opt-out "
+        "belongs in a phase that argues for it."
+    )
+    assert "printf" not in body, (
+        "the bare-repository arm's body prints a root — the accept path belongs "
+        "after the arms, not inside a refusal"
+    )
+
+
+def test_the_arm_three_local_is_declared():
+    """`gitdir` is function-scoped, and nothing pinned that.
+
+    A review lens removed it from the `local` line: the variable then leaks into
+    every script that SOURCES this file, and the full suite stayed green. The
+    arms are the visible part of the change; the declaration is the part that
+    keeps it from touching its callers."""
+    text = LIB.read_text()
+    line = next(l for l in text.splitlines() if l.strip().startswith("local CDPATH= primary_root="))
+    assert re.search(r"\bgitdir\b", line), (
+        f"`gitdir` is no longer function-scoped, so arm 3 leaks a global into "
+        f"every sourcing caller: {line.strip()}"
+    )
+
+
+def test_the_bare_repository_arm_runs_after_the_any_work_tree_arm():
+    """ORDERING — which the condition pins cannot see, and which is about the
+    MESSAGE rather than the refusal.
+
+    **Corrected after a review lens falsified this test's own premise.** It used
+    to end "the `elif` is load-bearing, not stylistic", and that is wrong: arm 2's
+    block ends in `return 1`, so `elif` → `if` is behaviour-neutral and the lens
+    measured it failing only the structural pins, no behavioural test. What is
+    load-bearing is the arm 3 block appearing AFTER arm 2's, in either spelling —
+    `--git-dir` succeeds inside an ordinary work tree too, so an arm 3 reached
+    first would tell a root inside someone's checkout that "that repository has
+    no work tree", which is false and is the nearest-true-reason property arm 1's
+    precedence exists to protect."""
+    text = LIB.read_text()
+    assert text.index('  if owner="$(env -u GIT_DIR') < text.index('  elif gitdir="$(env -u GIT_DIR'), (
+        "arm 3 no longer follows arm 2; a root inside a working tree would be "
+        "refused with the no-work-tree message"
     )
 
 
