@@ -801,6 +801,7 @@ The worktree at `<WORKTREE_PATH>` is already claimed — lock at `sysop/runtime/
 2. **Produce the plan.** Structure:
    - **Task summary** — one paragraph restating the task and goal.
    - **`## Constraints & Risks`** preamble — one bullet per file/directory the plan will touch, citing applicable conventions from `.claude/convention_map.md` AND applicable security checks from `.claude/security_map.md`, plus cross-cutting rules (logger formatting, APP_ENV default, log sanitization, fetch redirect guards). One bullet per risk; no prose padding. Include a `### Coverage gap` subsection listing files with no matching map section (write `_(none)_` if every file matches).
+   - **`## Test decision`** — state either **`test <X> proves <Y>`** (the regression test, existing or new, that pins the behaviour this change touches) or **`no test because <Z>`** with a reviewable rationale. Make `Z` reviewable, not a hand-wave: the plan reviewer scrutinises it under `_shared/adversarial-review.md` finding 7, which flags a behaviour-touching task whose decision is missing — so an omission here is caught before an executor is spawned, not at the merge. **Decide it; do not write it.** The execution agent persists this section into the body (Step 7c Sequence item 3‑record), because the body write has to land in the worktree on the branch and you are forbidden from editing files.
    - **`## Implementation Steps`** — numbered steps with concrete file paths, line ranges, and expected diffs.
 3. **Hard constraints:**
    - Do **NOT** edit any file in the worktree (no `Edit` / `Write` tool calls).
@@ -821,6 +822,9 @@ Emit your plan as the LAST content in your final message, wrapped in a fenced ``
 
 ### Coverage gap
 - ...
+
+## Test decision
+test <X> proves <Y>   ("no test because <Z>" is the other legal form)
 
 ## Implementation Steps
 1. ...
@@ -881,6 +885,40 @@ You are executing roadmap task `<TASK_ID>`. The orchestrator has already:
    - **Reject after consideration** — document the rejection rationale inline when you implement, so the same issue does not resurface during human review.
 2. **Call `ExitPlanMode`** with the revised plan as the plan content. This is the agent's only ExitPlanMode call.
 3. **Implement** per the revised plan.
+3‑tier. **When the work surfaces something adjacent, decide the tier before you decide the fix.** Three tiers; take the first that fits.
+
+   1. **Fix it in this branch** when **all** of these hold: it is in a file or module this task already touches; it is mechanical, or a doc, test, or convention-config correction; an existing gate already covers it, or you add the test that does; it is small — on the order of 20 lines, and no more than a few per branch; and it is **not a claim about what the code means that you have not verified by reading the consumer**. **Never tier 1, at any size:** migrations; prompts under whatever eval gate the consumer declares (`<project>/CLAUDE.md`; if it declares none, read this as the project's shipped agent/skill prompt bodies); auth and money-path code; every path in `<project>/CLAUDE.md` § *Security-critical always-include files*; and anything that writes to production. Record each one as a single line under an `## Also fixed` heading in the task body — **the same write as item 3‑record**, in your worktree and never the main checkout (an edit there is on no branch and reaches no PR) — so the close reviews it as *intended* scope rather than as an unexplained hunk, and the test decision covers it. **One write, not two, and the reason is the ordering:** `tasks/schema.md` § *Also fixed* puts this section between `## Test decision` and `## Plan`, and two writes at two moments cannot guarantee that — whichever runs second places itself relative to whatever it happens to find. One write emits both sections in order and the question does not arise.
+   2. **Extend an existing open task** in that module — add what you found to that task's body rather than opening a second entry against the same code. This is `/add-task` Step 2's move, made the default here rather than one branch of a judgment.
+   3. **File a new task** only past both — or when it is a design question, needs a `user_action`, or writes to production. Tier 3 is the path step 5b's stub check is about; tiers 1 and 2 produce no `<PREFIX>-<NAME>` token for it to resolve.
+
+   **The backstop is a property of the CHANGE, not a lookup over a file list** — an enumeration rots. **If the change would weaken, disarm, narrow or delete a gate — a check, a semgrep rule, a numeric bound, an allowlist or ignore entry, a deletion-protection flag — it is never tier 1, whatever file it lives in**, because tier 1's "an existing gate already covers it" predicate is satisfied by the disarming edit itself. If you cannot name a gate that would still fail were your fix wrong, file instead.
+
+   **The bound is the design, not a formality.** Unplanned scope inside a narrow plan is a real failure mode, and an agent mid-task verifies an adjacent thing less carefully than a fresh one would. Tier 1 dropped in the name of throughput becomes a source of defects rather than a sink for tasks. When you are between tiers 1 and 2, take 2 — a filed line costs a reader, a wrong in-branch fix costs a revert.
+3‑record. **Persist the `## Test decision`** section into the task's body file, from the plan's `## Test decision` element above. **Write the worktree copy** (`<WORKTREE_PATH>/tasks/…`), never the main checkout's — an edit there is on no branch, so it never reaches the PR, and `/review-close` Step 2d reads this record at the branch tip. **If item 3‑tier produced any tier-1 fixes, write `## Also fixed` in this same write** — one line each, placed after this `## Test decision` section and before any `## Plan` section, per `tasks/schema.md` § *Also fixed*. **The order is the schema's contract; do not restate the reason you may have read elsewhere.** Two sibling sites justify it as protecting a first-match reader from a heading quoted inside the fenced plan. That is true of the *test-decision* reader, which is fence-blind, and **false of the `## Also fixed` reader**, which `/review-close` Step 2d says in as many words is fence-aware and does not depend on the ordering. Follow the order because the schema declares it and a human reads the body top-down, not because of a protection that reader does not need.
+
+   **If the body already carries a `## Test decision`, REPLACE that section — do not append a second one.** This is not hypothetical: `/claim-task --plan-only` (option C) writes `## Test decision` and `## Plan` into the body and then **releases the claim**, so the task returns to `open` carrying a record, and `/auto-build` Step 1 can claim it — Phase 6a spawns a fresh planner and never inspects the body. A second section leaves two, and every reader downstream takes the first match, so the stale one wins and is reported as verified. If the existing record still holds, say so in your final message and leave it; if your plan's decision differs, replace it and say why.
+
+   **Numbered `3‑record` rather than renumbered into the sequence**, for the reason item `3‑tier` carries the same shape: an executor reads the visible numeral, so shifting `4`, `4b`, `5`, `5b`, `6` and `7` down one to open a slot would rewrite six markers that other steps and this repo's guards cite by number, to say nothing new.
+
+   **If the plan carries no `## Test decision` element, do not compose one from the diff and pass it off as the plan's.** The planner is asked for one and the plan reviewer flags its absence (`_shared/adversarial-review.md` finding 7), so reaching this item without one means something upstream did not happen. Write the decision the implementation actually supports — a record Step 2d can verify beats an absence it can only halt on — and **say in your final message that the plan carried none and this decision is yours**, so the provenance gap reaches the human through the envelope instead of disappearing into a body that looks planner-reviewed.
+
+   **Then read it back, before you go on.** Nothing on this path used to write this record at all: `/review-close` Step 2d classified every autonomous branch `missing`, and because this skill claims through `claim_task.sh --lock` the ownership probe answered `OWED`, which is precisely the condition under which the *"Record not owed"* disposition is withheld — so every close of every autonomous branch put a human in front of a waive-or-hold choice with no third answer. The record is cheap here and expensive there. Confirm the heading is really in the file you just wrote:
+
+   ```bash
+   body="<WORKTREE_PATH>/<BODY_PATH_AS_RESOLVED>"
+   case "$body" in *"<"*) echo "ERROR: placeholder not substituted: $body" >&2; exit 2 ;; esac
+   [ -f "$body" ] || { echo "ERROR: no such body file: $body -- <BODY_PATH_AS_RESOLVED> is the \
+'body:' value from tasks/index.yml, which is relative to tasks/ (e.g. open/<TASK_ID>.md)" >&2; exit 2; }
+   grep -niE -A1 '^#{1,6}[[:space:]]*test[[:space:]]+decision\b' "$body"
+   ```
+
+   **A non-zero exit means the section is not there — go back and write it.** `-A1` prints the line under the heading, so a section still reading `<recorded at /claim-task plan time …>` is visible to you here — that is the schema template, not a record, and Step 2d classifies it `missing` too, so replace it.
+
+   **Know exactly what this proves, because an earlier version of this step claimed more and was wrong in both directions at once.** It is a **shallow** check, the same shape `/claim-task` Step 7e ships: it catches the write that silently did not happen, and nothing else. It does **not** verify that the record is real. `grep` cannot tell a heading in the body from one inside a fenced block, so on a body carrying a `## Plan` section — whose fence quotes its own `## Test decision` line — a hit can be a quotation.
+
+   That version tried to assert the record itself, requiring one of the two legal forms under the heading. Its own review round disqualified it on measurement. **Too permissive where it mattered:** `grep -A2` returns the union of *every* match's window, so a legal form quoted inside `## Plan` satisfied it while the real section was empty — and it exited **0** on a body with no unfenced heading at all, the exact failure it existed to catch. **Too strict everywhere else:** run over the live consumer corpus it rejected **166 of 207** bodies that carry a perfectly good record, with the false message *"empty section, or still the schema placeholder"*. The mechanism was wrong, not its parameters — a fence-blind scan of the whole file cannot answer "does the first *real* section hold a legal form".
+
+   The check that *can* answer it is fence-aware and reads one section: `/claim-task` Step 8's verifier, which is what makes that path's shallow grep affordable. **This path has no such backstop** — the orchestrator parses your envelope and never re-reads the body — and building one is filed as `Q-462` rather than approximated here. A shallow check that says so is worth more than a strong-sounding one that certifies clean over the failure it names.
 4. **Post-fix convention verification** (the same gate `/claim-task` Step 7e's executor runs internally): list changed files via `git diff --name-only <default branch>...HEAD`, check each against **`.claude/convention_map.md` and `.claude/security_map.md`** (with their `.project.md` overlays where present) for the relevant section — **both maps (`Q-352`), matching what this skill's own planner reads.** The autonomous path had the same one-map gap `/claim-task` Step 7e had, and the parenthetical above claims parity with that step, so fixing one and not this one would have made the claim false as well as the behaviour wrong, scan new lines for the listed conventions, fix any regressions before committing.
 4b. **Run the consumer's pre-merge verification gates.** The consumer project's `<project>/CLAUDE.md` has a `## Pre-merge verification` section (per WORKFLOW.md § 6.1) that may contain two subsections:
    - **`### Always`** — full-tree commands run unconditionally (lint, typecheck, tests).
@@ -908,7 +946,7 @@ You are executing roadmap task `<TASK_ID>`. The orchestrator has already:
 
 - Do **NOT** invoke the Agent tool — the orchestrator has already done the planning + adversarial-review fan-out. No nested adversarial pass, even on harness versions (Claude Code ≥2.1.172) where nested spawns are permitted.
 - Do **NOT** flip `status:` fields in `tasks/index.yml` — `/claim-task` (open → in_progress) and `/review-close` (in_progress → done) own status transitions.
-- ADDING a new task entry (a follow-up surfaced during the work) IS allowed and expected. `/document-work` Step 3b (follow-up stub check) requires every `<PREFIX>-<NAME>` token in pending-docs prose to resolve to a real entry in `tasks/index.yml` — file the entry + body file before invoking `/document-work`, or whitelist it intentionally per `tasks/schema.md`.
+- ADDING a new task entry (a follow-up surfaced during the work) IS allowed — but it is **tier 3**, not the default: take Sequence item 3‑tier's tiers in order first. When a follow-up does reach tier 3, `/document-work` Step 3b (follow-up stub check) requires every `<PREFIX>-<NAME>` token in pending-docs prose to resolve to a real entry in `tasks/index.yml` — file the entry + body file before invoking `/document-work`, or whitelist it intentionally per `tasks/schema.md`.
 
 ### Required final-message format
 

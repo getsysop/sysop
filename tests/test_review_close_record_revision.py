@@ -644,11 +644,21 @@ def test_step_2d_gains_no_reversal_vocabulary():
     combined waiver count is acceptable"* beside the anti-conflation rule and did
     the same.
 
-    Zero exemptions: the slice was measured clean of the whole vocabulary when this
-    was wired, so anything appearing later is new and deliberate.
+    One exemption, added by Phase 276 in the commit that caused it. The `2-also` arm
+    describes a section that genuinely *is* optional -- `## Also fixed` is present only
+    when a branch carried a tier-1 fix, and most do not -- so the arm has to say so, or
+    a reader carries the test-decision arm's `missing` halt across and fires it on
+    nearly every branch. The exemption is scoped to that one sentence rather than to
+    the phrase, so a softening of the *test-decision* record elsewhere in the step still
+    reddens: this guard's whole point is that "is optional" beside a pinned rule is how
+    a reversal reads.
     """
     step = slice_between(_text(), "### 2d. Test-Decision Verification", "### 2e.", "Step 2d")
-    assert_no_reversal(step, "review-close Step 2d")
+    assert_no_reversal(
+        step,
+        "review-close Step 2d",
+        exempt=("The section is optional by design (`tasks/schema.md` § *Also fixed*)",),
+    )
 
 
 def test_the_external_population_check_is_not_vacuous():

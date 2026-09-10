@@ -834,3 +834,292 @@ def test_the_plan_only_record_refuses_a_run_it_did_not_mint(repo):
                   {**IDS, "<RUN_ID>": "20260101T000000Z-nosuchrun",
                    "<PLAN_COMMIT_SHA>": "abc1234"}, main)
     assert r.returncode == 3, r.stdout
+
+
+# ---------------------------------------------------------------------------
+# Q-461: `## Also fixed` must survive option C, BETWEEN the two sections it
+# writes. Reached independently by two of Phase 276's three lenses and confirmed
+# by executing the extracted helper; the existing guard read only schema.md's
+# fenced example, so nothing in the suite saw the writer that violated it. These
+# run the shipped block, which is what the filing asked for.
+
+BODY_WITH_ALSO = """\
+# TECH-0007
+
+## Context
+Something needs doing.
+
+## Test decision
+<recorded at /claim-task plan time>
+
+## Also fixed
+- `a/b.py`: dropped a stale comment (PR 3)
+
+## Plan
+
+old plan text
+
+## Surfaced by
+prose
+"""
+
+
+def _order(text: str, *wanted: str) -> list[str]:
+    """The wanted headings in the order they appear OUTSIDE any fence.
+
+    Fence-aware for the reason the block itself is: the embedded plan carries its
+    own `## Test decision` line, so a positional `str.find` reads the quotation
+    and reports an order the body does not have.
+    """
+    seen, fence = [], None
+    for ln in text.split("\n"):
+        s = ln.lstrip()
+        mark = None
+        for ch in ("`", "~"):
+            if s.startswith(ch * 3):
+                run = 0
+                while run < len(s) and s[run] == ch:
+                    run += 1
+                mark = (ch, run)
+                break
+        if fence is None:
+            if mark:
+                fence = mark
+            else:
+                # Level-flexible, because the live corpus carries `### Also fixed` as
+                # well as `## `, and `preserve` matches at any level. An h2-only
+                # matcher here reported the section as ABSENT on a body where it was
+                # present and correctly placed -- a false negative in the test, which
+                # is the direction that wastes a debugging pass.
+                low = ln.strip().lower()
+                n = 0
+                while n < len(low) and low[n] == "#":
+                    n += 1
+                if 0 < n <= 6 and low[n:n + 1] == " ":
+                    txt = low[n:].strip()
+                    for w in wanted:
+                        if txt == w.lower() or txt.startswith(w.lower() + " "):
+                            seen.append(w)
+                            break
+        elif mark and mark[0] == fence[0] and mark[1] >= fence[1] and not ln.strip().strip(mark[0]):
+            fence = None
+    return seen
+
+
+def test_also_fixed_is_re_emitted_between_test_decision_and_plan(repo):
+    """The Q-461 defect, run rather than described.
+
+    Before the fix this produced `Test decision / Plan / Also fixed`: the section
+    was not stripped, so it survived into `out` AFTER `insert_at` was captured at
+    the earlier heading, and the reinserted contiguous block landed in front of it.
+    """
+    main, _ = repo
+    run_id = _stage_plan_only(main, body=BODY_WITH_ALSO)
+    r = _write_back(main, run_id)
+    assert r.returncode == 0, r.stderr
+    text = (main / "tasks/open/TECH-0007.md").read_text()
+    assert _order(text, "Test decision", "Also fixed", "Plan") == [
+        "Test decision", "Also fixed", "Plan",
+    ], (
+        "option C did not leave the body in the schema's order. `## Plan` embeds a "
+        "reviewed plan verbatim in a fence and that plan can quote either heading, so "
+        "a first-match heading reader must meet the real section first -- which is why "
+        "tasks/schema.md calls this order load-bearing.\n\n" + text
+    )
+
+
+def test_also_fixed_content_survives_option_c(repo):
+    """Preserving the heading while dropping its lines would be silent data loss.
+
+    `strip_sections` has produced exactly that twice before, recorded in its own
+    inline comments, which is why this asserts the content and not the heading.
+    """
+    main, _ = repo
+    run_id = _stage_plan_only(main, body=BODY_WITH_ALSO)
+    r = _write_back(main, run_id)
+    assert r.returncode == 0, r.stderr
+    text = (main / "tasks/open/TECH-0007.md").read_text()
+    assert "- `a/b.py`: dropped a stale comment (PR 3)" in text, (
+        "the `## Also fixed` line was lost by the option-C rewrite. The section is a "
+        "record of work that happened; losing it makes the close read the diff hunk as "
+        "unexplained scope.\n\n" + text
+    )
+    assert _headings(text, "Also fixed") == 1, (
+        "the option-C rewrite left more than one `## Also fixed` heading outside a "
+        "fence -- it re-emitted the section without removing the original.\n\n" + text
+    )
+
+
+def test_a_suffixed_also_fixed_heading_is_preserved_and_placed(repo):
+    """`## Also fixed (PR 1)` is a real heading in a live consumer corpus.
+
+    An equality match would leave it in place -- still after `## Plan` -- and report
+    nothing, because the absence branch here is silent by design. Step 2d's arm
+    matches by search for this same reason.
+    """
+    main, _ = repo
+    body = BODY_WITH_ALSO.replace("## Also fixed\n", "## Also fixed (PR 1)\n")
+    run_id = _stage_plan_only(main, body=body)
+    r = _write_back(main, run_id)
+    assert r.returncode == 0, r.stderr
+    text = (main / "tasks/open/TECH-0007.md").read_text()
+    assert "## Also fixed (PR 1)" in text, (
+        "the suffixed heading was not carried through verbatim -- the original heading "
+        "line is what gets re-emitted, so the suffix must survive.\n\n" + text
+    )
+    assert _order(text, "Test decision", "Also fixed", "Plan") == [
+        "Test decision", "Also fixed", "Plan",
+    ], ("a suffixed `## Also fixed` was not placed between the two sections.\n\n" + text)
+
+
+def test_a_quoted_also_fixed_inside_the_plan_fence_is_not_hoisted(repo):
+    """A heading inside the embedded plan is a quotation, not a section.
+
+    Hoisting it would invent an `## Also fixed` record for fixes that never
+    happened -- a fabricated record, which is the worst outcome at this class of
+    site. The walk is fence-aware; this proves the preserve path did not break that.
+    """
+    main, _ = repo
+    plan = PLAN_WITH_A_FENCE + "\n## Also fixed\n- fabricated line from inside the plan\n"
+    body = BODY_WITH_ALSO.replace(
+        "## Also fixed\n- `a/b.py`: dropped a stale comment (PR 3)\n\n", "")
+    run_id = _stage_plan_only(main, plan=plan, body=body)
+    r = _write_back(main, run_id)
+    assert r.returncode == 0, r.stderr
+    text = (main / "tasks/open/TECH-0007.md").read_text()
+    assert _headings(text, "Also fixed") == 0, (
+        "an `## Also fixed` heading quoted inside the embedded plan was treated as a "
+        "real section and hoisted out of the fence. That invents a record of adjacent "
+        "fixes nobody made.\n\n" + text
+    )
+    assert "fabricated line from inside the plan" in text, (
+        "the plan was supposed to be embedded verbatim, fence and all")
+
+
+def test_option_c_is_idempotent_with_an_also_fixed_section(repo):
+    """Two runs must not accrete sections or blank lines.
+
+    The blank-line accretion this guards was a real defect on the first cut of the
+    insertion-point normalisation, found by running it twice; adding a second
+    re-emitted section is a fresh chance to reintroduce it.
+    """
+    main, _ = repo
+    run_id = _stage_plan_only(main, body=BODY_WITH_ALSO)
+    assert _write_back(main, run_id).returncode == 0
+    first = (main / "tasks/open/TECH-0007.md").read_text()
+    run_id2 = _stage_plan_only(main, body=first)
+    assert _write_back(main, run_id2).returncode == 0
+    second = (main / "tasks/open/TECH-0007.md").read_text()
+
+    # The provenance sentence records WHICH run wrote the section, so two runs
+    # legitimately differ by that token and only that token. Normalising it keeps the
+    # comparison byte-exact everywhere else -- which is what catches the blank-line
+    # accretion this test exists for. Comparing raw text instead made this test fail
+    # on correct behaviour.
+    stamp = re.compile(r"\d{8}T\d{6}Z-[0-9a-f]+")
+    first, second = stamp.sub("RUN_ID", first), stamp.sub("RUN_ID", second)
+    assert first == second, (
+        "a second option-C run changed the body. Re-emitting `## Also fixed` must be "
+        "idempotent like the two sections beside it.\n\n--- first ---\n" + first
+        + "\n--- second ---\n" + second
+    )
+    for h in ("Test decision", "Also fixed", "Plan"):
+        assert _headings(second, h) == 1, (
+            f"a second option-C run left more than one `## {h}` heading.\n\n" + second)
+
+
+def test_an_unterminated_fence_still_refuses_with_an_also_fixed_section(repo):
+    """The backstop must survive the preserve path.
+
+    An unterminated fence means the scan cannot tell a heading from fenced text, so
+    `skipping` never resets and every remaining section is dropped -- silent data
+    loss in a tracked file. Adding a second sink is precisely the kind of change
+    that could turn that refusal into a partial write.
+    """
+    main, _ = repo
+    body = BODY_WITH_ALSO.replace("old plan text", "```markdown\nnever closed")
+    run_id = _stage_plan_only(main, body=body)
+    r = _write_back(main, run_id)
+    assert r.returncode == 6, (
+        f"expected the unterminated-fence refusal (exit 6), got {r.returncode}. "
+        f"stdout={r.stdout!r} stderr={r.stderr!r}"
+    )
+    assert (main / "tasks/open/TECH-0007.md").read_text() == body, (
+        "the block refused but had already written the body -- the refusal has to "
+        "happen before any write, or it is data loss with a message attached")
+
+
+def test_two_also_fixed_sections_are_both_preserved(repo):
+    """Round M17: `saved.setdefault` -> overwrite silently drops the FIRST section.
+
+    Not hypothetical, and that is why it earns an execution test rather than a filing:
+    the live consumer corpus has a body carrying `## Also fixed (PR 1)` AND
+    `## Also fixed (PR 0)` -- the two-section shape is the very evidence the docstring
+    cites for search-matching. No fixture had two, so the accumulate-vs-overwrite
+    property was untested. Verified against the mutant: it keeps the second and drops
+    the first, with no error -- section loss in a tracked file, which the surrounding
+    comments say this helper has produced twice before.
+    """
+    main, _ = repo
+    body = ("# TECH-0007\n\n## Context\nc\n\n## Test decision\n<recorded>\n\n"
+            "## Also fixed\n- FIRST LINE\n\n## Also fixed (PR 1)\n- SECOND LINE\n\n"
+            "## Plan\n\nold\n\n## Surfaced by\np\n")
+    run_id = _stage_plan_only(main, body=body)
+    r = _write_back(main, run_id)
+    assert r.returncode == 0, r.stderr
+    text = (main / "tasks/open/TECH-0007.md").read_text()
+    for line in ("- FIRST LINE", "- SECOND LINE"):
+        assert line in text, (
+            f"{line!r} was dropped. Both `## Also fixed` sections are the consumer's "
+            "record of work that happened; losing either makes the close read a diff "
+            "hunk as unexplained scope.\n\n" + text)
+    assert _order(text, "Test decision", "Also fixed", "Plan")[0] == "Test decision", (
+        "the two preserved sections did not land after `## Test decision`.\n\n" + text)
+    assert text.index("- FIRST LINE") < text.index("- SECOND LINE"), (
+        "the two sections were re-emitted out of their original order.\n\n" + text)
+
+
+def test_a_preserved_section_before_the_test_decision_sets_the_insertion_point(repo):
+    """Round M29: no fixture had `## Also fixed` BEFORE `## Test decision`.
+
+    `insert_at` is captured at the EARLIEST removed section, which is what makes the
+    rewrite land where the body already had these sections rather than at EOF. With
+    the preserved section first, that property is only exercised if `preserve` also
+    sets `insert_at` -- and nothing tested it, so an edit dropping that could push the
+    whole block below unrelated trailing sections.
+    """
+    main, _ = repo
+    body = ("# TECH-0007\n\n## Context\nc\n\n## Also fixed\n- adjacent fix\n\n"
+            "## Test decision\n<recorded>\n\n## Plan\n\nold\n\n## Surfaced by\nkeep last\n")
+    run_id = _stage_plan_only(main, body=body)
+    r = _write_back(main, run_id)
+    assert r.returncode == 0, r.stderr
+    text = (main / "tasks/open/TECH-0007.md").read_text()
+    assert text.index("## Context") < text.index("## Test decision"), (
+        "the rewritten block did not land at the earliest removed section's "
+        "position.\n\n" + text)
+    assert text.index("## Surfaced by") > text.index("## Plan"), (
+        "the block was appended past unrelated trailing sections instead of being "
+        "replaced in place -- `## Surfaced by` must stay last.\n\n" + text)
+    assert "- adjacent fix" in text, "the preserved content was lost\n\n" + text
+
+
+def test_the_preserve_match_requires_a_word_boundary(repo):
+    """Round M19: `startswith(k)` without the space strips a different heading.
+
+    `## Also fixedness of the thing` is not an `## Also fixed` section, and hoisting it
+    between the two written sections would relocate a section the consumer wrote
+    somewhere else -- an edit to their content, reported nowhere.
+    """
+    main, _ = repo
+    body = ("# TECH-0007\n\n## Context\nc\n\n## Test decision\n<recorded>\n\n"
+            "## Also fixedness of the thing\n- not an also-fixed section\n\n"
+            "## Plan\n\nold\n\n## Surfaced by\np\n")
+    run_id = _stage_plan_only(main, body=body)
+    r = _write_back(main, run_id)
+    assert r.returncode == 0, r.stderr
+    text = (main / "tasks/open/TECH-0007.md").read_text()
+    assert text.index("## Also fixedness") > text.index("## Plan"), (
+        "`## Also fixedness of the thing` was treated as an `## Also fixed` section and "
+        "hoisted above `## Plan`. The match needs a word boundary, not a prefix.\n\n"
+        + text)

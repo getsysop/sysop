@@ -126,7 +126,7 @@ Field is purely optional. Tasks without `manual_smoke:` and pending-docs without
 
 ### Test decision
 
-Every claimed task records a **test decision** in its body — the plan-time answer to "how do we know this works?" Decided by the planner at `/claim-task` Step 7a and written to the durable body by the Step 7e executor during implementation, so `/review-close` (Phase 59) can read it back at close time. (On the plan-only path there is no executor, so option C's write-back carries this section too — see "Plan" above.) It takes one of two forms:
+Every claimed task records a **test decision** in its body — the plan-time answer to "how do we know this works?" Decided by a planner and written to the durable body by the agent that implements, so `/review-close` (Phase 59) can read it back at close time. **Two paths write it, and both decide at plan time:** `/claim-task` Step 7a decides, Step 7e's executor writes (Step 8 then re-reads it at the branch tip); `/auto-build`'s plan-only agent decides in its plan structure, and Step 7c Sequence item 3‑record writes (Phase 277 — before it, nothing on that path wrote this section at all, so every autonomous branch reached Step 2d classified `missing`). On `/claim-task`'s plan-only path there is no executor, so option C's write-back carries this section too — see "Plan" above. It takes one of two forms:
 
 - **`test <X> proves <Y>`** — names the regression test (existing or new) that exercises the behavior this task changes, and the invariant it pins.
 - **`no test because <Z>`** — the explicit, reviewable rationale when no automated test is added (pure rename/move, config-only change, docs, a path an existing named test already covers, or a behavior that can only be confirmed by `manual_smoke:`).
@@ -138,6 +138,33 @@ Every claimed task records a **test decision** in its body — the plan-time ans
 **The validator does not check this** (Phase 234, Q-022). It did, warn-only, from Phase 58b: Invariant 13 warned when an `in_progress` body lacked the heading. But the validator reads the body off the **filesystem**, and the executor writes this section *inside the worktree*, so it is committed on the feature branch and nowhere else. Run from `main` — which is where both of its shipped callers run it — the section is absent for the entire `in_progress` window, so the warning fired on every claimed task on every validator run rather than on the tasks actually missing a record. A backstop that cannot distinguish the failure from the normal case is not a backstop, and it was diluting a channel that carries twelve invariants which can. Step 2d, which reads the revision that has the record, is the whole enforcement story.
 
 This is the **plan-time recording** half of Sysop's test discipline; the adversarial plan reviewer's "Missing invariant tests" dimension (`_shared/adversarial-review.md` finding 7) is the **review-time scrutiny** half — it judges whether a recorded `no test because Z` rationale is *sound*, rather than flagging the mere absence of a test. They are complementary, not redundant: the author records the decision here; the reviewer judges the recorded rationale.
+
+### Also fixed
+
+**Optional, and already in use before it was written down here.** A consumer project carried **eight** of these headings across seven task bodies when this section was authored, two of them with a `(PR N)` suffix. **That is not independent corroboration and must not be read as any** — the same tier rule reached that project's own `CLAUDE.md` two days earlier from the same source, and the first heading appears five hours after it. They are the rule's output, not evidence for it. What they *do* establish is a shape constraint that costs nothing to honour: readers must match this heading by **search, not equality**, because `## Also fixed (PR 1)` is a real heading in a live corpus.
+
+**Present only** when a branch carried an adjacent fix made under the **fix-in-branch tier** — `/claim-task` Step 7e Sequence item 2b, `/auto-build` Step 7c Sequence item 3b, and `/document-work` Step 3's tier list, which are one rule stated in the three places an executor reads. Most tasks never have one, and a body without the heading is the normal case, not a defect.
+
+**What goes in it.** One line per fix: what was wrong, where, and which gate or test covers it. Not a narrative. A fix that needs a paragraph to justify is past tier 1 and belongs in a task.
+
+**What may never go in it,** at any size: migrations, prompt files, money-path or auth code, anything that writes to production, and any path in the consumer's `<project>/CLAUDE.md` § *Security-critical always-include files* — the same list `/security-audit` Step 1 reads when it determines scope. These are outside the tier by category, not by size, so a correct one-line fix to one of them is still a task, not an `## Also fixed` entry.
+
+```markdown
+## Also fixed
+- `src/parse/header_parser.py:88` — off-by-one in the header offset; covered by the existing `test_header_span` case.
+- `docs/configuration.md` — the `WORKTREE_ROOT` row named a default the resolver stopped using in Phase 264.
+```
+
+**Why it exists.** The tier's whole claim is that a fix which is small, mechanical, in a file the task already touches, and covered by a gate is cheaper done now than filed and re-onboarded later. That claim only holds if the fix is *visible as intended scope* at the close. Without this section the same hunk reaches `/review-close` Step 2a as a diff the task body does not explain — which is a finding, correctly, because a reviewer cannot tell a licensed adjacent fix from unplanned scope creep. This heading is what makes the difference legible, and it is also the measurement surface: `## Also fixed` lines per branch is one of the three numbers the tier is judged on.
+
+**Where it is enforced.** `/review-close` Step 2d, alongside the test decision, on the same branch-tip read — see below for why that is the only shape that can work here.
+
+**The validator does not check this, and will not**, for both of the reasons that retired Invariant 13 and kept `## Plan` from ever getting one, in combination:
+
+- Like `## Test decision`, it is written by the executor **inside the worktree** and committed on the feature branch, so a validator reading the filesystem from `main` cannot see it at all.
+- Like `## Plan`, it is **optional by design** — most tasks fix nothing extra — so a presence check has no failure to distinguish from the normal case.
+
+A check that is both blind to the revision holding the record *and* unable to tell absence from correctness is not warn-only, it is noise. **What those two prongs refute is a *presence* check specifically.** An *if-present shape* check — when a body carries the section, each line names a path — is refuted by neither, and after a branch merges the section does sit on the default branch where the validator could see it. Nobody has built one, and it would repeat Step 2d's work at a point where nothing can act on the result; it is unbuilt rather than forbidden, and the distinction is recorded so a later author is not told the tree already settled a question it did not. `/review-close` Step 2d reads the right revision and already has the body open.
 
 ### User ops
 
@@ -304,6 +331,12 @@ Conventional section layout:
 ## Test decision
 <recorded at /claim-task plan time — "test <X> proves <Y>" or "no test because <Z>". See "Test decision" below.>
 
+## Also fixed
+<optional; one line per adjacent fix made in the same branch under the fix-in-branch tier.
+ Written by the executor during implementation, not at plan time. Ordered BEFORE "Plan" for
+ the same reason "Test decision" is — the fenced plan can quote either heading, so a
+ first-match reader must meet the real section first. See "Also fixed" below.>
+
 ## Plan
 <optional; written only by /claim-task option C (plan-only). The reviewed plan verbatim in a
  fenced block, followed by the sealed REVIEW_REPORT: block that passed it. Ordered AFTER
@@ -342,7 +375,9 @@ Conventional section layout:
 > Step 2d, which reads the branch tip and blocks. See "Test decision" above.
 >
 > **`## Plan` did not get one either, and for a stronger version of the same
-> reason.** The section above is optional by design — option C is one of three
+> reason, and `## Also fixed` (Phase 276) gets one for both reasons at once —
+> it is written on the branch like the test decision *and* optional like the
+> plan.** The section above is optional by design — option C is one of three
 > interaction modes and most tasks never take it — so a warn-only presence check
 > would fire on nearly every task in the queue rather than merely on claimed
 > ones. A check that cannot tell the failure from the normal case is not a

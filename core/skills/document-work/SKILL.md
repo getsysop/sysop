@@ -180,6 +180,18 @@ If multiple types could apply, use the primary one.
 
 **Do NOT** modify `PROJECT_STATUS.md`, `CHANGELOG.md`, `UI_Iterations.md`, `tasks/index.yml`, or `tasks/**/*.md` body files directly (with one exception, below). Status transitions on `tasks/index.yml` are owned by `/claim-task` and `/review-close`. **Filing a NEW follow-up task entry (id + body file under `tasks/open/`) IS allowed and is required when the work surfaces a follow-up that Step 3b would otherwise hard-fail on.**
 
+**Before filing one, take the tiers in order** — filing is tier 3, not the default. Three tiers; take the first that fits. This is the same rule the `/claim-task` and `/auto-build` executors run (Step 7e Sequence item 2b and Step 7c Sequence item 3b respectively); it is restated here because `/document-work` is also invoked directly, outside either executor, and the decision to file is made *here* — Step 3b only verifies that something already decided-and-named actually exists.
+
+1. **Fix it in this branch** when **all** of these hold: it is in a file or module this work already touches; it is mechanical, or a doc, test, or convention-config correction; an existing gate already covers it, or you add the test that does; it is small — on the order of 20 lines, and no more than a few per branch; and it is **not a claim about what the code means that you have not verified by reading the consumer**. **Never tier 1, at any size:** migrations; prompts under whatever eval gate the consumer declares (`<project>/CLAUDE.md`; if it declares none, read this as the project's shipped agent/skill prompt bodies); auth and money-path code; every path in `<project>/CLAUDE.md` § *Security-critical always-include files*; and anything that writes to production. Record each one as a single line under an `## Also fixed` heading in the task body, per `tasks/schema.md` § *Also fixed* — which is the **one further exception** to the "do not modify `tasks/**/*.md` body files" rule above, alongside filing a new body.
+2. **Extend an existing open task** in that module rather than opening a second entry against the same code.
+3. **File a new task** only past both — or when it is a design question, needs a `user_action`, or writes to production.
+
+**The backstop is a property of the CHANGE, not a lookup over a file list** — an enumeration rots. **If the change would weaken, disarm, narrow or delete a gate — a check, a semgrep rule, a numeric bound, an allowlist or ignore entry, a deletion-protection flag — it is never tier 1, whatever file it lives in**, because tier 1's "an existing gate already covers it" predicate is satisfied by the disarming edit itself. If you cannot name a gate that would still fail were your fix wrong, file instead.
+
+**The bound is the design, not a formality.** Unplanned scope inside a narrow plan is a real failure mode, and an agent mid-task verifies an adjacent thing less carefully than a fresh one would. Tier 1 dropped in the name of throughput becomes a source of defects rather than a sink for tasks. When you are between tiers 1 and 2, take 2 — a filed line costs a reader, a wrong in-branch fix costs a revert.
+
+Tiers 1 and 2 put no `<PREFIX>-<NAME>` token into the pending-docs prose, so neither one reaches Step 3b's gate at all: **that gate is a tier-3 gate**, and a tier-1 fix is invisible to it by construction. The record that keeps a tier-1 fix honest is `## Also fixed` plus `/review-close` Step 2a reading the diff against the body, not this check.
+
 <!-- Routing logic (which shared docs to update based on type) lives in /review-close Step 4c -->
 <!-- Canonical process: WORKFLOW.md §2.4 (Documentation) -->
 
