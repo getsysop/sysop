@@ -1132,7 +1132,16 @@ Read your three inputs from disk rather than from this prompt: `<ARTIFACT_DIR>/p
 
 1. **Absorb the classification.** For each `fixable` finding, apply its recorded `response` to the plan as you implement. Where a finding was rejected, its rationale is in `classification.md` — do not silently re-litigate it.
 2. **Implement** per the plan. Re-open the files it touches; do not rely on its summaries.
-3. **Persist the `## Test decision`** section into the task's body file, per the plan's step for it. **Write the worktree copy** (`<WORKTREE_PATH>/tasks/…`), never the main checkout's — an edit there is on no branch, so it never reaches the PR, and `/review-close` Step 2d reads this record at the branch tip. **If the plan's step names a main-checkout path, correct it and note the correction** rather than following it. The one exception is a body that is untracked in the main checkout (`/add-task` filed it and nobody committed it): it is on no branch and cannot be put on one, so write the main-checkout copy and **say so in your final message** — that record will not reach the PR and the body needs committing before `/review-close` runs.
+2b. **When the work surfaces something adjacent, decide the tier before you decide the fix.** Three tiers; take the first that fits.
+
+   1. **Fix it in this branch** when **all** of these hold: it is in a file or module this task already touches; it is mechanical, or a doc, test, or convention-config correction; an existing gate already covers it, or you add the test that does; it is small — on the order of 20 lines, and no more than a few per branch; and it is **not a claim about what the code means that you have not verified by reading the consumer**. **Never tier 1, at any size:** migrations; prompts under whatever eval gate the consumer declares (`<project>/CLAUDE.md`; if it declares none, read this as the project's shipped agent/skill prompt bodies); auth and money-path code; every path in `<project>/CLAUDE.md` § *Security-critical always-include files*; and anything that writes to production. Record each one as a single line under an `## Also fixed` heading in the task body — the same write as item 3 — so the close reviews it as *intended* scope rather than as an unexplained hunk, and the test decision covers it.
+   2. **Extend an existing open task** in that module — add what you found to that task's body rather than opening a second entry against the same code. This is `/add-task` Step 2's move, made the default here rather than one branch of a judgment.
+   3. **File a new task** only past both — or when it is a design question, needs a `user_action`, or writes to production.
+
+   **The backstop is a property of the CHANGE, not a lookup over a file list** — an enumeration rots. **If the change would weaken, disarm, narrow or delete a gate — a check, a semgrep rule, a numeric bound, an allowlist or ignore entry, a deletion-protection flag — it is never tier 1, whatever file it lives in**, because tier 1's "an existing gate already covers it" predicate is satisfied by the disarming edit itself. If you cannot name a gate that would still fail were your fix wrong, file instead.
+
+   **The bound is the design, not a formality.** Unplanned scope inside a narrow plan is a real failure mode, and an agent mid-task verifies an adjacent thing less carefully than a fresh one would. Tier 1 dropped in the name of throughput becomes a source of defects rather than a sink for tasks. When you are between tiers 1 and 2, take 2 — a filed line costs a reader, a wrong in-branch fix costs a revert.
+3. **Persist the `## Test decision`** section into the task's body file, per the plan's step for it. **Write the worktree copy** (`<WORKTREE_PATH>/tasks/…`), never the main checkout's — an edit there is on no branch, so it never reaches the PR, and `/review-close` Step 2d reads this record at the branch tip. **If the plan's step names a main-checkout path, correct it and note the correction** rather than following it. **If item 2b produced any tier-1 fixes, write `## Also fixed` in this same write** — one line each, placed after this `## Test decision` section and before any `## Plan` section, per `tasks/schema.md` § *Also fixed*. That order is not cosmetic: the plan section is a fenced block that can quote either heading, so a first-match heading reader must meet the real section first. The one exception is a body that is untracked in the main checkout (`/add-task` filed it and nobody committed it): it is on no branch and cannot be put on one, so write the main-checkout copy and **say so in your final message** — that record will not reach the PR and the body needs committing before `/review-close` runs.
 
    **Then read it back, before you go on.** This write is skipped more often than any other step in this sequence — measured on one consumer cycle at **three of four branches**, all claimed the same day through this path, two of them shipping substantial tests. So it is a missing *record*, not missing coverage, and nothing downstream catches it in time: the validator's warn-only invariant on this fact was retired (it read the working tree, where the record does not live), leaving `/review-close` Step 2d as the only enforcement — at the merge, after implementation, where the sole dispositions are waive it or hold otherwise-ready work. The record is cheap here and expensive there. Confirm the heading is really in the file you just wrote:
 
@@ -1162,7 +1171,7 @@ Read your three inputs from disk rather than from this prompt: `<ARTIFACT_DIR>/p
 
 - Do **NOT** invoke the Agent tool — this run is a leaf, and the envelope contract assumes a flat hierarchy.
 - Do **NOT** write to `sysop/runtime/subagent-envelopes/`. That directory is written **only** by the `SubagentStop` hook, and that is the entire reason it is evidence: no agent can cause it to exist. Writing it yourself converts the one unforgeable artifact into a forgeable one.
-- Do **NOT** flip `status:` fields in `tasks/index.yml`. Adding a new follow-up task entry IS allowed and expected if `/document-work` Step 3b would flag an unfiled follow-up ID.
+- Do **NOT** flip `status:` fields in `tasks/index.yml`. Adding a new follow-up task entry IS allowed — and is required if `/document-work` Step 3b would flag an unfiled follow-up ID — but it is **tier 3**, not the default: take item 2b's tiers in order first.
 - Do **NOT** push to origin (`/review-close` owns the push).
 - Do **NOT** invoke `/document-work` (the orchestrator does, at Step 8).
 
@@ -1292,14 +1301,53 @@ def fence_mark(line):
             return ch, n
     return None
 
-def strip_sections(lines, headings):
+def strip_sections(lines, headings, preserve=()):
     """Drop each `## <heading>` through the line before the next `## `.
 
-    Returns `(kept, insert_at, unbalanced)`. `insert_at` is where the EARLIEST
-    removed section began, so the rewrite lands back in the position it held
-    rather than at the end of the file; `None` means none of them were present
-    and the caller appends. `unbalanced` reports an unterminated fence, on
-    which the caller REFUSES -- see the note at the return.
+    Returns `(kept, insert_at, unbalanced, saved)`. `insert_at` is where the
+    EARLIEST removed section began, so the rewrite lands back in the position it
+    held rather than at the end of the file; `None` means none of them were
+    present and the caller appends. `unbalanced` reports an unterminated fence,
+    on which the caller REFUSES -- see the note at the return.
+
+    `preserve` names headings to remove from the body but hand BACK to the
+    caller in `saved` (keyed by the lowercased canonical heading, the original
+    heading line included), so the caller can re-emit them at a mandated
+    position instead of leaving them where they fell. It exists for one
+    concrete defect (`Q-461`): the caller strips `## Test decision` and
+    `## Plan` and reinserts them as one contiguous block at `insert_at`, so a
+    body in the schema's own order -- `Test decision / Also fixed / Plan` --
+    came out `Test decision / Plan / Also fixed`, inverting the order
+    `tasks/schema.md` calls load-bearing. Two insertion points would need a
+    second fence-aware walk over `out`; preserving through THIS walk keeps the
+    fence arithmetic single-sourced, which matters in a helper that has
+    produced silent section loss twice.
+
+    `preserve` matches at `## ` by SEARCH rather than equality: a match is
+    `## <name>` or a heading beginning `## <name> `. That was forced by grepping
+    the live consumer corpus -- `## Also fixed (PR 1)` and `## Also fixed (PR 0)`
+    are real headings in one task body, and an equality test would leave each
+    where it was, i.e. still sitting after `## Plan`, while reporting nothing,
+    because this arm is silent by design. The re-emitted heading is the caller's
+    original line, so the suffix survives.
+
+    **Matching at `## ` only is a decision, not an oversight, and it was made by
+    reverting the alternative.** A first cut matched any heading level. The
+    corpus does not support it -- of 12 `Also fixed` headings, the only
+    non-`## ` one is `tasks/schema.md`'s own section header, and no task body
+    carries the shape -- and it cost three defects: hoisting a deeper heading
+    RE-PARENTS it (an edit to the consumer's content, not a move), the hoisted
+    section then landed after `## Plan` so the NEXT run consumed it as part of
+    the plan section and dropped it, and a `# Also fixed` at h1 swallowed every
+    following `## ` section into the sink. Handling a deeper heading correctly
+    means deciding whether re-parenting is acceptable, which is a design
+    question; it is filed, not fixed here.
+
+    `headings` keeps equality at `## ` for the same reason plus one more: the
+    corpus carries `### Test decision` headings that this helper therefore does
+    not strip, so the caller inserts a SECOND section and a first-match reader
+    can meet the stale one. That is pre-existing and separately filed, and must
+    not be "tidied" into this line without the double-section case being handled.
 
     FENCE-AWARE on purpose, and it tracks fence LENGTH rather than just the
     marker. A task body can carry ``` or ~~~ blocks whose content starts with
@@ -1311,23 +1359,43 @@ def strip_sections(lines, headings):
     carry no info string.
     """
     want = {"## " + h.lower() for h in headings}
+    keep = ["## " + h.lower() for h in preserve]
     out, fence, skipping, insert_at = [], None, False, None
+    saved, sink = {}, None
     for ln in lines:
         mark = fence_mark(ln)
         if fence is None:
             if mark:
                 fence = mark
-            elif ln.strip().lower() in want:
-                if insert_at is None:
-                    insert_at = len(out)
-                skipping = True
-                continue
-            elif skipping and ln.startswith("## "):
-                skipping = False
+            else:
+                low = ln.strip().lower()
+                # Equality for `headings`; search at `## ` for `preserve`.
+                key = None
+                for k in keep:
+                    if low == k or low.startswith(k + " "):
+                        key = k
+                        break
+                if low in want or key is not None:
+                    if insert_at is None:
+                        insert_at = len(out)
+                    skipping = True
+                    # `sink` is None for a stripped-and-discarded section and a list
+                    # for a preserved one, so the two share one walk without either
+                    # branch having to know about the other.
+                    sink = saved.setdefault(key, []) if key is not None else None
+                    if sink is not None:
+                        sink.append(ln)
+                    continue
+                elif skipping and ln.startswith("## "):
+                    skipping = False
+                    sink = None
         elif (mark and mark[0] == fence[0] and mark[1] >= fence[1]
               and not ln.strip().strip(mark[0])):
             fence = None
-        if not skipping:
+        if skipping:
+            if sink is not None:
+                sink.append(ln)
+        else:
             out.append(ln)
     # An UNTERMINATED fence means the body's own fencing is unbalanced, and the
     # scan above cannot then tell a heading from fenced text -- so `skipping`
@@ -1336,7 +1404,7 @@ def strip_sections(lines, headings):
     # This is a BACKSTOP, not the fix: the fence arithmetic below is what stops
     # this block producing an unbalanced body in the first place. It exists
     # because an independent reviewer reached it with ordinary reviewer output.
-    return out, insert_at, fence is not None
+    return out, insert_at, fence is not None, saved
 
 # newline="" disables universal-newline translation, so a CRLF body is not silently
 # rewritten LF throughout -- which showed as a whole-file diff rather than the ~20 added
@@ -1359,7 +1427,8 @@ text = raw.replace("\r\n", "\n")
 # and Step 7a's presence test reads whichever comes first, i.e. the stale one --
 # and on the FIRST run it would push both sections below `## Surfaced by`, which
 # is not the order `tasks/schema.md` documents.
-lines, insert_at, unbalanced = strip_sections(text.split("\n"), ("Test decision", "Plan"))
+lines, insert_at, unbalanced, saved = strip_sections(
+    text.split("\n"), ("Test decision", "Plan"), preserve=("Also fixed",))
 if unbalanced:
     print("ERROR: {} has an unterminated code fence -- refusing to rewrite it, because a "
           "section scan cannot tell a heading from fenced text in that state and would drop "
@@ -1402,6 +1471,29 @@ block = [
     "",
     test_decision.strip(),
     "",
+]
+# `## Also fixed` is re-emitted HERE, between the two sections, because
+# `tasks/schema.md` orders it between them and this writer is the only thing that
+# can place it (`Q-461`). It was not stripped before, so it survived into `out`
+# AFTER `insert_at` was captured, and the reinserted block landed in front of it --
+# turning the schema's order into `Test decision / Plan / Also fixed`. Reached
+# independently by two reviewers and confirmed by executing the helper.
+#
+# Content is the consumer's; it is carried through unjudged. Trailing blanks are
+# dropped so the single "" below is the only separator, matching the blank-line
+# hygiene the insertion-point normalisation above establishes -- without it a
+# second option-C run accretes one blank line per run.
+# Keyed by the canonical `"## <name>"`, matching `keep` in `strip_sections`.
+# Getting this key wrong is silent data loss, not a no-op: the section is stripped
+# either way, and a lookup that misses simply fails to re-emit it. It has now been
+# wrong twice in this phase -- once in each direction, as the matching rule moved --
+# and both times the CONTENT test caught it while a heading test would not have.
+also = saved.get("## also fixed") or []
+while also and not also[-1].strip():
+    also.pop()
+if also:
+    block += also + [""]
+block += [
     "## Plan",
     "",
     "_Written by `/claim-task --plan-only` (option C), run `{}`. The plan below was "

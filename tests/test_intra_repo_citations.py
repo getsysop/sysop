@@ -134,6 +134,7 @@ UNRESOLVED_ALLOWED = {
     "bls_client.py": "gdp-side file, cited as provenance in docs/one-rule.md",
     "fred_client.py": "gdp-side file, cited as provenance in docs/one-rule.md",
     "alphavantage_client.py": "gdp-side file, cited as provenance in docs/one-rule.md",
+    "src/parse/header_parser.py": "illustrative example path in tasks/schema.md § Also fixed",
     "isr_client.py": "invented module name inside a semgrep fixture",
     "watchdog.py": "invented module name inside a semgrep fixture",
 }
