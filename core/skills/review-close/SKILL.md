@@ -647,7 +647,7 @@ This is the sibling of Step 3c's manual-smoke gate — a per-task body conventio
 
 For each **approved** feature branch (Step 2a verdict), for each task ID it claims (path resolved exactly as in Step 2a step 3 — `tasks/index.yml`'s `body:` per claimed ID):
 
-> **Read the record at the branch tip — not out of the working tree.** Both writing paths *decide* the test decision at plan time, and on both the **executor writes it into the body during implementation, inside the worktree** — `/claim-task` at Step 7e Sequence item 3, `/auto-build` at Step 7c Sequence item 3‑record — so the section is committed on the feature branch and nowhere else. Step 2d runs at Step 2; nothing merges until Step 3b/4a. `HEAD` is still `main`, so the working tree's copy of the body is whatever `main` has — and for a task claimed this cycle that copy carries **no test-decision heading at all**, because every shipped body-author is told not to write one (`intake/SKILL.md:111`, `add-task/SKILL.md:63`, `onboard/SKILL.md:95`; the schema's placeholder is a template, not something a real body normally holds). Reading *that* copy therefore classifies the record `missing` for every task on every branch on every run, and each `missing` fires the halt below. **Nothing spares one** — step 0's doc-only skip does not, because a `missing` classification is not the `no-test` its second conjunct requires, so a doc-only branch halts here too. A gate that only ever reports the state of a revision it is not gating. Resolve the *path* from `main`'s `tasks/index.yml` — correct, because a claim does not move the body and Step 4c's archive move runs after this step — and read the *content* from the revision under review:
+> **Read the record at the branch tip — not out of the working tree.** Both writing paths *decide* the test decision at plan time, and on both the **executor writes it into the body during implementation, inside the worktree** — `/claim-task` at Step 7e Sequence item 3, `/auto-build` at Step 7c Sequence item 3‑record — so the section is committed on the feature branch and nowhere else. Step 2d runs at Step 2; nothing merges until Step 3b/4a. `HEAD` is still `main`, so the working tree's copy of the body is whatever `main` has — and for a task claimed this cycle that copy carries **no test-decision heading at all**, because every shipped body-author is told not to write one (`intake/SKILL.md:111`, `add-task/SKILL.md:64`, `onboard/SKILL.md:95`; the schema's placeholder is a template, not something a real body normally holds). Reading *that* copy therefore classifies the record `missing` for every task on every branch on every run, and each `missing` fires the halt below. **Nothing spares one** — step 0's doc-only skip does not, because a `missing` classification is not the `no-test` its second conjunct requires, so a doc-only branch halts here too. A gate that only ever reports the state of a revision it is not gating. Resolve the *path* from `main`'s `tasks/index.yml` — correct, because a claim does not move the body and Step 4c's archive move runs after this step — and read the *content* from the revision under review:
 >
 > ```bash
 > # `body:` is canonically relative to `tasks/` — `open/<TASK-ID>.md`, NOT
@@ -717,13 +717,17 @@ ls "$(git rev-parse --git-common-dir)/../sysop/runtime/locks/<TASK_ID>.lock" >/d
 
 **This arm runs for every claimed task on every approved branch, including a task item 0 skipped.** It is inside Step 2d's loop, so its reach is that loop's: a branch claiming no roadmap task id — a review-batch branch, which holds a `BATCH-<N>.lock` rather than a `tasks/index.yml` claim, or a hand-cut branch — never enters it and is not covered here. Said plainly rather than left implied, because an earlier draft of this sentence claimed *every branch* and Step 2d cannot deliver that. Item 0's doc-only skip is scoped to *test-decision verification* — it exists because a docs branch carrying a `no test because Z` needs no test hunt. Carrying that skip across to this arm would silence it on precisely the branches most likely to trip it: a doc correction is the archetypal tier-1 fix, so doc-only branches are where `## Also fixed` is *most* expected, not least. If item 0 skipped this branch, read the body anyway for this arm alone.
 
-Once the body is in hand, this arm re-reads nothing. Find the section under a heading matching `also\s+fixed` (case-insensitive) — a **search, not an equality test**: `## Also fixed (PR 1)` is a real heading in a live consumer corpus and must match. **Skip fenced content when you look** — and do it here rather than by reference, because item 1 carries no such caveat and an earlier draft of this arm said it did. The `## Plan` section holds a reviewed plan *verbatim in a fence* (`tasks/schema.md` § Plan), and a plan that discusses this very rule will quote the heading. A fence-blind reader then finds a heading that is a quotation, reads the lines under it as a record, and reports check-1 findings against paths the branch legitimately never touched — a fabricated finding, which is the worst outcome this skill has. Track fences the way `/claim-task`'s Step 8 verifier does (its `fence_mark` helper: ``` and `~~~`, a closing marker at least as long as the one that opened), and take only headings outside one. **The ordering rule does not save you here**: `## Also fixed` before `## Plan` protects a first-match reader only when a real section exists, which is exactly the case where you did not need protecting.
+Once the body is in hand, this arm re-reads nothing. Find **every** section under a heading matching `also\s+fixed` (case-insensitive) — a **search, not an equality test**: `## Also fixed (PR 1)` is a real heading in a live consumer corpus and must match. **Two sections in one body is a reachable shape, so do not stop at the first match.** `/claim-task`'s option-C writer was executed against a body carrying `## Also fixed` *and* `## Also fixed (PR 1)` and re-emitted both — contents preserved, both correctly placed, `rc=0` — so a two-section body reaches this gate looking exactly as its author left it, and the reader that loses the second section is this one. Each section ends at the next heading of the **same or shallower** depth, so a `#### ` sub-heading inside one belongs to it rather than terminating it. **Count three things as headings, because two of them are easy to miss and both fail in the over-counting direction**: an ATX heading indented by up to three spaces is still a heading (four or more is a code block), and a **setext** heading — a line of text underlined by `===` (depth 1) or `---` (depth 2) — is one too. A terminator model anchored to a column-0 `#` sees neither, so the section over-runs into the next one and the tally reports its entries as well. Measured on both shapes. The error a first-match reader makes is an **undercount**, and that is the damaging direction: `## Also fixed` lines per branch is one of the three numbers § G judges the tier on, so too few lines reads as the tier sitting comfortably inside a bound it may already have left. **Skip fenced content when you look** — and do it here rather than by reference, because item 1 carries no such caveat and an earlier draft of this arm said it did. The `## Plan` section holds a reviewed plan *verbatim in a fence* (`tasks/schema.md` § Plan), and a plan that discusses this very rule will quote the heading. A fence-blind reader then finds a heading that is a quotation, reads the lines under it as a record, and reports check-1 findings against paths the branch legitimately never touched — a fabricated finding, which is the worst outcome this skill has. A fence opens on ``` or `~~~` and closes on a marker using the **same character**, **at least as long** as the opener, **and carrying no info string** — take only headings outside one. **Stated here in full rather than by reference to another skill, and that is a correction.** An earlier draft of this paragraph said *track fences the way `/claim-task`'s Step 8 verifier does*. That was unsafe when written — Step 8's walker carried no info-string check, so following it reproduced the defect described next — and it stays wrong as an instruction even now that `Q-468` has closed it, because a rule held only by pointing at another skill's code moves when that code does. Both of `/claim-task`'s walkers now delegate the closer decision to one `fence_closes` predicate per block — defined once per heredoc, since nothing is shared across them, cited at two lines that cannot be swapped for one another — `claim-task/SKILL.md:1300`, where Step 7f's writer says why its own openers carry info strings, and `claim-task/SKILL.md:1895`, the clause itself in Step 8's verifier; `fence_mark` still reports only that a line **is** a marker, which is the distinction that made this defect possible — an opener may carry an info string, a closer may not.
 
-- **Absent → done. Absence is never a finding here**, and this arm never halts on it. The section is optional by design (`tasks/schema.md` § *Also fixed*): most branches carry no adjacent fix, and a branch that fixed nothing extra is the normal case, not an omission. This is the opposite of the test-decision arm above, where `missing` *is* the finding — do not carry the halt across.
-- **Present → check three things**, all against `git diff --name-only <default branch>...<branch>` (three dots, per Step 2a's note), which you already have:
+**Why the info-string clause is load-bearing.** A ```` ```json ```` line *inside* a ```` ``` ```` fence is content, not a closer. A reader that accepts it as one believes it has left the fence while it is still inside, and then reads the fence's remaining lines as real sections — the fabricated-finding outcome this paragraph exists to prevent, arriving through the rule meant to prevent it. **The reachable window is narrow and worth knowing**, because a *balanced* nesting inverts the model twice and cancels: only a heading sitting **between the info-string line and its matching closer** is exposed. Verified by execution, both positions. A live consumer body carries the nesting (one in 912 bodies, scanned).
+
+**On an unterminated fence, report and stop — do not guess.** The arm is silent about this shape today and silence picks the worst answer by default: a reader that stays "inside" to EOF loses every real section and says nothing (the absence branch below is silent by design), and one that falls back to fence-blind reads the plan's quotations as records. Neither may pass unannounced, so surface it as `also-fixed record — unbalanced fences in <body>, not parsed` and let the human decide. `/claim-task` Step 8 detects the same condition and prints a NOTE rather than choosing silently; this is that rule, not a new one. **The ordering rule does not save you here**: `## Also fixed` before `## Plan` protects a first-match reader only when a real section exists, which is exactly the case where you did not need protecting.
+
+- **No section anywhere → done. Absence is never a finding here**, and this arm never halts on it. The section is optional by design (`tasks/schema.md` § *Also fixed*): most branches carry no adjacent fix, and a branch that fixed nothing extra is the normal case, not an omission. This is the opposite of the test-decision arm above, where `missing` *is* the finding — do not carry the halt across.
+- **One or more sections → check three things**, all against `git diff --name-only <default branch>...<branch>` (three dots, per Step 2a's note), which you already have. **Run all three over each section you found and report the union** — a finding in the second section is a finding, and the numbers item 4 asks for are sums across the sections rather than the first one's:
   1. **Every path a line names is in the diff.** A line naming a path the branch does not touch is a record of something that did not happen — a fabricated or copy-pasted entry — and the human reads the record. **Know this check's reach before you rely on it:** it compares against the *whole* branch diff, so it catches a line naming a file the branch never touched and nothing narrower. A fabricated line naming a file the task itself changed passes it trivially. That is a real bound, not a quibble — the check is a cheap screen against copy-paste, not a proof the fix happened.
   2. **No line names a never-tier-1 path.** Migrations, prompt files, the consumer's `<project>/CLAUDE.md` § *Security-critical always-include files*, money-path or auth code, or anything that writes to production. These are excluded from the tier at any size, so a line naming one means the bound was exceeded, whether or not the fix itself is correct.
-  3. **The count is small** — the tier says a few per branch, on the order of 20 lines each. A branch carrying many is not automatically wrong, but it is the shape the tier is most likely to be drifting into, and § G is explicit that the bound gets tightened before anything else if it does.
+  3. **The count is small** — the tier says a few per branch, on the order of 20 lines each. **Judge the summed count**, never each section's alone: the bound is per *branch*, so two sections of twelve lines is a twenty-four-line branch, and a per-section reading clears it twice over. A branch carrying many is not automatically wrong, but it is the shape the tier is most likely to be drifting into, and § G is explicit that the bound gets tightened before anything else if it does.
 
 **Judge a section against the bound in force when its branch was claimed**, not against the bound today. That is the ordinary rule for a changing convention and needs no special carve-out: an earlier draft of this arm granted one on the ground that the heading *predated any rule*, which is false — every section that existed when this arm was written was authored under a consumer-side copy of the same tier, bound and never-list included.
 
@@ -738,7 +742,7 @@ A finding on any of the three joins item 3's halt with the reason `also-fixed re
 
 Waivers, "record holds" and "record not owed" do not block. Only "hold for fix" changes the verdict, and it does so by reusing the existing **reject** disposition — no edits to Steps 3b/4/6 are needed.
 
-**4. Record outcomes for Step 8.** Tally per task: `verified`, `waived`, `not owed`, `held for fix` (now rejected), `unreadable`, or `skipped (doc-only)`. Tally the `## Also fixed` arm separately into its **own `Also fixed:` line** in the Step 8 report — `<N branches carrying the section, N lines total, N findings>` — never folded into the `Test decisions:` line, whose six fields answer a different question. One line per gate is this step's own convention (the `Security map:` line argues it at length), and it is load-bearing twice here: a close where no branch carried the section otherwise reads identically to a close where nobody looked, and `## Also fixed` lines per branch is one of the three numbers the tier is judged on — it has to reach the artifact the human reads. This drives the "Test decisions" line in the final report. **`waived` and `not owed` are counted separately and must not be merged back into one number** — that conflation is the whole reason the fourth disposition exists, and a report that sums them restores it.
+**4. Record outcomes for Step 8.** Tally per task: `verified`, `waived`, `not owed`, `held for fix` (now rejected), `unreadable`, or `skipped (doc-only)`. Tally the `## Also fixed` arm separately into its **own `Also fixed:` line** in the Step 8 report — `<N branches carrying a section, N lines total, N findings>` — never folded into the `Test decisions:` line, whose six fields answer a different question. **`N lines total` sums every section found, and a branch carrying two sections still counts once in the first field.** **A line is a list ITEM, not a physical line**, and the difference is not pedantry: `tasks/schema.md` says *one line per fix* and the live corpus wraps entries across three and four physical lines, so counting physical lines over-reports by 2× on real input. Count an item for each list marker at the section's top level — `-`, `*`, `+`, or `1.` — and **do not count its continuation lines or its nested sub-items**, which belong to the entry above them. The marker is deliberately not restricted to `-`: a section written with `*` bullets carries real entries, and a reader that only knows `-` tallies it as **zero**, which is the undercount direction this whole arm exists to close. A section that **records no entries** contributes **zero** — in the live corpus that shape is an explicit `_(none)_` marker *followed by a sentence or two saying why*, so do not read the rule as requiring the marker to be the section's whole content; it is the absence of list items that makes the count zero. Counting the explanatory prose would push the same number the other way. The two halves fail in opposite directions and both corrupt the same ratio: a first-match line count understates the numerator, while counting a two-section body as two branches inflates the denominator, and § G's number is lines *per branch*. One line per gate is this step's own convention (the `Security map:` line argues it at length), and it is load-bearing twice here: a close where no branch carried the section otherwise reads identically to a close where nobody looked, and `## Also fixed` lines per branch is one of the three numbers the tier is judged on — it has to reach the artifact the human reads. This drives the "Test decisions" line in the final report. **`waived` and `not owed` are counted separately and must not be merged back into one number** — that conflation is the whole reason the fourth disposition exists, and a report that sums them restores it.
 
 If the approved-branch set is empty (only unpushed main commits this cycle), Step 2d is a no-op — unpushed main commits don't carry `/claim-task` test-decision records. Skip cleanly.
 
@@ -1553,10 +1557,27 @@ PY
       # exited 1 on a bad path; a bare glob over a missing dir yields nothing and would
       # exit 0 with a success-shaped report, after which (b) removes the worktree and the
       # untracked docs are gone. Step 3c hard-errors on its unsubstituted placeholder for
-      # the same reason. `src_dir` is checked too, not just `wt`: an existing but WRONG
-      # directory is the shape that otherwise reports success over nothing.
+      # the same reason.
+      #
+      # `src_dir` USED to sit in this same disjunction, and that was `Q-470` — reported
+      # four times in eight days against a green suite. An absent pending-docs directory is
+      # the ORDINARY state of a branch whose doc was authored on the main checkout (which
+      # /document-work supports explicitly), of a hand-cut branch that never ran
+      # /document-work at all, and of a prior run that collected and then died before
+      # `git worktree remove`. In every one the directory's absence PROVES there is nothing
+      # here to lose, which is exactly when proceeding to (b) is safe; the guard was sending
+      # a compliant operator to fix an invocation that was already correct, and the bypass
+      # that teaches is the untracked-doc data loss this step exists to prevent.
+      #
+      # What that check was REACHING for is the wrong-but-existing directory, and that shape
+      # is still refused — but by a test that DISCRIMINATES, sited where it discriminates.
+      # See the `src_dir`-absent arm below: `.git` separates a checkout from a directory
+      # that merely exists, and it is only asked there. Where `src_dir` IS present the
+      # question buys nothing — the directory demonstrably holds this branch's pending-docs
+      # and they must be collected whatever else is true of it — so asking it here would
+      # have widened exit 4 across the whole population for no discrimination at all.
       if ('<worktree' in str(wt) or '<branch' in branch
-              or not branch.strip() or not wt.is_dir() or not src_dir.is_dir()):
+              or not branch.strip() or not wt.is_dir()):
           print(f'PENDING-DOC COLLECT ABORTED: unusable worktree path or branch name '
                 f'({wt}, {branch!r})')
           sys.exit(4)
@@ -1591,6 +1612,116 @@ PY
           b = fm.get('branch')
           return b.strip() if isinstance(b, str) and b.strip() else None
 
+      def _git(*args):
+          """Read-only git **in the WORKSPACE**, hermetic, and it FAILS OPEN — it never
+          raises and never halts.
+
+          `-C wt`, not the CWD, and that is the whole coverage argument. A `--clone`
+          workspace is a **separate repository** (`claim_task.sh --clone` publishes the
+          branch and clones `origin`), so its commits live in its own object store; measured
+          from the main checkout, a clone-shape doc's `branch_tip` does not resolve and every
+          clone-shape close would take the unknown arm — armed-looking and dead for that
+          whole population. Run from the workspace, the objects are always there: a linked
+          worktree shares the primary's store, and a clone has its own. The branch this asks
+          about is the branch the DOC describes, which is the one the workspace holds.
+
+          The env strip is Phase 124's rule: an inherited `GIT_DIR`/`GIT_WORK_TREE` from the
+          caller's shell overrides `-C` and resolves the wrong repository. Returning None on
+          any failure is deliberate and is stated in the exit table: a missing git, a
+          workspace that is not a repository, or a pruned object must not turn a
+          doc-integrity step into a refusal to close. Every doc written before `branch_tip:`
+          existed reaches the staleness test below with nothing to compare, and that case has
+          to be indistinguishable from a git that would not answer.
+          """
+          import os, subprocess
+          try:
+              r = subprocess.run(
+                  ['git', '-C', str(wt), *args], capture_output=True, text=True, timeout=10,
+                  env={_k: _v for _k, _v in os.environ.items()
+                       if _k not in ('GIT_DIR', 'GIT_WORK_TREE',
+                                     'GIT_COMMON_DIR', 'GIT_INDEX_FILE')},
+              )
+          except (OSError, subprocess.SubprocessError):
+              return None
+          return r.stdout if r.returncode == 0 else None
+
+      UNUSABLE_TIP = object()   # the key is there and its value cannot be an object name
+
+      def tip_of(p):
+          """This doc's `branch_tip:` — the branch tip /document-work Step 3 authored it
+          against. None is the ordinary answer for every doc predating the key; the
+          `UNUSABLE_TIP` sentinel says the key IS present and its value is not a string."""
+          try:
+              m = fm_re.match(p.read_text(encoding='utf-8', errors='replace'))
+          except OSError:
+              return None
+          if not m:
+              return None
+          try:
+              fm = yaml.safe_load(m.group(1))
+          except yaml.YAMLError:
+              return None
+          if not isinstance(fm, dict):
+              return None
+          if 'branch_tip' not in fm:
+              return None
+          t = fm.get('branch_tip')
+          # PRESENT-BUT-UNUSABLE is not ABSENT, and reporting it as absent states something
+          # false about the doc. `branch_tip: 1234567` is a YAML *int*, `true` a bool,
+          # `null` a None — all legal YAML, none of them an object name, and each one
+          # reaches here from a hand-edited or machine-mangled frontmatter. Returning the
+          # sentinel lets the caller say which it saw.
+          return t.strip() if isinstance(t, str) and t.strip() else UNUSABLE_TIP
+
+      # `src_dir` ABSENT is not an error — see the guard above. It is dispositioned HERE,
+      # after `branch_of` exists, because the two legitimate readings are worth telling
+      # apart: main already holding this branch's doc, and no pending-doc existing for this
+      # branch anywhere. Both permit (b); only the second is something an operator may want
+      # to act on before the branch merges, and silence would collapse them.
+      #
+      # An existing but EMPTY `src_dir` took the ordinary path before this change and still
+      # does — it reaches stage 1 with `docs == []`, collects nothing and exits 0. The two
+      # states must not be dispositioned differently, and that is the property to preserve
+      # if this arm is ever rewritten.
+      if not src_dir.is_dir():
+          # The wrong-but-existing directory, refused by the one test that tells it apart
+          # from the legitimate state. A HEALTHY workspace is always a checkout — a linked
+          # worktree (`.git` file) or a clone (`.git` directory) — and `main-checkout` never
+          # runs this heredoc at all.
+          #
+          # But step 0 does not ENFORCE that, and an earlier draft of this comment claimed it
+          # did. Arm (iii) `discovered` is `.git`-backed (it calls `head_branch`), arm (ii)
+          # `recorded` is NOT: it accepts the lock's `workspace:` on `cand.is_dir()` alone.
+          # So a stale or hand-edited lock naming a plain directory resolves as `recorded`
+          # and arrives here. Exit 4 is still the right answer for it — there is no checkout
+          # to collect from — which is why the message below names the actual reason instead
+          # of reusing the generic one; a `Q-470`-shaped "fix the invocation" on a lock the
+          # operator never typed is precisely the mis-blame this phase is removing.
+          #
+          # This is also why `Q-470`'s filing was wrong that the fix must overturn
+          # `test_a_wrong_but_existing_worktree_path_aborts`. Its fixture is two BARE
+          # directories, which is NOT observationally identical to the legitimate state after
+          # all — the legitimate state has a `.git`, and neither the old guard nor the old
+          # test was reading the one fact that separates them. The oracle stands; what
+          # changed is that it now pins a discrimination rather than a conflation.
+          if not (wt / '.git').exists():
+              print(f'PENDING-DOC COLLECT ABORTED: {wt} is not a checkout (no .git) and '
+                    f'holds no sysop/runtime/pending-docs — nothing here belongs to '
+                    f'{branch!r}. Check the workspace this branch\'s lock records.')
+              sys.exit(4)
+          on_main = sorted(
+              q.name for q in live.glob('*.md')
+              if q.name not in NOT_A_BRANCH_DOC and branch_of(q) == branch
+          ) if live.is_dir() else []
+          if on_main:
+              print(f'PENDING-DOC COLLECT SKIPPED: no {src_dir} — this branch\'s doc is '
+                    f'already on main ({", ".join(on_main)}); nothing to collect')
+          else:
+              print(f'PENDING-DOC COLLECT SKIPPED: no {src_dir}, and main holds no doc '
+                    f'claiming {branch!r} — this branch has no pending-doc anywhere')
+          print('PENDING-DOC COLLISIONS: 0')
+          sys.exit(0)
+
       docs = [p for p in sorted(src_dir.glob('*.md')) if p.name not in NOT_A_BRANCH_DOC]
 
       # STAGE 1 — DECIDE. Nothing is written until every doc has been checked, so there is
@@ -1599,6 +1730,9 @@ PY
       # doc was in the same "collected" list as a newly-created one. Deciding first makes
       # that class impossible rather than handled.
       collisions = []
+      stale = []
+      unknown_tip = []
+      SHA_RE = re.compile(r'[0-9a-fA-F]{7,64}\Z')
       for src in docs:
           # Ground truth is the branch being PROCESSED, not what two docs say about each
           # other. A doc that does not claim this branch is not this branch's to collect.
@@ -1607,6 +1741,52 @@ PY
               collisions.append(f'{src.name} (worktree doc claims {src_b!r}, '
                                 f'processing {branch!r})')
               continue
+
+          # STALENESS (`Q-471`). This is the LAST point in the close where the branch is
+          # still in the shape its doc was written against: Step 4-pre rebases or
+          # cherry-picks, and Step 4a may squash, all of which orphan the recorded SHA. Step
+          # 4c — where the routing that writes the durable record actually happens — cannot
+          # ask this question at all, and the ancestry property that makes that true is the
+          # one 1b's own blockquote already documents. So it is asked here and answered by
+          # refusing to collect, not by holding at 4c.
+          #
+          # `SHA_RE` is not decoration. `branch_tip` is free-form frontmatter, and an
+          # unvalidated value beginning with `-` reaches `git rev-list` as an option rather
+          # than a revision. A value that is not an object name is not a measurement, so it
+          # takes the same arm as a git that would not answer.
+          tip = tip_of(src)
+          if tip is None:
+              unknown_tip.append(f'{src.name} (no `branch_tip:` — written before the key '
+                                 f'existed, or by a writer that does not emit it)')
+          elif tip is UNUSABLE_TIP:
+              unknown_tip.append(f'{src.name} (`branch_tip:` is present but is not a '
+                                 f'string — a bare hex-looking value is a YAML int, and '
+                                 f'`true`/`null`/`[]` are not object names either)')
+          elif '<' in tip:
+              # The writer emitted its own template verbatim. `is not an object name` is
+              # true of it but names the wrong cause, and this heredoc already treats an
+              # unsubstituted `<worktree-path>` as its own loud case. Still fail open: the
+              # defect is in a writer, and halting every close until someone fixes one is
+              # the disposition `Q-470` is on this page for.
+              unknown_tip.append(f'{src.name} (`branch_tip:` is an UNSUBSTITUTED PLACEHOLDER '
+                                 f'— {tip!r}. The writer did not fill it in; fix the writer, '
+                                 f'not this close)')
+          elif not SHA_RE.match(tip):
+              unknown_tip.append(f'{src.name} (`branch_tip: {tip!r}` is not an object name)')
+          else:
+              counted = _git('rev-list', '--count', f'{tip}..{branch}')
+              try:
+                  drift = int((counted or '').strip())
+              except ValueError:
+                  counted = None
+                  drift = 0
+              if counted is None:
+                  unknown_tip.append(f'{src.name} (`branch_tip` {tip[:12]} does not resolve '
+                                     f'here — not evidence either way)')
+              elif drift:
+                  log = (_git('log', '--oneline', '--no-decorate',
+                              f'{tip}..{branch}') or '').strip()
+                  stale.append((src.name, tip[:12], drift, log))
           dst = live / src.name
           if dst.exists():
               dst_b = branch_of(dst)
@@ -1615,6 +1795,9 @@ PY
               if dst_b != branch:
                   collisions.append(f'{src.name} (main copy belongs to {dst_b!r}, '
                                     f'processing {branch!r})')
+      for u in unknown_tip:
+          print(f'PENDING-DOC STALENESS UNKNOWN: {u}')
+
       if collisions:
           for c in collisions:
               print(f'PENDING-DOC COLLISION: {c}')
@@ -1622,14 +1805,36 @@ PY
                 f'nothing collected, main untouched, worktree left in place')
           sys.exit(3)
 
+      # Collisions outrank staleness: a collision is about WHOSE record this is, which has
+      # to be settled before anything is said about whether a record is current.
+      if stale:
+          for name, tip12, drift, log in stale:
+              print(f'PENDING-DOC STALE: {name} — {drift} commit(s) landed on {branch!r} '
+                    f'after the doc was authored (branch_tip {tip12})')
+              for line in log.split('\n'):
+                  if line:
+                      print(f'    after the doc: {line}')
+          print(f'PENDING-DOC STALE: {len(stale)} — refusing; nothing collected, main '
+                f'untouched, worktree left in place. Re-run /document-work on this branch '
+                f'to refresh its doc (that re-stamps `branch_tip:`), then re-run the close.')
+          sys.exit(6)
+
       # STAGE 2 — COPY. Every doc has already been cleared.
       live.mkdir(parents=True, exist_ok=True)   # load-bearing, see below
       for src in docs:
           try:
               shutil.copy2(src, live / src.name)
           except OSError as e:
-              # A broken symlink, a directory named *.md, an unreadable file. Report and
-              # halt: (b) must not remove a worktree whose docs are not all on main.
+              # Report and halt: (b) must not remove a worktree whose docs are not all on
+              # main.
+              #
+              # **This comment used to name a broken symlink and a directory named *.md, and
+              # neither can reach it** — measured, both shapes. `branch_of` opens the file in
+              # stage 1, catches the OSError, returns None, and None never equals the branch,
+              # so both exit **3** as collisions before stage 2 begins. What actually reaches
+              # here is a WRITE that fails: an unwritable destination, or a source that
+              # cleared stage 1 and became unreadable between the stages. The exit table's
+              # own row said the same wrong thing.
               print(f'PENDING-DOC COLLECT FAILED: {src.name}: {e}')
               sys.exit(5)
           print(f'PENDING-DOC COLLECTED: {src.name}')
@@ -1642,17 +1847,36 @@ PY
 
       **Why provenance and not a content comparison.** The two copies differing is *not* the signal — the overwhelmingly common collision is the **same branch collected twice** (a prior run copied the doc, then died before `git worktree remove`), where main's copy is stale by construction and the worktree must win. Step 3c states exactly that rule for its own dedup, and a byte-comparison would fire loudly on the case where overwriting is correct while staying silent on the case that matters. What matters is whether the two docs came from the **same branch**, and each doc already carries that claim in its own `branch:` field.
 
-      **Print to stdout, and note there is no `2>/dev/null` any more.** The old form masked the dest-missing error, which is what made the failure silent; the collision lines above are the Step 8 `Pending-doc collisions:` row's only source.
+      **Print to stdout, and note there is no `2>/dev/null` any more.** The old form masked the dest-missing error, which is what made the failure silent; the collision lines above are the Step 8 `Pending-doc collisions:` row's only source. **The same is true of the `PENDING-DOC STALE:` and `PENDING-DOC STALENESS UNKNOWN:` lines** — they feed Step 8's `Stale pending-docs:` and `Staleness not measured:` rows, and a gate whose SKIP has no row in the run's report is a SKIP nobody sees. An earlier cut of this phase shipped both lines with no sink at all.
 
-      **Any non-zero exit means do NOT proceed to (b).** There are three, and they are not interchangeable:
+      **Any non-zero exit means do NOT proceed to (b).** There are four, and they are not interchangeable. **Exit 0 is not one shape either** — it is the ordinary collect, an existing-but-empty `sysop/runtime/pending-docs/`, and (since `Q-470`) the *absent* one, which prints `PENDING-DOC COLLECT SKIPPED:` naming which of the two legitimate readings applies. Proceed to (b) on all three; the absence of a directory to copy from is a proof there is nothing to lose, not a failure to find it.
 
       | exit | meaning | state of main | what to do |
       |---|---|---|---|
       | **3** | a collision — some doc does not belong to this branch | **untouched**; stage 1 writes nothing, so there is no partial work and nothing to undo | SKIP this branch (worktree, lock and branch intact). **Do not run the rollback** — it has nothing to undo. Resolve by correcting the mis-labelled doc, then re-run |
-      | **4** | unusable `<worktree-path>` or `<branch name>` — a placeholder left unsubstituted, a missing directory, an empty branch | **untouched**; nothing ran | fix the invocation and re-run. Never proceed to (b) |
-      | **5** | a copy failed partway through stage 2 (broken symlink, unreadable file) | **partially written** — some docs collected, the rest not | SKIP this branch and **do** run the rollback, which removes this branch's own collected copies by provenance. This is the one exit where there IS partial work |
+      | **4** | unusable `<worktree-path>` or `<branch name>` — a placeholder left unsubstituted, an empty branch, or a path that does not exist. **Plus one conditional arm:** a path that exists, has **no `.git`**, and has no `pending-docs/` inside it. The `.git` test is asked *only* there, because where the docs are present they must be collected whatever else is true of the path — so a non-checkout directory that does contain `pending-docs/` collects normally and does not reach this exit | **untouched**; nothing ran | fix the invocation and re-run. Never proceed to (b) |
+      | **5** | a copy failed partway through stage 2 — the destination is unwritable, or a source that cleared stage 1 became unreadable between the stages. **Not** a broken symlink or a directory named `*.md`: both are refused at stage 1 as collisions (exit 3), measured | **partially written** — some docs collected, the rest not | SKIP this branch and **do** run the rollback, which removes this branch's own collected copies by provenance. This is the one exit where there IS partial work |
+      | **6** | this branch's doc is **stale** — commits landed on the branch after `/document-work` stamped its `branch_tip:` | **untouched**; stage 1 writes nothing, same as 3 | SKIP this branch (worktree, lock and branch intact). **Re-run `/document-work` on this branch** — that re-stamps `branch_tip:` — then re-run the close. **Do not run the rollback**; there is nothing to undo |
 
       An earlier draft of this paragraph named only two exits and said exit 3 *"has undone its own partial work"* — language left over from the retired second design, which copied as it went. This one decides first, so on 3 there is nothing to undo; and it omitted 5, which is the only exit where the sentence would have been true.
+
+      > **Why staleness is decided here and not at Step 4c, where the damage would be done (`Q-471`).** Step 4c routes a doc's `summary:` into `PROJECT_STATUS.md` §6 in the same commit that flips its task to `done`, and nothing between the two asks whether the doc still describes the branch — measured at filing time: `mtime`, *stale doc*, *refresh the pending* and *describes the branch* return **zero** hits across all three lifecycle skills. The reported instance is not an edge case: three prod-write repair docs still reading *"NO prod write has been performed"* while their task bodies read *"Prod write PERFORMED and verified"*. A prod-write task reaches Step 4c stale **by construction**, because it writes its doc when the code is ready and achieves its deliverable afterwards, on the same branch, in a later commit.
+      >
+      > **Step 4c cannot ask it on the dominant shape, which is worse than not being able to ask it at all.** The test is `git rev-list --count <branch_tip>..<branch>`, an ancestry test over the branch's own history, and **Step 4a item 2 rebases each approved branch onto the merge target**. That rewrites the branch's SHAs, so on the default integration-branch shape the recorded `branch_tip` is an orphan by the time 4c runs and the count is meaningless — the same ancestry property step 1b's own blockquote documents at length, arriving there from the other direction.
+      >
+      > **Two shapes leave the branch intact, and that is the argument, not a caveat.** Under the Step 4-pre **PR-reuse** shape Step 4a is skipped outright, and a branch 4a classifies **published** is merged `--no-ff` rather than rebased — *"`--no-ff` leaves `<branch>` exactly where it was"*. On both, a 4c check would answer correctly. So a gate sited at 4c would be **live on the shapes that rarely fire and inert on the one that always does**, reporting nothing while the record goes wrong — this project's own shipped-inert class. A gate at 3b is correct on all of them, because 3b runs before Step 4 touches anything.
+      >
+      > **The squash is not part of this and an earlier draft of this paragraph said it was.** `--squash` appears once in the whole skill, at Step **4d**'s `gh pr merge`, which runs *after* 4c — so it cannot have orphaned anything 4c reads. Naming it here was wrong about which step does what, in the paragraph whose entire job is to say where the check can live.
+      >
+      > **Refusing to collect is the disposition, and holding at 4c is not available.** Step 1c's hold — leave the doc in `sysop/runtime/pending-docs/` and report it — works because a held doc's branch survives (Step 6 carries a HARD RULE for exactly that). A doc held for staleness has no such remedy at 4c, and the reason is sharper than "nothing refreshes it": the only thing that refreshes a pending-doc is **re-running `/document-work` on its branch**, and by the time 4c runs, Step 3b item (b) has already removed the workspace and Step 6 is about to delete the branch. The two things the remedy needs are gone. It would wait forever — the permanent-halt class 1b's quarantine rule exists to avoid — and 1c escapes it only because Step 6 carries a HARD RULE retaining a held doc's branch, which a staleness hold has no equivalent of. Refusing here loses nothing instead: main is untouched, the branch is unmerged, the worktree stays — **which is what makes the remedy reachable**, since re-running `/document-work` needs the workspace this exit declines to remove.
+      >
+      > **The cost, stated rather than discovered later.** Any commit after `/document-work` trips this, including a lint fix that does not falsify a word of the `summary:`. That deferral is real and it is the reason the report prints `git log --oneline` for the drift rather than only a count — the operator should be able to judge in one glance. **The remedy is the same either way**, and it is one command: re-run `/document-work`. There is deliberately no acknowledge-and-proceed flag; an override on a guard whose whole subject is "the record no longer matches the work" would be the first thing reached for and the last thing remembered.
+      >
+      > **A doc with no `branch_tip:` is reported and collected, never refused.** Every doc written before this key existed has none, and so does anything written by a producer that does not emit it. Refusing those would halt every consumer's first close after an update — the shape `Q-470` is on this page for. The same arm takes a `branch_tip` that is not an object name and one git will not resolve: absence of a measurement is not a measurement. Those print `PENDING-DOC STALENESS UNKNOWN:` and proceed, and the gap is real rather than papered over — a doc whose provenance cannot be established gets the pre-`Q-471` behaviour.
+      >
+      > **One shape is out of reach and saying so is the point.** The **`main-checkout`** shape never runs this heredoc (step 1 above says so: nothing to collect), so a doc authored in the primary checkout for the primary checkout is never staleness-tested. The exposure is narrower — the work and the doc share one checkout, so nothing landed between them that the author did not see — but it is not zero, and no reader should infer coverage from this gate's existence.
+      >
+      > **`clone` is NOT the second one, and an earlier draft of this gate made it so.** The measurement was first written against the runner's CWD, the main checkout — where a `--clone` workspace's commits do not exist, because a clone is a separate repository with its own object store. Measured: a genuinely stale clone-shape doc reported `STALENESS UNKNOWN` and collected, on every clone-shape close, forever. `-C wt` is what fixes it, and it is the reason the helper takes the workspace rather than inheriting the CWD every other part of this heredoc uses.
 
       **Why refuse rather than preserve-and-continue.** An earlier draft of this phase moved main's copy into a `sysop/runtime/pending-docs/superseded/` subdirectory and carried on. Its own review round disqualified that: **nothing in the shipped tree reads that directory.** Step 4c step 1 is a non-recursive `ls …/*.md`, so a parked doc is never consolidated — its branch's `roadmap_ids` never flip, its body is never archived, its lock never drops — and the phase had shipped, as the steady-state result of an ordinary collision, the exact end state the rollback note below condemns. Preserving bytes where no reader looks is not preservation. Refusing keeps both records in the two places a reader already checks.
 
@@ -1971,10 +2195,22 @@ For each approved feature branch (oldest first), merge it into the **merge targe
 
 #### Sysop-written shared append files — the conflicts this skill causes itself
 
-Two tracked files are appended to by *every* branch as a matter of workflow, so a conflict in them is prescribed rather than exceptional. **Never resolve either by stripping the `<<<<<<<`/`=======`/`>>>>>>>` markers and keeping both sides.** For an indented list that is exactly the resolution that corrupts silently — verified by repro, not reasoned:
+Three tracked files are appended to across branches as a matter of workflow, so a conflict in them is prescribed rather than exceptional — the first two by *every* branch, `tasks/notes.md` only by a branch that wrote a note. **Never resolve the first two by stripping the `<<<<<<<`/`=======`/`>>>>>>>` markers and keeping both sides**; `tasks/notes.md` is the one exception and its bullet states the two properties that make it one. For an indented list marker-stripping is exactly the resolution that corrupts silently — verified by repro, not reasoned:
 
 - **`tasks/index.yml`** — `/document-work` **requires** a branch that surfaces a follow-up to file it here: its otherwise-blanket "do NOT modify `tasks/index.yml`" rule carries one explicit carve-out, *"Filing a NEW follow-up task entry (id + body file under `tasks/open/`) IS allowed and is required when the work surfaces a follow-up that Step 3b would otherwise hard-fail on."* `/add-task` appends here too. So two branches filing follow-ups in one cycle collide deterministically — this is a conflict Sysop's own workflow prescribes, not an edge case. Git splits the entry into **two separate hunks** — the `id:` line and the `body:` line — and leaves every field the two entries share (`title` when identical, `phase`, `status`, `effort`, `blast_radius`, `user_action`, `depends_on`, `surfaced_by`) *outside* the markers as common context. Strip the markers and you get one entry holding **`id:` alone** while the next entry absorbs the whole shared field block plus a duplicate `body:` key. `yaml.safe_load` accepts it, the ids stay unique, and the damage is invisible to a diff read.
 - **`review_tasks.md`** — see the paragraph below, which predates this section and still governs.
+- **`tasks/notes.md`** — the notes ledger, appended to at tier 3 of the fix-in-branch rule when a follow-up cannot name what it blocks (`tasks/README.md` § *The notes ledger*). **This is the one of the three where keeping both sides IS the resolution**, and that is a property of its shape rather than a relaxation: it is a flat list of independent one-line entries with no nesting, so a union has nothing to splice wrongly. Order carries no meaning — do not reorder to make the diff tidy, and do not merge two lines that look similar; they were written by different branches about different work. **Two properties make the union safe, and BOTH must hold — check them, do not assume them.** **(1) The file is flat**: one line per note, no sub-bullets, no sections, no line continued across two lines. A nested list is the `tasks/index.yml` corruption above in a file with no validator behind it. **(2) Neither side DELETED a line.** A delete is not structure and leaves the file perfectly flat, so property (1) does not catch it — and this workflow *creates* deletes: `/add-task` Step 2 promotes a note by filing it as a task and removing its line. Union a promotion against another branch's append and **the promoted note comes back**, now duplicating a filed task. Verify with the merge stages before you union — same numbering as `tasks/index.yml` above, stage 2 is the merge target and stage 3 is the branch being replayed:
+
+```bash
+git show :1:tasks/notes.md > "${TMPDIR:-/tmp}/sysop-notes-base.md"    # merge base
+git show :2:tasks/notes.md > "${TMPDIR:-/tmp}/sysop-notes-ours.md"    # merge target
+git show :3:tasks/notes.md > "${TMPDIR:-/tmp}/sysop-notes-theirs.md"  # this branch
+# Any line present in the base and missing from a side is that side's deliberate delete:
+comm -23 <(sort "${TMPDIR:-/tmp}/sysop-notes-base.md") <(sort "${TMPDIR:-/tmp}/sysop-notes-ours.md")
+comm -23 <(sort "${TMPDIR:-/tmp}/sysop-notes-base.md") <(sort "${TMPDIR:-/tmp}/sysop-notes-theirs.md")
+```
+
+**Both empty → union is correct, keep both sides.** **Either non-empty → do not union.** Take the merge target's file and append only the lines stage 3 *added* relative to stage 1, so each side's deletes survive. **Two more traps, both measured rather than reasoned:** under `merge.conflictStyle=diff3`/`zdiff3` there is a fourth marker, `|||||||`, and a strip of only the three named above leaves it and the whole base section in the file — which reinjects exactly the line a promotion removed; and two branches appending a *byte-identical* line merge with **no conflict at all** and collapse to one, which no resolution step can catch because none runs. No validator gates this file, so there is no green light afterwards; re-read the resolved file before you stage it.
 
 **Resolve `tasks/index.yml` from the merge stages, structurally.** Both sides are complete files in the index; only the textual splice is broken. Stage numbering is the opposite of the intuitive reading during a rebase and was confirmed by execution, not recalled — **stage 2 is the merge target you are rebasing onto, stage 3 is the commit being replayed** (the feature branch):
 
@@ -2177,6 +2413,16 @@ After all branches are merged but **before** pushing:
 
 1b. **Drop any pending-doc whose branch did not actually merge — this gate decides task state, so it must not run on an unmerged branch's doc.** Step 3b copies each approved branch's pending-doc into main's `sysop/runtime/pending-docs/` *before* the merge is attempted (that ordering is deliberate — it is what stops `git worktree remove` from destroying the doc). So a branch that is approved, has its doc collected, and then **fails to merge at Step 4a** leaves a doc here that this step would otherwise consolidate — routing its content to the shared docs, flipping its `roadmap_ids` to `status: done`, `git mv`-ing the body to `archive/`, and dropping the task's lock and parked markers, **with the code never merged**. Step 3b's own rollback (its step 2b) covers only the case where *it* skips a branch, and says so; nothing covered a 4a-SKIP until this filter.
 
+   > **Before resolving anything, apply 1c's hold test to the doc in front of you (`Q-474`).** If any of its ids carries a truthy `user_action`, 1c holds the whole doc — leave-in-place, route nothing — and **that outcome does not depend on what 1b returns**. Resolving the ref is then pure downside: the only thing it can add is 1b's *"stop and ask — do not guess in either direction"*, a halt on a branch reference for a doc that was never going to be routed. This is the self-inflicted shape the step's own blockquote below already names for the cherry-pick case — *"the close halts on a doc it created the conditions for."*
+   >
+   > **The short-circuit is the fix, not a recorded merge SHA.** The filing proposed both; the second was refused on measurement. A SHA in the frontmatter would give 1b a handle surviving branch deletion, but it does not answer 1b's question after Step 4a squashes (the ancestry property the blockquotes below spend three paragraphs on), and it buys nothing at all for a doc whose disposition is already settled. `Q-471`'s `branch_tip:` is a *different* field answering a different question at a different step, and reading the two filings as sharing one key — which the phase brief did — would have added a second consumer to a field that cannot serve it.
+   >
+   > **It short-circuits 1b's REF RESOLUTION, not 1c.** A doc this test holds still goes through 1c below, which is what records the hold and puts it on Step 8's `Held-back docs:` row. An earlier draft of this pair said 1c runs only "for every doc 1b did not short-circuit", which would have made the short-circuit silently *delete* the report — a held doc vanishing from the run's own record is the failure mode 1c's `Held-back docs:` row exists to prevent.
+   >
+   > **Read the ids the way 1c reads them:** `roadmap_ids`, falling back to `task_ids`. 1c calls that fallback *"not optional here"* and gives the reason; a short-circuit keyed to only one of the two namespaces would resolve a ref for exactly the legacy doc 1c is most worried about.
+   >
+   > **Ordering, not deletion.** 1b still runs, unchanged, for every doc 1c does not hold; the population reaching its *ref resolution* is the only thing that changes. A rewrite that drops this paragraph restores a halt with no outcome attached to it.
+
    For each file found in step 1, read its `branch:` frontmatter value and keep it only if that branch is contained in the merge target:
 
    ```bash
@@ -2212,7 +2458,7 @@ After all branches are merged but **before** pushing:
 
    > **One way to reach that hard stop is this close's own Step 6, one run earlier.** Under `pr` policy Step 6 force-deletes (`git branch -D`) every branch Step 4a recorded as merged. A branch the operator cherry-picked is recorded merged, so it is deleted — while its pending-doc was held back here for scoring non-zero. On the next close the doc is re-collected, its `branch:` no longer resolves, and this rule fires: the close halts on a doc it created the conditions for. Under `direct` the tail is benign, because that path's safe `git branch -d` refuses on a cherry-picked branch and the ref survives. **The `git cherry` fallback above is what prevents the hold-back in the first place**; if you are reading this having already hit the stop, the doc's content is almost certainly in `main` already — verify with `git log --oneline --all --grep` on its summary before deciding, and do not consolidate on the assumption alone. (**A doc with no `branch:` at all is no longer treated as a benign legacy shape — it is quarantined, per the rule above.** This parenthesis previously said consolidating it was safe, which contradicted the stop-and-ask rule it sat beneath; both are now replaced by the single quarantine disposition. The case this parenthesis was reaching for — a *legacy-format* doc predating worktree-per-branch — is covered there too, and losing its bytes to a quarantine directory costs nothing that consolidating an unroutable doc would have preserved.)
 
-1c. **Hold back any pending-doc naming a task whose human step is still outstanding (`Q-327`).** After 1b's merged-only filter, read each surviving doc's ids and look each one up in `tasks/index.yml`. **Read `roadmap_ids`, falling back to `task_ids`** — the same Phase-23a compat shim step 3 applies (`pending.get('roadmap_ids') or pending.get('task_ids') or []`), and it is not optional here: a legacy doc keyed on `task_ids` that this gate skipped would be routed and consolidated, and only the round-trip's defence-in-depth arm would then hold the task — which is the stranding path, reached through the gate that exists to close it. **If any of those ids has a truthy `user_action`, do not route this doc at all this run** — truthy, **not** `== true`, matching the round-trip's predicate exactly. The two gates must agree, and a malformed non-bool value is precisely where an equality test and a truthiness test diverge: an equality reading routes the doc, the round-trip then holds the task, and the doc is deleted underneath it. The heredoc records why truthiness is the right bias; this gate inherits that reasoning rather than restating it — leave the file in `sysop/runtime/pending-docs/`, exactly as 1b leaves an unmerged branch's doc, and report it under Step 8's `Held-back docs:` with the reason `user_action outstanding: <TASK_ID>`.
+1c. **Hold back any pending-doc naming a task whose human step is still outstanding (`Q-327`).** This test is applied twice and the two are one mechanism. **1b short-circuits its ref resolution on it** (see 1b's first blockquote — `Q-474`), so a held doc is spared 1b's stop-and-ask. **This pass runs over every doc regardless**, because it is the one that records the hold and reports it. A doc the short-circuit spared is still held, still reported, still left in place — the short-circuit removes a ref lookup, never a record. Read each doc's ids and look each one up in `tasks/index.yml`. **Read `roadmap_ids`, falling back to `task_ids`** — the same Phase-23a compat shim step 3 applies (`pending.get('roadmap_ids') or pending.get('task_ids') or []`), and it is not optional here: a legacy doc keyed on `task_ids` that this gate skipped would be routed and consolidated, and only the round-trip's defence-in-depth arm would then hold the task — which is the stranding path, reached through the gate that exists to close it. **If any of those ids has a truthy `user_action`, do not route this doc at all this run** — truthy, **not** `== true`, matching the round-trip's predicate exactly. The two gates must agree, and a malformed non-bool value is precisely where an equality test and a truthiness test diverge: an equality reading routes the doc, the round-trip then holds the task, and the doc is deleted underneath it. The heredoc records why truthiness is the right bias; this gate inherits that reasoning rather than restating it — leave the file in `sysop/runtime/pending-docs/`, exactly as 1b leaves an unmerged branch's doc, and report it under Step 8's `Held-back docs:` with the reason `user_action outstanding: <TASK_ID>`.
 
    **Why the WHOLE doc waits, and not just the status flip.** The first cut of this fix did the narrower thing the filing proposed — route the doc entries as normal, hold only the three mutations that assert completion — and it **stranded the task**. The path is worth writing down because nothing about it is obvious: step 6 deletes the pending-docs *this step consolidated*, a routed doc is consolidated, and the pending-doc is the **only** carrier of `roadmap_ids` into this round-trip. So the doc would be gone, the task would sit `in_progress` with its lock held and its body under `open/`, and nothing would ever close it — `clear_user_action.py` flips the flag and says so in its own output (*"status is `in_progress`, so the automated frontier … still will not pick it up"*), and a later `/review-close` has no doc naming the task. **A silent permanent stall, arriving from a fix for a silent false close.** Holding the doc keeps the carrier alive: the human performs the step, clears the flag, and the next `/review-close` consolidates the doc and closes the task through the ordinary path, with no duplicated `CHANGELOG` entry. **The doc is only half the carrier, and the other half is the branch** — the doc's `branch:` is what step 1b resolves, and Step 6 deletes merged feature branches under both policies, so a held doc whose branch was cleaned up does not resume: it **halts** the next close on step 1b's stop-and-ask. Step 6 therefore carries a HARD RULE excluding those branches; that rule and this hold are one mechanism and neither works alone.
 
@@ -2944,7 +3190,7 @@ Security map:  <N checked, N skipped (no map match)> (or "none to check") — St
                target passed the convention check would otherwise read exactly
                like one where both fleets ran and both approved.
 Test decisions: <N verified, N waived, N not-owed, N held-for-fix, N unreadable, N doc-only> (or "none to verify")
-Also fixed:     <N branches carrying the section, N lines total, N findings> (or "none")
+Also fixed:     <N branches carrying a section, N lines total across ALL its sections, N findings> (or "none")
 Orchestrator artifacts: <Step 2e's per-branch block, verbatim> (or "none — no branch
                under review resolved to a claim"). Distinct from `Claim artifacts:`
                below, which is Step 4c's REMOVAL tally: this line is Step 2e's
@@ -2985,6 +3231,19 @@ Pending-doc collisions: <N> (or "none")
      SKIP'd with its worktree, lock and branch intact. Both docs are still where their
      authors left them. Resolve by renaming one, then re-run; until then neither
      branch's task closes.
+
+Stale pending-docs: <N> (or "none")
+  - <filename> (<branch>) — <N> commit(s) landed after `branch_tip: <short SHA>`; the
+     collect exited 6, so NOTHING was collected, main is untouched and the branch is
+     SKIP'd with its worktree, lock and branch intact. Re-run /document-work on that
+     branch to re-stamp it, then re-run the close.
+     <one line per drifting commit, as the collect printed them>
+
+Staleness not measured: <N> (or "none")
+  - <filename> (<branch>) — <no `branch_tip:` | present but not a string | an
+     unsubstituted placeholder | not an object name | does not resolve in the workspace>.
+     The doc WAS collected and will route normally; only the currency check was skipped.
+     A whole population reading this line every run means a writer is not stamping it.
 
 Quarantined docs: <N> (or "none")
   - <filename> — <no `branch:` frontmatter | frontmatter would not parse: <error>>;

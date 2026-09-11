@@ -774,6 +774,168 @@ Phase 7 (below) uses this value to distinguish "agent omitted the envelope but t
 When a background agent's completion notification arrives in any phase:
 
 1. Collect that agent's result. For Phase 6e, get the envelope by trying — in this order, first hit wins — (a) read `sysop/runtime/subagent-envelopes/<TASK_ID>.json` (Phase 37 `SubagentStop` hook output; resolve `<repo>/sysop/runtime/subagent-envelopes/` against the main repo root via `git rev-parse --git-common-dir`); (b) regex-parse the YAML envelope from the LAST fenced block of the agent's return text (existing behavior — see Step 7c). After consuming the JSON file, `rm -f sysop/runtime/subagent-envelopes/<TASK_ID>.json` to keep the dir clean for in-flight handoff; leave `_unparseable_*.json` diagnostics in place.
+1‑record. **Re-read the `## Test decision` record at the branch tip before this task counts as executed** — for a Phase-6e agent only, and only when its envelope says `STATUS: EXECUTED`. **Numbered `1‑record` rather than renumbered into the sequence**, for the reason item `3‑record` carries in this same file: shifting `2` and `3` down one would rewrite markers other steps cite by number to say nothing new.
+
+**Why this exists, and what a self-check structurally cannot catch.** `/claim-task` has two layers on this record — the executor's own grep at Step 7e, and **Step 8's authoritative read-back**, which reads the revision that will actually be graded and blocks before `/document-work`. This orchestrator had only the first: item `3‑record` is written by the same agent that reports its own success, so an executor that reports `EXECUTED` without running its check, or that writes the section into the **main checkout** instead of the worktree (on no branch, invisible to `/review-close` Step 2d), produces an envelope indistinguishable from a compliant one. No grep run by the writing agent can see either. This step is the second layer, and it is the same block `/claim-task` Step 8 runs — pinned identical by `tests/test_autobuild_record_readback.py`, because a second copy that drifts is worse than none.
+
+**Substitute this task's id, branch, and the repo-root-relative body path — three values you already hold per task. This block touches no run directory**, which is why it ports without change.
+
+```bash
+# Substitute all three literally and QUOTED. Stdlib only, heredoc + positional args per
+# Phase 126.
+#
+# <BODY_PATH_FROM_REPO_ROOT> has its own name because item `3‑record` below already uses
+# <BODY_PATH_AS_RESOLVED> for a DIFFERENT value -- the `body:` value as-is, joined onto
+# <WORKTREE_PATH>. One name for two values is how this block shipped inert once already.
+#
+# This one is relative to the REPO ROOT, and `/auto-build` has no resolver step that
+# produces it, so DERIVE it per task from the `body:` value Step 1 read out of
+# `tasks/index.yml`:
+#
+#     body: open/<TASK_ID>.md          (canonical)  ->  tasks/open/<TASK_ID>.md
+#     body: tasks/open/<TASK_ID>.md    (legacy)     ->  tasks/open/<TASK_ID>.md  (as-is)
+#
+# Test the prefix; neither shortcut is safe. Blind concatenation yields
+# `tasks/tasks/open/...` on the legacy spelling. Blind pass-through yields `open/...`,
+# which `git show <branch>:open/...` reports as ABSENT -- and this block then takes its
+# NOT ON BRANCH arm and **exits 0**, so the task is not failed and the operator is told
+# the body is merely untracked. That is a pass printed over the exact state this gate
+# exists to catch, and it is what a reader of item `3‑record`'s definition would produce.
+python3 - <<'RECORD_PY' "<TASK_ID>" "<BRANCH_NAME>" "<BODY_PATH_FROM_REPO_ROOT>"
+import re, subprocess, sys
+from pathlib import Path
+
+claim_id, branch, body_rel = sys.argv[1], sys.argv[2], sys.argv[3]
+if any("<" in a for a in (claim_id, branch, body_rel)):
+    print("ERROR: placeholder not substituted: {!r} {!r} {!r}".format(
+        claim_id, branch, body_rel), file=sys.stderr)
+    sys.exit(2)
+
+common = subprocess.run(["git", "rev-parse", "--git-common-dir"],
+                        capture_output=True, text=True, check=True).stdout.strip()
+main_root = Path(common).resolve().parent
+
+# `<rev>:<path>` -- the literal colon is what makes this a branch-tip read. Without it,
+# `git show <path>` means `git show HEAD -- <path>` and exits 0 off the WRONG revision:
+# the one failure here that can fabricate a pass (Step 2d documents it at length). The
+# operand is built by .format() so it cannot lose the colon.
+r = subprocess.run(["git", "-C", str(main_root), "show", "{}:{}".format(branch, body_rel)],
+                   capture_output=True, text=True)
+if r.returncode != 0:
+    err = (r.stderr or "").strip()
+    # git says "does not exist in '<rev>'" when the path is absent from the worktree too,
+    # and "exists on disk, but not in '<rev>'" when it is present but untracked. The
+    # DOCUMENTED case here -- an /add-task body nobody committed -- always leaves the file
+    # on disk, so it produces the SECOND message. Testing only the first inverted the two
+    # populations: the benign case got a raw fatal and the suspicious one got reassurance.
+    if "does not exist in" in err or "exists on disk, but not in" in err:
+        print("NOT ON BRANCH -- {} is absent at {}.".format(body_rel, branch))
+        print("  Expected ONLY for a body left untracked in the main checkout "
+              "(/add-task filed it, nobody committed it): 7e writes the main-checkout "
+              "copy and says so in its final message. Confirm that is what happened; "
+              "otherwise the body path is wrong, or the branch is not this claim's.")
+    else:
+        print("UNREADABLE -- {}:{}".format(branch, body_rel))
+        print("  " + err)
+    sys.exit(0)
+
+# Headings OUTSIDE fenced blocks. `tasks/schema.md` documents that `## Plan` carries the
+# reviewed plan verbatim in a fence, and that "the fenced plan contains its own
+# '## Test decision' line" -- it orders the real section FIRST so a first-match reader
+# meets it first. A fence-blind reader does not get that guarantee: it matches the plan's
+# copy, so a body with no real record reads as compliant.
+# A leading BOM keeps `^#` from matching and would report a false MISSING, which BLOCKS.
+lines = r.stdout.lstrip("\ufeff").split("\n")
+HEAD = re.compile(r"^(#{1,6})\s*(.*)$")
+WANT = re.compile(r"^\s*test\s+decision\b", re.I)
+
+def fence_mark(line):
+    """`(char, length)` if this line is a fence marker, else None.
+
+    This is Step 7f's `fence_mark`, and it is the same function on purpose -- do not
+    re-derive it a third time. Same for `fence_closes` below. THREE properties are
+    load-bearing, and this block shipped missing a different one each time. A body can
+    be fenced with ``` OR ~~~; a fence is closed only by the SAME character at the SAME
+    length or longer; and a closer carries NO info string. Step 7f's own writer emits a
+    FOUR-backtick outer fence whenever the plan it wraps contains an ordinary ```-block,
+    so a 3-backtick reader treats the plan's first inner fence as the close, reads the
+    rest of the plan as unfenced, and certifies the plan's own copy of `## Test decision`
+    as the record. Measured: a real option-C body with no record at all passed. The
+    info-string half is `Q-468` and reproduces the same way -- see `fence_closes`."""
+    s = line.lstrip()
+    for ch in ("`", "~"):
+        if s.startswith(ch * 3):
+            n = 0
+            while n < len(s) and s[n] == ch:
+                n += 1
+            return ch, n
+    return None
+
+def fence_closes(line, open_mark):
+    """True only if `line` CLOSES the fence `open_mark` opened.
+
+    Three properties, not two. Same character, at least as long -- and **no info
+    string**, which is the one an opener is allowed to carry and a closer is not.
+    A ```json line nested inside a plain ``` fence satisfies the first two, so a
+    reader without the third believes it has LEFT the fence while still inside it,
+    and then reads the fence's own lines as content. That is the fabricating
+    direction, not the dropping one (`Q-468`).
+
+    The closer decision lives here, in one place, precisely because it was split
+    across two loops before and only one of them remembered it."""
+    mark = fence_mark(line)
+    return (bool(mark) and mark[0] == open_mark[0] and mark[1] >= open_mark[1]
+            and not line.strip().strip(mark[0]))
+
+def headings(fence_aware):
+    out, open_mark = [], None
+    for i, ln in enumerate(lines):
+        mark = fence_mark(ln)
+        if mark:
+            if fence_aware:
+                if open_mark is None:
+                    open_mark = mark
+                elif fence_closes(ln, open_mark):
+                    open_mark = None
+            continue
+        if open_mark is not None:
+            continue
+        m = HEAD.match(ln)
+        if m:
+            out.append((i, len(m.group(1)), bool(WANT.match(m.group(2)))))
+    return out, open_mark is not None
+
+heads, unterminated = headings(True)
+if unterminated:
+    # A body whose fence never closes swallowed everything after it. Answering MISSING
+    # there would block a claim over a malformed body, so fall back to a fence-blind
+    # read -- which can only err toward accepting, and Step 2d re-reads this same record
+    # at the merge. Say so either way: the body needs fixing.
+    print("NOTE -- unbalanced ``` fence in {}; read fence-blind.".format(body_rel))
+    heads, _ = headings(False)
+
+wanted = [h for h in heads if h[2]]
+if not wanted:
+    print("MISSING -- no test-decision heading at {}:{}".format(branch, body_rel))
+    sys.exit(1)
+
+# Scope the template test to THAT section, not the whole body: the plan fence can quote
+# the schema, and a whole-body test would refuse a claim whose record is perfectly good.
+start, level, _ = wanted[0]
+end = next((i for i, lv, _ in heads if i > start and lv <= level), len(lines))
+section = "\n".join(lines[start + 1:end])
+if "<recorded at /claim-task plan time" in section:
+    print("TEMPLATE -- the section is still the schema placeholder at {}:{}".format(
+        branch, body_rel))
+    sys.exit(1)
+print("test-decision record present at {}:{}".format(branch, body_rel))
+RECORD_PY
+```
+
+**On `MISSING` or `TEMPLATE` (exit 1), this task's Step 8 status becomes `FAILED`** — **and so does `NOT ON BRANCH`, which on this path is a failure rather than the benign state its own text describes.** That arm exits 0 because `/claim-task` can legitimately meet a body `/add-task` left untracked in the main checkout. `/auto-build` cannot: Step 5 pre-claims from a committed `tasks/index.yml` on the default branch, so a body that is absent at the branch tip means the path was derived wrong or the body was never committed, and neither may pass as executed. **Read the printed line, not just the exit code.** with the printed line as its `Notes`, and **the batch continues** — go on to item 2 and refill as normal. Halting the whole run on one branch's missing record would strand every sibling that wrote theirs correctly, and deferring the check to the end would put it furthest from the work.
+
+**Do not write the record yourself from `PLAN_TEXT[<TASK_ID>]`.** You hold the plan and could, but Step 7b already documents that retype channel as lossy, and a record composed by the orchestrator is further from the diff than one written by the agent that made the change. A `FAILED` verdict the human can act on beats a record nobody stands behind — `/claim-task` Step 8 carries the same prohibition in as many words.
+
 2. If the queue still has unstarted batch tasks at the same phase, spawn one more agent with the same shape in a single new message.
 3. No polling, no sleeping — the harness delivers completion notifications.
 
@@ -891,10 +1053,12 @@ You are executing roadmap task `<TASK_ID>`. The orchestrator has already:
    2. **Extend an existing open task** in that module — add what you found to that task's body rather than opening a second entry against the same code. This is `/add-task` Step 2's move, made the default here rather than one branch of a judgment.
    3. **File a new task** only past both — or when it is a design question, needs a `user_action`, or writes to production. Tier 3 is the path step 5b's stub check is about; tiers 1 and 2 produce no `<PREFIX>-<NAME>` token for it to resolve.
 
+   **Past those, tier 3 has one more test: name what the filing blocks.** One of — the phase carrying `current_focus: true`; a named `planned` phase; a gate the project declares (`<project>/CLAUDE.md`, a release checklist, an ops runbook — whatever it calls them); or an open task whose stated acceptance this stops. Write that name into the body so a reader can check it. **Four kinds are filed whatever this test says**, each being its own justification: a design question or a call that is the human's; a `user_action`; a production write; and a defect in shipped behaviour **you can state as a falsifiable failure** — the input, the expected result, the actual one — or a security finding. **Everything else goes to `tasks/notes.md`** — the flat ledger beside the queue, one line per note, shape in `tasks/README.md` § *The notes ledger*. Nothing routes to that file and nothing counts it; that is what it is for. **A note is not a silent drop:** say in your final message that you wrote one and what it concerns, so the human can promote it with `/add-task`. And a note carries no task id, so do not put a `<PREFIX>-<NAME>` token for it into the docs prose — `/document-work` Step 3b hard-fails on a token that resolves to nothing. The ledger holds a finding nobody has committed to yet; it is never the place for one you would rather not defend. **The append itself is the record item's write, not this item's** — same delegation as `## Also fixed`, and for a plainer reason: this item runs while the work does, and a record write belongs in the one step that owns the worktree paths. Decide the routing here; name the line you want appended; leave the writing to it.
+
    **The backstop is a property of the CHANGE, not a lookup over a file list** — an enumeration rots. **If the change would weaken, disarm, narrow or delete a gate — a check, a semgrep rule, a numeric bound, an allowlist or ignore entry, a deletion-protection flag — it is never tier 1, whatever file it lives in**, because tier 1's "an existing gate already covers it" predicate is satisfied by the disarming edit itself. If you cannot name a gate that would still fail were your fix wrong, file instead.
 
    **The bound is the design, not a formality.** Unplanned scope inside a narrow plan is a real failure mode, and an agent mid-task verifies an adjacent thing less carefully than a fresh one would. Tier 1 dropped in the name of throughput becomes a source of defects rather than a sink for tasks. When you are between tiers 1 and 2, take 2 — a filed line costs a reader, a wrong in-branch fix costs a revert.
-3‑record. **Persist the `## Test decision`** section into the task's body file, from the plan's `## Test decision` element above. **Write the worktree copy** (`<WORKTREE_PATH>/tasks/…`), never the main checkout's — an edit there is on no branch, so it never reaches the PR, and `/review-close` Step 2d reads this record at the branch tip. **If item 3‑tier produced any tier-1 fixes, write `## Also fixed` in this same write** — one line each, placed after this `## Test decision` section and before any `## Plan` section, per `tasks/schema.md` § *Also fixed*. **The order is the schema's contract; do not restate the reason you may have read elsewhere.** Two sibling sites justify it as protecting a first-match reader from a heading quoted inside the fenced plan. That is true of the *test-decision* reader, which is fence-blind, and **false of the `## Also fixed` reader**, which `/review-close` Step 2d says in as many words is fence-aware and does not depend on the ordering. Follow the order because the schema declares it and a human reads the body top-down, not because of a protection that reader does not need.
+3‑record. **Persist the `## Test decision`** section into the task's body file, from the plan's `## Test decision` element above. **Write the worktree copy** (`<WORKTREE_PATH>/tasks/…`), never the main checkout's — an edit there is on no branch, so it never reaches the PR, and `/review-close` Step 2d reads this record at the branch tip. **If item 3‑tier produced any tier-1 fixes, write `## Also fixed` in this same write** — one line each, placed after this `## Test decision` section and before any `## Plan` section, per `tasks/schema.md` § *Also fixed*. **The order is the schema's contract; do not restate the reason you may have read elsewhere.** Two sibling sites justify it as protecting a first-match reader from a heading quoted inside the fenced plan. That is true of the *test-decision* reader, which is fence-blind, and **false of the `## Also fixed` reader**, which `/review-close` Step 2d says in as many words is fence-aware and does not depend on the ordering. Follow the order because the schema declares it and a human reads the body top-down, not because of a protection that reader does not need. **If item 3‑tier routed anything to the notes ledger, append those lines to `<WORKTREE_PATH>/tasks/notes.md` in this same pass** — create the file if it is absent, one flat line per note, appended at the end, per `tasks/README.md` § *The notes ledger*. It is a different file from the body and carries no ordering relationship to these sections; it is written here because this is the step that owns the worktree paths. **A note written into the main checkout is on no branch, so it never reaches the PR** — and it is not Step 2a that catches that: Step 1a skips the primary checkout by inode identity, so the dirty classification never sees it. What it reaches instead is Step 6's post-merge `git diff --quiet HEAD --` gate, which halts the close *after* the PR has merged. Late and loud rather than early and loud; write the worktree copy.
 
    **If the body already carries a `## Test decision`, REPLACE that section — do not append a second one.** This is not hypothetical: `/claim-task --plan-only` (option C) writes `## Test decision` and `## Plan` into the body and then **releases the claim**, so the task returns to `open` carrying a record, and `/auto-build` Step 1 can claim it — Phase 6a spawns a fresh planner and never inspects the body. A second section leaves two, and every reader downstream takes the first match, so the stale one wins and is reported as verified. If the existing record still holds, say so in your final message and leave it; if your plan's decision differs, replace it and say why.
 

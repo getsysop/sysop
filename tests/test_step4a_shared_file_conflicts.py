@@ -158,8 +158,36 @@ def test_validator_is_a_prescribed_command_not_just_a_mention(step_4a: str) -> N
 
 
 def test_marker_stripping_is_forbidden_not_merely_discouraged(step_4a: str) -> None:
+    """Absolute for the files it protects -- and the one exception must stay bounded.
+
+    Phase 278 added `tasks/notes.md` as a third shared append file, and it is the
+    one where keeping both sides IS the resolution: it is a flat list of
+    independent lines, so a union has nothing to splice wrongly. That made the
+    original prohibition ("Never resolve **either** ...") both stale and, read
+    top-down, a contradiction of the new bullet -- an agent would abort on the one
+    file where the union is required.
+
+    So the assertion moved rather than relaxed. It still requires the prohibition
+    to be ABSOLUTE for the two files whose shape makes stripping corrupting, and it
+    now additionally requires the exception to be NAMED and to point at the
+    properties that earn it. A future edit that widens the carve-out to "resolve
+    these however seems right" fails here, which the single-string version could
+    not have detected either way.
+    """
     body = _norm(step_4a)
-    assert "Never resolve either by stripping" in body
+    assert "Never resolve the first two by stripping" in body, (
+        "the never-strip rule is no longer absolute for `tasks/index.yml` and "
+        "`review_tasks.md`. For an indented list, keeping both sides is the "
+        "resolution that corrupts silently and validates green."
+    )
+    assert "`tasks/notes.md` is the one exception" in body, (
+        "the carve-out is unnamed or unbounded. An exception that does not say which "
+        "file it covers reads as a general relaxation of the sentence before it."
+    )
+    assert "its bullet states the two properties that make it one" in body, (
+        "the carve-out no longer points at what earns it (flat, and neither side "
+        "deleted a line). An exception with no stated precondition is a licence."
+    )
     # The reason must be stated, because the corruption is invisible to a diff read.
     assert "parses" in body or "yaml.safe_load` accepts it" in body
 

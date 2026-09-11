@@ -18,6 +18,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from _prose_guard_helpers import states
+
 import pytest
 
 REPO = Path(__file__).resolve().parent.parent
@@ -806,4 +808,929 @@ def test_step3c_survives_the_shapes_that_used_to_kill_the_close():
     assert r.returncode == 0, (
         "Step 3c died on a malformed pending-doc — it runs before Step 4c, so arm 3 "
         f"never gets the chance to quarantine it:\n{r.stdout}\n{r.stderr}"
+    )
+
+
+# ------------------------------------------------------- Phase 282: `Q-470`
+#
+# The exit-4 disjunction conflated an UNUSABLE operand with an ABSENT
+# `sysop/runtime/pending-docs/`, and the second is the ordinary state of a branch whose doc
+# was authored on the main checkout. Reported four times in eight days and green through all
+# four. The oracle above (`test_a_wrong_but_existing_worktree_path_aborts`) survives
+# untouched, and that is the point: its fixture is two BARE directories, and the legitimate
+# state is a CHECKOUT — `.git` is the fact neither the old guard nor the old test was
+# reading. The filing's claim that the two are "observationally identical" is what these
+# tests refute.
+
+
+def _checkout(wt: Path) -> Path:
+    """A directory that is a checkout, which is what every shape reaching the collect is.
+
+    A linked worktree carries a `.git` FILE (`gitdir: …`); a clone carries a `.git`
+    directory. The collect only asks whether one exists, so the cheap form models both.
+    """
+    wt.mkdir(parents=True, exist_ok=True)
+    (wt / ".git").write_text("gitdir: /dev/null\n", encoding="utf-8")
+    return wt
+
+
+def test_an_absent_pending_docs_dir_on_a_checkout_is_not_an_error(scripts, tmp_path):
+    """`Q-470`'s reported case. /document-work run on the main checkout leaves the branch's
+    worktree with no `pending-docs/` at all — and the doc is already on main, so the
+    directory's absence PROVES there is nothing to lose. Exit 0, and (b) may proceed."""
+    collect, _ = scripts
+    main, wt = tmp_path / "main", _checkout(tmp_path / "wt")
+    _doc(_live(main) / "feat-x.md", "feat/x", "AUTHORED ON MAIN")
+
+    r = _run(collect, main, wt)
+
+    assert r.returncode == 0, f"the ordinary state must not halt the close: {r.stdout}"
+    assert "COLLECT SKIPPED" in r.stdout
+    assert "feat-x.md" in r.stdout, "the report must name the doc it found on main"
+    assert "PENDING-DOC COLLISIONS: 0" in r.stdout, "Step 8 reads this line"
+    assert (_live(main) / "feat-x.md").read_text().count("AUTHORED ON MAIN") == 1
+
+
+def test_an_absent_pending_docs_dir_says_so_when_main_holds_nothing(scripts, tmp_path):
+    """The second legitimate reading — a hand-cut branch that never ran /document-work.
+    Also exit 0, but it is NOT the same fact and the report must not collapse them: this is
+    the one an operator may want to act on before the branch merges."""
+    collect, _ = scripts
+    main, wt = tmp_path / "main", _checkout(tmp_path / "wt")
+    _live(main).mkdir(parents=True)
+    _doc(_live(main) / "other.md", "feat/somebody-else", "NOT THIS BRANCH")
+
+    r = _run(collect, main, wt)
+
+    assert r.returncode == 0, f"a branch with no doc anywhere must not halt: {r.stdout}"
+    assert "main holds no doc claiming 'feat/x'" in r.stdout
+    assert "other.md" not in r.stdout, "another branch's doc is not this branch's doc"
+
+
+def test_the_absent_and_the_empty_pending_docs_dir_are_dispositioned_alike(scripts, tmp_path):
+    """An existing-but-EMPTY `src_dir` exited 0 before this change and still does. The two
+    states carry the same proof — nothing here to lose — so a fix that split them would be
+    asserting a difference that does not exist."""
+    collect, _ = scripts
+    empty_main, empty_wt = tmp_path / "e_main", _checkout(tmp_path / "e_wt")
+    (empty_wt / "sysop/runtime/pending-docs").mkdir(parents=True)
+    _live(empty_main).mkdir(parents=True)
+    absent_main, absent_wt = tmp_path / "a_main", _checkout(tmp_path / "a_wt")
+    _live(absent_main).mkdir(parents=True)
+
+    empty = _run(collect, empty_main, empty_wt)
+    absent = _run(collect, absent_main, absent_wt)
+    assert empty.returncode == 0 and absent.returncode == 0
+    # Exit codes alone are not the disposition. Routing the EMPTY directory through the
+    # absent arm also exits 0 — and then prints `COLLECT SKIPPED: no <dir>` about a
+    # directory that plainly exists, and newly subjects it to the `.git` gate.
+    assert "COLLECT SKIPPED" not in empty.stdout, (
+        "an existing-but-empty src_dir takes the ORDINARY path; reporting it as absent is "
+        "a false statement about the tree"
+    )
+    assert "COLLECT SKIPPED" in absent.stdout
+    assert "PENDING-DOC COLLISIONS: 0" in empty.stdout
+
+
+def test_a_bare_directory_is_still_refused_when_it_has_no_pending_docs(scripts, tmp_path):
+    """The discrimination, stated as its own claim rather than left implicit in the oracle
+    above. Same inputs as `test_an_absent_pending_docs_dir_on_a_checkout_is_not_an_error`
+    except for `.git` — and the dispositions differ. A fix that drops the `.git` test makes
+    these two agree, which is the conflation `Q-470` was."""
+    collect, _ = scripts
+    main = tmp_path / "main"
+    _doc(_live(main) / "feat-x.md", "feat/x", "AUTHORED ON MAIN")
+    bare = tmp_path / "not-a-checkout"
+    bare.mkdir()
+
+    assert _run(collect, main, bare).returncode == 4
+    assert _run(collect, main, _checkout(tmp_path / "wt")).returncode == 0
+
+
+def test_a_present_pending_docs_dir_is_collected_from_a_path_without_dot_git(scripts, tmp_path):
+    """The `.git` test is sited where it discriminates and NOWHERE else. Where `src_dir`
+    exists the directory demonstrably holds this branch's docs and they must be collected
+    whatever else is true of the path — hoisting the test into the top disjunction would
+    have widened exit 4 across the whole population for no discrimination at all."""
+    collect, _ = scripts
+    main, wt = tmp_path / "main", tmp_path / "wt"
+    _live(main).mkdir(parents=True)
+    _doc(wt / "sysop/runtime/pending-docs/feat-x.md", "feat/x", "WORKTREE")
+    assert not (wt / ".git").exists()
+
+    r = _run(collect, main, wt)
+
+    assert r.returncode == 0, f"a doc that is there must be collected: {r.stdout}"
+    assert "WORKTREE" in (_live(main) / "feat-x.md").read_text()
+
+
+# ------------------------------------------------------- Phase 282: `Q-471`
+#
+# Step 4c routes a doc's `summary:` into `PROJECT_STATUS.md` §6 in the same commit that
+# flips its task to `done`, and nothing between them asked whether the doc still described
+# the branch. It is decided HERE and not there because Step 4-pre rebases/cherry-picks and
+# Step 4a may squash — every one of which orphans the recorded SHA, so 4c cannot ask the
+# question at all. These tests run against a REAL repository, because the measurement is
+# `git rev-list` and a stubbed one would pin the stub.
+
+
+def _g(root: Path, *a) -> subprocess.CompletedProcess:
+    return subprocess.run(["git", *a], cwd=root, capture_output=True, text=True, check=True)
+
+
+def _repo(root: Path) -> str:
+    """A primary checkout on `main` with a `feat/x` branch carrying one commit.
+
+    Returns that branch's tip — what /document-work would stamp as `branch_tip:`.
+    """
+    root.mkdir(parents=True, exist_ok=True)
+    _g(root, "init", "-q", "-b", "main", ".")
+    _g(root, "config", "user.email", "t@example.invalid")
+    _g(root, "config", "user.name", "t")
+    (root / "f").write_text("a\n", encoding="utf-8")
+    _g(root, "add", "f")
+    _g(root, "commit", "-qm", "c1")
+    _g(root, "checkout", "-q", "-b", "feat/x")
+    (root / "g").write_text("b\n", encoding="utf-8")
+    _g(root, "add", "g")
+    _g(root, "commit", "-qm", "the work this doc describes")
+    tip = _g(root, "rev-parse", "HEAD").stdout.strip()
+    _g(root, "checkout", "-q", "main")
+    return tip
+
+
+def _worktree(main: Path, path: Path) -> Path:
+    """A REAL linked worktree, not a directory with a `.git` file written into it.
+
+    The first cut of these fixtures faked `.git`, and the staleness measurement then ran
+    against the runner's CWD, so the fake passed. Running it in the workspace — which is
+    what makes the `--clone` shape work at all — turns every fake into a failure, which is
+    the fixtures telling the truth for the first time.
+    """
+    _g(main, "worktree", "add", "-q", str(path), "feat/x")
+    return path
+
+
+def _clone(main: Path, path: Path) -> Path:
+    """The `--clone` shape: a SEPARATE repository with its own object store.
+
+    `claim_task.sh --clone` publishes the branch and clones the remote, so the workspace's
+    commits are not in the primary checkout's store at all. This is the shape the gate was
+    structurally inert for when the measurement ran in the main checkout.
+    """
+    subprocess.run(["git", "clone", "-q", str(main), str(path)], check=True,
+                   capture_output=True)
+    _g(path, "config", "user.email", "t@example.invalid")
+    _g(path, "config", "user.name", "t")
+    _g(path, "checkout", "-q", "feat/x")
+    return path
+
+
+def _commit_on(root: Path, message: str) -> None:
+    """A commit on `feat/x` in whichever checkout `root` names — the workspace, normally,
+    because that is where work happens after `/document-work` has written its doc."""
+    on_branch = _g(root, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip() == "feat/x"
+    if not on_branch:
+        _g(root, "checkout", "-q", "feat/x")
+    p = root / f"extra-{message.replace(' ', '-')}"
+    p.write_text("x\n", encoding="utf-8")
+    _g(root, "add", p.name)
+    _g(root, "commit", "-qm", message)
+    if not on_branch:
+        _g(root, "checkout", "-q", "main")
+
+
+def _tipped(path: Path, branch: str, summary: str, tip: str | None) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fm = f"---\nbranch: {branch}\n"
+    if tip is not None:
+        fm += f"branch_tip: {tip}\n"
+    fm += f'type: feature\nsummary: "{summary}"\n---\n'
+    path.write_text(fm, encoding="utf-8")
+
+
+def test_a_doc_its_branch_has_moved_past_is_refused_and_nothing_is_collected(
+    scripts, tmp_path
+):
+    """The § High. A prod-write task writes its doc when the code is ready and achieves its
+    deliverable afterwards, on the same branch, in a later commit — so it arrives stale BY
+    CONSTRUCTION. Refusing here costs nothing: main untouched, branch unmerged, worktree
+    left in place, which is what makes re-running /document-work reachable at all."""
+    collect, _ = scripts
+    main = tmp_path / "main"
+    tip = _repo(main)
+    wt = _worktree(main, tmp_path / "wt")
+    _tipped(wt / "sysop/runtime/pending-docs/feat-x.md", "feat/x", "NO prod write yet", tip)
+    _live(main).mkdir(parents=True)
+    _commit_on(wt, "the prod write, performed")
+
+    r = _run(collect, main, wt)
+
+    assert r.returncode == 6, f"a stale doc must not be collected: {r.stdout}"
+    assert "PENDING-DOC STALE" in r.stdout
+    assert "the prod write, performed" in r.stdout, (
+        "the drift must name the commits, not only count them — a count alone cannot be "
+        "judged in a glance and the deferral is the cost being paid"
+    )
+    assert not (_live(main) / "feat-x.md").exists(), "main must be untouched"
+    assert (wt / "sysop/runtime/pending-docs/feat-x.md").exists(), (
+        "the worktree copy is the only record; refusing must never consume it"
+    )
+
+
+def test_a_current_doc_collects_normally(scripts, tmp_path):
+    """The control. Without it the test above is satisfied by a check that refuses
+    everything, which is the failure mode this repo keeps finding in its own guards."""
+    collect, _ = scripts
+    main = tmp_path / "main"
+    tip = _repo(main)
+    wt = _worktree(main, tmp_path / "wt")
+    _tipped(wt / "sysop/runtime/pending-docs/feat-x.md", "feat/x", "CURRENT", tip)
+    _live(main).mkdir(parents=True)
+
+    r = _run(collect, main, wt)
+
+    assert r.returncode == 0, f"a current doc must collect: {r.stdout}"
+    assert "PENDING-DOC STALE" not in r.stdout
+    assert "CURRENT" in (_live(main) / "feat-x.md").read_text()
+
+
+def test_a_doc_with_no_branch_tip_is_reported_and_collected_never_refused(scripts, tmp_path):
+    """Every doc written before the key existed has none. Refusing those would halt every
+    consumer's first close after an update — which is the shape `Q-470` is on this page for,
+    reintroduced by its own fix. Absence of a measurement is not a measurement."""
+    collect, _ = scripts
+    main = tmp_path / "main"
+    _repo(main)
+    wt = _worktree(main, tmp_path / "wt")
+    _tipped(wt / "sysop/runtime/pending-docs/feat-x.md", "feat/x", "LEGACY", None)
+    _live(main).mkdir(parents=True)
+    _commit_on(wt, "a commit it cannot possibly know about")
+
+    r = _run(collect, main, wt)
+
+    assert r.returncode == 0, f"a legacy doc must not halt the close: {r.stdout}"
+    assert "STALENESS UNKNOWN" in r.stdout, "silence would read as a clean measurement"
+    # The OTHER direction. Both arms print `STALENESS UNKNOWN`, so asserting only that
+    # leaves a mutant where `tip_of` returns the unusable sentinel for a MISSING key —
+    # telling the operator a legacy doc carries a malformed value it does not have.
+    assert "no `branch_tip:`" in r.stdout, (
+        "an ABSENT key must not be reported as a present-but-unusable one"
+    )
+    assert "is present but is not a string" not in r.stdout
+    assert "LEGACY" in (_live(main) / "feat-x.md").read_text()
+
+
+def test_a_branch_tip_that_does_not_resolve_is_not_evidence_either_way(scripts, tmp_path):
+    """A pruned or foreign object. `git rev-list` fails, and a failed measurement must take
+    the unknown arm rather than being read as drift."""
+    collect, _ = scripts
+    main = tmp_path / "main"
+    _repo(main)
+    wt = _worktree(main, tmp_path / "wt")
+    _tipped(wt / "sysop/runtime/pending-docs/feat-x.md", "feat/x", "ORPHANED",
+            "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
+    _live(main).mkdir(parents=True)
+
+    r = _run(collect, main, wt)
+
+    assert r.returncode == 0, f"an unresolvable tip is not staleness: {r.stdout}"
+    assert "does not resolve here" in r.stdout
+    assert "ORPHANED" in (_live(main) / "feat-x.md").read_text()
+
+
+@pytest.mark.parametrize("hostile", ["--help", "--version", "-n1", "--output=/tmp/x"])
+def test_a_branch_tip_that_is_not_an_object_name_never_reaches_git_as_an_option(
+    scripts, tmp_path, hostile
+):
+    """`branch_tip` is free-form frontmatter. Unvalidated, a value beginning with `-`
+    reaches `git rev-list` as an OPTION rather than a revision — the whole class dies on one
+    `[0-9a-f]{7,64}` match, and a value that is not an object name is not a measurement."""
+    collect, _ = scripts
+    main = tmp_path / "main"
+    _repo(main)
+    wt = _worktree(main, tmp_path / "wt")
+    _tipped(wt / "sysop/runtime/pending-docs/feat-x.md", "feat/x", "HOSTILE",
+            f'"{hostile}"')
+    _live(main).mkdir(parents=True)
+
+    r = _run(collect, main, wt)
+
+    assert r.returncode == 0, f"{hostile!r} must degrade to unknown: {r.stdout}"
+    assert "is not an object name" in r.stdout
+    assert "HOSTILE" in (_live(main) / "feat-x.md").read_text()
+
+
+def test_a_collision_outranks_staleness(scripts, tmp_path):
+    """Both lists populated AT ONCE, which is the only state that tests the ordering.
+
+    The first cut of this test used a doc claiming a foreign branch — and that doc hits
+    `src_b != branch` and `continue`s, so `stale` was never populated and swapping the two
+    blocks verbatim left the suite green. The state where both populate is the OTHER
+    collision arm: the doc legitimately claims this branch (so it is measured, and it is
+    stale) while MAIN's copy of the same basename belongs to someone else."""
+    collect, _ = scripts
+    main = tmp_path / "main"
+    tip = _repo(main)
+    wt = _worktree(main, tmp_path / "wt")
+    _tipped(wt / "sysop/runtime/pending-docs/feat-x.md", "feat/x", "MINE-BUT-STALE", tip)
+    _live(main).mkdir(parents=True)
+    _tipped(_live(main) / "feat-x.md", "feat/somebody-else", "THEIRS", tip)
+    _commit_on(wt, "drift as well")
+
+    r = _run(collect, main, wt)
+
+    assert r.returncode == 3, f"the collision must win over the staleness: {r.stdout}"
+    assert "PENDING-DOC COLLISION" in r.stdout
+    assert "PENDING-DOC STALE:" not in r.stdout, (
+        "a collision settles WHOSE record this is, and that must be answered before "
+        "anything is said about whether a record is current"
+    )
+    assert "THEIRS" in (_live(main) / "feat-x.md").read_text()
+
+
+def test_the_ordering_fixture_really_populates_both_lists(scripts, tmp_path):
+    """The control that keeps the test above honest. Same fixture minus the foreign copy
+    on main: it must exit 6, which proves the doc IS measured and IS stale, so the exit-3
+    above is the ordering winning and not staleness never having been computed."""
+    collect, _ = scripts
+    main = tmp_path / "main"
+    tip = _repo(main)
+    wt = _worktree(main, tmp_path / "wt")
+    _tipped(wt / "sysop/runtime/pending-docs/feat-x.md", "feat/x", "MINE-BUT-STALE", tip)
+    _live(main).mkdir(parents=True)
+    _commit_on(wt, "drift as well")
+
+    assert _run(collect, main, wt).returncode == 6
+
+
+def test_a_broken_git_fails_open_rather_than_refusing_the_close(scripts, tmp_path):
+    """The collect runs from the main checkout; a non-repository CWD (or no git at all)
+    must degrade to unknown-not-stale. A doc-integrity step that turns a missing tool into a
+    refusal to close is the `Q-470` shape wearing this fix's name."""
+    collect, _ = scripts
+    main, wt = tmp_path / "main", _checkout(tmp_path / "wt")
+    _live(main).mkdir(parents=True)
+    _tipped(wt / "sysop/runtime/pending-docs/feat-x.md", "feat/x", "NO REPO",
+            "0123456789abcdef0123456789abcdef01234567")
+
+    r = _run(collect, main, wt)
+
+    assert r.returncode == 0, f"no repository must not halt the close: {r.stdout}"
+    assert "STALENESS UNKNOWN" in r.stdout
+    assert "NO REPO" in (_live(main) / "feat-x.md").read_text()
+
+
+# ------------------- Phase 282: the writer side, and the prose that binds it
+#
+# A gate whose producers do not emit the field it reads is a gate that prints
+# `STALENESS UNKNOWN` forever while looking armed. The population is DERIVED rather than
+# listed, because a listed one silently omits the next writer — which is the failure this
+# repo has filed under four different names.
+
+SKILLS_DIR = REPO / "core" / "skills"
+_YAML_FENCE = re.compile(r"```ya?ml\n(.*?)```", re.DOTALL)
+
+
+def _pending_doc_templates() -> list[tuple[Path, str]]:
+    """Every shipped YAML fence that is a pending-doc frontmatter template.
+
+    Identified by what makes it one — a `branch:` key and a `summary:` key in the same
+    fence — not by a hand-kept list of skills."""
+    found = []
+    for skill in sorted(SKILLS_DIR.rglob("SKILL.md")):
+        for block in _YAML_FENCE.findall(skill.read_text(encoding="utf-8")):
+            if re.search(r"^branch:", block, re.M) and re.search(r"^summary:", block, re.M):
+                found.append((skill, block))
+    return found
+
+
+def test_every_pending_doc_writer_emits_branch_tip():
+    """`Q-471`. Three writers ship: /document-work (the human-driven one) and /auto-fix +
+    /auto-judge (the batch ones). A writer that omits the key exempts its whole path from
+    the staleness gate without anything going red."""
+    templates = _pending_doc_templates()
+    found = sorted({str(p.relative_to(SKILLS_DIR)) for p, _ in templates})
+    assert found == [
+        "auto-fix/SKILL.md",
+        "auto-judge/SKILL.md",
+        "document-work/SKILL.md",
+    ], (
+        f"the pending-doc writer set changed: {found}. A NEW writer must be given "
+        f"`branch_tip:` and a stamping rule before this list is updated; a writer that "
+        f"VANISHED means the discriminator in _pending_doc_templates() stopped matching, "
+        f"and a sweep that finds nothing passes every other assertion in this test."
+    )
+    missing = [str(p.relative_to(REPO)) for p, b in templates
+               if not re.search(r"^branch_tip:", b, re.M)]
+    assert not missing, f"pending-doc writers with no `branch_tip:`: {missing}"
+
+
+def test_every_pending_doc_writer_says_when_to_stamp_it():
+    """The field is worthless stamped at the wrong moment, and each writer's LAST commit is
+    at a different step. /auto-judge's shipped order wrote the doc and THEN pushed the
+    `review_tasks.md` annotation, which stamps a commit the annotation moves past — exit 6
+    on every all-DROP batch. The rule has to travel with the template."""
+    for path, template in _pending_doc_templates():
+        body = path.read_text(encoding="utf-8")
+        # The rule must live OUTSIDE the template. The first cut of this guard matched the
+        # template line itself (`branch_tip: <full SHA — \`git rev-parse HEAD\`, run NOW>`),
+        # ~30 characters from the anchor — so deleting every stamping blockquote in all
+        # three writers left it green. Strip the template, then look.
+        prose = body.replace(template, "")
+        assert "branch_tip" in prose, (
+            f"{path.relative_to(REPO)}: `branch_tip` appears only inside the template, so "
+            f"nothing says when to stamp it"
+        )
+        # The two obligations, each pinned on its own — a writer that carries one and not
+        # the other is the /auto-judge bug this phase fixed.
+        # `states()`, not a raw search: "it need not re-stamp" contains "re-stamp".
+        assert any(states(prose, phr) for phr in (
+            "re-stamp it", "it must re-stamp", "it must re-stamp.",
+        )), f"{path.relative_to(REPO)}: no ASSERTED re-stamp obligation for a later commit"
+        # And WHERE to stamp, not only that a stamp exists. Moving /document-work's stamp
+        # to Step 1 — before Step 2's commit — guarantees exit 6 on every close, and the
+        # value would still be "a SHA read from HEAD".
+        assert states(prose, "after this branch's final commit") or states(
+            prose, "Stamp it here, at Step 3, and not earlier"
+        ), (f"{path.relative_to(REPO)}: the stamp POINT is unpinned — a stamp taken before "
+            f"this writer's last commit is stale the moment it is written")
+        assert re.search(r"rev-parse HEAD", prose), (
+            f"{path.relative_to(REPO)}: the stamp is not stated as a SHA read from HEAD"
+        )
+        assert states(prose, "exit 6") or "exit 6" in prose, (
+            f"{path.relative_to(REPO)}: the consequence of a stale stamp is not named, so "
+            f"a later editor has no reason to keep the rule"
+        )
+
+
+def test_auto_judge_commits_the_annotation_before_it_stamps():
+    """`/auto-judge`'s SHIPPED order was doc-then-push, which stamps a commit its own
+    `review_tasks.md` annotation then moves past — exit 6 on every all-DROP batch. The
+    phase reversed it and nothing tested the reversal, so reverting the fix was green."""
+    body = (SKILLS_DIR / "auto-judge" / "SKILL.md").read_text(encoding="utf-8")
+    assert states(body, "Commit and push the `review_tasks.md` annotation FIRST, then write this file"), (
+        "the ordering fix is the deliverable; without it the stamp is taken at a commit "
+        "the very next sentence tells the agent to supersede"
+    )
+    assert not re.search(r"write this file first,? then commit and push", body, re.I), (
+        "the shipped-bug ordering must not be restorable while this guard stays green"
+    )
+
+
+def test_the_stale_exit_is_in_the_disposition_table_with_its_remedy():
+    """Phase 165's lesson: an exit whose row does not state the remedy gets improvised, and
+    the improvisation on this step has twice been a wholesale worktree wipe. Exit 6's whole
+    safety argument is that the worktree STAYS — that is what makes the remedy reachable."""
+    body = SKILL.read_text(encoding="utf-8")
+    row = [ln for ln in body.split("\n") if ln.strip().startswith("| **6**")]
+    assert len(row) == 1, f"expected exactly one exit-6 row, found {len(row)}"
+    # The row must be INSIDE the table. A blank line terminates a Markdown table, and the
+    # first cut of this row sat one blank line below row 5 — so the phase's newest and most
+    # consequential row rendered as literal pipe text under no header at all.
+    lines = body.split("\n")
+    i = lines.index(row[0])
+    assert lines[i - 1].strip().startswith("| **5**"), (
+        "the exit-6 row must follow row 5 with no blank line between — a blank line ends "
+        "the table and orphans it from its header"
+    )
+    # Columns, not the whole row: `/document-work` and `untouched` both occur in the
+    # MEANING column too, so a whole-row `in` is satisfied by the half that is not the
+    # remedy. Split on the pipes and assert against the column that carries each claim.
+    cols = [c.strip() for c in row[0].strip().strip("|").split("|")]
+    assert len(cols) == 4, f"exit-6 row has {len(cols)} columns: {cols}"
+    meaning, state, todo = cols[1], cols[2], cols[3]
+    assert "stale" in meaning.lower()
+    assert "untouched" in state and "stage 1 writes nothing" in state
+    assert "/document-work" in todo, "the remedy must be in the WHAT-TO-DO column"
+    assert "worktree, lock and branch intact" in todo, (
+        "the branch state is the whole safety argument: the remedy needs the workspace "
+        "this exit declines to remove"
+    )
+    assert "Do not run the rollback" in todo, (
+        "exit 3 carries this and exit 6 has the same property — stage 1 writes nothing, so "
+        "there is nothing to undo and a rollback would only delete main's own record"
+    )
+
+
+def test_the_skill_states_why_staleness_is_not_decided_at_step_4c():
+    """The reason is load-bearing and not obvious, and the round corrected it twice. It is
+    an ancestry test, and **Step 4a item 2's rebase** is what orphans the recorded tip — not
+    a squash, which happens at Step 4d, AFTER 4c, and so cannot have orphaned anything 4c
+    reads. And it is not universal: the PR-reuse shape skips 4a and a published branch is
+    merged `--no-ff`, so a 4c gate would be live on the rare shapes and inert on the
+    dominant one. That last clause is the actual argument for siting it at 3b, so it is the
+    one pinned hardest."""
+    body = SKILL.read_text(encoding="utf-8")
+    # Bounded. An unbounded `body[index("PENDING-DOC STALE"):]` runs ~1,100 lines to EOF and
+    # sweeps up Step 4-pre's own prose, which supplies a rebase/squash co-occurrence all by
+    # itself — so deleting the mechanism from THIS paragraph left the guard green.
+    start = body.index("**Why staleness is decided here and not at Step 4c")
+    window = body[start:body.index("\n   b. ", start)]
+    assert len(window) < 12000, f"window is {len(window)} chars — it has slipped its bound"
+    assert states(window, "Step 4a item 2 rebases each approved branch")
+    assert states(window, "live on the shapes that rarely fire and inert on the one that always does")
+    assert "PR-reuse" in window and "--no-ff" in window, (
+        "the two shapes that leave the branch intact are the argument, not a caveat"
+    )
+    assert not re.search(r"Step 4a may squash", window), (
+        "the squash is Step 4d's and runs after 4c; naming it here was the round's finding"
+    )
+
+
+def test_step_1b_short_circuits_on_1c_s_hold_before_resolving_any_ref():
+    """`Q-474`. 1b's stop-and-ask is a halt on a branch reference for a doc that 1c was
+    never going to route — resolving it is pure downside. Both sites must say so: a rule
+    stated only at the step that does not act on it is the shape Phase 180 filed."""
+    body = SKILL.read_text(encoding="utf-8")
+    one_b = body[body.index("1b. **Drop any pending-doc"):body.index("1c. **Hold back")]
+    one_c = body[body.index("1c. **Hold back"):]
+    assert states(one_b, "Before resolving anything, apply 1c's hold test")
+    assert states(one_b, "Resolving the ref is then pure downside"), (
+        "a raw `in` on `pure downside` passes on `is NOT pure downside` — the phrase must "
+        "be asserted, not merely present"
+    )
+    assert "1b short-circuits its ref resolution on it" in one_c
+    # The round's finding: the first cut short-circuited 1c ITSELF, so a held doc would
+    # have vanished from Step 8's `Held-back docs:` row — the short-circuit silently
+    # deleting the report that 1c exists to produce.
+    assert states(one_b, "It short-circuits 1b's REF RESOLUTION, not 1c")
+    assert states(one_c, "This pass runs over every doc regardless")
+    # And it must read the ids the way 1c reads them, or it resolves a ref for exactly the
+    # legacy doc 1c calls the stranding path.
+    assert "`roadmap_ids`, falling back to `task_ids`" in one_b
+
+
+def test_the_short_circuit_did_not_delete_1b():
+    """Ordering, not deletion. 1b still runs for every doc 1c does not hold, and the three
+    things it decides are unchanged — a `fix` that drops them restores the silent false
+    close `Q-238` closed."""
+    body = SKILL.read_text(encoding="utf-8")
+    one_b = body[body.index("1b. **Drop any pending-doc"):body.index("1c. **Hold back")]
+    assert 'git rev-list --count "<branch from frontmatter>" "^HEAD"' in one_b
+    assert "git cherry HEAD" in one_b
+    assert states(one_b, "1b still runs, unchanged, for every doc 1c does not hold")
+
+
+def test_the_staleness_measurement_is_hermetic(scripts, tmp_path):
+    """Phase 124's rule, and the battery's one real survivor before it was written. The
+    collect runs from the main checkout while a worktree is live, and an inherited
+    `GIT_DIR`/`GIT_WORK_TREE` from the caller's shell resolves a DIFFERENT repository — so
+    an unstripped env would answer the staleness question about someone else's history and
+    report it as this branch's. Here the hostile env names a repo where `feat/x` does not
+    exist at all, which without the strip degrades a real drift to `STALENESS UNKNOWN`."""
+    collect, _ = scripts
+    main = tmp_path / "main"
+    tip = _repo(main)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main", "."], cwd=elsewhere, check=True)
+    wt = _worktree(main, tmp_path / "wt")
+    _tipped(wt / "sysop/runtime/pending-docs/feat-x.md", "feat/x", "STALE", tip)
+    _live(main).mkdir(parents=True)
+    _commit_on(wt, "the commit the doc does not describe")
+
+    import os
+    env = dict(os.environ)
+    env["GIT_DIR"] = str(elsewhere / ".git")
+    env["GIT_WORK_TREE"] = str(elsewhere)
+    r = subprocess.run([sys.executable, str(collect), str(wt), "feat/x"],
+                       cwd=main, capture_output=True, text=True, env=env)
+
+    assert r.returncode == 6, (
+        f"the hostile GIT_DIR was honoured and the drift was lost: {r.stdout}"
+    )
+    assert "the commit the doc does not describe" in r.stdout
+
+
+@pytest.mark.parametrize("value,expect", [
+    ("1234567", "not a string"),      # a bare hex-looking value is a YAML int
+    ("true", "not a string"),
+    # An explicit `null` is the key PRESENT with an unusable value, not the key absent —
+    # my first expectation here said otherwise and the code was right.
+    ("null", "not a string"),
+    ("[]", "not a string"),
+])
+def test_a_present_but_unusable_branch_tip_is_not_reported_as_absent(
+    scripts, tmp_path, value, expect
+):
+    """Found by this phase's own author-side pass. All four are legal YAML that no author
+    intends, and the first cut of the report called every one of them *"no `branch_tip:` —
+    written before the key existed"* — a statement about the doc that is simply false, in a
+    line whose whole job is to tell an operator which case they are in."""
+    collect, _ = scripts
+    main = tmp_path / "main"
+    _repo(main)
+    wt = _worktree(main, tmp_path / "wt")
+    (wt / "sysop/runtime/pending-docs").mkdir(parents=True)
+    (wt / "sysop/runtime/pending-docs/feat-x.md").write_text(
+        f'---\nbranch: feat/x\nbranch_tip: {value}\ntype: feature\nsummary: "V"\n---\n',
+        encoding="utf-8")
+    _live(main).mkdir(parents=True)
+
+    r = _run(collect, main, wt)
+
+    assert r.returncode == 0, f"an unusable value must not halt: {r.stdout}"
+    assert expect in r.stdout, f"{value!r} misreported: {r.stdout}"
+    assert "V" in (_live(main) / "feat-x.md").read_text()
+
+
+def test_the_clone_shape_is_measured_not_waved_through(scripts, tmp_path):
+    """The round's HIGH, and the reason `_git` takes `-C wt`.
+
+    A `--clone` workspace is a SEPARATE repository — `claim_task.sh --clone` publishes the
+    branch and clones the remote — so its commits are not in the primary checkout's object
+    store. Measured from the main checkout, a genuinely stale clone-shape doc reported
+    `STALENESS UNKNOWN` and collected, on every clone-shape close, forever: a gate that
+    looks armed and is dead for a whole population. Run in the workspace, the objects are
+    always there."""
+    collect, _ = scripts
+    main = tmp_path / "main"
+    _repo(main)
+    ws = _clone(main, tmp_path / "ws")
+    tip = _g(ws, "rev-parse", "HEAD").stdout.strip()
+    _tipped(ws / "sysop/runtime/pending-docs/feat-x.md", "feat/x", "CLONE", tip)
+    _live(main).mkdir(parents=True)
+    _commit_on(ws, "work done inside the clone")
+    # The proof that the main checkout cannot answer: it does not have the object.
+    assert subprocess.run(["git", "cat-file", "-e", f"{tip}^{{commit}}"], cwd=main,
+                          capture_output=True).returncode == 0
+    after = _g(ws, "rev-parse", "HEAD").stdout.strip()
+    assert subprocess.run(["git", "cat-file", "-e", f"{after}^{{commit}}"], cwd=main,
+                          capture_output=True).returncode != 0, (
+        "the clone's new commit must be absent from the primary store, or this fixture is "
+        "not modelling the clone shape at all"
+    )
+
+    r = _run(collect, main, ws)
+
+    assert r.returncode == 6, f"the clone shape must be measured, not waved through: {r.stdout}"
+    assert "work done inside the clone" in r.stdout
+    assert not (_live(main) / "feat-x.md").exists()
+
+
+def test_the_clone_shape_control_a_current_clone_doc_collects(scripts, tmp_path):
+    """The negative control for the test above — without it, a check that refuses every
+    clone-shape doc would satisfy it."""
+    collect, _ = scripts
+    main = tmp_path / "main"
+    _repo(main)
+    ws = _clone(main, tmp_path / "ws")
+    tip = _g(ws, "rev-parse", "HEAD").stdout.strip()
+    _tipped(ws / "sysop/runtime/pending-docs/feat-x.md", "feat/x", "CLONE-CURRENT", tip)
+    _live(main).mkdir(parents=True)
+
+    r = _run(collect, main, ws)
+
+    assert r.returncode == 0, f"a current clone-shape doc must collect: {r.stdout}"
+    assert "CLONE-CURRENT" in (_live(main) / "feat-x.md").read_text()
+
+
+def test_the_measurement_runs_in_the_workspace_not_the_runners_cwd(scripts, tmp_path):
+    """Stated as its own claim rather than left implicit in the clone tests. The runner's
+    CWD is the primary checkout and the workspace is the operand; a measurement keyed to the
+    former answers about the wrong repository whenever the two differ. Here the primary
+    checkout holds a `feat/x` that is CURRENT and the workspace holds one that is not."""
+    collect, _ = scripts
+    main = tmp_path / "main"
+    _repo(main)
+    ws = _clone(main, tmp_path / "ws")
+    tip = _g(ws, "rev-parse", "HEAD").stdout.strip()
+    _tipped(ws / "sysop/runtime/pending-docs/feat-x.md", "feat/x", "WS", tip)
+    _live(main).mkdir(parents=True)
+    _commit_on(ws, "only the workspace moved")
+    assert _g(main, "rev-parse", "feat/x").stdout.strip() == tip, (
+        "the primary checkout's branch must still be AT the stamped tip, so a CWD-keyed "
+        "measurement would report `0` drift and collect"
+    )
+
+    r = _run(collect, main, ws)
+
+    assert r.returncode == 6, (
+        f"the primary checkout's answer (drift 0) was taken instead of the workspace's: "
+        f"{r.stdout}"
+    )
+
+
+# ---------------------------- the round's guard-strength findings, as their own claims
+
+def test_the_first_ever_close_works_when_main_has_no_pending_docs_dir(scripts, tmp_path):
+    """`live.mkdir(parents=True, exist_ok=True)` is load-bearing and nothing tested it.
+
+    Main's `sysop/runtime/pending-docs/` is gitignored — absent from any fresh clone,
+    authored lazily by /document-work in the WORKTREE, and removed-when-empty by Step 4c's
+    cleanup — so a consumer's first close arrives with no destination. Every other collect
+    test pre-creates `_live(main)`, so the population never contained that run. Without the
+    mkdir the copy fails and the collect exits 5, after which the prescribed rollback runs
+    against docs that were never collected.
+    """
+    collect, _ = scripts
+    main, wt = tmp_path / "main", tmp_path / "wt"
+    main.mkdir()
+    assert not _live(main).exists(), "this fixture's whole point is the missing destination"
+    _doc(wt / "sysop/runtime/pending-docs/feat-x.md", "feat/x", "FIRST EVER")
+
+    r = _run(collect, main, wt)
+
+    assert r.returncode == 0, f"the first-ever close must not fail: {r.stdout}"
+    assert (_live(main) / "feat-x.md").read_text().count("FIRST EVER") == 1
+
+
+def test_the_absent_arm_keys_on_the_pending_docs_dir_not_on_sysop(scripts, tmp_path):
+    """`_checkout()` builds a bare directory plus `.git`, and a real consumer worktree also
+    carries `sysop/`. A predicate widened to `not (wt / 'sysop').is_dir()` therefore passes
+    every fixture here while producing NOTHING on a real tree — the whole `Q-470` report
+    silently disappearing exactly where it is needed."""
+    collect, _ = scripts
+    main, wt = tmp_path / "main", _checkout(tmp_path / "wt")
+    (wt / "sysop" / "runtime").mkdir(parents=True)     # a real workspace has this
+    (wt / "sysop" / "scripts").mkdir(parents=True)
+    _doc(_live(main) / "feat-x.md", "feat/x", "ON MAIN")
+
+    r = _run(collect, main, wt)
+
+    assert r.returncode == 0
+    assert "COLLECT SKIPPED" in r.stdout, (
+        "the arm must key on the absent pending-docs directory, not on the absence of the "
+        "whole `sysop/` tree — which a real workspace always has"
+    )
+    assert "feat-x.md" in r.stdout
+
+
+def test_an_empty_branch_name_is_still_a_loud_abort(scripts, tmp_path):
+    """Splitting the disjunction must not have cost the operands their own arms. An empty
+    branch reaching stage 1 would classify every doc a collision (exit 3) — a quiet,
+    wrong-shaped refusal in place of the loud one."""
+    collect, _ = scripts
+    main, wt = tmp_path / "main", tmp_path / "wt"
+    _live(main).mkdir(parents=True)
+    _doc(wt / "sysop/runtime/pending-docs/feat-x.md", "feat/x", "S")
+
+    r = subprocess.run([sys.executable, str(collect), str(wt), ""],
+                       cwd=main, capture_output=True, text=True)
+
+    assert r.returncode == 4, f"an empty branch must abort loudly: {r.returncode} {r.stdout}"
+    assert "COLLECT ABORTED" in r.stdout
+
+
+def test_the_doc_glob_is_not_recursive(scripts, tmp_path):
+    """`quarantine/` is a SUBDIRECTORY precisely so no `*.md` reader sees it again (Step 4c
+    says so in as many words). An `rglob` here would collect quarantined and nested docs and
+    hand them to a step that was promised it would never see them."""
+    collect, _ = scripts
+    main, wt = tmp_path / "main", tmp_path / "wt"
+    _live(main).mkdir(parents=True)
+    _doc(wt / "sysop/runtime/pending-docs/feat-x.md", "feat/x", "TOP")
+    _doc(wt / "sysop/runtime/pending-docs/quarantine/old.md", "feat/somebody-else", "NESTED")
+
+    r = _run(collect, main, wt)
+
+    assert r.returncode == 0, f"a nested doc must be invisible, not a collision: {r.stdout}"
+    assert not (_live(main) / "old.md").exists()
+    assert "NESTED" not in r.stdout
+
+
+def test_a_foreign_doc_is_never_measured_for_staleness(scripts, tmp_path):
+    """The collision arm `continue`s before the staleness block, and it must: reporting
+    `STALENESS UNKNOWN` about a doc that does not belong to this branch states a fact about
+    someone else's record in this branch's report."""
+    collect, _ = scripts
+    main = tmp_path / "main"
+    _repo(main)
+    wt = _worktree(main, tmp_path / "wt")
+    _tipped(wt / "sysop/runtime/pending-docs/feat-x.md", "feat/other", "FOREIGN", None)
+    _live(main).mkdir(parents=True)
+
+    r = _run(collect, main, wt)
+
+    assert r.returncode == 3
+    assert "STALENESS" not in r.stdout
+
+
+@pytest.mark.parametrize("hostile", [
+    "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef..HEAD --all",   # a trailing revision range
+    "0123456 --not --all",
+    "abcdef0\nrm -rf /",
+])
+def test_sha_re_is_anchored_at_both_ends(scripts, tmp_path, hostile):
+    """`SHA_RE.match` without `\\Z` accepts a valid prefix and passes the whole string to
+    git — so `<sha>..HEAD --all` validates and arrives as extra revisions and options."""
+    collect, _ = scripts
+    main = tmp_path / "main"
+    _repo(main)
+    wt = _worktree(main, tmp_path / "wt")
+    _tipped(wt / "sysop/runtime/pending-docs/feat-x.md", "feat/x", "ANCHOR", f'"{hostile}"')
+    _live(main).mkdir(parents=True)
+
+    r = _run(collect, main, wt)
+
+    assert r.returncode == 0, f"{hostile!r} must degrade to unknown: {r.stdout}"
+    assert "is not an object name" in r.stdout
+
+
+@pytest.mark.parametrize("var", ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE"])
+def test_every_git_env_var_in_the_strip_list_is_actually_stripped(scripts, tmp_path, var):
+    """All four, parametrized. The first cut of the hermeticity test set only two of them,
+    so dropping the other two from the strip list was a survivor — a list guarded by a
+    fixture that exercises half of it is a list that can shrink."""
+    collect, _ = scripts
+    main = tmp_path / "main"
+    tip = _repo(main)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main", "."], cwd=elsewhere, check=True)
+    wt = _worktree(main, tmp_path / "wt")
+    _tipped(wt / "sysop/runtime/pending-docs/feat-x.md", "feat/x", "STALE", tip)
+    _live(main).mkdir(parents=True)
+    _commit_on(wt, "the commit the doc does not describe")
+
+    import os
+    env = dict(os.environ)
+    env[var] = str(elsewhere / ".git") if var != "GIT_WORK_TREE" else str(elsewhere)
+    if var == "GIT_INDEX_FILE":
+        env[var] = str(elsewhere / ".git" / "index")
+    r = subprocess.run([sys.executable, str(collect), str(wt), "feat/x"],
+                       cwd=main, capture_output=True, text=True, env=env)
+
+    assert r.returncode == 6, f"{var} was honoured and the drift was lost: {r.stdout}"
+
+
+def test_step_8_carries_a_row_for_every_line_the_collect_prints():
+    """A gate whose SKIP has no row in the run's report is a SKIP nobody sees, and the
+    first cut of this phase shipped both new stdout lines with no sink at all. Derive the
+    pairing rather than listing it: every `PENDING-DOC <X>:` prefix the heredoc prints must
+    have a Step 8 row, and each row must say what happened to the doc."""
+    body = SKILL.read_text(encoding="utf-8")
+    step8 = body[body.index("Pending-doc collisions: <N>"):]
+    step8 = step8[:step8.index("\n## ")] if "\n## " in step8 else step8
+
+    stale = [ln for ln in step8.split("\n") if ln.startswith("Stale pending-docs:")]
+    unknown = [ln for ln in step8.split("\n") if ln.startswith("Staleness not measured:")]
+    assert len(stale) == 1, "exit 6 has no Step 8 row"
+    assert len(unknown) == 1, "`STALENESS UNKNOWN` has no Step 8 row"
+
+    stale_block = step8[step8.index(stale[0]):step8.index(unknown[0])]
+    assert "exited 6" in stale_block and "NOTHING was collected" in stale_block
+    assert "/document-work" in stale_block, "the row must carry the remedy"
+    unknown_block = step8[step8.index(unknown[0]):]
+    unknown_block = unknown_block[:unknown_block.index("\nQuarantined docs:")]
+    assert "WAS collected" in unknown_block, (
+        "the two rows mean opposite things about the doc — one refused, one routed — and a "
+        "row that does not say which is worse than no row"
+    )
+
+
+def test_the_collect_prints_no_prefix_without_a_step_8_sink():
+    """The general form of the test above: the pairing is DERIVED from the heredoc's own
+    `print` statements, so a future line added with no row reddens here rather than being
+    noticed when an operator misses a SKIP."""
+    body = SKILL.read_text(encoding="utf-8")
+    collect = _heredocs()[0]
+    prefixes = set(re.findall(r"'PENDING-DOC ([A-Z][A-Z ]+):", collect))
+    prefixes |= set(re.findall(r'"PENDING-DOC ([A-Z][A-Z ]+):', collect))
+    step8 = body[body.index("Pending-doc collisions: <N>"):]
+    # The Step 8 template's row names, lower-cased and de-spaced, must cover each prefix.
+    covered = {
+        "COLLISION": "pending-doc collisions:",
+        "COLLISIONS": "pending-doc collisions:",
+        "STALE": "stale pending-docs:",
+        "STALENESS UNKNOWN": "staleness not measured:",
+        "COLLECT ABORTED": None,      # exit 4 — the close never reaches Step 8
+        "COLLECT FAILED": None,       # exit 5 — likewise
+        "COLLECT SKIPPED": None,      # exit 0, reported inline in the collect's own output
+        "COLLECTED": None,
+        "SKIPPED": None,
+    }
+    unmapped = sorted(p for p in prefixes if p not in covered)
+    assert not unmapped, (
+        f"the collect prints {unmapped} and this test does not know whether Step 8 has a "
+        f"row for it — decide, then add the mapping"
+    )
+    for prefix, row in covered.items():
+        if row and prefix in prefixes:
+            assert row in step8.lower(), f"`PENDING-DOC {prefix}:` has no Step 8 row"
+
+
+@pytest.mark.parametrize("short", ["a", "abc", "abcdef"])
+def test_a_too_short_hex_value_is_named_as_malformed_not_as_a_missing_object(
+    scripts, tmp_path, short
+):
+    """`SHA_RE`'s lower bound of 7 is a diagnostic, and dropping it to 1 is otherwise an
+    equivalent mutation — both roads end at `STALENESS UNKNOWN` and a collect. What changes
+    is what the operator is told: *"is not an object name"* says fix the doc, *"does not
+    resolve here"* says the object is gone from this workspace. They are different actions,
+    and git's own minimum unambiguous abbreviation is what makes 7 the right cut."""
+    collect, _ = scripts
+    main = tmp_path / "main"
+    _repo(main)
+    wt = _worktree(main, tmp_path / "wt")
+    _tipped(wt / "sysop/runtime/pending-docs/feat-x.md", "feat/x", "SHORT", f'"{short}"')
+    _live(main).mkdir(parents=True)
+
+    r = _run(collect, main, wt)
+
+    assert r.returncode == 0
+    assert "is not an object name" in r.stdout, (
+        f"{short!r} was passed to git and reported as unresolvable, which sends the "
+        f"operator looking for a missing commit instead of a malformed field: {r.stdout}"
     )

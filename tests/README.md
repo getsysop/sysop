@@ -72,7 +72,7 @@ Before any port, gdp's three matching test files (`test_next_task.py` 41fn, `tes
 
 ## Branch protection — enforced
 
-`main` requires the `pytest` status check, with `enforce_admins` on — enforced since 2026-06-24. Direct pushes are rejected; changes land via branch → PR → squash-merge (the `pr` merge policy `/review-close` grew in Phase 63 for exactly this shape). Historical note: protection was initially saved-but-unenforced (free-plan private repos don't enforce rules), which is why the suite's early phases relied on the human reading PRs as the gate.
+`main` requires the `pytest` status check, with `enforce_admins` on — enforced since 2026-06-24. **Since Phase 279 that context is produced by an AGGREGATOR job, not by the job that runs the suite** (`Q-465`): the suite is sharded across four machines and a matrix leg reports as `shard (1)`, `shard (2)`, … , none of which is `pytest`. `.github/workflows/tests.yml`'s `pytest` job depends on every leg and fails unless all of them succeeded. Renaming either job is a branch-protection edit, not a refactor — **on two repos**, since public `getsysop/sysop` requires the same context on its snapshot PRs. Off a pull request the matrix collapses to a single leg, so the nightly still runs the whole suite on one machine. Direct pushes are rejected; changes land via branch → PR → squash-merge (the `pr` merge policy `/review-close` grew in Phase 63 for exactly this shape). Historical note: protection was initially saved-but-unenforced (free-plan private repos don't enforce rules), which is why the suite's early phases relied on the human reading PRs as the gate.
 
 ## Why these don't ship downstream
 
