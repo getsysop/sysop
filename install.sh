@@ -1076,11 +1076,33 @@ get_sysop_commit() {
     err "--anchor: cannot resolve '$ANCHOR_OVERRIDE' in $REPO_ROOT"
     exit 1
   fi
-  if git -C "$REPO_ROOT" rev-parse HEAD >/dev/null 2>&1; then
-    git -C "$REPO_ROOT" rev-parse HEAD
-  else
-    printf 'unknown'
+  # Phase 280 (`Q-466`, round finding): this is the THIRD instance of one class in
+  # this file -- absence and failure sharing a branch -- and it is the sharpest,
+  # because `sysop_commit` is the only lock field that is neither a literal nor read
+  # back from the lock. It is derived by FORKING git on every install, so it is
+  # load-dependent by construction; and where the serializer's fail-open moved both
+  # timestamps, a changed `sysop_commit` moves ONLY `updated_at`, which is exactly
+  # and only what `test_noop_update_preserves_updated_at` asserts.
+  #
+  # The old shape also forked TWICE -- once to test, once to read -- so a failure
+  # between the two yielded the empty string rather than the `unknown` the else-arm
+  # intended. One fork now, and the two outcomes are separated:
+  #   not a git repo   -> `unknown`, the legitimate absence (a tarball install)
+  #   a git repo, but rev-parse failed -> refuse, rather than silently substituting
+  #     a different value into the lock and calling the install an update.
+  local head_sha
+  if head_sha="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null)" && [[ -n "$head_sha" ]]; then
+    printf '%s' "$head_sha"
+    return 0
   fi
+  if git -C "$REPO_ROOT" rev-parse --git-dir >/dev/null 2>&1; then
+    err "Refusing to continue: $REPO_ROOT is a git repository but its HEAD could not
+     be read. Substituting 'unknown' would change sysop_commit, which makes an
+     otherwise no-op install look like a real update and moves updated_at. Re-run;
+     nothing has been modified."
+    exit 1
+  fi
+  printf 'unknown'
 }
 
 # Read a top-level field from the target lock file. Echoes empty on miss.
@@ -1095,14 +1117,31 @@ lock_field() {
   # yield nothing, warn once, and let the callers' existing guards decide. That
   # keeps --update fail-closed: an empty sysop_commit still trips the ISSUE-0047
   # no-anchor check rather than silently overwriting managed paths.
-  python3 - "$lock_path" "$key" <<'PY'
+  #
+  # Phase 280 (`Q-466`, round finding): "the lock is malformed" and "I could not
+  # read the lock right now" are NOT the same thing, and this reader is the one
+  # that runs FIRST -- before a single managed path is written. Treating a
+  # transient read failure as absence yields an empty `sysop_commit`, which trips
+  # the no-anchor guard with a diagnosis that is FALSE (the anchor is present and
+  # fine) and whose two prescribed remedies both destroy: `--adopt` rewrites the
+  # lock, `--force` overwrites every managed path without preservation. So a
+  # malformed lock stays tolerated exactly as Phase 148 decided, and a genuine
+  # read failure refuses HERE -- which is also what stops `write_lock_file`'s
+  # later refusal from leaving a half-applied install behind it.
+  local rc=0
+  python3 - "$lock_path" "$key" <<'LOCKPY' || rc=$?
 import json, sys
 try:
     with open(sys.argv[1]) as f:
         data = json.load(f)
-except (OSError, ValueError):
-    print(f"lock: {sys.argv[1]} is unreadable — treating it as absent", file=sys.stderr)
+except FileNotFoundError:
     raise SystemExit(0)
+except ValueError:
+    print(f"lock: {sys.argv[1]} is malformed - treating it as absent", file=sys.stderr)
+    raise SystemExit(0)
+except OSError as exc:
+    print(f"lock: cannot read {sys.argv[1]}: {exc}", file=sys.stderr)
+    raise SystemExit(3)
 if not isinstance(data, dict):
     print(f"lock: {sys.argv[1]} is not a JSON object — treating it as absent",
           file=sys.stderr)
@@ -1115,7 +1154,12 @@ elif isinstance(val, list):
         print(item)
 else:
     print(val)
-PY
+LOCKPY
+  if (( rc == 3 )); then
+    err "Refusing to continue: the lock exists but could not be read. Treating that as an absent lock would report a missing anchor, and both remedies for a missing anchor (--adopt, --force) rewrite state this install would rather preserve. Fix the read error and re-run; nothing has been modified."
+    exit 1
+  fi
+  return 0
 }
 
 # Write/refresh <target>/.claude/sysop.lock. Honours DRY_RUN.
@@ -1185,14 +1229,45 @@ data = {
 #   updated_at   — advances only when some other field actually changed. An
 #     install that writes an otherwise-identical lock is not an update.
 #
-# A missing, unreadable, or non-object lock falls through to the caller's
-# values, which is the fresh-install path.
+# A missing or non-object lock falls through to the caller's values, which is
+# the fresh-install path. An UNREADABLE one does not, and that distinction is
+# `Q-466`'s (Phase 280).
+#
+# The first cut caught bare `OSError`, so "the lock is not there" and "the lock
+# is there and I could not read it right now" were the same case -- and the
+# fallback for both is "treat this as a fresh install", which rewrites BOTH
+# timestamps to now. On a fresh install that is correct. On a re-install it
+# silently destroys the two fields this whole block exists to preserve, and it
+# does it without a word on stderr. Demonstrated by driving this serializer with
+# a simulated EMFILE on the read: `installed_at` and `updated_at` both jump to
+# the caller's values, which is exactly the symptom `Q-466` reports.
+#
+# EMFILE/EINTR are the load-dependent OSErrors, and a transient one is precisely
+# what a heavily parallel test run or a busy consumer machine produces. So:
+# FileNotFoundError is the legitimate absence; every other OSError is an error
+# and is raised. An earlier cut also swallowed IsADirectoryError as "absence";
+# the round showed that strictly harmful -- `prev = None` falls through to the
+# WRITE below, which raises the identical error uncaught, converting a clean
+# actionable message into a raw traceback. A directory at the lock path is not
+# absence, and the installer refuses it upstream on `[[ -f ]]` anyway. A malformed lock stays
+# TOLERATED -- Phase 148 decided a hand-mangled lock must not abort the install
+# with a traceback, and `lock_field` carries the same tolerance.
 prev = None
 try:
     with open(lock_path) as f:
         prev = json.load(f)
-except (OSError, ValueError):
+except FileNotFoundError:
     prev = None
+except ValueError:
+    prev = None
+except OSError as exc:
+    raise SystemExit(
+        "sysop: cannot read the existing lock at {}: {}\n"
+        "  Refusing rather than rewriting it: treating an unreadable lock as an\n"
+        "  absent one resets installed_at and updated_at, which is silent data loss.".format(
+            lock_path, exc
+        )
+    )
 
 if isinstance(prev, dict):
     prev_installed = prev.get("installed_at")

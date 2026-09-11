@@ -83,11 +83,41 @@ def strict_slice(text: str, start: str, end: str, name: str, *, limit: int) -> s
       plan-skeleton slice was 17,726 characters before the author-side battery caught
       it.
 
-    The bounds are sized from the CURRENT slices (record 5,886 / tier 3,007 / plan
-    1,409 / skeleton 195) with roughly 20-30% headroom. They are a tripwire for an
-    anchor that has moved, not a budget for prose -- a slice that outgrows its bound
-    because the text legitimately grew wants the bound re-derived and the new figure
-    recorded here, which is a different act from nudging it up to get green.
+    The bounds are sized from the CURRENT slices with roughly 20-30% headroom. They
+    are a tripwire for an anchor that has moved, not a budget for prose -- a slice
+    that outgrows its bound because the text legitimately grew wants the bound
+    re-derived and the new figure recorded here, which is a different act from
+    nudging it up to get green.
+
+    **Sizings, newest last, so a re-derivation is auditable rather than a number
+    that moved:**
+
+    * Phase 277, at first sizing: record 5,886 / tier 3,007 / plan 1,409 / skeleton 195.
+    * Phase 278: the tier item gained `Q-410`'s filing bar -- the naming test, its four
+      legal answers, its four exemptions, the ledger destination and the Step 3b
+      interaction -- and the record item gained the ledger append. **One bound moved,
+      three did not, and the round corrected this entry twice.** The first version
+      re-derived only the bound that was crossed and said "the other three bounds ...
+      none moved", which enumerated two of three and never mentioned the Sequence
+      slice at all; the round measured it and it had moved the most in absolute terms.
+      Post-round measurements, every `strict_slice` call site:
+
+      | slice | pre-phase | now | bound | headroom |
+      |---|---|---|---|---|
+      | `3-tier` item | 3,007 | 4,682 | 4,000 -> **5,900** | 20.6% |
+      | `3-record` item | 5,886 | 6,728 | 7,000 (unchanged) | 3.9% |
+      | Step 7c Sequence | 13,684 | 16,201 | 18,000 (unchanged) | 10.0% |
+      | plan structure | 1,409 | 1,409 | 2,000 (unchanged) | 29.6% |
+
+      **The "roughly 20-30% headroom" sizing rule above describes how a bound is set
+      when it is first written, NOT an invariant these must maintain** -- the first
+      version of this entry implied the latter, which is why it read as though three
+      bounds were now wrong. A bound here is a tripwire for a **moved anchor**, and a
+      moved anchor widens a slice by thousands of characters, so 3.9% headroom still
+      catches the thing it exists to catch. Raising the two that merely narrowed would
+      *weaken* the tripwire to buy a number, which is the nudge this file forbids. The
+      one bound that moved did so because its slice **crossed**, and is the only case
+      that licenses a raise.
     """
     assert text.count(start) == 1, (
         f"{name}: start anchor occurs {text.count(start)} times, expected exactly 1. "
@@ -127,7 +157,7 @@ def tier_item() -> str:
         f"\n{TIER_MARKER} **When the work surfaces something adjacent",
         f"\n{RECORD_MARKER} **Persist the `## Test decision`**",
         "auto-build 3-tier item",
-        limit=4000,
+        limit=5900,
     )
 
 
@@ -785,4 +815,29 @@ def test_no_later_sequence_item_cancels_the_record() -> None:
             "the record is optional",
             "carry on without",
         ),
+    )
+
+
+# The bounds themselves. Every `limit=` above is prose until something reads it:
+# the round raised the tier bound to 20,000 and the Sequence bound to 40,000 and
+# the suite stayed green, so "re-derived, not nudged" was a discipline with no
+# enforcement. Pinning the values makes a silent raise red and a deliberate one a
+# visible edit to this list, with the sizing table above as its record.
+EXPECTED_BOUNDS = {
+    "auto-build 3-record item": 7000,
+    "auto-build 3-tier item": 5900,
+    "auto-build plan structure": 2000,
+    "auto-build Step 7c Sequence": 18000,
+}
+
+
+def test_no_slice_bound_is_raised_silently() -> None:
+    src = Path(__file__).read_text(encoding="utf-8")
+    pat = re.compile(r'"(auto-build [^"]+)",\s*limit=(\d+)')
+    found = {name: int(limit) for name, limit in pat.findall(src)}
+    assert found == EXPECTED_BOUNDS, (
+        f"a slice bound changed without this list changing with it: {found!r} against "
+        f"{EXPECTED_BOUNDS!r}. Raising a bound is how a slice stops meaning anything, "
+        "and the docstring's re-derivation rule had no enforcement until this test. A "
+        "legitimate raise edits this dict AND records the new sizing in the table above."
     )

@@ -1738,3 +1738,545 @@ def test_the_post_push_scan_guard_is_not_vacuous():
     assert any("not two" in p for p in problems), (
         f"the control fired, but not on the absence this guard exists for: {problems}"
     )
+
+
+# --- Phase 283 — a GitHub list endpoint defaults to `state=open` ---------------
+#
+# Pass 5b's bullet supplies the PR-number ceiling an operator judges citations
+# against, and told them to re-derive it with
+# `gh api repos/getsysop/sysop/pulls --jq 'max_by(.number).number'`.
+#
+# That command does not answer the question. `/pulls` and `/issues` are list
+# endpoints and both default to `state=open`; `getsysop/sysop` merges every
+# snapshot PR and closes nothing else, so the open set is routinely EMPTY, and
+# `max_by` over an empty array prints `null` — which `--jq` renders as a blank
+# line at **exit 0**. Measured 2026-09-11: the bare form printed empty, the
+# `state=all` form printed 45.
+#
+# The failure direction is the one that matters. An empty answer in a paragraph
+# whose entire job is to supply a ceiling reads as *there is no ceiling*, so an
+# unresolvable citation gets waved through — and the bullet itself says the
+# below-ceiling case is "the worse direction ... because it reads as
+# corroboration". A gate that prints nothing on a question it cannot answer is
+# this page's oldest recorded shape, and here it was in the page's own prose.
+#
+# Keyed to the MECHANISM, not to this one line: any `gh api` call on a list
+# endpoint whose default excludes what the caller is counting must name the
+# state it wants. Everything about the surrounding text is free — the repo slug,
+# the jq expression, the page number, the prose, moving it into a fence.
+#
+# **Stated at its true width, corrected by the round.** The first version of this
+# paragraph named the residual that a SIBLING already covers — deleting the Pass-5b
+# bullet outright, which `test_the_runbook_names_every_pass_the_gates_implement`
+# reddens — and was silent on the one nothing covered: **keep the bullet, delete
+# only the command.** A lens measured it: replacing the invocation with "re-derive
+# it yourself" left all five runbook-reading modules green, and the operator with
+# no way to derive the ceiling at all. So the shape check below is paired with a
+# subject check, and this comment now names the case each one owns.
+
+_STATE_DEFAULTING_ENDPOINTS = ("pulls", "issues", "milestones")
+
+# `search/issues` is NOT one of them, and a lens caught the first version
+# reddening it. The search API takes no `state` parameter at all — state lives
+# inside `q` as `is:merged` / `state:closed` — so demanding one there fails a
+# correct call, the direction this module keeps recording as the way a correct
+# guard gets deleted. It is the common GitHub path that happens to end in
+# `/issues`, which is exactly why a path-suffix match had to learn about it.
+_SEARCH_PATHS = ("search/issues", "search/repositories", "search/commits")
+
+# The SAME default, in the spelling this page actually uses. A lens counted the
+# file: 9 `gh pr` against 1 `gh api`, and demonstrated the identical failure by
+# running it —
+#
+#   gh pr list --repo getsysop/sysop --limit 100 --json number \
+#     --jq 'max_by(.number).number'        -> prints nothing, exit 0
+#   ... --state all ...                     -> prints 45
+#
+# so a guard keyed only to `gh api` covers the rarer half of its own class in
+# its own file. `gh pr list` and `gh issue list` both default to open and take
+# `--state`/`-s` rather than a query parameter.
+_STATE_DEFAULTING_SUBCOMMANDS = ("pr", "issue")
+
+
+def _scannable(text: str) -> str:
+    """The text a command could actually be read out of.
+
+    Two normalizations, both found by running a hostile corpus against the first
+    version of this predicate rather than by reading it:
+
+    * **Backslash continuations are joined first.** A guard keyed to a physical
+      line is walked through by a line continuation — `_shared/adversarial-review.md`
+      names that class by name — and here it failed in the *over-strict*
+      direction, which is worse: `gh api repos/o/r/pulls \\` + `-f state=all`
+      is a correct call that reddened, and a guard that fires on the idiomatic
+      form is one a maintainer learns to delete.
+    * **Comment lines are dropped**, matching this module's own `_live_lines`
+      doctrine — a commented-out command is not a command, and there is nothing
+      for an operator to run. Markdown headings start with `#` too and are
+      dropped by the same rule, which is harmless: a heading is not a command
+      either.
+    """
+    uncommented = "\n".join(
+        ln for ln in text.splitlines() if not ln.lstrip().startswith("#")
+    )
+    return re.sub(r"\\\n\s*", " ", uncommented)
+
+
+def _gh_api_list_calls(text: str) -> list[str]:
+    """Every `gh api` invocation in the runbook that hits a LIST endpoint.
+
+    A single-resource path (`repos/o/r/pulls/45`) takes no `state` and is not a
+    list — matching it would redden a legal edit, which is the direction that
+    gets a correct guard deleted. So the path must END at the collection, with
+    nothing after it but an optional query string.
+    """
+    out = []
+    scannable = _scannable(text)
+    for m in re.finditer(r"gh\s+api\b[^\n`]*", scannable):
+        call = m.group(0)
+        endpoint = re.search(
+            r"[A-Za-z0-9_.\-/]*/(" + "|".join(_STATE_DEFAULTING_ENDPOINTS) + r")"
+            # The path may be followed by a query string, and then by ANY
+            # non-path character. The first version whitelisted end-of-span,
+            # whitespace and quotes — so `…/pulls;`, `…/pulls,`, `(…/pulls)`
+            # each stopped being seen as a call, and a lens walked all three.
+            # `/` stays excluded on purpose: that is what keeps a
+            # single-resource path (`/pulls/45`, `/pulls/45/files`) out.
+            r"(\?[^\s'\"]*)?(?=$|[^A-Za-z0-9_.\-/])",
+            call,
+        )
+        if endpoint and not any(sp in call for sp in _SEARCH_PATHS):
+            out.append(call)
+    # `gh pr list` / `gh issue list` — same default, different spelling. Only
+    # `list` is a collection: `gh pr checks`, `gh pr merge`, `gh pr view` and
+    # `gh pr create` all take a selector and no state, and the runbook uses all
+    # four. Matching them would redden nine correct lines.
+    for m in re.finditer(
+        r"gh\s+(?:" + "|".join(_STATE_DEFAULTING_SUBCOMMANDS) + r")\s+list\b[^\n`]*", scannable
+    ):
+        out.append(m.group(0))
+    return out
+
+
+# WHERE the state has to appear, not merely THAT the token appears. The first
+# version was `\bstate=`, which matches anywhere in the call — including inside
+# a `--jq` filter. An independent lens found the bypass by running it:
+#
+#   gh api repos/o/r/pulls --jq '[.[]|select(.state=="open")]|length'
+#
+# names no state PARAMETER, silently returns only open pull requests, and read
+# CLEAN. That is `_shared/adversarial-review.md` rule 1's named failure — "a
+# check satisfied by a substring is satisfied by an incidental use of that
+# substring — worse than a gap, because it marks a dangerous line compliant" —
+# and it marked compliant the exact shape this guard exists to catch.
+_STATE_NAMED = re.compile(
+    r"""
+      # A VALUE is required. `?state=&per_page=100` satisfied the first
+      # version — the parameter is named and empty, which GitHub does not read
+      # as "all". A lens found it; it is the emptiest possible way to look
+      # compliant.
+      [?&]state=[^&\s'\"]                                     # gh api, query string
+    | (?:^|\s)(?:-f|-F|--field|--raw-field)(?:\s+|=)state=[^\s'\"]   # gh api, flag value
+    | (?:^|\s)(?:--state|-s)(?:\s+|=)\S                      # gh pr/issue list
+    """,
+    re.VERBOSE,
+)
+
+# A query string the guard cannot read, because the value is not in the text.
+# `QS='state=all&per_page=100'; gh api "repos/o/r/pulls?$QS"` is a correct,
+# ordinary call — this page already parameterizes `$PY` and `$P` — and the first
+# version of this guard reddened it. A lens found it as a FALSE ALARM, and
+# reddening a correct idiom is the direction that gets a guard deleted rather
+# than fixed. So an expansion in the query string is ACCEPTED, and the cost is
+# named here rather than left implicit: an author who wants past this guard can
+# put the query in a variable. That is a real residual, not a closed case — it is
+# just a smaller hole than punishing the idiom, and the guard reads one file that
+# a determined author is editing anyway.
+_SHELL_EXPANSION = re.compile(r"\?[^\s'\"]*\$")
+
+
+def _names_a_state(call: str) -> bool:
+    """A `state` PARAMETER, in gh's spellings: `?state=`/`&state=` in the query
+    string, or `-f`/`-F`/`--field`/`--raw-field` carrying it.
+
+    `state=open` counts as naming one — an operator who asked for open pull
+    requests on purpose is not this guard's business. What is not allowed is
+    leaving the default unstated on a call whose answer depends on it.
+    """
+    return _STATE_NAMED.search(call) is not None or _SHELL_EXPANSION.search(call) is not None
+
+
+def unstated_state_calls(text: str) -> list[str]:
+    return [c for c in _gh_api_list_calls(text) if not _names_a_state(c)]
+
+
+def _ceiling_bullet(text: str) -> str:
+    """The Pass 5b bullet — the one that hands the operator a number to judge
+    citations against. Anchored on the pass name, which the sibling guard
+    already requires to be present, and ended at the next list item."""
+    m = re.search(r"(?m)^\s*- Pass 5b\b.*?(?=\n\s*-\s|\n\n)", text, re.S)
+    return m.group(0) if m else ""
+
+
+def test_the_ceiling_bullet_still_hands_the_operator_a_command():
+    """The residual the round found: keep the bullet, delete only the command.
+
+    Measured green across all five runbook-reading modules before this existed.
+    The bullet's whole job is to supply a ceiling that "drifts every cut"; a
+    bullet that says so and then names no way to re-derive it leaves the reader
+    exactly where the stateless command did — holding no number.
+    """
+    bullet = _ceiling_bullet(_runbook())
+    assert bullet, (
+        "the Pass 5b bullet is gone or no longer starts with `- Pass 5b`. Its "
+        "presence is test_the_runbook_names_every_pass_the_gates_implement's "
+        "subject; this test needs to find it to check what is inside it"
+    )
+    assert _gh_api_list_calls(bullet), (
+        "the Pass 5b bullet no longer names a `gh api` call on a pull-request or "
+        "issue LIST endpoint. It tells the operator the ceiling drifts every cut "
+        "and not to trust the figure printed there — so removing the command "
+        "leaves no way to obtain one. If the ceiling stops being derived by hand, "
+        "retire this guard deliberately rather than letting the bullet go quiet"
+    )
+
+
+# The population, decided by MEASUREMENT rather than by reach. A lens showed the
+# guard read one file and that the identical defect went green in four others, so
+# a repo-wide widening was tried — and **refuted by running it**: 22 tracked files
+# flag, and the hits are dominated by two shapes that are not the defect at all.
+# Permission allow-list PATTERNS (`gh pr list:*)` in `settings.json` and in six
+# shipped skills) are not commands; and `/review-close`'s `gh pr list --head
+# <branch>` deliberately wants the OPEN pull request for that branch, which is
+# the correct answer there. That is the finding the widening produced: outside a
+# ceiling-or-inventory question, `open` is usually what the caller means, so the
+# defect is specific to the cut procedure rather than general to the repo.
+#
+# So the population is the operator-facing cut surface, named file by file — the
+# page an operator walks, the spec behind it, and the two builders whose PRINTED
+# blocks are paste sequences with the same standing as the runbook's own. All
+# four are clean today, so this widening closes a prospective hole and is not
+# covering an existing leak.
+_COMMAND_SURFACE = (
+    "tools/TESTER_MIRROR_RUNBOOK.md",
+    "tools/PUBLIC_RELEASE_SPEC.md",
+    "tools/cut_public_release.sh",
+    "tools/make_public_mirror.sh",
+)
+
+
+def test_the_cut_surface_names_the_state_its_list_calls_want():
+    """The runbook's three neighbours, which prescribe commands with equal standing.
+
+    `PHASE_LOG.md` is deliberately NOT here. It quotes the defective command as
+    history — that is what a record is for — and it ships. The contract this
+    guard enforces binds pages an operator runs FROM, not the record of why.
+    """
+    if not _in_source_repo():
+        pytest.skip("sterilized mirror; the maintainer-side surface is correctly absent")
+    problems = {}
+    for rel in _COMMAND_SURFACE:
+        path = REPO_ROOT / rel
+        assert path.is_file(), (
+            f"{rel} is missing from the SOURCE repo. This population is named file "
+            "by file on purpose; a rename needs re-pointing here, not a silent skip"
+        )
+        found = unstated_state_calls(path.read_text(encoding="utf-8"))
+        if found:
+            problems[rel] = found
+    assert not problems, (
+        f"a list call on the cut's operator surface does not name its state: {problems}. "
+        "These files prescribe commands an operator pastes; a call that silently "
+        "answers about open items only is the same defect wherever it sits"
+    )
+
+
+def test_the_command_surface_population_is_not_vacuous():
+    """Each named file must actually be scanned, and the scan must be able to see
+    a defect in it — otherwise the widening above is four skips wearing a green."""
+    if not _in_source_repo():
+        pytest.skip("not the source repo")
+    for rel in _COMMAND_SURFACE:
+        text = (REPO_ROOT / rel).read_text(encoding="utf-8")
+        planted = text + "\n\n`gh api repos/o/r/pulls --jq 'max_by(.number).number'`\n"
+        assert unstated_state_calls(planted), (
+            f"a planted defect in {rel} was not seen — that file contributes "
+            "nothing to the population and the guard is green over it by accident"
+        )
+
+
+def test_every_gh_list_call_in_the_runbook_names_the_state_it_wants():
+    assert unstated_state_calls(_runbook()) == [], (
+        "a `gh api` call on a /pulls or /issues LIST endpoint does not name a "
+        "`state=`. Both default to `state=open`, so the answer silently excludes "
+        "merged and closed items — and on a repo with none open the call prints "
+        "an empty line at exit 0, which reads exactly like a clean zero. If open "
+        "really is what you want, say `state=open` and this guard is satisfied.\n"
+        "DELIBERATELY STRICT, one case: quoting the bad form as a counter-example "
+        "in live prose reddens this too, because detecting that a sentence means "
+        "*do not run this* is polarity-by-string-matching — a class this project "
+        "abandoned at 0/21 (Phase 179) and declined again at Phase 180. Describe "
+        "the wrong form in words instead, as the Pass-5b bullet itself does"
+    )
+
+
+def test_the_state_guard_is_not_vacuous():
+    """Red against the tree this was filed about — `main` at Phase 282's squash."""
+    if not _in_source_repo():
+        pytest.skip("not the source repo")
+    pre = _pinned_runbook("3d59341")
+    problems = unstated_state_calls(pre)
+    assert problems, (
+        "the predicate found nothing wrong with the PRE-FIX runbook, whose Pass-5b "
+        "bullet carried a bare `gh api repos/getsysop/sysop/pulls` — the guard is "
+        "not measuring what it claims"
+    )
+    assert any("pulls" in p for p in problems), (
+        f"the control fired, but not on the call this guard exists for: {problems}"
+    )
+
+
+@pytest.mark.parametrize(
+    "name,call,flagged",
+    [
+        # --- the defect, in the spellings it can wear -------------------------
+        ("bare pulls list", "gh api repos/o/r/pulls --jq 'max_by(.number).number'", True),
+        ("bare issues list", "gh api repos/o/r/issues --jq '.[0].number'", True),
+        ("paginated but stateless", "gh api --paginate repos/o/r/pulls --jq 'length'", True),
+        ("query string without state", "gh api 'repos/o/r/pulls?per_page=100' --jq 'length'", True),
+        # --- correct forms, which must stay green ------------------------------
+        ("query state=all", "gh api 'repos/o/r/pulls?state=all&per_page=100' --jq 'max_by(.number).number'", False),
+        ("state first in query", "gh api 'repos/o/r/pulls?state=all' --jq 'length'", False),
+        ("-f flag form", "gh api repos/o/r/pulls -f state=all --jq 'length'", False),
+        ("--field form", "gh api repos/o/r/issues --field state=closed --jq 'length'", False),
+        ("open ON PURPOSE is fine", "gh api 'repos/o/r/pulls?state=open' --jq 'length'", False),
+        # --- not a list endpoint: must NOT be flagged --------------------------
+        ("single pull by number", "gh api repos/o/r/pulls/45 --jq '.title'", False),
+        ("a pull's files", "gh api repos/o/r/pulls/45/files --jq 'length'", False),
+        ("single issue by number", "gh api repos/o/r/issues/12 --jq '.state'", False),
+        # --- an unrelated endpoint that does not default by state --------------
+        ("commits", "gh api repos/o/r/commits --jq '.[0].sha'", False),
+        # --- the round's bypass: `state=` inside a --jq filter is NOT a state --
+        # Found by an independent lens running the call. The first predicate was
+        # `\bstate=` over the whole span, so each of these read CLEAN while
+        # naming no state parameter at all — the second one silently returning
+        # only open pull requests, which is the exact answer this guard exists
+        # to stop an operator trusting.
+        ("jq filter READS .state",
+         "gh api repos/o/r/pulls --jq '.[0].state'", True),
+        ("jq filter SELECTS on .state — returns open only",
+         "gh api repos/o/r/pulls --jq '[.[]|select(.state==\"open\")]|length'", True),
+        ("jq filter mentioning state= in a string",
+         "gh api repos/o/r/pulls --jq '\"state=all\"'", True),
+        # --- every flag spelling gh accepts, none of which may redden ----------
+        ("-F flag form", "gh api repos/o/r/pulls -F state=all --jq 'length'", False),
+        ("--raw-field form", "gh api repos/o/r/pulls --raw-field state=all", False),
+        ("--field=key=value form", "gh api repos/o/r/pulls --field=state=all", False),
+        ("&state= later in the query", "gh api 'repos/o/r/pulls?per_page=100&state=all'", False),
+    ],
+)
+def test_the_state_predicate_separates_the_defect_from_legal_calls(name, call, flagged):
+    got = unstated_state_calls(f"prose around it: `{call}` and more prose\n")
+    assert bool(got) is flagged, f"{name}: expected flagged={flagged}, got {got}"
+
+
+def test_the_state_guard_survives_legal_edits_to_its_own_bullet():
+    """The four edits that must not redden it — the direction that deletes guards.
+
+    Each rewrites something real about the corrected call while leaving the
+    mechanism intact.
+    """
+    fixed = "gh api 'repos/getsysop/sysop/pulls?state=all&per_page=100' --jq 'max_by(.number).number'"
+    for name, edit in [
+        ("renamed repo", fixed.replace("getsysop/sysop", "someone/else")),
+        ("different jq", fixed.replace("max_by(.number).number", "[.[].number]|max")),
+        ("reordered query", fixed.replace("state=all&per_page=100", "per_page=100&state=all")),
+        ("moved into a fence", "```bash\n" + fixed + "\n```"),
+    ]:
+        assert unstated_state_calls(edit) == [], f"{name} reddened a correct call"
+
+
+@pytest.mark.parametrize(
+    "name,text,flagged",
+    [
+        # Built BEFORE the fix, per rule 4. Three of these reddened the first
+        # version of the predicate and **all three were legal edits** — every
+        # failure was over-strictness, the direction that gets a correct guard
+        # deleted rather than fixed. This comment said "two of the three" until
+        # a review lens re-ran the eight cases against that first version and
+        # counted; the error was in the flattering direction.
+        ("fenced stateless call", "```bash\ngh api repos/o/r/pulls --jq 'length'\n```\n", True),
+        ("commented-out call in a fence",
+         "```bash\n# gh api repos/o/r/pulls --jq 'length'\n```\n", False),
+        ("markdown heading is not a command",
+         "# gh api repos/o/r/pulls\n\nprose\n", False),
+        ("backslash continuation carries the state",
+         "```bash\ngh api repos/o/r/pulls \\\n  -f state=all --jq 'length'\n```\n", False),
+        ("backslash continuation and still no state",
+         "```bash\ngh api repos/o/r/pulls \\\n  -f per_page=100 --jq 'length'\n```\n", True),
+        ("a bare github.com URL is not a gh api call",
+         "See https://github.com/getsysop/sysop/pulls for the list.\n", False),
+        ("`gh pr list` is a different command",
+         "`gh pr list --state all --json number`\n", False),
+        ("gh api on a repo root takes no state",
+         "`gh api repos/o/r --jq '.private'`\n", False),
+    ],
+)
+def test_the_state_predicate_normalizes_before_it_matches(name, text, flagged):
+    assert bool(unstated_state_calls(text)) is flagged, f"{name}: expected flagged={flagged}"
+
+
+@pytest.mark.parametrize(
+    "name,text,flagged",
+    [
+        # --- the CLI spelling, which is 9-to-1 the dominant one in this file ---
+        ("gh pr list, stateless",
+         "`gh pr list --repo o/r --limit 100 --json number --jq 'max_by(.number).number'`", True),
+        ("gh issue list, stateless", "`gh issue list --repo o/r --json number`", True),
+        ("gh pr list --state all", "`gh pr list --repo o/r --state all --json number`", False),
+        ("gh pr list -s all", "`gh pr list -s all --json number`", False),
+        # The four `gh pr` subcommands this page actually uses take a SELECTOR and
+        # no state. Matching them would redden nine correct lines.
+        ("gh pr checks", "`gh pr checks snapshot-refresh-abc --repo o/r --watch`", False),
+        ("gh pr merge", "`gh pr merge snapshot-refresh-abc --repo o/r --squash`", False),
+        ("gh pr create", "`gh pr create --repo o/r --body-file b.md`", False),
+        ("gh pr view", "`gh pr view 45 --repo o/r`", False),
+        # --- case sensitivity. GitHub query parameters are case-sensitive, so
+        # `?State=all` is IGNORED and the request silently defaults to open.
+        # Adding `re.I` to _STATE_NAMED would accept it; this is what stops that.
+        ("?State=all is not a state parameter", "`gh api 'repos/o/r/pulls?State=all'`", True),
+        # --- the accepted residual, pinned so it stays a DECISION -------------
+        ("a query string held in a shell variable is accepted",
+         "`gh api \"repos/o/r/pulls?$QS\" --jq 'length'`", False),
+    ],
+)
+def test_the_state_predicate_covers_both_gh_spellings(name, text, flagged):
+    assert bool(unstated_state_calls(text)) is flagged, f"{name}: expected flagged={flagged}"
+
+
+def test_the_predicate_examines_every_call_not_only_the_first():
+    """A lens narrowed the scan to the first match and nothing reddened.
+
+    One call in the live runbook means no test built from it can tell the
+    difference — so the population question is asked here, on synthetic text,
+    where a second call can exist.
+    """
+    two = (
+        "First, the good one: `gh api 'repos/o/r/pulls?state=all' --jq 'length'`.\n"
+        "Then the bad one: `gh api repos/o/r/issues --jq 'length'`.\n"
+    )
+    problems = unstated_state_calls(two)
+    assert len(problems) == 1 and "issues" in problems[0], (
+        f"the second call was not reached: {problems}. A predicate that stops at "
+        "the first match reports clean on a file whose defect is anywhere but "
+        "the top"
+    )
+
+
+def test_a_later_state_in_prose_cannot_launder_an_earlier_call():
+    """The capture window ends at the closing backtick on purpose.
+
+    Widened to `[^\\n]*`, prose following a backticked defective call joins the
+    span and any `?state=` in it satisfies the check — the call ships green.
+    """
+    laundered = "Run `gh api repos/o/r/pulls --jq 'length'` — the endpoint takes ?state=all too.\n"
+    assert unstated_state_calls(laundered), (
+        "prose after the closing backtick was allowed to satisfy the state check "
+        "for the call inside it"
+    )
+
+
+def test_only_the_query_string_may_hold_the_unreadable_expansion():
+    """The accepted residual is NARROW, and the narrowness is the whole decision.
+
+    `?$QS` is accepted because the guard cannot read a variable's value and
+    reddening a correct parameterized call is the direction that deletes
+    guards. Widened to "a `$` anywhere in the call", the acceptance becomes a
+    general-purpose bypass: any stateless call carrying a shell variable in an
+    unrelated position — a `--jq` filter, a repo slug — goes quiet. That
+    widening survived the battery until this test existed.
+    """
+    outside = [
+        "`gh api repos/o/r/pulls --jq '\"$x\"'`",
+        "`gh api \"repos/$OWNER/$REPO/pulls\" --jq 'length'`",
+        "`gh pr list --repo o/r --json number --jq '$f'`",
+    ]
+    for call in outside:
+        assert unstated_state_calls(call), (
+            f"a `$` outside the query string satisfied the state check: {call}"
+        )
+    inside = "`gh api \"repos/o/r/pulls?$QS\" --jq 'length'`"
+    assert not unstated_state_calls(inside), (
+        "the narrow residual stopped being accepted; a parameterized query "
+        "string is a correct idiom this page already uses for $PY and $P"
+    )
+
+
+@pytest.mark.parametrize(
+    "name,text,flagged",
+    [
+        # --- the endpoint lookahead, walked by ordinary punctuation -----------
+        # The first version whitelisted end-of-span, whitespace and quotes. A
+        # lens walked all three of these, and S11 is the LIVE shape: this page's
+        # own sentence continues `…, do not trust this number`.
+        ("trailing semicolon", "`gh api repos/o/r/pulls;`", True),
+        ("trailing comma in prose", "gh api repos/o/r/pulls, then compare", True),
+        ("parenthesised", "(gh api repos/o/r/pulls)", True),
+        # `/` stays excluded, which is what keeps single-resource paths out.
+        ("single resource", "`gh api repos/o/r/pulls/45 --jq '.title'`", False),
+        ("resource sub-path", "`gh api repos/o/r/pulls/45/files --jq 'length'`", False),
+        # --- a NAMED BUT EMPTY state is not a state --------------------------
+        # `?state=&per_page=100` named the parameter and gave it nothing, which
+        # GitHub does not read as "all". The emptiest possible way to look
+        # compliant, and it satisfied the first predicate.
+        ("empty query value", "`gh api 'repos/o/r/pulls?state=&per_page=100'`", True),
+        ("empty flag value", "`gh api repos/o/r/pulls -f state= --jq 'x'`", True),
+        # --- /milestones has the same default --------------------------------
+        ("milestones list", "`gh api repos/o/r/milestones --jq 'length'`", True),
+        ("milestones with state", "`gh api 'repos/o/r/milestones?state=all'`", False),
+        # --- search/* takes NO state parameter: reddening it is over-strict ---
+        ("search/issues", "`gh api 'search/issues?q=repo:o/r+is:pr+is:merged'`", False),
+        ("search/issues via -X GET", "`gh api -X GET search/issues -f q='repo:o/r'`", False),
+    ],
+)
+def test_the_endpoint_match_separates_a_list_from_its_neighbours(name, text, flagged):
+    assert bool(unstated_state_calls(text)) is flagged, f"{name}: expected flagged={flagged}"
+
+
+def test_a_comment_cannot_swallow_the_command_below_it():
+    """`_scannable` strips comments BEFORE joining continuations, and the order
+    is the whole point.
+
+    Joining first, a comment line ending in a backslash absorbs the command on
+    the next line and the call disappears from the scan entirely — the guard
+    then reports clean about text it never saw. In real bash a trailing `\\` on
+    a `#` line does not continue the comment, so the command runs. Latent when a
+    lens found it (the live runbook loses no tokens either way), and closed
+    rather than filed because the ordering is a one-line choice.
+    """
+    eaten = "```bash\n# ceiling \\\ngh api repos/o/r/pulls --jq 'max_by(.number).number'\n```\n"
+    assert unstated_state_calls(eaten), (
+        "a comment line ending in a backslash swallowed the command beneath it; "
+        "_scannable is joining continuations before stripping comments"
+    )
+
+
+def test_the_command_surface_cannot_silently_shrink():
+    """A lens commented one file out of `_COMMAND_SURFACE` and nothing reddened.
+
+    The runbook is covered twice over (its own test reads it directly), so
+    dropping it from this population is invisible — and so is dropping any of
+    the other three, since the remaining ones still pass. A named population
+    needs its membership asserted, or it is a list that can be edited down to
+    nothing one entry at a time.
+    """
+    assert set(_COMMAND_SURFACE) == {
+        "tools/TESTER_MIRROR_RUNBOOK.md",
+        "tools/PUBLIC_RELEASE_SPEC.md",
+        "tools/cut_public_release.sh",
+        "tools/make_public_mirror.sh",
+    }, (
+        f"_COMMAND_SURFACE is {_COMMAND_SURFACE}. Adding a file is ordinary and "
+        "wants this set updated in the same commit; REMOVING one needs a stated "
+        "reason, because the guard goes quiet about that file with nothing red"
+    )

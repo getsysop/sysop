@@ -5,8 +5,12 @@ name: tests
 # permissions, scoped pull_request.types so draft / fork PRs do not
 # over-trigger.
 #
-# Branch protection on `main` requires this `pytest` check
-# (see tests/README.md "Branch protection").
+# Branch protection on `main` requires the `pytest` check
+# (see tests/README.md "Branch protection"). Since Phase 279 that check is the
+# AGGREGATOR job at the bottom of this file, not the job that runs the suite --
+# the suite is sharded across machines and a matrix leg cannot carry a required
+# check's name. Read `jobs.shard` and `jobs.pytest` together; neither is
+# renameable without a branch-protection edit.
 #
 # NO `push: branches: [main]` trigger, and that is deliberate — do not add
 # one back without re-checking the condition below. Branch protection sets
@@ -60,8 +64,40 @@ permissions:
   contents: read
 
 jobs:
-  pytest:
+  # The suite, split across machines. Phase 279 / `Q-465`: this job used to be
+  # named `pytest` and used to be one runner carrying the whole suite for ~16
+  # min. The reasoning for sharding — and for sharding by ITEM rather than by
+  # file — is in `tests/conftest.py` under "CI shard selection"; it is not
+  # repeated here, because a second copy is a second thing to keep true.
+  #
+  # THE NAME MOVED, AND THAT IS THE LOAD-BEARING PART. Branch protection
+  # requires the check context `pytest`. A matrix job cannot carry that name:
+  # its legs report as `shard (1)`, `shard (2)`, … and none of them is `pytest`,
+  # so requiring `pytest` would block every PR forever. The `pytest` job below
+  # is the aggregator that keeps the context, and renaming EITHER job is a
+  # branch-protection change, not a refactor.
+  shard:
     runs-on: ubuntu-latest
+    strategy:
+      # Every leg reports, so a red run names every shard that failed rather
+      # than the first one. Diagnosing across four machines is hard enough
+      # without the other three being cancelled.
+      fail-fast: false
+      matrix:
+        # Four on a PR, one everywhere else. **The values are 0-based so the leg's name
+        # matches the shard it logs** -- GitHub names a leg after its matrix value, so
+        # `[1, 2, 3, 4]` produced a leg called `shard (1)` that printed `sysop shard: 0 of
+        # 4`, and the reader of a red leg could not map it to the run. The values are
+        # labels only; the authority is `strategy.job-index`, which the step echoes.
+        # `SYSOP_SHARD_COUNT=1` selects
+        # everything, so the nightly and a manual dispatch still run the WHOLE
+        # suite on ONE machine — deliberately, and not merely because sharding
+        # a nightly buys nothing. `Q-466` is a flake that needs the full
+        # ~6,650-test population under contention to surface at all; sharding
+        # changes that contention profile, so if every run were sharded the
+        # class would stop being observable anywhere. The nightly is now the
+        # one run that preserves it, and nobody waits on a nightly.
+        shard: ${{ fromJSON(github.event_name == 'pull_request' && '[0, 1, 2, 3]' || '[0]') }}
     # Scoped to the EVENT, never to the job: a skipped job never reports, and
     # the required `pytest` check would then block forever (see the note above
     # about `paths-ignore`). `pull_request` and `workflow_dispatch` always run
@@ -98,12 +134,12 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       # The interpreter floor, installed FIRST so the 3.13 setup below wins
-      # `python` on PATH and stays the one the suite runs under. This is a
-      # STEP of the required `pytest` job rather than a job of its own on
-      # purpose: branch protection requires the check named `pytest`, so a
-      # separate job would be advisory — green or red, nothing would gate on
-      # it. `tests/test_python_floor_portability.py` reads the path out of
-      # SYSOP_FLOOR_PYTHONS and fails (not skips) under CI when it is absent.
+      # `python` on PATH and stays the one the suite runs under.
+      # `tests/test_python_floor_portability.py` reads the path out of
+      # SYSOP_FLOOR_PYTHONS and fails (not skips) under CI when it is absent —
+      # so this runs in EVERY shard, not in one of them. The setup chain is 28 s
+      # against a 949 s test step; paying it four times is the cheap half of
+      # this trade.
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         id: floor-python
         with:
@@ -125,4 +161,60 @@ jobs:
       # them across workers anyway. Default dot output plus the `-ra` summary
       # already in pyproject's addopts names every failure.
       - name: Run tests
-        run: pytest
+        env:
+          # BOTH read off the matrix, neither written twice. This is the whole
+          # guard against the failure the aggregator cannot see: a hand-written
+          # count that disagrees with the matrix width — four legs and a count
+          # of five — runs a fifth of the suite on no machine at all and leaves
+          # every check green. `job-index` is 0-based and `job-total` is the
+          # number of legs, which is the contract `tests/conftest.py` asserts
+          # and `tests/test_ci_shard.py` pins.
+          SYSOP_SHARD_ID: ${{ strategy.job-index }}
+          SYSOP_SHARD_COUNT: ${{ strategy.job-total }}
+        # The echo is not decoration. `strategy.job-total` is the one value here
+        # that is neither written down nor derivable from this file alone, so
+        # the run log is the only place its resolution can be checked — and an
+        # unresolved expression arrives as an empty string, which
+        # `shard_config()` refuses rather than silently reading as "unsharded".
+        run: |
+          echo "shard ${SYSOP_SHARD_ID} of ${SYSOP_SHARD_COUNT}"
+          pytest
+
+  # THE REQUIRED CHECK. Branch protection on `main` requires the context
+  # `pytest`; this job's name IS that context. It runs nothing itself — it
+  # exists so that one check name can stand for every shard.
+  pytest:
+    needs: [shard]
+    # `always()` so a FAILING shard still produces a report. A job that does not
+    # run never reports, and a required check that never reports blocks the PR
+    # forever instead of failing it — the same hazard the `paths-ignore` note
+    # above is about.
+    #
+    # Scoped to `pull_request` because that is the only event branch protection
+    # reads. On the nightly the shard job's own red is the signal and this adds
+    # nothing; skipping here also keeps the mirrors — where the nightly is
+    # deny-listed above — from showing a red aggregator every day over a run
+    # that was declined on purpose. That scoping is what lets the deny-list stay
+    # in ONE place rather than being copied onto this job and drifting.
+    if: ${{ always() && github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every shard must have succeeded
+        # `needs.shard.result` is the AGGREGATE over the matrix: `success` only
+        # when every leg succeeded, `failure` when any failed, plus `cancelled`
+        # and `skipped`. One comparison therefore covers all four states.
+        #
+        # Written as `= success` and never as `!= failure`. `skipped` and
+        # `cancelled` are precisely the states in which NOTHING was tested, and
+        # a `!= failure` gate calls both of them green — which is this repo's
+        # most-repeated defect and the one `Q-465` warned this build would
+        # reintroduce. An unresolvable `needs.<name>` (a renamed job) expands to
+        # the empty string and is refused by the same comparison, so a typo
+        # fails closed rather than certifying.
+        run: |
+          result='${{ needs.shard.result }}'
+          echo "shard job result: ${result:-<empty>}"
+          if [ "$result" != "success" ]; then
+            echo "::error::the sharded suite did not succeed (result=${result:-<empty>})"
+            exit 1
+          fi

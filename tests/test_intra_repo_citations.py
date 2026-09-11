@@ -182,6 +182,23 @@ CITATION_ANCHORS = {
     # while a batch is open, and the round is archived with an OPEN batch.
     ("core/companion/scripts/review_index.py", "archive_review_tasks.py:595"):
         "Widening ANY_BATCH_HEADER_RE alone did NOT fix this",
+    # Phase 280, re-pointed by Phase 281 when `Q-468` closed. The `2-also` arm names
+    # BOTH `fence_closes` definitions in /claim-task -- one per heredoc, because nothing
+    # is shared across them -- and the claim it anchors is that the closer decision has
+    # exactly one home in each block. Before Phase 281 these cited :1395 and :1869, the
+    # two CALLERS, because only one of them carried the rule; the arm's sentence was
+    # about that asymmetry. If either definition moves or loses its info-string clause,
+    # the arm's claim needs re-checking rather than quietly inverting -- Phase 280
+    # shipped exactly that inversion once already.
+    # Deliberately NOT the same needle as its sibling below. Round lens 1, MEDIUM 2:
+    # when both entries carried the identical clause string, swapping which line each
+    # citation pointed at -- so the prose named the wrong site for BOTH -- stayed GREEN.
+    # The anchor kept line-precision and lost site-discrimination. This one is a
+    # sentence only Step 7f's copy carries.
+    ("core/skills/review-close/SKILL.md", "claim-task/SKILL.md:1300"):
+        'emits `fence + "markdown"` below',
+    ("core/skills/review-close/SKILL.md", "claim-task/SKILL.md:1895"):
+        "and not line.strip().strip(mark[0])",
     ("core/skills/auto-fix/SKILL.md", "archive_review_tasks.py:175"):
         "Merged|Complete",
     ("core/skills/auto-judge/SKILL.md", "archive_review_tasks.py:175"):
@@ -230,7 +247,7 @@ CITATION_ANCHORS = {
         "next_batch_number",
     ("core/skills/review-close/SKILL.md", "intake/SKILL.md:111"):
         "tasks/schema.md",
-    ("core/skills/review-close/SKILL.md", "add-task/SKILL.md:63"):
+    ("core/skills/review-close/SKILL.md", "add-task/SKILL.md:64"):
         "open/<TASK-ID>.md",
     ("core/skills/review-close/SKILL.md", "onboard/SKILL.md:95"):
         "Test decision",

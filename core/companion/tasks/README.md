@@ -16,13 +16,14 @@ Source of truth for the project's task queue. Replaces the single-file `product_
 |---|---|---|
 | `/intake` | `vision.md`, `decisions.md`, `index.yml` | the populated queue itself — `index.yml` + `open/<ID>.md` bodies + the intent layer (`vision.md`, `decisions.md`); leaves it **uncommitted** for human sign-off |
 | `/onboard` | consented in-repo evidence (README/docs/manifests/git log), a roadmap/`TODO.md` file or `gh issue list`, `index.yml` (dedup) | for an *existing* project adopting Sysop: drafts `vision.md` + `decisions.md` from evidence (fabrication-guarded — inferred rationales confirmed, never asserted) and/or imports the backlog into `index.yml` + bodies with `surfaced_by: [imported]` provenance; leaves everything **uncommitted**, then hands off to `/intake` for going-forward planning |
-| `/add-task` | `index.yml`, `open/` + `deferred/` bodies (dedup), `decisions.md` (contradiction check; tolerates absence) | quick capture of a single task (or 2–3 independent siblings): appends the validated `index.yml` entry + writes `open/<TASK-ID>.md`; never creates phases, never edits existing entries or `status:`, leaves it **uncommitted** — routes phase-shaped thoughts to `/intake` |
+| `/add-task` | `index.yml`, `open/` + `deferred/` bodies (dedup), `notes.md` (dedup + promotion source; tolerates absence), `decisions.md` (contradiction check; tolerates absence) | quick capture of a single task (or 2–3 independent siblings): appends the validated `index.yml` entry + writes `open/<TASK-ID>.md`; never creates phases, never edits existing entries or `status:`, leaves it **uncommitted** — routes phase-shaped thoughts to `/intake` |
 | `/next-task` | `index.yml`, `review_tasks.md`, `sysop/runtime/locks/*.lock` | — (default mode resolves a roadmap task, falling back to the next pending review batch; `--review` surfaces only batches) |
 | `/roadmap` | `index.yml`, `vision.md`, `decisions.md`, `review_tasks.md` | — (read-only strategy view: groups both queues' outstanding work by kind + proposes orderings of attack; never mutates) |
 | `/daily-summary` | `index.yml` (completed tasks for the milestone section), git history | — (read-only retrospective: standup/async report of the last day + week, git-log-driven; never mutates) |
 | `/test-audit` | source + test trees, `.claude/checks.yml` (`critical_path:` globs), optional coverage artifact | — (read-only test-quality audit: recommends new tests on load-bearing surfaces + retirements of dead/redundant/hollow tests; routes accepted recs to `/intake`; never writes tests or mutates) |
-| `/claim-task <ID>` | `index.yml`, body | flips `status: open → in_progress` in `index.yml`; creates `sysop/runtime/locks/<ID>.lock` |
-| `/document-work` | `index.yml`, body | — (verifies referenced IDs exist) |
+| `/claim-task <ID>` | `index.yml`, body | flips `status: open → in_progress` in `index.yml`; creates `sysop/runtime/locks/<ID>.lock`; its executor writes the branch's `## Test decision` / `## Also fixed` records and, at tier 3 of the fix-in-branch rule, appends to `notes.md` |
+| `/auto-build` | `index.yml`, bodies, `sysop/runtime/locks/*.lock` | the batch equivalent of `/claim-task`: claims each task in the batch and its executors write the same branch records, including tier-3 appends to `notes.md` |
+| `/document-work` | `index.yml`, body | verifies referenced IDs exist; may file a new follow-up entry + body, write `## Also fixed`, or append to `notes.md` — the three carve-outs to its own do-not-modify rule |
 | `/review-close` | `index.yml`, body | sets `status: done` + `completed_date`; `git mv` body to `archive/` |
 | `/release` | `index.yml` (done tasks since last tag → highlights), git history | writes a `CHANGELOG.md` entry (uncommitted) + creates/pushes an annotated tag; optional GitHub Release. Write-side, human-gated, dry-run by default; never rewrites a version manifest |
 
@@ -81,6 +82,28 @@ One construct the seed still uses is worth naming, because it is the exception t
 - `decisions.md` — the *technical-decisions record* (stack/schema/sequencing calls + rationale). This is the planning-side analog of `convention_map.md`: a re-invoked `/intake` checks new decisions against what's already committed here, and flags derived tasks for re-check if the intent has drifted.
 
 Both are authored only by `/intake` (or drafted by `/onboard` when an existing project adopts Sysop) — `install.sh` never creates them, so there is nothing for `--update` to overwrite (protection by absence, not by the skip-if-exists guard `index.yml` gets). They are not managed paths. They live at the `tasks/` root, so the validator's orphan check (which scans only `open/`, `deferred/`, `archive/`) ignores them.
+
+## The notes ledger (`notes.md`)
+
+`notes.md` is where a finding goes when it is **real but nothing has committed to it yet**. It sits beside the queue and is deliberately not in it.
+
+**Who writes it.** The executors — `/claim-task`, `/auto-build` — and `/document-work`, at tier 3 of the fix-in-branch rule. That rule's first two tiers fix the finding in the branch or fold it into an existing open task. Tier 3 files a new task only when the follow-up **names what it blocks**: the phase carrying `current_focus: true`, a named `planned` phase, a gate the project declares, or an open task whose stated acceptance it stops. Four kinds are filed whatever that test says — a design question, a `user_action`, a production write, and a defect in shipped behaviour or a security finding. Everything else lands here instead of growing the queue.
+
+**Shape — flat, one line per note, and the flatness is load-bearing.** Append at the end:
+
+```
+- 2026-09-10 · `agent/router.py` · surfaced by FIX-0042 · the retry ceiling is hard-coded where every sibling reads it from config
+```
+
+Date, the file or module it concerns, the task that surfaced it (omit when a human wrote it by hand), then the finding in one sentence. **No nesting, no sub-bullets, no sections.** **Make sure the file ends in a newline before you append** — a `>>` onto a file whose last line has none joins two notes into one, and one-line-per-note is the property everything below rests on.
+
+Two branches that both write a note in one cycle conflict here, and **for a flat list of independent lines keeping both sides is the correct resolution — but only when both sides merely appended.** Structure breaks it (that is how `tasks/index.yml` corrupts silently under the same conflict), and so does a **deletion**, which leaves the file just as flat: promoting a note removes its line, and a union against another branch's append puts the promoted note back. `/review-close` § *Sysop-written shared append files* carries the check for both properties and is the only place that resolution is licensed. **One case no resolution step can catch:** two branches appending a byte-identical line merge cleanly and collapse to one, because there is no conflict to resolve. Write the date and the surfacing task into every note and that case stops arising.
+
+**What reads it.** `/add-task` Step 2 dedups against it, so the same finding is not noted twice and a note can be promoted rather than duplicated. No other *skill* does — no skill routes to it, `/next-task` cannot select from it, `/roadmap` does not count it. That is the entire point: it is a record, not a queue. (`validate_tasks.py`'s warn-only secret scan reaches it too, as the ownership note below says; that is a screen, not a reader.)
+
+**Promotion is a human act.** When a note starts blocking something you can name, run `/add-task` on it and delete the line. A note nobody promotes is a note nobody needed, which is the outcome the ledger exists to make visible.
+
+**Ownership.** Consumer-owned, like `vision.md` and `decisions.md` — `install.sh` never creates it, so there is nothing for `--update` to overwrite (protection by absence). Whoever writes the first note creates the file. It is not a managed path, and it lives at the `tasks/` root, so the validator's orphan check (which scans only `open/`, `deferred/`, `archive/`) ignores it. The validator's warn-only secret scan does cover it, since that walks `tasks/**/*.md` — a note pasted out of a log gets the same screen a task body does.
 
 ## Migrating from `product_roadmap.md`
 

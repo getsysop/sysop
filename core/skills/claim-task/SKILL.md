@@ -1138,10 +1138,12 @@ Read your three inputs from disk rather than from this prompt: `<ARTIFACT_DIR>/p
    2. **Extend an existing open task** in that module — add what you found to that task's body rather than opening a second entry against the same code. This is `/add-task` Step 2's move, made the default here rather than one branch of a judgment.
    3. **File a new task** only past both — or when it is a design question, needs a `user_action`, or writes to production.
 
+   **Past those, tier 3 has one more test: name what the filing blocks.** One of — the phase carrying `current_focus: true`; a named `planned` phase; a gate the project declares (`<project>/CLAUDE.md`, a release checklist, an ops runbook — whatever it calls them); or an open task whose stated acceptance this stops. Write that name into the body so a reader can check it. **Four kinds are filed whatever this test says**, each being its own justification: a design question or a call that is the human's; a `user_action`; a production write; and a defect in shipped behaviour **you can state as a falsifiable failure** — the input, the expected result, the actual one — or a security finding. **Everything else goes to `tasks/notes.md`** — the flat ledger beside the queue, one line per note, shape in `tasks/README.md` § *The notes ledger*. Nothing routes to that file and nothing counts it; that is what it is for. **A note is not a silent drop:** say in your final message that you wrote one and what it concerns, so the human can promote it with `/add-task`. And a note carries no task id, so do not put a `<PREFIX>-<NAME>` token for it into the docs prose — `/document-work` Step 3b hard-fails on a token that resolves to nothing. The ledger holds a finding nobody has committed to yet; it is never the place for one you would rather not defend. **The append itself is the record item's write, not this item's** — same delegation as `## Also fixed`, and for a plainer reason: this item runs while the work does, and a record write belongs in the one step that owns the worktree paths. Decide the routing here; name the line you want appended; leave the writing to it.
+
    **The backstop is a property of the CHANGE, not a lookup over a file list** — an enumeration rots. **If the change would weaken, disarm, narrow or delete a gate — a check, a semgrep rule, a numeric bound, an allowlist or ignore entry, a deletion-protection flag — it is never tier 1, whatever file it lives in**, because tier 1's "an existing gate already covers it" predicate is satisfied by the disarming edit itself. If you cannot name a gate that would still fail were your fix wrong, file instead.
 
    **The bound is the design, not a formality.** Unplanned scope inside a narrow plan is a real failure mode, and an agent mid-task verifies an adjacent thing less carefully than a fresh one would. Tier 1 dropped in the name of throughput becomes a source of defects rather than a sink for tasks. When you are between tiers 1 and 2, take 2 — a filed line costs a reader, a wrong in-branch fix costs a revert.
-3. **Persist the `## Test decision`** section into the task's body file, per the plan's step for it. **Write the worktree copy** (`<WORKTREE_PATH>/tasks/…`), never the main checkout's — an edit there is on no branch, so it never reaches the PR, and `/review-close` Step 2d reads this record at the branch tip. **If the plan's step names a main-checkout path, correct it and note the correction** rather than following it. **If item 2b produced any tier-1 fixes, write `## Also fixed` in this same write** — one line each, placed after this `## Test decision` section and before any `## Plan` section, per `tasks/schema.md` § *Also fixed*. That order is not cosmetic: the plan section is a fenced block that can quote either heading, so a first-match heading reader must meet the real section first. The one exception is a body that is untracked in the main checkout (`/add-task` filed it and nobody committed it): it is on no branch and cannot be put on one, so write the main-checkout copy and **say so in your final message** — that record will not reach the PR and the body needs committing before `/review-close` runs.
+3. **Persist the `## Test decision`** section into the task's body file, per the plan's step for it. **Write the worktree copy** (`<WORKTREE_PATH>/tasks/…`), never the main checkout's — an edit there is on no branch, so it never reaches the PR, and `/review-close` Step 2d reads this record at the branch tip. **If the plan's step names a main-checkout path, correct it and note the correction** rather than following it. **If item 2b produced any tier-1 fixes, write `## Also fixed` in this same write** — one line each, placed after this `## Test decision` section and before any `## Plan` section, per `tasks/schema.md` § *Also fixed*. That order is not cosmetic: the plan section is a fenced block that can quote either heading, so a first-match heading reader must meet the real section first. The one exception is a body that is untracked in the main checkout (`/add-task` filed it and nobody committed it): it is on no branch and cannot be put on one, so write the main-checkout copy and **say so in your final message** — that record will not reach the PR and the body needs committing before `/review-close` runs. **If item 2b routed anything to the notes ledger, append those lines to `<WORKTREE_PATH>/tasks/notes.md` in this same pass** — create the file if it is absent, one flat line per note, appended at the end, per `tasks/README.md` § *The notes ledger*. It is a different file from the body and carries no ordering relationship to these sections; it is written here because this is the step that owns the worktree paths. **A note written into the main checkout is on no branch, so it never reaches the PR** — and it is not Step 2a that catches that: Step 1a skips the primary checkout by inode identity, so the dirty classification never sees it. What it reaches instead is Step 6's post-merge `git diff --quiet HEAD --` gate, which halts the close *after* the PR has merged. Late and loud rather than early and loud; write the worktree copy.
 
    **Then read it back, before you go on.** This write is skipped more often than any other step in this sequence — measured on one consumer cycle at **three of four branches**, all claimed the same day through this path, two of them shipping substantial tests. So it is a missing *record*, not missing coverage, and nothing downstream catches it in time: the validator's warn-only invariant on this fact was retired (it read the working tree, where the record does not live), leaving `/review-close` Step 2d as the only enforcement — at the merge, after implementation, where the sole dispositions are waive it or hold otherwise-ready work. The record is cheap here and expensive there. Confirm the heading is really in the file you just wrote:
 
@@ -1291,7 +1293,11 @@ if env_path.is_file():
         sealed = None
 
 def fence_mark(line):
-    """`(char, length)` if this line opens or closes a fence, else None."""
+    """`(char, length)` if this line is a fence marker, else None.
+
+    Reports only that the line IS a marker. Whether it *closes* an open fence is
+    `fence_closes`' question -- an opener may carry an info string (this writer
+    emits `fence + "markdown"` below), a closer may not."""
     s = line.lstrip()
     for ch in ("`", "~"):
         if s.startswith(ch * 3):
@@ -1300,6 +1306,22 @@ def fence_mark(line):
                 n += 1
             return ch, n
     return None
+
+def fence_closes(line, open_mark):
+    """True only if `line` CLOSES the fence `open_mark` opened.
+
+    Three properties, not two. Same character, at least as long -- and **no info
+    string**, which is the one an opener is allowed to carry and a closer is not.
+    A ```json line nested inside a plain ``` fence satisfies the first two, so a
+    reader without the third believes it has LEFT the fence while still inside it,
+    and then reads the fence's own lines as content. That is the fabricating
+    direction, not the dropping one (`Q-468`).
+
+    The closer decision lives here, in one place, precisely because it was split
+    across two loops before and only one of them remembered it."""
+    mark = fence_mark(line)
+    return (bool(mark) and mark[0] == open_mark[0] and mark[1] >= open_mark[1]
+            and not line.strip().strip(mark[0]))
 
 def strip_sections(lines, headings, preserve=()):
     """Drop each `## <heading>` through the line before the next `## `.
@@ -1389,8 +1411,7 @@ def strip_sections(lines, headings, preserve=()):
                 elif skipping and ln.startswith("## "):
                     skipping = False
                     sink = None
-        elif (mark and mark[0] == fence[0] and mark[1] >= fence[1]
-              and not ln.strip().strip(mark[0])):
+        elif fence_closes(ln, fence):
             fence = None
         if skipping:
             if sink is not None:
@@ -1754,16 +1775,27 @@ main_root = Path(common).resolve().parent
 changed = subprocess.run(
     ["git", "-C", str(main_root), "diff", "--name-only", "HEAD", "--", "tasks/"],
     capture_output=True, text=True, check=True).stdout.split()
-if changed:
+# The pathspec stays exactly `tasks/`. `tasks/notes.md` is partitioned out AFTER the
+# diff, not excluded from it: narrowing what the probe looks at is how it stops
+# seeing a stranded body, and the ledger is not a body file.
+bodies = [p for p in changed if p != "tasks/notes.md"]
+note_only = [p for p in changed if p == "tasks/notes.md"]
+if bodies:
     print("STRANDED — task-body edits are uncommitted on main:")
-    for p in changed:
+    for p in bodies:
         print("  " + p)
+elif note_only:
+    print("NOTES PENDING — tasks/notes.md is edited but uncommitted on main.")
+    print("  Not stranded: /add-task promotes a note by deleting its line and never commits.")
+    print("  Commit it with your next commit. Do NOT skip the chain for this.")
 else:
     print("tasks/ CLEAN — no body edits stranded on main")
 PY
 ```
 
 **If that printed `STRANDED`** — the executor wrote body edits into the main checkout instead of the worktree (internal tracker #322). They are on no branch, so they do not reach the PR, and nothing downstream notices: `/review-close` Step 4c `git mv`s the body into `tasks/archive/`, and the edits never having been staged, the rename stages **`HEAD`'s** content, so the body contributes `0 insertions(+), 0 deletions(-)` to the consolidation commit — the rename lands, the documentation does not. (The commit itself is larger; it also carries `tasks/index.yml` and the pending docs.) The only backstop is Step 6's tracked-tree gate, which fires **after `gh pr merge` has landed**, too late to save the PR. So: surface the file list the block just printed, **skip the auto-mode chain**, and tell the human the edits must be moved onto the branch (still checked out at `<WORKTREE_PATH>`, whose work commit is amendable) before `/review-close` runs. **Do not move them yourself** — which copy is authoritative is the human's call.
+
+**`tasks/notes.md` is partitioned out of the verdict, and the pathspec is deliberately NOT narrowed to do it.** The notes ledger is not a body file, and this workflow *prescribes* an uncommitted edit to it in the main checkout: `/add-task` Step 2 promotes a note by filing the task and deleting the note's line, and `/add-task` never commits. Left undistinguished, that promotion reports `STRANDED`, and the disposition below then tells the human three things that are all false of a note — that an executor wrote body edits to the wrong tree, that they must be moved onto the branch, and that internal tracker #322 is the cause — and **skips the auto-mode chain**. Reproduced against the shipped probe, not reasoned. **The first fix for it was the wrong shape** and a guard caught it: adding `:(exclude)tasks/notes.md` to the pathspec narrows what the probe *looks at*, and `test_a_probe_widened_past_tasks_is_caught_by_execution` pins the pathspec as exactly `tasks/` because *anything narrower stops seeing the stranded body*. So the diff still covers all of `tasks/` and the partition happens after it, on a path that can never hold a task body. `NOTES PENDING` is a distinct, non-halting verdict rather than a silence, because a note uncommitted on `main` still needs committing.
 
 **An untracked body is not `STRANDED`, and the probe is scoped so it does not report as one.** `git diff HEAD` ignores untracked files, so an `/add-task` body nobody committed leaves this quiet — correctly, because that body is on no branch and cannot be put on one. The executor reports that case itself, in its own final message.
 
@@ -1825,17 +1857,18 @@ HEAD = re.compile(r"^(#{1,6})\s*(.*)$")
 WANT = re.compile(r"^\s*test\s+decision\b", re.I)
 
 def fence_mark(line):
-    """`(char, length)` if this line opens or closes a fence, else None.
+    """`(char, length)` if this line is a fence marker, else None.
 
     This is Step 7f's `fence_mark`, and it is the same function on purpose -- do not
-    re-derive it a third time. Both properties are load-bearing and BOTH were missing
-    from the first version of this block: a body can be fenced with ``` OR ~~~, and a
-    fence is closed only by the SAME character at the SAME length or longer. Step 7f's
-    own writer emits a FOUR-backtick outer fence whenever the plan it wraps contains an
-    ordinary ```-block, so a 3-backtick reader treats the plan's first inner fence as the
-    close, reads the rest of the plan as unfenced, and certifies the plan's own copy of
-    `## Test decision` as the record. Measured: a real option-C body with no record at
-    all passed."""
+    re-derive it a third time. Same for `fence_closes` below. THREE properties are
+    load-bearing, and this block shipped missing a different one each time. A body can
+    be fenced with ``` OR ~~~; a fence is closed only by the SAME character at the SAME
+    length or longer; and a closer carries NO info string. Step 7f's own writer emits a
+    FOUR-backtick outer fence whenever the plan it wraps contains an ordinary ```-block,
+    so a 3-backtick reader treats the plan's first inner fence as the close, reads the
+    rest of the plan as unfenced, and certifies the plan's own copy of `## Test decision`
+    as the record. Measured: a real option-C body with no record at all passed. The
+    info-string half is `Q-468` and reproduces the same way -- see `fence_closes`."""
     s = line.lstrip()
     for ch in ("`", "~"):
         if s.startswith(ch * 3):
@@ -1845,6 +1878,22 @@ def fence_mark(line):
             return ch, n
     return None
 
+def fence_closes(line, open_mark):
+    """True only if `line` CLOSES the fence `open_mark` opened.
+
+    Three properties, not two. Same character, at least as long -- and **no info
+    string**, which is the one an opener is allowed to carry and a closer is not.
+    A ```json line nested inside a plain ``` fence satisfies the first two, so a
+    reader without the third believes it has LEFT the fence while still inside it,
+    and then reads the fence's own lines as content. That is the fabricating
+    direction, not the dropping one (`Q-468`).
+
+    The closer decision lives here, in one place, precisely because it was split
+    across two loops before and only one of them remembered it."""
+    mark = fence_mark(line)
+    return (bool(mark) and mark[0] == open_mark[0] and mark[1] >= open_mark[1]
+            and not line.strip().strip(mark[0]))
+
 def headings(fence_aware):
     out, open_mark = [], None
     for i, ln in enumerate(lines):
@@ -1853,7 +1902,7 @@ def headings(fence_aware):
             if fence_aware:
                 if open_mark is None:
                     open_mark = mark
-                elif mark[0] == open_mark[0] and mark[1] >= open_mark[1]:
+                elif fence_closes(ln, open_mark):
                     open_mark = None
             continue
         if open_mark is not None:

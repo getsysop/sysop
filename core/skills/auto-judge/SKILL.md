@@ -415,6 +415,7 @@ If STATUS is PASS and commits were pushed, create a pending-docs file in the wor
 ```yaml
 ---
 branch: <branch-name>
+branch_tip: <full SHA — `git -C <WORKTREE_PATH> rev-parse HEAD`, run NOW>
 date: YYYY-MM-DD
 type: infrastructure
 roadmap_ids: []
@@ -423,7 +424,9 @@ summary: "Batch <N> complete (judgment): <Title>. Fixed <X>, dropped <Y>, failed
 ---
 ```
 
-If all tasks were DROP (no code change pushed, only review_tasks.md annotation), still create the pending-docs so the batch's close is documented, and push the review_tasks.md commit on the branch.
+> **`branch_tip:` is stamped LAST, after this branch's final commit (`Q-471`).** `/review-close` Step 3b compares it against the branch tip and **refuses to collect** a doc that later commits have overtaken, because Step 4c routes `summary:` into the durable record in the same commit that flips the task to `done`. Read it with `git -C <WORKTREE_PATH> rev-parse HEAD` — from the worktree, not from the main checkout, whose `HEAD` is a different branch. **Anything committed to this branch after the stamp stops the next close at exit 6**, so if a later step here commits, it must re-stamp. Omitting the field is not a silent opt-out either — it prints `PENDING-DOC STALENESS UNKNOWN:` on every close of every batch this skill produces, which is a gate exempting the whole review-batch path while looking armed.
+
+If all tasks were DROP (no code change pushed, only review_tasks.md annotation), still create the pending-docs so the batch's close is documented. **Commit and push the `review_tasks.md` annotation FIRST, then write this file** — the reverse order was the shipped one, and it stamps `branch_tip:` at a commit the annotation then moves past, which is exit 6 on every all-DROP batch.
 
 ## Step 5: Summary Report
 

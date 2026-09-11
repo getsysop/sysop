@@ -36,11 +36,12 @@ Apply the atomicity litmus from `.claude/skills/_shared/decomposition-rubric.md`
 
 ## Step 2 — Dedup
 
-Search the queue for overlap before drafting: task titles in `index.yml` plus a `Grep` over `tasks/open/` and `tasks/deferred/` bodies for the task's key nouns. If a plausible match exists:
+Search the queue for overlap before drafting: task titles in `index.yml` plus a `Grep` over `tasks/open/` and `tasks/deferred/` bodies for the task's key nouns. **Search `tasks/notes.md` too, tolerating its absence** — that is the notes ledger, where an executor records a finding that reached tier 3 of the fix-in-branch rule without being able to name what it blocks (`tasks/README.md` § *The notes ledger*). If a plausible match exists:
 
 - **An open task already covers it** → surface it; offer to extend that task's body with the new detail instead of filing a duplicate.
 - **A deferred task covers it** → surface it; the right move may be un-parking that task (a human decision), not filing a twin.
 - **Related but genuinely distinct** → file the new task and record the relationship in prose in `## Context` (formal `surfaced_by:` only when the existing task actually *spawned* this one).
+- **A line in `notes.md` covers it** → this is a **promotion**, not a duplicate. The human asking for the task is the commitment the note was waiting for, so file it normally and **delete that line from `notes.md` in the same run**, quoting the line you removed in the playback. Carry the note's detail into the body rather than re-deriving it; the note was written by an agent that had the code open. Leaving the line behind is how one finding becomes two records that drift.
 
 No match → proceed.
 
@@ -102,7 +103,7 @@ This is one conversational turn, not a review gate. The human's real sign-off is
 ## What this skill never does
 
 - Creates or edits `phases:`, `tasks/vision.md`, or `tasks/decisions.md` — that's `/intake`.
-- Changes any existing task's `status:`, touches `sysop/runtime/locks/`, or edits an existing entry — capture only appends.
+- Changes any existing task's `status:`, touches `sysop/runtime/locks/`, or edits an existing entry — capture only appends. **The one write outside that rule is deleting a promoted line from `tasks/notes.md`** (Step 2), which is a delete from the ledger rather than an edit to the queue, and it happens only in the run that files the task replacing it.
 - Imports backlogs or scans the repo for work — that's `/onboard`.
 - Commits, pushes, or merges anything.
 

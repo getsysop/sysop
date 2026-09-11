@@ -343,12 +343,68 @@ class TestTheFenceScannerMatchesTheWritersItReads:
         rc, out = _run(repo, "CLAIM-1", b, "tasks/open/T.md")
         assert rc == 1 and out.startswith("MISSING"), (rc, out)
 
+    def test_a_tilde_marker_does_not_close_a_backtick_fence(self, repo):
+        """Round lens 2, MEDIUM 3. The character half of the closer rule was pinned by
+        **0 of 6,756 tests** — deleting `mark[0] == open_mark[0]` from all three shipped
+        sites killed nothing, and `grep -rln "mark\\[0\\] == open_mark\\[0\\]" tests/`
+        returned nothing.
+
+        Not an equivalent mutant: without the clause this body re-opens `Q-468`'s own
+        outcome — the `~~~` line closes the ``` fence, the quoted heading reads as
+        outside it, and the walk ends unbalanced so Step 8 falls back to its fence-blind
+        read and reports the record PRESENT. The five companion modules the phase cites
+        as precedent pin this half with a fixture; the heredoc copies got the rule
+        without one."""
+        body = ("# T\n\n## Requirements\n1. thing\n\n## Plan\n"
+                "```\nan example that quotes a tilde fence:\n~~~\n"
+                "## Test decision\ntest tests/x.py proves y\n```\n")
+        b = self._commit(repo, "f-charclause", body)
+        rc, out = _run(repo, "CLAIM-1", b, "tasks/open/T.md")
+        assert rc == 1 and out.startswith("MISSING"), (rc, out)
+
     def test_a_tilde_fence_is_a_fence(self, repo):
         body = ("# T\n\n## Plan\n~~~markdown\n## Test decision\n"
                 "test only inside a tilde fence\n~~~\n")
         b = self._commit(repo, "f-tilde", body)
         rc, out = _run(repo, "CLAIM-1", b, "tasks/open/T.md")
         assert rc == 1 and out.startswith("MISSING"), (rc, out)
+
+    def test_an_info_string_line_does_not_close_the_fence_it_sits_inside(self, repo):
+        """`Q-468`, exit 1: the walker believes it LEFT the fence and certifies the
+        plan's own quoted record -- with `unterminated=False`, so the fence-blind
+        fallback never engages and nothing is printed to say so.
+
+        The window is narrow, and the shape below is what makes it reachable. A
+        *balanced* nesting of the usual kind inverts the model twice and cancels; a
+        shorter inner run is already caught by the length rule. What is exposed is an
+        info-string marker at the SAME character and length as the fence it sits inside
+        -- ordinary content in a plan that quotes fenced examples -- with the heading
+        between it and its matching closer. The body below is balanced and legal."""
+        body = (
+            "# T\n\n## Requirements\n1. thing\n\n## Plan\n"
+            "````\nan example block:\n"
+            "````json\n## Test decision\ntest tests/x.py proves y\n"
+            "````yaml\nkey: value\n````\n")
+        b = self._commit(repo, "f-infostring", body)
+        rc, out = _run(repo, "CLAIM-1", b, "tasks/open/T.md")
+        assert rc == 1 and out.startswith("MISSING"), (rc, out)
+
+    def test_an_info_string_line_does_not_strand_the_fence_open_either(self, repo):
+        """`Q-468`, exit 2 -- the other half, reached by a second lens on a neighbouring
+        shape. Here the mis-close leaves the walk `unterminated=True`, which demotes
+        Step 8 to its fence-BLIND read, and that certifies the quoted record too. So the
+        defect has two exits and neither is the right answer; a fix that closes only the
+        first leaves the gate just as blind on this body."""
+        body = (
+            "# T\n\n## Requirements\n1. thing\n\n## Plan\n"
+            "````\nan example block:\n"
+            "````json\n## Test decision\ntest tests/x.py proves y\n````\n")
+        b = self._commit(repo, "f-infostring-open", body)
+        rc, out = _run(repo, "CLAIM-1", b, "tasks/open/T.md")
+        assert rc == 1 and out.startswith("MISSING"), (rc, out)
+        assert "unbalanced" not in out, (
+            "the body IS balanced under a correct closer rule; a NOTE here means the "
+            "walk mis-closed and fell back to the fence-blind read: " + out)
 
     def test_a_shorter_run_inside_a_longer_fence_does_not_close_it(self, repo):
         """The length half, isolated: the record is real and OUTSIDE the plan, and the

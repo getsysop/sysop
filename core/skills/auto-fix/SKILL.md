@@ -504,6 +504,7 @@ Use the Write tool to create `<WORKTREE_PATH>/sysop/runtime/pending-docs/<saniti
 ```yaml
 ---
 branch: <branch-name>
+branch_tip: <full SHA — `git -C <WORKTREE_PATH> rev-parse HEAD`, run NOW>
 date: YYYY-MM-DD
 type: infrastructure
 roadmap_ids: []
@@ -511,6 +512,10 @@ review_task_ids: []
 summary: "Batch <N> complete: <Title>. <Scope>."
 ---
 ```
+
+> **`branch_tip:` is stamped LAST, after this branch's final commit (`Q-471`).** `/review-close` Step 3b compares it against the branch tip and **refuses to collect** a doc that later commits have overtaken, because Step 4c routes `summary:` into the durable record in the same commit that flips the task to `done`. Read it with `git -C <WORKTREE_PATH> rev-parse HEAD` — from the worktree, not from the main checkout, whose `HEAD` is a different branch. **Anything committed to this branch after the stamp stops the next close at exit 6**, so if a later step here commits, it must re-stamp. Omitting the field is not a silent opt-out either — it prints `PENDING-DOC STALENESS UNKNOWN:` on every close of every batch this skill produces, which is a gate exempting the whole review-batch path while looking armed.
+
+> **Why 4e is the right place, stated correctly.** An earlier version of this note said *"Sonnet pushed this branch before Step 4 ran and 4e commits nothing"* — and both clauses were false. Sonnet's push is at **4b**, inside Step 4, and **4d commits twice and pushes** (the `fix(batch-<N>) … (opus verify)` and `revert(batch-<N>)` commits) between that push and this step. The stamped value is still right, but for the other reason: 4e is simply the LAST step, so `HEAD` here is after everything 4d did. The operative rule above — re-stamp if a later step commits — is triggered by a step the old note claimed did not exist.
 
 This file is **untracked** (gitignored). It will be copied to main by `/review-close` Step 3b before the worktree is removed.
 

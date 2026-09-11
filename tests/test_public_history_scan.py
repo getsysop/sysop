@@ -838,13 +838,22 @@ def _scan_with_stub(tmp_path, clone, stub_body):
     walked both of them through. A stub that exists and then refuses, or exits
     without a SUMMARY, is what exercises them.
 
-    **The stub MUST drain stdin, and the first version did not.** The arm pipes
-    one commit's `%B` into the scanner. A stub that exits without reading gives
-    `git log` a SIGPIPE, `set -o pipefail` promotes that 141 into the pipeline
-    status, and `msg_rc=141` takes the `>= 2` refusal branch — so the test
-    reached the wrong branch, false-FAILED on correct code roughly half the time
-    under load, and in those runs never exercised the check it is named for.
-    Found by a review lens that traced `msg_rc`; reproduced here at 2 of 6.
+    **The stub drains stdin, and where that matters is NOT where this docstring
+    used to say.** It read: a stub that exits without reading gives `git log` a
+    SIGPIPE, `set -o pipefail` promotes that 141 into the pipeline status, and
+    `msg_rc=141` takes the `>= 2` refusal branch. **That cannot happen for a stub
+    that exits non-zero.** `pipefail` returns the RIGHTMOST non-zero status, not
+    the largest and not the first — measured: `(exit 141) | (exit 2)` is **2**.
+    So for the `exit 2` stub the drain changes nothing observable, and the two
+    variants were confirmed to produce byte-identical output modulo the SHA.
+
+    **For a stub that falls off its end at 0 it is load-bearing**, because
+    `(exit 141) | (exit 0)` **is** 141 — so a non-draining zero-exit stub flips
+    the no-SUMMARY case into the "could not run" branch instead. That is the one
+    real exposure, it belongs to
+    `test_a_scanner_that_prints_no_summary_halts_rather_than_reading_zero`, and
+    that test already catches the flip by asserting `no SUMMARY` rather than
+    merely `rc == 2`. Both stubs keep the drain; only one of them needs it.
     """
     stub = tmp_path / "stub_scanner.py"
     stub.write_text(stub_body, encoding="utf-8")
@@ -885,9 +894,28 @@ def test_a_scanner_that_refuses_at_runtime_halts_the_scan(tmp_path):
     # reason that has nothing to do with a refusal. Pin the code the stub
     # actually returns, so the two are distinguishable.
     assert "scanner could not run" in (p.stdout + p.stderr), f"{p.stdout}{p.stderr}"
-    assert "141" not in p.stderr.split("\n")[0], (
-        "the halt came from a broken pipe, not the stub's exit 2 — the stub is "
-        f"not draining stdin:\n{p.stderr}"
+    # `Q-426`/`Q-467`. This was `"141" not in p.stderr.split("\n")[0]`, meaning to
+    # separate the stub's `exit 2` from a broken pipe whose `msg_rc=141` takes the
+    # same `>= 2` branch. It could do neither. **The code was never printed** —
+    # line 0 was `refusing: … on <sha>` and nothing else — so the only variable
+    # content it searched was a 40-char hex SHA, which contains `141` about once
+    # in 108 runs. Vacuous in the direction it was written for, ~1%-per-run red
+    # in the other, and one of those reds burned an 18-minute CI run on a
+    # one-line checklist edit.
+    #
+    # **And the state it hunted cannot occur here.** `pipefail` returns the
+    # RIGHTMOST non-zero status, verified: `(exit 141) | (exit 2)` is 2, not 141.
+    # A stub that exits non-zero therefore always wins the pipeline status, drain
+    # or no drain. The SIGPIPE exposure is real but lives in the sibling test
+    # below, whose stub falls off its end at 0 — `(exit 141) | (exit 0)` IS 141 —
+    # and that test already catches the flipped branch by asserting `no SUMMARY`.
+    #
+    # So the script now prints the code and this pins the whole token. Parenthesised,
+    # which no SHA can spell; a bare `2` would have swapped one incidental-substring
+    # oracle for another.
+    assert "(rc=2)" in p.stderr.split("\n")[0], (
+        "the refusal does not name exit 2, so this branch was reached by something "
+        f"other than the stub refusing:\n{p.stderr}"
     )
 
 
