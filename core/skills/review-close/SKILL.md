@@ -567,6 +567,17 @@ Step 2a still reads the diff either way. If every target skips, Step 2b is a cle
      and any revision's changes with `git diff <base>...<tip>`. Both read the object
      database and are unaffected by tree state.
 
+     You are reviewing many files, so you will write a loop over them. **Name the
+     loop variable `entry`, never `path`.** `<path>` above is a placeholder for a
+     value, not a suggested variable name: in zsh — the default shell on macOS, and
+     so quite possibly yours — `path` is tied to `$PATH`, and a bare `path=…` empties
+     the command search path. Every later command in that block then fails with
+     `command not found`, `git` included. The damage is not that you stop: it is that
+     you may already have scanned some files, and the rest silently return nothing, so
+     you would emit `VERDICT: APPROVED` over a remainder you never actually read. If a
+     command reports `command not found`, say so in your output and stop — do not
+     return a verdict over a partial scan.
+
      Do NOT create new files either — no scratch scripts, no notes, no probe files,
      not even untracked ones, anywhere in the repository. If you want to compute
      something, run it from a heredoc or write under `/tmp`. "No edits to tracked
@@ -657,6 +668,15 @@ For each **approved** feature branch (Step 2a verdict), for each task ID it clai
 > # `tasks/` unless the recorded value already starts with it. Quote the operand —
 > # unquoted, `<…>` is a redirection to bash, not a placeholder (Step 6 states the same
 > # rule for `git branch -D`), and an unquoted path containing a space truncates at it.
+> #
+> # This step ships NO LOOP and the lines below are one-shot templates, so you will
+> # write the iteration yourself. **Name the loop variable `entry`, never `path`.**
+> # In zsh — the default macOS shell — `path` is tied to `$PATH`, and `path=…`
+> # REPLACES the command search path with the loop value, after which `git` is not
+> # found. Step 1's fifth `unreadable` outcome has the diagnosis; this comment is
+> # here so you never need it. Same rule, same reason, as Step 1a and Step 3b.
+> # (The two lines below are one-shot templates on purpose — the quoting and the
+> # canonical/back-compat pair are what they demonstrate. The loop is yours.)
 > git show "<branch>:tasks/<body as recorded>"    # canonical:   body: open/<TASK-ID>.md
 > git show "<branch>:<body as recorded>"          # back-compat: body: tasks/open/<TASK-ID>.md
 > ```
@@ -669,14 +689,18 @@ For each **approved** feature branch (Step 2a verdict), for each task ID it clai
 
 - **`test-proves`** — the section names a test (the `test <X> proves <Y>` shape).
 - **`no-test`** — the section states `no test because <Z>`.
-- **`missing`** — no test-decision heading **at the branch tip**, or the section still holds the schema template placeholder (`<recorded at /claim-task plan time …>`).
-- **`unreadable`** — `git show` did not hand you the file at the branch tip. **Four distinct outcomes land here, and the definition used to name only the first, so the other three routed nowhere at all** — each verified by execution against git 2.50.1:
+- **`missing`** — no test-decision heading **at the branch tip**, or the section still holds the schema template placeholder (`<recorded at /claim-task plan time …>`). **Reachable only from output you know you read.** Empty output is not evidence of an absent heading: **two** `unreadable` outcomes below produce exactly it — the fifth under capture, and outcome 4's quiet sub-case, which exits **0** and so passes any "did it run?" check. Confirm you read file content from a revision, not an empty result. This is the only classification on this list a failed read can counterfeit.
+- **`unreadable`** — `git show` did not hand you the file at the branch tip. **Five distinct outcomes land here, and the definition used to name only the first, so the others routed nowhere at all** — the first four verified by execution against git 2.50.1, the fifth against zsh 5.9:
   - `fatal: path '…' does not exist in '…'` — the rev resolved, the path did not. **Before believing it, re-check the `tasks/` prefix rule above — a mis-resolved path produces this identical fatal, and that is the likelier cause.** Genuinely reachable when the claim reused a pre-existing branch cut before the body file was written, since `claim_task.sh` reuses an existing branch rather than refusing.
   - `fatal: ambiguous argument '…': unknown revision or path not in the working tree.` — the **operand itself** was mangled, so neither half resolved. The `tasks/` prefix rule **cannot** produce this signature, so re-checking the prefix here is a dead end; check what mangled the operand instead. The known cause is a zsh history-modifier expansion: unbraced `"$b:tasks/…"` under zsh applies `:t` and eats the leading `t`, turning the path into `asks/…` — measured, and the shipped placeholders are braced/quoted literals precisely so this cannot arise from the skill's own text.
   - `fatal: invalid object name '…'.` — the **path** resolved but the rev did not exist. A stale or misspelled branch name, not a missing body.
   - **Exit `0` with a commit diff instead of a file — the one that is not a fatal, and the only one that can fabricate a verdict.** An operand that lost its `<rev>:` makes `git show <path>` mean `git show HEAD -- <path>`: it does **not** walk history — that correction is the round's — it shows **`HEAD`**, and exits **0** either way. Two sub-cases, and the quiet one is likelier: if `HEAD` happens to touch that path you get a commit diff whose `+` lines can contain `## Test decision` and the prose beneath it; if it does not, you get **exit 0 and no output at all**, which reads as an empty body rather than as a failed read. A reader scanning that output for the record finds one — **from the wrong revision, on `main`, not on the branch.** So do not treat exit 0 as proof you read the body: **confirm the operand you sent contained a literal `:`, and that the output is file content rather than a diff** (a `commit <sha>` header line, or lines beginning `+`/`-`/`@@`, means you read a commit). This is the fabricated-finding case the paragraph below forbids, arriving through the one door that looks like success.
 
-  **None of the four is `missing`:** nothing has been asserted about the record either way, and reporting it as `missing` would put a fabricated finding in front of the human. Surface the branch, the path you resolved, the revision you read, and **which of the four outcomes you got** — they have different causes and the disposition used to collapse them.
+  - **`zsh: command not found: git` — the loop variable took `$PATH` with it.** The command block above now ships this rule as a comment, so this should be unreachable; it is listed because a reader who wrote their own loop before reaching that block still lands here. In zsh — the default macOS shell — `path` is tied to `$PATH`, and `path=…` **replaces** the command search path with the loop value (it does not empty it; if that value names a real bin directory the command may even still resolve). `git` is then not found. Whether you *see* that depends on how you ran it: bare, as the block above prescribes, the error reaches you; captured — `out=$(git show "$rev:$entry" 2>/dev/null)` — you get empty stdout and the evidence goes to the stderr you discarded. Exit **127**. Treat it as `unreadable`, and check the loop variable before the branch.
+
+  **None of the five is `missing`:** nothing has been asserted about the record either way, and reporting it as `missing` would put a fabricated finding in front of the human. Surface the branch, the path you resolved, the revision you read, and **which of the five outcomes you got** — they have different causes and the disposition used to collapse them.
+
+  **Empty output identifies nothing on its own, and that is why the exit status is part of the report.** Three different states produce zero bytes on stdout: the fifth outcome under capture, outcome 4's quiet sub-case (the operand having lost its `<rev>:`, on a `HEAD` that does not touch that path), and a task body that is genuinely empty. They are **not** distinguishable by looking at the output, and one of them is not even a failed read. The exit status separates them where silence cannot: **127** for the clobbered `$PATH`, **128** for a path absent from the revision, **0** for a real body *and* for outcome 4's quiet case. Note what that last pair means — **a "did the command run?" check passes for outcome 4's quiet case**, because it did run and it exited 0, so that check alone cannot keep you out of `missing`. What does: confirm you are holding **file content from a named revision**, not an empty result. All measured.
 
 **2. Verify the record against the branch diff:**
 
@@ -1516,7 +1540,7 @@ PY
       # same name step 1 above matched from `git worktree list` and item (b) passes to
       # `git worktree remove`. Run from the repo root; `live` below is relative to CWD.
       python3 - "<worktree-path>" "<branch name>" <<'PY'
-      import re, shutil, sys
+      import os, re, shutil, sys, tempfile
       from pathlib import Path
       try:
           import yaml
@@ -1582,6 +1606,61 @@ PY
                 f'({wt}, {branch!r})')
           sys.exit(4)
 
+      # THE MAIN CHECKOUT AS `<worktree-path>` (`Q-478`). Measured, not reasoned: a doc
+      # that claims THIS branch clears stage 1 — main's "copy" IS the same file, so
+      # `branch_of(dst) == branch` and no collision fires — and then `shutil.copy2` raises
+      # `SameFileError`, an `OSError`. (A doc claiming some OTHER branch still exits 3 here,
+      # which is why the damage needs a doc for the branch being processed.) Before this
+      # phase that landed on exit **5**, whose disposition said *run the rollback*, which
+      # removes BY PROVENANCE every doc in main claiming this branch: the operand error
+      # destroyed exactly the records this step exists to protect, through the skill's own
+      # prescribed recovery rather than in spite of it.
+      #
+      # The same-file failure is always on the FIRST copy, so with the exit-7 split below it
+      # lands there now instead — measured at exit 7 with this guard removed, which is
+      # non-destructive. That is why this refusal is belt to that braces rather than
+      # redundant with it: 7 fixes the disposition, 4 refuses the operand.
+      #
+      # Exit 4 is the right home: this is an assertion about the INVOCATION, and main is
+      # untouched, which is what that row promises. Step 0 maps the primary checkout to the
+      # `main-checkout` shape with an EMPTY workspace and step 1 then skips this heredoc
+      # entirely, so the shipped path never produces this operand — it is reached by a
+      # hand-substituted `<worktree-path>`, which is the class exit 4 exists for.
+      #
+      # Compare RESOLVED paths, for the reason step 0 already gives about `workspace:`: it
+      # is written unresolved so it can contain `/../`, and on macOS the repo root reaches
+      # through `/private`. Comparing the two DIRECTORIES rather than `wt` against the repo
+      # root tests the actual hazard — source and destination are the same place. **Bounded
+      # honestly:** `live` is CWD-relative, so this compares against the pending-docs of
+      # whatever directory the step is run from. Run from the repo root, as step 1 says, that
+      # is main's. Run from a SUBDIRECTORY of main with `wt` naming the primary checkout,
+      # the two differ, the guard
+      # does not fire, and the step builds a spurious `sysop/runtime/pending-docs/` under the
+      # CWD (measured — exit 0, no data loss, off-contract CWD). An earlier draft of this
+      # comment claimed the check held "however the operator got there", which is wider than
+      # what it does.
+      try:
+          _same_dir = src_dir.resolve() == live.resolve()
+      except (OSError, RuntimeError) as e:
+          # Measured on CPython 3.14: non-strict `resolve()` returns a path even for a
+          # symlink loop, so this arm did not fire in testing. It is kept because the
+          # alternative on an unanswerable comparison is to fall through into a step whose
+          # documented remedy deletes, and because an uncaught exception here would exit 1 —
+          # a code this step's own table does not carry.
+          print(f'PENDING-DOC COLLECT ABORTED: {src_dir} cannot be resolved ({e}), so '
+                f'whether it is main\'s own pending-docs directory is unanswerable — '
+                f'refusing rather than proceeding toward a step that deletes by provenance')
+          sys.exit(4)
+      if _same_dir:
+          print(f'PENDING-DOC COLLECT ABORTED: {wt} resolves to the checkout this close is '
+                f'running in, so its pending-docs ARE main\'s — already where Step 4c '
+                f'looks. Copying them onto themselves raises SameFileError and halts '
+                f'this step, and before `Q-478` that halt\'s prescribed remedy deleted '
+                f'them. Step 0 reports this workspace with the main-checkout shape and '
+                f'an empty path, and step 1 skips this step for it; there is nothing to '
+                f'collect here and nothing to remove.')
+          sys.exit(4)
+
       def branch_of(p):
           """This doc's `branch:`, read with the SAME parser Steps 3c and 4c use.
 
@@ -1597,6 +1676,14 @@ PY
           never be shown to be the SAME branch as another, and the caller treats
           unknown-vs-anything as a collision.
           """
+          # ONLY A REGULAR FILE IS READ. A `*.md` glob matches by NAME, so a FIFO or a
+          # directory carrying that name reaches here — and `read_text` on a FIFO BLOCKS
+          # FOREVER, which no caller recovers from and no timeout here covers. Measured:
+          # the rollback hung indefinitely on a neighbour FIFO in main's pending-docs.
+          # `is_file()` follows symlinks, so a valid link to a real doc still reads and a
+          # dangling one returns the sentinel.
+          if not p.is_file():
+              return None
           try:
               m = fm_re.match(p.read_text(encoding='utf-8', errors='replace'))
           except OSError:
@@ -1605,16 +1692,29 @@ PY
               return None
           try:
               fm = yaml.safe_load(m.group(1))
-          except yaml.YAMLError:
+          except (yaml.YAMLError, RecursionError):
+              # `RecursionError` is NOT a `YAMLError`. A deeply nested flow sequence in a
+              # doc this step merely walks past raised it straight through this handler:
+              # exit 1, empty stdout, on the half that deletes — the same shape this page
+              # already fixed for `live.mkdir`. Measured on a neighbour doc.
               return None
           if not isinstance(fm, dict):
               return None
           b = fm.get('branch')
           return b.strip() if isinstance(b, str) and b.strip() else None
 
-      def _git(*args):
-          """Read-only git **in the WORKSPACE**, hermetic, and it FAILS OPEN — it never
-          raises and never halts.
+      def _git(*args, where=None):
+          """Read-only git in `where` (default: the WORKSPACE), hermetic, and it FAILS OPEN
+          — it never raises and never halts.
+
+          **`where` exists because the two populations do not live in the same repository.**
+          A doc collected FROM the workspace was stamped there, and the paragraph below is
+          the argument for measuring it there. A doc already on MAIN was authored on the main
+          checkout — that is what `Q-470`'s first reading means — and measuring *it* from a
+          `--clone` workspace asks a repository that need not hold the commits: measured, a
+          main-side drift of 1 read as **0** from the clone, and `rev-list` SUCCEEDED, so the
+          run reported measured-and-clean over a record it had never measured. That is worse
+          than the fail-open UNKNOWN arm because it is silent. Found by Phase 286's round.
 
           `-C wt`, not the CWD, and that is the whole coverage argument. A `--clone`
           workspace is a **separate repository** (`claim_task.sh --clone` publishes the
@@ -1636,7 +1736,8 @@ PY
           import os, subprocess
           try:
               r = subprocess.run(
-                  ['git', '-C', str(wt), *args], capture_output=True, text=True, timeout=10,
+                  ['git', '-C', str(where if where is not None else wt), *args],
+                  capture_output=True, text=True, timeout=10,
                   env={_k: _v for _k, _v in os.environ.items()
                        if _k not in ('GIT_DIR', 'GIT_WORK_TREE',
                                      'GIT_COMMON_DIR', 'GIT_INDEX_FILE')},
@@ -1651,6 +1752,21 @@ PY
           """This doc's `branch_tip:` — the branch tip /document-work Step 3 authored it
           against. None is the ordinary answer for every doc predating the key; the
           `UNUSABLE_TIP` sentinel says the key IS present and its value is not a string."""
+          # DEFENCE IN DEPTH, AND UNREACHABLE TODAY — said plainly because the phase that
+          # added it claimed otherwise. Every call site into `staleness()` pre-filters on
+          # `branch_of(...) == branch`, and `branch_of` already returns None for anything
+          # that is not a regular file, so a FIFO or a directory can never arrive here.
+          # Proven rather than argued: replacing this guard's body with a fatal probe leaves
+          # all 137 tests green, i.e. no test can reach it. Found by Phase 286's round, whose
+          # guard lens also showed the phase's own battery had scored a kill against it by
+          # mutating all three copies of this guard at once.
+          #
+          # It stays because the property it protects is real — `read_text` on a FIFO BLOCKS
+          # FOREVER, which no caller recovers from and no timeout here covers — and a future
+          # call site that skips the filter would need it. What it must not do is be counted
+          # as covered. The reachable copies are the two in `branch_of`, and those are.
+          if not p.is_file():
+              return None
           try:
               m = fm_re.match(p.read_text(encoding='utf-8', errors='replace'))
           except OSError:
@@ -1659,7 +1775,11 @@ PY
               return None
           try:
               fm = yaml.safe_load(m.group(1))
-          except yaml.YAMLError:
+          except (yaml.YAMLError, RecursionError):
+              # `RecursionError` is NOT a `YAMLError`. A deeply nested flow sequence in a
+              # doc this step merely walks past raised it straight through this handler:
+              # exit 1, empty stdout, on the half that deletes — the same shape this page
+              # already fixed for `live.mkdir`. Measured on a neighbour doc.
               return None
           if not isinstance(fm, dict):
               return None
@@ -1672,6 +1792,70 @@ PY
           # reaches here from a hand-edited or machine-mangled frontmatter. Returning the
           # sentinel lets the caller say which it saw.
           return t.strip() if isinstance(t, str) and t.strip() else UNUSABLE_TIP
+
+      SHA_RE = re.compile(r'[0-9a-fA-F]{7,64}\Z')
+
+      def staleness(paths, where=None):
+          """`Q-471`'s comparison, over ANY population of docs claiming this branch.
+
+          **This lived inside the `src_dir`-present loop and nowhere else, which is the
+          defect it is being hoisted out of.** Phase 282 shipped `Q-470` and `Q-471`
+          together: `Q-470` made an absent `src_dir` a legitimate exit-0 state, and that
+          arm returns BEFORE the loop — so a doc authored into the MAIN checkout, the path
+          `/document-work` explicitly supports and the one `Q-470` exists to let through,
+          was never compared against the branch tip at all. Measured: one commit of drift,
+          `PENDING-DOC COLLECT SKIPPED`, exit 0, no `PENDING-DOC STALE`, and Step 4c then
+          routes the outdated `summary:` into the shared docs in the same commit that flips
+          the task `done`.
+
+          Single-sourced rather than copied into the second site. Two readers of one rule
+          twenty lines apart is exactly what this step already paid for once, when the
+          rollback hand-rolled a frontmatter scan while the collect used yaml and the two
+          halves disagreed on 18 of 33 shapes.
+
+          The caller passes only docs that CLAIM this branch. A foreign doc is a
+          collision, settled before anything is said about currency — "whose record is
+          this" outranks "is this record current", which is the ordering the populated
+          path's own comment states.
+          """
+          unknown, stale = [], []
+          for src in paths:
+              tip = tip_of(src)
+              if tip is None:
+                  unknown.append(f'{src.name} (no `branch_tip:` — written before the key '
+                                     f'existed, or by a writer that does not emit it)')
+              elif tip is UNUSABLE_TIP:
+                  unknown.append(f'{src.name} (`branch_tip:` is present but is not a '
+                                     f'string — a bare hex-looking value is a YAML int, and '
+                                     f'`true`/`null`/`[]` are not object names either)')
+              elif '<' in tip:
+                  # The writer emitted its own template verbatim. `is not an object name` is
+                  # true of it but names the wrong cause, and this heredoc already treats an
+                  # unsubstituted `<worktree-path>` as its own loud case. Still fail open: the
+                  # defect is in a writer, and halting every close until someone fixes one is
+                  # the disposition `Q-470` is on this page for.
+                  unknown.append(f'{src.name} (`branch_tip:` is an UNSUBSTITUTED PLACEHOLDER '
+                                     f'— {tip!r}. The writer did not fill it in; fix the writer, '
+                                     f'not this close)')
+              elif not SHA_RE.match(tip):
+                  unknown.append(f'{src.name} (`branch_tip: {tip!r}` is not an object name)')
+              else:
+                  counted = _git('rev-list', '--count', f'{tip}..{branch}',
+                             where=where)
+                  try:
+                      drift = int((counted or '').strip())
+                  except ValueError:
+                      counted = None
+                      drift = 0
+                  if counted is None:
+                      unknown.append(f'{src.name} (`branch_tip` {tip[:12]} does not resolve '
+                                         f'here — not evidence either way)')
+                  elif drift:
+                      log = (_git('log', '--oneline', '--no-decorate',
+                                  f'{tip}..{branch}', where=where)
+                             or '').strip()
+                      stale.append((src.name, tip[:12], drift, log))
+          return unknown, stale
 
       # `src_dir` ABSENT is not an error — see the guard above. It is dispositioned HERE,
       # after `branch_of` exists, because the two legitimate readings are worth telling
@@ -1719,6 +1903,38 @@ PY
           else:
               print(f'PENDING-DOC COLLECT SKIPPED: no {src_dir}, and main holds no doc '
                     f'claiming {branch!r} — this branch has no pending-doc anywhere')
+
+          # `Q-471` RUNS HERE TOO, and until this arm existed it did not. "Nothing to
+          # collect" is a statement about the COPY, never about whether the record on main
+          # is current — and on this route main's doc is the one Step 4c will consolidate,
+          # so it is precisely the doc whose freshness decides a task's state. The exit
+          # code matches the populated path's because the operator's remedy is identical:
+          # re-run /document-work on this branch to re-stamp `branch_tip:`.
+          if on_main:
+              # Same rule as the populated path below, with an empty incoming set:
+              # every doc main holds for this branch survives into Step 4c. Measured
+              # in the MAIN checkout, which is where these docs were authored.
+              unknown_here, stale_here = staleness([live / n for n in on_main],
+                                                   where=Path.cwd())
+              for u in unknown_here:
+                  print(f'PENDING-DOC STALENESS UNKNOWN: {u}')
+              if stale_here:
+                  for name, tip12, drift, log in stale_here:
+                      print(f'PENDING-DOC STALE: {name} — {drift} commit(s) landed on '
+                            f'{branch!r} after the doc was authored (branch_tip {tip12})')
+                      for line in log.split('\n'):
+                          if line:
+                              print(f'    after the doc: {line}')
+                  # The state claim differs from the populated path's on purpose: nothing
+                  # was collected *because there was nothing to collect*, and main is NOT
+                  # untouched in the sense that matters — it is holding the stale doc.
+                  print(f'PENDING-DOC STALE: {len(stale_here)} — refusing. Nothing was '
+                        f'collected (there was nothing to collect), but main is holding a '
+                        f'doc for {branch!r} that the branch has outgrown, and Step 4c '
+                        f'would route its summary while flipping the task done. Re-run '
+                        f'/document-work on this branch to refresh it (that re-stamps '
+                        f'`branch_tip:`), then re-run the close.')
+                  sys.exit(6)
           print('PENDING-DOC COLLISIONS: 0')
           sys.exit(0)
 
@@ -1730,9 +1946,40 @@ PY
       # doc was in the same "collected" list as a newly-created one. Deciding first makes
       # that class impossible rather than handled.
       collisions = []
-      stale = []
-      unknown_tip = []
-      SHA_RE = re.compile(r'[0-9a-fA-F]{7,64}\Z')
+      # THE POPULATION IS "EVERY DOC THIS RUN LEAVES FOR STEP 4c TO CONSOLIDATE", and
+      # that is the rule on BOTH routes. `Q-483`'s first cut measured main's docs only on
+      # the absent-`src_dir` arm, which split two states this file explicitly forbids
+      # splitting — *"an existing but EMPTY `src_dir` … The two states must not be
+      # dispositioned differently, and that is the property to preserve if this arm is ever
+      # rewritten."* Measured on the round's fixtures: absent exited 6 and empty exited 0
+      # over the identical stale doc. Worse, the exit-6 row's own remedy — re-run
+      # /document-work — CREATES `sysop/runtime/pending-docs/` unconditionally, so applying
+      # the documented fix moved the close onto the arm that did not look and the gate
+      # turned itself off. Both found by Phase 286's round.
+      #
+      # Two terms, because they are two different claims measured in two different repos:
+      #   - the worktree's own docs claiming this branch, which this run is about to copy;
+      #   - main's docs claiming this branch that this run will NOT overwrite, which
+      #     therefore survive into Step 4c exactly as they are.
+      # A main doc whose name IS in the incoming set is excluded: it is replaced by the
+      # fresh copy, so its staleness is about to stop existing.
+      #
+      # Only docs that CLAIM this branch. The loop below skips a foreign doc with a
+      # `continue` before it ever reached the staleness read, and hoisting the read out
+      # of the loop lost that guard until a shipped test caught it: measuring a foreign
+      # doc's drift asks the wrong question about the wrong record, and its answer would
+      # refuse a close over a doc this branch has no claim on.
+      mine = [d for d in docs if branch_of(d) == branch]
+      incoming = {d.name for d in mine}
+      surviving_on_main = [
+          q for q in sorted(live.glob('*.md'))
+          if q.name not in NOT_A_BRANCH_DOC and q.name not in incoming
+          and branch_of(q) == branch
+      ] if live.is_dir() else []
+      unknown_tip, stale = staleness(mine, where=wt)
+      _u2, _s2 = staleness(surviving_on_main, where=Path.cwd())
+      unknown_tip += _u2
+      stale += _s2
       for src in docs:
           # Ground truth is the branch being PROCESSED, not what two docs say about each
           # other. A doc that does not claim this branch is not this branch's to collect.
@@ -1754,39 +2001,6 @@ PY
           # unvalidated value beginning with `-` reaches `git rev-list` as an option rather
           # than a revision. A value that is not an object name is not a measurement, so it
           # takes the same arm as a git that would not answer.
-          tip = tip_of(src)
-          if tip is None:
-              unknown_tip.append(f'{src.name} (no `branch_tip:` — written before the key '
-                                 f'existed, or by a writer that does not emit it)')
-          elif tip is UNUSABLE_TIP:
-              unknown_tip.append(f'{src.name} (`branch_tip:` is present but is not a '
-                                 f'string — a bare hex-looking value is a YAML int, and '
-                                 f'`true`/`null`/`[]` are not object names either)')
-          elif '<' in tip:
-              # The writer emitted its own template verbatim. `is not an object name` is
-              # true of it but names the wrong cause, and this heredoc already treats an
-              # unsubstituted `<worktree-path>` as its own loud case. Still fail open: the
-              # defect is in a writer, and halting every close until someone fixes one is
-              # the disposition `Q-470` is on this page for.
-              unknown_tip.append(f'{src.name} (`branch_tip:` is an UNSUBSTITUTED PLACEHOLDER '
-                                 f'— {tip!r}. The writer did not fill it in; fix the writer, '
-                                 f'not this close)')
-          elif not SHA_RE.match(tip):
-              unknown_tip.append(f'{src.name} (`branch_tip: {tip!r}` is not an object name)')
-          else:
-              counted = _git('rev-list', '--count', f'{tip}..{branch}')
-              try:
-                  drift = int((counted or '').strip())
-              except ValueError:
-                  counted = None
-                  drift = 0
-              if counted is None:
-                  unknown_tip.append(f'{src.name} (`branch_tip` {tip[:12]} does not resolve '
-                                     f'here — not evidence either way)')
-              elif drift:
-                  log = (_git('log', '--oneline', '--no-decorate',
-                              f'{tip}..{branch}') or '').strip()
-                  stale.append((src.name, tip[:12], drift, log))
           dst = live / src.name
           if dst.exists():
               dst_b = branch_of(dst)
@@ -1820,24 +2034,124 @@ PY
           sys.exit(6)
 
       # STAGE 2 — COPY. Every doc has already been cleared.
-      live.mkdir(parents=True, exist_ok=True)   # load-bearing, see below
+      # `live.mkdir` is the one write here that can fail BEFORE any doc is touched, and
+      # uncaught it exits **1** with a traceback — a code this step's table does not carry,
+      # on the very cause this failure's row names (an unwritable `sysop/runtime/pending-docs/`).
+      # Reproduced: an unwritable PARENT with the directory absent.
+      try:
+          live.mkdir(parents=True, exist_ok=True)   # load-bearing, see below
+      except OSError as e:
+          print(f'PENDING-DOC COLLECT FAILED: {live} could not be created: {e}')
+          print('PENDING-DOC UNDO: nothing to undo — stage 2 never started.')
+          sys.exit(7)
+
+      # STAGE 2 — COPY, AND UNDO ITSELF IF IT CANNOT FINISH.
+      #
+      # Stage 1 already owns this principle and states it above: *"Nothing is written until
+      # every doc has been checked, so there is no partial state to undo… Deciding first
+      # makes that class impossible rather than handled."* Stage 2 cannot decide first — a
+      # write either works or it does not — so it gets the same property the other way: it
+      # restores what it displaced and removes what it created, and main ends as it began.
+      #
+      # **Why this replaced "exit 5, then run the rollback" (`Q-481`).** That remedy deleted
+      # by PROVENANCE — every doc in main claiming this branch — not by what this run copied,
+      # and the two are different sets. Measured by Phase 284's round: a worktree holding
+      # `a.md`/`b.md`/`c.md`, main holding a PRIOR run's `a.md` and `c.md`, the failure on
+      # `b.md` — the prescribed rollback removed `a.md` **and** `c.md`, while the *collect's*
+      # `PENDING-DOC ROLLBACK: REQUIRED` line, all the operator had before running it, named
+      # only `a.md`. `c.md` was a record this run never touched. That is `Q-478`'s defect one
+      # exit over: a documented recovery destroying what the step exists to protect.
+      #
+      # **The undo RESTORES; it does not unlink.** Deleting would be the same bug again: the
+      # dominant collision here is the same branch collected twice, where the copy
+      # deliberately OVERWRITES main's stale twin, so a delete-based undo would destroy the
+      # very record the overwrite displaced. Each doc's prior copy is preserved first, and
+      # only docs this run CREATED are removed.
+      #
+      # A same-file failure (an aliased doc — a symlink or hardlink into main's own
+      # pending-docs, which `Q-478`'s directory-level guard does not see because `SameFileError`
+      # is about FILE identity) now lands here like any other, and the restore puts main's
+      # original back. It needed no separate arm.
+      staged, undo_root = [], None
       for src in docs:
+          dst = live / src.name
+          bak = None
           try:
-              shutil.copy2(src, live / src.name)
+              # `os.path.lexists`, NOT `dst.exists()`. `exists()` FOLLOWS SYMLINKS, so a
+              # DANGLING symlink at the destination reads as absent: no backup is taken,
+              # `copy2` then writes THROUGH the link — creating a file wherever it points,
+              # outside this directory — and the undo, seeing `bak is None`, concludes this
+              # run created the entry and unlinks it. Measured before the fix: main lost the
+              # symlink, gained a stray file under a sibling directory, and the step reported
+              # *"main is as it was"*. Found by Phase 284's round 2.
+              if os.path.lexists(dst):
+                  if undo_root is None:
+                      # A random name, per the fixed-name temp class this project converted
+                      # (Phases 271-272): a predictable path is another process's to collide with.
+                      undo_root = Path(tempfile.mkdtemp(prefix='sysop-collect-undo-'))
+                  bak = undo_root / src.name
+                  # `follow_symlinks=False` preserves the LINK rather than its target, so a
+                  # symlink can be put back as a symlink.
+                  shutil.copy2(dst, bak, follow_symlinks=False)
+                  if dst.is_symlink():
+                      dst.unlink()            # never write THROUGH it
+              staged.append((src.name, bak))
+              shutil.copy2(src, dst)
           except OSError as e:
-              # Report and halt: (b) must not remove a worktree whose docs are not all on
-              # main.
-              #
-              # **This comment used to name a broken symlink and a directory named *.md, and
-              # neither can reach it** — measured, both shapes. `branch_of` opens the file in
-              # stage 1, catches the OSError, returns None, and None never equals the branch,
-              # so both exit **3** as collisions before stage 2 begins. What actually reaches
-              # here is a WRITE that fails: an unwritable destination, or a source that
-              # cleared stage 1 and became unreadable between the stages. The exit table's
-              # own row said the same wrong thing.
               print(f'PENDING-DOC COLLECT FAILED: {src.name}: {e}')
-              sys.exit(5)
+              restored, removed, stuck = [], [], []
+              for name, saved in reversed(staged):
+                  d = live / name
+                  try:
+                      if saved is not None:
+                          # Unlink ONLY where it is required: writing through a symlink
+                          # would put the bytes outside this directory, and restoring a
+                          # symlink needs the destination gone first. Doing it
+                          # unconditionally breaks the ordinary restore — `live` is usually
+                          # read-only when this arm fires, and removing an entry needs
+                          # DIRECTORY write permission while overwriting a file in place
+                          # does not. Measured: it turned three passing restores into
+                          # PermissionError.
+                          if (os.path.islink(d) or os.path.islink(saved)) and os.path.lexists(d):
+                              d.unlink()
+                          shutil.copy2(saved, d, follow_symlinks=False)
+                          restored.append(name)
+                      elif os.path.lexists(d):
+                          d.unlink()                      # this run created it
+                          removed.append(name)
+                  except OSError as ue:
+                      stuck.append(f'{name}: {ue}')
+              print(f'PENDING-DOC UNDO: {len(restored)} restored'
+                    f'{" (" + ", ".join(restored) + ")" if restored else ""}, '
+                    f'{len(removed)} removed'
+                    f'{" (" + ", ".join(removed) + ")" if removed else ""}')
+              if stuck:
+                  # The undo itself failed. THIS is the only way main is left partial, and
+                  # the backups are deliberately not cleaned up — they are the remedy.
+                  for s in stuck:
+                      print(f'PENDING-DOC UNDO FAILED: {s}')
+                  # `undo_root` is None when nothing had been displaced yet, and an earlier
+                  # cut of this line printed the literal string "preserved in None" at an
+                  # operator being told to restore by hand from it.
+                  where = (f'Main\'s prior copies are preserved in {undo_root}; restore '
+                           f'them by hand.' if undo_root is not None else
+                           'No copies were preserved — nothing had been displaced yet, so '
+                           'the entries named above are ones this run created and could not '
+                           'remove.')
+                  print(f'PENDING-DOC UNDO FAILED: {len(stuck)} — main MAY BE PARTIAL. '
+                        f'{where} Do NOT run the rollback: it deletes by provenance, which '
+                        f'is what `Q-481` is about, and it would remove records this run '
+                        f'never wrote.')
+                  sys.exit(5)
+              if undo_root is not None:
+                  shutil.rmtree(undo_root, ignore_errors=True)
+              print('PENDING-DOC UNDO: main is as it was. Do NOT run the rollback — there '
+                    'is nothing to undo, and it deletes by provenance rather than by what '
+                    'this run copied.')
+              sys.exit(7)
           print(f'PENDING-DOC COLLECTED: {src.name}')
+      if undo_root is not None:
+          shutil.rmtree(undo_root, ignore_errors=True)
       for p in sorted(src_dir.glob('*.md')):
           if p.name in NOT_A_BRANCH_DOC:
               print(f'PENDING-DOC SKIPPED (not a branch doc): {p.name}')
@@ -1849,16 +2163,41 @@ PY
 
       **Print to stdout, and note there is no `2>/dev/null` any more.** The old form masked the dest-missing error, which is what made the failure silent; the collision lines above are the Step 8 `Pending-doc collisions:` row's only source. **The same is true of the `PENDING-DOC STALE:` and `PENDING-DOC STALENESS UNKNOWN:` lines** — they feed Step 8's `Stale pending-docs:` and `Staleness not measured:` rows, and a gate whose SKIP has no row in the run's report is a SKIP nobody sees. An earlier cut of this phase shipped both lines with no sink at all.
 
-      **Any non-zero exit means do NOT proceed to (b).** There are four, and they are not interchangeable. **Exit 0 is not one shape either** — it is the ordinary collect, an existing-but-empty `sysop/runtime/pending-docs/`, and (since `Q-470`) the *absent* one, which prints `PENDING-DOC COLLECT SKIPPED:` naming which of the two legitimate readings applies. Proceed to (b) on all three; the absence of a directory to copy from is a proof there is nothing to lose, not a failure to find it.
+      **Any non-zero exit means do NOT proceed to (b).** There are five, and they are not interchangeable. **Exit 0 is not one shape either** — it is the ordinary collect, an existing-but-empty `sysop/runtime/pending-docs/`, and (since `Q-470`) the *absent* one, which prints `PENDING-DOC COLLECT SKIPPED:` naming which of the two legitimate readings applies. The absence of a directory to copy from is a proof there is nothing to lose, not a failure to find it. **Read the EXIT CODE, never that line**: since `Q-483` the `COLLECT SKIPPED:` message is also printed on a run that then refuses at **6**, because main can be holding a doc for this branch that the branch has outgrown even when there was nothing to collect. An earlier version of this sentence told the operator to proceed to (b) on all three shapes, which made a recogniser out of a line that no longer discriminates.
 
       | exit | meaning | state of main | what to do |
       |---|---|---|---|
       | **3** | a collision — some doc does not belong to this branch | **untouched**; stage 1 writes nothing, so there is no partial work and nothing to undo | SKIP this branch (worktree, lock and branch intact). **Do not run the rollback** — it has nothing to undo. Resolve by correcting the mis-labelled doc, then re-run |
-      | **4** | unusable `<worktree-path>` or `<branch name>` — a placeholder left unsubstituted, an empty branch, or a path that does not exist. **Plus one conditional arm:** a path that exists, has **no `.git`**, and has no `pending-docs/` inside it. The `.git` test is asked *only* there, because where the docs are present they must be collected whatever else is true of the path — so a non-checkout directory that does contain `pending-docs/` collects normally and does not reach this exit | **untouched**; nothing ran | fix the invocation and re-run. Never proceed to (b) |
-      | **5** | a copy failed partway through stage 2 — the destination is unwritable, or a source that cleared stage 1 became unreadable between the stages. **Not** a broken symlink or a directory named `*.md`: both are refused at stage 1 as collisions (exit 3), measured | **partially written** — some docs collected, the rest not | SKIP this branch and **do** run the rollback, which removes this branch's own collected copies by provenance. This is the one exit where there IS partial work |
-      | **6** | this branch's doc is **stale** — commits landed on the branch after `/document-work` stamped its `branch_tip:` | **untouched**; stage 1 writes nothing, same as 3 | SKIP this branch (worktree, lock and branch intact). **Re-run `/document-work` on this branch** — that re-stamps `branch_tip:` — then re-run the close. **Do not run the rollback**; there is nothing to undo |
+      | **4** | unusable `<worktree-path>` or `<branch name>` — a placeholder left unsubstituted, an empty branch, or a path that does not exist. **Plus three conditional arms.** (i) A path that exists, has **no `.git`**, and has no `pending-docs/` inside it — the `.git` test is asked *only* there, because where the docs are present they must be collected whatever else is true of the path, so a non-checkout directory that does contain `pending-docs/` collects normally and does not reach this exit. (ii) **(`Q-478`)** A path whose `pending-docs/` **resolves to the one this close is writing into** — the primary checkout, which step 0 reports with the `main-checkout` shape and an empty workspace, and which step 1 then skips. The two directories being the same is the hazard, so that is what is compared; `wt` against the repo root would be a proxy for it and would miss an operator standing in a worktree. (iii) A path that cannot be **resolved at all**, which makes (ii) unanswerable — refused rather than guessed, because the fall-through leads to a step that deletes. *(This row said "two" while the code had three, and the omitted one was the phase's own addition — found by its round's record lens.)* | **untouched**; nothing ran | fix the invocation and re-run. Never proceed to (b) |
+      | **5** | stage 2 failed **and its own undo also failed** — the rarest arm on this page and the only one that leaves work half-done. Reaching it needs two faults: a write that fails, then a second failure restoring what was displaced | **MAY BE PARTIALLY WRITTEN** — the only exit on this page that can be. The discriminator is *"the undo raised"*, not *"main changed"*: a destination this step cannot write is usually one it cannot restore either, so main can be byte-identical here (measured). Compare against the preserved copies rather than assuming damage; they are deliberately **not** cleaned up | SKIP this branch. **Restore by hand** from the preserved directory the failure names — the `PENDING-DOC UNDO FAILED:` lines say exactly which files are stuck and why. **Do not run the rollback**: it deletes by *provenance*, so it would remove records this run never wrote on top of a main that is already half-written. Then fix the underlying cause and re-run |
+      | **6** | this branch's doc is **stale** — commits landed on the branch after `/document-work` stamped its `branch_tip:` | **nothing was WRITTEN** — stage 1 decides before it copies, same as 3 — but do not read that as "main is as you want it": on the `Q-470` route there was nothing to collect and **main is holding the stale doc**, which is the whole reason this arm refuses. The distinction is the one `Q-483` turned on | SKIP this branch (worktree, lock and branch intact). **Re-run `/document-work` on this branch** — that re-stamps `branch_tip:` — then re-run the close. **Do not run the rollback**; there is nothing to undo |
+      | **7** | **(`Q-478`, `Q-481`)** stage 2 could not finish — the destination could not be created, a copy failed, or a doc turned out to be the *same file* as main's own (an aliased doc: `SameFileError` is about FILE identity, which exit 4's directory-level refusal cannot see). **Stage 2 undid itself**: it restored every copy it displaced and removed every file it created | **as it was.** Stated precisely rather than as "untouched": `live.mkdir(…, exist_ok=True)` runs before the first copy, so main may have gained an empty `sysop/runtime/pending-docs/`. No **record** changed — the `PENDING-DOC UNDO:` line names what was restored and removed | SKIP this branch. **Do not run the rollback**, for the reason 3 and 6 give: there is nothing to undo, stage 2 has already put main back. Main may still hold a doc claiming this branch from a *prior* run, and the rollback deletes by provenance rather than by what this run copied — so running it here removes a record this run never wrote. Fix the cause (most often an unwritable `sysop/runtime/pending-docs/`) and re-run |
 
       An earlier draft of this paragraph named only two exits and said exit 3 *"has undone its own partial work"* — language left over from the retired second design, which copied as it went. This one decides first, so on 3 there is nothing to undo; and it omitted 5, which is the only exit where the sentence would have been true.
+
+      **And on 5 it was true only *sometimes*, which is where this got interesting.** The
+      first cut of this phase split the first-copy-fails case out as exit 7 and left exit 5
+      prescribing the rollback for a genuine partial. **Its own round then falsified the
+      remaining half by execution (`Q-481`):** the rollback deletes by *provenance* — every
+      doc in main claiming this branch — not by what this run copied. Worktree `a.md`/`b.md`/
+      `c.md`, main holding a PRIOR run's `a.md` and `c.md`, the write failing on `b.md`: the
+      prescribed remedy removed `a.md` **and** `c.md`, while the *collect's* own
+      `PENDING-DOC ROLLBACK: REQUIRED` line — the only thing the operator had to go on before
+      running it — named only `a.md`. (The rollback's own `ROLLED BACK:` line does name both;
+      the gap was between what the operator was told to expect and what happened.)
+      `c.md` was a record this run never touched. That is `Q-478`'s own defect one exit over —
+      a documented recovery destroying what the step exists to protect — and the phase had
+      shipped a *guard* pinning the prescription.
+
+      **So the remedy was removed rather than bounded.** Stage 2 restores what it displaced
+      and removes what it created, which is the property stage 1 states about itself at the
+      top of this heredoc: *"deciding first makes that class impossible rather than handled."*
+      No collect exit prescribes the rollback now; the only site that does is step (b), where
+      the collect exited 0 and "every worktree doc" genuinely is what it copied. Two things
+      fell out for free — the aliased-doc case (`SameFileError` is FILE identity, which the
+      directory-level refusal cannot see) needed no arm of its own, and the "which docs"
+      question stopped existing. What remains at 5 is the double fault: the undo itself
+      failing, which is the only way this step can now leave partial work.
 
       > **Why staleness is decided here and not at Step 4c, where the damage would be done (`Q-471`).** Step 4c routes a doc's `summary:` into `PROJECT_STATUS.md` §6 in the same commit that flips its task to `done`, and nothing between the two asks whether the doc still describes the branch — measured at filing time: `mtime`, *stale doc*, *refresh the pending* and *describes the branch* return **zero** hits across all three lifecycle skills. The reported instance is not an edge case: three prod-write repair docs still reading *"NO prod write has been performed"* while their task bodies read *"Prod write PERFORMED and verified"*. A prod-write task reaches Step 4c stale **by construction**, because it writes its doc when the code is ready and achieves its deliverable afterwards, on the same branch, in a later commit.
       >
@@ -1910,7 +2249,7 @@ PY
 
       ```bash
       python3 - "<worktree-path>" "<branch name>" <<'PY'
-      import re, sys
+      import os, re, sys
       from pathlib import Path
 
       try:
@@ -1941,8 +2280,47 @@ PY
       NOT_A_BRANCH_DOC = {'convention-candidates.md'}   # never collected, so never rolled back
       fm_re = re.compile(r'^---\n(.*?)\n---', re.DOTALL)
 
-      if '<worktree' in str(wt) or '<branch' in branch or not branch.strip():
-          print('PENDING-DOC ROLLBACK ABORTED: unusable worktree path or branch name')
+      src_dir = wt / 'sysop' / 'runtime' / 'pending-docs'
+
+      # `wt.is_dir()` is here for the reason the COLLECT's own guard states about itself:
+      # a bad path must be LOUD. Without it this heredoc globs a directory that is not
+      # there, finds nothing, prints `ROLLED BACK: none` and exits **0** — a
+      # success-shaped report over a rollback that did not happen, which is exactly the
+      # failure mode the collect's comment forbids. Measured on a typo'd operand: rollback
+      # exit 0 while the collect refused the same path at 4. Found by Phase 284's round.
+      if ('<worktree' in str(wt) or '<branch' in branch
+              or not branch.strip() or not wt.is_dir()):
+          print(f'PENDING-DOC ROLLBACK ABORTED: unusable worktree path or branch name '
+                f'({wt}, {branch!r})')
+          sys.exit(4)
+
+      # The same operand refusal the collect carries (`Q-478`), sited here as well because
+      # THIS is the half that deletes. The collect merely fails on a main-checkout
+      # `<worktree-path>`; the rollback walks the worktree's docs and unlinks main's copy of
+      # each, so when the two directories are the same it unlinks the ORIGINALS.
+      #
+      # Stated precisely, because the easy version of this sentence overclaims: with the
+      # collect's refusal in place the CHAINED route is already closed — step (b) is reached
+      # only after the collect exits 0, and on this operand it now exits 4. What this guard
+      # covers is the rollback invoked on its own, which the page now prescribes from ONE
+      # place — step (b), when `git worktree remove` still refuses — and which takes the same
+      # hand-substituted operand. (An earlier cut of this comment said "two places, exit 5's
+      # disposition and step (b)". That was true before `Q-481` removed the exit-5
+      # prescription, and it then contradicted a paragraph 110 lines away in this same file
+      # for one commit. Round 2 caught it.) Defence in depth on the half that deletes, not a
+      # second live route.
+      try:
+          _same_dir = src_dir.resolve() == live.resolve()
+      except (OSError, RuntimeError) as e:
+          print(f'PENDING-DOC ROLLBACK ABORTED: {src_dir} cannot be resolved ({e}), so '
+                f'whether it is main\'s own pending-docs directory is unanswerable — '
+                f'refusing rather than deleting')
+          sys.exit(4)
+      if _same_dir:
+          print(f'PENDING-DOC ROLLBACK ABORTED: {wt} resolves to the checkout this close is '
+                f'running in. Rolling back here would unlink main\'s own pending-docs — the '
+                f'originals, not copies of them. Nothing was ever collected FROM main, so '
+                f'there is nothing to undo.')
           sys.exit(4)
 
       def branch_of(p):
@@ -1953,6 +2331,14 @@ PY
           rollback could not undo its own collect, and reported a byte-identical doc as
           'not this branch's'. Two divergent readers twenty lines apart, in the phase
           whose subject is two divergent readers."""
+          # ONLY A REGULAR FILE IS READ. A `*.md` glob matches by NAME, so a FIFO or a
+          # directory carrying that name reaches here — and `read_text` on a FIFO BLOCKS
+          # FOREVER, which no caller recovers from and no timeout here covers. Measured:
+          # the rollback hung indefinitely on a neighbour FIFO in main's pending-docs.
+          # `is_file()` follows symlinks, so a valid link to a real doc still reads and a
+          # dangling one returns the sentinel.
+          if not p.is_file():
+              return None
           try:
               m = fm_re.match(p.read_text(encoding='utf-8', errors='replace'))
           except OSError:
@@ -1961,35 +2347,152 @@ PY
               return None
           try:
               fm = yaml.safe_load(m.group(1))
-          except yaml.YAMLError:
+          except (yaml.YAMLError, RecursionError):
+              # `RecursionError` is NOT a `YAMLError`. A deeply nested flow sequence in a
+              # doc this step merely walks past raised it straight through this handler:
+              # exit 1, empty stdout, on the half that deletes — the same shape this page
+              # already fixed for `live.mkdir`. Measured on a neighbour doc.
               return None
           if not isinstance(fm, dict):
               return None
           b = fm.get('branch')
           return b.strip() if isinstance(b, str) and b.strip() else None
 
-      removed, left = [], []
-      for src in sorted((wt / 'sysop' / 'runtime' / 'pending-docs').glob('*.md')):
-          if src.name in NOT_A_BRANCH_DOC:
+      # POPULATION — `Q-482`. The worktree's docs were only ever a NAME source: every
+      # unlink below is gated on MAIN's own copy claiming this branch, so `src_dir`
+      # decided which names to look at and nothing else. On `Q-470`'s absent-`src_dir`
+      # route there are no names, so this loop ran zero times over a main that was holding
+      # this branch's doc and printed `ROLLED BACK: none` at exit 0 — the success-shaped
+      # report the collect's own comment forbids, one heredoc away, with step (b) as the
+      # only caller. So the population is the UNION of the worktree's names and main's own
+      # docs claiming this branch.
+      #
+      # The union, NOT a replacement. Dropping the worktree half would retire the
+      # `LEFT ALONE` diagnostic — Phase 210's foreign-branch finding, and the only line
+      # that says a doc was deliberately spared rather than never looked at.
+      def _md_names(d):
+          return ({p.name for p in d.glob('*.md') if p.name not in NOT_A_BRANCH_DOC}
+                  if d.is_dir() else set())
+
+      # An entry in main that cannot be READ carries no branch claim, so this step cannot
+      # attribute it to this branch and does not reach for it here. It is still reported
+      # when the worktree names it, which is the case measured below.
+      names = _md_names(src_dir) | {
+          n for n in _md_names(live) if branch_of(live / n) == branch
+      }
+
+      # RESTORE, DO NOT DELETE, WHERE MAIN HOLDS THE ONLY COPY — this phase's correction
+      # of its own filing. `Q-482` proposed taking main's copies as the population and
+      # unlinking them. Measured on both routes: ordinary, 2 copies -> 1, and the worktree
+      # can re-collect; the `Q-470` route, 1 copy -> **0**, because the worktree has none.
+      # That is `Q-478`'s class a fourth time — a documented recovery destroying the record
+      # it exists to protect. The unlink's own comment states the property that makes it
+      # safe (*re-collected on a later run*), and that property is FALSE wherever the
+      # worktree holds no copy. So the discriminator is exactly that property: unlink only
+      # when another copy survives, and otherwise MOVE main's copy back to the worktree,
+      # which takes the doc out of Step 4c's glob without costing the bytes.
+      removed, held, left, failed = [], [], [], []
+      for name in sorted(names):
+          dst = live / name
+          # `os.path.lexists`, NOT `dst.exists()`. `exists()` FOLLOWS SYMLINKS, so a
+          # DANGLING symlink in main's pending-docs reads as absent and is skipped — the
+          # entry stays and this step reports `ROLLED BACK: none` at exit 0 over it.
+          # Measured. Phase 284 found the identical substitution in stage 2's undo; this
+          # is the same class in the half that deletes.
+          if not os.path.lexists(dst):
               continue
-          dst = live / src.name
-          if not dst.exists():
+          # Ground truth is the branch being processed. Act on main's copy ONLY when THAT
+          # copy claims this branch — the copy step (a) just made. Comparing the two docs
+          # to each other is what let a worktree carrying a foreign-branch doc delete
+          # another branch's only surviving record.
+          if branch_of(dst) != branch:
+              left.append(f'{name} (main copy claims {branch_of(dst)!r}, processing {branch!r})')
               continue
-          # Ground truth is the branch being processed. Delete main's copy ONLY when
-          # THAT copy claims this branch — the copy step (a) just made. Comparing the two
-          # docs to each other is what let a worktree carrying a foreign-branch doc
-          # delete another branch's only surviving record.
-          if branch_of(dst) == branch:
+          # THE UNLINK IS CONDITIONAL ON ANOTHER COPY SURVIVING, and that condition is the
+          # unlink's OWN stated property (`re-collected on a later run`) rather than a new
+          # rule. It is FALSE wherever the worktree holds no readable copy — which is
+          # exactly `Q-470`'s absent-`src_dir` route — so unlinking there destroys the only
+          # record. Measured: ordinary route 2 copies -> 1; that route 1 -> 0.
+          #
+          # `is_file()`, not `lexists`, and the two sides of this loop want OPPOSITE symlink
+          # rules for opposite reasons. Main's entry above is tested with `lexists` because
+          # an entry that is THERE must never read as absent. Here the question is whether
+          # the RECORD survives, so a dangling symlink in the worktree is not a copy.
+          # A COPY SURVIVES ONLY IF UNLINKING `dst` LEAVES ONE — which an ALIAS does not.
+          # `is_file()` follows symlinks, so a worktree entry that is a symlink pointing AT
+          # main's own copy answers True: the code then unlinks the file the link points to
+          # and the link dangles. Measured on the shipped heredoc: `ROLLED BACK: feat-x.md`,
+          # exit 0, **zero readable copies**. Found by the round's guard lens outside its
+          # mutation frame, and it is the aliasing case the COLLECT already refuses at exit 7
+          # (`SameFileError` is about FILE identity) — so the half that copies guarded it and
+          # the half that deletes did not.
+          #
+          # `realpath` rather than `samefile`, because the two alias shapes must NOT be
+          # treated alike: a HARDLINK is a genuine surviving copy (unlinking one link leaves
+          # the other readable, measured), and `samefile` would hold it too — safe, but a
+          # false alarm on the one aliasing shape that is fine. Comparing resolved PATHS
+          # separates them: a symlink resolves onto `dst`, a hardlink does not.
+          _t = src_dir / name
+          if not (_t.is_file() and os.path.realpath(_t) != os.path.realpath(dst)):
+              # NOTHING IS MOVED, AND THAT IS THE ROUND'S FINDING, NOT AN OMISSION. An
+              # earlier cut of this phase moved main's copy INTO the worktree here. That is
+              # worse than the bug it replaced: `git worktree remove` — the very command
+              # step (b) is trying to run — deletes a worktree's gitignored
+              # `sysop/runtime/` content SILENTLY and exits 0 (§ 8.4 of `WORKFLOW.md` says
+              # so; re-measured for this phase), and `claim_task.sh --release` runs it with
+              # no pending-doc awareness anywhere in the script. So the move relocated the
+              # only copy of a record into the one directory scheduled for deletion, and
+              # `Q-482` — a REPORTING defect over a record that survived — would have
+              # become a durability one. There is no safe destination, so the doc stays
+              # where it is and the step says so instead of reporting success.
+              held.append(name)
+              continue
+          try:
               dst.unlink()                              # re-collected on a later run
-              removed.append(src.name)
-          else:
-              left.append(f'{src.name} (main copy claims {branch_of(dst)!r}, processing {branch!r})')
+              removed.append(name)
+          except OSError as e:
+              # Previously a raw traceback at exit 1 — a code this page does not carry —
+              # on the half that deletes, with NOTHING on stdout. Measured against a
+              # read-only `sysop/runtime/pending-docs/`.
+              failed.append(f'{name} ({e.__class__.__name__}: {e})')
       print('ROLLED BACK: ' + (', '.join(removed) or 'none'))
+      print("MAIN'S ONLY COPY, LEFT IN PLACE: " + (', '.join(held) or 'none'))
       print('LEFT ALONE (not this branch\'s): ' + (', '.join(left) or 'none'))
+      if held or failed:
+          if failed:
+              print('PENDING-DOC ROLLBACK FAILED: ' + '; '.join(failed))
+          if held:
+              print(f'Main holds the ONLY copy of {", ".join(held)} — the worktree has '
+                    f'none, so removing it would destroy the record rather than roll back '
+                    f'a copy. Left in place deliberately. Do NOT delete it by hand.')
+          print(f'Main still holds a doc claiming {branch!r}, so this branch must not be '
+                f'consolidated. Step 4c item 1b holds a doc whose branch content is not in '
+                f'the merge target, which covers the ordinary case — but it is then the '
+                f'only thing standing between that doc and BeanRider ISSUE-0050, so check '
+                f'Step 8 names this branch under `Held-back docs:` before the close ends.')
+          sys.exit(8)
       PY
       ```
 
-      > **Provenance, not basename — that distinction IS the fix.** The previous form was `rm -f sysop/runtime/pending-docs/$(basename "$f")` over the worktree's files, which deleted main's copy by name with no check that this branch ever wrote it. Measured: against a **different** branch's doc it removed a file this branch never authored, and step (a) had already overwritten it, so both records were gone while the victim's worktree was already removed. Reading `branch:` from both copies makes the rollback delete only what step (a) copied. **There is no restore half, because there is nothing to restore**: (a) now refuses a differing-branch collision outright rather than displacing anything, so a doc that is not this branch's is never touched by either step. An earlier draft of this phase parked the displaced copy under a `superseded/` subdirectory; that was withdrawn when its own review round showed the directory had **no consumer anywhere in the tree** — `ls sysop/runtime/pending-docs/*.md` is non-recursive, so Step 4c never sees a parked doc, and the branch's task would never close. Preserving bytes where no reader looks is not preservation.
+      **Exit 0 is the pass completing with every doc dispositioned**, and it prints three
+      lines rather than one: `ROLLED BACK:` names what it unlinked — main's copy, where the
+      worktree's own copy survives, so the doc is re-collected on a later run;
+      `MAIN'S ONLY COPY, LEFT IN PLACE:` names what it deliberately did **not** remove
+      because removing it would have destroyed the record rather than rolled back a copy;
+      and `LEFT ALONE:` what is not this branch's, with the reason. Nothing is destroyed on
+      any arm. Exit 0 means the third list is the only non-empty one it can be — anything in
+      the second list exits **8**, because main is still holding this branch's doc.
+
+      **The non-zero exits.** A separate table from the collect's, because the two heredocs
+      are separate invocations and an exit code read off the wrong one is a remedy for a
+      different failure.
+
+      | exit | meaning | state of the record | what to do |
+      |---|---|---|---|
+      | **4** | refused before touching anything — an unsubstituted `<worktree-path>` **or `<branch name>`**, an empty branch name, a `<worktree-path>` that is not a directory, a `src_dir` that cannot be resolved, or one resolving to main's own pending-docs | **untouched** | fix the invocation. This is an assertion about the operand, never about the branch |
+      | **8** | **(`Q-482`)** the pass ran and main is **still holding a doc claiming this branch**. The report names which case, and they are not the same: the worktree holds no readable copy, so removing main's would destroy the only record and it was left in place on purpose (`MAIN'S ONLY COPY, LEFT IN PLACE:`); or an unlink that should have succeeded failed, most often on an unwritable `sysop/runtime/pending-docs/` (`PENDING-DOC ROLLBACK FAILED:`, naming each file and its errno) | **main still holds a doc claiming this branch.** Whatever the other three lines report did happen: this is a partial pass, not a refusal | clear the cause and **re-run this heredoc before Step 4c**. Step 4c item 1b holds an unmerged branch's doc rather than consolidating it, so this is not a silent loss — but it is then the only thing standing between that doc and BeanRider ISSUE-0050 |
+
+      > **Provenance, not basename — that distinction IS the fix.** The previous form was `rm -f sysop/runtime/pending-docs/$(basename "$f")` over the worktree's files, which deleted main's copy by name with no check that this branch ever wrote it. Measured: against a **different** branch's doc it removed a file this branch never authored, and step (a) had already overwritten it, so both records were gone while the victim's worktree was already removed. Reading `branch:` from both copies makes the rollback delete only what step (a) copied. **Nothing is restored for a differing-branch collision, because nothing is displaced**: (a) refuses one outright rather than overwriting, so a doc that is not this branch's is never touched by either step. (`Q-482` briefly added a restore half for a different case — main holding the **only** copy of *this* branch's doc — and its own round removed it again: the only destination available is the worktree, and `git worktree remove` deletes that directory's gitignored content silently. So there is still no restore half, and the scoped claim above is the one that was ever measured.) An earlier draft of this phase parked the displaced copy under a `superseded/` subdirectory; that was withdrawn when its own review round showed the directory had **no consumer anywhere in the tree** — `ls sysop/runtime/pending-docs/*.md` is non-recursive, so Step 4c never sees a parked doc, and the branch's task would never close. Preserving bytes where no reader looks is not preservation. **`Q-482` proposed the worktree's own `sysop/runtime/pending-docs/` as a destination on exactly that reasoning — it is where `/document-work` writes and where this step's collect reads, so it has a reader where `superseded/` had none — and its round killed it for a different reason: `git worktree remove`, the command step (b) is trying to run, deletes that directory's gitignored content silently at exit 0. A destination with a reader is still not a destination if it is scheduled for deletion.**
 
       Then downgrade this branch to SKIP for this run (leave its worktree, lock, and branch intact), and continue with the next approved branch. Silent data loss is the failure mode this guard prevents (BeanRider ISSUE-0016) — the strip never touches a real file, so it cannot cause it. (The rollback matters because step (a) copies before this remove is attempted; without it, a branch SKIP'd here leaves its doc stranded in main's `sysop/runtime/pending-docs/` for the merged branches' Step 4c to consolidate.)
 
@@ -3244,6 +3747,16 @@ Staleness not measured: <N> (or "none")
      unsubstituted placeholder | not an object name | does not resolve in the workspace>.
      The doc WAS collected and will route normally; only the currency check was skipped.
      A whole population reading this line every run means a writer is not stamping it.
+
+Pending-doc write failures: <N> (or "none")
+  - <filename> (<branch>) — the collect exited <5|7> because <the destination could not
+     be created | the copy of <filename> failed: <error>>. On **7** stage 2 undid itself and
+     main is as it was. On **5** the undo ALSO failed: main may be partially written, the
+     displaced copies are preserved in the directory the `PENDING-DOC UNDO FAILED:` lines
+     name, and they were restored by hand. **The rollback is run on neither** — it deletes
+     by provenance rather than by what this run copied. Either way the branch is SKIP'd
+     with its worktree, lock and branch intact. Fix the cause — usually an unwritable
+     sysop/runtime/pending-docs/ — and re-run.
 
 Quarantined docs: <N> (or "none")
   - <filename> — <no `branch:` frontmatter | frontmatter would not parse: <error>>;

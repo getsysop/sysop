@@ -141,6 +141,29 @@ _BLANKET_EXEMPTIONS = (
 )
 
 
+# Phase 288 (`Q-489`) — the placement presence patterns, defined ONCE and read by the gate
+# predicate, the section predicate and the comparative pin test. Three readers of a literal
+# written three times is the defect this repo filed as `Q-337`; it is not repeated here.
+_GATE_PRESENCE_PATTERNS = {
+    "gate-placement": r"created\s+AT\s+the\s+commit\s+under\s+review",
+    "gate-echo": r"echo\s+`git\s+rev-parse\s+HEAD`\s+before\s+its\s+first\s+finding",
+    # Directional, per the isolation rule's own lesson: naming the words is not enough,
+    # because a sentence denying the mechanism contains them too. This pins the CONSEQUENCE,
+    # which a reversal has to delete rather than negate.
+    "gate-placement-why": r"unplaced\s+lens\s+reads\s+the\s+pre-phase\s+tree",
+}
+
+_SECTION_PRESENCE_PATTERNS = {
+    "placement-at-the-commit": r"create\s+every\s+reviewer\s+AT\s+the\s+commit\s+under\s+review",
+    # The `-C` is load-bearing: a bare `git rev-parse HEAD` reports the reviewer's shell CWD,
+    # not the tree it was handed, so the echo can be right while the lens reads the wrong
+    # revision. A round lens demonstrated exactly that against the first version of the rule.
+    "placement-echo": r"first\s+action\s+is\s+`git\s+-C\s+<[^`]+>\s+rev-parse\s+HEAD`",
+    # Why it is a mechanism and not advice.
+    "placement-not-diligence": r"diligence,\s+which\s+nothing\s+enforces",
+}
+
+
 def gate_problems(gate: str) -> list[str]:
     """Everything that would stop the gate from binding."""
     problems = []
@@ -196,6 +219,22 @@ def gate_problems(gate: str) -> list[str]:
                 f"gate lost its {name} clause — the governor's numbers are re-stated here, "
                 "and a drifted restatement is the contradiction a reader meets first"
             )
+    # Phase 288 (`Q-489`). The placement rule lived in the procedure file and lapsed anyway
+    # for four consecutive phases, because the gate — the text actually loaded at the moment
+    # someone spawns an agent — never carried it. Same no-invoker defect the author-side pass
+    # had at Phase 166, one clause over.
+    #
+    # Matched against the RENDERED gate. The round's guard lens wrapped this whole paragraph
+    # in `<!-- -->`: gate, authority clause, governor numbers and placement clause all became
+    # invisible to a reader while every pattern above still found its words, suite green.
+    rendered_gate = _prose_only(gate)
+    for name, pat in _GATE_PRESENCE_PATTERNS.items():
+        if not re.search(pat, rendered_gate, re.I):
+            problems.append(
+                f"gate lost its {name} clause — the requirement the round gate exists to "
+                "invoke is not in the text read at spawn time"
+            )
+    problems += placement_retraction_problems(gate)
     for pat in _HEDGES:
         if re.search(pat, gate, re.I):
             problems.append(f"gate hedged with {pat!r}")
@@ -221,10 +260,24 @@ def section_problems(section: str) -> list[str]:
         # otherwise leave every governor-scoped guard reading nothing while this predicate
         # stayed green — the Phase-166 zero-guards hole, one subsection over.
         "governor": r"### How many reviewers, how many rounds — the governor",
+        # Phase 288 (`Q-489`). Hoisted from a sub-bullet of the isolation caveat to a
+        # top-level requirement. The mechanics stay below; the REQUIREMENT lives up here,
+        # because a rule filed under "where the harness offers it" is not read at spawn
+        # time — measured by four consecutive phases that had the caveat and lapsed anyway.
+        # The load-bearing half of WHY it is a requirement rather than advice: what has been
+        # carrying it is reviewer diligence, and diligence is not a mechanism.
     }
+    # Placement is matched against the RENDERED section for the same reason the gate is:
+    # commenting the block out or fencing it left every pattern satisfied and the rule
+    # invisible. Everything else keeps its historical raw match.
+    rendered = _prose_only(section)
+    required.update(_SECTION_PRESENCE_PATTERNS)
     for name, pat in required.items():
-        if not re.search(pat, section, re.I):
+        haystack = rendered if name.startswith("placement-") else section
+        if not re.search(pat, haystack, re.I):
             problems.append(f"procedure lost its {name} rule")
+    problems += placement_position_problems(section)
+    problems += placement_retraction_problems(section)
     for pat in _HEDGES:
         if re.search(pat, section, re.I):
             problems.append(f"procedure hedged with {pat!r}")
@@ -2515,3 +2568,460 @@ def test_the_recipe_does_not_use_a_machine_shared_path(_cfgrepo) -> None:
         "the recipe writes a fixed machine-shared path; two rounds in different "
         "repos would overwrite each other's baseline"
     )
+
+
+# --------------------------------------------------------------------------------------
+# Phase 288 (`Q-489`) — the placement requirement
+#
+# The defect this guards is not a missing rule. Phase 198 (2026-08-13) put both the correct
+# diagnosis and the spawner-side remedy in the procedure file — Phase 154's original bullet
+# had the diagnosis WRONG ("two reviewers landed on *different* commits", called
+# non-determinism) and so could ask only for vigilance. It lapsed anyway: at least 13
+# reviewers across Phases 284–287 were placed on the pre-phase tree, every one caught by a
+# lens that happened to check its own revision. What was missing was an INVOKER — the gate paragraph, which is the text loaded
+# at the moment someone spawns an agent, never carried the requirement — and a receipt that
+# makes a misplaced round visible from outside it.
+#
+# So both sites are pinned, and every mutation below is an edit a well-meaning author could
+# make: shorten the gate, soften a requirement into an intention, or reverse the mechanism
+# while keeping its vocabulary.
+# --------------------------------------------------------------------------------------
+
+_PLACEMENT_GATE_MUTATIONS = {
+    "gate: placement clause deleted": (
+        _sub("**each created AT the commit under review and required to echo "
+             "`git rev-parse HEAD` before its first finding**", "reviewers"),
+        ("gate-placement", "gate-echo"),
+    ),
+    "gate: placement softened to a worktree of its own": (
+        _sub("each created AT the commit under review", "each given a worktree of its own"),
+        ("gate-placement",),
+    ),
+    "gate: echo requirement dropped, placement kept": (
+        _sub("and required to echo `git rev-parse HEAD` before its first finding", ""),
+        ("gate-echo",),
+    ),
+    # The reversal shape the isolation rule's own history records: every keyword still
+    # present, the claim inverted. A reader meeting this spawns unplaced lenses believing
+    # the tree is right.
+    "gate: consequence reversed": (
+        _sub("so an unplaced lens reads the pre-phase tree and finds nothing",
+             "so an unplaced lens reads the branch tip anyway and finds everything"),
+        ("gate-placement-why",),
+    ),
+}
+
+
+@pytest.mark.parametrize("name", sorted(_PLACEMENT_GATE_MUTATIONS))
+def test_every_placement_mutation_to_the_gate_is_caught(name):
+    mutate, expected = _PLACEMENT_GATE_MUTATIONS[name]
+    problems = gate_problems(mutate(_gate_paragraph()))
+    for clause in expected:
+        assert any(clause in p for p in problems), (
+            f"{name}: gate_problems() did not report {clause} — it returned {problems}"
+        )
+
+
+_PLACEMENT_SECTION_MUTATIONS = {
+    "procedure: the requirement heading deleted": (
+        _sub("**Create every reviewer AT the commit under review, and require it to prove "
+             "where it landed.**", "**Worktrees.**"),
+        ("placement-at-the-commit",),
+    ),
+    "procedure: echo softened into an intention": (
+        _sub("The reviewer's first action is `git -C <the path it was handed> rev-parse HEAD`, "
+             "reported verbatim",
+             "The reviewer should ideally confirm its own revision, reported verbatim"),
+        ("placement-echo",),
+    ),
+    # The `-C` is not decoration. Dropping it leaves a command that reports the reviewer's
+    # shell CWD — the primary checkout on the harness that produced this defect — so the
+    # echo can be correct while the lens reads the wrong tree. A round lens demonstrated
+    # exactly this against the first version of the rule.
+    "procedure: the -C dropped from the echo": (
+        _sub("`git -C <the path it was handed> rev-parse HEAD`", "`git rev-parse HEAD`"),
+        ("placement-echo",),
+    ),
+    # The sentence that says why this is a mechanism and not advice. Deleting it leaves the
+    # requirement readable as a restatement of the caveat it was hoisted out of, which is
+    # precisely the reading that let four phases lapse.
+    "procedure: the not-diligence clause deleted": (
+        _sub("diligence, which nothing enforces", "good practice"),
+        ("placement-not-diligence",),
+    ),
+}
+
+
+@pytest.mark.parametrize("name", sorted(_PLACEMENT_SECTION_MUTATIONS))
+def test_every_placement_mutation_to_the_procedure_is_caught(name):
+    mutate, expected = _PLACEMENT_SECTION_MUTATIONS[name]
+    problems = section_problems(mutate(_multi_reviewer_section()))
+    for clause in expected:
+        assert any(clause in p for p in problems), (
+            f"{name}: section_problems() did not report {clause} — it returned {problems}"
+        )
+
+
+def test_the_placement_predicates_survive_a_rewrap():
+    """Negative control. The patterns are whitespace-tolerant on purpose: they run against
+    raw file text, and a rewrap that splits a pinned sentence across a newline is not a
+    defect. A guard that reddens on reflow gets weakened rather than fixed — the failure
+    mode `_sub`'s own docstring records.
+    """
+    import textwrap
+    gate = re.sub(r" ", "\n", _gate_paragraph())
+    section = re.sub(r" ", "\n", _multi_reviewer_section())
+    assert [p for p in gate_problems(gate) if "gate-placement" in p or "gate-echo" in p] == []
+    assert [p for p in section_problems(section) if "placement-" in p] == []
+
+    # And the PIN survives a real 80-column hard wrap, which the presence predicates alone
+    # never exercised. The round's guard lens broke `re-dispatch` across lines this way and
+    # the slicer reported the requirement DELETED — a pure reflow reading as a deletion is
+    # the over-strictness that gets a guard removed rather than fixed.
+    wrapped = _multi_reviewer_section().replace(
+        _raw_placement_block(), textwrap.fill(_raw_placement_block(), 80))
+    assert _placement_block(wrapped) == PLACEMENT_BLOCK_VERBATIM, (
+        "an 80-column hard wrap breaks the pin — fold hyphenated line breaks before comparing"
+    )
+    assert placement_position_problems(wrapped) == []
+
+
+def test_the_placement_predicates_are_not_vacuous():
+    assert any("gate-placement" in p for p in gate_problems(""))
+    assert any("gate-echo" in p for p in gate_problems(""))
+    assert any("placement-at-the-commit" in p for p in section_problems(""))
+    assert any("placement-echo" in p for p in section_problems(""))
+
+
+# --------------------------------------------------------------------------------------
+# The presence predicates above are wiring, not coverage — and the author's own battery
+# proved it before any reviewer did. Five attacks written in wording the author had NOT
+# used all survived them: `where convenient` appended to the placement clause; `ideally`
+# and `asked to` substituted for the imperatives; `or afterwards if it forgot` appended to
+# the echo; a revoking sentence (`a lens that skips it is still a lens`) inserted BETWEEN
+# the two bullets; and `For example,` prefixed to the requirement, demoting it to an
+# illustration. Every keyword survived each one, so every predicate stayed green.
+#
+# The fix is not a longer modal blocklist. A regex screen over prose is structurally a
+# reversion detector: each round adds vocabulary and the next author picks new words. What
+# holds is a VERBATIM PIN on the load-bearing clause — it reddens on any edit, including
+# the legitimate ones, which is the cost that buys it. A reader who means the change
+# updates the pin and says why in the commit; a reader who is softening it has to do that
+# in writing.
+# --------------------------------------------------------------------------------------
+
+PLACEMENT_BLOCK_START = "**Create every reviewer AT the commit under review"
+PLACEMENT_BLOCK_END = "rather than reading its findings."
+
+# What must come BEFORE the requirement, and what must come after. The round's guard lens
+# moved the block byte-identical to just above the governor — below the caveat it was
+# hoisted out of — and every pin, every predicate and the whole 73-module blast radius
+# stayed green. Position is the ENTIRE claimed improvement of this phase, and nothing
+# asserted it. The module already owned the primitive (rule 3 / rule 4 / the limits
+# paragraph are ordered this way); the one requirement that is only about placement was the
+# one without it.
+PLACEMENT_MUST_FOLLOW = "**Commit before the round starts.**"
+# `## Prompt Template` is deliberately absent: it sits OUTSIDE the section slice, so naming
+# it here would make every call report an unanchored ordering. Verified, not assumed —
+# `_multi_reviewer_section().find("## Prompt Template")` is -1.
+PLACEMENT_MUST_PRECEDE = (
+    "**Worktree isolation, where the harness offers it.**",
+    "### How many reviewers, how many rounds",
+    "### Before you spawn anyone",
+)
+
+GATE_PLACEMENT_VERBATIM = _flat(
+    "**each created AT the commit under review and required to echo `git rev-parse HEAD` "
+    "before its first finding**"
+)
+
+PLACEMENT_BLOCK_VERBATIM = _flat(
+    "**Create every reviewer AT the commit under review, and require it to prove where it "
+    "landed.** The harness will not do this for you: `isolation: \"worktree\"` forks from the "
+    "repository's **default branch**, not from the spawning session's `HEAD`, so under a `pr` "
+    "merge policy — where the round always runs from a branch that has not merged — every lens "
+    "is handed the pre-phase tree deterministically. Re-measured 2026-09-13: a probe spawned "
+    "from a branch one commit ahead of the default branch landed on the **default branch's "
+    "tip**, and the marker that branch's own commit had introduced was absent from its "
+    "checkout. **Scope:** this is the ad-hoc round. Where an earlier step already created the "
+    "worktree — `/claim-task`, `/auto-build`, `/auto-fix`, `/auto-judge`, per the carve-out "
+    "below — there is no commit under review to place anyone at, and this does not apply. Two "
+    "halves, and the second is what makes the first checkable: - **Place it.** Create the "
+    "checkout at the phase commit yourself — `git worktree add <dir> --detach <sha>`, or a "
+    "throwaway clone checked out there — with `<dir>` **outside the repository**: a relative "
+    "path leaves an untracked directory in the very tree the round is reviewing, which is the "
+    "breach shape the spawn-time `git status --porcelain -uall` baseline exists to flag. Name "
+    "that SHA in the prompt. The caveat bullet below carries the mechanics and the clone "
+    "gotchas. - **Make it echo.** The reviewer's first action is `git -C <the path it was "
+    "handed> rev-parse HEAD`, reported verbatim **before any finding**. **The `-C` is the whole "
+    "rule** — a bare `git rev-parse HEAD` reports the reviewer's shell CWD, which on a harness "
+    "that hands out a checkout is usually the primary one, so it can echo the right SHA while "
+    "the lens reads the wrong tree; this was demonstrated by a lens reviewing this very "
+    "paragraph. A reviewer whose echo does not match the pin **stops and says so rather than "
+    "re-pointing itself silently**, and the spawner re-dispatches it rather than reading its "
+    "findings."
+)
+
+
+# Bounded canary, not a filter — the same shape as the isolation rule's retraction blacklist
+# below, and bounded for the same reason Phase 179 measured: a regex screen over prose is a
+# reversion detector, and each round that extends its vocabulary loses to the next author's
+# synonyms. These are the exact revocations the round wrote, which all three scoped pins
+# survived because they sit OUTSIDE the pinned span. The pin cannot see addition; this can
+# see the additions already demonstrated, and the record says so rather than implying more.
+_PLACEMENT_RETRACTIONS = (
+    r"still a lens",
+    r"belt-and-braces",
+    r"placement is (?:optional|advisory|a nicety)",
+    r"a lens that skips (?:it|them|this)",
+    r"(?:need|have) not be placed",
+    r"skip the (?:placement|echo|receipt)",
+)
+
+
+def _placement_block(section: str) -> str:
+    """The requirement, rendered and flattened. Empty when either anchor is gone.
+
+    Rendered through `_prose_only` FIRST, which is the fix for two findings of the round at
+    once. Commenting the block out or fencing it left every pin green while the rule reached
+    no reader — the attack this module's own `_prose_only` docstring names, in a slice that
+    did not call it. And an 80-column hard wrap broke `re-dispatch` across lines, so the
+    slicer could not find its end anchor and reported the requirement DELETED on a pure
+    reflow; `_prose_only`'s hyphen-fold and list-marker fold close that.
+    """
+    rendered = _prose_only(section)
+    start = rendered.find(PLACEMENT_BLOCK_START)
+    if start < 0:
+        return ""
+    end = rendered.find(PLACEMENT_BLOCK_END, start)
+    if end < 0:
+        return ""
+    return _flat(rendered[start:end + len(PLACEMENT_BLOCK_END)])
+
+
+def _raw_placement_block() -> str:
+    """The block as it sits in the file, unflattened — the wrap control needs real newlines."""
+    section = _multi_reviewer_section()
+    start = section.index(PLACEMENT_BLOCK_START)
+    end = section.index(PLACEMENT_BLOCK_END, start) + len(PLACEMENT_BLOCK_END)
+    return section[start:end]
+
+
+def placement_position_problems(section: str) -> list[str]:
+    """Where the requirement sits, which is the whole of what this phase changed."""
+    rendered = _prose_only(section)
+    problems = []
+    hits = rendered.count(PLACEMENT_BLOCK_START)
+    if hits == 0:
+        return ["the placement requirement is gone from the section"]
+    if hits > 1:
+        problems.append(
+            f"the placement requirement appears {hits} times — a softened duplicate below "
+            "the real one is what a reader acts on, and the pin only checks the first"
+        )
+    here = rendered.index(PLACEMENT_BLOCK_START)
+    anchor = rendered.find(PLACEMENT_MUST_FOLLOW)
+    if anchor < 0:
+        problems.append("the commit-first rule is gone, so placement's position cannot be checked")
+    elif here < anchor:
+        problems.append(
+            "the placement requirement sits ABOVE the commit-first rule — you cannot place a "
+            "reviewer at a commit that does not exist yet"
+        )
+    for later in PLACEMENT_MUST_PRECEDE:
+        at = rendered.find(later)
+        if at < 0:
+            problems.append(f"{later!r} is gone from the section, so the ordering is unanchored")
+        elif here > at:
+            problems.append(
+                f"the placement requirement sits BELOW {later!r}. Position is the entire fix: "
+                "the rule existed for years in the caveat below and lapsed for four consecutive "
+                "phases because nobody read it before spawning. Moving it back down is the "
+                "regression, however intact its wording"
+            )
+    return problems
+
+
+def placement_retraction_problems(text: str) -> list[str]:
+    rendered = _prose_only(text)
+    return [
+        f"the placement requirement is revoked nearby by {pat!r} — the rule and its negation "
+        "cannot both ship, and a pin scoped to the rule cannot see a licence added beside it"
+        for pat in _PLACEMENT_RETRACTIONS if re.search(pat, rendered, re.I)
+    ]
+
+
+def test_the_placement_block_is_pinned_verbatim():
+    assert _placement_block(_multi_reviewer_section()) == PLACEMENT_BLOCK_VERBATIM
+
+
+def test_the_gate_placement_clause_is_pinned_verbatim():
+    assert GATE_PLACEMENT_VERBATIM in _flat(_gate_paragraph())
+
+
+def test_the_placement_block_slicer_fails_closed():
+    section = _multi_reviewer_section()
+    assert _placement_block(section)
+    assert _placement_block(section.replace(PLACEMENT_BLOCK_START, "**Worktrees.**", 1)) == ""
+    assert _placement_block(section.replace(PLACEMENT_BLOCK_END, "read them.", 1)) == ""
+
+
+_PIN_ATTACKS = {
+    # The five that beat the presence predicates. Kept as the pin's regression set: each
+    # one is a live softening an author could write in good faith.
+    "licensed with 'where convenient'": (
+        "each created AT the commit under review",
+        "each created AT the commit under review where convenient", "gate"),
+    "imperatives softened to 'ideally' and 'asked to'": (
+        "**each created AT the commit under review and required to echo",
+        "**each ideally created AT the commit under review and asked to echo", "gate"),
+    "echo made post-hoc": (
+        "before its first finding",
+        "before its first finding, or afterwards if it forgot", "gate"),
+    "revoked between the two bullets": (
+        "- **Make it echo.**",
+        "This is belt-and-braces; a lens that skips it is still a lens.\n\n- **Make it echo.**",
+        "section"),
+    "demoted to an example": (
+        "Create every reviewer AT the commit under review",
+        "For example, create every reviewer AT the commit under review", "section"),
+}
+
+
+@pytest.mark.parametrize("name", sorted(_PIN_ATTACKS))
+def test_every_softening_the_presence_predicates_missed_breaks_the_pin(name):
+    """Both halves, because only the pair says anything.
+
+    The round's guard lens pointed out that the first version of this test could not fail:
+    the pin is `==` over a span and all five mutations land inside it, so "they break the
+    pin" restates `test_the_placement_block_is_pinned_verbatim`. The claim worth testing is
+    COMPARATIVE — these five defeat the presence predicates and do not defeat the pin — so
+    the miss is now asserted alongside the catch.
+    """
+    old, new, target = _PIN_ATTACKS[name]
+    if target == "gate":
+        mutated_gate = _gate_paragraph().replace(old, new, 1)
+        assert all(re.search(pat, _prose_only(mutated_gate), re.I)
+                   for pat in _GATE_PRESENCE_PATTERNS.values()), (
+            f"{name}: a presence predicate DOES catch this — it belongs in the presence "
+            "battery, not in the pin's comparative set"
+        )
+    else:
+        mutated_section = _multi_reviewer_section().replace(old, new, 1)
+        missed = [n for n, pat in _SECTION_PRESENCE_PATTERNS.items()
+                  if not re.search(pat, _prose_only(mutated_section), re.I)]
+        assert missed == [], (
+            f"{name}: presence predicate(s) {missed} DO catch this — it belongs in the "
+            "presence battery, not in the pin's comparative set"
+        )
+    if target == "gate":
+        mutated = _gate_paragraph().replace(old, new, 1)
+        assert mutated != _gate_paragraph(), f"{name}: mutation did not apply"
+        assert GATE_PLACEMENT_VERBATIM not in _flat(mutated), (
+            f"{name}: the gate pin accepted a softened clause"
+        )
+    else:
+        mutated = _multi_reviewer_section().replace(old, new, 1)
+        assert mutated != _multi_reviewer_section(), f"{name}: mutation did not apply"
+        assert _placement_block(mutated) != PLACEMENT_BLOCK_VERBATIM, (
+            f"{name}: the block pin accepted a softened requirement"
+        )
+
+
+def test_the_pins_are_not_satisfied_by_an_empty_or_unrelated_text():
+    assert _placement_block("") == ""
+    assert _placement_block("nothing to see here") == ""
+    assert GATE_PLACEMENT_VERBATIM not in _flat("nothing to see here")
+
+
+# --------------------------------------------------------------------------------------
+# The round's own survivors, kept as the regression set.
+#
+# The guard lens wrote 26 attacks against the first version of these guards and **11
+# survived (42%)**, with 7 of 12 controls falsely reddening. The three that mattered:
+#
+#   * the block moved byte-identical BELOW the caveat it was hoisted out of — green
+#     everywhere, and position is the entire improvement this phase claims;
+#   * the block commented out or fenced — every pin satisfied, rule invisible;
+#   * a revoking sentence added BESIDE the block — a pin scoped to a span cannot see an
+#     addition outside it, which this module's own docstring already records as the shape
+#     every scoped guard loses to.
+#
+# Each is now driven through the real predicates.
+# --------------------------------------------------------------------------------------
+
+def test_the_requirement_may_not_be_moved_below_the_caveat_it_was_hoisted_from():
+    assert placement_position_problems(_multi_reviewer_section()) == []
+
+    section = _multi_reviewer_section()
+    block = _raw_placement_block()
+    moved = section.replace(block, "", 1)
+    at = moved.index("### How many reviewers, how many rounds")
+    moved = moved[:at] + block + "\n\n" + moved[at:]
+
+    problems = placement_position_problems(moved)
+    assert any("BELOW" in p for p in problems), problems
+    # And it must reach the production predicate, not only the helper.
+    assert any("BELOW" in p for p in section_problems(moved)), (
+        "the relocation is caught by the helper but not by section_problems() — the guard "
+        "is not wired into the predicate the real tests call"
+    )
+    # The pin alone cannot see it, which is why the ordering assertion exists.
+    assert _placement_block(moved) == PLACEMENT_BLOCK_VERBATIM
+
+
+def test_a_softened_duplicate_below_the_real_block_is_caught():
+    section = _multi_reviewer_section()
+    # Softened AFTER the start anchor, or the decoy stops being a duplicate of the thing the
+    # count is looking for — the first attempt at this test replaced text inside the anchor
+    # itself and proved nothing.
+    decoy = _raw_placement_block().replace("**Place it.**", "**Place it, where convenient.**", 1)
+    assert decoy.count(PLACEMENT_BLOCK_START) == 1, "the decoy must still carry the anchor"
+    problems = placement_position_problems(section + "\n\n" + decoy)
+    assert any("appears 2 times" in p for p in problems), problems
+
+
+@pytest.mark.parametrize("wrap", [
+    pytest.param(lambda b: f"<!--\n{b}\n-->", id="commented-out"),
+    pytest.param(lambda b: f"```\n{b}\n```", id="fenced"),
+    pytest.param(lambda b: f"<details>\n{b}\n</details>", id="collapsed"),
+])
+def test_neutering_the_whole_block_reads_as_deleting_it(wrap):
+    section = _multi_reviewer_section()
+    neutered = section.replace(_raw_placement_block(), wrap(_raw_placement_block()), 1)
+    assert _placement_block(neutered) == "", "the pin is satisfied by text no reader sees"
+    assert section_problems(neutered) != []
+
+
+def test_neutering_the_whole_gate_paragraph_reads_as_deleting_it():
+    gate = _gate_paragraph()
+    problems = gate_problems(f"<!--\n{gate}\n-->")
+    assert any("gate-placement" in p for p in problems), problems
+
+
+@pytest.mark.parametrize("where", ["before", "after", "gate"])
+def test_a_licence_added_BESIDE_the_rule_is_caught(where):
+    licence = "This is belt-and-braces; a lens that skips it is still a lens."
+    if where == "gate":
+        assert placement_retraction_problems(_gate_paragraph() + " " + licence) != []
+        assert gate_problems(_gate_paragraph() + " " + licence) != []
+        return
+    section = _multi_reviewer_section()
+    block = _raw_placement_block()
+    mutated = section.replace(
+        block, f"{licence}\n\n{block}" if where == "before" else f"{block}\n\n{licence}", 1)
+    assert _placement_block(mutated) == PLACEMENT_BLOCK_VERBATIM, "the pin should be intact"
+    assert section_problems(mutated) != [], (
+        "a revocation added beside the rule leaves every scoped pin green — the canary is "
+        "not reaching the production predicate"
+    )
+
+
+def test_the_retraction_canary_states_its_bound_rather_than_implying_coverage():
+    """It is a canary, not a filter. An out-of-vocabulary revocation walks through it, and
+    the record says so — Phase 179 measured a prose blocklist catching 0 of 21 reversals it
+    had not been taught. This test pins the honest limit so nobody reads the canary as a
+    guarantee: the ordering assertion and the pin are the real checks.
+    """
+    novel = "Placement here is a matter of taste and the round stands without it."
+    assert placement_retraction_problems(novel) == []

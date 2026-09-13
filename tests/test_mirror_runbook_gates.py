@@ -2280,3 +2280,68 @@ def test_the_command_surface_cannot_silently_shrink():
         "wants this set updated in the same commit; REMOVING one needs a stated "
         "reason, because the guard goes quiet about that file with nothing red"
     )
+
+
+# --- Phase 283's round — the exemption paragraph that broke its own rule ------
+
+
+def _issue_exemption_paragraph() -> str:
+    """`PHASE_LOG.md`'s header clause that buys its Pass-5b exemption.
+
+    It SHIPS. Anchored on the sentence that grants the exemption, not on a line
+    number, and ended at the blockquote's own paragraph break.
+    """
+    log = REPO_ROOT / "PHASE_LOG.md"
+    assert log.is_file(), "PHASE_LOG.md is missing; it ships and this guard reads it"
+    head = log.read_text(encoding="utf-8")[:20000]
+    m = re.search(r"It also cites issue numbers the public tree cannot resolve.*?(?=\n[^>]|\Z)", head, re.S)
+    return m.group(0) if m else ""
+
+
+def test_the_issue_exemption_paragraph_quotes_no_ceiling():
+    """It says of itself: "No ceiling is quoted here on purpose." It then quoted one.
+
+    The paragraph carried `reaches only 30` against a real 46, in the same
+    sentence as the clause forbidding it, for months — in a file that SHIPS to
+    the public repo. A lens found it while the phase was fixing the identical
+    stale figure one file away, in `tools/`, which does not ship.
+
+    The direction is what makes it worth a guard rather than an edit:
+    UNDERSTATING the ceiling tells a public reader that a citation which
+    resolves will 404 — the corroboration direction the runbook calls the worse
+    one. Overstating it is merely useless.
+    """
+    para = _issue_exemption_paragraph()
+    assert para, (
+        "the Pass-5b exemption paragraph is no longer findable in PHASE_LOG.md's "
+        "header. That sentence is what buys the file's exemption — if it moved, "
+        "re-anchor this guard; if it went away, the exemption went with it"
+    )
+    claims = re.findall(r"(?:reach|reaches|reached|up to|as high as|only)\s+`?(\d+)`?", para)
+    assert not claims, (
+        f"the exemption paragraph quotes a ceiling ({claims}) for the public "
+        "repo's issue numbering. That number rises with every cut and nothing "
+        "re-derives it here, so it is stale the moment it is written — which is "
+        "what the paragraph's own 'No ceiling is quoted here on purpose' clause "
+        "says. State the structural facts (the 1-3 hole, that it rises) instead; "
+        "derive the live figure with `gh api "
+        "'repos/getsysop/sysop/pulls?state=all&per_page=100' --jq "
+        "'max_by(.number).number'`"
+    )
+
+
+def test_the_ceiling_guard_is_not_vacuous():
+    """Red against the text the round actually found."""
+    para = _issue_exemption_paragraph()
+    broken = para.replace(
+        "has a hole (`1`–`3`, then nothing until `11`), and rises with every cut",
+        "and, at the time of writing, reaches only 30",
+    )
+    assert broken != para, (
+        "the control could not reconstruct the pre-fix wording — re-point it at "
+        "the current phrasing rather than letting it pass by not mutating"
+    )
+    assert re.findall(r"(?:reach|reaches|reached|up to|as high as|only)\s+`?(\d+)`?", broken), (
+        "the predicate does not fire on the exact sentence that shipped stale for "
+        "months; it is not measuring what it claims"
+    )

@@ -476,6 +476,16 @@ Do NOT mutate repository state — no `git checkout`, `switch`, `reset`, `stash`
 with `git show <sha>:<path>`, which reads the object database and is unaffected by
 tree state.
 
+You are reading across many files, so you will write a loop over them. **Name the
+loop variable `entry`, never `path`.** `<path>` above is a placeholder for a value,
+not a suggested variable name: in zsh — the default shell on macOS, and so quite
+possibly yours — `path` is tied to `$PATH`, and a bare `path=…` empties the command
+search path, after which every command in that block fails with `command not found`,
+`git` included. The damage is not that you stop: files you already read still
+produced findings, and the rest silently return nothing, so you would report a clean
+result over a remainder you never actually read. If a command reports `command not
+found`, say so in your output and stop — do not report over a partial scan.
+
 Do NOT create new files either — no scratch scripts, no notes, no probe files, not
 even untracked ones, anywhere in the repository. Compute from a heredoc or write
 under `/tmp`. "No edits to tracked files" is not permission to add untracked ones:

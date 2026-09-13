@@ -6,7 +6,7 @@ Each phase row in CLAUDE.md's `## Phase log` table links to a commit; `git show 
 
 > **This file narrates maintainer-side work, so it names files the public tree does not contain.** `CLAUDE.md`, `REVIEW_CHECKLIST.md`, `REVIEW_ARCHIVE.md`, `*_HANDOFF.md` and everything under `tools/` are maintainer-side and **not in the public tree** — they are stripped from the published mirror on purpose. Where an entry below names one, read it as a record of what was done, not as a document to go and open. Every claim a *consumer* has to act on lives in the shipped skills, `core/companion/docs/WORKFLOW.md`, and `docs/`. (Phase 184 measured 272 such references here — 236 of them unqualified — and discharged them with this paragraph rather than by editing the history; the per-phase guard in `tests/test_mirror_leak_gate.py` holds the shipped operational surface at zero and exempts this file *because* of this paragraph.)
 >
-> **It also cites issue numbers the public tree cannot resolve.** Every bare `#NNN` below is an entry in a private maintainer tracker — Sysop's own, or an upstream project's — not in the public `getsysop/sysop` repository — whose numbering is unrelated and, at the time of writing, reaches only 30. Following one either 404s or lands on an unrelated pull request. The same exemption applies for the same reason: they are discharged with this sentence rather than by rewriting the record, while the shipped operational surface is held at zero by writing `internal tracker #NNN` there instead. **No count is quoted here on purpose** — the first draft named one and it was stale in the same commit, because this file grows by a phase entry every time the number would be re-read. `tests/test_mirror_leak_gate.py` derives it.
+> **It also cites issue numbers the public tree cannot resolve.** Every bare `#NNN` below is an entry in a private maintainer tracker — Sysop's own, or an upstream project's — not in the public `getsysop/sysop` repository — whose numbering is unrelated, has a hole (`1`–`3`, then nothing until `11`), and rises with every cut. Following one either 404s or lands on an unrelated pull request. The same exemption applies for the same reason: they are discharged with this sentence rather than by rewriting the record, while the shipped operational surface is held at zero by writing `internal tracker #NNN` there instead. **No ceiling is quoted here on purpose** — the first draft named one, it was stale in the same commit, and a *second* stale one (`30`, against a real `46`) then sat in this very sentence for months **beside the clause forbidding it**, until Phase 283's round found it. That is the worse direction: understating the ceiling tells a reader that a citation which resolves will 404. The structural facts above do not drift; a number does, because this file grows by a phase entry every time the number would be re-read. `tests/test_mirror_leak_gate.py` derives it.
 
 ## Phases 1 through 25
 
@@ -35230,3 +35230,2004 @@ the 82, and the arithmetic was not adjusted by hand — the module derives it fr
 The row is labelled `283` rather than `283 (pre-cut)` because `ledger_phase_rows` reads a bare
 numeral; the cut half appends `283-cut`, exactly as Phase 274 did. That was found by running the
 guard, not by reading the parser.
+
+### The cut (the Phase-277 record tail through 282)
+
+Run as the phase's second commit, from merged `main` at `00754c7`, after the pre-cut PR merged.
+
+**The window — and the first draft of this paragraph got it wrong in exactly the way Phase 195
+wrote a rule about.** It said **eight** commits, six shipping. `e2ed1dc..00754c7` is **nine**, and
+**seven** ship. The missing one is `00754c7` itself — this phase's own pre-cut commit, which is in
+the range because the cut is taken *from* it, and which ships 275 lines of `PHASE_LOG.md` and 542
+of `tests/test_mirror_runbook_gates.py`. The eight came from the brief, computed at `3d59341`
+before the pre-cut commit existed, and was carried forward instead of re-derived at the merged-main
+cut SHA. **That is Phase 195's rule verbatim** — *"every shipping number has to be re-derived at
+the merged-`main` cut SHA"* — and the brief even flagged this paragraph as the one Phase 274's
+round caught wrong. Found by a lens re-running `git rev-list --count`.
+
+Correctly: `9f10469`, `358107c` and `a591540` are Phase 277's own post-cut record commits, then
+Phases 278–282, then this phase's pre-cut commit. The two that do **not** ship are `358107c`
+(`tools/NEXT_SESSION_PROMPT.md` alone) and `a591540` (`REVIEW_CHECKLIST.md` + `tools/`), both
+stripped by the mirror's own `rm` block — read off that block, not off any list. `9f10469` is in
+the window *because* `PHASE_LOG.md` ships: it adds 37 lines to a file the mirror keeps.
+
+**Every gate green on the first run, which is not the usual outcome here** — Phases 195, 246 and
+225 each record a cut that was not. (This sentence originally cited **250**, and a lens read that
+phase's record: it says `GATE GREEN` and *"Nothing about the product was red at any step."* What
+Phase 250 found was two stale figures in the runbook's prose. Phase 225 is the correct third
+example — running the gate there found a cut-blocker that had never met a `.venv`-less tree.) Passes 1a, 1b, 1c, 3, 4 and 4b all empty; the rename-residue
+diff empty; the two builds **content-identical** at tree `9cf2471`; `_shipped_files()` and the
+built mirror's `git ls-files` **identical**, not merely equal in count. Passes 5 and 5b: 172 tests
+green in the source repo. Pass 2 (56 matches) and Pass 2b (244) diffed against the published
+snapshot rather than counted: **zero new hits in either**, so there was nothing to eyeball and the
+diff said so instead of a number.
+
+**Step 4, the suite inside the sterilized tree: 6,082 passed / 518 skipped / 0 failed** (8m43s),
+run with `PYTHONDONTWRITEBYTECODE=1` and `-p no:cacheprovider` so the eyeball was not reading
+bytecode. Step 3 before step 4, as the page orders it.
+
+**Step 5, the published history: 40 commits, `NEW: content=0 names=0 header=0 message=0`,** exit 0,
+with all 16 accepted `content` and 16 accepted `header` rows resolving out of the accepted-findings
+file. Nothing new to adjudicate, so the red-gate policy never had to fire.
+
+**Step 6, the cold-clone install smoke, both modes, from a third directory.** Loop mode: both hooks
+armed in the target, no stray `.git` beside the clone, the README's own commit line exit 0 leaving a
+clean tree. `self_check.sh` reported **9 passed / 1 failed** — the documented PyYAML case, whose own
+printed remedy took it to **10 passed / 0 failed**, which is the pass. `run_checks.sh` then ran 8
+executed / 11 skipped / 0 failed and reported one HIGH against Sysop's **own vendored**
+`sysop/scripts/` — the already-filed placeholder-globs case Phase 226 recorded, reproduced exactly
+rather than rediscovered. Full mode into a second fresh target: exit 0, both hooks, `tasks/`
+present, `--packs auto` detecting `python`.
+
+**Both halves pushed.** Tester `wade-cms/sysop-tester` force-pushed to a fresh root at `c62ed20`,
+**private confirmed before and after**. Public `getsysop/sysop` appended via PR — the message gate
+scanned the body to zero findings before `gh pr create` ran, the identity check was read rather than
+trusted to block (it cannot; the push is on the next line), the required check went green, and the
+squash-merge landed `1585153`.
+
+**Step 13.** Leg (a): the scan re-run against the **pushed** history — exit 0, `commits:41`, grown by
+exactly one, and the new commit's own row present and clean on all four arms. A scan whose
+enumeration never reached this commit would have reported clean about a history without it. Leg (b):
+cold clones of both published repos from a third directory — all three trees at `9cf2471`, the
+tester repo a fresh root at 1 commit, and the three currency greps each printing 1. The two over the
+**cold clones** are the ones that can only pass if GitHub actually serves this cut; the gate-dir line
+is satisfied by building, which is why it is the stale-directory check and not the push check. Both
+build dirs were stale from the Phase-277 cut on arrival — exactly the three-way-agreement-over-nothing
+hazard that leg records — and were rebuilt.
+
+**The announcement went out, and the round found it wrong twice over — publicly.** It was posted,
+covering the 2026-09-10 miss and this cut, and then a lens audited it against the diff.
+
+**Three of its six tester-facing bullets described work that is not in this window.** The failed-task
+record shipped at **Phase 157** in July (`git log -S '> Failed:'` returns one commit, outside the
+range; `close_batch.sh` has **zero** commits in the window); the rollback-path item is Phases 270–272
+and was **already announced on 2026-09-09** (`core/companion/scripts/`, zero commits in the window);
+and *"if you copied the shipped consumer CI template, re-copy it"* asked testers to do work for **no
+gain** — the sharding is this repo's own CI, and `core/companion/ci/` has zero commits in the window.
+Every one was written from memory of what the phases *did* rather than from the diff, which is the
+fabrication class this project keeps catching, committed in the one artefact that goes to other
+people. The same false bullet went into the public PR body.
+
+**And the count was wrong: this is the fourth missed announcement, not the third — and one of them
+is still missing.** Snapshot #40 (`private 87a53a0`, 2026-09-03 — Phase 257's own cut, covering the
+Phase-250 record tail plus 251–257) has no announcement either; the next comment, a day later,
+covers snapshot #41's content instead. Worse, **the catch-up scoped itself to "everything since the
+2026-09-09 note", so it stepped straight over that window** — a correction that reproduced the
+defect it was correcting, one window earlier. Phases 251–257 had never been announced and, until the
+correction below, still had not been.
+
+**Both were corrected in public rather than edited away.** A second comment on the standing thread
+names the three wrong bullets with the commands that falsify them, tells testers to ignore the
+re-copy instruction, derives what the snapshot *actually* touches from the diff, announces the
+251–257 window, and states the count as four. The public PR body was re-scanned and re-published
+with the false bullet removed and the correction stated in it. `Q-479` is the filing, and it now has
+two worked examples in front of it — one of which is the phase's own attempt to close it.
+
+**Lens B audited the published bytes rather than the record, and the tree came back exactly right.**
+Exclusions all absent (derived from the `rm` block, not retyped); Passes 1a/1b/1c empty on **both**
+published trees; Pass 5 re-derived independently on the published tree — 17 raw candidates, all 17
+genuinely qualified, each read with its neighbours rather than taken on the gate's word; Pass 5b
+zero unqualified citations on the operational surface; public and tester trees the **same** hash at
+395 files each; the published suite 6,087 passed / 513 skipped / 0 failed; cold-clone install green
+in both modes with no stray `.git`; and of the 41 published commits, the 16 carrying the historical
+`Q-294` leak do **not** include the tip.
+
+**It found one thing the phase had fixed in the file that does not ship and left in the file that
+does.** `PHASE_LOG.md`'s header — the sentence that buys this file's Pass-5b exemption — said the
+public repo's numbering *"at the time of writing, reaches only 30"*. The real ceiling is **46**, and
+that clause sat **beside** its own *"No count is quoted here on purpose"* for months. It ships. The
+direction is the bad one, and it is the same one the runbook names: understating the ceiling tells a
+public reader that a citation which **resolves** will 404 — corroboration, not absence. Fixed to the
+structural facts that do not drift (the `1`–`3` hole; that it rises every cut), and guarded, because
+the paragraph had been asserting the rule about itself while breaking it.
+
+**Two latent findings recorded rather than fixed.** The identity check in the generated publish block
+asserts an identity on a commit GitHub **discards** — under `pr` routing the squash commit is what
+appends, authored `wade-cms` and committed by GitHub, so the gate passes on an object that never
+ships. No leak (the email is the ratified one, and `wade-cms` already appears 45× in the shipped
+tree), and all 41 public commits have that shape. Related: `Q-392`'s premise — *"the PR body becomes
+the public commit message"* — **did not hold this cut**. PR #46's body is fifteen lines; the
+published commit's body is empty, because the repo squashes with `COMMIT_MESSAGES`. The gate ran and
+passed anyway, so nothing bad shipped, but the channel that actually carries text to the public is
+the **branch commit messages**, which the scanner is not pointed at. Both are filed rather than
+bundled: they are mechanism questions, and this phase had already rewritten one exit row's worth of
+publish-block prose.
+
+## Phase 284 (executed 2026-09-11 — the operand that destroyed the record it was meant to protect)
+
+**Brief:** `tools/NEXT_SESSION_PROMPT.md`, rewritten at Phase 283's close. § High was empty, so the
+brief carried four unranked candidates and said the ranking was Wade's. Asked, and Wade took
+`Q-478`.
+
+**Board at the open, derived rather than inherited.** 0 open § High, **122** § Medium, **105** § Low,
+next-free **`Q-481`**. Tree clean, `main` == `origin/main` at `39100ae`. Every figure the brief
+printed reproduced.
+
+**§ G does not run, for the same reason it did not last phase.** `tools/FIX_IN_BRANCH_BASELINE.md`
+opens its window ~2026-09-23; today is 2026-09-11. The brief's second conditional — *"if the tripwire
+has moved above 0"* — is not an independent gate: the baseline states the tripwire is zero *by
+construction*, so there is no standing counter to read, and it can only acquire a value when the
+re-measurement runs. Recorded because Phase 283 had to write the same paragraph, which suggests the
+brief's phrasing invites the reading every time.
+
+### The filing's two candidate fixes were halves, not alternatives
+
+`Q-478` offered *"two candidate fixes, both cheap and neither obviously right"* — refuse up front when
+`src_dir.resolve() == live.resolve()`, or make exit 5's rollback conditional on at least one doc
+having been copied. Read as alternatives, which is how the entry frames them. They are not: they fix
+**different defects that happen to meet on one path**.
+
+- The **first** closes a wrong operand. Its damage is unrecoverable.
+- The **second** closes a wrong *disposition* that is reachable without the operand at all, and whose
+  damage is recoverable.
+
+Taking either alone leaves the other live. That is the phase's main correction of its own brief, and
+it was visible only after both were reproduced rather than reasoned about.
+
+**The reported path, reproduced first.** Extracting the shipped heredocs verbatim (the same
+`HEREDOC_RE` `tests/test_pending_doc_integrity.py` already uses, so the fixture's input is the source
+of truth rather than a retyping) and passing a real git checkout as `<worktree-path>`: a doc claiming
+the processed branch clears stage 1 — main's "copy" **is** the same file, so `branch_of(dst) ==
+branch` and no collision fires — then `shutil.copy2` raises `SameFileError`, an `OSError`, and the
+step exits **5**. Exit 5's row read *"SKIP this branch and **do** run the rollback"*. Running it, as
+prescribed: `ROLLED BACK: FEAT-0001.md`, and main's pending-docs directory empty. The only copy of the
+record, destroyed by the step's own documented recovery.
+
+**The second defect, and the obvious fixture does not reproduce it.** Exit 5's state claim —
+*"**partially written** — some docs collected, the rest not"* — is false whenever the **first** copy
+is the one that fails, and the rollback deletes by *provenance* rather than by what this run copied,
+so it then removes whatever main already held for this branch. The first attempt to reproduce this
+used one doc and a `chmod 0o500` destination and came back **exit 0, copied fine** — because
+directory write permission is needed only to *create* or *unlink*, and the destination file already
+existed. The shape that does reproduce it needs main to hold the **first** doc (so its copy succeeds
+by overwrite) and not the second: a worktree holding `a.md` + `b.md`, main holding only a prior run's
+`b.md`. That produces `COLLECT FAILED: a.md`, zero collected, and a rollback that deletes main's
+`b.md` — a record this run never wrote. Recoverable (the worktree copy survives), unlike the operand
+case, and the record says which is which rather than letting the reader assume they are equally bad.
+
+**A third site, which no filing named: the rollback carries the same blind spot.** Its abort guard is
+`'<worktree' in str(wt) or '<branch' in branch or not branch.strip()` — no same-directory test, and no
+`is_dir()` either. The collect merely *fails* on this operand; the rollback walks the worktree's docs
+and unlinks main's copy of each, so when the two directories are the same it unlinks the **originals**.
+It is the half that deletes, and the page prescribes it from two places. **Stated without the
+overclaim the first draft of this comment made:** with the collect's refusal in place the *chained*
+route is already closed — step (b) is reached only after the collect exits 0, and on this operand it
+now exits 4 — so what the rollback's own guard covers is a direct hand-invocation, which is defence in
+depth, not a second live route. The first version of that comment said "guarding only the collect
+would fix the reported route while leaving the deleting half open", which reads as a live path and is
+not one.
+
+### What shipped
+
+1. **The collect refuses the operand at exit 4**, which is that row's stated class — an assertion
+   about the invocation, main untouched. The comparison is `src_dir.resolve() == live.resolve()`:
+   the two *directories*, not `wt` against the repo root, because the directories being the same **is**
+   the hazard and the proxy misses an operator standing in a worktree. `resolve()` for the reason
+   step 0 already gives about `workspace:` — written unresolved, so it can contain `/../`, and on
+   macOS the repo root reaches through `/private`.
+2. **The rollback refuses it too**, at its own exit 4.
+3. **The first-copy-fails case is split out as exit 7**, with a row saying the opposite of 5's.
+4. **The exit table** gains the arm and the row, and its *"There are four"* becomes five.
+
+**The exit-7 split replaced this phase's own first cut, and the reason is worth the four lines.**
+The first fix printed `PENDING-DOC ROLLBACK: REQUIRED | NOT REQUIRED` and pointed exit 5's row at
+that line. That is a disposition whose default, when the line goes unread, is the **destructive**
+branch — and every other remedy on this page is reached by looking up the exit code, which the
+operator must do anyway. So the conditional moved into the code and the line stayed as corroboration.
+Measured rather than asserted: with the exit-4 guard removed, the main-checkout operand now lands on
+**7**, not 5 — so the two fixes are genuinely belt and braces, 7 fixing the disposition and 4 refusing
+the operand.
+
+### Also fixed, in branch
+
+- **A shipped test pinned the wrong exit for its own fixture.**
+  `test_an_uncopyable_doc_halts_rather_than_half_collecting` holds **one** doc, so its failure is on
+  the first copy and **nothing is collected** — while its name said *"rather than half collecting"*
+  and its assertion pinned the exit whose remedy is *run the rollback*. Re-pointed to 7 under a name
+  that describes its fixture, and the partial case it was supposed to cover got the test it never had.
+  Net coverage up, not sideways.
+- **`shape=main-checkout` tripped the Phase-254 default-branch guard**, whose tier-1 `[=!]=?\s*main\b`
+  arm reads `=main` as a ref. Two sites, both in text this phase wrote. **Reworded rather than
+  narrowed:** tolerating a following hyphen would be narrowing a gate, which CLAUDE.md puts outside
+  tier 1 at any size — and this file already has an idiom for the sentence, four lines from step 0.
+
+### The author-side pass
+
+**Rule 3 first, because it is what produced everything above.** Both heredocs were extracted from the
+shipped skill and executed against real fixtures before any edit, and both defects are measurements
+rather than readings. The `chmod 0o500` miss is the rule's own *"a fixture you populate from memory
+proves only that you are self-consistent"* landing on the author: the fixture was built from my model
+of how a copy fails, and the model was wrong about which permission does what.
+
+**Rule 2 caught three claims in prose I had just written.** *"Every doc clears stage 1"* was too
+strong — a doc claiming another branch still exits 3, so the damage needs a doc for the branch being
+processed. A parenthetical explaining the `chmod` miss described *"the earlier draft of this test"* —
+session narrative in a file that ships, kept as mechanism and stripped of the self-reference. And the
+rollback comment's overclaim above.
+
+**Rule 4's trigger does not fire, stated rather than skipped.** It governs a change that moves a
+delimiter, predicate or state machine over *text some other writer produces*. This change's predicate
+is over filesystem paths and its state machine is over copy results; no other writer's text is being
+reinterpreted. Recorded because a rule silently skipped and a rule that does not apply look identical
+in a record.
+
+**Rule 1 — the battery** (`tools/phase284_mutations.py`): **15 mutations, 15 killed, 0 survived; 5
+controls green, 0 false alarms; 0 no-ops; 2 declared oracle mutations run and named.** The mutation
+set is deliberately not reverts-plus-gut-the-helper, which is the shape Phase 283's round named: it
+attacks the predicate's *form* (unresolved comparison, `wt`-against-CWD proxy), its *acceptance*
+(computed and not acted on, refusal downgraded to a warning), its *population* (the rollback half),
+its *ordering* (the refusal relocated to after stage 2's copy), the exit-7 split's arithmetic
+(`collected` appended before the copy; the branch forced either way), and the **table**, since the
+table is what an operator actually reads. Controls cover the over-strictness direction.
+
+**Two anchors went stale and the battery's own no-op detector caught them**, returning exit 2 with
+*"the numbers above are not a measurement"*. The run it refused to report cleanly was **`14/15
+killed`** — one of the two stale cases was a mutation and one a control, so without the detector the
+14 scored mutations would all have been kills and the line would have read `14/14`. **An earlier draft
+of this paragraph wrote that number as `13/13`, which is a figure this phase never measured** — a
+fabricated statistic in the record of a phase whose subject is a claim nobody checked. Caught by the
+round's record lens flagging it as unverifiable, then re-derived from the run. The detector itself is
+Phase 283's lens-1 finding, **hand-copied** from that phase's battery rather than shipped: `grep -l`
+finds it in `tools/phase283_mutations.py` and `tools/phase284_mutations.py` and nowhere else, so
+nothing carries it to Phase 285 — the same per-phase-script limit `tools/AUTHOR_DEFECT_REGISTER.md`
+records for the baseline gate. This is its first catch.
+
+**The number is reported with what it is worth.** An author battery's zero measures self-consistency.
+In this project's log, 85 author batteries have reported every mutation killed and 82 were falsified
+by an independent lens — a rate that makes "15/15" a statement about wiring until a lens says
+otherwise. The round is the measurement.
+
+**Suite at the first commit (`313fb5f`): 6,890 → 6,895 collected (+5).** The first draft of
+this line also said *"6,700 passed / 195 skipped / **0 failed**, both figures derived from a
+detached worktree at `HEAD`"*, and the round's record lens falsified it in one command: that
+commit is **2 failed**. The number was real but measured at an earlier working state, before the
+record commit added the `CLAUDE.md` row and this entry — and the sentence claimed the opposite.
+The two failures are the close-out guards (`test_every_phase_from_174_has_a_ledger_row`,
+`test_the_next_session_prompt_briefs_the_next_phase`), red by design mid-phase and green at close;
+the honest version says so rather than reporting a green that was not taken at the commit.
+
+### The round — three lenses, and it disqualified half of what the phase had just built
+
+Three by the governor's condition read honestly: the change ships behaviour (two heredoc
+refusals, a new exit code, six tests) **and** a record making numeric claims. All three on the
+author's model; the diff-model arm was not available, recorded as a departure. Each pinned to
+`313fb5f` in its own clone — **all three reported the harness had placed them on `main` instead,
+and each re-detached onto the pin and said so before reading anything**, which is the one reason
+their numbers are comparable at all.
+
+**The author battery's 15/15 did not survive contact.** The independent guard lens wrote **52
+mutations and watched 10 walk through (42/52, 80.8%)**, with a measured overlap against my set of
+**25%**. This is the 83rd time in this project's log that an author battery reported every
+mutation killed and a lens then falsified it; the rate is why the number is reported as a
+statement about wiring.
+
+**The sharpest guard finding was that my headline test passes with a BROKEN predicate.** Swapping
+`resolve()` for `absolute()` in both heredocs left the suite green while reopening `Q-478` in
+full — collect 7, rollback 0, record destroyed. The mechanism is exact: `live` is **relative**, so
+`live.absolute()` is built from `os.getcwd()`, which the OS has already realpath'd, while
+`src_dir` keeps argv's spelling. pytest's `tmp_path` is itself pre-resolved, so **the plain
+fixture is the one shape on which the two cannot diverge**. Verified under a pre-resolved base:
+`resolve()`, `absolute()` and a parent-only comparison all exit 4 — the test could not tell them
+apart. A symlinked operand restores the divergence portably, and a workspace whose `pending-docs`
+symlinks into main's kills the parent-only variant too. Both are now fixtures.
+
+**One reported survivor was misclassified, in the direction that flatters nobody.** The lens
+declared `samefile()` an *equivalent* mutant and excluded it from its denominator. It is not
+equivalent: `Path.samefile` raises `FileNotFoundError` on a path that does not exist, and an
+absent `src_dir` is the **ordinary** state — that substitution re-opens `Q-470`, reported four
+times in eight days. Scored rather than excluded, it is also **killed**, by the `Q-470` tests
+rather than by anything this phase added.
+
+**And then the execution lens found the defect that reshaped the phase (`Q-481`).** Exit 5 told
+the operator to run the rollback. The rollback deletes by **provenance** — every doc in main
+claiming this branch — not by what this run copied, and the two are different sets. Measured: a
+worktree holding `a.md`/`b.md`/`c.md`, main holding a PRIOR run's `a.md` and `c.md`, the write
+failing on `b.md` — the prescribed remedy removed `a.md` **and** `c.md`, while the *collect's* own
+`PENDING-DOC ROLLBACK: REQUIRED` line — all the operator had before running it — named only
+`a.md`. (The rollback's `ROLLED BACK:` line does name both; the gap was between what the
+operator was told to expect and what the remedy did. An earlier draft of this sentence said
+only "the report", which reads as the rollback's output and is false of it — caught by round 2.) `c.md` was a record this run never touched. **That is `Q-478`'s own defect one exit
+over**, and this phase had just shipped a guard pinning the prescription.
+
+**Wade's call, because it replaced a mechanism rather than bounding one.** Two shapes were put up:
+pass the collected names to the rollback as a third operand, or make stage 2 undo itself. He took
+the undo, and it is the better half of the two — it *removes* a remedy instead of adding an
+operand, and it gives stage 2 the property stage 1 already states about itself at the top of the
+same heredoc: *"deciding first makes that class impossible rather than handled."*
+
+**What the redesign did, and what fell out of it.** Stage 2 preserves each doc's prior copy before
+overwriting, and on any failure restores what it displaced and removes what it created. **The undo
+restores; it never unlinks** — deleting would be the same bug a third time, because the dominant
+collision here is the same branch collected twice, where the copy deliberately overwrites main's
+stale twin. **Exit 5 is retired as the partial-collect exit** and now means only the double fault:
+the undo itself failing, which is the one way this step can still leave partial work, and it
+preserves the backups and names them. No collect exit prescribes the rollback any more; step (b)
+is its only remaining caller, and a guard pins that so the mechanism is scoped rather than
+orphaned. Two things came free: the **aliased-doc** case — a worktree doc symlinked or hardlinked
+into main's own pending-docs, which the directory-level refusal cannot see because `SameFileError`
+is about *file* identity — needed no arm of its own, and the "which docs" question stopped
+existing.
+
+**Three smaller execution findings, all reproduced and all fixed.** The rollback had no
+`wt.is_dir()` while the collect did, so a typo'd operand printed `ROLLED BACK: none` and exited
+**0** — a success-shaped report over a rollback that never happened, which is verbatim the failure
+the collect's own comment forbids. `live.mkdir` sat outside the try, so an unwritable parent with
+the directory absent exited **1** with a raw traceback — an undocumented code, on the very cause
+the failure row names, one line below a comment citing "exit 1 — a code this step's own table does
+not carry" as a reason to catch. And the exit-4 row said "two conditional arms" while the code had
+three, the omitted one being **this phase's own** addition.
+
+**Two of my own claims were wider than the code.** *"True however the operator got there"* is
+false: `live` is CWD-relative, so running from a subdirectory of main with the primary checkout as
+the operand does not fire the guard (exit 0, no data loss, off-contract CWD). And the no-op
+detector was described as *"shipped one phase earlier"* when it is a hand-copy between two
+per-phase scripts that carries nowhere.
+
+**A self-inflicted one, recorded because the record is the point.** Repairing the disposition guard
+I sliced the test module between two anchors that had six other tests between them — the six
+guard-strength tests the round had just earned — and deleted all of them. Caught one command later, by the
+module going from **100 passed + 1 skipped to 95 passed + 0** — 101 collected to 95, which is the
+six. They were never committed, so there
+was nothing to check out; they were re-authored and **inserted** rather than sliced. The rule this
+breaks is already in memory (*restore from memory, never `git checkout`*); the one it adds is that
+a two-anchor slice is a delete of everything between, and the anchors were four edits apart.
+
+**The final battery, re-pointed at the new mechanism: 26 mutations, 26 killed, 7 controls green, 0
+no-ops, 2 declared oracle mutations run and named.** Seven cases went stale when the redesign
+removed `collected` and the exit-5 prescription, and the no-op detector refused to score the run
+rather than reporting a clean number over dead anchors — its second catch, in the same phase. The
+re-pointed set then produced **two genuine survivors of its own**: a `staged.append` moved after
+the copy (so the doc whose copy fails is never undone — no reachable fixture separates the two
+orders, closed with a structural ordering assertion and labelled as one), and the rollback's
+`is_dir()` arm dropped (the placeholder test could not see it, because `'<worktree' in str(wt)`
+fires first). Both closed.
+
+**Suite: 6,890 → 6,905 collected (+15)**, with no failures other than the two close-out guards,
+which go green at close.
+
+**And the fabrication happened TWICE in this phase, which is the part worth keeping.** The first
+draft of the line above said **6,914**, a number nothing produced — written by adding up what the
+edits felt like they had added, the same way `13/13` was. It was caught the same way too: by
+running the command instead of trusting the sentence. Two identical failures inside the one phase
+whose subject is a claim nobody checked says the reflex is not "be careful with numbers" but
+"a number that was not read off a command is not a number", and this record is where that has to
+be visible rather than silently corrected.
+
+### Round 2 — licensed by the governor, because a mechanism was replaced rather than patched
+
+The governor names exactly one condition for a second round: *"the fixes themselves produced
+substantial new material no fresh reader has seen — a mechanism replaced, a guard module rewritten
+wholesale rather than patched."* Stage 2 was replaced. Two lenses (execute the replacement; its
+guards and its record), both on the author's model, both pinned to `ee32ff8`. **All five reviewers
+across both rounds reported the harness had placed them on `main` rather than the pin, and each
+re-detached and said so before reading** — without that, none of their numbers would have been
+about this phase.
+
+**The guard lens scored 10 of 38 surviving (26.3%) at 37% overlap** — against the re-pointed
+battery's 26/26. Second round, second falsification.
+
+**The execution lens found the defect that mattered, and it is `Q-478`'s shape a third time.** The
+undo decided *"this run created it"* from `bak is None`, which really means `dst.exists()` was
+False — and **`exists()` follows symlinks.** So a **dangling** symlink in main's pending-docs read
+as absent: no backup was taken, `copy2` wrote *through* the link and created a file wherever it
+pointed — outside `sysop/runtime/pending-docs/` entirely — and the undo then unlinked the original
+symlink and counted it among its own removals, while the step printed *"main is as it was"*.
+Reproduced exactly. Fixed with `os.path.lexists`, a `follow_symlinks=False` backup so a link is
+preserved as a link, and an explicit refusal to write through one.
+
+**And the same reproduction showed a second defect the lens did not name: the exit-5 message
+interpolated `undo_root` when it is `None`, printing *"Main's prior copies are preserved in
+None; restore them by hand"*** at an operator who has just lost work. The arm now says which case
+it is in.
+
+**My first repair of the symlink class was worse than the bug, and my own tests caught it.** I made
+the undo `unlink()` the destination unconditionally before restoring. Removing an entry needs
+**directory** write permission; overwriting a file in place does not — and `live` is read-only in
+exactly the fixtures where this arm fires. Three passing restores became `PermissionError`. The
+unlink is now taken only where it is actually required: a symlink on either side.
+
+**Two more from the execution lens, both fixed.** The shipped Step 8 report template still told the
+operator that on exit 5 *"the rollback was run"* and cited a `PENDING-DOC ROLLBACK: REQUIRED` line
+that nothing prints any more — the operator-facing report pointing at the deletion `Q-481` removed.
+And a comment 110 lines from its contradiction still said the rollback is *"prescribed from two
+places"*. Both are the same failure: the redesign moved the mechanism and the prose describing it
+did not move with it, in one commit.
+
+**One reported finding was refuted and one was corrected in my favour, so both are stated.** The
+lens read exit 5's row as claiming main is *"PARTIALLY WRITTEN"* and showed a single read-only doc
+producing exit 5 with main byte-identical — correct, and the row now says **MAY BE**, because the
+discriminator is *"the undo raised"*, not *"main changed"*. Its claim that exit 5 had **zero**
+coverage was true of the pinned commit and already closed before the report arrived: the arm's test
+was added between the two rounds.
+
+**The guard lens's own instrument had two errors, and one of them was in my battery.** It declared
+`samefile()` an *equivalent* mutant and excluded it — it is not equivalent (it raises on an absent
+path, re-opening `Q-470`) and it is killed. And it found **`M24` in my battery was a FALSE kill**:
+the mutation left a bare `except` after replacing `try:`, so the heredoc did not parse and every
+test failed. That scores as a kill while measuring the parser. Replaced with a clean removal of the
+handler. A battery that counts a `SyntaxError` as coverage is the same species of number as a
+fabricated one.
+
+**Guard repairs, each verified to kill what earned it.** The two structural tests I had added were
+both walked by *dead code* — a `staged.append` under `if False:` satisfied the AST ordering check,
+and an `exit` under `if False:` satisfied the refusal check — because both walked the whole subtree
+for a matching call. Both now count only unconditional statements in the handler's or loop body's
+own statement list. The phrase contract was defeated by *"invoke the rollback heredoc now"*, so it
+matches the object with a verb alternation rather than one verb. The `state of main` column had no
+reader at all, and the prose count of non-zero exits was a free-floating number beside a test that
+derives the set; both are pinned now.
+
+**The leak guard was racy by construction and red on the lens's first run.** It snapshotted the
+process-global system temp while `pyproject.toml` ships `-n auto`. `_run` now takes a `tmpdir` and
+the subprocess gets a test-local `TMPDIR`, so the assertion is exact instead of best-effort.
+
+**Filed, not fixed: `Q-482`.** On `Q-470`'s absent-`src_dir` exit-0 route, step (b)'s remove-refusal
+sends the operator to a rollback that iterates the *worktree's* docs — of which there are none — so
+it prints `ROLLED BACK: none`, exits 0, and leaves an unmerged branch's doc on main for Step 4c.
+That is BeanRider ISSUE-0050, the harm step (b) cites as its reason for existing, and the sentence
+that makes the rollback safe elsewhere is **vacuously** true over zero docs. Pre-existing, a design
+question about what the rollback's population should be, and this phase had already replaced one
+mechanism on its round's say-so.
+
+**Final battery: 34 mutations, 34 killed; 7 controls green; 0 no-ops; 2 declared oracle; 1 declared
+equivalent** (`M28`, whose `elif` arm runs only when nothing was at the destination, so `exists()`
+and `lexists()` cannot disagree about what the copy created — declared with the argument rather than
+scored either way). The no-op detector fired **twice more** after the redesign moved four anchors.
+
+**The ledger row moved four derived figures**, exactly as round 2 predicted it would: the register's
+population sentence and its load-bearing all-killed figure, that figure again in the class table,
+and the ledger's own reading note — 85/82 → **86/83**, 139/123 → 140/124. `tests/test_ledger_stats.py`
+caught all four. That is the fourth consecutive phase it has caught this, which is what a
+derived-figure guard is for — and this phase's record was written to be true *after* the row lands
+rather than before, because round 2 pointed out that the alternative is a sentence that falsifies
+itself at close.
+
+**Suite: 6,890 → 6,912 collected (+22), 0 failed.**
+
+**That number was written as 6,924 first, which makes three.** `13/13`, `6,914`, `6,924` — three
+fabricated figures in one phase, each caught the same way: by running the command instead of
+re-reading the sentence. The count is kept current here rather than corrected quietly, because a
+phase whose subject is a claim nobody checked has no business rounding its own failures down. The
+rule this leaves is narrower than "be careful with numbers" and is the only one that would have
+worked: **a figure not read off a command's output in the same edit is not a figure.** All three
+were produced by adding up what the diff felt like it had added.
+
+## Phase 285 (executed 2026-09-12 — the rollback that reported success over a doc it never moved)
+
+**Brief:** `tools/NEXT_SESSION_PROMPT.md`, rewritten at Phase 284's close. § High was empty, so the
+brief carried four unranked candidates and said the ranking was Wade's. Asked, and Wade took
+`Q-482`; he also ordered the mirror push *after* this phase rather than before it (the window was
+two commits and one consumer-facing file, so a cut now would have spent a full runbook walk and a
+required-check run to publish `core/skills/review-close/SKILL.md` alone — **13 to 18 minutes**, the
+five most recent successful `tests` runs on `main`, derived here rather than recalled; an earlier
+draft said "~14 minutes" with no derivation, which the round's record lens flagged as the one
+figure in this entry that had none), and took the GDP
+`ISSUE-0135` status flip as this phase's only off-repo rider, leaving BeanRider's 33-entry friction
+log sweep for a dedicated pass.
+
+**The rider, and what it found.** The premise moved while the phase ran. `ISSUE-0135` was recorded
+`Open` in the brief; by the time the edit was made another GDP session had committed `84b6949a` and
+**filed it upstream as `wade-cms/sysop#636`** — a re-file of a defect `Q-371` closed at Phase 251,
+which is precisely the "one entry where re-filing would have cost a phase" that Phase 279's record
+had flagged. The fix was verified in GDP's own install before the flip rather than taken from the
+Sysop record: `sysop/scripts/review_index.py --list` prints
+`review_index --list: read review_tasks.md (169 lines); 0 batches listed.` at rc=0 — the positive
+empty verdict the issue asked for, where the reported behaviour was zero bytes at rc=0. The status
+is now `Fixed in Sysop` with that evidence and a note that the upstream filing postdates the fix.
+**Left deliberately undone, and recorded because the round's record lens found no Sysop-side trace
+of any of it:** the GDP edit is **uncommitted** — another session committed to that repo twice
+during this phase and its `main` is gated — and **`wade-cms/sysop#636` is still open**, because
+Wade approved a status flip in GDP, not an issue closure in another repo.
+
+**Board at the open, derived rather than inherited.** 0 open § High, **122** § Medium, **105** § Low,
+next-free **`Q-483`**. Tree clean, `main` == `origin/main` at `760feec`. Public mirror head
+`1585153`, a snapshot of private `00754c7`, so the unpublished window is `00754c7..HEAD` — two
+commits, whose only change under `core/`, `install.sh` or `.github/` is
+`core/skills/review-close/SKILL.md`. The tester-announcement obligation is **met**: the tester snapshot
+`c62ed20` is `2026-09-11T18:16:28Z` and discussion #1 carries two comments after it,
+`18:35:27Z` and `18:52:33Z`. **An earlier draft named 18:35 as the newest, which it is not** —
+both lines were in the output I read, and I quoted the wrong one, three lines from the brief's
+own warning that the check is *"PER SNAPSHOT, not against the newest comment"*. The conclusion
+is unchanged; the figure was wrong.
+
+**§ G does not run, for the third phase running.** `tools/FIX_IN_BRANCH_BASELINE.md` opens its
+window ~2026-09-23; today is 2026-09-12. The brief's second conditional — *"if the tripwire has
+moved above 0"* — is not an independent gate: the baseline states the tripwire is zero *by
+construction*, so there is no standing counter to read and it can only acquire a value when the
+re-measurement runs. Phases 283 and 284 each had to write this paragraph out, and so did this one,
+which is now three consecutive phases spending the same four lines disproving the same reading. That
+is a defect in the brief's phrasing rather than in any phase. It goes to § *Notes* rather than to a
+`Q-NNN`: `tools/NEXT_SESSION_PROMPT.md` is maintainer-side and ships to no mirror, so it is not a
+defect in shipped behaviour, and rewording a conditional is not a design question — which is exactly
+the test CLAUDE.md's filing bar applies, and the first draft of this paragraph failed it by
+announcing a `Q-483` the bar does not license.
+
+### Reproduced first, and the filing was wrong in both directions
+
+The route: `Q-470` made an absent worktree `sysop/runtime/pending-docs/` a legitimate exit-0 state
+with two readings, one of them *"this branch's doc is already on main"*. Take it, reach step (b),
+have `git worktree remove` refuse, and the page prescribes the rollback. Extracting both heredocs
+with the same `HEREDOC_RE` `tests/test_pending_doc_integrity.py` already uses — so the fixture's
+input is the shipped source rather than a retyping — against a checkout with no pending-docs and a
+main holding `feat-x.md`:
+
+```
+PENDING-DOC COLLECT SKIPPED: no …/wt/sysop/runtime/pending-docs — this branch's doc is
+already on main (feat-x.md); nothing to collect      exit 0
+ROLLED BACK: none
+LEFT ALONE (not this branch's): none                  exit 0
+main's pending-docs after the prescribed remedy:      ['feat-x.md']
+```
+
+The collect **names the doc**, and the remedy then reports success over leaving it exactly where it
+was. That much the filing had right.
+
+**Its headline is wrong, and the correction moves against the entry rather than for it.** `Q-482`
+claims the doc is left *"on main for Step 4c to consolidate — flipping its task to `done` with the
+code unmerged"*, i.e. BeanRider ISSUE-0050. Measured on a real repo: Step 4c item 1b resolves the
+branch (`git rev-parse --verify` succeeds), scores `git rev-list --count "feat/x" "^HEAD"` at **1**
+and its `git cherry` fallback at **1**, and 1b's disposition for a branch failing both is *"leave
+the file in place and skip it entirely"*. So the doc is **held, not consolidated**. The entry's own
+*What blocks* clause concedes this — it names 1b as the thing that catches the class — while its
+first sentence asserts the opposite; both readings were in the filing and only one is true. What is
+left is a success-shaped report plus a defence that is now single-layer, which is worth a phase and
+is not the harm the headline claimed.
+
+**And the filing's first candidate fix is refuted by measurement, not by argument.** `Q-482` offers
+two shapes and calls the population question a design question: take main's copies as the
+population, or have step (b) refuse to run the rollback on a route where it cannot act. The first is
+the obvious one and it destroys the record:
+
+| route | copies before | after a naive unlink | |
+|---|---|---|---|
+| ordinary (worktree holds its own copy) | 2 | 1 | recoverable — re-collected on a later run |
+| `Q-470` route (absent `src_dir`) | 1 | **0** | **the only copy, gone** |
+
+That is `Q-478`'s class a fourth time — a documented recovery destroying the record it exists to
+protect — and the unlink's own shipped comment states the property that makes it safe,
+*re-collected on a later run*, which is **false** wherever the worktree holds no copy.
+
+**Wade's call, because it replaced a mechanism rather than bounding one** — the same precedent
+Phase 284 set when its round put two shapes up. Three were offered: restore rather than delete,
+refuse loudly, or quarantine. He took the restore. Quarantine was put up with its own objection
+attached rather than presented as neutral: Phase 210 built a `superseded/` parking directory and its
+round withdrew it because nothing in the tree globbed it — *"preserving bytes where no reader looks
+is not preservation"* — and the same objection applies to a quarantine subdirectory unless
+something is given a reason to read it.
+
+### What shipped
+
+1. **The population is the UNION** of the worktree's names and main's own docs claiming this branch.
+   The worktree's docs were only ever a *name* source: every unlink was already gated on main's copy
+   claiming the branch, so `src_dir` decided which names to look at and nothing else. The union
+   rather than a replacement, because dropping the worktree half would silently retire the
+   `LEFT ALONE` diagnostic — Phase 210's foreign-branch finding, and the only line that says a doc
+   was deliberately spared rather than never looked at.
+2. **The unlink became conditional on another copy surviving, and that condition is the unlink's
+   own stated property** (`# re-collected on a later run`) rather than a new rule. It is false
+   wherever the worktree holds no readable copy. `is_file()`, not `lexists`: the two sides of the
+   loop want opposite symlink rules, because main's side asks *is an entry there* and the
+   worktree's asks *does the record survive*.
+3. **Where main holds the only copy, nothing happens to it and the step says so** —
+   `MAIN'S ONLY COPY, LEFT IN PLACE:`, at exit **8**, with an explicit *do not delete it by hand*.
+   **This is not what the phase first built.** It first *moved* main's copy into the worktree, and
+   its own round disqualified that; § *The round* below is the argument and the measurement.
+4. **The rollback gets an exit table of its own**, with a deliberately different header from the
+   collect's (`state of the record`, not `state of main`) so neither table's derived guard can latch
+   onto the other's.
+5. **`branch_of` reads only regular files and catches `RecursionError`**, in all three readers in
+   this step. The union widened which docs get parsed, and the round found the widening's new
+   population — *bystander* docs — able to hang or crash the step. See § *The round*.
+
+**The parking question was asked and answered twice, in opposite directions.** Phase 210 built a
+`superseded/` directory and withdrew it because nothing in the tree globbed it — *"preserving bytes
+where no reader looks is not preservation"*. This phase proposed the worktree's own
+`sysop/runtime/pending-docs/` on exactly the reasoning that it *does* have a reader: it is where
+`/document-work` writes and where this step's collect reads. That reasoning is correct and it is
+still not enough, because **a destination with a reader is not a destination if it is scheduled for
+deletion** — which is the round's finding and the sentence now in the shipped file.
+
+### Folded in by Wade's call, and recorded as declared scope rather than as tier 1
+
+Both were put up with their measurements and Wade widened the brief to include them, so the
+round reviews them as intended scope — which is what the stanza asks for. **The reasoning an
+earlier draft gave for that was a non-sequitur, and the round's record lens was right to call
+it one.** It read *"`core/skills/**` is never tier 1 at any size, **so** neither entered under
+the fix-in-branch stanza"*. "Never tier 1" does not exempt anything from the stanza; it
+**routes** the item to tier 2 or tier 3, and "Wade's call" is a tier-3 *filing trigger*, not a
+tier-1 licence. As written it would have licensed any `core/skills/**` change to bypass the
+stanza entirely — the exact inversion of a rule whose purpose is that shipped skill bodies do
+not get fixed in passing, and a later phase would have cited it. What actually authorises them
+is the brief widening, not the tier.
+Both live in the population logic this phase was already rewriting, and both produce the same
+success-shaped report that is this phase's subject.
+
+- **`dst.exists()` → `os.path.lexists`.** `exists()` follows symlinks, so a **dangling** symlink in
+  main's pending-docs read as absent, the loop skipped it, and the step printed `ROLLED BACK: none`
+  at exit 0 with the entry still sitting there. Measured. **Phase 284 found the identical
+  substitution in stage 2's undo one heredoc away**, and the same one was live in the half that
+  deletes. It carries no branch claim, so this step still must not remove it — what changed is that
+  it is now named on `LEFT ALONE` instead of vanishing.
+- **The unlink had no exception handling.** Against a read-only `sysop/runtime/pending-docs/` it
+  produced a raw `PermissionError` traceback at **exit 1** with **nothing on stdout** — a code this
+  page does not carry, on the half that deletes. Verbatim the class Phase 284 fixed for
+  `live.mkdir`. Now collected per file and reported at the new **exit 8**, a partial pass rather
+  than a refusal.
+
+### A shipped guard's premise, not the guard, is what this phase falsified
+
+`test_the_rollback_refuses_a_placeholder_operand_and_takes_no_other_exit` asserted
+`exits == {4}`, and its docstring gave the reasoning: *"The rollback has no table of its own and
+needs none: it either refuses or it rolls back."* Exit 8 is neither — it ran, and could not finish.
+The suite caught it on the first run after the edit, which is the guard working. The literal set
+assertion is replaced by a derived one against the rollback's own table, mirroring
+`test_every_exit_the_collect_can_take_has_a_row_in_the_exit_table`; the execution half (the
+placeholder arm actually fires) keeps its own test under a name that describes its fixture.
+
+**The table's first cut had a row for exit 0 and the new guard failed it** — the collect's twin
+derives `exits` with `- {0}` and asserts `rows == exits`, so a row for the ordinary outcome is as
+wrong as a missing one. Exit 0's three report lines moved into the prose above the table, where
+they describe a pass rather than a remedy.
+
+### Prose this change falsified, fixed in the same commit
+
+Phase 284's round named this exact failure — *"the redesign moved the mechanism and the prose
+describing it did not move with it, in one commit"* — so it was looked for rather than stumbled on.
+The `Provenance, not basename` blockquote read **"There is no restore half, because there is nothing
+to restore"**. That sentence was *scoped* to the differing-branch collision, where it remains true —
+step (a) refuses one outright rather than displacing anything — but it is stated as a universal, and
+this phase added a restore half for a different case. Reworded to the scoped claim, which is the
+only one that was ever measured, with the superseded universal quoted so the change is visible
+rather than silent.
+
+### Numbers
+
+Every figure below was read off a command's output in the same edit that wrote it — Phase 284 shipped
+three fabricated counts and left that rule.
+
+- **Suite: 6,912 → 6,929 collected (+17)**, the baseline taken from a detached worktree at
+  `HEAD` rather than from Phase 284's record. Full run at the closing commit, after the round's
+  fixes and after the five derived figures the ledger row moved: **6,733 passed / 196 skipped /
+  0 failed** (608.33s). Stated for the commit rather than for a working tree, which is the half
+  of the number rule this phase had to be taught twice. The one failure is `test_every_phase_from_174_has_a_ledger_row`, red by
+  design until this phase's round appends its `tools/ROUND_YIELD_LEDGER.md` row, and green at
+  close.
+
+  **An earlier draft of this line said `+6` and `0 failed`, and then "corrected" itself with an
+  account that was also false — which the round's record lens caught.** `+6` was true of the
+  first commit. **`0 failed` never was:** `58ab203` added the `| 285 — … |` row to `CLAUDE.md`
+  and no ledger row, so `test_every_phase_from_174_has_a_ledger_row` was red *in that commit*
+  — re-run at that tree here, **1 failed, 29 passed**. The figure came from a working state
+  taken before the record commit. Worse than the original slip: the revision blamed the change
+  on *"the author-side pass, which added four tests"*, which explains `6,918 → 6,922` and says
+  nothing about the failure, so a false figure was laundered into an arithmetic side-effect.
+  **This is verbatim the defect Phase 284's round caught one phase earlier** — *"the honest
+  version says so rather than reporting a green that was not taken at the commit"* — read at
+  the open of this phase and reproduced anyway. The number rule this log already carries is
+  necessary and was not sufficient; what it lacks is that **a number re-measured after an edit
+  must be re-measured at the commit, not at the working tree**.
+- The `tests/test_pending_doc_integrity.py` module alone: **126 passed, 1 skipped**.
+
+### The author-side pass, and it found a defect I had just shipped
+
+**Rule 3 is what produced the whole phase** — both heredocs were extracted with the shipped
+`HEREDOC_RE` and executed against real fixtures *before* any edit, so every claim above is a
+measurement rather than a reading, and the filing's two errors surfaced on the first run.
+
+**Rule 4's trigger fires, which is not obvious and is why it is written out.** The change widens a
+*predicate over text another writer produces*: before, `branch_of` parsed only docs whose name a
+worktree doc supplied; now it parses every `*.md` in main's pending-docs. So the hostile corpus was
+built and run — nine cases, **zero crashes**: `convention-candidates.md` claiming this branch, an
+unterminated frontmatter fence, frontmatter that is not a mapping, frontmatter that raises a
+`YAMLError`, a `branch:` that is a YAML int, a *directory* named `feat-x.md`, an empty-but-present
+`src_dir`, a dangling symlink in the worktree, and a worktree whose `sysop/runtime` is a file.
+
+**Case 8 failed, and it was `Q-478`'s class reintroduced by this phase's own fix.** With the
+worktree's entry a **dangling symlink**, the restore arm's `os.path.lexists(src_dir / name)` said a
+copy survives, main's real doc was unlinked, and the result was **zero copies** — the exact outcome
+the phase exists to prevent, produced by inverting its own rule one line later. The two sides of
+one loop want *opposite* symlink rules: main's side uses `lexists` so an entry that is there never
+reads as absent; the worktree's side is asking whether the **record** survives, so `is_file()`,
+which follows the link, is the right test. Fixed at the time, and the same finding's other half
+came with it — a *directory* at the destination. **The record lens later corrected how that half
+was described:** at `58ab203` a directory never reached `shutil.move` at all, because the arm was
+`if os.path.lexists(...)`, so it took the *unlink* branch and deleted main's only copy — zero
+copies at exit 0, not a nesting. "Refuses rather than relocating" described an intermediate state,
+not the tree that commit shipped. Both are moot now: the round removed the move entirely, and the
+three occupants (absent, dangling symlink, directory) collapse into one case with one disposition.
+
+**Rule 2 caught two claims in prose I had just written.** Exit 4's row named four arms and the code
+has five (the unsubstituted `<branch name>` and the empty branch name are half of one condition it
+folded away). And exit 8's row said *"could not be unlinked or moved"* while the arm added minutes
+earlier is a **refusal**, not a failed write — a row describing two of its three causes.
+
+**Rule 1 — the battery** (`tools/phase285_mutations.py`): **14 mutations, 14 killed, 0 survived; 3
+controls green, 0 false alarms.** It reached that only on the second run. The first reported
+**11/14**, and all three survivors were findings:
+
+- **`M01` was a bad mutation of mine, and it produced a false SURVIVOR.** Written as
+  `names = _md_names(src_dir) | set() or {…}`, it measures **operator precedence**: `|` binds
+  tighter than `or`, so `(A | set()) or B` still evaluates `B` whenever `A` is empty — and `A` is
+  empty on exactly the route under test. The population never changed. This is the same species as
+  Phase 284's `M24` false *kill*, which scored a `SyntaxError` as coverage; the opposite direction,
+  equally useless, and it would have reported the phase's own subject as uncovered.
+- **`M03` was a real coverage gap.** Deleting `NOT_A_BRANCH_DOC` from the population left the suite
+  green, because the shipped `convention-candidates` test uses a doc claiming **no** branch — so it
+  lands in `LEFT ALONE` on its branch claim alone and the exclusion never has to fire. A test that
+  makes the excluded doc claim *this* branch now pins it as an exclusion.
+- **`M07` was a gap in a test this phase had written that same hour.** The restore-ordering test
+  failed inside `src_dir.mkdir`, which sits **above** `restored.append`, so hoisting the append
+  over the move survived it. Re-pointed at a read-only `live`, where the `mkdir` succeeds and
+  `shutil.move`'s own rename is what fails — the only reachable fixture that separates the two
+  orders.
+
+**The number is reported with what it is worth.** An author battery's zero measures
+self-consistency. In this project's log, 86 author batteries have reported every mutation killed and
+83 were falsified by an independent lens. The round is the measurement.
+
+
+### The round — three lenses, and it disqualified the mechanism the phase was built around
+
+Three by the governor's condition read as Phase 284 read it: the change ships behaviour **and** a
+record making numeric claims. Execution, guard strength, and the record. Each pinned to `102bc22`
+in its own worktree — and **all three reported the harness had placed them on `760feec` instead,
+re-detaching onto the pin and saying so before reading anything.** That is 3 of 3, after Phase
+284's 5 of 5; it is no longer a harness quirk worth noting in passing, and it is the only reason
+their numbers are about this phase at all.
+
+**One round, not two.** The governor licenses a second when the fixes produce substantial new
+material no fresh reader has seen. A mechanism *was* replaced here — but the replacement was the
+round's own finding acted on, not new material the round had not seen, and the final battery
+re-points onto guards the round itself specified. Recorded as a decision rather than left implied.
+
+**The execution lens disqualified the restore arm, and the argument is one command.**
+`git worktree remove`, unforced, on a **clean** worktree, deletes that worktree's gitignored
+`sysop/runtime/` content **silently and exits 0** — which `WORKFLOW.md` § 8.4 already states in
+those words, and which I re-ran rather than cited. The phase had just moved main's only copy of a
+record into exactly that directory, at the one step whose entire purpose is running that command.
+Measured before and after:
+
+```
+PRE-PHASE  (760feec): ROLLED BACK: none                 record on MAIN: True   in worktree: False
+POST-PHASE (102bc22): RESTORED TO THE WORKTREE: a.md    record on MAIN: False  in worktree: True
+```
+
+So `Q-482` was a **reporting** defect over a record that survived, and the fix converted it into a
+**durability** defect. Severity confirmed rather than asserted: `claim_task.sh` runs
+`git worktree remove` at two sites and contains **zero** occurrences of `pending-doc`, so
+`--release` on the branch just SKIP'd destroys the restored record with no warning.
+
+**Wade's call, again, and it reverses his own earlier one on evidence that did not exist then.**
+Three shapes were put up at the start of the phase and he took *restore*; neither of us knew the
+destination is silently deleted. Told that, he took **drop the move; report and refuse**: where the
+worktree holds no surviving copy, main's doc is not touched, and the step exits 8 naming it under
+`MAIN'S ONLY COPY, LEFT IN PLACE:` with an explicit *do not delete it by hand*. The phase's shipped
+answer is therefore the option its own author had ranked second at the open.
+
+**The guard lens's sharpest finding was outside its mutation frame, and it survived the reversal.**
+`is_file()` follows symlinks, so a worktree entry that is a **symlink pointing at main's own copy**
+answered *"a copy survives"*; the step unlinked the file the link points to and the link dangled —
+`ROLLED BACK: feat-x.md`, exit 0, **zero readable copies**. Reproduced against the post-reversal
+tree, where it was still live. This is the aliasing case the **collect** already refuses at exit 7
+(`SameFileError` is about file identity), so the half that copies guarded it and the half that
+**deletes** did not. Fixed with `os.path.realpath(_t) != os.path.realpath(dst)` rather than
+`samefile`, because the two alias shapes must not be treated alike: a **hardlink** is a genuine
+surviving copy — unlinking one link leaves the other readable, measured — and `samefile` would hold
+it too. Both shapes are now a parametrized test.
+
+**Its battery: 43 mutations, 8 survived (18.6%).** Two it declared equivalent *with the argument*
+and kept in its denominator rather than excluding silently — the failure Phase 284's round made in
+the other direction — leaving **6 real survivors (14.0%)**, plus **2 false reds**. It reproduced
+this phase's battery exactly (14/14) and called it *"the 84th"*, which is the right way to hold an
+author's zero. The overlap number is the one worth keeping: **12 of my 14 had a counterpart in its
+43 (86%), but 31 of its 43 (72%) fell outside my frame — and every one of its 8 survivors was in
+that 72%.** I tested ordering on the restore arm and not the unlink arm; the table's row number and
+header collision but not its regex spelling or its *location*; the failure report's existence but
+not its content on one of two arms; and nothing at all on aliasing.
+
+Its survivors, all closed: `removed.append` hoisted above the unlink reported a doc still on main
+as rolled back, and the assertion that should have caught it — `"ROLLED BACK:" in stdout` — is
+satisfied equally by `ROLLED BACK: none` and by the lie (now pinned to the full line); the exit
+table derived from `sys\.exit\((\d+)\)` alone, so a `raise SystemExit(9)` shipped with no row
+(now derived across all three spellings, in both tables); the table could be **moved 1,900 lines
+away** into an unrelated step and every guard stayed green (now pinned between the heredoc and the
+end of Step 3b); and the union's branch-claim gate had *text* coverage only — its literal kept
+alive in a dead lambda defeats the phrase guard while the behaviour changes (now a behavioural test
+that another branch's doc is never mentioned).
+
+**The execution lens also found the population the phase's own rule-4 corpus never covered.** The
+union widened `branch_of` from "docs the worktree named" to "every `*.md` in main's
+`sysop/runtime/pending-docs/`" — so a **bystander** doc, nothing to do with the branch being
+processed, now reaches that reader. A YAML nesting bomb raised `RecursionError` straight through
+`except yaml.YAMLError` (exit 1, empty stdout, on the half that deletes — verbatim the shape this
+same phase fixed for the unlink), and a FIFO blocked `read_text` **forever**. My nine cases were
+all about the *target* doc; the widening's new population is bystanders, and I built none. All
+three of this step's readers now take regular files only and catch `RecursionError`.
+
+**The record lens's H1 is the one that should not have been available to it.** This entry's own
+correction of its own suite number was itself false: `0 failed` was never true of `58ab203` — that
+commit added the `CLAUDE.md` row without a ledger row, so the close-out guard was red *in it*
+(re-run there: **1 failed, 29 passed**) — and the revision then blamed the change on *"the
+author-side pass, which added four tests"*, which explains the collected count and says nothing
+about the failure. **That is verbatim the defect Phase 284's round caught one phase earlier**, in a
+paragraph I read at the open of this phase. The number rule this log carries — *a figure not read
+off a command is not a figure* — was followed and was not sufficient. What it lacks, and what this
+phase adds: **a figure re-measured after an edit must be re-measured at the commit, not at the
+working tree.**
+
+It also found the next-session brief pointing at *"the second conditional below"* after this phase
+deleted that conditional, and the § Notes line filed to explain that paragraph describing, in the
+present tense, a file state its own commit had destroyed. Both fixed. Against those it re-derived
+roughly forty claims and found them exact — every board count, all six collected-test figures, the
+battery, the `86/83` ledger figures, the `Q-482` reproduction in both directions, and every
+cross-phase citation — and confirmed the tense discipline held: nothing in the record described the
+round in the past tense before it ran.
+
+**Two claims were refuted and are scoped rather than deleted.** *"Step 4c item 1b holds an unmerged
+branch's doc"* is false as a universal — a stacked branch whose commits are ancestors of the merge
+target scores `rev-list` **0** and gets consolidated — so the claim is now *a branch whose content
+is not in the merge target*, which is what was measured and what the safety argument needs. And
+*"re-collected on a later run"* fails two ways, the sharper being that step (b)'s own **ordinary**
+remedy — committing the untracked file that caused the refusal — advances the branch tip and makes
+the next collect exit **6 STALE**.
+
+**Final battery, re-pointed onto the round's own findings: 21 mutations, 21 killed, 3 controls
+green, 0 false alarms, 0 no-ops.** The no-op detector fired **twice** during the phase — once on an
+ambiguous anchor before any measurement, once when the aliasing fix moved two anchors — and refused
+to report a number over dead anchors both times. Its third and fourth catches, hand-copied from
+Phase 284 and carrying nowhere on its own.
+
+**One thing the lenses agreed on without being asked, and it is worth more than any single
+finding.** Three separate routes to *zero surviving copies* were found in one phase — the
+dangling-symlink spelling by my own author-side pass, the aliased-symlink spelling by the guard
+lens, and the whole restore arm by the execution lens — in a phase whose declared subject is
+exactly that class. Each was introduced or left open by the fix, not by the code the fix replaced.
+
+## Phase 287 (executed 2026-09-12 — the loop variable that empties $PATH; the cut deferred again)
+
+**Brief: `tools/NEXT_SESSION_PROMPT.md`, written at Phase 286's close.** Two items, in the order
+Wade set: `Q-486` first — the zsh `path=` leg split out of `Q-485` and ratified into § High — then
+the mirror push, which has now slipped twice (Wade's own deferral at 285, `Q-483` displacing it at
+286). The fix goes first so the mirror does not publish a known wrong-state defect to testers.
+
+**The cut did not run, and slips a third time — to Phase 288.** The session was ended by Wade
+before the adversarial round finished. `Q-486` is closed; the mirror push is not started. An
+earlier draft of this entry, of `REVIEW_ARCHIVE.md`'s heading and of `CLAUDE.md`'s row all named
+"the cut" as delivered and ticked the row, in a commit whose own subject says `(pre-cut)` and whose
+diff contains no mirror artifact. The round's record lens caught all three.
+
+**The brief said this decision postdates Phase 286's round and had not been through a lens**, and
+told this phase to verify it independently. That verification is the author-side work below; it
+survived, and was understated in two ways. **It is not a lens**, and an earlier draft of this
+sentence claimed it was — the round is a separate instrument and is recorded separately.
+
+### `Q-486` — the filed one site was four, across three skills
+
+**The class, stated as the detector states it:** an agent is handed a per-item command template
+over a path-shaped placeholder, with no loop variable bound for it. It then writes the loop and
+picks the name, and the obvious name for the thing it is iterating is `path`. In zsh — the default
+shell on macOS, and therefore the shell a great many of these bash blocks are executed by — `path`
+is tied to `$PATH`. A bare `path=…` empties the command search path and every later command in the
+block dies.
+
+**Two arms, and the second is the one that moved the number.**
+
+- **Arm A — prose prescribes the iteration and ships no loop.** `/review-close` `### 2d.`, the
+  filed site. Its `git show` lines are one-shot templates carrying `<…body path>`; the prose says
+  *for each approved feature branch, for each task ID it claims*. Measured: the step ships **zero**
+  loop skeletons.
+- **Arm B — the template sits inside a sub-agent prompt.** A reviewer reads across many files by
+  definition, so it loops whether or not the surrounding prose says "for each", and `<path>` there
+  reads as a suggested variable name. Three sites: `/review-close`'s Step 2b convention-gate
+  prompt, and the **verbatim identical sentence** in `/codebase-review` and `/security-audit`
+  (*"Read history with `git show <sha>:<path>`"*).
+
+`/review-close` Step 1a matched the detector and is **not** in the class: it ships its loop, binds
+`wt_path`/`entry`, and carries the remedy at `:205`. That exclusion had to be earned — see below.
+
+### The harm is a false `missing`, and it arrives as silence
+
+The filing said the clobber's failure string is identical to a genuine absence. Measured, it is
+worse than that — there is no string to compare:
+
+```
+zsh -c 'for pair in "main:README.md"; do path=${pair#*:}; out=$(git show "main:$path" 2>/dev/null); echo "stdout-len=${#out}"; done'
+→ stdout-len=0
+```
+
+Under the ordinary `2>/dev/null` capture idiom the clobber yields **empty stdout with the only
+evidence on a stderr that idiom discards.**
+
+**The first draft of this paragraph said that was "byte-for-byte what a body holding no heading
+yields", and the author-side pass's rule-4 corpus refuted it before any reviewer saw it.** A body
+that genuinely lacks the heading returns its *content* — 49 bytes against the clobber's 0 — so the
+two outputs are not identical. The collision is one level up, and survives the correction: Step 1
+asks whether the output holds a `test decision` heading, both answers are *no*, and both therefore
+classify `missing`. The exit status **would** separate them — 127 for the clobber, 0 for a real
+body, 128 for an absent path — and nothing in the step tells the reader to look at it, which is
+precisely why all four enumerated outcomes are keyed to stderr text the prescribed idiom throws
+away. Step 2d's `unreadable` list enumerates **four** outcomes, each keyed to a
+distinct `git` fatal, and closes *"None of the four is `missing`"*. The clobber produces none of
+the four. It therefore falls through to `missing` — the one classification that list exists to
+refuse — the halt fires, and an **approved branch is demoted on a shell bug**. Step 2b's arm is the
+same shape inside a gate: a reviewer that clobbers mid-scan silently reads nothing for the
+remainder and emits `VERDICT: CLEAN` over files it never opened.
+
+**So the naming rule alone would not have closed this**, and that is the phase's substantive
+addition beyond what Wade ratified. Three repairs, not one:
+
+1. A **fifth** `unreadable` outcome naming `command not found` and the empty-stdout signature, with
+   the summary sentence's count moved from four to five.
+2. The `missing` definition gained *"Empty output is not evidence of an absent heading"* — so the
+   counterfeit cannot be reached from output alone.
+3. Both Arm-B prompts now tell the sub-agent to say so and stop rather than report over a partial
+   scan.
+
+### The detector was wrong four times, and every one was in the passing direction
+
+Recorded because the pattern is the point, not the embarrassment. The guard's engine went:
+
+1. **Word-level `path` match** → 30 candidates, almost all ordinary prose (*"this path has five
+   refusal modes"*).
+2. **Loop keyword anchored at line start** → missed `… | while IFS= read -r _line`, so Step 1a's
+   binder at `:168` was invisible and the step read as unprotected.
+3. **Markdown headings without a fence model** → `# Use --porcelain …`, a *shell comment* inside a
+   fenced block, matched the heading pattern, truncating Step 1a's section three lines in.
+4. **`PATHISH` with a leading `[a-z]` character class** → the class consumed the `p`, so `<path>`
+   — the canonical case, and the whole subject — **never matched**. The guard was green over a tree
+   it could not see.
+
+Only (4) is silent; the other three are loud. The one that matters is that a guard keyed on `for
+each` also excused Arm B entirely, and Arm B is two-thirds of the class. **A sentinel is what
+caught the swing to over-lax**: `test_the_class_is_not_empty` fails when the detector matches
+nothing, on the principle that a guard which stops finding its own subject certifies clean over the
+breach.
+
+**Guarded by `tests/test_zsh_path_clobber_guard.py`.** Nothing pinned this rule before today, at
+any of its sites, which is precisely why its two existing copies never propagated to the four that
+needed them.
+
+### Six shipped guards broke, and my first repair of them was not enough
+
+Adding a fifth outcome reddened **six** existing tests. **Four** of the six used the literal string `**None of the four is \`missing\`:**` as a *section
+terminator*; the fifth broke on two separate pins, the first of them a different sentence
+(*"which of the **four** outcomes you got"*), and the sixth used the literal as a **substitution
+target** in a mutation list. An earlier draft of this paragraph said all six were terminators — a
+tidier story than the tree supports, corrected by the round's record lens. The count six is
+re-derived and correct. None of the six was telling me the change was wrong; each was telling me its
+anchor had moved. Re-anchored, and **extended rather than re-anchored alone**: the fifth outcome is
+now asserted by the same routing parametrisation and the same keeps-its-own-cause test that cover
+the first four, because an arm no guard covers is how the first four came to need those tests.
+
+Three defects of my own, found on the way:
+
+- The bullet's lead-in still read **"Four distinct outcomes land here"** while the summary two
+  screens below said five. I introduced that, and no assertion existed to catch it.
+- My insertion consumed the **blank line** the six guards anchor on, which is why re-anchoring
+  them did not fix them on the first attempt.
+- My first draft of the bullet was verbose enough (4,081 chars) to trip an existing
+  runaway-slice bound at 4,000. **The bound was left alone and the prose was tightened** — twice,
+  ending at **3,960**, which is 40 chars of headroom and is filed to `§ Notes`. (An earlier draft of
+  this line said 3,643: a stale intermediate from the first tightening, reported as the outcome.
+  The round's record lens caught it against the phase's own `§ Notes` figure.) Raising a guard's
+  limit to fit the thing being guarded is the failure that bound exists to catch.
+
+**Two batteries, 19 mutations, 19 killed, 0 surviving; 3 negative controls green — and the number
+that matters is that 5 of the 19 survived on first run and had to be closed.** The second battery
+is the one that earned its keep, and it earned it twice:
+
+- First run, 3 survivors against the re-anchored guards. The sharpest was `A4 — collapse the fifth
+  into \`missing\``, a **one-word edit that reverts the entire phase** while every count stays
+  correct and every other assertion stays green. `A5` (drop the empty-stdout mechanism) and `A6`
+  (revert the lead-in count to four, leaving the summary saying five) were the other two.
+- Second run, after the rule-4 correction below rewrote the bullet: 2 more. `A8` deletes the
+  *"not byte-identical … 49 bytes against 0"* clause and `A9` the exit-status discriminator —
+  **both of them the correction itself**, unguarded. That is the shape this project keeps
+  re-deleting and then re-discovering, so both now have assertions.
+
+**Both batteries ship** as `tools/phase287_mutations_battery1.sh` and
+`…_battery2.sh`, with the class sweep as `tools/phase287_class_sweep.py`, so the numbers above are
+re-runnable. The round's record lens found them missing — 70 predecessor phases preserve theirs and
+this one had left them in a scratch directory, which is an unverifiable number by this project's
+own rule. **Suite: 6958 tests collected in 4.38s.** The "5 of 19" is **3 survivors on battery 2's first run and 2 more on its
+re-run** after the rule-4 correction rewrote the bullet; stated as a flat "first run" it cannot be
+reconciled with the 3 reported a paragraph earlier.
+
+`A5` also had to be **re-pointed** after the rewrite: its target string no longer existed, so it
+had silently become a no-op and reported itself killed. A mutation that cannot find its target is
+not a passing mutation, and the author-side rule says to take the battery with the rewrite.
+
+### The round — three lenses, interrupted and re-run, and it found the fix wrong in four ways
+
+**The round was interrupted.** The record lens completed; the execution and guard-strength lenses
+were killed mid-flight when the session ended, and re-spawned afterwards against the branch tip.
+They therefore reviewed a *later* tree than the record lens did — which is why both of them open
+with a red suite the record lens never saw, and why the commit that introduced it is **the record
+lens's own fix**.
+
+**The red suite, and the number that falsified itself.** The record-lens commit replaced
+`` the rule at `:205` and `:2212` `` with a content reference — a good fix for a stale citation —
+that was **+40 characters into exactly 40 characters of documented headroom**. The same commit
+filed the `§ Notes` warning *"the next legitimate edit reddens it for a non-reason"* and then was
+that edit, 40 characters later. Nothing re-measured. Both lenses caught it independently.
+
+**Four things this phase shipped that were false, all in its own new prose:**
+
+1. ***"The fifth is the one that arrives wearing `missing`'s own signature."*** Measured false.
+   Outcome 4's quiet sub-case — the operand having lost its `<rev>:`, on a `HEAD` that does not
+   touch that path — returns exit **0**, zero bytes, and **no message at all**. That is quieter
+   than the clobber, which at least exits 127 with a message. **Three** of the five states produce
+   empty stdout, so silence identifies none of them.
+2. ***"what the prescribed reading does with it: `out=$(… 2>/dev/null)`."*** § 2d contains no
+   `2>/dev/null` anywhere except the one this phase added. The step prescribes a **bare**
+   `git show`, run bare the error reaches you, and the whole silence argument rested on an idiom
+   the phase supplied and then attributed to the step.
+3. ***"empties the command search path."*** zsh **replaces** `$PATH` with the loop value. It does
+   not empty it, and if the value names a real bin directory the command still resolves — so an
+   agent told "$PATH is emptied" who runs `echo $PATH` sees a non-empty string and concludes the
+   diagnosis does not apply.
+4. **The fix was not reachable.** Loop prescribed at `:659`, command block at `:671`, naming rule
+   at `:690` — 19 lines *after* the command and inside a failure-diagnosis bullet an agent reads
+   only when already triaging. It was the only one of the four sites placed after the point of
+   use; the other three sit immediately above the command. **The rule now lives as a comment
+   inside the block the agent copies from**, which is what `:205` and `:2225` already do.
+
+**A fifth site the sweep missed.** `_shared/adversarial-review.md:34` — *"have reviewers compare
+with `git show <sha>:<path>`"* — is the **source text all three Arm-B sites instantiate**, governs
+every round CLAUDE.md mandates, and carried no rule. The execution lens received that instruction,
+without the rule, in its own prompt. Fixed there, where the copies come from.
+
+**The guard was weak in the direction the author never aimed.** Battery 1's ten mutations all
+delete *remedy text*; not one attacks the *detector*. So the guard lens's detector attacks all
+survived: three cosmetic placeholder edits (`<path>`→`<PATH>`, `<path>`→`<path_to_file>`,
+`git show`→`git cat-file -p`) each deleted a site **and** its remedy while the run reported one
+fewer passing case at exit 0; full vacuity — hide all seven sites, append one decoy to an
+unrelated skill — left `test_the_class_is_not_empty` green over **zero** real coverage; and
+`REMEDY`, a substring test, could not tell the rule from a sentence revoking it. It was also
+**too strict** in the other direction: three of six controls false-red on legal markdown, because
+`REMEDY` matched per line and any wrap between `never` and `` `path` `` broke it.
+
+Closed with a per-file **site census** (`EXPECTED_SITES`), a `REVOCATION` pattern, a shell-only
+`BINDER`, split binder/remedy windows, and a joined-span `REMEDY`. **Battery 3 ships the lens's own
+attacks** so they are re-runnable rather than described.
+
+**The batteries were reporting kills they had not earned.** Battery 2's predicate is
+`if pytest; then SURVIVED else killed`, and the tree was already red — so the `else` branch fired
+unconditionally and **9 of the phase's 19 reported kills were void**. Demonstrated with a no-op
+mutation scoring a kill. All three batteries now refuse to run on a red tree. Honest final:
+**27 mutations, 27 killed, 0 surviving, 6 controls green.**
+
+**A finding the round reported and the author then repeated without checking.** The execution
+lens said its worktree had been placed on `3f8c8d8` rather than the branch tip — *"the 7th reviewer
+in a row misplaced"*. The number went straight into this phase's ledger row as reported. It is
+**wrong, and low**: the ledger's own rows give 185 (3/3, and that round was **discarded and
+re-dispatched in full**), 241 (1), 284 (5/5), 285 (3/3), 286 (3/3), and this phase at **2 or more**
+of 5 — the record lens's worktree was sitting at `3f8c8d8` against a `37189ae` tip, observed
+directly in `git worktree list` before cleanup. That is **at least 13 reviewers across four
+consecutive phases**. The lens counted from 285, missed 284 entirely, and missed its own sibling in
+the same round; the author then shipped that number in the ledger, which is precisely the class
+this round spent its time on. Filed as **`Q-489`** in § High — `isolation: "worktree"` forks from
+`main`'s tip, so a round on a feature branch reads the pre-phase tree unless each lens notices and
+re-points itself. Nothing enforces that check; Phase 240 already proved the alternative (a
+throwaway clone at the phase commit) and it was never adopted.
+
+**Two findings filed rather than fixed:** `Q-487` (the `BARE_SELF_CITATION` guard cannot see the
+citation class it exists to catch — latent: one live instance in `core/`, and it is correct) and
+`Q-488` (the 4,000-char cap, promoted from `§ Notes` after the phase collided with it three times).
+One left **scoped rather than repaired**: the guard's population is `core/skills` only, while five
+`core/companion/` sites satisfy arm A — recorded as SUSPECTED by the lens, and left as the
+boundary the guard states rather than widened without measuring.
+
+### Also fixed
+
+- `CLAUDE.md` — Phase 286's `_pending merge_` cell backfilled to `3f8c8d8`, per the convention that
+  the next phase does it in its own commit.
+- Local branch hygiene: **17** stale local refs deleted (15 with `MERGED` PRs confirmed via
+  `gh pr list --head`, plus `review-241` and `review-276-guard-strength`, whose phases shipped with
+  hashes in the log and whose distinctive artifacts are present on `main`). No remote ref touched.
+  An earlier check used `git log --grep "Phase 240"` and matched Phase 250's commit body — unsound,
+  replaced with the PR state before anything was deleted.
+
+## Phase 286 (executed 2026-09-12 — the fix that walked past the gate its own phase shipped)
+
+**Brief: none, and that is the point.** Phase 285's close set 286 = the mirror push, ratified by
+Wade the same day. What displaced it was a **triage**, not a filing: with Phase 285 merged, the
+session looked at what `gdp-query-system` had filed upstream while the phase ran, and the triage
+surfaced a defect no reporter had found. Wade re-ranked on the evidence — *"take it now as 286,
+mirror slips again"* — so the cut moves to 287, `Q-457` to 288, and the `Q-409` thinning campaign
+to 289+.
+
+### The triage, because it is half the phase's product
+
+**All 82 open upstream issues are from one consumer**, `gdp-query-system`. Nothing else files
+upstream. **Sixteen** arrived on 2026-09-12 (#621–636), after twenty-two on 09-09.
+
+**An earlier draft of this paragraph said "37 in September's first twelve days against 33 in all of
+August", and the round's record lens showed it was false in both terms and inverted in direction.**
+The `33` is August's **still-open** count, not its filings: August created **84** issues and
+September's first twelve days created **38**, so the batch rate roughly *halved* rather than
+accelerating. And the `37` was an internal sum (15 + 22) rather than a measurement, built on a `15`
+that was itself wrong. The sentence existed to argue that duplicate filing is getting worse; it
+argued it from a filings-versus-survivors comparison, which is not a comparison. **`Q-484`'s case
+does not rest on it** — that rests on 5 of 15 measured stale in one batch, and on the cadence
+argument, both of which stand. The rhetoric is removed rather than repaired.
+
+**That consumer is two days and five phases stale**, pinned at `150bddb` (Phase 280, landed
+2026-09-10) while `main` is at 285. Verified in both trees rather than inferred: GDP's installed
+`review-close/SKILL.md` still carries `... or not wt.is_dir() or not src_dir.is_dir():` in the
+exit-4 disjunction, and contains **zero** occurrences of `Q-470`, `Q-474` or `branch_tip`.
+
+**Of the fifteen: 5 stale, 8 live, 2 partial, and they collapse to 9 distinct defects.**
+Seven are clustered in `Q-485`; **six of those are actionable and the seventh is recorded as
+declined** on the page's own measurement, which an earlier draft summed as "7 actionable". Four of the five stale ones (#624, #627, #630, #635) are the same defect, `Q-470`,
+which shipped in Phase 282 on **2026-09-11 — one day after GDP's pin**. Current `main`'s comment at
+that exact line reads *"`src_dir` USED to sit in this same disjunction, and that was `Q-470` —
+reported four times in eight days against a green suite."* It has now been reported **eight** times.
+The fifth (#623) is `Q-474`, same phase, same commit. All five closed upstream with the fixing
+phase and the verification, alongside `#636` (a re-file of `Q-371`/Phase 251, caught during Phase
+285's own GDP rider).
+
+**The triage missed an older one, and its own round caught that.** `#520` (2026-08-29) quotes the
+identical guard, proposes exactly the split Phase 282 shipped, and was **still open** — the triage
+scoped itself to "today's fifteen" and never looked back. Closed with the same citation.
+**Seven closed, 83 → 76 open.** An earlier draft said *"six closed, 82 → 77"*, which cannot be
+true: six closures with a delta of five. The `82` was real but measured *after* the first of the
+six it was attributed to. **And the record's "it has now been reported eight times" is left
+unverified rather than repaired** — the skill's own "four times in eight days" cites no issue
+numbers, so whether `#520` is inside that four or additional to it is not something this phase
+measured. What was measured is that it was open and the triage did not see it.
+
+**The sharp part is that the staleness is already machine-readable and nothing reads it.**
+`/report-issues` stamps an `**Environment**` block into every filing, and every one of today's
+carries `Sysop commit: 150bddb3422f` in its body. A single `git diff <stamped>..HEAD -- core/` at
+triage time separates *live defect* from *you are five phases behind* before any phase spends
+attention on it. **This is not a GDP problem.** Phases land here at roughly one a day; any consumer
+on a weekly update cadence will always be filing against a stale tree, so duplicate filings are
+structural. **An earlier draft of this paragraph said it was "recorded here rather than filed,
+because the shape of a fix is a question about the triage path and not a defect in shipped
+behaviour" — which fails CLAUDE.md's own filing bar in the reader's favour.** *A design question or
+Wade's call* is the bar's **first** listed trigger, and this is one; it also names what it blocks
+(the 77-issue backlog and every future inbound batch). Filed as **`Q-484`**. The seven actionable
+defects the triage left are filed as **`Q-485`**, clustered on the batch precedent — one cluster is
+one phase, and the issue numbers carry the durable detail.
+
+### `Q-483`, which the triage found and no reporter did
+
+Phase 282 shipped **two** halves. `Q-470` made an absent worktree `sysop/runtime/pending-docs/` a
+legitimate exit-0 state — one of its two readings being *"this branch's doc is already on main"*.
+`Q-471` added the `branch_tip:` comparison that refuses a doc the branch has outgrown. **The
+comparison lived only inside the `src_dir`-present loop, and `Q-470`'s arm returns before it** —
+the early return at line 1802, the loop at 1815.
+
+Reproduced end to end before any edit, against a real repo with a real linked worktree: a doc
+stamped at the branch tip, one later commit on the branch, worktree holding no `pending-docs/`.
+
+```
+commits landed on the branch after the doc was stamped: 1
+collect exit: 0
+    PENDING-DOC COLLECT SKIPPED: no …/wt/sysop/runtime/pending-docs
+    PENDING-DOC COLLISIONS: 0
+STALE warning emitted?  False
+doc still on main for Step 4c to consolidate?  True
+```
+
+**The harm is a false record rather than a lost one**, which is what separates it from the
+`Q-478`/`Q-481`/`Q-482` family Phase 285 spent itself on: Step 4c routes the outdated `summary:`
+into the shared docs **in the same commit that flips the task to `done`**, so two durable artifacts
+disagree and the close reports success.
+
+**Why nobody reported it, and the window was ONE day rather than four.** An earlier draft said
+"four days" here, in `CLAUDE.md`'s row and in the archive entry; the round's record lens measured
+it. Phase 282 landed `2026-09-11 10:08` and this phase opened `2026-09-12 10:51` — **just over 26
+hours**, and the number almost certainly bled from the adjacent *"four times in eight days"* and
+*"the four inbound reports"*. The lens also pointed out that "survived unreported" overstates at
+both ends: GDP's pin predates Phase 282, so **no consumer ever had the code**. What is true is that
+it needs a doc authored on the main checkout *and* a branch that then moves on. The four inbound reports that establish main-checkout authoring as GDP's
+routine path are about the *other* half of the same phase, and all four were filed against an
+install that predates it.
+
+### What shipped
+
+**The reader was hoisted, not copied.** The per-doc `branch_tip` read moved out of the loop into a
+single `staleness(paths)` helper defined **above** the early return, called by both populations —
+the `src_dir`-present path over the worktree's docs, the absent path over main's own docs claiming
+this branch. Copying it into the second site would have fixed the symptom and recreated the class
+this step already paid for once: the rollback hand-rolled a frontmatter scan while the collect used
+`yaml`, and the two halves of one step disagreed on 18 of 33 frontmatter shapes.
+
+**The extraction broke something immediately, and a shipped test caught it within one run.** The
+loop skips a foreign doc with a `continue` *before* it ever reached the staleness read; hoisting
+the read lost that guard, and `test_a_foreign_doc_is_never_measured_for_staleness` went red.
+Measuring a foreign doc's drift asks the wrong question about the wrong record, and its answer
+would refuse a close over a doc this branch has no claim on. The helper's population contract is
+now stated in its docstring and enforced at the call site.
+
+**The new arm reuses exit 6** because the operator's remedy is identical — re-run `/document-work`
+to re-stamp `branch_tip:` — but its message deliberately does **not** repeat the populated path's
+*"main untouched"*: nothing was collected because there was nothing to collect, and main is holding
+the stale doc, which is the entire finding.
+
+### The author-side pass
+
+**Rule 3 is what produced the phase.** Both heredocs were extracted with the shipped `HEREDOC_RE`
+and run against a real repo with a real linked worktree *before* any edit, so the defect is a
+measurement rather than a reading — and the same fixture, re-run after, is the fix's evidence.
+
+**Rule 4's trigger fires, and stating why is the point.** The change does not widen a parser; it
+widens the *population a predicate is applied to* — `branch_tip:` values, which `/document-work`
+writes and this step merely reads, now reach the comparison from a second route. So the hostile
+corpus was built and run against the new arm: ten cases, **no crashes and no hangs**. A `branch_tip`
+that is a YAML int, an unsubstituted placeholder, a non-object-name string, one beginning with `-`
+(the option-injection shape `SHA_RE` exists for), `null`, and a 40-zero sha all take the
+**STALENESS UNKNOWN** arm at exit 0 — fail open, which is the disposition `Q-470` is on this page
+for. The real-tip-with-drift case exits 6, the real-tip-no-drift case exits 0, two docs on main
+claiming one branch behave, and a FIFO bystander does not hang.
+
+**One corpus case is worth recording because its message is imprecise and its disposition is not.**
+A `branch_tip:` of forty zeros reports *"present but is not a string — a bare hex-looking value is a
+YAML int"*, which is true (`0000…` parses as `0`) but names a different cause than *"a sha that does
+not resolve here"*. Pre-existing on the populated path, unchanged by this phase, and the outcome —
+UNKNOWN, fail open — is right either way. Noted rather than fixed, because narrowing a message on
+an arm whose whole job is to fail open is not obviously an improvement.
+
+**Rule 2 caught nothing new in prose this time**, which is itself worth saying: the claims in this
+entry were written against a file that had just been re-read for the extraction, and the one
+sentence that did drift — the filing-bar justification for `Q-484` — is corrected in the § above
+with its reasoning, not quietly.
+
+**Rule 1 — the battery** (`tools/phase286_mutations.py`): **8 mutations, 8 killed, 0 survived; 3
+controls green, 0 false alarms; 0 no-ops.** The set attacks the hoist's *reachability* (the absent
+arm stops calling the reader; the refusal arm removed; the exit dropped), both *population
+contracts* in both directions (a foreign worktree doc measured; another branch's doc on main
+refusing this branch's close), the *single-sourcing* that is the shape of the fix (the populated
+path forks its own reader), and **fail-open**, which is the direction that would halt every
+consumer rather than the one that ships a false record. Two of the eight — `M07` and `M08` — exist
+because the corpus found nothing there and a clean corpus proves less than a killed mutation does.
+
+**The number is reported with what it is worth.** An author battery's zero measures
+self-consistency; counted **after** this phase's own ledger row lands, because the alternative is
+a sentence that falsifies itself at close, **88** have reported every mutation killed and **85**
+were falsified by an independent lens — this phase being the 85th. The round is the measurement.
+
+### Numbers
+
+Every figure was read off a command's output in the same edit that wrote it, and the suite figure
+is stated **for the commit** — the half of that rule Phase 285 had to be taught twice, when a
+number measured on the working tree shipped as `1 failed` over a tree that was red in five places.
+
+- **Suite: 6,929 → 6,946 collected (+17)**, the baseline taken at Phase 285's merged `main`
+  (`56cef41`) rather than from its record. At the author-side commit it was 6,935 (+6); the round
+  added eleven more. Full run at close: **6,750 passed / 196 skipped / 0 failed** (569.08s),
+  stated **for the commit** rather than for a working tree — the half of the number rule Phase 285
+  had to be taught twice.
+- The `tests/test_pending_doc_integrity.py` module alone: **143 passed, 1 skipped**.
+
+  **One full-suite run during the phase reported a failure that was not one**, and it is recorded
+  because the honest reflex is to investigate rather than re-run until green: the suite was
+  running concurrently with the mutation battery, which spawns its own `pytest -n auto` fleet per
+  mutation, and an xdist worker died — `OSError: cannot send (already closed?)` out of
+  `pytest_sessionfinish`. The same collision reported a control as a false red in the battery.
+  Re-run with nothing competing, both were clean. Two pytest fleets at `-n auto` on one machine
+  is a measurement error, not a result.
+- Inbound triage: **15 issues → 5 stale / 8 live / 2 partial → 9 distinct defects → 7 clustered, of which 6 are actionable and 1 is recorded declined**;
+  **6 closed upstream**, open count **82 → 77**, every one of the 82 from a single consumer.
+
+### The round — three lenses, and the fix was wrong in two directions at once
+
+Three by the governor's condition: behaviour **and** a numeric record. Execution, guard strength,
+the record. All three pinned to `f8720a9`, and **all three reported the harness had placed them on
+`56cef41` instead** — six reviewers in a row now, after Phase 285's three of three. It is no longer
+a quirk worth mentioning in passing; it is the reason their numbers are about this phase at all.
+
+#### The execution lens: the fix broke an invariant printed two lines above the code it rewrote
+
+`SKILL.md` states, twenty lines above the arm this phase touched:
+
+> An existing but EMPTY `src_dir` … reaches stage 1 with `docs == []`, collects nothing and exits
+> 0. **The two states must not be dispositioned differently, and that is the property to preserve
+> if this arm is ever rewritten.**
+
+Measured on identical fixtures differing only in whether the worktree's `pending-docs/` exists as an
+empty directory, with the same stale doc on main and the same one commit of drift: **absent → exit
+6, empty → exit 0 in total silence.** No `STALE`, no `STALENESS UNKNOWN`. The property held before
+this phase and did not hold after it.
+
+**The test named for that invariant was green and could not see it.** Its fixture is `_checkout()`
+— a *fake* `.git` file, an empty main, no drift — so there is no doc to measure and no repository to
+measure it in. The same test module's `_worktree` docstring already warns about exactly this:
+*"The first cut of these fixtures faked `.git`, and the staleness measurement then ran against the
+runner's CWD, so the fake passed."* The phase added two real-repo tests and left that one on the
+fake.
+
+**And the remedy the new exit-6 row prescribes turned the gate off.** `/document-work` runs
+`mkdir -p sysop/runtime/pending-docs` **unconditionally**. So on the `Q-470` route the operator
+reads *"re-run `/document-work` … then re-run the close"*, does exactly that, creates the directory,
+and the next close takes the arm that does not look at main. Measured: first run exit 6 naming two
+stale docs; after the documented remedy, **exit 0**, with the second still on main. The gate fired,
+the operator complied, and the close proceeded carrying the doc the gate exists to stop.
+
+**Both have one root and one fix.** The population is no longer "the worktree's docs, plus main's
+docs when the worktree has none" but **every doc this run leaves for Step 4c to consolidate**: the
+worktree's own docs claiming this branch, plus main's docs claiming this branch that this run will
+**not** overwrite. A main doc whose name is in the incoming set is excluded on purpose — it is about
+to be replaced, so its staleness is about to stop existing, and including it would make the
+documented remedy impossible to satisfy.
+
+**A third finding, and it fails silently rather than open.** `_git` defaults to `-C wt`, with a good
+argument behind it: a `--clone` workspace is a separate repository, so a doc collected *from* the
+workspace must be measured there. A doc already on **main** was authored on the main checkout — that
+is `Q-470`'s first reading — and asking a clone about it asks a repository that need not hold the
+commits. Measured: a main-side drift of 1 read as **0** from the clone, and `rev-list` *succeeded*,
+so the run reported measured-and-clean over a record it had never measured. Worse than the fail-open
+UNKNOWN arm, because UNKNOWN says so. `_git` and `staleness` now take an explicit `where`.
+
+**Two shipped statements this phase had made false**, both fixed: the exit-table paragraph told the
+operator to *"proceed to (b) on all three"* exit-0 shapes and offered `COLLECT SKIPPED:` as the
+recogniser — a line that now also prints on a run refusing at 6; and the exit-6 row's state column
+said main was *"untouched"*, which is precisely wrong on the new arm, where nothing was collected
+**because there was nothing to collect** and main is holding the stale doc.
+
+**What that lens verified rather than broke**, stated because a refuted hypothesis is a result: a
+16-case differential found the `src_dir`-present route **byte-identical** before and after (its
+first run reported three differences, all of which were its own harness nondeterminism, and it said
+so); a `branch_tip` beginning with `-` cannot reach `git rev-list` as an option, twice over; FIFO
+and directory bystanders hang neither heredoc; the rollback is untouched; and it produced **no
+false refusal** across thirteen legitimate shapes — legacy docs, orphan shas, deleted refs, detached
+HEAD, shallow clones, renamed branches.
+
+#### The guard lens: 39 mutations, 12 survived (30.8%), and 2 false reds of 4 controls
+
+It reproduced this phase's 8/8 exactly and called it *"the 85th"*. Measured overlap: **5 of its 39
+(12.8%) matched one of the author's 8; 6 of the author's 8 had a counterpart in its set.**
+
+**It found dead code this phase wrote, and proved it three ways.** The `is_file()` and
+`RecursionError` guards added to `tip_of` are **unreachable**: every call site into `staleness()`
+pre-filters on `branch_of(...) == branch`, and `branch_of` already returns `None` for a non-regular
+file. Re-verified here rather than taken on report — arming that guard's body with a fatal probe
+leaves all 137 tests green. **The phase's own battery had scored a kill against it**, because `M08`
+rewrote all three copies of the guard in one mutation and credited the reachable pair's kill to the
+third. That is Phase 284's `M24` class — a battery counting something other than coverage. The guard
+stays as defence in depth, because the property is real and a future call site that skips the filter
+would need it; what it may not do is be counted. Both the code comment and the FIFO test's docstring
+said otherwise and are corrected — that docstring claimed a bystander *"now reaches two readers
+instead of none"*, and **both halves were false**: `56cef41` already ran `branch_of` over the same
+population, and after the change it still reaches exactly one.
+
+**Its sharpest mutation walked the phase's structural guard in both directions at once.** A
+hand-rolled second reader added *beside* the call kept `staleness(` at 3 and `tip_of(src)` at 1 and
+passed; two behaviour-preserving renames — the helper, and the reader's loop variable — went red.
+The guard measured spelling, and measured it in the wrong direction. It is now derived from the
+**AST**: exactly one function may contain a constant beginning `branch_tip`, nothing outside a
+function may, the helper is whatever calls that reader, and both routes must reach it by line
+position. Rename-proof, and it kills the second-reader mutation.
+
+**Four report quantities had no assertion at all**, all now pinned: the stale **tally** could print
+`0` while refusing `1` — and the skill names those lines as Step 8's `Stale pending-docs:` row's
+only source — the **drift count** could be off by one on either route, and the log line could lose
+its `after the doc:` label. The lens also checked whether a refusal could print the collect's
+success marker; the shipped code already exits before it, and there is now a test saying so.
+
+**Two of its survivors it argued were equivalent, with the argument rather than a silent exclusion**
+— the `NOT_A_BRANCH_DOC` exclusion on `on_main` (the excluded doc carries no `branch:` today, so
+`branch_of` already drops it) and `tip[:12]` → `tip[:7]`. Both kept in its denominator. That is the
+discipline Phase 285's round asked for and did not get.
+
+**Final battery, re-pointed onto the round's own findings: 16 mutations, 16 killed, 4 controls
+green, 0 false alarms, 0 no-ops.** The no-op detector fired **three times** across the phase — once
+on an ambiguous anchor, twice when the population rewrite moved four anchors — and refused to report
+a number over dead anchors each time.
+
+#### The record lens: the mechanism held up and the triage half did not
+
+**It re-derived and confirmed the engineering**, which is worth stating first because it is the
+larger half: the board counts, the collected figures at both commits, the module count reproduced
+four times, the battery reproduced exactly with its no-op detector real, the `87`/`84` ledger
+figures, `1d7f7f2`'s 58 lines / 36,833 bytes, and — running the phase's own new tests against the
+**parent's** `SKILL.md` — the `Q-483` reproduction **line for line**, including that line 1802 is
+`sys.exit(0)` and 1815 is `for src in docs:` at that commit. All six cross-phase citations opened
+and described accurately. Tense clean. Every one of the six upstream closures cites the reason
+claimed.
+
+It also **retracted two of its own findings and said so** — a suspected fabricated quote that turned
+out to be a verbatim shipped docstring from Phase 210, and an early "26 failed" suite reading that
+was its own environment (a detached worktree has no `.venv`, so a scan shelling out to bare
+`python3` cannot import pytest). A reviewer reporting its own errors is the behaviour this record
+should reward.
+
+**Then it took the triage apart.**
+
+- **The headline statistic was false and inverted.** *"37 in September's first twelve days against
+  33 in all of August"* compared September's **filings** to August's **survivors**. August created
+  **84**; September's first twelve days created **38**. The batch rate roughly halved. Corrected
+  above, and the rhetoric removed rather than repaired — `Q-484` rests on the 5-of-15 measurement
+  and the cadence argument, not on this.
+- **"Four days" was just over 26 hours**, repeated in three documents, almost certainly bled from
+  the adjacent *"four times in eight days"*. And "survived unreported" overstates at both ends,
+  because GDP's pin predates Phase 282 — no consumer ever had the code.
+- **The triage missed an open duplicate.** `#520` (2026-08-29) quotes the identical guard and was
+  still open; the triage scoped itself to *"today's fifteen"* and never looked back. Closed.
+  **Seven closed, 83 → 76.** The earlier *"six closed, 82 → 77"* is arithmetically impossible —
+  six closures, delta five — because the `82` was measured after the first of the six.
+- **"Reported eight times" is now left unverified rather than repaired.** The skill's own *"four
+  times in eight days"* cites no issue numbers, so whether `#520` falls inside that four or beside
+  it is not something this phase measured. Saying so is cheaper than guessing, and this log has
+  paid for guessing.
+- **Sixteen arrived on 09-12, not fifteen** (#621–636; the fifteen was the triage's scope, not the
+  day's count). **Six of `Q-485`'s seven are actionable** and the seventh is recorded declined.
+  **`Q-485`'s `:2069` citation was stale in the very commit shipping it** — the same edits moved it
+  to 2129 — so it now cites the blockquote by its opening words; `tools/ledger_stats.py` already
+  tracks that class at six prior sites. BeanRider's sweep is **36** entries, not 33. The merged
+  phase branches are **9**, not "~12". And `Q-485`'s zsh reproduction exits **127**, not 0 — the
+  shipped harm is that the loop continues and the enclosing step reports 0.
+- **The hostile corpus was unverifiable as reported.** It lived in an unpreserved script, and two of
+  its ten cases appeared in no test. This repo's own rule is that the corpus lives in the tests, so
+  six of them are now a parametrized test on the main-side route.
+
+**One finding is recorded and not fixed:** `f8720a9`'s commit message frames `Q-484`/`Q-485` as that
+commit's work when both were already present at `82c9274` (that commit is 219 insertions, 0
+deletions). The `PHASE_LOG.md` wording was accurate; only the message misframed it. A commit message
+cannot be corrected without rewriting history, and this line is the correction.
+
+### One decision taken after the round, and flagged as such
+
+Reviewing the queue at the close, Wade re-ranked `Q-485`'s item (6) — the missing zsh `path=`
+warning at `### 2d.` — **out of the § Medium cluster and into § High**, to be split as `Q-486` and
+fixed in Phase 287 alongside the cut. The reasoning is § High's own definition: a live defect in
+shipped code, wrong task state, silent failure, and a remedy that is one sentence already carried
+at two other sites. This phase clustered it because the inbound-triage precedent clusters GDP
+batches, and that under-ranked the one leg with wrong-state harm.
+
+**It is recorded in the Phase 287 brief rather than acted on here, and marked unreviewed**, because
+this phase's adversarial round had already covered the record, and a filing added afterwards would
+slip past the gate the round exists to be. The brief says so and tells the next session to verify
+the claim itself — worth doing, because this phase's own first check of it grepped for
+`## Step 2d`, found nothing, and nearly reported the filing as wrong about the tree. The section is
+`### 2d.`; the grep was too narrow, not the filing.
+
+## Phase 287.1 (executed 2026-09-12 — file `Q-489`: the round gate reads the pre-phase tree)
+
+**Written retroactively by Phase 288, which found it missing.** Phase 287.1 (`3f8c38d`, #640) went
+into `CLAUDE.md`'s Phase log with no prose entry and no ledger row; Phase 288's record lens caught
+the gap, noting that every precedent sub-phase (`99.1`, `109.1`, `159a`) has one, and that the guard
+which would otherwise catch it cannot — `missing_ledger_rows`' row regex is `^\|\s*(\d+)\s*\|`, so a
+`.1` label is invisible to it.
+
+**What it did.** Wade asked whether Phase 287's execution lens was right that it was *"the 7th
+reviewer in a row"* placed on the wrong commit. It was right, and the number was **low**: the lens
+counted from Phase 285, missing Phase 284's 5/5 and its own sibling in the same round. Re-derived
+from the ledger's own rows — 185 (3/3, the round discarded and re-dispatched), 241 (1), 284 (5/5),
+285 (3/3), 286 (3/3), 287 (≥2 of 5) — the chain is **at least 13 reviewers across four consecutive
+phases**. Filed as `Q-489`, § High. Both the ledger row and Phase 287's `PHASE_LOG.md` entry were
+corrected in the same commit to say that the author had put the lens's underived number straight into
+the record, which is that round's own class of defect.
+
+**Round: skipped, recorded.** Record-only commit — one queue entry plus two record corrections, no
+shipped behaviour and no guards. The governor's default for that shape is two lenses; the skip is
+taken on the same grounds as the file's three prior record-only skips, and is now carried as a row
+in `tools/ROUND_YIELD_LEDGER.md` rather than being absent from it.
+
+## Phase 288 (executed 2026-09-13 — the gate that read the pre-phase tree)
+
+**Brief: `tools/NEXT_SESSION_PROMPT.md`, and it was stale in its lower half.** The prompt was
+written mid-Phase-287 when that session ended early, and its paste-block still says the round is
+unfinished and the branch must not merge. Both had since happened: Phase 287 merged as `ffdb2c8`
+(#639), and a follow-on `287.1` (`3f8c38d`, #640) filed `Q-489` *after* the prompt's plan was set.
+So the session opened on a fork the brief **contradicted itself about** — its header ranks `Q-489`
+first and says outright that it *"outranks the cut if you are choosing between them"*, while its
+paste-block, four sections later, orders the round-then-mirror sequence that `Q-489` displaces. (An
+earlier draft of this sentence called it a fork the brief *"could not settle"*; the round's record
+lens showed the brief settled it and then contradicted the settlement — a wrong diagnosis of a
+brief's defect, in a phase whose subject is diagnosing a defect correctly.) Wade settled it: **`Q-489` first, the cut as 289**,
+shape **(b)+(c)**, with `Q-488` left queued for a phase that owns it.
+
+### What the filing was wrong about, and it changes the fix
+
+`Q-489` closes with *"there is already a known-good workaround in this repo… so the alternative is
+proven, just not adopted."* **It is adopted.** The remedy is written in the very file the gate
+cites: `_shared/adversarial-review.md`'s isolation caveat carries both the diagnosis (*"created from
+the repository's **default branch**, not from the spawning session's `HEAD`"*) and the fix (*"pin the
+reviewer to the commit under review… `git worktree add <path> --detach <sha>`… the spawner states
+the expected SHA in the prompt"*). And the maintainer's always-loaded memory has carried it since
+Phase 176.
+
+**An earlier draft of this paragraph said the caveat had carried both halves *"since the gate was
+written"*, and the round's record lens falsified it by 44 phases.** Phase 154 shipped the bullet
+with the diagnosis **wrong** — *"two reviewers spawned together landed on different commits"*, which
+it called non-determinism — and a wrong diagnosis can only ask for vigilance, which is the file's own
+stated lesson six lines below where this phase wrote the false sentence. Both remedy strings enter at
+`7d43af3`, **Phase 198**, 2026-08-13: `git log -S "the spawner states the expected SHA in the
+prompt"` returns exactly that commit. The phase credited Phase 198 with a *refinement* of something
+it authored.
+
+**The same draft said rounds 185–187 *"practised it and recorded doing so"*, and that is wrong in
+both directions.** All three predate Phase 198, so they cannot have been following this file — they
+were ahead of it. And **185 is the failure, not the compliance**: its ledger row records *"a
+discarded first dispatch — `isolation: "worktree"` forked all three from `main`… Halted and
+re-dispatched onto worktrees created at the phase commit"*. Citing this project's one thrown-away
+round as an example of the rule working is the exact inversion the round exists to catch. The
+correct reading is sharper than the one it replaces: **the practice predates the document, and then
+both decayed.**
+
+**Two written copies and three rounds that knew better, and four consecutive phases lapsed anyway.**
+So the defect was never a missing rule, and shipping shape (b) as more prose would have been the
+third copy. What was
+missing is what Phase 166 named one clause over: **an invoker**. The requirement lived under a
+heading reading *"Worktree isolation, where the harness offers it"*, three levels deep, in a file
+read for its procedure — not in the gate stanza, which is the text actually loaded at the moment
+someone spawns an agent, and which said only *"independent fresh-context `general-purpose` agents
+(never forks), distinct lenses"*. The maintainer's memory index was worse than silent: it
+prescribed **`Give each reviewer isolation: "worktree"`**, the broken shape, with no pin.
+
+### The premise, re-measured first-hand rather than inherited
+
+A probe agent was spawned with `isolation: "worktree"` from this branch at `ab7c216`, with the
+phase's own commit carrying a marker string (`287.1 — file`) that `main` does not have:
+
+- the probe reported `git rev-parse HEAD` = **`3f8c38d`** — `main`'s tip, one commit behind;
+- `grep -c '287\.1 — file' CLAUDE.md` in its checkout returned **0**: the phase's change was not in
+  its tree at all;
+- `git worktree list` from inside it showed both trees, which is the cheap self-check handle;
+- the documented `core.hooksPath` rewrite did **not** fire — `diff` against the pre-spawn baseline
+  reported the local config unchanged, exactly as the caveat's stated precondition predicts for a
+  repo with the key unset.
+
+### What shipped
+
+1. **A top-level requirement in the shipped partial**, hoisted out of the caveat: *Create every
+   reviewer AT the commit under review, and require it to prove where it landed* — **Place it**
+   (`git worktree add <dir> --detach <sha>` or a throwaway clone, SHA named in the prompt) and
+   **Make it echo** (`git rev-parse HEAD` as the reviewer's first action, verbatim, before any
+   finding; a lens that cannot show the SHA is re-dispatched, not read). The caveat below keeps the
+   mechanics and is re-pointed to say so.
+2. **The gate stanza carries it** (`CLAUDE.md`), because that is the invoker.
+3. **A receipt** — `tools/ROUND_YIELD_LEDGER.md` rows from Phase 288 on must name the commit their
+   lenses stood on. **The direction matters and an earlier draft of this line had it backwards**
+   (the round's record lens caught it, and caught the shipped text getting it right while three
+   maintainer-side sites got it wrong). From *inside* the round the failure is perfectly
+   detectable — every one of the ≥13 was in fact detected from inside, by a lens that ran
+   `rev-parse` — which is exactly why the receipt a round writes about itself is worth having.
+   It is from *outside* that a misplaced round is invisible: a lens on the parent commit finds
+   nothing, which reads exactly like a clean pass.
+4. **The maintainer memory** stops prescribing the broken shape, in both the entry and the index
+   line that is loaded every session.
+
+### The author-side pass found the guards were wiring, not coverage
+
+The first battery was **7 mutations, 7 caught**, and that number was worth nothing: most of it was
+reverting text written minutes earlier. (**"Four of the seven" was the first draft's figure and it
+came from no command** — the round's record lens asked for the derivation and there is none. Counted
+against the code: **3** restore the pre-phase state exactly, **6** remove or replace text this phase
+wrote. The number the prose wanted is "most", and the two derivable counts are now stated instead of
+a third one nobody can reproduce — which is precisely the rule this project wrote after Phase 284.) Attacking the predicates with wording the
+author had *not* used, **5 of 5 survived** — `where convenient` appended to the placement clause;
+`ideally`/`asked to` substituted for the imperatives; `or afterwards if it forgot` appended to the
+echo; a revoking sentence inserted *between* the two bullets; and `For example,` prefixed to the
+requirement, demoting it to an illustration. Every pinned keyword was still present in all five, so
+every predicate stayed green.
+
+The repair is **not** a longer modal blocklist — that is the treadmill Phase 179 measured, where a
+regex screen over prose catches 0 of 21 out-of-vocabulary reversals. It is a **verbatim pin** on
+the load-bearing block: the requirement's full text, whitespace-folded, with a fail-closed slicer.
+It reddens on any edit including legitimate ones, which is the cost that buys it. All five attacks
+break it; the five are kept as its permanent regression set.
+
+### What this does NOT fix, stated rather than discovered
+
+**Placement is still done by hand.** Nothing prevents a session from calling `Agent` with bare
+`isolation: "worktree"` and no pin — the harness offers no "at this SHA" parameter, so the rule is
+still prose plus a habit. What changed is that the prose is now where the spawner reads it, and
+that an unrecorded placement reddens the suite at the ledger. The failure moves from silent to
+visible; it is not designed out.
+
+### The round — three lenses, and it took the phase apart
+
+**Governor: three lenses.** The change ships behaviour (a shipped partial, two guard modules) **and**
+a record making numeric claims, which is the stated condition. One round. All three were placed by
+hand at the phase commit with `git worktree add --detach 4b8423b` and each echoed
+`git -C <dir> rev-parse HEAD` before reading — **the phase dogfooding its own rule**, which is how
+two of the findings below were found.
+
+**Lens B (guard strength) wrote 26 attacks; 11 survived — 42%.** Twelve controls, **7 false reds**,
+three of them this phase's own over-strictness. The three that mattered:
+
+1. **Position was the entire claimed improvement, and nothing asserted it.** Move the block
+   byte-identical to just above the governor — back below the caveat it was hoisted out of — and
+   every pin, every predicate and the full 73-module blast radius stay green. The module already
+   owned the primitive (rule 3 / rule 4 / the limits paragraph are ordered by assertion); the one
+   requirement that is *only* about position was the one without it. Now `placement_position_problems`
+   asserts it sits above the caveat, the governor and the author-side pass, and below commit-first.
+2. **Commenting the block out, or fencing it, left every pin green.** `_prose_only()` exists in that
+   very module, its docstring names this exact attack, and two other slices call it — the placement
+   slice did not. Both the section and the gate now match against rendered prose.
+3. **Every scoped pin loses to ADDITION.** A revoking sentence one line above or below the block, or
+   appended to the gate paragraph, survives a pin that compares a span. A bounded canary now screens
+   the six revocations the lens actually wrote, and a test pins the *limit* rather than implying
+   coverage — an out-of-vocabulary revocation still walks through, which is Phase 179's measurement,
+   not a gap to be regexed away.
+
+**Lens A (execution) ran the prescribed commands, and the sharpest finding is that one of them is
+destructive.** The clone recipe this file has prescribed since Phase 198 — `git clone <repo> /tmp/lensN
+&& git checkout <tag>` — **runs its second command in the spawner's tree**, because `git clone` does
+not change directory. Reproduced in a fixture: the spawner's branch went detached and a commit's files
+left its working tree, exit 0, no warning. It is the exact mutation the rule two paragraphs above
+forbids, prescribed by the remedy below it, and the phase's new rule had just delegated to it
+(*"the caveat bullet below carries the mechanics"*). Now `git -C <dir> checkout <tag>`.
+
+Two more from the same lens, both shipped falsehoods: the *"two clone caveats … two extra skips"*
+sentence is right about the missing `main` ref and **wrong by 25×** about `.venv` — a checkout without
+one produces **24 hard failures in `tests/test_public_history_scan.py` alone** (`refusing: cannot
+import the leak detectors`), not a skip, so a lens told to expect two skips and handed 25 reds cannot
+tell them from a regression. And **`Make it echo` did not bind where the lens reads**: a bare
+`git rev-parse HEAD` reports the reviewer's shell CWD, which on this harness is the primary checkout —
+the lens demonstrated it echoing the correct SHA from the wrong tree. The rule now prescribes
+`git -C <the path it was handed> rev-parse HEAD`, and says why.
+
+**Lens C (record truth) falsified the phase's central historical claim, which had already shipped.**
+*"The caveat has carried both the diagnosis and this remedy since the gate was written"* is **false by
+44 phases**: Phase 154's bullet had the diagnosis **wrong** — two reviewers landing on *different*
+commits, called non-determinism — and both remedy strings enter at `7d43af3`, **Phase 198**. The phase
+credited Phase 198 with refining what it authored, and the file contradicts the false sentence six
+lines below where this phase wrote it. Compounding it, *"rounds 185–187 practised it and recorded
+doing so"* is wrong in both directions: all three predate Phase 198, and **185 is the failure** — its
+ledger row records the dispatch that had to be discarded. The corrected reading is sharper than the
+one it replaces: **the practice predates the document, and then both decayed.**
+
+The same lens caught the **inside/outside inversion** — the shipped text said the failure is invisible
+from *outside* the round (right), while three maintainer-side sites said *inside* (wrong, and
+self-defeating: all ≥13 misplacements were in fact detected from inside, by lenses that ran
+`rev-parse`, which is the entire reason a self-written receipt is worth anything) — plus a **fabricated
+count** (*"four of the seven were reverts"* came from no command; it is 3 strictly, 6 loosely), a
+**paraphrase presented as a verbatim quote** across three files, a suite figure taken on a tree that
+does not exist, and **Phase 287.1 indexed with no prose entry, no ledger row and no recorded skip** —
+in the commit that shipped a receipt for exactly that kind of omission, and invisible to the guard
+whose row regex cannot see a `.1` label. Both were written.
+
+### What the round changed, and what it refused to change
+
+**Fixed in branch:** the destructive clone recipe; the `.venv` falsehood; `-C` in the echo; the scope
+carve-out the hoist had stripped (the four worktree-creating skills have no commit under review); the
+`<dir>`-outside-the-repo rule; the ordering assertion; rendered matching; the addition canary; the
+receipt widened to the whole row, to non-numeric labels (`289-cut` — **and 289 is the cut**, so the
+next round would have been the first to escape it), to a digit-bearing SHA (`` `defaced` `` satisfied
+the first version, and so did my own `deadbee` fixture, which is how the digit rule was found), with
+the `skip` exemption tightened to a leading token; the ledger header documenting all of it; and every
+false claim above.
+
+**Filed, not fixed — `Q-490`, § High.** Two lenses independently reached the same place: `CLAUDE.md`
+is stripped from the public mirror, so the invoker this phase added **ships to nobody**. The text a
+consumer's agent reads at spawn time is `/review-close` Step 2b, which still sets bare
+`isolation: "worktree"` and points at the partial. Verifying that filing turned up a defect neither
+lens reported: Step 2b offers its agents `git diff origin/<default branch>...HEAD` to retrieve their
+own basis, and in a worktree forked from the default branch **`HEAD` is that branch** — the diff is
+empty, the agent reviews nothing, and the convention gate reports clean. Shipped skill prompt bodies
+are never-tier-1, and this wants its own shape decision and its own round.
+
+**Refused, and recorded as a limit rather than repaired.** The receipt certifies that a SHA was
+*written*, not that the lenses stood on the right commit — a row honestly recording a misplaced round
+satisfies it. Both lenses called this out. Judging the claim from its prose is the polarity-detection
+treadmill Phase 179 measured at 0 of 21, so the guard keeps the narrow job it can actually do (the
+question cannot be left unanswered, which is the state all four of the 284–287 rounds were in) and a
+test pins that limit so a future reader cannot mistake green for the stronger claim.
+
+**Also surfaced, filed to `Q-466` as tier 2:** running a guard subset during the round turned a
+"full-suite-only flake" into a **two-module reproduction** — `test_mirror_runbook_gates.py` +
+`test_cut_release_gate.py` fails 4 of 4 runs, in both fixed orders, and reproduces at the parent
+commit, while the module alone passes 13/13 and pairs with three other modules stay green. The
+assertion that fires prints the script's output but **not its exit status**, so the reader is told
+"the fixture is broken" and given nothing to tell that from a broken gate.
+
+### Also fixed
+
+- Phase 287's Commit cell backfilled to `ffdb2c8` (#639) — it carried `_pending merge_`.
+- Phase 287.1 (`3f8c38d`, #640) had no index row at all; added — and then, when the round showed an
+  index row pointing at a phase with no record home is its own defect, a `PHASE_LOG.md` entry and a
+  recorded-skip ledger row were written for it too.
+- The shipped clone recipe (`git clone … && git checkout`) and the `.venv` clone caveat, both
+  pre-existing and both found by running them.
+- `Q-466` extended with a two-module reproduction of a flake it had recorded as needing the full
+  suite; `Q-490` filed § High.
+
+**Suite, and the measurement point matters:** `6,786 passed, 197 skipped` (7m48s) was taken
+**before** this phase's own `| 288 |` row went into `CLAUDE.md`, so it does not describe the commit
+under review. At the round's commit the tree carried **one deliberate red** —
+`test_every_phase_from_174_has_a_ledger_row`, which is the ledger row this phase owes and which the
+convention writes when the round closes. The round's record lens caught the discrepancy by
+arithmetic before the author did. **Post-round, on the tree that ships: `6,800 passed, 197 skipped,
+0 failed` (7m28s).** New tests: the gate module 153 → **182**, the ledger module 20 → **28** (the
+first two counts were re-derived by the record lens against the parent blobs; the round's own fixes
+added the rest).
+
+---
+
+## Phase 289 (executed 2026-09-13 — the currency pass the cut had stopped waiting for)
+
+**Brief:** `tools/NEXT_SESSION_PROMPT.md`, written at Phase 288's close. One ranked item — the
+mirror push, now six phases wide and slipped four times — with `Q-490` scoped out by name to
+*after* the cut, `Q-457` and the `Q-409` thinning campaign reserved for 290+, and `Q-488` recorded
+as queued deliberately rather than forgotten.
+
+**Board at the open, derived rather than inherited.** § High **1** (`Q-490`), § Medium **125**,
+§ Low **105**, next-free **`Q-491`**. Tree clean, `main` == `origin/main` at `af75a58`. Public
+`getsysop/sysop` at `1585153` = private `00754c7`, asked of GitHub rather than read from the brief.
+Every figure the brief printed reproduced.
+
+**§ G does not run.** `tools/FIX_IN_BRANCH_BASELINE.md` opens its window ~2026-09-23 and states the
+tripwire is *"zero on both sides by construction, not by measurement"* — so there is no standing
+counter to read and the date is the only gate. Today is 2026-09-13. **Ten days short**, so the cut
+is the phase.
+
+### Three decisions at the open
+
+Wade took three, against options and a recommendation for each.
+
+1. **Bundle the monograph currency pass** — against a recommendation of cut-only. The
+   recommendation rested on Phase 118's settled position that the monograph is a dated snapshot
+   *allowed* to lag, on the guard asserting only never-*ahead*, and on the push having slipped four
+   times already. Wade overrode it, and the pass is the larger half of this phase.
+2. **Straight through on the cut** — no checkpoint at step-3 GREEN. Recorded because step 12's
+   squash-merge is the one irreversible act in the procedure and its PR body becomes an immutable
+   public commit message; the session was authorised to write both without a review pause.
+3. **290 = `Q-490`**, then `Q-457`, then the `Q-409` thinning campaign. This is *not* a re-rank of
+   the 2026-09-12 ordering: that ordering was set before `Q-490` existed (filed 2026-09-13 by Phase
+   288's round), so it never considered the only open § High.
+
+### Two corrections to the brief, both found by running its own commands
+
+- **The window is 8 commits, not the 7 the brief lists.** `af75a58` (Phase 288.1) merged after the
+  brief was written. `git rev-list --count 00754c7..HEAD` = **8**: `39100ae` (Phase 283's cut
+  commit), 284, 285, 286, 287, 287.1, 288, 288.1.
+- **Both build directories were stale on arrival.** `/tmp/sysop-gate` and `/tmp/wf-tester` each
+  still held `sysop public snapshot (private 00754c7)` from 2026-09-11 — which is exactly the trap
+  step 13(b) of the runbook documents at length: a stale gate dir agrees with two unchanged
+  published repos and reads green over nothing. Neither builder removes its target, so this is the
+  ordinary state between cuts and not a fault; it is recorded because the step that catches it is
+  the *last* one, and an operator who trusted directory presence anywhere earlier would have gated
+  the previous cut twice.
+
+### The currency pass
+
+**Scope, derived.** `0da3fd6..HEAD` is **23 commits** (Phases 274–288.1). Restricted to what a
+consumer receives, the window is **17 files, +1778/−109** across `core/`, `install.sh` and
+`.github/`. `docs/` and `README.md` were **not touched once** in it — `git diff --stat 0da3fd6..HEAD
+-- docs/ README.md` prints nothing — which is why `docs/workflow.html` is fifteen phases behind and
+`docs/index.html` needs no edit at all: that page carries the upstream review-data snapshot
+(Feb–Jul 2026, 71 rounds, 3,298 findings), a closed historical window that does not drift with
+Sysop phases. Phase 185's precedent governs the rest: this is what a currency pass *found*, not an
+audit of every sentence in the file.
+
+**Ten of the twenty-three commits shipped nothing consumer-visible**, counted the same way the
+denominator is — by commit, derived rather than listed: 274 (both), the 275 brief, Phase 277's
+three record commits, 283 (both), 287.1 and 288.1, all confined to `tools/`, `tests/`, `CLAUDE.md`,
+`PHASE_LOG.md` and the two queue files. Counted as whole *phases* with nothing consumer-visible
+anywhere in them, it is **four** — 274, 283, 287.1, 288.1 — because 275 and 277 each have other
+commits that do touch the shipped tree. **The first draft of this sentence said "nine phases of the
+twenty-three"**, which was wrong three ways at once: it was a commit count wearing the word
+*phases*, its own enumeration listed ten items, and the denominator was commits. Caught by the
+round's record lens.
+
+**What went in, and where.** Six additions to `docs/workflow.html` and one to `docs/history.md`. The
+prose additions alone are **+218/−8** in the first commit (`git show --numstat 6e75847 --
+docs/workflow.html`), of which five insertions and five deletions are the stamp bump, so the
+content is +213/−3; across both commits the file is **+223/−8**. Stating one of those numbers
+without the derivation is what the first draft of this line did:
+
+1. **§ III gains a ninth shape** — *a round that ran, on the wrong tree*. The section's lede moves
+   from "Eight shapes … across July and August 2026" to "Nine … between July and September 2026".
+   This is Phase 288's `Q-489`, and it belongs in that section rather than beside the governor
+   because it is that section's thesis applied to the instrument the rest of the page trusts: a lens
+   on the pre-phase tree finds nothing, and no-findings-from-a-lens-that-ran is indistinguishable
+   from a clean pass. Carries the re-measured probe, the *place it / make it echo* halves, and the
+   `-C` detail — a bare `git rev-parse HEAD` answers about the reviewer's shell CWD, so a lens can
+   echo the right revision while reading the wrong tree.
+2. **A companion paragraph beside it** for Phase 287's `entry`-not-`path` rule — framed explicitly
+   as a companion and *not* a tenth shape, so the lede's count stays true. Carries the durable half:
+   `missing` gained a precondition because at least three situations produce zero bytes.
+3. **§ day-one gains the fix-in-branch tier** (276) and **the tier-3 filing bar with
+   `tasks/notes.md`** (278) — three paragraphs. The never-list is stated as a property of the change,
+   including the clause that closes the tier's own loop: any edit that would weaken, disarm, narrow
+   or delete a gate is never tier 1, because the tier's *"a check covers it"* test is satisfied by
+   the disarming edit itself.
+4. **§ I gains the close-path thread** — `branch_tip:` and the staleness refusal (282), the
+   population bug one phase later where the arm that exists to support main-checkout docs *returns
+   before the loop* and the refusal's own printed remedy creates the directory that turns the gate
+   off (286), and the three documented recoveries that were destroying the records they protect
+   (284, 285). The `/document-work` glossary entry gains `branch_tip:`.
+5. **§ II gains the autonomous-record gap** (277, 281) — nothing on that path wrote `## Test
+   decision` *ever*, which produced no error at all: it produced a waive-or-hold with no third
+   answer on every close of every batch branch. Plus the second layer (the orchestrator re-reads at
+   the branch tip, because the executor writes the record and reports its own success) and the
+   fence-closer detail, where a tagged fence nested inside a plain one lets the plan's *quoted*
+   heading be certified as the branch's record.
+6. **§ VI gains the installer's absent-vs-unreadable split** (280) — the only change in the window
+   that alters what `install.sh` does on a consumer machine. Verified at the source: a
+   `FileNotFoundError` is absence, a mangled lock stays tolerated per Phase 148, and every other
+   `OSError` refuses before anything is written, because treating an unreadable lock as absent
+   resets `installed_at` and `updated_at` silently — and `EMFILE`/`EINTR` are exactly what a busy
+   machine produces.
+7. **§ Boring mechanics gains the runner/editor split** (275) — `review-close/REFERENCE.md`, the
+   verbatim pin, the three-way machine-read roster, and the honest scoping the file itself carries
+   (*six rules, one step; the rest unprotected by construction*). It also carries the part worth
+   more than the mechanism: the worked instance shipped alongside it was **disqualified by its own
+   round**, because the pin strips fenced blocks and the step chosen to demonstrate it is
+   **70.6%** fenced — measured in `Q-457`, not estimated here — so it would have covered no rule in
+   that step.
+
+**`docs/history.md`'s open September bullet is extended** rather than closed, covering the tier, the
+three absence-vs-failure fixes and the placement rule. It states no suite total, which
+`test_the_terminal_history_entry_carries_no_suite_total` requires of the terminal entry.
+
+**Stamps.** Masthead issue, hero stat, colophon prose and colophon list all move 273 → 289, and both
+date notations 2026-09-08 → 2026-09-13. The four sites are bumped together because
+`test_the_currency_guard_reaches_every_stamp_site` mutates each one alone and requires the
+population to change — a guard that reads three of four stays green while the fourth drifts.
+
+**What this pass did NOT do, so nobody re-discovers it.** `Q-321` is still open: Phases 231–238's
+three absences (`solo: true`, `/auto-build` Phase 6d, the two further `cleanup_worktrees.sh`
+members) are outside this window and were deferred on Wade's call at Phase 239's stamp decision.
+`Q-105`'s two portable claims from Phases 162–163 were likewise not folded in. The seam those
+decisions rest on is *absent* vs *false*, and it has not moved: a dated snapshot that omits a
+feature is incomplete, not lying.
+
+### The author-side pass
+
+**Rule 1 is narrow here and the number should be read accordingly.** This phase ships **no new
+guard**, so there is no new coverage to measure — a kill rate would describe guards that predate it.
+What was worth measuring is whether the *existing* currency guards still reach the sites this change
+moved, since a **partial** stamp bump is the edit they exist to police. **Not a stamp bump as
+such** — the round's execution lens demonstrated that reverting all four stamps and both dates to
+the pre-phase values is invisible to every guard in a twelve-module sweep, which is Phase 118's
+deliberate position (no never-behind ratchet) and means the fifteen-phase staleness that motivated
+this whole phase could not have been detected by the suite. An earlier version of this sentence
+said *"exactly the edit they exist to police"*, which is a word too strong in the direction that
+flatters the guards. Five mutations, each applied
+alone and each restored from a copy taken in the same command (never `git checkout`, per this
+project's own rule about restoring from the index): **M1** drift the masthead issue, **M2** drift the
+colophon list entry, **M3** drift the masthead date, **M4** add a suite total to
+`docs/history.md`'s terminal bullet, **M5** stamp all four monograph sites one phase *ahead* of
+`PHASE_LOG.md`. **5/5 killed**, by three different assertions, with the tree verified clean after
+each. What that does **not** measure: anything about the prose, which is the whole of this phase and
+is guarded by nothing.
+
+**Rule 2 is where this phase's risk actually lives, and it caught three things — and missed more than
+it caught.** Claims written into `docs/workflow.html` and `docs/history.md` were checked against the
+tree rather than against the inventory they came from. **An earlier version of this sentence said
+*every* factual claim was, and the round falsified that with six**: one HIGH and five MEDIUM, all of
+them statements in those two files that do not survive a check. The universal was the overclaim; the
+three below are what the pass genuinely found.
+
+1. **A claim taken from a summary instead of a command.** The draft said the loop-variable fix was
+   *"one word in four prompts"*. `grep -rc 'never `path`'` returns **4** in
+   `review-close/SKILL.md` alone, plus one each in `codebase-review`, `security-audit` and the
+   `_shared/` partial — so "four" was a file count restated as a site count. **The number was removed
+   rather than corrected**, because the defensible statement needs no count: *one word, repeated in
+   every shipped prompt that hands out that loop*. This is the exact failure this project already has
+   a rule about — a figure not read off a command's output is not a figure — reached by trusting a
+   sub-agent's tidy summary over the grep.
+2. **A paragraph that narrated a defect and never said what shipped.** The Phase-286 passage
+   described the population bug, the two disagreeing arms and the remedy that creates the directory
+   the gate needs to be absent — and then stopped, leaving a reader unable to tell whether any of it
+   is fixed. A disposition sentence was added, verified against `staleness(paths, where=None)` at
+   `review-close/SKILL.md:1798` and its three call sites (`:1917`, `:1979`, `:1980`), which is where
+   the two-population claim comes from.
+3. **`Q-491`, filed.** Verifying the auto-build second-layer claim surfaced an orphaned sentence
+   fragment at `core/skills/auto-build/SKILL.md:935`: a sentence ends at *exit code.* and a lowercase
+   `with the printed line as its `Notes`, and the batch continues` then opens a clause with no
+   subject. `git log -S` dates it to `3bb3c40` (Phase 281) — introduced whole, so it has never been
+   correct and no round has read it. **Filed, not fixed:** a shipped skill prompt body is never tier
+   1 at any size. It is live in the tree this phase is about to publish.
+
+**Rule 3 ran and found nothing.** The only commands this change prescribes are in the Phase-290
+brief: the five-line derive block and the backfill `git log --oneline --grep 'Phase 289'`. All six
+were run verbatim and all six produced output. **Rule 4 does not apply** — no delimiter, predicate or
+state machine moved.
+
+**Suite at the point the round opens: `6,799 passed, 197 skipped, 1 failed` (7m51s).** The single
+failure is `test_every_phase_from_174_has_a_ledger_row`, reporting `[289]` — the round-yield row this
+phase owes and which the convention writes at round close. It is red **by construction** for the
+duration of the round, which is the same state Phase 288 ran in, and every reviewer is told so
+explicitly, because Phase 287's round established that a battery run against a red tree cannot tell a
+kill from the pre-existing failure.
+
+### The round — two lenses, one round
+
+**Two, not three, and the call is recorded rather than assumed.** The governor escalates to a third
+lens when a change ships behaviour **and** its record makes numeric claims. This phase ships prose:
+`docs/`, `PHASE_LOG.md`, `CLAUDE.md`'s row, the brief, two queue entries. Not one line of `core/`,
+`install.sh`, `.github/` or `tests/` moved. *Ships behaviour* is defined as altering what a shipped
+file **does or checks**, and the governor says prose alone does not qualify however much of it there
+is — so the condition fails on its first term and the default stands.
+
+**Both lenses were placed by hand at `3464c89`** with `git worktree add --detach`, into directories
+outside the repository, and each echoed `git -C <its path> rev-parse HEAD` before its first finding.
+Both echoed `3464c89...`. The spawn-time `git config --local --list` and `git status --porcelain
+-uall` baselines were diffed afterwards: both unchanged, so `git worktree add` did not rewrite
+`core.hooksPath` the way the harness's own isolation setup does. Both on Opus, the author's model,
+with explicitly hostile framing; the different-model arm was not available and is recorded as a
+departure.
+
+**Record lens — 1 HIGH, 5 MEDIUM, 8 LOW, plus one incidental.** The HIGH had **shipped to a public
+page**: the runner/editor paragraph said the worked instance *"was disqualified by its own review
+round"* and priced it at a step that is ~70% fenced. Both halves wrong, and wrong together — Step
+`1a` is the candidate the round threw out **before anything shipped**, and the step that did ship is
+Step 3, which measures **4.8%** stripped (re-derived by the author with the shipped
+`_prose_only`, against the lens's 2.9% fence-only figure; both are an order of magnitude from 70%).
+The paragraph also contradicted its own neighbour ten lines up, which said six rules are declared
+and the rest ride unprotected. **Provenance is the part worth keeping:** the number was lifted from
+`CLAUDE.md`'s one-line Phase-275 row rather than from a command — the exact class this phase's own
+§ *The author-side pass* claims to have swept for, committed two paragraphs after making the claim.
+Rewritten to what actually happened, which is the better story: a round caught a bad choice before
+publication and the replacement was picked by measurement.
+
+Five more public-page falsehoods, all fixed: the zero-bytes claim said *"at least three situations,
+one of them an ordinary success"* where the shipped text says **two** and Phase 287 specifically
+refuted the ordinary-success reading; the never-list paraphrase inverted which half is an
+enumeration and which is written as a property of the change; `docs/history.md` said all three
+recoveries *"were rewritten to undo themselves"* when only one was; the installer's *"three sites"*
+was two-plus-a-different-shape; and the fence paragraph narrated a defect with no disposition —
+**the identical omission this phase's own rule-2 pass had caught and fixed 400 lines away.** Eight
+LOW, six fixed (the `$PATH` overstatement, *"head of the section"*, the missing scope carve-out, the
+always-loaded claim — which the record shows was *worse* than silent, since the note prescribed the
+broken call — the foreclosed month, and a pre-existing *"eighth shape"* collision this phase's own
+insertion made readable as a numbering error).
+
+**Execution lens — 4 MEDIUM, 3 LOW, and the sharpest finding of the round.** Its battery: **34
+detection mutations, 30 killed, 4 survived (11.8%)**; **10 negative controls, 3 green, 7 falsely
+reddened**. Its headline said 53 mutations, which does not reconcile with 34 + 10; the two sub-counts
+are what its tables support and are what is recorded here. The four survivors are one class:
+`SUITE_TOTAL_CLAIM` is walked by `**6,799** tests` — the bold-number form used **96** times in
+`PHASE_LOG.md` against **1** in all of `docs/` — so the author's own mutation missed it only by
+happening to use the plain form. Filed as `Q-494` with the two control defects beside it.
+
+**Finding 1 is about the gate Phase 288 shipped last night, and the author reproduced it.** A
+placed reviewer's worktree has no `.venv` **by construction**, and the remedy
+`_shared/adversarial-review.md` offers is *"an absolute path … **or** symlink it in"*. The `or` is
+false: the failing checks shell out to `tools/scan_public_history.sh`, which resolves its own
+interpreter at `:116` from the tree it stands in, so handing the reviewer an interpreter changes
+nothing. Measured by the author, same worktree, same absolute interpreter passed to pytest both
+times: `tests/test_public_history_scan.py` is **24 failed / 7 passed** bare and **31 passed**
+with `.venv` symlinked in; the lens measured the whole suite at **26 failed** against **1**. So from
+Phase 288 onward every correctly-placed lens meets ~26 reds while its brief says 1 — and this
+phase's own round brief said 1. Filed as `Q-493`, § Medium, with the note that the second failure
+direction is verbatim Phase 287's recorded defect (a battery scoring itself against an
+already-red tree), now reachable by *following* the rule rather than by neglecting it.
+
+**Disposition.** Every public-page finding fixed in branch and re-verified. Four filed rather than
+fixed — `Q-491`, `Q-492` (both shipped skill prompt bodies, never tier 1 at any size), `Q-493` and
+`Q-494` (both gate changes, never tier 1 whatever file they live in). Three record overclaims of my
+own corrected: *"every factual claim was checked"* (the round falsified six), *"nine phases of the
+twenty-three"* (a commit count wearing the word *phases*, whose own list held ten items — re-derived
+independently as **10 commits / 4 whole phases**), and *"a stamp bump is exactly the edit they exist
+to police"*, which the execution lens falsified by showing that reverting **every** stamp to the
+pre-phase value is invisible to a twelve-module sweep. That last one is the honest headline for what
+the guards do: they police partial-bump self-consistency, never currency — so the fifteen-phase
+staleness that motivated this entire phase could not have been detected by the suite.
+
+**And the register counts this phase among them.** Appending row 289 moved the derived figures from
+**89/86/3** to **90/87/3** — 90 author batteries reporting every mutation killed, 87 of them
+falsified by an independent lens, none intact. This phase's 5/5 is the ninetieth claim and the
+eighty-seventh falsification. The three sentences stating those figures (`ROUND_YIELD_LEDGER.md`'s
+reading note, and two in `tools/AUTHOR_DEFECT_REGISTER.md`) were red on the suite until they were
+updated, which is `tests/test_ledger_stats.py` doing exactly the job Phase 229 built it for: the
+register's own summary is not allowed to disagree with the derivation, so the streak cannot be
+narrated more kindly than it ran. The population line moved with it — 146 rounds, 129 numbered
+phases, 161–289.

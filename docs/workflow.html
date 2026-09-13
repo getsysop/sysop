@@ -847,8 +847,8 @@
     <div class="hero-grid">
       <aside class="hero-margin rise">
         <span class="line">Vol. <span class="accent">I</span></span>
-        <span class="line">Issue 273</span>
-        <span class="line">2026.09.08</span>
+        <span class="line">Issue 289</span>
+        <span class="line">2026.09.13</span>
         <span class="line" style="margin-top:22px">An essay on</span>
         <span class="line">software workflow</span>
       </aside>
@@ -871,7 +871,7 @@
             <div class="hero-stat-label">Skills</div>
           </div>
           <div class="hero-stat">
-            <div class="hero-stat-fig">273</div>
+            <div class="hero-stat-fig">289</div>
             <div class="hero-stat-label">Shipped phases</div>
           </div>
           <div class="hero-stat">
@@ -1125,6 +1125,44 @@
           deduplicated queue entry out, uncommitted for your sign-off. It never creates phases or touches the intent
           layer — a phase-shaped thought gets routed back to <code>/intake</code>.
         </p>
+        <p>
+          <strong>Addendum (2026-09-13).</strong> A queue answers <em>what should be worked on</em>. It turned out to
+          be silent on a question that arises constantly and had been resolved ad hoc every time: what to do with the
+          thing you notice <em>while</em> working on something else. Left unstated, it resolves badly in both
+          directions &mdash; either everything adjacent gets fixed in the branch, and the change under review quietly
+          stops being the change that was reviewed, or everything gets filed, and the queue fills with one-line
+          corrections nobody will ever schedule. So the decision was written down as three tiers, in the three places
+          an executor actually reads. <em>Fix it here</em> when the file is already in the brief, the fix is mechanical
+          or a documentation correction, a check covers it or you add the one that does, it is small, and it is not a
+          claim about what code means that you have not verified by reading it. <em>Extend an open task</em> in that
+          area. <em>File a new one</em> only past both.
+        </p>
+        <p>
+          Two details carry the weight. The first is the never-list, and its two halves are built differently on
+          purpose. Most of it is an ordinary enumeration &mdash; migrations, prompt files, money-path and auth code,
+          anything that writes to production, and whatever the project's own security-critical file list names. The
+          last member is deliberately <em>not</em> a list: <em>any</em> change that would weaken, disarm, narrow or
+          delete a gate, whatever file it lives in. It is written as a property of the change rather than a lookup
+          because an enumeration rots, and because the tier's own &ldquo;a check covers it&rdquo; test is satisfied
+          by the disarming edit itself &mdash; the kind of loop a rule has to close explicitly or it will be walked.
+          The second is that a tier-1 fix is <em>declared</em>: the task body gains an <code>## Also fixed</code>
+          section, and at close every path named there is checked against the branch's own diff, with no line allowed
+          to name something on the never-list. An absent section is never a finding &mdash; most branches fix nothing
+          extra &mdash; so the check grades what was claimed, not whether anything was claimed.
+        </p>
+        <p>
+          Tier 3 then needed a bar of its own, because &ldquo;file it&rdquo; is the tier that looks free and is not: a
+          filing costs a reader, and a queue of filings nobody can rank is the failure mode the tiers were written to
+          avoid. A new task must <em>name what it blocks</em> &mdash; a phase in progress, a planned one, a declared
+          gate, or an open task's stated acceptance &mdash; with four kinds filed regardless of that test, because
+          they are not the session's call to make: a design question, anything needing a human action, anything
+          touching a production write, and a falsifiable defect in shipped behaviour or a security finding. Everything
+          else goes to a flat one-line-per-entry <code>tasks/notes.md</code> beside the queue, which nothing routes
+          off and nothing counts. <span class="muted">The installer never creates that file; whoever writes the first
+          note creates it, which is protection by absence rather than another thing to configure.</span> Promoting a
+          note is the one carve-out to <code>/add-task</code>'s otherwise append-only rule: it files the task and
+          deletes the line in the same run, so a thought cannot be live in two places at once.
+        </p>
         <aside class="pullquote">
           <p>From here, the rest of the document applies. <code>/next-task</code> picks the first claimable entry;
             the lifecycle (§ I) takes over.</p>
@@ -1368,7 +1406,7 @@
           </div>
           <div class="entry">
             <dt>/document-work<span class="model-tag">inherits · narration</span></dt>
-            <dd>Boy-scout simplify pass, follow-up-stub <em>HARD-FAIL</em> gate, then writes <code>sysop/runtime/pending-docs/&lt;branch&gt;.md</code> for senior review.</dd>
+            <dd>Boy-scout simplify pass, follow-up-stub <em>HARD-FAIL</em> gate, then writes <code>sysop/runtime/pending-docs/&lt;branch&gt;.md</code> for senior review. The doc's frontmatter records the <code>branch_tip:</code> it was written against, stamped <em>last</em>, after the branch's final commit (Phase&nbsp;282) &mdash; which is what lets the close path tell a current narration from one the branch has since moved past.</dd>
           </div>
           <div class="entry">
             <dt>/review-close<span class="model-tag opus">opus · gate</span></dt>
@@ -1424,6 +1462,54 @@
           thing. It cannot notice that the file says two contradictory things and that which one governs depends on
           where the reader starts.</p>
         </aside>
+
+        <p>
+          <strong>Addendum (2026-09-13).</strong> The narration a branch hands to review is a claim about a tree, and
+          nothing had ever checked that the tree still looked like that. <code>/document-work</code> writes the
+          pending doc; commits then keep landing on the branch, because review found something or the author kept
+          working. The doc now carries the revision it was written against, stamped after the branch's last commit,
+          and the close path counts the commits that arrived since. Where any did, it <em>refuses to collect</em>:
+          nothing is moved, the main checkout is left exactly as it was, and the branch is skipped with its worktree
+          intact so the narration can simply be re-run. Where the stamp is missing or unreadable &mdash; an older doc,
+          a hand-cut branch &mdash; the doc is collected and the fact that staleness could not be measured is
+          <em>reported</em> rather than treated as a failure, which is the direction this page keeps arguing for: say
+          the check did not run, do not let its silence read as a pass.
+        </p>
+        <p>
+          One phase later that gate was found to be checking the wrong population, and the shape of the miss is the
+          familiar one. The refusal had been written inside the loop that walks the worktree's incoming docs &mdash;
+          but the close path has a second, entirely legitimate route where that directory does not exist at all,
+          because the doc was authored in the main checkout, and that route <em>returns before the loop</em>. So the
+          one class of doc the earlier fix had gone out of its way to keep supported was the class never compared
+          against anything. Worse, the two arms disagreed about the identical stale document: an absent directory
+          refused, an empty one passed. And the remedy printed by the refusal creates the directory &mdash; so an
+          operator following the instruction moved their next close onto the arm that does not look. The gate turned
+          itself off, correctly, by the book. What ships now lifts the comparison out of that loop entirely, so it
+          runs on both routes and over two populations &mdash; the documents arriving from the branch's
+          workspace, and the ones already sitting in the main checkout that this run will not overwrite, each
+          measured in the repository it actually lives in. Measuring the second from the first had been
+          <em>succeeding</em> and reporting no drift: measured-and-clean over a record never measured.
+        </p>
+        <p>
+          The third thread here is the one worth carrying furthest, because it is about <em>recoveries</em>. Three
+          separate documented ways out of a bad collect were each destroying the records they existed to protect. Hand
+          the collect the wrong directory &mdash; the one it is writing into &mdash; and it failed in a way whose
+          printed disposition said <em>run the rollback</em>; the rollback deletes, by provenance, every doc in the
+          main checkout claiming that branch. An operand mistake was routed by the skill's own prescribed recovery
+          into deleting the work. That prescription is gone. What replaced it is a step that undoes <em>itself</em>:
+          before overwriting anything it preserves what was there under a randomly-named temporary directory, and on
+          any failure it puts back what it displaced and removes only what it created &mdash; restoring rather than
+          unlinking, because a delete-based undo destroys the record the overwrite displaced. The rollback was then
+          found to have the same population bug as the staleness gate, one level over: it took its list of documents
+          from the worktree alone, so on the route where that directory is absent it looped zero times over a main
+          checkout that <em>was</em> holding the branch's doc, and printed <code>ROLLED BACK: none</code> at exit
+          zero. It now takes the union of both sides, and where the main checkout holds the only readable copy it
+          leaves the document in place and says so, under its own exit code, rather than achieving a clean report by
+          removing the last copy.
+          <span class="muted">A recovery path is code that runs on the worst day, and it is the least-exercised code
+          in any system. All three of these were written down as remedies before any of them was run.</span>
+        </p>
+
 
         <h3>Adjacent skills</h3>
         <p class="muted">
@@ -1735,6 +1821,42 @@
           copying: verify, correct if that is possible, refuse if it is not. The general shape is the one this section
           keeps arriving at — isolation is an assumption about a specific directory, and an assumption about a
           directory is worth what the check that identifies it is worth.</p>
+
+        <p><strong>Addendum (2026-09-13).</strong> A gap sat in this path for a long time without producing a single
+          error, because what it produced was a question for a human. &sect;&nbsp;I describes the test decision as
+          recorded at plan time and verified at close. On the autonomous path, nothing wrote it &mdash; not
+          occasionally, <em>ever</em>. Every batch branch therefore arrived at the close gate with the record classed
+          missing, and because a batch claims its tasks through the lock the ownership probe answered
+          <em>owed</em>, which is precisely the state that withholds the &ldquo;no record was required&rdquo;
+          disposition. So every close of every autonomous branch put a person in front of a waive-or-hold with no
+          third answer available, and the workflow read as working: a prompt appeared, somebody decided, the branch
+          merged. The planner now emits the decision as part of its plan and the executor persists it into the
+          branch's copy of the task body, replacing rather than appending where one already exists &mdash; every
+          reader downstream takes the first match, so an append is how you end up grading the wrong one.
+        </p>
+        <p>
+          The fix needed a second layer, and the reason generalises past this project. The executor writes the record
+          and the executor reports its own success; an agent that skipped the write, or wrote it into the main
+          checkout instead of the branch, returns an envelope indistinguishable from a compliant one, and no check
+          that agent runs can see either mistake. So the orchestrator re-reads the record <em>at the branch tip</em>
+          before counting the task executed, using the same block the single-task path already ran, pinned identical
+          by a test because a second copy that drifts is worse than no second copy. It is explicitly forbidden from
+          composing the record itself out of the plan text it is holding &mdash; which would turn a verification into
+          a fabrication &mdash; and a failure fails that task rather than halting the batch. <span class="muted">The
+          failure being closed is an agent skipping a step in its own instructions. The remedy for that cannot be
+          another step in the same instructions, given to the same agent.</span>
+        </p>
+        <p>
+          One detail from the same work is worth keeping for how small it is. The reader that finds the record walks
+          the body looking for fence markers, so it knows whether a heading it sees is real or quoted inside an
+          example. It had two of the three rules a fence has; the missing one is that a <em>closing</em> fence never
+          carries a language tag. Without it, a tagged fence nested inside a plain one reads as a close, the walker
+          believes it has left the example, and the <code>## Test decision</code> heading <em>quoted in the plan</em>
+          is certified as the branch's record. The check runs, finds what it is looking for, and passes &mdash; on
+          text that was never a record at all. What ships is the third property, written down once as a named
+          predicate both readers call rather than as a rule each of them restates: same character, at least as long,
+          and no language tag.
+        </p>
       </div>
     </div>
   </div>
@@ -1861,8 +1983,8 @@
         <p>
           Everything above assumes the review <em>ran</em>. The hardest defect class in a review system is the one
           where it didn't — because a review that dies produces the same artifact as a review that found nothing:
-          no findings, no error, a queue that looks drained. Eight shapes of that silence turned up in real runs
-          across July and August 2026, and each got its own answer.
+          no findings, no error, a queue that looks drained. Nine shapes of that silence turned up in real runs
+          between July and September 2026, and each got its own answer.
         </p>
         <p>
           <strong>A stage that died.</strong> The pre-scan used to report how many checks it <em>selected</em>. In a
@@ -2114,6 +2236,63 @@
           corrected.</span>
         </p>
         <p>
+          <strong>A round that ran, on the wrong tree.</strong> The ninth shape is this project's own adversarial
+          round, which is this section's argument turned on the instrument the rest of the page relies on to catch
+          everything else. A reviewer is spawned with its own checkout so that reading the tree cannot disturb it.
+          That checkout is created from the repository's <em>default branch</em> &mdash; not from the commit the
+          spawning session is sitting on. Under a pull-request merge policy every round runs from a branch that has
+          not merged yet, so this is not a risk, it is a certainty: every lens is handed the pre-phase tree,
+          deterministically. And a lens reading the parent commit finds nothing to report, which is indistinguishable
+          from a clean pass &mdash; or worse, reports real defects about the wrong revision, which read exactly like
+          defects in the change under review. Re-measured directly rather than inherited: a probe spawned from a
+          branch one commit ahead of the default branch reported the <em>default branch's</em> tip, and a marker
+          string that branch's own commit had introduced was absent from its checkout.
+        </p>
+        <p>
+          The uncomfortable part is not the mechanism, it is the record. The remedy was already written down, in the
+          same file the round procedure lives in, with the mechanics spelled out &mdash; and had been for a month; a
+          warning had preceded it by eighteen days carrying the <em>wrong</em> diagnosis, calling the symptom
+          non-determinism, and a wrong diagnosis can only ask for vigilance. The maintainer's own always-loaded note
+          was worse than silent: it prescribed the broken call, with no pin at all. It lapsed anyway: <strong>at least thirteen reviewers across four consecutive
+          phases</strong> were placed on the pre-phase tree, caught every time only because somebody happened to look.
+          So the fix could not be a third copy of the rule. What ships is an <em>invoker</em> and a
+          <em>receipt</em>: the requirement moved up into the body of the section a spawner actually reads at the
+          moment it spawns an agent, out of a subsection three levels down filed under <em>where the harness offers
+          it</em>; and the round ledger's
+          rows must now name the commit their lenses stood on, which a test enforces. The requirement is two halves,
+          and the second is what makes the first checkable &mdash; <em>place it</em>, by creating the checkout at the
+          commit under review and naming that revision in the prompt, and <em>make it echo</em>, by having the
+          reviewer print the revision it actually landed on before its first finding. It is scoped to the round that
+          creates its own reviewers: where an earlier step already built the checkout, there is no commit under
+          review to place anyone at, and the rule says so rather than reading as universal. The echo is where the care is:
+          it has to be read from the path the reviewer was handed, because a bare query answers about the shell's own
+          working directory, so a lens can echo the right revision while reading the wrong tree. That was
+          demonstrated by a lens reviewing this very rule.
+          <span class="muted">A reminder is not a mechanism; neither is a correct rule filed where nobody is standing
+          at the moment they need it.</span>
+        </p>
+        <p>
+          A companion finding from the phase before it is worth recording beside that one, because it is the same
+          consequence reached through something far smaller. Several shipped prompts hand a reviewing agent a loop
+          over files, with the file named by a variable. In zsh &mdash; the default shell on macOS &mdash; the
+          name <code>path</code> is tied to <code>$PATH</code>. An agent that picks the obvious loop variable
+          therefore <em>replaces</em> its own command search path on the first iteration &mdash; it does not empty
+          it, and if the value happens to name a real binary directory the command may even still resolve, which is
+          part of why this is hard to spot. Usually it does not. What the agent has already scanned still produced
+          findings; everything after returns nothing, and when the output is captured rather than shown it returns
+          nothing <em>quietly</em>, so the run ends with an approval over a remainder it never read. The fix is one word, repeated in
+          every shipped prompt that hands out that loop &mdash; name the variable <code>entry</code> &mdash; and
+          the durable half is what it forced next
+          door: a classification step that had been reading empty output as <em>this file has no such section</em>
+          now has to account for the fact that two different <em>failed</em> reads return exactly zero bytes &mdash;
+          this clobber when its output is captured, and a quieter one that returns nothing at exit 0. Neither is an
+          ordinary success: a body that genuinely lacks the section returns its content, which is not empty. Empty
+          output therefore identifies nothing on its own, so the exit status became part of the report and the
+          absent-section verdict is reachable only from output you know you read.
+          <span class="muted">Every entry in this section is a variation on one sentence: nothing came back is not
+          an answer, it is the absence of one.</span>
+        </p>
+        <p>
           A miss and a real zero are the same output. That is the whole class, and it is why the fixes here are never
           &ldquo;check harder&rdquo;: they are to derive the population from the source of truth rather than trusting an
           anchor to find it, and to give the reporting vocabulary a word for <em>nothing ran</em> so the difference
@@ -2128,7 +2307,7 @@
           class &mdash; a temp file named from its target, so two concurrent writers collide on one name &mdash; and it
           found them by matching a single spelling of the assignment. Grepping for the <em>class</em> instead turned up
           seven more writers spelled another way, across four files, none of which that pattern could match at all; a
-          review lens then found an eighth shape in two shipped skills. Each discovery had been read, at the time, as the
+          review lens then found an eighth <em>spelling</em> in two shipped skills. Each discovery had been read, at the time, as the
           list being one entry short.
         </p>
         <p>
@@ -2867,6 +3046,41 @@
           <p><strong>Additive, never load-bearing.</strong> Both hooks are JSON-first with regex fallback. If a hook crashes, is unregistered, or is missing entirely, the skill still works — it just falls back to the older parse path.</p>
           <p>Phase 7 envelope-recovery (filesystem cross-check) is the deepest fallback for <code>/auto-build</code> when no parser sees the envelope at all.</p>
         </aside>
+
+        <p>
+          <strong>Addendum (2026-09-13).</strong> The same instinct &mdash; keep the text the runner reads short,
+          put the rest where it is paid for once &mdash; produced a second mechanism, and the honest report is that
+          it is one step in, not finished. A skill body is two documents wearing one file: procedure for the agent
+          executing it, and, threaded through that, the reasons a given sentence is worded the way it is. The second
+          audience is an editor, and it is the smaller one. So the reasons moved out. <code>SKILL.md</code> stays the
+          runner; a sibling <code>REFERENCE.md</code> carries, per rule, what the rule protects, what its loss or
+          softening would change, why it is easy to soften, and which phase bought it. Claude Code does not load a
+          skill's sibling files automatically, so the split costs the runner nothing.
+        </p>
+        <p>
+          What makes it more than filing is the <em>pin</em>. Rules that earn a declaration &mdash; the record can
+          name what their loss would change &mdash; are reproduced verbatim and compared by a required check, and the
+          roster is machine-read three ways at once: the ids listed in the reference, the sections that define them,
+          and a constant inside the test module must be the same set, so retiring a rule cannot happen as a side
+          effect of an edit. The reference then says the thing such a document usually omits: six rules are declared,
+          all of them in one step, and the other six declared steps and the whole tail of the skill ride
+          <em>unprotected by construction</em> &mdash; do not read the file's existence as coverage of the skill.
+          <span class="muted">Which is the same sentence this page keeps writing about gates, applied to the
+          document that describes them.</span>
+        </p>
+        <p>
+          The worked instance the method ships with is not the one it was drafted with, and the round is why. The
+          step first chosen to demonstrate the pin was picked for being the right size &mdash; and the pin compares
+          <em>prose</em>, stripping fenced blocks first, while in that step roughly seven-tenths of the text sits
+          inside fences, because that is where the commands live and the commands are where the rules are. Measured
+          on the characters a pin could actually hold, it was under a third of the size it appeared to offer, and
+          every rule a reader would name in it was invisible to the mechanism. The round disqualified it
+          <em>before anything shipped</em>; the step that did ship was chosen by that measurement rather than by eye.
+          <span class="muted">The fence problem itself is not solved &mdash; it is filed, and it is what stops the
+          campaign moving past this first step. Two rules inside the shipped step already meet the bar for
+          declaration and cannot be declared, and the reference says so under a heading called <em>Blocked</em>
+          rather than leaving them out.</span>
+        </p>
       </div>
     </div>
   </div>
@@ -2932,6 +3146,26 @@
           records the mode, and <code>--update --mode full</code> later grows a loop install into the full
           workflow, purely additively. The day-one walkthrough is
           <a href="https://github.com/getsysop/sysop/blob/main/docs/loop-mode.md">loop mode</a>.
+        </p>
+
+        <p>
+          <strong>Addendum (2026-09-13).</strong> That lock is the installer's memory, and it turned out to be
+          reading it the way this page keeps finding things read: treating <em>I could not open it</em> as
+          <em>it is not there</em>. The two are one line apart in the code and nothing alike in consequence. An
+          absent lock means a fresh install, so the absent branch writes both timestamps from scratch &mdash; which,
+          reached by mistake on a machine that simply ran out of file descriptors under a parallel load, silently
+          overwrites the record of when the project first installed Sysop and of when it last actually changed. The
+          failure mode is not an error; it is a no-op update that reports itself as a real one. Three places on that
+          path stopped conflating the two, in two different shapes. The two that read the lock now split three ways:
+          a genuine absence is absence, a hand-mangled lock stays tolerated because a mangled file must not abort an
+          install with a traceback, and every other read failure <em>refuses</em>, before anything is written, naming
+          what it could not read. The third reads the installed-from revision rather than the lock, and splits two:
+          no repository at all is an honest unknown &mdash; that is a tarball install &mdash; while a repository
+          whose revision will not read refuses outright, because substituting the unknown there changes the recorded
+          revision, and a changed revision is precisely what makes a no-op install report itself as an update.
+          <span class="muted">The generalisation is the one the catalogue of silent failures in &sect;&nbsp;III is built on. An empty
+          result has at least two causes, and a system that cannot tell them apart will eventually pick the wrong
+          one at the worst moment &mdash; here, on the only path whose whole job is remembering.</span>
         </p>
 
         <h3 id="off-claude-code">One concrete step off Claude Code</h3>
@@ -3075,7 +3309,7 @@
       <aside class="col-rule">Colophon</aside>
       <div>
         <p class="col-body">
-          A monograph on <em>Sysop</em>, as of <em>Phase 273</em> · 2026-09-08, with dated addenda where the record
+          A monograph on <em>Sysop</em>, as of <em>Phase 289</em> · 2026-09-13, with dated addenda where the record
           moved after the snapshot. Phase numbers throughout are iterations
           of the workflow's own development — each one planned, adversarially reviewed, and shipped through the process it
           extends; <a href="https://github.com/getsysop/sysop/blob/main/PHASE_LOG.md">PHASE_LOG.md</a> carries one entry per phase. Set in the reader's native serif —
@@ -3116,7 +3350,7 @@
             <ul>
               <li>Extracted from <em>gdp-query-system</em></li>
               <li>First consumer · BeanRider</li>
-              <li>Phase 273 · 2026-09-08</li>
+              <li>Phase 289 · 2026-09-13</li>
             </ul>
           </div>
           <div>

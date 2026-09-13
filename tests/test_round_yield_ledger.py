@@ -584,3 +584,215 @@ def test_the_non_numeric_row_loop_is_observed():
         "a well-formed non-numeric row is being reported — the loop has become "
         "over-strict and the ledger's own convention no longer validates."
     )
+
+
+# --------------------------------------------------------------------------------------
+# Phase 288 (`Q-489`) — the placement receipt
+#
+# `isolation: "worktree"` forks a reviewer from the default branch, so a round run from a
+# feature branch reads the PRE-PHASE tree unless the spawner places it. That happened to at
+# least 13 reviewers across Phases 284–287 and cost a round outright at Phase 185. The
+# procedure now requires each lens to echo `git rev-parse HEAD` before its first finding;
+# this is the half that makes the omission visible from OUTSIDE the round. Inside it the
+# failure is detectable — all ≥13 misplacements WERE detected from inside, by a lens that
+# ran `rev-parse`, which is why a receipt the round writes about itself is worth anything.
+# From outside, a misplaced round is indistinguishable from a clean one: a lens on the
+# parent commit finds nothing, which reads exactly like a clean pass.
+#
+# So a binding row must name the commit its lenses stood on. A recorded skip is exempt:
+# there are no lenses to place. The floor is a NEW one — rows 174-287 predate the
+# requirement and several of them (185, 186, 187) record correct placement in prose with no
+# SHA, which is why this cannot be applied retroactively without rewriting their evidence.
+# --------------------------------------------------------------------------------------
+
+PLACEMENT_BINDS_FROM = 288
+
+
+def _label_phase(label: str) -> int | None:
+    r"""The phase number a ledger row's label refers to, or None.
+
+    **Not `int(label)`.** The first version selected rows with `^\|\s*(\d+)\s*\|`, and both
+    round lenses showed the same hole from different directions: the ledger's own two most
+    recent cut rows are labelled `274-cut` and `283-cut`, this repo shipped `159a`, `159b`
+    and `287.1`, and **the very next phase after this one is the cut** — so on the file's
+    established convention the first round to meet this guard would have escaped it.
+
+    The `< 1000` bound is what keeps `inbound-sprint triage 2026-08-11` from reading as
+    phase 2026. It is a heuristic and it is stated rather than hidden: a row whose label
+    carries no phase number at all (a bare `mirror push`, say) is not bound by this check.
+    Every row in the file today either carries one or is a recorded skip.
+    """
+    # `(?<!\d)…(?!\d)` rather than `\b…\b`: a word boundary needs a non-word character, so
+    # `\b(\d{1,3})\b` finds nothing in `288a` — the exact label shape this repo ships
+    # (`159a`, `159b`), and the one the test below caught escaping.
+    m = re.search(r"(?<!\d)(\d{1,3})(?!\d)", label)
+    return int(m.group(1)) if m else None
+
+
+# A recorded skip is the sanctioned exit, and it is the FIRST WORD of the cell, not a word
+# in it. The round's guard lens disarmed the receipt with `skip the receipt — 2 × 1 lenses
+# ran, placement not recorded`: a real round, describing itself, exempted by one token. The
+# file's three precedents all read `**skip** — <reason>`, so the separator is part of the
+# convention and can be required.
+_SKIP_CELL = re.compile(r"^skip\b\s*(?:[—–-]|$)")
+
+# Backticked AND digit-bearing. A bare `\b[0-9a-f]{7,40}\b` matches ordinary English written
+# in hex letters — `defaced`, `effaced` — and the ledger's cells are free prose, so the code
+# span alone is not the discriminator the first version claimed: the round's record lens
+# pointed out that `` `defaced` `` still satisfied it. Requiring a digit closes that.
+#
+# The residue, stated rather than hidden: an all-letter SHA prefix (p ≈ (6/16)^7 ≈ 0.14% for
+# a 7-char abbreviation, vanishing for a full 40) would be refused. That is the SAFE
+# direction — a loud false red on a real row, fixed by writing a longer abbreviation — not a
+# silent false green.
+PLACEMENT_RECEIPT = re.compile(r"`(?=[0-9a-f]{7,40}`)[0-9a-f]*\d[0-9a-f]*`")
+
+
+def placement_problems(ledger: str) -> list[str]:
+    # Same slice as `row_problems`, inlined the same way: both must read the SAME table, and
+    # a second slicer that drifts from it would silently bind a different population.
+    problems = []
+    m = re.search(r"(?m)^\|\s*Phase\s*\|", ledger)
+    if not m:
+        return ["the ledger's schema table header is gone"]
+    end = ledger.find("\n## ", m.end())
+    table = ledger[m.start():end if end != -1 else len(ledger)]
+    for row in re.finditer(r"(?m)^\|([^|]*)\|(.*)$", table):
+        label = row.group(1).strip()
+        if not label or label == "Phase" or set(label) <= set("- :"):
+            continue
+        n = _label_phase(label)
+        if n is None or n < PLACEMENT_BINDS_FROM:
+            continue
+        cells = _split_cells(row.group(2))
+        if not cells:
+            continue
+        if _SKIP_CELL.match(_unmarked_cell(cells[0])):
+            continue
+        # The WHOLE row, not the Reviewers cell. The first version scanned `cells[0]` only,
+        # and the round's record lens showed the nearest precedents put it elsewhere: Phases
+        # 285 and 286 recorded where their lenses stood in the **Diff-model** cell. A receipt
+        # guard that dictates which column the receipt goes in reddens an author who follows
+        # the file's own precedent — over-strictness in the direction that gets guards
+        # deleted. What must be true is that the row names the commit, not where it says so.
+        if not PLACEMENT_RECEIPT.search(row.group(2)):
+            problems.append(
+                f"row {label!r} names no commit its lenses stood on — record the "
+                "SHA each lens echoed (`git rev-parse HEAD`, before its first finding). A "
+                "round whose placement is unrecorded cannot be told from one that read the "
+                "pre-phase tree, and that round reports no findings."
+            )
+    return problems
+
+
+def test_binding_rows_record_where_their_lenses_stood():
+    assert placement_problems(_ledger()) == []
+
+
+def test_the_placement_check_is_not_vacuous():
+    """Driven against a synthetic ledger, not the live one: a vacuity test that depends on
+    the file's current contents stops exercising anything the moment the file changes."""
+    unrecorded = _synthetic("| 999 | 2 × 1 (a / b) | no | n/a | n/a | n/a | n/a | n/a |")
+    assert any("999" in p for p in placement_problems(unrecorded)), placement_problems(unrecorded)
+
+    recorded = _synthetic(
+        "| 999 | 2 × 1 (a / b), both placed at `4b8423b` | no | n/a | n/a | n/a | n/a | n/a |")
+    assert placement_problems(recorded) == [], placement_problems(recorded)
+
+    # The receipt must be a SHA in a code span, not any code span. A row that quotes a
+    # filename would otherwise satisfy it.
+    quoted = _synthetic(
+        "| 999 | 2 × 1 (a / b), see `adversarial-review.md` | no | n/a | n/a | n/a | n/a | n/a |")
+    assert any("999" in p for p in placement_problems(quoted)), placement_problems(quoted)
+
+    # Nor by ordinary English that happens to be spelled in hex letters. The round's record
+    # lens defeated the first version of this pattern with exactly this token.
+    hexword = _synthetic(
+        "| 999 | 2 × 1 (a / b), a `defaced` control | no | n/a | n/a | n/a | n/a | n/a |")
+    assert any("999" in p for p in placement_problems(hexword)), placement_problems(hexword)
+
+    # And the receipt may sit in ANY cell — Phases 285 and 286 recorded placement in the
+    # Diff-model cell, so binding it to the Reviewers cell would red the file's own precedent.
+    elsewhere = _synthetic(
+        "| 999 | 2 × 1 (a / b) | no, and all lenses at `102bc22` | n/a | n/a | n/a | n/a | n/a |")
+    assert placement_problems(elsewhere) == [], placement_problems(elsewhere)
+
+
+def test_a_recorded_skip_is_exempt_from_the_placement_receipt():
+    skipped = _synthetic("| 999 | **skip** — recorded reason | n/a | n/a | n/a | n/a | n/a | n/a |")
+    assert placement_problems(skipped) == [], placement_problems(skipped)
+
+
+def test_the_placement_receipt_binds_only_at_and_above_its_floor():
+    below = _synthetic(f"| {PLACEMENT_BINDS_FROM - 1} | 2 × 1 (a / b) | no | n/a | n/a | n/a | n/a | n/a |")
+    assert placement_problems(below) == [], placement_problems(below)
+    at = _synthetic(f"| {PLACEMENT_BINDS_FROM} | 2 × 1 (a / b) | no | n/a | n/a | n/a | n/a | n/a |")
+    assert placement_problems(at) != [], "the floor is off by one — it must bind AT 288"
+
+
+def test_the_placement_floor_does_not_bind_the_rows_that_predate_it():
+    """185, 186 and 187 record correct placement in prose and carry no SHA — 185 only after
+    a first dispatch it had to discard. Applying the
+    receipt retroactively would red three rows whose evidence is sound, and the repair
+    would be rewriting their record to fit a guard — the tail wagging the dog."""
+    ledger = _ledger()
+    for n in (185, 186, 187):
+        row = re.search(rf"(?m)^\|\s*{n}\s*\|.*$", ledger)
+        assert row, f"no {n} row to check the floor against"
+        assert not PLACEMENT_RECEIPT.search(row.group(0)), (
+            f"row {n} now carries a SHA receipt — if the rows below the floor have been "
+            "backfilled, lower PLACEMENT_BINDS_FROM deliberately rather than leaving the "
+            "floor describing a state that no longer holds"
+        )
+    assert placement_problems(ledger) == []
+
+
+def test_the_receipt_reaches_the_labels_the_file_actually_uses():
+    """The round's two lenses found the same hole from opposite ends: a `\\d+`-only row
+    selector misses `289-cut`, `288.1` and `288a` — and 289 IS the cut, so the first round
+    to meet this guard would have been the first to escape it."""
+    for label in ("289-cut", "288.1", "288a", "mirror push 288–289"):
+        row = _synthetic(f"| {label} | 2 × 1 (a / b) | no | n/a | n/a | n/a | n/a | n/a |")
+        assert any(label in p for p in placement_problems(row)), (
+            f"a row labelled {label!r} escapes the receipt: {placement_problems(row)}"
+        )
+    # …and the bound that keeps a date from reading as a phase number.
+    dated = _synthetic(
+        "| inbound-sprint triage 2026-08-11 | 2 × 1 (a / b) | no | n/a | n/a | n/a | n/a | n/a |")
+    assert placement_problems(dated) == [], (
+        "a 2026 date is being read as a phase number, so every dated `docs:` row predating "
+        "the floor now demands a receipt"
+    )
+
+
+def test_the_skip_exemption_is_the_first_word_and_not_a_word_in_the_cell():
+    """`skip the receipt — 2 × 1 lenses ran, placement not recorded` disarmed the first
+    version with one token, while describing a real round."""
+    abused = _synthetic(
+        "| 999 | skip the receipt — 2 × 1 lenses ran, placement not recorded "
+        "| no | n/a | n/a | n/a | n/a | n/a |")
+    assert any("999" in p for p in placement_problems(abused)), placement_problems(abused)
+    for genuine in ("**skip** — recorded reason", "skip — recorded reason", "skip"):
+        row = _synthetic(f"| 999 | {genuine} | n/a | n/a | n/a | n/a | n/a | n/a |")
+        assert placement_problems(row) == [], f"{genuine!r} is the sanctioned exit and must pass"
+
+
+def test_the_receipt_detects_OMISSION_and_says_so_rather_than_implying_more():
+    """**The limit, pinned so it cannot quietly be forgotten.** Both round lenses landed on
+    this independently: a regex receipt certifies that a SHA was *written*, not that the
+    lenses stood on the right commit. A row that records the failure in full — "both lenses
+    were handed the pre-phase tip `ab7c216` and neither re-detached" — satisfies it.
+
+    That is not a defect to be regexed away; judging the claim's truth from its prose is the
+    polarity-detection treadmill Phase 179 measured at 0 of 21. What this guard buys is that
+    the question cannot be left UNANSWERED in the record, which is the state all four of the
+    284–287 rounds were in. The answer's truth is the reader's job, and this test exists so
+    that nobody reads a green suite as the stronger claim.
+    """
+    confessed = _synthetic(
+        "| 999 | 2 × 1 (a / b), both handed the pre-phase tip `ab7c216`, neither re-detached "
+        "| no | n/a | n/a | n/a | n/a | n/a |")
+    assert placement_problems(confessed) == [], (
+        "if this now reports, the guard has started judging the claim rather than its "
+        "presence — re-read the docstring before 'fixing' it"
+    )
