@@ -151,6 +151,10 @@ def test_step1c_makes_an_empty_enumeration_visible(skill: str):
     ("does not exist in", "rev resolved, path did not"),
     ("ambiguous argument", "the operand itself was mangled"),
     ("invalid object name", "path resolved, rev did not"),
+    # Phase 287 (`Q-486`). The fifth is the one that produces NO signature: a loop
+    # variable named `path` empties $PATH in zsh, so `git` is not found and, under
+    # `2>/dev/null`, the read returns empty stdout -- `missing`'s own signature.
+    ("command not found", "the loop variable clobbered $PATH; arrives as silence"),
 ])
 def test_every_measured_git_show_failure_signature_is_routed(skill: str, signature, why):
     """Scoped to the classifier bullet, and deliberately WITHOUT a whole-file fallback.
@@ -162,7 +166,7 @@ def test_every_measured_git_show_failure_signature_is_routed(skill: str, signatu
     the outcome routed nowhere. A guard whose subject can silently widen to the whole file
     is not a guard.
     """
-    bullet = _section(skill, "- **`unreadable`**", "\n\n  **None of the four is `missing`:**")
+    bullet = _section(skill, "- **`unreadable`**", "\n\n  **None of the five is `missing`:**")
     flat_bullet = " ".join(bullet.split())
     assert len(flat_bullet) < 4000, (
         "the `unreadable` bullet slice ran away — re-anchor it rather than letting it "
@@ -758,18 +762,37 @@ def test_the_timeout_arm_still_stops(flat: str):
 
 
 def test_the_four_git_show_outcomes_keep_their_own_causes(skill: str):
-    """Lens 3 D1. The four outcomes can keep their labels and exchange their bodies: the
+    """Lens 3 D1. The outcomes can keep their labels and exchange their bodies: the
     `ambiguous argument` bullet gets the rev-does-not-exist cause and vice versa. Every
-    membership assertion passes; the classifier now misdiagnoses both."""
-    bullet = _section(skill, "- **`unreadable`**", "\n\n  **None of the four is `missing`:**")
+    membership assertion passes; the classifier now misdiagnoses both.
+
+    Phase 287 added a fifth outcome and it is asserted here with the rest -- an arm no
+    guard covers is how the first four came to need this test.
+    """
+    bullet = _section(skill, "- **`unreadable`**", "\n\n  **None of the five is `missing`:**")
+    # The last bullet has no newline inside the slice, so an end-safe fallback
+    # hands back the whole remainder -- 840 chars against a 131-567 range for the
+    # others, which makes any adjacency claim vacuous for it alone. Cap the
+    # fallback at the siblings' scale so "carries its own cause" means the same
+    # thing for the fifth outcome as for the first four.
+    CAUSE_REACH = 200
+
     def _cause(sig: str) -> str:
         i = bullet.index(sig)
-        return " ".join(bullet[i:bullet.index("\n", i)].split())
+        nl = bullet.find("\n", i)
+        end = nl if nl != -1 else min(i + CAUSE_REACH, len(bullet))
+        return " ".join(bullet[i:end].split())
     assert "the **operand itself** was mangled" in _cause("ambiguous argument"), (
         "the `ambiguous argument` outcome no longer carries its own cause"
     )
     assert "the **path** resolved but the rev did not exist" in _cause("invalid object name")
     assert "the rev resolved, the path did not" in _cause("does not exist in")
+    assert re.search(r"loop variable took `\$PATH`", _cause("command not found")), (
+        "the `command not found` outcome no longer carries its own cause NEXT TO ITS "
+        "LABEL -- the loop variable taking $PATH with it. Detaching the cause to the "
+        "far end of the bullet used to pass here, because the fallback window was "
+        "four times the siblings'"
+    )
 
 
 def test_the_allow_rule_is_matched_as_an_exact_rule_not_a_substring(skill: str):

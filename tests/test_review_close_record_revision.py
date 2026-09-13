@@ -157,11 +157,13 @@ PINS: list[tuple[str, str, str]] = [
      "shipped flow; documentation only' and kept every other token intact."),
     ("2d",
      "Surface the branch, the path you resolved, the revision you read, and **which of "
-     "the four outcomes you got**",
+     "the five outcomes you got**",
      "what `unreadable` actually does. Replacing it with 'do not surface it and do not halt' "
      "makes the classification inert while its other pins hold. Phase 219 added the fourth "
-     "clause: the four outcomes have different causes, and the disposition used to collapse "
-     "them into one — including an exit-0 read of the WRONG revision that looks like success."),
+     "clause: the outcomes have different causes, and the disposition used to collapse "
+     "them into one — including an exit-0 read of the WRONG revision that looks like success. "
+     "Phase 287 (`Q-486`) added the fifth, a clobbered $PATH, which is the only one that "
+     "arrives as silence and therefore the only one that can counterfeit `missing`."),
     ("2d",
      "`WORKFLOW_GUIDE.md` § Merge Process already says to read \"**the branch's** `## Test decision`\" back against the diff, so the branch-tip read restores the spec rather than inventing a rule",
      "the citation that makes this an alignment rather than a preference. It is the skill-side "
@@ -202,7 +204,7 @@ PINS: list[tuple[str, str, str]] = [
      "**Before believing it, re-check the `tasks/` prefix rule above — a mis-resolved path produces this identical fatal, and that is the likelier cause.**",
      "without this, the likeliest cause of the fatal is the one the reader is steered away from"),
     ("2d",
-     "**None of the four is `missing`:** nothing has been asserted about the record either way, and reporting it as `missing` would put a fabricated finding in front of the human.",
+     "**None of the five is `missing`:** nothing has been asserted about the record either way, and reporting it as `missing` would put a fabricated finding in front of the human.",
      "keeps `unreadable` and `missing` apart. Collapsing them reports a fabricated finding."),
     ("2d",
      "**`missing`** — no test-decision heading **at the branch tip**",
@@ -469,8 +471,8 @@ MUTATIONS: list[tuple[str, Callable[[str], str]]] = [
         t.replace("  " + GATE_CMD + "\n", "", 1)
          .replace("  git reset --hard origin/<default branch>\n", "  git reset --hard origin/<default branch>\n  " + GATE_CMD + "\n", 1))),
     ("R/C1 collapse `unreadable` into `missing`", _sub(
-        "**None of the four is `missing`:** nothing has been asserted",
-        "**None of the four is `missing`: each is a stricter form of it, so classify them `missing` and continue —** nothing has been asserted")),
+        "**None of the five is `missing`:** nothing has been asserted",
+        "**None of the five is `missing`: each is a stricter form of it, so classify them `missing` and continue —** nothing has been asserted")),
     ("R/D1 exempt `unreadable` from the halt", _sub(
         "**On any discrepancy, missing record, or unreadable body, halt and ask**",
         "**On any discrepancy or missing record, halt and ask** (an unreadable body is *not* a halt condition — carry it as verified)")),

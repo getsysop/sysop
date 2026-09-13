@@ -84,6 +84,29 @@ that it's a working log written for the project's own continuity, not an introdu
   turned out to be reading about nine-tenths of the lines it reported reading, and it was not
   review that found it — review had read it closely more than once — but a probe that measured its
   reach.
+  Later in the month, a question the queue had never been asked got an answer: what to do with the
+  thing you notice while working on something else. It is now three tiers — fix it in the branch
+  under stated conditions, extend an open task, or file a new one — with a never-list that is
+  mostly an ordinary enumeration and ends in one member written as a property of the change
+  instead, because an enumeration rots: any edit that would weaken or remove a check is excluded
+  at every size, whatever file it lives in. A tier-1 fix is declared in the task body and checked against the
+  branch's own diff at close; a filing has to name what it blocks, and everything that does not
+  goes to a flat notes file that nothing routes off. Alongside it, three fixes to the same
+  confusion in three different places: a narration handed to review is now stamped with the
+  revision it was written against, so a branch that kept moving is caught rather than merged on a
+  stale account of itself; the recovery paths around that step, three of which had been
+  documented as remedies and were destroying the records they existed to protect, were each fixed
+  differently — one prescription deleted outright, one step rewritten to undo itself by restoring
+  what it displaced, and the rollback given the population it had been missing plus a refusal to
+  remove a last remaining copy; and the installer stopped reading "I could not open the
+  lock" as "there is no lock", which had been quietly resetting the two dates that file exists to
+  keep. Then the review round turned on itself. An isolated reviewer is created from the
+  default branch, not from the commit being reviewed, so on any unmerged branch every lens had been
+  reading the tree as it was before the change — finding nothing, which looks exactly like finding
+  nothing wrong. The remedy had been written down for a month and was skipped anyway across four
+  consecutive phases, so what shipped was not a third copy of the rule but a place to stand: the
+  requirement moved into the text read at the moment an agent is spawned, and each round now has to
+  record, in a file a test reads, which commit its reviewers actually stood on.
 
 Where to go next: [the monograph](./workflow.html) for why it's built this way,
 [one rule, end to end](./one-rule.md) for the evidence trail behind a single rule, and
