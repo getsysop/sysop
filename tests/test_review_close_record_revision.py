@@ -57,6 +57,12 @@ because the mutation table only edits the skill and cannot reach it.
 from __future__ import annotations
 
 import re
+import sys
+from pathlib import Path as _P
+
+sys.path.insert(0, str(_P(__file__).resolve().parent))
+
+from _prose_guard_helpers import swap  # noqa: E402
 from pathlib import Path
 from typing import Callable
 
@@ -441,10 +447,15 @@ def test_shipped_skill_satisfies(check):
 # Non-vacuity — the round's demonstrated bypasses, kept as permanent regression tests
 # --------------------------------------------------------------------------------------
 
-def _sub(old: str, new: str) -> Callable[[str], str]:
+def _sub(old: str, new: str, after: str | None = None) -> Callable[[str], str]:
+    """A mutation that replaces the one WHITESPACE-TOLERANT occurrence of `old`.
+
+    `Q-495`: this was `text.replace(old, new, 1)` over a raw literal, so re-wrapping the
+    shipped sentence staled the anchor and the row reported `mutation source text not
+    found` — a failure about the harness, on an edit that is not a defect.
+    """
     def go(text: str) -> str:
-        assert old in text, f"mutation source text not found: {old[:60]!r}"
-        return text.replace(old, new, 1)
+        return swap(text, old, new, after=after)
     return go
 
 

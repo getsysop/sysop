@@ -2262,9 +2262,12 @@
           rows must now name the commit their lenses stood on, which a test enforces. The requirement is two halves,
           and the second is what makes the first checkable &mdash; <em>place it</em>, by creating the checkout at the
           commit under review and naming that revision in the prompt, and <em>make it echo</em>, by having the
-          reviewer print the revision it actually landed on before its first finding. It is scoped to the round that
-          creates its own reviewers: where an earlier step already built the checkout, there is no commit under
-          review to place anyone at, and the rule says so rather than reading as universal. The echo is where the care is:
+          reviewer print the revision it actually landed on before its first finding. It binds every spawn that
+          <em>creates</em> a checkout, not only the ad-hoc round &mdash; the scope line said &ldquo;this is the ad-hoc
+          round&rdquo; for two phases, which excluded the close path's own convention reviewers by its own terms and so
+          bound nothing where it was needed most. The carve-out is the narrow one it always was: where an earlier step
+          already built the checkout, there is no separate commit under review to place anyone at, and the rule says so
+          rather than reading as universal. The echo is where the care is:
           it has to be read from the path the reviewer was handed, because a bare query answers about the shell's own
           working directory, so a lens can echo the right revision while reading the wrong tree. That was
           demonstrated by a lens reviewing this very rule.
@@ -3062,7 +3065,7 @@
           name what their loss would change &mdash; are reproduced verbatim and compared by a required check, and the
           roster is machine-read three ways at once: the ids listed in the reference, the sections that define them,
           and a constant inside the test module must be the same set, so retiring a rule cannot happen as a side
-          effect of an edit. The reference then says the thing such a document usually omits: six rules are declared,
+          effect of an edit. The reference then says the thing such a document usually omits: eight rules are declared,
           all of them in one step, and the other six declared steps and the whole tail of the skill ride
           <em>unprotected by construction</em> &mdash; do not read the file's existence as coverage of the skill.
           <span class="muted">Which is the same sentence this page keeps writing about gates, applied to the
@@ -3070,16 +3073,26 @@
         </p>
         <p>
           The worked instance the method ships with is not the one it was drafted with, and the round is why. The
-          step first chosen to demonstrate the pin was picked for being the right size &mdash; and the pin compares
-          <em>prose</em>, stripping fenced blocks first, while in that step roughly seven-tenths of the text sits
+          step first chosen to demonstrate the pin was picked for being the right size &mdash; and the pin, as it then stood,
+          compared <em>prose</em> with fenced blocks stripped out first, while in that step roughly seven-tenths of the text sits
           inside fences, because that is where the commands live and the commands are where the rules are. Measured
           on the characters a pin could actually hold, it was under a third of the size it appeared to offer, and
           every rule a reader would name in it was invisible to the mechanism. The round disqualified it
           <em>before anything shipped</em>; the step that did ship was chosen by that measurement rather than by eye.
-          <span class="muted">The fence problem itself is not solved &mdash; it is filed, and it is what stops the
-          campaign moving past this first step. Two rules inside the shipped step already meet the bar for
-          declaration and cannot be declared, and the reference says so under a heading called <em>Blocked</em>
-          rather than leaving them out.</span>
+        </p>
+
+        <p>
+          <strong>Addendum (2026-09-14).</strong> The paragraph above was written while the fence question was still
+          open, and it was answered within the day. The canonicaliser now <em>tags</em> a wrapper instead of deleting
+          it &mdash; a fenced block survives to the character, bracketed so a pin can tell a command from prose &mdash;
+          and the two rules the reference had listed under a heading called <em>Blocked</em> were declared instead.
+          That heading is now empty and says so in place of the entries, because a section that explains why it
+          emptied is worth more than a deleted one. <span class="muted">What followed is not, on the record, what
+          that settlement bought: thinning this step never needed a new pin, and the blocker the project actually
+          names is a different one &mdash; that a re-wrap changing no words still breaks guards which were never
+          meant to constrain formatting. Once that was priced, thirteen sections of rationale moved out of the runner
+          and into the reference, and four rules were deliberately left whole, each refused on the ground that the
+          rule's reason is the thing that makes it followable.</span>
         </p>
       </div>
     </div>

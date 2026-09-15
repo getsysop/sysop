@@ -261,3 +261,35 @@ def test_the_register_says_its_dates_are_lower_bounds():
         "the case-sensitivity row's out-of-window citation is gone — that row is the "
         "worked example of a date the ledger alone cannot supply"
     )
+
+
+def test_the_falsification_detector_reads_the_phrasings_the_ledger_uses():
+    """`_FOUND` must recognise every way a row says a lens found survivors.
+
+    Widened three times, each after a row was written in a spelling it could not read — and each
+    omission scores a FALSIFIED battery as an intact one, which inflates the register's one
+    load-bearing number in the flattering direction. Phase 295 supplied the third: its row said
+    "4 gate-killing mutations, 0 caught (0/4)", and `all_killed_audit` published that phase as the
+    single row in 135 where an author's zero stood unchallenged.
+
+    This is the control the previous two widenings did not leave behind.
+    """
+    m = _mod()
+    must_match = [
+        "guard lens: 63 mutations, 40 killed, 23 survivors (36.5%)",
+        "17 SURVIVED",
+        "8 guard bypasses found",
+        "0 of 21 killed",
+        "4 gate-killing mutations, 0 caught (0/4)",
+        "0 caught",
+        "none killed",
+        "2 of 30 caught",
+    ]
+    missed = [p for p in must_match if not m._FOUND.search(p)]
+    assert not missed, (
+        f"the falsification detector cannot read {len(missed)} phrasing(s) the ledger uses or "
+        f"could plausibly use: {missed}. Each one silently scores a falsified battery as intact."
+    )
+    # And it must not fire on a row that genuinely records no independent battery.
+    for clean in ("unrecorded", "not run", "n/a — a publication cut defines no mutation battery"):
+        assert not m._FOUND.search(clean), f"detector false-fires on {clean!r}"

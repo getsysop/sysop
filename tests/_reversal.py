@@ -42,6 +42,8 @@ phrasings this project has already been burned by cannot recur silently. It is n
 general closure, and a longer list is not the remedy (`Q-374`).
 """
 
+from _prose_guard_helpers import anchor
+
 # The generic softeners. Every entry is here because a mutation walked through a guard
 # without it: the first eleven from Phase 247's round, `in practice` and the two
 # `acceptable` forms from Phase 249's, and the block after them from Phase 248's round
@@ -109,15 +111,22 @@ def assert_no_reversal(step: str, name: str, exempt=(), extra=()) -> None:
     """
     haystack = step
     for phrase in exempt:
-        n = step.count(phrase)
+        # Whitespace-tolerant on both counts (Phase 292, `Q-495`). An exemption is a whole
+        # shipped sentence; re-wrapping it staled the literal, the count went to 0, and the
+        # guard failed for a REFORMAT while every rule it protects was intact.
+        pat = anchor(phrase)
+        n = len(pat.findall(step))
         assert n == 1, (
             f"{name}: exemption {phrase!r} occurs {n} times in the step (expected exactly "
             f"1) — a stale exemption silently widens what this guard permits, and a "
             f"duplicated one carves a second hole the exemption was never granted for"
         )
-        haystack = haystack.replace(phrase, "")
+        haystack = pat.sub("", haystack)
     low = haystack.lower()
-    hits = [v for v in (*REVERSAL_VOCAB, *extra) if v.lower() in low]
+    # Tolerant here too, and this direction is the one that MATTERS: a raw `in` misses a
+    # softening whose phrase happens to straddle a line break, so re-wrapping the file was
+    # a way to hide one from this check. Tolerance closes that rather than widening it.
+    hits = [v for v in (*REVERSAL_VOCAB, *extra) if anchor(v.lower()).search(low)]
     assert not hits, (
         f"{name}: reversal vocabulary {hits} appears in the step outside its declared "
         f"exemptions. Every greppable string the pins hold can be preserved while the "
@@ -127,16 +136,42 @@ def assert_no_reversal(step: str, name: str, exempt=(), extra=()) -> None:
     )
 
 
-def slice_between(text: str, start: str, end: str, name: str) -> str:
+def slice_between(text: str, start, end, name: str) -> str:
     """The text from *start* up to *end*, failing closed if either anchor moves.
 
     A slice that silently returns "" when its end marker is renamed makes every
     negative assertion over it vacuously true — Phase 248's `test_slice_fails_closed`
     exists for exactly that, and this helper carries the same property so a caller
     cannot reintroduce it.
+
+    Either anchor may be a **compiled pattern** instead of a literal (Phase 292,
+    `Q-495`). Callers whose anchor opens with a list marker need one: the marker
+    character is presentational, a formatter that normalises `-` to `*` changes no
+    rendering, and a literal anchor then goes red over a guard that was never about
+    bullets. Keeping literals working matters as much — most anchors here are prose and
+    a pattern would make them harder to read, not safer.
     """
-    i = text.find(start)
+    def _find(a, frm: int) -> tuple[int, int]:
+        if isinstance(a, str) and not a.strip():
+            # A WHITESPACE-ONLY anchor is about whitespace -- `"\n\n"` means "the next
+            # blank line", which is a real end marker here. Tolerance is meaningless for
+            # it and `anchor()` refuses it outright, so it stays a literal find.
+            at = text.find(a, frm)
+            return at, len(a)
+        if not hasattr(a, "search"):
+            # A LITERAL anchor is read whitespace-tolerantly (Phase 292, `Q-495`): these
+            # anchors are whole shipped sentences, and re-wrapping one staled every slice
+            # keyed to it -- six of this layer's own caller checks among them. Verified
+            # offset-identical on the shipped tree before it landed: of the 19 call sites
+            # with two literal anchors, the 12 whose START anchor resolves in
+            # `review-close/SKILL.md` resolved at the SAME offset raw and tolerant, and
+            # none moved. (The other 7 anchor in other files and were not measured here.)
+            a = anchor(a)
+        m = a.search(text, frm)
+        return (-1, 0) if m is None else (m.start(), m.end() - m.start())
+
+    i, width = _find(start, 0)
     assert i >= 0, f"{name}: start anchor {start!r} not found"
-    j = text.find(end, i + len(start))
+    j, _ = _find(end, i + width)
     assert j > i, f"{name}: end anchor {end!r} not found after the start anchor"
     return text[i:j]

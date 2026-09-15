@@ -36,8 +36,10 @@ a retired rule's id retires with it.
 - `RC-3-4` — "the diff" is this pass's changed-file list, never the run's.
 - `RC-3-5` — the doc-only skip is licensed by the pass, not by the diff being harmless.
 - `RC-3-6` — the item-5 stop is about the run, not this pass.
+- `RC-3-7` — three dots on the changed-file diff, always; two silently corrupt the list.
+- `RC-3-8` — the `NO_ORIGIN_MAIN` sentinel is what makes an uncomputable scope branchable.
 
-**Coverage is one step, and one part of it.** Only Step `3` is declared today, and only six of
+**Coverage is one step, and one part of it.** Only Step `3` is declared today, and only eight of
 its rules. The other six declared steps (`4c`, `4b`, `4a`, `3b`, `1a`, `2d`) and the whole tail of
 the skill ride **unprotected**. Do not read the presence of this file as coverage of the skill.
 
@@ -176,6 +178,64 @@ Prose asserting an order is not a test of it.
 
 ---
 
+## `RC-3-7`
+
+**The rule.** The changed-file list is read with `git diff --name-only <base>...HEAD` — **three
+dots, always**. Two dots compare the two *tips*, so everything the base gained since the branch
+was cut renders as though the branch **deleted** it. The rule is stated as a shell comment inside
+the prescribed command block, which is where the operator reads it.
+
+**What its loss would change.** Not a failure — a wrong answer, silently. The two-dot form exits
+0 and returns a list, so nothing halts; the list is simply not the one the step means. Every
+narrowing decision in Step 3 reads that list and is therefore corrupted upstream of itself at
+once: item 3's surface gate arms commands for surfaces the branch never touched and skips ones it
+did, item 4's doc-only test classifies a code diff as documentation when the code files appear
+only as phantom deletions, and Step 8's `Unverified surfaces:` line reports the corruption as
+coverage. `/review-close` **manufactures** the condition rather than merely meeting it — Step 1b
+commits `review_tasks.md` to `main` before any branch is inspected — so the stale-base case is
+the normal one here, not the edge.
+
+**Where it came from.** Internal tracker #241, Phase 158, which rebuilt Step 2's diff basis for
+this defect class. Step 2a's note is the canonical statement and this comment defers to it.
+
+**What guards it besides this pin.** `tests/test_review_close_diff_basis.py` allowlists every
+two-dot `git diff` in the shipped tree by whole line, over the raw text, so a regression of the
+*command* fails there first. The pin covers what that scan cannot see: the comment that says why,
+which a rewrite could delete or invert with the command left correct — measured, and missed by
+the scan in all three shapes.
+
+---
+
+## `RC-3-8`
+
+**The rule.** The changed-file command ends `|| echo "NO_ORIGIN_MAIN"`, and the prose above it
+branches on that string. The sentinel is what converts *"the scope could not be computed"* into a
+value the runner can act on.
+
+**What its loss would change.** `RC-3-2` says a scope you could not compute must never silently
+narrow the gate, and this is the mechanism that makes that sentence executable. Without the `||`
+arm the diff alone exits 128 with `fatal: ambiguous argument` and prints nothing — so a runner
+that treats a failed command's empty output as an empty changed-file list fires *every* narrowing
+at maximum: no surface is in the list, so item 3 arms nothing; no code file is in the list, so
+item 4 skips verification entirely. The setups this lands on are the ones the skill knows least
+about — no `origin`, or a remote whose default branch is not `main`. The rule's own trigger would
+be gone while its statement, *"If it prints `NO_ORIGIN_MAIN`"*, still sat in the prose above it,
+which is the shape a round demonstrated: delete the arm and the pin stayed green.
+
+**Why it is declared separately from `RC-3-2`.** `RC-3-2` is the *policy* and is prose; this is
+the *sentinel that arms it* and is a command. They fail independently: the policy can be reworded
+with the command intact, and the command can be deleted with the policy intact.
+
+**What this declaration adds, stated narrowly because the detection already existed.**
+`tests/test_review_close_merged_tree_gate.py` pins the whole three-line scope command —
+`|| echo "NO_ORIGIN_MAIN"` included — as an *executable fenced line* in both the `step3` and
+`post` sections, so deleting the arm already fails there. The earlier § Blocked entry said as
+much. What was missing is not a detector but a **declaration**: nothing named what the sentinel
+protects or what its loss would change, so an editor met a pinned string with no reason attached.
+That is this file's job, and the roster is where it becomes machine-checkable.
+
+---
+
 ## Candidates — meet the bar, not declared
 
 These meet the § 2.2 bar and could be declared if the campaign shows Step 3 moving. They are
@@ -193,29 +253,38 @@ listed so the roster's *selection* is legible, not just its contents.
 
 ## Blocked — meets the bar, cannot be declared
 
-**The three-dot diff rule.** `git diff --name-only <base>...HEAD` uses three dots, always; two
-would render everything the base gained since a branch was cut as though the branch deleted it.
-This changes a verdict — it corrupts the changed-file list every narrowing decision reads — but
-it lives in a **shell comment inside a fenced block**, and the pin's canonicaliser strips fenced
-text before comparing. It therefore fails roster check (a) and cannot be declared under the
-current mechanism.
+**Empty since Phase 291, and the reason is the point.** This section carried two entries — the
+three-dot diff rule and the `NO_ORIGIN_MAIN` sentinel — and both were blocked for the same
+mechanical reason rather than any property of the rules: they live in a shell comment and a
+command inside Step 3's fenced block, and the pin's canonicaliser deleted fenced text before
+comparing. They were recorded here as *"the campaign's standing evidence that the fence question
+has to be settled before a command-heavy step is pinned"* (`Q-457`).
 
-**The `NO_ORIGIN_MAIN` sentinel, same reason.** `RC-3-2` depends entirely on the runner printing
-`NO_ORIGIN_MAIN` when the changed-file list cannot be computed, and the `|| echo "NO_ORIGIN_MAIN"`
-that produces it is inside the same fence. A round deleted it and the pin stayed green while the
-prose above still said *"If it prints `NO_ORIGIN_MAIN`"* — the rule's own trigger removed, its
-statement intact. (A pre-existing guard elsewhere in the suite does catch this one; the pin does
-not.)
+That question is settled. The canonicaliser now **tags** wrappers instead of deleting them, so a
+rule inside a fence is pinned while moving a rule into one still fails the pin as a change. Both
+rules are declared above as `RC-3-7` and `RC-3-8`.
 
-Both are recorded here because they are the campaign's standing evidence that the fence question
-has to be settled before a command-heavy step is pinned.
+**One correction the settlement turned up, which this section had overstated.** The entry for the
+three-dot rule described it as unguarded. Its *verdict-changing* failure mode — two dots in the
+operative command — was already caught by `tests/test_review_close_diff_basis.py`, which scans
+the raw shipped text (fences included) against a whole-line allowlist. Measured four ways against
+**that scanner** before `Q-457` was settled: the two-dot regression is **caught**; deleting the
+rationale comment, inverting it to recommend two dots, and deleting the sentinel are all
+**missed** by it. (The sentinel is caught elsewhere — see `RC-3-8` — which the old entry for it
+already said.) So what the pin adds here is protection for the *reasoning*, which no guard had,
+and a **declaration** for the rest. A rule's blocked status was never the same as a rule being
+unprotected, and this section had been read as though it were.
+
+An entry belongs here when it meets § 2.2's bar and the mechanism cannot reach it. Nothing does
+today. If something lands here again, say which mechanism cannot reach it and why, and check
+whether another guard already covers the consequence before calling the rule unprotected.
 
 ## Declared limits of this mechanism
 
 Stated so the file cannot be read as more coverage than it is. A round established each of these
 by demonstration, not by argument.
 
-- **Nothing outside Step 3 is screened.** A sentence contradicting one of these six rules,
+- **Nothing outside Step 3 is screened.** A sentence contradicting one of these eight rules,
   planted in `4a-post`, Step 3c, Step 8 or `WORKFLOW.md`, reaches no screen here. The screens are
   section-scoped deliberately — a file-wide screen reddens the step that warns about a reading,
   for the sentence that warns about it — but the consequence is a real gap, not a theoretical one:
@@ -226,20 +295,261 @@ by demonstration, not by argument.
   pattern, its screen and relaxing the pinned floor — about eight edits in one commit — passes.
   The mechanism makes deletion a visible edit to pinned constants; it does not make it
   impossible, and it never claimed to.
+- **A rule indented four spaces is invisible to the pin.** That is markdown's undelimited code
+  form, and `_flat` collapses indentation before the pin compares. Every *delimited* neutering
+  form is covered (``` and `~~~` at any length, `<!-- -->`, `<details>`, `>`), and a WHOLESALE
+  re-indent of a step is refused — but a single indented rule is not. No general detector is
+  built because 68 of the 69 deep-indented lines in `SKILL.md` are list continuations, so one
+  would mis-tag them to catch this. Filed as `Q-497`.
+- **A declared rule can be retired in three edits, not the eight this section used to imply.**
+  Measured by a round: re-point the rule's subject pattern at another sentence of the same step,
+  delete the rule, regenerate the block pin. The roster, the section and `DECLARED_IDS` stay
+  untouched. `SUBJECT_QUOTES` now pins what each pattern must match, so the re-point has to
+  replace the rule's own words and the diff says which rule left — it does not make retirement
+  impossible, it makes it legible.
+- **A re-wrap inside a prescribed command block reddens the pin.** Shell comments are tagged,
+  not deleted, so their line breaks are inside the pinned text: re-wrapping a comment block
+  moves the `#` prefixes and the pin fails as a change. That is the cost side of `Q-457`'s
+  settlement and it is deliberate — the alternative is the comment being invisible again — but
+  it is a real innocent edit going red, and `Q-458` is the open entry that prices it. Ordinary
+  prose and blockquotes are reflow-invariant; command-block comments are not.
 
 ---
 
+## Step 3b — provenance
+
+Editor-addressed history for `## Step 3b: Prepare Worktrees for Merge`. Nothing here binds the
+agent running the skill; it is why a rule in that step is shaped the way it is, so that an editor
+changing one knows what the shape was bought with. Authored, not copied — the runner keeps the
+rule, this keeps the argument.
+
+### Why `src_dir` is not in the loudness disjunction
+
+Step 3b refuses a wrong or unsubstituted worktree path outright, and for a measured reason: the
+retired copy form exited 1 on a bad path, while a bare glob over a missing directory yields
+nothing and exits 0 with a success-shaped report — after which the step removes the worktree and
+the untracked documents are gone. That rule stays in the runner.
+
+**An absent source directory was once refused by the same test, and that was wrong.** It was
+reported four times in eight days against a suite that stayed green. An absent pending-docs
+directory is the *ordinary* state of three perfectly good branches: one whose document was
+authored on the main checkout, which `/document-work` supports explicitly; a hand-cut branch that
+never ran `/document-work` at all; and a prior run that collected and then died before the
+worktree was removed. In every one of those the directory's absence **proves there is nothing to
+lose**, which is exactly the condition under which proceeding is safe. The check was sending a
+compliant operator to fix an invocation that was already correct — and the bypass that teaches is
+the untracked-document data loss the step exists to prevent.
+
+**What the check was reaching for is still refused, by a test that discriminates.** The real
+hazard is a directory that exists but is the wrong one. A checkout carries `.git`; a directory
+that merely exists does not. That question is asked only on the arm where it discriminates —
+where the source directory is present, asking it buys nothing this arm does not already get —
+a doc claiming a *different* branch is refused separately, further down — so asking here would have
+widened the refusal across the whole population and discriminated nothing. (The block this replaces
+said the present directory *"demonstrably holds this branch's pending documents"*, which is looser
+than the skill: `SKILL.md` checks `branch_of(src) != branch` and refuses a foreign doc in its own
+arm. The inaccuracy was inherited, not introduced — and relocating it into a file with almost no
+guard density is exactly how an inherited inaccuracy stops being caught, so it is corrected here.)
+
+The general shape the record already carried: **a guard that fires on the ordinary case teaches
+operators to route around it**, and the routing is what costs you the thing the guard protects —
+which is the reason given for the reversal itself, not a new rule. (A first draft closed with a
+further sentence prescribing where to site such a question. It was a design rule that had existed
+nowhere before, authored into a file § 4.1 measures as covered by nothing, which is the one thing a
+provenance section must not do.)
+
+### Why staleness is asked at Step 3b rather than at Step 4c
+
+Step 3b is the last point in the close where the branch is still in the shape its document was
+written against. Everything after it rewrites history — Step 4-pre rebases or cherry-picks, and
+Step 4a may squash — and each of those orphans the commit the document recorded. Step 4c, where
+the routing that writes the durable record actually happens, therefore cannot ask the question at
+all; the ancestry property that makes that true is the one Step 1b's own blockquote already
+documents. So it is asked at collect time and answered by refusing to collect, rather than held
+open to a step that could not settle it.
+
+### Why the recorded tip is validated before it reaches git
+
+`branch_tip:` is free-form frontmatter — whatever the document's author wrote ends up in it. An
+unvalidated value beginning with a hyphen reaches `git rev-list` as an option rather than as a
+revision, which is why the field is matched against an object-name pattern before it is used at
+all. The disposition that follows is deliberate rather than incidental: a value that is not an
+object name is not a measurement, so it takes the same arm as a git that would not answer, and is
+reported as unknown rather than as stale. Keeping those two together matters because the stale arm
+refuses the close, and a malformed field is not evidence that a document is out of date.
+
+### Why an absent source directory is dispositioned where it is
+
+The absence is reported after the branch of each document is known, because two legitimate readings
+have to be told apart: main already holds this branch's document, or no pending document exists for
+this branch anywhere. Both permit the worktree removal that follows; only the second is something
+an operator may want to act on before the branch merges, and one silent path would collapse them
+into a single outcome that says nothing.
+
+**The equivalence with an existing but empty source directory is stated in the runner rather than
+here, and deliberately.** It is a constraint on what the code may do rather than an argument about
+why it does it — an empty directory reaches the first stage with an empty document list, collects
+nothing and exits clean, and the two states must not diverge. Splitting the two apart has been
+measured once: the absent directory exited on the refusing arm while an empty one exited clean,
+over the identical stale document. That is why the sentence stays where a reader of the runner
+meets it.
+
+### Why naming the main checkout as the worktree path is refused rather than handled
+
+A document that claims the branch being processed clears the first stage when the "copy" is main's
+own file: the branch matches, so no collision fires, and the copy then raises a same-file error.
+Measured rather than reasoned. A document claiming some *other* branch is still refused earlier,
+which is why the damage needs a document for the branch actually being closed.
+
+**The refusal exists because the previous disposition was destructive.** That failure used to land
+on an exit whose documented remedy was to run the rollback — and the rollback removes, by
+provenance, every document in main claiming this branch. So an operand error destroyed exactly the
+records the step exists to protect, through the skill's own prescribed recovery rather than in
+spite of it.
+
+**It is belt to the later split's braces, not redundant with it.** The same-file failure always
+happens on the first copy, so with the later exit in place it would now land there instead —
+measured with this refusal removed, and non-destructive. The later exit fixes the disposition; this
+one refuses the operand, and the two answer different questions.
+
+**The shipped path never produces this operand.** Step 0 maps the primary checkout to its own shape
+with an empty workspace, and step 1 then skips the heredoc entirely, so the operand is reached only
+by a hand-substituted path — which is the class that exit is for.
+
+**The bound, stated because an earlier draft overstated it.** That draft claimed the check held
+"however the operator got there", which is wider than what it does. The live directory is resolved
+relative to the working directory, so the comparison is against the pending documents of wherever
+the step is run. Run from a subdirectory of main while naming the primary checkout, the two paths
+differ, the guard does not fire, and the step builds a spurious pending-docs directory under the
+working directory — measured, exiting clean with no data lost, on an off-contract working
+directory.
+
+### Why the copy stage undoes itself instead of reporting and handing over
+
+The first stage owns the principle it states in the runner: nothing is written until every document
+has been checked, so there is no partial state to undo. The copy stage cannot have that property,
+because a write either works or it does not — so it gets the same guarantee from the other side.
+
+**What it replaced was destructive.** The earlier remedy reported an exit and told the operator to
+run the rollback, and the rollback deletes by provenance: every document in main claiming this
+branch, which is not the same set as the documents this run copied. Measured on a worktree holding
+three documents, with main holding a prior run's copies of the first and third and the failure
+falling on the second: the prescribed rollback removed both of main's, while the collect's own
+"rollback required" line — all the operator had to go on — named only the first. The third was a
+record the run never touched. That is the neighbouring operand defect one exit over, a documented
+recovery destroying what the step exists to protect.
+
+**An aliased document needed no separate arm.** A symlink or hardlink into main's own pending-docs
+is invisible to the directory-level comparison, because same-file failure is about file identity
+rather than directory identity. It now lands here like any other failure, and the restore puts
+main's original back.
+
+### What the conditional unlink was measured against
+
+Three numbers sit behind the rules the runner keeps. The ordinary route leaves two copies and
+removes one; the route where the source directory is absent leaves one and would remove it,
+which is the whole reason the unlink is conditional rather than unconditional.
+
+**The aliasing case was found outside a mutation frame, by a reviewer rather than by the author.**
+A worktree entry that is a symlink pointing at main's own copy answers true to a regular-file test,
+because that test follows links. The code then unlinks the file the link points to and the link
+dangles: the run reports a successful rollback and exits clean, with zero readable copies left.
+The half that copies had already guarded that shape — same-file failure is about file identity —
+and the half that deletes had not.
+
+**Hardlinks are deliberately not treated like symlinks.** A hardlink is a genuine surviving copy:
+unlinking one link leaves the other readable, measured. A same-file comparison would hold it too,
+which is safe but raises a false alarm on the one aliasing shape that is fine. Comparing resolved
+paths separates the two, because a symlink resolves onto the destination and a hardlink does not.
+
+### Why the population is measured on both routes
+
+The first cut of this rule measured main's documents only on the arm where the source directory is
+absent, which split two states the step explicitly forbids splitting. Measured on the fixtures that
+found it: the absent directory exited on the refusing arm and an empty one exited clean, over the
+identical stale document.
+
+**The documented fix made it worse, which is the part worth keeping.** The refusing arm's own
+remedy is to re-run the documentation step — and that step creates the pending-docs directory
+unconditionally. So applying the remedy moved the close onto the arm that did not look, and the
+gate turned itself off. Both halves were found by a review round rather than in use.
+
+**The foreign-document guard was lost once and recovered by a shipped test.** Hoisting the
+staleness read out of the loop dropped the skip that runs before it, which is why the runner states
+the ordering rather than leaving it to the loop's shape.
+
+### Why the workspace shape is re-tested here even though step 0 resolves it
+
+An earlier draft of this comment claimed step 0 enforces that a workspace is a checkout. It does
+not, and the distinction is the reason the test exists. The discovered arm is git-backed, because
+it reads the head branch; the recorded arm is not — it accepts the lock's workspace on a
+directory test alone. So a stale or hand-edited lock naming a plain directory resolves as recorded
+and reaches this heredoc, and the refusal names that reason rather than reusing the generic
+invocation message. Telling an operator to fix an invocation they never typed is the mis-blame this
+arm was reshaped to remove.
+
+**A filing about this arm was wrong, and the oracle it wanted overturned stands.** The filing held
+that the fix must overturn the test pinning a wrong-but-existing worktree path. That test's fixture
+is two bare directories, which is not observationally identical to the legitimate state after all:
+the legitimate state carries a git entry, and neither the old guard nor the old test was reading
+the one fact that separates them. What changed is that the test now pins a discrimination rather
+than a conflation.
+
+### Why the workspace search has a second pass at all
+
+The prefix a claiming session used is read from that session's environment and recorded nowhere
+except a lock the claim may not have written. Without the second pass, a consumer who exports
+*that prefix* at claim time and not at close time gets no workspace — the silent incompletion this
+step exists to remove.
+
+**The relocated-root variable is the same kind of variable and is NOT cured by the second pass**,
+which is the distinction the runner states and an earlier draft of this paragraph collapsed. Both
+passes glob siblings of the repository, and a relocated root names a parent elsewhere, so no pass
+reaches it. Its narrower reach is why the unresolvable combination is a relocated *clone* claimed
+without a lock rather than every relocated workspace.
+
+**Why the residue is only the clone case.** A linked worktree appears in the porcelain listing this
+step is handed, wherever it sits on disk; a clone does not, because a clone is its own repository
+rather than a worktree git tracks. That is what narrows the unresolvable combination to a relocated
+clone claimed without a lock, rather than leaving it open for every relocated workspace.
+
+### Why the workspace scan is a heredoc rather than a shell loop
+
+An earlier draft used two bash `for` loops. Those are unauthorizable: `for` and `done` are not
+documented command separators, so no permission rule binds them, and the same reasoning is why this
+step's rollback became a heredoc too. Passing the worktree listing in as an argument is what lets
+the block run no subprocess of its own, which is the property that keeps the whole thing matching
+as a single simple command.
+
+### What ordering an unverified arm first actually cost
+
+The lock is the claim's own statement, and a claim can be stale. A lock left behind by a workspace
+that had since been deleted or moved shadowed the live one, so the discovering arm never ran, and
+the collect aborted on a path that no longer exists — with nothing in the disposition naming the
+stale lock as the cause. The rule the runner keeps is the general one; this is the incident that
+bought it.
+
+### What deciding first replaced
+
+An earlier draft copied as it went and undid the copies on a collision. Its undo deleted files main
+already held, because an overwritten document sat in the same "collected" list as a newly created
+one. Deciding before writing makes that class impossible rather than handled, which is why the
+property is stated in the runner as a guarantee rather than as an implementation note.
+
 ## Known debt
 
-**Nothing in `SKILL.md` points at this file, so nothing will open it.** Claude reads a skill's
-supporting files only when the skill body names them, and the on-demand pointer — *"if you are
-about to skip or weaken this step, read `REFERENCE.md` § `<rule-id>`"* — is not installed. The
-phase that introduced this file deliberately made no edit to `SKILL.md`. **Installing that
-pointer is the first edit of the first thinning phase, ahead of moving any text**, because until
-it exists this file's zero runner cost is the trivial kind: it costs nothing because it is never
-read.
+**Both of this section's entries were paid by Phase 293 and are kept here as the record of what
+was owed.** They read, until then: that nothing in `SKILL.md` pointed at this file so nothing
+would ever open it, and that the runner did not say its tail was unprotected.
 
-**The runner does not yet say that its tail is unprotected.** The unguarded majority of the skill
-should declare itself as such in `SKILL.md`. The phase that introduced this file deliberately made
-no edit to `SKILL.md`, so that sentence is owed by the first thinning phase. Until then, this file
-is the only place the limit is written down.
+`SKILL.md` now carries two pointers, inserted whole and reflowing nothing: one under the summary
+line, saying this file is the editor's half and is not loaded with the skill; and one under
+`## Step 3: Run Verification`, naming `RC-3-1` through `RC-3-8` and telling anyone about to skip,
+weaken or reword a rule in that step to read them first. The second also states the limit
+directly in the runner — *"the rest of this skill is not covered — do not read the file's
+existence as coverage of anything outside Step 3."*
+
+**What is still owed, and it is smaller than what was.** The pointer exists for Step `3` only,
+because Step `3` is the only step with declared rules. The other six steps the method selects
+(`4c`, `4b`, `4a`, `3b`, `1a`, `2d`) get theirs as they are declared — a pointer to an empty
+roster would be worse than none, since it would read as coverage.

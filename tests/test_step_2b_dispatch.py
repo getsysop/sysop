@@ -21,6 +21,12 @@ and each names a decision taken against a stated alternative rather than a
 wording.
 """
 import re
+import sys
+from pathlib import Path as _P
+
+sys.path.insert(0, str(_P(__file__).resolve().parent))
+
+from _prose_guard_helpers import carries  # noqa: E402
 import subprocess
 import sys
 import textwrap
@@ -110,7 +116,7 @@ def test_the_paste_and_the_prompt_agree_on_the_widened_set():
     what it wrote, and what the prompt told the agent it had. All three move
     together or the guard is worthless."""
     text = REVIEW_CLOSE.read_text(encoding="utf-8")
-    assert "not `## Prevention Conventions` alone (`Q-342`)" in text
+    assert carries(text, "not `## Prevention Conventions` alone (`Q-342`)")
     # The prompt block is no longer named after one section...
     assert "     ## Project conventions\n" in text
     # ...and the write-once arm writes the whole set, not "the section".
@@ -130,40 +136,47 @@ def test_the_security_twin_is_a_second_fleet_with_its_own_gate():
     step = m.group(0)
 
     # (a) A second agent, not a bigger prompt -- Phase 166's ~15% lens overlap.
-    assert "A second agent, not a bigger prompt" in step
+    assert carries(step, "A second agent, not a bigger prompt")
     # (b) Glob-gated, so the doc-and-glue majority spawns nothing extra...
-    assert "spawn only if some glob in either matches" in step
+    assert carries(step, "spawn only if some glob in either matches")
     # ...and the skip is searched, never assumed.
-    assert "searched absence and never an assumed one" in step
+    assert carries(step, "searched absence and never an assumed one")
     # (c) Its own paste file -- asserted at the WRITE TARGET, not as a presence
     # check. The round pointed the write at `2b-conventions.md` and this stayed
     # green, because the `rm -f` line above it still mentioned the security file:
     # an assertion satisfied by an INCIDENTAL occurrence of its own token. That is
     # the fourth instance of this shape in one phase, so it is asserted
     # positionally here and the wrong filename is refused by name.
-    m = re.search(r"write them verbatim to `([^`]+)`", step)
+    m = re.search(r"write them verbatim to\s+`([^`]+)`", step)
     assert m, "step 3b no longer names a write target for the security paste"
     assert m.group(1) == "sysop/runtime/2b-security.md", (
         f"the security twin writes its paste to {m.group(1)!r} -- pointing it at "
         f"the convention fleet's file lets a stale write from either arm satisfy "
         f"the other's freshness check, which is the defect this file exists for"
     )
-    rm = re.search(r"`rm -f ([^`]+)`", step)
-    assert rm and rm.group(1) == "sysop/runtime/2b-security.md", (
+    # `\s+` between the flag and its operand, not a literal space (`Q-495`): an inline
+    # code span may carry a soft line break, which CommonMark renders as a space, and a
+    # re-wrap put the operand on the next line -- so the pattern stopped matching at all
+    # and the guard reported the delete as RETARGETED when nothing about it had changed.
+    rm = re.search(r"`rm -f\s+([^`]+)`", step)
+    # `Q-495`: the operand is compared whitespace-normalised. A code span may carry a soft
+    # line break -- CommonMark renders it as a space -- so a re-wrap that put the path on
+    # the next line made this read the operand as changed when only its layout had moved.
+    assert rm and re.sub(r"\s+", " ", rm.group(1)).strip() == "sysop/runtime/2b-security.md", (
         "the loud-failure delete no longer targets the security paste file"
     )
-    assert "separate file from `2b-conventions.md`" in step
+    assert carries(step, "separate file from `2b-conventions.md`")
     # (d) The trap: a second baseline capture would invert step 2's delta.
-    assert "Do NOT capture a second baseline" in step
+    assert carries(step, "Do NOT capture a second baseline")
     # (e) BLOCKED authority -- the DISPOSITION, not its vocabulary. The round
     # inverted this while preserving every string the first version of this test
     # asserted ("Step 4 treats this fleet's `BLOCKED` as ADVISORY ONLY and the
     # close proceeds") and the entire suite stayed green. The twin's power to stop
     # a close is the whole of Q-352's escalation; a guard that cannot see it
     # removed is guarding the word, not the behaviour.
-    assert "VERDICT: BLOCKED` authority" in step
-    assert "advisory only — was considered and refused" in step
-    assert "Step 4 already treats *any* `BLOCKED` as a stop" in step, (
+    assert carries(step, "VERDICT: BLOCKED` authority")
+    assert carries(step, "advisory only — was considered and refused")
+    assert carries(step, "Step 4 already treats *any* `BLOCKED` as a stop"), (
         "the twin's verdict no longer routes into Step 4's stop -- an advisory "
         "security lens is the filed state with one more line of output"
     )
@@ -176,8 +189,8 @@ def test_the_security_twin_is_a_second_fleet_with_its_own_gate():
 
     # (f) And the reach is disclosed rather than implied: on a stock install most
     # of the shipped map is placeholders, so the twin skips application code.
-    assert "carry placeholder globs" in step
-    assert "still carry placeholder globs" in step, (
+    assert carries(step, "carry placeholder globs")
+    assert carries(step, "still carry placeholder globs"), (
         "the skip report does not distinguish an unlocalized map from a clean one"
     )
 

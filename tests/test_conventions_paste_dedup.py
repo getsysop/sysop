@@ -85,10 +85,22 @@ def test_the_write_rm_and_prompt_paths_are_one_path():
 def test_the_agent_arm_pins_authority_and_fails_closed():
     block = _step2b()
     flat = " ".join(block.split())
-    assert "Do NOT substitute your own worktree's CLAUDE.md" in flat, (
-        "the prompt no longer pins WHICH text agents route against — each worktree "
-        "checks out its branch's CLAUDE.md, so reviewers could diverge silently"
+    # Phase 290 (`Q-490`) reworded this deliberately and updated the pin in the same
+    # commit, per the Phase 168 precedent stated below. The old sentence was
+    # "Do NOT substitute your own worktree's CLAUDE.md", which named ONE tree; a placed
+    # reviewer can now see two (its own isolated worktree, carrying the DEFAULT branch's
+    # copy, and the pinned checkout, carrying the target's), and neither is the
+    # orchestrator's read. The property is unchanged and strictly stronger.
+    assert "Do NOT substitute a CLAUDE.md read from either tree you can see" in flat, (
+        "the prompt no longer pins WHICH text agents route against — a reviewer can "
+        "read a CLAUDE.md from two different trees and neither is the authority, so "
+        "reviewers could diverge silently"
     )
+    for tree in ("DEFAULT branch's version", "pinned checkout carries the target's"):
+        assert tree in flat, (
+            f"the prohibition no longer names {tree!r} — naming only one of the two "
+            "trees leaves the other reading as a legitimate source"
+        )
     # The WHOLE fail-closed sentence, verbatim and whitespace-normalized, ending at
     # its period — the round's CP-2 turned "STOP" into a sentence prefix ("STOP only
     # if a second read also fails; otherwise fall back…") and the prefix check

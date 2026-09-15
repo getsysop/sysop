@@ -68,21 +68,61 @@ _BARE_PROSE_COMMAND = re.compile(
 _COMMAND_WORD_BEFORE = re.compile(r"(?:bash|python3)\s*$")
 
 
+def _spans_masked(lines: list[str], keep: list[int]) -> dict[int, str]:
+    """The unfenced lines with inline code spans blanked — ACROSS line breaks.
+
+    `Q-495`: this was `re.sub(r"`[^`]*`", "", line)`, per line. An inline code span may
+    legally carry a soft line break (CommonMark renders it as a space), so a span that a
+    re-wrap split left its tail unmasked and the scan below read a command inside a code
+    span as bare prose — reporting the skill as unable to bind a permission rule for text
+    that was never outside a span. Masking preserves newlines so line numbers survive.
+    """
+    def blank(m):
+        return "".join("\n" if c == "\n" else " " for c in m.group(0))
+
+    out, run = {}, []
+    for i in keep + [None]:
+        # CONTIGUOUS runs only: a fence between two prose lines is a real boundary, and
+        # joining across it let a backtick pair with one on the far side, blanking text
+        # that the exemption below reads. A span may cross a line break; it may not cross
+        # a fenced block.
+        if run and (i is None or i != run[-1] + 1):
+            # A BLANK LINE TERMINATES an inline code span in CommonMark, and a pattern
+            # that ignores that lets one unbalanced backtick pair with another paragraphs
+            # away and blank out everything between. Measured on `review-close/SKILL.md`:
+            # the blank-line-blind form `` `[^`]*` `` masks 233,745 characters against
+            # 87,437, so 146,308 characters of prose were hidden from this scan -- the
+            # guard going blind, not merely tolerant. It is the same "a blank line is not
+            # whitespace to cross" rule `_SOFT_BREAK` states, which this phase wrote and
+            # then broke one file over. Found by its round with a planted offender.
+            masked = re.sub(r"`(?:[^`\n]|\n(?![^\S\n]*\n))*`", blank,
+                            "\n".join(lines[j] for j in run))
+            out.update(zip(run, masked.split("\n")))
+            run = []
+        if i is not None:
+            run.append(i)
+    return out
+
+
 def test_no_bare_prose_script_command_either():
     offenders = []
     for f in SHIPPED_MD:
-        fence = False
-        for i, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
+        lines = f.read_text(encoding="utf-8").splitlines()
+        fence, keep = False, []
+        for i, line in enumerate(lines):
             if line.lstrip().startswith("```"):
                 fence = not fence
                 continue
             if fence:
                 continue  # fenced commands are test_prescribed_command_coverage's domain
-            stripped = re.sub(r"`[^`]*`", "", line)  # spans are the check above's domain
+            keep.append(i)
+        masked = _spans_masked(lines, keep)
+        for i in keep:
+            stripped = masked[i]
             for m in _BARE_PROSE_COMMAND.finditer(stripped):
                 if _COMMAND_WORD_BEFORE.search(stripped[: m.start()]):
                     continue
-                offenders.append(f"{f.relative_to(REPO_ROOT)}:{i}")
+                offenders.append(f"{f.relative_to(REPO_ROOT)}:{i + 1}")
     assert not offenders, (
         "script command written in bare prose, outside any span or fence — no rule "
         "can bind it and no other module sees it (round survivor IC-2): "

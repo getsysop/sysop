@@ -24,6 +24,12 @@ So the rules here are:
 from __future__ import annotations
 
 import re
+import sys
+from pathlib import Path as _P
+
+sys.path.insert(0, str(_P(__file__).resolve().parent))
+
+from _prose_guard_helpers import anchor, carries, locate  # noqa: E402
 import subprocess
 import sys
 import textwrap
@@ -52,14 +58,21 @@ def _paragraph_containing(text: str, needle: str) -> str:
     Uniqueness is the point: an anchor that matches twice lets a check bind a
     decoy paragraph and pass while its real subject is gutted.
     """
-    assert text.count(needle) == 1, (
-        f"anchor {needle!r} occurs {text.count(needle)} times — a paragraph-scoped "
+    # Whitespace-tolerant (Phase 292, `Q-495`): these needles are whole shipped
+    # sentences, and re-wrapping one took the count to 0 — so the guard failed with
+    # "occurs 0 times" for a REFORMAT, reading as though its subject had been deleted.
+    pat = anchor(needle)
+    n = len(pat.findall(text))
+    assert n == 1, (
+        f"anchor {needle!r} occurs {n} times — a paragraph-scoped "
         f"assertion needs exactly one, or it may bind the wrong block"
     )
     for para in text.split("\n\n"):
-        if needle in para:
+        if pat.search(para):
             return para
-    raise AssertionError(f"no paragraph holds {needle!r}")
+    # A needle that straddles a blank line belongs to no single paragraph; say so rather
+    # than reporting it as absent.
+    raise AssertionError(f"no single paragraph holds {needle!r}")
 
 
 def _fence_containing(text: str, needle: str) -> str:
@@ -81,11 +94,16 @@ def _required_rule_bullet(rule: str) -> bool:
     on the rule name appearing in any prose anywhere — both measured by the round.
     """
     text = _skill()
-    head = text.index("confirm `permissions.allow` satisfies every rule below")
-    tail = text.index("Every rule named above ships in the installer's seeded allow-list")
+    # `Q-495`: tolerant, and it names the phrase when it moves. `str.index` raised a bare
+    # `ValueError("substring not found")` on a re-wrap of the pre-flight's own prose.
+    head = locate(text, "confirm `permissions.allow` satisfies every rule below").start()
+    tail = locate(text, "Every rule named above ships in the installer's seeded allow-list").start()
     for line in text[head:tail].splitlines():
         st = line.strip()
-        if not st.startswith("- `" + rule):
+        # `Q-495`: any unordered marker. Pinning `-` made a REQUIRED-permission-rule
+        # guard red on a presentational reformat; which marker carries the rule is not
+        # part of "the rule is a required bullet".
+        if not re.match(r"[-*+] `" + re.escape(rule), st):
             continue
         if re.search(r"\bnot required\b|\boptional\b|\bno longer\b", st, re.I):
             return False
@@ -112,7 +130,7 @@ def test_the_batch_set_reader_is_invoked_with_python_not_bash():
     # review_index.py --list` satisfies — a spelling that binds no allow-rule
     # (Phase 126/183 class) and is silently denied under `dontAsk`. That survivor
     # was found by this phase's own battery (row X02).
-    assert "`python3 sysop/scripts/review_index.py --list`" in para, (
+    assert carries(para, "`python3 sysop/scripts/review_index.py --list`"), (
         "Step 4b's batch-set derivation no longer names bare `python3` as the "
         "command word for review_index.py — a PATH-prefixed spelling binds no rule"
     )
@@ -378,8 +396,8 @@ def test_the_two_user_action_gates_use_the_same_predicate():
     """1c said `== true` while the round-trip uses truthiness — they diverge on
     exactly the malformed values the truthiness bias was chosen for."""
     text = _skill()
-    step1c = text[text.index("1c. **Hold back any pending-doc"):
-                  text.index("2. **If none found**")]
+    step1c = text[locate(text, "1c. **Hold back any pending-doc").start():
+                  locate(text, "2. **If none found**").start()]
     assert "truthy, **not** `== true`" in step1c, (
         "Step 1c states an equality test again; on a non-bool value it routes the "
         "doc and the round-trip then holds the task, which is the stranding path"
@@ -679,9 +697,9 @@ def test_a_held_task_keeps_its_pending_doc_so_a_later_run_can_close_it():
     # Pin the SENTENCE, not the word. `stranded` also occurs in the paragraph above
     # this one, so a word-level check passed while the sentence naming the failure
     # class was deleted (battery row S04) — the Q-340 shape yet again.
-    assert (
-        "**A silent permanent stall, arriving from a fix for a silent false close.**"
-        in step1c
+    assert carries(
+        step1c,
+        "**A silent permanent stall, arriving from a fix for a silent false close.**",
     ), (
         "Step 1c no longer names the failure class it exists to prevent — the next "
         "reader sees only the narrow remedy in Q-327 and re-introduces the stall"
@@ -923,19 +941,19 @@ def test_the_step_8_rows_the_hold_depends_on_still_exist():
 
 def test_the_doc_only_skip_predicate_reads_all_three_convention_sources():
     text = _skill()
-    start = text.index("**0. Per-target doc-only skip")
+    start = locate(text, "**0. Per-target doc-only skip").start()
     # End at the ENUMERATION's close, not at the step's. The wider slice swept in
     # the `Check the second condition` note that follows, which also names
     # `## Testing Patterns` — so dropping the sibling-section source from the list
     # left the token alive next door and this check passed (battery row P03, the
     # third instance of the Q-340 class in this phase alone). The predicate's
     # three sources are the three numbered items; assert them there.
-    close = text.index("If any of the three yields a rule", start)
+    close = locate(text, "If any of the three yields a rule").end()
     # Two scopes, deliberately. `enumeration` is where the three sources must live;
     # `predicate` extends just far enough to hold the concluding directive, and no
     # further — the note after it names the same tokens for a different purpose.
     enumeration = text[start:close]
-    predicate = text[start:text.index("Docs-only cycles are not an edge case", close)]
+    predicate = text[start:locate(text, "Docs-only cycles are not an edge case").start()]
     assert (
         "If any of the three yields a rule that could govern the touched types, "
         "spawn the agent and let it route."

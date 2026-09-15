@@ -104,7 +104,9 @@ def _arm(flat: str, label: str) -> str:
     with both labels intact and every assertion here stayed green — a gate that reads
     "retrieve" for a 5 KB diff and "paste" for a 452 KB one."""
     i = flat.index(label) + len(label)
-    ends = [flat.find(m, i) for m in ("- **", "> **") if flat.find(m, i) != -1]
+    # `Q-495`: all three unordered markers, or a marker swap moves where this arm is
+    # judged to END and the guard reads the neighbouring arm's body.
+    ends = [flat.find(m, i) for m in ("- **", "* **", "+ **", "> **") if flat.find(m, i) != -1]
     return flat[i:min(ends)] if ends else flat[i:i + 400]
 
 

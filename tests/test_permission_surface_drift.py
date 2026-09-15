@@ -53,6 +53,12 @@ word boundary, so `Bash(git:*)` covers `git worktree list --porcelain` while
 """
 import json
 import re
+import sys
+from pathlib import Path as _P
+
+sys.path.insert(0, str(_P(__file__).resolve().parent))
+
+from _prose_guard_helpers import carries  # noqa: E402
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -400,7 +406,7 @@ def test_the_resolve_section_still_says_what_it_is_for():
         "close, not default to `main`")
     # Rule A's whole point: bare invocation, never a variable. A rule does not match past a
     # variable assignment, so the assigned form binds nothing.
-    assert "not a variable to set" in body, (
+    assert carries(body, "not a variable to set"), (
         "the section no longer says the placeholder is not a shell variable — the one thing "
         "`_shared/main-push-guard.md` Rule A exists to prevent")
     assert 'DEFAULT_BRANCH="$(' in body, (

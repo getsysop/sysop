@@ -67,8 +67,83 @@ def claude_md_phase_numbers(claude_md: str) -> set[int]:
     return {int(g.group(1)) for g in re.finditer(r"(?m)^\|\s*(\d+)\s", table)}
 
 
+# A Phase log row label sorts on (major, minor, letter): `294` -> (294, 0, ""), `294.1` ->
+# (294, 1, ""), `295a` -> (295, 0, "a"). Both suffixed shapes are live in the table (`5.1`,
+# `23a`, `159a`, `287.1`, `291.1`, …) and `claude_md_phase_numbers` cannot see either, because
+# its `^\|\s*(\d+)\s` needs whitespace where those have a `.` or a letter. That blindness is
+# `Q-503`'s and is NOT fixed here — but it must not be allowed to WIDEN the exemption, which is
+# what the first version did: with `294.1` or `295a` as the newest row, `max()` over the numeric
+# set still returned 294 and kept it exempt forever. Found by this phase's round.
+_LABEL_KEY = re.compile(r"^(\d+)(?:\.(\d+))?([a-z])?")
+
+
+def _row_labels(claude_md: str) -> list[str]:
+    """The first cell of every data row in the Phase log table."""
+    m = re.search(r"^##\s+Phase log\s*$", claude_md, re.M)
+    assert m, "the Phase log heading is gone from CLAUDE.md; this guard's anchor needs revisiting"
+    # Bounded at the next `## ` heading, like `ledger_phase_rows` — whose comment records the
+    # author-side battery defeating an unscoped parse with a stray row pasted into the notes.
+    # This fails loud rather than silent (a stray row reddens several arms), but repeating an
+    # unscoped slice the module's own sibling documents as battery-defeated is not worth one line.
+    table = claude_md[m.start():]
+    stop = table.find("\n## ", 1)
+    labels = []
+    for line in (table[:stop] if stop != -1 else table).split("\n"):
+        if not line.startswith("|"):
+            continue
+        cells = [c.strip() for c in re.split(r"(?<!\\)\|", line.strip().strip("|"))]
+        if not cells or not cells[0] or cells[0] == "Phase" or set(cells[0]) <= set("- :"):
+            continue
+        labels.append(cells[0])
+    return labels
+
+
+def newest_phase_number(claude_md: str) -> int | None:
+    """The newest row's phase number, or **None when the newest row is a sub- or letter-phase**.
+
+    The one row allowed no ledger row. Derived from this module's own parsers and deliberately
+    not imported from `test_phase_log_currency.newest_label`, which answers a neighbouring
+    question over a different one. The exemption has to name a number the guard would otherwise
+    demand; two parsers that disagree either exempt a phase this one never reports (a silent
+    no-op) or fail to exempt one it does (the false red this exists to remove). Same reason,
+    opposite conclusion, to `Q-500`'s duplicate-then-diverge.
+
+    Returning `None` for a suffixed newest row is the load-bearing case, not a corner: when
+    `294.1` or `295a` opens, Phase 294 has closed, and its missing ledger row is a real lapse
+    that must be reported. The first version returned `max()` over the numeric set and so kept
+    294 exempt until the next *plain integer* phase — which is the window failing to close,
+    the one property the carve-out has to have.
+    """
+    keys = [k for k in (_LABEL_KEY.match(l) for l in _row_labels(claude_md)) if k]
+    if not keys:
+        return None
+    major, minor, letter = max(
+        (int(m.group(1)), int(m.group(2) or 0), m.group(3) or "") for m in keys)
+    return None if (minor or letter) else major
+
+
 def missing_ledger_rows(claude_md: str, ledger: str) -> list[int]:
+    """Phases that closed without a ledger row — the NEWEST phase excepted.
+
+    A ledger row for phase N cannot exist until N's round has run, and Phase 288 places
+    N's reviewers at N's own commit. Without this carve-out the guard is red for exactly
+    the interval the round gate exists to serve: measured at Phase 293, all three lenses
+    were handed `1 failed, 7026 passed` and none could baseline on green, one spending part
+    of its budget establishing that the failure was designed. A reviewer that cannot tell
+    "red because the phase is mid-close" from "red because the phase broke something"
+    either pays to find out or learns to discount a red suite, and a round that discounts
+    red is the failure the gate was built to prevent (`Q-505`).
+
+    The window is the same one `test_phase_log_currency`'s
+    `test_only_the_newest_phase_may_have_an_unresolved_commit_cell` already grants the
+    Commit cell, for the same reason: the value does not exist yet. It closes the moment
+    the next phase adds its own row — so a phase that closed and never appended is still
+    reported, which is the guard's real job.
+    """
     phases = {n for n in claude_md_phase_numbers(claude_md) if n >= LEDGER_BINDS_FROM}
+    newest = newest_phase_number(claude_md)
+    if newest is not None:
+        phases.discard(newest)
     return sorted(phases - ledger_phase_rows(ledger))
 
 
@@ -251,9 +326,161 @@ def test_the_backfill_is_present():
 def test_every_phase_from_174_has_a_ledger_row():
     missing = missing_ledger_rows(_claude_md(), _ledger())
     assert missing == [], (
-        f"phases {missing} closed (they have CLAUDE.md Phase log rows) without a "
-        "round-yield ledger row — append one per round, or a skip row with its reason, "
-        "before closing the phase"
+        f"phases {missing} closed without a round-yield ledger row — a LATER phase has "
+        "since opened its own Phase log row, so the window in which the row could not yet "
+        "exist has passed. Append one per round, or a skip row with its reason. (The "
+        "newest phase is exempt while its round runs; these are not it.)"
+    )
+
+
+def test_the_newest_phase_is_exempt_and_only_it():
+    """The carve-out `Q-505` asks for, with its own negative control.
+
+    Two fabricated rows, neither in the ledger. The higher is the newest row in the table
+    and is exempt; the lower is not newest and must still be reported. A widening of the
+    exemption to "any recent phase" fails on the second assertion, and a reversion to no
+    exemption at all fails on the first — the two arms bracket it from both sides.
+    """
+    claude_md = _claude_md()
+    fabricated = claude_md + (
+        "\n| 9998 — fabricated, not newest | `deadbee` | ✓ |"
+        "\n| 9999 — fabricated, newest | `deadbef` | ✓ |\n"
+    )
+    assert {9998, 9999} <= claude_md_phase_numbers(fabricated), (
+        "the fabricated rows did not parse; this control is testing nothing"
+    )
+    missing = missing_ledger_rows(fabricated, _ledger())
+    assert 9999 not in missing, (
+        "the newest phase was reported missing a ledger row — the carve-out is gone, and "
+        "every phase is red at its own commit for the window its reviewers read it"
+    )
+    assert 9998 in missing, (
+        "a phase that is NOT the newest was let through — the exemption has widened past "
+        "the single row whose value cannot exist yet, and a lapsed ledger now goes unseen"
+    )
+
+
+def test_the_exemption_closes_when_the_next_phase_opens():
+    """The window is per-phase and shuts the moment a newer row lands.
+
+    Phase N exempt on its own; Phase N reported the instant N+1 opens. This is the arm that
+    keeps the carve-out a *window* rather than a permanent hole at the end of the table —
+    an exemption that never closes is indistinguishable from deleting the guard.
+    """
+    claude_md = _claude_md()
+    alone = claude_md + "\n| 9998 — fabricated | `deadbee` | ✓ |\n"
+    assert 9998 not in missing_ledger_rows(alone, _ledger())
+    successor = alone + "\n| 9999 — fabricated successor | `deadbef` | ✓ |\n"
+    assert 9998 in missing_ledger_rows(successor, _ledger()), (
+        "a phase stayed exempt after a later phase opened its own row — the window never "
+        "closes, so a phase that closed and never appended is permanently invisible"
+    )
+
+
+def _ledger_with_row(ledger: str, phase: int) -> str:
+    """Insert a schema-table row for `phase`, INSIDE the table the parser reads.
+
+    Appending at end-of-file would land past `## Reading notes` and be invisible —
+    `test_a_stray_row_outside_the_schema_table_does_not_count` is the pin that says so, and a
+    fixture built the wrong way would make the test below pass for the wrong reason.
+    """
+    m = re.search(r"(?m)^\|\s*Phase\s*\|.*\n\|[-:| ]+\|\n", ledger)
+    assert m, "the schema table header/separator pair is gone; this fixture cannot be built"
+    row = f"| {phase} | fabricated | - | - | - | - | - |\n"
+    return ledger[:m.end()] + row + ledger[m.end():]
+
+
+def test_the_exemption_names_the_newest_row_even_when_that_row_IS_present():
+    """The case the other three arms cannot distinguish, and the author-side battery found it.
+
+    Every arm above fabricates phases that ALL lack ledger rows, so "the newest phase" and "the
+    highest phase with no ledger row" are the same number and a chaining implementation passes
+    them all. It is a real difference: exempting the highest UNROWED phase excuses an older
+    lapse the moment the newest phase has appended its own row — which is the ordinary state of
+    this repo between phases, not a corner.
+
+    So: 9999 newest AND rowed, 9998 older and unrowed. 9998 must be reported. A chaining
+    implementation exempts 9998 instead and returns nothing.
+    """
+    claude_md = _claude_md() + (
+        "\n| 9998 — fabricated, older, no ledger row | `deadbee` | ✓ |"
+        "\n| 9999 — fabricated, newest, HAS a ledger row | `deadbef` | ✓ |\n"
+    )
+    ledger = _ledger_with_row(_ledger(), 9999)
+    assert 9999 in ledger_phase_rows(ledger), (
+        "the fabricated ledger row did not parse — the fixture is built wrong and this test "
+        "would pass for the wrong reason"
+    )
+    missing = missing_ledger_rows(claude_md, ledger)
+    assert 9998 in missing, (
+        "an older phase with no ledger row was excused while the newest phase already had one — "
+        "the exemption is keyed to the highest UNROWED phase rather than to the newest phase, "
+        "so every lapse is forgiven one phase at a time"
+    )
+    assert 9999 not in missing, "the newest phase has a row and must not be reported regardless"
+
+
+def test_the_window_closes_on_a_SUFFIXED_successor_too():
+    """The successor shapes `test_the_exemption_closes_when_the_next_phase_opens` cannot see.
+
+    Found by this phase's round, which measured the first version keeping 294 exempt under a
+    `294.1` or `295a` successor — `[]` where it must be `[294]` — because the numeric parser
+    cannot see either label and `max()` over what it CAN see still returned 294. Both shapes
+    are live in the real table (`5.1`, `23a`, `159a`, `287.1`, `291.1`). Self-healing at the
+    next plain integer, which is why it is a hole rather than a hemorrhage — and why the arm
+    exists, since a hole that heals is exactly the kind nobody notices.
+    """
+    claude_md = _claude_md() + "\n| 9998 — fabricated, closed, no ledger row | `deadbee` | ✓ |\n"
+    assert 9998 not in missing_ledger_rows(claude_md, _ledger()), (
+        "the fixture is wrong: 9998 must start out exempt as the newest row, or the arms "
+        "below prove nothing about the successor"
+    )
+    for successor, shape in (
+        ("9998.1 — fabricated sub-phase", "sub-phase, the 287.1 / 291.1 shape"),
+        ("9999a — fabricated letter phase", "letter phase, the 159a / 23a shape"),
+        ("9999 — fabricated numeric", "plain integer, the control"),
+    ):
+        with_successor = claude_md + f"| {successor} | `deadbef` | ✓ |\n"
+        assert 9998 in missing_ledger_rows(with_successor, _ledger()), (
+            f"a {shape} opened above 9998 and 9998 stayed exempt — the window does not close "
+            "on this successor shape, so a phase that closed and never appended is invisible "
+            "until the next plain-integer phase"
+        )
+
+
+def test_a_suffixed_newest_row_exempts_nobody():
+    """The direct statement of `newest_phase_number`'s contract.
+
+    A sub- or letter-phase as the newest row means the integer below it has CLOSED, so nothing
+    is exempt. Asserted on the function rather than through `missing_ledger_rows` so a future
+    refactor cannot satisfy the arm above by some other route while the contract rots.
+    """
+    claude_md = _claude_md()
+    assert newest_phase_number(claude_md + "\n| 9999 — numeric | `a1b2c3d` | ✓ |\n") == 9999
+    for suffixed in ("9999.1 — sub-phase", "9999a — letter phase"):
+        assert newest_phase_number(claude_md + f"\n| {suffixed} | `a1b2c3d` | ✓ |\n") is None, (
+            f"{suffixed!r} as the newest row returned a number; it must return None, because "
+            "the phase below it has closed and owes its row"
+        )
+
+
+def test_the_exemption_is_keyed_to_the_newest_row_not_to_a_missing_one():
+    """Exempting "the highest phase with no ledger row" instead of "the highest phase"
+    would walk an unbounded tail through: 294, 293, 292 … each in turn becoming the
+    highest *unrowed* phase as the one above it is excused. Two unrowed rows above the
+    real table's newest must yield exactly one exemption, and that is the assertion.
+    """
+    claude_md = _claude_md()
+    fabricated = claude_md + (
+        "\n| 9997 — fabricated | `deadbec` | ✓ |"
+        "\n| 9998 — fabricated | `deadbee` | ✓ |"
+        "\n| 9999 — fabricated | `deadbef` | ✓ |\n"
+    )
+    missing = missing_ledger_rows(fabricated, _ledger())
+    exempted = {9997, 9998, 9999} - set(missing)
+    assert exempted == {9999}, (
+        f"expected exactly the newest fabricated row to be exempt, got {sorted(exempted)} "
+        "— the exemption is chaining down the tail instead of naming one row"
     )
 
 
@@ -271,11 +498,20 @@ def test_a_stray_row_outside_the_schema_table_does_not_count():
 
 def test_the_pace_keeping_guard_is_not_vacuous():
     """A fabricated future phase must be reported missing — otherwise the guard passes
-    because it is reading nothing."""
+    because it is reading nothing.
+
+    It takes TWO fabricated rows since `Q-505`: the newest row is exempt by design, so a
+    single `| 9999 |` would now be excused and this control would pass over a guard that
+    had stopped reading. The lower row is the one under test; the higher exists only to
+    stop the lower from being the newest.
+    """
     claude_md = _claude_md()
-    fabricated = claude_md + "\n| 9999 — fabricated | `deadbeef` | ✓ |\n"
-    assert 9999 in claude_md_phase_numbers(fabricated)
-    assert 9999 in missing_ledger_rows(fabricated, _ledger())
+    fabricated = claude_md + (
+        "\n| 9998 — fabricated | `deadbee` | ✓ |"
+        "\n| 9999 — fabricated successor | `deadbef` | ✓ |\n"
+    )
+    assert 9998 in claude_md_phase_numbers(fabricated)
+    assert 9998 in missing_ledger_rows(fabricated, _ledger())
 
 
 def test_no_ledger_row_is_stranded_outside_the_schema_table():

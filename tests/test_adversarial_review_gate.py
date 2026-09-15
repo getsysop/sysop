@@ -24,9 +24,10 @@ and the partial's other sections satisfied deletions from this one.
 """
 from __future__ import annotations
 
+import bisect
 import re
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Iterable
 
 import pytest
 
@@ -464,12 +465,37 @@ def _prose_only(text: str) -> str:
     demonstrated, one file over. Stripping both first makes a neutered rule read as a
     deleted one, which is what it is.
     """
-    text = re.sub(r"<!--.*?-->", "", text, flags=re.S)
-    text = re.sub(r"^```.*?^```", "", text, flags=re.S | re.M)
+    # FENCES FIRST. A `<!--` inside a fence is literal text, but this ran comment-stripping
+    # first and `<!--.*?-->` is not fence-aware, so it consumed the fence's closing delimiter
+    # and everything up to the next `-->` ANYWHERE later in the file — deleting real prose,
+    # not merely failing to strip it. Found by this phase's round, in the sibling of the bug
+    # the phase had already fixed in `_wrapper_spans`. Ordering is the whole fix: a fence
+    # removed first cannot contribute a stray opener.
+    # ANY indent, EITHER delimiter, and a closer that matches its own opener (`Q-457`,
+    # Phase 291). This was `^``` `, column-0-anchored and backtick-only, and both halves
+    # were live holes. The indent half: this file's own indented `config-baseline` snippet
+    # survived into the rendered text while its column-0 `lsof` snippet did not — two
+    # prescribed commands in one section, one covered and one invisible, decided by nothing
+    # but indentation. The delimiter half was found by this phase's round and is worse:
+    # `~~~` is legal CommonMark, GitHub renders it as a code block, and this pattern did not
+    # match it — so wrapping the gate paragraph in `~~~` left `gate_problems` at ZERO while
+    # the same wrap in ``` returned three. That is Phase 167's "gate commented out" survivor
+    # reached through a different delimiter, in the function written to refuse it.
+    # Each of the three runs to its closer OR to end-of-file, because an unterminated wrapper
+    # hides everything after it on GitHub and the honest rendering is that it is gone. This
+    # half was missing and the round's own new test found it: an unterminated ``` , `~~~` or
+    # `<details>` planted before a guarded subsection left `_author_pass_slice` returning the
+    # subsection **in full**, so every presence predicate passed over text no reader can see.
+    # Only `<!--` failed closed, and by luck — its unterminated opener happened to reach a
+    # later comment's `-->` and swallow the start marker. `_tagged` already ran these to EOF;
+    # the two canonicalisers now give the same answer.
+    text = re.sub(r"^[ \t]*(`{3,}|~{3,})[^\n]*\n(?:.*?^[ \t]*\1[ \t]*$|.*)", "",
+                  text, flags=re.S | re.M)
+    text = re.sub(r"<!--(?:.*?-->|.*)", "", text, flags=re.S)
     # A `<details>` block renders collapsed. Same neutering, different markup — and an
     # UNCLOSED one still collapses on GitHub while surviving this substitution, so the
     # leftover tag is screened as a contradiction below rather than trusted to be stripped.
-    text = re.sub(r"<details\b.*?</details>", "", text, flags=re.S | re.I)
+    text = re.sub(r"<details\b(?:.*?</details>|.*)", "", text, flags=re.S | re.I)
     # Blockquote too, and here it is not merely neutering: in THIS file `>` marks text to be
     # copied verbatim into a reviewer's prompt (§ Prompt Template). A blockquoted rule has
     # not been softened, it has been re-addressed — to the reviewer whose existence the rule
@@ -484,6 +510,816 @@ def _prose_only(text: str) -> str:
     # cannot distinguish an ordered marker from a sentence ending in a number — "exited 128.
     # This is rule 1's…" would fold mid-prose and corrupt the comparison.
     return re.sub(r"(?m)^(\s*)(?:\*|\d+\.)\s", r"\1- ", text)
+
+
+# --------------------------------------------------------------------------------------
+# The wrapper TAGGER — `_prose_only`'s other half (`Q-457`, Phase 291)
+# --------------------------------------------------------------------------------------
+#
+# `_prose_only` above answers one question: *what does a reader still see?* It answers it by
+# deletion, which is right for a **presence** check — a rule wrapped in a fence or a comment
+# has been neutered, and a presence predicate that still finds its words reports a rule that
+# reaches nobody. That is Phase 167's "gate commented out" survivor and it is why the
+# function exists.
+#
+# It is the wrong question for a **verbatim pin over `review-close/SKILL.md`**, and `Q-457`
+# is that mismatch. There, fenced blocks are the *prescribed commands* and blockquotes are
+# notes to the operator: both are operative, and deleting them before the pin compares makes
+# the load-bearing half of the step unpinnable. Measured at the filing: `1a` is 70.6% fenced,
+# `4c` is 37.3% blockquote with **no column-0 fences at all**, and two rules that change a
+# verdict — Step 3's three-dot diff rule and its `NO_ORIGIN_MAIN` sentinel — sat in
+# `REFERENCE.md` § Blocked precisely because a pin could not see them.
+#
+# So the two questions get two functions rather than one policy flag. `_tagged` keeps every
+# character and makes the *wrapper* visible instead, as a marker pair around each region:
+#
+#   * a rule that moves from plain prose into a fence, a blockquote or a comment changes the
+#     canon (a marker appears), so the pin reddens — the same property deletion gave, stated
+#     as a change rather than as a disappearance, which is the more legible diff;
+#   * a rule that already lives inside one is *pinned*, which deletion could never do;
+#   * and where the wrapper's delimiters fall OUTSIDE a slice's anchors — the shape that
+#     defeats a no-strip policy, measured on both slicers before this was written — the
+#     anchor itself lands inside an open region and `_anchor_is_wrapped` fails the slice
+#     closed.
+#
+# Three properties are load-bearing and each is tested below, because each was a defect in a
+# discarded draft:
+#
+#   * **Reflow-invariant.** Markers bracket a REGION, never a line, and a blockquote's `>`
+#     prefixes are dropped with the content kept. A per-line marker made re-wrapping a
+#     blockquote change the canon, which is Phase 168's 19-innocent-edits-in-30 all over
+#     again, aimed at the one class of text a thinning campaign edits most.
+#   * **Indent-invariant.** A marker is inserted at the first non-space character of its
+#     delimiter line, not at the line start, so `_flat` cannot tell an indented fence from a
+#     column-0 one. `_prose_only`'s `^``` ` was column-0-anchored and this is the same fix
+#     applied there: measured in this very file, the indented `config-baseline` snippet
+#     survived into the rendered text while the column-0 `lsof` snippet did not — two
+#     prescribed commands in one section, one covered and one invisible, decided by nothing
+#     but indentation.
+#   * **Unterminated wrappers run to EOF.** An unclosed fence really does render everything
+#     after it as code, so tagging to EOF is faithful to what a reader sees, and the
+#     containment check then reports every later step as neutered — loudly. This is the
+#     opposite call from `review_index.py`'s `_fenced_mask`, deliberately: that parser ACTS
+#     on what it reports (a wrong mask flips a consumer's checkboxes), while the worst this
+#     can do is redden a test.
+#
+# Regions **nest**; they are not disjoint, and an earlier draft of this comment said they
+# were. Two nestings are live and they point opposite ways: `review-close/SKILL.md` carries
+# 10 fence delimiter lines inside blockquotes and `adversarial-review.md` carries a
+# commented-out block inside one (blockquote outer), while commenting out a whole step wraps
+# that step's own fences and blockquotes (comment outer). A class-PRIORITY resolver cannot
+# express both, and a draft that tried got one wrong each way it was ordered — see
+# `_wrapper_spans`. Resolution is by containment instead. What lets `_anchor_is_wrapped` be
+# a per-class open/close count rather than a stack is narrower than disjointness: **no class
+# ever nests inside itself.**
+
+TAG_COMMENT, TAG_FENCE, TAG_DETAILS, TAG_QUOTE = "comment", "fence", "details", "quote"
+
+# The class list. Order is immaterial to every consumer — `_without` and
+# `_anchor_is_wrapped` are per-class and `ALL_TAG_MARKERS` is a flatten — and it is NOT the
+# resolution order, which lives in `_wrapper_spans` and is fences, then comments, then
+# blockquotes. An earlier version of this comment claimed the two were the same thing and
+# was wrong about the code directly below it.
+TAG_CLASSES: tuple[str, ...] = (TAG_QUOTE, TAG_FENCE, TAG_COMMENT, TAG_DETAILS)
+
+# Classes that NEUTER rather than carry. Comments and `<details>` hide text from every
+# reader in every file; fences and blockquotes are file-dependent, which is the whole of
+# `Q-457`, so they are not on this list and each caller states its own policy.
+NEUTERING_TAGS: frozenset[str] = frozenset({TAG_COMMENT, TAG_DETAILS})
+
+# A fence delimiter is 3+ backticks OR 3+ tildes. Both are legal CommonMark and GitHub
+# renders both; a backtick-only pattern let `~~~` wrap a whole step with the pin green, which
+# is what this phase's round found. `_FENCE_LINE` answers "is this line a delimiter at all";
+# pairing needs the char and the length too, so `_fence_delim` returns them and
+# `_wrapper_spans` requires a closer of the SAME character, AT LEAST as long, with nothing
+# after it. Without the length rule a 3-backtick line inside a 4-backtick block closes it and
+# the rest of the block renders as prose.
+_FENCE_LINE = re.compile(r"^[ \t]*(`{3,}|~{3,})([^\n]*)$")
+_QUOTE_LINE = re.compile(r"^[ \t]*>")
+
+
+def _fence_delim(line: str) -> tuple[str, int, str] | None:
+    """`(char, length, info)` when `line` is a fence delimiter, else `None`."""
+    m = _FENCE_LINE.match(line)
+    if not m:
+        return None
+    run = m.group(1)
+    return run[0], len(run), m.group(2)
+
+
+def _closes_fence(line: str, char: str, length: int) -> bool:
+    """CommonMark's closing rule: same character, at least as long, nothing but space after."""
+    d = _fence_delim(line)
+    return bool(d) and d[0] == char and d[1] >= length and not d[2].strip()
+
+
+def _tag_open(cls: str) -> str:
+    return f"[[{cls}]]"
+
+
+def _tag_close(cls: str) -> str:
+    return f"[[/{cls}]]"
+
+
+ALL_TAG_MARKERS: tuple[str, ...] = tuple(
+    m for cls in TAG_CLASSES for m in (_tag_open(cls), _tag_close(cls))
+)
+
+
+def _line_bounds(text: str) -> list[tuple[int, int]]:
+    """(start, end) of every line, end excluding the newline."""
+    out, pos = [], 0
+    for line in text.split("\n"):
+        out.append((pos, pos + len(line)))
+        pos += len(line) + 1
+    return out
+
+
+def _inner_span(text: str, a: int, b: int) -> tuple[int, int]:
+    """Shrink [a, b) to its first and last non-space characters.
+
+    This is the indent-invariance fix: a marker placed at a LINE start sits before the
+    indentation, so `_flat` renders `  ```bash` and ```` ```bash ```` differently once a
+    marker precedes them. Placed at the first non-space character it cannot. Newlines count
+    as space here too, which is what keeps a region tagged to end-of-file from putting its
+    closer past the last character anyone wrote.
+    """
+    while a < b and text[a].isspace():
+        a += 1
+    while b > a and text[b - 1].isspace():
+        b -= 1
+    return a, b
+
+
+# Markdown's OTHER code form has no delimiters: four spaces of indentation renders a block as
+# code. `_flat` collapses indentation, so a pin cannot see it at all — this phase's round
+# indented Step 3's body, left the headings at column 0, and got a byte-identical slice, a
+# green pin, and **one new failure across 95 modules**, which was an unrelated fixture's
+# anchor rather than a detection.
+#
+# **A general detector is not built, and the reason is measured rather than asserted.**
+# CommonMark's indented code block is "4+ spaces and not inside a list item", and separating
+# those needs a block parser that tracks list container indentation. In
+# `review-close/SKILL.md` **69** non-blank lines outside any wrapper are indented >= 4 and
+# **68 of them are list continuations** — so a naive rule mis-tags 68 real list items in a
+# 467 KB file to catch one thing, which is the over-strictness direction at its worst.
+#
+# What IS built is bounded to the shape the round demonstrated: a WHOLESALE re-indent, where
+# the guarded region's own body goes from a handful of deep lines to nearly all of them.
+# Measured at this commit: Step 3 is **2 of 29 (6.9%)**, the author-side subsection **0 of
+# 25**, the whole of `review-close/SKILL.md` **69 of 651 (10.6%)**; under the round's attack
+# Step 3 becomes **29 of 31 (93.5%)**. The floor below sits far above the first set and far
+# below the second.
+#
+# **What it does not catch, stated rather than implied:** a SINGLE rule indented four spaces.
+# That renders as code, the pin cannot see it, and this ratio will not move. `REFERENCE.md`
+# § Declared limits carries it and `Q-497` is filed against it.
+INDENT_CODE_FLOOR = 4
+INDENT_NEUTERED_RATIO = 0.5
+
+
+def _indent_neutered(text: str) -> bool:
+    """True when a region's own unwrapped body has been indented into a code block."""
+    covered: set[int] = set()
+    for a, b, _cls in _wrapper_spans(text):
+        covered.update(range(a, b))
+    total = deep = 0
+    for s, e in _line_bounds(text):
+        line = text[s:e]
+        if not line.strip() or s in covered:
+            continue
+        total += 1
+        if len(line) - len(line.lstrip(" \t")) >= INDENT_CODE_FLOOR:
+            deep += 1
+    return bool(total) and deep / total > INDENT_NEUTERED_RATIO
+
+
+def _matching_close(text: str, start: int, opener: str, closer: str) -> int:
+    """Index of the closer that balances an opener already consumed, or -1.
+
+    Only `<details>` needs this — it is the one wrapper here that can contain itself. An
+    unbalanced run yields -1, which the caller turns into a region running to EOF, the same
+    answer an unterminated fence gets and for the same reason: that is what renders.
+    """
+    depth, i = 1, start
+    while depth:
+        nxt_open, nxt_close = text.find(opener, i), text.find(closer, i)
+        if nxt_close == -1:
+            return -1
+        if nxt_open != -1 and nxt_open < nxt_close:
+            depth += 1
+            i = nxt_open + len(opener)
+        else:
+            depth -= 1
+            if not depth:
+                return nxt_close
+            i = nxt_close + len(closer)
+    return -1
+
+
+def _wrapper_spans(text: str) -> list[tuple[int, int, str]]:
+    """`(start, end, class)` regions, PROPERLY NESTED, in document order.
+
+    `start`/`end` are already shrunk to non-space bounds so inserting markers at them is
+    indentation-blind.
+
+    **Nesting is real here and a priority order cannot express it.** Two shapes are live in
+    the guarded files and they nest opposite ways: `review-close/SKILL.md` carries **10**
+    fence delimiter lines inside blockquotes and `adversarial-review.md` carries a
+    commented-out block inside one (so the blockquote is outer), while commenting out a
+    whole step wraps that step's own fences and blockquotes (so the comment is outer). A
+    first draft resolved classes by priority into DISJOINT spans and got one of the two
+    wrong each way it was ordered: comments-first split that blockquote in three and left a
+    bare `>` in the rendered text; blockquote-first made the comment overlap a claimed
+    region, so it was dropped entirely and **a whole step commented out came back GREEN** —
+    the Phase 167 survivor, rebuilt inside its own fix.
+
+    Resolution is therefore by *containment*, in one order that respects markdown's own:
+
+      1. **Fences**, from delimiter lines. `_FENCE_LINE` allows only spaces and tabs before
+         the backticks, so a quoted delimiter (`> ``` `) is not one — that, and not any check
+         in the loop, is why those 10 lines need no special case.
+      2. **Comments and `<details>`**, outside any fence — inside one they are literal text.
+      3. **Blockquote runs**, each contiguous run of `>` lines as ONE region.
+
+    Anything that partially overlaps rather than nests is refused by `_unhandled_nesting`
+    rather than mis-rendered.
+    """
+    lines = _line_bounds(text)
+    spans: list[tuple[int, int, str]] = []
+
+    # 1. Fences: line-oriented, ANY indent, toggling. An unterminated one runs to EOF — an
+    #    unclosed fence really does render everything after it as code.
+    # No quoted-delimiter check here, and an earlier draft's was DEAD CODE its own battery
+    # exposed: `_FENCE_LINE` allows only spaces and tabs before the run, and a quoted
+    # delimiter has a `>` there, so `> ``` ` is simply not a fence line. That is the real
+    # reason the 10 quoted delimiters in `review-close/SKILL.md` need no special case, and
+    # `test_a_widened_fence_pattern_would_invert_the_nesting` guards the pattern that
+    # carries it.
+    fences: list[tuple[int, int]] = []
+    open_k: int | None = None
+    open_char, open_len = "", 0
+    for k, (s, e) in enumerate(lines):
+        line = text[s:e]
+        if open_k is None:
+            d = _fence_delim(line)
+            if d and not (d[0] == "`" and "`" in d[2]):
+                # A backtick opener's info string may not contain a backtick (CommonMark),
+                # which is what keeps an inline `` `code` `` span off this branch.
+                open_k, open_char, open_len = k, d[0], d[1]
+        elif _closes_fence(line, open_char, open_len):
+            fences.append((lines[open_k][0], e))
+            open_k = None
+    if open_k is not None:
+        fences.append((lines[open_k][0], len(text)))
+    spans += [(a, b, TAG_FENCE) for a, b in fences]
+
+    # 2. Character-oriented wrappers, which may open and close mid-line.
+    # `<details>` NESTS; `<!-- -->` does not (a comment ends at its first `-->`). Taking the
+    # first closer for both was a defect this phase's round found: in
+    # `<details>A<details>B</details>C</details>` the region ended at the INNER closer, so
+    # `C` renders collapsed on GitHub and read as live prose here. It is the one shape that
+    # breaks "no class ever nests inside itself", which `_anchor_is_wrapped` depends on.
+    for cls, opener, closer, nests in (
+        (TAG_COMMENT, "<!--", "-->", False),
+        (TAG_DETAILS, "<details", "</details>", True),
+    ):
+        i = 0
+        while True:
+            a = text.find(opener, i)
+            if a == -1:
+                break
+            if any(lo <= a < hi for lo, hi in fences):
+                # Literal text inside a fence: skip past the OPENER only. Skipping past its
+                # computed `end` was this resolver's own bug, found by the fixture written
+                # for it — a `<!--` inside a fence matched the next `-->` anywhere later in
+                # the file and the scan resumed past it, so the first genuine comment after
+                # a fence containing the token was never tagged at all.
+                i = a + len(opener)
+                continue
+            b = _matching_close(text, a + len(opener), opener, closer) if nests \
+                else text.find(closer, a + len(opener))
+            end = len(text) if b == -1 else b + len(closer)
+            spans.append((a, end, cls))
+            i = end
+
+    # 3. Blockquotes: each CONTIGUOUS run of `>` lines is ONE region, so re-wrapping the
+    #    prose inside it moves no marker.
+    run: int | None = None
+    for k, (s, e) in enumerate(lines):
+        if _QUOTE_LINE.match(text[s:e]):
+            if run is None:
+                run = k
+        elif run is not None:
+            spans.append((lines[run][0], lines[k - 1][1], TAG_QUOTE))
+            run = None
+    if run is not None:
+        spans.append((lines[run][0], lines[-1][1], TAG_QUOTE))
+
+    return sorted((*_inner_span(text, a, b), cls) for a, b, cls in spans)
+
+
+def _unhandled_nesting(text: str) -> list[str]:
+    """The shapes this resolver does not model, named rather than mis-rendered.
+
+    Both are measured at zero in the guarded files, and both would produce a silently wrong
+    rendering rather than a loud one — which is the failure mode every other part of this
+    module is built to refuse.
+    """
+    out: list[str] = []
+    infence = False
+    for n, line in enumerate(text.split("\n"), 1):
+        if infence and _QUOTE_LINE.match(line):
+            out.append(f"line {n}: a `>` line inside an unquoted fence")
+        if not _QUOTE_LINE.match(line) and _FENCE_LINE.match(line):
+            infence = not infence
+    spans = _wrapper_spans(text)
+    for i, (a, b, ca) in enumerate(spans):
+        for c, d, cb in spans[i + 1:]:
+            if c >= b:
+                break
+            if d > b:  # starts inside, ends outside — neither nested nor disjoint
+                out.append(f"chars {c}-{d} ({cb}) partially overlap {a}-{b} ({ca})")
+    return out
+
+
+def _tagged(text: str) -> str:
+    """Every character kept; every wrapped region bracketed by its class markers.
+
+    A blockquote's `>` prefixes are dropped — the `[[quote]]` pair already says the region
+    is quoted, and keeping per-line `>` would make a re-wrap change the canon, which is the
+    one edit a thinning campaign makes constantly.
+    """
+    spans = _wrapper_spans(text)
+
+    # Characters to omit: each quote line's `> ` prefix. Computed over the raw lines rather
+    # than from the spans, so it cannot drift from `_QUOTE_LINE`'s own answer.
+    drop = bytearray(len(text))
+    for s, e in _line_bounds(text):
+        m = re.match(r"[ \t]*> ?", text[s:e])
+        if m and _QUOTE_LINE.match(text[s:e]):
+            for k in range(s, s + m.end()):
+                drop[k] = 1
+
+    # Open outer-before-inner, close inner-before-outer, and close before open at a shared
+    # offset so two adjacent regions do not nest into each other.
+    events: list[tuple[int, int, int, str]] = []
+    for a, b, cls in spans:
+        events.append((a, 1, -b, _tag_open(cls)))
+        events.append((b, 0, -a, _tag_close(cls)))
+    events.sort()
+
+    out: list[str] = []
+    last = 0
+    for pos, _kind, _tie, marker in events:
+        out.append("".join(c for k, c in enumerate(text[last:pos], last) if not drop[k]))
+        out.append(marker)
+        last = pos
+    out.append("".join(c for k, c in enumerate(text[last:], last) if not drop[k]))
+    text = "".join(out)
+
+    # The same two folds `_prose_only` ends with, and for the same reasons: a word broken
+    # across lines at a hyphen is presentation, and a list marker must be folded while line
+    # starts are still visible.
+    text = re.sub(r"(\w)-\n[ \t]*(\w)", r"\1-\2", text)
+    return re.sub(r"(?m)^(\s*)(?:\*|\d+\.)\s", r"\1- ", text)
+
+
+def _without(tagged: str, classes: Iterable[str]) -> str:
+    """Drop the named classes' regions, markers and all. Other classes keep their markers.
+
+    This is how a caller states its own neutering policy over `_tagged` output. Passing
+    every class reproduces `_prose_only`'s answer (asserted below, on both real files).
+    """
+    for cls in classes:
+        tagged = re.sub(
+            re.escape(_tag_open(cls)) + r".*?" + re.escape(_tag_close(cls)),
+            "",
+            tagged,
+            flags=re.S,
+        )
+        # An unterminated region tagged to EOF has an opener and no closer.
+        tagged = re.sub(re.escape(_tag_open(cls)) + r".*", "", tagged, flags=re.S)
+    return tagged
+
+
+def _anchor_is_wrapped(tagged: str, index: int) -> bool:
+    """True when the character at `index` sits inside an open wrapper region.
+
+    This is the half a no-strip policy cannot have, and the reason it was refused. Measured
+    on both slicers before this was written: wrap a whole step in `<!-- -->` with the closer
+    placed past the slice's END marker and the slice between the anchors is byte-identical,
+    so the pin stays **green over a fully commented-out step** — Phase 167's survivor,
+    rebuilt.
+
+    Regions NEST rather than being disjoint — an earlier draft of this docstring said
+    otherwise and was the third copy of a claim corrected in two other places, left standing
+    until the round found it. A per-class unbalanced count is still the right test, and the
+    reason is narrower: **no class nests inside itself.** `<details>` is the one that can,
+    which is why `_wrapper_spans` depth-matches its closer.
+    """
+    before = tagged[:index]
+    for cls in TAG_CLASSES:
+        if before.count(_tag_open(cls)) > before.count(_tag_close(cls)):
+            return True
+    return False
+
+
+# --------------------------------------------------------------------------------------
+# The tagger's load-bearing properties (`Q-457`, Phase 291)
+# --------------------------------------------------------------------------------------
+#
+# Each of these was a defect in a discarded draft of `_tagged`, not a property invented
+# after the fact. They are written against synthetic input on purpose: the shipped files
+# exercise the happy path, and three of the five drafts failed only on shapes neither file
+# happens to contain today.
+
+TAGGED_FILES = (PARTIAL, Path(__file__).resolve().parents[1] / "core/skills/review-close/SKILL.md")
+
+
+def _canon(text: str) -> str:
+    return _block_canon(_flat(_tagged(text)))
+
+
+@pytest.mark.parametrize("path", TAGGED_FILES, ids=lambda p: p.name)
+def test_dropping_every_tagged_class_reproduces_the_stripped_rendering(path):
+    """The two canonicalisers must agree on the text they share.
+
+    `_tagged` keeps what `_prose_only` deletes; drop every tagged region from its output and
+    the two must be the same string. This is the invariant that makes a pin regeneration
+    provable rather than eyeballed: the delta between a stripped pin and a tagged one is
+    exactly markers plus previously-stripped spans, and nothing else. A tagging bug that
+    dropped, duplicated or re-ordered ordinary prose fails here rather than silently
+    regenerating a pin around it.
+    """
+    raw = path.read_text(encoding="utf-8")
+    assert _flat(_without(_tagged(raw), TAG_CLASSES)) == _flat(_prose_only(raw))
+
+
+@pytest.mark.parametrize("path", TAGGED_FILES, ids=lambda p: p.name)
+def test_the_guarded_files_carry_no_nesting_the_resolver_cannot_model(path):
+    """Refused loudly rather than mis-rendered — the one thing the resolver will not guess."""
+    assert _unhandled_nesting(path.read_text(encoding="utf-8")) == []
+
+
+@pytest.mark.parametrize("path", TAGGED_FILES, ids=lambda p: p.name)
+def test_no_guarded_file_contains_a_tag_marker_of_its_own(path):
+    """A marker in shipped text would let an editor forge a wrapper boundary.
+
+    `_without` and `_anchor_is_wrapped` both read markers as structure, so a literal
+    `[[fence]]` in the runner could split a region, close one early, or make an anchor look
+    wrapped. Absent today in both files; asserted so it stays that way.
+    """
+    raw = path.read_text(encoding="utf-8")
+    for marker in ALL_TAG_MARKERS:
+        assert marker not in raw, f"{path.name} contains the literal marker {marker}"
+
+
+def test_a_blockquote_survives_being_re_wrapped():
+    """Reflow-invariance, the property a per-line marker cannot have.
+
+    A first draft prefixed every wrapped LINE with its class marker. That makes re-wrapping a
+    blockquote change the canon — and a thinning campaign is nothing but content edits inside
+    subsections, so it would have turned the most common innocent edit into a pin
+    regeneration. Phase 168 measured 19 of 30 innocent edits going red on pinned prose; this
+    is the half of that cost the design can actually refuse.
+    """
+    assert _canon("> alpha beta\n> gamma delta\n> epsilon\n") == _canon("> alpha beta gamma\n> delta epsilon\n")
+    assert "alpha beta gamma delta epsilon" in _canon("> alpha beta\n> gamma delta\n> epsilon\n")
+
+
+def test_a_fence_survives_being_re_indented():
+    """Indent-invariance — the fourth hazard `Q-457` named, from the other side.
+
+    `_prose_only`'s `^``` ` was column-0-anchored, so an indented fence was NOT stripped and a
+    prescribed command inside one was pinned while the same command at column 0 was not.
+    Measured live in `adversarial-review.md`: the indented `config-baseline` snippet survived
+    into the rendered text and the column-0 `lsof` snippet did not. Both functions now match
+    at any indent, so indentation decides nothing.
+    """
+    flush = "x\n```bash\necho hi\n```\ny\n"
+    indented = "x\n  ```bash\n  echo hi\n  ```\ny\n"
+    assert _canon(flush) == _canon(indented)
+    assert "echo hi" in _canon(flush), "the fence's content is the thing being pinned"
+    assert _prose_only(flush).strip() == _prose_only(indented).strip()
+
+
+@pytest.mark.parametrize("wrapper", [
+    ("```\n", "```\n"),
+    ("<!--\n", "-->\n"),
+    ("<details>\n", "</details>\n"),
+    ("> ", ""),
+])
+def test_moving_a_rule_into_a_wrapper_changes_the_canon(wrapper):
+    """The property deletion used to give, kept as a change rather than a disappearance.
+
+    `_prose_only` made a neutered rule read as deleted, which failed a pin. `_tagged` keeps
+    every word, so this had to be re-earned rather than assumed — and "keep everything" is
+    exactly the shape that could have quietly lost it.
+    """
+    opener, closer = wrapper
+    rule = "the scope may never silently narrow the gate\n"
+    assert _canon(rule) != _canon(opener + rule + closer)
+    assert "silently narrow the gate" in _canon(opener + rule + closer)
+
+
+def test_an_unterminated_wrapper_runs_to_end_of_file():
+    """Faithful to what a reader sees, and the opposite call from `review_index.py`.
+
+    An unclosed fence really does render everything after it as code, so tagging to EOF is
+    the honest rendering and every later anchor then reports as neutered. `review_index.py`'s
+    `_fenced_mask` deliberately ignores an unterminated fence for the opposite reason: it
+    ACTS on what it reports, and a mask running to EOF flips a consumer's checkboxes. The
+    worst this can do is redden a test.
+    """
+    text = "before\n```bash\ninside\nstill inside\n"
+    spans = _wrapper_spans(text)
+    assert [cls for _, _, cls in spans] == [TAG_FENCE]
+    assert spans[0][1] == len(text.rstrip())
+    tagged = _tagged(text)
+    assert _anchor_is_wrapped(tagged, tagged.index("still inside"))
+    assert not _anchor_is_wrapped(tagged, tagged.index("before"))
+
+
+def test_a_comment_inside_a_blockquote_does_not_split_the_blockquote():
+    """The live shape, and the defect the first draft shipped on it.
+
+    `adversarial-review.md`'s prompt template carries a commented-out block inside a
+    blockquote. Resolving comments before blockquotes split that run in three and left a bare
+    `>` in the rendered text — which is how a class-priority resolver was found to be the
+    wrong model at all.
+    """
+    text = "> one\n> <!-- hidden\n> more\n> -->\n> two\n\nafter\n"
+    classes = [cls for _, _, cls in _wrapper_spans(text)]
+    assert classes.count(TAG_QUOTE) == 1, classes
+    assert ">" not in _without(_tagged(text), TAG_CLASSES)
+
+
+def test_a_fence_inside_a_blockquote_belongs_to_the_blockquote():
+    """The other live shape: 10 quoted fence delimiters in `review-close/SKILL.md`.
+
+    A quoted delimiter is part of its blockquote, not a fence of its own, so it needs no
+    special case — `_FENCE_LINE` simply does not match it. Asserted because the inverse
+    (treating it as a fence) produces overlapping spans and a silently wrong rendering.
+    """
+    text = "> note\n> ```bash\n> echo hi\n> ```\n> end\n\nafter\n"
+    spans = _wrapper_spans(text)
+    assert [cls for _, _, cls in spans] == [TAG_QUOTE], spans
+    assert "echo hi" in _tagged(text)
+
+
+def test_a_quote_line_inside_a_fence_is_refused_rather_than_mis_tagged():
+    """The one nesting the resolver does not model, and does not guess at."""
+    assert _unhandled_nesting("```\n> quoted inside a fence\n```\n")
+    assert _unhandled_nesting("ordinary\n> quoted\n\n```\nfenced\n```\n") == []
+
+
+def test_anchor_containment_sees_a_wrapper_that_opens_outside_the_slice():
+    """The measurement that refused the filing's first two ways out.
+
+    Dropping the strip for this file — either of the first two remedies `Q-457` listed —
+    leaves a slice byte-identical when the wrapper's closer lands past its END marker, so the
+    pin stays green over text no reader can see. The containment check is what the remedies
+    were missing, and it is cheap.
+    """
+    text = "<!--\nheading\nbody\nEND-MARKER\n-->\ntail\n"
+    tagged = _tagged(text)
+    assert _anchor_is_wrapped(tagged, tagged.index("heading"))
+    assert _anchor_is_wrapped(tagged, tagged.index("END-MARKER"))
+    assert not _anchor_is_wrapped(tagged, tagged.index("tail"))
+
+
+def test_the_tagged_population_is_both_guarded_files():
+    """A population guard, because shrinking one is invisible and free.
+
+    Every parametrized check above reads `TAGGED_FILES`. Dropping `review-close/SKILL.md`
+    from it leaves the whole module green while the file this phase exists for goes
+    unchecked — a battery mutation did exactly that and survived. Named, not counted: a
+    `>= 2` would pass on the wrong two.
+    """
+    # TWO independent assertions, not one. A battery mutation vacated the name check by
+    # unioning the expected set into the observed one — the shape that defeats any single
+    # predicate — and a lone check went green over a population of one. The count and the
+    # names have to be vacated separately now, which is the same bar `REFERENCE.md` states
+    # for retiring a declared rule: possible in one commit, not possible as a side effect.
+    assert len(TAGGED_FILES) == 2, f"the population is {len(TAGGED_FILES)} file(s)"
+    names = sorted(p.name for p in TAGGED_FILES)
+    assert names == ["SKILL.md", "adversarial-review.md"], names
+    for path in TAGGED_FILES:
+        assert path.is_file(), f"{path} does not exist — the check reads nothing"
+        assert _wrapper_spans(path.read_text(encoding="utf-8")), (
+            f"{path.name} has no wrapped regions at all — a file this module reads for its "
+            "rendering must have something to render"
+        )
+
+
+def test_a_widened_fence_pattern_would_invert_the_nesting():
+    """The guard on the one thing that makes the quoted-delimiter case work.
+
+    `_FENCE_LINE` allows only spaces and tabs before the delimiter run, so a quoted delimiter
+    is not a fence line and a fence inside a blockquote stays part of its blockquote. Widen
+    the pattern to tolerate `>` and the nesting inverts silently: the 10 quoted delimiters in
+    `review-close/SKILL.md` start pairing as fences and swallow the prose between them. The
+    resolver has no check that would notice, so this property IS the contract.
+    """
+    # The CONTRACT, not the literal pattern. A first version pinned the regex source, and
+    # this phase's own round then required the pattern to change (`~~~` is a legal fence and
+    # was not matched) — so the pin failed for a strengthening, which is the over-strictness
+    # direction. What must hold is that no leading `>` reaches the delimiter.
+    for quoted_delim in ("> ```bash", ">```", "  > ~~~", "\t> ```"):
+        assert not _FENCE_LINE.match(quoted_delim), quoted_delim
+        assert _fence_delim(quoted_delim) is None, quoted_delim
+    for bare in ("```bash", "  ```", "~~~", "  ~~~python", "````"):
+        assert _fence_delim(bare) is not None, bare
+    for style in ("```bash", "~~~bash"):
+        quoted = f"> note\n> {style}\n> echo hi\n> {style[:3]}\n> end\n"
+        assert [cls for _, _, cls in _wrapper_spans(quoted)] == [TAG_QUOTE], style
+
+
+def test_a_comment_delimiter_inside_a_fence_is_literal_text():
+    """A fence's content is literal, so `<!--` in one opens nothing.
+
+    Absent from both guarded files today, which is exactly why it needs a test: the resolver
+    skips a comment whose opener falls inside a fence, and a battery mutation that removed
+    that skip survived every check.
+    """
+    text = "before\n```bash\n# <!-- not a comment\n```\nafter\n<!-- real -->\ntail\n"
+    classes = [cls for _, _, cls in _wrapper_spans(text)]
+    assert classes == [TAG_FENCE, TAG_COMMENT], classes
+    tagged = _tagged(text)
+    assert not _anchor_is_wrapped(tagged, tagged.index("after")), (
+        "a `<!--` inside a fence opened a comment region and swallowed the text after it"
+    )
+    assert "not a comment" in _without(tagged, NEUTERING_TAGS), (
+        "fence content was dropped as though it were commented out"
+    )
+
+
+# --------------------------------------------------------------------------------------
+# What Phase 291's own round found, in the fix written to close this class
+# --------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("opener,closer", [
+    ("```", "```"),
+    ("~~~", "~~~"),
+    ("````", "````"),
+    ("```markdown", "```"),
+    ("~~~markdown", "~~~"),
+])
+def test_every_legal_fence_delimiter_neuters_as_loudly_as_a_backtick_one(opener, closer):
+    """`~~~` is a legal fence and it defeated both canonicalisers.
+
+    Measured by the round: wrapping the gate paragraph in ``` returned three problems and
+    wrapping the identical text in `~~~` returned **zero** — GitHub renders both as code
+    blocks, so that is Phase 167's "gate commented out" survivor reached through a delimiter
+    the pattern did not know about, inside the function whose docstring exists to refuse it.
+    The same wrap left `review-close`'s Step 3 pin GREEN over a step no reader can see.
+
+    Parametrized over every shape CommonMark allows rather than over the one that was
+    broken: a fix keyed to `~~~` alone would leave `````` ````` `````` in exactly this state.
+    """
+    gate = _gate_paragraph()
+    assert gate_problems(gate) == [], "premise: the shipped gate is clean"
+    assert gate_problems(f"{opener}\n{gate}\n{closer}\n"), (
+        f"a gate wrapped in {opener!r} reached every presence predicate unneutered"
+    )
+    rule = "the scope may never silently narrow the gate\n"
+    plain = _block_canon(_flat(_tagged(rule)))
+    wrapped = _block_canon(_flat(_tagged(f"{opener}\n{rule}{closer}\n")))
+    assert plain != wrapped, f"{opener!r} left the canon unchanged"
+
+
+def test_a_fence_closer_must_match_its_own_opener():
+    """CommonMark's rule, and without it a block silently ends early.
+
+    A 3-backtick line inside a 4-backtick block closed it, so the rest of the block became
+    prose and the trailing delimiter opened a new fence running to EOF. Found by the round.
+    A tilde line must not close a backtick fence either.
+    """
+    four = "````\nline1\n```\nline2\n````\n"
+    spans = _wrapper_spans(four)
+    assert [cls for _, _, cls in spans] == [TAG_FENCE], spans
+    assert "line2" not in _without(_tagged(four), [TAG_FENCE]), (
+        "a shorter delimiter closed a longer fence and the tail leaked out as prose"
+    )
+    mixed = "```\ninside\n~~~\nstill inside\n```\n"
+    assert [cls for _, _, cls in _wrapper_spans(mixed)] == [TAG_FENCE]
+    assert "still inside" not in _without(_tagged(mixed), [TAG_FENCE])
+    # An info string containing a backtick is not a fence opener (CommonMark), which keeps an
+    # inline code span off the opener branch. The LATER bare delimiter is a legal opener and
+    # runs to EOF unterminated — that is the right answer, so assert where the region starts
+    # rather than that there is none. A first draft of this asserted `== []` and was wrong
+    # about the function, not the other way round.
+    spans = _wrapper_spans("```a`b\nx\n```\ny\n")
+    assert [cls for _, _, cls in spans] == [TAG_FENCE]
+    assert spans[0][0] > len("```a`b\nx\n") - 1, (
+        f"the backtick-carrying info line opened the fence: {spans}"
+    )
+
+
+def test_details_ends_at_its_own_closer_not_the_first_one():
+    """`<details>` is the one wrapper here that nests inside itself.
+
+    Taking the first `</details>` ended an outer region at the INNER closer, so the text
+    between them rendered collapsed on GitHub and read as live prose here. That also breaks
+    the "no class nests inside itself" property `_anchor_is_wrapped` depends on, which is why
+    this is depth-matched rather than screened. Neither guarded file contains a `<details>`
+    at all, so nothing but a hostile fixture reaches it.
+    """
+    text = "<details>\nA\n<details>\nB\n</details>\nC\n</details>\ntail\n"
+    spans = _wrapper_spans(text)
+    assert [cls for _, _, cls in spans] == [TAG_DETAILS], spans
+    visible = _without(_tagged(text), NEUTERING_TAGS)
+    assert "C" not in visible, "text before the outer closer read as live prose"
+    assert "tail" in visible, "the region swallowed text past its own closer"
+    tagged = _tagged(text)
+    assert _anchor_is_wrapped(tagged, tagged.index("C"))
+    assert not _anchor_is_wrapped(tagged, tagged.index("tail"))
+    # Unbalanced runs to EOF, the same answer an unterminated fence gets.
+    assert [cls for _, _, cls in _wrapper_spans("<details>\nA\n<details>\nB\n</details>\n")] \
+        == [TAG_DETAILS]
+
+
+def test_an_unterminated_comment_or_details_runs_to_end_of_file():
+    """The arm the round found untested, in both directions.
+
+    An unterminated `<!--` or `<details>` hides everything after it on GitHub, so the region
+    must run to EOF and every later anchor must report as neutered. Deleting the arm left the
+    region unopened and nothing in the suite noticed — the positive control below is the one
+    that bites, because an unterminated wrapper *before* a guarded section is exactly how a
+    step goes invisible without a single character of it changing.
+    """
+    for opener in ("<!--", "<details>"):
+        text = f"before\n{opener}\nswallowed\nstill swallowed\n"
+        spans = _wrapper_spans(text)
+        assert len(spans) == 1, (opener, spans)
+        assert spans[0][1] == len(text.rstrip()), (opener, spans)
+        tagged = _tagged(text)
+        assert _anchor_is_wrapped(tagged, tagged.index("swallowed"))
+        assert not _anchor_is_wrapped(tagged, tagged.index("before"))
+        # `_without` must drop an unterminated region too, or a neutered rule reads as live.
+        assert "swallowed" not in _without(tagged, NEUTERING_TAGS), opener
+
+
+def test_an_unterminated_wrapper_before_a_section_neuters_it():
+    """The positive control for the arm above, over the real guarded file."""
+    raw = PARTIAL.read_text(encoding="utf-8")
+    i = raw.find("\n" + AUTHOR_PASS_START)
+    assert i > 0
+    for opener in ("<!--", "<details>", "```", "~~~"):
+        mutated = raw[:i] + f"\n\n{opener}\n" + raw[i:]
+        assert _author_pass_slice(mutated) == "", (
+            f"an unterminated {opener!r} before the subsection left its slice readable"
+        )
+
+
+@pytest.mark.parametrize("slicer", ["author_pass", "governor"])
+def test_a_section_indented_into_a_code_block_fails_closed(slicer):
+    """Markdown's undelimited code form, which the pin cannot see by construction.
+
+    `_flat` collapses indentation, so indenting a whole section four spaces leaves the pinned
+    text byte-identical while GitHub renders it as a code listing. The round did exactly that
+    to Step 3 and got a green pin plus **one** new failure across 95 modules — an unrelated
+    fixture's anchor, not a detection.
+
+    Judged over the SLICE, never the file: a first cut checked the whole file, where indenting
+    one subsection barely moves the ratio, and read clean over a neutered section.
+    """
+    raw = PARTIAL.read_text(encoding="utf-8")
+    # Markers resolved at call time: `GOVERNOR_START` is defined further down the module.
+    fn, start, end = {
+        "author_pass": (_author_pass_slice, AUTHOR_PASS_START, AUTHOR_PASS_END),
+        "governor": (_governor_slice, GOVERNOR_START, AUTHOR_PASS_START),
+    }[slicer]
+    assert fn(raw), "premise: the shipped subsection resolves"
+    a = raw.find("\n" + start)
+    b = raw.find(end, a)
+    assert 0 < a < b
+    indented = "\n".join(("    " + line if line.strip() else line)
+                         for line in raw[a:b].split("\n"))
+    assert fn(raw[:a] + indented + raw[b:]) == "", (
+        f"{slicer}: a section indented into a code block still resolved"
+    )
+
+
+def test_the_indent_floor_is_far_from_the_shipped_files():
+    """The ratio is a threshold, so the margin is the evidence — measured, not assumed.
+
+    Shipped slices sit near zero and the attack sits near one; a floor at 0.5 has room on
+    both sides. Asserted so a later edit cannot quietly walk the floor down toward the
+    shipped value, which is how a threshold stops meaning anything.
+    """
+    assert INDENT_CODE_FLOOR == 4, "CommonMark's indented-code-block rule is four spaces"
+    assert 0.25 <= INDENT_NEUTERED_RATIO <= 0.75
+    for entry in TAGGED_FILES:
+        assert not _indent_neutered(entry.read_text(encoding="utf-8")), entry.name
+    assert not _indent_neutered(_author_pass_section())
+    # A list-heavy region must not trip it: 68 of the 69 deep-indented lines in
+    # `review-close/SKILL.md` are list continuations, which is why no general detector is
+    # built. If this fires, the floor is wrong, not the file.
+    listy = "- one\n    continued\n- two\n    continued\n\nprose at column 0\nmore prose\n"
+    assert not _indent_neutered(listy)
 
 
 def _author_pass_slice(text: str) -> str:
@@ -507,6 +1343,11 @@ def _author_pass_slice(text: str) -> str:
     a = text.find(AUTHOR_PASS_START)
     b = text.find(AUTHOR_PASS_END, a)
     if b <= a:
+        return ""
+    # Judge the SLICE, never the file: indenting one subsection barely moves a whole-file
+    # ratio, so a file-wide check reads clean over a neutered section. A first cut did
+    # exactly that and the fixture caught it.
+    if _indent_neutered(text[a:b]):
         return ""
     return text[a:b]
 
@@ -1935,6 +2776,8 @@ def _governor_slice(text: str) -> str:
     b = text.find(AUTHOR_PASS_START, a)
     if b <= a:
         return ""
+    if _indent_neutered(text[a:b]):
+        return ""
     return text[a:b]
 
 
@@ -2739,26 +3582,36 @@ PLACEMENT_BLOCK_VERBATIM = _flat(
     "**Create every reviewer AT the commit under review, and require it to prove where it "
     "landed.** The harness will not do this for you: `isolation: \"worktree\"` forks from the "
     "repository's **default branch**, not from the spawning session's `HEAD`, so under a `pr` "
-    "merge policy — where the round always runs from a branch that has not merged — every lens "
-    "is handed the pre-phase tree deterministically. Re-measured 2026-09-13: a probe spawned "
-    "from a branch one commit ahead of the default branch landed on the **default branch's "
-    "tip**, and the marker that branch's own commit had introduced was absent from its "
-    "checkout. **Scope:** this is the ad-hoc round. Where an earlier step already created the "
-    "worktree — `/claim-task`, `/auto-build`, `/auto-fix`, `/auto-judge`, per the carve-out "
-    "below — there is no commit under review to place anyone at, and this does not apply. Two "
-    "halves, and the second is what makes the first checkable: - **Place it.** Create the "
-    "checkout at the phase commit yourself — `git worktree add <dir> --detach <sha>`, or a "
-    "throwaway clone checked out there — with `<dir>` **outside the repository**: a relative "
-    "path leaves an untracked directory in the very tree the round is reviewing, which is the "
-    "breach shape the spawn-time `git status --porcelain -uall` baseline exists to flag. Name "
-    "that SHA in the prompt. The caveat bullet below carries the mechanics and the clone "
-    "gotchas. - **Make it echo.** The reviewer's first action is `git -C <the path it was "
-    "handed> rev-parse HEAD`, reported verbatim **before any finding**. **The `-C` is the whole "
-    "rule** — a bare `git rev-parse HEAD` reports the reviewer's shell CWD, which on a harness "
-    "that hands out a checkout is usually the primary one, so it can echo the right SHA while "
-    "the lens reads the wrong tree; this was demonstrated by a lens reviewing this very "
-    "paragraph. A reviewer whose echo does not match the pin **stops and says so rather than "
-    "re-pointing itself silently**, and the spawner re-dispatches it rather than reading its "
+    "merge policy — where the round always runs from a branch that has not merged — every lens is "
+    "handed the pre-phase tree deterministically. Re-measured 2026-09-13: a probe spawned from a "
+    "branch one commit ahead of the default branch landed on the **default branch's tip**, and "
+    "the marker that branch's own commit had introduced was absent from its checkout. **Scope: "
+    "every spawn that CREATES a checkout, not only the ad-hoc round.** This sentence said *\"this "
+    "is the ad-hoc round\"* until Phase 290, and that is why it bound nothing where it was most "
+    "needed: `/review-close` Step 2b pointed at this section and said it *\"applies directly\"*, "
+    "but Step 2b is neither an ad-hoc round nor a pre-existing worktree, so the scope line "
+    "excluded it by its own terms and the pointer reached no rule. **A pointer is not an "
+    "invoker** — Phase 288 diagnosed exactly that shape and then reproduced it, wiring the "
+    "upstream project's own invoker into a maintainer-side instruction file that never ships, so "
+    "for a consumer the rule reached nobody for two phases. The rule binds wherever a reviewer's "
+    "checkout is being made: ad-hoc rounds, `/review-close` Step 2b and its Step 3c security "
+    "twin, and `/codebase-review` + `/security-audit` whenever they are run from anything but the "
+    "default branch. **The carve-out is narrow and unchanged:** where an *earlier step* already "
+    "created the worktree — `/claim-task`, `/auto-build`, `/auto-fix`, `/auto-judge`, per the "
+    "caveat below — the agent is already standing on the work, there is no separate commit under "
+    "review to place it at, and this does not apply. Two halves, and the second is what makes the "
+    "first checkable: - **Place it.** Create the checkout at the phase commit yourself — `git "
+    "worktree add <dir> --detach <sha>`, or a throwaway clone checked out there — with `<dir>` "
+    "**outside the repository**: a relative path leaves an untracked directory in the very tree "
+    "the round is reviewing, which is the breach shape the spawn-time `git status --porcelain "
+    "-uall` baseline exists to flag. Name that SHA in the prompt. The caveat bullet below carries "
+    "the mechanics and the clone gotchas. - **Make it echo.** The reviewer's first action is `git "
+    "-C <the path it was handed> rev-parse HEAD`, reported verbatim **before any finding**. **The "
+    "`-C` is the whole rule** — a bare `git rev-parse HEAD` reports the reviewer's shell CWD, "
+    "which on a harness that hands out a checkout is usually the primary one, so it can echo the "
+    "right SHA while the lens reads the wrong tree; this was demonstrated by a lens reviewing "
+    "this very paragraph. A reviewer whose echo does not match the pin **stops and says so rather "
+    "than re-pointing itself silently**, and the spawner re-dispatches it rather than reading its "
     "findings."
 )
 
@@ -2789,7 +3642,15 @@ def _placement_block(section: str) -> str:
     slicer could not find its end anchor and reported the requirement DELETED on a pure
     reflow; `_prose_only`'s hyphen-fold and list-marker fold close that.
     """
-    rendered = _prose_only(section)
+    # FLATTEN FIRST, then locate. The anchors used to be searched for in the rendered
+    # but still line-broken text, so the slicer only survived a reflow when the wrap
+    # happened to fall clear of both anchors -- which made the rewrap control below
+    # pass by luck rather than by construction. Phase 290 lengthened this block by a
+    # sentence, the 80-column wrap then landed inside the END anchor ("rather than
+    # reading its findings."), and a pure reflow reported the requirement DELETED.
+    # `_prose_only`'s folds cannot help once the anchor itself spans the break; only
+    # flattening before the search can.
+    rendered = _flat(_prose_only(section))
     start = rendered.find(PLACEMENT_BLOCK_START)
     if start < 0:
         return ""

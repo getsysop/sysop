@@ -33,9 +33,13 @@ and states the reason per shape rather than picking a winner.
 from __future__ import annotations
 
 import re
+import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 from tests import shape_lib as S
+from _prose_guard_helpers import carries  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SKILL = REPO_ROOT / "core" / "skills" / "review-close" / "SKILL.md"
@@ -119,7 +123,7 @@ def test_confirmed_merge_no_longer_accepts_a_zero_exit_as_equivalent_to_merged()
     assert "`gh pr merge` exits 0 / `gh pr view` shows `state: MERGED`" not in block, (
         "the disjunction is back — exit status is not co-equal evidence with PR state"
     )
-    assert "whatever the merge command's exit status or stderr said" in block
+    assert carries(block, "whatever the merge command's exit status or stderr said")
 
 
 def test_step6_reset_is_stated_per_shape_and_still_always_run():
@@ -359,7 +363,7 @@ def test_reuse_probe_verb_is_declared_and_already_seeded():
     #205/#210 flagged, it genuinely ships in the installer's allow-list, so declaring it as
     required does not add a fresh-install hard stop."""
     import json
-    assert "- `Bash(gh pr list:*)`" in _text()
+    assert carries(_text(), "- `Bash(gh pr list:*)`", any_bullet=True)
     settings = json.loads(
         (REPO_ROOT / "core" / "companion" / ".claude" / "settings.json").read_text(encoding="utf-8")
     )
@@ -381,15 +385,28 @@ def test_step4c_doc_staging_requires_the_wildcard_not_literal_paths():
     """
     text = _text()
     preflight = text.split("## Step 1:")[0]
-    assert "- `Bash(git add:*)`" in preflight, (
+    assert carries(preflight, "- `Bash(git add:*)`", any_bullet=True), (
         "Step 4c's shared-doc staging lost its required rule"
     )
     assert "Step 4c step 7's shared-doc staging" in preflight, (
         "the doc-staging verbs are not disclosed in the permission pre-flight"
     )
+    # `Q-495`: tolerant on the NEGATIVE assertions too, because as literals they passed
+    # vacuously the moment the file's bullet character changed — a ban that stops banning
+    # when someone runs a formatter is worse than no ban, since it still reads as one.
+    #
+    # Deliberately WITHOUT `any_bullet`, and the asymmetry is the point. `any_bullet` pins
+    # the item to a line start and does not absorb `>`, which is right for a REQUIREMENT
+    # (the rule must really be a list item) and wrong for a BAN: it would stop seeing the
+    # banned rule the moment someone parked it in a blockquote or mid-sentence, which the
+    # plain literal did catch. A requirement should be precise; a ban should be broad.
+    # Phase 292's round found the first cut of this line using `any_bullet` and narrowing
+    # all three bans.
     for verb in ("- `Bash(git add PROJECT_STATUS.md)`", "- `Bash(git add changelog.md)`",
                  "- `Bash(git add UI_Iterations.md)`"):
-        assert verb not in text, f"{verb} became a hard requirement — fresh installs will halt"
+        assert not carries(text, verb), (
+            f"{verb} became a hard requirement — fresh installs will halt"
+        )
 
 
 # --------------------------------------------------------------------------------------
