@@ -101,17 +101,30 @@ def test_both_writers_state_the_shared_unreleased_grammar():
     )
 
 
+def _clause(text: str, opener: str) -> str:
+    """The whole clause opening at `opener`, its wrapped continuation lines included.
+
+    `Q-495`: both callers used `re.search(r"^...\\*\\*:.*$", re.MULTILINE)`, which is the
+    PHYSICAL line. Re-wrapping the rule put half its own words on the next line, so the
+    operative clause read as "gone" while it was intact. It also widens the NEGATIVE
+    assertions below in the direction that matters: a countermand parked on a
+    continuation line used to sit outside what they could see.
+    """
+    m = re.search(opener + r".*$", text, re.MULTILINE)
+    assert m, f"clause not found: {opener!r}"
+    j = text.find("\n\n", m.start())
+    return " ".join(text[m.start(): j if j != -1 else len(text)].split())
+
+
 def test_step_4c_bugfix_write_targets_unreleased_not_date_headings():
     """The bugfix routing line must target `## [Unreleased]` and must not have
     reverted to the retired `### YYYY-MM-DD` date-heading grammar."""
     rc = REVIEW_CLOSE.read_text(encoding="utf-8")
-    m = re.search(r"^\s*\*\*CHANGELOG\.md\*\* \(bugfix type only.*$", rc, re.MULTILINE)
-    assert m, "review-close Step 4c's bugfix routing line not found"
-    line = m.group(0)
+    line = _clause(rc, r"^\s*\*\*CHANGELOG\.md\*\* \(bugfix type only")
     # The OPERATIVE clause, not a token anywhere on the line: the round's CL-2 kept
     # `[Unreleased]` inside a negation ("not under `## [Unreleased]`") and dodged the
     # YYYY-MM-DD pin with a concrete date.
-    assert re.search(r"Add under `## \[Unreleased\]`", line), (
+    assert re.search(r"Add\s+under\s+`##\s+\[Unreleased\]`", line), (
         f"bugfix write's operative clause no longer targets [Unreleased]: {line}"
     )
     assert "not under" not in line and "date heading" not in line, (
@@ -145,10 +158,8 @@ def test_the_rotation_files_into_unreleased_changed():
     line's destination, so rotating into a fresh date heading — the retired grammar,
     re-minted by the highest-volume writer — survived every other pin."""
     rc = REVIEW_CLOSE.read_text(encoding="utf-8")
-    m = re.search(r"^\s*\*\*Rotation check\*\*:.*$", rc, re.MULTILINE)
-    assert m, "review-close Step 4c's rotation line not found"
-    line = m.group(0)
-    assert re.search(r"under `## \[Unreleased\]` → `### Changed`", line), (
+    line = _clause(rc, r"^\s*\*\*Rotation check\*\*:")
+    assert re.search(r"under\s+`##\s+\[Unreleased\]`\s+→\s+`###\s+Changed`", line), (
         f"the rotation's operative destination clause is gone: {line}"
     )
     # CL-3's shape: both tokens kept inside "(no longer …)" — forbid the countermand.

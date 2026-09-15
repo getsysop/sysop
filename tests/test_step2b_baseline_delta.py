@@ -42,7 +42,18 @@ def _is_spawn_step(ln: str) -> bool:
     this test into a "could not locate" error instead of a real verdict.
     Found by mutating this very test.
     """
-    return re.match(r"^\s*\d+\.\s+Spawn an Agent with:", ln) is not None
+    return re.match(r"^\s*(?:\d+\.\s+|Then )[Ss]pawn an Agent with:", ln) is not None
+
+
+def _is_placement_step(ln: str) -> bool:
+    """Match Phase 290's reviewer-placement block, which now opens the spawn step.
+
+    Placement is the first act of item 3 that touches git state (it runs
+    `git worktree add`), so the baseline must precede IT, not merely the
+    `Agent` call two paragraphs later. Content-keyed for the same reason
+    `_is_spawn_step` is: inserting a step renumbers the list.
+    """
+    return re.match(r"^\s*\d+\.\s+\*\*Create each reviewer's checkout", ln) is not None
 
 
 # --------------------------------------------------------------------------
@@ -259,8 +270,8 @@ def test_the_capture_writes_a_config_baseline_too() -> None:
 
 
 def test_the_assertion_has_a_fourth_command_for_config() -> None:
-    cmds = _fence_after("assert all four are clean")
-    assert len(cmds) == 4, f"expected 4 assertion commands, got {len(cmds)}: {cmds}"
+    cmds = _fence_after("assert all five are clean")
+    assert len(cmds) == 5, f"expected 5 assertion commands, got {len(cmds)}: {cmds}"
     assert any("config --local --list" in c and "2b-config-baseline.txt" in c
                for c in cmds), cmds
 
@@ -275,10 +286,11 @@ def test_the_prose_and_the_fence_agree_on_the_command_count() -> None:
     it cited was not real.
     """
     text = SKILL.read_text()
-    assert "assert all four are clean" in text
-    assert "assert all three are clean" not in text, (
-        "the prose still says three while the fence ships four"
-    )
+    assert "assert all five are clean" in text
+    for stale in ("three", "four"):
+        assert f"assert all {stale} are clean" not in text, (
+            f"the prose still says {stale} while the fence ships five"
+        )
 
 
 def _cfg_capture(repo: Path) -> None:
@@ -290,7 +302,7 @@ def _cfg_capture(repo: Path) -> None:
 
 def _cfg_delta(repo: Path) -> bool:
     """True when the SHIPPED config assertion PASSES (config unchanged)."""
-    cmd = next(c for c in _fence_after("assert all four are clean")
+    cmd = next(c for c in _fence_after("assert all five are clean")
                if "2b-config-baseline.txt" in c)
     return subprocess.run(cmd, cwd=repo, shell=True, capture_output=True,
                           text=True, executable="/bin/bash").returncode == 0

@@ -97,7 +97,8 @@ def test_index_yml_is_named_in_a_conflict_context(step_4a: str) -> None:
     # left the file named only inside the `git show :2:tasks/index.yml` commands
     # a few hundred characters away, and the window stayed satisfied. Require
     # the ENUMERATION ITSELF to name it -- that is the thing a reader routes on.
-    bullets = re.findall(r"^- \*\*(.+?)\*\*", step_4a, re.M)
+    # `Q-495`: `[-*+]` — the shared-append-files LIST is the subject; its marker is not.
+    bullets = re.findall(r"^[-*+] \*\*(.+?)\*\*", step_4a, re.M)
     assert any("tasks/index.yml" in b for b in bullets), (
         "the shared-append-files list must name `tasks/index.yml` as one of its "
         f"entries — found only: {bullets}"

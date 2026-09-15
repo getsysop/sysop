@@ -29,6 +29,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from _prose_guard_helpers import carries, locate  # noqa: E402
+
 import pytest
 
 from _reversal import assert_no_reversal, slice_between
@@ -552,7 +556,7 @@ def test_review_close_carries_the_also_fixed_arm() -> None:
     ],
 )
 def test_also_fixed_arm_checks_all_three_things(label: str, needle: str) -> None:
-    assert needle in read(CLOSE), (
+    assert carries(read(CLOSE), needle), (
         f"the `## Also fixed` arm lost its {label!r} check. A record nobody verifies "
         "against the diff is a record that can assert a fix that never happened."
     )
@@ -840,7 +844,7 @@ def test_validator_gains_no_also_fixed_invariant(tmp_path: Path) -> None:
 )
 def test_scope_limit_rules_state_their_relation_to_the_tier(path: Path, needle: str, why: str) -> None:
     """Two shipped rules restrict scope; without this, a reader gets two unrelated rules."""
-    assert needle in read(path), (
+    assert carries(read(path), needle), (
         f"{path.name} no longer states how its scope limit relates to the "
         f"fix-in-branch tier ({why}). Both rules are live and one is narrower; a "
         "reader who meets them separately has no way to know which governs."
@@ -884,7 +888,7 @@ def test_the_workflow_spec_describes_the_tier(path: Path, needle: str, why: str)
     class for exactly this -- Phase 145 backfilled § 8.4 for the same reason, and
     Phase 161 found three retired behaviours still documented as live.
     """
-    assert needle in read(path), f"{path.name} does not describe the tier: {why}"
+    assert carries(read(path), needle), f"{path.name} does not describe the tier: {why}"
 
 
 # --------------------------------------------------------------------------
@@ -1018,7 +1022,7 @@ def test_the_filing_bar_lives_inside_the_reversal_screened_block(name: str) -> N
 @pytest.mark.parametrize("label,needle", sorted(BAR_LEGAL_ANSWERS.items()))
 def test_the_bar_keeps_every_legal_answer(name: str, label: str, needle: str) -> None:
     """Four ways to satisfy the naming test, one per project shape."""
-    assert needle in tier_block(name), (
+    assert carries(tier_block(name), needle), (
         f"{name}: the filing bar no longer accepts {label!r} as a thing a "
         f"follow-up can name ({needle!r} is gone). A bar whose only legal answer "
         "is the current phase refuses every project that plans further ahead "
@@ -1056,7 +1060,7 @@ def test_the_bar_keeps_every_exemption(name: str, label: str, needle: str) -> No
     Kept alongside the contiguous-run check above so a failure NAMES the entry
     that went missing rather than reporting the whole list as changed.
     """
-    assert needle in tier_block(name), (
+    assert carries(tier_block(name), needle), (
         f"{name}: the filing bar lost its {label!r} exemption. Each of the four "
         "is its own justification for a queue entry regardless of what it blocks; "
         "the last one especially -- a queue that cannot hold a bug because nobody "
@@ -1230,7 +1234,7 @@ def test_document_work_routes_the_note_but_does_not_write_it() -> None:
     ],
 )
 def test_the_spec_surfaces_describe_the_filing_bar(path: Path, needle: str, why: str) -> None:
-    assert needle in read(path), (
+    assert carries(read(path), needle), (
         f"{path.name} does not describe the tier-3 filing bar: {why}. The three skill "
         "bodies are not the whole population -- these two restate the same sequence to "
         "readers who never open a SKILL.md."
@@ -1391,7 +1395,9 @@ def ledger_bullet() -> str:
     """
     return slice_between(
         read(CLOSE),
-        "- **`tasks/notes.md`** — the notes ledger",
+        # `Q-495`: `[-*+]`, because a uniform bullet-marker swap is rendering-identical
+        # and reddened this anchor — a guard about the NOTES LEDGER, not about bullets.
+        re.compile(r"[-*+] \*\*`tasks/notes\.md`\*\* — the notes ledger"),
         "**Resolve `tasks/index.yml` from the merge stages, structurally.**",
         "review-close notes-ledger bullet",
     )
@@ -1407,7 +1413,7 @@ def test_the_ledger_resolution_states_its_own_precondition() -> None:
     the rule stated three paragraphs earlier.
     """
     bullet = ledger_bullet()
-    assert "**This is the one of the three where keeping both sides IS the resolution**" in bullet, (
+    assert carries(bullet, "**This is the one of the three where keeping both sides IS the resolution**"), (
         "/review-close no longer marks the ledger as the exception to its own "
         "never-keep-both-sides rule."
     )
@@ -1528,7 +1534,7 @@ def test_the_readme_example_obeys_the_shape_it_prescribes() -> None:
     body = [ln for ln in fence[1].splitlines() if ln.strip()]
     assert body, "the ledger example is empty"
     for ln in body:
-        assert ln.startswith("- "), (
+        assert re.match(r"[-*+] ", ln), (
             f"the ledger's shipped example is no longer flat: {ln!r} is indented or is "
             "not a top-level list item. An agent copies the example, not the prohibition "
             "above it."
@@ -1554,7 +1560,7 @@ def test_the_readme_restatement_of_the_bar_stays_complete() -> None:
         ("a defect in shipped behaviour", "the defect exemption"),
         ("security finding", "the security exemption"),
     ]: 
-        assert needle in section, (
+        assert carries(section, needle), (
             f"tasks/README.md's restatement of the filing bar lost {why} ({needle!r}). "
             "It is shipped documentation of the rule and diverging from the skill "
             "bodies is how a consumer ends up following a different bar."
@@ -2004,7 +2010,7 @@ def test_the_arm_iterates_rather_than_taking_the_first_match(label: str, needle:
         "### 2e. Claim-Artifact Report",
         "2-also arm through item 4",
     )
-    assert needle in arm, (
+    assert carries(arm, needle), (
         f"the `## Also fixed` arm lost its {label!r} rule. A first-match reader "
         "undercounts `## Also fixed` lines per branch -- one of the three numbers "
         "section G judges the tier on -- in the direction that reads as the tier "
@@ -2091,7 +2097,7 @@ def test_the_arm_states_the_info_string_clause() -> None:
         "**3. On a clean match",
         "2-also arm",
     )
-    assert "carrying no info string" in arm, (
+    assert carries(arm, "carrying no info string"), (
         "the `## Also fixed` arm's fence rule no longer says a closer carries no info "
         "string. Without it a nested ```json line reads as a closer, the reader believes "
         "it has left the fence, and the fence's own contents are reported as a record."
@@ -2247,7 +2253,7 @@ def test_the_arm_carries_what_the_round_forced_in(label: str, needle: str, end: 
         end,
         "2-also arm",
     )
-    assert needle in arm, (
+    assert carries(arm, needle), (
         f"the `## Also fixed` arm lost its {label!r} rule. Every one of these was "
         "forced in by an independent reviewer that executed the arm's instructions "
         "rather than reading them; each has a demonstrated wrong answer behind it."
@@ -2337,9 +2343,12 @@ def test_the_re_pointed_rows_are_not_quoted_only_to_be_repudiated(label: str, ne
     """
     arm = live_prose(read(CLOSE), "**2‑also. The `## Also fixed` arm", "**3. On a clean match",
                      "2-also arm")
-    i = arm.index(needle)
+    # `Q-495`: tolerant, and it names the needle when it moves. `str.index` raised a bare
+    # `ValueError("substring not found")` when the shipped sentence was re-wrapped.
+    m = locate(arm, needle)
+    i = m.start()
     start = max(arm.rfind(". ", 0, i), arm.rfind("\n\n", 0, i)) + 1
-    end = arm.find(". ", i + len(needle))
+    end = arm.find(". ", m.end())
     sentence = arm[start:end if end != -1 else len(arm)].lower()
     found = [v for v in _ARM_REPUDIATION if v in sentence]
     assert not found, (

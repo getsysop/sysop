@@ -8,6 +8,11 @@ model: opus
 
 Final gate before production. Reviews all pending work (feature branches AND unpushed main commits), pushes to origin, verifies staging, and cleans up.
 
+> **Editing this skill rather than running it?** `REFERENCE.md`, beside this file, carries the
+> editor's half: what each load-bearing rule protects, what its loss or softening would change,
+> and where it came from. It is not loaded with this file — open it when you are about to change
+> a rule, not to run one. Running this skill needs nothing from it.
+
 ## Resolve the default branch — before anything else
 
 **Run this once, here, before the permission guard and before Step 1.** Every step below
@@ -432,7 +437,9 @@ Step 2a still reads the diff either way. If every target skips, Step 2b is a cle
    ```
 
    - **At or below 1,000 lines:** paste the diff verbatim into the prompt's `## Diff` block, as before. The paste is cheaper than the round-trip, and the reviewer starts reading immediately.
-   - **Above 1,000 lines:** paste the `--stat` summary instead (`git diff <default branch>...<branch> --stat`, or `git diff origin/<default branch>...HEAD --stat`), then the literal retrieval command on its own line — the same basis, three dots, no `--stat` — and say the hunks must be read before reviewing. Each agent runs with `isolation: "worktree"`, so it has its own checkout and can retrieve this itself.
+   - **Above 1,000 lines:** paste the `--stat` summary instead (`git diff <default branch>...<branch> --stat`, or `git diff origin/<default branch>...HEAD --stat`), then the literal retrieval command on its own line — the same basis, three dots, no `--stat` — and say the hunks must be read before reviewing. Item 3 below gives each agent a checkout pinned at the target's commit, so it can retrieve this itself.
+
+     > **Write the retrieval command with EXPLICIT refs on both sides, `-C`-rooted at the pinned checkout, and never with `HEAD` on either end.** The two `--stat` forms above are the *orchestrator's*, run in the primary worktree where `HEAD` means what they assume. The agent's copy is a different tree, and the `HEAD` form does not survive the move: hand it `git diff origin/<default branch>...HEAD` and — before item 3's pin existed — the three-dot diff came back **EMPTY**, and the agent reviewed nothing and reported a clean gate. **Measured:** `isolation: "worktree"` forks at `origin/<default branch>`, so in that checkout `HEAD` *is* `origin/<default branch>` and the diff is empty by identity; `<default branch>...HEAD` is empty too, because `origin/<default branch>` is an ancestor of the local tip and so is its own merge-base. **Every `HEAD`-resolving form returns nothing** — there was no arm that happened to work. Two forms sat on one line and the orchestrator chose between them, so which one it wrote into the prompt decided whether the gate ran at all. The pinned checkout makes `HEAD` correct again, which is exactly why it must still not be used: it makes the command *look* right on both the broken and the fixed path, so a future regression in item 3 would be silent. **Emit exactly one of these to the agent, and no other diff command:** `git -C <absolute path to the pinned checkout> diff <default branch>...<branch>` for a feature branch, or `git -C <pinned> diff origin/<default branch>...<PIN>` for the unpushed-main group — refs the agent's tree cannot reinterpret. Offering a second form beside one of these, or a fallback *"where the pinned checkout is unavailable"*, reopens the defect exactly: which of two offered forms an agent copies is what decided whether the gate ran at all.
 
    > **Why a threshold and not a rule either way, and where the number comes from.** Measured over **ten branch-shaped merges** — one agent's worth of work each — in one real consumer repository; `review-close: consolidate` integration commits are excluded, because an integration branch is not a single 2b target. The ten are enumerated by commit in this project's maintainer record, not by a date range: a date range is not a stable population, and the first form of this sentence used one that had already stopped selecting the ten it quoted. Their diffs were 88, 224, 272, 273, 332, 366, 641, 2141, 2376 and 13,606 lines (5 KB – 452 KB). **Seven of ten sit under 700 lines; the top three are 77 KB, 112 KB and 452 KB.** A 1,000-line cut separates that population where it actually separates — anywhere in the 641→2141 gap gives the same split — and the number is a stated choice anchored on that measurement, not a claimed optimum. Above the cut the paste dominates the prompt and, at the top of the range, crowds the conventions section the agent is being asked to route against. Below it, retrieval buys nothing and costs a tool call.
    >
@@ -465,7 +472,39 @@ Step 2a still reads the diff either way. If every target skips, Step 2b is a cle
 
    **`rm -f` first, and `-uall` on both ends.** The delete is what makes a *skipped* capture fail loudly on every close rather than only the first — without it the file persists between runs, and a later close that skips this step silently diffs against a previous close's tree. `-uall` is required because plain `--porcelain` collapses an untracked directory to a single `?? dir/` line, so an agent writing into a directory that was already untracked is invisible; the assertion below uses `-uall` too, and the two must match.
 
-3. Spawn an Agent with:
+3. **Create each reviewer's checkout AT the target's commit — the harness will not do it for you, and this is the step that decides whether the gate runs at all.** `isolation: "worktree"` forks from the repository's **default branch**, not from the spawning session's `HEAD`. Under `pr` policy the target is always a branch that has not merged, so *every* agent spawned with isolation alone is handed the pre-merge tree: it reviews the default branch, finds nothing, and returns `APPROVED`. A convention gate reporting clean over a tree that does not contain the work is indistinguishable from one that reviewed it. `_shared/adversarial-review.md` § *Running more than one reviewer* states the rule; **this step is its invoker, and until Phase 290 the only invoker lived in a maintainer file the public mirror strips, so for a consumer the rule shipped to nobody.**
+
+   **One checkout per agent, detached, outside the repository**, created before the spawn and named in the prompt:
+
+   ```bash
+   # Per target, and the two targets resolve DIFFERENTLY. Write the arm you need; do not
+   # collapse them. For a feature branch the pin is the BRANCH TIP -- never `HEAD`, which
+   # under `pr` policy is the default branch this step is standing on, i.e. exactly the
+   # pre-merge tree `Q-490` is about. Collapsing the arms restores the defect SILENTLY:
+   # the checkout is created at whatever `PIN` holds, so the agent's echo still matches
+   # and the receipt still passes while every lens reviews the default branch.
+   PIN=$(git rev-parse "<target branch>")        # feature-branch target
+   PIN=$(git rev-parse HEAD)                     # unpushed-main group ONLY
+
+   PINNED=$(mktemp -d "${TMPDIR:-/tmp}/sysop-2b-XXXXXX")
+
+   # `mktemp` delegates "outside the repository" to the temp dir, which is not always outside
+   # it: a project-local temp dir is a legal setting that several CI images and
+   # nix shells use, and it lands the pin INSIDE the tree -- where it surfaces in the
+   # step-2 delta as a phantom mutation, and where git collapses the whole nested
+   # worktree to one `??` line even under `-uall`, hiding any real agent write in it.
+   # So verify containment rather than assuming it.
+   case "$PINNED"/ in "$(git rev-parse --show-toplevel)"/*)
+     echo "REFUSING: temp dir is inside the repository ($PINNED)"; exit 1 ;; esac
+
+   git worktree add --detach "$PINNED" "$PIN"
+   ```
+
+   - **Outside the repository, always.** A relative path leaves an untracked directory inside the very tree step 2's `git status --porcelain -uall` baseline is about to be compared against, so it would surface as a phantom mutation in the delta below and mask a real one.
+   - **One per agent, not one shared read-only checkout.** Sharing is cheaper and would be safe if the do-not-mutate rule held — it has been measured failing twice, and the failure mode of a shared pin is precisely the Phase 153 incident: one lens moves the checkout and its siblings silently describe the wrong revision. The echo below cannot catch that, because every echo runs *before* any sibling has had time to mutate.
+   - **Keep `isolation: "worktree"` anyway.** The pinned checkout is what the agent *reads*; its isolated worktree is where its own writes land. Dropping isolation would put a stray scratch file back in the primary tree, which is the one thing that contained both measured breaches. **That containment is the whole reason, and an earlier draft of this bullet gave a second one that was false:** it claimed the first two commands of the HARD RULE assertion below would then report clean *while the pinned checkouts leaked*. They would not. The fifth command reads `git worktree list`, not harness state, so it finds the pinned checkouts whether or not `isolation` is set; with no isolation the first two commands become **dead text** — vacuous, because their subject genuinely does not exist — not blind. Nothing leaks undetected either way.
+
+   Then spawn an Agent with:
    - `subagent_type: "general-purpose"`
    - `model: "opus"` (always — the **convention-gate** role, which defaults to `opus`: adversarial convention review; do not omit, per `.claude/served_models.yml`) <!-- sysop:role=convention-gate -->
    - `isolation: "worktree"` — give each agent its own checkout (internal tracker #234). Steps 2a–2d run in the user's **primary** worktree, which has a single `HEAD`; a full-tool agent that decides to compare two revisions will reach for `git checkout` unless something stops it, and in a real run one did, moving `HEAD` off the branch the close was working on. Step 4's HARD RULE already names this hazard but frames the actor as *external*; here it is this skill's own agents, spawned two steps earlier. (The reported run had an integration branch checked out at 2b, which this skill's step order does not produce — 4-pre cuts it two steps later — so read the incident as "off the expected branch", not as evidence about which branch that is. What the misplaced commit would have cost also depends on policy: Step 6 deletes a merged feature branch with a safe `git branch -d`, and force-deletes only the integration branch under `pr`.) Isolation is available here because these agents have **no** pre-existing worktree, so `_shared/adversarial-review.md` § *Running more than one reviewer* applies directly — its "do not use it where a worktree already exists" caveat is about `/claim-task`, `/auto-build`, `/auto-fix` and `/auto-judge`, which spawn into a worktree an earlier step created, not about this step. **Where the harness offers no isolation parameter, the prompt's do-not-mutate rule below is the portable floor** — all that is available, which is not the same as sufficient. Measured twice, on two different instruction texts: a consumer's 13-agent run had one agent create `tasks/open/<ID>.md` and edit `tasks/index.yml`, with several others leaving scratch scripts in the worktree root; and this repo's own pre-build pass, under a more emphatic read-only instruction, had an agent create a scratch file inside its worktree anyway. Both were contained only because the run passed `isolation: "worktree"`. So isolation is the structural hardening the floor does not provide, not a redundant extra on top of it — and a harness without it **must** expect a dirty tree and re-assert cleanliness rather than trust the prompt.
@@ -476,6 +515,32 @@ Step 2a still reads the diff either way. If every target skips, Step 2b is a cle
      You are the final convention gate before this branch merges to production.
      Review the diff below for violations of the project's conventions — EVERY
      section given to you below, not `## Prevention Conventions` alone.
+
+     ## Where you are — echo this BEFORE your first finding
+     The tree you must review is NOT your own working directory. Your own
+     checkout is forked from the default branch and does not contain this
+     target's work. Read every file and run every git command against the
+     pinned checkout instead, with `-C`:
+
+         git -C <absolute path to the pinned checkout> rev-parse HEAD
+
+     Report that output verbatim as your first line. It must equal <PIN>.
+     If it does not, STOP and say so — do not re-point yourself and do not
+     review. A lens that reads the wrong revision finds nothing to report,
+     which is indistinguishable from a clean pass.
+
+     `-C` is the whole rule: a bare `git rev-parse HEAD` reports your shell's
+     CWD, which is your own worktree, so you can echo a plausible SHA while
+     reading the wrong tree.
+
+     Do not modify the pinned checkout — no `git checkout`, no branch switch,
+     no staging, no stash. Other reviewers are reading their own copies and a
+     lens that moves a checkout has, in a real round, made its siblings
+     silently describe the wrong revision. Compare revisions with
+     `git -C <pinned> show <sha>:<entry>`, which reads the object database and
+     is unaffected by tree state. Name that loop variable `entry`, never
+     `path` — in zsh `path` is tied to `$PATH`, and assigning it replaces the
+     command search path so every later command fails.
 
      ## Target
      <branch name, or "unpushed main commits">
@@ -514,8 +579,11 @@ Step 2a still reads the diff either way. If every target skips, Step 2b is a cle
      sysop/runtime/2b-conventions.md> IN FULL before reviewing. It holds the
      project's complete convention-bearing sections, copied verbatim by
      the orchestrator at spawn time — that copy is the authority you route
-     against. Do NOT substitute your own worktree's CLAUDE.md: your checkout
-     carries the branch's version of that file, not the orchestrator's read.
+     against. Do NOT substitute a CLAUDE.md read from either tree you can see:
+     your own worktree carries the DEFAULT branch's version of that file and the
+     pinned checkout carries the target's, neither of which is the orchestrator's
+     read, and a branch that edits the conventions would otherwise have each
+     reviewer routing against a different taxonomy.
      If the file is missing or empty, STOP and report exactly that instead of
      reviewing — a review against an assumed taxonomy is worse than no review.
 
@@ -600,7 +668,9 @@ Step 2a still reads the diff either way. If every target skips, Step 2b is a cle
 
    **Do NOT capture a second baseline.** Step 2's tree and config baselines were taken before the *first* spawn and cover every agent this step spawns as well. Re-capturing here would take the snapshot **after** step 3's agents have run, so a mutation one of them made would be recorded as the starting state and the assertion below would then certify the tree clean over it — the exact inversion step 2's own note warns about.
 
-   Spawn one Agent per surviving target, with the same `subagent_type: "general-purpose"`, the same `model: "opus"` (the **reasoning** role), the same `isolation: "worktree"`, and `description: "Security check: <target>"`. The prompt is step 3's, with four substitutions and nothing else changed:
+   Spawn one Agent per surviving target, with the same `subagent_type: "general-purpose"`, the same `model: "opus"` (the **reasoning** role), the same `isolation: "worktree"`, **the same step-3 placement — its own pinned checkout at the target's commit, created before the spawn, with the `## Where you are` block and its echo carried verbatim** — and `description: "Security check: <target>"`. The prompt is step 3's, with four substitutions and nothing else changed:
+
+   > **The placement is not optional here either, and this fleet is the easier one to forget.** Step 3's checkouts belong to step 3's agents; these are different agents and need their own, for the same reason step 3 gives one to each lens rather than sharing. A security lens spawned with `isolation` alone reads the default branch — so it reviews a tree with none of the target's new endpoints, handlers or dependencies in it, returns no violations, and its `VERDICT` is carried into step 4 as a clean security gate that can *block* a close but in this state can never raise one. `_shared/adversarial-review.md` § *Running more than one reviewer* governs both fleets; the assertion below counts pinned checkouts from both.
 
    - the opening line names the security map as the taxonomy: *"Review the diff below for violations of the project's security conventions — the OWASP-category rules in the security map."*
    - `## Project conventions` becomes `## Security map`, carrying the security sources (pasted, or the `sysop/runtime/2b-security.md` path) under the same missing-or-empty STOP rule.
@@ -619,14 +689,36 @@ Step 2a still reads the diff either way. If every target skips, Step 2b is a cle
 >
 > **It must be a delta, not an absolute cleanliness test — that is why step 2 above captures a baseline.** Nothing in this skill establishes that the primary worktree is clean before the agents run: Step 1a excludes it by construction (it skips the **primary checkout**, matched by path identity, as Step 6's `pr` re-sync note also states in its own words — until this phase both sites said *the worktree whose branch is `main`*, which is the same worktree only while the primary happens to be on `main`), and the only earlier primary-tree reads are both in **Step 1b** — one path-scoped (`git status --porcelain -- review_tasks.md`), one whole-tree but grepped down to `review_tasks_archive.md` — while **Step 1c reads no working tree at all** (`for-each-ref`, `merge-base`, `diff --name-only`). So nothing before the agents run establishes anything about the rest of the tree. A bare `git diff --quiet HEAD --` here would fire on any ordinary uncommitted work and SKIP a close that is fine — a false-FAIL on the dominant path, which is how a gate gets disabled by the first operator who hits it. The baseline is taken after Steps 1b and 1c because both deliberately create commits, so a Step-1 reading is stale by design.
 >
-> After step 4 collects the verdicts, assert all four are clean before continuing:
+> **Remove step 3's pinned checkouts FIRST — they are yours, and the assertion below is not
+> the place to discover them.** The orchestrator created one per agent and nothing else
+> deletes them, so running the assertion first reports a "leak" on **every** close that
+> spawned anything: a false-FAIL on the dominant path, which is how a gate gets disabled by
+> the first operator who hits it. Remove them once both fleets have reported, then assert
+> that none remain:
+>
+> ```bash
+> git worktree list --porcelain | grep -F '/sysop-2b-' | sed 's/^worktree //' \
+>   | while read -r entry; do git worktree remove "$entry"; done
+> ```
+>
+> **A `remove` that refuses because the checkout is dirty is a FINDING, not an obstacle.**
+> The prompt forbids writing to the pinned tree, so a dirty one means a lens mutated the
+> revision its siblings were reading, and every verdict from that fleet is suspect — read
+> the diff, decide whether to re-run the fleet, and only then `git worktree remove --force`.
+> Do not reach for `--force` first; it deletes the evidence that tells you whether the round
+> is trustworthy.
+>
+> After that, and after step 4 collects the verdicts, assert all five are clean before continuing:
 >
 > ```bash
 > git worktree list --porcelain | grep -F '/.claude/worktrees/' || echo "no agent worktrees"
 > git for-each-ref --format='%(refname:short)' refs/heads/ | grep '^worktree-agent-' || echo "no agent branches"
 > diff <(git status --porcelain -uall) sysop/runtime/2b-baseline.txt && echo "primary tree unchanged by 2b"
 > diff <(git config --local --list | sort) sysop/runtime/2b-config-baseline.txt && echo "local config unchanged by 2b"
+> git worktree list --porcelain | grep -F '/sysop-2b-' || echo "no pinned checkouts"
 > ```
+>
+> **The fifth command VERIFIES the removal above; it does not discover the checkouts.** They live outside the repository by design, so they never appear in the third command's `git status` delta and never reach `.claude/worktrees/` for the first — the only handle on them is `git worktree list`, which is why they get their own line rather than riding one of the existing four. Because the removal loop runs first, the ordinary result here is `no pinned checkouts`, and **anything it lists is a checkout the removal loop could not take** — a dirty one it refused, or one belonging to a concurrent close. Read it, do not `--force` past it. The `git branch -D <name>` remedy in the paragraph below does **not** apply to these: they are `--detach`ed and have no branch, so there is no name to delete and a leaked pin is never reviewed as someone's feature work (Step 1a's porcelain parser emits no row for a detached worktree).
 >
 > **If the third or fourth command reports `No such file or directory`, that step-2 baseline was never captured — that is the loud failure, and it is not optional to fix.** Re-running the capture *now* cannot help: it would record whatever the agents did as the starting state. Inspect the tree by hand against `git log`, or re-run Step 2b from a known-clean point.
 >
@@ -955,6 +1047,12 @@ PY
 **Read the block into the Step 8 report — the `Orchestrator artifacts:` line, not `Claim artifacts:`, which is Step 4c's removal tally — and continue.** Nothing here gates anything: a branch with every artifact absent proceeds exactly as it would have, and a branch with every artifact present is not thereby approved. If a consumer ever reports a run where the artifacts were absent, the report was ignored, and the branch merged anyway, *that* is the evidence for revisiting a blocking form — and it should be revisited here, never at `/document-work`, whose Phase-155 hard fail punished at the worst possible moment, after implementation.
 
 ## Step 3: Run Verification
+
+> **Before you skip, weaken, or reword any rule in this step, read `REFERENCE.md` § `RC-3-1`
+> through § `RC-3-8`.** Those eight rules are declared load-bearing and pinned by a required
+> check: each section names what its loss would change, which is the thing this step cannot tell
+> you while you are running it. The rest of this skill is not covered — do not read the file's
+> existence as coverage of anything outside Step 3.
 
 **This is the pre-merge pass, and it can only verify the tree it runs on.** `HEAD` is still `main` here — Step 3b has not removed a worktree and Step 4a has not merged anything — so no approved branch's files are in this working tree and its new tests do not exist yet. What this pass verifies is *this* tree: `origin/<default branch>` plus whatever local-only commits `main` already carries. It is a fail-fast on the base, and it is the last point where stopping is free. **It is not a verdict on the work, and nothing here may be reported as having verified a branch** — that verdict is `4a-post`, which re-runs the same resolved list on the merge target once the branches are merged.
 
@@ -1408,10 +1506,10 @@ For each approved feature branch:
 # matches as a single simple command (Phase 126). THREE quoted positional args: the
 # branch this iteration is processing, `git worktree list --porcelain` output, and the
 # repo's own basename prefix. Passing the worktree listing IN means this block runs no
-# subprocess of its own and needs no shell loop — the two bash `for` loops an earlier
-# draft used are unauthorizable (`for`/`done` are not documented command separators, so
-# no allow-rule binds them), which is the same reason Step 3b's rollback became a
-# heredoc. Run from the repo root.
+# subprocess of its own and needs no shell loop — and the two bash `for` loops an earlier
+# draft used are unauthorizable: `for`/`done` are not documented command separators, so no
+# allow-rule binds them. Run from the repo root.
+# See REFERENCE.md, section Step 3b — provenance.
 python3 - "<branch name>" "$(git worktree list --porcelain)" "${WORKTREE_PREFIX:-$(basename "$(git rev-parse --show-toplevel)")}" <<'PY'
 import sys
 from pathlib import Path
@@ -1456,11 +1554,9 @@ if ws is None:
                 continue
             cand = Path(fields["workspace"])
             # VERIFY the recorded workspace before taking it. The lock is the claim's own
-            # statement, but a claim can be stale: a lock left behind by a workspace that
-            # has since been deleted or moved shadowed the live one, arm (iii) never ran,
-            # and the collect then aborted (exit 4) on a path that no longer exists — with
-            # nothing in the disposition naming the stale lock as the cause. An unverified
-            # arm must not be ordered ahead of a verified one.
+            # statement, but a claim can be stale. An unverified arm must not be ordered
+            # ahead of a verified one.
+            # See REFERENCE.md, section Step 3b — provenance.
             if not cand.is_dir():
                 continue
             ws, shape = cand, fields.get("mode") or "recorded"
@@ -1490,17 +1586,14 @@ if ws is None:
     # Two passes. The prefixed glob first, because it is what `claim_task.sh` computes —
     # then EVERY sibling directory, because `WORKTREE_PREFIX` is read from the *claiming*
     # session's environment and recorded nowhere except a lock that `--lock` may not have
-    # written. `WORKTREE_ROOT` (Phase 262) is the same kind of variable and carries the same
-    # caveat, with one narrower reach: BOTH passes glob siblings of the repo, so neither
-    # finds a workspace built under a relocated root. That residue is only `--clone`,
-    # because a linked worktree appears in the `git worktree list --porcelain` this step is
-    # handed as argv[2] wherever it sits, and a clone does not — a clone is its own
-    # repository, not a worktree git tracks. So: relocated + `--clone` + no `--lock`
-    # is the one combination this arm cannot resolve, and it resolves to `<none>`,
-    # which this step already reports rather than guessing at. Without the second pass, a consumer who exports that variable at claim time
-    # and not at close time gets `<none>` — the same silent incompletion this step exists
-    # to remove. The widening is safe because the arm verifies `HEAD`: a directory only
+    # written. The widening is safe because the arm verifies `HEAD`: a directory only
     # counts if it is a git checkout standing on this exact branch.
+    #
+    # BOTH passes glob siblings of the repo, so neither finds a workspace built under a
+    # relocated root. So: relocated + `--clone` + no `--lock` is the one combination this
+    # arm cannot resolve, and it resolves to `<none>`, which this step already reports
+    # rather than guessing at.
+    # See REFERENCE.md, section Step 3b — provenance.
     for cands in (sorted(repo.parent.glob(f"{prefix}-*")),
                   sorted(d for d in repo.parent.iterdir() if d.is_dir())):
         for cand in cands:
@@ -1583,62 +1676,24 @@ PY
       # untracked docs are gone. Step 3c hard-errors on its unsubstituted placeholder for
       # the same reason.
       #
-      # `src_dir` USED to sit in this same disjunction, and that was `Q-470` — reported
-      # four times in eight days against a green suite. An absent pending-docs directory is
-      # the ORDINARY state of a branch whose doc was authored on the main checkout (which
-      # /document-work supports explicitly), of a hand-cut branch that never ran
-      # /document-work at all, and of a prior run that collected and then died before
-      # `git worktree remove`. In every one the directory's absence PROVES there is nothing
-      # here to lose, which is exactly when proceeding to (b) is safe; the guard was sending
-      # a compliant operator to fix an invocation that was already correct, and the bypass
-      # that teaches is the untracked-doc data loss this step exists to prevent.
-      #
-      # What that check was REACHING for is the wrong-but-existing directory, and that shape
-      # is still refused — but by a test that DISCRIMINATES, sited where it discriminates.
-      # See the `src_dir`-absent arm below: `.git` separates a checkout from a directory
-      # that merely exists, and it is only asked there. Where `src_dir` IS present the
-      # question buys nothing — the directory demonstrably holds this branch's pending-docs
-      # and they must be collected whatever else is true of it — so asking it here would
-      # have widened exit 4 across the whole population for no discrimination at all.
+      # `src_dir` USED to sit in this same disjunction.
+      # See REFERENCE.md, section Step 3b — provenance.
       if ('<worktree' in str(wt) or '<branch' in branch
               or not branch.strip() or not wt.is_dir()):
           print(f'PENDING-DOC COLLECT ABORTED: unusable worktree path or branch name '
                 f'({wt}, {branch!r})')
           sys.exit(4)
 
-      # THE MAIN CHECKOUT AS `<worktree-path>` (`Q-478`). Measured, not reasoned: a doc
-      # that claims THIS branch clears stage 1 — main's "copy" IS the same file, so
-      # `branch_of(dst) == branch` and no collision fires — and then `shutil.copy2` raises
-      # `SameFileError`, an `OSError`. (A doc claiming some OTHER branch still exits 3 here,
-      # which is why the damage needs a doc for the branch being processed.) Before this
-      # phase that landed on exit **5**, whose disposition said *run the rollback*, which
-      # removes BY PROVENANCE every doc in main claiming this branch: the operand error
-      # destroyed exactly the records this step exists to protect, through the skill's own
-      # prescribed recovery rather than in spite of it.
-      #
-      # The same-file failure is always on the FIRST copy, so with the exit-7 split below it
-      # lands there now instead — measured at exit 7 with this guard removed, which is
-      # non-destructive. That is why this refusal is belt to that braces rather than
-      # redundant with it: 7 fixes the disposition, 4 refuses the operand.
-      #
-      # Exit 4 is the right home: this is an assertion about the INVOCATION, and main is
-      # untouched, which is what that row promises. Step 0 maps the primary checkout to the
-      # `main-checkout` shape with an EMPTY workspace and step 1 then skips this heredoc
-      # entirely, so the shipped path never produces this operand — it is reached by a
-      # hand-substituted `<worktree-path>`, which is the class exit 4 exists for.
-      #
-      # Compare RESOLVED paths, for the reason step 0 already gives about `workspace:`: it
-      # is written unresolved so it can contain `/../`, and on macOS the repo root reaches
-      # through `/private`. Comparing the two DIRECTORIES rather than `wt` against the repo
-      # root tests the actual hazard — source and destination are the same place. **Bounded
-      # honestly:** `live` is CWD-relative, so this compares against the pending-docs of
-      # whatever directory the step is run from. Run from the repo root, as step 1 says, that
-      # is main's. Run from a SUBDIRECTORY of main with `wt` naming the primary checkout,
-      # the two differ, the guard
-      # does not fire, and the step builds a spurious `sysop/runtime/pending-docs/` under the
-      # CWD (measured — exit 0, no data loss, off-contract CWD). An earlier draft of this
-      # comment claimed the check held "however the operator got there", which is wider than
-      # what it does.
+      # THE MAIN CHECKOUT AS `<worktree-path>` (`Q-478`). Exit 4 refuses this operand: it is
+      # an assertion about the INVOCATION, and main is untouched, which is what that row
+      # promises. Compare RESOLVED paths — `workspace:` is written unresolved so it can
+      # contain `/../`, and on macOS the repo root reaches through `/private` — and compare
+      # the two DIRECTORIES rather than `wt` against the repo root, which tests the actual
+      # hazard: source and destination are the same place. Bounded honestly: `live` is
+      # CWD-relative, so run this from the repo root, as step 1 says — run from a SUBDIRECTORY
+      # of main with `wt` naming the primary checkout and the two differ, the guard does not
+      # fire, and the step builds a spurious `sysop/runtime/pending-docs/` under the CWD.
+      # See REFERENCE.md, section Step 3b — provenance.
       try:
           _same_dir = src_dir.resolve() == live.resolve()
       except (OSError, RuntimeError) as e:
@@ -1857,37 +1912,20 @@ PY
                       stale.append((src.name, tip[:12], drift, log))
           return unknown, stale
 
-      # `src_dir` ABSENT is not an error — see the guard above. It is dispositioned HERE,
-      # after `branch_of` exists, because the two legitimate readings are worth telling
-      # apart: main already holding this branch's doc, and no pending-doc existing for this
-      # branch anywhere. Both permit (b); only the second is something an operator may want
-      # to act on before the branch merges, and silence would collapse them.
-      #
-      # An existing but EMPTY `src_dir` took the ordinary path before this change and still
-      # does — it reaches stage 1 with `docs == []`, collects nothing and exits 0. The two
-      # states must not be dispositioned differently, and that is the property to preserve
-      # if this arm is ever rewritten.
+      # `src_dir` ABSENT is not an error — see the guard above. An existing but EMPTY
+      # `src_dir` reaches stage 1 with `docs == []`, collects nothing and exits 0. The two
+      # states must not be dispositioned differently.
+      # See REFERENCE.md, section Step 3b — provenance.
       if not src_dir.is_dir():
           # The wrong-but-existing directory, refused by the one test that tells it apart
           # from the legitimate state. A HEALTHY workspace is always a checkout — a linked
           # worktree (`.git` file) or a clone (`.git` directory) — and `main-checkout` never
-          # runs this heredoc at all.
-          #
-          # But step 0 does not ENFORCE that, and an earlier draft of this comment claimed it
-          # did. Arm (iii) `discovered` is `.git`-backed (it calls `head_branch`), arm (ii)
-          # `recorded` is NOT: it accepts the lock's `workspace:` on `cand.is_dir()` alone.
-          # So a stale or hand-edited lock naming a plain directory resolves as `recorded`
-          # and arrives here. Exit 4 is still the right answer for it — there is no checkout
-          # to collect from — which is why the message below names the actual reason instead
-          # of reusing the generic one; a `Q-470`-shaped "fix the invocation" on a lock the
-          # operator never typed is precisely the mis-blame this phase is removing.
-          #
-          # This is also why `Q-470`'s filing was wrong that the fix must overturn
-          # `test_a_wrong_but_existing_worktree_path_aborts`. Its fixture is two BARE
-          # directories, which is NOT observationally identical to the legitimate state after
-          # all — the legitimate state has a `.git`, and neither the old guard nor the old
-          # test was reading the one fact that separates them. The oracle stands; what
-          # changed is that it now pins a discrimination rather than a conflation.
+          # runs this heredoc at all. Arm (ii) `recorded` accepts the lock's `workspace:` on
+          # `cand.is_dir()` alone, so a stale or hand-edited lock naming a plain directory
+          # resolves as `recorded` and arrives here. Exit 4 is the right answer for it —
+          # there is no checkout to collect from — which is why the message below names the
+          # actual reason instead of reusing the generic one.
+          # See REFERENCE.md, section Step 3b — provenance.
           if not (wt / '.git').exists():
               print(f'PENDING-DOC COLLECT ABORTED: {wt} is not a checkout (no .git) and '
                     f'holds no sysop/runtime/pending-docs — nothing here belongs to '
@@ -1941,21 +1979,12 @@ PY
       docs = [p for p in sorted(src_dir.glob('*.md')) if p.name not in NOT_A_BRANCH_DOC]
 
       # STAGE 1 — DECIDE. Nothing is written until every doc has been checked, so there is
-      # no partial state to undo. An earlier draft copied as it went and undid the copies
-      # on a collision; its undo deleted files main already held, because an overwritten
-      # doc was in the same "collected" list as a newly-created one. Deciding first makes
-      # that class impossible rather than handled.
+      # no partial state to undo. Deciding first makes that class impossible rather than
+      # handled.
+      # See REFERENCE.md, section Step 3b — provenance.
       collisions = []
       # THE POPULATION IS "EVERY DOC THIS RUN LEAVES FOR STEP 4c TO CONSOLIDATE", and
-      # that is the rule on BOTH routes. `Q-483`'s first cut measured main's docs only on
-      # the absent-`src_dir` arm, which split two states this file explicitly forbids
-      # splitting — *"an existing but EMPTY `src_dir` … The two states must not be
-      # dispositioned differently, and that is the property to preserve if this arm is ever
-      # rewritten."* Measured on the round's fixtures: absent exited 6 and empty exited 0
-      # over the identical stale doc. Worse, the exit-6 row's own remedy — re-run
-      # /document-work — CREATES `sysop/runtime/pending-docs/` unconditionally, so applying
-      # the documented fix moved the close onto the arm that did not look and the gate
-      # turned itself off. Both found by Phase 286's round.
+      # that is the rule on BOTH routes.
       #
       # Two terms, because they are two different claims measured in two different repos:
       #   - the worktree's own docs claiming this branch, which this run is about to copy;
@@ -1965,10 +1994,10 @@ PY
       # fresh copy, so its staleness is about to stop existing.
       #
       # Only docs that CLAIM this branch. The loop below skips a foreign doc with a
-      # `continue` before it ever reached the staleness read, and hoisting the read out
-      # of the loop lost that guard until a shipped test caught it: measuring a foreign
-      # doc's drift asks the wrong question about the wrong record, and its answer would
+      # `continue` before it ever reached the staleness read: measuring a foreign doc's
+      # drift asks the wrong question about the wrong record, and its answer would
       # refuse a close over a doc this branch has no claim on.
+      # See REFERENCE.md, section Step 3b — provenance.
       mine = [d for d in docs if branch_of(d) == branch]
       incoming = {d.name for d in mine}
       surviving_on_main = [
@@ -1989,18 +2018,11 @@ PY
                                 f'processing {branch!r})')
               continue
 
-          # STALENESS (`Q-471`). This is the LAST point in the close where the branch is
-          # still in the shape its doc was written against: Step 4-pre rebases or
-          # cherry-picks, and Step 4a may squash, all of which orphan the recorded SHA. Step
-          # 4c — where the routing that writes the durable record actually happens — cannot
-          # ask this question at all, and the ancestry property that makes that true is the
-          # one 1b's own blockquote already documents. So it is asked here and answered by
-          # refusing to collect, not by holding at 4c.
-          #
-          # `SHA_RE` is not decoration. `branch_tip` is free-form frontmatter, and an
-          # unvalidated value beginning with `-` reaches `git rev-list` as an option rather
-          # than a revision. A value that is not an object name is not a measurement, so it
-          # takes the same arm as a git that would not answer.
+          # STALENESS (`Q-471`). `branch_tip` is free-form frontmatter, and an unvalidated value
+          # beginning with `-` reaches `git rev-list` as an option rather than a revision, so
+          # `SHA_RE` is not decoration. A value that is not an object name is not a measurement,
+          # so it takes the same arm as a git that would not answer.
+          # See REFERENCE.md, section Step 3b — provenance.
           dst = live / src.name
           if dst.exists():
               dst_b = branch_of(dst)
@@ -2045,33 +2067,15 @@ PY
           print('PENDING-DOC UNDO: nothing to undo — stage 2 never started.')
           sys.exit(7)
 
-      # STAGE 2 — COPY, AND UNDO ITSELF IF IT CANNOT FINISH.
-      #
-      # Stage 1 already owns this principle and states it above: *"Nothing is written until
-      # every doc has been checked, so there is no partial state to undo… Deciding first
-      # makes that class impossible rather than handled."* Stage 2 cannot decide first — a
+      # STAGE 2 — COPY, AND UNDO ITSELF IF IT CANNOT FINISH. Stage 2 cannot decide first — a
       # write either works or it does not — so it gets the same property the other way: it
       # restores what it displaced and removes what it created, and main ends as it began.
       #
-      # **Why this replaced "exit 5, then run the rollback" (`Q-481`).** That remedy deleted
-      # by PROVENANCE — every doc in main claiming this branch — not by what this run copied,
-      # and the two are different sets. Measured by Phase 284's round: a worktree holding
-      # `a.md`/`b.md`/`c.md`, main holding a PRIOR run's `a.md` and `c.md`, the failure on
-      # `b.md` — the prescribed rollback removed `a.md` **and** `c.md`, while the *collect's*
-      # `PENDING-DOC ROLLBACK: REQUIRED` line, all the operator had before running it, named
-      # only `a.md`. `c.md` was a record this run never touched. That is `Q-478`'s defect one
-      # exit over: a documented recovery destroying what the step exists to protect.
-      #
-      # **The undo RESTORES; it does not unlink.** Deleting would be the same bug again: the
-      # dominant collision here is the same branch collected twice, where the copy
-      # deliberately OVERWRITES main's stale twin, so a delete-based undo would destroy the
-      # very record the overwrite displaced. Each doc's prior copy is preserved first, and
-      # only docs this run CREATED are removed.
-      #
-      # A same-file failure (an aliased doc — a symlink or hardlink into main's own
-      # pending-docs, which `Q-478`'s directory-level guard does not see because `SameFileError`
-      # is about FILE identity) now lands here like any other, and the restore puts main's
-      # original back. It needed no separate arm.
+      # THE UNDO RESTORES; IT DOES NOT UNLINK. The dominant collision here is the same branch
+      # collected twice, where the copy deliberately OVERWRITES main's stale twin, so a
+      # delete-based undo would destroy the very record the overwrite displaced. Each doc's
+      # prior copy is preserved first, and only docs this run CREATED are removed.
+      # See REFERENCE.md, section Step 3b — provenance.
       staged, undo_root = [], None
       for src in docs:
           dst = live / src.name
@@ -2389,8 +2393,14 @@ PY
       # it exists to protect. The unlink's own comment states the property that makes it
       # safe (*re-collected on a later run*), and that property is FALSE wherever the
       # worktree holds no copy. So the discriminator is exactly that property: unlink only
-      # when another copy survives, and otherwise MOVE main's copy back to the worktree,
-      # which takes the doc out of Step 4c's glob without costing the bytes.
+      # when another copy survives, and otherwise LEAVE main's copy exactly where it is
+      # and report it (`held`). NOTHING IS MOVED. `Q-482` briefly added a restore half
+      # that moved the doc back to the worktree; its own round removed it again, because
+      # `git worktree remove` — the command step (b) is running — deletes that directory's
+      # gitignored content silently at exit 0, so the "safe" destination is where the only
+      # copy goes to die. This comment said "MOVE ... back to the worktree" until Phase 290
+      # (`Q-492`): it is the section's own header comment, so it is the first sentence an
+      # editor meets, and acting on it would rebuild the exact route that round killed.
       removed, held, left, failed = [], [], [], []
       for name in sorted(names):
           dst = live / name
@@ -2410,28 +2420,20 @@ PY
               continue
           # THE UNLINK IS CONDITIONAL ON ANOTHER COPY SURVIVING, and that condition is the
           # unlink's OWN stated property (`re-collected on a later run`) rather than a new
-          # rule. It is FALSE wherever the worktree holds no readable copy — which is
-          # exactly `Q-470`'s absent-`src_dir` route — so unlinking there destroys the only
-          # record. Measured: ordinary route 2 copies -> 1; that route 1 -> 0.
+          # rule. It is FALSE wherever the worktree holds no readable copy, so unlinking there
+          # destroys the only record.
           #
           # `is_file()`, not `lexists`, and the two sides of this loop want OPPOSITE symlink
-          # rules for opposite reasons. Main's entry above is tested with `lexists` because
-          # an entry that is THERE must never read as absent. Here the question is whether
-          # the RECORD survives, so a dangling symlink in the worktree is not a copy.
+          # rules for opposite reasons. Main's entry above is tested with `lexists` because an
+          # entry that is THERE must never read as absent. Here the question is whether the
+          # RECORD survives, so a dangling symlink in the worktree is not a copy.
           # A COPY SURVIVES ONLY IF UNLINKING `dst` LEAVES ONE — which an ALIAS does not.
-          # `is_file()` follows symlinks, so a worktree entry that is a symlink pointing AT
-          # main's own copy answers True: the code then unlinks the file the link points to
-          # and the link dangles. Measured on the shipped heredoc: `ROLLED BACK: feat-x.md`,
-          # exit 0, **zero readable copies**. Found by the round's guard lens outside its
-          # mutation frame, and it is the aliasing case the COLLECT already refuses at exit 7
-          # (`SameFileError` is about FILE identity) — so the half that copies guarded it and
-          # the half that deletes did not.
           #
           # `realpath` rather than `samefile`, because the two alias shapes must NOT be
-          # treated alike: a HARDLINK is a genuine surviving copy (unlinking one link leaves
-          # the other readable, measured), and `samefile` would hold it too — safe, but a
-          # false alarm on the one aliasing shape that is fine. Comparing resolved PATHS
-          # separates them: a symlink resolves onto `dst`, a hardlink does not.
+          # treated alike: a HARDLINK is a genuine surviving copy, and `samefile` would hold
+          # it too. Comparing resolved PATHS separates them: a symlink resolves onto `dst`, a
+          # hardlink does not.
+          # See REFERENCE.md, section Step 3b — provenance.
           _t = src_dir / name
           if not (_t.is_file() and os.path.realpath(_t) != os.path.realpath(dst)):
               # NOTHING IS MOVED, AND THAT IS THE ROUND'S FINDING, NOT AN OMISSION. An

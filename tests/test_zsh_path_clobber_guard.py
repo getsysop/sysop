@@ -30,6 +30,12 @@ reported as a missing record, the halt fires, and an approved branch is demoted
 -- on a shell bug.  Guarding the remedy text is guarding against that.
 """
 import re
+import sys
+from pathlib import Path as _P
+
+sys.path.insert(0, str(_P(__file__).resolve().parent))
+
+from _prose_guard_helpers import carries, locate  # noqa: E402
 import pathlib
 
 import pytest
@@ -323,11 +329,11 @@ def test_step_2d_routes_the_silent_read_away_from_missing():
         "Step 2d does not name the `command not found` outcome; a clobbered "
         "$PATH then has no arm and falls through to `missing`"
     )
-    assert re.search(r"None of the five is `missing`", step), (
+    assert re.search(r"None\s+of\s+the\s+five\s+is\s+`missing`", step), (
         "Step 2d's summary still counts four outcomes -- the fifth was added "
         "without updating the count that tells the reader how many to expect"
     )
-    assert re.search(r"[Ee]mpty output is not evidence", step), (
+    assert re.search(r"[Ee]mpty\s+output\s+is\s+not\s+evidence", step), (
         "Step 2d's `missing` definition does not rule out a silent failed read, "
         "so empty stdout still classifies as an absent heading"
     )
@@ -336,14 +342,14 @@ def test_step_2d_routes_the_silent_read_away_from_missing():
     # Each is a one-token edit that reverts the fix while every other assertion
     # here stays green -- which is what "the guards were weaker than their author
     # said" means in practice.
-    i5 = step.index("command not found")
+    i5 = locate(step, "command not found").start()
     disposition = step[i5 : step.index("\n\n", i5)]
-    assert re.search(r"as `unreadable`", disposition), (
+    assert re.search(r"as\s+`unreadable`", disposition), (
         "the fifth outcome no longer DISPOSES to `unreadable`. Routing it to "
         "`missing` is the defect the whole arm exists to prevent, and it is a "
         "one-word edit that leaves the outcome enumerated and every count correct"
     )
-    assert "empty stdout" in disposition, (
+    assert carries(disposition, "empty stdout"), (
         "the fifth outcome no longer states the empty-stdout mechanism -- which is "
         "the entire reason it belongs on the `unreadable` list rather than being "
         "treated as a shell error the reader will obviously notice"
@@ -362,7 +368,7 @@ def test_step_2d_routes_the_silent_read_away_from_missing():
     # skill entirely (no fixture in the tree produces it, and real bodies measure
     # 45-113 bytes), and what is pinned here is the RELATION the measurement was
     # evidence for, in the section that now carries it.
-    assert re.search(r"[Tt]hree different states produce zero bytes", step), (
+    assert re.search(r"[Tt]hree\s+different\s+states\s+produce\s+zero\s+bytes", step), (
         "Step 2d no longer says that empty output is produced by more than one "
         "state. That is the whole reason silence cannot identify an outcome, and "
         "without it a reader treats zero bytes as a diagnosis"
@@ -377,7 +383,7 @@ def test_step_2d_routes_the_silent_read_away_from_missing():
         "as sufficient, and it is not"
     )
 
-    assert re.search(r"\*\*Five distinct outcomes land here", step), (
+    assert re.search(r"\*\*Five\s+distinct\s+outcomes\s+land\s+here", step), (
         "the `unreadable` lead-in still counts four. The count is stated twice -- "
         "at the lead-in and at the summary -- and an edit that reverts one and not "
         "the other tells the reader to stop looking after the fourth"

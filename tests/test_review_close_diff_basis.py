@@ -56,6 +56,12 @@ from pathlib import Path
 
 import pytest
 
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from _prose_guard_helpers import _kinds, carries, locate, rewrapped  # noqa: E402
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SKILLS_DIR = REPO_ROOT / "core" / "skills"
 DOCS_DIR = REPO_ROOT / "core" / "companion" / "docs"
@@ -325,7 +331,7 @@ def test_every_step_2_diff_site_uses_the_merge_base_form():
         "<full unified diff from the target's diff basis>",                 # prompt placeholder
         "`git diff <default branch>...<branch>` — three dots, per Step 2a's note",      # 2d predicate
     ):
-        assert site in rc, f"missing merge-base diff site: {site!r}"
+        assert carries(rc, site), f"missing merge-base diff site: {site!r}"
 
 
 def test_the_rationale_note_still_recommends_three_dots():
@@ -359,11 +365,79 @@ def _prompt_fence(block: str) -> tuple[int, int]:
 
 def test_step_2b_sets_isolation_as_a_spawn_parameter():
     block = _step_2b(REVIEW_CLOSE.read_text())
-    bullets = [ln for ln in block.splitlines() if re.match(r"^\s*-\s+`isolation:", ln)]
+    # `[-*+]`, not `-`: CommonMark's three unordered-list markers are interchangeable and
+    # the choice between them is presentational, so pinning one made a uniform `-` -> `*`
+    # reformat of the shipped file redden a guard about SPAWN PARAMETERS (`Q-495`). The
+    # widening admits no new shape — an ordered marker and plain prose are still refused.
+    bullets = [ln for ln in block.splitlines() if re.match(r"^\s*[-*+]\s+`isolation:", ln)]
     assert len(bullets) == 1, f"expected exactly one isolation bullet, got {bullets!r}"
-    assert bullets[0].lstrip().startswith('- `isolation: "worktree"`'), (
+    # Same marker widening, same reason. The property under test is that the bullet OPENS
+    # with the parameter — so it is an instruction to set it, not a `Do NOT set ...` — and
+    # which of the three bullet characters carries it is not part of that property.
+    assert re.match(r'^[-*+]\s+`isolation: "worktree"`', bullets[0].lstrip()), (
         f"isolation bullet is not an affirmative instruction: {bullets[0]!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# `Q-495` — the guards over this file must survive a reformat that changes no meaning
+# ---------------------------------------------------------------------------
+
+
+def _bullets_swapped(text: str) -> str:
+    """Every `- ` LIST BULLET becomes `* `, uniformly — and nothing inside a fence.
+
+    Uniformly on purpose: CommonMark starts a NEW list when the marker character changes,
+    so swapping some and not others would be a rendering change and the control would be
+    testing the wrong thing.
+
+    **Fence-aware, and that is not a nicety.** Phase 292's round found the first cut of
+    this helper rewriting fenced content too: of the 145 lines in `review-close/SKILL.md`
+    matching `^\\s*- `, **20 sit inside a fence** — Step 2b's prompt template and Step 8's
+    report template, which are verbatim output the skill tells the runner to emit. Swapping
+    those changes what the skill PRESCRIBES, so the transform would not have been the
+    rendering-identical reformat this docstring claims. Fence-aware it touches 123 lines.
+    (The phase's published `19 → 0` figure was measured with a fence-aware swap already;
+    what was wrong was this shipped helper and its claim, not the number.)
+    """
+    lines = text.split("\n")
+    kinds = _kinds(lines)
+    return "\n".join(
+        re.sub(r"^(\s*)- ", r"\1* ", ln) if kinds[i][0] == "listitem" else ln
+        for i, ln in enumerate(lines)
+    )
+
+
+def test_the_isolation_guard_survives_a_uniform_bullet_marker_swap():
+    """The reversal guard for the `[-*+]` widening above. Pinning `- ` made a guard about
+    SPAWN PARAMETERS red on a presentational reformat — measured, not hypothesised: this
+    control reddened `test_step_2b_sets_isolation_as_a_spawn_parameter` at the phase's
+    open, and it is a site Phase 291's four controls did not reach."""
+    shipped = REVIEW_CLOSE.read_text()
+    swapped = _bullets_swapped(shipped)
+    # Anti-vacuity WITHOUT requiring the swap to change anything. The first cut asserted
+    # `swapped != shipped`, which is red exactly when the file already uses `*` bullets —
+    # that is, when this guard is run against the very reformat its name certifies
+    # survival of. It turned the phase's own `19 → 0` bullet-swap figure into a 1, and the
+    # 1 was this guard. Found by this phase's round. What matters is that the file carries
+    # unordered bullets at all, in whichever marker.
+    assert re.search(r"(?m)^\s*[-*+] ", shipped), "no unordered bullets — nothing to test"
+    block = _step_2b(swapped)
+    bullets = [ln for ln in block.splitlines() if re.match(r"^\s*[-*+]\s+`isolation:", ln)]
+    assert len(bullets) == 1, f"a marker swap hid the isolation bullet: {bullets!r}"
+    assert re.match(r'^[-*+]\s+`isolation: "worktree"`', bullets[0].lstrip())
+
+
+def test_the_doc_only_paragraph_anchors_survive_a_rewrap():
+    """`_paragraph_starting` reads three markers; each must survive a re-wrap of the
+    sentence it names, which is what staled the `4. ` form it used to carry."""
+    wrapped = rewrapped(REVIEW_CLOSE.read_text())
+    assert wrapped != REVIEW_CLOSE.read_text()
+    for marker in ("**If the diff is doc-only**",
+                   "**0. Per-target doc-only skip",
+                   "**0. Per-branch doc-only skip"):
+        para = _paragraph_starting(wrapped, marker)
+        assert para, f"{marker!r} resolved to an empty paragraph after a re-wrap"
 
 
 def test_step_2b_does_not_negate_isolation():
@@ -458,14 +532,27 @@ def _code_extensions(paragraph: str) -> set[str]:
 
 
 def _paragraph_starting(text: str, marker: str) -> str:
-    start = text.index(marker)
-    return text[start : text.index("\n\n", start)]
+    """The paragraph opening at `marker`, located whitespace-tolerantly.
+
+    `Q-495`: this was `text.index(marker)` over a raw literal, and it raised a bare
+    `ValueError("substring not found")` when the literal staled — so a reformat of the
+    shipped file read as a broken test rather than as a stale anchor. `locate()` reports
+    the phrase it could not find, and absorbs a re-wrap of the sentence it names.
+    """
+    start = locate(text, marker).start()
+    end = text.find("\n\n", start)
+    assert end > start, f"no paragraph break after {marker[:60]!r}"
+    return text[start:end]
 
 
 def test_all_three_doc_only_skips_share_one_code_file_set():
     text = REVIEW_CLOSE.read_text()
     sets = {
-        "3": _code_extensions(_paragraph_starting(text, "4. **If the diff is doc-only**")),
+        # `Q-495`: anchored on the sentence, NOT on `4. ` in front of it. The ordinal is
+        # this paragraph's position in Step 3's list and has nothing to do with the
+        # code-file set being compared, so carrying it made a list-marker reformat redden
+        # a guard about extensions. `**If the diff is doc-only**` is unique in the file.
+        "3": _code_extensions(_paragraph_starting(text, "**If the diff is doc-only**")),
         "2b": _code_extensions(_paragraph_starting(text, "**0. Per-target doc-only skip")),
         "2d": _code_extensions(_paragraph_starting(text, "**0. Per-branch doc-only skip")),
     }
@@ -486,13 +573,13 @@ def test_the_skip_predicates_are_not_inverted(marker, predicate):
     """Inverting both (`no` → `any`) passed 32/32 against the first version, and is
     strictly worse than never having shipped the skip: every code branch skips the gate."""
     para = _paragraph_starting(REVIEW_CLOSE.read_text(), marker)
-    assert predicate in para, f"skip predicate changed or inverted: {para[:160]!r}"
+    assert carries(para, predicate), f"skip predicate changed or inverted: {para[:160]!r}"
     assert not re.search(r"touches \*{0,2}any\*{0,2} code files", para)
 
 
 def test_the_skip_actuator_still_skips():
     para = _paragraph_starting(REVIEW_CLOSE.read_text(), "**0. Per-target doc-only skip")
-    assert "skip the agent for that target" in para
+    assert carries(para, "skip the agent for that target")
 
 
 def test_the_skip_is_gated_on_no_applicable_convention_not_on_the_extension_alone():
@@ -502,7 +589,7 @@ def test_the_skip_is_gated_on_no_applicable_convention_not_on_the_extension_alon
     beancount one is explicitly not scanner-shaped."""
     block = _step_2b(REVIEW_CLOSE.read_text())
     assert "cannot violate one" not in block, "the false premise is back"
-    assert "no rule that governs the file types the diff *does* touch" in block
+    assert carries(block, "no rule that governs the file types the diff *does* touch")
     assert "do not skip" in block, "the escape hatch must be an instruction, not a hint"
     for evidence in ("convention_map.md", "beancount", "Synthetic content only"):
         assert evidence in block, f"the counter-example evidence for {evidence} is gone"
@@ -520,8 +607,8 @@ def test_the_skip_does_not_waive_secret_scanning():
 
 def test_a_skipped_target_is_not_reported_as_approved():
     block = _step_2b(REVIEW_CLOSE.read_text())
-    assert "never as `APPROVED`" in block
-    assert "an agent that was never spawned has approved nothing" in block
+    assert carries(block, "never as `APPROVED`")
+    assert carries(block, "an agent that was never spawned has approved nothing")
 
 
 def test_step_2b_results_have_somewhere_to_render():

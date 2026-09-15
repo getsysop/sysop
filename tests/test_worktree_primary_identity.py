@@ -25,6 +25,12 @@ known to measure something.
 import shutil
 import subprocess
 from pathlib import Path
+import sys
+from pathlib import Path as _P
+
+sys.path.insert(0, str(_P(__file__).resolve().parent))
+
+from _prose_guard_helpers import carries  # noqa: E402
 
 import pytest
 
@@ -425,7 +431,7 @@ def test_the_skill_states_the_population_by_identity():
                    "it skips the **primary checkout**, matched by path identity",
                    "excludes the primary checkout by path identity",
                    "deliberately skips the primary checkout"):
-        assert phrase in text, f"a corrected site lost its identity wording: {phrase!r}"
+        assert carries(text, phrase), f"a corrected site lost its identity wording: {phrase!r}"
 
 
 def test_both_gitignore_owners_resolve_the_primary_not_the_callers_worktree():

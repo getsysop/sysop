@@ -33,11 +33,18 @@ What these guards are FOR, stated so a later edit can tell a rename from a retre
 
 from __future__ import annotations
 
+import inspect
+import pathlib
 import re
+import sys
 from pathlib import Path
 from typing import Callable
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tests"))
+
+from _prose_guard_helpers import locate, rewrapped, swap  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SKILL = REPO_ROOT / "core" / "skills" / "review-close" / "SKILL.md"
@@ -696,26 +703,79 @@ def test_the_public_docs_carry_the_two_pass_shape():
 # Mutations — every one must be caught by at least one check
 # --------------------------------------------------------------------------------------
 
-def _sub(old: str, new: str) -> Callable[[str], str]:
+def _at(text: str, phrase: str) -> int:
+    """`text.index(phrase)`, whitespace-tolerant — the offset form of `_sub`.
+
+    The rows that slice the file rather than substitute into it used `t.index`, which
+    raises a bare `ValueError("substring not found")` when its anchor stales: the row
+    reads as a broken test rather than as a stale literal, which is `Q-495`'s reason for
+    routing every one of these through an assertion that names the phrase.
+    """
+    return locate(text, phrase).start()
+
+
+def _sub(old: str, new: str, after: str | None = None) -> Callable[[str], str]:
+    """A mutation that replaces the first WHITESPACE-TOLERANT occurrence of `old`.
+
+    `Q-495`: this was `text.replace(old, new, 1)` over a raw literal, so re-wrapping the
+    shipped sentence staled the anchor and the row went red for a reformat while every
+    rule it protects was intact. Measured on this module at the phase's OPEN (`1988a9a`,
+    before any of this phase's edits): **33 of its 59 rows** stopped applying after a
+    rendering-identical re-wrap. `swap()` pins the
+    words and lets the layout move; leading whitespace in `old` still requires whitespace,
+    so the rows anchored on `"   " + COMMAND` keep targeting the fenced occurrence rather
+    than a prose mention of the same command.
+    """
     def go(text: str) -> str:
-        assert old in text, f"mutation source text not found: {old[:70]!r}"
-        return text.replace(old, new, 1)
+        return swap(text, old, new, after=after)
     return go
 
 
+# `Q-495`: the scope command appears in Step 3 AND in 4a-post, and the three-space indent
+# that used to tell them apart is exactly what a re-indent moves. Every row named for
+# 4a-post's copy says so rather than relying on which one comes first in the file.
+POST_HEADING = SECTIONS["post"][0]
+
+
+# Step 4b's actual invocation, pinned WITH its fence closer. The bare three-argument form
+# is also a prefix of the recovery path's re-run (`… <N3> 2>&1`), so without the closer the
+# anchor names two sites.
+_MOVE_PROBE_SOURCE = ""  # set below, once the helper is defined
+
+_STEP_4B_CALL = (
+    'bash sysop/scripts/close_batch.sh --merge-target "<merge target>" <N1> <N2> <N3>\n```'
+)
+
+
+def _move_probe_after_close_batch(text: str) -> str:
+    """O1: relocate the clean-tree probe to AFTER Step 4b's close-batch call.
+
+    `Q-495`'s own lesson, applied to this row. It used to be two chained `str.replace`
+    calls, and the second one -- `"   " + CLOSE_BATCH + "\n"` -- had NEVER matched: the
+    shipped line carries `--merge-target` arguments and sits at column 0, so the row was a
+    pure DELETION of the probe wearing the name of a move, and the table's only ordering
+    mutation tested no ordering. `str.replace` returns the string unchanged when it finds
+    nothing, so nothing said so; `swap()` fails loud instead, which is why both halves go
+    through it. Found by this phase's round.
+    """
+    without = swap(text, "   " + CLEAN_PROBE + "\n", "")
+    return swap(without, _STEP_4B_CALL, _STEP_4B_CALL + "\n\n   " + CLEAN_PROBE,
+                after=SECTIONS["step4b"][0])
+
+
+_MOVE_PROBE_SOURCE = inspect.getsource(_move_probe_after_close_batch)
+
 MUTATIONS: list[tuple[str, Callable[[str], str]]] = [
     # ---- ordering: the whole fix ----
-    ("O1 move the gate after close_batch.sh", lambda t: (
-        t.replace("   " + CLEAN_PROBE + "\n", "", 1)
-         .replace("   " + CLOSE_BATCH + "\n", "   " + CLOSE_BATCH + "\n   " + CLEAN_PROBE + "\n", 1))),
+    ("O1 move the gate after close_batch.sh", lambda t: _move_probe_after_close_batch(t)),
     ("O2 comment the clean-tree probe out, leave the text present", _sub(
         "   " + CLEAN_PROBE, "   # " + CLEAN_PROBE)),
     ("O3 rename the step so it no longer sits between 4a and 4b", _sub(
         "### 4a-post. Verify the Merged Tree", "### 4z. Verify the Merged Tree")),
     ("O4 demote the step to prose (strip its fences)", lambda t: (
-        t[:t.index("### 4a-post.")]
-        + t[t.index("### 4a-post."):t.index("### 4b. Close Merged Batches")].replace("```bash", "").replace("```", "")
-        + t[t.index("### 4b. Close Merged Batches"):])),
+        t[:_at(t, "### 4a-post.")]
+        + t[_at(t, "### 4a-post."):_at(t, "### 4b. Close Merged Batches")].replace("```bash", "").replace("```", "")
+        + t[_at(t, "### 4b. Close Merged Batches"):])),
     # ---- the disclaimers ----
     ("D1 soften Step 3's disclaimer to a caveat", _sub(
         "**This is the pre-merge pass, and it can only verify the tree it runs on.**",
@@ -772,13 +832,16 @@ MUTATIONS: list[tuple[str, Callable[[str], str]]] = [
     ("R3 let --dry-run's green stand in for the merged gate", _sub(
         "**`4a-post` cannot run under `--dry-run`**", "`4a-post` also runs under `--dry-run`")),
     ("R4 drift 4a-post's scope command to two dots", _sub(
-        RAW_SCOPE_POST, RAW_SCOPE_POST.replace("origin/<default branch>...HEAD", "origin/<default branch>..HEAD"))),
+        RAW_SCOPE_POST, RAW_SCOPE_POST.replace("origin/<default branch>...HEAD", "origin/<default branch>..HEAD"),
+        after=POST_HEADING)),
     ("R4b append a pathspec so 4a-post only ever sees markdown", _sub(
-        RAW_SCOPE_POST, RAW_SCOPE_POST.replace("origin/<default branch>...HEAD", "origin/<default branch>...HEAD -- '*.md'"))),
+        RAW_SCOPE_POST, RAW_SCOPE_POST.replace("origin/<default branch>...HEAD", "origin/<default branch>...HEAD -- '*.md'"),
+        after=POST_HEADING)),
     ("R4c degenerate range — always empty", _sub(
-        RAW_SCOPE_POST, RAW_SCOPE_POST.replace("origin/<default branch>...HEAD", "origin/<default branch>...origin/<default branch>"))),
+        RAW_SCOPE_POST, RAW_SCOPE_POST.replace("origin/<default branch>...HEAD", "origin/<default branch>...origin/<default branch>"),
+        after=POST_HEADING)),
     ("R4d hoist the range into a variable", _sub(
-        RAW_SCOPE_POST, '   RANGE=origin/<default branch>..HEAD && git diff --name-only "$RANGE"')),
+        RAW_SCOPE_POST, '   RANGE=origin/<default branch>..HEAD && git diff --name-only "$RANGE"', after=POST_HEADING)),
     # R5/R5b were written against the pre-Phase-175 sentence, which propagated item 4's
     # doc-only skip into 4a-post. Phase 175 removed that propagation, so both mutations
     # are re-pointed at the sentence that replaced it — the rewrite takes its battery
@@ -821,30 +884,29 @@ MUTATIONS: list[tuple[str, Callable[[str], str]]] = [
     ("A1 delete the Step 8 template's verification block outright", lambda t: re.sub(
         r"Verification:  pre-merge.*?Unverified surfaces: <[^\n]*\n", "", t, count=1, flags=re.S)),
     ("A2 keep 4a-post's fence but leave only comments in it", _sub(
-        RAW_SCOPE_POST, "   # (see Step 3 for the command)")),
+        RAW_SCOPE_POST, "   # (see Step 3 for the command)", after=POST_HEADING)),
     ("A3 re-fence Step 3's scope block as ```text", _sub(
         "```bash\n# The changed-file list for THIS pass", "```text\n# The changed-file list for THIS pass")),
     ("A3b re-fence 4a-post's scope block as ```console", lambda t: (
-        t[:t.index("### 4a-post.")]
-        + t[t.index("### 4a-post."):t.index("### 4b. Close Merged Batches")].replace("```bash", "```console", 1)
-        + t[t.index("### 4b. Close Merged Batches"):])),
+        t[:_at(t, "### 4a-post.")]
+        + t[_at(t, "### 4a-post."):_at(t, "### 4b. Close Merged Batches")].replace("```bash", "```console", 1)
+        + t[_at(t, "### 4b. Close Merged Batches"):])),
     ("A4 rename the Step 3c heading that bounds two sections", _sub(
         "## Step 3c: Manual Smoke Gate", "## Step 3d: Manual Smoke Gate")),
     # Phase 175 split the 4a-post report arm across two lines to add `ran nothing` — the
     # deletion has to take both, or the check is still satisfied by the remnant.
-    ("A5 satisfy the report check from the --dry-run mention alone", lambda t: (
-        t.replace(
-            "               merged-tree (4a-post) <ran on <merge target>: N commands\n"
-            "                                      | ran nothing: why | not reached: why\n"
-            "                                      | TIMEOUT: <command> — killed, so it returned no\n"
-            "                                        verdict. The tree is UNVERIFIED: neither passed\n"
-            "                                        nor failed, and never folded into \"ran N commands\".>\n",
-            "", 1))),
+    ("A5 satisfy the report check from the --dry-run mention alone", _sub(
+        "               merged-tree (4a-post) <ran on <merge target>: N commands\n"
+        "                                      | ran nothing: why | not reached: why\n"
+        "                                      | TIMEOUT: <command> — killed, so it returned no\n"
+        "                                        verdict. The tree is UNVERIFIED: neither passed\n"
+        "                                        nor failed, and never folded into \"ran N commands\".>\n",
+        "")),
     # ---- the round's survivors. 49 of its 63 mutations lived against the first version;
     # these are the ones that named a distinct bypass rather than a variant of one. ----
     ("H01 delete the run-the-list instruction — the gate verifies nothing", lambda t: (
-        t[:t.index("3. **Run the list**")]
-        + t[t.index("4. **On failure, stop.**"):])),
+        t[:_at(t, "3. **Run the list**")]
+        + t[_at(t, "4. **On failure, stop.**"):])),
     ("H02 turn the run into a non-instruction", _sub(
         "3. **Run the list**, applying", "3. **Do not run the list** — each branch's worktree already ran it. Skip, ignoring")),
     ("H04 make the run optional", _sub(
@@ -865,9 +927,9 @@ MUTATIONS: list[tuple[str, Callable[[str], str]]] = [
         "## Step 3b: Prepare Worktrees for Merge\n",
         "## Step 3b: Prepare Worktrees for Merge\n\nIf Step 3 was skipped (doc-only diff), skip Step 3c too.\n")),
     ("H05 delete the report fence, keep the tokens in prose", lambda t: (
-        t[:t.index("```\nReview Complete.")]
+        t[:_at(t, "```\nReview Complete.")]
         + "Mention Verification:, Unverified surfaces: and merged-tree (4a-post) if you feel they add value.\n"
-        + t[t.index("If `$ARGUMENTS` contains `--dry-run`"):])),
+        + t[_at(t, "If `$ARGUMENTS` contains `--dry-run`"):])),
     ("H07 HTML-comment the report's verification lines", _sub(
         "Verification:  pre-merge", "<!-- Verification:  pre-merge")),
     ("H42 move the --dry-run disclaimer into an HTML comment", _sub(
@@ -885,9 +947,10 @@ MUTATIONS: list[tuple[str, Callable[[str], str]]] = [
 NON_MUTATIONS: list[tuple[str, Callable[[str], str]]] = [
     ("N1 join the scope command onto one line (equivalent)", _sub(
         RAW_SCOPE_POST,
-        '   git rev-parse --verify --quiet origin/<default branch> >/dev/null && git diff --name-only origin/<default branch>...HEAD || echo "NO_ORIGIN_MAIN"')),
+        '   git rev-parse --verify --quiet origin/<default branch> >/dev/null && git diff --name-only origin/<default branch>...HEAD || echo "NO_ORIGIN_MAIN"', after=POST_HEADING)),
     ("N2 space the redirection (equivalent)", _sub(
-        RAW_SCOPE_POST, RAW_SCOPE_POST.replace(">/dev/null", "> /dev/null"))),
+        RAW_SCOPE_POST, RAW_SCOPE_POST.replace(">/dev/null", "> /dev/null"),
+        after=POST_HEADING)),
     # N3/N4 re-pointed by Phase 248: Step 4b's primary invocation gained
     # `--merge-target` (`Q-308`), so the old literal no longer existed and both
     # controls died on `_sub`'s source assert rather than measuring anything.
@@ -895,8 +958,9 @@ NON_MUTATIONS: list[tuple[str, Callable[[str], str]]] = [
     # invocation; re-fence a redundant close_batch block -- and N4 now uses the
     # cherry-pick block, which is the redundant one it was always describing.
     ("N3 Step 4b ships only the --force form the skill mandates under pr", _sub(
-        'bash sysop/scripts/close_batch.sh --merge-target "<merge target>" <N1> <N2> <N3>',
-        'bash sysop/scripts/close_batch.sh --force --merge-target "<merge target>" <N1> <N2> <N3>')),
+        'bash sysop/scripts/close_batch.sh --merge-target "<merge target>" <N1> <N2> <N3>\n```',
+        'bash sysop/scripts/close_batch.sh --force --merge-target "<merge target>" <N1> <N2> <N3>\n```',
+        after=SECTIONS["step4b"][0])),
     ("N4 re-fence ONE redundant close_batch block (invariant intact)", _sub(
         '```bash\nbash sysop/scripts/close_batch.sh --force --merge-target "<merge target>" <N1> <N2> <N3>\n```',
         '```text\nbash sysop/scripts/close_batch.sh --force --merge-target "<merge target>" <N1> <N2> <N3>\n```')),
@@ -913,6 +977,68 @@ def test_legitimate_rewrites_do_not_go_red(name, mutate):
     assert rewritten != shipped, f"{name!r} was a no-op — it no longer matches the shipped text"
     failures = [f for check in CHECKS for f in check(rewritten)]
     assert not failures, f"{name!r} is a legitimate rewrite but went red: {failures}"
+
+
+def test_no_mutation_row_edits_the_skill_with_a_SILENT_matcher():
+    """`Q-495`'s own lesson, turned on this table. A row that half-applies reports nothing.
+
+    `str.replace` returns the string unchanged when it finds nothing and `str.index` at
+    least raises, so a row built from chained `.replace` calls can have one half quietly
+    match nothing and still look like a working mutation — `mutate(t) != t` is satisfied by
+    the other half. That is not hypothetical: `O1`, the table's ONLY ordering mutation,
+    had a second `.replace` targeting `"   " + CLOSE_BATCH + "\n"`, a line the file has
+    never contained (the shipped call carries `--merge-target` arguments and sits at
+    column 0). For as long as it shipped, `O1` was a pure DELETION of the clean-tree probe
+    wearing the name of a move, and nothing tested ordering. Found by this phase's round.
+
+    So every edit to the skill text goes through `swap`/`_at`, which fail loud. This is a
+    source-level check because the failure is invisible at run time by construction.
+    """
+    src = pathlib.Path(__file__).read_text(encoding="utf-8")
+    start = src.index("MUTATIONS: list[tuple[str")
+    # The first `@pytest.mark.parametrize` AFTER the tables, not the first in the file --
+    # there is one 150 lines earlier, and taking it produced an inverted slice, so this
+    # guard scanned an EMPTY string and passed over anything. Caught by checking that it
+    # actually bites on a reintroduced `t.replace(`, which is the only way to see it.
+    end = src.index("@pytest.mark.parametrize", start)
+    tables = src[start:end]
+    assert '("O1 move the gate' in tables and len(tables) > 5000, (
+        f"the scanned region is not the mutation tables ({len(tables)} chars) — this "
+        "guard is measuring nothing"
+    )
+    offenders = [
+        ln.strip() for ln in (tables + _MOVE_PROBE_SOURCE).splitlines()
+        if re.search(r"\bt\.replace\(|\btext\.replace\(|\bt\.index\(|\btext\.index\(", ln)
+    ]
+    assert not offenders, (
+        "a mutation row edits the skill with a matcher that fails silently; use "
+        "`swap()`/`_at()` so a stale anchor is loud:\n  " + "\n  ".join(offenders)
+    )
+
+
+@pytest.mark.parametrize("name,mutate", MUTATIONS + NON_MUTATIONS,
+                         ids=[m[0] for m in MUTATIONS + NON_MUTATIONS])
+def test_every_anchor_survives_a_rendering_identical_rewrap(name, mutate):
+    """`Q-495`: a reformat that changes no meaning must not stale a mutation anchor.
+
+    Every row here pins the pre-mutation text. When that text is re-wrapped the row stops
+    applying, and the suite goes red for a REFORMAT while every rule the row protects is
+    intact — and the fix each time is to re-type a literal in a test, a re-approval with
+    no review in it. Phase 291 met this with a single-sentence control and lost one row.
+    Measured at this phase's open with a maximal re-wrap, which breaks every raw
+    multi-word anchor at once rather than sampling one wrap position: **33 of these 59
+    rows** stopped applying. After `_sub`/`_at` were routed through the tolerant matcher,
+    zero did.
+
+    This is the guard, not the measurement: it re-wraps the shipped text and requires the
+    row to still land. It cannot go vacuous, because `rewrapped()` asserts that it changed
+    something and that it changed only whitespace.
+    """
+    wrapped = rewrapped(_text())
+    assert wrapped != _text()
+    assert mutate(wrapped) != wrapped, (
+        f"{name!r} became a no-op on re-wrapped text — its anchor is whitespace-fragile"
+    )
 
 
 @pytest.mark.parametrize("name,mutate", MUTATIONS, ids=[m[0] for m in MUTATIONS])

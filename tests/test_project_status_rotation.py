@@ -134,8 +134,8 @@ def _rule(step4c):
     """
     lines, lo, hi = step4c
     cap_line = _logical_clause(lines, lo, hi)
-    rot_line = lines[_one_line_starting_with(lines, ROTATION_ANCHOR, lo, hi)]
-    write_line = lines[_one_line_starting_with(lines, "**PROJECT_STATUS.md §6**", lo, hi)]
+    rot_line = _logical_clause(lines, lo, hi, ROTATION_ANCHOR)
+    write_line = _logical_clause(lines, lo, hi, "**PROJECT_STATUS.md §6**")
 
     cap = _only_number(cap_line, _MORE_THAN, "consolidation cap")
     trigger = _only_number(rot_line, _MORE_THAN + r" entries", "rotation trigger")
@@ -296,8 +296,8 @@ def test_the_rotation_rule_tells_the_run_to_report_the_count(step4c):
     gets written `unreported` — the #367 shape, one phase earlier.
     """
     lines, lo, hi = step4c
-    i = _one_line_starting_with(lines, ROTATION_ANCHOR, lo, hi)
-    assert re.search(r"report the count you rotated", lines[i], re.I), lines[i]
+    rot = _logical_clause(lines, lo, hi, ROTATION_ANCHOR)
+    assert re.search(r"report\s+the\s+count\s+you\s+rotated", rot, re.I), rot
 
 
 # ── the condition the prose states, checked against the rotation it describes ──
@@ -396,7 +396,7 @@ def test_the_rotation_report_survives_as_a_countable_field(step4c):
     assert re.search(r"<N> rotated out", field), field
 
     lo, hi = _step_4c_bounds(lines)
-    rot = lines[_one_line_starting_with(lines, ROTATION_ANCHOR, lo, hi)]
+    rot = _logical_clause(lines, lo, hi, ROTATION_ANCHOR)
     for m in re.finditer(r"[Rr]eport the count you rotated", rot):
         preceding = rot[max(0, m.start() - 30):m.start()].lower()
         for negation in ("need not", "no need to", "optional", "may skip"):
@@ -422,9 +422,16 @@ def test_the_staging_note_is_not_contradicted_beside_itself(step4c):
 
 # ── the clause is pinned verbatim (Phase 168's precedent) ────────────────────
 
-def _logical_clause(lines, lo, hi):
-    """The consolidation clause including its wrapped continuation lines."""
-    i = _one_line_starting_with(lines, CONSOLIDATION_ANCHOR, lo, hi)
+def _logical_clause(lines, lo, hi, anchor=None):
+    """The clause opening at `anchor`, including its wrapped continuation lines.
+
+    `Q-495`: every caller used to take the PHYSICAL line for every rule but this one, so
+    re-wrapping a rule across two lines put half its own words out of reach and the guard
+    reported the rule as changed. A rule is a clause, not a line; the only thing the line
+    was ever doing is telling the rule apart from a later paragraph citing it, and the
+    anchored start still does that.
+    """
+    i = _one_line_starting_with(lines, anchor or CONSOLIDATION_ANCHOR, lo, hi)
     j = i + 1
     while j < len(lines) and lines[j].strip():
         j += 1

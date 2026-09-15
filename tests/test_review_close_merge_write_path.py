@@ -14,6 +14,12 @@ rule and its neighbourhood — rather than asserting a sentence is present somew
 from __future__ import annotations
 
 import re
+import sys
+from pathlib import Path as _P
+
+sys.path.insert(0, str(_P(__file__).resolve().parent))
+
+from _prose_guard_helpers import anchor, carries, locate  # noqa: E402
 from pathlib import Path
 
 import pytest
@@ -34,10 +40,29 @@ def flat(skill: str) -> str:
     return " ".join(skill.split())
 
 
-def _section(text: str, start: str, end: str) -> str:
-    i = text.index(start)
-    j = text.index(end, i + len(start))
+def _section(text: str, start, end) -> str:
+    """Either anchor may be a compiled pattern (Phase 292, `Q-495`) — the `unreadable`
+    bullet is anchored by a list marker, and the marker character is presentational, so a
+    literal went red on a uniform `-` -> `*` reformat. `str.index` also raised a bare
+    `ValueError("substring not found")`, which reads as a broken test rather than a stale
+    anchor; both anchors now name themselves when they move.
+    """
+    def _at(anchor, frm):
+        if hasattr(anchor, "search"):
+            m = anchor.search(text, frm)
+            assert m, f"section anchor {anchor.pattern!r} not found"
+            return m.start(), m.end()
+        at = text.find(anchor, frm)
+        assert at >= 0, f"section anchor {anchor!r} not found"
+        return at, at + len(anchor)
+
+    i, after = _at(start, 0)
+    j, _ = _at(end, after)
     return text[i:j]
+
+
+# `Q-495`: any unordered marker — the subject is the `unreadable` OUTCOME, not the bullet.
+_UNREADABLE_BULLET = re.compile(r"[-*+] \*\*`unreadable`\*\*")
 
 
 # ── Q-233 (1) — the continue that opens an editor ───────────────────────────
@@ -55,7 +80,7 @@ def test_the_rebase_continue_is_never_prescribed_bare(skill: str):
         r"(?<!core\.editor=true )(?<!a bare `)git rebase --continue", skill
     )
     assert not bare, f"{len(bare)} bare `git rebase --continue` site(s) are back"
-    assert skill.count("git -c core.editor=true rebase --continue") >= 3
+    assert len(anchor("git -c core.editor=true rebase --continue").findall(skill)) >= 3
 
 
 def test_the_exact_allow_rule_exists_because_a_prefix_rule_cannot_cover_it():
@@ -166,7 +191,7 @@ def test_every_measured_git_show_failure_signature_is_routed(skill: str, signatu
     the outcome routed nowhere. A guard whose subject can silently widen to the whole file
     is not a guard.
     """
-    bullet = _section(skill, "- **`unreadable`**", "\n\n  **None of the five is `missing`:**")
+    bullet = _section(skill, _UNREADABLE_BULLET, "\n\n  **None of the five is `missing`:**")
     flat_bullet = " ".join(bullet.split())
     assert len(flat_bullet) < 4000, (
         "the `unreadable` bullet slice ran away — re-anchor it rather than letting it "
@@ -769,7 +794,7 @@ def test_the_four_git_show_outcomes_keep_their_own_causes(skill: str):
     Phase 287 added a fifth outcome and it is asserted here with the rest -- an arm no
     guard covers is how the first four came to need this test.
     """
-    bullet = _section(skill, "- **`unreadable`**", "\n\n  **None of the five is `missing`:**")
+    bullet = _section(skill, _UNREADABLE_BULLET, "\n\n  **None of the five is `missing`:**")
     # The last bullet has no newline inside the slice, so an end-safe fallback
     # hands back the whole remainder -- 840 chars against a 131-567 range for the
     # others, which makes any adjacency claim vacuous for it alone. Cap the
@@ -778,16 +803,22 @@ def test_the_four_git_show_outcomes_keep_their_own_causes(skill: str):
     CAUSE_REACH = 200
 
     def _cause(sig: str) -> str:
-        i = bullet.index(sig)
-        nl = bullet.find("\n", i)
-        end = nl if nl != -1 else min(i + CAUSE_REACH, len(bullet))
+        """The outcome's own clause — to the next LIST ITEM or blank line, not the next
+        newline (`Q-495`). Ending at the physical line put the cause out of reach the
+        moment the item was re-wrapped, so the guard reported the cause as deleted. The
+        boundary stays a sibling bullet, not a blank line, so a neighbouring outcome's
+        cause still cannot satisfy this one."""
+        i = locate(bullet, sig).start()
+        rest = bullet[i:]
+        m = re.search(r"\n\s*(?:[-*+]\s|\n)", rest)
+        end = i + (m.start() if m else min(CAUSE_REACH, len(rest)))
         return " ".join(bullet[i:end].split())
-    assert "the **operand itself** was mangled" in _cause("ambiguous argument"), (
+    assert carries(_cause("ambiguous argument"), "the **operand itself** was mangled"), (
         "the `ambiguous argument` outcome no longer carries its own cause"
     )
-    assert "the **path** resolved but the rev did not exist" in _cause("invalid object name")
-    assert "the rev resolved, the path did not" in _cause("does not exist in")
-    assert re.search(r"loop variable took `\$PATH`", _cause("command not found")), (
+    assert carries(_cause("invalid object name"), "the **path** resolved but the rev did not exist")
+    assert carries(_cause("does not exist in"), "the rev resolved, the path did not")
+    assert re.search(r"loop\s+variable\s+took\s+`\$PATH`", _cause("command not found")), (
         "the `command not found` outcome no longer carries its own cause NEXT TO ITS "
         "LABEL -- the loop variable taking $PATH with it. Detaching the cause to the "
         "far end of the bullet used to pass here, because the fallback window was "

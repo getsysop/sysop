@@ -29,6 +29,12 @@ properties rather than spellings: that the empty set has a named arm, that the
 arm skips the gate, and that the gate sentence no longer stands unqualified.
 """
 import re
+import sys
+from pathlib import Path as _P
+
+sys.path.insert(0, str(_P(__file__).resolve().parent))
+
+from _prose_guard_helpers import anchor, carries  # noqa: E402
 import subprocess
 from pathlib import Path
 
@@ -255,7 +261,10 @@ def _paragraph_containing(body: str, needle: str) -> str:
     use of that substring", which is worse than a gap because it marks a dangerous
     paragraph compliant. Scoping to the paragraph is what closes them.
     """
-    n = body.count(needle)
+    # Whitespace-tolerant (Phase 292, `Q-495`): a re-wrap that splits the anchor across
+    # two lines took this count to 0, so the guard failed reporting the anchor as absent.
+    pat = anchor(needle)
+    n = len(pat.findall(body))
     assert n == 1, (
         f"anchor {needle!r} appears {n} times in Step 4b, expected exactly 1. "
         "Lens 3's G14: this helper returned the FIRST matching paragraph, so a "
@@ -264,9 +273,11 @@ def _paragraph_containing(body: str, needle: str) -> str:
         "structural close; a first-match scope is not a scope."
     )
     for para in body.split("\n\n"):
-        if needle in para:
+        if pat.search(para):
             return para
-    raise AssertionError("unreachable")
+    # Reachable after all, once the count above is tolerant: a needle that straddles a
+    # blank line is counted once and belongs to no single paragraph. Say which.
+    raise AssertionError(f"no single paragraph holds {needle!r}")
 
 
 def test_step_4b_names_the_locks_as_its_batch_set_source():
@@ -326,7 +337,7 @@ def test_the_empty_set_must_be_derived_not_inferred_from_absence():
     """Absence of locks is not emptiness. Pinned separately from the arm itself,
     because the arm can be perfectly worded while its trigger is wrong."""
     body = _step_4b(_skill())
-    assert re.search(r"never inferred from absence", body), (
+    assert re.search(r"never\s+inferred\s+from\s+absence", body), (
         "Step 4b no longer forbids inferring the empty set from absent locks — the "
         "false-empty is the path that turns a missed batch into a clean report"
     )
@@ -363,7 +374,7 @@ def test_step_4b_refuses_the_review_task_ids_namespace():
         "is not polarity: the filing proposed this field as the fix, and a guard "
         "that only checks it is mentioned licenses reinstating it."
     )
-    assert "TASK-" in para and "Unknown argument" in para, (
+    assert carries(para, "TASK-") and carries(para, "Unknown argument"), (
         "the refusal no longer carries its executed evidence (the argument-parse "
         "rejection). A refusal without it is an assertion, which is what the first "
         "draft of this paragraph was — and it was wrong about the BATCH- form."

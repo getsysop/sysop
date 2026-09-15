@@ -107,6 +107,23 @@ that it's a working log written for the project's own continuity, not an introdu
   consecutive phases, so what shipped was not a third copy of the rule but a place to stand: the
   requirement moved into the text read at the moment an agent is spawned, and each round now has to
   record, in a file a test reads, which commit its reviewers actually stood on.
+  That fix had a half nobody had filed. The rule was right and it reached nobody who installed the
+  project: its only invoker sat in a maintainer-side file the public snapshot strips, and the close
+  path's own reviewers were excluded by the rule's own scope sentence, which still described it as
+  being about the ad-hoc round. That scope line had read that way for two phases, and widening it is
+  what made a citation already years old in project time actually bind. Then two results about
+  editing itself. Reformatting is not innocent: a re-wrap that changes not one word can silently
+  change which model a pinned step resolves to, because the marker and the pin it governs must
+  sit on the same physical
+  line — so a reflow an author would call cosmetic leaves the count unchanged and the answer
+  different. And a question the project had been calling blocked was settled the other way round:
+  a verbatim pin now tags fenced blocks instead of deleting them before comparing, so every
+  character survives and the pin can still tell a command from prose. Work the project had been
+  describing as stuck then moved, though not because of that settlement — thinning the step in
+  question never needed a new pin, and it was the re-wrap result above that had been the blocker
+  of record. Rationale began moving out of the file an agent executes and into a sibling an editor
+  reads, thirteen sections of it so far, with four rules deliberately left whole on the ground that
+  a rule's reason is the thing that makes it followable.
 
 Where to go next: [the monograph](./workflow.html) for why it's built this way,
 [one rule, end to end](./one-rule.md) for the evidence trail behind a single rule, and
