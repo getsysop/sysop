@@ -8,6 +8,11 @@ model: opus
 
 End-of-sprint code quality audit. Scans the codebase for correctness, convention violations, dead code, test gaps, and architectural drift. Produces a new Round (or appends to today's) in `review_tasks.md` with deduplicated, batched tasks ready to be claimed.
 
+> **Editing this skill rather than running it?** `REFERENCE.md`, beside this file, carries
+> the editor's half: what a rule protects, what its loss or softening would change, and where
+> it came from. It is not loaded with this file — open it when you are about to change the
+> skill, and author new rationale there rather than here.
+
 ## Pre-flight: Permission Guard
 
 Before any work, verify `.claude/settings.json` carries the allow-rules this skill depends on. Under `dontAsk` mode a missing rule for `bash sysop/scripts/run_checks.sh` is auto-denied with no prompt, halting the check-registry stage with no actionable error.

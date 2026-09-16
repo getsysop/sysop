@@ -122,8 +122,10 @@ that it's a working log written for the project's own continuity, not an introdu
   describing as stuck then moved, though not because of that settlement — thinning the step in
   question never needed a new pin, and it was the re-wrap result above that had been the blocker
   of record. Rationale began moving out of the file an agent executes and into a sibling an editor
-  reads, thirteen sections of it so far, with four rules deliberately left whole on the ground that
-  a rule's reason is the thing that makes it followable.
+  reads — forty-four sections of it across four steps as of 2026-09-16, with eighteen blocks left
+  whole: most often because a rule's reason is what makes it followable, and otherwise because a
+  guard or a pin still reads the text where it sits, because the verdict could not be decided, or
+  because moving the block would have meant re-authoring far more than it freed.
 
 Where to go next: [the monograph](./workflow.html) for why it's built this way,
 [one rule, end to end](./one-rule.md) for the evidence trail behind a single rule, and

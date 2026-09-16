@@ -43,7 +43,9 @@ skips — explicitly, stating the reason — when one is absent (the Phase 160 l
 sterilized-tree FileNotFoundError reads as a defect and goes red on the public CI).
 """
 
+import pathlib
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -125,14 +127,24 @@ def phase_rows(claude_md: str) -> list[tuple[str, str]]:
     return rows
 
 
-def numeric_phase(label: str) -> int | None:
-    """The leading integer of a row label, or None for `2A` / `rename` / `launch`.
+def numeric_phase(label: str) -> tuple[int, int] | None:
+    """`(major, minor)` for a row label, or None for `2A` / `2F.1` / `rename` / `launch`.
 
-    Used only to find the newest row — the one allowed to carry a placeholder. A row whose
-    label has no leading integer can never be the newest, so it is never exempt.
+    Used to find the newest row — the one allowed to carry a placeholder. A row whose label
+    has no leading number can never be the newest, so it is never exempt.
+
+    **Sub-phases were None until Phase 297** (`Q-503`), which meant a `.1` row could never be
+    the newest and so could never carry the `_pending merge_` placeholder its own commit has
+    to write. Latent rather than observed — `287.1` and `291.1` both landed with their hashes
+    already resolved — but it is a false red waiting on the next sub-phase that commits before
+    it merges, and this module's whole subject is a record going stale with nothing going red.
+
+    `2F.1` stays None on purpose: the `.` there follows a LETTER-suffixed phase, and letter
+    phases are outside every numeric population in this repo's guards. The regex requires the
+    optional `.N` to attach directly to the leading digits, so `2F.1` fails at the `F`.
     """
-    m = re.match(r"^(\d+)(?:\s|$|—)", label)
-    return int(m.group(1)) if m else None
+    m = re.match(r"^(\d+)(?:\.(\d+))?(?:\s|$|—)", label)
+    return (int(m.group(1)), int(m.group(2) or 0)) if m else None
 
 
 def unresolved_rows(claude_md: str) -> list[tuple[str, str]]:
@@ -205,6 +217,13 @@ def test_the_commit_cell_guard_has_rows_to_see():
         "shrunk, so the row parser has stopped matching its shape"
     )
     assert all(cell for _, cell in rows), "a Commit cell parsed as empty"
+    # 48 before Phase 297, 42 after: `numeric_phase` now parses the six dot-suffixed labels
+    # that already existed (`5.1`, `16.1`, `99.1`, `109.1`, `287.1`, `291.1`), so those moved
+    # out of this set. `288.1`, which this phase ADDED, arrives already numbered and does not
+    # move it further — the count is 42 and not 41 for that reason.
+    # The floor stays 40 because the remainder is FROZEN — the
+    # letter-suffixed phases, `2A`-style labels, `rename` and `launch` are all historical, and
+    # a new sub-phase adds a NUMBERED row rather than shrinking this set further.
     unnumbered = [lab for lab, _ in rows if numeric_phase(lab) is None]
     assert len(unnumbered) >= 40, (
         f"only {len(unnumbered)} non-numerically-labelled rows seen; the parser has "
@@ -229,7 +248,11 @@ def test_the_next_session_prompt_briefs_the_next_phase():
         f"  {line1[:140]}"
     )
     declared = int(m.group(1))
-    expected = numeric_phase(newest_label(claude_md)) + 1
+    # `[0]` — the MAJOR. The brief after `296.1` is Phase 297, not `297.1`: a sub-phase is a
+    # correction to the phase below it, so the next phase counts from the major. Before
+    # Phase 297 `numeric_phase` returned a bare int and a `.1` newest row returned None,
+    # which would have raised `TypeError` here rather than computing the wrong number.
+    expected = numeric_phase(newest_label(claude_md))[0] + 1
     assert declared == expected, (
         f"tools/NEXT_SESSION_PROMPT.md briefs Phase {declared}, but the next phase is "
         f"{expected}. The file is single-use: the phase that consumes it rewrites it in the "
@@ -271,7 +294,6 @@ def test_every_commit_hash_in_the_table_resolves():
     """Shape is not existence. `HASH_RE` accepts any 7-40 hex run, so a cell reading
     `` `0000000` `` — a typo, a hash from a rebased-away commit, a copy-paste of the wrong
     line — reads as resolved. This is the one check that can tell the difference."""
-    import subprocess
 
     # CI checks out with `actions/checkout` at its default `fetch-depth: 1`, so the runner
     # has ONE commit and every historical hash fails to resolve. A local checkout is full
@@ -495,4 +517,553 @@ def test_the_disposition_parser_sees_the_briefs_list_items():
     assert not dropped, (
         f"disposition_text dropped {len(dropped)} of {len(expected)} list items the brief "
         f"actually contains; first dropped: {dropped[0][:100]!r}"
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# (d) A merged phase has a PHASE_LOG.md section.
+#
+# `Q-503`. This module is named for `PHASE_LOG.md` and, until Phase 297, never opened
+# it: every guard above reads `CLAUDE.md`'s table or the next-session prompt. So the
+# **prose** half of a phase's record — the half `CLAUDE.md`'s close-out convention names
+# first, and the only place the "why we made this call" narrative lives — was enforced by
+# memory alone, which is what Phase 154 ruled is not a mechanism.
+#
+# **The cost was measured before this was written, not after.** Phase 287.1 shipped with
+# no prose entry and no ledger row; Phase 288 found it, wrote the missing record, wrote
+# down the regex reason, and did not fix the detector. Eight and a half hours later Phase
+# 291.1 shipped
+# with no record in any of the three places and nothing went red; Phase 293 wrote that one
+# too. Phase 297 then found a THIRD, which no brief had named: **Phase 288.1** (`af75a58`,
+# #642) was merged to `main` with no `PHASE_LOG.md` section, no `CLAUDE.md` row and no
+# ledger row. It had sat unrecorded for two days in the one window where every other guard
+# in the tree was green.
+#
+# **The population comes from `git log`, and it has to.** The obvious cheaper source is
+# `CLAUDE.md`'s own table — no subprocess, no history dependence. It is also exactly the
+# source that could not see `288.1`, because a phase that never wrote its table row is
+# absent from the table. Deriving the population from the artefact under audit is the
+# `_shared/adversarial-review.md` rule-1 "where it looks" failure, and this guard is a
+# worked instance of why: the table and the log go stale together, by the same slip, in
+# the same commit that forgets.
+#
+# **No newest-phase carve-out, and none is needed.** The sibling ledger guard exempts the
+# newest row because a ledger row records a round that has not run yet. A `PHASE_LOG.md`
+# section has no such dependency — the convention is that the prose is written BEFORE the
+# round, which is what lets the round review it — and the population here is the DEFAULT
+# BRANCH, so a phase in flight is not in it at all. The window the other guards have to
+# carve out does not exist here.
+PHASE_LOG = REPO_ROOT / "PHASE_LOG.md"
+
+# The oldest phase this repo's commit subjects name in any of the three forms below. Below it
+# the inherited history carries the extraction's gdp subjects, so there is no population to
+# derive; raising it above 53 IS a policy choice about which phases deserve a record, and is
+# how you would abandon one.
+#
+# **This was 65 and the reason given for it was false — the round's record lens.** 65 is the
+# oldest *prefix-form* subject, which was the only form the first version could see. Under the
+# three-form population the oldest is 53, and Phases 53, 63 and 64 are ordinary Sysop phases,
+# not the extraction's gdp history. They were silently outside the demanded set while a comment
+# said no such set existed. All three carry `## Phase <N>` sections, so widening the floor
+# costs nothing and closes three phases the guard was written to cover.
+PHASE_LOG_BINDS_FROM = 53
+
+# A guard is only as real as the history it can see, and this one reads history through a
+# subprocess that answers cheerfully with nothing. `actions/checkout` takes its default
+# `fetch-depth: 1` unless told otherwise; on a depth-1 clone `git log` yields ONE subject,
+# every phase in the derived population has a heading, and the guard reports green over a
+# repository it never looked at. `.github/workflows/tests.yml` sets `fetch-depth: 0` for
+# this guard — this floor is what goes red if that is ever removed, instead of the guard
+# quietly becoming decorative.
+#
+# **It counts MATCHING SUBJECTS, not distinct phases**, and the first version's comment said
+# 231 (the distinct count) while the assertion compared 332 — a floor that read as tight and
+# carried 107 of slack. The round's record lens measured it. 335 matching subjects at
+# authoring against 231 distinct phases; a floor, so it only ever rises, and set close enough
+# that a regression to the single prefix form (200 subjects) also reddens.
+#
+# **A hand-set constant is the weaker half and is not alone.** Editing this to 0 disarms it,
+# so `test_the_derived_population_covers_the_phase_log_table` cross-checks the same question
+# against a second live source — `CLAUDE.md`'s own table — which no edit to this number can
+# satisfy.
+MERGED_SUBJECT_FLOOR = 325
+
+# `main`, then `origin/main` for CI, where `actions/checkout` leaves a detached HEAD on the
+# PR merge ref and the local branch may not exist. HEAD is deliberately NOT a fallback: on
+# a PR it carries the phase's own unmerged commits, so the guard would demand a section for
+# a phase that has not merged — the false red the "default branch" population avoids.
+DEFAULT_BRANCH_REFS = ("main", "origin/main")
+# Pinned, because the sentence above was an invariant nothing enforced: the round's guards
+# measured `DEFAULT_BRANCH_REFS = ("HEAD",)` running GREEN with Phase 297's own unmerged
+# commits in the population. The author-side battery had dismissed that mutation as a no-op
+# "because HEAD is `main`" — true on `main`, and the battery runs on the phase branch, where
+# it is not. A survivor mislabelled as a no-op is worse than a survivor.
+assert "HEAD" not in DEFAULT_BRANCH_REFS, (
+    "HEAD is not a default-branch ref. On a phase branch it carries the phase's own unmerged "
+    "commits, so the guard would demand a PHASE_LOG.md section for a phase that has not "
+    "merged — and 'merged' is the whole population this guard is defined over."
+)
+
+# **This repo names a phase in its commit subject four different ways, and the first version
+# of this guard could see one.** The `Phase <N>:` prefix is today's convention, and a
+# bare `^Phase (\d+)` scan over the default branch returns 175 subjects — which looks like
+# the whole population until you notice it starts at 126. Phases 66 through 125 used
+# conventional-commit subjects with the number in a trailing parenthetical
+# (`feat(skills): strip the identifier leak (Phase 66) (#7)`), so ~60 merged phases were
+# silently outside the population and the floor's own comment read as if they were in it.
+# Found by this phase's author-side battery, by the rule-1 "where it looks" check. There are
+# THREE forms, not two — the third is a conventional-commit SCOPE (`docs(phase-190): …`),
+# which is how Phase 190's own commit names itself and the only way that phase enters the
+# population at all. 175 subjects with the prefix alone, 205 with the trailing parenthetical,
+# **231** with all three. A guard whose population is an artefact of one writing style is the
+# defect this module exists for, one altitude up.
+#
+# **All three are ANCHORED**, and the round's guards lens is why. The trailing forms were
+# `\(Phase (\d+)\)` and `\(phase-(\d+)\)` with no anchor, so an ordinary subject that MENTIONS a
+# phase — `docs: cross-reference the approach rejected in (Phase 999)` — minted a demand for a
+# phase that never merged and reddened three arms with a message asserting it had. This repo
+# writes about its own phase numbers constantly: 38 subjects already carry `(Phase ` and 103
+# carry `(phase-`. The parenthetical form must therefore END the subject (an optional trailing
+# `(#NNN)` PR reference is the house style), and the scope form must be a conventional-commit
+# scope, which by definition sits before the first `:`.
+# The prefix form is case-INSENSITIVE and letter-tolerant, both measured. Phases 95–98 wrote
+# `phase 95: …` in lower case, and `Phase 159a:` defeats a `\b` because there is no word
+# boundary between `9` and `a` — so five merged phases (95, 96, 97, 98, 159) sat outside the
+# population while the comment below claimed three forms covered it. Found by the round's
+# execution lens. Widening gains exactly those five and zero false reds: every one already
+# has a `## Phase <N>` section.
+_SUBJECT_PHASE_RES = (
+    re.compile(r"^phase (\d+)(?:\.(\d+))?[a-z]?\b", re.I),
+    re.compile(r"\(Phase (\d+)(?:\.(\d+))?\)(?:\s*\(#\d+\))*\s*$"),
+    re.compile(r"^[a-z]+\(phase-(\d+)(?:\.(\d+))?\):"),
+)
+
+# The floor for the CROSS-SOURCE arm below, which is a different question from
+# `PHASE_LOG_BINDS_FROM`. Phase 94 landed under a subject that names no phase number in any
+# form, so demanding that every table row appear in the git population is only true above it.
+#
+# **This was 126, and the reason given was false twice over.** The comment said phases 94–98
+# "name no phase number in any form" — true of 94 alone; 95–98 use a lower-case prefix the
+# regexes now admit. And it claimed the exception set is empty only from 126, when it is
+# empty from 95. Both halves found by the round. The floor at 126 excluded 29 table rows the
+# arm can now cover, every one of them in the form-2 population that `MERGED_SUBJECT_FLOOR`
+# is too slack to backstop.
+CROSS_SOURCE_BINDS_FROM = 95
+
+# The cross-source arm's own non-vacuity floor. 202 table rows fall in range at authoring.
+CROSS_SOURCE_TABLE_FLOOR = 195
+
+# A section emptied to its heading is not a record. Shortest live body is 538 chars.
+PHASE_LOG_MIN_BODY = 300
+
+
+def _phase_log() -> str:
+    return _read(PHASE_LOG, "the merged-phase record guard")
+
+
+def prose_only(markdown: str) -> str:
+    """`markdown` with fenced blocks and HTML comments blanked, line structure preserved.
+
+    The first version matched headings over the raw file, and the round's guards lens walked
+    it twice: a `## Phase 290 …` line inside a ```` ```markdown ```` example block satisfied
+    the demand for Phase 290 after its real section was deleted, and so did the heading
+    wrapped in `<!-- … -->`. This repo has paid for fence-awareness three times already
+    (Phases 275, 281, 291); a guard reading `PHASE_LOG.md` — a file whose whole subject is
+    quoting markdown — had no business reading it raw.
+
+    Lines are blanked rather than removed so that every surviving line keeps its position and
+    `(?m)^` still means what it says.
+    """
+    out, fence, in_comment = [], None, False
+    for line in markdown.split("\n"):
+        stripped = line.lstrip()
+        if in_comment:
+            out.append("")
+            if "-->" in line:
+                in_comment = False
+            continue
+        if fence is None and stripped.startswith("<!--") and "-->" not in line:
+            in_comment = True
+            out.append("")
+            continue
+        info = _fence_marker(stripped)
+        if fence is not None:
+            out.append("")
+            # A closer is the marker ALONE, at least as long as the opener, with no info
+            # string — CommonMark's rule, and the reason the first version desynchronised.
+            if info and info[0] == fence[0] and info[1] >= fence[1] and not info[2]:
+                fence = None
+            continue
+        if info:
+            fence = info
+            out.append("")
+            continue
+        out.append(line)
+    return "\n".join(out)
+
+
+def _fence_marker(stripped: str) -> tuple[str, int, str] | None:
+    """`(char, run length, info string)` if `stripped` is a fence line, else None.
+
+    **The discriminator is the info string**, and the first version did not have one: it
+    treated any line beginning with three backticks as a fence, so this file's own prose —
+    which quotes markdown constantly — desynchronised the state machine. The live instance
+    was an INLINE code span, ``` `Sampled`, not `Full` ```, whose stripped form starts with
+    three backticks and is not a fence at all. It swallowed 1,465 lines; 13 such spans
+    between them hid **41** real `## Phase` headings, and the guard reported all 41 as
+    missing records. A parser that manufactures 41 false reds is worse than the hole it closes.
+
+    CommonMark: a backtick fence's info string may not contain a backtick. That one rule
+    separates the inline span from the fence.
+    """
+    m = re.match(r"^(`{3,}|~{3,})(.*)$", stripped)
+    if not m:
+        return None
+    run, info = m.group(1), m.group(2).strip()
+    # A real fence's info string is a single language tag. Anything with whitespace or a
+    # backtick in it is PROSE that happens to begin with the marker — either an inline code
+    # span (``` `Sampled`, not `Full` ```) or a sentence that wrapped onto a line starting
+    # with one (``` merely splits the outer block into two empty ones…). Both are live in
+    # `PHASE_LOG.md`; measured, all six such lines in the file are prose and none is a fence,
+    # and between them they hid 41 then 29 real `## Phase` headings from two earlier cuts of
+    # this parser. CommonMark would open a fence on the second shape, so this is deliberately
+    # stricter than the spec, for a file whose subject is quoting markdown.
+    if info and (" " in info or "`" in info):
+        return None
+    return (run[0], len(run), info)
+
+
+def _ref_exists(ref: str) -> bool:
+    return subprocess.run(["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"],
+                          cwd=REPO_ROOT, capture_output=True).returncode == 0
+
+
+def _default_branch_ref() -> str:
+    for ref in DEFAULT_BRANCH_REFS:
+        if _ref_exists(ref):
+            return ref
+    raise AssertionError(
+        "none of " + ", ".join(DEFAULT_BRANCH_REFS) + " resolves in this checkout, so the "
+        "merged-phase population cannot be derived. This is a FAILURE and not a skip on "
+        "purpose: CLAUDE.md is present, so this is the source repo, and a guard that "
+        "silently stands down here is the inert-gate shape `Q-503` exists to close. If CI "
+        "reaches this, `actions/checkout` is no longer fetching refs."
+    )
+
+
+def _refuse_a_stale_default_branch(ref: str) -> None:
+    """`main` behind `origin/main` truncates the population at the NEWEST end, silently.
+
+    The round's guards lens measured it: pointing the resolver at `main~4` and deleting a
+    phase's section left every arm green, because the cross-source arm bounds the table by
+    `max(merged)` — derived from the same truncated population — so end-truncation is
+    self-consistent. Depth truncation is caught (it removes the OLDEST commits, which the
+    cross-source arm can see); this is the direction that is not.
+
+    Only checked when `origin/main` exists and is ahead, which is exactly the "you forgot to
+    pull" state `CLAUDE.md` already tells sessions to avoid. A missing remote is not an error.
+    """
+    if ref != "main" or not _ref_exists("origin/main"):
+        return
+    if subprocess.run(["git", "merge-base", "--is-ancestor", "origin/main", "main"],
+                      cwd=REPO_ROOT, capture_output=True).returncode == 0:
+        return
+    behind = subprocess.run(["git", "rev-list", "--count", "main..origin/main"],
+                            cwd=REPO_ROOT, capture_output=True, text=True).stdout.strip()
+    raise AssertionError(
+        f"local `main` is {behind} commit(s) behind `origin/main`, so the merged-phase "
+        "population is truncated at its newest end and every arm in this module is "
+        "self-consistent over the shorter history. `git fetch` first — this is a stale "
+        "checkout, not a record defect."
+    )
+
+
+def merged_phase_labels() -> list[str]:
+    """Phase labels taken from commit subjects on the default branch, newest first.
+
+    Subjects, not the table. Both of Phase 296's squash commits — `Phase 296 (pre-cut): …`
+    and `Phase 296 (cut): …` — reduce to the same label, so this returns labels rather than a
+    set keyed to commits.
+    """
+    ref = _default_branch_ref()
+    _refuse_a_stale_default_branch(ref)
+    log = subprocess.run(["git", "log", "--format=%s", ref],
+                         cwd=REPO_ROOT, capture_output=True, text=True)
+    assert log.returncode == 0, f"`git log {ref}` failed: {log.stderr.strip()[:200]}"
+    labels = _labels_from(log.stdout)
+    # **Every arm that reads history inherits the floor, because the floor is a property of
+    # the population and not of one test.** The first version asserted it inside
+    # `test_every_merged_phase_has_a_phase_log_section` only, and the round measured the
+    # consequence on a real `fetch-depth: 1` checkout WITH a default branch — the CI shape —
+    # where the level arm and the vacuity control both ran GREEN over a one-commit
+    # population. Two of four arms certifying a repository they never read is the inert-gate
+    # shape `Q-503` exists to close, shipped inside the fix for it.
+    assert len(labels) >= MERGED_SUBJECT_FLOOR, (
+        f"only {len(labels)} phase-naming commit subjects derived from `{ref}`, against a "
+        f"floor of {MERGED_SUBJECT_FLOOR}. The POPULATION is what broke, not the record: "
+        "`actions/checkout` takes its default `fetch-depth: 1` unless told otherwise, and on "
+        "a depth-1 clone this is 1. Every guard in this module that reads history would "
+        "otherwise pass over a repository it never looked at."
+    )
+    return labels
+
+
+def _labels_from(log_stdout: str) -> list[str]:
+    labels = []
+    for subject in log_stdout.splitlines():
+        subject = subject.strip()
+        m = next((r.search(subject) for r in _SUBJECT_PHASE_RES if r.search(subject)), None)
+        if not m:
+            continue
+        major, minor = int(m.group(1)), int(m.group(2) or 0)
+        if major < PHASE_LOG_BINDS_FROM:
+            continue
+        labels.append(f"{major}.{minor}" if minor else str(major))
+    return labels
+
+
+def phase_log_heading_re(label: str) -> re.Pattern:
+    """`## Phase 296` at the start of a line — not `## Phase 296.1`, not `## Phase 296xx`.
+
+    The negative lookahead is the whole point. A bare `^## Phase 296\\b` is satisfied by a
+    `## Phase 296.1 (…)` heading — `\\b` sits happily before a `.` — so an integer phase with
+    no section of its own would be certified by its sub-phase's.
+
+    **The first version used `(?![\\d.])`, and this phase's own battery killed it.** That
+    blocks a digit or a dot and admits everything else, so `## Phase 296xx` satisfied the
+    demand for Phase 296 — the "what it accepts" failure class. `(?![\\w.])` blocks any word
+    character.
+
+    **`[a-z]?` is a real shape, not slack.** Phase 65's record is `## Phase 65a` and
+    `## Phase 65b` while its commit subject says `Phase 65:` — the letter-part convention this
+    repo used through `23a`, `159a`, `61b`. A single letter part satisfies the integer's
+    demand; two characters do not.
+
+    Three heading levels are accepted where the convention says two, because Phase 136's
+    section shipped under `###` and a guard that cannot see it reports a missing record where
+    a misfiled one is what happened; `test_every_merged_phase_section_uses_a_level_two_heading`
+    keeps the level itself honest.
+    """
+    return re.compile(rf"(?m)^#{{2,3}} Phase {re.escape(label)}[a-z]?(?![\w.])")
+
+
+def test_every_merged_phase_has_a_phase_log_section():
+    """The guard `Q-503` asks for: a phase on the default branch has prose in PHASE_LOG.md."""
+    _claude_md()  # skips in the public mirror, where CLAUDE.md is stripped
+    phase_log = prose_only(_phase_log())
+    labels = merged_phase_labels()   # asserts the population floor for every arm
+    missing = [lab for lab in labels if not phase_log_heading_re(lab).search(phase_log)]
+    assert not missing, (
+        f"phases merged to the default branch with no `## Phase <N>` section in "
+        f"PHASE_LOG.md: {sorted(set(missing))}. PHASE_LOG.md is the single source of truth "
+        "for the 'why we made this call' narrative and CLAUDE.md's close-out convention "
+        "names it first; a phase that merged without one has lost that record silently, "
+        "which is how Phases 287.1, 288.1 and 291.1 each went unnoticed until a human\n"
+        "happened to read for something else."
+    )
+
+
+def test_every_merged_phase_section_uses_a_level_two_heading():
+    """The level, separately from the presence — so each failure names its own defect.
+
+    Phase 136's section shipped under `###`. `phase_log_heading_re` accepts two or three so
+    a misfiled section is not reported as an absent one, and this arm is what stops that
+    tolerance from silently becoming the convention.
+    """
+    _claude_md()
+    phase_log = prose_only(_phase_log())
+    misfiled = [lab for lab in merged_phase_labels()
+                if not re.search(rf"(?m)^## Phase {re.escape(lab)}[a-z]?(?![\w.])", phase_log)
+                and phase_log_heading_re(lab).search(phase_log)]
+    assert not misfiled, (
+        f"PHASE_LOG.md sections filed under `###` instead of `## `: {sorted(set(misfiled))}. "
+        "The section is there, so no record is lost — but `## ` is what every reader and "
+        "every sibling guard keys on."
+    )
+
+
+def test_the_merged_phase_guard_would_notice_an_absent_section():
+    """The non-vacuity control, driving the REAL predicate over a mutated log.
+
+    Asserting only that today's population is green proves nothing about whether the
+    matcher can fail. Each of the three arms below removes one thing and must be caught.
+    """
+    _claude_md()
+    phase_log = prose_only(_phase_log())
+    labels = merged_phase_labels()
+    assert labels, "no merged phases derived; the arms below would prove nothing"
+
+    newest = labels[0]
+    without = phase_log_heading_re(newest).sub("## Phase REMOVED", phase_log)
+    assert not phase_log_heading_re(newest).search(without), (
+        f"the fixture did not actually remove Phase {newest}'s heading; this control is "
+        "testing nothing"
+    )
+
+    # A sub-phase heading must NOT satisfy its integer's demand — the `\\b`-lookahead case.
+    integer_only = re.sub(rf"(?m)^(#{{2,3}} Phase {re.escape(newest)})(?![\w.])",
+                          r"\1.9", phase_log)
+    assert not phase_log_heading_re(newest).search(integer_only), (
+        f"`## Phase {newest}.9` satisfied the demand for Phase {newest} — the lookahead is "
+        "gone, and an integer phase can be certified by a sub-phase's section"
+    )
+
+    # A longer number-plus-letters run is NOT the phase. This arm is the one the first
+    # version of the matcher failed: with `(?![\d.])` the heading `## Phase 296xx` satisfied
+    # the demand for Phase 296, so renaming a section to anything non-numeric read as a
+    # record. Found by this phase's own battery (M01), not by a reviewer.
+    suffixed = phase_log_heading_re(newest).sub(f"## Phase {newest}xx", phase_log)
+    assert not phase_log_heading_re(newest).search(suffixed), (
+        f"`## Phase {newest}xx` satisfied the demand for Phase {newest} — the lookahead "
+        "blocks digits and dots but admits letters, so a substring counts as a record"
+    )
+
+    # A SINGLE letter part does satisfy it, and must: Phase 65's record is `## Phase 65a`
+    # and `## Phase 65b` while its commit subject says `Phase 65:`. Over-strictness here
+    # would report the repo's own oldest convention as a missing record.
+    lettered = phase_log_heading_re(newest).sub(f"## Phase {newest}a", phase_log)
+    assert phase_log_heading_re(newest).search(lettered), (
+        f"`## Phase {newest}a` no longer satisfies Phase {newest} — the letter-part shape "
+        "this repo used through `23a`, `65a` and `159a` now reads as an absent record"
+    )
+
+    # And the matcher is anchored: a mid-line mention is not a section.
+    mention = phase_log_heading_re(newest).sub(f"see also ## Phase {newest} above", phase_log)
+    assert not phase_log_heading_re(newest).search(mention), (
+        f"a mid-line mention of `## Phase {newest}` satisfied the matcher; it is no longer "
+        "anchored to the start of a line and any prose reference counts as a record"
+    )
+
+
+def test_the_derived_population_covers_the_phase_log_table():
+    """The non-vacuity check that is DERIVED rather than hand-set.
+
+    `MERGED_SUBJECT_FLOOR` is a constant, so it can be edited to 0 and the population check
+    becomes decorative — battery case M08, which survived the first version of this module.
+    This asks the same question against a second live source: every plain phase `CLAUDE.md`'s
+    table lists from `CROSS_SOURCE_BINDS_FROM` up to the newest MERGED phase must appear in
+    the git-derived population. On a depth-1 clone that population is one subject and this
+    fails with 170-odd names, which is what the floor alone only promises.
+
+    Bounded above by the newest merged label on purpose: a phase in flight has its table row
+    but not its commit on the default branch, and demanding it here would redden every phase
+    at exactly the moment its own round reads the suite.
+    """
+    _claude_md()
+    merged = set(merged_phase_labels())
+    assert merged, "no merged phases derived; this arm would prove nothing"
+    newest = max(_label_key(lab) for lab in merged)
+
+    table = {}
+    for label, _cell in phase_rows(_claude_md()):
+        key = numeric_phase(label)
+        if key and (CROSS_SOURCE_BINDS_FROM, 0) <= key <= newest:
+            table[_fmt_key(key)] = label
+
+    # Non-vacuity, inline: `CROSS_SOURCE_BINDS_FROM = 99999` or `if key and False` both left
+    # this arm green over an empty `table`, because it only ever asserted that `merged` was
+    # non-empty. Both measured by the round's guards lens, in the arm the record had named as
+    # the derived answer to a hand-set floor.
+    assert len(table) >= CROSS_SOURCE_TABLE_FLOOR, (
+        f"only {len(table)} CLAUDE.md phase rows fall in [{CROSS_SOURCE_BINDS_FROM}, "
+        f"{_fmt_key(newest)}] — this arm is comparing the git population against almost "
+        "nothing, which passes for the same reason an empty set has no missing members"
+    )
+    unmerged = sorted(set(table) - merged, key=_label_key)
+    assert not unmerged, (
+        f"{len(unmerged)} phase(s) have a CLAUDE.md Phase-log row but no commit subject on "
+        f"the default branch: {unmerged[:12]}. Either the history this guard reads is "
+        "truncated — a shallow clone makes this list ~170 long — or a row names a phase that "
+        "never merged."
+    )
+
+
+def _label_key(label: str) -> tuple[int, int]:
+    major, _, minor = label.partition(".")
+    return (int(major), int(minor or 0))
+
+
+def _fmt_key(key: tuple[int, int]) -> str:
+    return f"{key[0]}.{key[1]}" if key[1] else str(key[0])
+
+
+def test_the_guard_reads_every_merged_phase_not_just_the_newest():
+    """The BREADTH of the loop, which nothing pinned.
+
+    The round's execution lens narrowed the loop to `labels[:1]` — check only the newest
+    merged phase — and the module stayed green. The non-vacuity control drives
+    `phase_log_heading_re` over a mutated log using `labels[0]` alone, so it proves the
+    MATCHER can fail and says nothing about how many phases are checked. A guard reduced to
+    "the newest phase has a section" could not have found Phase 288.1, which is this phase's
+    entire product.
+
+    Two independent old phases, chosen from opposite ends of the population so that a loop
+    truncated at either end is reported.
+    """
+    _claude_md()
+    phase_log = prose_only(_phase_log())
+    labels = merged_phase_labels()
+    for probe in (labels[-1], labels[len(labels) // 2]):
+        without = phase_log_heading_re(probe).sub("## Phase REMOVED", phase_log)
+        missing = [lab for lab in labels if not phase_log_heading_re(lab).search(without)]
+        assert probe in missing, (
+            f"Phase {probe} is in the derived population but removing its heading is not "
+            "reported — the loop is not reading every phase it derived"
+        )
+
+
+def test_a_heading_alone_is_not_a_record():
+    """The guard says "prose"; it was checking a heading line.
+
+    The round's guards lens deleted Phase 290's entire body — **326 lines, 23,303
+    characters** — left the heading standing, and the module stayed green. The failure
+    message tells an operator the phase "has lost that record silently"; the remedy it
+    prescribes was satisfiable by one line.
+
+    The floor is deliberately low. The shortest live section body is 538 characters, so 300
+    reports an emptied section without dictating how much a phase must write — over-strictness
+    here would redden a legitimately terse record, which is the direction that gets guards
+    deleted rather than fixed.
+    """
+    _claude_md()
+    phase_log = prose_only(_phase_log())
+    heads = [(m.group(0), m.start()) for m in
+             re.finditer(r"(?m)^## Phase [0-9][^\n]*", phase_log)]
+    assert len(heads) >= 200, f"only {len(heads)} sections parsed; the section parser broke"
+    thin = []
+    for i, (head, start) in enumerate(heads):
+        end = heads[i + 1][1] if i + 1 < len(heads) else len(phase_log)
+        body = phase_log[start + len(head):end].strip()
+        if len(body) < PHASE_LOG_MIN_BODY:
+            thin.append(f"{head[:48]} — {len(body)} chars")
+    assert not thin, (
+        "PHASE_LOG.md sections with a heading and (almost) no prose under it:\n  "
+        + "\n  ".join(thin)
+        + "\n\nThe heading is the index; the prose is the record. A section emptied to its "
+        "heading passes every other arm in this module."
+    )
+
+
+def test_an_unresolvable_default_branch_fails_rather_than_skips():
+    """The property `_default_branch_ref`'s own message insists on, enforced by nothing.
+
+    The round's execution lens replaced its `raise AssertionError` with `pytest.skip` and the
+    module went from `4 failed` to `9 passed, 5 skipped` — silent green — with the full suite
+    on a normal tree unaffected, because the branch is never reached there. A docstring that
+    says "this is a FAILURE and not a skip on purpose" and is enforced by nothing is the
+    inert-gate shape applied to itself.
+    """
+    import ast
+    src = ast.parse(pathlib.Path(__file__).read_text(encoding="utf-8"))
+    fn = next(n for n in ast.walk(src)
+              if isinstance(n, ast.FunctionDef) and n.name == "_default_branch_ref")
+    raises = [n for n in ast.walk(fn) if isinstance(n, ast.Raise)]
+    skips = [n for n in ast.walk(fn)
+             if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+             and n.func.attr == "skip"]
+    assert raises and not skips, (
+        "`_default_branch_ref` no longer RAISES when no default branch resolves. A skip "
+        "there stands the whole merged-phase guard down silently in exactly the checkout "
+        "where it is most needed — its own message says so, and until Phase 297's round "
+        "nothing held it to that."
     )

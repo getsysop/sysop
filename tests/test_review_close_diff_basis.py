@@ -598,11 +598,38 @@ def test_the_skip_is_gated_on_no_applicable_convention_not_on_the_extension_alon
 def test_the_skip_does_not_waive_secret_scanning():
     block = _step_2b(REVIEW_CLOSE.read_text())
     para = _paragraph_starting(block, "> **Check the second condition")
-    assert "A02" in para and "security_map.md" in para
-    assert "neither touches nor waives it" in para, (
-        "the carve-out must state the skip does not waive the scan — a round mutation "
-        "reworded it to *waive* A02 while both greps stayed satisfied"
+    # RESTORED, and the phase that removed it was wrong about why. Phase 299 first replaced this
+    # with `assert "Secret-scanning" in para`, on the claim that the pair below "REQUIRED A
+    # FALSEHOOD to be present". It did not. It required a routing claim naming `security_map.md`
+    # and A02, and the tree supplies TRUE ones — `core/companion/security_map.md` routes
+    # `.gitignore`/`.env*` to A02 and `.claude/skills/**/*.md` to A02 Data Exposure. The repair
+    # `Q-502` actually needed was a five-word correction of the parenthetical, which is what the
+    # skill now carries; deleting the requirement instead was a weakening, and its own round
+    # measured three rewrites that walk the single-token replacement:
+    #
+    #   "Secret-scanning is somebody else's job, and this skip neither touches nor waives it."
+    #   "Nothing in this step is about Secret-scanning. The skip is licensed by the map alone …"
+    #   "… and for a code diff this skip neither touches nor waives it; on a doc-only diff the
+    #    scan is skipped with everything else."
+    #
+    # The first two are caught by the pair below. The third keeps both, which is why the carve-out
+    # is now pinned as a WHOLE CLAUSE rather than as the tail phrase — a qualifier inserted into
+    # it is exactly the "reworded it to waive A02 while both greps stayed satisfied" mutation this
+    # assertion's own message has always named, and the tail-phrase form could not see it.
+    assert "A02" in para and "security_map.md" in para, (
+        "the carve-out no longer says WHERE the separate expectation lives. Naming the map and "
+        "the category is the operationally useful half: on a doc-only diff of skill markdown, "
+        "`.claude/skills/**/*.md` -> A02 is the live rule the skip must not be read as waiving"
     )
+    assert ("is a separate expectation covered by the project's scanner, and this skip neither "
+            "touches nor waives it") in para, (
+        "the carve-out must state, in one unqualified clause, that the skip does not waive the "
+        "scan. Pinned whole because a qualifier spliced into the middle — 'for a code diff … ; "
+        "on a doc-only diff the scan is skipped with everything else' — inverts it on the one "
+        "diff class this skip fires for, while leaving every shorter pin satisfied. A deliberate "
+        "rewording updates this literal in the same commit and says why."
+    )
+
 
 
 def test_a_skipped_target_is_not_reported_as_approved():

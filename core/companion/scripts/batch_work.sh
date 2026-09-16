@@ -240,7 +240,7 @@ refuse_on_structural_fence() {
 # template nests `### Batch <N>` under `## Round N` and states no numbering
 # scope. (An earlier version of this comment added "and no shipped skill derives
 # the next number from existing headers". That is FALSE and was corrected in
-# Phase 211: `codebase-review/SKILL.md:166` and `security-audit/SKILL.md:183` —
+# Phase 211: `codebase-review/SKILL.md:171` and `security-audit/SKILL.md:188` —
 # the only two writers of batch headers in the tree — both say `next_batch_number`
 # = highest Batch N + 1, i.e. a file-global rule. It does not rescue the
 # whole-file refusal, because nothing ENFORCES that rule and a per-round tracker

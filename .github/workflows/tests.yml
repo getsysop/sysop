@@ -132,6 +132,23 @@ jobs:
           && github.repository != 'wade-cms/sysop-tester')
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # FULL history. The action's default is `fetch-depth: 1`, and on a
+          # depth-1 clone `git log` yields ONE commit subject -- which is not a
+          # failure, it is a green pass over a repository nothing read.
+          # `tests/test_phase_log_currency.py`'s merged-phase record guard
+          # (`Q-503`, Phase 297) derives its whole population from
+          # `git log --format=%s main`, so at depth 1 it would certify that
+          # every merged phase has a PHASE_LOG.md section after checking at
+          # most one. That guard carries a MERGED_SUBJECT_FLOOR that goes red
+          # rather than quiet if this line is ever removed; the floor is the
+          # tripwire, this is the fix.
+          #
+          # It also un-skips `_pinned_runbook`'s non-vacuity controls in
+          # tests/test_mirror_runbook_gates.py, which have been skipping in CI
+          # since Phase 272 measured them failing on a real depth-1 clone. They
+          # pass locally on full history, which is the tree this now gives CI.
+          fetch-depth: 0
 
       # The interpreter floor, installed FIRST so the 3.13 setup below wins
       # `python` on PATH and stays the one the suite runs under.

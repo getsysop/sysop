@@ -15,6 +15,11 @@ Claim a roadmap task or review batch, create an isolated worktree, then **orches
 
 > **Helper names** referenced in this skill (e.g., `_sanitize_log`, `useAbortableFetch`, `getDisplayError`, `redact_api_keys`, `shared_cli.py`) are placeholders — substitute the equivalent helpers from your project's `convention_map.md`. Worked examples may also reference specific batch numbers, file paths, or env-var names from the originating project; treat those as illustrations, not literal requirements.
 
+> **Editing this skill rather than running it?** `REFERENCE.md`, beside this file, carries
+> the editor's half: what a rule protects, what its loss or softening would change, and where
+> it came from. It is not loaded with this file — open it when you are about to change the
+> skill, and author new rationale there rather than here.
+
 ## Pre-flight: Permission Guard
 
 Verify `.claude/settings.json` carries the allow-rules this skill depends on. Under `dontAsk` mode a missing worktree-add or branch-creation rule is auto-denied with no prompt, halting before the workspace is created.

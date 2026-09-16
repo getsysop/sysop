@@ -10,6 +10,11 @@ Adversarial security audit aligned to the OWASP Top 10. Scans for injection, aut
 
 > **Helper names** (e.g., `_sanitize_log`, `_escape_like`, `validate_sql_safety`, `_track_failure_best_effort`, `useAbortableFetch`, `isSafeHref`, `getDisplayError`, `MARKDOWN_ALLOWED_ELEMENTS`, `isAllowedRedirectUrl`, `MAX_RESPONSE_BYTES`) referenced throughout this skill are placeholders for project-defined utilities — substitute your project's equivalents from `<project>/.claude/convention_map.md` and pack `security_map.md` files. File-path placeholders (e.g., `<api module>/server.py`, `<api module>/routes/<route>.py`) are similarly project-bound; agents read the actual files specified in your `<project>/.claude/security_map.md` under each Step 4 agent's section pointer below. **A section the consumer never localized names no files at all** — do not mentally substitute its header into the path you think it means. A header still in `<…>` form scopes no checks and authorises no skip; work from the sections whose globs resolve (§ Scope note, in the map itself).
 
+> **Editing this skill rather than running it?** `REFERENCE.md`, beside this file, carries
+> the editor's half: what a rule protects, what its loss or softening would change, and where
+> it came from. It is not loaded with this file — open it when you are about to change the
+> skill, and author new rationale there rather than here.
+
 ## Pre-flight: Permission Guard
 
 Before any work, verify `.claude/settings.json` carries the allow-rules this skill depends on. Under `dontAsk` mode a missing rule for `bash sysop/scripts/run_checks.sh` is auto-denied with no prompt, halting the security check stage with no actionable error.

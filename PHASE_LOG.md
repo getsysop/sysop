@@ -2050,7 +2050,7 @@ Landing via branch → PR → squash-merge.
 
 **Mirror push (2026-07-22 — Phase 135 + follow-up shipped).** First public/tester refresh since `ff4acfe` (Phases 133 + 134); the snapshot of `d452c8f` carries Phase 135's pre-scan execution-accounting build (`run_checks/accounting.py` + stage-module integration + the `failed`-blocking gate + 3-number summary) and this follow-up's semgrep `SSL_CERT_FILE` trust-anchor resolution + eslint discriminator drift-guard (net +1964/−150 across 20 files; +89 tests over the 988 baseline). Full leak-scan gate clean: all must-be-empty passes empty (1a internal ids, 1b home paths, 1c dogfood target, 3 excluded files), Pass 2 zero new gdp-provenance sites, Pass 2b one new site — the `PHASE_LOG.md` prose recording the prior 133+134 mirror push (accepted `BeanRider` provenance, no new identifier); 1077 green in-tree. Tester force-push `b41e686` → **`0a682c5`** (re-clone note); public append-via-PR (`getsysop/sysop#17`, pytest green) squash-merged **`077ae35`**.
 
-### Phase 136 (2026-07-22 — cross-harness cell-1: Step 2b self-bootstrap statement)
+## Phase 136 (2026-07-22 — cross-harness cell-1: Step 2b self-bootstrap statement)
 
 **The failure.** The cross-harness comparison's cell-1 (Antigravity IDE × Claude Opus 4.6, sandboxed, network-off) found a *cautious* agent read `sysop/scripts/run_checks.sh`, inferred PyYAML + the tool binaries needed installing, and declined on a standing "do not install anything" instruction **without ever running it** — then hand-rolled grep and recorded "tools not available." Net: a review that should have consumed a ~974-finding pre-scan read none, reporting 24 tasks where the Claude Code reference cell reported 372. The capability was present the whole time (`run_checks.sh` prepends the repo's `.venv/bin` and prefers its `python3`); it was lost to a reasonable misinference because Step 2b handed the command with no statement that the runner resolves its own toolchain — the only PATH-bootstrap note lived mid-paragraph in the *LSP stage* section, an aside about binary resolution, nowhere near the instruction that needed it. This is the exact silent-degradation the deterministic layer exists to prevent, and it fails silently: the round summary reads as complete, the miss surfaces only as unexplained low counts.
 
@@ -36959,6 +36959,52 @@ added the rest).
 
 ---
 
+## Phase 288.1 (executed 2026-09-13 — correct the index row the round retracted)
+
+**Written retroactively by Phase 297, which found it missing.** Phase 288.1 (`af75a58`, #642) went
+into no record at all: no `PHASE_LOG.md` section, no `CLAUDE.md` Phase-log row, no
+`tools/ROUND_YIELD_LEDGER.md` row — the same three-way absence Phase 291.1 had, and for the same
+reason. **No brief named it.** Phase 293 found 291.1 and wrote it; 288.1 had merged eight hours
+EARLIER the same day and nobody looked, because the only thing that could have looked was the detector
+`Q-503` describes and Phase 297 finally built. This entry closes it from the commit's own message
+and diff, and asserts nothing neither of those carries.
+
+**What the phase did.** Phase 288's `CLAUDE.md` index row said the remedy *"was already written in
+three places"*. Phase 288's own round had retracted that: what it established was **two** written
+copies — the partial since Phase 198, the maintainer memory since Phase 176 — and Phase 288's own
+record says the third would only have existed had that phase shipped more prose (*"shipping shape
+(b) as more prose would have been the third copy"*). The round separately established **three
+rounds that placed their reviewers correctly before the document said to**, Phase 185 only after
+discarding a first dispatch. The row was rewritten to *"two written copies and three rounds that
+knew better"*, which is the wording it carries today.
+
+**An earlier draft of this entry said the row had ADDED those two counts and called the sum three
+places.** It is wrong twice: 2 + 3 is 5, and `af75a58` — the only source this retroactive entry
+may draw on — never says the row summed anything. Caught by the round's record lens, which was
+asked to check exactly that this entry asserts nothing the commit does not carry.
+
+**Why a whole commit for one table row.** `CLAUDE.md` is always loaded, so a retracted claim
+sitting in it is read into every subsequent session as fact — the same argument Phase 296 later
+made for scanning the monograph before a cut. The phase is the smallest possible instance of this
+repo's most-repeated finding: a record that outlived the round that disproved it.
+
+**It also backfilled Phase 288's hash** (`ffa1bd1`, #641) in the same commit, and the message says
+why that is not a breach of Phase 202's rule: *"Phase 202's rule is against spending a CI run on a
+cell, not against a cell riding a change that was happening anyway."* That reading is correct and
+worth keeping — the rule's cost argument is about **dedicated** backfill PRs, and this cell rode a
+commit that existed for another reason. The brief was updated in the same change to tell Phase 289
+it owed no backfill, which is the half that stops the rule's own bookkeeping from going stale.
+
+**No adversarial round, and the skip is recorded** — record-only commit, no guards, no prescribed
+commands, 0 lenses. Ledger row appended by Phase 297 in the shape Phase 288 used for 287.1 and
+Phase 293 used for 291.1.
+
+**The cost of its absence, stated plainly.** This is the third sub-phase in a row to lose its
+record and the first that no later phase caught by reading. Phases 287.1 and 291.1 were each found
+by a human noticing; 288.1 was found by a guard, on its first run, two days after it merged.
+That is the whole argument for `Q-503` and it is why Phase 297 fixed the detector rather than only
+the record.
+
 ## Phase 289 (executed 2026-09-13 — the currency pass the cut had stopped waiting for)
 
 **Brief:** `tools/NEXT_SESSION_PROMPT.md`, written at Phase 288's close. One ranked item — the
@@ -40371,3 +40417,2156 @@ consecutive sentences, and the monograph inherits the phrasing; both ship. Two �
 containment span's end anchor is untested, and **`test_doc_currency.py` reads no content at all** —
 taking the pre-phase monograph with all four falsehoods restored and changing only the five stamp
 lines leaves it at 11 passed, which is the sharpest argument for reverting the stamp bump.
+
+### The cut
+
+**Window re-derived at the merged-`main` cut SHA**, per Phase 195's rule rather than carried from
+the pre-phase figures: `7d0274d..7ae73a8` is **nine** commits, linear, zero merges — Phase 289's
+cut-record commit, 290, 291, 291.1, 292, 293, 294, 295, and this phase's own squash. **The
+pre-merge record said eight and this section says nine, and neither was wrong**: the squash-merge
+collapsed Phase 296's three commits into one, so the count could only be known here. A forecast of
+eleven made before the merge was wrong for exactly that reason, and is recorded rather than
+quietly corrected.
+
+**Shipped surface at the cut SHA: 36 of 399 shipped files, +8,658/−446**, of which seven are
+neither tests nor `PHASE_LOG.md` — `review-close/REFERENCE.md` (+340/−30), `review-close/SKILL.md`
+(+175/−173), `docs/workflow.html` (+23/−10), `docs/history.md` (+17), `_shared/adversarial-review.md`
+(+2/−2), and one line each in `codebase-review` and `security-audit`. Restricted to what a consumer
+receives: **7 files, +559/−217**. Unchanged across the whole window: `install.sh`, all of
+`core/companion/`, every pack, `.github/`, and **20 of the 23 skills**.
+
+**Every gate, in reading order.** Step 1 clean tree at `7ae73a8`. Step 2 built after `rm -rf` — both
+build dirs held the *previous* cut on arrival (`private 7d0274d`), the ordinary between-cuts state
+and the trap step 13(b) exists for. Step 3 **GATE GREEN**: Passes 1a, 1b, 1c, 3, 4, 4b and the
+rename residue all empty; both builds content-identical at tree **`3f5dbc5`**; Passes 5 and 5b green
+in the source repo (175 tests); the population diff between `_shipped_files()` and the built mirror
+**empty**. Passes 2 and 2b were **diffed against the published snapshot rather than counted**: Pass 2
+no newly-carrying file, Pass 2b exactly one — `tests/test_reader_census.py`, which counts consumer
+mentions as part of Phase 295's § 7.2 census, read and confirmed as intended credit rather than
+accepted on its count.
+
+**The brief's one thing to watch was `REFERENCE.md`**, the thinning campaign's first output to reach
+the mirror, and Passes 5/5b over it are green — verified, not assumed.
+
+Step 4, the suite *inside* the sterilized tree: **6,406 passed, 585 skipped, 0 failed** — the higher
+skip count against the source repo's 200 is the mirror-excluded modules skipping as designed.
+Step 5, the published-history scan over a full clone: exit 0, `NEW: content=0 names=0 header=0
+message=0`, with 16 accepted entries the known pre-adjudicated window. Its `commits:42` against
+`rev-list HEAD`'s 41 is the scanner walking `--all --tags` on purpose — the wider enumeration, since
+a leak can sit on a ref the `HEAD` walk never reaches.
+
+**Step 6 ran the product, which is the only gate that does.** Cold clone into a third directory,
+both modes. Loop: exit 0, `pre-commit` **and** `pre-merge-commit` armed (`core.hooksPath` unset, so
+`.git/hooks` is the right place to look), no stray `.git` beside the clone, the README's own next
+line committed at exit 0 leaving a clean tree. `self_check.sh` reported **9 passed / 1 failed** — the
+documented PEP-668 case, naming its own fix — and **10 passed / 0 failed** after running the remedy
+it printed verbatim. `run_checks.sh` then executed the registry with its accounting (**8 executed /
+11 skipped / 0 failed of 19**) and reported one HIGH against Sysop's **own vendored**
+`sysop/scripts/`, the known fresh-install case where placeholder `paths:` send pyright whole-tree.
+Full mode into a second fresh target: exit 0, both hooks, `tasks/` shipped, `--packs auto` detected
+`python`.
+
+**Step 7, the tester half:** force-pushed `e0c3a45 → a54623e`, and **verified from the API rather
+than the pipe** — the runbook forbids piping a push. Repo still **private**.
+
+**Step 12, the public half, from the gate build dir** — never `/tmp/wf-tester`, whose `origin`
+step 7 has taken. The publish sequence was read from the builder's own output rather than retyped.
+The snapshot commit carries the ratified identity (`wade@gdpquery.ai`), Phase 227's fix working.
+**The identity check was evaluated explicitly, not trusted**: its shipped shape sets a status
+nothing consumes in an interactive shell, so it was run as a real comparison and its answer read
+before the push. The PR body — which the squash-merge folds into an immutable public commit message
+— was written to a file and gated by `tools/scan_message.py` chained ahead of `gh pr create` with
+`&&`: `sources:2 findings:0`. Opened as #48, **held at the human gate**, merged on Wade's word as
+**`2395487`**.
+
+**Step 13 verified what actually landed.** (a) The history re-scan against the *pushed* tree: exit 0,
+`commits:42 → 43` grown by exactly one, **the new commit's own row present** and reading
+`content:0 names:0 header:0 message:0` — so the body this cut authored introduced nothing on the one
+arm that reads it. (b) Cold clones of both published repos from a third directory: public, tester
+and gate build dir all resolve to tree **`3f5dbc5`**; the tester repo is a fresh root; and all three
+currency greps for `private 7ae73a8` print **1**, the two over the cold clones being the half that
+can only pass if GitHub is actually serving this cut. The named absences were printed rather than
+retyped and all five are gone; 399 tracked files; tester **private**, public **public**.
+
+**The announcement landed before the public merge, and that is recorded rather than smoothed.** It
+describes the *tester* snapshot, which was live, and makes no claim about the public repo — so it
+was accurate when posted. But it did leave the two halves briefly out of step, and step 13(b)'s
+tree-identity check could not have passed in that window. The ordering was a consequence of the
+human gate sitting between the two pushes, which is a good place for it; the note here is so the
+next cut's operator expects the gap rather than reading it as a failure.
+
+### A decision taken at the close, recorded and not built
+
+Asked where the thinning campaign stands, the honest answer corrected a premise worth recording:
+**the campaign only relocates.** Nothing in the tree governs where a *future* phase authors new
+rationale — `REFERENCE.md`'s header describes what it carries, and the transform is retrospective.
+Since the campaign opened the net is −8,603 characters over three phases, but **Phase 293 itself
+added 794**, and all three were campaign phases, so no ordinary phase has run to test a convention
+that does not exist.
+
+**Ratified by Wade 2026-09-15: new rationale is authored in `REFERENCE.md`, not in the runner.** The
+runner gets the instruction plus a one-line reason *only where the reason changes what the runner
+does*. The arithmetic behind it: relocation runs at **0.246 points of `mixed` per split** against
+**~+8 KB per phase that touches the file**, so capping the source beats relocating.
+
+**Recorded here and deliberately not built.** This phase is a cut; implementing a standing
+convention inside it is the scope creep the round exists to catch. The open half is the gate's
+shape — a convention honoured by memory is what Phase 154 ruled is not a mechanism, and the only
+instrument that classifies a block as `editor` is the campaign's own census, which runs
+maintainer-side and so cannot gate a consumer-facing authoring rule as it stands. `Q-504` carries
+the ratification and the unresolved half; the brief ranks it above the campaign's next section.
+
+## Phase 297 (executed 2026-09-15 — the guard that never opened the record, and the filing whose fix would have crashed)
+
+The brief ranked `Q-503` first and `Q-504` second, with the § G re-measurement outranking both if
+the date had passed. It has not — the window opens ~2026-09-23 — so the ranked pair is the phase.
+
+### Five decisions at the open
+
+Brought as menu decisions before any edit, because four of the five change what gets built.
+
+1. **`Q-503`'s two reds: fix both in-phase.** The guard goes red on arrival; the alternatives were
+   filing one as a `Q-` behind an allowlist entry, or flooring the guard past the gap.
+2. **`Q-504`'s population: create `REFERENCE.md` siblings now** — Wade's call, over the
+   recommendation, which was to scope both halves to `review-close` alone.
+3. **The ratchet's baseline: a named constant in the test.**
+4. **Scope: both items**, as the brief ranks them.
+5. **Sibling depth**, asked as a follow-up once the first answer landed: siblings and the dimension
+   now, ratchet still `review-close`-only. The measurement that forced the question is in
+   § *What the siblings cost*.
+
+### `Q-503` — the guard, and what it found on its first run
+
+`tests/test_phase_log_currency.py` is named for `PHASE_LOG.md` and never opened it. Its ten tests
+read `CLAUDE.md`'s table and `tools/NEXT_SESSION_PROMPT.md`, so the **prose** half of a phase's
+record — the half the close-out convention names first — was held by memory, which Phase 154 ruled
+is not a mechanism.
+
+The new guard derives its population from `git log --format=%s` on the default branch, floored at
+Phase 65 (the oldest `Phase <N>` subject the history carries; `175` such subjects at authoring),
+and demands a matching `^## Phase <N> ` heading. **The population has to come from git and not from
+`CLAUDE.md`'s table**, and the phase's own finding is why: a table-derived population cannot see a
+phase that never wrote its table row, which is exactly the defect. Deriving the population from the
+artefact under audit is `_shared/adversarial-review.md` rule 1's *"where it looks"* failure, and
+this is a worked instance — the table and the log go stale together, in the same commit that
+forgets.
+
+**It went red on two phases, and one of them was not in any brief.**
+
+| Found | State |
+|---|---|
+| **Phase 288.1** (`af75a58`, #642) | merged 2026-09-13 with **no record in any of the three places** — no `PHASE_LOG.md` section, no `CLAUDE.md` row, no ledger row |
+| **Phase 136** | record present, filed under `###` instead of `## ` |
+
+288.1 is the **sixth** instance of the class and the third sub-phase in a row to lose its record —
+the brief named 287.1, 291.1, 294, 295 and 296, and did not know about this one. It is also the
+first found by a guard rather than by a human noticing: 287.1 was caught by Phase 288 and 291.1 by
+Phase 293, both by reading; 288.1 merged eight hours BEFORE 291.1 the same day and nobody
+looked. Its record is now written from the commit's own message and diff, and asserts nothing
+neither carries.
+
+**The filed one-character remedy does not work.** `Q-503` proposed taking `(\d+)` to
+`(\d+(?:\.\d+)?)` at two sites. Both captures feed straight into `int()`, so the first sub-phase row
+raises `ValueError: invalid literal for int() with base 10: '288.1'` — measured, not reasoned. The
+filing had named the fix without naming a representation, and the representation is the whole
+question. Phase identity is now a `(major, minor)` tuple: it sorts, hashes and compares on exactly
+the two things a phase label carries, where a float would make `288.10` and `288.1` the same phase
+by accident rather than by intent.
+
+**The filed two blind sites were four.** Beyond `claude_md_phase_numbers` and `numeric_phase`, the
+same `\d+` stop sat in `ledger_phase_rows` and in `row_problems`' own row regex — so Phase 287.1's
+and 291.1's ledger rows had **never been width-checked, draft-checked or skip-reason-checked**
+since they were written. The non-numeric cell-count loop's negative lookahead needed the same
+widening, or a sub-phase row would now be processed by both loops and report a width problem twice.
+
+**One arm was inverted on purpose, and it is the change most worth reading twice.**
+`newest_phase_number` returned `None` for a sub-phase newest row, and a test named
+`test_a_suffixed_newest_row_exempts_nobody` pinned that. It was right while sub-phases were
+invisible to `claude_md_phase_numbers`: nothing was exempt because nothing was demanded. `Q-503`
+puts them in the demanded set, so `None` would now demand a ledger row for a phase whose round has
+not run — red for exactly the window Phase 288's placement rule needs green. A sub-phase newest row
+now exempts **itself and only itself**; the integer below it stays demanded, which is the property
+the old name was protecting and which is asserted directly rather than left to the rename.
+
+**The guard is only as real as the history it can see, and CI could not see any.**
+`actions/checkout` takes its default `fetch-depth: 1`, and on a depth-1 clone `git log` yields one
+subject: every phase in the derived population has a heading, and the guard reports green over a
+repository it never read. That is the inert-gate shape this repo's rounds keep finding, and it
+would have shipped as the phase's headline. `.github/workflows/tests.yml` now checks out at
+`fetch-depth: 0`, with `MERGED_SUBJECT_FLOOR` as the tripwire if that line is ever removed — the
+floor fails loudly where the old established pattern (`_pinned_runbook`) skips, because a skip here
+is the gate standing down in the one place it is required to run.
+
+### `Q-504` — both halves, and the population Wade widened
+
+The convention: **new rationale is authored in `REFERENCE.md`, not the runner.** The runner gets
+the instruction plus a one-line reason only where the reason changes what the runner does.
+
+- **(i) Destinations.** The rule is written in `core/skills/review-close/REFERENCE.md` §  *Where
+  new rationale goes*, and siblings were created for `claim-task`, `security-audit` and
+  `codebase-review`. Each states honestly that it declares no rules yet and is **not** coverage —
+  an empty roster is where the work has reached, not a gap to paper over.
+- **(ii) The gate, in two halves because neither alone is a mechanism.** `CLAUDE.md` gains **round
+  dimension 10**: a reviewer reads the phase's own diff for rationale belonging in `REFERENCE.md`.
+  A *dimension*, not a lens — the governor caps lenses at two **by default**, so a standing extra reviewer would
+  breach it every phase, while Phase 58a's #9 is the precedent for scrutiny at no lens cost. It
+  lives in `CLAUDE.md` and not `_shared/adversarial-review.md`, which ships: consumers do not
+  author Sysop skills, so the shipped list still ends at 9. The mechanical half is
+  `EDITOR_MIXED_CEILING = 150_192` — **absolute** `editor`+`mixed` characters, because a share
+  ratchet is satisfied by adding runner text while the file grows.
+
+**A second arm nobody asked for, and the reason it is not scope creep.** A pure `<=` ratchet
+loosens itself: the campaign relocates a 28,000-character section, the measured mass drops, the
+constant stays, and the next phase silently inherits a section's worth of headroom to re-fill.
+`CEILING_FOLLOWS_WITHIN = 5_000` refuses a ceiling drifting more than that above the measured
+value. The bound is set against the campaign's own unit of work — the sections it relocates run
+24,000–29,000 characters — so a completed section cannot be banked, while an ordinary edit does not
+force a constant update.
+
+**What the ratchet cannot do is stated in the module rather than implied.** The ceiling is a
+constant in a test file; raising it is possible. What the gate buys is that raising it is a
+deliberate, visible edit in the diff instead of a side effect of writing prose — which is the half
+dimension 10 covers, and why `Q-504` was ratified as both.
+
+### What the siblings cost, and the question it forced
+
+Wade's answer to the population question was the option ranked third, so the follow-up was whether
+it meant the ratchet too. It does not, and the measurement is why: the ratchet needs a census, and
+a census needs a hand-authored verdict per block, because `classify()` returns `unclassified` for
+anything without one.
+
+| Skill | Unclassified blocks | Chars |
+|---|---|---|
+| `claim-task` | 311 | 132,797 |
+| `security-audit` | 265 | 140,356 |
+| `codebase-review` | 240 | 117,244 |
+| **total** | **816** | **390,397** |
+
+Phase 293's census of `review-close` alone was 565 read-basis blocks and opened the campaign. So
+the siblings and the dimension ship now; the ratchet stays on the one censused skill and the
+extension is filed as **`Q-510`**, which names what it blocks: not the `Q-409` campaign, but any
+claim that the convention is mechanically enforced — true of `review-close`, false of the other
+three. `test_the_round_dimension_is_stated_in_claude_md` pins the join between the two surfaces so
+the overclaim cannot be made quietly.
+
+**One thing checked rather than assumed, because the brief's own caution said to read the code.**
+The ratified ratchet looked inert against the case it exists for: a phase adds prose, the new block
+has no verdict, `editor`+`mixed` does not move. Reading `tests/test_reader_census.py` rather than a
+summary of it, `test_every_block_carries_a_verdict` already fails on any unclassified block and
+`test_no_verdict_is_stale` on any orphaned verdict — so a phase touching `SKILL.md` *must* classify
+what it adds, and classifying rationale honestly trips the ratchet. Classifying it `runner` is a
+claim in the diff, which is what dimension 10 reads. The mechanism holds; it would not have if the
+summary had been trusted.
+
+### The author-side pass, and the four defects it found in my own guards
+
+Run after the commit, per `_shared/adversarial-review.md` § *Before you spawn anyone*. The battery
+is persisted at `tools/phase297_mutations.py` rather than left in a transcript — Phase 296's round
+could not verify that phase's fractions from the tree, and roughly seventy prior phases ship theirs
+as a script.
+
+**First run: 13 kills, 2 survivors, 4 controls green, 0 false reds — and both survivors were real.**
+
+- **M01, the headline case, survived.** The matcher was `^#{2,3} Phase <N>(?![\d.])`, which blocks a
+  digit or a dot and admits everything else — so `## Phase 296xx` satisfied the demand for Phase
+  296. A guard whose entire job is noticing an absent section was satisfied by a substring of a
+  renamed one. This is `_shared/adversarial-review.md` rule 1's *"what it accepts"* class, in the
+  first predicate I wrote for it.
+- **M10: nothing pinned the `.1` widening.** Reverting `_PHASE_NUM_RE` to a bare `(\d+)` left the
+  ledger module **green**, because a guard that demands less never goes red. Every arm in that
+  module passed over the exact regression the widening exists to prevent.
+
+**Then the population check found a third defect, in the thing the guard was reading.** Rule 1's
+*"where it looks"* asks whether the population covers every place the defect can appear. It did
+not: the first version matched one commit-subject form, and this repo uses several. Sixty-odd
+merged phases were outside the guard, and the conventional-commit-scope form is the only way Phase
+190 enters it at all.
+
+**The counts published here in the first draft were wrong in three ways and are restated from one
+command** — they mixed *subjects* with *distinct phases*, took the first figure from `HEAD` while
+the guard reads `main`, and reported an increment of +30 that is +31. Two of the round's three
+lenses caught it independently. Cumulative distinct phases on `main`, by form:
+
+| form | example | cumulative |
+|---|---|---|
+| `phase <N>` prefix, case-insensitive, letter-tolerant | `Phase 296 (cut): the mirror push…` | 179 |
+| trailing parenthetical, anchored to the subject's end | `feat(skills): strip the identifier leak (Phase 66) (#7)` | 213 |
+| conventional-commit scope | `docs(phase-190): the round record…` | **239** |
+
+**And there were four forms, not three — the round's execution lens found the fourth.** Phases
+95–98 wrote `phase 95: …` in lower case, and `Phase 159a:` defeats a `\b` because there is no word
+boundary between `9` and `a`. Five merged phases sat outside the population while this section
+claimed three forms covered it. Widening the prefix to be case-insensitive and letter-tolerant
+gains exactly `95, 96, 97, 98, 159` and reddens nothing: every one already had a section.
+
+**A fourth: the ratchet's control was testing a copy of the rule.** `M15` neutered the comparison
+with `or True` and the control stayed green, because the control did its own arithmetic instead of
+calling the guard. That is precisely the shape `test_a_wrong_published_digit_is_reported` was
+rewritten to avoid **earlier in the same file** — made again, by me, in the same
+commit. Both bounds now live in one shared `editor_mass_problems()` predicate that the tests and
+their controls both call.
+
+**Two of my own mutations measured nothing, and are recorded rather than counted.** M09's first
+form *prepended* a non-matching regex to the tuple instead of replacing one, and M23 points the ref
+resolver at `HEAD`, which on `main` is the same commit — a mutation that restores the state it
+claims to break, which is the class Phase 288's round named. Neither is evidence and neither is
+counted as a kill.
+
+**Final: 21 kills + the shallow probe, 0 undeclared survivors, 4 controls green, 0 false reds.**
+
+**The CI claim was demonstrated against the wrong tree, and the round caught it.**
+`MERGED_SUBJECT_FLOOR` exists for a `fetch-depth: 1` checkout, and editing that constant on a
+full-history tree measures nothing, so the battery clones instead. But it cloned `file://{REPO}`
+without naming a branch — and `REPO`'s HEAD is the phase branch, so the clone had **no `main` and
+no `origin/main` at all**. Every arm then died in `_default_branch_ref()` before a population was
+built, and the four failures the record called proof of the floor were proof of something else, on
+a tree `actions/checkout` never produces.
+
+**On the real CI shape — depth 1 *with* `main` — only two of four arms failed**, because the floor
+lived inside one test and the level arm and the vacuity control had none. Two arms certifying a
+repository they never read is the inert-gate shape `Q-503` exists to close, shipped inside the fix
+for it. The floor now lives in `merged_phase_labels()`, so every arm that reads history inherits
+it; the probe clones with `-b main`; and all five history-reading arms fail on that tree. The
+substantive claim survives unchanged — CI is red without `fetch-depth: 0` either way — but the
+demonstration did not demonstrate it, and that is the defect.
+
+**Three declared survivors — and the round showed two of the three claims were wrong.**
+`EDITOR_MIXED_CEILING` was listed here as uncatchable; the phase's own battery kills an edit to it
+twice (M13, M14), and only a raise **inside** `CEILING_FOLLOWS_WITHIN`'s 5,000 slack goes
+undetected. `M23` was dismissed as a no-op *"because HEAD is `main`"* — the battery runs on the
+phase branch, where it is not, and it was a real survivor that a one-line pin now closes. What
+remains true is narrower and is stated at that width: `MERGED_SUBJECT_FLOOR` and
+`CEILING_FOLLOWS_WITHIN` are constants a deliberate edit can loosen, which is the design of every
+ratchet in this tree — loosening becomes a visible line in the diff instead of a side effect of
+writing prose, and that line is what round dimension 10 reads.
+
+**Rule 2 — re-read new prose against the code it describes. It reported two corrections and the
+round refuted both.** The first "correction" — that the population *"starts at 65 and then skips 66
+through 125"* — was itself false (the prefix-only set contains 65 **and** 123), and it certified a
+sentence that was also false: `PHASE_LOG_BINDS_FROM = 65` was justified as *"the oldest phase this
+repo's commit subjects name"* when the oldest is **53**, and Phases 53, 63 and 64 are ordinary
+Sysop phases, not the extraction's gdp history. The floor is now 53 and all three are covered. The
+second — that `Q-510`'s block counts had been *"taken from a census run before the siblings
+existed"* — describes an impossibility: the census resolves `core/skills/<name>/SKILL.md` only, so
+a `REFERENCE.md` sibling cannot move a block count, and no `SKILL.md` changed. The counts were
+right; the explanation attached to them was invented. **Both are the class the pass exists to
+catch, committed by the pass itself**, and the honest reading is that rule 2 produced zero
+corrections here, not two.
+
+**Rule 4 — the hostile corpus.** This change moves a predicate over text other writers produce
+(commit subjects, `PHASE_LOG.md` headings, ledger row labels), so the corpus was built from the
+live artefacts rather than from my model of them: every subject form actually present, the
+letter-part heading shape (`## Phase 65a`, whose commit subject says `Phase 65:`), the `###` level
+slip, and the sub-phase row. Two of the four defects above came from that corpus and not from
+reasoning about it.
+
+### The round
+
+**Three lenses, one round** — the governor's three-lens condition: the phase ships behaviour and a
+numeric record. All three placed by hand at `001d0226` with `git worktree add --detach` outside the
+repository, the primary `.venv` symlinked into each per `Q-493`, each echoing
+`git -C <dir> rev-parse HEAD` before its first finding. All three echoed the pin; spawn-time
+`git status --porcelain -uall` was empty; all three worktrees removed at close.
+
+**The author's battery said 21 kills and 0 survivors. The guards lens ran 46 independent mutations
+and 19 survived — 41%.** That is the fifteenth consecutive phase in this log where an independent
+battery found what the author's did not, and the gap is the point of the exercise rather than a
+surprise. Per module: currency 11/21 killed, ledger **9/10**, census 7/15.
+
+#### The three HIGH findings
+
+**1 — the ratchet is walked by writing rationale as code or as a heading, and the honest verdict is
+forbidden.** `classify()` returns `("runner", "construction")` for `code`, `fence-delim`, `heading`
+and `frontmatter` blocks **before** it consults any verdict, so rationale written as `: <prose>`
+lines inside a ```` ```bash ```` fence, or as `####` heading lines, needs no verdict, leaves
+`unclassified` at zero and moves `editor`+`mixed` by nothing. Verified here, not taken from the
+lens: 459 characters of pure editor prose inside a fence and 300 as a heading each left the census
+at exactly 150,192. And recording the *honest* `editor` verdict for such a block is refused by
+`test_the_construction_rule_never_overrides_an_authored_verdict` — **there is no place to make the
+true claim, and the dishonest state is the only green one.**
+
+So this phase's sentence *"a phase touching `SKILL.md` must classify what it adds… The mechanism
+holds"* is **false for four block kinds**, and it was written in the very paragraph congratulating
+itself for reading the code instead of a summary. The mechanism holds for prose blocks, which is
+the dominant case and not the claim that was made. **Not fixed here and filed as `Q-511`:** the
+remedy is a change to `tools/reader_census.py`, the campaign's own measuring instrument, mid-
+campaign — it would move published figures and belongs to a phase that can re-derive them.
+
+**2 — the arm this phase named as the derived answer to a hand-set floor was itself vacuous.**
+`test_the_derived_population_covers_the_phase_log_table` asserted only that `merged` was non-empty,
+so `CROSS_SOURCE_BINDS_FROM = 99999` and `if key and False` both left it green over an empty table.
+It now carries `CROSS_SOURCE_TABLE_FLOOR`. This is the third time in one phase that a control was
+found asserting its own arithmetic rather than driving the guard.
+
+**3 — the population can be truncated at its newest end with everything green.** `main` behind
+`origin/main` is the ordinary state of this repo between sessions, and pointing the resolver at
+`main~4` while deleting a phase's section left all fourteen arms passing: the cross-source arm
+bounds the table by `max(merged)`, derived from the same truncated population, so end-truncation is
+self-consistent. Depth truncation is caught because it removes the *oldest* commits, which that arm
+can see. `_refuse_a_stale_default_branch` now fails with the remedy (`git fetch`) rather than
+letting the guard describe a shorter history.
+
+#### What else was fixed in-branch
+
+| finding | lens | fix |
+|---|---|---|
+| a heading inside a fence or an HTML comment satisfied the demand | guards | `prose_only()` — and its first two cuts were worse than the bug, below |
+| a section emptied to its heading (326 lines, 23,303 chars) passed | guards | `test_a_heading_alone_is_not_a_record`, floor 300 against a 538-char live minimum |
+| narrowing the loop to `labels[:1]` stayed green | execution | `test_the_guard_reads_every_merged_phase_not_just_the_newest`, probing both ends |
+| `raise` → `pytest.skip` in `_default_branch_ref` stayed green | execution | an AST pin; the docstring said "a FAILURE and not a skip" and nothing held it there |
+| an unanchored `(Phase 999)` **mention** minted a demand and reddened three arms | guards | both trailing forms anchored; 38 subjects already carry `(Phase ` |
+| `RATIONALE_SECTION = "#"` and a one-element skill tuple disarmed the prose guards | guards | both pinned — unlike the declared constants, these make an arm assert *nothing* |
+| the three new `REFERENCE.md` files had no pointer from their runner | execution | pointer added to all three, and `test_every_reference_destination_is_reachable_from_its_runner` requires it in the first 40 lines |
+| `CROSS_SOURCE_BINDS_FROM = 126`'s justification was false and cost 29 rows | guards | 95; the exception set is empty from there, and only Phase 94 names no number in any form |
+| "21 kills" double-counted M10 and M21, byte-identical tuples | execution | the duplicate removed and a dedupe assertion added |
+
+**`prose_only()` took three cuts, and the first two were worse than the hole they closed.** Cut one
+treated any line starting with three backticks as a fence: an **inline** code span in this file's
+own prose — ``` `Sampled`, not `Full` ``` — desynchronised the state machine for 1,465 lines, and
+13 such spans between them hid **41** real `## Phase` headings, which the guard then reported as 41
+missing records. Cut two applied CommonMark's actual rule (a backtick fence's info string may not
+contain a backtick) and still lost 29, to a sentence that had *wrapped* onto a line beginning with
+the marker. The shipped rule is stricter than CommonMark on purpose — a fence's info string is a
+single token — and all six such lines in `PHASE_LOG.md` are prose, none a fence. A parser that
+manufactures 41 false reds is worse than the hole it closes, and this one was written for a file
+whose entire subject is quoting markdown.
+
+#### The record findings
+
+The record lens verified the big numbers exactly — the suite figure, the battery tally, the census
+split, `+8 KB` per touching commit, the queue counts, `Q-510`'s four figures — and found the
+defects concentrated in the commentary. Beyond the two rule-2 refutations above and the
+population-count restatement:
+
+- **"Four days" was fabricated, at eight sites, and it is 8 hours 27 minutes.** `af75a58` (288.1)
+  and `1988a9a` (291.1) merged on the **same day**, 288.1 the earlier of the two. No reading gives
+  four days, and one of the eight sites shipped inside a test assertion message. **This exact class
+  is already in this log twice** — Phase 286's round caught "four days" that was 26 hours, and an
+  earlier entry caught "four days earlier" that was thirty minutes. A number not read off a command
+  is not a number, and this phase wrote eight of them.
+- **The retroactive Phase 288.1 entry asserted arithmetic its source commit does not carry** — that
+  the 288 row "added two written copies to three rounds and called the sum three places". 2 + 3 is
+  5, `af75a58` says no such thing, and Phase 288's own record says the third copy was the one that
+  would have existed had it shipped more prose. Corrected in all three places, including the
+  always-loaded file.
+- **`Q-510` claimed a guard "pins the join, so the overclaim cannot be made quietly."** It pins the
+  CLAUDE.md↔`REFERENCE.md` destination join and cannot detect a claim about enforcement at all.
+
+### Also fixed
+
+- `tools/AUTHOR_DEFECT_REGISTER.md`'s population line: 154 → **155 rounds**, a consequence of
+  appending 288.1's ledger row. Caught by `test_the_registers_population_line_is_derived`, which is
+  `Q-297`'s remedy working exactly as filed.
+- `tools/ledger_stats.py`'s `phase_rows()` does not count sub-phases, and that was **left alone**:
+  the sentence it feeds says *"136 of them numbered phases (161–296)"*, a count of integers in a
+  range, so excluding 288.1 is correct rather than a fifth instance of the blind class.
+
+## Phase 298 (executed 2026-09-15 — the section that was half locked, and the arm that had never been used)
+
+The brief ranked § 4c first and `Q-507` second, with the § G re-measurement outranking both if the
+date had passed. It has not — the window opens ~2026-09-23 — so § 4c is the phase.
+
+### The state at the open, derived rather than read off the brief
+
+Tree clean at `6061155` — which is Phase 297's squash and the hash this phase backfills — suite
+**7,119 passed / 200 skipped**. Census: `runner` 66.6%, `editor` 8.1%, `mixed` 24.7% (112,981
+chars). § High 0, § Medium 137, § Low 106, next free `Q-512`. The § G re-measurement window
+(~2026-09-23) has not opened, so it displaced nothing.
+
+§ 4c's surface re-derived from the census: **21 blocks, 28,416 chars** — 13 `mixed` (22,284)
+and 8 `editor` (6,132) — which reproduces § 8.2's figure exactly, and the 56.0% lock rate with it.
+
+### Three decisions at the open, and two calls the section forced
+
+Brought as menu decisions before any edit, because each changes what gets built.
+
+1. **Scope: § 4c alone.** `Q-507` becomes the next phase. Its detector runs over a commit
+   *range*, so pointing it at this phase's diff next phase catches the same defects it would
+   have caught live — which is what makes the ordering argument for building it first weaker
+   than it looks.
+2. **The locked 56%: attempt row 1, hard-stop on any re-point.** § 9.1(b)'s row 1 — the anchor
+   sits on text that STAYS, and the replacement reproduces it byte-for-byte — had never been
+   exercised. Phase 294 took one block and Phase 295 took eleven, and all twelve were unanchored.
+3. **The free `editor` blocks: include them.** Transform 1 had never been run either.
+
+Two further calls were mine and are recorded because they are method changes, not data:
+
+- **`tools/phase295_precondition_b.py` takes a `--section` and a `--verdicts`** (maintainer-side;
+  never ships). It hard-coded `## Step 3b` and `mixed`, so it could not measure the section the
+  campaign had reached. Its own docstring already said every later section would need it.
+- **The pointer line has three spellings, not one.** `#` at the head of a markdown line is a
+  **heading**, so Phase 295's comment form is unusable outside a fence — and all eleven of its
+  splits were `comment-run` blocks inside a heredoc, which is why the gap did not surface until
+  § 4c, the first section whose candidates are `prose` and `blockquote` blocks. Without an
+  alternate, the pointer's own words score as introduced vocabulary and fail the word-subset
+  check on every prose replacement. The exclusion does not widen: each spelling is a fixed
+  string modulo the step id, anchored at both ends, and the one-line-per-replacement cap is
+  unchanged.
+
+### The cheap scan is wrong in both directions, and § 4c is where that showed
+
+Phase 295 measured § 3b's cheap ≥30-character anchor scan against the expensive deletion and
+found them agreeing **19 of 19**. It recorded that as a data point and said in terms it was not a
+licence. § 4c is the section that collects on the caution.
+
+**The first precondition-(b) result contradicted the scan.** `cc12c2e266ddf4b7` carries no anchor
+at 30 characters and came back with excess failures, because
+`tests/test_claim_artifact_reaping.py` uses `# Report what this code DID` — **27 characters** —
+as the terminator of a region it reads out of `SKILL.md`. A ≥30 reading calls that block free.
+
+**So the threshold was varied, and the first conclusion drawn from it was wrong.**
+`tools/phase298_lock_rates.py` (maintainer-side; never ships) puts § 4c at 56.0% locked at ≥30
+and **78.1%** at ≥12, and a first draft of the § 8.2 addendum published the second figure as the
+honest one. It is not: the predicate asks whether a reader module holds a literal occurring once
+in `SKILL.md`, never whether the assertion is *about* `SKILL.md`. Over the file there are **845**
+short (12–29 character) unique hits across **134** modules, **185** of them in modules that never
+mention `review-close`; spot-checked in § 4c, `"Phase 261 converted"` is asserted against
+`clear_user_action.py`, `"protected-branch policy"` against a hook payload and `"tasks/archive"`
+against a fixture path. **78.1% is an upper bound.**
+
+**What survives is about the scan rather than about a better threshold.** ≥30 produces false
+negatives, ≥12 produces more false positives, and neither gives the reachable mass — which is
+why § 9.1(b) requires the deletion measurement in terms. **At `dd0bde3` the ranking is stable at
+30, 20 and 12** (`3b` < `4c` < `2b`), and the ranking is the only property § 9's order decision
+rests on, so that decision is untouched.
+
+**The as-of anchor on that sentence is this phase's round, not tidiness.** The claim shipped with
+no commit attached, in three places — here, `tools/CONTEXT_THINNING_SPEC.md` § 8.2 and the tool's
+own docstring — and running the named tool at this phase's own commit did not reproduce it.
+Nothing drifted: after a section is thinned its remaining population is the blocks the phase
+**refused**, and blocks are refused largely *because* they are locked, so § 4c climbs to
+74.0% / 100.0% / 100.0% over its six survivors and sorts **above** `2b`. A lock rate is a property
+of a section **as the campaign finds it**, comparable only across sections not yet taken.
+
+**And the fix had to be corrected once inside the round.** The first version made the tool explain
+itself only when the ranking came out unstable. But a thinned section sorts upward, so it can make
+every threshold *agree* — after the fixture fix above moved § 2b's rate, the run at this phase's
+close reads `ranking is STABLE` on the order `3b` < `2b` < `4c`, which is not the order the
+campaign ordered anything by. **A ranking that is stable because one member is a remnant is worse
+than an unstable one: it looks like evidence.** The warning is unconditional now, keyed on the rows
+rather than on the headline, and its test is keyed the same way.
+
+### The instruments
+
+Three, all maintainer-side and none shipping.
+
+- **`tools/phase295_precondition_b.py`** gains `--section` and `--verdicts`. It measured § 3b and
+  `mixed` only; § 4c is the first section taken with its free `editor` blocks in scope, and
+  transform 1's precondition is the SAME deletion measurement as transform 4(b)'s, so both
+  verdicts are measured in one run. A zero-candidate run now exits 2 and names the sections it
+  knows, because zero candidates is a misspelled section far more often than an empty one — and a
+  scan that finds nothing must not report what a scan with nothing to look at reports.
+- **`tools/phase295_split.py`** gains transform 1 (`--delete`), which the campaign had never run,
+  and the markdown spellings of the pointer line. Its span arithmetic moved into
+  `delete_block_spans`, with the judgement inside it rather than at the call site.
+- **`tools/phase298_lock_rates.py`** varies the anchor-length threshold, which is the § 8.2
+  variable nobody had varied.
+
+The names stay `phase295_` on purpose. `PHASE_LOG.md` and `tools/ROUND_YIELD_LEDGER.md` (both
+maintainer-side; neither ships) cite those paths as what Phase 295 ran, and renaming them would
+strand the citations to buy a tidier filename.
+
+### The author-side pass, and the three holes it found in my own guards
+
+Run per `_shared/adversarial-review.md` § *Before you spawn anyone*, and reported here because
+`CLAUDE.md` says the rule had no invoker until one was made. The battery is
+`tools/phase298_mutations.py`.
+
+**The write side had no tests at all.** `tools/` has no shipped runner, so
+`tests/test_thinning_transforms.py` is how the campaign's two transform tools reach CI —
+`tests/test_reader_census.py`'s accommodation, for the measuring instrument, restated for the
+instruments that change the tree.
+
+**Three rows survived the first run, and all three were real.**
+
+- **M03 — the pointer's DESTINATION was pinned in one spelling of three.** Widening the markdown
+  arm to `See `[A-Z]+.md`` left every case in the refusal list green, because that list tested a
+  wrong destination only in the comment form. Two markdown cases added.
+- **M16 — `CEILING_FOLLOWS_WITHIN` could be widened tenfold with every arm green.** The constants
+  arm compares a ceiling that already equals the measured total, so a wider slack changes nothing
+  about it. The slack's justification — *"sized against the campaign's unit of work"* — was
+  written down and held by nothing. **The fix this bullet first claimed — "it is now derived" —
+  was an overstatement the round then measured**: what is derived is a *bound on* the constant,
+  not the constant, and that bound is the smallest campaign section, which after a relocation is
+  the section just relocated. So it permitted 11,970 where the justification allows 5,000. The
+  shipped form is both: a hard `SLACK_CEILING` cap plus the derived bound, as one
+  `slack_problems()` predicate the control drives. See § *The round*.
+- **M12 — survived TWICE.** First because the exactness comparison is unreachable in the live tool
+  (a correct census always makes the two numbers agree), then again after the arithmetic was
+  extracted as a seam — because extracting the arithmetic without the DECISION left the `if` at
+  the untested call site. Moving the judgement into the seam closed it.
+
+### Precondition (b), and the floor that is not a constant
+
+21 keys × 101 reader modules, across three worktrees placed at `0d2a5ea` with the primary
+`.venv` symlinked in. Green start **4,428 passed / 2 skipped on all three**, so the baseline is
+empty and every failure is caused by its deletion. The record is
+`tools/phase298_precondition_b.json` (maintainer-side; never ships).
+
+**The floor was read off NODE IDS, never off counts, and this is the run that shows why.** Eight
+blocks returned exactly 5 failures, which looked like a constant; **two returned 4** — both of them
+HTML comments, at 85 and 77 characters. A floor inferred from the 5 would have scored those two as
+*below the floor* and every other block as carrying one extra content guard. The one node id that
+separates them is `test_the_spec_publishes_the_figures_the_census_computes`: those two blocks are
+small enough that removing them does not move a published share to a different rounded digit.
+**(A first draft of this paragraph said "three zero-anchor blocks" and "an 85-character HTML
+comment", singular. Both are wrong — it is eight and two — and neither came off a command. Phase
+298's round derived them from `tools/phase298_precondition_b.json`; the argument is unaffected and
+the correction makes it stronger, since a count-derived floor is wrong for two blocks rather than
+one.)** The intersection over all 21 keys is **4 node ids, all in
+`tests/test_reader_census.py`**: `test_no_verdict_is_stale`,
+`test_the_spec_publishes_the_per_section_figures`,
+`test_the_census_script_runs_clean_as_a_subprocess` and
+`test_a_fully_thinned_section_has_a_green_state`.
+
+**The intersection is NOT the predicate that produced the published number, and a first draft of
+this paragraph said it was.** Seven census node ids appear across the run and the computation
+discards all seven — the whole module — not the four. The two are far apart: dropping only the
+floor leaves **99.4%** locked; dropping the module leaves **73.2%**. That draft also named *"the
+§ 7.2 authoring row"* as a floor member, when that arm fires on **4 of 21** blocks and therefore
+*discriminates*, while the real fourth member went unnamed. Caught by this phase's round, which
+recomputed both predicates from `tools/phase298_precondition_b.json`.
+
+**So the predicate, at the width it is actually used:** every failure outside
+`tests/test_reader_census.py`. That module fires on any deletion by construction — an orphaned
+verdict, a moved per-section figure, a re-run census — and those are RECORD guards this phase
+updates in the same commit, not evidence a block is load-bearing. **The node-id floor is itself
+size-dependent**, which is the fragility the draft credited it with avoiding:
+`test_the_spec_publishes_the_figures_the_census_computes` fires on 19 of 21 and misses the
+intersection only because the two smallest blocks cannot move a rounded share.
+
+**And the campaign can inflate its own next section's rate, which this phase did.** An anchor is
+*any* unique reader-module literal occurring once in `SKILL.md`; the predicate cannot tell a live
+assertion from a test fixture. This phase's new test module quoted § 2b's real sentence as a
+word-subset fixture, and that alone moved § 2b from **71.9% to 74.6%** — marking a 704-character
+block as locked by a file that guards nothing in it, in the section the next phase takes. Found by
+the round, reproduced by removing the module (19,251 → 18,547 locked chars), and fixed by
+desynthesising the fixture. **A guard written while thinning section A must not quote section B
+verbatim.**
+
+**Measured lock rate: 73.2%** — 20,793 locked of 28,416, on that predicate. The ≥30 scan said
+56.0% and the ≥12 scan said 78.1%; the truth is near neither, and closer to the one that is an
+upper bound. **Four blocks the ≥30 scan called free carry content guards**, and one of them
+(`cc12c2e266ddf4b7`) is pinned by a **27-character** comment used as a region terminator.
+
+### The transforms — fifteen taken, six refused
+
+Ten transform-4 splits and **five transform-1 deletes**, the first the campaign has run.
+**16,445 `editor`+`mixed` characters left the section, 7,511 were written back as `runner`, 8,939
+off the file.** Those three do not net: the five-character gap is the deletes taking their own
+trailing newlines, which were never `editor`+`mixed`. A first draft published 7,506 by subtracting
+the file delta from the section delta instead of summing the replacements — the same shape as
+adding two rounded shares, in the phase whose spec section warns about it.
+
+`SKILL.md` 456,720 → **447,781** chars, 3,814 → **3,801** lines. Census `runner` 66.6% → **69.6%**,
+`editor` 8.1% → **8.0%**, `mixed` 24.7% → **21.9%**. File-wide `editor`+`mixed` **150,192 →
+133,747**, and `EDITOR_MIXED_CEILING` lowered to that value in the same commit, with no slack
+opened.
+
+**Five of the ten splits were row 1, and that arm had never been used.** Phase 294's one block and
+Phase 295's eleven were all unanchored, so § 9.1(b)'s first row — *the anchor sits on text that
+stays; reproduce it byte-for-byte* — existed and had no worked instance. **It is settled by
+measurement, not by the author's reading**: apply the replacement, run the modules the deletion
+reddened, and green with **no re-pointing** IS the row-1 claim. All five came back green first
+time, including `e0ea437d7e5fb5f0` with seven content guards over 4,752 characters.
+
+**The six refusals split three ways, and they are the more useful result.**
+`50ed615518e6f96c` (3,116) is a **row-2 stop**: its guard requires the `tasks/index.yml` writer
+roster present in Step 4c's comment region, and the roster is exactly what a split relocates.
+`dead91c5fda71a69` (1,251), `8a31c373c9998c90` (1,564) and `9fc0799cee1439a4` (1,971) are
+`editor`-verdict blocks with red content anchors — which **disqualifies transform 1 outright**,
+because it authors nothing back and so has no row 1 available to it. `dead91c5fda71a69` is the
+sharpest: a count-pinned guard requires each retired disposition to appear **exactly once**, in
+the withdrawal explanation, so that block is load-bearing in the runner *because* it is
+editor-addressed. `5dcac67fe336f3c3` (3,089) and `76a00f8e624ce451` (980) are precondition-(a)
+refusals whose severable share I put at roughly **12%** and **18%** — re-authoring 4,000 characters
+of rule-dense runner prose to move 550 is the wrong trade. **Those two figures are ESTIMATES and
+the round was right to say so:** they are my reading of which sentences would survive a split, no
+command produces them, and precondition (a) is explicitly a judgment test — the spec's own warning
+is that *"a test the author satisfies by rewording measures the author."* They are the one soft
+ground under the KEEP verdict, and a first draft called them *measured*, borrowing a word the
+row-1 claims earn by running guards and this does not.
+
+The six account for **11,971 characters**, which is exactly what § 4c now measures.
+
+### Keep/revert for § 4c — KEEP
+
+§ 8 requires the verdict per section and this is it. **Keep**, on grounds that are measured rather
+than argued: the section's relocatable mass fell **28,416 → 11,971**, 57.9%, against § 3b's 37.0%;
+every replacement passed the word-subset check; every row-1 claim was settled by running the
+guards the deletion had reddened rather than by reading the replacement; and the refusals
+discriminate — six blocks stayed, three of them because a guard measurably needs them where they
+are.
+
+**What would have made it a revert.** A replacement that honestly read `mixed`; a row-1 claim that
+needed a guard re-pointed at `REFERENCE.md` to go green, which is the one thing § 9.1(b) row 2
+forbids and which did not happen; or a per-block price low enough that the campaign could not
+justify its own cost. The measured price is **1,096 characters of relocatable mass per transform**
+(16,445 over fifteen) against § 3b's **1,307** (14,372 over eleven) — so the per-transform yield
+is *lower* here, and the section share moved is much higher (**57.9%** against 37.0%) because more
+of § 4c's blocks were reachable at all, not because each one paid better. A first draft of this
+sentence published 1,645, which is 16,445 divided by the ten splits rather than by the fifteen
+transforms, and it had the comparison pointing the wrong way.
+
+### The round
+
+**Three lenses, one round** — the governor's three-lens condition: the phase ships behaviour and a
+numeric record. All three placed by hand at `afbefa5` with `git worktree add --detach` outside the
+repository, the primary `.venv` symlinked into each per `Q-493`, each echoing
+`git -C <dir> rev-parse HEAD` before its first finding. All three echoed the pin and passed the
+introduced-symbol gate (`delete_block_spans`, `tools/phase298_lock_rates.py`); spawn-time
+`git status --porcelain -uall` was empty and the local-config baseline was captured before any
+spawn.
+
+**The author's battery said 18/18. The guards lens ran 30 behaviour-changing mutations and 22
+survived — 27%.** That is the sixteenth consecutive phase in this log where an independent battery
+found what the author's did not.
+
+#### The three HIGH findings
+
+**1 — the follower slack I added this phase was widenable 5,000 → 11,970 with everything green.**
+The derived bound is `min(per-section editor+mixed)`, and after a relocation the smallest section
+**is the section just relocated** — § 4c had fallen to 11,971 that same commit. So the bound
+loosened exactly when the campaign succeeded, permitting a phase to bank ≈ the entire mass this
+phase had just moved. *"A completed section cannot be banked"* was the point, and the guard was
+sized by the completed section. Worse, **the bound itself had no control**: `* 10` restored M16 in
+full. Closed with a `SLACK_CEILING` cap, a shared `slack_problems()` predicate the control drives
+with explicit arguments, and absence detected by **membership** rather than by a sentinel default —
+the round defeated the first zero-detector in one token by changing a `.get` default to `10**9`.
+All seven of the lens's mutations now die, replayed.
+
+**2 — transform 1's predicate was pinned at one literal of four arms.** `mixed` was asserted;
+`runner` and *no verdict at all* both walked through. The second matters: **1,039 of 1,592 distinct
+shas carry no verdict**, so the unpinned branch governed the majority of the file, and with the
+mutation applied the tool offered to delete the skill's own YAML frontmatter. The live tool was
+correct throughout — this is guard blindness, not a shipped defect. All four arms are parametrized
+now, plus the positive arm, which a refusal-only list cannot see.
+
+**3 — the tree was RED at the commit the reviewers were placed on**, and `main` requires the
+`pytest` check. `test_the_next_session_prompt_briefs_the_next_phase` failed because this phase
+added its `CLAUDE.md` row without rewriting `tools/NEXT_SESSION_PROMPT.md`, which moves the gate's
+expected phase to 299 while the file still briefed 298. **Found only by running the full suite** —
+the guards lens's three in-scope modules were green throughout, and so were mine. Both lenses
+reported it independently. It is the same class as the phase's own headline findings: a gate whose
+subject the phase moved without moving the gate's input.
+
+#### What else the round found
+
+| finding | lens | fix |
+|---|---|---|
+| the two markdown pointer spellings this phase added were invisible to the guard that exists to stop pointers dangling — 8 of 22 unseen, and retargeting all eight left it green | execution | both spellings parsed; verified red on the exact mutation |
+| the stability claim was falsified by this phase's own instrument at this phase's own commit | execution | the table anchored to `dd0bde3`; the tool names the thinned section instead of printing a bare contradiction |
+| both pointer populations could be emptied with the suite green — the constants-side guard cannot see it, because the mutation empties the **decorator** | guards | an AST check on the parametrize arguments themselves |
+| a third copy of the campaign section map, outside the fork guard whose own comment names it | execution | all three compared |
+| the comment arm's leading side and both arms' step-id slot were unpinned — the mirror image of the destination asymmetry this phase had just fixed | guards | four cases added |
+| the tokenizer's digit class and its case folding | both | an introduced number is caught; a recapitalised word is not refused |
+| a usage line prescribing `--check`, a flag argparse refuses | execution | corrected; Phase 295's, in a file this phase rewrote |
+
+**The stability finding is the one worth reading twice, because nothing drifted.** The claim
+shipped in three places with no as-of anchor, and running the tool it names prints `NOT stable`.
+The cause is that a thinned section's remaining population is what the phase **refused**, and
+refusals are mostly locked — so § 4c reads 74.0% / 100.0% / 100.0% over six survivors and sorts
+above `2b`. **A lock rate is a property of a section as the campaign finds it**, comparable only
+across sections not yet taken. That sentence is now in the spec, in the tool's headline and in the
+record, because the next phase takes § 2b and will read that table to plan against.
+
+#### The record findings
+
+- **"Three zero-anchor blocks returned exactly 5 failures … an 85-character HTML comment returned
+  4."** Both halves wrong: **eight** blocks returned 5 and **two** returned 4, both of them HTML
+  comments. Neither number came off a command — in the paragraph whose entire subject is that the
+  floor must be read off node ids and never off counts. The correction strengthens the argument: a
+  count-derived floor is wrong for two blocks, not one.
+- **The guards lens corrected itself three times about its own evidence, and the last correction
+  is the one worth keeping.** It first reported a full-suite result, then withdrew both runs as
+  terminated and unusable, then established that both had in fact completed normally at ~21
+  minutes — it had been reading the output files before the summary lines flushed, and *a tail
+  taken mid-progress is indistinguishable from a killed run*. Its withdrawn claim that "the
+  baseline was not green" had the right observation attached to the wrong cause: the single
+  failure on the pristine tree was **this phase's own red gate**, which it later found by other
+  means. The settled numbers: clean baseline **1 failed / 7,143 passed / 202 skipped**, and the
+  M16-reopening mutation **2 failed / 7,142 passed**, the extra failure being
+  `test_the_offline_arm_falls_back_to_strict_and_still_blocks` — a flake that passes in isolation
+  and touches nothing the mutation reads. **So the slack exploit is confirmed green across all
+  7,144 collected tests**, not merely across the three modules its readership proof covered, and
+  the red tree is established three independent ways.
+
+#### What the record lens found, and it is the largest single haul of the round
+
+Its HIGH was H1 above, reached independently. Beyond that it re-derived every published figure and
+found the defects concentrated exactly where this log keeps finding them — in the commentary, not
+in the headline numbers.
+
+| claim | measured | where |
+|---|---|---|
+| *"eleven transforms over fifteen blocks"* | **fifteen** transforms over **twenty-one** candidate blocks — Phase 295's split count in one slot and this phase's transform count in the other | spec § 8.1 |
+| § 4c's surface: *"15 `mixed` and 6 `editor`"* | **13** `mixed` and **8** `editor`. The chars were right. 15/6 is this phase's transforms/refusals split grafted onto the verdict split, and **15 + 6 = 21 made it internally consistent**, which is why nothing caught it | this record |
+| *"a 25-character comment"* | **27** — I measured `len('Report what this code DID')` and dropped the `# ` the guard actually uses, at three sites | three files |
+| *"the rounded sum was 33.0 against an unrounded 32.9"* at Phase 295's close | **32.8** — and the 33.0 was computed from the 8.2/24.8 figures **this phase deleted in the same paragraph** | spec § 8.1 |
+| the floor's four members | one named member (*"the § 7.2 authoring row"*) fires on **4 of 21** and therefore discriminates; the real fourth went unnamed | this record |
+| the 73.2% derivation | the published number drops the **whole census module**, not the four floor ids. Floor-only gives **99.4%** | this record |
+| *"it is now derived"* of the slack fix | a bound on the constant, not the constant — see HIGH 1 | this record |
+
+**And one finding that is about the campaign rather than about this phase.** An anchor is *any*
+unique reader-module literal occurring once in `SKILL.md`; the predicate cannot tell a live
+assertion from a test fixture. This phase's own new test module quoted § 2b's real sentence as a
+word-subset fixture, and that alone moved § 2b's published lock rate **71.9% → 74.6%** — marking a
+704-character block as locked by a file that guards nothing in it, **in the section the next phase
+takes**. Reproduced by removing the module (19,251 → 18,547 locked chars) and fixed by
+desynthesising the fixture. The rule generalises and is now in the spec: **a guard written while
+thinning section A must not quote section B verbatim.**
+
+**Two more the lens was right to press on.** `tools/phase298_lock_rates.py` had no test and no
+battery row, in the phase whose stated product is the first tests the campaign's write-side tools
+have ever had — now covered, including an arm that pins the headline against its own rows.
+And `POINTER`'s step-id class was `[0-9a-z]+`, which refuses `4-pre` — **a live section of this
+skill** — so every prose replacement there would have failed the word-subset check on the
+pointer's own words. Reachable, not latent.
+
+**What it could not break, re-derived rather than taken on trust:** the three headline masses
+(16,445 / 7,511 / 8,939, the last derived independently by SHA-diffing the census at both
+revisions); all six refusal sizes summing to exactly 11,971; all ten replacements passing the
+word-subset check; the five row-1 claims, structurally — none of those blocks' guard modules was
+touched by this phase; the census and ceiling figures; and `Q-512` sound at both ends.
+
+#### And the round's own fixes reproduced a hazard the battery harness documents first
+
+Widening `POINTER`'s step-id class to admit `4-pre` moved the two lines this phase's battery had
+**retyped** as module constants. Both rows matched nothing, dropped out silently, and the battery
+reported **16/16 killed** where it had previously run 18 — a tally that shrinks without saying so
+reads as a clean sweep. `tools/mutation_battery.py`'s docstring opens with exactly this ("Phase 186
+hand-copied two gate lines as module constants … seven mutations reported `SKIPPED`, in a battery
+whose fraction was read as coverage") and prescribes a callable over the file's current text. Both
+anchors are derived now. **The harness names the defect in its first bullet and the phase committed
+it anyway**, which is the same shape as everything else this round found: the rule was written
+down, and writing it down is not a mechanism.
+
+#### The closing numbers, and one flaky module
+
+**Suite at close: 7,171 passed / 201 skipped, exit 0** (opening: 7,119 / 200 — the **+52** are
+this phase's own new guards plus the round's). A first draft of this line said 7,166, which was
+the count on the tree *before* the record lens's fixes landed — a closing figure taken from a
+superseded tree, which is the class this round spent most of its time correcting, committed in the
+sentence reporting the round. The precondition-(b) baseline was 4,428 / 2 on all three
+measurement worktrees.
+
+**`tests/test_cut_release_gate.py` is load-sensitive and is not a finding.** Under three concurrent
+reviewer suites it failed `test_the_offline_arm_falls_back_to_strict_and_still_blocks` twice, and a
+later run under load failed `test_a_cut_that_cannot_tell_prints_neither_trailer` — a *different*
+test in the same module. Both pass in isolation, and the module passes whole at 84. **The unit is
+the module**, and naming one test in the next-session brief would have made the second occurrence
+read as a fresh defect rather than a recurrence.
+
+**Appending the ledger row moved four derived figures**, which is `Q-297`'s remedy working exactly
+as filed and exactly as it worked for Phase 297: `ROUND_YIELD_LEDGER.md` 156 → **157 rounds**,
+137 → **138 numbered phases**, and the all-killed tally 97/94 → **98/95**, stated at four sites
+across two maintainer-side files. All four are derived by `tools/ledger_stats.py`, and the suite
+named each one.
+
+### Also fixed
+
+- **A remedy naming a script that has never existed.** `tests/test_reader_census.py` told a
+  maintainer to re-derive § 7.2's four figures with `tools/phase295_figures.py`. That file is not
+  in this repository's history; the figures come from `tools/phase294_figures.py`, which prints
+  all four — checked by running it. Same class as the fabricated `tools/skill_audit_check.py`
+  citation the module's own docstring already records. Guarded, and the guard had to be
+  **narrowed**: a first cut read the whole source and failed on that very docstring. Prose may
+  name a file that is gone; a remedy may not, so the guard reads assertion messages only.
+
+### Filed
+
+- **`Q-512` — a shipped skill body states a defect the tree fixed in Phase 271.** § 4c's
+  atomic-rewrite comment says `backfill_completed_dates.py` *"still derives `<path>.tmp` from the
+  target"*. It was converted to `mkstemp` in Phase 271 (`9772f66`) — the commit that closed the
+  filing the sentence cites as open — and the sentence was authored in Phase 269 (`f4c30b1`), so
+  it was true for two phases. `tests/test_index_writer_class.py`'s roster was updated then and is
+  right; nothing compares the test's roster to the prompt's. **Not fixed in branch** for two
+  independent reasons: `core/skills/**` is never tier 1, and § 9.1's transform list is CLOSED — an
+  in-place correction of a line the commit is not deleting outright is prohibition 5, so the
+  campaign's own rules forbid the edit. It is a row-2 stop that carries a falsehood out of reach,
+  which is the sharpest argument the campaign has produced for its own limits.
+
+**Found by rule 2 of the author-side pass**, and worth naming as a campaign result rather than an
+incident: relocating provenance forces someone to read it against the tree, and nothing else was
+doing that. **The first check was a bad grep, not a bad claim** — `install.sh ships
+tasks/archive/.gitkeep` returned zero hits because the installer builds that path from
+`$tasks_dst/$sub/.gitkeep`. A zero-hit grep read as an empty surface is this log's own recurring
+defect, committed here while checking for exactly that class.
+
+---
+
+## Phase 299 (executed 2026-09-15 — the section that was locked end to end, and the fourteen the brief had not counted)
+
+**Ratified by Wade before any edit**, two answers: the scope is **§ 2b alone** — `Q-507`'s
+detector goes to a later phase — and `Q-511`'s open shape resolves to **(a)**, let an authored
+`editor`/`mixed` verdict override the construction rule for `heading` and `code` and re-derive the
+§ 8.1 figures in the same commit. Only the first bound this phase's work; the second is recorded on
+the entry so the phase that takes it inherits a decision rather than asking again.
+
+Three lenses, one round, per the governor — this phase ships behaviour and a numeric record.
+
+### The state at the open, derived rather than read off the brief
+
+Tree clean at `900eb61`. Census: `runner` 69.6%, `editor` 8.0%, `mixed` 21.9%, `editor`+`mixed`
+**133,747** over 447,781 characters. § High **0**, § Medium **138**, § Low **106**, next free
+`Q-513`. The § G re-measurement window (~2026-09-23) has not opened, so it displaced nothing.
+
+§ 2b's relocatable surface, re-derived: **12 keys, 25,804 characters** — which matches the brief
+exactly, at the count and at the size.
+
+### The brief said § 2b closes the campaign. It does not, and the refutation was already in the spec
+
+§ 9's ratified scope is *"`review-close` only, **every** section, then STOP"*. § 2b is the third
+section the campaign has taken, and § 8.1's own concentration table puts the top three at **57%
+cumulative**. **That sentence was 43%-wrong in a first draft of this record, and its round caught
+it:** the table has FOUR rows, and the fourth — `+ 2d`, pre-flight, `6` — reaches **74%**, so the
+un-itemised remainder is **26%** across eleven sections, not 43% across fourteen. Worse for the
+framing: those three named sections are the largest three of the "fourteen" this phase presents as
+uncounted, so the spec's own table already knew about them. What survives is narrower and still
+true — the table is a BASELINE pinned to `11b7edc` and never edited, it groups three sections into
+one row without naming their individual masses, and **eleven sections are named nowhere at all**.
+Aggregating the
+census by `section` names them: **fourteen editor-bearing sections carrying 71,485 characters that
+no phase has touched**, the largest being § 2d at 12,144, the pre-flight permission guard at 9,129,
+Step 6 at 7,519 and Step 3c at 7,439.
+
+**What made the claim survivable is that nothing in the tree could contradict it.**
+`_CAMPAIGN_SECTIONS` in `tests/test_reader_census.py` names the three sections the campaign has
+*run*; § 8.1's published current-state row covers those same three; and `slack_problems` derives
+its bound from the minimum over them. Three headings out of seventeen, and no relation between the
+roster and the file.
+
+The remedy is the inventory-completeness invariant `/security-audit` Step 2a-0 already uses one
+skill over: **`_SECTIONS_NOT_YET_TAKEN` plus `roster_problems()`, asserting that the two rosters
+PARTITION the file's editor-bearing sections.** Named rather than derived — deriving it would make
+the roster agree with the census by construction and assert nothing. Both arms are live and
+controlled: a section in neither roster, and a rostered heading that matches nothing (renamed, or
+fully relocated). Five parametrized control rows drive the real predicate.
+
+### Precondition (b): eleven of eleven candidates came back ANCHORED
+
+The measurement ran the shipped procedure — delete the block, run the **102 Python** modules
+`grep -rl review-close tests/` names (the bare grep returns **104**; two are `tests/PORT_LOG.md`
+and `tests/README.md`, a discrepancy the harness's own docstring documents and this record first
+re-introduced) — over **eleven** of the twelve keys, across three worktrees
+placed by hand at `900eb61` with `git worktree add --detach` outside the repository and the primary
+`.venv` symlinked into each per `Q-493`. All three green-started at **4,480 passed / 2 skipped**.
+The twelfth, `c52681bf6b3c3871`, was not measured: prohibition 7 refuses it whatever the guards
+say, and measuring it would have bought a number no decision reads.
+
+**Every one of the eleven reddened on the raw signal, and its round showed the signal was wrong.**
+`tools/reader_census/review-close.json` is keyed by content sha, so deleting ANY block orphans its
+verdict and reddens `tests/test_reader_census.py` — for a 208-character unanchored `runner` block
+as readily as for a guarded one. None of those failures is a guard on the deleted text. **Two of
+the eleven reddened nothing else**, so the honest rate is **9 of 11 by block (81.8%)** and
+**21,445 of 23,335 measured characters (91.9%)**, against § 4c's 73.2%.
+
+Phase 295's record already names the class, about a different instrument, in the very file that
+runs this measurement — *"a per-block signal that is identical for every block is not a
+measurement"* — and Phase 298 must have discounted the module silently, or its five transform-1
+deletes could not have happened. `tools/phase295_precondition_b.py` now partitions
+`content_failures` from `bookkeeping_failures` and reads the verdict off the first, with the reason
+as a module constant rather than a caution in a docstring, which is exactly what the two earlier
+phases already had.
+
+### Six splits, all row 1 — and the biggest one only after it was re-scoped
+
+The nine modules the deletions reddened were re-run with the replacements applied. **Seven came
+back green untouched, one needed only the census bookkeeping this phase owed anyway — and one is
+green because this phase edited its assertion.** A first draft of this record claimed "no guard
+re-pointed" for all nine, and the round measured it: `test_the_skip_does_not_waive_secret_scanning`
+is still red against an unedited test tree. § 9.1's row-2 prohibition is narrow — do not re-point a
+guard *at* `REFERENCE.md` — and that was not breached; the published claim was the broad one, and
+it was false. The edit is the `Q-502` repair below, and it belongs inside the claim rather than
+forty lines away from it.
+
+**Why the row-1 scan missed it.** Every ≥30-character literal anchor in all six deleted blocks is
+reproduced byte-for-byte in its replacement, 6 of 6. The two literals that were dropped are
+`"A02"` (three characters) and `"security_map.md"` (fifteen) — both under the threshold the
+anchor definition uses, which is the same false-negative class Phase 298's own § 4c run documented
+at 27 characters.
+
+`92d438f83d9a1b10` (9,708 characters, the § 2b HARD RULE) did not start in row 1. Three of its
+thirteen literal anchors — `it skips the **primary checkout**, matched by path identity`,
+`the worktree whose branch is \`main\``, and `until this phase both sites said …` — sat inside a
+removal span, which is **row 2 and a stop**. The cut was narrowed until all thirteen are reproduced
+byte-for-byte: a 300-character cost against a 2,011-character move. § 9.1(b) says in as many words
+that *"rows 1 and 2 are separated by what the author writes next"*, and the author choosing row 1
+is only honest if the choice is recorded where a reviewer can disagree with it. It is recorded
+here and in the spec's own pair record.
+
+**Every replacement is a pure deletion plus a pointer line.** No sentence was re-phrased: the
+method was to delete the block whole, re-emit it minus the declared removal spans, and append the
+pointer. `word_subset` reports **zero introduced words** for all six, which under that check's own
+stated limits means it caught nothing and could not have — the replacements have no new vocabulary
+because they have no new text.
+
+### Transform 1 was available for ONE of the three `editor` blocks
+
+`1b4aa29f2273cd43` (2,289 characters, 8 new failures) and `09cdd40bb65dda04` (1,881, 12 failures
+and 6 literal anchors) reddened content guards and are refused: § 9.1's ratified predicate is *"an
+`editor` verdict AND no guard anchored on that block"*, and an `editor` block with a red guard
+**disqualifies transform 1 outright** — it authors nothing back, so no row 1 is available to it.
+
+**`aaea220144360820` (1,186) reddened only the census, and this phase refused it anyway.** That
+refusal was the corrected signal's first casualty: under the ratified predicate the block was free
+the whole time. Its round caught it, and it ships as this phase's one transform-1 delete.
+
+**So 4,170 characters the census calls editor-addressed are load-bearing in the runner because a
+guard reads them** — § 9.1's own resolution, *"the census asks who is this text addressed to; a
+guard asks has this text changed"*. A first draft of this section said 5,356 and *"transform 1 was
+unavailable for the entire section"*, and both figures came from the uncorrected signal.
+
+**The comparison it drew was wrong too.** That draft said *"in § 4c three of five `editor` blocks
+were free"*. § 4c had **eight** `editor` blocks (6,132 characters) and **five** were free — Phase
+298's own entry says 8 and 6,132, and that phase's round had already corrected the figure once in
+the other direction. Re-derived here from the census at `858ca3f`.
+
+### `Q-502` closed, and the filing was wrong about its own cost
+
+The entry described a **one-line deletion**: drop the false parenthetical
+*"(`security_map.md` routes root operational docs to **A02**)"* from the *"Check the second
+condition"* blockquote. Two things it did not know.
+
+**First, the retraction and the claim live in different blocks.** The correction sits in the
+`This skip is about step 3's agent` paragraph (`9f7da609c0fb4504`); the claim it retracts sits two
+paragraphs later in `585d3fca4f3864fb`. Relocating the retraction alone — which is what thinning
+that paragraph on its own merits would have done — leaves the assertion standing in the runner with
+nothing answering it, which is **strictly worse than the contradiction**. Both blocks were split in
+one commit for that reason, and neither would have been split alone.
+
+**Second, a shipped guard pinned the paragraph, and this phase's first reading of why was wrong.**
+`tests/test_review_close_diff_basis.py::test_the_skip_does_not_waive_secret_scanning` opened with
+`assert "A02" in para and "security_map.md" in para` — written in Phase 158 (`d955aa0`) — so
+deleting the false parenthetical reddened it. This phase concluded the assertion *"REQUIRED A
+FALSEHOOD to be present"* and deleted the requirement, replacing it with
+`assert "Secret-scanning" in para`.
+
+**Its round disproved that in one command.** The assertion required a *routing claim naming the map
+and A02*, and the tree supplies true ones: `core/companion/security_map.md` routes
+`.gitignore`/`.env*` to **A02** under § *Repo Hygiene*, and `.claude/skills/**/*.md` to **A02 Data
+Exposure** under § *Skill Markdown & Check Registry*. The repair `Q-502` actually needed was a
+five-word **correction** of the parenthetical, not its deletion — and deleting the requirement was
+a weakening the round then measured, three ways. *"Secret-scanning is somebody else's job"* passes
+the single-token pin and fails the pair. *"Nothing in this step is about Secret-scanning"* passes a
+substring check inside a sentence asserting the opposite. And a qualifier spliced into the
+carve-out — *"for a code diff this skip neither touches nor waives it; on a doc-only diff the scan
+is skipped with everything else"* — inverts the rule on exactly the diff class the skip fires for
+while satisfying every shorter pin. **It was over-strict at the same time:** a legitimate reflow
+putting `secret-scanning` mid-sentence reddened it, because a case- and hyphen-sensitive single
+token is the least robust shape available.
+
+**What ships** is the split redone from the original block with the parenthetical corrected —
+`` (`security_map.md` routes `.claude/skills/**/*.md` to **A02**) `` — which is true, introduces no
+word the original block did not carry, and restores the operationally useful half: on a doc-only
+diff of skill markdown that glob *is* the live A02 rule the skip must not be read as waiving. The
+assertion is restored verbatim, and the carve-out is now pinned as a **whole clause** rather than
+its tail phrase, which is what catches the spliced qualifier. All three rewrites were replayed
+against the repair: all three red, an ordinary reword green. The retired sentence is pinned in
+`FALSE_RATIONALES`, now read over `REFERENCE.md` as well.
+
+### What the section refused, and what each refusal is worth
+
+`c52681bf6b3c3871` (2,469) is precondition (e), and its **granularity** is the part worth
+recording: the `model:` pin and its `sysop:role` marker occupy about 250 characters of one physical
+line inside a 2,469-character block, so prohibition 7 locks roughly ten times what it protects.
+That is the concrete cost of what `Q-498` blocks, stated as a ratio rather than as a total.
+
+`b2aa445de8921f52` (704) is § 9.1(a)'s own worked undecidable, quoted in the spec: the procedure's
+*"say so and CONTINUE, **do not stop**"* forecloses stopping on one reading and proves stopping is
+in the runner's option space on the other. § 10's tie-break sends it to the runner. `8bd45b296fa92714`
+(464) is the case § 7.6a picks out by name — a refused alternative that forecloses a branch a
+cautious runner would otherwise re-derive.
+
+Those five refusals — the two `editor` blocks above and these three — total **7,807 characters**,
+which is exactly what § 2b still carries. The section is accounted for to the character.
+
+### The numbers, all derived in the commit that publishes them
+
+| | at the open | at the close |
+|---|---|---|
+| `review-close/SKILL.md` | 447,781 chars | **442,389** |
+| `runner` | 1,771 / 311,655 / 69.6% | **1,777 / 324,261 / 73.3%** |
+| `editor` | 41 / 35,865 / 8.0% | **40 / 34,679 / 7.8%** |
+| `mixed` | 62 / 97,882 / 21.9% | **56 / 81,071 / 18.3%** |
+| `editor`+`mixed` | 133,747 | **115,750** |
+| § 2b | 25,804 | **7,807** |
+| `EDITOR_MIXED_CEILING` | 133,747 | **115,750** |
+
+17,997 characters left § 2b's relocatable surface, **12,606 were written back as `runner`** and
+**5,392 left the file**. Those three do not net, and the one-character gap is the transform-1
+delete taking its own trailing newline with it — a byte that was never `editor`+`mixed`. Phase 298
+records the same gap at five characters for five deletes.
+
+`CEILING_FOLLOWS_WITHIN` did **not** move: § 2b's remnant is 7,807, still above the 5,000 slack, so
+the derived bound is satisfied without an edit. **A projection made before the measurement had put
+§ 2b at 3,637 and would have forced the slack down, and a second projection made after it said
+8,993.** Both were wrong, in opposite directions and for the same reason — the first assumed all
+three `editor` deletes would land, the second assumed none would. One did.
+
+**Suite at close: 7,200 passed / 201 skipped**, re-run after every round fix. It was 7,178 at the phase's first commit and 7,181 at the commit the reviewers stood on; the round's own closures added the rest.
+
+**The author-side pass, stated with its first number rather than its last.** Rule 2 caught a false
+present-tense claim in this phase's own `REFERENCE.md` draft before it shipped. Rule 1's battery
+(`tools/phase299_mutations.py`) opened at **6 of 10 killed, four survivors, one no-op and one
+refused blind control**; all four survivors were closed, the no-op was the author's own stale
+projection, and the final form is 13/13 with two controls green. **That number covers the
+Python-side guards only.** The census is keyed by content sha, so any byte change to `SKILL.md`
+reddens it — which means a battery that mutates prose without re-authoring the census records a
+kill for every prose mutation whatever the prose guard did. This battery mutated no prose, so its
+13/13 says nothing about the prose guards, and the round's independent battery ran 33 and watched
+15 survive.
+
+### The round — three lenses, one round, all three placed at `ebe13cb`
+
+Three by the governor's condition: this phase ships behaviour **and** a numeric record. All three
+placed by hand with `git worktree add --detach` outside the repository, the primary `.venv`
+symlinked into each per `Q-493`, each required to echo `git -C <dir> rev-parse HEAD` before its
+first finding. **All three echoed `ebe13cbd45d9a4cf7dd6e006519055a07c280fff`.** The guards lens
+mutated only its own checkout and reported it clean at the end; the other two read without writing.
+
+**The author-side battery said 13/13. The guards lens ran 33 and watched 15 survive, and the record
+lens falsified the phase's headline outright.** That is the seventeenth consecutive phase in this
+log where an author's clean sweep met an independent battery's dozens — and this time the more
+expensive finding came from neither battery but from a lens re-deriving a number the author had
+already "measured".
+
+**The guards lens also named the confound that makes the author's number worth even less than
+that.** The census is keyed by content sha, so *any* byte change to `SKILL.md` reddens
+`test_every_block_carries_a_verdict` — which means a battery that does not re-author the census
+after each prose mutation records a kill for every one of them, whatever the prose guard did.
+Before that correction five of the lens's own prose cases read RED; after it, three were green.
+**An author battery that mutates prose without re-authoring the census cannot have measured any
+prose guard's reach**, and this phase's did not mutate prose at all — which is why its 13/13 covers
+only the Python-side guards.
+
+#### HIGH — the `Q-502` repair rested on a premise one command disproves
+
+The phase's record said `test_the_skip_does_not_waive_secret_scanning`'s
+`assert "A02" in para and "security_map.md" in para` **"REQUIRED A FALSEHOOD to be present"**. It
+did not. It required a *routing claim naming the map and A02*, and the tree supplies true ones:
+`core/companion/security_map.md` routes `.gitignore`/`.env*` to **A02** at its § *Repo Hygiene*,
+and `.claude/skills/**/*.md` to **A02 Data Exposure** at its § *Skill Markdown & Check Registry*.
+The repair `Q-502` actually needed was a **five-word correction of the parenthetical**; deleting
+the requirement instead was a weakening, and the lens measured three rewrites that walk the
+single-token replacement it left behind — *"Secret-scanning is somebody else's job"* (which the
+old assertion rejected), *"Nothing in this step is about Secret-scanning"*, and a qualifier spliced
+into the carve-out itself: *"for a code diff this skip neither touches nor waives it; on a doc-only
+diff the scan is skipped with everything else"*, which inverts the rule on exactly the diff class
+the skip fires for while satisfying every shorter pin. **It was simultaneously OVER-strict**: a
+legitimate reflow putting `secret-scanning` mid-sentence reddened it, because the replacement was a
+case- and hyphen-sensitive single token.
+
+Fixed by redoing the split from the original block with the parenthetical **corrected** rather than
+deleted — `` (`security_map.md` routes `.claude/skills/**/*.md` to **A02**) `` — which is true,
+restores the operationally useful half (on a doc-only diff of skill markdown that glob *is* the
+live A02 rule), and introduces no word the original block did not carry. The assertion is restored,
+and the carve-out is now pinned as a **whole clause** rather than as its tail phrase, which is what
+catches the spliced qualifier. All three of the lens's rewrites were replayed against the repair:
+two now red, the third red, an ordinary reword green.
+
+#### HIGH — three guards that could not see the defect they were written for
+
+- **The retired-rationale pin could not see `REFERENCE.md`.** Its corpus was `SKILL.md` +
+  `WORKFLOW.md`; `REFERENCE.md` is a shipped file beside the runner and **the destination of every
+  byte this campaign relocates**. The lens appended two retired rationales to it as plain
+  assertions and the suite stayed green — including the entry this phase had just added, whose
+  string is physically present in `REFERENCE.md` right now. The blanket fix is unavailable, because
+  a retraction has to quote the claim to deny it. Closed as a **count**: `_LICENSED_IN_REFERENCE`
+  gives each label its permitted number of occurrences (1 for the A02 retraction, 0 otherwise), one
+  predicate over both corpora, four controls.
+- **`_RETIRED_PINS` could be derived.** `dict(FALSE_RATIONALES)` makes the pin agree with its
+  subject by construction; dropping an entry from both then passed. The phase wrote an
+  anti-derivation guard for its *other* new roster in the same commit and gave this one nothing.
+- **The anti-derivation guard read the FIRST assignment.** `next((n.value for n in tree.body …))`
+  takes one match, so a literal decoy above a derived second assignment satisfied it. The lens
+  proved it is not a no-op two ways: with the derived roster a renamed section heading reports no
+  problem where the literal roster reports one, at the predicate and at file level. **This module
+  had already closed that exact class** — `per_section_problems` refuses more than one published
+  row, *"because a stray copy earlier in the document became the guarded row"* — and the new guard
+  did not inherit it.
+
+Both are now one shared `literal_collection_problems()` over an AST node type, counting assignments
+rather than taking the first, used by both rosters and driven by six control rows.
+
+#### HIGH — the controls this phase added were themselves unpinned
+
+Every predicate in `tests/test_reader_census.py` is controlled, and every control is an inline
+parametrize list that nothing pinned. The lens neutered three arms by deleting the row that covered
+each: the phase's own exact-equality slack row, its brand-new partition control, and two
+`editor_mass_problems` rows. **The sibling module learned this after a round "removed twelve cases
+with the suite green" and the lesson was never carried here.** Ported.
+
+#### MEDIUM — a false inference in this record, and it was 43%-wrong
+
+This entry said the spec's § 8.1 table shows *"the top three are 57% cumulative — so 43% of the
+mass is in sections that table does not itemise"*. The table has **four** rows; the fourth reaches
+**74%**, and it names § 2d, the pre-flight guard and Step 6 — **the largest three of the "fourteen"
+this phase presents as uncounted**. The un-itemised remainder is 26% across eleven sections.
+Corrected at all three sites it appeared, including the comment that justifies the new guard.
+
+#### What the severability lens found, and what it did not
+
+Its own category came back **clean: no binding rule left the runner in any of the six splits**, and
+both severability refusals were correct. It walked all fourteen removed spans against § 9.1(a)'s
+test mechanically — a word-level `difflib` opcode walk over each old/new pair, so no span was out
+of view — and checked two it expected to fail, finding the rule carried elsewhere in the runner
+both times.
+
+What it found instead was in `REFERENCE.md`, which is the file this campaign writes:
+
+- **HIGH: a false claim published into a shipped file as its only surviving copy.** The relocated
+  paragraph said a leaked agent branch is reviewed as feature work, Step 2a finds no commits, and
+  Step 6 offers to delete it. Two of those three links have been closed since **Phase 158**
+  (`d955aa0`), which added the `worktree-agent-*` exclusion to Step 1c's enumerator *and* to
+  Step 2a. The falsehood was inherited from `SKILL.md`, where it had stood for ~140 phases — but
+  this phase **re-authored it into `REFERENCE.md` and strengthened it**, and authoring is where it
+  was checkable. `REFERENCE.md` is the file § 4.1 says nothing checks.
+- **MEDIUM: three provenance subsections for blocks that did not move.** Provenance was drafted for
+  every candidate before the measurement; the measurement then disqualified all three transform-1
+  deletes, and their sections were not removed. 5,356 characters stood in the tree twice at the commit the lens read (one of those three blocks has since been deleted, on the LATER finding below), the
+  section's own preamble — *"the runner keeps the rule, this keeps the argument"* — was false for a
+  quarter of its body, and the two copies had already diverged.
+- **MEDIUM ×2: two seams**, and a measurement whose predicate left with it (the stock-install map
+  count is 11 of 16 under *carries at least one placeholder* and 10 of 16 under *every glob is a
+  placeholder*, decided by exactly one section). All fixed; the predicate is recorded with the
+  command that derives it.
+- **LOW, closed:** the retired claim could be restated in `REFERENCE.md` with the suite green —
+  folded into the HIGH above.
+
+**My first rewrite of the collision paragraph then committed the same class twice** — it said three
+steps carry an exclusion (two do) and attributed Step 6's population to Step 2a's output (Step 6
+iterates what Step 4a merged). Both corrected against the file.
+
+#### What the record lens found, and it invalidated this phase's headline
+
+It re-derived every published figure from a command in a throwaway clone rather than from the
+record, and **the numbers were all right**: both census ends, § 2b's 12 keys and both totals, the
+block-by-block reconstruction of 16,811 / 12,505 / 4,306 at the commit it read, all eleven per-block
+failure counts, the thirteen anchors, the 2,011-character move, the green start at 4,480/2, the nine
+reddened modules, the queue counts at both ends, `Q-513`'s eight sections, the `Q-502` provenance at
+both ends, and the full suite at 7,181/201. No fabricated date.
+
+**The defects were in the inferences drawn from them, and three were HIGH.**
+
+1. **The lock rate measured the wrong thing.** Covered above: two of eleven reddened only the census,
+   so 100% was really 9 of 11. The lens proved the confound with a control — deleting a 208-character
+   unanchored `runner` block reddens three tests in that module — which is the shape of evidence the
+   claim needed and did not have.
+2. **`aaea220144360820` was refused on that artifact** and was free under the ratified predicate.
+   Taken, as this phase's one transform-1 delete.
+3. **"No guard re-pointed" was false**, and the lens measured it the only way that settles it:
+   post-phase skill, **pre-phase test tree**. Seven modules green untouched, one census bookkeeping
+   update, one guard assertion edited. It also explains why the phase's own row-1 scan missed it —
+   both dropped literals are under the ≥30-character anchor threshold, `"A02"` being three.
+4. **"In § 4c three of five `editor` blocks were free" was wrong**: eight blocks, five free,
+   re-derived from the census at `858ca3f`. Phase 298's own entry says 8 and 6,132, and that phase's
+   round had already corrected the figure once in the other direction.
+
+**MEDIUM.** The author battery's docstring asserted `CEILING_FOLLOWS_WITHIN` "had to move too" — a
+projection written before the measurement and left standing after it, contradicting a code comment
+130 lines below in the same file, in the phase that congratulates itself on catching that class in
+`Q-502`. And the record published no suite figure, no author-side battery record, and never
+mentioned the three guards its second commit added. All added above.
+
+**LOW, all fixed.** `grep -rl review-close tests/` returns **104**, not 102 — two are `.md`, a
+discrepancy the harness's own docstring documents and this record re-introduced. `Q-498`'s ratified
+granularity figure was an estimate standing next to a measurement: the line is **199** characters,
+not "about 250", and the ratio is **12.4×**, not "roughly ten". § 8.1's basis figures had not been
+refreshed (1,314 / 13.2% and **559** / 86.3%, against a published 12.8% / 565 / 86.7%) — the drift
+was Phase 298's, but this phase re-derived four neighbouring shares in the same section and left
+this pair. The `CLAUDE.md` row was 239 characters against the file's own "aim ≤ ~200"; it is now 204
+and says something that is true.
+
+**Two LOW observations recorded rather than actioned.** `_RETIRED_PINS` is a verbatim copy of
+`FALSE_RATIONALES` fifteen lines away, so the one-line edit it names becomes a two-line edit — true,
+and accepted: the alternative is deriving it, which is `HIGH 3` above. And the context accounting is
+worth stating plainly, because *"5,392 off the file"* is easy to misread: `SKILL.md` loses 5,392
+characters and `REFERENCE.md` gains about 13,100, so the skill directory ships **more** bytes, not
+fewer. § 8.1 already refuses size as the metric — the campaign moves text from a file every runner
+reads to one only an editor does — but the record should say so rather than let the smaller number
+stand alone.
+
+#### Declined, with the reason
+
+- **Restoring the llm-pack placeholder caveat** to the runner is refused by the word-subset check,
+  and it is not a defect: the caveat moved to `REFERENCE.md` by design and the surviving sentence
+  makes no false claim. Worth recording as a property of the check rather than of this phase —
+  **the check cannot distinguish restoring a block's own prior text from introducing new text**,
+  because its subject is the block as it now stands.
+- **"The runner carries an instruction it cannot execute"** (the `N of M` report). Answered with
+  the measurement rather than accepted: the runner computes N and M from the *consumer's* map, and
+  the report string states its own predicate — *carries* placeholder globs, meaning at least one.
+  The stock-install figures were evidence for a caveat, not the runner's input.
+- **The `EDITOR_MIXED_CEILING = 121_936` observation** is wrong about the tree; the constant is
+  `115_750` and the drift is 0, which the same lens's verification section states correctly.
+  *(Corrected by Phase 300. This line originally read `116_936` — a wrong number substituted for
+  a wrong number, in the sentence declining a reviewer's figure. Neither `116_936` nor `121_936`
+  has ever appeared in `tests/test_reader_census.py`: `git log -S'116_936' -- tests/test_reader_census.py`
+  is empty, and `git show 98b29a5:tests/test_reader_census.py` carries `EDITOR_MIXED_CEILING = 115_750`
+  at line 1155. Three lenses read this paragraph and none checked the replacement.)*
+
+#### Filed rather than fixed
+
+`Q-514` (the pointer guard's heading regex refuses a hyphenated step id its pointer regex accepts —
+latent, and it bites at § 4a-post and § 4-pre) and `Q-515` (the campaign's stopping condition
+terminates in a red tree, because all three census bounds refuse a zero measurement by design).
+
+
+## Phase 300 (executed 2026-09-16 — § 2d, and the free block that was a trap)
+
+Base `98b29a5` (Phase 299). Scope ratified by Wade at the phase's open: `Q-511` first, then § 2d;
+`Q-513` in fix shape (a); `REFERENCE.md` ratified as the provenance destination; the mirror cut
+deferred to Phase 301. The § G re-measurement window opens ~2026-09-23 and did not fire.
+
+### `Q-511` — and the filing's own forecast, falsified
+
+`classify()` answered from the block's kind before consulting `verdicts`, so rationale written as
+a `####` heading or as a line inside a ```` ```bash ```` fence was `runner` by construction, and
+the guard refused to record the honest verdict — the dishonest state was the only green one.
+Shape (a): `AUTHORED_OVERRIDES_CONSTRUCTION = {"code", "heading"}`. `fence-delim` and
+`frontmatter` are excluded and the omission is the argument; an authored `runner` does not
+override, because it would report a rule as a reading.
+
+**The filing said the remedy "moves every published figure in § 8.1 and the pinned census rows
+with them", and that is why Phase 297 declined it mid-campaign. It moves none of them.** The tree
+carries zero authored editor/mixed verdicts on construction blocks, and a survey of the whole
+overridable population found no instance to author one for: all 31 `heading` blocks name steps the
+runner executes, and no `code` block is a `:` no-op prose line — the shape the filing had measured
+synthetically. The census is byte-identical across the change. A deferral had been bought with a
+cost that did not exist.
+
+**What the survey did find is `Q-517`:** **79** `code` blocks carrying **6,198** characters of
+Python docstring prose inside **seven** `python3 - <<` heredocs. A docstring line cannot leave a
+heredoc without breaking the program, so no § 9.1 transform reaches it, and it sits inside a
+command the runner pastes. Filed with three shapes rather than folded in.
+
+**The first derivation missed a heredoc and the round caught it.** The scan anchored the heredoc
+marker to end-of-line (`<<-?\s*'?NAME'?\s*$`), and the one heredoc that opens
+`python3 - <<'PY' "<branch 1>" "<branch 2>" …` puts positional arguments *after* the marker. Its
+`verdict_of()` docstring is 3 blocks / 226 characters, and `79 − 3 = 76`, `6,198 − 226 = 5,972`
+accounts for the whole discrepancy. **The figure was published as "MEASURED" and the measurement
+had a regex bug**, which is the same class as quoting a rate without its unit: a number carries the
+scope of the command that produced it.
+
+### `Q-513` — the bound's population, and a defect the fix's own control caught
+
+`campaign_population()` unions both rosters (17 sections) and `CEILING_FOLLOWS_WITHIN` falls
+**5,000 → 642**, one below § 1b's 643. Shapes (b) and (c) declined with reasons in the docstring.
+The cost is recorded where the constant used to promise the opposite: most commits touching editor
+mass now carry a visible ceiling edit.
+
+**A first cut derived the label `Step 3b` where `_CAMPAIGN_SECTIONS` calls that section `3b`** —
+two vocabularies, so a heading sitting on BOTH rosters would have landed under two labels and been
+counted twice instead of refused. Found by the new collision control, not by reading. The same arm
+shipped with an inequality that made the double-roster case pass silently; the author battery
+removed it and stayed green, so it came out.
+
+Battery 13 mutations, 11 killed. **Both survivors are recorded rather than papered over:** each
+half of the folded floor assertion is individually redundant with
+`test_a_renamed_or_emptied_section_is_reported_rather_than_derived_around`. A first cut shipped
+that claim as its own test; it measured fully redundant and was **deleted** rather than left
+reading as the guard for this entry. Deleting it by heading span also removed the nine-row
+parametrized slack control that sat inside the span — recovered verbatim from `HEAD`, and the
+recovery is recorded because nothing but a diff review would have caught it.
+
+### § 2d — the measurement, and the block that measured free
+
+Ten keys, 12,144 characters, measured across three worktrees placed by hand at `4f0f7e6` with the
+primary `.venv` symlinked into each.
+
+**§ 2d's lock rate, measured and compared on ONE instrument.** The delete-and-run measurement,
+discounting bookkeeping failures, gives § 2d **6 of 10 by block (60.0%)** and **9,709 of 12,144 by
+char (79.9%)**. Re-derived the same way from the committed artifacts for the other three:
+§ 3b **4/19 (21.1%)** / 35.4%, § 4c **10/21 (47.6%)** / 73.2%, § 2b **9/11 (81.8%)** / 91.9%. So
+**§ 2d is third of four by block and second by char — mid-pack, not an outlier in either
+direction.**
+
+**A first draft of this paragraph called it "the lowest of the four sections taken" and the round
+falsified it in one command.** The claim was built by setting § 2d's BLOCK rate beside § 2b's
+block rate and § 4c's CHAR rate — § 4c by block is 47.6%, below § 2d — so the comparison mixed
+units and inverted the ranking. The dependent inference went with it: *"the char figure points the
+other way"* was true only relative to the false premise. **A rate has a unit and a commit, and
+three of the four numbers in that sentence had neither stated.**
+
+**The first measurement run was VOID, and the harness caught what this phase had shipped.** Part 1
+added `2d` to `phase295_precondition_b.SECTIONS` so the section would be addressable by id, and
+wrote a comment asserting that a guard pinning the three section-map copies equal "would be red
+for the whole of every phase that uses this script". That guard exists —
+`tests/test_thinning_transforms.py::test_every_copy_of_the_campaign_section_map_agrees` — and the
+edit forked the map. The precondition harness refused with `RED TREE — the measurement is void`
+before measuring anything. Both halves of the comment were wrong: the guard exists, and its
+premise is answered by the verbatim-heading path the same comment documents two lines above. `2d`
+was reverted out and added back only in the commit that lands the section. Cost: one voided
+measurement round.
+
+**Six splits, all row 1, two of them only after narrowing the cut:**
+
+| key | chars | → | relocated | row |
+|---|---|---|---|---|
+| `d6b37e0bd8feb458` | 3,405 | 1,995 | 1,410 | 1, narrowed |
+| `ad10dd200df7328c` | 2,474 | 1,243 | 1,231 | 1 |
+| `a9357cc12f515c2f` | 1,612 | 829 | 783 | 1, narrowed |
+| `0614a5a907fb45ac` | 961 | 704 | 257 | 1 |
+| `aa68fd8840d68798` | 714 | 390 | 324 | 1 |
+| `fbf0dce7bfa9e89e` | 209 | 81 | 128 | 1 |
+
+**A SECOND class of anchor exists and the author's own scan could not see it.** The narrowing of
+`d6b37e0bd8feb458` was forced twice. The first pass preserved the eight test-literal anchors that
+`unique_anchors` reports. The delete-and-run measurement then named
+`tests/test_intra_repo_citations.py::test_no_registered_citation_has_gone_stale` among its content
+failures — because `CITATION_ANCHORS` registers `claim-task/SKILL.md:1305` and `:1900` as
+citations *from this file*, and the replacement had dropped both. `unique_anchors` reads test
+string literals; it does not read a citation registry. Row 2 forbids re-pointing, so the cut
+narrowed again to keep both citations in the runner, at a cost of 118 characters. **Only the
+measurement saw this. A phase that reasons about which guards "probably" read a block would have
+shipped it**, which is what § 9.1(b) says in as many words and what this is the worked instance of.
+
+**Three refusals, each for a different reason, and the reasons are not interchangeable:**
+
+- `85a3f6a60fed7795` (1,569, `editor`) — ANCHORED, 7 anchors over 571 characters, 36.4% of the
+  block, all on the corpus measurements that would move. Transforms 1 and 3 fail their predicate
+  and transform 4 does not apply to an `editor` block, so no transform reaches it. **The author's
+  pre-measurement note had called this a transform-1 candidate on severability grounds alone** —
+  the procedure fixes the lock command and offers the runner no choice — and reported the
+  severability half as if it settled the question. It does not.
+- `409093d55fbaf007` (440) — the guard is fine; its one anchor is on the rule, which stays. It
+  fails **precondition (a)**: delete the refuted carve-out and a cautious runner plausibly
+  re-derives it, so § 10's tie-break keeps it.
+- `37e148c527641c9d` (353) — **free, zero anchors, and declined anyway.** The block ends with a
+  colon introducing the ```` ```bash ```` fence below it, and § 9.1's mandatory pointer line would
+  land between the colon and its fence, taking the colon's referent. The checker reports it clean;
+  the block structure around it is what refuses. Roughly 150 characters were not worth degrading
+  the runner's prose for. **Its twin `fbf0dce7bfa9e89e` carries the same duplicated rationale and
+  has no such neighbour, so the provenance section records the reason once for both.**
+
+**One verdict CORRECTED, not relocated.** `64bab1c9095e1480` (407, the `> **For new projects:**`
+blockquote) measured **free** — zero content failures, zero anchors, transform 1 available. It is
+§ 1.2's first table row, and § 1.2 says arm 2 fires: the block states a convention the runner
+reads. Both citations were re-verified against the tree before acting — the `no test because <Z>`
+shape is this gate's classification input and *"does Z still hold?"* is verbatim its predicate.
+The census verdict was corrected to `runner`. **A phase reading only the ANCHORED/free column
+relocates a binding rule with a green measurement behind it**, which is § 10's laundering
+direction. § 1.2's table now strikes the pre-rule verdict through rather than deleting it, because
+the disagreement between rule and census is what that table exists to record.
+
+### Precondition (a), cited rather than asserted — the round found this owed
+
+§ 9.1 transform 4(a) requires that **the split's pair record cites the sentence in the procedure
+that offers or forecloses the choice — a citation, not a verdict.** The phase gave the anchor
+accounting (b) and the verdict accounting (c) for all six and gave severability citations only for
+the three refusals. The six, with the foreclosing sentence named:
+
+| split | the sentence in the procedure that forecloses the choice |
+|---|---|
+| `0614a5a907fb45ac` | *"Verify the record, don't re-judge."* — the runner is told which judgement is not its own, so the Invariant 13 history argues for nothing it may decide. |
+| `a9357cc12f515c2f` | *"This step nevertheless reads the record for each task ID the branch claims, whatever produced it"* — the population is fixed by the procedure, so the argument against narrowing it is not offered to the runner. |
+| `d6b37e0bd8feb458` | *"A fence opens on ``` or `~~~` and closes on a marker … and carrying no info string — take only headings outside one."* — the rule is unconditional; the draft history behind it decides nothing. |
+| `aa68fd8840d68798` | the same unconditional fence rule, one block above: the info-string clause is stated, so its window measurement changes no branch. |
+| `ad10dd200df7328c` | *"Count an item for each list marker at the section's top level — `-`, `*`, `+`, or `1.`"* — the marker set is enumerated, so the argument for not restricting it to `-` is not a choice the runner has. |
+| `fbf0dce7bfa9e89e` | the sub-step label is the procedure; its *numbering* is addressed to whoever writes the heading, never to the runner. |
+
+**The measurement record was not reproducible from the tree, and the round closed that rather than
+filing it.** `tools/` carried `phase295_precondition_b.json` and `phase298_precondition_b.json` and
+no Phase 299 or Phase 300 equivalent, so this phase's ten-key / 12,144-char / 6-of-10 figures
+rested on the record alone. `tools/phase300_precondition_b.json` now holds all ten per-key records
+— `content_failures`, `bookkeeping_failures`, `anchors_inside` and the spans — merged from the
+three placed worktrees. **Phase 299's is still missing**, and that is left as the round found it
+rather than reconstructed from a tree that has since moved.
+
+### The accounting, in three parts because two of them move no text
+
+**9,782** characters left § 2d's `editor`+`mixed`. **9,375** of that is the six split blocks, of
+which **5,242** was written back into the runner and **4,133** left the file. The remaining
+**407** is the corrected verdict, where nothing moved at all. A phase reporting 9,782 as
+relocation would be claiming 5,649 characters of work it did not do.
+
+§ 2d **12,144 → 2,362**; file-wide `editor`+`mixed` **115,750 → 105,968**; census `runner`
+**1,784 / 329,919 / 75.3%** over 3,812 lines and 438,265 chars, `editor` 7.8% (39 blocks, 34,272),
+`mixed` 50 blocks / 71,696 / 16.4%. `EDITOR_MIXED_CEILING` lowered to 105,968 in the same commit.
+`§ 7.2`'s row moved 68 → 67 `Q-` ids, because a `Q-468` mention left with a split.
+
+### § 7.6b — the destination ratified, and the limit the verification exposed
+
+§ 7.6a said the shape was ratified and the location was open and Wade's, and that the phase next
+writing one at scale had to settle it. Phases 295, 298 and 299 each wrote one and none asked.
+Ratified as `REFERENCE.md`, with the arithmetic those three did not state: `SKILL.md` −22,179
+bytes against `REFERENCE.md` +42,170, so the skill directory shipped **19,991 bytes more** than
+when the campaign opened; the three provenance sections were 40,641 bytes, 65.1% of `REFERENCE.md` — **all of that as of `98b29a5`, stated here with the anchor the round found missing**, since this phase added a fourth before its own close and took the file to four sections and ~69%. Derive rather than quote: `git ls-tree -l HEAD -- core/skills/review-close/`.
+
+The argument § 7.6a never considered is `PHASE_LOG.md`: Phase 239 ratified publishing maintainer
+provenance, and 4.4 MB of it is public. That precedent covers one axis — `PHASE_LOG.md` publishes
+but does not install, while `install_skills()` copies every file in a skill directory.
+
+**The harness claim was verified rather than quoted back.** A first draft supported "costs the
+runner nothing" by citing `REFERENCE.md`'s own preamble — the file whose cost was in question.
+Checked against the Agent Skills documentation instead: a skill's body loads only when used and a
+sibling file enters context only when read. **And the verification exposed a limit now declared in
+the spec:** the docs say a supporting file costs nothing *until accessed*, and transforms 2 and 3
+insert `See REFERENCE.md § …` pointers into the runner's own procedure, attached to rules the
+runner is mid-execution on. **The count is derived, not quoted** —
+`grep -c 'See `REFERENCE.md` §' core/skills/review-close/SKILL.md` — because it was 14 when the
+paragraph was drafted and 20 by the end of this phase, this phase's own six splits each having
+added one. A first version of this bullet published the 14; part 8 retired that figure in the spec
+and left this twin standing, which the round caught. A runner that follows one loads the whole file.
+Nothing measures how often that happens, so the campaign's honest claim is that the *default* path
+no longer carries the text, which is weaker than "the runner pays less".
+
+### What the round found — and the class it kept finding
+
+Three lenses, placed by hand at `0bb3037`, each echoing `git -C <dir> rev-parse HEAD` before its
+first finding. **Every finding below was verified by the author against the tree before it was
+acted on**, and every one of them held.
+
+**The phase repeated defects its own predecessors' rounds had already named — three times.**
+
+1. **A provenance subsection for a block that never moved.** `85a3f6a60fed7795` was refused, stays
+   verbatim in the runner, and this phase authored 1,266 bytes of `REFERENCE.md` restating its
+   argument anyway: **+1,266 shipped bytes for zero runner saving**, in a phase whose own § 7.6b
+   arithmetic complains the directory is already ~24 KB larger than when the campaign opened.
+   Phase 299's round found the identical class — *"three provenance subsections for blocks that did
+   not move, 5,356 chars standing twice, already diverged"*. Deleted.
+2. **A bare-basename line citation written by the author-side pass**, moving the pinned
+   ambiguous-citation count **15 → 16**. Phase 295's round records that sentence almost verbatim,
+   including the delta. Disambiguated by dropping the line number rather than widening the pin.
+3. **The transcription class part 8 exists to punish, five more times.** Part 8 diagnosed *"a
+   transcribed count in a document whose subject is a campaign that changes that count every
+   phase"* and fixed one instance. The round found § 7.6b's projection, § 7.6b's byte arithmetic,
+   `PHASE_LOG.md`'s pointer twin, `Q-517`'s ratchet arithmetic and two contradictory cut-size
+   figures in one file — four created by this phase, one left standing by part 8's own remedy. All
+   now carry a derivation command or an as-of commit instead of a digit.
+
+**The three findings that were wrong about the world rather than stale:**
+
+- **An inverted ranking, published three times.** *"§ 2d's lock rate is the lowest of the four
+  sections taken"* is false: on the delete-and-run instrument § 2d is **third of four by block
+  (60.0%)** and second by char, against § 3b 21.1%/35.4%, § 4c 47.6%/73.2% and § 2b 81.8%/91.9%.
+  The sentence also set a BLOCK rate beside a CHAR rate — § 4c by block is 47.6%, below § 2d — so
+  the comparison mixed units, and the dependent clause went with the premise.
+- **A measurement labelled MEASURED whose regex was wrong.** `Q-517`'s population was published as
+  6 heredocs / 76 blocks / 5,972 chars. The scan anchored the heredoc marker to end-of-line and
+  missed the one carrying positional arguments after it. True: **7 / 79 / 6,198**, and
+  `79 − 3 = 76`, `6,198 − 226 = 5,972` accounts for the whole gap.
+- **A line count published as an entry count.** `Q-516`'s *"35 real Open"* was 36 status lines minus
+  a template. One of the 36 belongs to a **headless entry** appended under ISSUE-0021 — whose own
+  status is `Fixed` — so 34 numbered entries are genuinely open. The orphan and its double-statused
+  host are the sharpest cases that filing could have had, and the derivation walked past both.
+
+**Two ordering and seam defects.** `## Step 2d — provenance` was appended at the end of
+`REFERENCE.md` against § 7.6's ratified rule that sections run in the runner's step order — Phase
+299 honoured that rule and this phase did not; moved between 2b and 3b. And two facts left **both**
+files rather than relocating: the `## Plan`-fence context that says *when* the fence rule applies,
+and the *"item 1 carries no such caveat"* asymmetry. Both restored to provenance.
+
+**`REFERENCE.md` asserted a consolidation that had not happened**, claiming the `2‑pre`/`2‑also`
+rationale was *"recorded once here for both"* while the `2‑pre` copy is still in the runner.
+
+**§ 1.2's arm-2 citations were stale and the phase claimed it had re-verified them.** They were
+line-number pointers into the review-close runner — lines 783 and 800, last correct at `900eb61`.
+The *content* was verified by grep; the line numbers were not, and the record said otherwise.
+**Writing this very sentence reintroduced the defect once:** a first draft spelled those pointers
+in `<basename>:<line>` form, which the ambiguous-citation gate counts, and the pinned count moved
+15 → 16 for the second time in one phase — the first being the author-side pass's own citation.
+A record describing a citation defect is still a document the citation gates read. All three are now content anchors, which is
+the only citation form that survives a campaign editing the file underneath it.
+
+**The guards lens split the phase cleanly, and the split is the result.** An independent
+50-mutation battery (none reused from the author's 29) scored **subject-side 23 of 26 killed
+(88%)** and **guard-side 21 of 50 (42%)** — every attempt to mutate `classify()`, the override
+set, the three-copy map, the § 2d content or the verdicts file died, and 29 mutations to the
+module's own predicates and controls lived. **The ratchet — the campaign's central gate — is
+disarmable by deleting two parametrize rows and widening one operator, with `7211 passed,
+201 skipped` over the whole repo**, and the guard written to prevent exactly that names the
+bypass in its own docstring while checking only `len(cases.elts) >= 2`. Filed as **`Q-518`,
+§ High**, because the remedy is a gate redesign across every parametrized control in the module
+and `CLAUDE.md`'s tier 1 excludes gate edits at any size.
+
+**Two halves were cheap enough to take, and both were verified by replaying the lens's own
+mutations.** `section_map_problems()` was extracted so the three-copy fork guard has a control at
+all (its neutering had survived), and its call site now asserts the *membership* of the copies
+dict, because dropping `phase298_lock_rates` out of the comparison had also survived — a fork
+check that only compares the copies it is handed cannot notice one going unhanded. And
+`test_the_follower_drift_arm_is_not_vacuous` drives the drift arm directly, killing both a
+reword of the phrase its sibling filters on and a 10× widening. Replayed: 3 of the lens's 5
+survivors now die, and **the remaining two were verified to be redundancy rather than exposure** —
+neutering the drift test *and* introducing real 24k drift reddens two sibling arms.
+
+**One defect the round found was this phase's own, and it is the sharper kind.** The new guard
+widening `test_a_renamed_or_emptied_section_is_reported_rather_than_derived_around` to the untaken
+roster picked its subject with `next(iter(frozenset))`. CPython salts `str` hashing per process,
+so it exercised **one of thirteen** sections, non-reproducibly — three distinct headings across
+five bare runs — and the lens demonstrated a dropped-§ 1b mutation passing under
+`PYTHONHASHSEED=1` and failing under `0`. `tests/conftest.py` states the rule this broke, in this
+same suite: *"a salted key is not a flaky run, it is ids that quietly go unrun."* Fixed to iterate
+all thirteen sorted; the mutation now dies at seeds 0, 1 and 13.
+
+**And that fix retroactively made a false record true, which is worth separating from being
+right.** `Q-513`'s archived resolution claimed each half of the folded floor assertion was
+individually redundant. The lens measured the second half surviving removal in combination with a
+dropped § 1b — load-bearing, redundant with nothing — *because* of the salted iteration. After the
+iteration fix the claim holds. **The claim was false when written and was made true by fixing
+something else; the archive now says so rather than quietly reading as verified.**
+
+**The author's own battery was invalid and its control said so.** The first cut scored 10/10 kills
+including a control that edits prose no anchor covers — every "kill" was the sha-keyed census
+noticing an edit rather than a guard on the text. Redone discounting `BOOKKEEPING_MODULES`:
+**10 killed, 0 survived, 2 controls survived as designed.** That is Phase 299's own correction to
+`phase295_precondition_b.py`, re-committed by its author one phase later. Both artifacts now ship
+(`tools/phase300_mutations.py`, `tools/phase300_precondition_b.json`) because the round found
+neither Phase 299 nor Phase 300 had left one.
+
+### Also fixed
+
+- `Q-515` argued from "§ 2b's 11/11 lock rate" — the figure the same round that filed it had
+  already replaced with 9 of 11 (81.8%). The inference survives; the figure did not.
+- `PHASE_LOG.md` § Phase 299 declined a reviewer's `EDITOR_MIXED_CEILING = 121_936` observation by
+  stating "the constant is `116_936`". Neither number has ever appeared in
+  `tests/test_reader_census.py`; the value at `98b29a5` was `115_750`. **A wrong number
+  substituted for a wrong number, in the sentence whose whole job was declining a figure**, past
+  three lenses. The rest of that entry's published figures were spot-checked and reproduce.
+- `tools/phase295_precondition_b.py`'s `SECTIONS` comment, corrected as described above.
+
+### Filed
+
+`Q-516` (BeanRider's friction-log sweep, owed since Phase 285 and carried in four briefs without
+becoming a queue entry — 54 entries, 35 real `Open`, 15 of those named in a `CLAUDE.md` phase row;
+it blocks the announce) and `Q-517` (the heredoc docstring population).
+
+## Phase 301 (executed 2026-09-16 — the gate that counted rows, and the control that went stale while nobody looked)
+
+Base `d553c25` (Phase 300). **Scope ratified by Wade at the phase's open**, six answers: `Q-518`
+**alone** — the mirror cut moves to Phase 302 with the window becoming 297–301, and the campaign's
+tail to Phase 303+; the fix is the content pin **plus all four uncontrolled sibling arms**;
+`Q-517` resolves to shape **(a)**, a declared floor; `Q-515` to shape **(c)**, the campaign ends
+at a measured floor; the tail bundles **by mass, biggest first**; and the stale group control
+found while scoping is folded in rather than filed. Only the first two bound this phase's work.
+
+Green baseline taken before any edit: **7215 passed, 201 skipped**, 8:03. Recorded because the
+phase's claim is about which mutations die, and a battery on a tree that was already red measures
+nothing. The § G re-measurement window opens ~2026-09-23 and did not fire.
+
+### `Q-518` — the guard that named its own bypasses and closed none of them
+
+`test_no_parametrized_case_list_here_can_be_silently_emptied` asserted `len(cases.elts) >= 2`.
+Against this module's lists of 5, 6, 9 and 10 rows that licenses deleting 3, 4, 7 and 8 rows
+invisibly, and the guard's docstring enumerated **three** working bypasses by name. It closed the
+case in its own name — *emptying* — and none of the three *row-deletion* cases it listed.
+
+The remedy is `case_pin_problems`: pin row **content**, by `ast.literal_eval` over the decorator's
+case list, keyed by the test the decorator sits on. Keyed by test name because the predecessor
+walked bare `ast.Call` nodes and so knew a list existed at some line number without knowing which
+control it belonged to — a pin that cannot name its test cannot tell a maintainer what to restore.
+
+**Subset presence, not equality, and the asymmetry is the design.** An equality pin reddens on
+every legitimate row *addition*, and a guard a correct commit must edit is a guard that gets
+edited to pass. That is not a prediction:
+`test_a_wrong_published_digit_is_reported`'s own docstring records a predecessor **rewritten to
+be derived** for exactly that. **A first draft of this paragraph said "three of these lists have
+taken one in the last four phases"; the round measured it and it is ONE** — the slack bounds went
+8 → 9 at Phase 299, and the four other lists that look like additions were newly *created*. The
+design choice survives the correction; the evidence offered for it did not. A subset pin never fires on an addition and always fires on a deletion
+or an in-place inversion.
+
+**The machinery is a module, not a third copy.** **TWO** test modules guard their own
+parametrize lists — `tests/test_reader_census.py` and `tests/test_thinning_transforms.py` — and
+each did it by count. (A first draft said three, counting `tests/_case_pins.py`, which this phase
+wrote and which guards nothing of its own; the commit message said "third copy" and was right.) `tests/_case_pins.py` holds the extractor and the predicate; the
+pin DATA stays with each module, because which row is load-bearing is a fact about that module's
+predicates. This repo already carries `test_every_copy_of_the_campaign_section_map_agrees` because
+a map forked across three files, and a fourth fork of a guard is a guard that disagrees with
+itself.
+
+**The anticipated design tension does not exist, and it is worth recording because it is what
+made the filing read as a multi-day redesign.** The fear was that rows mirror constants that move
+every phase, so a content pin would need editing at every close. Measured across 297–300:
+`EDITOR_MIXED_CEILING` fell **150,192 → 105,968** (−44,224) while all five ratchet rows kept
+citing the hermetic `150_192` throughout. Measured by AST walk at `d553c25`: of **42** inline
+rows, **0** contain an `ast.Name` — so it is **42 of 42**, and the pin costs **zero** per-phase
+maintenance. **A first draft said "41 of 42 … the two exceptions are the `cap=None` rows", which
+was wrong twice**: 41 + 2 is 43, and those rows reference no constant either — they pass `None`,
+and the coupling to `SLACK_CEILING` lives in `slack_problems`' default parameter, not in the row.
+The coupling is still deliberate and is still the pin on that constant; it is simply not an
+exception to this count.
+
+### The four arms that had no control
+
+- **The zero arm.** `(0, 150_192, 5_000, True)` does not pin it: neuter `if total <= 0:` to
+  `if False:` and a ceiling 150,192 above a measured 0 makes the **drift** arm answer instead, so
+  `expect=True` holds either way. `Q-515` cites that row as the pin, and it is not one. Fixed by
+  `(0, 100, 5_000, True)` — the ceiling sits inside the slack and 0 is not over it, so no other
+  arm can fire.
+- **`slack_problems`' missing arm.** Its *"must RETURN, not fall through"* assertion ran against a
+  fixture of 20,000-character sections and a slack of 100, where **neither** later arm can fire —
+  so `return` and `append`-then-continue produced the same single problem and the assertion whose
+  entire subject is that difference passed under both. Fixed by raising the slack to 20,000.
+- **The parametrize guard's own bars.** `>= 2` → `>= 0` and `checked >= 8` → `>= 0` both survived.
+  `checked >= 8` was a bar against 13 live lists, so five whole controls could be deleted before
+  it spoke. **This arm's first fix was wrong in both directions and the round caught it.** The
+  replacement was `checked >= len(_CASE_PINS)`, which is 7 — so the bound went DOWN from 8 — and
+  which the `missing` assertion one line above makes *unreachable*, since that line already
+  guarantees all seven pinned tests were counted. It was dead code wearing a number, and the
+  record described it as a strengthening. And the deeper reason both bars survived at all is that
+  they were inline `assert`s inside the guard test, so **nothing could drive them** — the defect
+  this module states as doctrine on `editor_mass_problems` and had not applied here. Now:
+  `parametrize_shape_problems` is a predicate, `_PARAMETRIZE_DECORATOR_COUNT = 14` is an EXACT
+  ratchet (the seven `ast.Name`-driven controls are pinned by nothing else), and
+  `test_the_shape_bars_are_driven_rather_than_asserted_inline` drives it over tampered sources.
+  Both mutations die now; they did not before.
+- **The provenance-pointer prose arm**, in `tests/test_review_close_reference_pins.py`, which had
+  no control of any kind. `assert pointers` is satisfied by either branch of the alternation:
+  measured here, fence form **14**, prose form **20**, so deleting the prose branch leaves 14 and
+  the guard green while § 2b's six and § 2d's six stop being checked against anything. Fixed with
+  a per-arm population assertion and a five-row control that drives the real regex — including two
+  **near-miss** rows, because an arm that matches more than its spelling is as broken as one that
+  matches less and a control of positive cases alone cannot tell.
+
+### The defect found while scoping, verified by probe rather than by reading
+
+`test_a_wrong_published_digit_is_reported` was parametrized `[0, 1, 2, 3]` while `_CURRENT_ROW`
+has **five** capture groups. Probed all five at the phase's open: the guard **does** catch a
+bumped total, and the control never exercised it — so § 8.1's published `105,968` had no
+wrong-digit case at all. Its docstring says, in as many words, *"The cases are DERIVED from the
+published row, not hard-coded."* That was true of each case's CONTENT and false of the case
+LIST, and the gap opened at Phase 300 when § 2d took the regex to five groups. The ids now come
+from `_PUBLISHED_FIGURE_GROUPS = list(range(_CURRENT_ROW.groups))`, and a second assertion pins
+the regex to `_CAMPAIGN_SECTIONS`.
+
+**A first version of this paragraph had the two assertions exactly backwards, and the round
+simulated it.** It said re-listing the ids by hand *"satisfies the first and fails the second the
+next time a section is taken"*. It is the reverse: hand-listed ids fail assertion **1**, and
+assertion **2** cannot fail when a section is taken at all — the published row's regex is BUILT
+from `_CAMPAIGN_SECTIONS`, which the same docstring says two lines earlier. So the arm the record
+called *"the one that matters"* was the arm with no control, which is `Q-518`'s own shape inside
+the fix for `Q-518`. Assertion 2 is kept — it catches the regex's construction being changed, not
+a section being taken — but it is now described as what it is, and the battery's M14/M15 both
+drive assertion 1.
+
+**This is `Q-518`'s own class one altitude down**, and the filing could not have found it: a
+parametrized control reports on the ids it was given and says nothing about the ones it was not.
+
+### The author-side pass found an over-strictness the battery could not
+
+Rule 1 says mutate the guard's ASSUMPTIONS, not just the content it checks. Seven source shapes
+were put through `case_pin_problems` directly — an aliased decorator, a `mark.parametrize` import,
+cases moved to a module constant, the pinned row present under a *different* test, scalar rows, a
+deleted row, and a row rewritten as an expression. Six answered correctly. The seventh did not:
+a row reformatted from `(1, 2)` to `[1, 2]` **reported as missing**, and those parametrize
+identically — pytest sees the same two cases. That is a false FAIL on a legal edit, which is
+`Q-514`'s shape, and a guard that cries on correct commits is a guard that gets edited to stop
+crying. Closed with `_norm`, which compares sequences by content.
+
+**The battery could not have found this**, and saying why is the point: every mutation in it is a
+*defect* someone might introduce, and this was a *correct* edit the guard refused. A battery
+measures the kill direction only. The seven shapes are now
+`tests/test_case_pins.py::test_the_predicate_reports_exactly_the_escape_routes`, with the three
+must-stay-silent rows kept alongside the five must-report ones, because a guard measured on
+positive cases alone cannot tell "catches the defect" from "reports everything".
+
+The helper got its own module rather than a section of `test_reader_census.py`, which carries a
+`skipif` for the mirror-excluded `tools/reader_census.py`. `tests/_case_pins.py` ships and runs in
+the sterilized tree, and a helper whose only tests live in a module that skips is a helper nobody
+tests where it actually runs.
+
+### The battery, and the mutation it caught in the phase's own first cut
+
+18 mutations, **18 killed**, both controls surviving. The three bypasses the old docstring
+enumerated were applied **as compound edits** — delete the control row, then neuter the arm —
+because that is how the filing writes them and a single-edit battery would have shown the arms
+already guarded. All three die on the deletion half alone. `Q-518`'s measured headline (delete two
+ratchet rows, widen `if total > ceiling` to `* 3`, `7211 passed`) is `B1`, and it is now killed.
+
+**The first cut of `case_pin_problems` shipped a defect and its own guard caught it on the first
+run.** A single-column projection returned a 1-tuple while the pin listed bare strings, so all
+three pinned rows reported missing. Recorded rather than quietly fixed, because the failure is the
+mechanism working: the same edit under the predecessor's count check would have been invisible.
+The projection now takes an `int` for the single-column case, and the docstring says why — a pin
+written `('…',)` differs from `'…'` by a comma a reader does not see.
+
+### Two record corrections, both verified before being asserted
+
+- **`Q-518` says renaming `## Step 2d — provenance` dangles *"all twelve § 2d pointers"*.** § 2d
+  carries **6**. The twelve is § 2b's six plus § 2d's six — the pointers that lose destination checking ENTIRELY when the prose arm dies, since § 4c keeps two in the fence form. The prose arm's own population is **20**.
+- **`Q-515` cites `(0, 150_192, 5_000, True)` as the pin on the zero arm.** It is not; the drift
+  arm answers for it. Both corrections are on the entries.
+
+### Ratified, and recorded so the phase that takes them inherits a decision
+
+`Q-517` → **(a)**: accept the construction classification and record the ~6,198 characters of
+heredoc docstring prose as a declared floor the campaign cannot reach. Changes no shipped byte and
+moves no published figure. Structure re-derived at HEAD: **7** python heredoc regions, confirming
+the entry's corrected count. The character figure is the entry's and wants re-deriving by the
+phase that records the floor — it was measured at `4f0f7e6`.
+
+`Q-515` → **(c)**: the campaign ends at a measured floor rather than zero, which makes the
+red-tree terminal state unreachable and the question moot. It adds no mechanism — and `Q-518` is
+the argument against shape (a)'s sentinel, since this phase's whole subject is that this module's
+switches can be flipped with the suite green. The two compose: the heredoc floor from `Q-517` is
+part of the floor `Q-515` terminates at.
+
+### Also fixed
+
+- `tests/test_reader_census.py` — the stale `[0, 1, 2, 3]` population and its docstring's false
+  derivation claim (above).
+- `tests/_case_pins.py` — `_norm`, closing the tuple/list false FAIL the author-side pass found
+  in this phase's own new predicate (above).
+
+### Filed
+
+**Nothing, in the end.** The phase filed `Q-519` — `tests/test_thinning_transforms.py` still
+guards its two inline lists by count, it is the module the census guard was *ported from*, and it
+now has a shared predicate available at `tests/_case_pins.py`. Its own round then applied
+`CLAUDE.md`'s Phase-278 filing bar and **un-filed it**: a tier-3 entry must name what it blocks,
+and this one's header said *"BLOCKS nothing today"* while disclaiming the shipped-behaviour
+exemption, since `tests/` reaches no consumer. It is a `REVIEW_CHECKLIST.md` § *Notes* line, which
+is what the rule prescribes for exactly this case. Next free id is `Q-519` again.
+
+### The round — three lenses at `fea8280`, and what it took off this phase
+
+Three placed worktrees (`git worktree add --detach fea8280`), each echoing `git -C <path>
+rev-parse HEAD` before its first finding: guard strength, record truth, execution + scope.
+
+**The guard-strength lens wrote 46 mutations of its own, none of them one of the author's 18, and
+24 of them SURVIVED — a 47.8% kill rate against the author's reported 100%.** That gap is the
+round's real result. The author's battery scored 18/18 because it mutated the arms the author was
+thinking about; the independent lens mutated the mechanism's assumptions, and the mechanism did
+not hold. Six of its survivors were real defects and are fixed below; the rest are dispositioned
+at the end of this section.
+
+**The round's verdict on the mechanism was that it holds. Its verdict on the record was that it
+did not, and its verdict on two of the fixes was that they were wrong.** Every finding below was
+re-verified by this author with its own command before being acted on — including one where the
+two lenses disagreed and the one that had MEASURED rather than inferred was right.
+
+**The two that were defects in the fix, not the record:**
+
+- **The phase shipped two NEW uncontrolled parametrized controls while closing an entry about
+  uncontrolled parametrized controls.** `test_each_provenance_pointer_arm_is_not_vacuous` and
+  `test_the_predicate_reports_exactly_the_escape_routes` went into modules with no emptying guard
+  and no pin. The execution lens ran the compound shape the filing describes — delete the two
+  near-miss rows, then apply this phase's own battery mutation M13 — and got **196 passed**. M13
+  had died in the author's battery *only* because of a row nothing pinned. Both control tables are
+  now pinned by `case_pin_problems`, in the modules that own them; the compound re-runs and dies.
+- **`_norm`'s justification was false and the function over-normalised.** It claimed `[1, 2]` and
+  `(1, 2)` *"parametrize identically"*. Run against pytest: true at **2+** argnames, where the row
+  is unpacked; false at **one**, where the row is passed through and the test gets a list or a
+  tuple. `_norm` also recursed, equating a row's members, which pytest never unpacks. Both latent
+  here — every pinned test has 2+ argnames — and both live for the next consumer, since the
+  thinning-transforms sibling is a single-argname string list. Now gated on a carried
+  `CaseList.argnames`, top level only, no recursion. A sibling defect from the same lens: a column
+  projection over scalar rows indexes INTO the value, so `"mixed"[0] == "m"` reported CLEAN and an
+  int row raised `TypeError`. Refused explicitly now.
+
+**And the two bars this phase claimed to fix were still vacuous after it fixed them.** The round
+re-ran them: `>= 2` to `>= 0` and the replacement count bar to `>= 0` both **survived**. Two
+reasons, both the phase's. The replacement `checked >= len(_CASE_PINS)` is **7**, so the bound went
+DOWN from 8, and the `missing` assertion above it already guarantees those seven were counted — the
+line could not fail. And both bars were inline `assert`s, so nothing could drive them, which is the
+doctrine this module states on `editor_mass_problems` and had not applied to itself. Extracted as
+`parametrize_shape_problems`, pinned by an exact `_PARAMETRIZE_DECORATOR_COUNT = 14` because the
+seven `ast.Name`-driven controls are reachable by no content pin, and driven by a five-row control.
+**Both mutations die now.** Final battery: **19 of 19 killed, both controls surviving**, all three
+compound bypasses killed.
+
+**Nine record claims were wrong, five of them repeated across two or three files in one commit**,
+and two had shipped into `tests/` where they read as documentation. The ones worth naming as a
+class: the suite total published to the NEXT phase (the brief said 7,228/201 against a measured
+7,238/202, in the same commit whose accounting paragraph explains the skip); the two-assertion
+account, exactly inverted, which named the unreachable arm as the load-bearing one; *"three of
+these lists have taken a row addition"* when one had; *"41 of 42 … the two exceptions"*, which is
+43 and was really 42 of 42; and `_PINNED_LIVE_SECTIONS`, which called a two-phase-stale dict "live"
+**and** was a trap — refreshing it to the live figure produces five SPURIOUS pin failures. Renamed
+`_PINNED_FIXTURE_SECTIONS` with the reason stated.
+
+**The six the guard lens found, each verified by this author before being acted on:**
+
+- **CX7 — a DECOY definition defeated the entire mechanism, and it needed no edit to the pin.**
+  `parametrized_cases` walked `ast.walk(tree)`, which descends into nested functions and class
+  bodies that pytest never collects. Add a `def _holder():` wrapping a decorator with the pinned
+  rows, then gut the real control: `7236 passed, 202 skipped`, zero failures. The docstring called
+  the key *"the test the decorator sits on"* — a bare `node.name` is not a test identity. The
+  population is `tree.body` now: a collectable test is a module-level function.
+- **Three legal pytest spellings were false FAILs** — `pytest.param(1, 2, id="first")`,
+  `pytest.param(..., marks=...)` and `argnames=`/`argvalues=` keywords. This is the class the
+  phase was already hunting: `pytest.param` with an id is far commoner than the list/tuple
+  reformat `_norm` was written for, and it is the same `Q-514` shape. Unwrapped and read now.
+- **MS6 — `slack_problems`' zero-section arm had a pinned row that did not cover it**, which is
+  precisely the defect the phase fixed for `editor_mass_problems` and left standing one predicate
+  over. **And the first fix for it was wrong too:** no boolean row can isolate that arm, because a
+  zero section makes the derived bound fire as well (`slack >= 0` for every non-negative slack).
+  It is pinned on the MESSAGE now, the shape the drift arm's control already used.
+- **MS2 — the ratchet's own zero arm had no return-not-fall-through assertion**, the exact
+  sibling of the `slack_problems` fix this phase shipped.
+- **MP4/MP5 — the new pointer control pinned the punctuation and not the target.** Widening
+  `(Step [0-9a-z]+ — provenance)` to `— [a-z]+` matched every sample identically, so the arm would
+  collect any `Step X — <word>` pointer and judge it against the wrong roster. Two rows added.
+- **MA2 — `_norm`'s recursion was uncontrolled**, so the phase's own correction of it was
+  unguarded in the same way the thing it corrected had been.
+
+**Final battery: 28 of 28 killed, both controls surviving** — the author's 19 plus the six above
+plus the three compound bypasses, every one of the lens's real findings kept as a permanent row so
+the next phase inherits them rather than re-deriving them.
+
+**What is left undisposed, stated rather than quietly dropped.** The lens's other survivors are
+recorded in `REVIEW_CHECKLIST.md` § *Notes* rather than fixed: the `_UNEVALUATABLE` mechanism is
+inert (three independent ways to remove it stay green, because a row reports missing either way),
+`ast.Tuple` case lists and the `except` tuple are unexercised, the `int` projection branch is only
+ever driven with `columns = 0`, and deleting a `_CASE_PINS` entry together with its rows is green
+for 4 of 7 pins. That last one is the documented bound of an editable pin — the entry is a visible
+diff line and that is the whole mechanism — and the rest are latent shapes with no live path. They
+are a filing, not a fix, and the reason is stated where a reader will meet it.
+
+**`Q-519` was filed and the round un-filed it.** Both reporting lenses independently applied
+`CLAUDE.md`'s Phase-278 bar: a tier-3 filing must name what it blocks, and the entry's own header
+said *"BLOCKS nothing today"* while disclaiming the shipped-behaviour exemption. It is now a
+`REVIEW_CHECKLIST.md` § *Notes* line, which is what the rule prescribes. Next free id is `Q-519`
+again.
+
+### The accounting
+
+Suite **7215 → 7264 passed**, **201 → 202 skipped**, zero failures. **+23 from the phase, +26
+more from its round**, and the round's half is itemised because it is the larger one: from the
+record/execution lenses, the argnames-conditional control (3), the scalar-projection refusal (1),
+the argnames counter (6), this module's self-pin (1), the shape-bar driver (5) and the pointer-arm
+pin (1) = 17; from the guard lens, the `pytest.param` control (3), the keyword spelling (1), the
+decoy refusal (1), the zero-section message arm (1), the ratchet's return-not-fall-through (1) and
+two rows added to the pointer control (2) = 9. The extra skip is accounted
+rather than waved past: `tests/test_mirror_skip_discipline.py` globs `tests/test_*.py`, so the new
+`tests/test_case_pins.py` adds one parametrized case, and it skips because the module builds no
+path to a mirror-excluded file — the guard noticing a new module is the guard working.
+`tests/_case_pins.py` does not match that glob and adds nothing. The phase's own +23: the new
+published-figure test (1), the group population growing 4 → 5 (1), the ratchet's isolating row
+(1), the pin's own control (4), the per-arm population test (1), the pointer-arm control (5), and
+`tests/test_case_pins.py` (10). No shipped file changed — the whole diff is `tests/` and `tools/`,
+and `install.sh` installs neither, so **no consumer receives anything from this phase**. That was
+checked rather than assumed: all four `tests/` mentions in `install.sh` are comments.
+
+---
+
+## Phase 302 (executed 2026-09-16 — the cut that was deferred twice, and the word that did the opposite job two lines apart)
+
+Base `79d4914` (Phase 301). **The window was ratified at Phase 301's open**, not here: the mirror
+cut moves to this phase with the window becoming 297–301, and the campaign's tail to Phase 303+.
+**Three further answers ratified by Wade at this phase's open:** fix `Q-508` in the pre-cut commit
+at both of its sites; run a **targeted** doc-currency scan rather than a full monograph pass or
+none at all; and post the tester snapshot note directly, derived from the diff.
+
+**Green baseline, and deliberately not a local run.** `main` at `79d4914` merged at
+2026-09-16T20:20:11Z with its required check green. For a phase whose product is a publication that
+is the stronger statement, because what has to have been green is the commit the cut publishes
+*from*, not a working copy on this machine. A local suite pass would have said less and cost more.
+
+**The round corrected this claim's arithmetic.** It first read *"all five required checks"*. Five
+checks ran — four shards plus `pytest` — and exactly **one** is required:
+`gh api repos/.../branches/main/protection --jq '.required_status_checks.contexts'` returns
+`["pytest"]`, because a matrix leg cannot carry a required context. Everything green was true; the
+claim about the gate's shape was not, and the brief was carrying it forward as standing guidance.
+
+### `Q-508` — one word doing the opposite job two lines apart
+
+The filing was right that the sentence contradicts itself and slightly wrong about why. Line 42 of
+`core/skills/review-close/REFERENCE.md` defines the term: *"A rule is declared when the record can
+name **what its loss or softening would change**."* Line 63 then uses it correctly — *"Only Step
+`3` is declared today, and only eight of its rules"* — and line 64 applies the same word to the six
+steps that, by that definition, are precisely the ones **not** declared. So the defect is not that
+two numbers disagree; both numbers are true. Verified against the roster the pins are built from:
+`DECLARED_IDS` is exactly `RC-3-1` … `RC-3-8`, eight ids, all on step `3`.
+
+**The first repair was to copy line 1068, which states the identical fact without reaching for the
+word — and the round proved that wrong.** Copying the phrasing carried its *content*: an enumerated
+six (`4c`, `4b`, `4a`, `3b`, `1a`, `2d`) which is **stale at HEAD**. Run the spec's own reproduce
+command and `2b` now sits at 6 against a cut of ≥ 5, so the declared subset is **eight** steps and
+the list omits one the campaign had already thinned. Worse, *"the method"* is defined only in
+`tools/CONTEXT_THINNING_SPEC.md`, which the mirror **strips** — so that repair would have traded a
+self-contained contradiction for an unfalsifiable claim that was also numerically false, at three
+sites, one of them public. The filing's own suggestion (*"the other six numbered steps"*) at least
+had no such dependency, but carried the same drifting count.
+
+**What shipped instead drops the enumeration entirely,** at all three sites: *"Only Step `3` is
+declared today, and only eight of its rules. Every other step in this skill, and the whole tail of
+it, ride **unprotected**."* That removes the vocabulary collision, the count that drifts every time
+the campaign advances, and the pointer into a stripped file, in one edit — and it covers `4a-post`,
+which the enumerated six omitted and which this record elsewhere calls the only thing that verifies
+a branch in isolation. The remaining figure, `eight`, is derivable from `DECLARED_IDS`.
+
+The twin in `docs/workflow.html` carried the same collision, two sentences after defining the term
+correctly itself, and is fixed the same way. `grep -rn 'declared steps' core/ docs/` is clean, and
+so is `grep -rn 'the method selects'`.
+
+**This fix ships without a guard, and that is a decision rather than an omission.** The numeric
+half of the sentence *is* derivable from `DECLARED_IDS`, and a guard asserting the published eight
+against the roster would have been cheap — but it would not have caught this defect, which moved no
+number. **The round falsified the reason, and the reason was the phase's one shipped decision.** The
+argument rested on Phase 192's finding that this repo's prose guards are 92% invertible — but that
+measurement was taken on *presence* checks (`needle in text`), and a **forbidden-string** check is
+the opposite polarity: it cannot be walked by rewording the surrounding prose, only by
+reintroducing the literal, which is what recurrence looks like. The module that pins this very file
+already ships that mechanism, as `FORBIDDEN` in `tests/test_review_close_reference_pins.py`. So
+"no guard could catch this" was false.
+
+What is true after the round reshaped the fix is narrower: the enumeration is **gone**, so the only
+thing left to keep current is the published `eight`, and that is derivable from `DECLARED_IDS`
+rather than matchable in prose. **That guard is filed, not built, and the rule says why** — the
+governor treats a new guard added after the round as material no fresh reader has seen, which is
+its stated second-round condition. Building it here would have bought a guard and owed a round, in
+a phase whose product is a publication already deferred twice.
+
+### The targeted currency scan — and `docs/` had no changes in the window
+
+`docs/` was last touched by `7ae73a8` and has zero commits in 297–301. Phase 296 met that same
+premise and routed the question to a scan rather than to precedent; that scan found four shipped
+falsehoods. This one found **two, and they are one claim published in two files.**
+
+Both say the runner/reference split has moved **thirteen sections** with **four rules left whole**.
+Measured: `git show 7ae73a8:…/REFERENCE.md | grep -c '^### '` returns **13**; the same grep at HEAD
+returns **44** — § 4c 14, § 3b 13, § 2b 11, § 2d 6, which sums to 44 exactly. The thirteen were
+§ 3b's, the only provenance block that existed at the last cut. The refusal half is **18**, not
+four: § 3b 4 (Phase 295), § 4c 6 (Phase 298), § 2b 5 (Phase 299), § 2d 3 (Phase 300), each read off
+that phase's own record.
+
+**The grounds clause was stale in a way the figures alone do not show.** Both files attribute every
+refusal to *"the rule's reason is the thing that makes it followable"* — which was Phase 295's
+§ 3b-specific ground. The fourteen refusals added since are row-2 guard stops, precondition-(e)
+collisions (a `model:` pin sharing a physical line with its `sysop:role` marker, where prohibition
+7 locks 12.4× what it protects), and § 9.1(a) undecidables. Generalising one step's reason to four
+steps' refusals is the kind of claim a reader has no way to check, so both sites now name the
+grounds in the plural.
+
+**`docs/history.md` is the worse of the two and the one a reader leaves with.** Its phrasing is
+*"thirteen sections of it **so far**"* — an explicit present-tense running total, carrying none of
+the dated-addendum framing `workflow.html` at least has, and sitting as the last substantive
+sentence before that page's footer.
+
+**The monograph's stamp was deliberately not bumped.** This was a targeted scan, not a currency
+pass, and `tests/test_doc_currency.py` reads stamps rather than content — so a bump would assert a
+pass that did not happen. That failure mode is already recorded against that guard; this phase
+declines to demonstrate it.
+
+### What the cut publishes
+
+Derived at this phase's open, not carried from the brief:
+
+- **The window is seven commits at this one, six at the phase's base**, resolved from what the
+  public repo says it shipped rather than
+  from phase numbers. Public `HEAD`'s message is `sysop public snapshot (private 7ae73a8) (#48)`,
+  so `git log --oneline 7ae73a8..HEAD` is the window: Phases 297–301 **plus `481f351`**, Phase
+  296's own post-push record commit. That last one is the shape Phases 257/260/265/268/283 all had,
+  and the record has been wrong about the window at 250 and at 257.
+- **`review-close/REFERENCE.md` publishes at roughly double**: 35,519 bytes public against 70,350 local,
+  **+98.1%**. `SKILL.md` goes the other way, 459,686 → 441,180, **−4.0%** — which is the campaign
+  working, and the two figures are the same four phases seen from either side.
+- **Four shipped skills changed, across eight files, not the one the Phase 300 brief flagged.**
+  `claim-task`, `codebase-review` and `security-audit` each gained a `REFERENCE.md`;
+  `review-close`'s was added at Phase 275 and grew. The leak passes matter over all four.
+- **The Pass 5b ceiling re-derives to 48**, both command forms agreeing, 41 pull requests total so
+  the single-page form is still exhaustive. The runbook's `45` is stated as a measurement dated
+  2026-09-11 and is therefore a record, not a stale claim — it was left alone.
+
+### The author-side pass, and the governor's call on lens count
+
+**Two lenses, not three, and the rule decided it rather than the session.** The governor escalates
+to a third lens when a change ships behaviour *and* a record making numeric claims. The second term
+holds here. The first does not, and the definition is explicit that it does not: *"ships behaviour
+means the change alters what a shipped file does or checks — code, guards, tests — and **prose
+alone does not qualify, however much of it there is**."* This phase's entire diff is prose and
+record. Phase 296 — the previous cut — ran three, and the difference is not that it was a cut: it
+shipped `tests/test_reviewer_placement.py`, 148 lines of guard. This one ships none.
+
+**Rules 1 and 4 have an empty subject and are recorded as such rather than performed.** There is no
+new guard to mutate and no delimiter, predicate or state machine moved over text another writer
+produces. Writing a battery anyway would have produced a number about nothing.
+
+**Rule 2 found the phase's own record wrong, which is the pass paying for itself.** The claim that
+*"Phase 301's round measured this repo's prose guards 92% invertible"* is a misattribution: the 92%
+belongs to **Phase 192's** round. Phase 301's guard lens measured something different and sharper —
+46 mutations, 24 surviving — 52.2% survival, 47.8% killed. The wrong attribution had
+reached three sites (this entry, the
+archive's resolution note, and the commit message) before the pass caught it. It is the exact class
+this project keeps re-recording — a figure carried to a phase that did not produce it — and it was
+caught by checking a number against its source rather than by re-reading the sentence.
+
+**Rule 3 ran the block this phase prescribes, verbatim, and it is clean.** The six derive-commands
+in the next brief return next-free `Q-519`, § High **0**, § Medium **137**, § Low **108**, and the
+new per-section one-liner reproduces the published bundle order exactly — 9,129 · 7,519 · 7,439,
+summing to Bundle A's 24,087. Exit 0 throughout. The command is new in this phase, which is what
+put it in rule 3's scope: `git log --oneline` has no operand to get wrong, and this one computes
+its whole output.
+
+### The round — two lenses at `e549356`, and it reshaped the phase's one fix
+
+**Placement.** Both lenses were created by hand at the commit under review —
+`git worktree add --detach e549356` outside the repository, the primary `.venv` symlinked into
+each, a private scratch directory per lens — and both echoed
+`git -C <path> rev-parse HEAD` → `e549356fa691956291312f2cec89096f830a8a37` before their first
+finding. Lenses: **record truth** (re-derive every figure, falsify every inference) and **the
+public reader** (what does this cut publish, and what in it is false or unresolvable outside the
+repo). Both on Opus, the author's model; the diff-model arm was not available and is recorded as a
+departure. Twenty-two findings, roughly five of them overlapping — consistent with the ~15% the
+governor cites, and each lens produced its sharpest finding alone.
+
+**THE SHARPEST FINDING WAS THAT THE PHASE'S OWN FIX WAS WRONG, AND ONLY THE PUBLIC-READER LENS
+COULD SEE IT.** The `Q-508` repair copied line 1068's phrasing — *"the other six steps the method
+selects (`4c`, `4b`, `4a`, `3b`, `1a`, `2d`)"* — on the ground that the file already contained its
+own answer. It does not. Run the spec's own reproduce command at HEAD: `2b` is now at 6 and the
+Sysop head cuts at ≥ 5, so the declared subset is **eight** steps, and the enumerated six omits one
+the campaign had already thinned. And *"the method"* is defined only in
+`tools/CONTEXT_THINNING_SPEC.md`, which the mirror **strips** — so the repair traded a
+self-contained contradiction for an unfalsifiable claim that was also numerically false, at three
+sites, one of them the public monograph. The record lens, reading the same files, did not see it;
+it checked the sentence against the definition and the definition was fine. **The enumeration is
+gone at all three sites** — *"Every other step in this skill, and the whole tail of it, ride
+unprotected"* — which kills the vocabulary collision, the drifting count and the stripped-doc
+pointer at once, and covers `4a-post`, which the six omitted and which the record elsewhere calls
+the only thing that verifies a branch in isolation.
+
+**A NEW PUBLIC FALSEHOOD, AUTHORED BY THE PASS THAT WAS FIXING PUBLIC FALSEHOODS.** Both lenses
+independently walked all fourteen non-§3b refusals against their own records and found the
+replacement grounds clause false for five. `409093d55fbaf007`'s record says *"the guard is fine;
+its one anchor is on the rule, which stays. It fails **precondition (a)**"* — not a guard stop, and
+precondition (a) *is* the followability ground the sentence assigns exclusively to the first four.
+`37e148c527641c9d` is *"free, zero anchors, and declined anyway"* — none of the three grounds. The
+phase had written, one paragraph earlier, that generalising one step's reason to four steps'
+refusals *"is the kind of claim a reader has no way to check"*; a reader can check this one, because
+`PHASE_LOG.md` ships. Both sites now give four grounds under non-exhaustive framing.
+
+**The author-side pass caught an inverted attribution and then inverted the replacement figure.**
+Rule 2 correctly moved the 92% from Phase 301 to Phase 192. The contrast figure put in beside it —
+*"24 of 46 mutations standing at 47.8%"* — attaches Phase 301's **kill** rate to its survivors.
+22/46 is 47.8%; 24/46 is 52.2%, and Phase 301's own entry labels it a kill rate in the line being
+cited. The corrected sentence compared a survival rate to a kill rate, in the sentence announcing
+that a figure had been checked against its source. `tools/ROUND_YIELD_LEDGER.md`'s row 301 is the
+upstream defect — every other survivor cell in that table states survival.
+
+**`main` requires one check, not five.** The entry claimed *"all five required checks SUCCESS"*.
+`gh api .../branches/main/protection --jq '.required_status_checks.contexts'` returns `["pytest"]`;
+five ran, one is required, and this repo's own workflow says why — a matrix leg cannot carry a
+required context. The substance (everything green) held; the claim about the gate's shape did not,
+and the brief was carrying it forward as standing guidance.
+
+**Also fixed from the round:** the window is seven commits at this one and six at the phase's base
+(the prescribed command returns 7 where the record lives, and the phase's own pre-cut commit ships);
+`docs/history.md` kept the word *"so far"* that the phase had itself named as the defect, with only
+the number refreshed; the monograph's 2026-09-14 addendum carried figures from 2026-09-16, now dated
+inline; the brief republished `Q-510`'s at-filing census figures as current, stale by exactly one
+block and 333 characters each because Phase 300 changed the census tool under them; the brief called
+a dated addendum *"undated"*, inverting the very doctrine it was illustrating; the brief announced
+*"the cut is done"* in the pre-cut commit; the runbook's own `38 today` was present-tense and wrong
+by three, the same running-total shape this phase filed as a defect in a public file; byte figures
+were published without their unit; and `Q-519` is cited as live in four shipped test docstrings
+while three records call it next-free, so the brief now warns against reusing it blind.
+
+**Dimension 10 was checked, not skipped.** The public-reader lens confirmed the diff touches no
+`SKILL.md`, so the dimension's subject is empty; the one skill-tree edit is inside `REFERENCE.md`,
+which is the direction the dimension wants.
+
+### `## Also fixed`
+
+- **The ledger row's own coupling, caught by the suite rather than by me.** Appending row 302 to
+  `tools/ROUND_YIELD_LEDGER.md` moves two *derived* population lines — the ledger's own reading
+  note (*"Across 141 numbered phases"* → **142**) and `tools/AUTHOR_DEFECT_REGISTER.md`'s
+  (*"records 160 rounds, 141 of them numbered phases"* → **161 / 142**). Nothing warns the author;
+  `tests/test_ledger_stats.py` simply goes red, which is the gate working. Recorded because the
+  phase pushed before its own full suite returned and shipped a red commit for eleven minutes.
+- **The register's phase RANGE is unguarded while the counts beside it are guarded.** The same
+  sentence carried `(161–300)`; the derivation says `161–302`. `test_the_registers_population_line_is_derived`
+  asserts the two counts and stops before the parenthetical, so Phase 301 left it one stale with
+  the suite green. Corrected here and filed as a § *Notes* line, since it names nothing it blocks.

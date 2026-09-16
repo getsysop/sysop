@@ -195,9 +195,9 @@ CITATION_ANCHORS = {
     # citation pointed at -- so the prose named the wrong site for BOTH -- stayed GREEN.
     # The anchor kept line-precision and lost site-discrimination. This one is a
     # sentence only Step 7f's copy carries.
-    ("core/skills/review-close/SKILL.md", "claim-task/SKILL.md:1300"):
+    ("core/skills/review-close/SKILL.md", "claim-task/SKILL.md:1305"):
         'emits `fence + "markdown"` below',
-    ("core/skills/review-close/SKILL.md", "claim-task/SKILL.md:1895"):
+    ("core/skills/review-close/SKILL.md", "claim-task/SKILL.md:1900"):
         "and not line.strip().strip(mark[0])",
     ("core/skills/auto-fix/SKILL.md", "archive_review_tasks.py:175"):
         "Merged|Complete",
@@ -233,17 +233,17 @@ CITATION_ANCHORS = {
     # skill derives the next batch number. These two are the only writers of
     # `### Batch` headers in the tree and both do, file-globally, which is why
     # the comment now cites them by line.
-    ("core/companion/scripts/batch_work.sh", "codebase-review/SKILL.md:166"):
+    ("core/companion/scripts/batch_work.sh", "codebase-review/SKILL.md:171"):
         "next_batch_number",
-    ("core/companion/scripts/batch_work.sh", "security-audit/SKILL.md:183"):
+    ("core/companion/scripts/batch_work.sh", "security-audit/SKILL.md:188"):
         "next_batch_number",
     # Phase 211's round found the same struck premise in review_index.py's own
     # docstring — the copy where it is load-bearing, since it justifies the
     # scoping decision. The author-side sweep missed it because the sentence
     # wraps across two lines there and the grep was line-oriented.
-    ("core/companion/scripts/review_index.py", "codebase-review/SKILL.md:166"):
+    ("core/companion/scripts/review_index.py", "codebase-review/SKILL.md:171"):
         "next_batch_number",
-    ("core/companion/scripts/review_index.py", "security-audit/SKILL.md:183"):
+    ("core/companion/scripts/review_index.py", "security-audit/SKILL.md:188"):
         "next_batch_number",
     ("core/skills/review-close/SKILL.md", "intake/SKILL.md:111"):
         "tasks/schema.md",
