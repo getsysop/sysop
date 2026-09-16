@@ -36,6 +36,7 @@ ordinary rewriting shows up as the defect it is.
 
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path
 from unittest import mock
@@ -155,6 +156,13 @@ FALSE_RATIONALES = {
     "Step 3c's incoherence claim": "A smoke gate over a doc-only change is incoherent — but only a doc-only",
     "4a-post's inheritance": "applying item 3's surface gate and item 4's doc-only skip",
     "the spec's bare 2b claim": "Skipped for a doc-only diff, which has no code-convention surface",
+    # Phase 299 (`Q-502`). The step retracted this claim in one paragraph and went on making it
+    # two paragraphs later, and had done since the correction was written. Both halves left in
+    # the same commit, because relocating the retraction alone would have left the assertion
+    # standing with nothing answering it. Pinned here rather than in `test_review_close_diff_basis`
+    # because a sibling assertion there REQUIRED the false sentence to be present — a guard
+    # holding a contradiction in place — and the repair of that one is not a reversion guard.
+    "the A02 doc-routing claim": "routes root operational docs to",
 }
 
 
@@ -163,10 +171,145 @@ def _slice_4a_post(text: str) -> str:
     return text[start : text.index("### 4b. Close Merged Batches", start)]
 
 
+#: The retired set, pinned by MEMBERSHIP and by VALUE.
+#:
+#: Phase 299's author battery walked the set two ways and neither reddened anything. Dropping an
+#: entry deletes a parametrize case, and a guard that demands less never goes red — the same shape
+#: Phase 297's round found in the round-coverage ledger. LENGTHENING an entry is worse: the pin
+#: then matches nothing, so `test_the_false_rationale_stays_retired` passes vacuously over a
+#: sentence that has come back in its shipped spelling. Both are one-line edits an author makes to
+#: get a commit green, and both were invisible.
+#:
+#: Pinning here rather than adding cleverness to the parametrized test, because the property is
+#: about the SET and the test is about one member of it. A legitimate addition edits two places;
+#: that is the ratchet, not friction to route around.
+_RETIRED_PINS = {
+    "Step 3's lint/typecheck licence": "a doc-only diff can't regress code-level lint/typecheck",
+    "Step 2d's no-behaviour claim": "there is no behavior to pin",
+    "Step 3c's incoherence claim": "A smoke gate over a doc-only change is incoherent — but only a doc-only",
+    "4a-post's inheritance": "applying item 3's surface gate and item 4's doc-only skip",
+    "the spec's bare 2b claim": "Skipped for a doc-only diff, which has no code-convention surface",
+    "the A02 doc-routing claim": "routes root operational docs to",
+}
+
+
+def test_the_retired_pin_is_a_literal():
+    """`_RETIRED_PINS` may not be DERIVED from the set it pins (round finding, HIGH 3).
+
+    `_RETIRED_PINS = dict(FALSE_RATIONALES)` makes the pin agree with its subject by
+    construction; the lens then dropped an entry from both and the module stayed green. The
+    predicate is shared with `tests/test_reader_census.py`, which shipped the same check for its
+    own roster in this same commit and did not give this one anything.
+    """
+    import tests.test_reader_census as census_tests  # the shared predicate lives there
+    problems = census_tests.literal_collection_problems(
+        Path(__file__).read_text(encoding="utf-8"), "_RETIRED_PINS", ast.Dict, _RETIRED_PINS)
+    assert not problems, "\n".join(problems)
+
+
+@pytest.mark.parametrize("mutated,expect", [
+    ("    assert FALSE_RATIONALES == _RETIRED_PINS", False),
+    ("    assert set(FALSE_RATIONALES) <= set(_RETIRED_PINS)", True),
+    ("    assert set(FALSE_RATIONALES) == set(_RETIRED_PINS)", True),
+    ("    assert True or FALSE_RATIONALES == _RETIRED_PINS", True),
+])
+def test_the_pin_comparison_is_whole_and_exact(mutated, expect):
+    """The negative control `test_the_retired_set_cannot_shrink_or_drift` did not have.
+
+    Its absence is what let a one-token `==` -> `<=` flip pass while an entry was dropped. This
+    drives the SHIPPED comparison line rather than re-doing it: it reads the line out of this
+    file, so a rewrite that changes the operator is seen here even though the assertion below
+    still passes on the unmutated tree.
+    """
+    line = [ln for ln in Path(__file__).read_text(encoding="utf-8").split("\n")
+            if ln.startswith("    assert FALSE_RATIONALES == _RETIRED_PINS")]
+    assert len(line) == 1, "the pin's comparison line moved or was reshaped; re-point this control"
+    weakened = mutated != line[0].split(", (")[0]
+    assert weakened is expect, f"{mutated!r} vs shipped {line[0]!r}"
+
+
+def test_the_retired_set_cannot_shrink_or_drift():
+    """Neither a dropped entry nor an edited one may pass."""
+    assert FALSE_RATIONALES == _RETIRED_PINS, (
+        "FALSE_RATIONALES no longer matches its pin. A retired sentence removed from the set is "
+        "free to come back unnoticed; a lengthened or reworded pin matches nothing and the "
+        "parametrized guard below then passes over the sentence it was written to catch. "
+        f"only in the set: {sorted(set(FALSE_RATIONALES) - set(_RETIRED_PINS))}; "
+        f"only in the pin: {sorted(set(_RETIRED_PINS) - set(FALSE_RATIONALES))}; "
+        f"values differing: {sorted(k for k in set(FALSE_RATIONALES) & set(_RETIRED_PINS) if FALSE_RATIONALES[k] != _RETIRED_PINS[k])}"
+    )
+
+
+#: How many times each retired sentence may appear in `REFERENCE.md`, and why the number is not
+#: always zero.
+#:
+#: ROUND FINDING (guards lens, HIGH 2). `test_the_false_rationale_stays_retired`'s corpus was
+#: `SKILL.md` + `WORKFLOW.md`. `REFERENCE.md` — a SHIPPED file, beside the runner, and **the
+#: destination of every byte the `Q-409` campaign relocates** — was in neither. The lens appended
+#: two retired rationales to it as plain assertions and the whole suite stayed green. The hole
+#: widens with every phase of the campaign, because moving rationale into that file is what the
+#: campaign does.
+#:
+#: The blanket fix is unavailable: a retraction has to QUOTE the claim in order to deny it, and
+#: Phase 299's own § Step 2b provenance does exactly that. So the predicate is a COUNT rather than
+#: an absence. One occurrence of the A02 claim is the retraction; a second is the claim being
+#: made, whatever it is wearing. Everything else is licensed zero times.
+_LICENSED_IN_REFERENCE = {
+    "the A02 doc-routing claim": 1,
+}
+
+
+def retired_claim_problems(label: str, runner: str, reference: str) -> list[str]:
+    """Both corpora as ONE predicate a control can drive over mutated text.
+
+    A function rather than two inline asserts, for the reason every other guard in this repo
+    records: a control that re-does the comparison in its own body passes over a neutered arm.
+    """
+    needle = FALSE_RATIONALES[label]
+    problems = []
+    if needle in runner:
+        problems.append(f"{label} is back in the runner corpus (SKILL.md / WORKFLOW.md)")
+    licensed = _LICENSED_IN_REFERENCE.get(label, 0)
+    n = reference.count(needle)
+    if n != licensed:
+        problems.append(
+            f"{label} appears {n}x in REFERENCE.md; {licensed} licensed. One occurrence of a "
+            f"retired claim is a retraction quoting it; a further one is the claim being made. "
+            f"If a retraction was legitimately added or removed, move the number in "
+            f"_LICENSED_IN_REFERENCE in the same commit and say why."
+        )
+    return problems
+
+
 @pytest.mark.parametrize("label", sorted(FALSE_RATIONALES))
 def test_the_false_rationale_stays_retired(label):
-    corpus = _flat(_text()) + "\n" + _flat(WORKFLOW.read_text(encoding="utf-8"))
-    assert FALSE_RATIONALES[label] not in corpus, f"{label} is back"
+    runner = _flat(_text()) + "\n" + _flat(WORKFLOW.read_text(encoding="utf-8"))
+    reference = (REVIEW_CLOSE.parent / "REFERENCE.md").read_text(encoding="utf-8")
+    problems = retired_claim_problems(label, runner, reference)
+    assert not problems, "\n".join(problems)
+
+
+#: The A02 label is LICENSED ONCE, so its green state is one occurrence in `REFERENCE.md` — not
+#: zero. A first version of this table read the arms the other way round and two of the four went
+#: red on arrival, which is the control catching its author before the guard shipped inverted.
+@pytest.mark.parametrize("runner,reference,expect", [
+    ("clean", "routes root operational docs to", False),        # exactly licensed: the retraction
+    ("routes root operational docs to", "routes root operational docs to", True),   # back in the runner
+    ("clean", "", True),                                        # the retraction itself went missing
+    ("clean", "routes root operational docs to " * 2, True),    # a second occurrence: an assertion
+])
+def test_the_retired_claim_predicate_is_not_vacuous(runner, reference, expect):
+    """The negative control, driving the REAL predicate over both corpora.
+
+    Three arms, because the guard has three ways to be wrong and the lens found the module with
+    one of them live: the runner arm, the reference-absent arm, and the reference-surplus arm.
+    """
+    problems = retired_claim_problems("the A02 doc-routing claim", runner, reference)
+    assert bool(problems) is expect, (
+        f"retired_claim_problems(runner={runner!r}, reference={reference[:40]!r}) returned "
+        f"{problems!r}; expected {'a problem' if expect else 'none'}")
+
+
 
 
 # The five strings above are reversion guards: they catch the sentences that shipped, and

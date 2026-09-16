@@ -39,6 +39,7 @@ from pathlib import Path as _P
 
 sys.path.insert(0, str(_P(__file__).resolve().parent))
 
+from _case_pins import case_pin_problems  # noqa: E402
 from _prose_guard_helpers import anchor  # noqa: E402
 import subprocess
 import sys
@@ -915,7 +916,48 @@ def test_the_recipe_in_the_comment_is_the_one_the_test_runs():
 
 # --- Phase 295's round: twelve shipped pointers into a heading nothing pinned ------------------
 
-_PROVENANCE_POINTER = re.compile(r"See REFERENCE\.md, section (Step [0-9a-z]+ — provenance)\.")
+#: BOTH spellings, and Phase 298's round is why. That phase added two MARKDOWN forms of the
+#: pointer line — `#` opens a heading outside a fence, so the comment form is unusable in a
+#: `prose` or `blockquote` block — and this regex saw only the comment form. Measured at that
+#: phase's own commit: 14 comment-spelling pointers seen, **8 markdown-spelling pointers not
+#: seen**, and retargeting all eight at a heading that does not exist left this guard green.
+#:
+#: § 4c was covered only by coincidence, because two of its pointers happen to be comment-form.
+#: The next section is not: every one of § 2b's twelve candidates is `blockquote`, `prose` or
+#: `listitem`, so every § 2b pointer will be markdown-form and `## Step 2b — provenance` would
+#: have been pinned by nothing — this guard's own filed defect, reconstructed one section later.
+#:
+#: Kept as one alternation rather than two constants so a future spelling is added in one place
+#: and both arms of the test inherit it.
+_PROVENANCE_POINTER = re.compile(
+    r"See REFERENCE\.md, section (Step [0-9a-z]+ — provenance)\."          # inside a fence
+    r"|See `REFERENCE\.md` § \*(Step [0-9a-z]+ — provenance)\*\."          # prose / blockquote
+)
+
+
+def _pointer_targets(text: str) -> list[str]:
+    """Every provenance pointer's target heading, from either spelling.
+
+    `findall` over an alternation with two groups yields a tuple per match with one empty half;
+    collapsing them here keeps the call sites reading as they did when there was one spelling.
+    """
+    return [a or b for a, b in _PROVENANCE_POINTER.findall(text)]
+
+
+def _pointer_targets_by_arm(text: str) -> tuple[list[str], list[str]]:
+    """`(fence-form targets, prose-form targets)` — the two spellings, kept apart.
+
+    `Q-518`, Phase 301. `_pointer_targets` collapses the alternation, which is right for the
+    dangling check and wrong for asking whether both arms are alive. The guard below asserted
+    only `assert pointers`, and that is satisfied by either arm alone: measured at Phase 301's
+    open, the fence form carries 14 pointers and the prose form 20, so neutering the prose arm
+    left 14 and the test green while § 2b's six and § 2d's six lost destination checking
+    entirely. An alternation with one dead branch is two guards where one has quietly stopped.
+    """
+    fence, prose = [], []
+    for a, b in _PROVENANCE_POINTER.findall(text):
+        (fence if a else prose).append(a or b)
+    return fence, prose
 
 
 def test_every_provenance_pointer_resolves_to_a_real_reference_heading():
@@ -934,7 +976,7 @@ def test_every_provenance_pointer_resolves_to_a_real_reference_heading():
     """
     skill = SKILL.read_text(encoding="utf-8")
     reference = REFERENCE.read_text(encoding="utf-8")
-    pointers = _PROVENANCE_POINTER.findall(skill)
+    pointers = _pointer_targets(skill)
     assert pointers, (
         "no provenance pointers found in SKILL.md — either the thinning campaign's pointer shape "
         "changed or this guard has lost its population"
@@ -945,3 +987,101 @@ def test_every_provenance_pointer_resolves_to_a_real_reference_heading():
         f"{len(dangling)} provenance pointer target(s) do not exist as a `## <name>` heading in "
         f"REFERENCE.md: {dangling}. Known headings: {sorted(headings)}"
     )
+
+
+def test_both_provenance_pointer_spellings_have_a_live_population():
+    """Each arm of the alternation separately, because `assert pointers` covers neither.
+
+    `Q-518`, Phase 301, and this is the fourth of the four sibling arms the filing lists as
+    having no control at all. The guard above is satisfied by either spelling alone. Measured
+    at this phase's open: fence form 14 pointers (`Step 3b` ×12, `Step 4c` ×2), prose form 20
+    (`Step 2b` ×6, `Step 2d` ×6, `Step 4c` ×8). Delete the prose branch of the regex and 14
+    pointers remain, so the guard passes while every § 2b and § 2d pointer — twelve of them —
+    stops being checked against anything.
+
+    Asserted as "non-empty per arm" rather than as counts. The counts move every time the
+    campaign takes a section, and a guard a legitimate commit must edit is a guard that gets
+    edited to pass — the lesson `test_a_wrong_published_digit_is_reported` records upstream.
+    """
+    fence, prose = _pointer_targets_by_arm(SKILL.read_text(encoding="utf-8"))
+    assert fence, (
+        "no FENCE-form provenance pointers (`See REFERENCE.md, section <X>.`) found in "
+        "SKILL.md. Either that spelling has left the file — in which case retire the branch "
+        "from `_PROVENANCE_POINTER` deliberately — or the branch has stopped matching."
+    )
+    assert prose, (
+        "no PROSE-form provenance pointers (``See `REFERENCE.md` § *<X>*.``) found in "
+        "SKILL.md. This is the arm that covers every § 2b and § 2d pointer, and the collapsed "
+        "check above cannot see it go dark."
+    )
+
+
+@pytest.mark.parametrize("sample,expect_fence,expect_prose,why", [
+    ("See REFERENCE.md, section Step 3b — provenance.", 1, 0, "fence form alone"),
+    ("See `REFERENCE.md` § *Step 2d — provenance*.", 0, 1, "prose form alone"),
+    ("See REFERENCE.md, section Step 3b — provenance.\n"
+     "See `REFERENCE.md` § *Step 2d — provenance*.", 1, 1, "both forms in one body"),
+    ("See REFERENCE.md section Step 3b — provenance.", 0, 0, "a near-miss: the comma is load-bearing"),
+    ("See `REFERENCE.md` § Step 2d — provenance.", 0, 0, "a near-miss: the emphasis is load-bearing"),
+    # THE TARGET, not just the punctuation — `Q-518`, Phase 301's round (MP4/MP5). The four rows
+    # above pin the comma and the emphasis and say nothing about the heading NAME, so widening
+    # `(Step [0-9a-z]+ — provenance)` to `(Step [0-9a-z]+ — [a-z]+)` matched every sample
+    # identically and left the suite green — the arm would then collect any `Step X — <word>`
+    # pointer as a provenance pointer and the dangling check would judge it against the wrong
+    # roster. These two rows fail the moment the target stops being the literal word.
+    ("See REFERENCE.md, section Step 3b — rationale.", 0, 0,
+     "the fence arm's TARGET is `provenance`, not any word"),
+    ("See `REFERENCE.md` § *Step 2d — rationale*.", 0, 0,
+     "the prose arm's TARGET is `provenance`, not any word"),
+])
+def test_each_provenance_pointer_arm_is_not_vacuous(sample, expect_fence, expect_prose, why):
+    """The negative control the guard above shipped without — driving the REAL regex.
+
+    `Q-518`, Phase 301. `_PROVENANCE_POINTER` had no control of any kind: nothing fed it a
+    sample, so deleting either branch was invisible except through a live-tree population that
+    the other branch kept non-empty. Each row here fixes one branch's behaviour independently,
+    so removing a branch reddens the rows that need it and leaves the others alone — which is
+    what makes this a control rather than a restatement.
+
+    The two near-miss rows are the other half: an arm that matches MORE than its spelling is as
+    broken as one that matches less, and a control made only of positive cases cannot tell.
+    """
+    fence, prose = _pointer_targets_by_arm(sample)
+    assert (len(fence), len(prose)) == (expect_fence, expect_prose), (
+        f"{why}: expected {expect_fence} fence-form and {expect_prose} prose-form pointer(s), "
+        f"got {len(fence)} and {len(prose)} — {sample!r}"
+    )
+
+
+#: This module's pointer-arm control, pinned by content — `Q-518`, Phase 301, added by its round.
+#:
+#: The phase shipped `test_each_provenance_pointer_arm_is_not_vacuous` into a module with no
+#: emptying guard and no pin, and the round then ran the compound shape `Q-518` describes: delete
+#: the two NEAR-MISS rows, then apply the phase's own battery mutation M13 (make the `*` emphasis
+#: optional in the prose branch). The suite stayed green — 196 passed. M13 died in the author's
+#: battery ONLY because of a row that nothing pinned.
+#:
+#: The two near-miss rows are the load-bearing ones: without them the arm may match MORE than its
+#: spelling and no positive case can tell. Columns 0-2 are the fixture and its expectation; the
+#: `why` prose is free.
+_POINTER_ARM_PINS = {
+    "test_each_provenance_pointer_arm_is_not_vacuous": ((0, 1, 2), (
+        ("See REFERENCE.md, section Step 3b — provenance.", 1, 0),
+        ("See `REFERENCE.md` § *Step 2d — provenance*.", 0, 1),
+        ("See REFERENCE.md section Step 3b — provenance.", 0, 0),
+        ("See `REFERENCE.md` § Step 2d — provenance.", 0, 0),
+        ("See REFERENCE.md, section Step 3b — rationale.", 0, 0),
+        ("See `REFERENCE.md` § *Step 2d — rationale*.", 0, 0),
+    )),
+}
+
+
+def test_the_pointer_arm_control_cannot_be_hollowed_out():
+    """`Q-518`'s predicate, turned on the control this phase added to this module.
+
+    Without this, the sequence the filing describes works here verbatim: delete the two near-miss
+    rows and widen the prose branch, and nothing in the repo reddens — no other module reads
+    `_PROVENANCE_POINTER` or `_pointer_targets`, so there is no second reader to catch it.
+    """
+    problems = case_pin_problems(Path(__file__).read_text(encoding="utf-8"), _POINTER_ARM_PINS)
+    assert not problems, "\n\n".join(problems)
