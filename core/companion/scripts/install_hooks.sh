@@ -87,6 +87,7 @@ fi
 
 INSTALLED=0
 BACKED_UP=()
+UNMANAGED=()
 # Explicit allowlist: only these tracked filenames are ever copied into
 # .git/hooks/ so stray files (.DS_Store, *.swp, README.md, accidentally
 # pasted hook files) cannot get installed and executed on git events.
@@ -94,8 +95,30 @@ TMP=""
 trap 'rm -f -- "${TMP:-}"' EXIT
 for BASENAME in pre-commit pre-merge-commit pre-push; do
   HOOK="${HOOKS_SRC}/${BASENAME}"
-  [[ -f "$HOOK" ]] || continue
   DST="${HOOKS_DST}/${BASENAME}"
+  if [[ ! -f "$HOOK" ]]; then
+    # Sysop ships pre-commit and pre-merge-commit; `pre-push` is in the allowlist
+    # so a later release can add one without touching this loop. Until then the
+    # bare `continue` this replaces made an ARMED consumer hook of that name
+    # indistinguishable from no hook at all — the script reported "2 hook(s)
+    # installed" and said nothing about the third, which is how a consumer comes
+    # to believe every hook they run is Sysop-managed (`Q-541` leg 1).
+    #
+    # Sysop does not arm it. There is no documented consumer hooks directory to
+    # arm FROM, and the one candidate — `scripts/hooks/` — is where Sysop's own
+    # hooks lived before the Phase 128 vendor move, so reading it would risk
+    # pushing a stale pre-migration template over the migrated one. That is the
+    # same failure `self_check.sh` now detects, and installing it here would be
+    # this script causing it.
+    # `-e` alone is false for a BROKEN symlink, which is exactly the armed-but-dead
+    # case this arm exists to surface — the same `-e || -L` correction Phase 142 made
+    # to the obsolete-file sweep. A directory at that path is excluded: git will not
+    # run it, so calling it an armed hook would be false.
+    if [[ ( -e "$DST" || -L "$DST" ) && ! -d "$DST" ]]; then
+      UNMANAGED+=("$BASENAME")
+    fi
+    continue
+  fi
 
   # Back up any pre-existing hook that differs from the tracked version
   # so user customizations are not silently clobbered.
@@ -133,5 +156,12 @@ if [[ ${#BACKED_UP[@]} -gt 0 ]]; then
   echo "⚠️  Backed up pre-existing customized hooks:"
   for BACKUP_NOTE in "${BACKED_UP[@]}"; do
     echo "   • ${BACKUP_NOTE}"
+  done
+fi
+if [[ ${#UNMANAGED[@]} -gt 0 ]]; then
+  echo ""
+  echo "ℹ️  Armed here, but not Sysop's — no template in sysop/scripts/hooks/:"
+  for UNMANAGED_NOTE in "${UNMANAGED[@]}"; do
+    echo "   • ${UNMANAGED_NOTE}  (yours: Sysop neither installs nor updates it)"
   done
 fi

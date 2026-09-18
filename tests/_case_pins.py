@@ -186,8 +186,10 @@ def _norm(value, argnames: int):
         @parametrize("x",   [[1, 2]])   ->  x=[1, 2]      # ... and the test can tell
 
     Run against pytest, not reasoned about. So at one argname the two forms are different values
-    and equating them silences a real difference — and `Q-519` points the next consumer at
-    `@parametrize("state", ["mixed", "runner", "none"])`, which is exactly that shape.
+    and equating them silences a real difference — and the live target points the next consumer at
+    `@parametrize("state", ["mixed", "runner", "none"])`, which is exactly that shape. That target is
+    `REVIEW_CHECKLIST.md` § *Notes*' 2026-09-16 `tests/test_thinning_transforms.py` line, NOT a `Q-NNN`:
+    Phase 301 filed one, its own round un-filed it under the Phase-278 bar, and the id was reissued.
 
     Hence: coerce the TOP LEVEL only, and only at 2+ argnames. No recursion, because a row's
     MEMBERS are handed to the test verbatim whatever the argname count, so `(1, [2])` and
@@ -231,7 +233,7 @@ def case_pin_problems(source: str, pins: dict) -> list[str]:
         # A column projection over a row that is not a sequence would index INTO the value:
         # `"mixed"[0]` is `"m"`, which reports CLEAN against a pin of first letters, and an int
         # row raises `TypeError` instead of reporting. Both found by Phase 301's round, both
-        # latent here and both live for `Q-519`'s target, which is a single-argname string list.
+        # latent here and both live for that note's target, which is a single-argname string list.
         # Refuse the pin rather than answer it wrongly.
         if columns is not None:
             scalar = [r for r in rows if not isinstance(r, (list, tuple))]

@@ -180,24 +180,74 @@ def test_no_id_is_ever_renumbered():
         # PR without a local run would not be caught here.
         pytest.skip("no `main` ref to compare against (shallow clone or detached history)")
 
-    def id_by_body(text: str) -> dict[str, str]:
-        out = {}
+    def entries(text: str) -> list[tuple[str, str]]:
+        """(id, body) for every anchored entry, in file order."""
+        out = []
         for _, line in entry_lines(text):
             m = ANCHORED_RE.match(line)
             if m:
-                out[line[m.end():][:120]] = m.group(1)
+                out.append((m.group(1), line[m.end():]))
         return out
 
-    before, after = id_by_body(base.stdout), id_by_body(_checklist())
-    moved = {
-        body: (before[body], after[body])
-        for body in before.keys() & after.keys()
-        if before[body] != after[body]
-    }
+    def pair_up(before, after):
+        """Match each `main` entry to its counterpart, WITHOUT using position.
+
+        Three keyings have now been tried here and the first two were both wrong:
+
+          - **A 120-character prefix.** Entries filed in the same batch open with identical
+            boilerplate: measured on `main`, ten entries shared three keys and a plain dict
+            silently dropped seven of them. It also FALSE-POSITIVED the moment one of a
+            colliding pair resolved -- removing `Q-524` left `Q-520` answering to `Q-524`'s
+            key and the guard reported a renumber that never happened.
+          - **(prefix, occurrence index).** That fixed the collision and introduced a worse
+            one: the index is POSITIONAL, so resolving any non-last member of a colliding
+            group re-keys every entry after it. Measured on the live queue, dropping `Q-534`
+            produced THREE false positives where the prefix key produced none -- and moving
+            an entry between sections produced four. Resolving an entry into the archive is
+            the everyday Phase-56 operation, so that traded a rare false positive for a
+            common one. The round caught it.
+
+        So: match on the FULL body first, which is unaffected by deletions and reorderings.
+        Only entries whose text actually changed fall through, and those are matched by the
+        120-character prefix -- but *only* when it is unambiguous among the leftovers on both
+        sides. An ambiguous leftover is left unmatched rather than guessed at, because a wrong
+        pairing is exactly what reports a renumber that did not happen.
+        """
+        pairs = []
+        by_body = {}
+        for i, (_, body) in enumerate(after):
+            by_body.setdefault(body, []).append(i)
+        used = set()
+        left_b, left_a = [], []
+        for bid, bbody in before:
+            idx = by_body.get(bbody)
+            if idx:
+                j = next((k for k in idx if k not in used), None)
+                if j is not None:
+                    used.add(j)
+                    pairs.append((bid, after[j][0]))
+                    continue
+            left_b.append((bid, bbody))
+        left_a = [e for k, e in enumerate(after) if k not in used]
+
+        def uniq_prefix(items):
+            seen = {}
+            for eid, body in items:
+                seen.setdefault(body[:120], []).append(eid)
+            return {k: v[0] for k, v in seen.items() if len(v) == 1}
+
+        pb, pa = uniq_prefix(left_b), uniq_prefix(left_a)
+        for key, bid in pb.items():
+            if key in pa:
+                pairs.append((bid, pa[key]))
+        return pairs
+
+    moved = [(was, now) for was, now in pair_up(entries(base.stdout), entries(_checklist()))
+             if was != now]
     assert not moved, (
         "entries whose ID changed since `main` — IDs are assigned once and never "
         "renumbered, because every handoff that cites one rots the moment it moves:\n"
-        + "\n".join(f"  {was} -> {now}: {body[:80]}" for body, (was, now) in moved.items())
+        + "\n".join(f"  {was} -> {now}" for was, now in moved)
     )
 
 

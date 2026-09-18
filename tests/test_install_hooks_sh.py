@@ -379,3 +379,93 @@ class TestCoreHooksPath:
         assert ".git/hooks" not in remedy, \
             f"remedy points at .git/hooks, which git is configured to ignore: {remedy}"
         assert "chmod +x" in r.stdout, "remedy leaves the hooks non-executable"
+
+
+class TestUnmanagedArmedHook:
+    """`Q-541` leg 1. The allowlist already names `pre-push`; Sysop ships no
+    template for it, so the loop's `[[ -f "$HOOK" ]] || continue` skipped it in
+    silence. A consumer who wrote their own `pre-push` and armed it therefore
+    read "Done. 2 hook(s) installed" with no mention of the third — which is how
+    someone comes to believe every hook they run is Sysop-managed.
+
+    The filing's implied remedy — arm it from a consumer directory — is refused
+    and the refusal is the point: Sysop documents no consumer hooks directory,
+    and the only candidate (`scripts/hooks/`) is where Sysop's OWN hooks lived
+    before the Phase 128 move, so reading it risks pushing a stale pre-migration
+    template over the migrated one. So this reports; it does not install."""
+
+    def test_names_an_armed_hook_it_does_not_ship(self, tmp_path):
+        repo = _init_repo(tmp_path / "repo")
+        _seed_hooks(repo, {n: f"#!/bin/sh\n# {n}\nexit 0\n"
+                           for n in ("pre-commit", "pre-merge-commit")})
+        armed = repo / ".git" / "hooks" / "pre-push"
+        armed.parent.mkdir(parents=True, exist_ok=True)
+        armed.write_text("#!/bin/sh\n# the consumer's own\nexit 0\n")
+        armed.chmod(0o755)
+        before = armed.read_text()
+
+        r = _run(repo)
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert "Armed here, but not Sysop's" in r.stdout, \
+            "an armed hook Sysop does not ship was skipped in silence"
+        assert "pre-push" in r.stdout.split("Armed here, but not Sysop's", 1)[1]
+        assert armed.read_text() == before, "the consumer's own hook was overwritten"
+        assert "2 hook(s) installed" in r.stdout
+
+    def test_silent_when_the_unshipped_hook_is_not_armed(self, tmp_path):
+        """Control. The notice is about a hook that EXISTS and is unmanaged, not
+        about every name in the allowlist Sysop happens not to ship — otherwise
+        it would fire on every install and be read as boilerplate."""
+        repo = _init_repo(tmp_path / "repo")
+        _seed_hooks(repo, {n: f"#!/bin/sh\n# {n}\nexit 0\n"
+                           for n in ("pre-commit", "pre-merge-commit")})
+        r = _run(repo)
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert "Armed here, but not Sysop's" not in r.stdout
+        assert "2 hook(s) installed" in r.stdout
+
+    def test_shipped_hook_still_installs_over_an_armed_one(self, tmp_path):
+        """Control on the restructured loop: moving `DST` above the template test
+        must not change what happens when the template DOES exist."""
+        repo = _init_repo(tmp_path / "repo")
+        _seed_hooks(repo, {n: f"#!/bin/sh\n# {n}\nexit 0\n" for n in HOOK_NAMES})
+        armed = repo / ".git" / "hooks" / "pre-push"
+        armed.parent.mkdir(parents=True, exist_ok=True)
+        armed.write_text("#!/bin/sh\n# stale\n")
+        armed.chmod(0o755)
+        r = _run(repo)
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert "3 hook(s) installed" in r.stdout
+        assert "# pre-push" in armed.read_text(), "the shipped template did not land"
+        assert "Backed up pre-existing customized hooks" in r.stdout
+        assert "Armed here, but not Sysop's" not in r.stdout
+
+
+class TestUnmanagedArmedHookEdges:
+    """Round finding (execution lens), F9. `-e` alone is false for a broken symlink —
+    the armed-but-dead case this arm exists to surface — and a directory at that path
+    is not a hook git will ever run."""
+
+    def _seed(self, tmp_path):
+        repo = _init_repo(tmp_path / "repo")
+        _seed_hooks(repo, {n: f"#!/bin/sh\n# {n}\nexit 0\n"
+                           for n in ("pre-commit", "pre-merge-commit")})
+        hooks = repo / ".git" / "hooks"
+        hooks.mkdir(parents=True, exist_ok=True)
+        return repo, hooks
+
+    def test_broken_symlink_is_reported(self, tmp_path):
+        repo, hooks = self._seed(tmp_path)
+        (hooks / "pre-push").symlink_to(repo / "does-not-exist")
+        r = _run(repo)
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert "Armed here, but not Sysop's" in r.stdout, \
+            "a broken armed symlink was skipped in silence"
+
+    def test_a_directory_is_not_called_an_armed_hook(self, tmp_path):
+        repo, hooks = self._seed(tmp_path)
+        (hooks / "pre-push").mkdir()
+        r = _run(repo)
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert "Armed here, but not Sysop's" not in r.stdout, \
+            "a directory was reported as an armed hook; git will not run it"

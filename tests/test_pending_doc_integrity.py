@@ -1738,8 +1738,8 @@ def test_a_present_pending_docs_dir_is_collected_from_a_path_without_dot_git(scr
 #
 # Step 4c routes a doc's `summary:` into `PROJECT_STATUS.md` §6 in the same commit that
 # flips its task to `done`, and nothing between them asked whether the doc still described
-# the branch. It is decided HERE and not there because Step 4-pre rebases/cherry-picks and
-# Step 4a may squash — every one of which orphans the recorded SHA, so 4c cannot ask the
+# the branch. It is decided HERE and not there because Step 4a rebases and
+# the PR squash follows — every one of which orphans the recorded SHA, so 4c cannot ask the
 # question at all. These tests run against a REAL repository, because the measurement is
 # `git rev-list` and a stubbed one would pin the stub.
 

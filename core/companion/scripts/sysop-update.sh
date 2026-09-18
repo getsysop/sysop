@@ -14,7 +14,12 @@
 # To pin an update to a reviewed rev instead of the source clone's HEAD:
 #   bash sysop/scripts/sysop-update.sh --ref <tag-or-commit>
 # (--ref takes any rev your clone can resolve — a release tag, or a commit SHA;
-#  for tags: git -C "$SYSOP_SRC" fetch --tags). Omit --ref to track HEAD (default).
+#  for tags: git -C "$SYSOP_SRC" fetch --tags).
+#
+# Omit --ref and you get the source clone's WORKING TREE, not its HEAD (Phase 306,
+# `Q-539`). The lock still records HEAD, so if that clone has uncommitted changes
+# the two disagree — install.sh warns and writes "source_dirty": true. `--ref HEAD`
+# is the cheap way to take the committed tree instead.
 #
 # See WORKFLOW.md § 8.2b for the upgrade-flow contract.
 # ──────────────────────────────────────────────────────────────

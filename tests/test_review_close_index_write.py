@@ -89,9 +89,11 @@ def _index(*task_ids: str) -> str:
     return "schema_version: 1\ntasks:\n" + rows
 
 
-def _git(root: Path, *args: str) -> None:
-    subprocess.run(["git", "-C", str(root), *args], check=True,
-                   capture_output=True, text=True)
+def _git(root: Path, *args: str) -> subprocess.CompletedProcess:
+    # Returns the completed process so callers can READ git's answer. Existing callers
+    # ignore it; `Q-524`'s guard needs `status --porcelain` and `show :<path>`.
+    return subprocess.run(["git", "-C", str(root), *args], check=True,
+                          capture_output=True, text=True)
 
 
 @pytest.fixture()
@@ -355,3 +357,46 @@ def test_the_bodies_are_staged_by_the_code_that_moved_them(repo: Path):
                             capture_output=True, text=True, check=True).stdout.split()
     assert "tasks/index.yml" in staged, staged
     assert "tasks/archive/TECH-0001.md" in staged, staged
+
+
+# ---------------------------------------------------------------- `Q-524`
+
+def test_a_body_edited_before_the_close_is_staged_by_the_move(repo: Path) -> None:
+    """Phase 304, `Q-524` — asserted by RUNNING Step 4c, not by reading it.
+
+    `git mv` stages the rename of the **committed** content. A body modified earlier in the
+    close (a Step 4b edit, say) is still unstaged afterwards, so Step 7's commit archives the
+    pre-edit text and its own post-commit gate then fails on the residue.
+
+    This lives here rather than beside the phase's other guards because **this module already
+    extracts and executes the real heredoc**, and the phase's first guard was a 700-character
+    substring window over the source instead. The round defeated that window three ways — a
+    comment mentioning the call, a decoy `git mv`/`git add` pair earlier in the file that the
+    window's anchor locked onto, and `check=False` on the re-stage — and measured only 76
+    characters of slack left in it, so one more comment line at that indent would have made it
+    misreport. Running the block admits none of those: `R ` versus `RM` is the shipped
+    behaviour, and nothing about how the source is spelled can fake it.
+    """
+    body = repo / "tasks" / "open" / "TECH-0001.md"
+    body.write_text("---\nid: TECH-0001\n---\nEDITED DURING THE CLOSE\n", encoding="utf-8")
+
+    r = _run(repo, ["TECH-0001"])
+    assert r.returncode == 0, r.stderr
+
+    porcelain = _git(repo, "status", "--porcelain").stdout
+    moved = [ln for ln in porcelain.splitlines() if "TECH-0001" in ln]
+    assert moved, f"Step 4c staged nothing for TECH-0001:\n{porcelain}"
+    # The discriminator is the WORKTREE column, not the index letter: git records the move
+    # as `R` or as `A`+`D` depending on how much the content changed, and both are fine.
+    # What must not appear is a worktree-modified flag (`RM`/`AM`) or an untracked `??` --
+    # either means Step 7 commits the pre-edit text and then fails its own gate on residue.
+    unstaged = [ln for ln in porcelain.splitlines() if ln[1] != " " or ln.startswith("??")]
+    assert not unstaged, (
+        "Step 4c left work UNSTAGED after moving the body, so Step 7 would commit the "
+        f"pre-edit text and then fail its own gate on the residue (Q-524):\n{porcelain}"
+    )
+
+    staged = _git(repo, "show", ":tasks/archive/TECH-0001.md").stdout
+    assert "EDITED DURING THE CLOSE" in staged, (
+        "the staged body is the pre-edit content — the edit was dropped"
+    )

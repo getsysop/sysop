@@ -8,9 +8,9 @@ read as correct.
 
 **#208 — a `fatal:` after a SUCCESSFUL merge.** `gh pr merge --delete-branch` deletes the
 *local* branch too, so after the remote squash lands `gh` switches to the base branch and
-tries to fast-forward it. In the **integration-branch shape** that cannot succeed: Step 4-pre
-cherry-picked every local-only `main` commit onto the integration branch, so those commits
-exist twice at different SHAs and `origin/<default branch>` is not a descendant of local `main`. Step 4d-1
+tries to fast-forward it. In the **integration-branch shape** that cannot succeed: the squash
+commit's parent is the pre-squash `origin/<default branch>`, so local `main`'s commits are not
+its ancestors and `origin/<default branch>` is not a descendant of local `main`. Step 4d-1
 used to key the stuck-PR branch on "`gh pr merge` refuses", which reads that expected `fatal:`
 as a failed merge and skips all cleanup after a merge that already landed.
 
@@ -154,7 +154,11 @@ def test_step4pre_probes_for_an_existing_pr_before_cutting_a_branch():
     probe_at = block.index(
         'gh pr list --head "<approved branch name>" --base <default branch> --state open'
     )
-    cut_at = block.index('git checkout -b "$INTEGRATION_BRANCH" origin/<default branch>')
+    # Phase 304: the branch is cut from the LOCAL default branch, not from
+    # `origin/<default branch>` — the cherry-pick that shape needed collapsed the
+    # merge-base and silently reverted claim flips (`Q-521`). The ordering property
+    # this test pins is unchanged.
+    cut_at = block.index('git checkout -b "$INTEGRATION_BRANCH" <default branch>')
     assert probe_at < cut_at, (
         "the reuse probe must run BEFORE the integration branch is cut — probing after it "
         "has already been created is the second-PR bug"

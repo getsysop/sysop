@@ -324,15 +324,17 @@ def _unapplied(repo: Path, upstream: str, head: str) -> int:
     return sum(1 for ln in r.stdout.splitlines() if ln.startswith("+"))
 
 
-def test_containment_is_broken_by_a_cherry_pick_which_step4pre_prescribes(
+def test_containment_is_broken_by_a_cherry_pick(
     tmp_path: Path,
 ) -> None:
     """Q-189. The ancestry test scores non-zero on a FULLY APPLIED branch.
 
-    Step 4-pre's `pr` policy runs `git cherry-pick origin/main..main`, so this
-    is not an operator improvisation -- it is the prescribed path. If this test
-    ever reports 0, the fallback in Step 4c step 1b can be reconsidered; until
-    then the skill must not skip on `rev-list` alone.
+    Phase 304 removed the one place the flow PRESCRIBED a cherry-pick (Step
+    4-pre's commit sweep), so this is no longer the prescribed path -- but the
+    property it pins is unchanged and the Step 4c step 1b fallback still rests
+    on it, because a cherry-pick anywhere else in the flow, or any operator
+    improvisation that rewrites commits, produces exactly this. The skill must
+    not skip on `rev-list` alone.
     """
     repo = tmp_path / "r"
     _init(repo)

@@ -64,11 +64,43 @@ def states(haystack: str, phrase: str) -> bool:
 
 
 def section(text: str, heading: str) -> str:
-    """The body of `heading`, ending at the next heading of the SAME OR HIGHER level.
+    """The body of `heading`, ending at the next heading of the SAME OR HIGHER level
+    **that is not inside a fenced code block**.
 
     `heading` is the full markdown heading line, e.g. `### Solo`. Raises AssertionError
     (never ValueError) with a message naming the problem, and requires the heading to be
     unique — a decoy duplicate earlier in the file silently redirected the original guard.
+
+    **Fence-awareness (Phase 308, `Q-543`).** A bash comment inside a fence — `# do the
+    thing` — matches `^#{1,N} \\S` and closed the section on it. A guard over the slice
+    then read a fraction of its subject, and a NEGATIVE assertion over the invisible
+    remainder passed vacuously. Fences are paired by `_fence_state()`, the module's
+    existing CommonMark primitive, so `~~~` and a 3-backtick line inside a 4-backtick
+    block are handled — those were Phase 291's two survivors of a hand-rolled pairing.
+
+    **What this does NOT do**, stated because three Phase 307 docstrings made a false
+    central claim about their own guard:
+
+    * It does not make the HEADING search fence-aware. A `heading` that also appears
+      inside a fenced template still counts toward the uniqueness assertion, which then
+      refuses rather than guessing — deliberate, and the reason `test_review_close_
+      smoke_gate.py` checks that `### User ops` is unfenced before slicing it.
+    * It closes on ATX headings only. A setext underline (`---` under a line) and an
+      indented (1–3 space) ATX heading do not close a section.
+    * An unterminated fence inside the body is an AssertionError, not a slice to EOF.
+      Running to EOF is fail-OPEN: the slice would gain unrelated sections and a
+      positive assertion could then be satisfied from outside its subject.
+    * **It inherits `_fence_state()`'s fence INDENTATION rule, which is not CommonMark's.**
+      `_FENCE` accepts any indent, where CommonMark caps a fence opener at 3 spaces (4+
+      is an indented code block). So a 4-space-indented ``` is read as a fence here: in
+      one direction that raises the unterminated-fence assertion over markdown that is
+      fine, and in the other two such lines pair and silently swallow a real closing
+      heading. Both were found by this phase's round; neither is reachable on today's
+      corpus — measured, 0 divergences from strict CommonMark across 3,499 headings in
+      103 tracked files, and the 8 indented fence lines in `review-close/SKILL.md` all
+      sit outside every sliced section. Filed as `Q-544` rather than fixed here, because
+      the correct rule is relative to a list item's content column and `_fence_state()`
+      tracks no list context — and it is shared with `rewrapped()`.
     """
     level = len(heading) - len(heading.lstrip("#"))
     marker = "\n" + heading + "\n"
@@ -76,10 +108,25 @@ def section(text: str, heading: str) -> str:
     assert count == 1, f"expected exactly one {heading!r} heading, found {count}"
     start = text.index(marker)
     rest = text[start + len(marker):]
-    # any heading at level <= this one closes the section
-    closer = re.compile(r"^#{1,%d} \S" % level, re.MULTILINE)
-    m = closer.search(rest)
-    return heading + "\n" + (rest[: m.start()] if m else rest)
+    lines = rest.splitlines(keepends=True)
+    closer = re.compile(r"^#{1,%d} \S" % level)
+    # A SENTINEL line past the end, so the unterminated-fence test reads the state AT
+    # end-of-file. `_fence_state` yields True for a fence's own CLOSING line, so the last
+    # yielded value is not that state: a section ending on a legal ``` closer would have
+    # tripped the assertion below. Caught by running it, not by reading it.
+    body, unterminated = [], False
+    for i, fenced in _fence_state(lines + ["\n"]):
+        if i == len(lines):
+            unterminated = fenced
+            break
+        if not fenced and closer.match(lines[i]):
+            break
+        body.append(lines[i])
+    assert not unterminated, (
+        f"{heading!r}: the section ran to end-of-file inside an unterminated fenced "
+        f"block. The slice cannot be trusted — fix the fence, do not widen the guard."
+    )
+    return heading + "\n" + "".join(body)
 
 
 def normalize(text: str) -> str:

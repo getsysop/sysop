@@ -12,14 +12,18 @@
 #      probed in run_checks.sh's order, not the installer's: the MAIN checkout's
 #      .venv then venv, then this checkout's, then PATH (a worktree carries no
 #      venv, so anchoring on the current root would answer about the wrong tree)
-#   4. git hooks armed (pre-commit / pre-merge-commit present + executable)
+#   4. git hooks armed (pre-commit / pre-merge-commit present + executable),
+#      and every ARMED hook read for a pre-Phase-128 `scripts/<vendor>` path
 #   5. optional scanners (semgrep, pip-audit, pyright) — advisory only
 #   6. review-round evidence (Phase 143): stale pending markers + asymmetric
 #      round history — the outer half of the refusal/abandonment check, which
 #      must live outside the round to see a round that never started
 #
-# Exit 0 when every hard prereq passes (1–3; hooks and scanners are reported
-# but never fail the check — loop-mode consumers may run checks via CI only).
+# Exit 0 when every hard prereq passes (1–3; scanners are reported but never
+# fail the check, and neither does an UNARMED hook — loop-mode consumers may run
+# checks via CI only). An armed hook that still names a pre-migration
+# `scripts/<vendor>` path DOES fail it: the consumer opted into that hook and it
+# is dead, which is not a preference about enforcement (`Q-541` leg 2).
 # Probe 6 splits: a STALE MARKER fails the check (a round demonstrably started
 # and never finished — unambiguous), while an ASYMMETRIC round history is
 # advisory only (indistinguishable from "hasn't been run here yet").
@@ -145,6 +149,83 @@ for tmpl in "$REPO_ROOT/sysop/scripts/hooks/"*; do
 done
 if [[ "$ARMED" -eq 0 ]] && [[ -d "$REPO_ROOT/sysop/scripts/hooks" ]]; then
   info "no hooks armed — enforcement runs only where you wire it (CI, or arm the hooks)"
+fi
+
+# ── 4a. armed hooks still naming a pre-migration path ───────────────────────
+# `Q-541` leg 2. The loop above asks only whether an executable of a TEMPLATE's
+# name exists. It never reads one, and it never sees a hook Sysop does not ship —
+# so `pre-push` was not in the loop at all, and an armed hook whose body still
+# pointed at a pre-Phase-128 `scripts/<vendor>` path passed every check while
+# being dead. That is the one class of breakage a vendor-path migration produces,
+# and this is the gate that is supposed to certify the migration succeeded.
+#
+# Iterates the ARMED directory, not the template directory, which is the whole
+# point: a consumer-owned hook is exactly the one nothing else looks at.
+#
+# Scoped to the vendor paths actually installed under sysop/scripts/, so a consumer's
+# own `$REPO_ROOT/scripts/lint_ledger.py` is not flagged. Migrated spellings are
+# neutralised BEFORE matching, because the pattern has to admit the `/` in
+# `$REPO_ROOT/scripts/…` — the form that actually executes — and would otherwise
+# match `sysop/scripts/…` through it.
+#
+# This shares its VENDOR-PATH predicate with install.sh's stale-reference scanner,
+# and `tests/test_self_check_stale_hooks.py` pins that half by running both over one
+# corpus. It is NOT the same answer overall, and an earlier version of this comment
+# claimed it was: install.sh scans hooks and CI workflows with a deliberately WIDER
+# arm that matches a bare `scripts/` with no basename, because a staged-path trigger
+# regex (`^scripts/…`) carries none. This check does not, on purpose — for a health
+# check that has to stay quiet on a clean install, that arm is noise. The test
+# asserts both halves: agreement on the vendor predicate, and the divergence,
+# enumerated.
+# Built from the FILES under sysop/scripts/, recursively, as paths relative to it —
+# the same shape install.sh derives from NS_MOVE_OLD, which is what makes the two
+# answers comparable. A first version took `basename` of the top level, which put
+# the bare words `run_checks`, `ci` and `hooks` — three DIRECTORIES — into the
+# alternation, so `scripts/circleci-deploy.sh`, `scripts/hooks_helper.sh` and
+# `scripts/run_checks_of_ours.sh` all failed this check. That is the same
+# false-positive class install.sh's own comment describes deleting, re-introduced
+# here and upgraded from a report line to a non-zero exit.
+VENDOR_ALT=""
+while IFS= read -r vendor_rel; do
+  [[ -n "$vendor_rel" ]] || continue
+  VENDOR_ALT="${VENDOR_ALT:+$VENDOR_ALT|}${vendor_rel//./\\.}"
+done < <(
+  if [[ -d "$REPO_ROOT/sysop/scripts" ]]; then
+    find "$REPO_ROOT/sysop/scripts" -type f 2>/dev/null \
+      | sed -e "s#^$REPO_ROOT/sysop/scripts/##" \
+      | grep -v '^__pycache__/\|/__pycache__/'
+  fi
+  # The directory forms, each required to be followed by a non-path character or
+  # end of line. `scripts/run_checks/*` in a coverage omit list or a semgrep
+  # `paths:` block names a directory that moved and carries no filename to scope
+  # to; without this it is invisible, which is a recall regression against the
+  # pre-Phase-309 scanner. The trailing boundary is what keeps a consumer's own
+  # `scripts/hooks/pre-push` out: a CONCRETE file under a moved directory matches
+  # only if it is itself a moved file.
+  if [[ -d "$REPO_ROOT/sysop/scripts" ]]; then
+    find "$REPO_ROOT/sysop/scripts" -mindepth 1 -type d 2>/dev/null \
+      | sed -e "s#^$REPO_ROOT/sysop/scripts/##" \
+      | grep -v '^__pycache__$\|/__pycache__$' \
+      | sed -e 's#$#/([^A-Za-z0-9_.-]|$)#'
+  fi
+)
+if [[ -n "$VENDOR_ALT" && -d "$HOOKS_DIR" ]]; then
+  # No `-x` filter. A hook that sources a non-executable helper beside it is a
+  # common idiom, and the helper is where the dead path usually sits — filtering
+  # on the executable bit reported green over exactly that. install.sh's scanner
+  # has never filtered on it either, so this is also what makes the two agree.
+  for armed_hook in "$HOOKS_DIR"/*; do
+    [[ -f "$armed_hook" ]] || continue
+    armed_name="$(basename "$armed_hook")"
+    # git's own shipped templates are executable and are not the consumer's.
+    case "$armed_name" in *.sample|*.bak*) continue ;; esac
+    if sed -E 's#(sysop|companion)/scripts/#\1/@sysop-migrated@/#g' "$armed_hook" 2>/dev/null \
+       | grep -qE "(^|[^[:alnum:]_])scripts/($VENDOR_ALT)" 2>/dev/null; then
+      bad "armed hook '$armed_name' still names a pre-migration scripts/ path"
+      info "    Sysop's vendor dir moved to sysop/scripts/ (Phase 128); that line no longer resolves"
+      info "    fix: $HOOKS_DIR/$armed_name — repoint it at sysop/scripts/<name>"
+    fi
+  done
 fi
 
 # ── 4b. agent-isolation residue ─────────────────────────────────────────────

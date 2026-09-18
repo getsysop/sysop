@@ -122,10 +122,41 @@ that it's a working log written for the project's own continuity, not an introdu
   describing as stuck then moved, though not because of that settlement — thinning the step in
   question never needed a new pin, and it was the re-wrap result above that had been the blocker
   of record. Rationale began moving out of the file an agent executes and into a sibling an editor
-  reads — forty-four sections of it across four steps as of 2026-09-16, with eighteen blocks left
+  reads — forty-four sections of it across four steps, with eighteen blocks left
   whole: most often because a rule's reason is what makes it followable, and otherwise because a
   guard or a pin still reads the text where it sits, because the verdict could not be decided, or
   because moving the block would have meant re-authoring far more than it freed.
+  Then that campaign was stopped, on 2026-09-16, by decision rather than by completion — four
+  sections taken, thirteen never reached, every later bundle cancelled. The arithmetic is the
+  reason and it was re-derived rather than quoted: the file the campaign was aimed at lost 5.6%
+  where the goal needed roughly three quarters of it gone, a census of what could be cleanly
+  relocated found 8.0%, and the two sections measured had 56% and 70% of every split re-authored
+  straight back into the file it left.
+  The method could not reach the prize, which is a fact about the instrument and not about the
+  problem — the two changes that would reach it were costed and deliberately left unopened, with
+  the condition for reopening written down in advance rather than argued later. The guard that
+  bounded the growth stays armed and changes job, from tracking progress to refusing
+  re-accretion. What replaced the campaign is narrower than a continuation of it. A standing review
+  question — does this paragraph tell the agent what to do, or tell an editor why the rule exists? —
+  now routes the second kind to the sibling file as it is written, which is prevention rather than
+  relocation. The one phase to exercise it since the freeze was an ordinary defect fix, and it added
+  three sections of freshly authored rationale rather than moving any: the runner grew by about
+  1,900 bytes in that phase and the editor-facing mass the guard measures fell by thirty-one
+  characters. The push is over; what survives it only keeps new rationale out of the runner in the
+  first place.
+  Later in the month the same lesson arrived from a different side — a filing is three claims, not
+  one, and the claim nobody checks is the fix it proposes, because that one arrives sounding like
+  work already done. One entry's remedy, described as needing no new research, would have
+  suppressed the only live finding its report exists to surface. Another named two live instances
+  of a defect and neither was a call site of the code it was about. A third was characterised by a
+  test fixture that passed on half its cases for a reason unrelated to the code: where a
+  cherry-pick keeps its original's committer date, git produces a byte-identical commit, so the
+  history never diverges and nothing reverts — a harness green because the defect is gone and a
+  harness green because the conditions were never assembled read exactly alike. And the queue's
+  last high-severity entry was built three times, disqualified by three separate review rounds — an
+  oscillating verdict, then a permanent stall, then a rule true of one section and false of six —
+  and reverted on the maintainer's call, with the record and one new finding as the only things
+  that shipped.
 
 Where to go next: [the monograph](./workflow.html) for why it's built this way,
 [one rule, end to end](./one-rule.md) for the evidence trail behind a single rule, and
