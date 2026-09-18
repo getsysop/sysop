@@ -847,8 +847,8 @@
     <div class="hero-grid">
       <aside class="hero-margin rise">
         <span class="line">Vol. <span class="accent">I</span></span>
-        <span class="line">Issue 289</span>
-        <span class="line">2026.09.13</span>
+        <span class="line">Issue 310</span>
+        <span class="line">2026.09.18</span>
         <span class="line" style="margin-top:22px">An essay on</span>
         <span class="line">software workflow</span>
       </aside>
@@ -871,7 +871,7 @@
             <div class="hero-stat-label">Skills</div>
           </div>
           <div class="hero-stat">
-            <div class="hero-stat-fig">289</div>
+            <div class="hero-stat-fig">310</div>
             <div class="hero-stat-label">Shipped phases</div>
           </div>
           <div class="hero-stat">
@@ -1429,6 +1429,7 @@
           <p>A third authoring rule had already shipped part-way through all this — earlier than the run above, which is why the run kept going — and it is the one that pays: <strong>run the commands your change prescribes</strong>, in a throwaway repo, before spawning anyone — with the fixture's inputs built from what the shipped code actually emits rather than from your own model of it. The two halves are not decoration. The same prescribed <code>git show</code> against the same fixture printed the file under the author's assumed path and exited 128 under the path every shipped writer really produces; the change's own new error branch would then have halted every run with a confident, wrong diagnosis. One of three reviewers found it, by building the repo and typing the command. The other two read the same files and did not.</p>
           <p class="muted">And the rule is necessary, not sufficient — which the log demonstrated on itself. Fifteen phases after it shipped, a sweep found sixteen live sites prescribing an interpreter path that is absent on a named and ordinary set of consumer machines — poetry, conda, a plain <code>venv/</code> layout, a system Python that refuses installation — three of those sites being the documentation still teaching the idiom. A rule about the commands you are adding does not sweep the commands already there.</p>
           <p><strong>Addendum (2026-08-11).</strong> The streak has not ended since this snapshot was cut. Two consecutive phases after it built mechanisms their own review rounds then rejected outright: one withdrew its headline fix after the round showed the fix was worse than the defect it closed, and the other built a reference table false for four of its six rows, with a guard that killed 2 of 26 independent mutations while false-killing 12 of 15 negative controls. Neither rejected mechanism merged. The record is kept because the trend is the finding — and because a review gate strong enough to reject its author's own work, with the rejection written down, is the property everything else on this page is trying to buy.</p>
+
           <p><strong>Addendum (2026-08-23).</strong> The paragraph above narrates that streak by hand, which is
           exactly the kind of claim this page keeps arguing should not be narrated by hand. It is now produced by a
           committed derivation instead: a register recording every round's author-side battery beside the independent
@@ -1443,6 +1444,33 @@
           guarded by nothing, which is what dating an addendum is for. The register's own first draft was dismantled by its round for the same failure it exists
           to catch — the first version of it read the denominator out of every &ldquo;N of M surviving&rdquo; cell, on four rows,
           inflating the number each time.</p>
+
+          <p><span class="muted">Re-derived 2026-09-18, which is the only reason to quote it again: the same
+          command now reports <strong>one hundred and fifty numbered phases, one hundred and five claiming
+          an author battery with every mutation killed, one hundred and two of those falsified by an independent
+          lens, three unchecked, and still none intact</strong>. Eighty-two more phases, and the intact column has
+          not opened once. That is the figure worth watching, because it is the one that would move if the
+          authoring rules were doing what their author hoped &mdash; and the honest reading is narrower than it
+          looks: those rules were never meant to make an author's battery correct, only to stop it being the last
+          word on its own guards.</span></p>
+
+          <p><strong>Addendum (2026-09-18) &mdash; the strongest instance of a round rejecting its author's
+          own mechanism, and the one that cost the most.</strong> A phase took the queue's last remaining
+          high-severity defect and built a mechanism for it three times. Each cut got its own review round, and each round disqualified the
+          cut: the first produced a verdict that oscillated between two states on repeated runs, the second
+          replaced the oscillation with a permanent stall, and the third narrowed the rule until it was true
+          of one section and false of six. Nothing merged. The phase's product is its record and one new
+          finding, and the maintainer &mdash; not the session &mdash; made the call to revert.
+          <span class="muted">Two things make it worth a paragraph rather than a line. The first is that the
+          disqualifications were not repetitions: each round refused a different mechanism for a different
+          reason, which is what a round is supposed to do and is also the signal the session kept declining
+          to read. The rule that came out of it is about when to stop rather than how to fix &mdash; a second
+          round killing a replacement means the shape is wrong, not that the patch was, and the next move is
+          to bring the disposition to a human rather than to build a fourth. The second is that the original
+          filing was refuted before the first cut was written: its proposed discriminator did not
+          discriminate, firing identically on a branch that had never merged, and two of its three signals
+          turned out to measure staleness rather than the property being tested. Three cuts were spent on a
+          mechanism whose premise the first hour had already falsified.</span></p>
           <p>The other thing the record gained is a failure of the round itself. Reviewers dispatched into isolated
           working copies were landing on the <em>parent</em> commit rather than the one under review, because an isolated copy is
           created from the repository's default branch rather than from the session's own commit — so under a
@@ -2332,6 +2360,41 @@
           that detector was read carefully first, by people looking for exactly this, and reading found none of it.
         </p>
 
+        <p>
+          <strong>Addendum (2026-09-18).</strong> Three phases in a row then found the same silence in the
+          <em>report of a defect</em> rather than in the defect. A filed finding carries three separable
+          claims &mdash; that the defect exists, that it lives where the filing says, and that the fix the
+          filing names is the right one &mdash; and the last of the three is the one nobody checks, because
+          it arrives sounding like work already done.
+        </p>
+
+        <p>
+          One filing said its remedy needed <em>no new research</em> and named an existing constant to reuse.
+          Reusing it would have suppressed the single live entry the report exists to surface on the only real
+          consumer, while omitting the one file that genuinely belonged &mdash; wrong in both directions at
+          once, and confidently. A second filing named two live instances of a defect in a shared text
+          helper; neither was a call site of that helper at all, and the one place the helper really does
+          truncate appears in none of the four measurements the finding's blast radius had accumulated before
+          somebody opened the files. Its published figures did not survive re-measurement either.
+          <span class="muted">The third is the subtlest, because the instrument that agreed was a
+          reproduction. A close-path defect silently reverted a task's status flip; the fixture built to
+          characterise it passed cleanly on half its cells, and the reason had nothing to do with the code
+          under test. Where a cherry-pick inherits its original's committer date, git produces a
+          byte-identical commit &mdash; same tree, same parent, same author, same message, same SHA &mdash;
+          so the history never diverges and the flip survives. Every one of those rows reports success. Run
+          the same matrix with distinct dates and every row reverts. A harness can be green because the
+          defect is fixed, or green because the conditions that expose it were never assembled, and the two
+          are indistinguishable from the exit code &mdash; which is this section's own thesis, arriving
+          inside the test written to prove a fix.</span>
+        </p>
+
+        <p>
+          What the three share is that each was caught by doing the cheapest possible thing and doing it
+          first: opening the file the filing cites, and running the command the filing prescribes, before
+          building anything on top of either. Neither is review. Both are execution, and both preceded the
+          design rather than checking it afterwards.
+        </p>
+
         <h3 id="unstated-contract">One writer, many readers, and a contract written down nowhere</h3>
         <p>
           Those silences are not independent accidents, and a run of phases through August 2026 kept landing on the
@@ -3091,10 +3154,47 @@
           that settlement bought: thinning this step never needed a new pin, and the blocker the project actually
           names is a different one &mdash; that a re-wrap changing no words still breaks guards which were never
           meant to constrain formatting. Once that was priced, rationale moved out of the runner and into the
-          reference across four steps &mdash; forty-four sections of it as of 2026-09-16 &mdash; and eighteen blocks
+          reference across four steps &mdash; forty-four sections of it &mdash; and eighteen blocks
           were left whole: most often because a rule's reason is what makes it followable, and otherwise because a
           guard or a pin still reads the text where it sits, because the verdict could not be decided, or because
           moving the block would have meant re-authoring far more than it freed.</span>
+        </p>
+
+        <p>
+          <strong>Addendum (2026-09-18) &mdash; the campaign is frozen, and the honest report is that the
+          method could not reach the prize.</strong> Those four steps are where it stopped. On 2026-09-16 the
+          campaign was closed by decision rather than by completion: four sections taken, <em>thirteen</em>
+          never reached, and every later bundle cancelled. The arithmetic is the reason, and it was
+          re-derived against the merged tree rather than quoted from the plan that proposed it. The runner
+          lost <strong>26,315 bytes, 5.6%</strong>, across ten phases &mdash; seven of which touched the
+          file, six of which changed its size, and one of which <em>grew</em> it &mdash; while the reference it fed grew from 20,213 bytes to 70,244 over the same span. The target the campaign was opened against needed roughly three quarters of the file gone.
+          A census of what could be cleanly relocated found <strong>8.0%</strong>, against a ceiling of
+          35.8%, and the two sections measured had <strong>56%</strong> and <strong>70%</strong> of every split re-authored straight back into the runner. For scale in the
+          other direction: four ordinary phases in the run-up to it had <em>added</em> 42,341 bytes, so the
+          whole campaign did not undo four phases of routine accretion.
+        </p>
+
+        <p>
+          <span class="muted">Three things are worth stating about a freeze rather than a finish. The first
+          is that this is a fact about the instrument, not about the problem &mdash; the two levers that do
+          reach the prize were costed and deliberately left unopened, because the cheap one was measured and
+          found insufficient before the expensive ones were started. The second is that the ratchet stays
+          armed and changes job: the check that bounded editor-facing mass is now a growth guard, refusing
+          re-accretion rather than tracking progress toward anything. The third is the reopen condition,
+          written down in advance so the decision is not re-argued from whoever is under pressure &mdash; a
+          second consumer, or a close cadence high enough that per-close cost compounds. What replaced the
+          campaign is narrower than a continuation of it, and the distinction is worth stating precisely
+          because the file has kept growing. A standing review dimension now asks of every change whether a
+          block of prose tells the runner what to do or tells an editor why the rule exists, and routes the
+          second kind to the reference <em>as it is written</em>. That is prevention, not relocation. The one
+          phase to exercise it since the freeze was an ordinary defect fix: it added three reference sections
+          &mdash; forty-seven across five steps today, against the campaign's forty-four across four &mdash;
+          but those sections are newly authored rationale for that fix, not text lifted out of the runner. The
+          runner <strong>grew</strong> by 1,896 bytes in that phase, and the editor-facing mass the ratchet
+          measures fell by <strong>thirty-one characters</strong>. The campaign's own roster still lists that
+          step as never taken, correctly. So the honest summary is not that thinning continues at a smaller
+          scale: it is that the push is over, and what survives it only keeps new rationale from landing in the
+          runner in the first place.</span>
         </p>
       </div>
     </div>
@@ -3181,6 +3281,37 @@
           <span class="muted">The generalisation is the one the catalogue of silent failures in &sect;&nbsp;III is built on. An empty
           result has at least two causes, and a system that cannot tell them apart will eventually pick the wrong
           one at the worst moment &mdash; here, on the only path whose whole job is remembering.</span>
+        </p>
+
+        <p>
+          <strong>Addendum (2026-09-18).</strong> The lock's other job is saying <em>which tree you have</em>,
+          and two ways it could not were found on a live consumer install rather than reasoned about. The
+          first: without <code>--ref</code>, an update copies your Sysop clone's <em>working tree</em> while
+          the lock records that clone's <code>HEAD</code>. The two are the same file only when the clone is
+          clean, and a maintainer's clone routinely is not &mdash; so a consumer can be running a line of code
+          that exists in no commit, under a SHA whose tree does not contain it, and a maintainer triaging
+          against that SHA reproduces the wrong thing. The run now says so at the moment it happens and the
+          lock carries the fact, because the alternative &mdash; refusing &mdash; would break the ordinary way
+          the tool is developed. The second: <code>--update</code> deliberately leaves its result uncommitted,
+          so running it twice before committing is not an accident, it is Tuesday. The second run's
+          <em>pre-update snapshot</em> then stamps itself with the commit being moved to, over a tree already
+          holding part of that move &mdash; so the one commit whose entire purpose is answering
+          <em>where was I before this</em> answers with where you were going.
+        </p>
+
+        <p>
+          <span class="muted">A companion pair closed the same week is about migrations rather than
+          revisions, and it is the more ordinary failure of the two. When a vendored directory moves, the
+          installer scans the consumer for references to the old location &mdash; and that scan had been
+          reporting files whose only mention of the old path was a record of the migration itself, which is
+          append-only and correct. A report that is mostly noise is a report nobody reads, and the instinct
+          was to reuse an exclusion list already sitting in the same file. It answers a different question,
+          and it would have suppressed the one live reference a maintainer could act on. What ships is a
+          purpose-named predicate of three entries, which is less clever and is the only kind that can be
+          checked. The other half is the hook layer: an armed git hook still pointing at a pre-migration path
+          runs nothing and says nothing, so the health check now reads every armed hook and fails on one,
+          and the arming script names a hook it ships no template for instead of skipping it in
+          silence.</span>
         </p>
 
         <h3 id="off-claude-code">One concrete step off Claude Code</h3>
@@ -3324,7 +3455,7 @@
       <aside class="col-rule">Colophon</aside>
       <div>
         <p class="col-body">
-          A monograph on <em>Sysop</em>, as of <em>Phase 289</em> · 2026-09-13, with dated addenda where the record
+          A monograph on <em>Sysop</em>, as of <em>Phase 310</em> · 2026-09-18, with dated addenda where the record
           moved after the snapshot. Phase numbers throughout are iterations
           of the workflow's own development — each one planned, adversarially reviewed, and shipped through the process it
           extends; <a href="https://github.com/getsysop/sysop/blob/main/PHASE_LOG.md">PHASE_LOG.md</a> carries one entry per phase. Set in the reader's native serif —
@@ -3365,7 +3496,7 @@
             <ul>
               <li>Extracted from <em>gdp-query-system</em></li>
               <li>First consumer · BeanRider</li>
-              <li>Phase 289 · 2026-09-13</li>
+              <li>Phase 310 · 2026-09-18</li>
             </ul>
           </div>
           <div>

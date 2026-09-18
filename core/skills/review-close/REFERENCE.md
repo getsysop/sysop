@@ -679,8 +679,8 @@ provenance section must not do.)
 ### Why staleness is asked at Step 3b rather than at Step 4c
 
 Step 3b is the last point in the close where the branch is still in the shape its document was
-written against. Everything after it rewrites history — Step 4-pre rebases or cherry-picks, and
-Step 4a may squash — and each of those orphans the commit the document recorded. Step 4c, where
+written against. Everything after it rewrites history — Step 4a rebases its local-only arm, and
+the PR squash follows — and each of those orphans the commit the document recorded. Step 4c, where
 the routing that writes the durable record actually happens, therefore cannot ask the question at
 all; the ancestry property that makes that true is the one Step 1b's own blockquote already
 documents. So it is asked at collect time and answered by refusing to collect, rather than held
@@ -856,6 +856,137 @@ property is stated in the runner as a guarantee rather than as an implementation
 
 ---
 
+## Step 4-pre — provenance
+
+### Why the integration branch is cut from the local default branch, and never from `origin/<default branch>` plus a cherry-pick
+
+Until Phase 304 this step cut the integration branch from `origin/<default branch>` and then swept
+the local-only `main` commits onto it with `git cherry-pick origin/<default branch>..<default branch>`.
+That cherry-pick **rewrites** the commits, so neither the rollback nor the re-claim remains an
+ancestor of anything a feature branch knows, and the merge-base between the integration branch and
+an approved branch collapses to `origin/<default branch>`. Step 4a's three-way merge then resolves
+the task index against a base that has never seen the claim flip.
+
+**Which arm, because the scope is the thing an editor prices a change with.** This reaches Step 4a's
+**published** arm (`git merge --no-ff`) and **not** its local-only arm. The local-only arm rebases,
+and a rebase replays each commit's *patch* against its real parent: the branch never changed
+`status:`, so there is no status hunk to replay and the collapsed merge-base is never consulted.
+Measured both ways. **Phase 304's first record claimed the population was every approved branch cut
+from a rollback, and its own round measured that wrong** — which matters, because `SKILL.md` calls
+the local-only arm *"the common case"*, so the defect lives on the rarer arm. Pinned by
+`tests/test_step4pre_ancestry.py::test_the_local_only_arm_was_never_vulnerable`.
+
+**What that produces.** A task rolled back `in_progress` → `open` and then re-claimed leaves the
+integration side *net unchanged* against `origin/<default branch>`, while the approved branch — cut
+between those two commits — carries `open`. Three-way sees one side changed and takes it. The flip
+is reverted, the merge reports `CLEAN (no conflict, no warning)`, and `validate_tasks.py` stays
+green because `open` is a valid status.
+
+**What the corruption actually costs, measured — not what the filing said it costs.** The filing,
+and this section's first version, said the task *"sits `open` with its lock still held, which is
+exactly what `/auto-build`'s frontier treats as claimable"*. **That is refuted by the frontier
+itself:** `auto-build/SKILL.md`'s `ready()` rejects `tid in locks` with the reason *"active lock in
+`sysop/runtime/locks/` — already claimed"*, so a held lock is precisely what makes it *un*claimable.
+The real cost is quieter and is a data-integrity one:
+
+- **The source of truth stops being the discriminator.** The task index — which every reader
+  treats as authoritative — says `open` for work that is in flight. The lock is then the only thing
+  standing between that task and a second claim, and the status field it is supposed to agree with
+  now disagrees.
+- **No gate can see it.** `validate_tasks.py`'s Invariant 9 is one-directional — *`in_progress`
+  requires a lock* — with no converse, so `open` **with** a lock is legal and the validator is
+  clean over the corrupted state. That is why the upstream report measured 839 tasks and 0 errors.
+- **Dropping the lock is what makes it live.** Anything that releases the lock without re-reading
+  the status — `claim_task.sh --release`, a failed close, a worktree cleanup — leaves a genuinely
+  claimable task whose work is already in flight or merged.
+- **The close does not surface it either.** Step 4c's `done` flip is keyed on `roadmap_ids`, not on
+  the current status, so a reverted task still closes as `done` and the disagreement never appears.
+
+**Measured, Phase 304**, over a fixture matrix of four branch-edit shapes × two base states:
+
+| shape (Step 4a **published** arm) | merge-base | base current | merge | `status:` after |
+|---|---|---|---|---|
+| `origin/<default branch>` + cherry-pick | collapsed | yes | CLEAN | `open` — **reverted, 8/8** |
+| cut from the local default branch, then merge `origin/<default branch>` | preserved | yes | CLEAN | `in_progress` — **correct, 8/8** |
+
+In all eight of the fixed rows the branch's own work survived and, where `origin/<default branch>` had advanced
+mid-run, the upstream commit survived too — so the property that motivated cutting from
+`origin/<default branch>` in the first place (the PR's checks run against the current base) is kept
+by the `git merge origin/<default branch>` that follows, not lost.
+
+**Two claims in the filing that the measurement corrected.** `Q-521` stated four conditions "all
+required", the third being that the branch edits the same task entry far enough from `status:` that
+the hunks do not overlap. That condition is **not required and not relevant**: under the collapsed
+merge-base the integration side has *no* diff for the file, so there is nothing for any hunk to
+conflict with at any distance. A branch that never touches the task index at all reverts the
+flip just the same (on the published arm) — so the population is every **published** approved branch
+cut from a rollback. That is wider than the entry described in one direction (the branch's own edit
+is irrelevant) and narrower in another (the local-only arm is immune), and neither correction was
+in the filing. The filing also attributed a conflicting outcome to a three-line
+task entry as an independent trap; measured, that conflict appears **only** in combination with the
+identical-SHA trap below, never on the defect path.
+
+**The fixture trap, because it cost a round its verdict.** If the cherry-picked commits land with
+the same committer timestamp as the originals, git produces **byte-identical SHAs** — same tree,
+same parent, same author and author date, same message — the merge-base is the rollback commit
+rather than its parent, and the flip survives. A fixture fast enough to cherry-pick within the same
+second therefore reproduces nothing, and reports a clean pass. Phase 303's adversarial round ran
+exactly such a script, concluded the defect was irreproducible, and was wrong; two of the author's
+own attempts died the same way. Any test or fixture in this area must force distinct committer
+dates (`GIT_COMMITTER_DATE`) and assert on the merge-base, not only on the merge's exit status.
+
+### The Step 4c containment false positive the swap removed, and what the figure actually is
+
+Step 4c step 1b's `git rev-list --count "<branch>" "^HEAD"` is an ancestry test. Until Phase 304,
+Step 4-pre cut the integration branch off `origin/<default branch>` and swept local-only commits
+across with `git cherry-pick`, which rewrites them — so a pending doc whose frontmatter is
+`branch: <default branch>`, which `/document-work` writes whenever it runs on the default branch,
+scored non-zero and was classified `NOT-MERGED` on **every** `pr`-policy close, while its content
+was provably in the merge target. Cutting from the local default branch makes its tip a real
+ancestor, and the same doc scores `0`.
+
+**The figure, stated the way it is actually true.** The count before is *however many local-only
+default-branch commits the tree has*, not a constant: on the phase's own test fixture, which
+carries two (the rollback and the re-claim), it is **2 → 0**; on a one-commit fixture it is
+**1 → 0**. Phase 304's first record published *"one local-only `main` commit: `1` before, `0`
+after"* as though it were one measurement, and its round found the two fixtures disagreeing — the
+shipped sentence cited the one-commit number while the in-tree test used the two-commit fixture.
+The guard asserts only that the before-count is non-zero and the after-count is `0`, which is the
+part that generalises.
+
+### The permission rules the swap moved, and the one it silently removed
+
+Retiring the cherry-pick moved this step's whole permission footprint, and Phase 304's first cut
+shipped the move without the rules. Three facts, none of them visible to a mechanical check:
+
+- **`git merge --no-edit …` binds neither shipped merge rule.** The seeded set has
+  `Bash(git merge --ff-only:*)` and `Bash(git merge --no-ff:*)`, and the matcher compares literal
+  text from the flag onwards — the same reason `SKILL.md`'s own pre-flight already gives for why
+  `--ff-only` does not authorize `--no-ff`. Under `permissions.defaultMode: "dontAsk"` the base
+  merge is therefore auto-denied on every `pr` close, the integration branch silently stays at the
+  local default branch, and the single property the new shape exists to keep — the PR's checks
+  running against the current base — is the one that is lost. The `PermissionDenied` hook matches
+  three `git` shapes, none of them a merge, so the denial arrives bare.
+- **`Bash(git cherry-pick:*)` stays seeded even though the sweep is gone**, because the Step 4
+  branch-guard's reflog recovery (*"cherry-pick your stranded commits onto the expected branch"*)
+  is now its only caller. Do not retire it with the step that used to justify it.
+- **The escape disappeared with the sweep.** `git cherry-pick --abort` rode on
+  `Bash(git cherry-pick:*)`. `git merge --abort` matches neither merge rule, and concluding a
+  resolved merge needs a `git commit` that matches only `Bash(git commit -m docs:*)` — so a
+  conflicted Step 4-pre was, briefly, neither concludable nor abortable.
+- **Nothing mechanical catches this class.** `tests/test_permission_surface_drift.py` checks
+  *declared → seeded* and never *prescribed → declared*, and
+  `tests/test_prescribed_command_coverage.py`'s invocation pattern only matches
+  `sysop/scripts/<name>` paths, so every `git` command in every fence is outside its population.
+  Both directions were green over a step prescribing a command no rule bound. Filed rather than
+  fixed here: closing it means widening a guard's population, which is its own change.
+
+**What a reversal would cost.** Reinstating the cherry-pick restores a silent data defect whose
+blast radius is the claim ledger, on a path with no detector: the merge is clean, the validator is
+green, and the only visible symptom is a duplicate claim some later cycle. `tests/test_step4pre_ancestry.py`
+pins the mechanism — it asserts the merge-base is preserved and the status survives, with distinct
+committer dates, so the identical-SHA false negative cannot make it pass vacuously.
+
 ## Step 4c — provenance
 
 Editor-addressed history for `### 4c. Consolidate Pending Documentation`. Nothing here binds the
@@ -916,8 +1047,8 @@ the trees byte-identical — still scores `1`.
 **Why the `main`-doc case does not hide.** A cherry-pick scores `0` only in the degenerate case
 where it reproduces the identical SHA, which needs the picked commit to land on the **same parent**
 it originally had **and** to carry the same committer timestamp. `git cherry-pick` stamps the
-committer date at *pick* time, and the commits Step 4-pre sweeps are `/claim-task` Step 4d flips
-and Step 1b `review_tasks.md` saves made minutes to days earlier — so the timestamp condition is
+committer date at *pick* time, and the local-only commits in question are `/claim-task` Step 4d
+flips and Step 1b `review_tasks.md` saves made minutes to days earlier — so the timestamp condition is
 essentially never met on this path, and the same-parent condition alone is not enough. Measured on
 a realistic five-minute-old local `main` commit: `rev-list --count` `1`, `git cherry` `0`
 unapplied. The `0` outcome is confined to a pick made inside the same clock second as the original

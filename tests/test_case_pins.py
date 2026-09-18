@@ -125,8 +125,8 @@ def test_the_tuple_list_equivalence_applies_only_where_pytest_unpacks(decorator,
 
     Phase 301's round measured this: `_norm` coerced every sequence on every row, which is right
     at 2+ argnames and WRONG at one, where pytest hands the row to the test verbatim and a list
-    and a tuple are genuinely different values. `Q-519` sends the next consumer at a single-argname
-    list, so this is not hypothetical.
+    and a tuple are genuinely different values. The § *Notes* target below sends the next consumer at a
+    single-argname list, so this is not hypothetical.
 
     Each row below pins the TUPLE form `(1, 2)` against a source written with the LIST form. It
     must be silent where pytest makes them the same case and must report where it does not.
@@ -144,7 +144,8 @@ def test_a_column_pin_over_scalar_rows_is_refused_rather_than_answered_wrongly()
     single-argname list of strings is a sequence of CHARACTERS, so a pin of first letters reported
     CLEAN — a false pass — and an int row raised `TypeError` out of the guard instead of reporting.
     `tests/test_thinning_transforms.py::test_transform_1_refuses_every_state_that_is_not_editor`
-    is exactly that shape, and `Q-519` points the next phase at it.
+    is exactly that shape, and `REVIEW_CHECKLIST.md` § *Notes* (2026-09-16) points the next phase at it.
+    That pointer is deliberately not a `Q-NNN` — see the note in `_case_pins.py`'s `_norm`.
 
     The predicate now refuses the pin and says what to do instead.
     """

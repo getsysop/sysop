@@ -27,7 +27,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from _prose_guard_helpers import normalize, states  # noqa: E402
+from _prose_guard_helpers import normalize, section, states  # noqa: E402
 
 CONFIG_DOC = REPO_ROOT / "docs/configuration.md"
 WORKFLOW = REPO_ROOT / "core/companion/docs/WORKFLOW.md"
@@ -40,19 +40,23 @@ _WORD_TO_INT = {
 
 
 def _section_6_1() -> str:
-    """WORKFLOW.md § 6.1, sliced by its OWN heading pair.
+    """WORKFLOW.md § 6.1.
 
-    Not `_prose_guard_helpers.section()`: that helper slices to the next
-    same-or-higher heading and is fence-blind, and § 6.1's body is mostly fenced
-    `markdown` templates whose content lines are literal `## Merge policy`,
-    `## Plan review` and so on. It therefore returns the first ~40 lines and every
-    check over the rest passes vacuously. Found by writing this module.
+    **This was a local workaround from Phase 238 until Phase 308.** § 6.1's body is
+    mostly fenced `markdown` templates whose content lines are literal `## Merge
+    policy`, `## Plan review` and so on, and `_prose_guard_helpers.section()` was
+    fence-blind — it returned the first ~40 lines and every check over the rest
+    passed vacuously. This module worked around it by slicing on its own heading
+    pair and said so, and nobody fixed the shared helper for 70 phases; `Q-543`
+    was then filed as a novel discovery, which one `grep` would have refuted.
+
+    The helper is fence-aware now (`tests/test_prose_guard_section.py`), and it
+    returns this same span — verified byte-identical up to a trailing newline
+    before the workaround was removed. Kept as a named function because the
+    module's tests read better for it, not because the helper needs wrapping.
     """
-    text = WORKFLOW.read_text(encoding="utf-8").split("\n")
-    start = next(i for i, ln in enumerate(text)
-                 if ln.startswith("### 6.1 What CLAUDE.md should contain"))
-    end = next(i for i in range(start + 1, len(text)) if text[i].startswith("### 6.2"))
-    return "\n".join(text[start:end])
+    return section(WORKFLOW.read_text(encoding="utf-8"),
+                   "### 6.1 What CLAUDE.md should contain")
 
 
 def test_the_section_slice_reaches_the_templates():

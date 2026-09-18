@@ -134,6 +134,23 @@ CODEX_SKILLS=(codebase-review security-audit)
 LOCK_REL=".claude/sysop.lock"
 LOCK_VERSION=1
 
+# Phase 306 (`Q-539`): the installer copies $REPO_ROOT's WORKING TREE, while the
+# lock records $REPO_ROOT's HEAD (get_sysop_commit). Those are the same tree only
+# when the source clone is clean, so a consumer's `sysop_commit` can name a commit
+# whose tree was never what landed. Probed once, before anything is written.
+#   0 = clean (or a non-git source, which has no committed state to differ from)
+#   1 = uncommitted changes under the source paths the installer actually reads
+SOURCE_DIRTY=0
+SOURCE_DIRTY_PROBED=0
+SOURCE_DIRTY_COUNT=0
+# The source paths the installer reads. Derived from install.sh's own
+# `$REPO_ROOT/...` references, not from a mental model of them — the top-level
+# prefixes are `core/` and `packs/`, plus install.sh itself, whose uncommitted
+# state changes the installer that runs. `tests/test_install_source_dirty.py`
+# re-derives this population from the file and fails if a new source root
+# appears without being added here.
+SOURCE_SCAN_PATHS=(core packs install.sh)
+
 # Populated by copy_file / concat_files / install_permissions during install.
 # Paths are stored relative to <target>. Drives lock-file `managed_paths` and
 # the --update mode's snapshot + deletion logic.
@@ -228,6 +245,8 @@ NS_MOVE_OLD=()
 NS_MOVE_NEW=()
 NS_MOVE_PENDING=0
 NS_STALE_REFS=()
+# Per-file cap on the stale-reference report (see _ns_scan_stale_refs).
+NS_STALE_REF_CAP=20
 NS_SWEPT_COUNT=0
 # Phase 123: temp file holding the loop-mode-filtered settings.json template
 # (cleaned by _cleanup_install_temp on the EXIT trap).
@@ -291,11 +310,14 @@ Options:
                         by the source clone (sha, short sha, tag, branch).
   --ref REV             (Fresh install or --update) Pin the install to a git
                         tag/rev — a reviewed *release* — instead of the source
-                        clone's live HEAD. Copies from the rev and records its
-                        commit in the lock; a later --check then reports how far
-                        behind HEAD you are. The rev must exist in your source
-                        clone (release tags: git -C <clone> fetch --tags). Omit
-                        to track HEAD (the default). Not valid with --adopt/--check.
+                        clone's WORKING TREE. Copies from the rev and records
+                        its commit in the lock; a later --check then reports how
+                        far behind HEAD you are. The rev must exist in your source
+                        clone (release tags: git -C <clone> fetch --tags). Omit and
+                        the install copies the clone's working tree while the lock
+                        records its HEAD — the two differ whenever that clone is
+                        dirty, which the run warns about (Phase 306, `Q-539`).
+                        Not valid with --adopt/--check.
   --accept-upstream PATH
                         (Phase 24b, --update only) Take upstream content for the
                         target-relative PATH even if it has been modified by the
@@ -877,9 +899,13 @@ _ns_new_to_old() {
 # Basenames of the vendor scripts Sysop installs at scripts/ (OLD layout) /
 # sysop/scripts/ (NEW). Core companion scripts always; installed-pack scripts too
 # (they land in the same flat scripts/ dir — packs/<p>/companion/scripts/*). One
-# per line, __pycache__ skipped. Single source for the migration tree-probe, the
-# T4 stale-ref scan, and the lockless-fresh old-layout guard, so all three see the
-# same managed surface (a pack script left at flat scripts/ must re-trigger too).
+# per line, __pycache__ skipped. Single source for the migration tree-probe and the
+# lockless-fresh old-layout guard, so both see the same managed surface (a pack
+# script left at flat scripts/ must re-trigger too). **It used to say "all three",
+# naming the T4 stale-ref scan as the third.** Phase 309 re-pointed that scan at
+# `NS_MOVE_OLD` — a map of full old PATHS rather than basenames, which is what let it
+# stop matching a consumer's own `scripts/hooks/pre-push` — and left this sentence
+# asserting the retired arrangement. Corrected by that phase's own round.
 # SELECTED_PACKS is empty when called before resolve_selected_packs (the fresh
 # guard) → core-only, which is enough there since a real install always ships core.
 _ns_vendor_basenames() {
@@ -1105,6 +1131,115 @@ get_sysop_commit() {
   printf 'unknown'
 }
 
+# Phase 306 (`Q-539`): decide whether the Sysop SOURCE tree is dirty, and say so
+# loudly. This does NOT refuse — this project's own maintainer workflow installs
+# from a mid-phase tree constantly, and a refusal there becomes a flag typed by
+# reflex, which is how an escape hatch stops being one. What it fixes is that the
+# condition was previously invisible at both ends: nothing printed at install time
+# and nothing recorded afterward, so a consumer holding `sysop_commit: <sha>` had
+# no way to learn that <sha>'s tree is not what it received.
+#
+# Call it once, at the point where REPO_ROOT is final for the mode being run —
+# after the --ref block for an install/update (a --ref worktree is a fresh detached
+# checkout, so it is clean by construction and correctly reports nothing), and at
+# the top of cmd_check / cmd_adopt, which --ref is rejected for at arg-validation.
+# The one-shot guard is INSURANCE, not a live guard: `cmd_check` and `cmd_adopt`
+# both return from `main()` before the install-path call site, so no input
+# reaches the probe twice today and removing it changes nothing observable
+# (measured by this phase's round). It is kept so that a fourth caller added
+# later produces one warning rather than two, and it is described that way
+# rather than as something the tests cover.
+# Args: [<source dir>] — defaults to $REPO_ROOT. --check reads a DIFFERENT tree
+# ($CHECK_SOURCE), and its report is wrong in exactly the same way, so it passes
+# its own; it writes no lock, so the record half does not apply there.
+probe_source_tree_state() {
+  local src="${1:-$REPO_ROOT}"
+  [[ "$SOURCE_DIRTY_PROBED" -eq 1 ]] && return 0
+  SOURCE_DIRTY_PROBED=1
+  SOURCE_DIRTY=0
+  SOURCE_DIRTY_COUNT=0
+
+  # A non-git source (unpacked tarball/zip — the "any agent or none" install path)
+  # has no committed state for a working tree to differ from. get_sysop_commit
+  # already records "unknown" there, which is an honest anchor; there is nothing
+  # to warn about and a warning would be noise on every such install.
+  #
+  # `rev-parse --git-dir` alone does NOT establish that, because it WALKS UP: a
+  # tarball unpacked inside any git repo — a project dir, a dotfiles repo, a
+  # version-controlled $HOME — answers with the HOST repo. The probe then reports
+  # the host's dirtiness and the lock records `source_dirty: true` about a tarball
+  # with no git relationship at all, which is a fresh instance of the very class
+  # `Q-539` exists to close, minted by its own fix. Found by this phase's round.
+  #
+  # The discriminator is the toplevel: a real Sysop clone has install.sh at its
+  # root, so `--show-toplevel` IS the source dir. Anything else — tarball-in-repo,
+  # or Sysop vendored as a subdirectory of a larger repo — is not a tree whose
+  # HEAD describes this source, so say nothing rather than say something false.
+  local _src_top=""
+  _src_top="$(git -C "$src" rev-parse --show-toplevel 2>/dev/null)" || return 0
+  [[ -n "$_src_top" ]] || return 0
+  [[ "$(cd "$_src_top" 2>/dev/null && pwd -P)" == "$(cd "$src" 2>/dev/null && pwd -P)" ]] || return 0
+
+  # Scoped to the paths the installer reads (SOURCE_SCAN_PATHS). Unscoped would
+  # fire on any stray untracked file anywhere in the clone — in this repo that is
+  # the steady state, and a warning that fires always is a warning nobody reads.
+  local porcelain=""
+  porcelain="$(git -C "$src" status --porcelain -- "${SOURCE_SCAN_PATHS[@]}" 2>/dev/null)" || return 0
+  [[ -n "$porcelain" ]] || return 0
+
+  SOURCE_DIRTY=1
+  SOURCE_DIRTY_COUNT="$(printf '%s\n' "$porcelain" | grep -c '^' || true)"
+
+  local _head=""
+  _head="$(git -C "$src" rev-parse HEAD 2>/dev/null || true)"
+  [[ -n "$_head" ]] || _head="unknown"
+  hdr "⚠  the Sysop source tree has uncommitted changes"
+  say "  Sysop is read from the source WORKING TREE, while the lock records HEAD,"
+  say "  so ${_head:0:12} does NOT denote the files involved here."
+  note "source:    $src"
+  note "dirty:     ${SOURCE_DIRTY_COUNT} path(s) under ${SOURCE_SCAN_PATHS[*]}"
+  note "recorded:  ${_head:0:12}"
+  if [[ "$CHECK_MODE" -eq 1 ]]; then
+    say "  --check is read-only, so nothing is recorded: this report compares your"
+    say "  install against uncommitted work, not against ${_head:0:12}."
+  else
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+      # A dry run writes no lock and never reaches the Proceed? confirm (it is
+      # inside `if [[ "$DRY_RUN" -eq 0 ]]`), so both of the sentences below would
+      # be false for this run. Found by the round.
+      say "  (dry run: nothing is written, so no lock key is recorded.)"
+    else
+      say "  The lock will carry \"source_dirty\": true so this stays visible afterward."
+    fi
+    # The prescribed command MUST carry the mode this run is in. Author-side rule 3
+    # (run what the change prescribes) was applied twice here and the first pass
+    # drew the wrong conclusion from it: a mode-less `--ref HEAD` was observed
+    # refusing with "Target git tree has uncommitted changes", and that was written
+    # up as an ordering constraint. It is not. `validate_target`'s blanket refusal
+    # is explicitly skipped for --update/--adopt/--check, so the refusal fired only
+    # because the printed line had dropped --update and become a FRESH install
+    # against an already-installed target. Measured: `--update --ref HEAD` against a
+    # two-file-dirty target succeeds. So the fix is the mode flag, and the
+    # commit-or-discard caveat that rode with the wrong diagnosis is gone.
+    #
+    # --adopt is its own case: --ref is rejected for it at arg-validation, so
+    # offering --ref there would prescribe a command that exits 2.
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+      say "  To take the committed tree instead, re-run with --ref:"
+    else
+      say "  To take the committed tree instead, decline below and re-run:"
+    fi
+    if [[ "$ADOPT_MODE" -eq 1 ]]; then
+      note "commit the source clone first — --ref is not valid with --adopt"
+    elif [[ "$UPDATE_MODE" -eq 1 ]]; then
+      note "bash $src/install.sh \"$TARGET\" --update --ref HEAD   # or a release tag"
+    else
+      note "bash $src/install.sh \"$TARGET\" --ref HEAD            # or a release tag"
+    fi
+  fi
+  return 0
+}
+
 # Read a top-level field from the target lock file. Echoes empty on miss.
 # Usage: lock_field <key>
 lock_field() {
@@ -1162,6 +1297,58 @@ LOCKPY
   return 0
 }
 
+# Phase 306 (`Q-542`): read a top-level lock field as COMMITTED in the target's
+# HEAD, rather than as it stands in the working tree. Echoes empty — never fails
+# — on every state where there is no committed answer: an unborn HEAD, a target
+# whose lock is not tracked yet, a non-repo target. Callers must treat empty as
+# "no committed value" and fall back, which is why this is a separate reader and
+# not a flag on lock_field: lock_field's empty means the anchor is corrupt and
+# the install fails closed, and those two emptinesses must not share a branch.
+#
+# Deliberately scoped. `old_commit` stays the WORKING-TREE lock everywhere else,
+# because everywhere else the question is "what content is on disk right now" —
+# reconstruct_old_install (3-way divergence) rebuilds the tree the last run
+# actually wrote, and that run advanced the on-disk lock along with the files.
+# Only the rollback anchor asks the other question: what was the last COMMITTED
+# state, the one an operator returns to.
+committed_lock_field() {
+  local key="$1"
+  git -C "$TARGET" rev-parse --verify HEAD >/dev/null 2>&1 || return 0
+  # `git show HEAD:<path>` resolves from the REPOSITORY ROOT, not from -C's
+  # directory. A target that is a subdirectory of its repo is a supported shape
+  # (`validate_target` accepts it via `rev-parse --show-toplevel`), and without
+  # the prefix this reads the ROOT's `.claude/sysop.lock` — a different consumer's
+  # lock, or a stranger's file that happens to sit there. Measured: in a repo whose
+  # root lock reads `deadbeef…` and whose `sub/` lock reads `1111…`,
+  # `git -C sub show HEAD:.claude/sysop.lock` returns `deadbeef…`. That is worse
+  # than returning nothing, because the caller then announces a divergence that did
+  # not happen and anchors a rollback to a commit from another tree. Found by this
+  # phase's round; it contradicted this function's own "empty, never wrong" contract.
+  local prefix
+  prefix="$(git -C "$TARGET" rev-parse --show-prefix 2>/dev/null)" || return 0
+  local blob
+  blob="$(git -C "$TARGET" show "HEAD:${prefix}$LOCK_REL" 2>/dev/null)" || return 0
+  [[ -n "$blob" ]] || return 0
+  # The blob travels by env var, not by a pipe. `python3 - "$key"` already takes
+  # its PROGRAM from stdin, so a heredoc and a piped payload cannot coexist here:
+  # the first cut did both, the heredoc won the redirection, `json.load(sys.stdin)`
+  # met EOF, and the function returned empty on every call — i.e. the divergent
+  # branch below was dead and the message was unchanged. Caught by running the
+  # reproduction against the fix rather than by reading it.
+  SYSOP_COMMITTED_LOCK="$blob" python3 - "$key" <<'CLOCKPY' || return 0
+import json, os, sys
+try:
+    data = json.loads(os.environ["SYSOP_COMMITTED_LOCK"])
+except ValueError:
+    raise SystemExit(0)
+if not isinstance(data, dict):
+    raise SystemExit(0)
+val = data.get(sys.argv[1])
+if val is not None and not isinstance(val, (list, dict)):
+    print(val)
+CLOCKPY
+}
+
 # Write/refresh <target>/.claude/sysop.lock. Honours DRY_RUN.
 # Args: <installed_at> <updated_at>
 write_lock_file() {
@@ -1189,6 +1376,16 @@ write_lock_file() {
   local codex_links_json="true"
   [[ "$CODEX_LINKS" -eq 1 ]] || codex_links_json="false"
 
+  # Phase 306 (`Q-539`): written ONLY when true, never as an explicit false.
+  # Phase 148's contract is that a no-op re-install leaves a clean consumer tree
+  # clean; an always-present key would rewrite — and so dirty — the lock of every
+  # consumer whose source was clean, on their next update, for no signal. Absence
+  # therefore means "no exception recorded", which covers both a clean source and
+  # a lock written before this phase. WORKFLOW.md § 8.2b says so in the schema.
+  local source_dirty_json="false"
+  [[ "$SOURCE_DIRTY" -eq 1 ]] && source_dirty_json="true"
+
+  SYSOP_SOURCE_DIRTY="$source_dirty_json" \
   SYSOP_CODEX_LINKS="$codex_links_json" \
   SYSOP_LOCK_PATH="$lock_path" \
   SYSOP_LOCK_VERSION="$LOCK_VERSION" \
@@ -1214,6 +1411,16 @@ data = {
     "updated_at": os.environ["SYSOP_UPDATED_AT"],
     "managed_paths": managed,
 }
+
+# Phase 306 (`Q-539`): exception marker, present only when the source tree was
+# dirty. Inserted before `managed_paths` so the human-readable head of the lock
+# carries it rather than burying it under a 100-entry list.
+if os.environ.get("SYSOP_SOURCE_DIRTY") == "true":
+    data = {
+        **{k: v for k, v in data.items() if k != "managed_paths"},
+        "source_dirty": True,
+        "managed_paths": managed,
+    }
 
 # Phase 148: both timestamps are anchored to lock *content*, not to the clock,
 # so a no-op re-install/update leaves a clean consumer tree clean. Before this,
@@ -1290,9 +1497,20 @@ PY
 
 # Snapshot dirty paths from a given set into a single commit. Echoes the new
 # commit hash on stdout, or empty if nothing was dirty. Honours DRY_RUN.
-# Args: <old_hash> <path1> [<path2> ...]
+# Args: <old_hash> <superseded_hash> <path1> [<path2> ...]
+#
+# Phase 306 (`Q-542`): <old_hash> is the anchor an operator reads to answer
+# "where was I before this update" — so it is the last COMMITTED lock value, not
+# the on-disk one. <superseded_hash> is non-empty only when those two disagree,
+# i.e. an earlier --update advanced the on-disk lock and was never committed, and
+# it is named in the message rather than silently dropped: the snapshot is then
+# not a clean pre-update state, and a message that hides that is the same defect
+# one level up. It states only what was measured — that the on-disk lock had
+# already advanced — and makes no claim about WHY any given path is dirty, since
+# a dirty managed path can equally be a consumer edit.
 snapshot_managed_paths() {
   local old_hash="$1"; shift
+  local superseded_hash="$1"; shift
   local -a candidates=("$@")
   (( ${#candidates[@]} == 0 )) && return 0
 
@@ -1326,9 +1544,13 @@ snapshot_managed_paths() {
   # Stage explicitly; `git commit -- <paths>` then commits ONLY those paths
   # from the working tree, leaving any unrelated staged changes untouched.
   git -C "$TARGET" add -- "${dirty[@]}" >&2
+  local _msg="sysop: pre-update snapshot (was at ${old_hash:0:12})"
+  if [[ -n "$superseded_hash" ]]; then
+    _msg="sysop: pre-update snapshot (was at ${old_hash:0:12}; lock on disk already advanced to ${superseded_hash:0:12} by an uncommitted earlier run)"
+  fi
   git -C "$TARGET" commit \
     --no-verify \
-    -m "sysop: pre-update snapshot (was at ${old_hash:0:12})" \
+    -m "$_msg" \
     -- "${dirty[@]}" >/dev/null
   git -C "$TARGET" rev-parse HEAD
 }
@@ -2907,7 +3129,7 @@ install_permissions() {
       return 0
     fi
     # Fail CLOSED: if the filter can't be built, do NOT fall back to the full
-    # master — that would over-grant the 78-rule allow-list AND re-add the hooks
+    # master — that would over-grant the 80-rule allow-list AND re-add the hooks
     # block referencing scripts loop mode never installs (broken at runtime).
     # Skip settings.json instead (the consumer sees more permission prompts, but
     # no over-grant and no dangling hooks); the loud error keeps it visible.
@@ -3916,6 +4138,10 @@ cmd_check() {
     exit 2
   fi
   CHECK_SOURCE="$(canonicalize_target "$CHECK_SOURCE")"
+  # Phase 306 (`Q-539`): --check's verdict is derived from CHECK_SOURCE's working
+  # tree, so a dirty source makes its `Up to date` / `N commit(s) behind` answer an
+  # answer about uncommitted work. Read-only, so this warns and records nothing.
+  probe_source_tree_state "$CHECK_SOURCE"
   if ! git -C "$CHECK_SOURCE" rev-parse HEAD >/dev/null 2>&1; then
     err "--source is not a git repository: $CHECK_SOURCE"
     exit 2
@@ -3925,6 +4151,19 @@ cmd_check() {
   if [[ ! -f "$lock_path" ]]; then
     err "No lock file at $(rel "$lock_path"). Run with --adopt first."
     exit 1
+  fi
+
+  # Phase 306, round finding: `source_dirty` shipped with no reader, and the one
+  # command whose whole job is "am I current?" was the sharpest place for that to
+  # matter — it answered `Up to date` over an install whose own lock records that
+  # its `sysop_commit` does not denote what landed. Report it before the verdict,
+  # so the verdict is read with it rather than after it.
+  if [[ "$(lock_field source_dirty)" == "True" ]] || [[ "$(lock_field source_dirty)" == "true" ]]; then
+    say ""
+    say "⚠ this install was taken from a DIRTY Sysop source tree (lock: \"source_dirty\": true)."
+    say "  Its recorded commit does not denote the files it received, so the comparison"
+    say "  below is against a commit that was never installed. Re-install or update from"
+    say "  a committed tree (--ref HEAD, or a release tag) to clear it."
   fi
 
   local installed_commit upstream_head
@@ -3981,6 +4220,10 @@ cmd_check() {
 # ─── --adopt mode ─────────────────────────────────────────────
 cmd_adopt() {
   hdr "Sysop --adopt"
+  # Phase 306 (`Q-539`): --adopt runs the pipeline and writes a lock, so it ships
+  # the same working tree and records the same HEAD an install does. --ref is
+  # rejected for this mode at arg-validation, so REPO_ROOT is already final.
+  probe_source_tree_state
   # Early-validate --anchor so the error fires before the dry-run pipeline.
   if [[ -n "$ANCHOR_OVERRIDE" ]]; then
     local resolved_anchor; resolved_anchor="$(get_sysop_commit)"
@@ -4365,6 +4608,90 @@ PY
   done
 }
 
+# Append-only archival records. A flat scripts/ reference inside one of these is a
+# historical fact — the review round that ran, the task that closed, the changelog
+# entry — so "fixing" it means editing the record. They can never reach zero, and a
+# report that can never reach zero invites exactly that edit (`Q-540` (b)).
+#
+# The changelog is spelled three ways because a byte-exact `changelog.md` missed the
+# one that matters: `core/skills/release/SKILL.md` writes **`CHANGELOG.md`** (nine uses
+# against one lowercase, which it reaches for only "if the project already tracks its
+# changelog under a different case"). So the DEFAULT Sysop consumer's changelog was the
+# case this function did not exclude. Subdirectory spellings are matched too, as
+# `review-close/SKILL.md` already anchors `review_tasks_archive.md` with `(^|/)`.
+#
+# This is NOT the --update sweep's `never sweep consumer-owned files` case, and is
+# deliberately not shared with it. That list answers a different question — which
+# LIVE consumer files must never be deleted — and it is wrong here in both
+# directions. It OMITS `changelog.md`, which is append-only. And it covers
+# `review_tasks.md`, which on the one real consumer is the single live file this
+# report surfaces: its header names `scripts/archive_review_tasks.py`, so reusing
+# that set would empty the report of the one entry a maintainer can act on.
+# The friction log is absent on purpose: after the move it is `sysop/SYSOP_ISSUES.md`,
+# already excluded by the `sysop/*` skip, so an entry for it would be dead.
+_ns_is_archival_record() {
+  case "$1" in
+    tasks/archive/*|review_tasks_archive.md|changelog.md|CHANGELOG.md|Changelog.md) return 0 ;;
+    */review_tasks_archive.md|*/changelog.md|*/CHANGELOG.md|*/Changelog.md) return 0 ;;
+  esac
+  return 1
+}
+
+# The old flat vendor paths this migration moves, as ERE alternatives with the
+# leading `scripts/` stripped, longest first. NS_MOVE_OLD is the authoritative map
+# — built from the FULL new managed set, not from on-disk state — so this is the
+# same surface the move itself walks, not a second enumeration that can drift from
+# it. It replaces a `scripts/(<basenames>|hooks/|ci/|run_checks)` alternation whose
+# bare `hooks/` arm matched a consumer's OWN `scripts/hooks/pre-push`, a file that
+# never moved. Dots are escaped — unescaped, `scripts/_log.py` also matches
+# `scripts/_logXpy`.
+#
+# Alternation ORDER is deliberately not managed. A first draft sorted longest-first
+# against leftmost-longest differences between GNU and BSD grep, and that is a real
+# difference about which alternative wins — but every caller here consumes only
+# `grep -n`'s line number, and whether the regex matches at all does not depend on
+# which alternative matches it. The sort was decorative, so it is gone rather than
+# carried with a claim no caller can cash.
+# Quote every ERE metacharacter, not just `.`. Escaping the dot alone was enough for
+# today's shipped names and wrong in two ways for any future one: a `+` inverts the
+# match (`scripts/build+deploy.sh` stops matching while `scripts/builddeploy.sh`
+# starts), and an unbalanced `[` makes grep refuse the WHOLE pattern — so the scan
+# returns nothing and the report prints "no consumer files reference the old scripts/
+# paths". A false all-clear from a migration-verification instrument is the one
+# outcome this function must never produce. Latent today (no shipped or pack basename
+# carries a metacharacter) and cheap, so it is closed rather than filed.
+_ns_ere_quote() {
+  printf '%s' "$1" | sed 's/[][\\.^$*+?(){}|]/\\&/g'
+}
+
+_ns_old_path_alt() {
+  (( ${#NS_MOVE_OLD[@]} > 0 )) || return 0
+  local p rel d
+  {
+    for p in "${NS_MOVE_OLD[@]}"; do
+      [[ "$p" == scripts/* ]] || continue
+      rel="${p#scripts/}"
+      printf '%s\n' "$(_ns_ere_quote "$rel")"
+    done
+    # The DIRECTORY forms. NS_MOVE_OLD lists files, so scoping to it alone lost every
+    # bare-directory reference the pre-Phase-309 scanner caught — and those are how a
+    # coverage omit list, a `.gitignore`, a semgrep `paths:` block or a Makefile names
+    # the moved package: `scripts/run_checks/*`, `scripts/ci/`. Each is required to be
+    # followed by a non-path character or end of line, which is what keeps a consumer's
+    # own `scripts/hooks/pre-push` out: a CONCRETE file under a moved directory is
+    # reported only if it is itself a moved file.
+    for p in "${NS_MOVE_OLD[@]}"; do
+      [[ "$p" == scripts/*/* ]] || continue
+      rel="${p#scripts/}"
+      while [[ "$rel" == */* ]]; do
+        d="${rel%/*}"
+        printf '%s/([^A-Za-z0-9_.-]|$)\n' "$(_ns_ere_quote "$d")"
+        rel="$d"
+      done
+    done | sort -u
+  } | paste -sd'|' -
+}
+
 # T4: deterministic post-update stale-reference report — files Sysop does NOT own
 # that still name old flat scripts/ paths. Never auto-edited. Scans git-tracked
 # files (excluding sysop/**) plus, regardless of tracking, settings*.json,
@@ -4374,23 +4701,43 @@ PY
 # backup noise). Populates NS_STALE_REFS for the reporting step.
 _ns_scan_stale_refs() {
   NS_STALE_REFS=()
-  local -a bases=()
-  local f b
-  # Same vendor surface the migration tree-probe uses (core + installed packs), so a
-  # consumer file naming a pack script (scripts/shared_cli.py) is flagged too.
-  while IFS= read -r b; do
-    [[ -n "$b" ]] && bases+=("$b")
-  done < <(_ns_vendor_basenames)
-  local base_alt; base_alt="$(IFS='|'; printf '%s' "${bases[*]}")"
-  # POSIX-ERE word boundary that BOTH `git grep -E` and `grep -E` honor — neither
-  # implements `\b` (git grep -E silently matches nothing with it; adversarial
-  # review Finding), so `\bscripts/` left the git-tracked scan dead AND
-  # boundary-matched `sysop/scripts/`, flooding the report with the migrated file.
-  # This matches scripts/ only at line start or after a non-word, non-slash char,
-  # so sysop/scripts/ and companion/scripts/ (slash-preceded) never match.
+  local f
+  local old_alt; old_alt="$(_ns_old_path_alt)"
+  # Nothing moved out of scripts/ — there is no old flat path to reference.
+  [[ -n "$old_alt" ]] || return 0
+
+  # Neutralise the already-migrated spellings BEFORE matching, so the match
+  # pattern no longer has to exclude them by refusing every `/`-preceded form.
+  # That refusal was `Q-540` (a): `bash "\${REPO_ROOT}/scripts/run_checks.sh"` —
+  # the line that actually runs, in a CONSUMER's tree. Escaped for the same reason
+  # the `say "… path (shell \${REPO_ROOT}/scripts …"` advisory below escapes it:
+  # `test_install_source_dirty.py` derives this installer's own source roots from
+  # unescaped `$REPO_ROOT/<root>` references, and an unescaped mention in prose
+  # makes that guard report this file. (Cited by its text, not its line number —
+  # the round caught this comment quoting a line that had already moved, in the
+  # phase whose headline was stale line-number pointers.)
+  # It is slash-preceded, and was therefore never reported,
+  # while a prose mention of ` scripts/` was. `sed` is line-for-line, so a `grep -n`
+  # downstream still reports the file's own line numbers.
+  local strip='s#(sysop|companion)/scripts/#\1/@sysop-migrated@/#g'
+
+  # Boundaries that BOTH `git grep -E` and `grep -E` honor — neither implements
+  # `\b` (git grep -E silently matches nothing with it; adversarial review
+  # Finding). HB admits `/`, which is only safe because `strip` has already
+  # removed the migrated forms. BND refuses `/` and survives for the always-scan
+  # set alone, where it is how a bare `^scripts/` trigger regex is matched
+  # without also matching `sysop/scripts/`.
+  local HB='(^|[^[:alnum:]_])'
   local BND='(^|[^/[:alnum:]_])'
-  local tracked_pat="${BND}scripts/(${base_alt}|hooks/|ci/|run_checks)"
-  local plain_pat="${BND}scripts/"
+  local hit_pat="${HB}scripts/(${old_alt})"
+  # File SELECTION only, and deliberately a superset of hit_pat (no left
+  # boundary): a file it over-selects contributes nothing unless the capture
+  # pattern also matches a line in it.
+  local sel_pat="scripts/(${old_alt})"
+  # The always-scan set matches EITHER a bare path-prefix reference (a trigger
+  # regex carries no basename) OR a vendor path anywhere, including
+  # directory-prefixed. A union, so it is strictly wider than before.
+  local extra_pat="${BND}scripts/|${hit_pat}"
 
   # Finding 3 (dry-run fidelity): in a DRY-RUN migration the tree hasn't moved and the
   # settings/lock haven't been rewritten yet, so a naive scan floods with Sysop's OWN
@@ -4420,49 +4767,89 @@ _ns_scan_stale_refs() {
   fi
 
   local -a scan=()
-  # git-tracked files (excluding sysop/**) matching the basename-scoped pattern.
+  local -A wide=()
+  # git-tracked files (excluding sysop/**) naming one of the moved paths.
   while IFS= read -r f; do
     [[ -z "$f" ]] && continue
     [[ "$f" == sysop/* ]] && continue
     [[ "$f" == *.bak* ]] && continue
     [[ -n "${_own[$f]:-}" ]] && continue
+    _ns_is_archival_record "$f" && continue
     scan+=("$f")
-  done < <(git -C "$TARGET" grep -lIE "$tracked_pat" -- ':!sysop/' 2>/dev/null || true)
+  done < <(git -C "$TARGET" -c core.quotePath=false grep -lIE "$sel_pat" -- ':!sysop/' 2>/dev/null || true)
 
   # Always-scan set (may be untracked): settings files, armed hooks, CI workflows.
-  # Armed hooks gate on staged-path trigger regexes (^scripts/…) that carry no
-  # shipped basename, so match with the plain boundary pattern. The producer must
-  # NOT abort under `set -e` — an absent settings.local.json is the common case,
-  # and a leading `ls` of it would exit non-zero and kill the subshell before the
-  # two `find`s ran, silently dropping .git/hooks + CI from the scan (adversarial
-  # review Finding). Hence the if-guarded emission, never `ls`.
-  local extra _er
+  # The producer must NOT abort under `set -e` — an absent settings.local.json is
+  # the common case, and a leading `ls` of it would exit non-zero and kill the
+  # subshell before the two `find`s ran, silently dropping .git/hooks + CI from the
+  # scan (adversarial review Finding). Hence the if-guarded emission, never `ls`.
+  local extra _er _ep
   while IFS= read -r extra; do
     [[ -z "$extra" ]] && continue
     [[ "$extra" == *.bak* ]] && continue
     _er="${extra#"$TARGET"/}"
     [[ -n "${_own[$_er]:-}" ]] && continue
-    if grep -IEl "$plain_pat" "$extra" >/dev/null 2>&1; then
+    # The wide arm exists for ONE thing: a staged-path trigger regex (`^scripts/`)
+    # carries no basename, so nothing can scope it. Those live in hooks and CI
+    # workflows. A settings file's entries are commands and allow-rules, which
+    # always name a basename — so the wide arm buys it nothing and costs it a
+    # false positive, measured: a consumer's own `Bash(bash scripts/my_deploy.sh)`
+    # rule was reported as a stale VENDOR path with the advice "update it
+    # yourself", which is wrong about a file that never moved.
+    case "$_er" in
+      .claude/settings.json|.claude/settings.local.json) _ep="$hit_pat" ;;
+      *)                                                _ep="$extra_pat" ;;
+    esac
+    if sed -E "$strip" "$extra" 2>/dev/null | grep -IEq "$_ep"; then
+      # Marked wide FIRST: a file that is both tracked and in this set must be
+      # captured with the wider pattern, or a tracked workflow carrying only a
+      # `^scripts/` trigger regex would be silently dropped by the narrow one.
+      [[ "$_ep" == "$extra_pat" ]] && wide[$_er]=1
       scan+=("$_er")
     fi
   done < <(
     for _sf in "$TARGET"/.claude/settings.json "$TARGET"/.claude/settings.local.json; do
       if [[ -f "$_sf" ]]; then printf '%s\n' "$_sf"; fi
     done
-    find "$TARGET/.git/hooks" -maxdepth 1 -type f 2>/dev/null
+    # Round finding (execution lens, F7): this was the literal `$TARGET/.git/hooks`,
+    # so a consumer with `core.hooksPath` set — or a linked-worktree target, whose
+    # hooks live in the common dir — had their armed hooks scanned by nothing at all,
+    # and the report said "no consumer files reference the old scripts/ paths" over a
+    # dead gate. `resolve_hook_dst` is this installer's own answer to "where does git
+    # ACTUALLY look", already used to arm them; `install_hooks.sh`'s comment claims
+    # this file and `self_check.sh` "both anchor the same way", and the half that
+    # certifies the migration was the half that did not.
+    find "$(resolve_hook_dst 2>/dev/null || printf '%s' "$TARGET/.git/hooks")" \
+      -maxdepth 1 -type f 2>/dev/null
     find "$TARGET/.github/workflows" -maxdepth 1 -type f 2>/dev/null
   )
 
-  # Dedup + capture file:line for each hit.
+  # Dedup + capture file:line for each hit, with the SAME pattern that selected it.
   local -A seen=()
-  local rel line
+  local rel line pat
   for rel in "${scan[@]}"; do
     [[ -n "${seen[$rel]:-}" ]] && continue
     seen[$rel]=1
+    pat="$hit_pat"
+    [[ -n "${wide[$rel]:-}" ]] && pat="$extra_pat"
+    local -a hits=()
     while IFS= read -r line; do
       [[ -z "$line" ]] && continue
+      hits+=("$line")
+    done < <(sed -E "$strip" "$TARGET/$rel" 2>/dev/null | grep -nE "$pat" 2>/dev/null | cut -d: -f1)
+    # The per-file cap stops one file flooding the report. It used to be a bare
+    # `head -20` in the pipeline, which truncated in silence: a consumer read 20
+    # lines and had no way to know there were more, so a list they worked to the
+    # bottom of was still not empty. Count first, then say what was withheld.
+    local n=${#hits[@]} i=0
+    for line in ${hits[@]+"${hits[@]}"}; do
+      (( i < NS_STALE_REF_CAP )) || break
       NS_STALE_REFS+=("$rel:$line")
-    done < <(grep -nE "$plain_pat" "$TARGET/$rel" 2>/dev/null | head -20 | cut -d: -f1)
+      i=$((i + 1))
+    done
+    if (( n > NS_STALE_REF_CAP )); then
+      NS_STALE_REFS+=("$rel — and $((n - NS_STALE_REF_CAP)) more match(es), not listed")
+    fi
   done
 }
 
@@ -4907,13 +5294,18 @@ main() {
       err "  Its scripts self-locate at flat scripts/, but this installer wires them into"
       err "  sysop/scripts/ — the result would be silently broken. Options:"
       err "    • pin a rev that post-dates the sysop/ namespace — a newer release tag if one"
-      err "      exists, or a commit SHA; omitting --ref tracks HEAD, or"
+      err "      exists, or a commit SHA; omitting --ref copies the clone's working tree, or"
       err "    • check out that tag and run ITS OWN installer instead of this one:"
       err "        git -C ${SYSOP_SRC_CLONE:-$REPO_ROOT} checkout $REF_OVERRIDE && bash install.sh $TARGET"
       exit 1
     fi
     say "  → pinned to $REF_OVERRIDE (${_ref_commit:0:12})"
   fi
+
+  # Phase 306 (`Q-539`): REPO_ROOT is final here — --ref has re-pointed it if it
+  # was going to. Probe before anything is read out of the source or written to
+  # the target, so the warning precedes the install rather than trailing it.
+  probe_source_tree_state
 
   local lock_path="$TARGET/$LOCK_REL"
   local -a old_managed=()
@@ -5166,8 +5558,37 @@ main() {
       (( ${#NS_MOVE_OLD[@]} > 0 )) && snap_candidates+=("${NS_MOVE_OLD[@]}")
       (( ${#NS_MOVE_NEW[@]} > 0 )) && snap_candidates+=("${NS_MOVE_NEW[@]}")
     fi
+    # Phase 306 (`Q-542`): choose the ROLLBACK anchor, which is not the same
+    # question the rest of this function asks. `old_commit` is the lock as it
+    # stands on disk; the snapshot's job is to name the last state an operator
+    # can return to, which is the lock as COMMITTED. Those differ whenever an
+    # earlier --update advanced the on-disk lock and was not committed — and the
+    # documented flow leaves every update uncommitted for review ("The update is
+    # uncommitted — review and commit intentionally"), so this is the ordinary
+    # run-update-twice case, not a crash. Measured in BeanRider: snapshot
+    # `6b972f5` reads "was at 6de1581c" while the lock inside that commit and
+    # inside its parent both read 9f03becf.
+    local snapshot_anchor="$old_commit" superseded=""
+    local _committed_anchor
+    _committed_anchor="$(committed_lock_field sysop_commit)"
+    # `unknown` is get_sysop_commit's sentinel for a non-git source, and the file
+    # already guards it at seven other sites. Without it here, a tarball install
+    # that was committed and then updated from a git clone anchors its snapshot to
+    # the literal string `unknown` — a permanent commit message naming nothing,
+    # with the one real SHA demoted to the parenthetical. That is strictly worse
+    # than the pre-phase behaviour for that population, which named a real commit.
+    # Treat the sentinel as "no committed answer" and fall back. Found by the round.
+    if [[ -n "$_committed_anchor" ]] && [[ "$_committed_anchor" != "unknown" ]] \
+       && [[ "$_committed_anchor" != "$old_commit" ]]; then
+      snapshot_anchor="$_committed_anchor"
+      superseded="$old_commit"
+      say "  ⚠ an earlier --update advanced the lock on disk and was never committed."
+      note "committed lock: ${_committed_anchor:0:12}   on-disk lock: ${old_commit:0:12}"
+      note "anchoring the snapshot to ${_committed_anchor:0:12} — the last committed state."
+      note "the snapshot therefore holds a MIX: already-overwritten files with the older lock."
+    fi
     if (( ${#snap_candidates[@]} > 0 )); then
-      snapshot_hash="$(snapshot_managed_paths "$old_commit" "${snap_candidates[@]}")"
+      snapshot_hash="$(snapshot_managed_paths "$snapshot_anchor" "$superseded" "${snap_candidates[@]}")"
     fi
     if [[ -z "$snapshot_hash" ]]; then
       note "no dirty managed paths — skipping snapshot commit"

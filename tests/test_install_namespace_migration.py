@@ -412,10 +412,308 @@ class TestT4StaleRefReport:
         assert ".github/workflows/ci.yml" in out, "CI workflow not scanned (set -e abort?)"
         assert ".git/hooks/pre-commit" in out, "armed hook not scanned (set -e abort?)"
         # The MEDIUM (\b false-positive) fix: the migrated settings.json's ~40
-        # sysop/scripts rules must NOT flood the report — at most the consumer's
-        # own `bash scripts/my_deploy.sh` line.
-        assert out.count(".claude/settings.json:") <= 2, \
-            "migrated sysop/scripts rules flooded the stale-ref report"
+        # sysop/scripts rules must NOT flood the report. Phase 309 tightened this
+        # from "at most 2" to zero: the fixture's one surviving flat rule is the
+        # consumer's OWN `Bash(bash scripts/my_deploy.sh)`, which names no vendor
+        # script and was never going to move, so reporting it under "update them
+        # yourself" was wrong.
+        assert out.count(".claude/settings.json:") == 0, \
+            "settings.json rules reported as stale vendor paths"
+
+
+def _stale_section(out):
+    """Isolate the stale-reference report body so unrelated output can't satisfy
+    (or defeat) an assertion about it. Returns "" when no report was printed."""
+    marker = "stale references to old scripts/ paths"
+    return out.split(marker, 1)[1] if marker in out else ""
+
+
+class TestQ540StaleRefAccuracy:
+    """`Q-540`: the scanner reported the wrong lines in both directions.
+
+    (a) Its left boundary was ``(^|[^/[:alnum:]_])``, which by construction
+    excludes every ``/``-preceded form — so ``bash "$REPO_ROOT/scripts/run_checks.sh"``,
+    the line that actually runs, was never flagged, while a prose mention of
+    `` scripts/`` was. The slash-exclusion was deliberate (it kept the migrated
+    ``sysop/scripts/`` out of the report), so the fix is to neutralise the
+    migrated spellings BEFORE matching and scope the match to the paths that
+    actually moved, not to drop the boundary.
+
+    (b) It mixed append-only archival records in with live files, so the fixup
+    list could never reach zero and invited editing history to clear it.
+
+    Each test below names the direction it guards. They are written to fail on
+    the pre-fix scanner, not merely to describe it."""
+
+    def _consumer(self, tmp_path):
+        root, _ = _build_old_consumer(tmp_path / "c")
+        return root
+
+    def test_reports_slash_preceded_vendor_reference(self, tmp_path):
+        """(a), the whole point: the executing form is directory-prefixed."""
+        root = self._consumer(tmp_path)
+        (root / "Makefile").write_text(
+            'check:\n\tbash "$(REPO_ROOT)/scripts/run_checks.sh" --fail-on-blocking\n')
+        _git(root, "add", "-A"); _git(root, "commit", "-q", "-m", "slash-preceded ref")
+        hooks = root / ".git" / "hooks"; hooks.mkdir(parents=True, exist_ok=True)
+        (hooks / "pre-push").write_text(
+            '#!/bin/sh\nbash "$REPO_ROOT/scripts/run_checks.sh" --fail-on-blocking\n')
+        r = _run_update(root)
+        assert r.returncode == 0, r.stdout + r.stderr
+        section = _stale_section(r.stdout)
+        assert "Makefile" in section, \
+            "tracked file's $(REPO_ROOT)/scripts/ reference not reported"
+        assert ".git/hooks/pre-push" in section, \
+            "armed hook's $REPO_ROOT/scripts/ reference not reported"
+
+    def test_does_not_report_already_migrated_reference(self, tmp_path):
+        """The non-vacuity control for the strip: neutralising `sysop/scripts/`
+        must not neutralise it into a match."""
+        root = self._consumer(tmp_path)
+        (root / "Makefile").write_text(
+            'check:\n\tbash "$(REPO_ROOT)/sysop/scripts/run_checks.sh"\n')
+        # Positive control. Without it this fixture produces NO report at all, and the
+        # assertion below is `"Makefile" not in ""` — satisfied by the scanner being
+        # deleted outright. The round demonstrated exactly that.
+        (root / "POSITIVE.md").write_text("bash scripts/run_checks.sh\n")
+        _git(root, "add", "-A"); _git(root, "commit", "-q", "-m", "migrated ref")
+        r = _run_update(root)
+        assert r.returncode == 0, r.stdout + r.stderr
+        section = _stale_section(r.stdout)
+        assert "POSITIVE.md:1" in section, \
+            "the scanner produced no report — the assertion below would be vacuous"
+        assert "Makefile" not in section, \
+            "an already-migrated sysop/scripts/ reference was reported as stale"
+
+    def test_does_not_report_consumer_owned_hook(self, tmp_path):
+        """(a), the noise direction. The pre-fix pattern carried a bare
+        ``hooks/`` arm, so a consumer's OWN ``scripts/hooks/pre-push`` — a file
+        no migration touches, because Sysop ships only pre-commit and
+        pre-merge-commit — was reported as a stale vendor path."""
+        root = self._consumer(tmp_path)
+        (root / "scripts" / "hooks" / "pre-push").write_text("#!/bin/sh\nexit 0\n")
+        (root / "NOTES.md").write_text("Our own hook lives at scripts/hooks/pre-push.\n")
+        # Positive control — see the sibling test. Without it the report is empty and
+        # this passes with the scanner removed.
+        (root / "POSITIVE.md").write_text("bash scripts/run_checks.sh\n")
+        _git(root, "add", "-A"); _git(root, "commit", "-q", "-m", "consumer hook")
+        r = _run_update(root)
+        assert r.returncode == 0, r.stdout + r.stderr
+        section = _stale_section(r.stdout)
+        assert "POSITIVE.md:1" in section, \
+            "the scanner produced no report — the assertion below would be vacuous"
+        assert "NOTES.md" not in section, \
+            "a consumer-owned scripts/hooks/ path was reported as a stale vendor path"
+
+    def test_reports_only_the_vendor_line_in_a_mixed_file(self, tmp_path):
+        """(a), the flooding direction. The pre-fix scanner SELECTED files with a
+        basename-scoped pattern and then CAPTURED lines with a bare ``scripts/``
+        one, so a single genuine hit pulled in every unrelated ``scripts/``
+        mention in the same file."""
+        root = self._consumer(tmp_path)
+        (root / "NOTES.md").write_text(
+            "1 run bash scripts/run_checks.sh\n"
+            "2 our own deploy is scripts/my_deploy.sh\n"
+            "3 our own linter is scripts/lint_ledger.py\n")
+        _git(root, "add", "-A"); _git(root, "commit", "-q", "-m", "mixed file")
+        r = _run_update(root)
+        assert r.returncode == 0, r.stdout + r.stderr
+        section = _stale_section(r.stdout)
+        assert "NOTES.md:1" in section, "the genuine vendor reference was not reported"
+        assert "NOTES.md:2" not in section and "NOTES.md:3" not in section, \
+            "the consumer's own scripts/ files were reported as stale vendor paths"
+
+    def test_archival_records_excluded_live_records_kept(self, tmp_path):
+        """(b). The three append-only records can never be fixed — a reference
+        inside one is a record of what was true — while the live tracker and an
+        open task carry references a consumer genuinely should update."""
+        root = self._consumer(tmp_path)
+        ref = "see scripts/archive_review_tasks.py\n"
+        (root / "changelog.md").write_text(ref)
+        (root / "review_tasks_archive.md").write_text(ref)
+        (root / "tasks" / "archive").mkdir(parents=True, exist_ok=True)
+        (root / "tasks" / "archive" / "TECH-0001.md").write_text(ref)
+        # Live, and both must still be reported.
+        (root / "review_tasks.md").write_text("Live queue. " + ref)
+        (root / "tasks" / "open").mkdir(parents=True, exist_ok=True)
+        (root / "tasks" / "open" / "TECH-0002.md").write_text(ref)
+        _git(root, "add", "-A"); _git(root, "commit", "-q", "-m", "records")
+        r = _run_update(root)
+        assert r.returncode == 0, r.stdout + r.stderr
+        section = _stale_section(r.stdout)
+        for archival in ("changelog.md", "review_tasks_archive.md",
+                         "tasks/archive/TECH-0001.md"):
+            assert archival not in section, \
+                f"append-only archival record {archival} reported as a fixable stale ref"
+        assert "review_tasks.md:" in section, \
+            "the LIVE review tracker was suppressed along with the archive"
+        assert "tasks/open/TECH-0002.md" in section, \
+            "an open task was suppressed along with tasks/archive/"
+
+    def test_vendor_names_are_matched_literally(self, tmp_path):
+        """The alternation is built from real paths, so it carries dots. An
+        unescaped `scripts/_log.py` is a regex that also matches
+        `scripts/_logXpy` — a different file, and one that never moved."""
+        root = self._consumer(tmp_path)
+        (root / "NOTES.md").write_text(
+            "1 ours is scripts/_logXpy and stays\n"
+            "2 sysop's is scripts/_log.py and moved\n")
+        _git(root, "add", "-A"); _git(root, "commit", "-q", "-m", "dot")
+        r = _run_update(root)
+        assert r.returncode == 0, r.stdout + r.stderr
+        section = _stale_section(r.stdout)
+        assert "NOTES.md:2" in section, "the real vendor path was not reported"
+        assert "NOTES.md:1" not in section, \
+            "an unescaped dot matched a file that never moved"
+
+    def test_moved_directory_references_are_reported(self, tmp_path):
+        """Round finding (execution lens). Scoping the match to `NS_MOVE_OLD` — which
+        lists FILES — silently dropped every bare-directory reference the pre-Phase-309
+        scanner caught. `scripts/run_checks/*` is exactly how a coverage omit list, a
+        `.gitignore`, a semgrep `paths:` block or a Makefile names the moved package,
+        and it went invisible. The directory forms are back, each required to be
+        followed by a non-path character or end of line."""
+        root = self._consumer(tmp_path)
+        (root / "NOTES.md").write_text(
+            "1 omit = scripts/run_checks/*\n"
+            "2 make sure scripts/ci/ is on PATH\n"
+            "3 our own deploy is scripts/ci/deploy.sh\n"
+            "4 our own hook is scripts/hooks/pre-push\n")
+        _git(root, "add", "-A"); _git(root, "commit", "-q", "-m", "dirs")
+        r = _run_update(root)
+        assert r.returncode == 0, r.stdout + r.stderr
+        section = _stale_section(r.stdout)
+        assert "NOTES.md:1" in section, "a moved package directory was not reported"
+        assert "NOTES.md:2" in section, "a moved ci directory was not reported"
+        assert "NOTES.md:3" not in section, \
+            "a consumer's own file under a moved directory name was reported"
+        assert "NOTES.md:4" not in section, \
+            "a consumer's own hook under a moved directory name was reported"
+
+    def test_uppercase_changelog_is_archival(self, tmp_path):
+        """Round finding (execution lens). `core/skills/release/SKILL.md` writes
+        `CHANGELOG.md` — nine uses against one lowercase, which it reaches for only when
+        a project already tracks its changelog under a different case. So the byte-exact
+        lowercase `case` missed the spelling the DEFAULT Sysop consumer has, which is
+        precisely the record this exclusion exists to protect."""
+        root = self._consumer(tmp_path)
+        ref = "see scripts/archive_review_tasks.py\n"
+        (root / "CHANGELOG.md").write_text(ref)
+        (root / "docs").mkdir(exist_ok=True)
+        (root / "docs" / "changelog.md").write_text(ref)
+        (root / "NOTES.md").write_text(ref)   # non-vacuity: the scan DID run
+        _git(root, "add", "-A"); _git(root, "commit", "-q", "-m", "changelogs")
+        r = _run_update(root)
+        assert r.returncode == 0, r.stdout + r.stderr
+        section = _stale_section(r.stdout)
+        assert "NOTES.md:" in section, "the scan did not run — test premise gone"
+        assert "CHANGELOG.md:" not in section, \
+            "the uppercase changelog was reported as a fixable stale ref"
+        assert "docs/changelog.md:" not in section, \
+            "a changelog in a subdirectory was reported"
+
+    def test_a_git_quoted_path_is_not_dropped(self, tmp_path):
+        """Round finding (execution lens). `git grep -l` emits `core.quotePath`
+        escapes for a non-ASCII name; the escaped string is not a path on disk, so
+        `sed` failed, stderr went to /dev/null, and the file vanished from the report
+        without a word. Silent false negatives are the failure mode this whole entry
+        is about."""
+        root = self._consumer(tmp_path)
+        (root / "caf\u00e9.md").write_text("run bash scripts/run_checks.sh\n")
+        (root / "plain.md").write_text("run bash scripts/run_checks.sh\n")
+        _git(root, "add", "-A"); _git(root, "commit", "-q", "-m", "unicode name")
+        r = _run_update(root)
+        assert r.returncode == 0, r.stdout + r.stderr
+        section = _stale_section(r.stdout)
+        assert "plain.md:1" in section, "the ASCII control was not reported"
+        assert "caf\u00e9.md:1" in section, \
+            "a git-quoted path was dropped from the scan in silence"
+
+    def test_a_configured_hooks_path_is_scanned(self, tmp_path):
+        """Round finding (execution lens), F7. The always-scan set used the literal
+        `.git/hooks`, so a consumer who sets `core.hooksPath` had their armed hooks
+        read by nothing and got a clean bill over a dead gate. `resolve_hook_dst` is
+        this installer's own answer to where git actually looks."""
+        root = self._consumer(tmp_path)
+        alt = root / "myhooks"; alt.mkdir()
+        h = alt / "pre-commit"
+        h.write_text('#!/bin/sh\nbash "$REPO_ROOT/scripts/run_checks.sh"\n')
+        h.chmod(0o755)
+        _git(root, "config", "core.hooksPath", "myhooks")
+        # Untracked on purpose: the tracked path would reach the scan by another route.
+        r = _run_update(root)
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert "myhooks/pre-commit" in _stale_section(r.stdout), \
+            "an armed hook under core.hooksPath was never scanned"
+
+    def test_settings_files_are_basename_scoped(self, tmp_path):
+        """Round finding (guard lens). The phase narrowed settings files to the vendor
+        pattern, ratcheted an existing assertion from `<= 2` to `== 0`, and shipped NO
+        test of the arm — so excluding settings from the scan entirely left every test
+        green. A pure negative has no paired positive.
+
+        It also recorded a false reason for abandoning the test it tried to write
+        (*"the migration's settings pass rewrites vendor rules and drops others before
+        the scan ever runs"*). Both flat rules below survive the pass; the discriminating
+        pair is one line on the fixture the suite already had."""
+        root = self._consumer(tmp_path)
+        s = root / ".claude" / "settings.json"
+        data = json.loads(s.read_text())
+        data["permissions"]["allow"].append(
+            "Bash(python3 scripts/validate_tasks.py --strict)")
+        s.write_text(json.dumps(data, indent=2) + "\n")
+        _git(root, "add", "-A"); _git(root, "commit", "-q", "-m", "consumer rules")
+        r = _run_update(root)
+        assert r.returncode == 0, r.stdout + r.stderr
+        after = s.read_text()
+        assert "bash scripts/my_deploy.sh" in after and \
+               "python3 scripts/validate_tasks.py --strict" in after, \
+            "the settings pass rewrote a consumer-authored rule — premise gone"
+        rows = [l for l in _stale_section(r.stdout).splitlines()
+                if ".claude/settings.json:" in l]
+        assert len(rows) == 1, \
+            f"expected exactly the vendor rule, got {rows}"
+        joined = "\n".join(rows)
+        # The positive half: the consumer's rule naming a MOVED vendor script.
+        n = next(i for i, line in enumerate(after.splitlines(), 1)
+                 if "validate_tasks.py --strict" in line)
+        assert f".claude/settings.json:{n}" in joined, \
+            f"the vendor rule at line {n} was not the row reported: {rows}"
+
+    def test_per_file_cap_says_what_it_withheld(self, tmp_path):
+        """The cap used to be a bare ``head -20`` inside the pipeline, so a file
+        with more hits was truncated in silence — a consumer could work the list
+        to the bottom and still not be done. Measured on the one real consumer,
+        the single live file in the report sits AT the cap."""
+        root = self._consumer(tmp_path)
+        (root / "NOTES.md").write_text(
+            "".join(f"line {i} bash scripts/run_checks.sh\n" for i in range(1, 26)))
+        _git(root, "add", "-A"); _git(root, "commit", "-q", "-m", "25 hits")
+        r = _run_update(root)
+        assert r.returncode == 0, r.stdout + r.stderr
+        section = _stale_section(r.stdout)
+        assert "NOTES.md:20" in section, "the cap did not report its first 20"
+        assert "NOTES.md:21" not in section, "the cap did not hold"
+        assert "and 5 more match(es), not listed" in section, \
+            "the report truncated in silence"
+
+    def test_tracked_workflow_trigger_regex_still_reported(self, tmp_path):
+        """Regression guard on the fix itself. A path-trigger regex carries no
+        basename, so only the wider always-scan pattern can see it — and a
+        workflow is BOTH tracked and in that set. Capturing it with the narrow
+        tracked pattern would drop it silently."""
+        root = self._consumer(tmp_path)
+        wf = root / ".github" / "workflows"; wf.mkdir(parents=True)
+        (wf / "gate.yml").write_text(
+            "on:\n  push:\n    paths:\n      - 'scripts/**'\n"
+            "jobs:\n  x:\n    steps:\n      - run: bash scripts/run_checks.sh\n")
+        _git(root, "add", "-A"); _git(root, "commit", "-q", "-m", "tracked workflow")
+        r = _run_update(root)
+        assert r.returncode == 0, r.stdout + r.stderr
+        section = _stale_section(r.stdout)
+        assert ".github/workflows/gate.yml:4" in section, \
+            "the paths: trigger line was dropped — a tracked workflow was captured " \
+            "with the narrow pattern"
 
 
 class TestT6ShimGuard:
