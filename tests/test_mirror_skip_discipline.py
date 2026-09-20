@@ -24,6 +24,7 @@ A module that reaches an excluded file through a computed path, or through a hel
 in another module, is outside what this can see — it is a floor on the class, not a
 proof against it.
 """
+import ast
 import re
 import subprocess
 import sys
@@ -74,19 +75,68 @@ def _modules():
 # matched any textual occurrence and produced 25 false positives, which is the
 # over-strict shape that teaches a maintainer to delete a guard.
 _PATH_BUILD = re.compile(r'(?:ROOT|parents\[\d\]|Path)\s*(?:/\s*"([^"]+)")+')
-_SEGMENT = re.compile(r'/\s*"([^"]+)"')
+#: A segment is a quoted literal OR a bare name. The bare-name arm is resolved
+#: against the module's own top-level string constants and dropped when it does not
+#: resolve, so it adds no textual matching and cannot reintroduce the 25 false
+#: positives the first cut of this guard produced.
+_SEGMENT = re.compile(r'/\s*(?:"([^"]+)"|([A-Za-z_][A-Za-z0-9_]*))')
+
+
+def _module_constants(text: str) -> dict[str, str]:
+    """Top-level ``NAME = "literal"`` bindings.
+
+    **Why this exists.** This guard resolved only quoted literals, so ONE level of
+    indirection walked through it: `tests/test_mirror_currency_ratchet.py` binds
+    `CHECKLIST = "REVIEW_CHECKLIST.md"` and then reads `REPO_ROOT / CHECKLIST`, and
+    this module reported *"builds no path to a mirror-excluded file"* about it. That
+    module then failed three tests inside the sterilized tree on Phase 320's pre-cut
+    dry run — the exact failure this guard exists to prevent, on the exact file it
+    was looking at.
+
+    It is the author-side pass's own bullet — *a guard keyed to a literal is walked
+    through by a variable holding the value* — live in the repo, and it is why the
+    fix is a resolver rather than a second literal.
+
+    Parsed with `ast` rather than a regex: a regex over assignments would match
+    inside docstrings and comments, which is how this guard got its false positives
+    the first time. A module that does not parse yields no constants and the caller
+    falls back to literal-only resolution, which is this guard's prior behaviour.
+    """
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return {}
+    consts: dict[str, str] = {}
+    for node in tree.body:                      # TOP level only — not ast.walk
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant) \
+                and isinstance(node.value.value, str):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    consts[target.id] = node.value.value
+    return consts
 
 
 def _constructed_paths(text: str) -> list[tuple[str, ...]]:
-    """Literal path-segment chains, per line. Chains, not a flat set, because
-    `ROOT / "tools" / "X.md"` and `ROOT / "tools"` have different consequences."""
+    """Path-segment chains, per line. Chains, not a flat set, because
+    `ROOT / "tools" / "X.md"` and `ROOT / "tools"` have different consequences.
+
+    A segment is a quoted literal, or a bare name that the module binds to a string
+    constant at top level. An unresolvable name is DROPPED rather than kept as its
+    own spelling, so a local variable or an attribute never becomes a match.
+    """
+    consts = _module_constants(text)
     out = []
     for line in text.splitlines():
         if not re.search(r'(?:ROOT|parents\[\d\]|Path\()', line):
             continue
-        segs = tuple(_SEGMENT.findall(line))
+        segs = []
+        for literal, name in _SEGMENT.findall(line):
+            if literal:
+                segs.append(literal)
+            elif name in consts:
+                segs.append(consts[name])
         if segs:
-            out.append(segs)
+            out.append(tuple(segs))
     return out
 
 
@@ -132,6 +182,67 @@ def test_a_module_reading_an_excluded_path_skips_when_it_is_absent(module):
         f"pytest.skip. On the public snapshot that file is absent, and this module "
         f"reddens the required `pytest` check — as a collection ERROR if the read "
         f"happens inside a decorator. Guard it, as tests/test_registry_drift.py does."
+    )
+
+
+def test_a_constant_holding_an_excluded_filename_is_resolved():
+    """**Control for the widening, and for the hole it closed.**
+
+    Phase 320's cut dry run failed three tests inside the sterilized tree because
+    `tests/test_mirror_currency_ratchet.py` read `REVIEW_CHECKLIST.md` through a
+    module-level constant, and this guard — resolving only quoted literals — reported
+    *"builds no path to a mirror-excluded file"* about it. One indirection walked
+    through the guard whose whole job is that class.
+
+    Both directions are asserted, because a resolver that matched everything would
+    also pass the first half:
+
+      * the CONSTANT spelling resolves and is reported, and
+      * a name the module does not bind at top level is DROPPED, not kept as its own
+        spelling — which is what keeps a local variable or an attribute from becoming
+        a match and reintroducing this guard's original 25 false positives.
+    """
+    excluded = next(iter(p for p in _excluded_paths() if p.endswith(".md")), "REVIEW_CHECKLIST.md")
+
+    via_constant = f'''
+import pathlib
+ROOT = pathlib.Path(__file__).parents[1]
+CHECKLIST = "{excluded}"
+text = (ROOT / CHECKLIST).read_text()
+'''
+    assert _reads_excluded_file(via_constant) == [excluded], (
+        "a module-level constant holding an excluded filename must resolve; this is "
+        "the exact spelling that reached a cut unguarded"
+    )
+
+    # The unbound name here is `tools` ON PURPOSE, and the first version of this arm
+    # used `CHECKLIST`, which made it VACUOUS. A bare Python identifier can never
+    # equal `REVIEW_CHECKLIST.md` — dots are not legal in identifiers — so keeping an
+    # unresolved name as its own spelling could not produce a hit against any `.md`
+    # entry, and the arm passed against the very mutation it was written to kill.
+    # The excluded set also carries a DIRECTORY, `tools/`, whose rstripped form IS a
+    # legal identifier. That is the only spelling where the defect is reachable, so
+    # it is the only spelling that tests it. Caught by this phase's own battery (W3),
+    # not by a reviewer.
+    unbound = '''
+import pathlib
+ROOT = pathlib.Path(__file__).parents[1]
+def read(tools):
+    return (ROOT / tools / "spec.md").read_text()
+'''
+    assert _reads_excluded_file(unbound) == [], (
+        "a name with no top-level string binding must be DROPPED, not matched — "
+        "otherwise the resolver is textual matching wearing a resolver's name, and "
+        "any local named `tools` becomes a false positive"
+    )
+
+    via_literal = f'''
+import pathlib
+ROOT = pathlib.Path(__file__).parents[1]
+text = (ROOT / "{excluded}").read_text()
+'''
+    assert _reads_excluded_file(via_literal) == [excluded], (
+        "the literal spelling must keep working — the widening is additive"
     )
 
 

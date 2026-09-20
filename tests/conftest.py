@@ -32,7 +32,7 @@ for _var in (
 # `34482362099`): 949 s of the 981 s is `Run tests`, and the whole setup chain -- checkout,
 # two `setup-python`, the dependency install -- is 28 s, so caching buys nothing and the
 # test step is the entire bill. The suite is NOT core-bound: 7x the workers (14 local
-# against 2 on `ubuntu-latest`) buys 1.94x, and on a small population more xdist workers is
+# against 2 on the hosted runner) buys 1.94x, and on a small population more xdist workers is
 # actively WORSE. So the lever is more MACHINES, not bigger ones, and `--durations` says the
 # work divides: a long tail with no critical path.
 #

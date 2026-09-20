@@ -987,6 +987,81 @@ green, and the only visible symptom is a duplicate claim some later cycle. `test
 pins the mechanism — it asserts the merge-base is preserved and the status survives, with distinct
 committer dates, so the identical-SHA false negative cannot make it pass vacuously.
 
+## Step 4a-post — provenance
+
+Editor-addressed history for `### 4a-post. Verify the Merged Tree`. Nothing here binds the runner.
+
+### Why the empty changed-file list branches on the approved-branch count
+
+The stop this replaced was unconditional, and its own stated causes were the argument against it:
+*a rebase left the branch a no-op, a `--ff-only` merge was skipped after a conflict, or `HEAD` is
+not the merge target you think it is.* All three presuppose that a merge was **attempted**. On a
+docs-consolidation cycle none was — Step 4a's loop runs over an empty set — so the premise of the
+contradiction is false and the stop fired on a close behaving exactly as designed. Reported from a
+consumer whose cycle had zero feature branches, zero unpushed `main` commits and four pending-docs.
+
+**The cycle is not exotic.** It is the shape a close takes whenever the previous one merged its
+branches but left pending-docs behind, held or stranded, and it is reachable any time
+`/review-close` runs twice in a row.
+
+**Why the predicate is the approved-branch count and not "Step 4a merged zero branches."** Those
+two are not the same set, and the difference is the Step 4-pre PR-reuse shape: there Step 4a is
+skipped entirely, so it merges zero branches, while the merge target *is* an approved branch. An
+empty list in that shape is a genuine contradiction — an approved branch that contributes nothing
+against `origin/<default branch>` — and must still stop. Measured on a fixture: a reuse-shape
+branch carrying one file diffs non-empty; a reuse-shape branch built from an empty commit diffs
+empty with an approved-branch count of 1, while the reported cycle diffs empty with a count of 0.
+Keying on the merged count would have widened the arm onto the one shape that needs the stop.
+
+**Why the report is not `ran nothing`.** The filing asked for `ran nothing: no branches merged`.
+That token is false for the filing's own reported case: four consumer-declared commands ran there.
+The changed-file list's emptiness is a fact about **scope**; `ran nothing` is a fact about
+**execution**, and they are independent — a declared `### Always` list runs whatever the diff
+shape, which is the promise Step 3's item 1 makes on this step's behalf. Folding the two would
+report a close that executed four commands as one that executed none.
+
+### Why item 4 gained an inherited-failure arm, and why it is scoped to one error
+
+`4a-post` item 4 was an unconditional *on failure, stop*. A consumer hit it on a
+`validate_tasks.py` Invariant 9 error — `status=in_progress but lock file missing` — that was
+already present on `origin/<default branch>`, on a cycle that merged nothing and therefore could
+not have introduced it. Stopping there prevents Step 4c, and **Step 4c's `done` flip is what
+clears that error**: verified on a fixture, exit 1 before the flip and exit 0 after it.
+
+**The skill already said so, in another step.** Step 6's *Lock-as-real-time-signal invariant* names
+this exact error as an expected transient of `pr` policy — Step 4c removes the lock from disk on
+the integration branch before the PR merges, so `main` briefly carries the task `in_progress` with
+no lock — and says *"No action needed beyond not re-claiming."* Item 4 halted on it anyway. Two paragraphs in one file,
+one error, opposite dispositions. The filing found the Step 6 note; this phase verified it.
+
+**What the filing got wrong, and what the record should not repeat.** It argued the error is then
+*permanent*, "because the only thing in the repo that clears it is the Step 4c round-trip that
+stopping prevents." That is false. Both remedies the validator's **own** error message names clear
+it, each verified on a fixture: recreating the lock (`claim_task.sh --lock`) exits 0, and flipping
+the task back to `status: open` exits 0. So the defect is that a gate halts a healthy close until
+someone clears the state out of band — real, and worth a fix — not that the close can never run
+again. The two remedies are not the same size: `status: open` edits tracked `tasks/index.yml`,
+while the lock remedy writes a gitignored runtime file and touches nothing tracked, so "hand-edits
+the default branch" is true of one and false of the other. (A first measurement of the second remedy reported it failing; that was a fixture error, a
+`sed` whose pattern matched the phase entry's `status:` as well as the task's. Re-derived with a
+targeted edit, it passes.)
+
+**Why three preconditions and not a general inherited/introduced test.** The filing proposed the
+general form: re-run the failing command against `origin/<default branch>` and, if it reproduces
+unchanged, classify it inherited and continue. That licenses continuing past **any** gate-visible
+defect already on the default branch, which is a fail-open widening of the one gate this skill
+calls *"the gate whose green means something."* The arm shipped instead is the narrowest one that
+covers the reported case: it fires only on a cycle that approved zero branches, only when the
+failure reproduces on the default branch, and only for the one error another step already
+classifies as self-clearing **and** only when the pending-doc that will clear it can be named.
+Anything it cannot establish is a stop.
+
+**Why it reports rather than passing quietly.** A gate that continues past a failure and says
+nothing is indistinguishable from one that passed. The `INHERITED:` token on Step 8's
+`Verification:` line is deliberately not foldable into `ran on <merge target>: N commands`, for the
+same reason `ran nothing` and `TIMEOUT` are not: each names a different state of the gate, and a
+report that loses which one occurred is the equivalence this whole step exists to remove.
+
 ## Step 4c — provenance
 
 Editor-addressed history for `### 4c. Consolidate Pending Documentation`. Nothing here binds the

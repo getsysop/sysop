@@ -1035,3 +1035,77 @@ def test_a_pin_collapsed_onto_HEAD_is_caught() -> None:
         "the feature-branch arm was dropped and only the `HEAD` arm remained — that is "
         "Q-490 leg (a) restored, silently, with every guard green"
     )
+
+
+# === Q-549 half 2: the temp root worktree isolation does not reach ===========
+
+def test_concurrent_reviewers_are_told_to_take_a_private_tmpdir() -> None:
+    """Parallel lenses share one pytest temp root, and its cleanup is count-keyed.
+
+    Established from pytest's own source rather than from a flaky race: the
+    factory builds `<tmp>/pytest-of-<user>` and calls
+    `make_numbered_dir_with_cleanup(root=..., keep=<retention>)` — one root for
+    every concurrent run, pruned by COUNT, with no notion of which run owns a
+    directory. Phase 312 ran three lenses at once and its claims lens reported
+    failures it could reproduce only under that contention.
+
+    THIS IS A PROSE GUARD AND ITS LIMITS ARE THE USUAL ONES. It asserts the
+    instruction is present and keyed on the mechanism, not that any spawner
+    obeys it — this repo has measured prose screens at 70-90% bypassable. It is
+    here so the rule cannot be deleted silently, not because it enforces.
+    """
+    body = PARTIAL.read_text(encoding="utf-8")
+    # ANCHORED ON THE RULE, NOT THE WORD. The first draft asserted `"TMPDIR" in
+    # body`, which was ALREADY TRUE before this phase — the token appears
+    # elsewhere in the file — so that line scored nothing. The round caught it.
+    # PIN THE IMPERATIVE, NOT THE NOUN PHRASE. The author's own second battery
+    # rewrote the bullet as "Consider whether a reviewer might want its own
+    # `TMPDIR`" — mandate to suggestion — and the previous assertion passed,
+    # because "own `TMPDIR`" survives the softening intact. Phase 179 measured a
+    # prose blocklist catching 0 of 21 reversals it had not been taught; this is
+    # that class, found here by mutating rather than by reading.
+    # A REAL LIST ITEM, IN THE RIGHT SECTION, STATED AS AN ORDER. The round got
+    # four rewordings past the earlier anchors: an INVERSION keeping every
+    # keyword ("Do NOT bother giving each reviewer its own `TMPDIR`"), a
+    # softened close ("You may export one if you like"), the bullet MOVED out of
+    # § Running more than one reviewer to the end of the file, and the bullet
+    # deleted with its keywords parked in an HTML comment. Substring presence
+    # cannot see any of those, so the three checks below are position, form and
+    # the closing order — not vocabulary.
+    bullet_lines = [
+        ln for ln in body.splitlines()
+        if ln.startswith("- **Give each concurrent reviewer its own `TMPDIR`.**")
+    ]
+    assert len(bullet_lines) == 1, (
+        "the TMPDIR rule is not a single real list item stating an order — it "
+        "has been deleted, duplicated, softened, inverted, or parked somewhere "
+        "that is not a bullet (an HTML comment satisfies a substring check)"
+    )
+    assert "Export a private `TMPDIR` per reviewer when you spawn more than one." in bullet_lines[0], (
+        "the bullet no longer CLOSES with the instruction; a rule whose last "
+        "clause is 'you may if you like' binds nobody"
+    )
+    section = body.split("### Before you spawn anyone", 1)[0]
+    assert bullet_lines[0] in section, (
+        "the TMPDIR bullet has been moved out of the multi-reviewer section — "
+        "it is only reachable where a spawner is deciding how many to spawn"
+    )
+    assert "**Give each concurrent reviewer its own `TMPDIR`.**" in body, (
+        "the TMPDIR rule is no longer stated as an imperative — a reworded "
+        "'consider whether you might want one' satisfies every looser anchor "
+        "while binding nobody"
+    )
+    assert "own `TMPDIR`" in body, (
+        "the round procedure no longer tells a spawner to give each reviewer its "
+        "own temp root; concurrent lenses will corrupt each other's fixtures and "
+        "report it as findings"
+    )
+    assert "pytest-of-" in body, (
+        "the TMPDIR rule no longer names the shared root that makes it "
+        "necessary, so an editor cannot tell it from a style preference"
+    )
+    assert "by count, not by owner" in body, (
+        "the reason the shared root is unsafe — cleanup keyed on count rather "
+        "than ownership — is gone, which is the half that makes the rule "
+        "checkable rather than arbitrary"
+    )

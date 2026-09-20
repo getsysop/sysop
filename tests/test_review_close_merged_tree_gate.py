@@ -44,7 +44,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tests"))
 
-from _prose_guard_helpers import locate, rewrapped, swap  # noqa: E402
+from _prose_guard_helpers import locate, rewrapped, states, swap  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SKILL = REPO_ROOT / "core" / "skills" / "review-close" / "SKILL.md"
@@ -283,9 +283,19 @@ PINS: list[tuple[str, str, str]] = [
      "those files are **untracked**",
      "why the placement matters at all. Without the untracked fact the placement reads as "
      "arbitrary and gets moved."),
+    # Phase 318 split this into a discriminator plus the arm that still stops. The old
+    # single pin read "an empty list here means the merges did not land", which is false
+    # on a cycle that approved no branches — the shape upstream #686 reported, where the
+    # stop fired on a healthy docs-consolidation close. Both halves are pinned because
+    # the arm is what a widening would delete: dropping the second sentence leaves a step
+    # that treats every empty list as expected, which is the original defect inverted.
     ("post",
-     "**An empty list here is not a pass — it is a contradiction, and you must stop on it.**",
-     "the asymmetry with Step 3. An empty list here means the merges did not land."),
+     "**An empty list here is not automatically a pass and not automatically a contradiction — the discriminator is how many branches are still approved after Step 3b, so read that count first.**",
+     "the discriminator. Whether an empty list is a contradiction depends on whether anything was owed."),
+    ("post",
+     "**One or more still approved after Step 3b**, including the Step 4-pre PR-reuse shape where the merge target *is* the one approved branch: **stop.**",
+     "the arm that still stops. The reuse shape merges zero branches but approves one, so a "
+     "merged-branch predicate would widen onto the one shape that needs the stop."),
     ("post",
      "Re-read it rather than carrying Step 3's result forward as a remembered value",
      "the only way this step can silently run something other than what the consumer declared."),
@@ -480,6 +490,190 @@ def check_the_report_has_somewhere_to_render(text: str) -> list[str]:
     return bad
 
 
+# Phase 318. Both arms this phase added are CONTINUES on a path that previously always
+# stopped, so the pins above only protect their spelling. These two checks protect the
+# property: an arm that keeps its pinned sentence while losing a precondition is the
+# failure mode, and it is the one a prose pin cannot see.
+INHERITED_PRECONDITIONS = (
+    # 1 — the close cannot have introduced the failure. The STAGE is load-bearing: Step 2d
+    #     demotes and Step 3b downgrades, so the Step 2a count is a different number.
+    "**This close has zero branches still approved after Step 3b**",
+    # 2 — the failure is present on the base, not manufactured by the merge.
+    "fails the same way on `origin/<default branch>`",
+    # 3 — and it is the ONE error another step already classifies as self-clearing,
+    #     for a task THIS close will flip. Without the second half the arm fires on any
+    #     Invariant 9 error, including one for a task no pending-doc will ever close.
+    "Invariant 9",
+    "will actually flip to `done`",
+    # 3, second half — Step 4c has THREE filters, not two. Its step 1c refuses to route a
+    #     doc at all when any id it names carries a truthy `user_action`, so a doc 1c holds
+    #     yields no flip and the arm's premise is false. The round's execution lens built
+    #     the fixture, drove all three preconditions true against a held task, and watched
+    #     the arm fire on a doc Step 4c would never route.
+    "step 1c's `user_action` hold",
+)
+
+#: The two sentences that make a CONTINUE past a failing gate honest. Neither is a
+#: precondition, so the loop above cannot reach them — and the round's guard lens deleted
+#: both with every check green. The second is the sharper loss: without it the tree that is
+#: actually pushed is gated by nothing at all, because `4a-post` failed and the re-run that
+#: was supposed to be the real verdict is gone.
+INHERITED_SAFETY = (
+    "**Never silently:**",
+    "Re-run the command after Step 4c's flip and report that result as the gate for the tree actually pushed.",
+)
+
+#: Vocabulary that WIDENS an arm rather than stating it. The round's guard lens defeated
+#: every precondition by pure addition — a clarifying sentence that waives one, or opens the
+#: arm to "any other failure on the same reasoning" — while leaving all fourteen anchors
+#: matching. This does not close that class (a class is not a string; see `Q-560`), but it
+#: catches the spellings that reach for it, which is what `OPTIONALISING_RE` does one
+#: function over for the sibling class.
+WIDENING_RE = re.compile(
+    r"may be waived|waived where|need not hold|does not gate the arm|never load-bearing|"
+    r"qualifies on the same reasoning|the worked example, not the boundary|"
+    r"guidance rather than a gate|use judgement where|either spelling is fine|"
+    r"disregard that requirement|is open to it|settles it just as well|"
+    r"without opening the pending-doc|questions to think about",
+    re.I,
+)
+
+
+def _live(text: str) -> str:
+    """`text` with HTML comments and fenced blocks removed.
+
+    A rule a runner never reads is not a rule. The round's guard lens wrapped the WHOLE
+    empty-list branch — both arms, both pins — in an HTML comment captioned "kept so the
+    drift guards keep their subject", replaced it with a blanket pass, and the module
+    reported 172 passed. `check_dry_run_disclaimer_is_live_text` in this same file already
+    strips comments for exactly this reason (its own round HTML-commented a rule out); the
+    two checks below were written beside it and did not, so this is that helper's rule
+    generalised rather than a new idea. Fences too: a rule demoted into a ```text block is
+    equally unread.
+    """
+    live = re.sub(r"<!--.*?-->", "", text, flags=re.S)
+    out, fenced = [], False
+    for line in live.split("\n"):
+        if re.match(r"^\s*(```|~~~)", line):
+            fenced = not fenced
+            continue
+        if not fenced:
+            out.append(line)
+    return "\n".join(out)
+
+
+def check_the_inherited_failure_arm_keeps_its_preconditions(text: str) -> list[str]:
+    """Item 4 is the stop that speaks for the merged tree; Phase 318 gave it one continue.
+
+    A general inherited/introduced test — the shape upstream `#685` proposed — licenses
+    continuing past ANY gate-visible defect already on the default branch. The arm shipped
+    instead is scoped to one error. The skill states THREE numbered preconditions; this tuple
+    carries FIVE phrases because precondition 3 is itself a conjunction (Invariant 9, AND a task
+    this close will actually flip, AND step 1c's hold). The counts are not in conflict and the
+    round asked — every phrase is load-bearing:
+    drop the approved-branch count and a close that merged work can walk past a failure it
+    introduced; drop the `origin/<default branch>` reproduction and "inherited" is an
+    assertion rather than a measurement; drop either half of the Invariant 9 scoping and
+    the arm reaches failures no Step 4c will repair, which is a fail-open gate.
+    """
+    # LIVE text only, and flattened. Both are round findings: the guard lens hid the rules in
+    # an HTML comment and in a fence with every check green, and the re-wrap control showed
+    # the first cut going red on an innocent reformat — the fail-closed direction that trains
+    # people to weaken a guard (`Q-495`'s thesis).
+    post = _flat(_live(_slice(text, "post")))
+    bad = []
+    # `states()`, not `in` — this module's author-side battery walked the first cut by leaving
+    # every required phrase in place inside a sentence that negates it ("It is NOT the case
+    # that ... matters here"). A substring check marks that compliant. `states()` is the
+    # negation-aware form the repo already ships. It is SENTENCE-scoped, so it does not reach
+    # a cancelling sentence placed next to the rule — that residual is `Q-560`.
+    if not states(post, _flat("The inherited-failure arm fires only when all three hold")):
+        bad.append("4a-post item 4's inherited arm no longer states that its preconditions are conjunctive")
+    for phrase in INHERITED_PRECONDITIONS:
+        if not states(post, _flat(phrase)):
+            bad.append(f"4a-post's inherited-failure arm lost a precondition: {phrase!r}")
+    # The two sentences that make the continue honest. Not preconditions, so the loop above
+    # never reached them, and the round deleted both with every check green.
+    for phrase in INHERITED_SAFETY:
+        if not states(post, _flat(phrase)):
+            bad.append(f"4a-post's inherited arm lost the rule that keeps its continue honest: {phrase!r}")
+    # The arm must fail closed on what it cannot establish.
+    if not states(post, _flat("If you cannot name a doc that clears all three, stop.")):
+        bad.append("the inherited arm does not fail closed when its Step 4c doc cannot be named")
+    if "INHERITED:" not in post:
+        bad.append("the inherited arm continues without a report token — a silent walk past a failure")
+    # The literal SLOT, in LIVE text: `| WAS-INHERITED: <command>` contains the substring
+    # `INHERITED:` and satisfied an earlier form while renaming the slot out from under the
+    # arm that writes to it; HTML-commenting the slot out satisfied the form after that.
+    # Step 8 is COMMENT-stripped but NOT fence-stripped: the report template legitimately
+    # lives inside a fence — `check_the_report_lines_are_in_the_template_fence` requires
+    # exactly that — so running `_live()` here deleted the slot it was checking for and
+    # reddened the shipped tree plus five negative controls. My bug, caught by the controls.
+    step8 = _flat(re.sub(r"<!--.*?-->", "", _slice(text, "step8"), flags=re.S))
+    if _flat("| INHERITED: <command>") not in step8:
+        bad.append("Step 8 has no live INHERITED slot, so the arm's report has nowhere to render")
+    # Widening by pure ADDITION — the round's sharpest finding. Not closed by this, and the
+    # residual is filed as `Q-560`; this catches the spellings that reach for it.
+    m = WIDENING_RE.search(post)
+    if m:
+        bad.append(f"4a-post item 4 carries arm-widening language: {m.group(0)!r}")
+    # ORDERING. The arm is a test the runner must reach BEFORE the unconditional stop; prose
+    # asserting an order is not a test of it. Use the LAST occurrence of the arm and the
+    # FIRST of the stop: the round bypassed a first/first comparison by planting a near-copy
+    # of the arm sentence earlier in the step.
+    arm = post.rfind(_flat("The inherited-failure arm fires only when all three hold"))
+    stop = post.find(_flat("**On every other failure, stop.**"))
+    if arm < 0 or stop < 0:
+        bad.append("4a-post item 4 lost either its inherited arm or its unconditional stop")
+    elif stop < arm:
+        bad.append(
+            "4a-post item 4's unconditional stop now precedes the inherited-failure arm, "
+            "so the arm is unreachable — a runner stops before it is ever tested"
+        )
+    return bad
+
+
+def check_the_empty_list_arms_are_both_present(text: str) -> list[str]:
+    """The empty changed-file list branches; neither arm may be dropped.
+
+    Upstream `#686` reported the stop firing on a healthy zero-branch close. The fix is a
+    branch, not a removal — and a branch decays in two directions. Losing the stop arm
+    makes every empty list expected, which is the defect this step was built to catch;
+    losing the continue arm restores `#686`.
+    """
+    # LIVE and flattened, for the reasons the sibling check states: the round hid this whole
+    # branch — both arms, both pins — inside an HTML comment and replaced it with a blanket
+    # pass, and every check stayed green.
+    post = _flat(_live(_slice(text, "post")))
+    bad = []
+    # `states()` for the same reason the sibling check above uses it: a negating sentence
+    # keeps every substring and inverts the rule.
+    if not states(post, _flat("**Zero still approved after Step 3b**")):
+        bad.append("4a-post lost the zero-approved-branch arm — a healthy docs close stops again (#686)")
+    if not states(post, _flat("**One or more still approved after Step 3b**")):
+        bad.append("4a-post lost the stop arm — every empty list now reads as expected")
+    # The STAGE, which the execution lens found missing. Step 2d demotes and Step 3b
+    # downgrades, so a Step 2a count is a different number — and on a close where 2a
+    # approved one branch and 3b downgraded it, the two readings disagree on exactly the
+    # shape #686 reports. Step 4-pre condition 1 already insists on this stage.
+    if not states(post, _flat("Take the count after Step 3b, not after Step 2a")):
+        bad.append("4a-post's empty-list discriminator no longer names the stage its count is taken at")
+    # Widening by addition — a third "also expected" bullet swallows the stop case without
+    # touching either pinned arm. Residual filed as `Q-560`.
+    m = WIDENING_RE.search(post)
+    if m:
+        bad.append(f"4a-post's empty-list branch carries widening language: {m.group(0)!r}")
+    # The distinction the filing's own proposed remedy got wrong. Plain `in`, NOT `states()`,
+    # and the exception is worth stating: the shipped sentence reads "**that note is not `ran
+    # nothing`**, which is reserved for a run that executed zero commands" — so `states()`'s
+    # within-40-chars negation rule sees "is not" and rejects a sentence that is in fact
+    # asserting the distinction. The negation belongs to the quoted TOKEN, not to the clause.
+    # Using `states()` here reddened the shipped tree, which is how this was found.
+    if "which is reserved for a run that executed zero commands" not in post:
+        bad.append("4a-post no longer separates an empty SCOPE from a zero-command RUN")
+    return bad
+
+
 def check_dry_run_does_not_claim_the_merged_gate(text: str) -> list[str]:
     if "**`4a-post` cannot run under `--dry-run`**" not in text:
         return ["--dry-run does not disclaim the merged-tree gate; Step 3's green stands in for it"]
@@ -601,6 +795,8 @@ CHECKS: list[Callable[[str], list[str]]] = [
     check_no_fourth_code_extension_list,
     check_the_report_has_somewhere_to_render,
     check_dry_run_does_not_claim_the_merged_gate,
+    check_the_inherited_failure_arm_keeps_its_preconditions,
+    check_the_empty_list_arms_are_both_present,
 ]
 
 
@@ -794,8 +990,62 @@ MUTATIONS: list[tuple[str, Callable[[str], str]]] = [
         "**gate nothing and skip nothing — run the full resolved list.** A scope you could not compute must never silently narrow the gate.",
         "skip verification entirely — with no list there is nothing to check.")),
     ("F2 make an empty list at 4a-post a pass", _sub(
-        "**An empty list here is not a pass — it is a contradiction, and you must stop on it.**",
+        "**An empty list here is not automatically a pass and not automatically a contradiction — the discriminator is how many branches are still approved after Step 3b, so read that count first.**",
         "An empty list here is a clean pass — nothing changed, so nothing needs checking.")),
+    # Phase 318's own fix is what this row exists to break: the zero-approved-branch arm
+    # is a continue, so widening its predicate to the MERGED count silently swallows the
+    # Step 4-pre PR-reuse shape, where Step 4a merges zero branches while one approved
+    # branch IS the merge target. An empty list there is a real contradiction — a branch
+    # that ships nothing — and the widened arm would sail past it.
+    ("F2b widen the zero-branch arm from approved count to merged count", _sub(
+        "**One or more still approved after Step 3b**, including the Step 4-pre PR-reuse shape where the merge target *is* the one approved branch: **stop.**",
+        "**One or more branches merged by Step 4a**: **stop.**")),
+    ("F2c drop the zero-approved-branch arm — #686 comes back", _sub(
+        "   - **Zero still approved after Step 3b**", "   - **Zero still approved after Step 3b, which cannot happen**")),
+    ("F2d collapse an empty SCOPE into a zero-command RUN", _sub(
+        "which is reserved for a run that executed zero commands",
+        "which means the same thing")),
+    # ---- Phase 318's inherited-failure arm. Each row removes exactly one predicate. ----
+    ("I1 drop the approved-branch precondition — a merging close may walk past its own failure", _sub(
+        "   1. **This close has zero branches still approved after Step 3b**, so it cannot have introduced the failure. One or more — including the Step 4-pre PR-reuse shape — means stop. Same count, same stage, as step 2 above.\n",
+        "")),
+    ("I2 drop the origin reproduction — 'inherited' becomes an assertion", _sub(
+        "**The failing command fails the same way on `origin/<default branch>`.**",
+        "**The failing command looks like one that was probably already there.**")),
+    ("I3 widen past Invariant 9 to any failure — the #685-as-filed shape", _sub(
+        "**The failure is `validate_tasks.py` Invariant 9** (`status=in_progress but lock file missing`) **for a task id this close's Step 4c will actually flip to `done`**",
+        "**The failure reproduces on the default branch**")),
+    ("I4 keep Invariant 9 but drop the this-close scoping", _sub(
+        "**for a task id this close's Step 4c will actually flip to `done`**",
+        "**for any task id at all**")),
+    ("I5 let the arm fire on what it cannot establish", _sub(
+        "**If you cannot name a doc that clears all three, stop.**",
+        "If you cannot name that doc, assume it exists.")),
+    ("I6 make the arm silent — a walk past a failure that reads as a pass", _sub(
+        "**When the arm fires, report it and keep going to item 5** — `INHERITED: <command> — fails on origin/<default branch> too; <TASK-ID> is in this close's Step 4c set` on Step 8's `Verification:` line, **beside** the executed-command count, never instead of it.",
+        "**When the arm fires, keep going to item 5.**")),
+    ("I7 make the preconditions disjunctive", _sub(
+        "**The inherited-failure arm fires only when all three hold.**",
+        "**The inherited-failure arm fires when any of these holds.**")),
+    # ---- The four the AUTHOR-SIDE battery found walking the first cut of the two checks
+    # above. All four left every required phrase in the file, which is why substring checks
+    # marked them compliant; three are the "what it accepts" class and one is "when it runs".
+    ("I8 keep every precondition but negate the sentence carrying one", _sub(
+        "   1. **This close has zero branches still approved after Step 3b**, so it cannot have introduced the failure.",
+        "   1. It is NOT the case that **This close has zero branches still approved after Step 3b** matters here; ignore it.")),
+    ("I9 keep the fail-closed phrase inside a sentence that cancels it", _sub(
+        "**If you cannot name a doc that clears all three, stop.**",
+        "It is false that **If you cannot name a doc that clears all three, stop.** — carry on.")),
+    # Hoisting by INSERTING the stop ahead of the arm rather than moving it: one tolerant
+    # `swap`, and it produces the same defect the check tests for, because the check reads
+    # the FIRST occurrence of each. A two-step `.replace()` form was whitespace-fragile and
+    # is forbidden by `test_no_mutation_row_edits_the_skill_with_a_SILENT_matcher` besides.
+    ("I10 hoist the unconditional stop above the arm, making the arm unreachable", _sub(
+        "**The inherited-failure arm fires only when all three hold.**",
+        "**On every other failure, stop.** **The inherited-failure arm fires only when all three hold.**")),
+    ("I11 rename the Step 8 slot while keeping the INHERITED substring", _sub(
+        "| INHERITED: <command> — fails on origin/<default",
+        "| WAS-INHERITED: <command> — fails on origin/<default")),
     ("F3 retire the empty-set warning at Step 3", _sub(
         "**An empty list is a real outcome here, and it is the one to report rather than pass over.**",
         "An empty list needs no special handling.")),
@@ -900,13 +1150,20 @@ MUTATIONS: list[tuple[str, Callable[[str], str]]] = [
         "                                      | ran nothing: why | not reached: why\n"
         "                                      | TIMEOUT: <command> — killed, so it returned no\n"
         "                                        verdict. The tree is UNVERIFIED: neither passed\n"
-        "                                        nor failed, and never folded into \"ran N commands\".>\n",
+        "                                        nor failed, and never folded into \"ran N commands\".\n"
+        "                                      | INHERITED: <command> — fails on origin/<default\n"
+        "                                        branch> too; <TASK-ID> is in this close's Step 4c\n"
+        "                                        set. The gate RAN and a command FAILED; the close\n"
+        "                                        continued because 4a-post item 4's three\n"
+        "                                        preconditions all held. Never folded into \"ran N\n"
+        "                                        commands\" either — that would report a failing\n"
+        "                                        command as a passing one.>\n",
         "")),
     # ---- the round's survivors. 49 of its 63 mutations lived against the first version;
     # these are the ones that named a distinct bypass rather than a variant of one. ----
     ("H01 delete the run-the-list instruction — the gate verifies nothing", lambda t: (
         t[:_at(t, "3. **Run the list**")]
-        + t[_at(t, "4. **On failure, stop.**"):])),
+        + t[_at(t, "4. **On failure, stop — unless"):])),
     ("H02 turn the run into a non-instruction", _sub(
         "3. **Run the list**, applying", "3. **Do not run the list** — each branch's worktree already ran it. Skip, ignoring")),
     ("H04 make the run optional", _sub(
@@ -919,7 +1176,8 @@ MUTATIONS: list[tuple[str, Callable[[str], str]]] = [
     ("H25 reorder by prepending an instruction", _sub(
         "1. **Re-resolve the command list**", "**Run Step 4b first, then come back here.**\n\n1. **Re-resolve the command list**")),
     ("H49 let a failure not stop the close", _sub(
-        "4. **On failure, stop.**", "4. **On failure, note it and continue.**")),
+        "4. **On failure, stop — unless the failure is one this close inherited and is about to repair.",
+        "4. **On failure, note it and continue.** Unless the failure is one this close inherited and is about to repair.")),
     ("H51 reintroduce the Step 3c coupling in Step 3 instead", _sub(
         "**The item-5 stop is about the run",
         "If Step 3 was skipped (doc-only diff), skip Step 3c too.\n\n**The item-5 stop is about the run")),

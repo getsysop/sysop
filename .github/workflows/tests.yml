@@ -76,8 +76,28 @@ jobs:
   # so requiring `pytest` would block every PR forever. The `pytest` job below
   # is the aggregator that keeps the context, and renaming EITHER job is a
   # branch-protection change, not a refactor.
+  #
+  # ARM, AND WHY IT IS NOT A CORE-COUNT CHANGE (Phase 315). `ubuntu-24.04-arm`
+  # gives the SAME 2 xdist workers as the x64 runner — verified in both run
+  # logs, `created: 2/2 workers` on each — so the gain is per-core speed and
+  # the "not core-bound, the lever is more MACHINES" reasoning in
+  # `tests/conftest.py` is unaffected. Measured: x64 mean **363 s** over 20
+  # shard samples (range 307-461) against arm64 mean **272 s** over 12 (range
+  # 227-340) — a **25.1%** mean improvement, for ~27 billed minutes against
+  # 20-22. **It is a median gain, not a guaranteed one:** 2 of the 12 arm64
+  # shards exceed the fastest x64 shard, so an individual run can land inside
+  # the x64 range. Wall clock improves too, so this is not a cost-for-latency trade
+  # like the sharding one above.
+  #
+  # THE FIRST VERSION OF THIS COMMENT SAID "the distributions do not overlap"
+  # AND THAT WAS FALSE. It was true of the first four arm64 samples, and this
+  # phase's OWN PR run then produced a 309 s shard against an x64 minimum of
+  # 307 s. A superlative drawn from n=4 is a claim about a distribution made
+  # without one; the mean over 8 is the honest statistic and it carries the
+  # decision on its own. This file ships to the public mirror, so the
+  # correction is not cosmetic.
   shard:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     strategy:
       # Every leg reports, so a red run names every shard that failed rather
       # than the first one. Diagnosing across four machines is hard enough
@@ -114,9 +134,19 @@ jobs:
     # BOTH mirrors are named, not just the public one. `.github/` ships to the
     # private tester mirror too, that repo has Actions enabled, and its default
     # branch IS the snapshot — so a single-mirror deny starts a daily billed run
-    # on a private repo and falsifies the runbook's step-4 premise that the
-    # tester repo has no CI. Found by Phase 268's round, before the first cut
+    # on a private repo. Found by Phase 268's round, before the first cut
     # that would have published the nightly.
+    #
+    # THE TESTER MIRROR IS RETIRED (Phase 316) AND ITS NAME STAYS HERE ANYWAY.
+    # The repo is archived and nothing pushes to it, so this clause is inert —
+    # inert is not wrong. **The binding reason is mechanical, not prudential:**
+    # `tests/test_ci_shard.py::test_the_nightly_still_declines_to_run_on_the_mirrors`
+    # asserts at least two denied mirrors, counted as distinct repositories,
+    # and removing this entry reddens it. Phase 316's first draft argued the
+    # prudential case instead ("it would arm a nightly on unarchive") and that
+    # is the weaker half: the deny-list is already in the snapshot sitting on
+    # that repo, so arming needs an unarchive AND a fresh push, which the same
+    # phase retired. An inert deny costs one line.
     #
     # The former project and org names are deliberately NOT spelled here.
     # `.github/` is mirrored, and the cut's `rename residue` gate is a HARD
@@ -214,7 +244,7 @@ jobs:
     # that was declined on purpose. That scoping is what lets the deny-list stay
     # in ONE place rather than being copied onto this job and drifting.
     if: ${{ always() && github.event_name == 'pull_request' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     steps:
       - name: Every shard must have succeeded
         # `needs.shard.result` is the AGGREGATE over the matrix: `success` only

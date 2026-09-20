@@ -101,6 +101,12 @@ INDEX_READERS = {
     "core/skills/daily-summary/SKILL.md",
     "core/skills/release/SKILL.md",
     "core/skills/review-close/SKILL.md",
+    # Added Phase 318. Its § *Step 4a-post — provenance* names `tasks/index.yml` once, to say
+    # which of the two Invariant 9 remedies edits a TRACKED file and which writes only a
+    # gitignored runtime lock. It reads the index's shape and instructs no author to write a
+    # title, so it is a reader, not `TITLE_AUTHORING` — the same membership its sibling
+    # `SKILL.md` above already has, and the same kind as `WORKFLOW.md` and `convention_map.md`.
+    "core/skills/review-close/REFERENCE.md",
     "core/skills/roadmap/SKILL.md",
     "core/skills/security-audit/SKILL.md",
     "core/skills/sitrep/SKILL.md",

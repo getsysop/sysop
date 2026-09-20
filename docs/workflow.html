@@ -847,8 +847,8 @@
     <div class="hero-grid">
       <aside class="hero-margin rise">
         <span class="line">Vol. <span class="accent">I</span></span>
-        <span class="line">Issue 310</span>
-        <span class="line">2026.09.18</span>
+        <span class="line">Issue 320</span>
+        <span class="line">2026.09.20</span>
         <span class="line" style="margin-top:22px">An essay on</span>
         <span class="line">software workflow</span>
       </aside>
@@ -871,8 +871,8 @@
             <div class="hero-stat-label">Skills</div>
           </div>
           <div class="hero-stat">
-            <div class="hero-stat-fig">310</div>
-            <div class="hero-stat-label">Shipped phases</div>
+            <div class="hero-stat-fig">320</div>
+            <div class="hero-stat-label">Phases shipped through</div>
           </div>
           <div class="hero-stat">
             <div class="hero-stat-fig">78</div>
@@ -3055,13 +3055,13 @@
               <g class="node">
                 <rect x="600" y="56" width="320" height="56" rx="2" class="fill-accent"/>
                 <text x="760" y="80" class="smallserif" style="font-size:14px">planner, reviewer or executor finishes</text>
-                <text x="760" y="100" class="small">emits envelope as its last block</text>
+                <text x="760" y="100" class="small">envelope: last block, or a handback</text>
               </g>
 
               <g class="node">
                 <rect x="600" y="142" width="320" height="56" rx="2" class="fill-plate"/>
                 <text x="760" y="166" class="smallserif" style="font-size:14px">SubagentStop fires</text>
-                <text x="760" y="186" class="small">last_assistant_message in stdin</text>
+                <text x="760" y="186" class="small">last_assistant_message, else transcript</text>
               </g>
 
               <g class="node">
@@ -3104,7 +3104,7 @@
           </div>
           <div class="entry">
             <dt>SubagentStop<span class="model-tag">claude code · 2.1.47</span></dt>
-            <dd>Fires when a sub-agent finishes. Parses the structured envelope (<code>TASK:</code> / <code>STATUS:</code> / <code>WORKTREE:</code> / …) into JSON so the parent skill doesn't have to grep the return text. Phase 54 added an <code>agent_transcript_path</code> fallback and <code>message_source</code> provenance, retiring the earlier timing caveat — the parser no longer depends on winning a race against the sub-agent's final message.</dd>
+            <dd>Fires when a sub-agent finishes. Parses the structured envelope (<code>TASK:</code> / <code>STATUS:</code> / <code>WORKTREE:</code> / …) into JSON so the parent skill doesn't have to grep the return text. Phase 54 added an <code>agent_transcript_path</code> fallback and <code>message_source</code> provenance. Separately, it retired the caveat about the <em>hook's own</em> timing — retired not by those additions but by the hooks docs coming to document the <code>SubagentStop</code> lifecycle: the hook runs synchronously on sub-agent completion, so the JSON is written before the parent reads it. A second race outlived that fix until Phase 319. The fallback ran only when <code>last_assistant_message</code> was <em>absent</em>, and an agent that hands its envelope back through the harness's handback tool leaves a one-line summary in that field — so the envelope was discarded and the run recorded unparseable, with the fallback never reached. Phase 319 made the fallback fire whenever the field carries no envelope, and made selection envelope-first across sources: on all three live transcripts measured, the agent emitted a one-liner <em>after</em> its handback, so last-wins would have thrown the envelope away a second time.</dd>
           </div>
         </dl>
 
@@ -3455,7 +3455,7 @@
       <aside class="col-rule">Colophon</aside>
       <div>
         <p class="col-body">
-          A monograph on <em>Sysop</em>, as of <em>Phase 310</em> · 2026-09-18, with dated addenda where the record
+          A monograph on <em>Sysop</em>, as of <em>Phase 320</em> · 2026-09-20, with dated addenda where the record
           moved after the snapshot. Phase numbers throughout are iterations
           of the workflow's own development — each one planned, adversarially reviewed, and shipped through the process it
           extends; <a href="https://github.com/getsysop/sysop/blob/main/PHASE_LOG.md">PHASE_LOG.md</a> carries one entry per phase. Set in the reader's native serif —
@@ -3496,7 +3496,7 @@
             <ul>
               <li>Extracted from <em>gdp-query-system</em></li>
               <li>First consumer · BeanRider</li>
-              <li>Phase 310 · 2026-09-18</li>
+              <li>Phase 320 · 2026-09-20</li>
             </ul>
           </div>
           <div>
