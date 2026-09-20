@@ -881,3 +881,142 @@ def test_orphan_body_file_under_open_errors(tmp_path):
     report = vt.validate(repo / "tasks", project_root=repo)
     messages = [f.format() for f in report.errors]
     assert any("orphan body file" in m for m in messages), messages
+
+
+# === Q-548: a non-UTF-8 byte must not take the whole validation down =========
+#
+# `UnicodeDecodeError` is a **ValueError**, not an `OSError`. Three readers in
+# this module opened text with a strict `utf-8` decode while catching `OSError`
+# only, so one stray byte propagated out of `validate()` and killed the entire
+# run — every invariant that would have come after it included — with a
+# traceback instead of one bad-file error.
+#
+# THE FILING NAMED ONE SITE AND THERE WERE THREE. `Q-548` said the crash was in
+# `_check_body_first_heading` and that "every sibling reader in the same file
+# uses errors='replace'". Measured at `75d1bc9`: of the four text readers in the
+# module, exactly ONE used `errors="replace"` (`_scan_secrets`). Strict was the
+# convention, not the outlier, and the two unnamed siblings crash identically —
+# including the `index.yml` read, which is the FIRST read of the run and so
+# takes down the validator before any invariant executes.
+#
+# Each case is driven through the real `validate()` rather than by calling the
+# private reader, because the defect is not "the reader raises" — it is "the
+# raise escapes the run". A test on the reader alone would pass with the bug
+# still live at the only level that matters.
+
+_NOT_UTF8 = b"\xff\xfe"
+
+
+def test_a_non_utf8_body_does_not_kill_the_whole_validation(tmp_path):
+    """Site 3 — `_check_body_first_heading`, the one site `Q-548` named."""
+    tasks_dir = _make_tasks_tree(tmp_path)
+    body = tasks_dir / "open" / "FEAT-LOCKED.md"
+    body.write_bytes(b"# FEAT-LOCKED\n\n" + _NOT_UTF8 + b" not utf-8\n")
+
+    report = vt.validate(tasks_dir)  # must RETURN, not raise
+
+    assert report is not None, "validate() returned nothing for a non-UTF-8 body"
+    # A BODY IS REPAIRED, NOT REFUSED — the opposite of the tracker above, and
+    # the asymmetry is the point. The heading is still read past the bad byte,
+    # so no heading complaint is raised about a file whose heading is correct.
+    messages = " ".join(f.message for f in report.errors)
+    assert "first non-empty line must be" not in messages, (
+        "the body was not decoded past its bad byte, so a correct '# FEAT-LOCKED' "
+        f"heading was reported as malformed:\n{messages[:400]}"
+    )
+    # AND the read must not have been ABANDONED either. Without this, dropping
+    # errors="replace" survives: the read raises, the (OSError, ValueError) arm
+    # catches it, and the run reports "cannot read body file" instead — which
+    # satisfies the assertion above while the heading was never checked at all.
+    # The round's point was that the two halves of this fix must be caught
+    # independently; this is the half that was not.
+    assert "cannot read body file" not in messages, (
+        "the body read was abandoned rather than repaired, so the heading check "
+        f"never ran:\n{messages[:400]}"
+    )
+
+
+def test_a_non_utf8_index_does_not_kill_the_whole_validation(tmp_path):
+    """Site 1 — the `index.yml` read, unnamed by the filing and the worst of the three.
+
+    It is the first read of the run, so before the fix a single stray byte here
+    meant NO invariant ran at all — the caller saw a traceback, not a report.
+    """
+    tasks_dir = _make_tasks_tree(tmp_path)
+    index = tasks_dir / "index.yml"
+    index.write_bytes(index.read_bytes().replace(b"Active phase", _NOT_UTF8 + b" phase"))
+
+    report = vt.validate(tasks_dir)
+
+    assert report is not None, "validate() returned nothing for a non-UTF-8 index.yml"
+    # AND IT MUST SAY SO. Returning a report is not enough: the first cut used
+    # errors="replace" here, which made the corrupt file PARSE — the run then
+    # reported five unrelated schema errors and nothing about the corruption,
+    # sending a maintainer after phantom problems. The round disqualified that.
+    # The tracker is refused with a reason; only the bodies are repaired.
+    messages = " ".join(f.message for f in report.errors)
+    assert "not valid UTF-8" in messages, (
+        "a corrupt index.yml was normalised instead of refused — the run gives "
+        f"no sign the file is the problem:\n{messages[:400]}"
+    )
+    assert len(report.errors) == 1, (
+        "refusing the tracker must be the ONLY error; anything else is a schema "
+        f"complaint derived from repaired bytes:\n{messages[:400]}"
+    )
+
+
+def test_a_yaml_value_error_is_not_reported_as_a_read_failure(tmp_path):
+    """`ValueError` is broader than `UnicodeDecodeError`, and the first cut conflated them.
+
+    `yaml.safe_load` raises a bare `ValueError` for an out-of-range date, so
+    folding `ValueError` into the `OSError` arm reported `completed: 2026-02-31`
+    as *"Cannot read:"* on a file that read perfectly — and routed past the
+    dedicated YAML branch three lines above it. Found by this phase's round.
+    """
+    tasks_dir = _make_tasks_tree(tmp_path)
+    index = tasks_dir / "index.yml"
+    text = index.read_text(encoding="utf-8")
+    anchor = "  - id: FEAT-LOCKED\n"
+    assert text.count(anchor) == 1, f"fixture anchor moved:\n{text}"
+    index.write_text(text.replace(anchor, anchor + "    completed: 2026-02-31\n", 1),
+                     encoding="utf-8")
+
+    report = vt.validate(tasks_dir)
+
+    messages = " ".join(f.message for f in report.errors)
+    assert "Cannot read" not in messages, (
+        f"a YAML content error is being reported as a read failure:\n{messages[:400]}"
+    )
+    assert "YAML value error" in messages, messages[:400]
+
+
+def test_a_non_utf8_body_does_not_kill_the_manual_smoke_check(tmp_path):
+    """Site 2 — `_check_manual_smoke`, also unnamed by the filing.
+
+    It is reached only when a task sets `manual_smoke: true`, and it runs AFTER
+    the heading check, so with the other two sites live it can never be observed
+    — the first crash masks it. Driven here with the heading check stubbed out,
+    which is the only way to show it is independently broken rather than merely
+    downstream of a site already fixed.
+    """
+    tasks_dir = _make_tasks_tree(tmp_path)
+    index = tasks_dir / "index.yml"
+    # ANCHORED ON THE TASK, AND ASSERTED TO HAVE TAKEN. The first draft of this
+    # test anchored on `status: in_progress` with count=1 — which is the PHASE
+    # block's status, several lines above the task's. `manual_smoke` landed on
+    # the phase, `_check_manual_smoke` returned early, and this test passed
+    # against the unfixed module. A no-op substitution is the same failure as a
+    # no-op guard, so the assertion below is the point of these four lines.
+    text = index.read_text(encoding="utf-8")
+    anchor = "  - id: FEAT-LOCKED\n"
+    assert text.count(anchor) == 1, f"fixture anchor moved:\n{text}"
+    index.write_text(text.replace(anchor, anchor + "    manual_smoke: true\n", 1),
+                     encoding="utf-8")
+    assert "manual_smoke: true" in index.read_text(encoding="utf-8")
+    body = tasks_dir / "open" / "FEAT-LOCKED.md"
+    body.write_bytes(b"# FEAT-LOCKED\n\n" + _NOT_UTF8 + b" not utf-8\n")
+
+    with mock.patch.object(vt, "_check_body_first_heading", lambda *a, **k: None):
+        report = vt.validate(tasks_dir)
+
+    assert report is not None, "validate() returned nothing for a non-UTF-8 smoke body"

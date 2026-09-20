@@ -1083,7 +1083,7 @@ def test_a_case_differing_worktree_is_not_mistaken_for_the_main_checkout(scripts
     guard that reddens on correct input gets deleted rather than fixed.
 
     The round could not build this fixture — macOS is case-insensitive by default, so the two
-    directories are one. CI is `ubuntu-latest`, so this test is ARMED where it matters and
+    directories are one. CI is `ubuntu-24.04-arm`, so this test is ARMED where it matters and
     skipped where it cannot mean anything. Verified to fire rather than assumed: run on a
     case-sensitive APFS image, the shipped predicate passes and the case-folding mutant fails.
     """

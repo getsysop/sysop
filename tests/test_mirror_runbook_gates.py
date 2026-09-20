@@ -232,11 +232,45 @@ def missing_gates(text: str) -> list[str]:
                 "only thing that ever changes the built tree, so a rebuild block that reads "
                 "as a self-contained recipe is a documented bypass"
             )
-        if not re.search(r"discussions/1(?!\d)", refresh):
+        # RETIRED (Phase 317, `Q-558`/`Q-479`) — **Wade's decision, not the phase's.** A gate
+        # edit is barred to a phase at any size by `CLAUDE.md`'s fix-in-branch stanza, which is
+        # why `Q-558` was FILED rather than fixed when Phase 316's round found it.
+        # This required the Refreshing section to bind every push to `sysop-tester` discussion
+        # #1. **The guard's SUBJECT is gone.** The obligation was *release notes to a subscribed
+        # tester cohort* — "say which phases the snapshot covers and name anything a tester could
+        # have been burned by" — of which a re-clone warning was one part. Phase 316 retired the
+        # mirror and archived the repo; there is no cohort subscribed to that thread.
+        #
+        # **What this assertion did and did not do, because the first draft got it wrong.** It
+        # checked that the RUNBOOK CONTAINS A PIN to the thread. It never checked that a comment
+        # was posted, and it could not: a regex over a markdown file cannot see an act. That is
+        # also why its post-installation record is 0 catches against 3 failures (2026-09-03,
+        # ~2026-09-10, 2026-09-18). With the paragraph retired, the pin points at nothing.
+        #
+        # **Not deleted for convenience, and the distinction matters.** The join it enforced had
+        # failed twice (Phases 144-145 shipped unannounced; 147-160 shipped against a thread last
+        # touched fourteen phases earlier), and a fifth silent instance — the 2026-09-18 cut —
+        # is now unremediable. Every one of those misses was a miss *against testers*. There is
+        # cohort subscribed to that thread and no mirror to announce; the public repo also
+        # a reader re-clones nothing.
+        #
+        # **If a notification obligation is ever wanted for the PUBLIC repo, it is a new guard
+        # with a new subject, not this one un-commented.** `Q-479` recorded the recurrence
+        # history and is archived with `Q-558`; read them before re-adding anything here.
+        #
+        # REPLACEMENT COVERAGE (Phase 317's round). The retired assertion was the only arm
+        # keyed to this section's CONTENT rather than its heading, and removing it let the
+        # whole body be replaced by a bare list of step numbers with this function still
+        # returning []. Measured by the round: DETECTED before, walks through after. The
+        # check below restores exactly that property and nothing about announcements — a
+        # refresh must still be told it re-runs the gates, which is the Phase-177 defect
+        # `## Refreshing` exists for.
+        if not re.search(r"\bgate|\bsame .{0,20}(gate|check)|re-?runs?\b", refresh, re.I):
             problems.append(
-                "the Refreshing section no longer binds the tester announcement to the push "
-                "(the standing discussion thread #1) — that join has failed twice, and a "
-                "different thread number notifies nobody who is subscribed"
+                "the Refreshing section no longer says a refresh re-runs the gates — it is "
+                "the entry point for every cut after the first, and a rebuild block that "
+                "reads as a self-contained recipe is the documented bypass this section "
+                "was written to close (Phase 177)"
             )
     return problems
 
@@ -306,8 +340,15 @@ def test_the_gate_check_is_not_vacuous():
         # INVOCATION is the equivalent edit now.
         ("history gate", text.replace("scan_public_history.sh", "scan_nothing.sh")),
         ("refresh binding", re.sub(r"(?m)^## Refreshing\s*$", "## Rebuilding", text)),
-        ("announcement binding",
-         text.replace("https://github.com/wade-cms/sysop-tester/discussions/1", "REDACTED")),
+        # Added with the replacement coverage above (Phase 317's round): gutting the section's
+        # BODY, which is the edit the retired assertion used to catch.
+        ("refresh body", re.sub(r"(?s)(?m)^## Refreshing\s*$.*?(?=^## )",
+                                "## Refreshing\n\nSteps 3, 4, 5, 6 and 13.\n\n", text)),
+        # The "announcement binding" arm was RETIRED with its assertion (Phase 317, Wade's call). A control
+        # for a guard that no longer exists is not a control — it is a test asserting the
+        # absence of something nobody checks. Three arms remain, so this stays non-vacuous;
+        # if the announcement obligation is ever re-added for the public repo, its control
+        # comes back here with it.
     ):
         assert missing_gates(mutated), f"removing the {label} was not detected"
 

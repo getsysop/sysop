@@ -30,6 +30,9 @@ pytest-xdist==3.8.0
 # this repo's most-repeated defect (Phases 154, 160, 186, 195). Pinned because
 # the ignore list is compiled into semgrep-core and is version-dependent; the
 # control test `test_the_directory_operand_alone_still_misses_them` is what
-# catches an upstream change to it. macOS arm64 + manylinux2014 wheels both
-# exist for cp313, which is what CI runs.
+# catches an upstream change to it. Wheels exist for cp313 on macOS arm64 and
+# on BOTH manylinux2014 x86_64 and manylinux2014 aarch64 — and aarch64 is the
+# one CI installs since Phase 315 moved the runner to `ubuntu-24.04-arm`. This
+# note exists to be checked against on a version bump: a release that ships
+# x86_64 and not aarch64 now breaks CI while reading as cleared.
 semgrep==1.157.0

@@ -12,12 +12,22 @@ Input-field provenance (verified against the Claude Code changelog,
 Phase 54): ``agent_id`` + ``agent_transcript_path`` were added to
 SubagentStop input in 2.0.42; ``last_assistant_message`` in 2.1.47.
 
-Message-source chain (Phase 54). The hook prefers ``last_assistant_message``
-from hook input. When that field is absent or empty (harness 2.0.42–2.1.46,
-or a harness that elides it), it falls back to reading the LAST assistant
-message out of the sub-agent's own JSONL transcript at
-``agent_transcript_path``. When neither source yields text, the hook exits 0
-and the parent skill's regex fallback handles the envelope as before.
+Message-source chain (Phase 54, corrected Phase 319). The hook prefers
+``last_assistant_message`` from hook input. It falls back to the sub-agent's
+own JSONL transcript at ``agent_transcript_path`` whenever that field carries
+NO ENVELOPE — not merely when it is absent or empty, which is what this
+paragraph claimed and the code did until Phase 319. The distinction is the
+whole defect: an agent that hands its envelope back through the harness's
+handback tool still leaves a non-empty one-line summary in
+``last_assistant_message``, so the old condition skipped the fallback and the
+run was recorded ``_unparseable_``. Measured on three live sub-agent
+transcripts, the old chain recovered none of the three envelopes and the
+corrected one recovers all three.
+
+The transcript is adopted ONLY when it yields an envelope, so this cannot
+lose or alter a case that already parsed. When neither source yields text the
+hook exits 0 and the parent skill's regex fallback handles the envelope as
+before.
 
 Posture (Phase 37, revised Phase 54). Additive — the parent skill prefers
 JSON when present and falls back to regex parsing of the sub-agent's return
@@ -79,7 +89,8 @@ ensure_runtime_gitignore() — append-if-missing on every install AND --update,
 so a .gitignore that pre-dates the install still gets the entry.
 
 Unmatched / malformed input produces an _unparseable_<session>_<agent>.json
-diagnostic file (kept across runs for inspection) and exits 0 — the hook
+diagnostic file (kept across runs for inspection, then reclaimed after
+DIAGNOSTIC_RETENTION_DAYS — see that constant) and exits 0 — the hook
 never blocks the parent. Errors are written to stderr only when the file
 itself can't be written.
 
@@ -95,10 +106,59 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from typing import Any
 
 
 ENVELOPES_DIR = "sysop/runtime/subagent-envelopes"
+
+# Diagnostic retention (`Q-334`, Phase 314). The hook is registered with no
+# `matcher`, so it fires on EVERY sub-agent stop. Every non-participant —
+# `Explore`, `general-purpose`, a consumer's own reviewers — legitimately has
+# no envelope and leaves a diagnostic saying so, and until now nothing
+# reclaimed them. Measured on one consumer 2026-09-19: **6,735 diagnostics
+# against 79 real envelopes**, 481 per active day, oldest 13.0 days.
+#
+# **The cap covers `_unparseable_*.json` and nothing else, and that is the
+# whole safety property.** A parsed envelope is evidence with a documented
+# lifetime — `claim-task/SKILL.md` § *Do not delete the envelopes here*, which
+# exists because deleting one at the moment it became evidence is the failure
+# that reshape removed — and it is reaped by the close, never by age. (The
+# discriminator is the FILENAME, not whether an envelope parsed: see
+# `_reclaim_stale_diagnostics` on the parsed-but-unkeyable case.) This is
+# not a hypothetical: on that same directory a 7-day sweep over the whole
+# directory would have destroyed **56 of the 79** envelopes, because an
+# envelope outlives the diagnostics by design (oldest envelope 47.7 days).
+DIAGNOSTIC_RETENTION_DAYS = 7
+
+# The harness tool a sub-agent calls to hand its final message back to its
+# parent. Matched by exact name on purpose: an upstream rename must make the
+# handback path find nothing (and fall back to text blocks) rather than match
+# some other tool's input. Matching any tool name was measured and rejected —
+# not because of tools like `Bash`, whose input carries no `message` key and so
+# is invisible here regardless, but because two other tools DO carry one: a
+# census of live transcripts finds `SubagentHandback` 333, `SendMessage` 234 and
+# `PushNotification` 5. Dropping this check adopts a `SendMessage` payload as the
+# agent's result.
+_HANDBACK_TOOL_NAME = "SubagentHandback"
+
+# How much text may follow the envelope block in a handback before the envelope
+# is read as a QUOTATION rather than this agent's own result.
+#
+# Both lifecycle skills tell an agent to emit its envelope as the LAST content of
+# its final message, so this enforces a contract that already exists rather than
+# inventing one. It exists because Phase 319's round falsified the claim that a
+# handback cannot carry a forged envelope: a Sysop REVIEW LENS — an agent holding
+# no claim at all — quoted another repo's envelope as evidence, and the first cut
+# of this fix adopted it and would have written that claim's slot.
+#
+# Measured over every handback on this machine carrying an envelope (57): 56 end
+# within 20 characters of it, and the one outlier is that reviewer, at 13,900.
+# The bound sits an order of magnitude above the compliant population and two
+# below the counterexample, so it is not fitted to the single case. Failure is
+# CLOSED — an envelope past the bound is ignored and the reader falls back to
+# text, which is pre-319 behaviour.
+_HANDBACK_ENVELOPE_TAIL_MAX = 200
 
 # Fence detection. Shared verbatim with `review_index.py`, `sitrep_survey.py`,
 # `next_task.py` and `archive_review_tasks.py`, and pinned equal by
@@ -207,17 +267,75 @@ def _main_repo_root(cwd: str) -> str:
     return gcd
 
 
+def _handback_message(content: list) -> str:
+    """The ``message`` argument of the LAST handback tool call in one entry.
+
+    Returns "" when the entry carries no handback block. The tool name is
+    matched exactly: a rename upstream makes this return "" and the reader
+    falls back to text blocks, which is the pre-Phase-319 behaviour.
+    """
+    found = ""
+    for block in content:
+        if not isinstance(block, dict) or block.get("type") != "tool_use":
+            continue
+        if block.get("name") != _HANDBACK_TOOL_NAME:
+            continue
+        payload = block.get("input")
+        if not isinstance(payload, dict):
+            continue
+        message = payload.get("message")
+        if isinstance(message, str) and message.strip():
+            found = message
+    return found
+
+
+def _envelope_is_this_agents_result(message: str) -> bool:
+    """True when `message` ends with an envelope, rather than merely quoting one.
+
+    `_find_envelope_block` takes the LAST fenced TASK+STATUS block anywhere in the
+    text, which is right for a message that ENDS with its envelope and wrong for
+    one that quotes an envelope and then keeps talking. Phase 319's round found a
+    live instance of the latter — a review lens quoting the envelope it was
+    reviewing — and the agent that emitted it held no claim.
+
+    Position is the discriminator because position is the contract: the skills
+    say the envelope is the last content of the final message.
+    """
+    block = _find_envelope_block(message)
+    if block is None:
+        return False
+    end = message.rfind(block) + len(block)
+    return len(message) - end <= _HANDBACK_ENVELOPE_TAIL_MAX
+
+
 def _last_assistant_message_from_transcript(path: str) -> str:
-    """Best-effort read of the LAST assistant message in a JSONL transcript.
+    """Best-effort read of the sub-agent's final message in a JSONL transcript.
 
     Fallback source for harnesses that provide ``agent_transcript_path``
-    (2.0.42+) but not ``last_assistant_message`` (2.1.47+). Tolerates
-    missing files, non-JSON lines, and unexpected entry shapes — any
-    failure returns "" so main() degrades to the parent's regex fallback.
+    (2.0.42+) but not ``last_assistant_message`` (2.1.47+), and — since
+    Phase 319 — the ONLY source that can see an envelope handed back through
+    the harness's handback tool rather than written as text. Tolerates
+    missing files, non-JSON lines, unexpected entry shapes, a non-string
+    ``text``, and a torn multibyte tail — a missing/unreadable file returns "",
+    and any other failure returns whatever was recovered before it, so main()
+    degrades to the parent's regex fallback instead of raising.
+
+    Selection is envelope-first, not last-wins. Measured on three live
+    sub-agent transcripts (Phase 319): in all three the agent emitted its
+    envelope through the handback tool and THEN produced a one-line text
+    summary, so the last-wins rule this function used to apply returned the
+    summary and discarded the envelope. Preferring an envelope-bearing
+    handback is what makes widening the block filter actually recover
+    anything; widening alone would still have returned the summary.
+
+    When no handback carries an envelope the return value is the last
+    non-empty text, exactly as before — so a transcript this function
+    already read correctly still reads the same way.
     """
     if not path:
         return ""
     last_text = ""
+    last_envelope = ""
     try:
         with open(path, encoding="utf-8") as f:
             for line in f:
@@ -237,10 +355,14 @@ def _last_assistant_message_from_transcript(path: str) -> str:
                 if isinstance(content, str):
                     text = content
                 elif isinstance(content, list):
+                    handback = _handback_message(content)
+                    if handback and _envelope_is_this_agents_result(handback):
+                        last_envelope = handback
                     text = "\n".join(
-                        block.get("text", "")
+                        block["text"]
                         for block in content
                         if isinstance(block, dict) and block.get("type") == "text"
+                        and isinstance(block.get("text"), str)
                     )
                 else:
                     continue
@@ -248,7 +370,23 @@ def _last_assistant_message_from_transcript(path: str) -> str:
                     last_text = text
     except OSError:
         return ""
-    return last_text
+    except Exception:
+        # NOT swallowed out of caution — swallowed because this read is now on the
+        # DOMINANT path. Before Phase 319 the transcript was opened only when
+        # `last_assistant_message` was empty; now it is opened on every run whose
+        # hook message carries no envelope, which is the common case. Two failures
+        # reach here from a transcript the hook does not control: a `UnicodeDecodeError`
+        # when the JSONL tail is still flushing and the read lands mid-multibyte
+        # (this project's prose is full of em dashes, so the window is real), and a
+        # `TypeError` from a `text` block whose `text` is not a string. Phase 319's
+        # own round measured both: pre-319 each wrote `_unparseable_*.json`, and the
+        # first cut of this phase exited 1 with a traceback and wrote nothing —
+        # a regression in the very mailbox `Q-553` is about.
+        #
+        # Returning what was already recovered rather than "" is deliberate: an
+        # envelope read from line 1 is not made wrong by line 900 being torn.
+        return last_envelope or last_text
+    return last_envelope or last_text
 
 
 def _fenced_blocks(text: str) -> list[str]:
@@ -351,6 +489,52 @@ def _unlink_quietly(path: str) -> None:
         pass
 
 
+def _reclaim_stale_diagnostics(envelopes_dir: str) -> int:
+    """Remove `_unparseable_*.json` older than `DIAGNOSTIC_RETENTION_DAYS`.
+
+    Returns the number removed. Best-effort throughout: this runs inside a
+    hook whose job is to write an envelope, and a reclaim failure must never
+    cost the caller that write, so every filesystem call is guarded and the
+    function cannot raise.
+
+    **Not `_unlink_quietly`.** That helper's contract is a temp file that never
+    made it to `os.replace`, and it is deliberately silent — it cannot report
+    how many files it removed, which is the one thing a retention sweep has to
+    be testable on.
+
+    A parsed envelope FILE is never a candidate; see `DIAGNOSTIC_RETENTION_DAYS`.
+    **One exception, stated because the obvious phrasing is wrong:** the
+    parsed-but-unkeyable case below (`"parsed": true, "task_id_valid": false`,
+    a TASK that does not match `_TASK_ID_SHAPE_RE`) is *stored under an
+    `_unparseable_` name*, so it IS swept at the cap like any other diagnostic.
+    That is the intended trade — it is keyed by session+agent, not by task, so
+    it is a diagnostic in every way that matters to a reader — but it means the
+    property is about the NAME, not about whether an envelope parsed. Measured
+    2026-09-19: 0 of 6,780 live diagnostics carry that shape.
+    """
+    cutoff = time.time() - DIAGNOSTIC_RETENTION_DAYS * 86400
+    removed = 0
+    try:
+        names = os.listdir(envelopes_dir)
+    except OSError:
+        return 0
+    for name in names:
+        # Re-checked here rather than delegated to a glob pattern: the prefix
+        # IS the safety property, so it is asserted at the point of deletion
+        # where a later edit cannot widen it from a distance.
+        if not (name.startswith("_unparseable_") and name.endswith(".json")):
+            continue
+        path = os.path.join(envelopes_dir, name)
+        try:
+            if os.path.getmtime(path) >= cutoff:
+                continue
+            os.unlink(path)
+        except OSError:
+            continue
+        removed += 1
+    return removed
+
+
 def _umask_mode() -> int:
     """What `open(path, "w")` would have created: 0666 masked by the umask."""
     umask = os.umask(0)
@@ -424,15 +608,39 @@ def main() -> int:
 
     last_message = data.get("last_assistant_message") or ""
     message_source = "hook_input"
-    if not last_message:
-        last_message = _last_assistant_message_from_transcript(transcript_path)
-        message_source = "agent_transcript"
+    # Gate widened in Phase 319. It used to read `if not last_message`, which
+    # made the transcript fallback unreachable for the defect it is needed for:
+    # an agent that hands its envelope back through the handback tool still
+    # leaves a non-empty one-line text summary in `last_assistant_message`, so
+    # the fallback was skipped and the run recorded `_unparseable_`. The
+    # condition is now "no envelope here", not "nothing here".
+    #
+    # The replacement is one-directional: the transcript's message is adopted
+    # ONLY when it actually carries an envelope, so a case that parses today
+    # parses identically, and a case that produces a diagnostic today produces
+    # the same diagnostic from the same text. The widening can add an envelope;
+    # it cannot lose or alter one.
+    if _find_envelope_block(last_message) is None:
+        recovered = _last_assistant_message_from_transcript(transcript_path)
+        if _find_envelope_block(recovered) is not None:
+            last_message = recovered
+            message_source = "agent_transcript"
+        elif not last_message:
+            last_message = recovered
+            message_source = "agent_transcript"
     if not last_message:
         return 0
 
     cwd = data.get("cwd") or os.getcwd()
     repo_root = _main_repo_root(cwd)
     envelopes_dir = os.path.join(repo_root, ENVELOPES_DIR)
+    # Sited here, not on the write paths: this is the one point every
+    # path that touches the directory passes through exactly once, so no
+    # early return below can skip it. Measured at 27 ms over 6,735 files,
+    # against a sub-agent run of minutes — a sentinel file to sweep only
+    # once per interval was considered and rejected as a second piece of
+    # runtime state bought for 27 ms.
+    _reclaim_stale_diagnostics(envelopes_dir)
 
     envelope = _parse_envelope(last_message)
     review_report_block = _find_review_report_block(last_message)

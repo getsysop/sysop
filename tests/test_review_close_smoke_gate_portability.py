@@ -98,7 +98,7 @@ def test_at_least_one_candidate_is_bash_3_2():
     """The parametrisation is only meaningful if the old shell is actually present.
 
     **This module is inert in this project's CI**, and that is worth stating rather than
-    discovering. `.github/workflows/*.yml` runs `ubuntu-latest`, whose `/bin/bash` is 5.x,
+    discovering. `.github/workflows/*.yml` runs `ubuntu-24.04-arm`, whose `/bin/bash` is 5.x,
     so on the checked run every parametrisation lands on a shell that parses the *broken*
     form too — verified by the round against the pre-fix preamble: bash 5.3.9 parses it,
     bash 3.2.57 does not. The real coverage is a maintainer's macOS laptop. Skipping

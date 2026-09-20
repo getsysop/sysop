@@ -206,11 +206,19 @@ def test_the_date_guard_reaches_both_notations():
 
 
 def test_rewording_the_hero_stat_label_stays_green():
-    """Round finding N7. 'Shipped phases' -> 'Phases shipped' is copy work, not drift."""
+    """Round finding N7. Rewording the label is copy work, not drift.
+
+    Re-pointed by Phase 320 (`Q-545`). The label was 'Shipped phases' beside a figure
+    that is the phase NUMBER, not a count of phases — the sequence has holes, so the
+    two differ. Relabelling to 'Phases shipped through' makes the figure honest and
+    moved this control's anchor, which is exactly the outcome the assert below is for:
+    the control is the reason a relabel could not be a drive-by, and re-pointing it is
+    the price of the fix rather than a defect in it.
+    """
     text = _read("docs/workflow.html")
     reworded = text.replace(
-        '<div class="hero-stat-label">Shipped phases</div>',
-        '<div class="hero-stat-label">Phases shipped</div>', 1)
+        '<div class="hero-stat-label">Phases shipped through</div>',
+        '<div class="hero-stat-label">Phases through</div>', 1)
     assert reworded != text, "anchor moved; this control needs re-pointing"
     sites = monograph_phase_sites(reworded)
     assert sites["hero stat"], "rewording the label made the hero stat unreadable"

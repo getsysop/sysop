@@ -1474,3 +1474,947 @@ def test_the_review_report_reader_returns_the_FIRST_matching_block():
         "```yaml\nREVIEW_REPORT:\n  verdict: FAIL\n```\n"
     )
     assert pse._find_review_report_block(text) == "REVIEW_REPORT:\n  verdict: PASS"
+
+
+# ---------------------------------------------------------------------------
+# Diagnostic retention (`Q-334`, Phase 314)
+#
+# The hook fires on every sub-agent stop and writes a diagnostic for every
+# non-participant, and nothing reclaimed them: 6,735 diagnostics against 79
+# real envelopes at one consumer, 481 per active day.
+#
+# `test_a_parsed_envelope_is_never_reclaimed_at_any_age` is the load-bearing
+# one. It is not a hypothetical boundary: measured on that same directory, a
+# 7-day sweep that did not discriminate would have destroyed 56 of the 79
+# envelopes, because envelopes outlive diagnostics by design.
+# ---------------------------------------------------------------------------
+
+def _age(path, days):
+    """Backdate a file's mtime by `days`."""
+    import os as _os
+    old = _os.stat(path)
+    when = old.st_mtime - days * 86400
+    _os.utime(path, (when, when))
+
+
+def _diag_dir(tmp_path):
+    d = tmp_path / pse.ENVELOPES_DIR
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def test_a_stale_diagnostic_is_reclaimed(tmp_path):
+    d = _diag_dir(tmp_path)
+    stale = d / "_unparseable_sess_agent.json"
+    stale.write_text("{}", encoding="utf-8")
+    _age(stale, pse.DIAGNOSTIC_RETENTION_DAYS + 1)
+    assert pse._reclaim_stale_diagnostics(str(d)) == 1
+    assert not stale.exists()
+
+
+def test_a_fresh_diagnostic_is_kept(tmp_path):
+    """The retention floor is what keeps `claim-task` Step 8 executable.
+
+    That step tells the orchestrator to open `_unparseable_*.json` before
+    concluding an envelope is absent, so a diagnostic from the run in progress
+    must survive the sweep that the same run triggers.
+    """
+    d = _diag_dir(tmp_path)
+    fresh = d / "_unparseable_sess_agent.json"
+    fresh.write_text("{}", encoding="utf-8")
+    assert pse._reclaim_stale_diagnostics(str(d)) == 0
+    assert fresh.exists()
+
+
+def test_a_parsed_envelope_is_never_reclaimed_at_any_age(tmp_path):
+    """The 56-of-79 near-miss. Envelopes are reaped by the close, not by age."""
+    d = _diag_dir(tmp_path)
+    names = ["TASK-1.json", "TASK-2.exec.json", "BATCH-538.plan.json",
+             "DATA-NO-PHASE-KEY.json", "TASK-3.review.json"]
+    for n in names:
+        f = d / n
+        f.write_text("{}", encoding="utf-8")
+        _age(f, 365)
+    assert pse._reclaim_stale_diagnostics(str(d)) == 0
+    for n in names:
+        assert (d / n).exists(), n
+
+
+def test_only_the_unparseable_prefix_and_json_suffix_are_candidates(tmp_path):
+    d = _diag_dir(tmp_path)
+    # Round finding F1: the first version of this list had NO name that was
+    # simultaneously `_`-prefixed and `.json`-suffixed, so widening the prefix
+    # to `_`, to `_unparseable` (no trailing underscore), or to a
+    # case-insensitive compare all passed. Each of the first three below is a
+    # counterexample to one of those widenings; `_UNPARSEABLE_X.json` also
+    # pins that the compare stays case-SENSITIVE.
+    keep = ["_unparseable_sess_agent.txt", "unparseable_sess_agent.json",
+            "x_unparseable_sess.json", "README", "_unparseable_",
+            "_notes.json", "_UNPARSEABLE_X.json", "_unparseableX.json",
+            "_unparseable_sessjson"]
+    for n in keep:
+        f = d / n
+        f.write_text("x", encoding="utf-8")
+        _age(f, 365)
+    assert pse._reclaim_stale_diagnostics(str(d)) == 0
+    for n in keep:
+        assert (d / n).exists(), n
+
+
+def test_a_missing_directory_returns_zero_and_does_not_raise(tmp_path):
+    assert pse._reclaim_stale_diagnostics(str(tmp_path / "nope")) == 0
+
+
+def test_an_unlinkable_diagnostic_is_skipped_not_fatal(tmp_path, monkeypatch):
+    """A reclaim failure must never cost the caller the envelope write."""
+    d = _diag_dir(tmp_path)
+    for n in ("_unparseable_a_a.json", "_unparseable_b_b.json"):
+        f = d / n
+        f.write_text("{}", encoding="utf-8")
+        _age(f, 365)
+    real = pse.os.unlink
+    calls = {"n": 0}
+
+    def flaky(path):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OSError("permission denied")
+        return real(path)
+
+    monkeypatch.setattr(pse.os, "unlink", flaky)
+    assert pse._reclaim_stale_diagnostics(str(d)) == 1
+
+
+def test_main_sweeps_on_the_SUCCESS_path_not_only_the_diagnostic_path(
+    monkeypatch, tmp_path
+):
+    """A repo whose agents all comply must still reclaim its old diagnostics.
+
+    Siting the sweep on the diagnostic write would mean the directory stops
+    draining exactly when the agents start behaving.
+    """
+    # Round finding F2: this test used to pass `cwd == tmp_path`, the same path
+    # `_main_repo_root` was stubbed to return, so it could not tell WHICH of the
+    # two the sweep targets. The hook's primary deployment is a sub-agent in a
+    # worktree, where they differ — and a sweep keyed to `cwd` is a silent no-op
+    # for every such run. `cwd` is now a distinct directory.
+    elsewhere = tmp_path / "worktree-cwd"
+    elsewhere.mkdir()
+    monkeypatch.setattr(pse, "_main_repo_root", lambda cwd: str(tmp_path))
+    d = _diag_dir(tmp_path)
+    stale = d / "_unparseable_old_old.json"
+    stale.write_text("{}", encoding="utf-8")
+    _age(stale, pse.DIAGNOSTIC_RETENTION_DAYS + 1)
+    rc = _run_main_with_stdin(monkeypatch, {
+        "last_assistant_message": (
+            "done\n\n```yaml\nTASK: FEAT-0123\nSTATUS: EXECUTED\n"
+            "WORKTREE: /tmp/wt\nBRANCH: feat/0123\n```\n"
+        ),
+        "session_id": "sess-1",
+        "agent_id": "agent-1",
+        "cwd": str(elsewhere),
+    })
+    assert not (elsewhere / pse.ENVELOPES_DIR).exists()
+    assert rc == 0
+    assert (d / "FEAT-0123.json").exists()
+    assert not stale.exists()
+
+
+def test_a_fresh_file_does_not_stop_the_sweep(tmp_path, monkeypatch):
+    """The `continue`/`break` distinction, which the other tests cannot see.
+
+    Every test above holds one kind of file at a time, so a sweep that
+    ABANDONED the directory at the first fresh entry passed all of them. On a
+    live directory the two kinds are interleaved — 3,677 fresh against 3,058
+    stale at the consumer measured — so an early exit reclaims nearly nothing
+    while still reporting a plausible count. The listing order is pinned
+    fresh-first rather than left to `os.listdir`, because a mutation this test
+    exists to catch must not be able to survive on a lucky ordering.
+    """
+    d = _diag_dir(tmp_path)
+    fresh = d / "_unparseable_aaa_fresh.json"
+    fresh.write_text("{}", encoding="utf-8")
+    stale = []
+    for i in range(3):
+        f = d / f"_unparseable_zzz{i}_stale.json"
+        f.write_text("{}", encoding="utf-8")
+        _age(f, pse.DIAGNOSTIC_RETENTION_DAYS + 1)
+        stale.append(f)
+    order = [fresh.name] + [f.name for f in stale]
+    monkeypatch.setattr(pse.os, "listdir", lambda p: list(order))
+    assert pse._reclaim_stale_diagnostics(str(d)) == 3
+    assert fresh.exists()
+    for f in stale:
+        assert not f.exists(), f.name
+
+
+def test_a_file_exactly_at_the_cutoff_is_kept(tmp_path, monkeypatch):
+    """`>=` not `>`: the boundary is inclusive, so the cap never reclaims a
+    file the retention window still covers. Time is frozen, because the
+    boundary is otherwise not constructible — `time.time()` moves between
+    setting the mtime and reading it.
+    """
+    d = _diag_dir(tmp_path)
+    now = 1_700_000_000.0
+    monkeypatch.setattr(pse.time, "time", lambda: now)
+    cutoff = now - pse.DIAGNOSTIC_RETENTION_DAYS * 86400
+    at = d / "_unparseable_at_cutoff.json"
+    at.write_text("{}", encoding="utf-8")
+    pse.os.utime(at, (cutoff, cutoff))
+    just_under = d / "_unparseable_just_under.json"
+    just_under.write_text("{}", encoding="utf-8")
+    pse.os.utime(just_under, (cutoff - 1, cutoff - 1))
+    assert pse._reclaim_stale_diagnostics(str(d)) == 1
+    assert at.exists()
+    assert not just_under.exists()
+
+
+def test_no_valid_task_id_can_produce_a_name_the_sweep_would_delete():
+    """The 56-of-79 property proved by construction, not by sampling.
+
+    The other retention tests assert the sweep spares the envelope names that
+    exist today. This one asserts no envelope name the writer is CAPABLE of
+    producing can match the delete predicate, which is the claim that has to
+    hold for the cap to be safe against a task id nobody has coined yet.
+
+    Two independent barriers, and the test fails if either is relaxed:
+    `_TASK_ID_SHAPE_RE` admits only `^[A-Z]...`, so an id cannot begin with an
+    underscore; and `_sanitize_for_filename` strips leading `._` regardless.
+    """
+    hostile = [
+        "_unparseable_x", "__unparseable_", "_UNPARSEABLE_A", "_unparseable_A-1",
+        "UNPARSEABLE-1", "_unparseable_A.json", "..//_unparseable_evil",
+        ".._unparseable_", "_" * 40 + "unparseable_Z",
+    ]
+    for task_id in hostile:
+        name = pse._sanitize_for_filename(task_id, "") + ".json"
+        assert not name.startswith("_unparseable_"), (task_id, name)
+        if pse._TASK_ID_SHAPE_RE.match(task_id):
+            assert not task_id.startswith("_"), task_id
+    # Barrier 1 stated as its own assertion, so relaxing the regex reddens here
+    # rather than silently widening what the sweep may delete.
+    assert not pse._TASK_ID_SHAPE_RE.match("_ABC")
+    # Barrier 2, likewise.
+    assert not pse._sanitize_for_filename("_unparseable_A", "").startswith("_")
+
+
+def test_main_sweeps_on_the_DIAGNOSTIC_path_too(monkeypatch, tmp_path):
+    """The mirror of the success-path test, and the direction that carries the
+    traffic. Round finding HIGH-2.
+
+    `main()`'s comment claims the sweep is sited so "no early return below can
+    skip it". Only the success arm was pinned, so moving the call to sit after
+    `_write_json(out_path, payload)` — reachable only when an envelope parses —
+    left all 123 tests green while the sweep fired on about 1% of real hook
+    invocations: measured on the live consumer, 6,780 diagnostic-arm stops
+    against 81 envelope-arm. That mutation reinstates most of `Q-334` with the
+    suite green and the comment still asserting the property. This test is the
+    other half of the pair.
+    """
+    monkeypatch.setattr(pse, "_main_repo_root", lambda cwd: str(tmp_path))
+    d = _diag_dir(tmp_path)
+    stale = d / "_unparseable_old_old.json"
+    stale.write_text("{}", encoding="utf-8")
+    _age(stale, pse.DIAGNOSTIC_RETENTION_DAYS + 1)
+    rc = _run_main_with_stdin(monkeypatch, {
+        "last_assistant_message": "I finished. No envelope here.",
+        "session_id": "sess-x",
+        "agent_id": "agent-x",
+        "cwd": str(tmp_path),
+    })
+    assert rc == 0
+    # the run wrote its own diagnostic ...
+    assert (d / "_unparseable_sess-x_agent-x.json").exists()
+    # ... and still reclaimed the stale one on the way through.
+    assert not stale.exists()
+
+
+def test_the_sweep_walks_the_WHOLE_listing(tmp_path, monkeypatch):
+    """Round finding F3: `names[:100]` survived the first battery.
+
+    `test_a_fresh_file_does_not_stop_the_sweep` asserts one fresh entry does
+    not abort the walk, over a four-file fixture — so no truncation bound of
+    four or more is detectable by it. The property actually wanted is that the
+    sweep visits every entry, and on the live consumer the listing is ~6,800.
+    A 200-file population makes any plausible slice or early bound visible.
+    """
+    d = _diag_dir(tmp_path)
+    stale = []
+    for i in range(200):
+        f = d / f"_unparseable_s{i:04d}_a.json"
+        f.write_text("{}", encoding="utf-8")
+        _age(f, pse.DIAGNOSTIC_RETENTION_DAYS + 1)
+        stale.append(f)
+    assert pse._reclaim_stale_diagnostics(str(d)) == 200
+    assert [f.name for f in stale if f.exists()] == []
+
+
+def test_the_sweep_unlinks_the_NAME_not_the_symlink_target(tmp_path):
+    """Round finding F4: `os.unlink(os.path.realpath(path))` survived.
+
+    Shipped behaviour is right — `os.unlink` does not follow a symlink — but
+    "never delete a parsed envelope" was not pinned against the one-line edit
+    that resolves the path first. A diagnostic-named symlink pointing at a real
+    envelope is the shape that makes the difference observable.
+    """
+    d = _diag_dir(tmp_path)
+    envelope = d / "FEAT-0001.json"
+    envelope.write_text('{"task_id": "FEAT-0001"}', encoding="utf-8")
+    _age(envelope, 365)
+    link = d / "_unparseable_link_a.json"
+    link.symlink_to(envelope)
+    _age(link, pse.DIAGNOSTIC_RETENTION_DAYS + 1)
+    assert pse._reclaim_stale_diagnostics(str(d)) == 1
+    assert not link.exists() and not link.is_symlink()
+    assert envelope.exists(), "the symlink's TARGET must survive"
+    assert envelope.read_text(encoding="utf-8") == '{"task_id": "FEAT-0001"}'
+
+
+def test_the_retention_value_is_exactly_the_one_the_docs_publish():
+    """Round finding F5: `7 -> 7.9` survived, because every other test
+    parameterises off the constant and so moves with it.
+
+    The value is not a free tuning knob: `WORKFLOW.md` § 8.4 and the artifacts
+    table both publish "7" to consumers, and the module docstring points at
+    this constant by name. Drift here silently falsifies shipped documentation,
+    which is the class this phase's own round spent most of its findings on.
+    """
+    assert pse.DIAGNOSTIC_RETENTION_DAYS == 7
+    assert isinstance(pse.DIAGNOSTIC_RETENTION_DAYS, int)
+
+
+# ---------------------------------------------------------------------------
+# Phase 319 — the handback envelope (`Q-552`)
+#
+# An agent that hands its envelope back through the harness's handback tool
+# leaves a non-empty one-line SUMMARY in `last_assistant_message`, so the old
+# `if not last_message` gate skipped the transcript fallback entirely, and the
+# old text-blocks-only join could not have seen the envelope anyway. Both gates
+# had to open together; neither alone can execute.
+#
+# The THIRD condition is the one no filing named, and it is measured, not
+# argued: on all three live sub-agent transcripts the agent produced a text
+# one-liner AFTER its handback, so the reader's last-wins rule would have
+# returned the one-liner and discarded the envelope even with the block filter
+# widened. Selection had to become envelope-first. `test_a_text_block_after_the
+# _handback_does_not_win` is that arm; strip it and the widening ships inert.
+# ---------------------------------------------------------------------------
+
+
+def _handback_entry(message: str, name: str = "SubagentHandback") -> dict:
+    return {"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "name": name, "input": {"message": message}},
+    ]}}
+
+
+def _text_entry(text: str) -> dict:
+    return {"type": "assistant", "message": {"content": [
+        {"type": "text", "text": text},
+    ]}}
+
+
+_ENVELOPE = (
+    "Work delivered.\n\n"
+    "```yaml\n"
+    "TASK: OPS-THING\n"
+    "PHASE: plan\n"
+    "STATUS: EXECUTED\n"
+    "WORKTREE: /tmp/wt\n"
+    "BRANCH: ops/thing\n"
+    "ERROR: none\n"
+    "```\n"
+)
+
+
+def test_an_envelope_handed_back_through_the_tool_is_read(tmp_path):
+    transcript = tmp_path / "agent.jsonl"
+    _write_transcript(transcript, [_handback_entry(_ENVELOPE)])
+    got = pse._last_assistant_message_from_transcript(str(transcript))
+    assert pse._find_envelope_block(got) is not None
+
+
+def test_a_text_block_after_the_handback_does_not_win(tmp_path):
+    """The measured live shape: handback, THEN a one-line summary.
+
+    Strip the envelope-first selection and this returns the summary — which is
+    what the reader did before Phase 319, and why widening the block filter
+    alone would have recovered nothing. All three live transcripts had this
+    ordering, so it is the dominant case and not an edge one.
+    """
+    transcript = tmp_path / "agent.jsonl"
+    _write_transcript(transcript, [
+        _handback_entry(_ENVELOPE),
+        _text_entry("Plan delivered to the orchestrator."),
+    ])
+    got = pse._last_assistant_message_from_transcript(str(transcript))
+    assert pse._find_envelope_block(got) is not None
+    assert got != "Plan delivered to the orchestrator."
+
+
+def test_a_tool_use_that_is_not_the_handback_tool_is_ignored(tmp_path):
+    """The exact-name predicate — the arm that would widen if it were loosened.
+
+    Matching any tool_use name was measured and rejected. The hazard is not a
+    `Bash` call — its input has `command`/`description` and no `message` key, so
+    it is invisible to `_handback_message` either way; an earlier draft of this
+    docstring said otherwise and this phase's own round refuted it by running the
+    counterfactual. The real population is tools that DO carry a `message`
+    argument: a census of this machine's transcripts finds `SubagentHandback` 333,
+    **`SendMessage` 234** and `PushNotification` 5. Dropping the name check adopts
+    a `SendMessage` payload as the agent's result.
+
+    This asserts the rejection for a differently-NAMED tool that carries a
+    message; `test_a_near_miss_tool_name_is_not_treated_as_a_handback` covers the
+    loosenings, which this test alone could not see.
+    """
+    transcript = tmp_path / "agent.jsonl"
+    _write_transcript(transcript, [
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "Bash",
+             "input": {"command": "grep -n 'TASK:' f", "description": "d"}},
+        ]}},
+        _handback_entry(_ENVELOPE, name="SomeOtherTool"),
+        _text_entry("summary only"),
+    ])
+    assert pse._last_assistant_message_from_transcript(str(transcript)) == "summary only"
+
+
+def test_a_handback_without_an_envelope_does_not_displace_the_last_text(tmp_path):
+    transcript = tmp_path / "agent.jsonl"
+    _write_transcript(transcript, [
+        _handback_entry("just a prose handback, no envelope"),
+        _text_entry("the last text"),
+    ])
+    assert pse._last_assistant_message_from_transcript(str(transcript)) == "the last text"
+
+
+def test_the_last_envelope_bearing_handback_wins(tmp_path):
+    transcript = tmp_path / "agent.jsonl"
+    second = _ENVELOPE.replace("OPS-THING", "OPS-SECOND")
+    _write_transcript(transcript, [
+        _handback_entry(_ENVELOPE),
+        _handback_entry(second),
+    ])
+    got = pse._last_assistant_message_from_transcript(str(transcript))
+    assert "OPS-SECOND" in (pse._find_envelope_block(got) or "")
+
+
+@pytest.mark.parametrize("payload", [
+    {"message": None}, {"message": ""}, {"message": "   "}, {"notmessage": "x"}, "notadict",
+])
+def test_a_malformed_handback_input_is_skipped_not_fatal(tmp_path, payload):
+    transcript = tmp_path / "agent.jsonl"
+    _write_transcript(transcript, [
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "SubagentHandback", "input": payload},
+        ]}},
+        _text_entry("still here"),
+    ])
+    assert pse._last_assistant_message_from_transcript(str(transcript)) == "still here"
+
+
+def test_no_envelope_anywhere_returns_the_last_text_exactly_as_before(tmp_path):
+    """The pre-Phase-319 contract, pinned: a transcript this function already
+    read correctly must still read the same way."""
+    transcript = tmp_path / "agent.jsonl"
+    _write_transcript(transcript, [
+        _text_entry("working on it"),
+        _text_entry("final answer"),
+    ])
+    assert pse._last_assistant_message_from_transcript(str(transcript)) == "final answer"
+
+
+# --- gate 1, in main() -----------------------------------------------------
+
+
+def test_a_nonempty_envelopeless_hook_message_still_reaches_the_transcript(
+    monkeypatch, tmp_path
+):
+    """Gate 1's predicate: "no envelope here", not "nothing here".
+
+    This is the reported defect end to end. Revert the condition to
+    `if not last_message` and this writes `_unparseable_*.json` instead.
+    """
+    transcript = tmp_path / "agent.jsonl"
+    _write_transcript(transcript, [
+        _handback_entry(_ENVELOPE),
+        _text_entry("Plan delivered to the orchestrator."),
+    ])
+    monkeypatch.setattr(pse, "_main_repo_root", lambda cwd: str(tmp_path))
+    rc = _run_main_with_stdin(monkeypatch, {
+        "last_assistant_message": "Plan delivered to the orchestrator.",
+        "session_id": "sess-h", "agent_id": "agent-h",
+        "agent_transcript_path": str(transcript), "cwd": str(tmp_path),
+    })
+    assert rc == 0
+    out = tmp_path / pse.ENVELOPES_DIR / "OPS-THING.plan.json"
+    assert out.exists(), "the handback envelope was not recovered"
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    assert payload["parsed"] is True
+    assert payload["task_id"] == "OPS-THING"
+    assert payload["message_source"] == "agent_transcript"
+    assert not list((tmp_path / pse.ENVELOPES_DIR).glob("_unparseable_*.json"))
+
+
+def test_a_hook_message_that_already_parses_is_never_replaced(monkeypatch, tmp_path):
+    """One-directional: the transcript is adopted only to ADD an envelope.
+
+    The transcript here carries a DIFFERENT envelope. If the gate ever starts
+    preferring it, this fails on `task_id` rather than passing quietly.
+    """
+    transcript = tmp_path / "agent.jsonl"
+    _write_transcript(transcript, [
+        _handback_entry(_ENVELOPE.replace("OPS-THING", "OPS-FROM-TRANSCRIPT"))
+    ])
+    monkeypatch.setattr(pse, "_main_repo_root", lambda cwd: str(tmp_path))
+    rc = _run_main_with_stdin(monkeypatch, {
+        "last_assistant_message": _ENVELOPE,
+        "session_id": "s", "agent_id": "a",
+        "agent_transcript_path": str(transcript), "cwd": str(tmp_path),
+    })
+    assert rc == 0
+    assert (tmp_path / pse.ENVELOPES_DIR / "OPS-THING.plan.json").exists()
+    assert not (tmp_path / pse.ENVELOPES_DIR / "OPS-FROM-TRANSCRIPT.plan.json").exists()
+    payload = json.loads(
+        (tmp_path / pse.ENVELOPES_DIR / "OPS-THING.plan.json").read_text(encoding="utf-8")
+    )
+    assert payload["message_source"] == "hook_input"
+
+
+def test_the_transcript_is_not_even_read_when_the_hook_message_parses(
+    monkeypatch, tmp_path
+):
+    """No cost added to the healthy path — the arm is the early skip."""
+    calls = []
+    monkeypatch.setattr(
+        pse, "_last_assistant_message_from_transcript",
+        lambda path: calls.append(path) or "",
+    )
+    monkeypatch.setattr(pse, "_main_repo_root", lambda cwd: str(tmp_path))
+    rc = _run_main_with_stdin(monkeypatch, {
+        "last_assistant_message": _ENVELOPE,
+        "session_id": "s", "agent_id": "a",
+        "agent_transcript_path": "/some/transcript.jsonl", "cwd": str(tmp_path),
+    })
+    assert rc == 0
+    assert calls == [], f"transcript was read on the healthy path: {calls}"
+
+
+def test_no_envelope_in_either_source_keeps_todays_diagnostic(monkeypatch, tmp_path):
+    """The widening must not change the diagnostic a no-envelope run writes."""
+    transcript = tmp_path / "agent.jsonl"
+    _write_transcript(transcript, [_text_entry("nothing useful")])
+    monkeypatch.setattr(pse, "_main_repo_root", lambda cwd: str(tmp_path))
+    rc = _run_main_with_stdin(monkeypatch, {
+        "last_assistant_message": "I finished. No envelope here.",
+        "session_id": "sess-n", "agent_id": "agent-n",
+        "agent_transcript_path": str(transcript), "cwd": str(tmp_path),
+    })
+    assert rc == 0
+    diags = list((tmp_path / pse.ENVELOPES_DIR).glob("_unparseable_*.json"))
+    assert len(diags) == 1
+    diag = json.loads(diags[0].read_text(encoding="utf-8"))
+    assert diag["parsed"] is False
+    assert diag["message_source"] == "hook_input"
+    assert "No envelope here." in diag["last_assistant_message_excerpt"]
+
+
+def test_the_handback_tool_name_is_pinned():
+    """A rename must be a deliberate edit, not a silent drift."""
+    assert pse._HANDBACK_TOOL_NAME == "SubagentHandback"
+
+
+# --- three arms the Phase 319 author-side battery found unguarded -----------
+# M7, M8 and M10 survived the first cut of the battery above. Each is a real
+# predicate with no test behind it; they are here because the author's own pass
+# found them, not a reviewer's.
+
+
+def test_an_empty_hook_message_with_no_envelope_anywhere_still_diagnoses(
+    monkeypatch, tmp_path
+):
+    """M7. Delete gate 1's `elif not last_message` arm and the ENVELOPE case
+    still passes — what silently disappears is the diagnostic on the old
+    2.0.42–2.1.46 fallback path, because `last_message` stays empty and main()
+    returns 0 before writing anything."""
+    transcript = tmp_path / "agent.jsonl"
+    _write_transcript(transcript, [_text_entry("no envelope, just prose")])
+    monkeypatch.setattr(pse, "_main_repo_root", lambda cwd: str(tmp_path))
+    rc = _run_main_with_stdin(monkeypatch, {
+        "last_assistant_message": "",
+        "session_id": "sess-e", "agent_id": "agent-e",
+        "agent_transcript_path": str(transcript), "cwd": str(tmp_path),
+    })
+    assert rc == 0
+    diags = list((tmp_path / pse.ENVELOPES_DIR).glob("_unparseable_*.json"))
+    assert len(diags) == 1, "the old fallback path lost its diagnostic"
+    diag = json.loads(diags[0].read_text(encoding="utf-8"))
+    assert diag["message_source"] == "agent_transcript"
+    assert "no envelope, just prose" in diag["last_assistant_message_excerpt"]
+
+
+def test_two_handbacks_in_ONE_entry_resolve_last_wins(tmp_path):
+    """M8. The last-wins rule INSIDE `_handback_message` — the test above puts
+    its two handbacks in separate entries, which the outer loop resolves, so it
+    cannot see this arm at all."""
+    second = _ENVELOPE.replace("OPS-THING", "OPS-SECOND")
+    transcript = tmp_path / "agent.jsonl"
+    _write_transcript(transcript, [
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "SubagentHandback",
+             "input": {"message": _ENVELOPE}},
+            {"type": "tool_use", "name": "SubagentHandback",
+             "input": {"message": second}},
+        ]}},
+    ])
+    got = pse._last_assistant_message_from_transcript(str(transcript))
+    assert "OPS-SECOND" in (pse._find_envelope_block(got) or "")
+
+
+@pytest.mark.parametrize("message", [123, {"nested": "dict"}, ["a", "list"], True])
+def test_a_truthy_nonstring_handback_message_is_skipped(tmp_path, message):
+    """M10. `{"message": None}` is falsy, so a `message and str(message)` rewrite
+    passes the None case and still starts coercing dicts and ints into the
+    envelope parser. A truthy non-string is what actually separates them."""
+    transcript = tmp_path / "agent.jsonl"
+    _write_transcript(transcript, [
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "SubagentHandback",
+             "input": {"message": message}},
+        ]}},
+        _text_entry("still here"),
+    ])
+    assert pse._last_assistant_message_from_transcript(str(transcript)) == "still here"
+
+
+# --- `Q-553`: the shipped skill bodies must carry the real bound ------------
+# Phase 314 capped retention and left two skill bodies describing the old
+# unbounded behaviour. Neither was flatly FALSE — the files do persist across
+# runs — which is why nothing caught it and why a "is this sentence wrong?"
+# check would not have either. These pin the surfaces to the CONSTANT, so the
+# next change to the cap reddens the skills that publish it.
+
+_AUTO_BUILD_SKILL = _REPO_ROOT / "core/skills/auto-build/SKILL.md"
+_CLAIM_REFERENCE = _REPO_ROOT / "core/skills/claim-task/REFERENCE.md"
+
+
+def _surfaces_naming_the_diagnostics() -> list[Path]:
+    """Every shipped file that names the diagnostics — DERIVED, not listed.
+
+    Round finding M-i: the first cut parametrised two hard-coded paths while five
+    files in `core/` carry the instruction, so a sixth surface picking it up would
+    have been invisible. That is the "roster that reads as coverage" class this
+    repo has already paid for once (Phase 204)."""
+    root = _REPO_ROOT / "core"
+    return sorted(
+        f for f in root.rglob("*")
+        if f.is_file() and f.suffix in {".md", ".py"}
+        and "_unparseable_" in f.read_text(encoding="utf-8", errors="replace")
+    )
+
+
+def test_the_diagnostic_surface_population_is_not_empty():
+    """Non-vacuity: a derived roster that derives nothing passes by agreeing about
+    nothing, which is the shape the guard above exists to avoid."""
+    found = _surfaces_naming_the_diagnostics()
+    assert len(found) >= 5, f"only {len(found)} surfaces name the diagnostics: {found}"
+    names = {f.name for f in found}
+    assert {"SKILL.md", "WORKFLOW.md", "parse_subagent_envelope.py"} <= names
+
+
+@pytest.mark.parametrize(
+    "path", _surfaces_naming_the_diagnostics(),
+    ids=lambda p: str(p.relative_to(_REPO_ROOT)),
+)
+def test_a_surface_that_mentions_the_diagnostics_states_the_retention_bound(path):
+    body = path.read_text(encoding="utf-8", errors="replace")
+    # Both spellings are DERIVED from the constant, not listed: the first run of
+    # this derived roster failed on `REFERENCE.md`, which states the bound as
+    # "7-day" rather than "7 days". That was the predicate being too narrow, not
+    # a real gap — the same wording-pin trap this section is about.
+    n = pse.DIAGNOSTIC_RETENTION_DAYS
+    stated = any(form in body for form in (f"{n} days", f"{n}-day", "DIAGNOSTIC_RETENTION_DAYS"))
+    assert stated, (
+        f"{path.relative_to(_REPO_ROOT)} describes the diagnostic mailbox without "
+        f"stating the {pse.DIAGNOSTIC_RETENTION_DAYS}-day bound the hook enforces"
+    )
+
+
+def test_the_claim_skill_does_not_promise_indefinite_retention():
+    """The exact `Q-553` wording: "from last week" WAS the boundary, so the
+    step's own worked example sat on the edge of what survives."""
+    body = _CLAIM_SKILL.read_text(encoding="utf-8")
+    assert "from last week" not in body, (
+        "the worked example is back, and it names exactly the retention boundary"
+    )
+
+
+def test_the_claim_skill_tells_the_runner_what_an_ABSENT_diagnostic_means():
+    """The operational half, and the only part that earns a line in the runner.
+
+    A bound the runner cannot act on is rationale; the actionable consequence is
+    that absence stopped being evidence. Rationale for this lives in REFERENCE.md
+    (dimension 10), which this asserts is where it went."""
+    body = _CLAIM_SKILL.read_text(encoding="utf-8")
+    assert "absence is not evidence" in body
+    ref = _CLAIM_REFERENCE.read_text(encoding="utf-8")
+    assert "Q-553" in ref, "the rationale did not reach the editor reference"
+    # Round finding H3 (Q6/Q7): `"Q-553" in ref` was satisfied by a one-line stub,
+    # so deleting the entire 33-line rationale — the dimension-10 half of the
+    # phase — left the guard green. The section must carry actual rationale.
+    section = ref.split("## Step 8 — the diagnostic mailbox is bounded")
+    assert len(section) == 2, "the Step 8 rationale section is gone or renamed"
+    body = section[1].split("\n## ")[0]
+    assert len(body) > 1200, (
+        f"the Step 8 rationale is {len(body)} chars — a stub, not the rationale "
+        f"dimension 10 requires be authored here rather than in the runner"
+    )
+    for required in ("What it protects", "What its loss or softening would change",
+                     "Provenance"):
+        assert required in body, f"the Step 8 rationale no longer states: {required}"
+
+
+# ---------------------------------------------------------------------------
+# Phase 319's own adversarial round — the guards lens found 27 holes and the
+# claims lens two HIGH. These are the arms that were missing.
+#
+# The structural diagnosis (guards lens M-h) is worth stating once: the first
+# cut's battery only ever REMOVED a predicate, so every guard it validated fires
+# on deletion and none fires on LOOSENING. Eleven of the phase's own tests passed
+# against a tree with `_handback_message` absent entirely. The rows below are
+# loosening-shaped on purpose.
+# ---------------------------------------------------------------------------
+
+
+def test_a_torn_multibyte_tail_does_not_crash_the_hook(monkeypatch, tmp_path):
+    """Round HIGH-1. The widening put this read on the DOMINANT path, so a
+    transcript whose tail is still flushing stopped being a rare case.
+
+    Pre-319 this wrote `_unparseable_*.json`; the phase's first cut exited 1 with
+    a `UnicodeDecodeError` traceback and wrote nothing — a regression in exactly
+    the mailbox `Q-553` is about."""
+    line = json.dumps(
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": "done —"}]}},
+        ensure_ascii=False,
+    ).encode("utf-8")
+    transcript = tmp_path / "torn.jsonl"
+    transcript.write_bytes(line[: line.rfind("—".encode("utf-8")) + 2])
+    with pytest.raises(UnicodeDecodeError):
+        transcript.read_bytes().decode("utf-8")      # the fixture really is torn
+    assert pse._last_assistant_message_from_transcript(str(transcript)) == ""
+
+    monkeypatch.setattr(pse, "_main_repo_root", lambda cwd: str(tmp_path))
+    rc = _run_main_with_stdin(monkeypatch, {
+        "last_assistant_message": "Plan delivered.", "session_id": "s", "agent_id": "a",
+        "agent_transcript_path": str(transcript), "cwd": str(tmp_path),
+    })
+    assert rc == 0
+    assert len(list((tmp_path / pse.ENVELOPES_DIR).glob("_unparseable_*.json"))) == 1
+
+
+def test_a_non_string_text_value_does_not_crash_the_hook(tmp_path):
+    """Round HIGH-1, second path: `TypeError: sequence item 0: expected str`."""
+    transcript = tmp_path / "badtext.jsonl"
+    _write_transcript(transcript, [
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": 123}]}},
+        _text_entry("real text"),
+    ])
+    assert pse._last_assistant_message_from_transcript(str(transcript)) == "real text"
+
+
+def test_an_envelope_already_read_survives_a_torn_tail(tmp_path):
+    """The broad catch returns what was recovered, not "" — an envelope read from
+    line 1 is not made wrong by line 900 being torn."""
+    line = json.dumps(
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": "x —"}]}},
+        ensure_ascii=False,
+    ).encode("utf-8")
+    transcript = tmp_path / "partial.jsonl"
+    transcript.write_bytes(
+        (json.dumps({"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "SubagentHandback", "input": {"message": _ENVELOPE}},
+        ]}}) + "\n").encode("utf-8")
+        + line[: line.rfind("—".encode("utf-8")) + 2]
+    )
+    got = pse._last_assistant_message_from_transcript(str(transcript))
+    assert pse._find_envelope_block(got) is not None
+
+
+@pytest.mark.parametrize("name", [
+    "subagenthandback",          # case-loosened
+    "MySubagentHandbackShim",    # substring-loosened
+    "SubagentStopHook",          # prefix-loosened
+    "Handback",                  # allowlist-loosened
+    "SendMessage",               # a REAL tool that carries a `message` argument
+    "PushNotification",          # ditto
+])
+def test_a_near_miss_tool_name_is_not_treated_as_a_handback(tmp_path, name):
+    """Round HIGH-2. The first cut only caught DELETING the name check; five
+    distinct loosenings walked through because the fixture used two names that
+    every loosening still rejects.
+
+    `SendMessage` and `PushNotification` are not hypothetical: a census of this
+    machine's transcripts finds 234 and 5 `tool_use` blocks whose input carries a
+    `message` key, against 333 real handbacks. Loosening the predicate adopts
+    them."""
+    transcript = tmp_path / "t.jsonl"
+    _write_transcript(transcript, [
+        _handback_entry(_ENVELOPE, name=name),
+        _text_entry("summary only"),
+    ])
+    assert pse._last_assistant_message_from_transcript(str(transcript)) == "summary only"
+
+
+def test_a_tool_use_block_with_no_name_is_not_a_handback(tmp_path):
+    """Round HIGH-2, sharpest form: `block.get("name", _HANDBACK_TOOL_NAME)`
+    makes a nameless block match, which is the "match some other tool's input"
+    outcome the module comment exists to forbid."""
+    transcript = tmp_path / "t.jsonl"
+    _write_transcript(transcript, [
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "input": {"message": _ENVELOPE}},
+        ]}},
+        _text_entry("summary only"),
+    ])
+    assert pse._last_assistant_message_from_transcript(str(transcript)) == "summary only"
+
+
+def test_a_blank_handback_does_not_shadow_a_real_one_in_the_same_entry(tmp_path):
+    """Round MEDIUM-a. Dropping `.strip()` from the truthiness test re-opens the
+    exact defect this phase exists to fix, in 15 characters."""
+    transcript = tmp_path / "t.jsonl"
+    _write_transcript(transcript, [
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "SubagentHandback", "input": {"message": _ENVELOPE}},
+            {"type": "tool_use", "name": "SubagentHandback", "input": {"message": "   "}},
+        ]}},
+        _text_entry("summary only"),
+    ])
+    got = pse._last_assistant_message_from_transcript(str(transcript))
+    assert pse._find_envelope_block(got) is not None
+
+
+def test_a_non_dict_block_in_the_content_list_is_skipped(tmp_path):
+    """Round MEDIUM-b. The malformed-input parametrisation covers `input` shapes,
+    never BLOCK shapes, so dropping `isinstance(block, dict)` raised
+    `AttributeError` unguarded."""
+    transcript = tmp_path / "t.jsonl"
+    _write_transcript(transcript, [
+        {"type": "assistant", "message": {"content": [
+            "a bare string in the content list",
+            {"type": "tool_use", "name": "SubagentHandback", "input": {"message": _ENVELOPE}},
+        ]}},
+    ])
+    got = pse._last_assistant_message_from_transcript(str(transcript))
+    assert pse._find_envelope_block(got) is not None
+
+
+def test_a_non_assistant_entry_is_never_read_as_the_agents_message(tmp_path):
+    """Round MEDIUM-c. Real transcripts interleave user entries; dropping the
+    type filter silently returns one."""
+    transcript = tmp_path / "t.jsonl"
+    _write_transcript(transcript, [
+        _text_entry("final answer"),
+        {"type": "user", "message": {"content": [{"type": "text", "text": "user noise"}]}},
+    ])
+    assert pse._last_assistant_message_from_transcript(str(transcript)) == "final answer"
+
+
+def test_the_envelope_check_is_a_real_parse_not_a_substring_test(tmp_path):
+    """Round MEDIUM-e. Downgrading `_find_envelope_block(...) is not None` to
+    `"TASK:" in handback` adopts a handback that merely MENTIONS the token — the
+    same any-match failure the exact-name pin exists to avoid, one predicate in."""
+    transcript = tmp_path / "t.jsonl"
+    _write_transcript(transcript, [
+        _handback_entry("I grepped for TASK: and STATUS: and found none."),
+        _text_entry("the last text"),
+    ])
+    assert pse._last_assistant_message_from_transcript(str(transcript)) == "the last text"
+
+
+def test_a_long_hook_summary_still_reaches_the_transcript(monkeypatch, tmp_path):
+    """Round MEDIUM-f. A length short-circuit on gate 1 reopens the reported
+    defect for any agent whose summary runs long, with every other test green."""
+    transcript = tmp_path / "t.jsonl"
+    _write_transcript(transcript, [_handback_entry(_ENVELOPE)])
+    monkeypatch.setattr(pse, "_main_repo_root", lambda cwd: str(tmp_path))
+    rc = _run_main_with_stdin(monkeypatch, {
+        "last_assistant_message": "summary. " * 400,      # 3,600 chars, no envelope
+        "session_id": "s", "agent_id": "a",
+        "agent_transcript_path": str(transcript), "cwd": str(tmp_path),
+    })
+    assert rc == 0
+    assert (tmp_path / pse.ENVELOPES_DIR / "OPS-THING.plan.json").exists()
+
+
+def test_a_handback_is_preferred_over_a_LATER_text_envelope(tmp_path):
+    """Round MEDIUM-d. The ordering rule was unpinned in BOTH directions, and
+    reversing it left all tests green.
+
+    This is a case pre-319 read differently — it returned the later text envelope
+    — so it is the one shape where the widening ALTERS rather than only adds. The
+    handback wins deliberately: it is the harness's final-handback call, while a
+    later text block is ordinary chat after the fact. Recorded rather than
+    claimed away; `PHASE_LOG.md` states the exception."""
+    later = _ENVELOPE.replace("OPS-THING", "OPS-LATER")
+    transcript = tmp_path / "t.jsonl"
+    _write_transcript(transcript, [_handback_entry(_ENVELOPE), _text_entry(later)])
+    got = pse._last_assistant_message_from_transcript(str(transcript))
+    assert "OPS-THING" in (pse._find_envelope_block(got) or "")
+
+
+# --- the quotation forgery path (round, execution lens HIGH) ----------------
+# `Q-561` and this phase's first record both asserted that a handback is a
+# structural signal "a quote cannot forge". The round falsified that with a
+# transcript this repo's own review practice produced: a Sysop review lens,
+# holding no claim, quoted the envelope it was reviewing, and the first cut
+# adopted it and would have written that claim's slot.
+
+
+def test_a_handback_that_QUOTES_an_envelope_and_keeps_talking_is_not_a_result():
+    """The live shape, reduced: evidence, the quoted envelope, then more report."""
+    quoting = (
+        "## Finding 3 — the executor's envelope\n\nIt reported:\n\n"
+        + _ENVELOPE
+        + "\n\n" + ("...and here is why that is wrong. " * 40)
+    )
+    assert pse._find_envelope_block(quoting) is not None, "fixture must contain an envelope"
+    assert pse._envelope_is_this_agents_result(quoting) is False
+
+
+def test_a_handback_that_ENDS_with_its_envelope_is_a_result():
+    assert pse._envelope_is_this_agents_result("Work delivered.\n\n" + _ENVELOPE) is True
+
+
+def test_a_short_sign_off_after_the_envelope_is_still_a_result():
+    """The bound is 200 chars, not 0 — 56 of 57 live handbacks end within 20 of
+    their envelope, so a brief closing line must not fail closed."""
+    assert pse._envelope_is_this_agents_result(_ENVELOPE + "\n\nNot pushed.\n") is True
+
+
+def test_the_quotation_bound_separates_the_measured_populations():
+    """The bound is not fitted to the counterexample: an order of magnitude above
+    the compliant population's maximum (20) and two below the quotation (13,900)."""
+    assert 20 < pse._HANDBACK_ENVELOPE_TAIL_MAX < 13_900
+    assert pse._HANDBACK_ENVELOPE_TAIL_MAX == 200
+
+
+def test_a_quoting_handback_does_not_reach_the_mailbox(monkeypatch, tmp_path):
+    """End to end: the forged envelope must not become a claim slot."""
+    quoting = "Reviewing:\n\n" + _ENVELOPE + "\n\n" + ("further analysis. " * 60)
+    transcript = tmp_path / "t.jsonl"
+    _write_transcript(transcript, [
+        _handback_entry(quoting),
+        _text_entry("Report delivered to the caller via SubagentHandback."),
+    ])
+    monkeypatch.setattr(pse, "_main_repo_root", lambda cwd: str(tmp_path))
+    rc = _run_main_with_stdin(monkeypatch, {
+        "last_assistant_message": "Report delivered to the caller via SubagentHandback.",
+        "session_id": "s", "agent_id": "a",
+        "agent_transcript_path": str(transcript), "cwd": str(tmp_path),
+    })
+    assert rc == 0
+    assert not (tmp_path / pse.ENVELOPES_DIR / "OPS-THING.plan.json").exists(), (
+        "a quoted envelope was written as this agent's result"
+    )
+    assert len(list((tmp_path / pse.ENVELOPES_DIR).glob("_unparseable_*.json"))) == 1

@@ -320,14 +320,40 @@ def validate(base_dir: Path, project_root: Path | None = None) -> Report:
         return report
 
     # Invariant 1: parses with yaml.safe_load
+    # THE TRACKER IS REFUSED, NOT REPAIRED — and this is the opposite of what the
+    # two body readers below do. `UnicodeDecodeError` is a **ValueError**, not an
+    # OSError, and PyYAML does not convert it, so before 2026-09-19 a stray byte
+    # here raised out of validate() and took the ENTIRE run with it. The first
+    # fix used `errors="replace"` like the body readers. **The round disqualified
+    # that**: replacing bytes in the tracker makes a corrupt file parse, so the
+    # run reported five unrelated schema errors and NOTHING about the corruption
+    # — a maintainer chasing phantom schema problems. A body is prose being
+    # scanned for a heading and may be repaired; index.yml is the tracker and
+    # must be refused with a reason.
+    #
+    # The three arms are ordered and distinct on purpose. A decode failure is not
+    # a read failure and a YAML value error is not either: the first cut folded
+    # `ValueError` into the OSError arm and reported `completed: 2026-02-31` as
+    # "Cannot read:" on a file that read perfectly, routing past the YAML branch
+    # directly above it.
     try:
         with open(index_path, "r", encoding="utf-8") as fh:
             raw = yaml.safe_load(fh)
+    except UnicodeDecodeError as e:
+        report.error(
+            str(index_path),
+            f"not valid UTF-8: {_sanitize_log(str(e)[:500])}. "
+            "The tracker is refused rather than repaired; fix the byte and re-run.",
+        )
+        return report
     except yaml.YAMLError as e:
         report.error(str(index_path), f"YAML parse error: {_sanitize_log(str(e)[:500])}")
         return report
     except OSError as e:
         report.error(str(index_path), f"Cannot read: {_sanitize_log(str(e)[:500])}")
+        return report
+    except ValueError as e:
+        report.error(str(index_path), f"YAML value error: {_sanitize_log(str(e)[:500])}")
         return report
 
     if not isinstance(raw, dict):
@@ -724,9 +750,9 @@ def _check_manual_smoke(
     if body_path is None or not body_path.is_file():
         return
     try:
-        with open(body_path, "r", encoding="utf-8") as fh:
+        with open(body_path, "r", encoding="utf-8", errors="replace") as fh:
             text = fh.read()
-    except OSError:
+    except (OSError, ValueError):
         return
     if not _MANUAL_SMOKE_HEADING_RE.search(text):
         report.warn(
@@ -743,7 +769,7 @@ def _check_body_first_heading(body_path: Path, task_id: str | None, loc: str, re
     if task_id is None:
         return
     try:
-        with open(body_path, "r", encoding="utf-8") as fh:
+        with open(body_path, "r", encoding="utf-8", errors="replace") as fh:
             for raw_line in fh:
                 line = raw_line.rstrip("\n")
                 if not line.strip():
@@ -763,7 +789,7 @@ def _check_body_first_heading(body_path: Path, task_id: str | None, loc: str, re
                     )
                 return
         report.error(f"{body_path}:1", f"body file is empty (expected '# {task_id}')")
-    except OSError as e:
+    except (OSError, ValueError) as e:
         report.error(str(body_path), f"cannot read body file: {_sanitize_log(str(e)[:500])}")
 
 
