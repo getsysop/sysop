@@ -43,15 +43,16 @@ What lands is deliberately less than the full install:
   runner under `sysop/scripts/`, two git hooks (armed at install — skeletons that block nothing
   until your project fills them in), and a CI workflow template in `sysop/scripts/ci/`.
 - **A permission allow-list** (`.claude/settings.json`) scoped to what these skills actually
-  run, and `.claude/sysop.lock` recording `mode: loop` so future updates re-apply the same shape.
+  run, and `.claude/sysop.lock` recording `"mode": "loop"` so future updates re-apply the same shape.
 - **`CLAUDE.md` stubs** for the three sections the audit skills read — `## Scope mapping`,
   `## Map coverage exclusions`, `## Security-critical always-include files` — appended only if
   your `CLAUDE.md` doesn't already have them (your existing content is never rewritten).
 
-No `tasks/` queue, no worktrees, no `/claim-task` or `/review-close`, no workflow docs. Two
+No `tasks/` queue, no per-task worktrees, no `/claim-task` or `/review-close`, no workflow docs. Two
 files are deliberately lazy rather than installed: `review_tasks.md` (the findings ledger) is
 created by your first audit run, and `sysop/SYSOP_ISSUES.md` (the friction log) by your first
-captured issue.
+captured issue: create it with one `## ISSUE-0001 — <title> (<date>)` heading per entry and a
+`**Status:** Open` line, the shape `/report-issues` reads.
 
 One note for Claude Code users: skip the plugin here. The five skills land project-side in
 `.claude/skills/`, so a loop install needs nothing else — the plugin's additional commands are
@@ -190,7 +191,7 @@ for you, and nothing is filed without your per-item consent. Full reference:
 
 Updates work the same as any install: `bash sysop/scripts/sysop-update.sh` (after setting
 `$SYSOP_SRC` — see [install-and-update.md](./install-and-update.md#updating-an-existing-install)).
-The lock's `mode: loop` means an update re-applies the loop shape — it won't quietly grow you a
+The lock's `"mode": "loop"` means an update re-applies the loop shape — it won't quietly grow you a
 task queue.
 
 If the loop earns its keep and you want the rest — planning, the queue, parallel builds under

@@ -95,7 +95,7 @@ def _git_lines(repo_root, args):
     try:
         r = subprocess.run(["git"] + args, cwd=repo_root,
                            capture_output=True, text=True, timeout=60, env=env)
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, subprocess.SubprocessError, UnicodeDecodeError):
         return None
     if r.returncode != 0:
         return None
@@ -198,12 +198,19 @@ def _default_ignored_targets(repo_root, exclude_rel):
         # Two very different states reach here. Outside a repo (or with no git)
         # there is nothing to enumerate and the caller's bare directory operand
         # is exactly right — say nothing. Inside a repo, git ANSWERED and failed:
-        # a corrupted index, a permission problem, a timeout. The recovery then
-        # returns an empty population and the stage would report `executed` over
-        # a set it could not enumerate — a status that does not mean what it says.
+        # a corrupted index, a permission problem, a timeout, or a path that is
+        # not UTF-8 (git prints `-z` names raw, and they cannot be decoded). The
+        # recovery then returns an empty population and the stage would report
+        # `executed` over a set it could not enumerate — a status that does not
+        # mean what it says.
         return [], 0, _inside_git_repo(repo_root)
     untracked = _git_lines(
-        repo_root, ["ls-files", "-z", "--others", "--exclude-standard"]) or []
+        repo_root, ["ls-files", "-z", "--others", "--exclude-standard"])
+    if untracked is None:
+        # The same failure on the untracked half. Git has just answered for this
+        # tree, so it IS one: degrade exactly as above rather than `or []`, which
+        # dropped the untracked test files while the stage still read `executed`.
+        return [], 0, True
 
     budget = _operand_budget()
     targets, dropped, used = [], 0, 0
@@ -444,7 +451,7 @@ def _run_semgrep(repo_root, included_ids, report=None):
         print("warn: git could not enumerate this repository, so the test files "
               "semgrep's default ignore list hides were NOT added to the scan "
               "(the whole-tree scan itself is unaffected). A corrupted index, a "
-              "permission problem, or a git timeout will do this.",
+              "permission problem, a git timeout or a non-UTF-8 path will do this.",
               file=sys.stderr)
     if partial:
         detail = (f"{len(partial)} file(s) partially parsed, unparsed regions not "

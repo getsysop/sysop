@@ -189,6 +189,23 @@ def test_eslint_invocation_never_uses_exit_on_fatal_error(tmp_path):
     assert "--exit-on-fatal-error" not in argv, argv
 
 
+def test_eslint_runs_the_discovered_frontends_own_binary(tmp_path):
+    """Phase 327 (`Q-592` line 44, the sibling it found). ESLint discovered `web/` and then ran
+    the bare name, which resolves only through `run_checks.sh`'s PATH entry for `frontend/`.
+    The project's own `node_modules/.bin/eslint` is what a discovered directory can run."""
+    web = _make_eslint_frontend(tmp_path, name="web")
+    (web / "node_modules" / ".bin").mkdir()
+    local = web / "node_modules" / ".bin" / "eslint"
+    local.write_text("#!/bin/sh\n")
+    local.chmod(0o755)
+    with patch("run_checks_impl.subprocess.run") as mock_run:
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="[]", stderr="")
+        rci._run_eslint(str(tmp_path), {"lint-error"})
+    assert mock_run.call_args.args[0][0] == str(local)
+    assert mock_run.call_args.kwargs["cwd"] == str(web)
+
+
 def test_eslint_skips_when_binary_missing(tmp_path, capsys):
     """FileNotFoundError from subprocess.run → empty list + stderr warning."""
     _make_eslint_frontend(tmp_path)

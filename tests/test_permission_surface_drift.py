@@ -271,13 +271,31 @@ def _preflight_body(text):
     return m.group(2) if m else None
 
 
-def declared_required():
-    """skill name -> [rules declared required], bullet form only.
+# Every CommonMark list-item marker: `-`, `*`, `+`, and an ordered `1.` / `1)`.
+LIST_ITEM = re.compile(r"^\s*(?:[-*+]|\d{1,9}[.)]) ")
 
-    Bullet form is the contract: a `Bash(...)` named in a *paragraph* of the
+
+def test_the_list_item_reader_sees_every_marker():
+    """Control for `declared_required()`'s marker set (Phase 333's round): a reader keyed to
+    `-`/`*` alone let a `+` bullet or a `1.` item hard-require a rule unseen."""
+    for line in ("- `Bash(x)`", "* `Bash(x)`", "+ `Bash(x)`", "1. `Bash(x)`", "12) `Bash(x)`",
+                 "   - `Bash(x)`"):
+        assert LIST_ITEM.match(line), f"list item not read: {line!r}"
+    for line in ("`Bash(x)` in prose", "-`Bash(x)`", "1.`Bash(x)`"):
+        assert not LIST_ITEM.match(line), f"prose read as a list item: {line!r}"
+
+
+def declared_required():
+    """skill name -> [rules declared required], list-item form only.
+
+    List-item form is the contract: a `Bash(...)` named in a *paragraph* of the
     pre-flight is documentation (an explicit non-entry, or a note about what the
     template ships), not a hard requirement. `/review-close` relies on this to
     say out loud which verbs it deliberately does NOT require.
+
+    Every CommonMark list marker counts -- `-`, `*`, `+`, `1.` and `1)` -- not just
+    `-`/`*`: Phase 333's round added a `+` bullet and a `1.` item to a pre-flight
+    and a reader keyed to two markers could not see either.
     """
     out = {}
     for path in sorted(SKILLS_DIR.glob("*/SKILL.md")):
@@ -286,7 +304,7 @@ def declared_required():
             continue
         rules = []
         for line in body.splitlines():
-            if re.match(r"^\s*[-*] ", line):
+            if LIST_ITEM.match(line):
                 rules += re.findall(r"`(Bash\([^`]+\))`", line)
         if rules:
             out[path.parent.name] = rules

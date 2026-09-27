@@ -24,21 +24,29 @@ import ast
 from typing import NamedTuple
 
 
+#: What `ast.literal_eval` raises on a node it cannot evaluate. `OverflowError` is in it because
+#: `literal_eval` does its own `+`/`-` on numbers: a 400-digit int plus `1j` overflows converting to
+#: float. Phase 327 first called this tuple's breadth untestable, and its round found that row.
+_LITERAL_EVAL_ERRORS = (ValueError, TypeError, SyntaxError, MemoryError, RecursionError,
+                        OverflowError)
+
+
 class CaseList(NamedTuple):
     """One test's inline parametrize rows, plus how many argnames the decorator declares.
 
     `argnames` decides whether a list row and a tuple row are the same case — see
     `parametrized_cases` — so the two travel together rather than the count being re-derived at
     each comparison site, which is how they get out of step.
+
+    `unevaluated` counts the rows `literal_eval` could not read — a name, a call, an f-string.
+    They are not in `rows`, because a pin is a literal and can never equal one; the count is
+    what lets a missing-row report say that a pinned row may have been rewritten as an
+    expression rather than deleted.
     """
 
     argnames: int
     rows: list
-
-
-#: A row the extractor could parse structurally but not evaluate — a name, a call, an f-string.
-#: Distinct from every legal row value, so a pin can never accidentally match one.
-_UNEVALUATABLE = object()
+    unevaluated: int = 0
 
 
 def parametrized_cases(source: str) -> dict[str, list]:
@@ -50,9 +58,13 @@ def parametrized_cases(source: str) -> dict[str, list]:
     name its test or its failure message cannot tell a maintainer what to restore.
 
     Rows are `ast.literal_eval`ed. Every inline row in `tests/test_reader_census.py` evaluates —
-    measured at Phase 301's close, 43 of 43 — but a row carrying a name or a call is recorded as
-    `_UNEVALUATABLE` rather than dropped, so a pinned row that someone converts to a computed
-    expression reports as missing instead of silently ceasing to be checked.
+    measured at Phase 301's close, 43 of 43. A row carrying a name or a call cannot equal a
+    literal pin, so a pinned row someone converts to a computed expression reports as missing
+    whatever this does with it; what it does is COUNT it (`CaseList.unevaluated`), so the report
+    can name that cause. Phase 327 (`Q-592` line 25): the first design recorded such rows as a
+    sentinel object, and three independent removals of it — dropping the filter, appending
+    nothing, redefining the sentinel as `None` — all stayed green, because the report was the same
+    either way. A mechanism no test can distinguish from its absence is a docstring.
 
     Stacked decorators accumulate: a test with two `parametrize` decorators contributes both
     lists, because either one going empty is the defect this exists to see.
@@ -94,20 +106,21 @@ def parametrized_cases(source: str) -> dict[str, list]:
             if not isinstance(cases, (ast.List, ast.Tuple)):
                 continue
             argnames = _argnames_count(dec)
-            rows = []
+            rows, unevaluated = [], 0
             for elt in _row_nodes(cases):
                 try:
                     rows.append(ast.literal_eval(elt))
-                except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
-                    rows.append(_UNEVALUATABLE)
+                except _LITERAL_EVAL_ERRORS:
+                    unevaluated += 1
             prev = found.get(node.name)
             if prev is None:
-                found[node.name] = CaseList(argnames, list(rows))
+                found[node.name] = CaseList(argnames, rows, unevaluated)
             else:
                 # Stacked decorators can declare different argnames. Keep the SMALLER, because
                 # the tuple/list equivalence below is only sound at 2+ and the conservative
                 # reading is the one that cannot silence a real difference.
-                found[node.name] = CaseList(min(prev.argnames, argnames), prev.rows + rows)
+                found[node.name] = CaseList(min(prev.argnames, argnames), prev.rows + rows,
+                                            prev.unevaluated + unevaluated)
     return found
 
 
@@ -160,7 +173,7 @@ def _argnames_count(dec: ast.Call) -> int:
         return 1
     try:
         names = ast.literal_eval(node)
-    except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
+    except _LITERAL_EVAL_ERRORS:
         return 1
     if isinstance(names, str):
         return len([n for n in names.replace(" ", "").split(",") if n])
@@ -187,9 +200,9 @@ def _norm(value, argnames: int):
 
     Run against pytest, not reasoned about. So at one argname the two forms are different values
     and equating them silences a real difference — and the live target points the next consumer at
-    `@parametrize("state", ["mixed", "runner", "none"])`, which is exactly that shape. That target is
-    `REVIEW_CHECKLIST.md` § *Notes*' 2026-09-16 `tests/test_thinning_transforms.py` line, NOT a `Q-NNN`:
-    Phase 301 filed one, its own round un-filed it under the Phase-278 bar, and the id was reissued.
+    `@parametrize("state", ["mixed", "runner", "none"])`, which is exactly that shape. That list is
+    `tests/test_thinning_transforms.py::test_transform_1_refuses_every_state_that_is_not_editor`,
+    pinned by this module since Phase 327 (`Q-592` line 24).
 
     Hence: coerce the TOP LEVEL only, and only at 2+ argnames. No recursion, because a row's
     MEMBERS are handed to the test verbatim whatever the argname count, so `(1, [2])` and
@@ -227,8 +240,7 @@ def case_pin_problems(source: str, pins: dict) -> list[str]:
                 f"test was deleted, renamed, or its cases moved to a module constant — all "
                 f"three want the pin updated in the same commit, deliberately.")
             continue
-        argnames, all_rows = found[test]
-        rows = [r for r in all_rows if r is not _UNEVALUATABLE]
+        argnames, rows, unevaluated = found[test]
 
         # A column projection over a row that is not a sequence would index INTO the value:
         # `"mixed"[0]` is `"m"`, which reports CLEAN against a pin of first letters, and an int
@@ -261,7 +273,10 @@ def case_pin_problems(source: str, pins: dict) -> list[str]:
                     f"predicate it drives — deleting it leaves the arm uncontrolled and the "
                     f"suite green, which is `Q-518`. If the row is genuinely obsolete, remove "
                     f"it from `_CASE_PINS` in the same commit and say why.\n"
-                    f"  present: {seen!r}")
+                    f"  present: {seen!r}"
+                    + (f"\n  {unevaluated} row(s) in this list are not literals and cannot be "
+                       f"compared — if the pinned row was rewritten as an expression, that is "
+                       f"why it reads as missing." if unevaluated else ""))
     return problems
 
 
@@ -317,3 +332,24 @@ def parametrize_shape_problems(source: str, expected_count: int,
             f"`ast.Name`-driven controls are pinned by nothing else — a content pin covers the "
             f"inline lists only.")
     return problems
+
+
+def unpinned_list_problems(source: str, pins: dict) -> list[str]:
+    """Every inline case list in the module must have a pin entry — the pins PARTITION it.
+
+    Phase 327 (`Q-592` line 27). `case_pin_problems` checks the rows of each test it is given
+    and says nothing about a test it is not given. So deleting one `_CASE_PINS` entry together
+    with the rows it pinned, then neutering the arm those rows drove, was green for four of
+    `tests/test_reader_census.py`'s seven pins: the tamper control's rows reach only the other
+    three. Requiring the pinned set to equal the set of inline lists makes that deletion red
+    unless the list also leaves the inline population — converted to a module constant, where
+    only the non-empty bar reaches it, or deleted, which the decorator-count ratchet sees.
+    That is the bound of an editable pin, now one edit further out: every step of it is a
+    visible line in the diff, and none of them is a single-token change.
+    """
+    return [
+        f"{test}: has an inline parametrize list and no pin entry. Every inline list in this "
+        f"module is pinned, so a missing entry is a pin that was deleted; restore it, or pin "
+        f"the rows that are the only ones killing a mutation of the arm this test drives."
+        for test in sorted(set(parametrized_cases(source)) - set(pins))
+    ]

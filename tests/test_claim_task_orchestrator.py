@@ -582,6 +582,10 @@ CONDITIONAL_ALLOWLIST = (
     "If both are absent, skip",                                   # executor: no verification section
     "skip cleanly with an explicit note if the dev server",       # executor: UI verify
     "Skip the chain when the executor returned",                  # Step 8 auto-mode chaining
+    # Phase 323, fix-by-default (`Q-591`). A condition on FILING, the step the rule makes
+    # the exception; it narrows an optional path rather than making a mandatory one
+    # optional. Bound to its own clause per the design note above.
+    "File a task only when it cannot be fixed now",               # 7e item 2b, outcome 2
     # Bound to its own sentence, not the bare verb phrase. An entry here exempts any
     # match whose word falls inside the span, so a two-word entry would exempt every
     # future "skip the auto-mode chain" anywhere in the file — which is the allowlist
@@ -1396,10 +1400,16 @@ def orchestrator_problems(text=None) -> list[str]:
                 p.append("Step 8 names the readers but no longer says neither rejects -- "
                          "reporting a skipped review is not preventing one, and the "
                          "shape's honest claim is the weaker of the two")
-            if not re.search(r"roadmap.{0,40}path only|only on the roadmap path", n8, re.I):
-                p.append("Step 8 no longer records that /sitrep's predicate is reached "
-                         "on the roadmap path only -- the batch gap is open and stating "
-                         "coverage it does not have is the Phase-155 shape")
+            # Phase 248 closed the batch gap (`_classify_review_batches` runs the same
+            # park probe), and this guard pinned the retired "roadmap path only" until
+            # Phase 332. Now: Step 8 must say both claim kinds reach it, and must not
+            # re-assert the gap.
+            if not re.search(r"both claim kinds reach", n8, re.I):
+                p.append("Step 8 no longer records that /sitrep's park classification is "
+                         "reached for both claim kinds")
+            if re.search(r"roadmap.{0,40}path only|only on the roadmap path", n8, re.I):
+                p.append("Step 8 re-asserts a roadmap-only /sitrep predicate, a gap "
+                         "closed since Phase 248")
 
     # --- Step 7a's plan-presence skip, and Step 1's batch rejection --------
     #
@@ -2465,9 +2475,9 @@ SKILL_MUTATIONS = {
     "part-B readers upgraded from reporting to gating": (
         "**Both readers report and neither rejects**",
         "**Both readers gate and either can reject**"),
-    "part-B reader coverage overclaimed to batches": (
-        "reached on the **roadmap** path only",
-        "reached on every claim path"),
+    "part-B batch coverage denied again": (
+        "**Both claim kinds reach `/sitrep`'s park classification.**",
+        "**`/sitrep`'s predicate is reached on the roadmap path only.**"),
     "part-B legs claimed as still deferred": (
         "All three of part B's legs now ship",
         "Part B's readers are specified and deferred"),

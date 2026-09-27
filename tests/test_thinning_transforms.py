@@ -44,6 +44,13 @@ from pathlib import Path
 
 import pytest
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _case_pins import (  # noqa: E402
+    case_pin_problems,
+    parametrize_shape_problems,
+    unpinned_list_problems,
+)
+
 REPO = Path(__file__).resolve().parent.parent
 SPLIT = REPO / "tools" / "phase295_split.py"
 PRECOND = REPO / "tools" / "phase295_precondition_b.py"
@@ -115,6 +122,23 @@ POINTER_REFUSES = (
 )
 
 
+def pointer_population_problems(accepts, refuses) -> list[str]:
+    """The two pointer lists' size and shape, as a predicate a control can drive."""
+    problems = []
+    if len(accepts) != 9:
+        problems.append(f"POINTER_ACCEPTS has {len(accepts)} rows, pinned at 9")
+    if len(refuses) != 12:
+        problems.append(f"POINTER_REFUSES has {len(refuses)} rows, pinned at 12")
+    # Every authorised spelling the campaign has, present by shape rather than by count alone.
+    if not any(ln.lstrip().startswith("#") for ln in accepts):
+        problems.append("the comment form is gone")
+    if not any("§ *Step" in ln and not ln.lstrip().startswith((">", "#")) for ln in accepts):
+        problems.append("the prose form is gone")
+    if not any(ln.lstrip().startswith(">") for ln in accepts):
+        problems.append("the blockquote form is gone")
+    return problems
+
+
 def test_the_pointer_populations_are_not_empty():
     """Both lists parametrize a test, so emptying either leaves its test collecting NOTHING and
     the suite exiting 0.
@@ -125,15 +149,72 @@ def test_the_pointer_populations_are_not_empty():
     finds nothing"`) and not here, in the list its own module docstring ranks first.
 
     Counts, not just non-emptiness: a list trimmed to one element is still non-empty and still
-    guards almost nothing.
+    guards almost nothing. **Exact since Phase 327** (`Q-592` line 24): the floors were `>= 4` and
+    `>= 8` against 9 and 12 rows, so five and four rows could leave with this green, and the lists'
+    comments tie each group of rows to the widening it kills. Adding a row means raising the
+    number in the same commit. What a count still cannot see is a row rewritten in place.
     """
-    assert len(POINTER_ACCEPTS) >= 4, POINTER_ACCEPTS
-    assert len(POINTER_REFUSES) >= 8, POINTER_REFUSES
-    # Every authorised spelling the campaign has, present by shape rather than by count alone.
-    assert any(ln.lstrip().startswith("#") for ln in POINTER_ACCEPTS), "the comment form is gone"
-    assert any("§ *Step" in ln and not ln.lstrip().startswith(">")
-               and not ln.lstrip().startswith("#") for ln in POINTER_ACCEPTS), "the prose form is gone"
-    assert any(ln.lstrip().startswith(">") for ln in POINTER_ACCEPTS), "the blockquote form is gone"
+    assert pointer_population_problems(POINTER_ACCEPTS, POINTER_REFUSES) == []
+
+
+def test_the_pointer_population_bars_are_driven():
+    """The control the counts lacked: one row removed from either list must report. Phase 327's
+    battery loosened `== 12` back to `>= 8` with no row removed and nothing noticed, because
+    the bar was an inline assert no control could feed a shorter list."""
+    assert pointer_population_problems(POINTER_ACCEPTS[:-1], POINTER_REFUSES)
+    assert pointer_population_problems(POINTER_ACCEPTS, POINTER_REFUSES[:-1])
+    # And one ADDED, so the pin stays exact in both directions (the round loosened `!=` to `<`).
+    assert pointer_population_problems(POINTER_ACCEPTS + POINTER_ACCEPTS[:1], POINTER_REFUSES)
+    assert pointer_population_problems(POINTER_ACCEPTS, POINTER_REFUSES + POINTER_REFUSES[:1])
+    # Each form removed with the row COUNT kept, so the count arm cannot answer for the form
+    # arm — the battery's one survivor on the first cut of this control.
+    for form, is_form in (
+        ("comment", lambda ln: ln.lstrip().startswith("#")),
+        ("prose", lambda ln: "§ *Step" in ln and not ln.lstrip().startswith((">", "#"))),
+        ("blockquote", lambda ln: ln.lstrip().startswith(">")),
+    ):
+        kept = [ln for ln in POINTER_ACCEPTS if not is_form(ln)]
+        padded = kept + [kept[0]] * (len(POINTER_ACCEPTS) - len(kept))
+        assert pointer_population_problems(padded, POINTER_REFUSES) == [f"the {form} form is gone"], form
+
+
+#: How many parametrized controls this module carries. Exact, not a floor: the predecessor's
+#: `checked >= 4` equalled the population, so it could see a control deleted but not a new one
+#: that later left. Six since Phase 327 added the tamper and per-entry controls below.
+_PARAMETRIZE_DECORATOR_COUNT = 6
+
+#: The inline case rows that may not leave this module, keyed by the test they control. Every
+#: row of every inline list: each is the only row killing some widening of the arm it drives.
+#: Format and semantics are `tests/_case_pins.py`'s, the same as `tests/test_reader_census.py`.
+_CASE_PINS = {
+    # Transform 1's predicate has four arms and one positive control below; each refused state
+    # is its own arm. A whole-row pin, because the rows are single-argname strings and a column
+    # projection would index a CHARACTER (the shape `_case_pins.py` refuses).
+    "test_transform_1_refuses_every_state_that_is_not_editor": (None, ("mixed", "runner", "none")),
+    # Neither mode and both modes are separate refusals. Column 0 only: column 1 is prose.
+    "test_transform_1_and_4_are_mutually_exclusive_and_one_is_required": (0, (
+        ("--key", "deadbeefdeadbeef"),
+        ("--key", "deadbeefdeadbeef", "--delete", "--replacement", "/dev/null"),
+    )),
+    # The pin's own control: each find/replace pair is one tamper the pins must see. Columns
+    # 0 and 1; column 2 is prose.
+    "test_the_case_pin_actually_bites": ((0, 1), (
+        ('\n@pytest.mark.parametrize("state", ["mixed", "runner", "none"])\n',
+         '\n@pytest.mark.parametrize("state", ["mixed", "runner"])\n'),
+        ('\n    (("--key", "deadbeefdeadbeef"), "neither mode"),\n', "\n"),
+        ('\n@pytest.mark.parametrize("args, why", [\n',
+         '\n@pytest.mark.skip(reason="tampered", rows=[\n'),
+        ("\ndef test_transform_1_refuses_every_state_that_is_not_editor(state):",
+         "\ndef test_transform_1_refuses_every_state_that_is_not_editor_RENAMED(state):"),
+    )),
+}
+
+
+def pin_guard_problems(source: str, pins: dict) -> list[str]:
+    """The whole pin guard as one function, so a control drives what the guard runs.
+    Phase 327's round removed the partition from the guard alone and nothing noticed."""
+    return (case_pin_problems(source, pins) + unpinned_list_problems(source, pins)
+            + parametrize_shape_problems(source, _PARAMETRIZE_DECORATOR_COUNT, globals()))
 
 
 def test_no_parametrized_case_list_here_can_be_silently_emptied():
@@ -144,35 +225,70 @@ def test_no_parametrized_case_list_here_can_be_silently_emptied():
     argument with `[]`, so the constants stayed full, the guard stayed green, and twelve rows
     stopped running. **Checking the constant is not checking the parametrization.**
 
-    So this reads this module's own AST. A named case list must resolve to something non-empty;
-    an inline list must carry at least two cases. A second version demanded every list be a NAME
-    and failed on this module's own legal inline parametrizations — a guard that makes the tree
-    it guards illegal is not a guard, it is a style rule with an assertion attached.
+    **Phase 327 (`Q-592` line 24) replaced the count with content.** This guard asserted
+    `len(cases.elts) >= 2` over its two inline lists — the check `Q-518` measured as a bypass in
+    `tests/test_reader_census.py`, which ported its guard FROM this module and was hardened while
+    this source was not. Now each inline row is pinned by value (`case_pin_problems`), every
+    inline list must carry a pin (`unpinned_list_problems`), and the decorator count is exact
+    (`parametrize_shape_problems`), all from `tests/_case_pins.py`.
     """
-    tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
-    checked = 0
-    for node in ast.walk(tree):
-        fn = getattr(node, "func", None)
-        if not (isinstance(node, ast.Call) and isinstance(fn, ast.Attribute)
-                and fn.attr == "parametrize"):
-            continue
-        assert len(node.args) >= 2, f"parametrize at line {node.lineno} has no case list"
-        cases = node.args[1]
-        if isinstance(cases, ast.Name):
-            value = globals().get(cases.id)
-            assert value, (
-                f"parametrize at line {node.lineno} names {cases.id!r}, which is empty or absent")
-        elif isinstance(cases, (ast.List, ast.Tuple)):
-            assert len(cases.elts) >= 2, (
-                f"the inline case list at line {node.lineno} has {len(cases.elts)} case(s). "
-                f"Emptying an inline list is invisible to every guard that reads the module "
-                f"constants — which is how the round removed twelve cases with the suite green.")
-        else:
-            raise AssertionError(
-                f"parametrize at line {node.lineno} takes a {type(cases).__name__} this guard "
-                f"cannot size; name it at module level instead")
-        checked += 1
-    assert checked >= 4, f"only {checked} parametrized case list(s) found — the walk is wrong"
+    source = Path(__file__).read_text(encoding="utf-8")
+    problems = pin_guard_problems(source, _CASE_PINS)
+    assert not problems, "\n\n".join(problems)
+
+
+@pytest.mark.parametrize("find, replace, why", [
+    # Every find opens on a real newline, which this list's own source spells as the two
+    # characters `\n`, so no row can match itself — the census module's anchoring rule.
+    ('\n@pytest.mark.parametrize("state", ["mixed", "runner", "none"])\n',
+     '\n@pytest.mark.parametrize("state", ["mixed", "runner"])\n',
+     "the no-verdict row deleted — the majority population's arm"),
+    ('\n    (("--key", "deadbeefdeadbeef"), "neither mode"),\n', "\n",
+     "the neither-mode row deleted"),
+    ('\n@pytest.mark.parametrize("args, why", [\n',
+     '\n@pytest.mark.skip(reason="tampered", rows=[\n',
+     "a pinned control's parametrize swapped for a skip that keeps its rows in the source"),
+    ("\ndef test_transform_1_refuses_every_state_that_is_not_editor(state):",
+     "\ndef test_transform_1_refuses_every_state_that_is_not_editor_RENAMED(state):",
+     "a pinned control renamed"),
+])
+def test_the_case_pin_actually_bites(find, replace, why):
+    """The control, driving the real predicates over a tampered copy of this module's source."""
+    body = Path(__file__).read_text(encoding="utf-8")
+    assert body.count(find) == 1, f"the injection point for {why!r} is not unique"
+    tampered = body.replace(find, replace)
+    assert pin_guard_problems(tampered, _CASE_PINS), f"the pins did not see {why}"
+
+
+#: A module constant because `parametrize_shape_problems` sizes a named list and refuses a call.
+_PINNED_TESTS = sorted(_CASE_PINS)
+
+
+def test_the_composite_drives_its_shape_term():
+    """Round 2 deleted `parametrize_shape_problems` from `pin_guard_problems` with the module
+    green: the tamper rows drive the content term and the per-entry control the partition, and
+    nothing drove the third. A NAME-driven control added (count off by one, no inline rows) and a
+    name-driven list sliced to nothing each reach that term alone."""
+    source = Path(__file__).read_text(encoding="utf-8")
+    added = source + '\n@pytest.mark.parametrize("x", _PINNED_TESTS)\ndef test_extra(x): pass\n'
+    assert pin_guard_problems(added, _CASE_PINS), "an extra control went uncounted"
+    # Anchored on REAL newlines, which this literal spells `\\n`, so it cannot match itself.
+    anchor = '\n@pytest.mark.parametrize("dropped", _PINNED_TESTS)\ndef test_a_deleted'
+    assert source.count(anchor) == 1, "re-anchor this control"
+    sliced = source.replace(anchor, anchor.replace("_PINNED_TESTS)", "_PINNED_TESTS[:0])"))
+    assert pin_guard_problems(sliced, _CASE_PINS), "a sliced control list went unseen"
+    # And the per-entry control's population is the whole pin table, not a prefix of it.
+    assert _PINNED_TESTS == sorted(_CASE_PINS)
+
+
+@pytest.mark.parametrize("dropped", _PINNED_TESTS)
+def test_a_deleted_pin_entry_is_seen_even_with_its_rows_gone(dropped):
+    """Any one entry removed from `_CASE_PINS` must report through the guard itself."""
+    fewer = {k: v for k, v in _CASE_PINS.items() if k != dropped}
+    problems = pin_guard_problems(Path(__file__).read_text(encoding="utf-8"), fewer)
+    assert any(p.startswith(f"{dropped}:") for p in problems), (
+        f"deleting the {dropped!r} pin entry went unseen")
+
 
 @pytest.mark.parametrize("line", POINTER_ACCEPTS)
 def test_the_pointer_exclusion_accepts_every_authorised_spelling(line):

@@ -168,6 +168,26 @@ def test_the_headline_names_its_population_as_phases_not_rounds():
     )
 
 
+def population_range_problems(flat, rounds, phases, lo, hi) -> list[str]:
+    """The phase range must be the parenthetical right after the counts, in either dash."""
+    if re.search(rf"records {rounds} rounds, {phases} of them numbered phases \({lo}[–-]{hi}\)", flat):
+        return []
+    return [f"no `({lo}–{hi})` beside `records {rounds} rounds, {phases} of them numbered phases`"]
+
+
+def test_the_population_range_is_read_beside_the_counts():
+    """The control. A stale range on the population line with the right one elsewhere must
+    report; the round's L2 moved a correct range into another sentence and stayed green."""
+    good = "records 9 rounds, 7 of them numbered phases (161–300), and so on."
+    assert population_range_problems(good, 9, 7, 161, 300) == []
+    assert population_range_problems(good.replace("–", "-"), 9, 7, 161, 300) == []
+    moved = ("records 9 rounds, 7 of them numbered phases (161–299), and so on. "
+             "Elsewhere: numbered phases (161–300).")
+    assert population_range_problems(moved, 9, 7, 161, 300)
+    assert population_range_problems(good.replace("(161–", "(160–"), 9, 7, 161, 300), (
+        "a stale START of the range went unseen")
+
+
 def test_the_registers_population_line_is_derived():
     """`Q-297`'s actual remedy, which Phase 239 first skipped.
 
@@ -190,6 +210,17 @@ def test_the_registers_population_line_is_derived():
         f"({rounds} rounds, {phases} numbered phases). This is the one sentence "
         "Q-297 was filed about, and it drifted before precisely because nothing "
         "read it."
+    )
+    # The parenthetical beside the two counts is the same figure's third half. Phase 327
+    # (`Q-592` line 29): the assertion above stopped before it, so Phase 301 left it reading
+    # `161–300` with the suite green and Phase 302 found it two stale.
+    # One pattern over the whole clause, so the range must sit in the same sentence as the
+    # counts (the round moved a correct range elsewhere and left a stale one here), and either
+    # dash spelling is the same range.
+    numbers = [int(r[m.PHASE]) for r in m.phase_rows()]
+    assert not population_range_problems(flat, rounds, phases, min(numbers), max(numbers)), (
+        f"the register's population line does not state the derived phase range "
+        f"({min(numbers)}–{max(numbers)}) beside its counts"
     )
     assert f"{phases} numbered phase rounds" not in flat, (
         f"the register calls {phases} a count of *rounds*; it is the count of "

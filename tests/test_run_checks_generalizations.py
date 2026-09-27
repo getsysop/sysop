@@ -51,6 +51,16 @@ def test_find_frontend_dir_raises_on_ambiguous_match(tmp_path):
     assert "app-b" in str(exc.value)
 
 
+def test_eslint_discovery_still_refuses_frontend_beside_a_second_install(tmp_path):
+    """Phase 327's round 2: a `frontend/` preference added for tsc silently changed ESLint,
+    which had always warned on two installs. ESLint's discovery is back to its own rule; the
+    preference lives in tsc's `_find_tsc_dir`."""
+    (tmp_path / "frontend" / "node_modules" / "eslint").mkdir(parents=True)
+    (tmp_path / "e2e" / "node_modules" / "eslint").mkdir(parents=True)
+    with pytest.raises(FrontendDirAmbiguous):
+        _find_frontend_dir(str(tmp_path))
+
+
 def test_find_frontend_dir_skips_skip_dirs(tmp_path):
     # node_modules-nested eslint dirs inside .venv / .git / nested node_modules
     # should never match — they would be a false positive.

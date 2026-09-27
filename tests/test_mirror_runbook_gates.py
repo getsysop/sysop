@@ -37,8 +37,10 @@ has gone missing.
 """
 
 import fnmatch
+import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -182,6 +184,35 @@ def build_target(text: str) -> str | None:
     return m.group(1) if m else None
 
 
+_STEP_RUN = re.compile(
+    r"\bsteps?\s+\(?#?(\d+)((?:\s*(?:,|and|or|&|\u2013|\u2014|-|to|through)\s*#?\d+)*)",
+    re.I)
+_STEP_RANGE = re.compile(r"(\d+)\s*(?:\u2013|\u2014|-|to|through)\s*#?(\d+)", re.I)
+
+
+def step_citations(text: str) -> set[int]:
+    """The step numbers *text* cites: the run of numbers directly after `step`/`steps`.
+
+    `steps 3, 4, 5 and 6`, `Steps 3 (leak passes), 4 (suite) and 13`, `step #3` and
+    `steps 3–6` or `3 through 6` (every step in the range) are citations. A number anywhere
+    else is not: "the 5 leak detectors", a date, a thread's `#1`, or a number later in the
+    sentence ("Step 12 is the append, whose template has 4 sections"). A run may wrap across
+    lines; bold markers, a parenthetical after a number, and HTML comments are dropped first.
+    **Not readable here:** polarity ("skip steps 3 and 4") and a genuine mention that is not
+    a back-reference ("the build dir step 3 creates").
+    """
+    text = re.sub(r"<!--.*?-->", " ", text, flags=re.S).replace("**", "")
+    text = re.sub(r"(?<=\d)\s*\([^)]*\)", "", text)
+    cited: set[int] = set()
+    for m in _STEP_RUN.finditer(text):
+        run = m.group(1) + m.group(2)
+        cited.update(int(n) for n in re.findall(r"\d+", run))
+        for lo, hi in _STEP_RANGE.findall(run):
+            if int(lo) < int(hi) <= int(lo) + 20:
+                cited.update(range(int(lo), int(hi) + 1))
+    return cited
+
+
 def missing_gates(text: str) -> list[str]:
     """Each gate must be ANNOUNCED by a numbered step and RUN by that same step's commands."""
     problems = []
@@ -215,20 +246,28 @@ def missing_gates(text: str) -> list[str]:
             "command's name, which is the defect this gate exists for"
         )
 
-    numbers = {n for n, _, _ in steps}
     m = re.search(r"(?m)^## Refreshing\s*$", text)
     if not m:
         problems.append("the runbook lost its '## Refreshing' section")
     else:
         end = text.find("\n## ", m.end())
         refresh = text[m.start() : end if end != -1 else len(text)]
+        # Step 6 by its title: it calls itself "the one gate that runs the product", and
+        # the rebuild fence's own comment lists it among the steps that run on the rebuild.
         gate_numbers = ({n for n, _, _ in suite} | {n for n, _, _ in history}
-                        | {n for n, title, _ in steps if re.search(r"verify-grep", title, re.I)})
-        cited = {int(x) for x in re.findall(r"\b(\d+)\b", refresh)} & numbers
-        if not gate_numbers <= cited:
+                        | {n for n, title, _ in steps if re.search(r"verify-grep", title, re.I)}
+                        | {n for n, title, _ in steps if re.search(r"cold[- ]clone", title, re.I)})
+        # A date's fields and a `#N` thread number are not step citations: `2026-07-24`
+        # read as citing step 7, so a date carrying `-04-` would have satisfied a gate.
+        # Nor is a blockquote: the retirement banner names steps 7 and 12 for unrelated
+        # reasons, so a renumber that shifted the cold-clone step to 7 read as cited.
+        unquoted = "\n".join(l for l in refresh.split("\n") if not l.lstrip().startswith(">"))
+        cited = step_citations(unquoted)
+        uncited = gate_numbers - cited
+        if uncited:
             problems.append(
                 f"the Refreshing section does not point back at every gate step "
-                f"(gates {sorted(gate_numbers)}, cited {sorted(cited)}) — a refresh is the "
+                f"(gates {sorted(gate_numbers)}, uncited {sorted(uncited)}) — a refresh is the "
                 "only thing that ever changes the built tree, so a rebuild block that reads "
                 "as a self-contained recipe is a documented bypass"
             )
@@ -351,6 +390,133 @@ def test_the_gate_check_is_not_vacuous():
         # comes back here with it.
     ):
         assert missing_gates(mutated), f"removing the {label} was not detected"
+    # Fifth arm (`Q-559`): the gate-citation check. Refreshing cites the gate steps twice —
+    # the "same gates" paragraph and the rebuild fence's comment — so stripping either alone
+    # rightly stays green; stripping both must fire that check and nothing else.
+    problems = missing_gates(_strip_gate_back_references(text))
+    assert len(problems) == 1 and _CITATION_PROBLEM in problems[0], (
+        f"stripping both back-references to the gate steps must fire the citation check "
+        f"alone; got {problems}")
+
+
+_CITATION_PROBLEM = "does not point back at every gate step"
+
+
+def _refresh_span(text: str) -> tuple[int, int]:
+    m = re.search(r"(?m)^## Refreshing\s*$", text)
+    assert m, "the runbook lost its '## Refreshing' heading; the citation controls anchor on it"
+    end = text.find("\n## ", m.end())
+    return m.start(), end if end != -1 else len(text)
+
+
+def _in_refresh(text: str, edit) -> str:
+    """`text` with `edit` applied to the Refreshing section only."""
+    a, b = _refresh_span(text)
+    return text[:a] + edit(text[a:b]) + text[b:]
+
+
+def _strip_gate_back_references(text: str) -> str:
+    """Refreshing minus the paragraph and the fence comment that cite the gate steps."""
+    anchors = (r"(?m)^\*\*A refresh runs the same gates as a first cut\.\*\*.*$",
+               r"(?m)^# --- steps [^\n]*above run HERE[^\n]*$")
+
+    def strip(section: str) -> str:
+        for pat in anchors:
+            section, n = re.subn(pat, "", section)
+            assert n == 1, f"control anchor {pat!r} matched {n} lines; re-point it"
+        return section
+    return _in_refresh(text, strip)
+
+
+def _gate_steps(text: str) -> dict[str, int]:
+    """The gate steps, located by title here rather than read from `missing_gates()`, so a
+    mutation to that function's gate set cannot move this oracle with it."""
+    found: dict[str, list[int]] = {}
+    for n, title, _ in numbered_steps(text):
+        for gate, pat in (("verify-grep", r"verify-grep"), ("suite", r"\bsuite\b"),
+                          ("history", r"histor"), ("cold-clone", r"cold[- ]clone")):
+            if re.search(pat, title, re.I):
+                found.setdefault(gate, []).append(n)
+    assert {g: len(ns) for g, ns in found.items()} == {"verify-grep": 1, "suite": 1,
+                                                       "history": 1, "cold-clone": 1}, found
+    return {g: ns[0] for g, ns in found.items()}
+
+
+def _uncite(n: int):
+    """Every citation of step *n* removed the way an editor would: the number with its
+    parenthetical and the separator after it, so `steps 3, 4 and 5` becomes `steps 4 and 5`."""
+    return lambda section: re.sub(
+        rf"(?<![-\d]){n}(?![-\d])(?:\s*\([^)]*\))?(?:\s*,|\s+and\b)?", "", section)
+
+
+def test_each_gate_step_must_be_cited_by_refreshing():
+    """The citation check, one gate at a time: removing every citation of a gate step from
+    Refreshing fires it and names that step; removing a non-gate step's citations does not."""
+    text = _runbook()
+    gates = _gate_steps(text)
+    for gate, n in gates.items():
+        problems = missing_gates(_in_refresh(text, _uncite(n)))
+        assert len(problems) == 1 and _CITATION_PROBLEM in problems[0], (gate, problems)
+        assert f"uncited [{n}]" in problems[0], (gate, problems)
+    for n in {k for k, _, _ in numbered_steps(text)} - set(gates.values()):
+        assert missing_gates(_in_refresh(text, _uncite(n))) == [], f"step {n} is not a gate"
+
+
+def test_only_a_step_clause_cites_a_step():
+    """An incidental number, a dotted date or a hidden comment cites nothing; a range cites
+    every step in it. Measured on the real runbook: with both back-references stripped, each
+    incidental sentence below left the citation check green before this rule."""
+    stripped = _strip_gate_back_references(_runbook())
+    for incidental in ("Run Pass 3 and Pass 4 again; the 5 leak detectors and 6 builders are unchanged.",
+                       "Cut on 2026.03.04, again on 2026.05.06.",
+                       "<!-- steps 3, 4, 5 and 6 above run here -->"):
+        text = _in_refresh(stripped, lambda sec, add=incidental: sec + "\n" + add + "\n")
+        assert any("does not point back" in p for p in missing_gates(text)), incidental
+    cases = {
+        "Steps 3\u20136 and 13 run again.": {3, 4, 5, 6, 13},
+        "steps 3 (leak passes), 4 (suite) and 6. Then 9 more.": {3, 4, 6},
+        "steps 3 (see 7 below) and 4": {3, 4},
+        "steps 3 (leak passes; see below), 4 (i.e. Passes 1-5) and 5": {3, 4, 5},
+        "Steps **3**, **4** and **5**": {3, 4, 5},
+        "STEPS 3 and 4": {3, 4},
+        "Steps 3 through 6": {3, 4, 5, 6},
+        "Steps 3 to 5": {3, 4, 5},
+        "Step #3 and #4": {3, 4},
+        "The gate steps (3, 4, 5, 6 and 13) run again.": {3, 4, 5, 6, 13},
+        "steps 3,\n4, 5 and\n6 above": {3, 4, 5, 6},          # a wrapped run
+        "Step 12 is the append, whose template has 4 sections and 5 boxes.": {12},
+        "two steps with nothing binding them: Phases 144\u2013145 shipped": set(),
+        "no step until Phase 274": set(),
+        "the 5 leak detectors": set(),
+        "steps 3\u201399": {3, 99},                             # a range past the bound is two numbers
+        "<!--\nsteps 3, 4\n-->": set(),                        # a comment spanning lines
+    }
+    for text, want in cases.items():
+        assert step_citations(text) == want, (text, step_citations(text))
+
+
+def test_rewrapping_refreshing_keeps_its_citations():
+    """A soft line break is not a clause end. With the fence comment's numbers gone, the
+    prose back-reference alone must survive a re-wrap at any width."""
+    from _prose_guard_helpers import rewrapped
+    text = _runbook()
+    fence_ref = "steps 3, 4, 5 and 6 above run HERE"
+    assert text.count(fence_ref) == 1, "the fence comment's back-reference moved; re-point"
+    prose_only = text.replace(fence_ref, "the gates above run HERE")
+    assert missing_gates(prose_only) == [], missing_gates(prose_only)
+    for width in (1, 20, 40, 80):
+        wrapped = _in_refresh(prose_only, lambda sec, w=width: rewrapped(sec, w))
+        assert wrapped != prose_only
+        assert missing_gates(wrapped) == [], (width, missing_gates(wrapped))
+
+
+def test_a_date_or_thread_number_does_not_count_as_a_citation():
+    """`2026-07-24` holds a `07` and a thread link holds `#1`; neither cites a step."""
+    text = _runbook()
+    stripped = _strip_gate_back_references(text)
+    pad = " ".join(f"2026-{n:02d}-{n:02d} #{n}" for n in _gate_steps(text).values())
+    problems = missing_gates(_in_refresh(stripped, lambda s: s + pad + "\n"))
+    assert len(problems) == 1 and _CITATION_PROBLEM in problems[0], problems
 
 
 def _discussions_anchor(text: str) -> str:
@@ -502,18 +668,27 @@ def test_rewriting_the_walk_with_a_different_command_stays_green():
 
 
 def test_renumbering_the_procedure_coherently_stays_green():
-    """Round finding N9 — inserting a step and updating the Refreshing back-reference is
-    ordinary maintenance and must not redden."""
+    """Round finding N9 — inserting a step and updating the Refreshing back-references is
+    ordinary maintenance and must not redden. Derived, so it cannot go stale as steps are
+    added: every step from 3 up shifts by one, and so does every citation of one."""
     text = _runbook()
+    numbers = sorted(n for n, _, _ in numbered_steps(text))
     shifted = text
-    for old, new in ((10, 11), (9, 10), (8, 9), (7, 8), (6, 7), (5, 6), (4, 5), (3, 4)):
-        shifted = re.sub(rf"(?m)^{old}\. ", f"{new}. ", shifted, count=1)
-    shifted = shifted.replace(
-        "# --- steps 3, 4 and 5 above run HERE, on the rebuilt tree.",
-        "# --- steps 4, 5 and 6 above run HERE, on the rebuilt tree.", 1)
-    shifted = shifted.replace("Steps 3 (leak passes), 4 (suite inside the sterilized tree) and 5",
-                              "Steps 4 (leak passes), 5 (suite inside the sterilized tree) and 6", 1)
-    assert shifted != text
+    for old in reversed([n for n in numbers if n >= 3]):
+        shifted, hit = re.subn(rf"(?m)^{old}\. ", f"{old + 1}. ", shifted, count=1)
+        assert hit == 1, f"step {old} not found"
+
+    def shift_citations(section: str) -> str:
+        return re.sub(r"(?<![-\d#])(\d+)(?![-\d])",
+                      lambda m: str(int(m.group(1)) + 1)
+                      if 3 <= int(m.group(1)) <= numbers[-1] else m.group(1), section)
+    renumbered_only = shifted
+    # The same renumber WITHOUT the back-references is the drift this check exists for.
+    assert missing_gates(renumbered_only), "renumbering the steps alone left every gate cited"
+    shifted = _in_refresh(shifted, shift_citations)
+    assert shifted != renumbered_only, "no back-reference was shifted; this control is inert"
+    assert sorted(n for n, _, _ in numbered_steps(shifted)) == [1, 2, *range(4, numbers[-1] + 2)]
+    assert _gate_steps(shifted) == {g: n + 1 for g, n in _gate_steps(text).items()}
     assert missing_gates(shifted) == [], missing_gates(shifted)
 
 
@@ -2386,3 +2561,209 @@ def test_the_ceiling_guard_is_not_vacuous():
         "the predicate does not fire on the exact sentence that shipped stale for "
         "months; it is not measuring what it claims"
     )
+
+
+# --- Phase 336 (`Q-567`) — the currency pass's surface is a command, run here ----------
+#
+# Phase 320 chose its currency scan's surface by eye ("the pages a human browses") and
+# covered 25 of 75 shipped .md/.html files, missing all 38 under core/skills/, which
+# install.sh copies into every consumer. The fix is one command in the runbook. These tests
+# run that command exactly as written: once in this repo, to compare its output with the
+# shipped set, and once against a stub `_shipped_files()`, to prove the output comes from it
+# rather than from a list that happens to match today.
+# Either word, in any heading wording: "the surface a currency pass must cover" and "the
+# doc-surface command" are the same section. No other heading here uses either word.
+_SURFACE_HEADING = re.compile(r"(?mi)^## .*\b(?:currency|surface)\b.*$")
+# A command fence: untagged or a shell tag, backticks or tildes, any info string after the
+# tag. An example-output fence (```text) is not the command.
+# Every fence is parsed, then filtered: a pattern that only matched shell openers read an
+# example fence's CLOSER as an opener and swallowed the command after it.
+_ANY_FENCE = re.compile(r"(?ms)^(```|~~~)([^\n]*)\n(.*?)^\1[ \t]*$")
+_SHELL_TAGS = ("", "bash", "sh", "shell", "zsh")
+_STUB_SHIPPED = ["a.md", "b.html", "c.py", "core/skills/x/SKILL.md", "docs/CNAME"]
+
+
+def _surface_fence(text: str) -> str:
+    m = _SURFACE_HEADING.search(text)
+    assert m, (
+        "the runbook lost its currency-pass surface section (Q-567). A cut's currency pass "
+        "then has no written surface again, which is how Phase 320 covered 25 of 75 shipped "
+        "files."
+    )
+    end = text.find("\n## ", m.end())
+    section = text[m.end() : end if end != -1 else len(text)]
+    fences = [
+        f.group(3) for f in _ANY_FENCE.finditer(section)
+        if (f.group(2).split() or [""])[0] in _SHELL_TAGS and _live_lines(f.group(3))
+    ]
+    assert fences, "the surface section has no command block"
+    return fences[0]
+
+
+def _surface_section(text: str) -> tuple[int, str]:
+    m = _SURFACE_HEADING.search(text)
+    assert m, "the runbook lost its currency-pass surface section (Q-567)"
+    end = text.find("\n## ", m.end())
+    return m.start(), text[m.start() : end if end != -1 else len(text)]
+
+
+def _run_surface_block(fence: str, tmp_path: Path, root: Path) -> tuple[int, list[str]]:
+    # The block falls back to a bare `python3` when the repo has no .venv (a placed
+    # reviewer's worktree). Put this interpreter, which has pytest, first on PATH under that
+    # name. An exec wrapper, not a symlink: a symlink to a venv's python resolves to the
+    # base interpreter and loses the venv's site-packages (Phase 336's round, lens 2).
+    shim = tmp_path / "bin"
+    shim.mkdir(exist_ok=True)
+    wrapper = shim / "python3"
+    if not wrapper.exists():
+        wrapper.write_text(f'#!/bin/sh\nexec "{sys.executable}" "$@"\n', encoding="utf-8")
+        wrapper.chmod(0o755)
+    script = fence
+    for form in ('"<source repo>"', "'<source repo>'", "<source repo>"):
+        script = script.replace(form, f"'{root}'")
+    env = {**os.environ, "PATH": f"{shim}:{os.environ['PATH']}", "PYTHONDONTWRITEBYTECODE": "1"}
+    # cwd is deliberately NOT the repository: an operator reaches this block from anywhere,
+    # so the block must `cd` itself.
+    r = subprocess.run(["/bin/bash", "-c", script], capture_output=True, text=True, env=env,
+                       cwd=tmp_path)
+    return r.returncode, [ln for ln in r.stdout.splitlines() if ln]
+
+
+def _stub_root(tmp_path: Path) -> Path:
+    """A directory with no `.venv` whose only content is a `tests/test_mirror_leak_gate.py`
+    returning sentinels. Like the real module it imports pytest, and it refuses to run under
+    any interpreter but this one, so the block's bare-`python3` fallback is exercised."""
+    root = tmp_path / "stub"
+    (root / "tests").mkdir(parents=True)
+    (root / "tests" / "test_mirror_leak_gate.py").write_text(
+        "import sys\n"
+        f"if sys.prefix != {sys.prefix!r}:\n"
+        "    raise SystemExit('the fallback python3 is not the test interpreter: ' + sys.prefix)\n"
+        "import pytest  # noqa: F401\n"
+        f"def _shipped_files():\n    return {_STUB_SHIPPED!r}\n",
+        encoding="utf-8",
+    )
+    return root
+
+
+def _surface_from_stub(fence: str, tmp_path: Path) -> tuple[int, list[str]]:
+    return _run_surface_block(fence, tmp_path, _stub_root(tmp_path))
+
+
+_STUB_WANT = ["a.md", "b.html", "core/skills/x/SKILL.md"]
+
+
+def _prints_stub_surface(rc: int, got: list[str]) -> bool:
+    """The block ran and printed exactly the stub's .md/.html paths, in its order."""
+    return rc == 0 and got == _STUB_WANT
+
+
+def _expected_surface() -> list[str]:
+    if str(REPO_ROOT / "tests") not in sys.path:
+        sys.path.insert(0, str(REPO_ROOT / "tests"))
+    import test_mirror_leak_gate as leak
+
+    return [p for p in leak._shipped_files() if p.endswith((".md", ".html"))]
+
+
+def _prints_shipped_surface(rc: int, got: list[str]) -> bool:
+    return rc == 0 and sorted(got) == sorted(_expected_surface())
+
+
+def test_the_currency_surface_block_prints_every_shipped_doc(tmp_path):
+    rc, got = _run_surface_block(_surface_fence(_runbook()), tmp_path, REPO_ROOT)
+    assert rc == 0, "the surface block failed as written"
+    want = _expected_surface()
+    assert _prints_shipped_surface(rc, got), (
+        "the runbook's surface command no longer prints the shipped .md/.html set.\n"
+        f"missing: {sorted(set(want) - set(got))}\nextra: {sorted(set(got) - set(want))}"
+    )
+    # Non-vacuity: the population the defect was about is present, and what the mirror
+    # strips is absent.
+    assert any(p.startswith("core/skills/") for p in got), "no core/skills/ file in the surface"
+    assert "docs/workflow.html" in got
+    assert not any(p.startswith("tools/") or p == "CLAUDE.md" for p in got)
+
+
+def test_the_currency_surface_reads_the_strip_list_rather_than_retyping_it(tmp_path):
+    """Q-567 asks for the strip list read from the builder. `_shipped_files()` is tied to
+    make_public_mirror.sh by test_exclusion_set_still_matches_the_mirror_script, so the block
+    must print exactly what that function returns, filtered to .md/.html. A pasted list
+    prints the right set today and drifts at the next strip-list edit; against the stub it
+    prints the wrong one."""
+    rc, got = _surface_from_stub(_surface_fence(_runbook()), tmp_path)
+    assert _prints_stub_surface(rc, got), (
+        f"the surface block does not print what _shipped_files() returns (got {got!r}, "
+        f"want {_STUB_WANT!r} from the stub)"
+    )
+
+
+# The section's prose is decided text: the rule that the pass covers every shipped doc, and
+# the dated-records exemption. Phase 336's round reversed the rule in prose ("the pages a
+# human browses … need not be scanned") and deleted the exemption with every test above
+# green, because they check what the command prints, not what the operator is told to do
+# with it. The hash uses the pin normalizer, so a re-wrap or a list-marker swap keeps it.
+SURFACE_SECTION_PIN = "aa96f3caa5bf05ef"
+
+
+def _surface_section_hash(text: str) -> str:
+    """The section's PROSE: its heading and every fenced block are left out, because the
+    execution tests above already judge the command, and a pin over it would redden every
+    legal edit to it (a retitle, a quoted placeholder, an example fence, a `~~~` fence)."""
+    import test_fix_in_branch_tier as T
+
+    _, section = _surface_section(text)
+    body = section.split("\n", 1)[1] if "\n" in section else ""
+    prose = re.sub(r"(?ms)^(```|~~~)[^\n]*\n.*?^\1[^\n]*$", "", body)
+    # A removed fence leaves blank lines behind; an added or moved one must not count.
+    prose = re.sub(r"\n(?:[ \t]*\n)+", "\n\n", prose).strip()
+    return T._pin_hash(prose)
+
+
+def test_the_currency_surface_section_precedes_the_steps():
+    """"Before step 1" is the point: the pass lands on the phase branch before step 1 cuts from
+    merged main. Moved below `## Steps`, the section reads as part of the cut."""
+    text = _runbook()
+    at, _ = _surface_section(text)
+    steps = re.search(r"(?m)^## Steps\s*$", text)
+    assert steps and at < steps.start(), "the currency-pass surface section no longer precedes ## Steps"
+
+
+def test_the_currency_surface_section_prose_is_pinned():
+    text = _runbook()
+    if str(REPO_ROOT / "tests") not in sys.path:
+        sys.path.insert(0, str(REPO_ROOT / "tests"))
+    got = _surface_section_hash(text)
+    assert got == SURFACE_SECTION_PIN, (
+        f"the currency-pass surface section changed (hash {got}, pinned {SURFACE_SECTION_PIN}). "
+        "If the edit keeps the rule (every shipped .md/.html file is the surface; the dated "
+        "records are in it but exempt), update SURFACE_SECTION_PIN in the same commit and say "
+        "so in the phase record. If it narrows the surface, it is Phase 320's defect back."
+    )
+
+
+def test_the_currency_surface_guard_is_not_vacuous(tmp_path):
+    """One control per defect shape; each must fail the stub run."""
+    fence = _surface_fence(_runbook())
+    pasted = "printf '%s\\n' " + " ".join(f"'{p}'" for p in _expected_surface())
+    controls = {
+        # Phase 320's shape: browsed pages only.
+        "narrowed": fence.replace("p.endswith(('.md','.html'))",
+                                  "p.endswith(('.md','.html')) and not p.startswith('core/skills/')"),
+        "pasted list": pasted,
+        "pasted list, call named in a live no-op": pasted + "\n: m._shipped_files()",
+        # Every shipped file, unfiltered: a superset of the right answer.
+        "unfiltered": fence.replace(" if p.endswith(('.md','.html'))", ""),
+        "ls-files, strip list retyped": "cd <source repo>\ngit ls-files | grep -vE '^(tools/|CLAUDE.md)' | grep -E '[.](md|html)$'",
+        # The operator runs this from anywhere, so the block must `cd` itself. This control
+        # also fails if the harness is changed to run the block from inside the repo.
+        "cd dropped": "\n".join(ln for ln in fence.splitlines() if not ln.strip().startswith("cd ")),
+    }
+    for name in ("narrowed", "unfiltered", "cd dropped"):
+        assert controls[name] != fence, f"the {name} control did not mutate the block; re-point it"
+    # The real-repo comparison fires on the narrowed block too, not only the stub check.
+    rc, got = _run_surface_block(controls["narrowed"], tmp_path, REPO_ROOT)
+    assert not _prints_shipped_surface(rc, got), "the shipped-set check passed a narrowed block"
+    for name, mutant in controls.items():
+        rc, got = _surface_from_stub(mutant, tmp_path / name.replace(" ", "_").replace(",", ""))
+        assert not _prints_stub_surface(rc, got), f"control {name!r} passed the stub check"

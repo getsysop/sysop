@@ -329,43 +329,23 @@ def test_the_readme_states_the_floor_this_module_enforces():
 # Redirects may sit between the `-` and the `<<`, and the delimiter may be
 # double-quoted. `claim_task.sh:312` runs `python3 - 2>"$ES_ERR" <<'PY'`, a THIRD
 # heredoc the start-anchored, redirect-blind version never found.
-_HEREDOC = re.compile(
-    r"^([ \t]*).*?(?:\.venv/bin/)?python3\s+-\s*(?:[0-9]?[<>]+\s*\S+\s*)*<<\s*['\"]?(\w+)['\"]?[^\n]*$",
-    re.M)
+#
+# `Q-612`: it was still narrow. Only redirects were allowed between the `-` and the
+# `<<`, so every heredoc with a positional argument there (`python3 - "$manifest"
+# <<'PY'`, eight in `install.sh`) was outside this population, and so were
+# `install.sh`'s five `"$_py" -` heredocs. The extractor is now shared with the
+# strict-decode guard, in `_heredoc_population.py`, so the two cannot drift apart.
+from _heredoc_population import shipped_heredocs  # noqa: E402
 
 
 def _skill_heredocs() -> list[tuple[str, str]]:
-    """(label, source) for every `python3 - <<PY … PY` block in the shipped tree.
+    """(label, source) for every Python heredoc in the shipped tree.
 
-    Population is skills AND companion shell scripts: both carry Python that runs
-    on the consumer's interpreter, and only the first was ever scanned.
+    Population is skills AND companion shell scripts, git hooks, packs and
+    `install.sh`: all of them carry Python that runs on the consumer's interpreter.
     """
-    out: list[tuple[str, str]] = []
-    # `install.sh` carries eight of these and the git hooks carry more; both run
-    # on the consumer's bare `python3` exactly as a skill heredoc does, and both
-    # were outside the population.
-    sources = (sorted((REPO_ROOT / "core" / "skills").rglob("*.md"))
-               + sorted((REPO_ROOT / "core" / "companion" / "scripts").rglob("*.sh"))
-               + sorted((REPO_ROOT / "core" / "companion" / "git-hooks").rglob("*"))
-               + [REPO_ROOT / "install.sh"])
-    sources = [f for f in sources if f.is_file()]
-    for f in sources:
-        body = f.read_text(encoding="utf-8")
-        for m in _HEREDOC.finditer(body):
-            term = m.group(2)
-            rest = body[m.end():]
-            end = re.search(r"^[ \t]*%s[ \t]*$" % re.escape(term), rest, re.M)
-            if not end:
-                continue
-            block = rest[:end.start()]
-            # Strip the common leading indentation the fenced block carries.
-            lines = [ln for ln in block.split("\n")]
-            pads = [len(ln) - len(ln.lstrip()) for ln in lines if ln.strip()]
-            pad = min(pads) if pads else 0
-            src = "\n".join(ln[pad:] if len(ln) >= pad else ln for ln in lines)
-            line_no = body.count("\n", 0, m.start()) + 1
-            out.append((f"{f.relative_to(REPO_ROOT)}:{line_no}", src))
-    return out
+    return [(f"{f.relative_to(REPO_ROOT)}:{ln}", body)
+            for f, ln, _, body in shipped_heredocs()]
 
 
 HEREDOCS = _skill_heredocs()
@@ -374,7 +354,8 @@ HEREDOCS = _skill_heredocs()
 def test_the_heredoc_population_is_not_empty():
     """A zero-length population would make every test below vacuously green — which is
     how the class hid in the first place."""
-    assert len(HEREDOCS) >= 10, (
+    # 47 at Phase 334, when the population became the shared one (it read 31 before).
+    assert len(HEREDOCS) >= 47, (
         f"only {len(HEREDOCS)} skill heredocs extracted; the regex has drifted away from "
         "the shipped invocation shape and the floor checks below are testing nothing"
     )

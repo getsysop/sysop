@@ -28,7 +28,8 @@ construction, and it is **largest exactly when the map is least localized**, whi
 case that was silently empty before.
 
 Design stance — **advisory and honest, never a gate.** It reports; it does not block, and
-every degraded path (no map, no ``CLAUDE.md``, empty repo, not a git tree) exits 0 with a
+every degraded path (no map, no ``CLAUDE.md``, empty repo, not a git tree, a non-UTF-8
+tracked name) exits 0 with a
 stated reason rather than failing the round. Only an unexpected crash exits 2. Same stance
 as ``scope_overlap.py``, and for the same reason: a partial audit beats a refused one.
 
@@ -203,10 +204,38 @@ def parse_exclusions(text: str) -> list[str]:
 # file resolution
 # --------------------------------------------------------------------------- #
 
+class UndecodablePath(ValueError):
+    """A tracked path whose name is not UTF-8; carries the name as a bash operand."""
+
+
+def _bash_operand(name: bytes) -> str:
+    """``name`` as a bash ANSI-C quoted word (``$'…'``) that names exactly these bytes.
+
+    Printable ASCII other than ``\\`` and ``'`` is kept; every other byte becomes a
+    two-digit ``\\xHH`` (always two digits, so a following hex character cannot be
+    read into the escape). The note tells the reader to ``git mv`` the file, and a
+    ``backslashreplace`` rendering (``caf\\xe9.py``) pasted into a shell names a
+    file with a literal backslash — which does not exist.
+    """
+    keep = {c for c in range(0x20, 0x7F)} - {ord("\\"), ord("'")}
+    return "$'" + "".join(chr(b) if b in keep else f"\\x{b:02x}" for b in name) + "'"
+
+
 def _git(root: str, *args: str) -> str:
-    return subprocess.run(
-        ["git", *args], cwd=root, capture_output=True, text=True,
-    ).stdout
+    out = subprocess.run(["git", *args], cwd=root, capture_output=True).stdout
+    try:
+        return out.decode("utf-8")
+    except UnicodeDecodeError:
+        bad = next(c for c in out.split(b"\0") if not _utf8(c))
+        raise UndecodablePath(_bash_operand(bad)) from None
+
+
+def _utf8(chunk: bytes) -> bool:
+    try:
+        chunk.decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    return True
 
 
 def _is_git_tree(root: str) -> bool:
@@ -235,7 +264,7 @@ def manifest(root: str) -> list[str]:
     return sorted(p for p in _git(root, "ls-files", "-z").split("\0") if p)
 
 
-def read_vendor_paths(root: str) -> set[str]:
+def read_vendor_paths(root: str, notes: list | None = None) -> set[str]:
     """The files Sysop itself installed, from the lock's own ``managed_paths``.
 
     DERIVED, never guessed. A hardcoded prefix list (``.claude/``, ``sysop/``, ``.agents/``)
@@ -251,6 +280,10 @@ def read_vendor_paths(root: str) -> set[str]:
     the installer's output and never reaches the application.
     """
     lock = os.path.join(root, ".claude", "sysop.lock")
+    # No lock is an uninstalled tree and says nothing. A lock that EXISTS but cannot be read
+    # is named in `notes`: reading it as empty counts Sysop's own files as the consumer's.
+    unread = (f"could not read {os.path.join('.claude', 'sysop.lock')} ({{}}) — Sysop's "
+              "installed files are counted as the consumer's own")
     try:
         with open(lock, encoding="utf-8") as fh:
             data = json.load(fh)
@@ -260,10 +293,16 @@ def read_vendor_paths(root: str) -> set[str]:
         # against this identical pair in Phase 148, and its comment names it verbatim:
         # "json.load raising, or .get on a non-object".
         if not isinstance(data, dict):
+            if notes is not None:
+                notes.append(unread.format(f"not a JSON object: {type(data).__name__}"))
             return set()
         paths = data.get("managed_paths")
         return set(p for p in paths if isinstance(p, str)) if isinstance(paths, list) else set()
-    except (ValueError, OSError, UnicodeDecodeError):
+    except FileNotFoundError:
+        return set()
+    except (ValueError, OSError, UnicodeDecodeError) as exc:
+        if notes is not None:
+            notes.append(unread.format(f"{type(exc).__name__}: {exc}"))
         return set()
 
 
@@ -434,7 +473,15 @@ def build(root: str, budget: int, per_agent: int, group_cap: int | None = None) 
     if not _is_git_tree(root):
         return {"status": "not-a-git-tree", "assignments": [], "notes": notes + [
             f"{root} is not a git work tree — the manifest comes from `git ls-files`"]}
-    files = manifest(root)
+    try:
+        files = manifest(root)
+    except UndecodablePath as exc:
+        # A partial partition would silently drop the file, and the partition promises
+        # every tracked file an owner — so it names the file and assesses nothing.
+        return {"status": "undecodable-path", "assignments": [], "notes": notes + [
+            f"tracked path {exc} is not valid UTF-8, so the manifest cannot be "
+            f"partitioned; rename it from {root} with `git mv -- {exc} <new UTF-8 name>` "
+            "and re-run"]}
     if not files:
         return {"status": "empty", "notes": notes + ["no tracked files"], "assignments": []}
 
@@ -458,7 +505,7 @@ def build(root: str, budget: int, per_agent: int, group_cap: int | None = None) 
     for g in exclusions:
         excluded |= resolve_glob(root, g)
 
-    vendor = read_vendor_paths(root)
+    vendor = read_vendor_paths(root, notes)
     # NOT `- excluded`. `CLAUDE.md § Map coverage exclusions` scopes the Step 2a map-coverage
     # AUDIT and nothing else: `WORKFLOW.md` § 6.1 states it "does not change the review/scan
     # manifest and is not a review-exclusion knob", and `security-audit/SKILL.md` repeats it
@@ -587,12 +634,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         report = build(args.root, args.budget, args.per_agent, args.group_cap)
     except Exception as exc:                                    # noqa: BLE001 — advisory tool
-        # The last-resort net. After the degrade hardening above, no input found by a review
-        # lens or by the author reaches this branch: a missing map, a map that is a directory,
-        # invalid UTF-8 in either parsed file, every non-object lock shape, a non-git tree, an
-        # empty repo and a nonexistent --root all exit 0 with a stated reason. So a mutation
-        # of this `2` is currently a no-op, and no test pins it — declared rather than closed,
-        # because a test for an unreachable branch would be a test of the mocking, not the code.
+        # The last-resort net. A missing map, a map that is a directory, invalid UTF-8 in
+        # either parsed file, every non-object lock shape, a non-git tree, an empty repo, a
+        # nonexistent --root and a tracked file whose NAME is not UTF-8 (`git ls-files -z`
+        # prints it raw) all exit 0 with a stated reason. Nothing known reaches this net.
         print(f"security_partition: unexpected error: {exc}", file=sys.stderr)
         return 2
 

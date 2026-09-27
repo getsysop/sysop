@@ -809,8 +809,8 @@ MUTATIONS: list[tuple[str, Callable[[str], str]]] = [
         "Write your full findings, including the sealed `REVIEW_REPORT:` block, to `<ARTIFACT_DIR>/review.md`")),
     ("M4 probe widened past tasks/", _sub('"--", "tasks/"', '"--", "."')),
     ("M5 probe made untracked-inclusive", _sub(
-        '["git", "-C", str(main_root), "diff", "--name-only", "HEAD", "--", "tasks/"]',
-        '["git", "-C", str(main_root), "status", "--porcelain", "--untracked-files", "--", "tasks/"]')),
+        '["git", "-C", str(main_root), "-c", "core.quotePath=true", "diff", "--name-only", "HEAD", "--", "tasks/"]',
+        '["git", "-C", str(main_root), "-c", "core.quotePath=true", "status", "--porcelain", "--untracked-files", "--", "tasks/"]')),
     ("M6 probe trusts the CWD instead of the common dir", _sub(
         'common = subprocess.run(["git", "rev-parse", "--git-common-dir"],\n'
         '                        capture_output=True, text=True, check=True).stdout.strip()\n'

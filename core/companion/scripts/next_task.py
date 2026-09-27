@@ -371,10 +371,10 @@ def load_index(index_path: Path | None = None) -> dict[str, Any]:
     try:
         with open(index_path, "r", encoding="utf-8") as fh:
             data = yaml.safe_load(fh)
-    except yaml.YAMLError as e:
+    except (yaml.YAMLError, OSError, UnicodeDecodeError) as e:
         print(
-            f"ERROR: YAML parse error in {index_path}: {_sanitize_log(str(e)[:500])}",
-            file=sys.stderr,
+            f"ERROR: {'YAML parse error in' if isinstance(e, yaml.YAMLError) else 'cannot read'}"
+            f" {index_path}: {_sanitize_log(str(e)[:500])}", file=sys.stderr,
         )
         raise SystemExit(1)
     if not isinstance(data, dict):
@@ -884,7 +884,14 @@ def extract_body_sections(
         return {}
     try:
         text = path.read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeDecodeError) as e:
+        # Absorbed so one bad body does not stop the pick — but named, or the
+        # task prints with its sections silently missing.
+        print(
+            f"WARN: could not read {path}: {_sanitize_log(f'{type(e).__name__}: {e}'[:500])}"
+            " — its sections are omitted",
+            file=sys.stderr,
+        )
         return {}
 
     sections: dict[str, list[str]] = {}
@@ -919,11 +926,11 @@ def _slugify_for_branch(task_id: str) -> str:
 
 
 def _default_branch_prefix(task_id: str) -> str:
-    if task_id.startswith("FEAT-"):
-        return "feat/"
-    if task_id.startswith("FIX-") or task_id.startswith("FIX_"):
-        return "fix/"
-    return "tech/"
+    # `/claim-task` Step 3's rule: the directory is the id's leading segment, lowercased,
+    # for every prefix. A fixed map here suggested `tech/data-foo` where the claim makes
+    # `data/data-foo`, so the printed suggestion named a branch that would never exist.
+    m = re.match(r"[A-Z][A-Z0-9]*", task_id)
+    return (m.group(0).lower() + "/") if m else "tech/"
 
 
 def _format_deps_line(task: dict[str, Any]) -> str:
@@ -1240,7 +1247,7 @@ def main(argv: list[str] | None = None) -> int:
     if _REVIEW_PATH.is_file():
         try:
             review_text = _REVIEW_PATH.read_text(encoding="utf-8")
-        except OSError as e:
+        except (OSError, UnicodeDecodeError) as e:
             print(
                 f"WARN: could not read {_REVIEW_PATH}: {_sanitize_log(str(e)[:500])}",
                 file=sys.stderr,

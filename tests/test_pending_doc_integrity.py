@@ -961,7 +961,7 @@ def test_no_collect_exit_prescribes_the_rollback_and_step_b_still_does():
         for ln in table.split("\n")
         if (m := re.search(r"\| \*\*(\d+)\*\* \|", ln))
     }
-    assert set(rows) == {3, 4, 5, 6, 7}, f"exit rows present: {sorted(rows)}"
+    assert set(rows) == {3, 4, 5, 6, 7, 8}, f"exit rows present: {sorted(rows)}"
 
     # SCOPED TO THE `what to do` COLUMN. The round defeated a whole-row search three ways,
     # each keeping the phrase somewhere in the row while reversing the instruction:
@@ -976,7 +976,7 @@ def test_no_collect_exit_prescribes_the_rollback_and_step_b_still_does():
     # prescription is any verb applied to the rollback, so match the OBJECT and let the verb
     # vary — still a phrase contract, just one whose phrase is the noun.
     pos = re.compile(r"\b(?:run|invoke|execute|use|apply)\s+(?:the\s+)?rollback", re.I)
-    for n in (3, 5, 6, 7):
+    for n in (3, 5, 6, 7, 8):
         assert neg.search(todo[n]), (
             f"exit {n}'s remedy column must say NOT to run the rollback. The rollback deletes "
             f"by provenance rather than by what this run copied, so prescribing it from a "
@@ -996,7 +996,7 @@ def test_no_collect_exit_prescribes_the_rollback_and_step_b_still_does():
         f"exit 5 is the only exit that can leave main half-written, and its state column "
         f"must say so or the operator skips the hand-restore: {state[5].strip()[:200]}"
     )
-    for n in (3, 4, 6):
+    for n in (3, 4, 6, 8):
         assert "PARTIALLY WRITTEN" not in state[n], (
             f"exit {n} writes nothing; claiming partial work sends the operator looking for "
             f"damage that is not there: {state[n].strip()[:200]}"
@@ -1664,7 +1664,8 @@ def test_an_absent_pending_docs_dir_on_a_checkout_is_not_an_error(scripts, tmp_p
 def test_an_absent_pending_docs_dir_says_so_when_main_holds_nothing(scripts, tmp_path):
     """The second legitimate reading — a hand-cut branch that never ran /document-work.
     Also exit 0, but it is NOT the same fact and the report must not collapse them: this is
-    the one an operator may want to act on before the branch merges."""
+    the one an operator may want to act on before the branch merges. Legitimate only while
+    no task lock names the branch: since `Q-594` a CLAIMED branch here exits 8 (below)."""
     collect, _ = scripts
     main, wt = tmp_path / "main", _checkout(tmp_path / "wt")
     _live(main).mkdir(parents=True)
@@ -2523,6 +2524,9 @@ def test_the_collect_prints_no_prefix_without_a_step_8_sink():
         "COLLISIONS": "pending-doc collisions:",
         "STALE": "stale pending-docs:",
         "STALENESS UNKNOWN": "staleness not measured:",
+        "MISSING": "undocumented claims:",   # exit 8 (`Q-594`) SKIPs one branch
+        "CLAIMS UNREADABLE": "claims unreadable:",
+        "OPEN CLAIM": "open claims:",       # report-only, exit 0 (`Q-604`'s report half)
         "COLLECT ABORTED": None,      # exit 4 — the close never reaches Step 8
         # exits 5 and 7 DO reach Step 8: each SKIPs one branch and the close continues with
         # the others, exactly as 3 and 6 do. The first draft of this mapping said "likewise"
@@ -3339,3 +3343,489 @@ def test_a_hostile_branch_tip_on_the_main_side_route_fails_open(scripts, tmp_pat
         f"{why}: an unreadable tip was reported as a measured drift"
     )
     assert "Traceback" not in r.stderr, r.stderr
+
+
+# ------------------------------------------------------- Phase 325: `Q-594`
+#
+# A claimed branch with no doc anywhere used to exit 0 through the `Q-470` arm, and Step
+# 4c — which closes only the ids a doc names — then left its tasks `in_progress` with their
+# locks held. The discriminator is a task lock naming the branch, NOT the directory being
+# absent: the existing-but-empty directory strands the same way and is dispositioned alike.
+
+
+def _lock(main: Path, name: str, text: str) -> Path:
+    p = main / "sysop" / "runtime" / "locks" / name
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text, encoding="utf-8")
+    return p
+
+
+def _task_lock(main: Path, task_id: str, branch: str) -> Path:
+    """The field order `claim_task.sh --lock` writes, including its free-text tail."""
+    return _lock(main, f"{task_id}.lock", (
+        f"task_id: {task_id}\nstatus: in_progress\nagent: claude\nbranch: {branch}\n"
+        f"mode: worktree\nworkspace: /tmp/wt\nstarted: 2026-09-23T00:00:00Z\n"
+        f"expires: 2026-09-24T00:00:00Z\nfiles_impacted:\n"
+        f"  - (update manually or via git diff --name-only main...HEAD)\n"
+        f"plan_summary: (update with a one-line description of the work)\nnotes:\n"
+    ))
+
+
+def _listing(d: Path) -> list[str]:
+    return sorted(str(p.relative_to(d)) for p in d.rglob("*")) if d.exists() else []
+
+
+def test_a_claimed_branch_with_no_doc_anywhere_is_refused_at_8(scripts, tmp_path):
+    """#711's case: absent `src_dir`, nothing on main, a task lock naming the branch."""
+    collect, _ = scripts
+    main, wt = tmp_path / "main", _checkout(tmp_path / "wt")
+    _live(main).mkdir(parents=True)
+    _task_lock(main, "TASK-0042", "feat/x")
+    before = _listing(main)
+
+    r = _run(collect, main, wt)
+
+    assert r.returncode == 8, f"a claimed branch with no doc must not merge: {r.stdout}"
+    assert "PENDING-DOC MISSING:" in r.stdout and "TASK-0042" in r.stdout, r.stdout
+    assert "roadmap_ids" in r.stdout, "the refusal must name the partial-delivery route too"
+    assert "PENDING-DOC COLLISIONS: 0" not in r.stdout, (
+        "the success line must not follow a refusal — Step 8 reads it as a clean collect"
+    )
+    assert _listing(main) == before, "exit 8 writes nothing"
+
+
+def test_the_empty_pending_docs_dir_is_refused_the_same_way(scripts, tmp_path):
+    """The shape the filing's remedy would have missed: keyed to the ABSENT directory, an
+    existing-but-empty one took the ordinary path and exited 0 over the same stranding."""
+    collect, _ = scripts
+    main, wt = tmp_path / "main", _checkout(tmp_path / "wt")
+    (wt / "sysop/runtime/pending-docs").mkdir(parents=True)
+    _live(main).mkdir(parents=True)
+    _task_lock(main, "TASK-0042", "feat/x")
+
+    r = _run(collect, main, wt)
+
+    assert r.returncode == 8, r.stdout
+    assert "COLLECT SKIPPED" not in r.stdout, "the empty directory still takes the ordinary path"
+
+
+def test_the_empty_dir_holding_only_convention_candidates_is_still_empty(scripts, tmp_path):
+    """`convention-candidates.md` is not a branch doc, so it documents nothing."""
+    collect, _ = scripts
+    main, wt = tmp_path / "main", _checkout(tmp_path / "wt")
+    (wt / "sysop/runtime/pending-docs").mkdir(parents=True)
+    (wt / "sysop/runtime/pending-docs/convention-candidates.md").write_text("- x\n")
+    _task_lock(main, "TASK-0042", "feat/x")
+
+    assert _run(collect, main, wt).returncode == 8
+
+
+@pytest.mark.parametrize("where", ["main", "worktree"])
+def test_a_claimed_branch_with_a_doc_is_not_refused(scripts, tmp_path, where):
+    """Both `Q-470` readings that HAVE a doc still exit 0 with a lock present."""
+    collect, _ = scripts
+    main, wt = tmp_path / "main", _checkout(tmp_path / "wt")
+    _live(main).mkdir(parents=True)
+    _task_lock(main, "TASK-0042", "feat/x")
+    home = _live(main) if where == "main" else wt / "sysop/runtime/pending-docs"
+    _doc(home / "feat-x.md", "feat/x", "DOCUMENTED")
+
+    r = _run(collect, main, wt)
+
+    assert r.returncode == 0, f"{where}: {r.stdout}"
+    assert "PENDING-DOC MISSING" not in r.stdout
+
+
+def test_a_doc_for_another_branch_does_not_document_this_one(scripts, tmp_path):
+    """On main, a foreign doc is simply not this branch's (the absent arm reads `branch_of`)."""
+    collect, _ = scripts
+    main, wt = tmp_path / "main", _checkout(tmp_path / "wt")
+    _doc(_live(main) / "other.md", "feat/somebody-else", "NOT THIS BRANCH")
+    _task_lock(main, "TASK-0042", "feat/x")
+
+    assert _run(collect, main, wt).returncode == 8
+
+
+def test_a_collision_outranks_the_missing_doc(scripts, tmp_path):
+    """A foreign doc in the WORKSPACE is a collision (3): whose record it is comes first."""
+    collect, _ = scripts
+    main, wt = tmp_path / "main", _checkout(tmp_path / "wt")
+    _doc(wt / "sysop/runtime/pending-docs/other.md", "feat/other", "FOREIGN")
+    _task_lock(main, "TASK-0042", "feat/x")
+
+    assert _run(collect, main, wt).returncode == 3
+
+
+@pytest.mark.parametrize(
+    "name, text, expect",
+    [
+        ("BATCH-7.lock", "task_id: BATCH-7\nbranch: feat/x\nmode: worktree\n", 0),
+        ("TASK-0042.lock", "task_id: TASK-0042\nbranch: feat/other\n", 0),
+        # FIRST column-0 `branch:` wins, as Step 2e and `claim_task.sh`'s awk read it.
+        ("TASK-0042.lock", "task_id: TASK-0042\nbranch: feat/other\nnotes:\nbranch: feat/x\n", 0),
+        ("TASK-0042.lock", "task_id: TASK-0042\nbranch: feat/x\nnotes:\nbranch: feat/other\n", 8),
+        # an indented or list-item line is free text, not a field
+        ("TASK-0042.lock", "task_id: TASK-0042\nnotes:\n  branch: feat/x\n- branch: feat/x\n", 0),
+        ("TASK-0042.lock", "task_id: TASK-0042\n# branch: feat/x\n", 0),
+        # no `task_id:` — the refusal still fires, and names the lock's stem
+        ("TASK-0042.lock", "branch: feat/x\n", 8),
+        # the id is the lock's `task_id:`, not its filename
+        ("TASK-0042.lock", "task_id: TASK-9999\nbranch: feat/x\n", 8),
+        # not a `.lock` at all
+        ("TASK-0042.txt", "task_id: TASK-0042\nbranch: feat/x\n", 0),
+        # a TASK id that merely starts `BATCH-` is a task, not a review batch
+        ("BATCH-IMPORT.lock", "task_id: BATCH-IMPORT\nbranch: feat/x\n", 8),
+        ("BATCH-7-X.lock", "task_id: BATCH-7-X\nbranch: feat/x\n", 8),
+        # equality, not a prefix or substring: a sibling branch's claim is not this one's
+        ("TASK-0042.lock", "task_id: TASK-0042\nbranch: feat/x-2\n", 0),
+        ("TASK-0042.lock", "task_id: TASK-0042\nbranch: feat\n", 0),
+    ],
+)
+def test_which_locks_count_as_a_claim(scripts, tmp_path, name, text, expect):
+    collect, _ = scripts
+    main, wt = tmp_path / "main", _checkout(tmp_path / "wt")
+    _live(main).mkdir(parents=True)
+    _lock(main, name, text)
+
+    r = _run(collect, main, wt)
+
+    assert r.returncode == expect, f"{name}: {text!r} -> {r.returncode}: {r.stdout}"
+    if expect == 8:
+        m = re.search(r"^task_id: (\S+)", text, re.M)
+        tid = m.group(1) if m else name[: -len(".lock")]
+        assert tid in r.stdout, "the refusal must name the claim it found"
+
+
+def test_the_hand_cut_branch_still_passes_with_other_claims_present(scripts, tmp_path):
+    """Wade's answer to the filing's design question: a branch no task lock names passes."""
+    collect, _ = scripts
+    main, wt = tmp_path / "main", _checkout(tmp_path / "wt")
+    _live(main).mkdir(parents=True)
+    _task_lock(main, "TASK-0001", "feat/somebody-else")
+
+    r = _run(collect, main, wt)
+
+    assert r.returncode == 0, r.stdout
+    assert "main holds no doc claiming 'feat/x'" in r.stdout
+
+
+def test_a_lock_that_is_not_a_regular_file_is_skipped_not_waited_on(scripts, tmp_path):
+    """`read_text` on a FIFO blocks forever; a directory named `*.lock` raises. Neither may
+    kill or hang the close, and neither may hide a real claim beside it."""
+    collect, _ = scripts
+    main, wt = tmp_path / "main", _checkout(tmp_path / "wt")
+    locks = main / "sysop" / "runtime" / "locks"
+    (locks / "A-DIR.lock").mkdir(parents=True)
+    os.mkfifo(locks / "B-FIFO.lock")
+    _task_lock(main, "TASK-0042", "feat/x")
+
+    r = subprocess.run(
+        [sys.executable, str(collect), str(wt), "feat/x"],
+        cwd=main, capture_output=True, text=True, timeout=30,
+    )
+
+    assert r.returncode == 8, r.stdout + r.stderr
+    assert "Traceback" not in r.stderr, r.stderr
+
+
+def test_exit_8_is_documented_where_the_operator_looks():
+    body = SKILL.read_text(encoding="utf-8")
+    table = body[body.index("| exit | meaning | state of main | what to do |"):]
+    table = table[: table.index("\n\n")]
+    row = next(ln for ln in table.split("\n") if ln.lstrip().startswith("| **8** |"))
+    todo = row.rsplit("|", 2)[-2]
+    assert "/document-work" in todo, todo
+    # A deliberate partial merge (a claim kept open on purpose) must have a route that is
+    # neither "close the task" nor "drop the lock": a doc with the id left out.
+    assert "roadmap_ids" in todo, todo
+    assert re.search(r"do\s+not\s+run\s+the\s+rollback", todo, re.I), todo
+    assert "Undocumented claims: <N>" in body, "exit 8 SKIPs a branch and needs a Step 8 row"
+    ws_empty = body[body.index("**If `WS` is empty**"):]
+    ws_empty = ws_empty[: ws_empty.index("\n\n")]
+    assert "exit-8 test" in ws_empty and "BATCH-" in ws_empty, (
+        "the shapes that never run the collect must still be told to apply the Q-594 test"
+    )
+
+
+def test_an_empty_workspace_dir_with_the_doc_on_main_is_not_refused(scripts, tmp_path):
+    """The populated arm's test is "no doc on EITHER side", not "the workspace holds none":
+    a doc authored on main survives into Step 4c and documents the claim."""
+    collect, _ = scripts
+    main, wt = tmp_path / "main", _checkout(tmp_path / "wt")
+    (wt / "sysop/runtime/pending-docs").mkdir(parents=True)
+    _doc(_live(main) / "feat-x.md", "feat/x", "AUTHORED ON MAIN")
+    _task_lock(main, "TASK-0042", "feat/x")
+
+    r = _run(collect, main, wt)
+
+    assert r.returncode == 0, r.stdout
+    assert "PENDING-DOC MISSING" not in r.stdout
+
+
+def _roadmap_doc(path: Path, branch: str, ids: str, key: str = "roadmap_ids") -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f'---\nbranch: {branch}\ntype: feature\n{key}: {ids}\n'
+                    f'summary: "S"\n---\n', encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "where, ids, key, expect_open",
+    [
+        ("worktree", "[]", "roadmap_ids", True),            # the partial-merge route
+        ("worktree", "[TASK-0042]", "roadmap_ids", False),
+        ("worktree", "[TASK-0042]", "task_ids", False),       # Phase 23a shim
+        ("main", "[]", "roadmap_ids", True),                  # the absent arm's on-main route
+        ("main", "[TASK-0042]", "roadmap_ids", False),
+        ("worktree", "TASK-0042", "roadmap_ids", False),     # a scalar, not a list
+    ],
+)
+def test_a_claim_no_doc_names_is_reported_never_refused(scripts, tmp_path, where, ids, key,
+                                                         expect_open):
+    """`Q-604`'s report half. A doc exists, so exit 8 does not apply; an id it leaves out
+    stays in_progress after the merge, and the collect says so BEFORE the merge."""
+    collect, _ = scripts
+    main, wt = tmp_path / "main", _checkout(tmp_path / "wt")
+    _live(main).mkdir(parents=True)
+    _task_lock(main, "TASK-0042", "feat/x")
+    home = _live(main) if where == "main" else wt / "sysop/runtime/pending-docs"
+    _roadmap_doc(home / "feat-x.md", "feat/x", ids, key)
+
+    r = _run(collect, main, wt)
+
+    assert r.returncode == 0, r.stdout
+    assert ("PENDING-DOC OPEN CLAIM: TASK-0042" in r.stdout) is expect_open, r.stdout
+    assert r.stdout.rstrip().endswith("PENDING-DOC COLLISIONS: 0"), r.stdout
+
+
+def test_only_the_unnamed_claim_is_reported(scripts, tmp_path):
+    collect, _ = scripts
+    main, wt = tmp_path / "main", _checkout(tmp_path / "wt")
+    _live(main).mkdir(parents=True)
+    _task_lock(main, "TASK-0001", "feat/x")
+    _task_lock(main, "TASK-0002", "feat/x")
+    _roadmap_doc(wt / "sysop/runtime/pending-docs/feat-x.md", "feat/x", "[TASK-0001]")
+
+    r = _run(collect, main, wt)
+
+    assert r.returncode == 0, r.stdout
+    assert "OPEN CLAIM: TASK-0002" in r.stdout and "OPEN CLAIM: TASK-0001" not in r.stdout
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads a mode-000 directory")
+def test_an_unlistable_locks_dir_is_said_aloud(scripts, tmp_path):
+    """`Path.glob` returns [] on EACCES, which read as "no claims" with nothing printed."""
+    collect, _ = scripts
+    main, wt = tmp_path / "main", _checkout(tmp_path / "wt")
+    _live(main).mkdir(parents=True)
+    locks = _task_lock(main, "TASK-0042", "feat/x").parent
+    locks.chmod(0)
+    try:
+        r = _run(collect, main, wt)
+    finally:
+        locks.chmod(0o755)
+
+    assert r.returncode == 0, r.stdout
+    assert "PENDING-DOC CLAIMS UNREADABLE:" in r.stdout, r.stdout
+
+
+# ---------------------------------------------- Phase 325's round: the guards lens's kills
+
+
+def _snapshot(d: Path) -> dict:
+    """Names AND bytes: `_listing` compares names only, so a rewrite in place is invisible."""
+    return {
+        str(p.relative_to(d)): (p.read_bytes() if p.is_file() else None)
+        for p in d.rglob("*")
+    } if d.exists() else {}
+
+
+@pytest.mark.parametrize("src", ["absent", "empty"])
+def test_exit_8_creates_and_rewrites_nothing_on_main(scripts, tmp_path, src):
+    """Neither route pre-creates main's pending-docs, so an mkdir before the refusal shows,
+    and so does a lock rewritten in place."""
+    collect, _ = scripts
+    main, wt = tmp_path / "main", _checkout(tmp_path / "wt")
+    if src == "empty":
+        (wt / "sysop/runtime/pending-docs").mkdir(parents=True)
+    _task_lock(main, "TASK-0042", "feat/x")
+    before = _snapshot(main)
+
+    r = _run(collect, main, wt)
+
+    assert r.returncode == 8, r.stdout
+    assert _snapshot(main) == before, "exit 8 must write nothing, not even an empty dir"
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads a mode-000 file")
+def test_an_unreadable_lock_does_not_hide_a_later_claim(scripts, tmp_path):
+    collect, _ = scripts
+    main, wt = tmp_path / "main", _checkout(tmp_path / "wt")
+    _live(main).mkdir(parents=True)
+    bad = _lock(main, "AAA-0001.lock", "task_id: AAA-0001\nbranch: feat/y\n")
+    bad.chmod(0)
+    _task_lock(main, "TASK-0042", "feat/x")
+    try:
+        r = _run(collect, main, wt)
+    finally:
+        bad.chmod(0o644)
+    assert r.returncode == 8, r.stdout + r.stderr
+    assert "PENDING-DOC CLAIMS UNREADABLE:" in r.stdout and "AAA-0001.lock" in r.stdout, (
+        "a lock that will not read is skipped ALOUD, not silently"
+    )
+
+
+def test_a_non_utf8_lock_does_not_crash_the_collect(scripts, tmp_path):
+    """Exit 1 is a code the exit table does not carry."""
+    collect, _ = scripts
+    main, wt = tmp_path / "main", _checkout(tmp_path / "wt")
+    _live(main).mkdir(parents=True)
+    p = main / "sysop" / "runtime" / "locks" / "AAA-0001.lock"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(b"task_id: AAA-0001\nnotes: caf\xe9\n")
+    _task_lock(main, "TASK-0042", "feat/x")
+    r = _run(collect, main, wt)
+    assert r.returncode == 8, r.stdout + r.stderr
+    assert "Traceback" not in r.stderr, r.stderr
+
+
+def test_the_partial_route_keeps_its_polarity():
+    """`roadmap_ids` alone is satisfied by "ADD the id to roadmap_ids", which closes the very
+    task a partial merge holds open. A phrase contract, the way the rollback rows are pinned."""
+    body = SKILL.read_text(encoding="utf-8")
+    table = body[body.index("| exit | meaning | state of main | what to do |"):]
+    table = table[: table.index("\n\n")]
+    row = next(ln for ln in table.split("\n") if ln.lstrip().startswith("| **8** |"))
+    assert "leave its id out of the doc's `roadmap_ids`" in row.rsplit("|", 2)[-2]
+    assert "leave that id out of `roadmap_ids`" in _heredocs()[0]
+
+
+def test_the_no_workspace_sentence_keeps_its_rule():
+    """The only thing that applies exit 8 to the shapes the collect never runs on."""
+    body = SKILL.read_text(encoding="utf-8")
+    ws = body[body.index("**If `WS` is empty**"):]
+    ws = ws[: ws.index("\n\n")]
+    for phrase in ("other than a review batch's `BATCH-<N>.lock`",
+                   "first column-0 `branch:` value",
+                   "main's `sysop/runtime/pending-docs/`", "SKIP the branch"):
+        assert phrase in ws, phrase
+
+
+def test_the_exit_0_shapes_are_qualified_by_the_lock():
+    """Both statements that list the collect's exit-0 shapes must say a task lock changes it."""
+    body = SKILL.read_text(encoding="utf-8")
+    para = body[body.index("**Any non-zero exit means do NOT proceed to (b).**"):]
+    para = para[: para.index("\n\n")]
+    assert "the last two only while no task lock names the branch" in para
+    assert "and at **8** (`Q-594`)" in para
+    assert "exits 0 — or 8, when\n      # a task lock names the branch" in body
+    row = next(ln for ln in body.split("\n") if ln.lstrip().startswith("| **8** |"))
+    assert "`BATCH-<N>.lock`, still exit 0" in row
+
+
+def test_the_skipped_line_precedes_the_refusal(scripts, tmp_path):
+    """The prose says `COLLECT SKIPPED:` is printed on a run that then refuses at 8."""
+    collect, _ = scripts
+    main, wt = tmp_path / "main", _checkout(tmp_path / "wt")
+    _live(main).mkdir(parents=True)
+    _task_lock(main, "TASK-0042", "feat/x")
+    r = _run(collect, main, wt)
+    assert r.returncode == 8
+    assert r.stdout.index("COLLECT SKIPPED") < r.stdout.index("PENDING-DOC MISSING")
+
+
+def test_branch_equality_is_case_sensitive(scripts, tmp_path):
+    collect, _ = scripts
+    main, wt = tmp_path / "main", _checkout(tmp_path / "wt")
+    _live(main).mkdir(parents=True)
+    _lock(main, "TASK-0042.lock", "task_id: TASK-0042\nbranch: Feat/X\n")
+    assert _run(collect, main, wt).returncode == 0
+
+
+def test_a_doc_on_main_that_names_the_id_counts_beside_a_workspace_doc(scripts, tmp_path):
+    """Both surviving sides document the branch: main's doc survives into Step 4c too."""
+    collect, _ = scripts
+    main, wt = tmp_path / "main", _checkout(tmp_path / "wt")
+    _task_lock(main, "TASK-0042", "feat/x")
+    _roadmap_doc(wt / "sysop/runtime/pending-docs/feat-x.md", "feat/x", "[]")
+    _roadmap_doc(_live(main) / "feat-x-earlier.md", "feat/x", "[TASK-0042]")
+
+    r = _run(collect, main, wt)
+
+    assert r.returncode == 0, r.stdout
+    assert "OPEN CLAIM" not in r.stdout, r.stdout
+
+
+# ------------------------------------------- Phase 325's round 2: the execution lens's kills
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root stats through a mode-000 directory")
+def test_a_lock_that_cannot_be_stated_is_said_aloud_and_hides_nothing(scripts, tmp_path):
+    """`Path.is_file()` RAISES on EACCES below Python 3.13 (every close then died at exit 1)
+    and returns False above it (a claim hidden silently). A symlink into a mode-000 directory
+    makes the stat itself fail, on any interpreter."""
+    collect, _ = scripts
+    main, wt = tmp_path / "main", _checkout(tmp_path / "wt")
+    _live(main).mkdir(parents=True)
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "real.lock").write_text("task_id: AAA-0001\nbranch: feat/x\n")
+    locks = _task_lock(main, "TASK-0042", "feat/x").parent
+    (locks / "AAA-0001.lock").symlink_to(vault / "real.lock")
+    vault.chmod(0)
+    try:
+        r = _run(collect, main, wt)
+    finally:
+        vault.chmod(0o755)
+    assert r.returncode == 8, r.stdout + r.stderr
+    assert "Traceback" not in r.stderr, r.stderr
+    assert "PENDING-DOC CLAIMS UNREADABLE:" in r.stdout and "AAA-0001.lock" in r.stdout
+
+
+def test_no_locks_directory_is_not_an_unreadable_one(scripts, tmp_path):
+    collect, _ = scripts
+    main, wt = tmp_path / "main", _checkout(tmp_path / "wt")
+    main.mkdir()
+    _roadmap_doc(wt / "sysop/runtime/pending-docs/feat-x.md", "feat/x", "[]")
+    r = _run(collect, main, wt)
+    assert r.returncode == 0, r.stdout
+    assert "UNREADABLE" not in r.stdout and "OPEN CLAIM" not in r.stdout, r.stdout
+
+
+def test_a_later_empty_doc_does_not_unname_an_id_an_earlier_doc_named(scripts, tmp_path):
+    """The named set is a UNION over docs; an overwrite would make the answer order-dependent."""
+    collect, _ = scripts
+    main, wt = tmp_path / "main", _checkout(tmp_path / "wt")
+    _task_lock(main, "TASK-0042", "feat/x")
+    _roadmap_doc(wt / "sysop/runtime/pending-docs/a-feat-x.md", "feat/x", "[TASK-0042]")
+    _roadmap_doc(_live(main) / "z-feat-x-later.md", "feat/x", "[]")
+    r = _run(collect, main, wt)
+    assert r.returncode == 0, r.stdout
+    assert "OPEN CLAIM" not in r.stdout, r.stdout
+
+
+def test_a_stale_refusal_prints_no_open_claim(scripts, tmp_path):
+    """The report is about a close that proceeds; on a refused run it would be a false line."""
+    collect, _ = scripts
+    main = tmp_path / "main"
+    tip = _repo(main)
+    wt = _worktree(main, tmp_path / "wt")
+    _tipped(_live(main) / "feat-x.md", "feat/x", "MAIN-AUTHORED", tip)
+    _commit_on(wt, "work that landed after the doc")
+    _task_lock(main, "TASK-0042", "feat/x")
+    r = _run(collect, main, wt)
+    assert r.returncode == 6, r.stdout
+    assert "OPEN CLAIM" not in r.stdout, r.stdout
+
+
+def test_the_open_claim_rows_keep_their_polarity():
+    body = SKILL.read_text(encoding="utf-8")
+    s8 = body[body.index("\nOpen claims: <N>"):]
+    s8 = s8[: s8.index("\n\n")]
+    assert "List it ONLY if the branch merged; drop it if the branch was SKIP'd." in s8
+    assert "Intended for a partial merge. If not, the id was left out of the doc" in s8
+    assert "\nClaims unreadable: <N>" in body
+    row = next(ln for ln in body.split("\n") if ln.lstrip().startswith("| **8** |"))
+    assert "the collect prints `PENDING-DOC OPEN CLAIM:` for it" in row
+    ws = body[body.index("**If `WS` is empty**"):]
+    ws = ws[: ws.index("\n\n")]
+    assert "that no such doc names in `roadmap_ids` (or `task_ids`) under Step 8's `Open claims:`" in ws

@@ -12,7 +12,8 @@
 #      probed in run_checks.sh's order, not the installer's: the MAIN checkout's
 #      .venv then venv, then this checkout's, then PATH (a worktree carries no
 #      venv, so anchoring on the current root would answer about the wrong tree)
-#   4. git hooks armed (pre-commit / pre-merge-commit present + executable),
+#   4. git hooks armed (pre-commit / pre-merge-commit present + executable, and
+#      byte-equal to the MAIN checkout's template; a difference is advisory),
 #      and every ARMED hook read for a pre-Phase-128 `scripts/<vendor>` path
 #   5. optional scanners (semgrep, pip-audit, pyright) — advisory only
 #   6. review-round evidence (Phase 143): stale pending markers + asymmetric
@@ -137,8 +138,16 @@ for tmpl in "$REPO_ROOT/sysop/scripts/hooks/"*; do
     if [[ "$HOOKS_PATH_SET" -eq 1 ]]; then
       # Present, but Sysop neither wrote nor compares it — don't claim credit.
       ok "hook present: $name  (your core.hooksPath dir — yours, not Sysop-managed)"
-    else
+    elif cmp -s "${MAIN_ROOT}/sysop/scripts/hooks/$name" "$HOOKS_DIR/$name" 2>/dev/null \
+         || [[ ! -f "${MAIN_ROOT}/sysop/scripts/hooks/$name" ]]; then
       ok "hook armed: $name"
+    else
+      # Git runs the armed copy, so a letter promoted, retired or demoted in the
+      # template does nothing until re-armed. Compared against the MAIN checkout's
+      # template: that is what a re-arm writes, and a worktree's branch copy is not
+      # (arming from a worktree pushes a branch's hooks into the shared directory).
+      # Info, not a failure: a consumer may keep a deliberately different armed body.
+      info "hook armed: $name — but it differs from its template (the template changed since arming, or the armed copy was edited by hand); if the template is what should run, re-arm from the main checkout: (cd \"$MAIN_ROOT\" && bash sysop/scripts/install_hooks.sh)"
     fi
     ARMED=$((ARMED + 1))
   elif [[ "$HOOKS_PATH_SET" -eq 1 ]]; then
@@ -209,7 +218,40 @@ done < <(
       | sed -e 's#$#/([^A-Za-z0-9_.-]|$)#'
   fi
 )
-if [[ -n "$VENDOR_ALT" && -d "$HOOKS_DIR" ]]; then
+# Scan only the directory Sysop arms. HOOKS_DIR follows core.hooksPath,
+# so under the documented `core.hooksPath=scripts/hooks` idiom it named the
+# consumer's OWN hooks directory — probe 4 already calls that "yours, not
+# Sysop-managed", install_hooks.sh skips it, and git never runs .git/hooks while
+# the key is set. There the vendor alternation's `hooks/pre-commit` and directory
+# arm matched a live delegate line (`real="$top/scripts/hooks/$name"`) and printed
+# a remedy that would break it. An EMPTY value runs no hooks, and --git-path
+# answers `./` for it, which made this loop read the working-tree root.
+# The comparison is physical (`pwd -P`) on both sides: a relative value resolves
+# against the working-tree root (HOOKS_DIR is already anchored there above), a
+# symlinked spelling of .git/hooks is still .git/hooks, and from a linked worktree
+# the default hooks live under the COMMON dir, not the worktree's private one.
+# A consumer that points core.hooksPath at the git-dir hooks directory itself is
+# still scanned. The skip is printed, because a skipped probe must not read as a
+# clean one. Recall this gives up: a stale vendor path inside the consumer's own
+# hooks dir. Nothing re-checks that after install: install.sh's report greps the
+# tracked files once, at the Phase-128 migration, and never again.
+_phys_dir() { (cd "$1" 2>/dev/null && pwd -P) || printf '%s\n' "$1"; }
+SCAN_4A=1
+if [[ "$HOOKS_PATH_SET" -eq 1 ]]; then
+  if [[ -z "$HOOKS_PATH_CFG" ]]; then
+    SCAN_4A=0
+    info "armed-hook path scan (4a) skipped: core.hooksPath is empty, so git runs no hooks and there is nothing to scan"
+  else
+    _default_hooks="$(git -C "$REPO_ROOT" rev-parse --git-common-dir 2>/dev/null)/hooks"
+    case "$_default_hooks" in /*) : ;; *) _default_hooks="$REPO_ROOT/$_default_hooks" ;; esac
+    if [[ "$(_phys_dir "$HOOKS_DIR")" != "$(_phys_dir "$_default_hooks")" ]]; then
+      SCAN_4A=0
+      info "armed-hook path scan (4a) skipped: core.hooksPath='${HOOKS_PATH_CFG}' is not this repository's git hooks directory, so Sysop does not arm it"
+      info "    if a hook there calls a Sysop script, it must name sysop/scripts/<name> (Phase 128)"
+    fi
+  fi
+fi
+if [[ "$SCAN_4A" -eq 1 && -n "$VENDOR_ALT" && -d "$HOOKS_DIR" ]]; then
   # No `-x` filter. A hook that sources a non-executable helper beside it is a
   # common idiom, and the helper is where the dead path usually sits — filtering
   # on the executable bit reported green over exactly that. install.sh's scanner
@@ -408,6 +450,13 @@ if [[ -d "$RECEIPT_DIR" ]]; then
       info "last round coverage: $LINE${DONE_AT:+  (closed $DONE_AT)}"
     else
       info "last round closed with no coverage line recorded — see $LATEST"
+    fi
+    # A fan-out round whose header had no `Fan-out coverage` line: the receipt
+    # records the string `unreported` (a dict when present, null when solo, so
+    # `_rstr` matches only this one form). Info, like every unreported number
+    # here: the failure is reserved for a round contradicting its own label.
+    if [[ "$(_rstr fanout)" == unreported ]]; then
+      info "    fan-out round recorded no per-worker coverage (no \`Fan-out coverage\` line in its round header)"
     fi
     # The anchor: `manifest` is the round's own claim, `tracked` was counted at
     # close. Shown, never judged — a scoped round legitimately speaks for a

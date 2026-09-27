@@ -1,6 +1,6 @@
 ---
 name: intake
-description: The planning front door — turn a brain-dump or a written brief into a populated, validated task queue. Interactive: brain-dump → playback → sounding-board → phases → priority → emit a phase-one slice. Re-enterable to deepen later phases as they come into focus, or to onboard an existing project that has a queue but no vision/decisions intent layer.
+description: The planning front door — turn a brain-dump or a written brief into a populated, validated task queue. Interactive — brain-dump → playback → sounding-board → phases → priority → emit a phase-one slice. Re-enterable to deepen later phases as they come into focus, or to onboard an existing project that has a queue but no vision/decisions intent layer.
 argument-hint: "[brief text, or a path to a brief file — optional]"
 model: opus
 ---

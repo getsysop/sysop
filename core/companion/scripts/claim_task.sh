@@ -140,7 +140,7 @@ resolve_primary_root() {
 #
 #   * It PROBES rather than assuming. A blind `PATH=.venv/bin:$PATH` prepend
 #     would shadow a capable system interpreter with an incapable venv one —
-#     trading the reported failure for its mirror image. self_check.sh:77-85
+#     trading the reported failure for its mirror image. self_check.sh:78-86
 #     documents the same hazard, named from the probe side. (Phase 182 wrote
 #     this citation against :61-66 and then, in the same commit, hoisted
 #     MAIN_ROOT above probe 3 — moving the text it points at. It also said
@@ -464,8 +464,12 @@ main_root = os.path.realpath(os.environ["MAIN_ROOT"])
 index_path = os.path.realpath(os.environ["INDEX_PATH"])
 rel = os.path.relpath(index_path, main_root)
 
-with open(index_path, encoding="utf-8") as f:
-    data = yaml.safe_load(f)
+try:
+    with open(index_path, encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+except (OSError, UnicodeDecodeError) as e:
+    print(f"ERROR: {rel} could not be read ({type(e).__name__}: {e})")
+    sys.exit(1)
 
 # `or {}` here reported a mid-truncate read as NOT_FOUND — "TECH-0001 not found in
 # tasks/index.yml" for a task plainly present — which is the misdiagnosis this whole
@@ -691,6 +695,25 @@ if $RELEASE; then
       echo "     python3 sysop/scripts/validate_tasks.py   # after the fix above" >&2
       exit 1
     fi
+    # A PyYAML that imports is not an index that reads. A byte that is not UTF-8,
+    # a permission error or a YAML error would otherwise surface at the flip below,
+    # after the worktree is already gone (`Q-612`), so read the index here, while
+    # a refusal still writes nothing.
+    if ! INDEX_PROBE=$(INDEX_PATH="$INDEX" python3 - 2>&1 <<'PY'
+import os, sys, yaml
+try:
+    with open(os.environ["INDEX_PATH"], encoding="utf-8") as fh:
+        yaml.safe_load(fh)
+except (OSError, UnicodeDecodeError, yaml.YAMLError) as e:
+    print(f"{type(e).__name__}: {e}")
+    sys.exit(1)
+PY
+    ); then
+      echo "❌ tasks/index.yml could not be read, so its status cannot be flipped:" >&2
+      printf '   %s\n' "$INDEX_PROBE" >&2
+      echo "   Nothing was released — the claim is intact. Repair the file, then re-run --release." >&2
+      exit 1
+    fi
   fi
 
   # ── Take the tracker write mutex before the first mutation (Phase 261) ──
@@ -771,8 +794,12 @@ import os, sys, tempfile, yaml
 task_id = os.environ["TASK_ID"]
 index_path = os.environ["INDEX_PATH"]
 
-with open(index_path, encoding="utf-8") as f:
-    data = yaml.safe_load(f) or {}
+try:
+    with open(index_path, encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+except (OSError, UnicodeDecodeError) as e:
+    print(f"ERROR: tasks/index.yml could not be read ({type(e).__name__}: {e})")
+    sys.exit(1)
 
 found = False
 for t in data.get("tasks", []):
@@ -1347,12 +1374,15 @@ if $USE_LOCK; then
   #
   # **Why, stated correctly.** This comment used to claim, **incorrectly**, that a
   # blank `expires:` is what "downstream lock-validator tooling treats as
-  # malformed". **No such
-  # tooling exists, and none ever has** — the field is read by NO runtime
-  # consumer: `sitrep_survey.py` parses it into a `Lock` dataclass field that
-  # nothing reads, and lock staleness is decided from `started:` alone
-  # (`_classify_task`'s stale check). An earlier draft of this comment added
-  # "and mtime", which is false for locks — the only `st_mtime` reads in that
+  # malformed". **Nothing treats a blank `expires:` as malformed.** The field
+  # has ONE runtime reader, and it is advisory: `validate_tasks.py` warns when a
+  # lock is past `expires:` AND says nothing about why (the seeded `plan_summary`
+  # placeholder, empty `notes:`, no park record since `started:`), and a blank or
+  # unparseable `expires:` leaves that check
+  # silent — it never fails validation. `sitrep_survey.py` parses the field into
+  # a `Lock` dataclass field that nothing reads, and lock staleness there is
+  # decided from `started:` alone (`_classify_task`'s stale check). An earlier
+  # draft of this comment added "and mtime", which is false for locks — the only `st_mtime` reads in that
   # file are pending-round markers and round receipts. Correcting a falsehood
   # is exactly when a new one gets written in; its own round caught this.
   # A reader who believed the old sentence would go looking for a validator to

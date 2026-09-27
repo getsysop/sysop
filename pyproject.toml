@@ -5,7 +5,8 @@ testpaths = ["tests"]
 # (`tests/_reversal.py`) rather than re-implementing it — the duplicate-then-diverge
 # shape `Q-367` filed after three modules had already done so.
 pythonpath = ["core/companion/scripts", "scripts", "tests"]
-# `-n auto` (Phase 187): 583s serial -> 123-160s here, ~4x on 14 logical cores.
+# `-n auto` (Phase 187): 583s serial -> 123-160s, ~4x on 14 logical cores, on the suite
+# as it was then (3,142 tests). It has more than doubled since: read the ratio, not the times.
 # The serial run is already 84% CPU-bound (224s user + 266s sys against 583s wall),
 # so the win is spreading that CPU across cores, NOT reclaiming idle -- and the
 # unusually large SYS half is the thousands of real subprocesses this suite drives

@@ -551,8 +551,11 @@ pack_dependencies() {
   if command -v python3 >/dev/null 2>&1; then
     python3 - "$manifest" <<'PY'
 import json, sys
-with open(sys.argv[1]) as f:
-    data = json.load(f)
+try:
+    with open(sys.argv[1]) as f:
+        data = json.load(f)
+except (OSError, UnicodeDecodeError) as e:
+    sys.exit(f"{sys.argv[1]}: could not be read ({type(e).__name__}: {e})")
 for d in data.get("dependencies", []) or []:
     print(d)
 PY
@@ -1185,10 +1188,31 @@ probe_source_tree_state() {
   # the steady state, and a warning that fires always is a warning nobody reads.
   local porcelain=""
   porcelain="$(git -C "$src" status --porcelain -- "${SOURCE_SCAN_PATHS[@]}" 2>/dev/null)" || return 0
-  [[ -n "$porcelain" ]] || return 0
+
+  # `status --porcelain` never reports IGNORED paths, and the copy loops read the
+  # filesystem, so a gitignored file HEAD does not contain — a stray
+  # `core/companion/scripts/stray.pyc` — was installed with the lock asserting a
+  # clean source (Phase 306's round measured it; Phase 327 fixed it). Not
+  # `--ignored=matching`: that reports every `__pycache__/`, which the installer
+  # skips, and a warning that fires on every maintainer install is one nobody
+  # reads. So the list is filtered by the copy loops' NAME rule: they skip a
+  # directory named `__pycache__`, and their `*` globs never match a name that
+  # starts with a dot, so they never enter a dot-directory either. (The files
+  # read from one by name, like `.claude/settings.json`, are tracked, and a
+  # tracked file is never listed as ignored.) It is not filtered by their REACH (how deep each loop
+  # goes, which packs are selected), so an ignored file in a directory no loop
+  # reads still warns. That errs toward the warning; nothing the loops copy is
+  # left out.
+  # A failed `ls-files` must not discard what `status` already found, so it
+  # reads as "no ignored files" rather than returning early.
+  local ignored=""
+  ignored="$(git -C "$src" ls-files --others --ignored --exclude-standard \
+      -- "${SOURCE_SCAN_PATHS[@]}" 2>/dev/null)" || ignored=""
+  ignored="$(printf '%s\n' "$ignored" | grep -Ev '(^|/)(__pycache__/|\.)' | grep -v '^$' || true)"
+  [[ -n "$porcelain" || -n "$ignored" ]] || return 0
 
   SOURCE_DIRTY=1
-  SOURCE_DIRTY_COUNT="$(printf '%s\n' "$porcelain" | grep -c '^' || true)"
+  SOURCE_DIRTY_COUNT="$(printf '%s\n%s\n' "$porcelain" "$ignored" | grep -c '.' || true)"
 
   local _head=""
   _head="$(git -C "$src" rev-parse HEAD 2>/dev/null || true)"
@@ -1198,6 +1222,9 @@ probe_source_tree_state() {
   say "  so ${_head:0:12} does NOT denote the files involved here."
   note "source:    $src"
   note "dirty:     ${SOURCE_DIRTY_COUNT} path(s) under ${SOURCE_SCAN_PATHS[*]}"
+  if [[ -n "$ignored" ]]; then
+    note "ignored:   $(printf '%s\n' "$ignored" | grep -c '.' || true) of them gitignored, which git status does not show"
+  fi
   note "recorded:  ${_head:0:12}"
   if [[ "$CHECK_MODE" -eq 1 ]]; then
     say "  --check is read-only, so nothing is recorded: this report compares your"
@@ -1458,14 +1485,20 @@ if os.environ.get("SYSOP_SOURCE_DIRTY") == "true":
 # actionable message into a raw traceback. A directory at the lock path is not
 # absence, and the installer refuses it upstream on `[[ -f ]]` anyway. A malformed lock stays
 # TOLERATED -- Phase 148 decided a hand-mangled lock must not abort the install
-# with a traceback, and `lock_field` carries the same tolerance.
+# with a traceback, and `lock_field` carries the same tolerance. A byte that is not
+# UTF-8 is malformed too. Tolerated is not silent: both timestamps reset, so say so
+# (`Q-612`, Phase 333's "absorb, but say so").
 prev = None
 try:
     with open(lock_path) as f:
         prev = json.load(f)
 except FileNotFoundError:
     prev = None
-except ValueError:
+except ValueError as exc:
+    import sys
+    sys.stderr.write("sysop: the existing lock at {} could not be parsed ({}: {}); "
+                     "rewriting it, with installed_at and updated_at reset\n".format(
+                         lock_path, type(exc).__name__, exc))
     prev = None
 except OSError as exc:
     raise SystemExit(
@@ -1834,8 +1867,11 @@ _load_substitution_keys() {
   local _keys
   if ! _keys="$("$_py" - "$subs_path" <<'PY'
 import sys, yaml
-with open(sys.argv[1]) as f:
-    data = yaml.safe_load(f) or {}
+try:
+    with open(sys.argv[1]) as f:
+        data = yaml.safe_load(f) or {}
+except (OSError, UnicodeDecodeError) as e:
+    sys.exit(f"{sys.argv[1]}: could not be read ({type(e).__name__}: {e})")
 subs = data.get('substitutions') if isinstance(data, dict) else None
 if subs is None:
     sys.stderr.write("  ⚠ substitutions: top-level 'substitutions:' mapping missing or empty\n")
@@ -1904,8 +1940,11 @@ apply_substitutions() {
   if ! _counts="$("$_py" - "$subs_path" "$dst" <<'PY'
 import os, re, sys, tempfile, yaml
 subs_path, dst_path = sys.argv[1], sys.argv[2]
-with open(subs_path) as f:
-    data = yaml.safe_load(f) or {}
+try:
+    with open(subs_path) as f:
+        data = yaml.safe_load(f) or {}
+except (OSError, UnicodeDecodeError) as e:
+    sys.exit(f"{subs_path}: could not be read ({type(e).__name__}: {e})")
 subs = data.get('substitutions') if isinstance(data, dict) else None
 if not isinstance(subs, dict):
     sys.exit(0)
@@ -1913,8 +1952,11 @@ pairs = [(k, v) for k, v in subs.items()
          if isinstance(k, str) and isinstance(v, str) and '\n' not in v]
 if not pairs:
     sys.exit(0)
-with open(dst_path) as f:
-    lines = f.readlines()
+try:
+    with open(dst_path) as f:
+        lines = f.readlines()
+except (OSError, UnicodeDecodeError) as e:
+    sys.exit(f"{dst_path}: could not be read ({type(e).__name__}: {e})")
 PATHS_KEY = re.compile(r'^(\s*)paths:(\s*)(\S.*)?$')
 counts = {}
 out = []
@@ -2117,8 +2159,12 @@ concat_files() {
         if ! _collisions="$("$_py" - "$dst" "$TARGET/$suffix_rel" <<'PY'
 import sys, yaml
 base_path, proj_path = sys.argv[1], sys.argv[2]
-with open(base_path) as f: base = yaml.safe_load(f) or {}
-with open(proj_path) as f: proj = yaml.safe_load(f) or {}
+def load(p):
+    try:
+        with open(p) as f: return yaml.safe_load(f) or {}
+    except (OSError, UnicodeDecodeError) as e:
+        sys.exit(f"{p}: could not be read ({type(e).__name__}: {e})")
+base, proj = load(base_path), load(proj_path)
 base_ids = {c['id'] for c in (base.get('checks') or []) if isinstance(c, dict) and 'id' in c}
 seen_in_proj, dupes = set(), []
 for c in (proj.get('checks') or []):
@@ -2164,8 +2210,11 @@ PY
 import os, re, sys, tempfile, yaml
 dst_path = sys.argv[1]
 target = {c.strip() for c in os.environ.get('_SYSOP_COLLISIONS', '').splitlines() if c.strip()}
-with open(dst_path) as f:
-    lines = f.readlines()
+try:
+    with open(dst_path) as f:
+        lines = f.readlines()
+except (OSError, UnicodeDecodeError) as e:
+    sys.exit(f"{dst_path}: could not be read ({type(e).__name__}: {e})")
 
 # Locate top-level `checks:` sequence entries by their dash lines (minimum
 # dash indent in the file) and the `id:` each block declares. Exit 3 — the
@@ -2236,8 +2285,12 @@ PY
             if ! "$_py" - "$dst" "$TARGET/$suffix_rel" <<'PY'
 import sys, yaml
 base_path, proj_path = sys.argv[1], sys.argv[2]
-with open(base_path) as f: base = yaml.safe_load(f) or {}
-with open(proj_path) as f: proj = yaml.safe_load(f) or {}
+def load(p):
+    try:
+        with open(p) as f: return yaml.safe_load(f) or {}
+    except (OSError, UnicodeDecodeError) as e:
+        sys.exit(f"{p}: could not be read ({type(e).__name__}: {e})")
+base, proj = load(base_path), load(proj_path)
 base_checks = [c for c in (base.get('checks') or []) if isinstance(c, dict)]
 base_index = {c['id']: i for i, c in enumerate(base_checks) if 'id' in c}
 for c in (proj.get('checks') or []):
@@ -2754,7 +2807,7 @@ arm_git_hooks() {
     return 0
   fi
   # Phase 15 / BeanRider ISSUE-0007: --update must NOT auto-arm. The install
-  # pipeline has just overwritten sysop/scripts/hooks/* with upstream content; arming
+  # pipeline has just refreshed sysop/scripts/hooks/* from upstream (a consumer-edited hook is kept — _phase_24b_in_scope); arming
   # now would silently swap the consumer's previously-armed (possibly custom)
   # hook body for the upstream skeleton during the reconcile window. The
   # consumer reconciles sysop/scripts/hooks/* via git first, then re-arms explicitly
@@ -2939,8 +2992,11 @@ _prune_stale_branch_grants() {
   python3 - "$dst" "$branch" <<'PRUNEPY' || return 0
 import json, re, sys
 dst, branch = sys.argv[1], sys.argv[2]
-with open(dst) as f:
-    data = json.load(f)
+try:
+    with open(dst) as f:
+        data = json.load(f)
+except (OSError, UnicodeDecodeError) as e:
+    sys.exit(f"{dst}: could not be read ({type(e).__name__}: {e})")
 perms = data.get("permissions", {})
 allow = perms.get("allow", [])
 keep, dropped = [], []
@@ -2982,8 +3038,11 @@ _branch_settings_template() {
   python3 - "$src" "$BRANCH_SETTINGS_TMP" "$branch" <<'BRANCHPY' || return 1
 import json, sys
 src, out, branch = sys.argv[1], sys.argv[2], sys.argv[3]
-with open(src) as f:
-    data = json.load(f)
+try:
+    with open(src) as f:
+        data = json.load(f)
+except (OSError, UnicodeDecodeError) as e:
+    sys.exit(f"{src}: could not be read ({type(e).__name__}: {e})")
 perms = data.get("permissions", {})
 allow = perms.get("allow", [])
 # Rewrite by exact string, not by regex over the file: the rule is a JSON value
@@ -3021,35 +3080,35 @@ src, out = sys.argv[1], sys.argv[2]
 # Filtering the master template by this keep-set is fail-closed: if a master rule
 # string is renamed, loop mode drops it and tests/test_install_loop_mode.py catches it.
 LOOP_ALLOW = {
-    # Phase 152. Required by BOTH loop-mode review skills at Step 7:
-    # `git add review_tasks_archive.md 2>/dev/null` is a plain add of a path no
-    # literal rule covers (its sibling `review_tasks.md` has its own rule).
-    # Phase 153 extended what this rule actually buys: the Step 2a coverage
-    # commit and the Step 9/9b promotion+demotion staging all used to sit inside
-    # `for … done` loops — `for`/`done` are not documented command separators, so
-    # no rule matched those invocations whatever was seeded — and each is now one
-    # plain `git add -A -- <path>` per candidate path. This rule covers them too.
-    # It does NOT cover the `cd … && git add …` compounds in the lifecycle-only
-    # skills, which loop mode does not ship anyway.
+    # Phase 152. Required by BOTH loop-mode review skills at Step 7: `git add
+    # review_tasks_archive.md 2>/dev/null` is a plain add of a path no literal rule covers (its
+    # sibling `review_tasks.md` has its own rule). Phase 153 extended what this rule buys: the
+    # Step 2a coverage commit and the Step 9/9b promotion+demotion staging all used to sit inside
+    # `for … done` loops — `for`/`done` are not documented command separators, so no rule matched
+    # them whatever was seeded — and each is now one plain `git add -A -- <path>` per candidate
+    # path, which this rule covers. It does NOT cover the lifecycle skills' `cd … && git add …`.
     "Bash(git add:*)",
     "Bash(git add review_tasks.md)",
     "Bash(git commit -m docs:*)",
+    # Q-588 (Phase 333): both review skills place each isolated agent at the commit under review
+    # with `git worktree add <dir> --detach <sha>` when run off the default branch, and remove it
+    # with `git worktree remove <dir>` after. Bare form only: a `git -C` spelling binds neither.
+    "Bash(git worktree add:*)",
+    "Bash(git worktree remove:*)",
     "Bash(bash sysop/scripts/run_checks.sh)",
     "Bash(bash sysop/scripts/run_checks.sh:*)",
     "Bash(bash sysop/scripts/install_hooks.sh)",
-    # The post-install footer this very script prints tells every consumer, in
-    # both modes, to run `bash sysop/scripts/self_check.sh` — and until Phase
-    # 184 no rule of any shape covered it, so the first thing a fresh loop-mode
-    # install prescribes was also the first permission prompt it hit.
+    # The post-install footer tells every consumer, in both modes, to run `bash
+    # sysop/scripts/self_check.sh`, and until Phase 184 no rule of any shape covered it — so the
+    # first thing a fresh loop-mode install prescribed was also the first prompt it hit.
     "Bash(bash sysop/scripts/self_check.sh)",
     "Bash(bash sysop/scripts/self_check.sh:*)",
     "Bash(bash sysop/scripts/sysop-update.sh)",
     "Bash(bash sysop/scripts/sysop-update.sh:*)",
     "Bash(python sysop/scripts/archive_review_tasks.py:*)",
     "Bash(python3 sysop/scripts/archive_review_tasks.py:*)",
-    # Phase 220: `--check-headers` is prescribed by WORKFLOW.md, by
-    # `close_batch.sh`'s grep-fallback warning and by the archiver's
-    # near-miss refusal — all three name it as the way to list the
+    # Phase 220: `--check-headers` is prescribed by WORKFLOW.md, by `close_batch.sh`'s grep-fallback
+    # warning and by the archiver's near-miss refusal — all three name it as the way to list the
     # offending headers, and loop mode ships this script.
     "Bash(python3 sysop/scripts/review_index.py:*)",
     "Bash(.venv/bin/python3 sysop/scripts/archive_review_tasks.py:*)",
@@ -3073,8 +3132,11 @@ LOOP_ALLOW = {
     # restricted permission set instead of silently degrading to the fallback.
     "Bash(gh repo view:*)",
 }
-with open(src) as f:
-    tmpl = json.load(f)
+try:
+    with open(src) as f:
+        tmpl = json.load(f)
+except (OSError, UnicodeDecodeError) as e:
+    sys.exit(f"{src}: could not be read ({type(e).__name__}: {e})")
 allow = [r for r in tmpl.get("permissions", {}).get("allow", []) if r in LOOP_ALLOW]
 # hooks intentionally omitted (loop mode: both Sysop hooks are lifecycle-only).
 with open(out, "w") as f:
@@ -3105,8 +3167,8 @@ install_permissions() {
   # dry-run) so no install applies the grant silently.
   if [[ "$INSTALL_MODE" == "loop" ]]; then
     note "allow-list: a small check/read-only subset, no hooks — no push, merge, or rebase"
-    note "  grants; it does include 'git add' (the review skills stage their ledger)."
-    note "  It is yours to trim: review .claude/settings.json and delete any rule you don't want."
+    note "  grants; it does include 'git add' (the review skills stage their ledger) and"
+    note "  'git worktree add/remove' (to place review agents). Delete any rule you don't want."
   else
     note "allow-list: pre-authorizes the agent for Sysop's lifecycle git flow WITHOUT further"
     note "  prompts — including 'git push origin' and 'git push --force-with-lease' (the"
@@ -3123,7 +3185,7 @@ install_permissions() {
     # would violate the dry-run contract, and the copy note would render the
     # raw /tmp path).
     if [[ "$DRY_RUN" -eq 1 ]]; then
-      note "would write $(rel "$dst") (loop allow-subset: 24 rules, no hooks)"
+      note "would write $(rel "$dst") (loop allow-subset: 26 rules, no hooks)"
       record_managed_path "$dst"
       record "permissions: would write $(rel "$dst") (loop allow-subset)"
       return 0
@@ -3199,10 +3261,13 @@ install_permissions() {
   python3 - "$src" "$dst" <<'PY'
 import json, sys
 template_path, target_path = sys.argv[1], sys.argv[2]
-with open(template_path) as f:
-    template = json.load(f)
-with open(target_path) as f:
-    existing = json.load(f)
+def load(p):
+    try:
+        with open(p) as f:
+            return json.load(f)
+    except (OSError, UnicodeDecodeError) as e:
+        sys.exit(f"{p}: could not be read ({type(e).__name__}: {e})")
+template, existing = load(template_path), load(target_path)
 
 merged = dict(existing)
 
@@ -4536,8 +4601,11 @@ target_path, template_path, old_src = sys.argv[1], sys.argv[2], sys.argv[3]
 HOOK_FILES = ("permission_denied_hook.py", "parse_subagent_envelope.py")
 
 def load(p):
-    with open(p) as f:
-        return json.load(f)
+    try:
+        with open(p) as f:
+            return json.load(f)
+    except (OSError, UnicodeDecodeError) as e:
+        sys.exit(f"{p}: could not be read ({type(e).__name__}: {e})")
 
 try:
     tgt = load(target_path)
@@ -4553,7 +4621,7 @@ tmpl = load(template_path)
 # no-op for the ~20 non-path rules (Bash(gh pr merge:*), Bash(git checkout:*),
 # Bash(python3 -c:*), …), so those CURRENT-VALID rules entered the removal set
 # verbatim and got stripped from settings.local.json (where install_permissions
-# never re-adds them) and from loop-mode settings.json (only the 24-rule LOOP_ALLOW
+# never re-adds them) and from loop-mode settings.json (only the LOOP_ALLOW
 # subset is re-added) — auto-approved commands silently started prompting again.
 # A rule is a movable vendor-path rule iff its flat and sysop/-namespaced spellings
 # differ; only such a rule's flat spelling is dead. Non-path and consumer-authored
@@ -4819,8 +4887,16 @@ _ns_scan_stale_refs() {
     # ACTUALLY look", already used to arm them; `install_hooks.sh`'s comment claims
     # this file and `self_check.sh` "both anchor the same way", and the half that
     # certifies the migration was the half that did not.
-    find "$(resolve_hook_dst 2>/dev/null || printf '%s' "$TARGET/.git/hooks")" \
-      -maxdepth 1 -type f 2>/dev/null
+    # `Q-573` sibling: an EMPTY core.hooksPath runs no hooks, and --git-path answers
+    # `./` for it, so resolve_hook_dst named the working-tree ROOT and every top-level
+    # file was read with the wide hook arm — a consumer's own `scripts/my_deploy.sh`
+    # in a README was reported as a stale vendor path. A NON-empty value is still
+    # followed: this report runs only during the Phase-128 migration, when
+    # `scripts/hooks/` IS the old vendor directory being moved.
+    if ! _hp="$(git -C "$TARGET" config --get core.hooksPath 2>/dev/null)" || [[ -n "$_hp" ]]; then
+      find "$(resolve_hook_dst 2>/dev/null || printf '%s' "$TARGET/.git/hooks")" \
+        -maxdepth 1 -type f 2>/dev/null
+    fi
     find "$TARGET/.github/workflows" -maxdepth 1 -type f 2>/dev/null
   )
 
@@ -5947,7 +6023,8 @@ main() {
       note "/codebase-review    # scan, promote surviving conventions, bootstrap review_tasks.md"
       note "/security-audit     # same rhythm, or before releases"
       say ""
-      say "Hit Sysop friction? Log it in sysop/SYSOP_ISSUES.md (create it under sysop/);"
+      say "Hit Sysop friction? Log it in sysop/SYSOP_ISSUES.md (create it under sysop/),"
+      note "one '## ISSUE-0001 — <title> (<date>)' heading per entry, with a '**Status:** Open' line;"
       note "/report-issues files the keepers upstream to Sysop"
     else
       say "See sysop/docs/WORKFLOW.md § 8.7 (Port checklist) for the bootstrap walkthrough."

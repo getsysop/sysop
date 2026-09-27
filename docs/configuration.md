@@ -88,7 +88,7 @@ If a project check declares the same `id` as an upstream check (e.g., to overrid
 
 Placeholder vocabulary (`<api module>`, `<frontend>`, etc.) appears in pack `checks.yml.fragment` files so packs stay framework-agnostic. Authoring a `.claude/substitutions.project.yml` maps each token to your concrete project path; the installer text-substitutes `paths:` values in the upstream `.claude/checks.yml` body so they resolve on disk and checks actually fire.
 
-Phase 24a's append/merge shape doesn't address the "concretize this placeholder inside an upstream check" case — pack `checks.yml.fragment` files ship `paths:` lists with placeholder tokens (`<api module>/`, `<scripts dir>/`, `<datajobs dir>/`, etc.) so packs stay framework-agnostic, and `run_checks_impl.py` silently returns empty when those don't resolve on disk. Author `.claude/substitutions.project.yml` to map each token to its concrete project path:
+Phase 24a's append/merge shape doesn't address the "concretize this placeholder inside an upstream check" case — pack `checks.yml.fragment` files ship `paths:` lists with placeholder tokens (`<api module>/`, `<scripts dir>/`, `<datajobs dir>/`, etc.) so packs stay framework-agnostic, and a grep check whose paths don't resolve on disk scans nothing — the pre-scan reports it `skipped` (`paths unresolved: placeholder globs not yet localized`), not as a clean pass. Tool-stage checks (pyright, tsc, semgrep, lint) scan the whole tree until localized instead. Author `.claude/substitutions.project.yml` to map each token to its concrete project path:
 
 ```yaml
 substitutions:
@@ -131,7 +131,7 @@ served:
 
 ### Spending less
 
-There is no cheap lever hiding in the default map. `mechanical` already resolves to Sonnet and `quick` to Haiku — they are not the expensive part — and they barely govern anything: on a full install they carry 2 of the 33 pins in the skills tree; the other 30 are `reasoning` and 1 is `convention-gate`. **On a loop-mode install they carry none at all**, because loop mode does not ship `/auto-fix` or `/next-task`, which are the only skills that use them; all 8 pins a loop install carries are `reasoning`.
+There is no cheap lever hiding in the default map. `mechanical` already resolves to Sonnet and `quick` to Haiku — they are not the expensive part — and they barely govern anything: on a full install they carry 2 of the 34 pins in the skills tree; 2 are `convention-gate` and the other 30 are `reasoning`. **On a loop-mode install they carry none at all**, because loop mode does not ship `/auto-fix` or `/next-task`, which are the only skills that use them; all 8 pins a loop install carries are `reasoning`.
 
 Either way the only lever with real money behind it is `reasoning` itself — which is also the role that runs adversarial review, judging, and execution. Sysop ships it conservative on purpose and does not recommend a blanket downgrade.
 
@@ -142,11 +142,11 @@ roles:
   reasoning: sonnet   # cheaper, and shallower where it matters most
 ```
 
-Worth knowing before you do: on the one consumer with per-phase spend recorded, the money is concentrated in *execution*, not review — 63.7% of it, against 21.8% for planning and 14.5% for review. Downgrading `reasoning` moves all three at once, so it buys most of its savings from the phase you are least likely to want cheaper. **The role is the unit you can configure**, and one pin has been split onto a role of its own for exactly this reason. `convention-gate` governs a single spawn — `/review-close` Step 2b's convention agent, which runs on every target of every close (the security twin beside it is gated on a security-map glob and skips most targets on a stock install) — so you can move it without moving the security twin beside it or anything else on `reasoning`:
+Worth knowing before you do: on the one consumer with per-phase spend recorded, the money is concentrated in *execution*, not review — 63.7% of it, against 21.8% for planning and 14.5% for review. Downgrading `reasoning` moves all three at once, so it buys most of its savings from the phase you are least likely to want cheaper. **The role is the unit you can configure**, and one spawn was split onto a role of its own for exactly this reason. `convention-gate` governs two spawns — `/review-close` Step 2b's convention agent, which runs on every target of every close (the security twin beside it is gated on a security-map glob and skips most targets on a stock install), and the `4a-fix` re-check of the close's own fix commit, which runs only on a close that fixed a note — so you can move it without moving the security twin beside it or anything else on `reasoning`:
 
 ```yaml
 roles:
-  convention-gate: sonnet   # the 2b convention agent only
+  convention-gate: sonnet   # the 2b convention agent and the 4a-fix re-check
 ```
 
 Finer still exists in the skill files themselves — a trailing `<!-- sysop:role=… -->` marker overrides the role for a single pin, which is how `/auto-fix` runs its fix agents on the mechanical tier while its verification pass stays on reasoning. But that marker lives in managed skill text, so reaching a pin that has *no* named role means forking the skill and giving up upstream updates to it. Naming a role, as `convention-gate` does, is what turns a marker into a knob you can reach from `served_models.local.yml`.

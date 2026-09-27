@@ -156,6 +156,50 @@ def test_empty_hookspath_is_surfaced_as_no_hooks_at_all(tmp_path):
     assert "NO hooks at all" in r.stdout
 
 
+def test_an_armed_hook_that_differs_from_its_template_is_reported_stale(tmp_path):
+    """Git runs the armed copy, so a letter added to the template does nothing until
+    re-armed. The check used to print `hook armed:` for any executable of the right
+    name; it now compares bytes, and the stale case is advisory, not a failure."""
+    root = _consumer(tmp_path / "s")
+    assert _install(root, "--packs", "").returncode == 0
+    tmpl = root / "sysop/scripts/hooks/pre-commit"
+    tmpl.write_text(tmpl.read_text() + "\n# a promoted letter\n")
+    r = _self_check(root)
+    assert r.returncode == 0, r.stdout + r.stderr
+    stale = "but it differs from its template"
+    lines = {ln.split("hook armed: ", 1)[1].split()[0]: ln
+             for ln in r.stdout.splitlines() if "hook armed: " in ln}
+    assert stale in lines["pre-commit"], r.stdout
+    # Advisory: printed by `info` (·), never by `ok` (✓), which would count it a pass.
+    assert lines["pre-commit"].lstrip().startswith("·"), lines["pre-commit"]
+    # Control: every untouched hook still reads armed, with no stale note.
+    others = [n for n in lines if n != "pre-commit"]
+    assert others and all(stale not in lines[n] for n in others), r.stdout
+
+
+def test_a_worktree_compares_against_the_main_checkouts_template(tmp_path):
+    """A re-arm writes the MAIN checkout's template. A branch that edits its own copy of
+    the template in a worktree has not changed what re-arming from main would do, so it
+    must not read stale, and the remedy must never be to arm from the worktree (#202)."""
+    root = _consumer(tmp_path / "m")
+    assert _install(root, "--packs", "").returncode == 0
+    _git(root, "add", "-A")
+    _git(root, "commit", "-qm", "install")
+    wt = tmp_path / "wt"
+    _git(root, "worktree", "add", "-q", "-b", "wtb", str(wt))
+    tmpl = wt / "sysop/scripts/hooks/pre-commit"
+    tmpl.write_text(tmpl.read_text() + "\n# a branch letter\n")
+    r = _self_check(root, cwd=wt)
+    assert "hook armed: pre-commit" in r.stdout, r.stdout
+    assert "differs from its template" not in r.stdout, r.stdout
+    # Control: the same edit in the main checkout does read stale, and names main.
+    main_tmpl = root / "sysop/scripts/hooks/pre-commit"
+    main_tmpl.write_text(main_tmpl.read_text() + "\n# a promoted letter\n")
+    r = _self_check(root, cwd=wt)
+    line = [ln for ln in r.stdout.splitlines() if "differs from its template" in ln]
+    assert len(line) == 1 and "re-arm from the main checkout" in line[0], r.stdout
+
+
 def test_source_and_installed_copies_match():
     """self_check.sh ships via install_companion_scripts — drift guard that the
     source copy is executable bash (a syntax error would break every consumer's

@@ -478,10 +478,15 @@ class TestClaimStallPositiveEvidence:
         # `_classify_review_batches`, not by `_classify_task`, and that
         # partition is unchanged. Closing Q-317 meant giving the batch
         # classifier its own call, NOT routing batches through the task path.
+        # Phase 332 moved the skip into `_is_review_batch_lock` (a project may name an
+        # indexed roadmap task `TASK-7`), so the pin is the call plus its behaviour.
         loop = src[src.index("def run_survey("):]
-        assert 'task_id.startswith("BATCH-")' in loop, (
+        assert "if _is_review_batch_lock(task_id, index):" in loop, (
             "run_survey no longer skips BATCH- locks — the two classifiers have "
             "been merged, which is a different design than Q-317's fix"
+        )
+        assert ss._is_review_batch_lock("BATCH-7", {}), (
+            "a BATCH-<N> lock is no longer treated as a review batch's"
         )
 
         start = src.index("def _classify_review_batches(")

@@ -618,8 +618,16 @@ class TestReasonsArePinned:
         i = body.index("Expiry = 4 hours from now")
         block = _comment_prose(body[i: i + 3000])
         # The corrected reason, both halves. Either alone leaves the next reader
-        # able to conclude the field is dead and delete it.
-        assert "read by NO runtime consumer" in block, block[:800]
+        # able to conclude the field is dead and delete it. The first half moved
+        # when validate_tasks.py gained its warn-only expired-placeholder check:
+        # before it the field was read by NO runtime consumer, and the comment
+        # must now name the one reader and say it cannot fail validation.
+        assert normalize("has ONE runtime reader, and it is advisory: `validate_tasks.py` warns") in block, block[:800]
+        assert normalize("it never fails validation") in block, block[:800]
+        # Case-folded: "read by no runtime consumer" is the same falsehood (round lens 2, P02).
+        assert not states(block.lower(), "read by no runtime consumer"), (
+            "the comment claims no runtime reader, but validate_tasks.py reads expires:"
+        )
         assert "pinned by tests" in block, block[:800]
 
     def test_the_spec_no_longer_says_the_reshape_is_unbuilt(self):

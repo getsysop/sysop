@@ -47757,3 +47757,4854 @@ surfaces that mention the diagnostic mailbox, which must then state the retentio
 HIGH fix above had to name `DIAGNOSTIC_RETENTION_DAYS` (7 days) to land. The roster is derived from
 the population rather than hand-listed, which is why adding a member could not be silent; Phase 319
 built it that way on purpose, and this is its first catch of a file it did not know about.
+
+### The cut
+
+**Published `607508b` to `getsysop/sysop` (PR #51) from merged `main` at `683a849`**, required
+`pytest` check green, squash-merged by Wade — the one irreversible step, his by the Phase-296
+ratification. Window **twelve commits** at the cut SHA (`cb1f972..683a849`), derived at both ends
+from the published repo's own snapshot message rather than from the brief's label.
+
+**Gates, all run rather than assumed, on the exact tree that shipped.**
+
+| gate | result |
+|---|---|
+| Passes 1a/1b/1c/3/4/4b + rename residue | **all empty**, verdict GREEN |
+| Both builders content-identical | tree **`8106c17`**, checked not assumed |
+| Population diff | **413 = 413**, identical file sets |
+| Pass 5/5b in the source repo | 175 passed |
+| Pass 2 / 2b vs the published snapshot | **4 new sites**, each eyeballed (below) |
+| Suite inside the sterilized tree | **6,713 passed / 710 skipped / 0 failed** |
+| Public history, pre-push | 45 commits, NEW `0/0/0/0` |
+| Cold-clone install, both modes | exit 0 each; hooks armed in both targets; no stray `.git` |
+| Identity gate | `Wade Petty <wade@gdpquery.ai>`, author **and** committer |
+| PR-body scan | `sources:2 findings:0`, chained `&&` ahead of `gh` |
+| Post-push history re-scan | **46** commits (grown by one), NEW `0/0/0/0`, **and the new commit's own row present** |
+| Cold-clone tree identity | public `8106c17` **==** gate build dir `8106c17` |
+| Currency | both `grep -c "private 683a849"` print **1** |
+
+**The four new eyeball sites were all in `PHASE_LOG.md` and all accepted:** two naming
+`gdp-query-system` as the consumer that reported `#685`/`#686` and as the source of a live
+`tasks/notes.md` conflict marker, and two naming BeanRider. All are Option-A provenance, which is
+the ratified keep-decision. **The one that wanted a second look named `wade-cms/sysop`** — checked
+rather than waved through: it is not a Pass-1a token, and `wade-cms` already appears in the **same
+five** published files before and after this cut, so the cut introduces no new disclosure.
+
+**Step 4 was RED before this phase fixed it.** The dry run returned `3 failed … exit 1`; the fix
+made it `6,713 / 710 / 0`. **The post-push scan could not have caught that** — by then the commit is
+immutable and a force-push does not remove it from GitHub. The gate that mattered was the one run
+*before* the push, and it only ran because the phase ran it speculatively while the round was out.
+
+**`self_check.sh` reported 9 passed / 1 failed on arrival and 10 / 0 after running its own printed
+remedy verbatim** — the documented prerequisite, not a defect, and the same 9/1 → 10/0 shape Phase
+250 measured. `run_checks.sh` exits 0 and reports one HIGH against Sysop's **own vendored**
+`sysop/scripts/run_checks/semgrep.py:272`, which is the placeholder-`paths:` fallback filed since
+Phase 133.
+
+## Phase 320.1 (executed 2026-09-20 — the directive named a position, and the position moved)
+
+**Surfaced by Wade asking what was briefed as next.** The brief's opening directive read
+*"Otherwise take item 2, `Q-550`"*. Phase 320 inserted its round's five filings into the ranked
+list and renumbered it in document order; **`Q-550` moved from 2 to 7 and the prose still pointed
+at the slot.** Nothing catches this — `tests/test_phase_log_currency.py` parses line 1 of the brief
+and the phase number it declares, not its body.
+
+**Fixed by naming the entry.** The directive now points at **`Q-567`**, which is where Phase 320
+deliberately ranked it — the method finding behind three of that round's others — and says where
+`Q-550` sits for a session that wants a build rather than a method fix. The transferable half ships
+with it: **name the entry, never the position. A rank is a sortable field and an id is not.** That
+made it a caution, so the published count moved **38 → 39**, re-derived by the same script rather
+than incremented by hand.
+
+**`Q-466`'s fourth instance, and the first with its assertion output captured** — which that entry
+has asked for since it was filed. A full-suite run on this change came back **1 failed / 7,516
+passed / 206 skipped** against **7,517 / 206** on the preceding run of the same tree plus one
+`tools/`-only paragraph; the isolated re-run was **13 passed** for the parametrised case and **84**
+for the whole module.
+
+**The captured message is the useful part, because the test says which half broke:** *"the cut
+script did not reach its verification gate; the harness fixture is broken rather than the gate"*,
+with output stopping after *"▶ building mirror"*. **So the shape is a build that died mid-flight
+under load, not a gate that judged wrongly** — consistent with the three earlier instances, and it
+narrows the class to fixtures that fork subprocesses and do filesystem work under `-n auto`. What
+this instance could **not** capture is recorded too: the script's exit status and stderr, because
+the assertion prints only stdout. That is what the next one should take.
+
+**The skip row itself moved a published number, and a gate caught it — for the second time in two
+commits.** Appending a `320.1` row took `ledger_stats.py`'s row count 180 → **181** while numbered
+phases stayed at **160** (a `.1` row is not one), and `AUTHOR_DEFECT_REGISTER.md` publishes the
+pair. `test_the_registers_population_line_is_derived` went red naming its own file. The all-killed
+figures did **not** move, correctly: a skip row carries no battery. **Two consecutive commits have
+now had a published figure reddened by their own ledger append**, which is the instrument working
+exactly as designed and worth stating rather than quietly fixing — the failure mode it replaced was
+a number nobody re-derived.
+
+**Adversarial round: SKIPPED, on the 287.1 / 288.1 / 291.1 / 310.1 precedent.** The change is
+maintainer-side documents only — `tools/NEXT_SESSION_PROMPT.md` and `REVIEW_CHECKLIST.md`, neither
+of which ships — touching no guard and prescribing no command, so author-side rules 1 and 3 bind
+nothing and there is no shipped surface for a lens to read. Recorded here and as a `skip` row in
+the ledger, per the convention that a skip is per-phase and must carry its reason.
+
+## Phase 321 (executed 2026-09-20 — the inbound triage, and the four verdicts a document I had not read already had right)
+
+**Wade asked for the recently submitted GDP issues to be triaged.** The surface is
+`wade-cms/sysop`, GDP's upstream channel; the last pass over it was Phase 303's. This phase takes
+what has arrived since: **17 open issues with no entry in `REVIEW_CHECKLIST.md`** — `#679`, `#680`,
+`#681`, `#683`, `#684`, `#687`, `#688`, `#689` (2026-09-19T14:43Z) and `#700`–`#708`
+(2026-09-20T22:21Z). `#682`, `#685` and `#686` are already closed. The diff is the queue and the
+record; `core/` is untouched.
+
+### The finding that matters is about the triage, not about the issues
+
+**Four of my thirteen first-pass dispositions were wrong, and `tools/NEXT_SESSION_PROMPT.md` had
+all four right before I started.** I triaged from `REVIEW_CHECKLIST.md` and `gh issue list`,
+reached verdicts on all 17, and only met the brief when `tests/test_phase_log_currency.py` went red
+on its single-use rule — *after* the entries were written. Its § *Inbound* section carried a prior
+pass's verdicts on exactly the eight 09-19 issues, and on four of them my answer differed:
+
+| Issue | My first pass | The brief | Who was right |
+|---|---|---|---|
+| `#683` | new § Medium entry | *"duplicate of the sharper `#595`"* | **the brief** — `#595` is `Q-530` |
+| `#687` | new § Medium entry | *"contradicted by `review-close/SKILL.md:2227`; fold into `#496`"* | **the brief** — `#496` is `Q-333` |
+| `#684` | filed as reported | *"central claim false on stock Sysop"* | **the brief** |
+| `#680` | *"the ff-merge is prescribed, not stray"* | an ff-merge local to that consumer, *"Sysop prescribes nowhere"* | **the brief** |
+
+**Each was then re-verified against the tree rather than adopted**, because the brief labels them
+*"each still ONE triage pass — re-verify before building"*. All four held.
+
+**`#687`: I quoted the sentence that refutes it and did not notice.** The filing argues the exit-6
+remedy is unreachable, and its third support — listed third, *"in order of cost"*, which an earlier
+draft of this paragraph called its lead and thereby inverted the filing's own ranking — is that *"the worktrees are about to be removed by the
+very next sub-step"*. Exit 6's own row says *"SKIP this branch (**worktree, lock and branch
+intact**)"* (`review-close/SKILL.md:2190`) — **which I cited in the entry** — and the rationale
+blockquote adds that refusing *"loses nothing instead: … the worktree stays — which is what makes
+the remedy reachable"*. The cost the filing measures is real and already priced in shipped text
+(*"Any commit after `/document-work` trips this … That deferral is real"*, with an
+acknowledge-and-proceed flag deliberately refused). So it is a price, not a defect, plus one named
+member of `Q-333`'s missing post-fix shape — folded there.
+
+**`#684`: the mechanism is one line above the rule.** The filing says the §6 line and the changelog
+bullet "paraphrase", so no substring match can work. `:3054` generates the content *"from `type` +
+`summary` + `roadmap_ids` + `review_task_ids` + `date`"* — not a complete field list for every
+destination, since `:3072`'s bugfix bullet also needs a `<Short Title>` those five do not supply,
+but complete for the half that matters: both records take the same `summary` in the same pass, so the string is byte-identical by construction and the
+prescribed match fires. The reporter's records almost certainly diverge because that consumer's
+history was not written by one stock pass — **inferred, not verified**: this phase has no access to
+that history, and the circumstantial support is that the quoted §6 line reads `Complete — ` where
+`:3056` prescribes `Complete:`. **The residual is narrower and stands:** the rule is silent on a legacy
+or hand-edited bullet, and the filing's own id-grep fallback over-reports (it scored a task present
+on an incidental mention inside another entry's prose). `Q-578`'s leg (1) now says that instead.
+
+**`#680`: my own sentence was the false one.** I wrote *"The ff-merge between capture and check is
+prescribed, not stray."* `grep -rn 'merge --ff-only' core/skills/ core/companion/scripts/` returns
+**9 hits across 4 files**, none of them under `core/skills/claim-task/` — and the four-item
+enumeration this paragraph first gave omitted both `_shared/permission-guard.md` hits, the one file
+`/claim-task` routes its reader into, i.e. in the direction that flattered the conclusion. Step
+7a captures HEAD, prints a line, spawns and checks with no mutation between (`:714`–`:730`). The
+ff-merge is GDP's own memory, which the filing says in its own words. The check is still a proxy
+broader than its property and the 0-ahead hardening is still cheap, so `Q-574` survives — **demoted
+to § Low**, reframed, and carrying the refutation.
+
+**`#683`: `Q-530` already carries `#595`, and `#595` is the better report.** It pins the lock to
+**the session's own parent `claude` process** (`ps -p <pid> -o etime=` at 03:53:41 against a
+644-second agent run, retried three times across one close), so the lock cannot clear *while the
+close runs* — sharper than `#683`'s "still held 40 minutes later". `#683` still earns its fold: it
+answers `Q-530`'s two closing questions and lets the third arm be **written** rather than
+researched.
+
+**The transferable rule, and it is not "read the brief".** I did check the queue — that is why
+`#701`, `#704` and `#688` were caught as duplicates. **What I did not check is the artifact that
+records dispositions nothing has acted on yet**, and a disposition is not an entry: three of these
+four were verdicts *not to file*, so by construction they leave no `Q-NNN` for a queue scan to
+find. **A triage's prior art lives in two places, and the one holding the negative verdicts is the
+one a queue grep cannot see.**
+
+### The two batches were observed against different trees
+
+GDP's `.claude/sysop.lock` reads **`da1f186`** (Phase 318), `updated_at` **2026-09-20T16:28:55Z**;
+its git history shows the preceding state was **`9ab74fb`** (Phase 307), taken 2026-09-17. So the
+09-19 batch was filed against **Phase 307's tree** with 308–318 landing after it, and the 09-20
+batch against **Phase 318's tree** with only 319–320.1 after. The first needed an already-fixed
+check and the second barely did. **All 17 reproduce at `7986aa2`**, each verified by opening the
+cited site rather than matching an id — Phase 303's `Q-326`/`Q-486` lesson, where an id-keyed
+triage would have refiled two defects that were already fixed.
+
+### What the triage found that the filings did not say
+
+**`#700` named one write site and there are two.** `grep -rn plan_summary core/` returns
+`claim_task.sh:1416` **and `batch_work.sh:465`** — and no reader anywhere in `core/`. Both lock
+writers emit the placeholder; the field it occupies is read by nothing.
+
+**`#703` is a Phase 309 regression.** `git log -S VENDOR_ALT -- core/companion/scripts/self_check.sh`
+returns exactly **`0ffb6fa`**, four phases ago, shipped to GDP in the 307→318 update they took that
+morning — which is why it surfaced as *"`self_check.sh` **now** reports"*. The filing does not make
+that connection, and it changes the framing: the probe whose job is certifying a healthy install
+has been calling one broken since the phase that added it, and **the remedy it prints would break
+hook resolution if followed**.
+
+### Dispositions
+
+**Eleven filed as `Q-568`–`Q-580`, with `Q-572` and `Q-577` drafted and withdrawn pre-commit** (the
+`#687` and `#683` folds above). Those two ids are **not reused** — the `Q-519` precedent from Phase
+303 — and this paragraph is why a reader meets a gap. Four § High (`#708`, `#707`, `#705`, `#679`),
+six § Medium, one § Low (`Q-574`). `#684`+`#689` are one entry (`Q-578`): two contracts in one Step
+4c writer, one phase closes both — the `Q-485` clustering rule.
+
+**`#701` and `#704` were closed as duplicates, their material folded into the entries that already
+carried the defect** — `#701` into `Q-473`/`Q-485`(2) (already carrying `#591`/`#603`/`#622`/`#634`),
+`#704` into `Q-528` (`#605`). **Neither closure is a discard.** `#701` is the first report to
+*measure* the omitted section (`## Conventions` at 16,175 chars against a 54,742 + 5,834 floor),
+the first where **three of five lenses reported the gap unprompted**, and the first to re-run
+widened and get three blocking violations the narrow run was never asked to look for. `#704` is the
+first to arrive with **named remedies**, which `Q-528` did not have.
+
+**`#688` is kept OPEN, because it refutes `Q-316`'s premise rather than repeating it.** `Q-316` says
+Phase 6a's plan-only agents *"return their plans into orchestrator context"*. On a four-task batch
+they reached the orchestrator **not at all**: the hand-back report *is* the final message, so a plan
+emitted before it sits where the parent never looks, and all four agents substituted a prose
+summary at roughly a quarter length, dropping the `file:line` citations the review depends on.
+`auto-build/SKILL.md:976` therefore names a location the parent cannot read.
+
+**`#705` was SPLIT OUT rather than appended, on the `Q-486`-out-of-`Q-485` precedent.** It shares a
+step with `Q-485`(4) (`#631`) and is a different mechanism with a measured harm: `#631` is agents
+writing scratch into their worktrees, *contained by isolation*; `#705` is sibling lenses colliding
+on the shared `/tmp` the prompt names at `:656`, one lens watching its capture change from 1,605
+lines of its own target to 1,084 of another's — **the reporter's measurement of its own run, not
+anything observable from this tree**, which `Q-570` said in the phase's own voice until the round
+noticed every sibling entry attributes and that one did not. That is `Q-490`'s wrong-tree review arriving through
+the scratch path, and appending a § High to a § Medium leg is what that precedent exists to avoid.
+
+### One thing recorded rather than claimed
+
+**`#679`'s underlying harness fact is the reporter's measurement, not this tree's.** Both *sites*
+are confirmed by reading them — `auto-build/SKILL.md:1048` orders the call, `plan-review/SKILL.md:107`
+argues from it happening — but *"`ExitPlanMode` is not available inside subagents"* is a claim about
+a spawned agent's tool set, evidenced by three independent executors and nothing here. `Q-571` makes
+confirming it a precondition of building the fix, and the brief independently says the same
+(*"probe the harness refusal first; `general-purpose` is declared `Tools: *`"*).
+
+### Author-side pass — rule 2, which is the whole of it for a phase like this
+
+**Rules 1, 3 and 4 bind nothing here** and saying so is the point rather than an excuse: the change
+ships no guard to mutate, prescribes no command to run, and moves no delimiter or predicate over
+text someone else writes. **Rule 2 — *re-read your own new prose against the code it describes* —
+is the entire exposure**, because this phase's product is thirteen claims about what shipped files
+do, and a wrong one is the Phase 153 class: a falsehood sitting in the record before any reviewer
+arrives.
+
+**Run mechanically rather than by re-reading**, by extracting every `file:line` in the new and
+extended entries and printing the line each one resolves to. **55 distinct citations; three
+defects, all mine:**
+
+1. **`:3059` was wrong by five.** Both `Q-578` and the `#684` paragraph above cited it for *"generate
+   the doc content from `type` + `summary` + …"* — the sentence the whole refutation turns on. It is
+   **`:3054`**; `:3059` is a blank line. It was read out of a `sed -n '3040,3062p'` window and never
+   line-resolved, which is exactly the shape rule 2 exists to catch, in the one citation that
+   carries the phase's sharpest claim.
+2. **`Q-574` cited a range whose endpoints are both blank lines** (`:714`–`:730`). The span did
+   contain what I said, so nothing was false — but a citation a reader cannot land on is not a
+   citation. Now `:715` (the capture), `:726` (the spawn line) and `:807` (the check).
+3. **`Q-473` carried coordinates into `/review-close` Step 2b that had drifted +9** since Phase 281
+   filed them — lines 375, 393 and 411 against a step now at `review-close/SKILL.md:384`, `:402`
+   and `:420`. **Not introduced here**, but this phase appended to that exact line, so a reader
+   would meet my text and dead pointers in one entry. Fixed as tier 1 (same line the phase was
+   already editing, mechanical, each re-derived by grepping the quoted text rather than by adding
+   9). **The count in this item read "three" when it was written; the round established it was
+   three of five** — see below.
+
+**⚠ And the round falsified defect 3's own closure, which is the most useful thing this phase
+produced.** The entry carried **five** of those coordinates, not three — one of them twice, another
+twice, the third once — and the sweep fixed three. Each replacement was anchored on a single
+*spelling* of its coordinate (the path-qualified form for one, the `at `-prefixed form for the
+other two) and asserted that spelling occurred exactly once, which was true while the possessive
+and `per `-prefixed occurrences of the same two numbers went unmatched. **The sweep's own
+output had printed both survivors** — one resolving to a bare `PY` heredoc terminator, the other to
+a `See REFERENCE.md` line — and I read past them as heuristic noise. **A citation-drift repair
+anchored on a spelling is the same measurement error as the drift it repairs**, and the pass then
+declared the class closed. This is the exact shape of the standing caution *a grep's form is the
+measurement*, committed inside the fix for a measurement defect, by the pass that exists to catch
+it. The number to carry is not "three defects": it is **three found, two missed, and a completion
+claim that was false when written**.
+
+**What the pass could not reach, stated rather than left implied:** it verifies that a cited line
+exists and says what the entry says it says. It does not verify that the *disposition* built on it
+is right — and the four dispositions this phase got wrong were all wrong for reasons no citation
+check could see. That is the round's job.
+
+### The standing call, and why filing did not breach it
+
+**`tools/NEXT_SESSION_PROMPT.md` carried, and this phase forwarded, a sentence its own product
+contradicts:** *"`#679–#689` in `wade-cms/sysop` are open by Wade's standing call: they stay as
+GitHub issues and the phase that takes one files it then."* This phase filed eleven `Q-NNN` entries
+for exactly those issues with no phase taking any, and the first draft of the new brief copied the
+sentence forward unchanged. The round caught it, correctly, as a contradiction with no
+reconciliation anywhere in the record.
+
+**The reconciliation is that Wade asked for this pass and chose its shape.** The session opened on
+*"Triage recently submitted issues from GDP on the private repo"*, and when the disposition table
+was put up as a menu the answer chosen was the option described as filing the new `Q-NNN` entries,
+extending the existing ones, and closing the duplicates upstream. A standing default is superseded
+by an instruction, not breached by one. **What was genuinely wrong is that nothing said so** — a
+reader meeting the brief and the queue a month from now would find a rule and eleven violations of
+it. The brief now records the supersession rather than repeating the default, and the rest of the
+call is unchanged: the issues that were not duplicates stay open.
+
+**Note also that filing inbound GDP issues as queue entries is the established shape, not an
+exception** — `Q-528`–`Q-537` are Phase 303's inbound triage, `Q-473`/`Q-475` are Phase 281's. The
+standing call is about not *pre-filing* the ones nobody has looked at yet, which is precisely the
+state this phase ended.
+
+### Adversarial round — two lenses, one round, both placed
+
+**Governor: two lenses, one round.** The change ships no behaviour — `core/` is untouched — so the
+third-lens condition (behaviour *plus* a numeric record) does not hold, and the call is recorded
+rather than assumed. **Round dimension 10 binds nothing here**: the phase adds no prose to any
+skill runner.
+
+**Both lenses were placed and both echoed.** `git worktree add --detach 412de11` into directories
+outside the repository, `.venv` symlinked into each, a private `TMPDIR` per lens, and both returned
+`412de111878bac1359ed04edef13e83eef6b7e2f` before their first finding. Local git config was
+snapshotted before the spawn and compared after. Lenses: **dispositions** (are the verdicts right,
+and is there prior art still unfound) and **claim truth** (does every citation, quotation and
+number hold).
+
+**Seventeen findings, every one verified against the tree before acting on it; two HIGH from each
+lens; none rejected.** The two that matter most are both about this phase's own record rather than
+about the issues:
+
+- **A fabricated citation in `Q-580`** — *"its § Report-and-exit integrity requires…"*, asserted
+  twice, for a section with **0 hits in `core/`**. `Q-332` records this exact false-citation class
+  and predicted the instance in as many words: *"a future phase citing 'the report-and-exit rule'
+  would have to write it first."* The underlying argument is sound and is now stated as what it is
+  — a discipline applied all over the skill with no written home.
+- **The author-side pass's own completion claim was false** (above).
+
+The rest: the `Q-528` fold's preferred remedy does not close the case that entry is titled for and
+dropped `#605`'s explicit must-not-fix-it-this-way constraint; `Q-568` cited `:1531` for an
+assignment that governs a different step (`:1222`, byte-identical, which is why it was easy); the
+standing-call contradiction; `Q-570` and `Q-316` needed the provenance discipline `Q-571` already
+had; `Q-570` and `Q-485`(4) share one fix and neither said so; `Q-574`'s grep enumeration named 4
+of 9 hits and omitted the file `/claim-task` routes into; *"a quarter again as large"* is 26.7%,
+not 125%; plus four citation-span and quotation defects.
+
+**Two things the lenses checked and could not break**, recorded because a refutation that survives
+is worth as much as one that falls: all three of this phase's own refutations (`#684`, `#687`,
+`#680`) held under attack, and all four of the brief-comparison rows quote the parent revision
+verbatim.
+
+## Phase 322 (executed 2026-09-23 — the § G re-measurement: the tripwire is above 0 on both sides, and whether the tier reduced filings cannot be read)
+
+**`date` read 2026-09-23 08:23 MDT, so the § G window was open and the re-measurement was the
+phase**, as `tools/NEXT_SESSION_PROMPT.md` directed. `tools/FIX_IN_BRANCH_BASELINE.md` had fixed
+the arithmetic thirteen days ahead, so that the session seeing the result would not choose the
+method. Every figure below lives in that file's new § *The re-measurement — Phase 322*. This entry
+records what was decided, in what order, and what the result means.
+
+### The order was the method
+
+The file fixed the arithmetic and named two scripts. It left four things open: the after-window
+bounds, how to re-run a baseline the consumer script cannot bound, whether the 2026-09-23
+non-phase round's twelve notes count, and any instrument for the tripwire. **All four were
+decided and committed as `cf439f7` at 08:29 MDT, before either script ran against the
+after-window.** A supplementary instrument, `tools/baselines/fix_in_branch_remeasure_supplement.py`,
+went into the same commit. It had been exercised only on the baseline window, with one exception, disclosed next.
+
+- **Sysop: Phases 276–321** against the recorded 256–275. The file's own mid-window marker counts
+  276 as live.
+- **The twelve non-phase notes are out**, for consistency rather than convenience. Their ten
+  sibling Q-entries are not in the filing count, so subtracting the notes would subtract a
+  population the count never held.
+- **The tripwire** is a vocabulary scan with every hit classified by hand.
+- **One disclosure.** While exercising the supplement I saw two days of after-window consumer
+  sink A: 20 items. It is recorded in the pre-registration.
+
+### What the file could not have known: GDP armed the tier two days early
+
+**GDP put the fix-in-branch stanza in its own `CLAUDE.md` at `dba3ad94`, 2026-09-07 16:35 MDT.**
+That is two days before this repo's tier landed and before the baseline file was written. So the
+file's GDP cell, *"`## Also fixed` lines per branch: 0 — same"*, was false when written, and the
+recorded consumer baseline spans two tier-on days. It was found while preparing, before any
+after-window run. The pre-registration moved the consumer baseline to a clone at `c950887b`,
+which carries no stanza. The clean re-run reads **115** machine-surfaced where the recorded
+baseline read 127. The round then showed that five of the 115 were moved entries, not new ones,
+so the true figure is 110. The stale cell is annotated in place.
+
+### The result, as the round left it
+
+**Only the tripwire gives a robust reading, and it is above 0 on both sides under every reading:
+Sysop 3 / 6 / 8 and GDP 1 / 2 / 3**, counted as content-or-reversal, plus bound breaches, plus
+record defects. So the file's stop condition applies, and that is `Q-591`.
+
+**Whether the tier reduced filings cannot be read from these numbers.** My first draft said
+filings per close *"fell about a quarter on both sides"* and that the remainder `Δ − A − C` *"is
+negative on both sides."* **The round falsified both as stated**:
+- **Sysop: the fall is baseline-dependent.** 256–275, the recorded window, was the pre-tier high.
+  Phases 236–255 filed at **2.25** per phase against the after-window's 2.28, so no fall is
+  established.
+- **Sysop: the remainder's sign depends on choices.** It is −32.4 at the pre-registered reading.
+  With sink A read item by item, about 15 of its 39 bullets are genuine adjacent fixes, which
+  gives −8.4. Counting the five sub-phase PRs as closes as well gives **+7.1**.
+- **GDP: the fall continues a decline.** Corrected for two baseline defects, it is 1.21 → 0.85
+  per close. An earlier pre-tier window reads 2.27.
+- **GDP: the sinks exceed the fall whatever sink A is.** The 61 in-population notes alone exceed
+  `Δ`, so the file's premise, that every fix and every note is a filing that would otherwise have
+  been made, fails there.
+
+**The file's one directional prediction failed too.** It expected the overlap share to fall
+faster than the total. It held at 50%.
+
+### The tripwire, and the stop condition
+
+**Every hit the scans returned was read, and the round found where the scans were short.** The
+consumer scan read only the bodies of ids added in the window, and sink A counts every body
+carrying the heading. Seventeen bodies were never opened, and one of them holds GDP's content
+hit, `FEAT-PRICING-LAUNCH-OFFER`. The round also found two hits I had read and classified wrong:
+- **Phase 288 → `Q-493`.** A shipped skill caveat rewritten in-branch was found after merge to
+  offer an alternative that cannot work.
+- **GDP #848.** Step 2b blocked a close on an in-branch fix that broke two predicates, and the
+  human ruling **widened the bound** to keep it. I had recorded the carve-out as *"used in the
+  same close"*, with the order backwards.
+
+It removed one I had counted: `FIX-PINNED-SERIES-SIGNOUT-NO-ABORT`'s finding came from the plan
+review, before any fix existed.
+
+**This phase does not act on the stop condition beyond filing.** `Q-591` (§ High) carries the
+counts, the composition and four candidate tightenings mapped onto the cases. My first draft
+called the composition *"self-certification, not reach."* The round showed it is not one thing:
+- reach past the bound, 281 and #848;
+- predicates asserted and found false, 280 and 294;
+- a never-tier-1 fix unflagged, 288;
+- wrong or incomplete content with no gate, 321 and FEAT-PRICING;
+- a fix lost with its parent, 312.
+
+Choosing among the tightenings changes a ratified rule and shipped skill bodies, so **it is
+Wade's call**. `Q-459`, the close-time extension of tier 1, is marked blocked by it.
+
+### Instruments that were wrong, and in which direction
+
+- **The verbatim Sysop sink A command** misses thirteen phases' variant headings and counts
+  non-fixes: bookkeeping, tier-2 extensions, deleted notes, and a bullet reading *"Nothing."* So
+  its 39 is **neither a floor nor a count of fixes**, and the item-by-item reading is about 15.
+  A widened match's first cut took 21 phantom items from two headings quoted inside a Phase 280
+  code fence. The author-side corpus check caught that before the commit.
+- **The committed consumer script counts an entry that moved inside `tasks/index.yml` as
+  added.** Five of the clean baseline's 156 ids were moves, so 115 machine-surfaced is 110. The
+  recorded 127 from 2026-09-09 is affected too. That debt is in `Q-591`.
+- **My GDP close boundary was read at the wrong tree.** It was read at current `HEAD`, where
+  five 09-07 closes that happened after the tier armed sat in the baseline. Read at `c950887b`,
+  the baseline has 91 closes, not 97.
+- **My consumer counter took 4 phantom items** from examples fenced inside GDP's
+  `tasks/schema.md`, printing 116 where 112 is real. It is now fence-aware.
+- **My consumer tripwire scan had the wrong population**, as above. It now scans the union.
+- **I applied the pre-registered C population rule on one side only.** On GDP it keeps 61 of
+  the 79 notes, not all 79.
+- **`b-ceiling` is not the ceiling the file calls it**: 10 reported, 39 modified lines. The Sysop
+  and commit-based attribution instruments disagree on the baseline, 62 against 68, so each is
+  compared only with itself.
+
+### Also fixed
+
+- `tools/FIX_IN_BRANCH_BASELINE.md`: the GDP `Also fixed: 0` cell, false when written, is
+  annotated in place.
+- `tools/FIX_IN_BRANCH_BASELINE.md`: the sink A and consumer sink C commands each gain a comment
+  stating the direction they miscount.
+
+### Author-side pass — the rules read for a phase whose product is numbers
+
+**Rule 1 binds in kind rather than as written.** No shipped guard was added. The instruments are
+this phase's guards, though, and their assumptions were attacked.
+- **The attribution instrument** was attacked by running a second one that shares nothing with it.
+  The two disagree on the baseline, 62 against 68. The mechanism was read, not guessed: a phase's
+  squash commit also carries the *previous* phase's round filings, such as Phase 263's commit
+  adding `Q-404` and `Q-406` *"by Phase 261/262"*, and inbound batches the text regex does not
+  attribute, such as Phase 281's `Q-470`–`Q-475`. So they are different proxies, and both give a
+  fall of 26.4–26.5%.
+- **The windows** were attacked with a sensitivity bound on each side: 278–321, and GDP from the
+  Sysop tier's arrival. Neither changes the sign of anything.
+
+**Rule 2 — re-read the new prose against what it describes — found four defects in my own
+figures**, all before the commit:
+- *"at least ten phases"* wrote variants; the command says **thirteen**.
+- The widened sink A was **92**, not 113.
+- Consumer sink A was **112**, not 116.
+- *"50 bodies"* was **47** with items, out of 49 carrying the heading.
+
+Only the 116 → 112 correction touches the GDP remainder, moving it from −170.7 to −166.7. The
+round later corrected the GDP figures again; see the next section.
+
+**Rule 3 — run what the change prescribes.** The supplement's seven usage lines were each run as
+written. The brief's new derive line, `grep -c 'id: Q-591 ' REVIEW_CHECKLIST.md`, was run and
+returns 1.
+
+**Rule 4 — a boundary over text someone else writes — is where this phase's defects were.** Both
+heading counters run over trackers other writers produce. A corpus check of every matching
+heading, in and out of fences, found **25 phantom items**: 21 from two consumer headings quoted
+inside a Phase 280 code fence, and 4 from examples fenced inside GDP's `tasks/schema.md`. The
+consumer counter became fence-aware, safe there because every body carrying the heading has
+balanced fences. The Sysop sink A command stays fence-blind, on the file's own measured grounds,
+and is now annotated as a floor.
+
+### Adversarial round — two lenses, one round, both placed
+
+**Governor: two lenses, one round.** The phase ships no behaviour, because `tools/` never ships,
+so the third-lens condition does not hold. The call is recorded, not assumed. **Round dimension
+10 binds nothing**: no skill runner was touched. Both lenses were placed with
+`git worktree add --detach 293930e` outside the repository, `.venv` symlinked in and a private
+`TMPDIR` each. Both echoed `293930eb507ebe2d23b2b335ed59a19da0939962` and their model id,
+`claude-opus-5-5`, before their first finding. Local git config was snapshotted before the spawn
+and compared after. The lenses were **numbers and instruments**, and **classification and claim
+truth**.
+
+**Every finding was verified against the tree before it was acted on.** None was taken on the
+lenses' agreement. **None was rejected outright.** Two were narrowed. Lens B's M1, Phase 318 → 319,
+is real as a fact, but the correction was the author's own fix, not a finding, entry or note, so
+it is recorded as considered and not counted. Lens B's L8, that `Q-591` sits under *"live defects
+in shipped code,"* is answered in the entry rather than moved.
+
+The findings that changed the result:
+- **Sysop "fall" is baseline-dependent** (lens A, HIGH). Re-run: Phases 236–255 read 45, or 2.25
+  per phase, and commit-attribution reads 2.30.
+- **The consumer tripwire scan missed 17 of 49 bodies** (both lenses). A content hit sat in one
+  of them, and all 17 were then read.
+- **Three missed hits**: Phase 288 → `Q-493`, GDP #848 and FEAT-PRICING (lens B, HIGH). Each was
+  read at its source, including the squash message of `3d8982f0` and `git log -S` on the caveat.
+- **One wrongly counted hit**, FIX-PINNED (lens B). The squash message attributes the finding to
+  the *"adversarial plan review."*
+- **Sink A's 39 is not a floor** (both lenses). All 39 bullets were then classified by me, which
+  gives about 15.
+- **Two GDP baseline defects**: moved ids and the close boundary (lens A). Five ids existed at
+  base; `c950887b` holds 91 closes and `dba3ad94` 92.
+- **The GDP C population rule was not applied** (lens A). 61 notes name a task and 18 do not.
+- **The composition thesis was false** (lens B).
+
+The rest were wording and completeness:
+- The GDP sink A was called *"pre-registered"* when it came from the corrected instrument.
+- *"The last three moved the remainder"* when one did.
+- *"Phase 312's ten went back"* when most did.
+- The supplement's *"exercised only on the baseline window"* beside its own exception.
+- The unpublished list of the 13 excluded notes.
+- *"Three skill bodies"* when option (a) edits a fourth.
+- Sink C counting survivors.
+- `b-ceiling` not being a ceiling.
+- The brief's list-item continuation lines lacking the blockquote prefix.
+
+**No second round.** The fixes are corrections to a record and to two subcommands of a
+maintainer-side script. Each was verified by re-running it. No mechanism was replaced and no
+guard module was rewritten, which is the governor's condition for a second round.
+
+**What the round did not change.** The pre-registered block is untouched between `cf439f7` and
+this commit, as lens B checked. The Sysop baseline reproduces exactly. The tripwire is above 0 on
+both sides, now under every reading rather than only the widest.
+
+**Bookkeeping, deliberately not listed under `Also fixed`.** Appending this phase's ledger row
+moved two derived figures that `tests/test_ledger_stats.py` pins. `AUTHOR_DEFECT_REGISTER.md`'s
+population line now reads 184 rounds and 162 numbered phases, and the ledger's reading note reads
+162. They are consequences of this phase's own row, not adjacent fixes. This phase's item-by-item
+reading of sink A excludes exactly that kind of bullet.
+
+## Phase 323 (executed 2026-09-23 — fix by default: the tier, the filing bar and the notes ledger are retired)
+
+**The phase was `Q-591`, and its design was Wade's before it opened.** Phase 322's
+re-measurement fired the § G tripwire, and the baseline file's pre-written answer was to
+tighten the bound. Wade decided the opposite the same day:
+- fix findings by default, with close-time review as the safety net;
+- three outcomes: fix, task, drop;
+- ask before filing when an answer would unblock the fix;
+- retire `tasks/notes.md`;
+- judge the rule by net open work per close.
+
+This phase built that across the shipped skills, this repo's own rule, and the measurement.
+
+### Four decisions taken at the open, by menu
+
+The brief left four questions the entry did not settle. Each was asked before any edit, and the
+answers are recorded as given:
+- **Never-list: "Exactly your three."** Migrations, production writes, and auth or payment logic.
+  I recommended keeping the gate-weakening backstop and the declared security-critical files as
+  well. Wade chose the three, so prompt bodies, declared security files and the gate-weakening
+  rule all leave the list, and close-time review is the net for them.
+- **Ask step: "Orchestrator asks, then fixes"** (my recommendation). The `/claim-task` executor
+  is a subagent with no human to ask. **Both shapes built for it were disqualified, one per
+  round**, and Wade's second answer, *"File with the question"*, replaced it. The round
+  sections below have the account.
+- **Sysop notes: "Freeze now, triage next phase."** § *Notes* is frozen and handed to `Q-592`.
+- **`Q-459`: "Next phase, not folded."** Two answers now both say *next phase*. Which goes
+  first is not settled, and the brief says so rather than choosing.
+
+### What changed
+
+- **The rule, at the three places an executor reads it:** `/claim-task` Step 7e item 2b,
+  `/auto-build` Step 7c item `3‑tier`, and `/document-work` Step 3. Each says:
+  - fix by default, with three outcomes;
+  - the never-list has three items. At an interactive `/document-work` only the human's answer
+    clears one, and an approved fix's `## Also fixed` line ends
+    `(approved: <date>, "<question>")`. The `/claim-task` executor and `/auto-build` have no
+    human to ask, so neither has an approval arm;
+  - the four reasons a finding cannot be fixed now, and extend an open task before filing a new
+    one;
+  - route a question to whoever can answer it;
+  - the ledger is retired, and a consumer's existing one is left alone.
+
+  The ledger-append paragraphs in both executors' record items are gone, and so is
+  `/document-work`'s "print the line" route.
+- **`/claim-task`:** the executor files an answer-blocked finding as a task on the branch, with
+  the question and both candidate fixes in it, and lists it in `<ARTIFACT_DIR>/questions.md`.
+  Step 8 reports those questions. It never asks or fixes, because this skill never
+  implements. The in-branch ask-and-fix is `Q-593`.
+- **`/document-work` Step 3** commits a fix or filing it makes itself, because Step 2 is its last
+  commit, and it re-stamps `branch_tip:`.
+- **`/review-close` Step 2d's `2‑also`:**
+  - check 2 is "no line concerns a never-list item without a recorded approval";
+  - check 3 is "reviewable in this close";
+  - sections are judged against today's rule. Every earlier bound was narrower, and the old one
+    is no longer stated anywhere a runner could apply it.
+
+  The shared-append-files section keeps its `notes.md` conflict handling. Two justifications
+  moved to `REFERENCE.md`.
+- **The readers of an existing ledger stay:** `/add-task`'s dedup and promotion, and the
+  stranded-body probe's `NOTES PENDING` partition.
+- **Docs:**
+  - `tasks/README.md` § *The notes ledger* (retired, never deleted, triage fix/task/drop);
+  - `tasks/schema.md` § *Also fixed*;
+  - `WORKFLOW.md` step 10 and the `2‑also` bullet;
+  - `WORKFLOW_GUIDE.md`;
+  - the scope-limit clauses in `/auto-fix` and `/auto-judge`;
+  - a dated monograph addendum that supersedes the 2026-09-13 tier paragraphs;
+  - `docs/history.md` moved to the past tense.
+- **This repo:** `CLAUDE.md`'s stanza is the same rule, with Wade's answer as the only way past
+  the never-list. `REVIEW_CHECKLIST.md` § *Notes* is renamed *frozen 2026-09-23*.
+- **The measure:** `tools/baselines/net_open_per_close.py`, plus a new section in
+  `tools/FIX_IN_BRANCH_BASELINE.md`.
+
+### The measure's first readings
+
+| window | net open per close | without non-phase filings | fixes per close |
+|---|---|---|---|
+| Sysop 236–255 | +1.15 | −0.05 | 0.00 † |
+| Sysop 256–275 (the recorded pre-tier window) | +2.10 | +1.90 | 0.00 † |
+| Sysop 276–322 (under the tier) | +2.33 | +1.90 | 1.81 |
+| GDP, tier armed → 2026-09-23 | +1.19 | n/a | 1.17 |
+
+† There is no `Also fixed` heading in the log before Phase 277, so those rows read zero by
+construction.
+
+**With non-phase filings set aside, the tier window and the recorded pre-tier window read
+identically, and an earlier window reads flat.** That is the reference fix-by-default is judged
+against. It is not a finding about the tier.
+
+### The round — three lenses, all placed at `37ed13b`
+
+Rules, guards, and record-and-numbers were placed with `git worktree add --detach`, and each
+echoed `37ed13bd…` and `claude-opus-5-5` before its first finding. **Every finding below was
+verified against the tree before it was acted on.**
+
+**Rules lens: 10 findings, 2 HIGH. All verified and fixed.**
+- **HIGH: my Step 8 told the orchestrator to make the fix.** The skill's frontmatter disallows
+  `Edit`/`Write`, and its line 12 says it never implements. The fix would also have skipped
+  every verification item the executor is bound to run. Replaced by a follow-up executor, which
+  round 2 then disqualified (below).
+- **HIGH: a fix made in `/document-work` Step 3 lands after the skill's last commit**, so the
+  branch is dirty and `/review-close` skips it. My diff had deleted the one sentence that stated
+  that hazard. It now commits and re-stamps.
+- **MED: the ask arm offered "permission for a never-list item" while four sites held the list
+  as absolute**, so an approved fix would have been flagged at close as a breach. Wade's `Q-591`
+  text includes that permission, so the approval arm went in. After round 2 only the
+  interactive `/document-work` keeps it.
+- **MED: a skipped question was filed into the main checkout, uncommitted.** It is now filed by
+  the follow-up executor, in the worktree.
+- **MED: "judge against the bound in force when claimed" had become unexecutable.**
+- **LOW:** `questions.md` had no lifecycle; a batch has no body; "directly after
+  `## Test decision`" was ambiguous; check 2 said "path"; and one bullet carried editor-facing
+  prose (dimension 10).
+
+**Record lens: 16 findings. All verified; 14 fixed, 2 disclosed.**
+- **HIGH: the orchestrator finding again, plus my record's claim to have checked it.** My rule-2
+  re-read had checked `/document-work`'s tool restriction and not `/claim-task`'s.
+- **MED: the published GDP fixes figure, 1.20, was wrong; it is 1.17.** I changed the counter's
+  item regex after that run and never re-ran GDP. That is the "numbers must come from a command
+  in the same edit" failure, in my own record.
+- **MED: "agrees with Phase 322 to within 2" was two errors cancelling.** The counter missed
+  Phases 302 and 305's ``### `## Also fixed` `` headings, and the window included Phase 322's
+  own items. Fixed: 276–321 now reads 92 and 113, Phase 322's numbers exactly.
+- **MED: the readings had undisclosed confounds.** They are now disclosed or printed by the
+  script:
+  - my non-phase disclosure said 10 items where `#725` added 22;
+  - the pre-tier reference was the high window;
+  - the "0.00 fixes" is an artifact;
+  - five N.1 point phases counted as closes.
+- **MED: three queue citations were stale after the 7-line shift.** `Q-052` has two and `Q-525`
+  one; one of `Q-052`'s was already stale before this phase. All three are re-pointed.
+- **MED:** Wade's notes answer was recorded without its "next phase".
+- **LOW:** a self-contradiction in the brief, `docs/history.md`'s present tense, the trailer
+  rationale (next section), the monograph's "two weeks later" (the addendum it follows is dated
+  09-13), an undeclared edit (*Also fixed*), a broken blockquote, and "as quoted" for "as
+  fenced".
+- **Disclosed, not changed.** The monograph's 316 → 341 is the re-measurement's own count, not
+  this instrument's. And open work counts every section. The lens flagged that as inflating
+  levels; I kept it on purpose, because a pile the count skips is one a finding can be moved
+  into. It moves no delta by more than 1.
+
+**Guards lens: 59 rows. 9 of 50 killed by a meaning guard, 39 survived, 5 false kills.**
+- **The survivors were nearly all one move:** keep every pinned phrase, and widen the rule with
+  a clause or a sentence in new words. Examples: the never-list plus "CI configuration", "Drop it
+  as well when a fix would take more than an hour", and the ledger re-added at sites no guard
+  read.
+- **The response, per class:**
+  - the decided text at 18 spans is pinned by whitespace-normalized hash, so any edit, a correct
+    one included, fails until the pin moves in the same commit;
+  - a tree-wide, case-insensitive containment check covers `notes.md` over every shipped file;
+  - the reversal screen now reads the raw block, not the blockquote-stripped one;
+  - `live_prose` hides HTML comments;
+  - re-wrap and `N)` tolerance where the lens showed false kills;
+  - `test_no_shadowed_tests.py` reads class bodies and assignments;
+  - a scratch-repo test runs the instrument's `sysop()` end to end.
+- **Re-running the lens's own battery against the fix: 35 killed, 3 survived, 4 false kills,
+  13 stale.**
+  - The 3 survivors were the instrument paths the scratch-repo test now kills. Each was checked
+    by hand, and the instrument was restored from a held copy.
+  - 13 anchors went stale, because my fixes changed their text. Most sit inside pinned spans.
+  - Of the 4 false kills, 3 are the pins' declared cost. The fourth is a `~~~` fence tripping
+    the pre-existing orchestrator guard. **Dropped:** nothing ships a `~~~` fence there.
+- **Not closable in kind, and recorded rather than labelled "by design".** A paraphrase that
+  re-creates the ledger without naming the file, at a site outside the pins, needs a judgement
+  about meaning that no pattern encodes. That is `Q-560`'s class, extended in place with this
+  instance.
+
+### Round 2 — two lenses, both placed at `e44b5fb`
+
+The round was warranted because the fixes replaced a mechanism (the Step 8 ask) and added a guard
+layer no fresh reader had seen, which is the governor's stated condition. Both lenses echoed
+`e44b5fb…` and `claude-opus-5-5`. **The full suite passed at `e44b5fb` (7,514 passed, 207
+skipped) while both found real defects.**
+
+**Behaviour lens: 10 findings, 1 HIGH, all verified.**
+- **HIGH: the follow-up executor could not carry out its prompt, and its failure read as success.**
+  It got no body path, no hard constraints and no `PHASE:`. So its envelope never became
+  `<CLAIM_ID>.exec.json`, and Step 8's first-hit read took the first executor's `EXECUTED`.
+- **MED: related defects in the same shape.** The second envelope would overwrite the first. A
+  resume could skip a failed follow-up. "Recorded approval" had no form. And the record
+  claimed the approval arm was "at every site", while `/auto-build`, `WORKFLOW.md` and the guide
+  lacked it.
+- **LOW:** `/document-work`'s "Step 2 is the last commit" sentence; the trailer on an ad-hoc
+  `main` run; a misfiled `REFERENCE.md` subsection; an overclaiming today's-rule sentence; three
+  record drifts.
+
+**The in-branch ask for `/claim-task` had now failed two rounds**, so I stopped rebuilding it and
+put the choice to Wade. His answer was *"File with the question"*: the executor files the finding
+with its question, and Step 8 reports it. Everything else above is fixed. The approval arm now
+has a concrete suffix, `(approved: <YYYY-MM-DD>, "<the question as asked>")`, which check 2
+reads.
+
+**Guards lens: 62 rows. 5 of 49 killed on meaning, 6 more only incidentally, 38 survived, and
+4 of 8 negative controls were false kills.** Wade's second answer was *"Fix closable, file
+rest"*, with no third round. Closed with a pattern:
+- **A decoy copy of a pinned span, placed earlier in the file, beat the pin**, because
+  `slice_between` takes the first occurrence. Every span's start anchor is now asserted unique.
+- **The allowed ledger spans were unpinned.** They are pinned now, along with whole
+  sections at the adjacency sites: the CLAUDE.md conventions section, both hard-constraint
+  lists, both record items, the `/document-work` carve-out, the README skills table, the
+  `2‑also` bullet in `WORKFLOW.md`, and the whole schema section. 27 spans in all.
+- **11 of 11 instrument mutations survived**, because the end-to-end test never asserted the
+  headline figures and its FROM side was empty. It now asserts every printed number from a
+  non-empty FROM, and `consumer()` has its own end-to-end test.
+- **`_pin_norm` erased structure.** An indented code block and a dedented list item kept the
+  hash. It now keeps each paragraph's and each list item's indentation.
+- **Containment gaps:** suffix-less files are read, format characters are stripped, and
+  `tasks/notes` without `.md` is caught.
+- **The shadow detector missed five rebinding forms** (`del`, a nested `if`, an import alias, a
+  tuple target, a `for` target). It now walks nested blocks and every binding form.
+- **False kills:** end anchors that moved under a legitimate edit, a `-`-only field regex, and
+  history pages.
+
+**The lens's own battery, re-run against the guards after these fixes, first read 43 killed and
+4 survived.** The four closures:
+- a one-line paragraph indented into a code block: spans now keep their first line's
+  indentation;
+- an instrument fixture whose non-phase share was zero: it now carries +1, −1, +1;
+- a `skip` marker on the pin test: markers are now forbidden in the module;
+- an instruction written into `docs/history.md`, which I had exempted wholesale to fix a false
+  kill: the exemption is withdrawn.
+
+Two more rows were caught only by the census. The pin now covers the whole `2‑also` arm, not
+checks 2–3. **Final re-run, at `bc47cb5`:**
+- **49 of 49 scored rows killed**, with 2 rows not run because my text changes had staled their
+  anchors;
+- **3 false kills.** Two are declared costs: a future historical mention of the ledger needs its
+  own span, and moving a pinned section needs a re-pin. The third is the census's pre-existing
+  any-edit check.
+
+The author battery reads 24/24 with 4/4 controls green. **That is the lens's battery exhausted
+against its own rows, not coverage.** A fresh lens would write new ones, and a third round was
+declined by Wade's answer.
+
+**Needs judgement, filed under `Q-560`:** new rule text in a section or file nothing pins, and a
+ledger renamed to another filename.
+
+### Also fixed
+
+- `tests/test_no_shadowed_tests.py` (new): no test name may be bound twice in a module or class
+  body. My own rewrite of `tests/test_fix_in_branch_tier.py` had three new guards shadowed by
+  old copies kept further down the file.
+- `core/companion/tasks/schema.md` and `core/skills/document-work/SKILL.md` cited `/auto-build`
+  "Step 7c Sequence item 3b". The item is labelled `3‑tier`.
+- The two `claim-task/SKILL.md` citations in `review-close`: `:1305` → `:1311` and
+  `:1900` → `:1906`. Three in the queue: `Q-052`'s `:1720` → `:1726` and `:1893` → `:1942`
+  (stale before this phase), and `Q-525`'s `:1151` → `:1157`.
+- `tools/CONTEXT_THINNING_SPEC.md` § 8.1: Phase 318's paragraph moved from the quoted "the same
+  command reports" to prose, because the census test reads the first such quote as current.
+- `tools/NEXT_SESSION_PROMPT.md`'s verification caution cited *"105 of 108"* all-killed batteries,
+  already stale before this phase. With this phase's ledger row, `tools/ledger_stats.py` derives
+  107 of 110, and the brief, `tools/AUTHOR_DEFECT_REGISTER.md` and the ledger's own note now say so.
+
+### Pin-layer work the rule change forced
+
+- `tests/test_fix_in_branch_tier.py` is rebuilt around the new rule. The `2‑also` reader
+  fixtures, the schema, the no-invariant decision, the union licence and the stranded probe
+  carry over with renamed needles.
+- `tests/test_claim_task_orchestrator.py` gains one clause-bound `CONDITIONAL_ALLOWLIST` entry,
+  *"File a task only when it cannot be fixed now"*. The other two "only when" hits were
+  reworded instead.
+- `tools/reader_census/review-close.json`: 6 blocks were re-authored, all `runner`. One of them,
+  the `2‑also` judging sentence, was `mixed`, and its rationale moved to `REFERENCE.md` under
+  dimension 10. `editor`+`mixed` is **105,497**, 471 under `EDITOR_MIXED_CEILING` and inside
+  `CEILING_FOLLOWS_WITHIN` (642). **The ceiling was not touched.** § 8.1 publishes the figures.
+- No `Q-` citation was added to `core/`.
+
+### Author-side pass
+
+- **Rule 1 — one battery**, `tools/phase323_mutations.py`: 24 defect rows and 4 controls.
+  - First run: 18/24 killed.
+  - After closing five new-words survivors: 23/24.
+  - After fixing the shadowed guards: 24/24.
+  - After the round's pins, its controls became false kills and were rewritten as re-wraps and
+    `N)` markers: 24/24 with 4/4 green.
+
+  **The round's 39-of-50 is what that number was worth.**
+- **Rule 2 — re-read the new prose.**
+  - `/document-work` carries no tool restriction.
+  - `/sitrep` needs only one commit to carry `Doc-Work:`.
+  - Resume routing keys on named artifacts.
+  - **It missed `/claim-task`'s own `disallowed-tools`**, the lenses' shared HIGH.
+  - Its trailer rationale was wrong: `/document-work`'s rule binds only commits that step
+    writes. The trailer is kept because `/sitrep` and Step 2's check read it.
+- **Rule 3 — run what the change prescribes.** Every instrument command was run on four windows.
+  The first run took a Phase 275 end commit off `--grep '^Phase 275'`, which matched a body
+  line and returned Phase 294's commit.
+- **Rule 4 — a boundary over text others write.** The counter's corpus check over
+  `PHASE_LOG.md` found a CommonMark reader treating 18 of the 32 `Also fixed` headings as fenced.
+  That is why its fence rule is scoped to `## Phase` sections.
+
+## Phase 324 (executed 2026-09-23 — the inbound triage of `#711`–`#724`, `#730` and `#731`)
+
+**Wade chose this phase by menu:** *"Triage all 16 as Phase 324"*. That supersedes, for this
+batch, the standing call to leave new issues open until a phase takes one. It is the Phase 321
+shape. Every issue body was read in full and every central claim re-checked against this tree
+before a disposition was written. A triage's prior art lives in two places, so each topic was
+grepped in the open queue and the Phase 323 brief's § *Inbound* was read first. That section
+held no verdicts for this batch.
+
+### Dispositions
+
+| upstream | claim verified at | disposition |
+|---|---|---|
+| #711 approved branch with no pending-doc strands its tasks | `review-close/SKILL.md:1955`, exit 0; `:2183` calls it legitimate | **filed `Q-594`, § High** |
+| #712 derive `opened`/`grepped` from the transcript | `_shared/fanout-evidence.md:40` | **extended `Q-219`**, leg (a) |
+| #713 `Opened` counts scanned-not-read files | `fanout-evidence.md:26` | **extended `Q-219`**, leg (b) |
+| #714 `Full` decided by count, not set | `codebase-review/SKILL.md:405` | **extended `Q-219`**, leg (c) |
+| #715 Step 1 manifest is model-computed | two recipes, both compliant with Step 1's prose | **extended `Q-579`**: one script fixes both |
+| #716 per-worker ratios absent from the 5b header | `security-audit/SKILL.md:664`, `codebase-review/SKILL.md:647` | **filed `Q-595`** |
+| #717 harness thread cap vs "dispatch all at once" | `codebase-review/SKILL.md:466` | **filed `Q-596`** |
+| #718 promotion: no same-day dedupe, no consent record | Step 9 at `codebase-review/SKILL.md:1123` | **filed `Q-597`** |
+| #719 one task per sibling site | `codebase-review/SKILL.md:654`, `security-audit/SKILL.md:711` | **filed `Q-598`** |
+| #720 one `nextjs-react` convention offered | — | **not filed; left open as demand-gated** |
+| #721 two core conventions offered | — | **not filed; left open as demand-gated** |
+| #722 no refute pass over Highs | `codebase-review/SKILL.md:613`, advisory sample only | **filed `Q-599`**; the cost question is Wade's |
+| #723 two-section convention floor | `review-close/SKILL.md:402` | **duplicate of `Q-473`**: extended there; issue to close |
+| #724 PR reuse fails for N>1 clean PRs | `review-close/SKILL.md:2556`, condition 1 is a count | **extended `Q-124`**, re-routed § Low → § Medium |
+| #730 no unattended prepare mode for the close | `--dry-run` persists nothing | **folded into `Q-411`** (§ Decisions, Wade's revisit routing); first filed as `Q-600`, withdrawn |
+| #731 every branch pays the same close | no `effort`/`blast_radius` predicate in the skill | **folded into `Q-411` and `Q-159`(ii)**; first filed as `Q-601`, withdrawn |
+
+**Sixteen issues: six filed as new entries (`Q-594`–`Q-599`), eight folded into six existing ones, and two left open.** Under fix-by-default a filing
+needs a reason it cannot be fixed now:
+- `Q-594`, `Q-595`, `Q-596` and `Q-598` are shipped-skill behaviour changes, each needing its own
+  verification. The honest reason is "too large to review in this branch", since this phase's
+  round is scoped to dispositions. `Q-594` also carries a design question. `Q-595`, a header field
+  plus a receipt parse, is the weakest case for filing over fixing.
+- `Q-597`, `Q-598` and `Q-599` each carry a design decision. The round showed `Q-598` reverses a prescribed rule, and `Q-599`'s remedy conflicts with § *Adjudication*.
+
+**The three conventions, in two issues, are not filed.** For #720 that is the policy.
+`CONTRIBUTING.md` § *Contribution trust policy* makes cross-consumer survival the merge gate: *"a
+convention merges into a pack once more than one project has independently hit it. A singleton
+isn't rejected — it waits as an open"* issue. All three are GDP-only. **For #721 it is my
+reading, not the policy's text:** #721 targets `core/`'s § Prevention Conventions, not a pack,
+and the policy's sentence names packs. I applied the same gate by analogy, since the reason for
+it, a single consumer's rule shipped to every consumer, is the same. The round flagged the
+difference. **This is a negative verdict
+that leaves no `Q-NNN` behind**, the shape Phase 321's warning is about, so the Phase 325 brief
+records it in § *Inbound*.
+
+**#730 and #731 were already a parked decision.** `Q-411`, the unattended close, sits in
+§ *Decisions to revisit later* on Wade's 2026-09-04 call. Its triggers are a second consumer, or
+`Q-408`/`Q-409` shrinking the stop surface, and neither has fired. `Q-159`(ii), the fast-path
+merge tier, waits for exactly the design #731 brings. My first pass filed them as new § Medium
+entries, `Q-600` and `Q-601`. That quietly overrode Wade's routing, and it is Phase 321's miss
+again: prior art in a section a Medium-and-High grep does not read. The round found it, and both
+ids are withdrawn and never to be reused. **Whether GDP's measurements, with the fix-by-default
+decision, reopen `Q-411` is Wade's call**, and `Q-459` belongs to the same decision.
+
+### Also fixed
+
+Both are partial fixes the round showed were owed under fix-by-default:
+- **`Q-595`, half:** both review skills' Step 5b templates gain a `> **Fan-out coverage:**` line,
+  with the per-worker ratios and a wave count, beside `Reconciliation:`. The 5f enforcement
+  remains.
+- **`Q-596`, half:** both skills now dispatch a spawn refused for a thread or concurrency limit in
+  further waves, and count them on that line. Reading a declared ceiling ahead of time remains.
+- **Nine line citations re-pointed by exact text match.** Eight are in queue entries and one in
+  this entry's table, all shifted by those two edits. One citation matched more than one line and
+  was resolved by the constant offset, with the text compared.
+
+### Author-side pass
+
+- **Rules 1, 3 and 4 do not bind.** The phase ships no guard and moves no delimiter. The two
+  partial fixes are prose, run under the existing module tests (346 passed).
+- **Rule 2 is the whole pass.** Every `file:line` in the dispositions table and the new entries
+  was re-opened at the tree it cites.
+- **One self-inflicted defect was caught before commit.** `Q-600` and `Q-601` went in as
+  multi-line entries in a file whose derive commands count one line per entry. They were
+  flattened, and the counts re-derived: High 8 · Medium 181 · Low 113, max id `Q-601`.
+
+### The round — two lenses, both placed at `cb2c194`
+
+Dispositions, and claim truth. Each echoed `cb2c1944…` and `claude-opus-5-5`. **Every finding
+below was verified against the tree before it was acted on.**
+
+**Dispositions lens: 8 findings, 1 HIGH, all verified.**
+- **HIGH: #730 and #731 re-filed a question Wade had parked** (`Q-411`, `Q-159`(ii); above).
+  Folded, and `Q-600`/`Q-601` withdrawn.
+- **MED:**
+  - `Q-594` reverses a Phase 282 decision pinned by two tests, and its remedy would have missed
+    the empty-directory case. Both are now written into the entry.
+  - `Q-599`'s remedy conflicts with § *Adjudication*.
+  - `Q-598`'s premise missed the post-scan step that prescribes one task per sibling.
+  - The `Q-219` fold dropped the `Q-218` decline and the `grepped`-in-`Full` constraint.
+- **LOW/MED:** fix-by-default was applied as a blanket reason, not per entry, and two entries were
+  half-fixable now. They are half-fixed (*Also fixed*).
+- **LOW:** record wording, and the #721 policy reading. **BeanRider was checked read-only for all
+  three offered conventions and carries none**, so "GDP-only" is now measured.
+
+**Claim lens: 10 findings, 2 MED, all verified and corrected.**
+- `Q-596` said *both* skills dispatch all at once; only `/codebase-review` does.
+- `Q-599`'s cost was stated per round when it covered four rounds' Highs.
+- Low findings:
+  - `Q-473` said #723 was closed;
+  - two conventions was really three;
+  - #721 targets `core/`, so the policy applies there by analogy, and the entry now says so;
+  - `Q-124`'s stale older sentences;
+  - `Q-594` stated the reporter's inference as confirmed;
+  - `Q-601` had an unattributed estimate and a miscounted grep;
+  - `Q-598` claimed a within-round rule the skill does not state;
+  - four paraphrases in the `Q-219` extension had drifted from the issue;
+  - `Q-599` overstated "the only post-merge check".
+
+**The pattern held.** A triage's missed prior art sat in a section the author's grep did not
+read. This phase grepped the whole file, and still missed `Q-411` and `Q-159`. My patterns were
+`unattended close`, `--prepare`, `light close` and `effort: Low`. The entries say
+``` `--unattended` `/review-close` ``` and `fast-path-merge`. **A grep's vocabulary is the
+measurement.**
+
+## Phase 325 (executed 2026-09-23 — `Q-594`: the claimed branch that merges with no document, and the partial merge the fix nearly refused)
+
+**Wade's three answers at the phase's open, by menu:**
+- **`Q-411`: reopen the light tier and `--prepare`; keep the unattended merge parked.** GDP's #731
+  and #730 are filed as `Q-602` and `Q-603`, both § Medium design entries. `Q-411` keeps only
+  `--unattended` itself. I recommended the light tier alone. Wade took `--prepare` too.
+- **Scope: `Q-594` alone this phase**, then `Q-592` (the frozen-notes triage), then `Q-459`.
+- **The filing's open design question: a hand-cut branch that claims no task passes as today.**
+
+### `Q-594` — exit 8
+
+Step 3b's collect reached `PENDING-DOC COLLECT SKIPPED: … this branch has no pending-doc
+anywhere` and exited 0. Phase 282 ruled that legitimate, with a hand-cut branch in mind. For a
+**claimed** branch it is where the tasks strand: Step 4c closes only the ids a doc names, so the
+task stays `in_progress`, its lock stays held, and Step 6 deletes the branch.
+
+**The discriminator is a task lock naming the branch, as the entry said, not the absent
+directory.** `refuse_if_claimed_but_undocumented()` runs only when no doc claims the branch on
+either side. It reads `sysop/runtime/locks/*.lock` the way Step 2e does (column-0 lines only,
+first `branch:` wins), skips a lock that is not a regular file, and excludes a review batch's own
+`BATCH-<N>.lock`, whose batch Step 4b closes without a doc. It is called from two places: the absent arm when main holds nothing, and the
+populated path when neither the workspace nor main holds a doc for the branch. The second call is
+what catches the existing-but-empty directory, which Phase 282 dispositions like the absent one and
+which strands tasks the same way. Collisions still outrank it. Nothing is written before it fires.
+Phase 282's two pinned tests pass with their assertions unedited (one gained a docstring sentence),
+because their fixtures carry no lock.
+
+**Shipped with it:** the exit table's row 8, *"There are six"*, a Step 8 `Undocumented claims:`
+row, and one runner sentence applying the same test by hand to the shapes that never run the
+collect (no workspace, or the main checkout). The argument is in `REFERENCE.md` § *Step 3b —
+provenance*, per dimension 10. Every census block the phase edited or added carries a `runner`
+verdict. `editor`+`mixed` is unchanged at 105,497, and the `EDITOR_MIXED_CEILING` constant was not
+touched. One caveat is lens C's: heredoc docstrings count as code by construction, so the ratchet
+cannot see rationale written into one. The round trimmed the new docstrings to their contracts for
+that reason.
+
+### The partial merge the first cut would have refused
+
+**Author-side rule 4 read the real artefact, and the artefact disagreed with the fix.** A GDP lock
+holds a task `in_progress` on purpose, with `user_action: false`. Its branch merged through a
+close weeks ago carrying a corrected spec and no verdict, because the release the task waits for
+has not happened. That merge went through exactly the arm this phase closes. Under the first cut
+it would have exited 8 with no correct remedy. `/document-work` names the task, and Step 4c would
+then flip it done. `--release` reopens it and drops the lock the consumer was holding. **The route
+already existed:** `/document-work` documents `roadmap_ids: []` as valid, and a doc with the id
+left out records the merge and closes nothing. The refusal message, the table row and
+`REFERENCE.md` now name it, and a phrase test pins its polarity.
+
+**What that route leaves behind, which the first record got wrong.** It said the task "stays open".
+The round's execution lens ran it end to end: the task stays `in_progress`, its lock stays held,
+and Step 6 deletes the branch the lock names, because Step 6 keeps only branches whose doc is still
+waiting. Nothing reported it. **So the collect now prints `PENDING-DOC OPEN CLAIM:`**, before the
+merge, for every claimed id that no doc for the branch names, and Step 8 carries it on an `Open
+claims:` row for a branch that then merged. The shapes the collect never runs on, including every
+`--branch` claim, get the same test by hand from the no-workspace sentence (round 2). This reports and never refuses. The same line covers the sibling: a doc that omits one
+of its claimed ids by mistake. Omission is also how a partial merge is written, so a refusal cannot
+tell the two apart. Whether anything should refuse is `Q-604`'s open question, and its report half
+is built.
+
+### Also fixed
+
+- **57 line citations re-pointed in 19 queue entries**, all measured from `e7b4556`'s file to the
+  final one: 14 path-qualified `review-close/SKILL.md:N`, 42 bare `:NNNN` and one
+  `REFERENCE.md:N`. **It took three passes, and the first two were wrong.** The first mapped against
+  a file I then edited by one line, so all 27 of its values were one line short and eleven sat on
+  blank lines. The second, after round 1, was right about those 27 but was taken before round 2's
+  code moved every line after 930 again. It also stayed blind to bare pointers in entries I had not
+  listed: `Q-568`, `Q-048`, `Q-066`, `Q-068` and `Q-354` cite Steps 2e, 3 and 3c and had moved.
+  **Thirteen targets were stale before this phase** and were re-derived from the text their entry
+  quotes: `Q-536` ×3, `Q-546`, `Q-580`, `Q-547`'s `:2761`, `Q-332`, `Q-121`, `Q-485`, and
+  `Q-057`'s and `Q-058`'s ranges with one bare pointer each. `Q-058`'s range had become inverted
+  (`:1033-1032`). My first record said six were stale, and round 2 found the other seven. I had also
+  called `:2761` unfindable after grepping case-sensitively for a word the file capitalises.
+  **Left alone on purpose:** the historical "the first draft cited `:NNNN`" pointers in `Q-485` and
+  `Q-487`, and `Q-425`'s pair, which cite a test module. **Not audited:** `Q-057`'s other bare
+  pointers, which round 2 found already stale at base (one is past the end of the file).
+- **Step 2e's lock loop had no `is_file()` guard**, so a FIFO named `*.lock` blocked the report
+  forever. Found by lens C, guarded, and pinned by an executing test that times out on the unguarded
+  form. (Round 2 corrected my first account: a directory named `*.lock` was never a hazard there,
+  because `IsADirectoryError` is an `OSError` and the loop already caught it.)
+- **`tools/CONTEXT_THINNING_SPEC.md` § 7.2 and § 8.1 re-derived**, because the phase adds `Q-`
+  citations to `core/`. Its `Q-` counts are 473 → 486 across `core/` and 67 → 75 in the skill.
+  § 8.1 gains a Phase 325 paragraph, and Phase 323's paragraph is re-worded to the past tense,
+  because the guard reads the first *"the same command reports"*.
+- **`REFERENCE.md` cited a private issue number** in the new section. Pass 5b caught it and it
+  was removed.
+- **Filed from the round:** `Q-605` (§ Low), for a branch name YAML reads as a non-string.
+
+### Author-side pass
+
+- **Rule 1: 21 of 23 mutations killed, and the two survivors are equivalent.** They cover the
+  lock parse (BATCH exclusion, equality versus prefix and substring, the column-0 rule, first-wins,
+  the `is_file` guard, the glob, the stem fallback), both call sites and their ordering against
+  collisions and `on_main`, the exit code, where the lock directory is resolved, a success line
+  printed before the refusal, the table remedy, the Step 8 row, the no-workspace sentence and the
+  prose count. **Two of the first run's survivors were the harness, not the guard:** the patterns
+  also occur in Step 2e's heredoc, and `replace(…, 1)` mutated that one. Re-run against the
+  occurrence inside the new function, first-wins was killed. **The two real survivors** drop
+  the `-` or `#` prefix exclusion. A line starting with either can never parse to the key `branch`,
+  so for this reader those clauses are dead. They are kept for parity with Step 2e's parse, which
+  the docstring cites. Two assumptions had no test before the battery ran, and both were added
+  first: a sibling-prefix branch name, and an empty workspace directory with the doc on main.
+- **Rule 2:** every new claim was re-read against the file it describes. `claim_task.sh
+  --release` does remove the worktree and keep the branch unless `--delete-branch` is passed.
+- **Rule 3:** the heredoc is run, not read. The tests execute it extracted verbatim from the
+  skill, against locks built in `claim_task.sh`'s own field order, including its free-text tail.
+- **Rule 4:** the hostile lock corpus covers an indented `branch:`, a `-` and a `#` line, a later
+  `branch:` in a notes tail, a missing `task_id:`, a directory, a FIFO, and a non-`.lock` name.
+  Reading the live consumer locks found the partial-merge shape above, and it changed the remedy.
+- **A second battery, on the round's own new material** (the open-claim report, the `BATCH-<N>`
+  fullmatch, the unlistable-directory line): **10 of 12 killed at first**. The two survivors were
+  real gaps, a main-side doc naming the id beside a workspace doc and a scalar `roadmap_ids:`. Both
+  got tests, and the re-run is 12 of 12.
+
+### Round 1 — three lenses, all placed at `a6ee871`
+
+The phase ships behaviour **and** a record of numbers, so the governor's third lens applied:
+execution, guard strength, and record truth with dimension 10. Each lens echoed `a6ee8714…` and
+`claude-opus-5-5` before its first finding, worked in its own detached worktree, and removed it
+afterwards. **I verified every finding below before acting on it.**
+
+**Execution lens: 1 MED, 4 LOW, all reproduced.**
+- **MED: the partial-merge remedy produced the silent state the phase exists to prevent.** Built:
+  the `PENDING-DOC OPEN CLAIM:` report and honest wording (above).
+- **LOW, fixed:**
+  - A task id such as `BATCH-IMPORT` escaped the check. `claim_task.sh` accepts it, and a
+    `BATCH-` prefix test exempted it. Now `BATCH-<digits>.lock` only.
+  - The `--release` remedy misdescribed a clone, which the script leaves in place, and omitted
+    that the script never commits.
+  - A locks directory that could not be listed read as "no claims" and printed nothing. It is now
+    `PENDING-DOC CLAIMS UNREADABLE:`.
+- **LOW, filed as `Q-605`:** a branch name YAML reads as a non-string false-stops. The fix is a
+  writer-or-reader choice.
+
+**Guard lens: 21 of 42 of its own mutations killed. Six survivors were equivalent, so 21 of 36
+real, and 0 of 6 negative controls false-killed.** It reproduced the author battery's kills and then
+reached what that battery had not:
+- writes on the refusal path (an `mkdir` before exit 8, a lock rewritten in place);
+- the fail-open contract (an unreadable or non-UTF-8 lock);
+- the partial route pinned by a noun rather than its polarity (*"ADD the id"* passed);
+- the no-workspace sentence, which was pinned by two substrings;
+- output order and case-sensitivity;
+- two exit-0 statements left stale by exit 8.
+
+**All fifteen real gaps now have killing tests**, adapted from the lens's own proposals, and the
+two stale statements are corrected and pinned. The fifteen mutations were re-applied to the final
+file, and all 15 were killed. One note stands as the lens wrote it: the census
+spec test "kills" most prose mutations, but it false-kills four of six controls, so it is not
+evidence of guarding.
+
+**Record lens: 1 HIGH, 3 MED, 6 LOW, all verified.**
+- **HIGH:** all 27 re-pointed citations were one line short (above, *Also fixed*).
+- **MED:**
+  - "two were already stale" was false: `Q-536`'s pair, `Q-580` and `Q-547`'s `:2761` were stale too.
+  - `Q-159`'s pointer and `Q-602` called `Q-602` the design of (ii) and said "built", when (ii)'s
+    defining property is the unattended merge Wade kept parked.
+  - The first docstring carried rationale the census cannot see.
+- **LOW:**
+  - `Q-411`'s text claimed unbuilt entries shrink its stop surface.
+  - Step 2e's parse was credited with a guard it lacked. That is now fixed in Step 2e itself.
+  - `REFERENCE.md` said Step 4b closes batches "from the lock itself". It reads `review_tasks.md`.
+  - A brief citation was left un-re-pointed.
+  - The census wording "six re-hashed" was really four re-hashed and two new, and the brief promised
+    a round record that did not exist yet.
+
+### Round 2 — two lenses, both placed at `9262e46`
+
+Round 1's fixes added a mechanism no reader had seen, the open-claim report, which is the
+governor's condition for a second round. Two lenses reviewed the delta, and each echoed `9262e46a…`
+and `claude-opus-5-5`. **Every finding below was reproduced before it was acted on.**
+
+**Execution lens: 2 MED, 3 LOW, and 15 of 24 non-equivalent mutations killed, 0 of 3 controls false-killed.**
+- **MED: a lock that cannot be stat'ed killed every close on the 3.9 floor.** `Path.is_file()`
+  raises `PermissionError` below 3.13 (reproduced with `/usr/bin/python3` 3.9.6), which exits 1, a
+  code the exit table does not carry. From 3.13 on it returns `False`, which hid the claim. Both
+  loops now stat explicitly or catch the error. The collect names the lock on a new
+  `Claims unreadable:` row. A floor-interpreter test runs Step 2e under a pre-3.13 Python when the
+  host has one.
+- **MED: every `--branch` claim still merged a partial delivery silently.** Those claims resolve to
+  the main-checkout shape, which never runs the collect. The no-workspace sentence now carries the
+  open-claim test too.
+- **LOW:**
+  - the open-claim line and its row stated post-merge outcomes as certain, and are now conditional;
+  - `CLAIMS UNREADABLE:` was filed under the exit-8 row, and now has its own;
+  - "a directory raised out of it" was false.
+- **Its seven real survivors now have killing tests or phrase pins**: a `BATCH-7-X.lock` counts as a
+  claim, the named set is a union over docs, no locks directory is not an unreadable one, a stale
+  refusal prints no open claim, and the Step 8 rows and the exit-8 clause keep their polarity. The
+  two `REFERENCE.md`-only survivors are editor rationale, which nothing pins by design.
+
+**Record lens: 2 MED, 4 LOW.**
+- **MED:** five more pre-phase-stale citations (*Also fixed*), and the archive and brief still
+  described the pre-round `BATCH-*` exclusion and left out the open-claim report.
+- **LOW:**
+  - the directory claim again;
+  - `Q-605`'s reach contradicted its own mechanism, since `tasks/index.yml`'s `branch:` field can put
+    any name on a claim;
+  - "unedited" for a test whose docstring changed;
+  - "ten" blank lines was eleven;
+  - `Q-574`'s `REFERENCE.md` pointer;
+  - `Q-604`'s present-tense "Step 8 does not say so".
+
+All are fixed.
+
+**Author battery over round 2's fixes: 10 of 10 killed.** It re-applied the seven survivors plus
+both MED fixes reversed: `is_file()` restored, the unreadable line silenced, and the no-workspace
+clause dropped. The floor test kills the unguarded Step 2e loop under 3.9.
+
+**The governor's third-round line.** Round 2's fixes patch a mechanism rather than replace one:
+a stat call, a row, a sentence and phrase pins. So a third round is not warranted on its terms, and
+none was spawned.
+
+**Queue at close:** High 7 · Medium 182 · Low 114 · highest id `Q-605` · next free `Q-606`.
+
+## Phase 326 (executed 2026-09-23 — `Q-592` part 1: the frozen § *Notes*, triaged; 33 of 44 lines disposed)
+
+**Wade's three answers at the phase's open, by menu:**
+- **The loop-bundle lines are fixed here**, not folded into `Q-606`'s pilot. The pilot keeps its
+  seven entries (`Q-583`–`Q-590` minus `Q-588`).
+- **When § *Notes* is empty, delete it and pin its absence**, rather than keeping an empty marker.
+- **Overflow splits into a follow-on phase.** This phase disposes of what one two-lens round can
+  review and leaves the lines that each want a mutation battery. The brief gate counts the next
+  phase from the major (`numeric_phase(...)[0] + 1`), and a `.1` label is a correction to the
+  phase below it, so the follow-on is **Phase 327**, not 326.1.
+
+### What the 44 lines were, and what happened to each
+
+Numbered in file order at the phase's open (`awk` over § *Notes*, 44 `- 20..` lines).
+**21 fixed, 3 folded, 9 dropped, 11 left for Phase 327.**
+
+| # | Site | Disposition |
+|---|---|---|
+| 1 | `review-close/SKILL.md` Step 6, `git cherry` | **fixed**: re-measured (a one-commit squash gives `-`, two commits give `+ +`). The first rewording ("any branch holding two or more commits") was still a universal claim, and the round's execution lens broke it: an `--allow-empty` second commit gives `- +`, and add-add-remove gives `- + +`. Round 1's rewording ("whose patch differs from the squash's diff") was then broken by round 2: a whitespace-only difference prints `-`, because patch-id ignores whitespace. The shipped clause is "`+` on each commit whose patch-id does not match the squash's", at the same character count |
+| 2 | `test_doc_currency.py`, dotted date spelling | **folded** into `Q-564` (b) |
+| 3 | `tests.yml`, "~6,650-test" | **fixed**: the figure removed; the argument never depended on it |
+| 4 | `share-wins/SKILL.md:98`, tester mirror | **fixed**: states the requirement (Discussions on, not archived) and names `getsysop/sysop` as meeting it (checked with `gh api`) |
+| 5 | Phase 291.1 records | **dropped**: all three records exist, and Phase 297's guard reads `.1` labels |
+| 6 | `intake` + `share-wins` frontmatter | **fixed**: both reworded off `: `; new `tests/test_skill_frontmatter_parses.py` |
+| 7 | transient `$TMPDIR` worktree | **dropped**: an observation, and nothing is wrong |
+| 9 | `docs/`, `tasks/notes.md` in the tree | **dropped**: the ledger was retired by Phase 323, so its absence is correct |
+| 10 | `review-close/REFERENCE.md`, "912 bodies" | **fixed**: "one of 911 bodies scanned at Phase 280", the figure that phase's record corrected |
+| 11 | 2b prompt, `/tmp` | **dropped as a duplicate** of `Q-485` leg (4), which already tracks `#631` (GDP ISSUE-0157) word for word. The first draft folded it into `Q-570`, and the round caught that this reversed Phase 321's split: `#631` is agents writing scratch *inside* their worktrees, contained by isolation, while `Q-570` (`#705`) is sibling lenses colliding on the shared `/tmp` |
+| 12 | brief's § G conditional | **dropped**: it records a deletion on purpose, in a single-use file, for a tier Phase 323 retired |
+| 13 | branch-deletion auditability | **dropped**: advice for a sweep nobody runs; nothing is broken |
+| 14 | `git worktree list` stray entry | **dropped**: the cause is unestablished, and a stray entry costs a look, not a wrong answer |
+| 15 | `pyproject.toml`, "123-160s here" | **fixed**: kept as Phase 187's measurement on 3,142 tests, and says the suite has more than doubled since |
+| 16 | shared session scratchpad | **fixed**: `_shared/adversarial-review.md`'s `TMPDIR` bullet now also asks for a private scratch dir per lens |
+| 18 | spec § 7.5 attribution | **dropped**: already corrected in the spec, which now names `## Declared limits of this mechanism` |
+| 19 | "byte-for-byte" / "exact" | **fixed**: `reconstruct()`'s docstring and spec § 8.1 both say the rebuild is by line |
+| 21 | `test_doc_currency.py` reads no content | **folded** into `Q-564` (a) |
+| 22 | runbook step 4, `.pytest_cache/` | **fixed**: the mechanism is `test_ci_shard.py`'s child `pytest` runs (reproduced in a scratch clone: 59 passed, `.pytest_cache/` created under `-p no:cacheprovider`); the page now says the prevention is half |
+| 23 | `/roadmap` and `## Plan` (`#435`) | **fixed**: a 📝 *planned* readiness flag with the same presence test `/claim-task` Step 7a runs, and a ship-fast tie-break; the schema names `/roadmap` as its second reader. The round found four slips in the first cut, all fixed: `body` missing from Step 1's field list, the legacy `tasks/`-prefixed `body:` form, a `<P>` placeholder already taken by "in flight", and the Portability note's "four files" |
+| 30 | provenance lines and `source_dirty` | **fixed**: both give-back skills append `(installed from a dirty source tree)` when the lock says so |
+| 32 | contradictory dispositions, no detector | **dropped**: the instance is fixed, and a detector for the class is a heuristic nothing needs today |
+| 33 | `test-audit:98`, `mode: loop` | **fixed**: the lock is JSON, `"mode": "loop"` |
+| 34 | `report-issues` missing-log remedy | **fixed**, and the same message in `share-wins`: "create it", with the one heading and `**Status:**` shape each reader recognises (the round found "create it" alone produced a file with zero entries). `share-wins` does not ship in loop mode, so its message no longer cites it |
+| 35 | `contribute-convention`, consumer name | **fixed**: overlay H1, else the friction log's H1 (full install only), else the primary checkout's directory name via `git rev-parse --path-format=absolute --git-common-dir` (checked from the primary and from a worktree: both `wade-flow`). Both of the round's other lenses found that the first cut left loop mode, where the line was found, with no source at all |
+| 36 | `security-audit` Step 7, `--mark` | **folded** into `Q-581`: its answer depends on which of that entry's shapes is picked |
+| 37 | § 8.2b vs 8.2c | **fixed** at both skills |
+| 38 | `pip-audit not available` | **fixed**: the runner prints `pip-audit not on PATH` (`pip_audit.py:110`) |
+| 39 | "Step 3c security twin" | **fixed**: the twin is Step 2b's item 3b; the verbatim pin in `test_adversarial_review_gate.py` moved with it |
+| 40 | "every envelope shipped today" omits `PHASE:` | **fixed**: `/auto-build`'s does; `/claim-task`'s three all emit it. The round found the bare `<TASK_ID>.json` claim two lines above in the same partial and twice in `WORKFLOW.md`; all three now read `<TASK_ID>[.<phase>].json` |
+| 41 | "inside `run_checks_impl.py`" | **fixed** at both codebase-review sites **and three `WORKFLOW.md` sites** (§ 6.5, the LSP paragraph, the § 8.4 row), plus two in the shipped `semgrep/README.md` that the round found. Two more (`WORKFLOW.md` § 8.2c and `docs/configuration.md`) said the shim "silently returns empty" for unresolved `paths:`, which the Phase 135 accounting made false: the check is reported `skipped (paths-unresolved)` |
+| 42 | guards that read `settings.json` only | **fixed**: the line named 3 sites and the class was **12**; all 12 now union `settings.local.json`, matching `_shared/permission-guard.md`, and new `tests/test_permission_guard_local_union.py` keeps it that way |
+| 43 | 9b staging and the security-map overlay | **fixed**: the partial now says `/security-audit`'s 9b; `/codebase-review`'s never writes the map |
+| 8, 17, 20, 24–29, 31, 44 | the conftest shard header, the reference-pins recipe and figures, the containment end anchor, the thinning count guard, `_case_pins.py` ×2, `test_reader_census.py`'s case-pin bound, the register's range, the ignored-file probe, `tsc`'s `frontend/` | **left for Phase 327**, which also deletes the section |
+
+### Also fixed
+
+- `core/skills/review-close/SKILL.md` Step 6 — the `git cherry` clause states the patch-id rule, at the same length (line 1; the shipped wording is round 2's)
+- `.github/workflows/tests.yml` — the stale test-count figure removed (3)
+- `core/skills/share-wins/SKILL.md` — the `--repo` note states the Discussions requirement instead of vouching for an archived repo (4)
+- `core/skills/intake/SKILL.md` + `core/skills/share-wins/SKILL.md` — frontmatter parses under `yaml.safe_load` (6)
+- `tests/test_skill_frontmatter_parses.py` — new: every shipped skill's frontmatter is strict YAML (6)
+- `core/skills/review-close/REFERENCE.md` — the 911 figure with its as-of (10)
+- `pyproject.toml` — the Phase 187 timing kept as history, with the suite size it was measured on (15)
+- `core/skills/_shared/adversarial-review.md` — a private scratch dir per lens (16)
+- `tools/reader_census.py` + `tools/CONTEXT_THINNING_SPEC.md` § 8.1 — the rebuild is by line (19)
+- `tools/TESTER_MIRROR_RUNBOOK.md` step 4 — the `.pytest_cache/` prevention is half, and why (22)
+- `core/skills/roadmap/SKILL.md` + `core/companion/tasks/schema.md` — the 📝 planned flag (23)
+- `core/skills/report-issues/SKILL.md` + `core/skills/share-wins/SKILL.md` — `source_dirty` in the provenance line (30)
+- `core/skills/test-audit/SKILL.md` — the lock is JSON (33)
+- `core/skills/report-issues/SKILL.md` + `core/skills/share-wins/SKILL.md` — a missing-log remedy that works in loop mode (34)
+- `core/skills/contribute-convention/SKILL.md` — the consumer name has a real source (35)
+- `core/skills/codebase-review/SKILL.md` + `core/skills/security-audit/SKILL.md` — § 8.2c (37)
+- `core/skills/security-audit/SKILL.md` — the runner's real pip-audit message (38)
+- `core/skills/_shared/adversarial-review.md` — the security twin's real step (39)
+- `core/skills/_shared/adversarial-review.md` — which skills emit `PHASE:` (40)
+- `core/companion/docs/WORKFLOW.md` (2 sites) + `core/companion/scripts/parse_subagent_envelope.py` — `<TASK_ID>[.<phase>].json` (40, from the rounds)
+- `tests/test_adversarial_review_gate.py` — `PLACEMENT_BLOCK_VERBATIM` and `AUTHOR_PASS_VERBATIM` moved with the prose they pin (39, rule 1)
+- `core/skills/codebase-review/SKILL.md` + `core/companion/docs/WORKFLOW.md` — the stages live in the `run_checks/` package (41)
+- twelve `core/skills/*/SKILL.md` permission guards — `settings.local.json` unioned in (42); `/release`'s was found by the round
+- `tests/test_permission_guard_local_union.py` — new: every guard read names the local file (42)
+- `core/companion/semgrep/README.md` — the semgrep stage lives in `run_checks/semgrep.py` (41, found by the round)
+- `core/skills/_shared/promotion-write-target.md` — which skill's 9b stages the security-map overlay (43)
+- `tests/test_phase128_path_drift.py` + `tests/test_friction_log_entry_boundaries.py` — moved with line 35's fix: one new log-naming skill, and a reader predicate that names what is classified (the round replaced a first-cut exemption)
+- `tests/test_shipped_prose_matches_code.py` — new: the lock is described as JSON, and the quoted pip-audit message is one the runner prints (33, 38)
+- `docs/loop-mode.md` — the lock's `"mode": "loop"`, at two sites the first sweep missed (33)
+- `core/skills/_shared/adversarial-review.md` rule 1 — run each mutant with `PYTHONDONTWRITEBYTECODE=1` (from the round)
+- `core/companion/docs/WORKFLOW.md` + `docs/configuration.md` — unresolved `paths:`: a grep check is reported `skipped`, a tool-stage check scans the whole tree (41, rounds 1 and 2)
+- seven `core/skills/*/SKILL.md` pre-flight intros — "verify `.claude/settings.json`" now names the local file too (42, round 2)
+- `install.sh` loop-mode nudge + `docs/loop-mode.md` — the friction-log entry shape (34, round 2)
+- `tests/test_shipped_prose_matches_code.py`, `tests/test_permission_guard_local_union.py`, `tests/test_friction_log_entry_boundaries.py`, `tests/test_skill_frontmatter_parses.py` — widened and hardened by round 2 (see Round 2)
+
+### What the triage found that the lines did not say
+
+**Two lines under-counted their own class, and my own sweep under-counted one of them again.**
+Line 42 named three guards that read `settings.json` only. The class was **twelve**, and three
+others already did the union: `git grep -n 'Read \`.claude/settings.json\`' 76975d8 -- core/skills`
+returns 15 lines. My first sweep fixed eleven, because the `sed` that rewrote them was anchored to
+line start and `/release`'s guard sentence sits mid-paragraph. The round found it. The new test
+reads every occurrence in the text, not every line that starts with one. Line 41 named two
+`run_checks_impl.py` sites in one skill. The same claim sat at three more in `WORKFLOW.md`,
+including the § 8.4 table row that describes the file, and at two in the shipped
+`semgrep/README.md`, which the round found.
+
+**Line 22's measurement held, and its explanation was missing.** A trivial tree under the repo's
+own `addopts` leaves no `.pytest_cache/` under `-p no:cacheprovider`. A scratch clone running
+`tests/test_ci_shard.py` does, because that module spawns child `python -m pytest` runs without
+the flag. The parent's flag does not reach them.
+
+**Line 1's fix had to be the same length.** `review-close/SKILL.md` sits under a block-hash census
+whose editor/mixed character count is frozen with the thinning campaign (`Q-409`). Spec § 8.1
+also publishes per-section figures that `test_reader_census.py` recomputes. The first correct
+wording added 139 characters. The shorter one moved § 8.1's published total by 17 and failed two
+tests. The first same-length cut swapped 42 characters for 42. Both rounds then reworded it
+again, each time keeping the span's length (55 characters at the end), so the file length, the
+census and § 8.1 are unchanged across every commit. The census verdict was re-keyed to the edited
+block's hash after each edit (`by: phase326`).
+
+### Author-side pass
+
+**Rule 1: 6 of 8 real mutations killed** on the one guard this phase ships,
+`tests/test_skill_frontmatter_parses.py`. Each mutant ran against the pre-fix skills
+(`git archive HEAD`), where the correct outcome is red, and against the fixed tree. Both controls
+held: the unmutated guard is red before the fix and green after it. Killed: a glob matching
+nothing, the line-by-line reading the repo's own tools use, a frontmatter slice of one line, a
+`try/except` inside `parse()`, a `try/except` inside `check()`, and an end fence searched from
+line 0. **The battery changed the guard twice before this count.** The first control called
+`yaml` directly, so the lenient-reader mutation would have survived. It now runs a broken file
+through `check()`. And the first "glob matches nothing" mutation used `SKILL.MD`, which macOS's
+case-insensitive filesystem still matched, so it measured nothing. **Two survivors, both edits to
+the test's own wrapper:** a `try/except` around the `check(path)` call, and parametrizing over a
+prefix of the population. Neither is reachable without editing the guard to skip its check.
+Lowering the population floor to 0 is equivalent on its own and is not counted.
+
+**Rule 2:** every changed sentence was re-read against what it describes. That pass also caught a
+false attribution I had written: that `/claim-task`'s `PHASE:` emission arrived in Phase 171.
+`git log -S` puts `PHASE: plan` in 159b and `PHASE: exec` in 171, so the parenthetical was
+removed. `getsysop/sysop`'s Discussions were checked with `gh api` (`has_discussions: true`,
+`archived: false`).
+
+**Rules 3 and 4:** no new command with a computed operand, and no boundary moved over text another
+writer produces. The 📝 flag reads `body:` relative to `tasks/`, the same resolution the schema
+states for the field.
+
+**The full suite then found two guards the fixes had moved:** 2 failed, 7,598 passed, 208
+skipped. Both came from line 35's fix, which makes `/contribute-convention` name
+`sysop/SYSOP_ISSUES.md` for the first time. `test_phase128_path_drift.py` keeps the exact set of
+skills that name the log. The skill names the resolvable path, so it joins `_LOG_NAMING_SKILLS`.
+`test_friction_log_entry_boundaries.py` derives its readers as "names the log" plus "Classify
+each", and this skill's "Classify each" is about overlay conventions (its Step 5). The first cut
+exempted it by name, pinned to a 40-character "H1" window, and one control mutation turned red.
+**Round 1 disqualified that exemption** (see below), and the shipped guard has no exemption.
+Both modules passed at the time (69 tests). The full suite was not re-run for a
+test-only change to two modules; CI runs it on the PR.
+
+### Round 1 — three lenses, all placed at `738682d`
+
+Three lenses, because the phase ships behaviour (two new guards, a moved pin, a census re-key) and a
+record full of counts. Each was placed with `git worktree add --detach` outside the repo, got its
+own `TMPDIR` and scratch directory, and echoed `738682d8a1e8df16f1ac42d3f1810e7404fe1e2a` and
+`claude-opus-5-5` before its first finding. The primary checkout's status was empty
+at spawn, and after the round it held only the author's own round-fix edits (all 21 paths listed and
+checked). The local git config was unchanged, and all three placed checkouts were clean at `738682d`.
+
+**Record and dispositions lens: 2 MED, 6 LOW, all verified and all eight fixed** (one after I had first declined it).
+- **MED:** the line-42 class was twelve, and `/release` still read `settings.json` alone. Fixed,
+  with a new class guard.
+- **MED:** the line-11 fold reversed Phase 321's split. It is now a drop (see the table).
+- **LOW, fixed:**
+  - two `run_checks_impl.py` claims in `semgrep/README.md`;
+  - the § 2.5 label;
+  - `Q-592`'s note under-counted what deleting § *Notes* breaks;
+  - no disposition for `#435`, now in the brief;
+  - the measure's sign flip, now warned in the brief.
+- **LOW, first declined, then fixed:** a loop-mode consumer-name fallback. I declined it over a
+  worktree concern; the execution lens found the same gap, and the fix below answers the concern.
+
+**Execution lens: 2 MED, 6 LOW, no HIGH, all verified and all eight fixed.** Two side remarks are not adopted (below). It re-found `/release` (the
+line-42 MED) and the line-35 loop-mode gap. The rest:
+- the line-1 rewording was still universal;
+- four `/roadmap` slips;
+- bare `<TASK_ID>.json` at three sites;
+- two stale "silently returns empty" sentences;
+- a "create it" remedy with no entry shape;
+- `share-wins` citing loop mode, which it does not ship in.
+
+The table rows carry each. **The two side remarks not adopted:** the guards' "verify `.claude/settings.json` carries"
+intro sentences, since the next sentence defines the read; and moving a one-clause anecdote out of
+`_shared/adversarial-review.md`, which dimension 10 does not bind. **Its full suite at the placed
+checkout: 7,559 passed, 249 skipped, exit 0.**
+
+**Guard lens: 2 MED, 5 LOW. All verified.**
+- **MED:** `/release` again.
+- **MED:** the `NAME_ONLY_READERS` exemption's 40-character "H1" window leaked (5 of 6
+  entry-reading sentences stayed green) and false-killed (4 of 4 legitimate rewordings went red).
+  **Replaced, not patched.** The reader predicate now names what is classified (`classify each …
+  entry / ISSUE- / GOOD- / [good]`, case-insensitive), so `/contribute-convention`'s "Classify each
+  candidate" never needed an exemption. Re-running the lens's own shapes: 4 of 6 entry-reading
+  sentences red and 4 of 4 legitimate edits green. The two that stay green read entries without
+  "classifying" them in any lexical form, which is the declared limit of a lexical predicate.
+- **LOW:** the frontmatter guard was weaker than its docstring. PyYAML's `SafeLoader` keeps
+  the last of two duplicate keys and returns `model: yes` as a bool, the `>= 20` floor was lowerable, and the
+  dropped assertions had no control. Rewritten: a duplicate-rejecting loader, a string check for
+  the known keys (`disallowed-tools` added by round 2), a population derived from the skill directories, and six defect controls through
+  `check()`.
+- **LOW:** 17 of the 21 fixes had no regression guard. The three cheap ones now have one:
+  line 42's `tests/test_permission_guard_local_union.py`, and lines 33 and 38 in
+  `tests/test_shipped_prose_matches_code.py`. Reverting each fix turns its guard red. The rest are
+  prose and figures, left unguarded on purpose.
+- **LOW:** line 33 missed two `docs/loop-mode.md` sites, and line 41 missed the semgrep README.
+  Both fixed.
+- **LOW:** a mutant can report its predecessor's result through pytest's mtime-and-size bytecode
+  cache. The caveat now sits in `_shared/adversarial-review.md` rule 1, with its verbatim pin moved,
+  and in the brief. The author battery above predates it. Its re-run under
+  `PYTHONDONTWRITEBYTECODE=1` over the rewritten guard is below.
+
+**Claim 4 (the character-neutral census edit) was verified by the guard lens:** identical census
+output at `76975d8` and HEAD.
+
+**Author battery over the round's rewritten frontmatter guard, with `PYTHONDONTWRITEBYTECODE=1`:
+9 of 9 non-equivalent mutations killed.** Killed: a glob matching nothing, slicing off three skills,
+the line-by-line reader, plain `SafeLoader`, a swallowed `YAMLError`, each dropped assertion (name,
+string types, description), and a one-line frontmatter slice. Both controls held. Dropping the
+mapping assertion is equivalent: a non-mapping still fails on `.get`, only with a different
+exception.
+
+**The governor's second-round line.** The fixes replace one mechanism, the reader predicate, and
+rewrite one guard module. That meets the governor's condition for a second round ("a guard module
+rewritten wholesale"), so a second round is warranted on its terms. See below.
+
+**Full suite over round 1's fixes: 7,612 passed, 210 skipped, exit 0.**
+
+### Round 2 — two lenses, both placed at `15f4aa6`
+
+Warranted by round 1's replaced mechanism and rewritten guard module. Both lenses echoed
+`15f4aa6367f4da0e1ede76968145c19a2af62a33` and `claude-opus-5-5`, and both checkouts were clean at
+the end.
+
+**Fixes-and-record lens: 2 MED, 9 LOW, no HIGH. All verified and all fixed.**
+- **MED:** round 1's "a check whose paths don't resolve scans nothing" was true only of the grep
+  stage. `check_paths_by_id` makes an all-placeholder tool-stage check (pyright, tsc, semgrep, lint)
+  scan the whole tree, and the lens showed a semgrep finding firing on unlocalised paths. Both
+  sentences now say both halves and quote the printed reason, `paths unresolved: …`.
+- **MED:** round 1's bytecode remedy was incomplete. `PYTHONDONTWRITEBYTECODE` stops writes, not
+  reads (pytest's `rewrite.py` calls `_read_pyc` regardless), and the lens reproduced a stale result
+  in 2 of 3 trials after an unflagged control run. Rule 1, its pin and the brief now say: flag every
+  run, or use a fresh `PYTHONPYCACHEPREFIX`.
+- **LOW:**
+  - The `git cherry` clause failed on a whitespace-only difference, so it now states the patch-id
+    rule.
+  - The consumer-name fallback's "the value `install.sh` seeds" is now scoped to a primary-checkout
+    install.
+  - The loop-mode install message and `docs/loop-mode.md` gave no entry shape; both do now.
+  - `parse_subagent_envelope.py`'s docstring still had the bare envelope path.
+  - Nested backticks broke the two missing-log messages.
+  - `disallowed-tools` was missing from the string check.
+  - Six record errors:
+    - three passages describing superseded first cuts as shipped;
+    - round 1's self-contradicting disposition counts;
+    - `_case_pins.py` ×3 where line 27 is `test_reader_census.py`;
+    - missing "Also fixed" lines.
+- **Its full suite at the placed checkout:** 7,571 passed, 251 skipped, exit 0.
+
+**Guard lens: 132 mutants — 82 killed, 31 survived, 12 controls green, 7 false-kills. 4 MED,
+6 LOW, all verified.**
+- **MED:** the pip-audit guard searched the runner's raw source, so a phrase found only in a
+  docstring passed. It now reads the string constants passed to `print` and `_record`, via `ast`.
+- **MED:** the lock-mode regex matched only the one spelling fixed, over too few files. It now
+  matches any `mode[:=]` shape on a line about the lock, across `README.md`, `CONTRIBUTING.md`,
+  `core/`, `docs/` (Markdown and HTML), `packs/` and the installer's printed lines.
+- **MED:** the reader predicate was per-line and literal. It now flattens whitespace and bold,
+  takes `classif…`, and reaches 32 characters.
+- **MED:** two shipped clauses were unpinned: the scratch-dir rule and the envelope path. Both are
+  now pinned.
+- **LOW, fixed:**
+  - The union guard's verb set was capital `Read` only. It is now case-insensitive
+    read/check/verify/inspect.
+  - Its window ran to the next `confirm`; it is now the sentence.
+  - It had a lowerable floor; it is now an exact 22. That population includes seven "verify
+    `.claude/settings.json` carries" pre-flight intros, which now name the local file too. Round 1
+    had declined those as side remarks, and a sentence-scoped window made them real.
+  - Branch controls for the reader predicate.
+  - `#` truncation and blank or boolean `disallowed-tools` in the frontmatter guard.
+  - A literal writer precondition that false-killed a reformat.
+- **LOW, not adopted:** a proximity rule between a skill's log mention and its classify sentence.
+  `report-issues` puts them 67 lines apart, so any useful window is file-wide, and the guard fails
+  loudly on a non-reader, which is recoverable by rewording.
+
+**Author battery over round 2's fixes: 28 of 28 of the lens's survivors and shapes killed, 4 of 4
+controls green, 0 false-kills.** Every run had `PYTHONDONTWRITEBYTECODE=1` and its own fresh
+`PYTHONPYCACHEPREFIX`, controls included, and every file was restored byte-for-byte. My first
+rewording of the pip-audit mutant changed only the `print`, which left the phrase in the `_record`
+call and made it equivalent. The lens's actual shape, with both reworded, is killed. **Declared
+limits, not closed:**
+- a sentence saying "never `.claude/settings.local.json`" satisfies the union guard, because it
+  checks presence, not meaning;
+- entry-reading wordings with another verb ("triage each entry", "for each entry, classify it")
+  escape a lexical predicate;
+- `"mode":"loop"` with no space is JSON-shaped and not flagged.
+
+**Full suite over round 2's fixes: 6 failed, 7,611 passed, 210 skipped.** All six were derived figures
+this phase's own changes moved. Five were `test_ledger_stats.py` guards over published headlines:
+this phase's ledger row made the audit 112/109/3 over 166 numbered phases (188 rounds). The sixth
+was spec § 8.1's census figure, 344,565 → 344,614 runner characters, from the 49 characters the
+`review-close` pre-flight intro gained. Each published site was updated to the derived value
+(`AUTHOR_DEFECT_REGISTER.md` ×3, the ledger's reading note, the spec, and the brief's caution),
+and both modules then passed (112 tests). The editor and mixed figures did not move.
+
+**The governor's third-round line.** Round 2's fixes patch guards rather than replace a
+mechanism, and the author battery above verifies them. A third round would be past the governor's
+default, which makes it Wade's call, and none was spawned.
+
+**Queue at close:** High 7 · Medium 183 · Low 114 · highest id `Q-606` · next free `Q-607`.
+No entry filed or closed: three were extended (`Q-564`, `Q-581`, and `Q-592`'s progress note) and `Q-592` stays open for Phase 327.
+
+## Phase 327 (executed 2026-09-23 — `Q-592` part 2: the last 11 § *Notes* lines fixed, and the section deleted)
+
+**No menu this phase.** The brief's one outward-facing step — commenting on and closing upstream
+`#435` — had already been done: `gh issue view 435 --repo wade-cms/sysop` read `CLOSED` at
+2026-09-24T02:47:40Z with a Phase 326 comment. Wade's three Phase 326 answers still governed
+the work: fix the lines here, split the overflow into this phase, and delete § *Notes* with a pin
+on its absence once it is empty.
+
+### What the 11 lines were, and what happened to each
+
+Numbered as Phase 326's table numbered them (file order at that phase's open). **All 11 fixed;
+none folded, none dropped.**
+
+| # | Site | Disposition |
+|---|---|---|
+| 8 | `tests/conftest.py` shard header | **fixed**: `test_the_report_header_names_the_slice_pytest_actually_parsed` runs a real `pytest --collect-only` session per slice, for `2 of 5` and `1 of 3` (neither is the `0 of 1` a constant would return), plus an unsharded control that must print no header |
+| 17 | reference-pins § 6 recipe | **fixed**: the recipe runs in a subshell that moves to the top of the checkout first (`--show-cdup`), so it works from any directory inside it and stops at the failed `git` outside one. The fragment comparison was replaced by a test that extracts the comment's own lines and executes them from the top, from `tests/` and from two levels down, plus an outside-a-repo test that requires git's exit 128 |
+| 28 | § *Coverage is one step* figures | **fixed**: `published_coverage_problems` derives the declared step, the rule count and Step 3's id range from `DECLARED_IDS`, with one isolating control per arm and three that move the set |
+| 20 | `_standing_containment` end anchor | **fixed**: the slicer refuses a span containing a blank line, which is what widening its end anchor produces; a control un-bolds the next paragraph's lead and requires the refusal |
+| 24 | `test_thinning_transforms.py` count guard | **fixed**: its two inline lists are pinned by content through `tests/_case_pins.py`, every inline list must carry a pin, the decorator count is exact, and the two named lists' floors became exact counts driven by a control |
+| 25 | `_case_pins.py` inert `_UNEVALUATABLE` | **fixed**: the sentinel became `CaseList.unevaluated`, a count the missing-row report names ("1 row(s) in this list are not literals"), and a test requires both that message and its absence on a plain deletion |
+| 26 | `_case_pins.py` three unexercised branches | **fixed**: a tuple-spelled case list and a column-1 `int` projection are now driven. **The third was first recorded as an equivalent mutant, and that was false.** The round's record lens found a reachable row that raises outside the tuple: `literal_eval` does its own arithmetic, and a 400-digit int plus `1j` raises `OverflowError`. `OverflowError` joined the tuple at both sites. After round 2, a test per site tells that site's narrow tuple from `Exception` (round 2 broadened one site at a time and each survived the first shared test), and `TypeError` has a real-row test of its own |
+| 27 | census case-pin bound | **fixed**, and not only with a comment: `unpinned_list_problems` requires the pins to partition a module's inline lists, so deleting a `_CASE_PINS` entry is red unless the list also leaves the inline population. A new control drops each of the seven entries in turn. The residual bound is stated at the helper |
+| 29 | the register's phase range | **fixed**: `test_the_registers_population_line_is_derived` now also derives `(161–326)` from the ledger's numbered phase rows |
+| 31 | `install.sh` ignored-file probe | **fixed**: the probe adds `git ls-files --others --ignored --exclude-standard` over the same scan paths, filtered by the copy loops' *name* rule: they skip a directory named `__pycache__`, and their `*` globs never match a dotfile. It is not filtered by their reach, so it can over-report (see the declared limits). Not `--ignored=matching`, for the reason the line gave |
+| 44 | `tsc`'s hard-coded `frontend/` | **fixed**: `_run_tsc` discovers its directory with ESLint's helper (`node_modules/typescript` beside a `tsconfig.json`), and both stages run the discovered directory's own `node_modules/.bin` binary. Its final shape came from two rounds: `frontend/` is used alone whenever it qualifies (the pre-phase behaviour for every such layout), the walk runs otherwise and skips nested checkouts, ESLint keeps its own pre-phase discovery, and a config that puts no files in the program is skipped on `tsc --listFilesOnly`'s answer. The line cited the `run_checks.sh` PATH entry and spelled out only the `tsc` consequence. The same entry was also ESLint's only route to a binary: ESLint already discovered `web/`, then ran the bare name, which resolved only for `frontend/`. The round then found three layouts the first cut of discovery broke (see Round 1) |
+
+**Then § *Notes* was deleted.** `test_the_sysop_notes_section_is_gone` replaces the three pins
+that held it frozen, last and single. After the round it refuses a Notes heading in any case, at
+any ATX level or in setext form, a bold `**Notes**` lead, and a dated bullet line with any of
+four separators; a heading that only contains the word (`## Release Notes checklist`) passes. The `Sysop Notes intro` span left `PIN_HASHES`, the `CLAUDE.md`
+stanza now says the section is gone, and the `CLAUDE.md conventions` hash moved with it. The
+three readers the brief named moved in the same commit: the pointers in `tests/_case_pins.py` and
+`tests/test_case_pins.py`, `fix_in_branch_remeasure_supplement.py notes` (which printed a
+`StopIteration` traceback without the heading and now prints a zero), and the baseline's derive
+command (which gains a comment: it reads 0 at HEAD now). `Q-592` is closed and archived.
+
+### Also fixed
+
+- `tests/test_ci_shard.py` — the report header's real-session test (8)
+- `tests/test_review_close_reference_pins.py` — the recipe executed from three directories and refused outside a checkout; the coverage figures derived, with per-arm controls (17, 28)
+- `tests/test_reviewer_placement.py` — `_standing_containment` refuses a multi-paragraph span, with a control (20)
+- `tests/test_thinning_transforms.py` — content pins, a partition, an exact decorator count, exact named-list counts and a driven control (24)
+- `tests/_case_pins.py` — `CaseList.unevaluated` replaces the sentinel; `unpinned_list_problems` (25, 27)
+- `tests/test_case_pins.py` — tuple-list, column-1 and unevaluated-row controls (25, 26)
+- `tests/test_reader_census.py` — the partition wired in, and a per-entry deletion control; `_PARAMETRIZE_DECORATOR_COUNT` 14 → 15 (27)
+- `tests/test_ledger_stats.py` — the register's phase range (29)
+- `install.sh` + `tests/test_install_source_dirty.py` — ignored files make the source dirty unless the copy loops' name rule skips them (`__pycache__/`, dotfiles) (31)
+- `core/companion/docs/WORKFLOW.md` — `source_dirty` says what "clean" covers (31)
+- `core/companion/scripts/run_checks/lsp.py` + `lint.py` + `tests/test_run_checks_lsp.py` + `tests/test_run_checks.py` — `tsc` discovery; the project's own binary for `tsc` and ESLint (44)
+- `core/companion/scripts/run_checks.sh` — the `frontend/` PATH comment says it is now a bare-name fallback (44)
+- `core/skills/codebase-review/SKILL.md` + `core/companion/docs/WORKFLOW.md` (b) and (d) — how `tsc` and ESLint resolve, and when they skip with a warning. **Both said "silently skips if its binary is missing", and the runner warns on stderr there**; that was the note's unverified parenthetical, checked and found the other way round (44)
+- `REVIEW_CHECKLIST.md` — § *Notes* deleted; `Q-592` archived
+- `tests/test_fix_in_branch_tier.py` + `CLAUDE.md` — the absence pin, the stanza sentence, and the two hash-table moves
+- `tools/baselines/fix_in_branch_remeasure_supplement.py` + `tools/FIX_IN_BRANCH_BASELINE.md` — the two readers of the deleted heading
+- `core/companion/scripts/run_checks/lint.py` + `lsp.py` — `frontend/` preferred among several candidates and reached through a symlink, solution-style configs skipped, an absolute local binary, install advice that prefers `frontend/` (round 1)
+- `tests/test_run_checks_lsp.py` + `tests/test_run_checks_generalizations.py` — discovery tests for each round-1 case, skip reasons and messages (round 1)
+- `core/companion/checks.yml.fragment` + `core/companion/docs/WORKFLOW.md` (the LSP, ESLint and semgrep paragraphs) + `core/skills/codebase-review/SKILL.md` (semgrep) — the remaining "silently skips" claims (round 1, and the author's class grep)
+- `tests/_case_pins.py` + `tests/test_case_pins.py` — `OverflowError` in the `literal_eval` tuple; both directions tested; the stacked-decorator sum (round 1)
+- `tests/test_reader_census.py` + `tests/test_thinning_transforms.py` — one `pin_guard_problems` per module that the guard and its controls call; a per-entry control in the thinning module; `_PARAMETRIZE_DECORATOR_COUNT` 5 → 6 there (round 1)
+- `tests/test_review_close_reference_pins.py` — the coverage predicate over five sites and every occurrence, pattern-anchored controls, and the recipe's recompute and subshell pinned (round 1)
+- `tests/test_reviewer_placement.py` — a whitespace-only line ends the containment paragraph (round 1)
+- `tests/test_ledger_stats.py` — the register range read beside its counts, with a control (round 1)
+- `tests/test_fix_in_branch_tier.py` — `notes_section_problems`, with revival and innocent-mention controls (round 1)
+- `install.sh` + `tests/test_install_source_dirty.py` — a failed `ls-files` no longer discards a dirty result; the comment says what the filter matches (round 1)
+- `tests/test_cut_release_gate.py` + `REVIEW_CHECKLIST.md` `Q-466` — the harness message prints the script's exit code; the round's instance recorded
+- `core/companion/scripts/run_checks/lsp.py` — `tsc --listFilesOnly` replaces the JSON detector; `_find_tsc_dir` (conventional-first, nested checkouts skipped); a location-less config error is `failed` (round 2, on Wade's answer)
+- `core/companion/scripts/run_checks/lint.py` — ESLint's discovery restored to its pre-phase rule; `skip_nested_checkouts` for tsc (round 2)
+- `core/companion/docs/WORKFLOW.md` + `core/skills/codebase-review/SKILL.md` — the discovery and skip sentences match the final shape (round 2)
+- `tests/test_run_checks_lsp.py` + `tests/test_run_checks_generalizations.py` — a two-call `tsc` mock; listing, fall-through, nested-checkout, label, shadowing and advice tests; ESLint's restored refusal pinned (round 2)
+- `tests/_case_pins.py` tests, `tests/test_reader_census.py`, `tests/test_thinning_transforms.py`, `tests/test_review_close_reference_pins.py`, `tests/test_reviewer_placement.py`, `tests/test_ledger_stats.py`, `tests/test_fix_in_branch_tier.py` — a control for each round-2 guard survivor (round 2)
+
+### What the phase found that the lines did not say
+
+**A `Q-` citation in `core/` moved a published number.** My first comment in `lsp.py` cited
+`Q-592`, and `test_the_spec_publishes_the_authoring_figures_it_computes` went red: § 7.2 publishes
+486 `Q-` ids across `core/`, and the tree computed 487. The brief warns about exactly this. The
+citation came out of the runtime comment, which is also where dimension 10 would put it.
+
+**The pins' own sibling class, in the module that pinned them.** The line said the thinning
+module "still guards its 2 inline parametrize lists by count". Its two *named* lists had the same
+shape one assertion up (`>= 4` and `>= 8` against 9 and 12 rows). Both became exact.
+
+### Author-side pass
+
+**Rule 1: the author's final battery reported 44 of 44 non-equivalent mutants killed, with 16 of 16
+controls green — and the round's guard lens then ran 99 of its own and 35 survived** (see Round 1).
+That is the ledger's recurring shape, once more. The runs:
+Every run, controls and restores included, had `PYTHONDONTWRITEBYTECODE=1` and its own fresh
+`PYTHONPYCACHEPREFIX`. Every file was restored from bytes held in memory and compared after each
+run. The battery ran three times:
+
+- **Run 1: 34 of 42 killed.** The 8 survivors:
+  - **R3 was equivalent.** Printing the flattened block without `_block_canon` gives the same
+    string, because canonicalisation is the identity on already-flattened text (checked: 13,779
+    characters either way). It was replaced by a non-equivalent recipe mutant, which is killed.
+  - **R4**: `;` for `&&` after the `git` call. The outside-a-repo test accepted any nonzero exit.
+    It now requires git's 128. The mutant exits 127 here (measured by the battery). In CI,
+    where the test substitutes the interpreter, it would exit 1 at the failed import; that half
+    is reasoned, not run.
+  - **C3, C4 and C5**: each arm of the coverage predicate neutered alone. Every control moved the
+    declared set, which trips two arms at once. Four isolating controls now use the real set and
+    edit one sentence each.
+  - **T5**: the exact count loosened back to a floor with no row removed. The bar was an inline
+    assert. It is now a predicate driven by a control that feeds it shorter lists.
+  - **I4**: the dirty count computed from `porcelain` alone. The test now asserts
+    `dirty:     1 path(s)`.
+  - **K3**: `_node_bin` ignoring the exec bit. A non-executable `.bin/tsc` now must fall back to
+    the bare name. Without the check, `subprocess.run` raises `PermissionError`, which neither
+    stage catches.
+- **Run 2: 43 of 44 killed.** Two rows were added (C6 and T6). **T6 survived** because the
+  first cut of T5's control also changed the row count, so the count arm answered for the form
+  arm. The form controls now keep the count.
+- **Run 3: 44 of 44.**
+
+The rows cover all 11 lines plus the absence pin: the header (3), the recipe (4), the coverage
+arms (6), the containment span (3), the thinning pins (6), `_case_pins.py` (4), the partition
+(2), the register (2), the installer probe (4), discovery (6) and § *Notes* (4).
+
+**Rule 2:** every changed sentence was read against what it describes. I checked the
+`WORKFLOW.md` (b) and (d) skip claims against `lsp.py` and `lint.py`: each missing-binary path
+prints `warn:`, and only the no-frontend path is silent. That is why both sentences changed. The
+`PermissionError` claim in the K3 test was checked against both stages' `except` clauses.
+
+**Rule 3:** the commands the change prescribes were run. The recipe is run by its test. The
+baseline's derive command printed `0` at HEAD. `fix_in_branch_remeasure_supplement.py notes`
+printed the new zero line.
+
+**Rule 4** applies to two changes: the installer's filter over filenames git reports, and the
+discovery walk over trees other tools write. **It was applied too narrowly, and the round showed
+where**: the only real artefact read was GDP, which has one frontend. A second TypeScript package
+beside `frontend/`, a symlinked `frontend/`, and Vite's default root layout were all derivable
+from what the change widened, and none was in the corpus. **What else matches:** `ls-files -o -i` at HEAD
+returns 29 ignored paths under the scan set, all under `__pycache__/`, so the filter leaves zero
+here (measured). **What the real artefact contains:** GDP has one `frontend/tsconfig.json` beside
+one `frontend/node_modules/typescript`, and no nested agent worktrees, so discovery finds exactly
+the directory the hard-coded path named (measured read-only). **Declared limits, not closed:**
+- The filter matches the copy loops' *name* rule, not their *reach*. The round placed one
+  ignored `.pyc` at a time in eleven places: every one was reported, and six of the eleven never
+  land. That fails toward the warning; the comment and `WORKFLOW.md` now say so.
+- Several candidates with no `frontend/` among them still skip `tsc` loudly. That was a skip
+  before discovery existed too, only a silent one.
+
+**Full suite at `783af81`, in a placed worktree: 7,647 passed, 210 skipped, exit 0.** That run
+predates the battery's closures, which touched four test modules. Those modules passed after the
+closures, and the suite is re-run over the round's fixes.
+
+### Round 1 — three lenses, all placed at `89aa11b`
+
+Three lenses, because the phase ships behaviour and a record full of counts. Each was placed with
+`git worktree add --detach` outside the repo, with the primary's `.venv` symlinked in, its own
+`TMPDIR` and scratch directory, and echoed `89aa11b178a96df3f45ef248827752a29778b0db` and
+`claude-opus-5-5` before its first finding. All three checkouts ended clean at `89aa11b` apart
+from the `.venv` symlink. The primary's local git config was unchanged, and its tree held only
+the author's own round-fix edits.
+
+**Execution lens (+ dimension 10): 3 MED, 5 LOW, all verified, all fixed.**
+- **MED: discovery switched `tsc` off for layouts it used to check.** `frontend/` plus a root
+  install, an `e2e/` or `tools/` package, or an in-repo worktree copy all skipped as ambiguous,
+  and the warning named a setting that does not exist. Reproduced by the author with the stage
+  itself. `frontend/` now wins when it qualifies, and the warning gives a remedy that exists.
+- **MED: a symlinked `frontend/` was skipped with no warning**, because the walk does not follow
+  links. Reproduced. `<root>/frontend` is now checked directly, in discovery and in the
+  no-install path.
+- **MED: Vite's default root `tsconfig.json` became a false clean.** It is solution-style
+  (`"files": []` plus `references`), so `tsc -p` checks nothing and exits 0. The lens measured it
+  with a real `tsc` 6.0.3. The same false clean existed for that layout under `frontend/` before
+  this phase; discovery widened its reach to the root. A solution-style config (JSONC comments
+  and trailing commas allowed) now skips with a warning and reason `not-configured`.
+- **LOW:**
+  - a relative `--repo-root` resolved the local binary twice (the path is now absolute);
+  - the probe's prose claimed to match the copy (now corrected);
+  - two `WORKFLOW.md` siblings still said "silently skips";
+  - the skill sentence was an editor's explanation (dimension 10), rewritten as what the runner
+    sees;
+  - the install advice could point into a harness worktree (it now prefers `frontend/`, then the
+    shallowest config).
+- **Its full suite at the placed checkout:** 7,653 passed, 210 skipped, exit 0.
+
+**Record lens: 3 MED, 5 LOW, all verified, all fixed.**
+- **MED:** the line-26 equivalent-mutant claim was false (`OverflowError`, above).
+- **MED:** "silently skips" survived at three shipped sites, one of them
+  `core/companion/checks.yml.fragment`, which every consumer's `checks.yml` carries. All fixed,
+  plus two semgrep siblings the author found with the class grep.
+- **MED:** the same discovery regression as the execution lens, found independently.
+- **LOW:**
+  - the skill sentence contradicted `WORKFLOW.md` (d) on ESLint's silent case;
+  - the brief kept a positional sentence ("the ranking below opens with them");
+  - a docstring overclaimed that every pointer row carries its own comment;
+  - the new `ls-files` early return could discard a dirty `status` result (now falls through,
+    with a `git`-shim test that the old code fails);
+  - the absence pin was case-sensitive, and the ESLint attribution overstated what the line had
+    left out.
+- **Its full suite:** 7,652 passed, 1 failed, 210 skipped. The failure was
+  `test_cut_release_gate.py::test_pass_4b_is_quiet_on_a_correctly_stripped_tree`. It stopped
+  after "building mirror" and passes alone, so it is `Q-466`'s contention class, in code this
+  phase did not touch. It is the same test's second such instance. Under fix-by-default the
+  harness message now prints the script's exit code, and `Q-466` records the instance.
+
+**Guard lens: 99 mutants, 64 killed, 35 survived, 10 controls green, 5 false kills. 3 MED, 4 LOW.
+All verified.** It judged 8 survivors equivalent or near-equivalent, and T4 (a row rewritten in
+place as a duplicate) is the bound the docstring states.
+- **MED:** the one-paragraph refusal missed a whitespace-only blank line. CommonMark treats that
+  line as blank, so it ends a paragraph, and the lens widened the span through one with all 60
+  tests green. It now matches any whitespace-only line.
+- **MED:** the partition could be unwired from the guard in both modules with the suite green,
+  because its control called the predicate directly. Unwiring it reopened the `Q-518` bypass
+  end to end (N8). Each module now has one `pin_guard_problems` that the guard and every control
+  call. The thinning module gained its own per-entry control, and the per-entry check reads any
+  problem, not the first.
+- **MED:** the coverage figure is published in two more places, `REFERENCE.md`'s
+  screening-limit sentence and the monograph, and a stale second copy of a guarded sentence was
+  never read. `published_coverage_problems` now reads five sites and every occurrence at each,
+  and accepts the count as digits.
+- **LOW:**
+  - the recipe test could not tell regenerating the constant from echoing it, and could not see
+    the subshell go;
+  - five code arms had no control: the range start, the two "sentence gone" arms, exact-count
+    additions, and the stacked-decorator sum;
+  - the register's range could sit in another sentence;
+  - the new `tsc` skip reasons and two messages were unasserted;
+  - the absence pin missed setext, bold and other-bullet spellings.
+- **False kills:** a count written as digits (now accepted), a hyphen for the en dash in the
+  register range (now accepted), `2>/dev/null` on the recipe's `git` (the stderr assertion is
+  gone; exit 128 is the discriminator), and an unrelated `## Release Notes checklist` heading
+  (no longer matched). The fifth, a reworded coverage sentence, **stays a false kill on
+  purpose**: the guard fails closed and says to restate the sentence from `DECLARED_IDS`.
+- **One false kill came from my own controls, not the guard.** Their anchors were literal, so
+  the lens's digit respelling (`8` for `eight`) left a control with nothing to find. They now
+  anchor by pattern.
+
+**Verifying the round's fixes.**
+- **Lens 2's own battery, unchanged, re-run at `fde9d58`** (the fix commit), in a placed
+  checkout: 69 of 94 applied mutants killed and 10 of 10 controls green. The 8 survivors are the
+  ones the lens itself judged equivalent, plus T4. 17 rows no longer applied, because the code
+  they targeted was rewritten.
+- **Correction, from round 2's execution lens:** that tally is miscounted. The first log holds 94
+  mutant rows: 69 killed, 8 survived and 17 no longer applied, so it is **69 of 77 applied**. A
+  second log of 5 rows (4 killed, 1 no longer applied) was left out, so 18 rows no longer applied,
+  not 17. And "the ones the lens itself judged equivalent, plus T4" is false: the lens's own notes
+  mark only H6, H7, P3 and K7 equivalent. H8 is a pre-existing arm, and T8 and N4 carry no
+  equivalence claim. N4 (the per-entry control cut to one entry) was a real survivor, closed in
+  round 2.
+- **Those 17, re-pointed at the new code, plus rows against the new material** (solution-style
+  detection, the `frontend/` preference, the symlink reach, the composite guard, the widened
+  absence pin): **33 of 34 killed, 10 of 10 controls green**. The survivor, X18, is equivalent:
+  `_find_frontend_dir` already returns an absolute path, so `_node_bin`'s own `abspath` only
+  matters for a caller that passes a relative directory. The first run of those rows left two
+  survivors, the symlinked no-install warning and the register range's placement; both were
+  closed before this count.
+
+**The governor's second-round line.** Round 1's fixes replaced a mechanism (the coverage
+predicate) and added two `tsc` behaviours no reader has seen: the `frontend/` preference and
+solution-style detection. That meets the governor's condition, so a second round runs on its
+terms. See below.
+
+### Round 2 — two lenses, both placed at `fe19b73`
+
+Both lenses echoed `fe19b73ff2d21a4009e0cdfd0c4fac77f030290f` and `claude-opus-5-5`, and both
+checkouts ended clean at that commit apart from the `.venv` symlink.
+
+**Execution + record lens: 1 HIGH, 6 MED, 3 LOW, all verified.** It ran every case with a real
+`tsc` 6.0.3 at `339864e`, `89aa11b` and `fe19b73`.
+- **HIGH:** Nx's solution config (`"files": [], "include": []`) was still recorded `executed`
+  with 0 findings: the JSON detector read any `include` as disqualifying.
+- **MED:**
+  - a solution config with a BOM was a false clean;
+  - `"files": []` with `include` inherited through `extends` was a false skip;
+  - the `frontend/` preference silently changed ESLint, which had always warned on two installs;
+  - the round-1 union split labels for an in-repo `frontend -> web` symlink and listed a
+    `Frontend/` directory twice on case-insensitive APFS;
+  - with no install in `frontend/`, `tsc` checked an in-repo agent worktree's copy and recorded
+    it as this checkout's result;
+  - the re-run tally above was miscounted.
+- **LOW:**
+  - three record sentences still said the probe filters "what the copy loops take";
+  - the skill line said a missing frontend install skips silently, which is false for `tsc`;
+  - a config error with no file location (`error TS18003`) was read as a clean run. That one
+    predates the phase.
+- **Its full suite:** 7,691 passed, 210 skipped, exit 0.
+
+**Guard lens: 112 mutants, 57 killed, 55 survived, 16 of the survivors argued equivalent or under
+a stated bound. 1 HIGH, 7 MED, and LOWs. All verified.**
+- **HIGH:** `pin_guard_problems` had no control on its third term, `parametrize_shape_problems`.
+  Deleting that one line left both modules green, and with it gone a whole refusal control could
+  be deleted or a name-driven list sliced to nothing: round 1's wiring class again.
+- **MED:**
+  - the coverage predicate's expected values could each be hard-coded, because every
+    set-moving row moved two of them;
+  - the per-arm controls false-killed on a legal re-wrap;
+  - the screening-limit anchor (`one of these N rules`) fired on an unrelated sentence elsewhere
+    in `REFERENCE.md`;
+  - each `except` site could be broadened alone;
+  - `TypeError` could leave the tuple though a real row raises it;
+  - the `beside` check on the direct `frontend/` path was never driven;
+  - two arms of the JSON detector were never exercised.
+- **LOW:**
+  - arms of the install-advice sort, the whitespace class, the ledger range start and the
+    Notes regex that no control drove;
+  - the exact decorator count holding in one direction only (pre-existing);
+  - the per-entry control shrinkable to one entry;
+  - vanish rows at three of five coverage sites;
+  - the known-debt range start;
+  - a stale copy placed before the real sentence;
+  - a textual subshell check;
+  - `<strong>` in the monograph.
+
+**Wade's two answers after round 2, by menu:**
+1. **Replace the JSON detector with `tsc --listFilesOnly`**, rather than patch its spellings:
+   discovery had been broken by two rounds in a row.
+2. **Fix every bounded round-2 finding, re-run round 2's guard battery author-side, then run one
+   narrow round-3 lens on the shipped `tsc` changes only.**
+
+**What was built on those answers.**
+- **`tsc` asks `--listFilesOnly` first.** An exit-0 listing with no file outside `node_modules`
+  skips with reason `not-configured`; anything else falls through to the real run.
+  - Measured with the real `tsc` 6.0.3 on six configs:
+    - Vite, Nx and BOM: 0 project files, skipped;
+    - `extends`: runs and reports what `tsc` reports;
+    - normal: runs and reports its error;
+    - no inputs: exits 1, falls through, and is now recorded `failed` (`config-error`) instead
+      of clean.
+- **Discovery is conventional-first.** `_find_tsc_dir` returns `frontend/` alone when it holds
+  a `tsconfig.json` beside `node_modules/typescript`. The walk runs only otherwise, and skips
+  any directory holding `.git`. So every layout `frontend/` served before the phase behaves
+  identically, labels included, and there is no union to split.
+- **ESLint's discovery is back to its pre-phase rule** (ambiguity warns and skips). It keeps
+  only the local-binary improvement.
+- **Every guard finding above got its control**, including a composite-shape control in both
+  modules, isolated one-value set moves, whitespace-tolerant control anchors, per-site `except`
+  tests, and one revival row per Notes-regex alternative.
+- **Stated bound, not closed:** `want["steps"]` can be hard-coded while the declared set spans
+  one step, because any set that adds a step moves the range's first or last id too, and those
+  arms fire. It becomes checkable when a second step is declared.
+
+**Round 2's guard battery, re-run author-side at `e3d702b`**, in a placed checkout, with the
+lens's harness and batches unchanged except for the path. Figures read off its six logs:
+- **129 rows: 102 still applied and 27 no longer applied**, because the code they targeted was
+  rewritten: the JSON detector, the union discovery and the old Notes arms.
+- **Of the 93 applied mutants and scenarios, 80 were killed and 13 survived.** Of the 20 the
+  lens reported surviving that still applied, 19 are now killed. The one left is A14 (the
+  `steps` bound, above).
+- **The other 12 survivors:**
+  - the lens's own equivalents: A10, A11, PL5, L5, K3, K4, K5 and I2;
+  - its two documented bounds, A16 and CX1;
+  - R4 and R5, the two `abspath` calls, each redundant given the other.
+- **Legal-edit probes: 5 of 9 stayed green**, among them all three re-wraps that were false kills
+  before (F5, F5b, F5c). F3 and F7 went red on the verbatim Step-3 pin, by design, as the lens
+  said.
+- **F1 and F6 were false kills from my own controls again.** The screening control's anchor
+  matched the inserted sentence too, and the monograph control did not cross `<strong>`. Both
+  were fixed, and both probes then passed.
+
+**Re-pointed rows for the 27, plus rows against the new code:** 22 rows, 19 killed on the first
+run, 5 of 5 controls green.
+- Two survivors were closed with tests, then killed on a re-run:
+  - LF2: a failed, empty listing must still run the check;
+  - N11: the skip warning leaves nested checkouts out.
+- **The third, N13, is filed as `Q-607`** rather than closed. Turning the nested-checkout skip on
+  for ESLint survives because no test pins either answer, and the answer is a design question.
+  A git submodule `frontend/` is also a nested checkout, and ESLint lints one today.
+
+### Round 3 — one lens, placed at `4e81faf`, on Wade's answer
+
+Scoped to the shipped `tsc`/ESLint pre-scan changes only, as Wade chose. The lens echoed
+`4e81fafc0b71932ede6b5a58ff2d224028986161` and `claude-opus-5-5`. It extracted `339864e` and
+`4e81faf` with `git archive`, drove both with a real `tsc` 6.0.3, and wrote nothing to GDP or the
+primary checkout.
+
+**1 HIGH, 1 MED, 4 LOW, all verified, all fixed.**
+- **HIGH:** with a `frontend/tsconfig.json` and no install beside it, the walk adopted another
+  qualifying project and recorded `executed` over code that was never the frontend's. The same
+  happened with a hoisted workspace root, which re-checked `frontend/` with the wrong options.
+  Before the phase this was a loud skip. Reproduced by the author with the stage.
+  `frontend/tsconfig.json` is now authoritative: `frontend/` is checked if it qualifies and
+  skipped loudly otherwise, and the walk runs only in a repo without one. So every repo with a
+  `frontend/tsconfig.json` behaves exactly as before the phase.
+- **MED:** tsc suppresses semantic checking while an options diagnostic stands, and under tsc 6
+  those are located in the config (`tsconfig.json(1,81): error TS5107` for `"target": "es5"`).
+  So the config-error arm, which looked only for unlocated errors, still read such runs as
+  clean. This predates the phase. The arm now fails a run that exits nonzero with no diagnostic
+  located in a source file. Checked with the real `tsc`: the `es5` config records
+  `failed`/`config-error`, and an ordinary config still records `executed` with its finding.
+- **LOW:**
+  - the skip detail no longer named the directory (`frontend/node_modules/typescript absent`
+    is restored);
+  - a repo living under any `node_modules/` directory had every listed file excluded (the
+    filter now reads each path relative to the frontend dir, by component);
+  - the install advice could not work for a hoisted or workspace install (it now says so);
+  - a repo whose only TypeScript is in a nested checkout recorded "no tsconfig.json" silently
+    (it now warns). The docstring's claim is narrowed to the install: a root config's own
+    `include` can still reach files under a nested checkout.
+- **Its clean checks:** GDP's real `frontend/` records `executed` with 1,175 identical findings at
+  `339864e` and `4e81faf`. The author re-ran it on the final code with the same result. The
+  listing costs about 1.1 s on GDP.
+
+**Author battery over the round-3 fixes: 8 of 8 killed after one closure.** The first run killed 7;
+the hoisting caveat was unasserted and is now pinned.
+
+**No fourth round.** The governor puts one past the third in Wade's hands, and his answer
+authorised one narrow round 3.
+
+**Full suite over the final tree (`d340042`), in a placed checkout: 7,730 passed, 210 skipped, exit 0.**
+
+**Queue at close:** High 7 · Medium 183 · Low 114 · highest id `Q-607` · next free `Q-608`.
+`Q-592` closed and archived; `Q-607` filed; `Q-466` extended.
+
+## Phase 328 (executed 2026-09-24 — `Q-459`: the close fixes its reviewers' non-blocking notes, after the merges)
+
+**Wade's three answers at the phase's open, by menu, each the recommended option:**
+- **Scope: fix-by-default parity.** A close may fix any note in a file its merged diff touches,
+  minus the never-list, minus any fix touching a security-map glob; a behaviour fix brings its
+  pinning test. Not the entry's doc/test/config-only bound.
+- **Re-check role: `convention-gate`**, not the `mechanical` role the entry proposed.
+- **A formal `NOTES:` block** in Step 2b's prompt, not harvesting prose.
+
+### What the entry assumed, and what the tree said
+
+**The premise holds, but only informally.** The entry said the 2b fleet's non-blocking
+findings "are filed". Sysop's shipped Step 2b prompt returned `VERDICT: APPROVED` or `VERDICT:
+BLOCKED` and nothing else, so it had no channel for them. Reviewers wrote such findings in prose
+anyway, and the session filed them. **On GDP, read-only, the count of task bodies saying a close
+surfaced them depends heavily on the match form**, so it is a size, not a figure. At GDP
+`93f88670`, over the working tree's `tasks/*/*.md`, case-insensitive:
+- **74 bodies, 32 open (24 Low, 8 Medium).** The form was ``(surfaced|found|filed|flagged|raised)\b[^.]{0,80}?(`/review-close`|/review-close\b|\bStep 2b\b|\b2b (convention|security)|\bconvention (agent|lens|fleet|gate)\b|\bsecurity (lens|fleet|agent)\b)``.
+- **85/33** without the word boundaries. Its extra hits included a task *id* containing
+  `review-close`.
+- **57/25** barring line breaks inside the match.
+
+The round's record lens read the committed tree at the same commit with its own forms. It got
+71/30, 78/35 and 42/21, and none of its forms gave 74/32. The first record published 74/32 without
+the regex, which made it unreproducible. `REFERENCE.md` now says "between about 40 and 85".
+
+**Where the fix lands is a choice, and the first record called it forced.** A fix committed to
+the feature branch moves its tip past the `branch_tip:` its pending-doc recorded. Step 3b's
+`staleness()` (`Q-471`) then refuses the collect with `PENDING-DOC STALE`, which the execution lens
+reproduced: exit 6 after one commit. But `/document-work` Step 3 already handles its own
+in-branch fixes by re-stamping `branch_tip:`, so the close could have done the same. It would
+then be editing another skill's record, whose `summary:` does not mention the fix. The fix lands
+on the merge target after the merges instead. That fixes the merged state once, and `4a-post`
+verifies it.
+
+**"Fires on every close" was wrong for any design worth building.** The re-check spawns only on a
+close that fixed a note, and it reviews one commit, not a branch.
+
+**`Q-602`(c) is answered in that entry**, for its build to confirm: "clean on the first pass"
+means no `BLOCKED` from either fleet. Notes do not disqualify a branch.
+
+### What changed
+
+- **`review-close/SKILL.md` Step 2b**:
+  - the convention prompt gains a `NOTES:` block, requested on both verdicts, with `NOTES: none`
+    for an empty one. The security twin carries it, being "step 3's prompt … verbatim" apart from
+    its four substitutions;
+  - item 4 collects the notes per target.
+- **Step 4a's PR-reuse pointer** now reads "go straight to **`4a-fix`**, then **`4a-post`**".
+  Before round 1 it sent that shape past the new step.
+- **New `### 4a-fix. Fix the Close's Notes`**, between `4a` and `4a-post`:
+  - set aside notes on a target that did not merge;
+  - fix, file or drop each other note. A fix qualifies when all four hold:
+    - every file it edits is in the close's merged diff, apart from the test that pins a
+      behaviour fix. The command is `4a-post` item 2's verbatim, and `NO_ORIGIN_MAIN` files
+      everything;
+    - it is off the never-list;
+    - it is outside both security maps' globs;
+    - a behaviour fix brings its test.
+  - a note from the security twin is always filed, and so is a never-list note, whatever the
+    human answers;
+  - every fix goes in ONE commit, `docs: review-close fix at close — <N> note(s)`, with no note
+    text in the message. Its SHA is printed and carried as a literal;
+  - one `convention-gate` agent re-checks it:
+    - baselines are re-captured before the spawn;
+    - the checkout is placed at the fix commit with the `sysop-2b-` prefix, so 2b's removal loop
+      and leak assertion cover it;
+    - the prompt is 2b's with five changes (four substitutions and the `NOTES:` block removed)
+      and nothing else changed, so it raises no notes and the loop is one pass;
+    - `BLOCKED`, a mismatched echo or no verdict **drops** the commit, in two calls: `git
+      rev-parse HEAD`, then, only if that printed `<fix-sha>`, `git rebase --onto <fix-sha>~1
+      <fix-sha>`. The notes are filed. A drop that cannot run stops the close with the fix
+      still in place;
+  - filed notes wait until **the start of Step 4d**, which gains a one-line pointer. They
+    follow `/add-task` Steps 2, 3 and 5.1–5.3 in one `docs: review-close file close notes …`
+    commit. The validator runs first, and `surfaced_by:` names the claimed ids (`[]` for a
+    review batch or the unpushed-main group).
+- **`4a-post` item 4** gains a first arm. On the gate's first run, with `HEAD` still the fix and a
+  clean tree, it drops the fix, routes its notes to filing, and re-runs once. A green re-run
+  means the fix was the failure. A red one restores the fix with `git cherry-pick` and hands
+  over to the existing arms.
+- **Step 8** gains a `Close notes:` line.
+- **`REFERENCE.md` § *Step 4a-fix — provenance*** holds the argument (dimension 10): why a
+  channel, why after the merges, why drop and why filing waits, what stops remain, the role, the
+  security path, and the scope.
+- **`WORKFLOW.md` § 2.8** gains item 5a. **The model-roles sites** that said `convention-gate`
+  governs one pin or one spawn now say two: `served_models.yml`, `WORKFLOW.md`,
+  `docs/configuration.md` and `_model_roles.py`'s docstring. The counts come from
+  `tools/phase223_role_census.py`: 34 pins (was 33), 15 inline (was 14), `convention-gate` 2.
+- **Census and spec.** Every block the phase edited was `runner` and every block it added is
+  `runner`. `tools/phase294_figures.py` reports 1,926 / 352,641 / 76.5% over 4,077 lines, and
+  `editor`+`mixed` is unchanged at **105,497**. `EDITOR_MIXED_CEILING` was not touched. Spec § 8.1
+  gains a Phase 328 paragraph, Phase 326's goes to the past tense, and § 7.2's `Q-` count across
+  `core/` is 486 → 489.
+- **Tests:**
+  - `tests/test_review_close_fix_at_close.py` (new, 126 tests). It has ten structural predicates,
+    each with one control per check (scoped, callable controls where the text recurs), and one
+    control per licence pattern. Eleven legal rewrites and a rendering-identical re-wrap must
+    stay green. Unit tests check that its slicer and its legal-rewrite helper fail closed. The
+    execution half runs the shipped fences in a throwaway repo whose `origin/main` has moved on,
+    so a two-dot diff is distinguishable: the merged-diff command with and without `origin`, the
+    commit fence, the placement block, 2b's removal loop and the drop;
+  - `tests/test_fix_in_branch_tier.py`: nine new `PINNED_SPANS` hash-pin the decided text:
+    - the `4a-fix` step, the 2b `NOTES:` block and 2b item 4;
+    - `4a-post` item 4 from its lead;
+    - the 4d pointer, Step 4a's PR-reuse lead, Step 8's `Close notes:` line and the twin's
+      substitutions;
+    - WORKFLOW 5a. A hash sees any rewording or addition, which is the class round 1 walked
+    through the predicates. The `REFERENCE ledger note` span's end anchor moved to the new
+    heading, and **its hash did not move**, because the decided text did not;
+  - `tests/test_convention_gate_role.py`: two marked pins, each bound to its own spawn, and the
+    resolver moves both;
+  - `tests/test_phase223_derivations.py`: `convention-gate` 1 → 2;
+  - `tests/test_review_close_merged_tree_gate.py`: the Step 4a pointer pin, and its two mutation
+    rows, follow the new sentence.
+
+### Author-side pass
+
+**Rule 2 caught my own sentences twice before the suite did.** The `4a-post` arm first said
+"continue to Step 4b", which `test_review_close_merged_tree_gate.py` forbids anywhere in the
+file. The `4a-fix` lead paragraph was the first in the file to pair `--dry-run` with `4a-post`,
+which moved that module's dry-run-disclaimer locator onto my paragraph. Both were reworded.
+
+**Rule 1, the over-strict direction, found my first predicates keyed to layout.** Every
+multi-word phrase check was a raw `in`, so a rendering-identical re-wrap reddened them. A re-wrap
+test now drives `rewrapped()` through every predicate.
+
+**Rule 3:** the execution half runs every fence the step computes or substitutes.
+
+**Rule 1, the battery** (`tools/phase328_mutations.py`, every run under
+`PYTHONDONTWRITEBYTECODE=1`). Before round 1 it went 16/16 with 1 false kill, then 16/18, then
+18/18 with 0 false kills. The two survivors were licences written beside intact rules, which a
+licence screen then closed. **Round 1 showed what that 18/18 was worth**; see below. After round
+1's fixes the battery was rewritten over the new text. It carries the round's sharpest survivors
+as rows (A1, A7, W1, W4, W7, W8, T1, T2b, P3 and the PR-reuse route) and reads four verifier
+modules, including the hash pins. **After round 1 it read 24/24 killed, 3/3 controls green, 0
+false kills; after round 2, with four rows for round 2's defects, 28/28 and 0 false kills.**
+One control changed meaning on the way. Quoting `PIN='<fix-sha>'` is now red **by design**,
+because the hash pin reddens every non-whitespace edit to decided text until the pin moves. A
+list-marker swap, which the pin normalizes, replaced it.
+
+### Round 1 — three lenses at `0792c32`, each placed in its own detached checkout
+
+Execution, guard strength, and record plus design. Each checkout was made by me outside the repo
+with the venv symlinked in. Each lens echoed `0792c32…` as its first line; none was asked for
+its model id. Every finding below was re-read against the tree. The HIGH one was reproduced by
+running the lens's fixture.
+
+**Execution lens:**
+- **HIGH, reproduced — the revert conflicts.** Item 6's filing commit sat on top of the fix.
+  When both touched one task body, `4a-post`'s `git revert --no-edit <fix-sha>` stopped with
+  `REVERT_HEAD` in the primary tree, a state no step handled. That falsified the record's "never
+  adds a stop". **Fixed:** filing moved after Step 4c (and in round 2 to the start of 4d), the revert became a drop of `HEAD`, and
+  the `4a-post` arm fires only while `HEAD` is still the fix.
+- **MEDIUM — the filing validator is red in the inherited-failure shape**, a task `in_progress`
+  with its lock removed, before Step 4c's flip. **Fixed** by the same move.
+- **MEDIUM — conditions 1 and 4 conflicted:** a behaviour fix's new test is outside the merged
+  diff. **Fixed:** the pinning test is exempt from condition 1.
+- **LOW — `surfaced_by:` was undefined for the unpushed-main group.** **Fixed.**
+- **LOW — a verification command that dirtied the tree blocks the revert.** **Fixed:** the arm
+  requires a clean tree, and otherwise the existing arms decide.
+- **LOW — "the tree Step 2b approved" overstated it.** **Reworded.**
+- **LOW, dropped:** the item 4 re-capture overwrites `2b-config-baseline.txt`. Step 2b's own
+  assertion requires the config delta restored before the close continues, so at `4a-fix` the
+  baseline already holds the original.
+- **Placement claim: confirmed by execution.** The later gates all passed with the extra commits
+  on the merge target: 4b, 4c's ancestry test, `direct`, `pr` and PR reuse.
+
+**Record and design lens:**
+- **Verified — the PR-reuse pointer in Step 4a skipped `4a-fix`.** **Fixed.**
+- **Verified — the new commits and `git revert` bound no seeded rule.** The only commit rule is
+  `Bash(git commit -m docs:*)`. **Fixed:** both messages start `docs:`, and the drop uses
+  `git rebase`, which `Bash(git rebase:*)` covers.
+- **Verified — "never stops the close" was overstated.** **Fixed:** `REFERENCE.md` § *What stops
+  remain* lists them: the placement refusal, a dirty pinned checkout, the menu, a red validator,
+  and a fix-caused `4a-post` failure on a Rule B re-run or over a dirty tree.
+- **Verified — a security-twin note outside the globs would be re-checked by the convention lens
+  alone.** **Fixed:** such notes are always filed.
+- **Verified — four sites still said `convention-gate` has one pin.** **Fixed.**
+- **Verified — the record's "nine" predicates were ten.** **Fixed.**
+- **Verified — the GDP figure was unreproducible.** **Fixed**, above.
+- **Verified — "the placement is forced" was overstated.** **Fixed**, above.
+- **Verified — a Rule B rebase would rewrite `<fix-sha>` before a `4a-post` re-run.** **Fixed**
+  by the first-run-only condition.
+- **Verified — differences from `/document-work` and `/add-task`.** Fixed:
+  - a never-list note is now filed whatever the answer, since the close has no `## Also fixed`
+    record to carry an approval;
+  - with no answer, the note is filed with the question;
+  - item 6 stages every file `/add-task`'s steps wrote;
+  - the step says why the close commits what `/add-task` leaves uncommitted.
+- **Dimension 10:** three short justification spans in the runner. **Two cut, one kept:** the
+  drop sentence now states what the runner can rely on.
+
+**Guard-strength lens: 62 mutants, 9 legal controls.**
+- **Of 13 SKILL mutants that went red, 11 were not kills.** The mutation stranded a control's
+  anchor, and no predicate fired. 23 of 36 SKILL mutants survived outright. That is the
+  wording-not-meaning class of `Q-560`/`Q-562`, here in this phase's own guards.
+- 15 of 26 guard-code mutants survived, and 8 of 9 legal edits falsely killed.
+- **Dispositions:**
+  - **The decided text is now hash-pinned**, the repo's existing mechanism for this exact class.
+  - **The structural predicates gained** a control per check; comment-stripped reads (the P3 and
+    A13 decoys); a one-fence rule for item 5 (W7); rev-parse ordering, executed (T2b); a three-dot
+    check plus a fixture where two-dot differs; the isolation bullet read in place (W2); and
+    marker-, quote-, brace-, prefix-, info-string- and dash-tolerant forms (the false kills).
+  - **The pure-rewording survivors are left to the hash**, and a second structural layer was not
+    written. `Q-560` already holds the question of meaning versus wording in prose guards. This
+    phase's evidence is one more instance, so the entry was not extended.
+
+### Round 2 — two lenses at `0d9967b`, on the governor's replaced-mechanism condition
+
+Execution plus record, and guard strength. Each lens was placed in its own detached checkout, and
+each echoed `0d9967b…` and `claude-opus-5-5`. Every finding was re-read against the tree.
+
+**Execution and record lens.** It ran the drop clean in every shape: `direct` ff-merge, `direct`
+over a `--no-ff` merge parent, the `pr` integration branch, PR-reuse with the fix as the only
+commit ahead of `origin`, and a root parent. It re-derived every number in the record, and all
+matched.
+- **MEDIUM, reproduced — note text in a double-quoted `-m` body executed.** `` `date` `` ran, and
+  its output landed in the commit body. **Fixed:** the fix commit carries no note text. The
+  notes live on Step 8's line and in the filed tasks.
+- **MEDIUM — the filing pointer at the end of Step 4c is unreachable** when 4c finds no
+  pending-docs. That includes the unpushed-main-only close whose notes item 6 names. **Fixed:**
+  the pointer opens Step 4d, which every close that lands reaches. A close that stops earlier
+  lists the notes on Step 8 as unfiled.
+- **MEDIUM — when the drop does not cure a `4a-post` failure, an innocent fix is discarded** and
+  its notes are routed to a filing the stopping close never reaches. **Fixed:** the fix is
+  restored with `git cherry-pick <fix-sha>`, which is seeded, and I ran it. With the parent
+  unchanged, it re-creates the identical SHA.
+- **LOW — a drop that cannot run had no disposition.** **Fixed:** it stops, and the report says
+  the fix is still on the merge target.
+- **LOW — § *What stops remain* was incomplete.** **Fixed:** it now lists the Rule A assert, the
+  failed drop and the restored-then-stop case.
+- **LOW — "four substitutions" (the change list has five), "both rounds" before round 2 existed,
+  and `Q-602`'s claim without a qualifier.** **Fixed.**
+- **Dimension 10 — three rationale sentences in round 1's runner text.**
+  - **Two cut:** the validator reason for waiting, and the sign-off reason for committing.
+  - **One kept, reworded:** "use the message exactly as shown", because its reason changes what
+    the runner does.
+
+**Guard-strength lens: 58 mutants across 7 modules.**
+- **HIGH-class behaviour, verified by reading — the check and the drop shared one fence**, so the
+  check gated nothing. The lens rebased a fix under a moved base, ran the block, and watched it
+  drop the fix and replay upstream work. **Fixed:** two calls, with the drop gated in prose
+  between them. The predicate requires two fences and the gate sentence between the check and
+  the rebase. The execution test runs the check, asserts its output, then runs the drop.
+- **Text mutants: 3 of 33 caught by this phase's guards before the fixes.** Dispositions:
+  - Step 8's line, Step 4a's lead, item 4's lead and the twin's substitutions were unpinned.
+    **Fixed:** all four are hash-pinned now.
+  - A `### 4a-note` step inserted between 4a and 4a-fix passed. **Fixed:** the heading list is
+    compared exactly.
+  - Three role-doc reversions to "nothing else" / "alone" / "only" passed. **Fixed:** a test
+    pins the second spawn's mention in each.
+  - Tab indentation and a column-0 fence closer turn a rule into code with every hash unmoved.
+    **Filed as `Q-608`:** a defect in the shared `_pin_norm`, whose fix re-derives all 35 pins.
+  - Contradicting sentences elsewhere in the skill: a `--dry-run` paragraph, a Rule B sentence,
+    and 4a-SKIP routing. **Folded into `Q-560`**, which already asks the question; the extension
+    records that pinning answers it for the decided text and leaves cross-step contradiction.
+- **Guard-code mutants: 15 of 22 survived.** Most were order and equality checks with no control.
+  **Fixed:** controls for the rev-parse-before-commit order, the validator order, the baseline
+  order, worktree-argument order, the `here != there` equality, an extra drop line, a message
+  body, the heading list, and unit tests that `_legal` refuses two matches and `_scoped` refuses
+  an ambiguous anchor. **Not fixed:** the execution half's own asserts (`HEAD == pre`, set
+  equality). A control for those would mean a fixture whose shipped fence is wrong, which
+  tests the test.
+- **False kills outside pinned text: three.** The prompt's end anchor and the removal-loop
+  anchor were moved to phrases that are part of what the guards read. **Fixed.** The twin's "four
+  substitutions" is now inside a hash-pinned span, so changing it is red by design.
+
+**No third round.** The governor puts one in Wade's hands. The round-2 fixes are bounded, and the
+caller verified each by execution: the split fences, the cherry-pick restore, and the message
+with no body. The battery reads 28/28 over them.
+
+### Also fixed
+
+- `tests/test_reviewer_placement.py` — `_step_3c_spawn` was dead. Nothing called it, and its end
+  anchor (`4. **Collect all verdicts`) had never matched the shipped line, which has no bold
+  before `Collect`. Removed.
+
+### Non-edits, recorded
+
+`docs/workflow.html`, `WORKFLOW_GUIDE.md` and `docs/getting-started.md` describe `4a-post` and
+Step 2b without the new step. They are old, not false: none of them states the verdict is the
+only output or that notes are filed. The currency pass takes them.
+
+## Phase 329 (executed 2026-09-24 — `Q-606`: the bundle-phase pilot, over the seven loop-bundle entries)
+
+**Wade's two menu answers at the phase's open, both the recommended option:** build `Q-606`,
+and bundle **the seven only** (`Q-583`, `Q-584`, `Q-585`, `Q-586`, `Q-587`, `Q-589`, `Q-590`),
+with neither `Q-579`'s `:422` sentence nor `Q-588` riding along.
+
+### What the entry assumed, and what the tree said
+
+**"Seven entries in different skills" was false.** `Q-583`, `Q-584`, `Q-587` and `Q-589` all
+edit `codebase-review/SKILL.md` and `security-audit/SKILL.md`, and `Q-585`/`Q-586` share
+`contribute-convention/SKILL.md`. The entry's own rule is that an orchestrator picks entries whose
+surfaces do not overlap, so the seven became **three executors grouped by file**: A (the four
+review-skill entries), B (`Q-585` + `Q-586`), C (`Q-590`, `_shared/promotion-write-target.md`).
+Each ran in its own worktree, created at base `1570f28` from the main checkout with the venv
+symlinked in. Each echoed that SHA before starting, owned only its listed files plus new test
+modules, and was barred from every record file and from adding a `Q-` citation under `core/`.
+The shared brief is in the session scratchpad and was not committed. Its rules are
+the ones stated in this paragraph.
+
+### The measurements the entry asked for
+
+| measure | this phase | reference |
+|---|---|---|
+| entries closed | **8** (the seven + `Q-606`) | Phase 328: 1; Phase 327: 1 entry (11 lines); Phase 325: 1 |
+| executor wall clock | A 16.4 min, C 27.7 min, B 28.7 min, run concurrently: build done 30 min after the phase opened (09:31:55 → 10:02:03 MDT) | Phase 325: "under 40 minutes in the build" for one entry (`Q-606`'s own figure) |
+| executor tokens | A 247,070 · B 274,680 · C 249,170 = **770,920** (the harness's per-agent `subagent_tokens`) | unrecorded for single-track builds |
+| git merge conflicts | **0** (three `--no-ff` merges, file-disjoint by construction) | — |
+| integration defects | **4**: 3 caught by the integrator's suite (an executor reported 1 of them), 1 caught by round 1 | — |
+| siblings reported in files an executor did not own | A 4, B 2 (one of them 4 sites), C 8 | — |
+| round findings | 4 lenses over 2 rounds: 1 MED + 10 LOW (lens 1); 6 real guard gaps + 23 wording-class survivors + 5 record LOW (lens 2); 1 MED + 7 LOW + 2 NIT (lens 3); 1 HIGH (already fixed) + 2 MED + 1 LOW-MED + 8 LOW (lens 4) | Phase 328, 1 entry: round 1 alone found 1 HIGH + 7 MED + 8 LOW over 3 lenses, then a 2-lens round 2 |
+| review tokens | lenses 273,658 + 290,811 + 219,899 + 241,389 = **1,025,757**; phase total with executors **1,796,677** | — |
+
+**The first three integration defects, and why two went unreported.** Each executor ran
+"every test module that mentions your files". That population cannot see a *cross-cutting* guard,
+one that scans every skill or every `section()` call site without naming any of them:
+- **B's**, reported: its new module calls `section()`, and `tests/_section_call_sites.py` must
+  list every calling module. B owned neither file and gave the exact line.
+- **A's**, not reported: its module called `section()` with a computed heading over two files,
+  which the same census cannot measure (`test_every_shared_section_call_site_resolves`). The
+  integrator's targeted run caught it. The fix replaces `_slice` with a local slicer built on
+  `_fence_state()`, so the fence rule keeps its one home, and adds five slicer unit tests.
+- **C's, and the sharpest**, not reported: C's partial, and the integrator's own sibling edits in
+  both review skills, told the agent to run `bash sysop/scripts/install_hooks.sh`.
+  `tests/test_hook_autoarm_drift.py::test_no_skill_tells_an_agent_to_arm_hooks` (Phase 150,
+  upstream #202) forbids any skill body from naming the script: arming is a human action in the
+  main checkout, and an agent arming from a worktree can replace a consumer's armed checks. Only
+  the integrator's full-suite run saw it. The skills now say the letter takes effect once **the
+  human** re-arms from the main checkout (`WORKFLOW.md` § 4.3), and never arm themselves.
+
+**What that says about the shape.** An executor's population rule has to include the repo's
+cross-cutting guards (census tables, drift guards over `core/skills/**`), or the integrator's
+suite is the only place those run. Here it caught both, but only because the integrator ran the
+full suite before the round. **The fourth defect was invisible to every guard.** C's `semgrep-<id>`
+stub reached B's `/contribute-convention` as a check with no rule in it. That is a semantic seam
+between two executors' files, and only a reviewer reading both found it (round 1). So naming
+cross-cutting guards in the brief closes two of the four, and the round is still the only net for
+the rest.
+
+### What changed
+
+Per entry, `REVIEW_ARCHIVE.md` § *Resolved — Phase 329* has each resolution. In short:
+- **`Q-583`:** the 5b `Reconciliation:` lines carry each skill's own 3-0b counts: three fields in
+  codebase-review (`cited-no-section · sections-no-row · globs-multi-row`) and four in
+  security-audit.
+- **`Q-584`:** both Step 2b paragraphs and Step 6 know `degraded`, `unroutable` and `unaccounted`
+  and both `⚠` markers.
+- **`Q-587`:** Step 9b commits on its own (no amend). A keep-only round's ledger edit is no
+  longer left uncommitted.
+- **`Q-589`:** one arm per value `trust.status` can take, so `none` is silent.
+- **`Q-585`:** `$SYSOP_SRC` is read from the shell rc, not the lock. The skill prescribes one
+  fragment grep, then asks the human once.
+- **`Q-586`:** provenance comes from the promotion commit (`git log -S` plus a `git show`
+  confirm) and from both review files. The trailer clause is dropped.
+- **`Q-590`:** the partial says what `--update` really does to an edited hook, plus the re-arm and
+  semgrep-registry facts below.
+
+**Integrator siblings, applied in `ed6f402`:**
+- **The semgrep registry entry.** `run_checks/semgrep.py` drops every finding whose
+  `semgrep-<id>` has no registry entry, and Step 9 option (ii) never wrote one. So **a semgrep
+  rule promoted through a review round was silently dead.** Both skills now write the entry and its
+  overlay mirror, and 9b's retire removes it.
+- **The re-arm wording**, covered above.
+- **"Round-attributed" map entries.** Step 9 writes no round into an entry, so the claim was false
+  in both review skills, `WORKFLOW.md` §§ 3.5 (twice), the partial (twice), and **the public
+  monograph** (`docs/workflow.html`, § *What's in a map entry*). The recurrence gate reads the
+  review rounds.
+- **`WORKFLOW.md` § 6.5** had three accounting states where there are five. Its sample header also
+  lacked `waived:`. `_shared/fanout-evidence.md` had the same three-state list.
+- **The fail-closed update posture**, in `docs/install-and-update.md` and `WORKFLOW.md` § 8.2c. It
+  aborts only when a managed path has uncommitted changes. On a clean tree the Phase 99 fallback
+  proceeds and overwrites committed script and hook edits (`install.sh`'s
+  `⚠  ancestor unreachable` branch).
+- **Hook-refresh wording**, in `WORKFLOW.md` § 8.2b step 6, `docs/install-and-update.md`, and an
+  `install.sh` comment.
+
+**Filed, not fixed: `Q-609`**, A's sibling in `/review-close` `4a-post`'s Exit 0 arm. It reports a
+`skipped` or `unroutable` blocking check as `pre-scan: clean`. `Q-606`'s own rule keeps
+`review-close/SKILL.md` edits out of a bundle, and the edit moves spec § 8.1's figures. **Not
+`Q-587`'s class:** A's note that `auto-fix` and `review-close` prescribe `git commit --amend`. Those
+are deliberate amends of unpushed commits, not a fold into a commit another step already made.
+The first record dropped the note on that ground alone. Lens 2 showed that ground answers only the
+history-rewrite half: `auto-fix`'s subagent commits bind no seeded rule either (`fix:` has none),
+so the permission half is extended into `Q-079` (see § *Round*).
+
+### Author-side pass
+
+- **Executors** (their own reports, re-verified at merge by running their modules). A ran 25
+  mutations with 25 killed and 6 controls green. B ran 22 with 22 killed and 8 controls green,
+  after one invalid first run where a pytest usage error read as a kill; its two prose-reword
+  survivors are declined as closable only by a hash pin. C ran 19 with 19 killed and 3 controls
+  green. Each ran rule 3's commands in a throwaway repo. C's fixture install is what established
+  `Q-590`'s premise, the armed-copy fact and the semgrep registry fact.
+- **Integrator battery** (`PYTHONDONTWRITEBYTECODE=1`, restores from memory): **16/16 killed,
+  4/4 controls green** on the final run. Ten rows are reversions or vacuity checks of the
+  integrator's own edits, which is wiring. Six attack assumptions:
+  - the surface guard losing a root;
+  - the slicer ignoring fences;
+  - the slicer's level test;
+  - the unterminated-fence assertion;
+  - the code fact in `semgrep.py`;
+  - the § 4.3 pointer.
+  The first run of the surface-root row **survived** (dropping `docs` from the tuple also dropped
+  it from the per-root check), and was closed by naming five files. **The first full battery run
+  graded every row by exit code alone and all read `rc2`.** xdist turns `-x` into an interrupt
+  (exit 2), which is also what a collection error returns; a usage error is exit 4. It was re-graded on the `N failed` summary line,
+  with no row counted from the first run.
+- **Rule 2** caught the integrator's own new pattern missing its subject: `normalize()` strips
+  underscores and the window stopped at `.claude`'s dot.
+- **Full suite:** the first run had 1 failure (the #202 guard above). After the fixes, at the
+  record commit `f7f4e54`: 7,934 passed, 214 skipped, 0 failed.
+
+### Round 1 — two lenses at `f7f4e54`, each placed in its own detached checkout
+
+**Two lenses, not the governor's three.** The phase ships guards and a numeric record, which
+licenses a third. `Q-606`'s ratified shape is "one two-lens round over the whole bundle", and the
+pilot measures that shape, so the round kept to it. Both lenses echoed `f7f4e54…` and
+`claude-opus-5-5`. Lens 1 read execution and claims, plus dimension 10. Lens 2 read guard
+strength and the record. Lens 1: 273,658 tokens, 15.3 min. Lens 2: 290,811 tokens, 26.5 min. Every
+finding below was re-read against the tree.
+
+**Lens 1 (execution + claims + dim 10): 1 MED and 10 LOW, all verified, all fixed.**
+- **MED — the re-arm pointer did not exist in a loop install.** Loop mode ships no `WORKFLOW.md`
+  (`install.sh:2725`), so "(WORKFLOW.md § 4.3)" pointed a loop consumer at nothing, and the #202 guard
+  forbids naming the script instead. All eight sites now add the public `docs/loop-mode.md`
+  § *Where enforcement lives*, which gives the command. A new assertion pins that the page still
+  does.
+- **The related LOW:** `self_check.sh` printed `hook armed:` for any executable with a template's
+  name, so the re-arm the skills now ask for could never be seen as owed. It now compares bytes,
+  and a stale armed hook reads `hook armed: <name> — but it differs from …; re-arm …`. That is
+  advisory, not a failure, because a consumer may keep a deliberately different armed body. It
+  has a new test in `tests/test_self_check_sh.py`.
+- **LOW, cross-executor (B × C):** C's new `semgrep-<id>` stub reached B's
+  `/contribute-convention` as a check with no rule in it. Step 2 now carries the matching
+  `.claude/semgrep/` rule with a stub, and the body template says so. **This is the pilot's fourth
+  integration defect, and the first found by a reviewer rather than a suite.** It sat between two
+  executors' files, and the integrator's own sibling edit created the stub.
+- **The other LOWs:**
+  - `core.hooksPath` caveat on "git runs the armed copy";
+  - the Step 9 gate now names both review files and drops the commit clause it gave no instruction for;
+  - "this step" → "Step 9b";
+  - an actor on the consumer-bullet re-arm;
+  - the two fail-closed paragraphs no longer contradict themselves;
+  - § 6.5's `unaccounted` is reconciled with "one of five states";
+  - the override grep counts only core and the lock's installed `packs`;
+  - dimension 10: 9b step 5's amend rationale moved to both `REFERENCE.md` files, beside the
+    re-arm rationale (neither names the script; the #202 guard reads `REFERENCE.md` too).
+
+**Lens 2 (guards + record): 51 mutations, 22 killed, 29 survived. Of the survivors, 6 were real
+gaps and 23 were meaning-reversing edits that keep the pinned words** (`Q-560`'s class).
+- **Real gaps, all closed:**
+  - the surface guard read `.md`/`.html`/`.sh` only, and missed the extensionless hook template
+    (the file whose claim it is), `checks.yml.fragment`, `CONTRIBUTING.md` and `SECURITY.md`. It now
+    reads every tracked file under the roots, `CONTRIBUTING.md` and `SECURITY.md` included, and
+    pins those files by name;
+  - the hook-claim patterns missed "replaces … on each update", "`--update` overwrites
+    `hooks/pre-commit`" and "Every `--update` re-copies". They now take the quantifier before or after
+    the verb, within one sentence, skip a negated quantifier, and carry true-statement controls.
+    Round 2 showed that object-before-verb still passed, and added it;
+  - `Q-585` and `Q-586` came back in other spellings, and the round claim was reworded;
+  - A's docstring over-claimed that "a new state" reddens. The fixture now takes its states from
+    `accounting.py`'s constants, and the docstring says a constant the renderer never prints
+    changes no output. The round's K3 row is that equivalent mutant.
+- **The 23 prose-meaning survivors** are closed as Phase 328 closed its own: **27 hash pins** over
+  the phase's decided spans, in a new module, `tests/test_review_loop_decided_text.py`. It reuses
+  `test_fix_in_branch_tier.py`'s normalizer and anchor check. A re-wrap or a list-marker swap keeps
+  a hash, and a word change moves it.
+- **Over-strictness:**
+  - two false positives on true sentences (the windows crossed a sentence end) are fixed with a
+    sentence-bounded window;
+  - the marker-swap false kill in the Step 3c arm lookup is fixed.
+  - Re-wrap brittleness elsewhere is dropped: by lens 2's measurement, the same re-wrap already
+    reddens 34 of 2,233 pre-existing tests over these files.
+- **Record, 5 LOW, all fixed:**
+  - the xdist sentence above;
+  - the brief said "two of the three" integration defects sat in cross-cutting guards, and all
+    three did;
+  - a test comment stated as fact the quote-matching question `Q-079` leaves open;
+  - the amend note's reason;
+  - `Q-609`'s pointer to where gate-on-skipped is argued.
+- **Lens 2 re-derived clean:** 8 closed; the checklist diff; 7/176/114; `Q-609` unused before;
+  49 cautions (48 at base); 0 conflicts (merge parents and disjoint file sets); the integration
+  defects on the rebuilt merge tree `10c835c`. It marked the timings, tokens, batteries and sibling
+  counts as harness facts it could not check.
+
+**Round-1 battery over lens 2's survivors** (`PYTHONDONTWRITEBYTECODE=1`, graded on the summary
+line): the 11 real-gap and meaning-reversal rows re-run are all killed, plus the `self_check.sh`
+compare row. K3 stays green as an equivalent mutant. The four controls stay green: a re-wrap
+inside a pinned span, a marker swap, and two true sentences.
+
+### Round 2 — two lenses at `0f0885b`, on the governor's new-material condition
+
+**Why a second round.** Round 1's fixes added a new guard module (27 hash pins) and a behaviour
+change to the shipped `self_check.sh`, which no fresh reader had seen. That is the governor's stated
+condition. Both lenses echoed `0f0885b…` and `claude-opus-5-5`. Lens 3 checked that the fixes
+execute (219,899 tokens, 9.3 min). Lens 4 checked the new guards and the round-1 record (241,389
+tokens, 65.9 min).
+
+**The suite was red at `0f0885b`, and the author caught it before lens 4 did.** The full-suite run at
+11:20 gave 1 failed and 7,999 passed. Round 1's extension of `Q-079` ("by Phase 329's round")
+made the brief gate count `Q-079` as a Phase 329 filing, and the brief named it only in prose.
+It is now a ranked item. Lens 4 filed the same thing as its one HIGH.
+
+**Lens 3 (execution): 1 MED, 7 LOW, 2 NIT. All verified, all fixed.**
+- **MED — `self_check.sh`'s new compare, run from a worktree, read the worktree's own template, and
+  its remedy was to arm from there.** That is the #202 harm the new `REFERENCE.md` section warns
+  against. The script already resolves `MAIN_ROOT` for this reason. The compare now reads the main
+  checkout's template. The message says the difference may be either side, and that the re-arm, if
+  wanted, is `(cd "<main>" && bash sysop/scripts/install_hooks.sh)`. A worktree test and its
+  control are added.
+- **The LOWs:**
+  - `REFERENCE.md` stated the open quote-matching question as fact;
+  - the stale line's remedy contradicted probe 4a's for a pre-migration hook (reconciled: the line
+    is now conditional, "if the template is what should run");
+  - the message had no direction;
+  - the loop pointer named a `docs/` path a consumer does not have (now the public URL), and the
+    `core.hooksPath` caveat pointed a loop consumer at a § 4.3 it lacks (now self-contained);
+  - `WORKFLOW.md` § 3.5 item 1 still named only the archived tracker (the Step 9 sibling);
+  - the record said 3 integration defects when round 1 had found a fourth;
+  - both `REFERENCE.md` files' § *What is declared* now mark the sections below it as rationale,
+    not declared rules.
+- **The NITs:**
+  - a duplicated "aborts only when" sentence;
+  - both docs' "`git fetch` to retry", where the installer's own error says fetch the commit by SHA;
+  - `self_check.sh`'s header, which now names the byte compare.
+
+**Lens 4 (guards + record): its own 18 new mutants, 1 killed, 17 survived. The round-1 battery,
+replicated exactly, holds (11/11 killed, K3 equivalent, 4 controls green).** Findings, all
+verified:
+- **MED — the pin module dropped Phase 328's P5 fix.** It did not restore a span's first-line
+  indentation, so indenting a paragraph into a code block kept its hash. Five indentation mutants
+  survived, three across every module that names the file. `_span` now restores the lead, as
+  `test_fix_in_branch_tier._span` does.
+- **MED — round 1's fixture rename left `clean.record(["c-exec"], …)`.** The "clean" render then
+  carried `1 unaccounted`, so the conditional-count guard stopped checking that both steps name
+  `unaccounted`. Fixed, and the test now asserts the clean header's counts outright.
+- **LOW-MED — a wrapper outside the anchors kept every hash**: an HTML comment, or a fence around a
+  span. The module now asserts every span is live. `PINNED_SPANS` has the same gap, so `Q-608` is
+  extended rather than a new entry filed.
+- **The LOWs:**
+  - Four legal marker swaps on anchor lines went red. Anchors now carry no list marker, and A's
+    `_step9_option` finds the next bullet by pattern.
+  - The width-1 re-wrap `_OL` false kill predates this phase and is folded into `Q-608`.
+  - The hook patterns missed object-before-verb, and the round-1 record overclaimed "either order".
+    An object-first pattern is added and the record sentence is scoped.
+  - Three true sentences were false-killed. Claims are now judged sentence by sentence; a sentence
+    that states its own exception ("unless", "only when", "unedited") is skipped, and the map
+    pattern gains a negation lookbehind. All three are now controls.
+  - `.github/` was outside the surface. It is added.
+  - The stale line's advisory level was unasserted. The test now requires `·`, not `✓`.
+  - Decided text outside every span: **nine more spans, 36 pins in all.**
+  - Lens 1's tally was 10 LOW, not 9.
+  - `Q-079`'s extension cited a step `auto-fix` does not have. Its opening claim about three seeded
+    commit rules has been stale since Phase 269 removed two of them, and that is corrected in place.
+- **Declined, wording class:** reworded falsehoods F2–F4 in files outside the pinned spans. The
+  surface regexes are a screen, not coverage. The decided text itself is hash-pinned, and
+  `Q-560` holds the general question.
+
+**Round-2 battery** (`PYTHONDONTWRITEBYTECODE=1`, graded on the summary line), all run after the
+final pins:
+- **10 rows killed:**
+  - three indentation mutants;
+  - two comment wrappers and one fence wrapper;
+  - the `ok` stale line;
+  - the object-first claim;
+  - a `.github/` claim;
+  - the stale fixture id.
+- **7 controls green:**
+  - four marker swaps on anchor lines (one went red on the first run, through A's `_step9_option`,
+    fixed and re-run green);
+  - three true sentences.
+
+**No third round.** The governor puts one in Wade's hands. The round-2 fixes are bounded: the pin
+module's `_span` gained one restoration, the other changes are patterns and controls, and each was
+verified by the battery above.
+
+### Also fixed
+
+- `core/companion/scripts/claim_task.sh` cites `self_check.sh:77-85`. The header line added here
+  moved that range to 78–86, which the registered-citation guard caught. It is re-pointed, with its
+  registry key.
+- `tests/test_reviewer_venv_resolution.py` and `tests/test_venv_command_word.py` cited
+  `self_check.sh:90`/`:93` and `run_checks.sh:50`/`:55` in docstrings. The `self_check.sh` pair
+  moved with this phase's header line. `:93` and both `run_checks.sh` citations were already wrong
+  before it; `:93` pointed at a different assignment than the one quoted. All four are re-pointed
+  to the lines they quote.
+
+## Phase 330 (executed 2026-09-24 — `Q-568` + `Q-528` + `Q-580` + `Q-609`: the Step 3c smoke gate, and `4a-post`'s Exit 0 arm)
+
+**Wade's pick after Phase 329, by menu:** these four entries as one ordinary phase, because
+`Q-606`'s own rule keeps `review-close/SKILL.md` edits out of a bundle. **His two menu answers at
+the open, both the recommended option:**
+- `Q-528`'s `#605` route **remembers the answer**. An answer of confirmed or unrunnable, given to a
+  held doc's section, is recorded in that doc and reported rather than asked again. A waiver is
+  never remembered.
+- `Q-580` gets **a fourth disposition**, not the smaller amend-the-halt-rule version.
+
+### What the entries assumed, and what the tree said
+
+- **`Q-528`'s remedy (a), as filed, scopes source 3 to "tasks this close is actually merging".**
+  Taken literally, that means tasks on an approved branch, and it would have dropped every linkage
+  from a main-dir doc on a main-only close. That is the shape of the existing Step 3c fixtures
+  that declare a task through a doc and pass no approved branch, such as
+  `test_declared_task_with_unmatched_body_heading_now_fires`. The gate keys instead on whether a
+  doc is **not merging this run**: a doc in main's `pending-docs/` whose branch is neither approved
+  nor the branch HEAD is on. A not-merging doc that Step 4c 1c holds (a truthy `user_action`, in
+  Python truthiness as the round-trip heredoc's `if t.get('user_action')` reads it) links no task.
+  *The first cut called this "1c's predicate exactly" and dropped the HEAD-branch clause; round 1
+  showed both were wrong, below.*
+- **`Q-609`'s filed report shape, `… — <ids>`, cannot be filled.** A `⚠` line reads
+  `<status>: <stage> (<N> checks) — <detail>`, with no ids, and its N counts every check in the
+  group, blocking or not, so "N blocking checks" was not derivable either. (`render()` does print
+  ids on `unaccounted:` and executed-with-zero-findings lines; the first record said it printed
+  none, and round 1 corrected that.) The existing `degraded` arm had the same unfillable shape,
+  and so did Step 8's template. Both now quote the lines verbatim.
+- **`Q-580`'s filing had no slot on a close with no notes.** `4a-fix` returns early when there are
+  none, so its item 6 never runs. The unrunnable defect is filed by **Step 4d's first line**, which
+  every landing close reaches. On the stop path it is filed at once, since nothing merges.
+- **The `#605` case is no longer on GDP's disk. The `#704` case still is.** A read-only clone of
+  GDP (remote removed), with its live `pending-docs/`, `locks/` and working `tasks/index.yml` copied
+  in, gave: base gate `SMOKE_REQUIRED: 1` with FEAT-AUTH-ACTION-URL-ON-APP-DOMAIN's full
+  five-step procedure; new gate `NO_SMOKE_REQUIRED` plus
+  `NOT IN THIS RUN: … linked only by held doc …`.
+
+### What changed
+
+- **`Q-568`:** the heredoc reads a claimed task's body with `git show "<branch>:<path>"`, taking the
+  path from main's index and the content from the tip, as Step 2d does. The lock branch outranks a
+  doc link, and the read runs inside the branch's workspace, since a `--clone` keeps its commits
+  in its own object store. Every signal prints `READ:`: the branch and SHA, the working tree with
+  the reason, a pending doc's checkout read in place, or `nothing — …`. A failed tip read falls
+  back to the working tree and says it may not be the text that is merging. It never suppresses
+  the signal.
+- **`Q-528`:** a not-merging doc that 1c holds links no task. Its `manual_smoke` tasks print
+  `NOT IN THIS RUN:`, and a lock on an approved branch still links them. Its own headings still
+  signal. Every doc-carried signal has a 16-hex `KEY:` (a hash of the section text) naming its doc,
+  and a not-merging doc's signal adds a `NOT MERGING:` line. **A new recorder heredoc**, run at once
+  after each answer, writes `smoke_answers:` into that doc's frontmatter, in main or in a
+  workspace, for confirmed or unrunnable, never for a waiver. It writes the block first, keeps
+  every other line byte for byte, re-parses the result to prove no other key changed, writes
+  atomically, and refuses rather than guesses. A close that does not merge the doc's branch prints
+  `PREVIOUSLY ANSWERED:`, and changed section text asks again.
+- **`Q-580`:** four options. A failed "I'll drive" asks whether the failure is transient (halt, as
+  before) or cannot be completed as written, and the second becomes "Unrunnable as specified". That
+  files the blocking defect by `/add-task`'s route and asks whether to continue or stop. Step 8
+  counts it on its own, and Step 4d files it with `4a-fix`'s notes.
+- **`Q-609`:** `pre-scan: clean` only when the accounting header shows `0 failed` and no
+  `degraded`, `unroutable` or `unaccounted` count, and no line carries `⚠ BLOCKING CHECK`.
+  `tests/test_prescan_merge_gate.py` binds the counts and the marker to `render()`. (The build's
+  first predicate, any `⚠` or an `unaccounted:` line, was wrong both ways; rounds 1 and 2 below.)
+- **Rationale** is in `REFERENCE.md` § *Step 3c — provenance* (new) and § *Step 4a-post —
+  provenance*. **Decided text** is hash-pinned in a new module,
+  `tests/test_review_close_smoke_decided_text.py` (9 spans at the build, 12 after round 1). Step 4d's pin in
+  `test_fix_in_branch_tier.py` moved with its sentence.
+
+### Also fixed
+
+- `tasks/schema.md` § *Manual smoke* said "three options … agent-drive failures do [block]". It now
+  describes the four options, the tip read and the held doc.
+- `Q-575`'s cross-reference credited a `blocked: true` proposal to `Q-580`. It was `Q-528`'s remedy
+  (c), and neither closed entry used it, so the sentence now says there is no field to reuse.
+- Step 8's `pre-scan` element carried the same unfillable `<ids>` as the arm.
+- The brief's caution count was published as "derived by script", and no script was committed.
+  `tools/brief_cautions.py` now applies the stated rule. It returns 46 for Phase 328's brief and
+  47 for Phase 329's, where those briefs published 48 and 49. The increments agree, so the +2 was
+  a reading nobody committed. This phase's brief publishes the script's number.
+
+### The census
+
+At the round-2 fix commit the command reports **2,169 / 366,910 / 77.1%** over 4,344 lines.
+`editor` is unchanged at 34,241, and `mixed` rose **71,256 → 71,647** (+391). Three edited blocks
+were `mixed` and stay `mixed`, each lengthened by instruction beside provenance it already carried:
+the `4a-post` arm list (+334), and Step 3c's step-1 paragraph (+23) and detection-sources
+blockquote (+34). Round 1 found the last two stating a contract the new code no longer met. The
+heredoc's `(b)` comment, the other `mixed` block in the diff, was kept byte-identical, so it keeps
+its verdict. So `editor`+`mixed` is **105,888**, 80 under `EDITOR_MIXED_CEILING`, and the ceiling
+was not touched. It was 105,710 at the build commit, and 105,903 after round 1. Round 2's first
+fixes then took it to 106,018, **50 over**. The ratchet refused, and a rationale sentence round 2's
+own `failed` addition had lengthened was moved out of the arm into `REFERENCE.md`, where it
+belonged under dimension 10 anyway. § 7.2's `Q-` count across `core/` moved **489 → 494** with the new `REFERENCE.md`
+section, then to **495** with round 2's `Q-610` citation. The recorder first copied the bootstrap's `(BeanRider ISSUE-0049)` comment, which moved
+the BeanRider figures. That comment sits outside the pinned bootstrap block, so it was dropped
+rather than moving a published number.
+
+### Author-side pass
+
+- **Rule 3, on a real install.** A throwaway repo, `install.sh --packs python --yes`, a
+  schema-valid `manual_smoke` task, and `claim_task.sh --lock` (the default claim writes **no
+  lock**, which this pass found by running it). The branch rewrote the smoke section. The literal
+  Step 3c block, with `APPROVED_BRANCHES` substituted, was run under `/bin/bash`. The base block
+  printed main's stale procedure (`#708` reproduced), and the new one printed the branch's with
+  `READ: feat/feat-0001@<sha>`. Then the branch was merged, `user_action` set, and a held doc written
+  in `/document-work`'s real frontmatter shape: `NOT IN THIS RUN:` plus one `HELD:` signal. The
+  literal recorder, with placeholders taken from that output, printed `RECORDED:` and wrote only the
+  block. The next run printed `PREVIOUSLY ANSWERED:`, and with the branch approved again it asked
+  afresh. Without a venv the gate exits 2 loudly, as designed.
+- **Rule 4, the hostile corpus.** The recorder was run over copies of GDP's four real pending docs,
+  and all four had every other key unchanged. The corpus then found **a real over-refusal**. When
+  the last key is a clip block scalar, appending the block after it adds a newline to that value.
+  The re-parse check refused, which was safe but wrong, so the block is now written first. It also
+  found **a traceback on unparseable frontmatter**, now a refusal. Pinned: the token inside another
+  key's block scalar, a quoted scalar continued at column 0, a flow mapping continued at column 0
+  (valid YAML, changed value), and an unterminated frontmatter.
+- **Rule 1, `tools/phase330_mutations.py`** (`PYTHONDONTWRITEBYTECODE=1`, graded on the summary
+  line, restored from memory): **33 rows and 3 controls. The first run killed 28, and 5 survived.**
+  The survivors were a doc link outranking the approved lock, info lines printed after the signals,
+  a held signal with no `READ:`, the re-parse check dropped (the only refusal fixture was one the
+  parse-error arm also caught), and no temp cleanup on a failed write. All five were closed with
+  tests (a simulated `os.replace` failure for the last), and the re-run killed **5 of 5 with the 3
+  controls green**. That is an author's number, and the ledger says what those are worth.
+- **Two collisions with guards that scan the whole file**, both caught by the related-module run:
+  - `test_index_writer_class.py` counts `mkstemp` calls and `safe_dump` kwargs per file, so the
+    recorder takes the canonical kwargs, and the roster counts 2 for `review-close` with a comment
+    saying why.
+  - `test_claim_artifact_reaping.py` finds Step 4c's import line by the prefix
+    `import datetime, os,`, which the recorder's first import line also had.
+- **The full suite then caught two mirror-gate defects in the new `REFERENCE.md` prose:** a pointer
+  to a stripped `tools/` spec with no maintainer-side qualifier, and two bare tracker numbers. The
+  gate matches `internal tracker #NNN` case-sensitively and without backticks, and it took three
+  tries to satisfy. Result: 8,131 passed, 2 failed, 217 skipped, then both fixed.
+- **Rule 2** tightened one `REFERENCE.md` sentence that asserted, without a check, that a Step 3c
+  commit crosses Steps 3b and 4a. It now states the one verified crossing: the commit would land
+  after Step 3's pre-merge pass.
+
+### Round 1 — three lenses at `78b0a77`, each placed in its own detached worktree
+
+**Three lenses**, because the phase ships behaviour and a record making numeric claims. Each was
+placed with `git worktree add --detach` at the phase commit, with the venv symlinked in, and each
+echoed `78b0a77d536c…` and `claude-opus-5-5` and gated on the phase-introduced `def emit_doc`. The
+lenses were:
+- lens 1, execution and dimension 10: 270,556 tokens, 13.2 min;
+- lens 2, guard strength: 252,212 tokens, 46.0 min;
+- lens 3, claims and record: 252,431 tokens, 11.7 min.
+
+Every finding below was re-read against the tree.
+
+**Lens 1 (execution): 1 HIGH, 3 MED, 5 LOW, 1 dimension-10, 1 minor. All verified.**
+- **HIGH, fixed: a `branch: main` held doc suppressed the smoke for code landing in this close.**
+  "Held" was keyed on "branch not approved", and a default-branch doc can never be approved. Its
+  commits land with this close, pushed under `direct` and carried under `pr`. Lens 1 reproduced it
+  in a fixture: the base gate asked, and the phase's gate printed `NO_SMOKE_REQUIRED`. **The
+  discriminator is now "not merging this run"**: a doc in main's `pending-docs/` whose branch is
+  neither approved nor the branch HEAD is on at Step 3c. With HEAD unresolved, nothing qualifies
+  (fail closed).
+- **MED, fixed: the Exit 0 arm reported `clean` over a degraded blocking check with placeholder or
+  no `paths:`.** `render()` puts `⚠` only on a *localized* blocking check, so this was a regression
+  against the old arm. Reproduced end to end with `run_checks.sh`. The arm now reads the header's
+  `degraded` / `unroutable` / `unaccounted` counts plus the `⚠ BLOCKING CHECK` marker.
+- **MED, fixed: a `--clone` workspace's body was read from main's stale local ref, under a label
+  saying it was merging.** `#708` came back, now with a false label. The tip read now runs in the
+  branch's workspace (lock `workspace:`, or the worktree list).
+- **MED, fixed: "reported rather than asked again" was false in two closes.** At the merging close
+  the doc sits in a worktree, not held, so the answer was never written. At the close that releases
+  the doc, the answered heading and the body procedure were both asked again. Now every doc-carried
+  signal has a `KEY:` naming its doc, the recorder writes into that copy (Step 3b's collect carries
+  it to main), and answers are honoured whenever the doc is not merging.
+- **LOW, fixed:** the review-rounds `⚠` note `cli.py` appends was read as a blocking check; Step 4d
+  had no commit when `4a-fix` had no notes; the halt paths skipped recording (the answer is now
+  recorded at once, before any halt); `schema.md` still said "run, confirm, or waive". Re-approving
+  a held branch lost its answers (lens 1's F7); the recording change closes it, because the
+  worktree copy is asked and recorded that close.
+- **Dimension 10, fixed:** one runner sentence ("Halting on that would halt every close …") and
+  three heredoc comments carried rationale. They were trimmed; `REFERENCE.md` already had it.
+- **Accepted, recorded:** the stop-path commit defeats PR reuse on the next close. That is the
+  claim-flip cost class, and it is written into `REFERENCE.md`.
+
+**Lens 3 (claims): 4 MED, 7 LOW. All verified, all fixed.**
+- "Held is 1c's predicate exactly" was false twice: 1c has no approved-branch clause, and
+  `if t.get('user_action')` is the round-trip heredoc's line, not 1c's. The rework made the
+  discriminator its own, stated so at every site.
+- The Exit 0 arm called every `⚠` a blocking check.
+- "`render()` prints no check ids" was false (the `unaccounted:` line and executed-with-zero-findings
+  lines print them).
+- The shipped `REFERENCE.md` cited a bare `ISSUE-0095` a public reader resolves to the wrong project;
+  it now says "a consumer-reported case", as the heredoc's own comment does.
+- LOWs: a non-UTF-8 doc crashed the recorder with a traceback (now `REFUSING:`); blank lines after an
+  existing block were dropped; two unedited Step 3c sentences contradicted the new output and
+  linkage; the stop path had no else-arm; the brief's ranking broke its blockquote in two places;
+  "700 lines earlier" was stale; this record understated what `READ:` can say.
+- Lens 3 re-derived the census, the § 7.2 count, the queue counts, the caution counts, the GDP
+  reproduction and every upstream issue's facts, and found them true.
+
+**Lens 2 (guards): its own 75 mutations against the phase's guards, 46 killed (61%), plus 9
+controls, 1 false-killed.** Its "other defects" were three findings the other lenses also made (the
+Exit 0 premise, the UTF-8 traceback, the stale step-1 sentence), all fixed above, and one of its
+own: **the recorder changed a doc's mode to 0600**. That is fixed with a `chmod`, as Step 4c's
+writer does.
+- **Real gaps, closed with tests:**
+  - the `task_ids` fallback for a legacy held doc, and `roadmap_ids` winning over `task_ids`;
+  - an approved doc link overwritten by a later unapproved one;
+  - the exact first line on an answered-only run;
+  - a frontmatter-only declaration in a not-merging doc;
+  - the dedup index;
+  - both remaining `NOT MERGING` note arms;
+  - the git-env scrub (a decoy `GIT_DIR`);
+  - same-directory `mkstemp` and the preserved mode;
+  - the recorded date;
+  - the key regex's exact length and case;
+  - `blocking_failures()` staying non-fatal for skipped, unroutable and degraded.
+- **Wording-class survivors in unpinned Step 3c prose**: three new hash spans (the step's intro,
+  the step-1 output sentence, the linkage blockquote), plus the refusal span widened to the end of
+  the step. That makes 12 spans.
+- **Spec-figure gap:** of the ten figures the § 8.1 paragraph published, four were bound.
+  `test_the_spec_publishes_the_figures_the_census_computes` now also checks lines, chars, `editor`,
+  `mixed`, their sum and the headroom wherever the paragraph states them. A one-digit change to
+  `mixed`, `editor` or the headroom now fails.
+- **False kill, fixed:** a prose sentence naming `tempfile.mkstemp()` reddened the index-writer
+  roster, which counted live text. For a markdown file it now counts fenced code only.
+- **Equivalent, dropped:** an unstripped branch compare (YAML strips it). **Lens 2's CRLF row was
+  also dropped here, as "a CRLF doc never matches the frontmatter pattern", and that reason was
+  false**: `read_text` normalises newlines, so a CRLF doc is read, and the recorder then rewrote it
+  as LF. Round 2 found it; see below.
+
+**After the fixes**, the author battery was re-pointed at the reworked code as 40 rows:
+- the heredoc: default branch, HEAD unresolved, clone read, carrier map;
+- the recorder: UTF-8, blank lines;
+- the prose: record-at-once;
+- the accounting: the header count.
+
+It killed **40 of 40, with 3 controls green**. That is an author's number over a guard set the round
+had just rewritten, which is the governor's condition for a second round.
+
+### Round 2 — two lenses at `8ea1c1c`, on the governor's new-material condition
+
+**Why a second round.** Round 1 replaced the phase's held mechanism with "not merging", rewrote
+the recorder's reach and the Exit 0 arm, and added a guard module's worth of tests. That is
+substantial new material no fresh reader had seen. Each lens was placed with
+`git worktree add --detach` at `8ea1c1c`, echoed it and `claude-opus-5-5`, and gated on
+`def not_merging`. **Both lenses noted the gate grep printed 2, not 1**: it also matches
+`def not_merging_note`. The author's prompt miscounted, and the placement itself was right. The
+lenses were:
+- lens 4, execution: 260,388 tokens, 12.6 min;
+- lens 5, guards and record: 295,585 tokens, 21.2 min.
+
+**Lens 4 (execution).** It walked a held task through its whole life on a real install: the merging
+close, Step 3b's collect, a held close, `clear_user_action.py`, and the releasing close. Each
+section was asked once, at the merging close, then reported. Clone and detached-HEAD shapes held.
+- **HIGH, introduced by round 1, fixed: an answer in a not-merging doc silenced a task an approved
+  branch was merging.**
+  - How it happened: the index signal's carrier was "the first doc naming the task". When a held
+    task was released and re-claimed on a new approved branch, the old held doc sorted first, and
+    its recorded answer printed `PREVIOUSLY ANSWERED:` over work that was merging.
+  - Both `78b0a77` and the base asked.
+  - Fix: a task an approved branch claims takes its carrier only from a merging doc. Pinned by a test
+    that fails on `8ea1c1c` and passes after.
+  - Lens 4 also found the same suppression for a doc spelling its branch `refs/heads/<name>`. Branch
+    names are now compared with that prefix stripped.
+- **MED, fixed: the Exit 0 arm said `clean` over a crashed *non-blocking* stage.** An invalid semgrep
+  rule gives `3 failed` in the header with no `⚠`, and round 1's predicate did not read `failed`.
+  The arm now requires `0 failed`.
+- **MED, filed as `Q-610`: a held `branch: <default branch>` doc re-asks on every close**, and the
+  answers recorded in it are never read. That is the safe direction of round 1's fix. Telling a
+  landed main-authored doc from a local one across `direct` and `pr` needs a design decision, and
+  the entry carries three candidates.
+- **LOWs, fixed:**
+  - `REFERENCE.md` said the held and releasing closes ask (they report).
+  - "the default branch" should read "the branch HEAD is on".
+  - The `--dry-run` rule sat only in step 4 after round 1 moved recording to step 2.
+  - `PREVIOUSLY ANSWERED:` did not name the doc whose answer it used.
+  - Two heredoc docstrings and one runner paragraph carried rationale (dimension 10). They were
+    trimmed, and the paragraph was cut to an instruction.
+
+**Lens 5 (guards and record): its own 62 mutations, 47 killed (76%), 7 controls with 0 false
+kills.**
+- **Its behaviour defect is lens 4's HIGH in general form:** a task whose only pending doc is not
+  merging, claimed by a lock on an approved branch. The carrier fix covers it, and a test pins that
+  exact shape, held and not held.
+- **Real gaps, closed:**
+  - The sum binding's regex matched nothing (the bold wraps the whole phrase), so "now also checks
+    … their sum" was false.
+  - The `mixed` pattern fell through to the sum phrase.
+  - Every figure binding switched itself off when its sentence was reworded. All six figures are now
+    required, in the bound phrasing.
+  - Also closed: the carrier order, a doc with no `branch:`, a detached HEAD, and the recorder's
+    `sysop/runtime/pending-docs` path check.
+- **Record defects, fixed:**
+  - Round 1 dropped lens 2's CRLF row on a false reason: a CRLF doc *is* read, and the recorder
+    rewrote it as LF, contradicting "byte for byte". The recorder now writes back the doc's own line
+    ending and refuses mixed endings.
+  - The "What changed" `Q-609` bullet still gave the superseded predicate.
+  - Lens 3's LOW count was 7, not 6.
+  - The ledger row was missing.
+  - Step 4d's "them" read as sending unrunnable defects to `Close notes:`.
+- **Residue, declined with the reason:** H01–H03 and E07 are contrary rules added to Step 3c and
+  `4a-post` prose this phase did not decide. Round 1's record said its new spans "close that"; they
+  close it for the phase's own text only. The general question is `Q-560`'s. The per-block `+N`
+  deltas are bound by nothing and are true today; binding prose deltas is not worth a guard.
+
+**The ceiling, found by running the census.** Round 2's first fixes took `editor`+`mixed` to
+**106,018, 50 over** `EDITOR_MIXED_CEILING`. The arm's "None of these exits non-zero …" sentence was
+rationale that `REFERENCE.md` already carried, and it was cut, leaving 105,888 (80 under).
+
+**After the fixes**, the author battery, with 45 rows re-pointed and extended for round 2, killed **45 of 45 with 3 controls
+green**. That is an author's number again; no third round was run, and whether to run one is Wade's call under the governor.
+
+**CI on the round-2 commit went red in 3 of 4 shards on one test**:
+`test_the_recorder_refuses_and_writes_nothing` snapshots every file under its fixture, and round 1
+had made that fixture a git repo. On CI a file under `.git/` differed between the two snapshots.
+Locally it did not. The recorder writes no git state, so the snapshot now excludes `.git/`.
+**The cause of CI's `.git` write is not established**, and this record does not guess at it.
+
+## Phase 331 (executed 2026-09-24 — the second bundle pilot: five guard-hardening entries by three executors)
+
+**Wade's three menu answers, each the recommended option:**
+- **At the open: the guard-hardening pilot.** This is the second pilot he chose after Phase 329,
+  on a different kind of cluster: `Q-564` + `Q-565`, `Q-559` + `Q-551`, and `Q-608`.
+- **Mid-build: `Q-564`(a) is accepted and stated, not mechanized.**
+- **At integration: executor C's lazy sub-steps get a hard break, fixed in this phase.**
+
+### The shape as run
+
+Three executors, grouped by file:
+- **A:** `tests/test_doc_currency.py`.
+- **B:** `tests/test_mirror_runbook_gates.py` + `tests/test_cut_release_gate.py`.
+- **C:** `tests/test_fix_in_branch_tier.py` and the two pin modules that import its normalizer.
+
+Each executor:
+- worked in its own worktree created at base `dde115f` from the main checkout, with the venv
+  symlinked in;
+- echoed that SHA before starting;
+- owned only its files and new test modules;
+- was barred from every record file and from all of `core/**`.
+
+**New in this pilot, after Phase 329's lesson:** the shared brief named eight cross-cutting guards
+to run before reporting, beside the modules naming the executor's files, and required a full suite
+run. The brief lives in the session scratchpad and was not committed; its rules are the ones stated
+here.
+
+### The measurements
+
+| measure | this phase | Phase 329 (first pilot) |
+|---|---|---|
+| entries closed | **5** (`Q-564`, `Q-565`, `Q-559`, `Q-551`, `Q-608`) | 8 |
+| executor wall clock (harness) | A 53.6 min, B 27.6 min (including a follow-up), C 57.7 min, run concurrently | A 16.4, C 27.7, B 28.7 min |
+| executor tokens (harness `subagent_tokens`) | A 218,048 · B 210,411 · C 306,215 = **734,674** | 770,920 |
+| git merge conflicts | **0** (three `--no-ff` merges, file-disjoint) | 0 |
+| integration defects caught by the integrator's suite | **0**: the full suite at `9a8972c` read 8,725 passed, 219 skipped, 0 failed | 3 |
+| siblings reported in files an executor did not own | A 3, B 0 (plus one stated limit), C 2 (its "4 sites" were 11) | 14 |
+
+**The zero is the pilot's result, and it is one run.** Each executor ran the named guards and a
+full suite in its own worktree (A: 8,181 passed; B: 8,175; C: 8,713, each 0 failed), and the merge
+added nothing red. Phase 329's integrator found three defects in guards that name no file. Here
+none reached integration. One run cannot separate the brief's guard list from a tests-only bundle
+that simply had less to collide on.
+
+### What the entries assumed, and what the tree said
+
+- **`Q-565`'s "41 fenced headings" was a reader artefact.** Executor A reproduced 41 only with a
+  naive toggle reader at Phase 320's tree (`65d7d06`). They are real headings that reader
+  swallowed, not quoted ones. At base, a CommonMark reading with list items finds 0 of 322 fenced.
+  The defect itself held: a fenced `## Phase 999` did raise the old ceiling.
+- **`Q-559`'s third mutation is equivalent.** `gate_numbers` is built only from step numbers, so
+  dropping `& numbers` could change the error message, never the verdict. The check had also been
+  reading dates (`2026-07-24` as step 7) and `discussion #1` as citations.
+- **`Q-551` held for the arm, not for the suite.** q1–q3 survived the arm as filed, but
+  `tests/test_reviewer_venv_resolution.py` already killed q1–q4. What the rebuilt arm adds is the
+  only end-to-end run of "no pytest → refuse → `&&` stops `gh`".
+- **`Q-608`'s leg 4 was wider than filed.** A re-wrap at widths 1–∞ false-killed 16 of the 83 real
+  spans, from four causes. C's own controls then found marker swaps and blockquote re-wraps breaking
+  13 anchors.
+- **The pin count, derived rather than quoted:** 83 spans over 20 files (`PINNED_SPANS` 35 over 14,
+  the loop module 36 over 8, the smoke module 12 over 2). The entry's "35 over 14" held.
+
+### What changed
+
+Per entry, `REVIEW_ARCHIVE.md` § *Resolved — Phase 331* has each resolution. In short:
+- **`Q-564` + `Q-565` (A):**
+  - Every stamp and date arm has a control that trips it alone.
+  - A new `predates` arm ties the page date to the stamped phase's `executed` date. It never
+    fired across the monograph's 63 past states, though only 28 of them reach the comparison;
+    the rest lack a site, disagree, or stamp an undated phase. The executor's report said 60,
+    and both lenses counted 63.
+  - The notation controls keep the page's own spelling.
+  - `_max_phase()` reads through a fence-aware `_unfenced_lines()` with a list-item rule.
+  - `Q-564`(a) is stated as NOT MECHANIZED in the module docstring, on Wade's answer: the cut's
+    round is the check.
+- **`Q-559` (B):**
+  - `missing_gates()` reports uncited gates.
+  - A fifth arm and a per-gate arm are added.
+  - Dates and `#N` no longer count as citations.
+  - Step 6, the cold-clone install, joins the gate set by its title, because the runbook calls it
+    "the one gate that runs the product". The integrator's answer to B's question came from that
+    text, not from Wade.
+- **`Q-551` (B):** the fallback arm runs on a copy of the working tree with a site-less `python3`
+  shim, beside a working-interpreter control. Row t3+q5 shows why a copy from `HEAD` would not do.
+- **`Q-608` (C):**
+  - `_pin_norm` is rebuilt over a line classifier: tabs, fence lines, list-marker gaps and quote
+    depth are all recorded.
+  - A shared `_span`/liveness implementation serves all three pin modules.
+  - All 83 hashes are re-derived in one commit (`248f3e1`) touching only test modules, with 0
+    differences in the normalized span text before and after.
+  - New `tests/test_pin_normalizer.py`.
+
+**A pre-existing no-op control, found by B:** `test_renumbering_the_procedure_coherently_stays_green`'s
+two back-reference `.replace()` calls had matched nothing since Phase 226. It now derives its edits
+from the runbook and fails if nothing shifts.
+
+### Integration
+
+- **B's stated limit, fixed by the integrator.** A renumber that left § *Refreshing* alone still
+  passed, because the retirement banner (a blockquote) says "step 7". Blockquote lines no longer
+  count as citations. The renumber control now asserts that the renumbered-only runbook fails.
+  Dropping the filter kills that assertion (1 failed).
+- **A's stale citation:** `tests/test_mirror_currency_ratchet.py` cited
+  `tests/test_doc_currency.py:264`, which was wrong at base too. It is now line-free.
+- **C's lazy sub-steps: 11 sites, not the 4 reported.** A sweep of the shipped markdown
+  (`core/**`, `packs/**`, `docs/*.md`, README, CONTRIBUTING) found `2b.`/`3‑tier.`/`4b.`/`5a.`/`5b.`-style lines directly under a
+  non-blank line in `claim-task`, `auto-build`, `WORKFLOW.md` and `WORKFLOW_GUIDE.md`. A lettered
+  sub-step is not a CommonMark list marker, so on a rendered surface it joins the paragraph above.
+  - **The blank-line fix would have shifted live citations.** A regex sweep outside `PHASE_LOG.md`
+    and `REVIEW_ARCHIVE.md` found 30 lines citing a `file:line` at or past an insertion point (lens
+    1's regex read 31), one
+    of them in `review-close/SKILL.md`. So the line above each now ends in a CommonMark hard break, on Wade's
+    answer, which moves no line.
+  - Two pins moved and were re-derived (`auto-build rule block`, `WORKFLOW 5a item`).
+  - **At three sites (`WORKFLOW.md` §§ 2.5 and 2.6's `4b.`, `auto-build`'s `3‑record.`)** the line
+    above sits inside a nested block, a sub-bullet or an indented paragraph. There the sub-step now
+    renders on its own line but still inside that block.
+  - `tests/test_substep_line_breaks.py` guards the class. Removing one break kills it (1 failed).
+
+### Dropped, with the reason
+
+- **A's `_fence_marker` note** (`tests/test_phase_log_currency.py`): a fence whose info string
+  holds a space is read as prose. So a quoted heading under a spaced info string could stand in for
+  a deleted section. That takes a deliberate forgery, and the rule is a documented,
+  stricter-than-spec choice measured against the file. Nothing is wrong today.
+- **C's note on `tools/phase*_mutations.py`:** historical batteries not run by the suite, and they
+  reference no removed name.
+- **A's `_fence_state` list-item finding** is `Q-544`'s question. `Q-544` is extended with the
+  measurement, not re-filed.
+
+### Author-side pass
+
+- **Executors**, their own reports, re-verified at merge by the integrator's full suite:
+  - A: 28 guard mutations; 24 killed on the first run. Three first-run survivors (G5c, G22, G23)
+    were closed by new controls, and G2b is a declared equivalent. 7 document rows behaved as
+    expected.
+  - B: 13 + 12 rows, then 8 more for the step-6 delta. Its two survivors were built on purpose:
+    t3+q5 shows the fixture trap, and t5+t4 shows the working-interpreter control is
+    load-bearing.
+  - C: 36 of 36 killed by its own report, each by a test other than the hash table. Its first run left A17, A24 and
+    A26 surviving, all closed.
+  - Every executor ran with `PYTHONDONTWRITEBYTECODE=1`, a fresh `PYTHONPYCACHEPREFIX`, and
+    a restore of the saved copy. A and the integrator restored bytes and compared them; B and C
+    restored through text-mode reads and writes, harmless here because no mutated file holds a
+    carriage return.
+- **Integrator:**
+  - Two mutations of its own edits, both killed: the blockquote filter dropped, and one hard break
+    removed.
+  - Rule 1 on the new sub-step guard found its population check was only "more than 50 files", so
+    dropping `core/**` would have passed. It now pins the four files that carried the class. The
+    battery then ran 7 mutations: the population, fence tracking, the suffixed variant, the
+    plain-step exclusion, both accepted breaks, and the blank-above test. **All 7 were killed,**
+    with the file restored byte for byte and the clean run green.
+  - The sub-step sweep ran over the whole shipped markdown surface, not over the four sites named.
+  - The first scripted queue edit also collapsed unrelated blank-line gaps in
+    `REVIEW_CHECKLIST.md`. The diff showed it before the commit. The files were restored and the
+    move redone so that only the five entries left.
+
+### Round 1: two lenses at `8b91d73`, each placed in its own detached checkout
+
+Two lenses, not the governor's three. The phase ships guards and a numeric record, which
+licenses a third. Phase 329 kept to `Q-606`'s two-lens pilot shape and so does this phase, so
+that the second pilot measures the same thing as the first. Both lenses echoed `8b91d73…` and
+`claude-opus-5-5`.
+- Lens 1: execution, claims and dimension 10. 220,581 tokens, 18.3 min (harness).
+- Lens 2: guard strength and the record's numbers. 296,556 tokens, 50.9 min (harness).
+
+Every finding below was re-read against the tree before anything was changed.
+
+**Lens 1: 2 MED and 4 LOW, all verified.**
+- **MED — a list-item fence closed by its own body line.** `auto-build/SKILL.md:1073` was a
+  column-0 continuation line inside a fence opened at indent 3 in a list item. CommonMark closes
+  the fence there, and the old closer opened a new one to `:1124`. So the rest of the step,
+  including two pinned spans and the "Required final-message format" heading, rendered as code.
+  `_pin_liveness` and the pins read fences by marker alone and saw none of it. The same lens
+  showed 14 dedent mutants above other pinned spans surviving everything.
+  - **Fixed:** the line is indented, which only adds spaces to an error message inside a
+    quoted continuation. One pin was re-derived (`auto-build record item`).
+  - **Guarded:** `tests/test_substep_line_breaks.py` now refuses a line dedented below an
+    indented fence's opener, in any shipped markdown file. The lens's own claim-task mutation is
+    killed by it.
+  - **My first cut of that guard was itself blind.** Its fence reader lacked the closer-length
+    rule, so the 4-backtick fence at `:995` "closed" at a 3-backtick line and every pairing
+    after it shifted. The first battery row, restoring the live defect, survived and exposed
+    it. Both detectors in the module now share one reader with CommonMark's closer rules.
+  - A CommonMark sweep with `markdown-it-py` (installed into the scratchpad, not the venv) over
+    all 103 tracked `.md` files found no other shipped instance.
+- **MED — the `Q-544` extension was false.** It said `PHASE_LOG.md` was the only file where
+  the missing list context is live; `auto-build` was a second. The entry is corrected in place.
+  The same sweep flagged `review-close/SKILL.md`'s three 6-space fences, and round 1's record
+  called them `Q-544`'s shape. **Round 2 showed that was an understatement with the wrong
+  cause:** 948 lines render as one indented code block because a lettered `a.` sub-step opens
+  no list. It is filed as `Q-611`, since `review-close` edits stay out of a bundle.
+- **LOW — two of the 11 hard breaks were no-ops.** `auto-build`'s `4b.` and `5b.` sat inside the
+  runaway code block. With `:1073` fixed, all 11 render as hard breaks: markdown-it finds a
+  hardbreak token at each and none inside code. "11 lazy sub-steps" stands: by the raw-text rule
+  there were 11, and two were hidden by the larger defect.
+- **LOW — the record's "60" and "30".** Both are corrected above.
+- **LOW, pre-existing — the bytecode probe failed under the round's own hygiene.**
+  `tests/test_run_checks_sh.py` dropped `PYTHONDONTWRITEBYTECODE` but inherited
+  `PYTHONPYCACHEPREFIX`, so under a fresh prefix it failed. Its sibling also passed vacuously
+  under a battery's `PYTHONDONTWRITEBYTECODE=1`. Both now drop both variables. With the wrapper's
+  export deleted and both variables set, the sibling fails (1 failed); before, it would have
+  passed.
+- **LOW, pre-existing — a tab-indented opener** is a fence to both readers and an indented code
+  block to CommonMark. It errs only toward a lower ceiling, and no tracked `.md` file has one.
+  It is noted in `Q-544`.
+- **Dimension 10:** the `core/**` diff added no prose, only trailing `\` and one indent.
+
+**Lens 2: 1 MED, 1 LOW-MED and 6 LOW over its own 99-row battery, all verified.**
+- **MED — with the hash table set aside, the normalizer's controls could not see fenced content,
+  quote depth or list type** (P14d, P15b, P12b), nor merged table rows (P6). The hashes caught
+  all four today only because they pin current output. A normalizer change shipped with
+  re-derived hashes would not have been caught. **Fixed:** four structure cases in
+  `test_pin_norm_sees_code_and_quote_structure`. The optional space after `>` (P3) is now a
+  legal-edit control. P12 (renumbering) is dropped: in CommonMark only a list's first number
+  renders.
+- **LOW-MED — deleting the blank line above a pinned span never moved its pin.** For a span
+  that opens a paragraph, that makes it a lazy continuation of the paragraph above. **Fixed:**
+  `_pin_span` marks a span that starts inside a paragraph, as a trailing block of its own. My
+  first placement put the mark before the span and broke the list-marker swap on three files,
+  because the marker no longer parsed as one; the legal-edit test caught it. 8 hashes re-derived.
+  A new structural control deletes that blank line under 16 spans and requires the pin to move.
+  It is scoped to spans anchored at a line start: a span anchored mid-paragraph sits inside a
+  paragraph either way, and joining that paragraph to the one above changes the text before the
+  span, not the span's block. `3.` interrupting a paragraph (CommonMark allows only `1.`) needs
+  list context the classifier does not track, and is not closed.
+- **LOW — any integer in § *Refreshing* counted as a citation** ("the 5 leak detectors", a
+  dotted date, a hidden comment), and a range ("Steps 3–6") counted as its endpoints only.
+  **Fixed:** `step_citations()` reads only numbers in a clause following `step`/`steps`, drops
+  parentheticals, dates, `#N` and HTML comments, and expands ranges. The lens's three attacks
+  are a test.
+- **LOW — the doc-currency reader's closer-character rule and one-line comments had no control**
+  (DC12, DC6b). Both are added.
+- **LOW — the sub-step population pinned four files only** (S5, S6, S10), and no detector case had
+  an indented sub-step (S8). Every root and README/CONTRIBUTING are now pinned, and indented and
+  in-fence cases are added.
+- **LOW — record:** "60 states" and "restores from saved bytes" are corrected above.
+- **LOW — environment:** the bytecode probe, as lens 1 found.
+- **Re-derived clean by lens 2:** `_max_phase()` 330 at base; 29 and 41 swallowed headings; 83
+  pins over 20 files; 16 re-wrap false kills and 13 broken anchors at base; the 11 sites; `248f3e1`
+  test-only; the executor suite totals.
+
+**Round-1 fix battery** (`PYTHONDONTWRITEBYTECODE=1`, a fresh `PYTHONPYCACHEPREFIX` per row, bytes
+restored and compared; pin rows run with the three hash-table tests deselected, lens 2's
+standard):
+- 15 of 16 rows killed. R13 (a one-line comment never closing) was written but left out of the
+  first run, and round 2 caught the gap; it was then run and killed (1 failed). The rest:
+  - R1–R6: fenced content, quote depth, ordered versus bullet, table rows, the quote space, the
+    inside mark;
+  - R7–R11: any integer, ranges, parentheticals, comments, the clause end;
+  - R12: the doc-currency closer character;
+  - R15–R16: the population roots.
+- **R14 survived as an equivalent mutant:** dropping the sub-step reader's closer-character
+  test changes nothing, because its "nothing after the run" test strips only the opener's own
+  character.
+- The fence guard's own battery: 6 of 6 rows killed, after its first run exposed the missing
+  length rule.
+- **Full suite at the fix commit `57f5f00`: 8,769 passed, 219 skipped, 0 failed.**
+
+**Why a second round.** Round 1 replaced the runbook's citation predicate and added a fence guard
+with its own reader, and no fresh reader has seen either. That is the governor's condition.
+
+### Round 2: two lenses at `bed9b7c`, scoped to round 1's fixes and record
+
+Both lenses echoed `bed9b7c…` and `claude-opus-5-5`.
+- Lens 3: the fixes executed, and the record's truth. 198,804 tokens, 13.1 min (harness).
+- Lens 4: the new guard code's strength. 228,359 tokens, 19.2 min (harness).
+
+Lens 3's full suite at `bed9b7c`, under the hygiene variables, read 8,769 passed, 219 skipped,
+0 failed. That is round 1's bytecode fix confirmed.
+
+**Lens 3: 1 MED and 4 LOW, all verified.**
+- **MED, record: `review-close/SKILL.md` was understated, with the wrong cause.** 948 lines
+  (1922–2600, 2603–2605, 2608–2873) render as indented code, prose and the exit-code table
+  included, because the lettered `a.` at `:1920` opens no list. It is the only shipped file
+  with a `code_block` token. **Filed as `Q-611`**, not fixed: `Q-606`'s rule keeps
+  `review-close` edits out of a bundle, because a repair moves its census, pins and spec
+  figures. The round-1 text and the `Q-544` extension are corrected.
+- **LOW — the fence guard's blind spots:** a tab-indented opener and blockquote fences, plus
+  three over-strict layouts. None is live. Tabs are fixed (below). Blockquote fences stay out
+  of reach. The over-strict layouts are stated in the module docstring.
+- **LOW — the fence detector's tests pinned only a dedent to column 0.** The same finding as
+  lens 4's, fixed below.
+- **LOW — `step_citations()`:**
+  - (a) a re-wrap turned it red;
+  - (b) plausible rewordings went red;
+  - (c) incidental numbers in a step clause still cited. On the real runbook it returned
+    144–160 and 274 as citations, and "the build dir step 3 creates" still cited 3.
+  - All three are fixed below, except that genuine mention of step 3. It is a real mention of
+    step 3, and telling a back-reference from a mention would need the sentence's meaning.
+    The brief's claim that "an incidental number does not" cite is scoped accordingly.
+- **LOW, record:** lens 2's tally, and R13. R13 is now run (see § Round 1).
+- **Re-derived clean by lens 3:**
+  - the `:1073` fix;
+  - all 11 hard breaks;
+  - 50 of 50 rendering-changing dedent mutants above pinned spans caught;
+  - 8 of 83 spans marked, and 16 join controls;
+  - `_bytecode_env` in all four env combinations;
+  - 63 monograph states, with 28 reaching the comparison.
+
+**Lens 4: its own 60-row battery; 1 LOW-MED and 7 LOW, all verified.** It confirmed R14's
+equivalence, and it confirmed that "14 of 15" was accurate as first written, because R13 was a
+numbering gap.
+- **LOW-MED — `step_citations()` ended a clause at every newline,** so re-wrapping the prose
+  back-reference dropped its citations. Only the fence comment's second back-reference masked
+  that.
+- **LOW:**
+  - bold numbers, a parenthesised list, `STEPS` and an abbreviation inside a parenthetical all
+    went red;
+  - an incidental number later in a step clause cited;
+  - several clause rules had no case (M2, M5, M7–M10);
+  - the fence tests pinned only a column-0 dedent (S10, S10b);
+  - two pairing rules had no case (S2, S6);
+  - tabs were ignored (307 false positives under the repo's own tab legal edit, and a
+    tab-indented opener was skipped);
+  - the population pin was root-granular (S15–S17);
+  - two floors were weak (P8, P9).
+- **Found, out of the lenses' scope:** the sub-step detector false-flagged re-wrapped prose
+  that puts a step reference at a line start (`WORKFLOW.md:918` at width 40).
+
+**What changed in response:**
+- **`step_citations()` is replaced a second time,** by a narrower rule. A citation is the run of
+  numbers directly after `step`/`steps`: separators `,`, `and`, `or`, `&`, dashes, `to`,
+  `through`; an optional `#` or `(`; a run may wrap across lines. Bold markers, a
+  parenthetical after a number, and HTML comments are dropped first, and ranges expand up to 20.
+  - On the real runbook it now returns exactly {3, 4, 5, 6, 12, 13}.
+  - 17 cases pin it, and a new test re-wraps § *Refreshing* at widths 1–80 with the fence
+    comment's numbers removed.
+  - `_uncite` in the per-gate test now removes a number the way an editor would. Its old form
+    left `steps , 4`, which no edit produces, and the new rule read that as no run at all.
+- **Sub-step detector:** it now needs a bold lead after the label. Every shipped sub-step has
+  one, and re-wrapped prose does not.
+- **Fence guard:**
+  - Indentation is read with tabs at stop 4.
+  - Cases added: a one-column dedent, an info-string line inside a fence, a longer closer, a
+    tab-led body line, a tab-indented opener.
+  - A population test derives the shipped `.md` set a second way and requires equality.
+    Writing it caught my own assumption: git's `docs/*.md` pathspec matches at any depth.
+- **Pin normalizer:** the join control's floor is 12 spans, and the quote-space legal edit must
+  apply somewhere.
+- **Round-2 fix battery** (same hygiene): **21 of 21 killed.**
+  - Rows: lens 4's S2, S6, S10, S10b, S15–S17, P8, P9, M2 and M7.
+  - One row each for the tab stop, the bold lead, the bold strip, the parenthetical strip, case,
+    `(`, `#`, `to`/`through`, run-only reading, and the editor-shaped uncite.
+  - M5 and M8–M10 no longer have a site: the `#N` strip and the clause terminators are gone.
+- **Full suite over the round-2 fixes: 8,772 passed, 219 skipped, 1 failed.** The failure was the
+  brief gate, red because `Q-611` was filed and not yet ranked. It is ranked, and the gate's module
+  re-runs green (17 passed).
+- **The final full suite at `384424c` then read 6 failed, all in `tests/test_ledger_stats.py`.**
+  My own ledger row had written the lenses' survivors as "real gaps", a phrasing the audit's
+  survivor pattern does not match, so it scored this phase's all-killed batteries as the one
+  intact row in 117. That is the Phase 295 shape exactly, where a row the detector could not
+  read published a false "intact". The cell now says "surviving", and the stated figures moved
+  with the derivation: 117 all-killed author batteries, 114 falsified, 3 unknown, over 171
+  numbered phases and 193 rounds. They are updated in `AUTHOR_DEFECT_REGISTER.md`, the ledger's
+  reading note and the brief. The module re-runs green (68 passed over it and its two neighbours).
+
+**No third round.** Round 2's fixes are bounded patches and one predicate narrowed, each
+verified by the battery above. The governor puts a third round in Wade's hands.
+
+### After the phase
+
+**Wade's two menu answers, both the recommended option:**
+- squash-merge #741;
+- **adopt bundle phases for clusters with no design question.** At most 3 executors, an executor
+  brief naming the cross-cutting guards, an integrator who runs the full suite, and the round as
+  for any phase. `review-close/SKILL.md` edits, § High behaviour changes and design entries are
+  never bundled.
+
+`CLAUDE.md`'s conventions carry the rule, and the Phase 332 brief no longer asks the question.
+
+## Phase 332 (executed 2026-09-24 — the first adopted bundle: four inbound-triage entries by three executors)
+
+**Wade's two menu answers at the open, both the recommended option:**
+- **The four-entry bundle:** `Q-576`, `Q-573`, `Q-575` and `Q-595`. `Q-219` leg (c) stayed out:
+  its own entry carries a design question (restate `Full` so it keeps `grepped`, then score the
+  proposal in both directions), and design entries are never bundled.
+- **`Q-573`'s shape: skip probe 4a under a configured `core.hooksPath`**, rather than carving the
+  configured directory out of the `VENDOR_ALT` match.
+
+This is the first bundle run under the adopted rule rather than as a pilot.
+
+### The shape as run
+
+Three executors, grouped by file:
+- **A:** `Q-576`, in `claim-task/SKILL.md` + `REFERENCE.md` and `release/SKILL.md`.
+- **B:** `Q-573` + `Q-575`, in `self_check.sh`, `validate_tasks.py`, the two lock writers and
+  `install.sh`.
+- **C:** `Q-595`, in both review skills' 5b and 5f and their `REFERENCE.md`s,
+  `_shared/fanout-evidence.md` and `sitrep_survey.py`.
+
+As in Phase 331:
+- Each executor worked in its own worktree at base `b97dce0` and echoed the SHA and its model id
+  (`claude-opus-5-5` for all three) before anything else.
+- Each owned only its files and never touched a record file.
+- The shared brief named 19 cross-cutting guard modules and required a full suite run. It lives
+  in the session scratchpad and was not committed.
+
+### The measurements
+
+| measure | this phase | Phase 331 | Phase 329 |
+|---|---|---|---|
+| entries closed | **4** (`Q-576`, `Q-573`, `Q-575`, `Q-595`) | 5 | 8 |
+| executor wall clock (harness) | A 42.3, B 53.5, C 60.4 min, concurrent | A 53.6, B 27.6, C 57.7 | A 16.4, C 27.7, B 28.7 |
+| executor tokens (harness `subagent_tokens`) | A 251,247 · B 293,186 · C 253,865 = **798,298** | 734,674 | 770,920 |
+| git merge conflicts | **0** (three `--no-ff` merges, file-disjoint) | 0 | 0 |
+| integration defects, counted as Phase 329 counts them | **3**: A's 2 reported reds at the merged tree `4cb76f7`, and the integrator's re-wrap reddening A's guard; the suite after them read 8,912 passed, 0 failed at `753ecec` | 0 | 3 |
+| siblings reported in files an executor did not own | A 5, B 4, C 3 | A 3, B 0, C 2 | 14 |
+
+**Executors' own full suites:**
+- B: 8,817 passed, 0 failed.
+- C: 8,830 passed, 0 failed.
+- A: 8,806 passed and 2 failed, at `072b617`, before its test-only `1f69f00`. The two failures were its own reported siblings, a stale line
+  citation and an unregistered `section()` call site, which only the integrator could apply.
+
+**What the 3 does and does not mean.** Phase 329's 3 counted every red test the integration met,
+one of them reported by an executor, and the same count here is 3. A's branch went in red on the
+two siblings it reported, and the integrator's own re-wrap turned A's guard red (below). No merge
+conflict and no unreported defect reached the suite. The first record of this phase called that
+"0 integration defects", which was not the measure Phase 329 used; round 1 corrected it.
+
+### What the entries assumed, and what the tree said
+
+- **`Q-576`'s population was four sites, not two, by the executors' sweep, and seven by the round's.**
+  - `auto-build/SKILL.md`'s branch-generation sentence says it "matches `/claim-task` Step 3" and
+    hard-coded the same five prefixes.
+  - `next_task.py`'s `_default_branch_prefix` mapped everything except `FEAT`/`FIX` to `tech/`. So
+    `/next-task` had suggested `tech/data-foo` where the claim makes `data/data-foo` since before
+    this phase, and `tests/test_next_task.py` asserted that divergence.
+  - Round 1 found three more in `sitrep_survey.py`, a file executor A had open to test the
+    branch round-trip, and whose sweep had grepped code too (it found `next_task.py`). The
+    first record blamed a "markdown-only" sweep; round 2 refuted that, and the cause of the
+    miss is not established. The three:
+    orphan-branch detection keyed to a fixed directory tuple, an ACTIVE WORK skip of every
+    `TASK-`/`BATCH-` lock, and a Doc-Work trailer grammar narrower than the schema's. See § Round 1.
+  - The entry's first remedy, classifying by lookup in `tasks/index.yml`, would have duplicated
+    Step 2's `--entry-state`, which already answers `absent` and stops. Step 1 classifies by the
+    schema's id grammar instead.
+- **`Q-573` had a second arm the entry did not name.** An empty `core.hooksPath` makes
+  `git rev-parse --git-path hooks` answer `./`, so probe 4a scanned the working-tree root as a hook
+  directory. On base, a `NOTES.md` mentioning `scripts/run_checks.sh` came out as
+  `✗ armed hook 'NOTES.md'`. `install.sh`'s migration scanner had the same empty-value defect.
+- **`Q-575`'s two write sites and zero readers held**, and so did the CI stub-lock claim. B read a
+  consumer CI workflow read-only: its stub body is the single line `ci-stub: …`, and the check
+  stays silent on it.
+- **`Q-595` held, and `read_coverage` had a live defect beside it.** In a merged same-day round,
+  a quality line whose `Sampled` basis names security matched the security reader's tag, because
+  the tag was matched against the whole line. The security round's ledger then recorded
+  `unreported` and printed "no coverage line found". The tag is now matched inside the `(…)`
+  label. **That defect was already filed, as `Q-040`(a),** which neither executor C nor the
+  first record named; round 1 caught it, and § Round 1 closes the rest of `Q-040`.
+
+### What changed
+
+Per entry, `REVIEW_ARCHIVE.md` § *Resolved — Phase 332* has each resolution. In short:
+- **`Q-576` (A):**
+  - Step 1 takes any id matching `^[A-Z][A-Z0-9-]{2,80}$`, with the batch arm tested first.
+  - Step 3 is one rule: the directory is the leading segment lowercased, and the leaf is the whole
+    id lowercased.
+  - `release/SKILL.md`'s category map names a fallback for any other prefix.
+  - `REFERENCE.md` holds the rationale.
+  - New `tests/test_claim_task_id_vocabulary.py` runs the rules the skill states against the
+    validator's own grammar, the real `claim_task.sh --entry-state`, and `sitrep_survey`'s
+    branch-to-id derivation.
+- **`Q-573` (B):**
+  - Probe 4a is skipped, with an info line, when `core.hooksPath` is set empty or resolves
+    (`pwd -P`) anywhere other than the **common** dir's `hooks`.
+  - `install.sh` skips its hooks `find` when the value is empty. It still follows a non-empty value
+    on purpose, because at migration time the old `scripts/hooks/` is the vendor directory being
+    moved.
+  - New `tests/test_self_check_hookspath_scan.py`.
+- **`Q-575` (B):**
+  - `validate_tasks.py` warns when a lock is past `expires:` AND still carries the seeded
+    `plan_summary`. That covers every `in_progress` task's lock and every `BATCH-<N>.lock`, but not
+    orphan locks.
+  - Unparseable input is silent and never crashes.
+  - `claim_task.sh`'s "no runtime reader" comment became false, so it was rewritten and its pin
+    moved in the same commit.
+  - New `tests/test_lock_placeholder_expiry.py`, which single-sources the placeholder by running
+    both writers.
+- **`Q-595` (C):**
+  - Both 5f writers record a `fanout` receipt key ahead of `"line"`: a dict when the line is
+    present, `unreported` when a fan-out round lacks it, `null` when solo.
+  - The absent case prints `round-receipt: FANOUT-UNREPORTED` before the Step 7 commit.
+  - The 5b templates now carry a per-skill label.
+  - `/sitrep` gains a discrepancy for the absent case.
+  - New `tests/test_fanout_coverage_receipt.py`. The two heredocs stay byte-identical, which a
+    lockstep test pins.
+
+### Integration
+
+- **`/claim-task` Step 3's rule re-wrapped to the table's six lines.** A's single-line rule moved
+  every later line up 5. That staled `review-close/SKILL.md:858`'s two `claim-task/SKILL.md:NNN`
+  citations. At base, `git grep` finds 69 `claim-task/SKILL.md:NNN` citations past `:321`
+  across 10 files: 42 in the two history files, and 27 elsewhere, 13 of them in
+  `REVIEW_CHECKLIST.md`. The first record counted the queue only. The obvious fix edits
+  `review-close`, which a bundle never does, and leaves the rest wrong. Keeping the count keeps all of them true: `git diff
+  --numstat` reads 10/10, and the two cited lines are byte-identical to base.
+  - **The re-wrap turned A's own guard red on 16 tests.** Its Step-3 parser read only a bullet's
+    first line, so a legal re-wrap of the rule read as "states 0 regexes". The parser now reads the
+    bullet with its continuation lines, as a verbatim substring the mutation rows can still edit.
+    That was the integration defect, and it was mine. A guard that a re-wrap reddens is Phase 331's
+    `step_citations()` lesson again.
+- **A's siblings:**
+  - `auto-build` and `next_task.py` follow the one rule. The shipped `DATA-FOO` → `tech/` assertion
+    now expects `data/`, and `UX-`, a digit-bearing prefix and a non-id fallback are pinned.
+  - The two `section()` call sites are registered.
+  - `PENDING_SIBLINGS` is deleted along with its site: dead configuration reads as coverage.
+- **B's siblings:** `schema.md` Invariant 9 gains its warn-only half (inside 9, because the count of
+  twelve is pinned). In `WORKFLOW.md`:
+  - § 4.1 says how to park a claim on purpose.
+  - § 8.4's `validate_tasks.py` row said "12 is the only warn-only one", already false because of
+    Invariant 11. It is corrected, along with its "(suspected secrets)" gloss on warnings.
+  - § 8.4's `self_check.sh` row states the 4a skip.
+- **C's siblings:**
+  - `self_check.sh` prints an info line for a fan-out round with no per-worker coverage, the only
+    surface loop mode has. The new
+    `test_self_check_names_only_an_unreported_fanout` has 4 cases, and its battery killed 3 of 3:
+    always, never, and the wrong literal.
+  - `WORKFLOW.md` § 4.2's round template and coverage-ledger paragraph gain the line.
+  - `/sitrep`'s discrepancy table gains a **Round coverage** row. It had been missing all four
+    pre-existing round-coverage discrepancies, not only the new one. The five kinds were checked
+    against `sitrep_survey.py`.
+
+### Dropped, with the reason
+
+- **A's sibling (b), re-pointing the queue's `claim-task/SKILL.md:NNN` citations:** no
+  longer needed. The re-wrap keeps every line where it was.
+- **A's two questions:** a `TASK-NNN` id now reaches Step 2 and is refused `absent`, with a remedy,
+  instead of the usage message. A lowercase id still gets the usage message, since ids are
+  case-sensitive everywhere else. Both are recorded here and neither changes anything.
+- **B's and C's stated decisions** keep the recommended readings, and each is recorded in the
+  archive resolution:
+  - batch locks are included, orphan locks are not;
+  - an unparseable `expires:` is silent;
+  - 4a gives up recall inside a consumer's own hooks directory;
+  - the fan-out label is per skill;
+  - the missing-line case warns, it does not fail.
+
+### Author-side pass
+
+- **Executors** (their reports, re-verified at merge by the integrator's full suite):
+  - **A:** 24 guard rows, 22 killed. G23 (a tautology over a test whose subject is measured by a
+    killed `sitrep_survey` row) and G25 (a duplicated precondition) survived. A declared them
+    equivalent, and they are not: each changes behaviour, and each is redundant with another test. Its 22
+    `test_guard_refuses` document rows were all killed, three of them the pre-phase text itself.
+  - **B:** 36 rows. 35 were killed, and V9 is a declared equivalent: `UnicodeDecodeError`
+    subclasses `ValueError`. S4 was closed before the run by the common-dir worktree control.
+  - **C:** its table lists 34 rows (M1–M25, S1–S4, G1–G5), and its tally says 35 of 35. 31 were
+    killed on the first run, and the four survivors (M3, M4, M15, G3) were closed by new tests
+    and re-killed.
+  - All three ran with `PYTHONDONTWRITEBYTECODE=1`, a fresh `PYTHONPYCACHEPREFIX`, and a restore
+    from saved bytes compared with `cmp`.
+- **Integrator:** the 3 `self_check.sh` rows above were all killed, with the file restored and
+  compared. The wrapped-bullet parser is exercised by the shipped text itself: its old one-line
+  form fails 16 tests on the current skill.
+
+### Round 1: three lenses at `b35e295`, each placed in its own detached checkout
+
+Three lenses: the phase ships behaviour **and** a numeric record, which is the governor's
+condition for a third. Each lens was placed with `git worktree add --detach` at `b35e295`, had
+`.venv` symlinked in, and had a private `TMPDIR` and scratch directory. All three echoed
+`b35e2954…` and `claude-opus-5-5` before their first finding. The local config was unchanged
+across the round.
+- **Lens 1: execution + dimension 10.** 269,281 tokens, 14.8 min (harness).
+- **Lens 2: guard strength**, a 94-row battery of its own. 226,242 tokens, 54.0 min.
+- **Lens 3: claims and record truth.** 246,571 tokens, 16.9 min.
+
+Every finding below was re-read against the tree before anything changed, and every one held. Two
+LOW are dropped with a reason and four are filed into `Q-560`; the rest are fixed. Lens 3's lead
+finding was mine: the record said `Q-575`'s cited `claim_task.sh:1416` was `:1418` at
+base, and base has it at `:1416`. `:1418` was executor B's own branch. That is a fabricated
+refutation in the record, Phase 153's shape.
+
+**MED, all fixed:**
+- **`Q-576` missed three fixed-prefix sites in `sitrep_survey.py`** (lens 1). This phase made
+  them reachable on the default path.
+  - Orphan-branch detection read a fixed directory tuple, so an orphan `ops/ops-gone` was never
+    reported. It now also accepts Step 3's derived shape, `<segment>/<segment>[-…]`.
+  - ACTIVE WORK skipped every `TASK-`/`BATCH-` lock. Now `_is_review_batch_lock()` skips only
+    `BATCH-<N>` and an unindexed `TASK-` id.
+  - The Doc-Work trailer grammar was narrower than the schema's, which dropped `ABC123` and
+    `QA2-X`. It is now the schema's grammar.
+- **`Q-575`'s warning fired on Sysop's own park** (lens 1).
+  - `/claim-task` (for a task or a batch) and `/auto-build` park by writing
+    `sysop/runtime/parked/<ID>__*.md` and leaving the lock alone (round 2 corrected an
+    attribution to `batch_work.sh`, which only removes those records), so every such park warned
+    "nothing says". A lock annotated in `notes:` warned too, although the schema says to annotate
+    there.
+  - Its remedies left out the commonest state, finished work waiting for `/review-close`, and
+    following "release" there reopens the task.
+  - Now any of `plan_summary`, `notes:` or a park record for the id silences the warning, and
+    the warning names the close route and says not to release finished work. `schema.md`
+    Invariant 9 and `WORKFLOW.md` § 4.1 say the same.
+- **`FANOUT-UNREPORTED`'s remedy could not clear its own discrepancy** (lens 1). The receipt is
+  written and the marker unlinked before the message prints, and a receipt is never rewritten. Both
+  the 5f message and `/sitrep`'s suggestion now say the receipt stays `unreported` until the next
+  round closes. `REFERENCE.md` says why.
+- **The `Q-576` guard could not see its siblings or the rule's leaf, and legal edits turned it
+  red** (lens 2). Eight survivors (A01', A05, A06, A08, A10', A12, G01, G02+A07; A10' was filed
+  into `Q-560` below, the rest fixed), five false kills
+  (A03, A04, A14all, A15, A16b), and rows "killed" only because their anchor moved.
+  - Lists are now read item by item, with continuation lines, under any marker.
+  - Step 3 is checked by clause: a directory clause with the segment regex, and a leaf clause with
+    "whole id". The rule may not carve out a prefix.
+  - No Step 1 sentence may name three of the old five, in any form.
+  - Every `ID` → `dir/leaf` example in shipped markdown must follow the rule.
+  - A branch-directory list is refused whatever fallback it states.
+  - Mutation anchors are whitespace-tolerant, and a moved anchor fails as `AnchorMoved`, distinct
+    from the guard passing a defect.
+- **Record** (lens 3), all corrected above:
+  - the fabricated `:1418`;
+  - `Q-040`(a) fixed without naming `Q-040`;
+  - `WORKFLOW.md` § 8.4 still omitting Invariant 10's warn-only half, which `schema.md` also
+    misstated as "requires";
+  - "0 integration defects", not counted as Phase 329 counts, is 3.
+
+**LOW, fixed:**
+- the `Q-040` remainder, below;
+- the parse drops Step 3c's `; <B> batch(es) flagged low-opened` tail, which 5b tells the runner to
+  copy (lens 1);
+- a non-template label naming neither skill falls back to the line text again (lens 1);
+- 4a's skip line was wrong about why (lens 1);
+- 4a from a subdirectory was untested; H07 is now killed (lens 2);
+- the `Q-575` boundary, the quoted naive expiry and the notes arm are pinned (lens 2);
+- the retired-falsehood pin is case-folded; P02 is now killed (lens 2);
+- F18 (the wave segment is all-or-nothing) is pinned (lens 2);
+- the 4a comment overstated `install.sh`'s coverage, which runs once, at migration (lens 3);
+- attribution in the archive notes, A's suite commit, and G23/G25 called equivalent (lens 3);
+- the undercounted citations (lens 3);
+- the `Q-595` archive note's "stole" (lens 3);
+- dimension 10 (lens 1): the heredoc's new rationale comments are one-liners now, with the
+  argument in `REFERENCE.md`. The Step 3 sentence I had padded the line count with was rationale;
+  two examples replace it, and the count stays 10/10.
+
+**`Q-040` closed in full**, since this phase had rewritten the function it lives in:
+- (a) was the label fix;
+- (b): a lone line labelled for the other skill is no longer handed to it;
+- the `unknown`-skill sibling selects nothing rather than falling to the quality tag;
+- the 2026-09-23 placement leg: a coverage line below the first batch stays unread. An existing
+  pin says that is batch prose, and my first fix, widening the reader, reddened it and was
+  reverted. Step 5b's merged-round bullet now says both lines go above Batch 1.
+
+**Dropped, with the reason:**
+- **Lens 1's `TASK-0042` and `BATCH-X1` at Step 1.**
+  - `TASK-0042` now meets `absent` with a remedy rather than the usage text, and it still stops.
+  - `BATCH-X1` is claimable only if a consumer names a roadmap task that, and the ACTIVE WORK fix
+    above keeps it visible.
+  - Nothing Sysop writes produces either.
+- **Lens 1's linked worktree with a relative `.git/hooks`.** Git itself resolves that to a
+  directory that does not exist, so no hook runs there. Only the message was wrong, and it is
+  fixed.
+
+**Filed as instances of an open entry, not fixed:** lens 2's A10' and A11 (the `/release`
+fallback), S01 (`schema.md` Invariant 9) and K03 (5b's "must carry"). Each is a meaning-changing
+reword that keeps a prose guard's tokens, or a legal reword that breaks them. That is `Q-560`'s
+open question about prose guards, and `Q-560` is extended with them rather than chased with more
+wording pins.
+
+**Round-1 fix battery** (`PYTHONDONTWRITEBYTECODE=1`, a fresh `PYTHONPYCACHEPREFIX` per row,
+files restored from saved bytes and compared):
+- `sitrep_survey.py`: 4 of 4 killed.
+- `validate_tasks.py`: 4 of 4 killed (the notes arm, the park-record arm, a widened park glob,
+  the naive-UTC fix).
+- P02 and H07: both killed.
+- The 5f selectors, applied to both skills: 6 of 7 on the first run. `label_first_off` survived
+  (a label outranking text had no case). A new test closed it, and the row was then killed.
+- The `Q-576` guard: lens 2's rows replayed.
+  - The 11 mutants, including A01', A05, A06, A08, A12, G01 and G02+A07, were all killed.
+  - The controls A03, A04, A14all and A16b stayed green.
+  - A15 first false-killed one row on its anchor. The anchor was shortened and A15 is green.
+  - G_examples_off survived until a planted-disagreement test killed it.
+
+**Full suite over the round-1 fixes: 8,934 passed, 223 skipped, 1 failed.** The failure was
+`tests/test_sitrep_routing_table.py`'s `Q-317` pin, which asserted the literal
+`task_id.startswith("BATCH-")` inside `run_survey`. The design it guards is unchanged, since batch
+locks still skip the task path, but the spelling moved into `_is_review_batch_lock`. The pin now
+asserts the call and its behaviour on a `BATCH-<N>` id, and its two modules re-run green (144
+passed).
+
+### Round 2: two lenses at `a9b5dfb`, scoped to round 1's fixes and record
+
+The governor's second-round condition held: round 1 rebuilt the `Q-576` guard module and
+replaced the 5f selectors. Two lenses were placed as before, and each echoed `a9b5dfb…` and
+`claude-opus-5-5`.
+- **Lens 4:** the fixes executed, and the round-1 record. 282,073 tokens, 33.0 min. Its own
+  full suite at `a9b5dfb` read 8,935 passed, 223 skipped, 0 failed.
+- **Lens 5:** the rebuilt guards' strength. 245,589 tokens, 92.5 min.
+
+No HIGH. Lens 4 found 2 MED and 5 LOW, plus one LOW labelled `[read-only]`. Lens 5 found 5 MED
+and a LOW list. Every one held when re-read against the tree.
+
+**MED, fixed:**
+- **A leftover park record hid a re-claimed, abandoned claim** (lens 4). A release never removes
+  a roadmap claim's marker, and the new park arm accepted any record for the id. A park record
+  now counts only if it was written at or after the lock's `started:`.
+- **The record's cause for `Q-576`'s missed sites was false** (lens 4): "the executors' sweep read
+  markdown only". Executor A's sweep found `next_task.py`, and A had `sitrep_survey.py` open. The
+  PHASE_LOG sentence, the brief's caution and the `CLAUDE.md` row carried it, and all three are
+  corrected. The caution now says what the evidence supports: reading a file for one purpose is
+  not sweeping it for the class.
+- **The re-pointed `Q-317` pin checked that the call exists, not what the loop does** (lens 5).
+  `continue` → `pass`, or a re-added `startswith("TASK-")` skip, survived. A new test drives
+  `run_survey`'s lock loop with four locks and asserts that only the indexed `TASK-7` and `OPS-FOO`
+  reach ACTIVE WORK.
+- **The fan-out fallback survived a mutation to read all lines** (lens 5, F-both9). A lone
+  `(code quality)` line whose basis says "security" was the missing case, and it is now a test.
+- **The rebuilt `Q-576` guard** (lens 5 MED-1/2/3). Round 2 walked 14 rewordings through it
+  (two-prefix gates, "DATA takes tech" in other words, ASCII arrows, table cells, directories
+  without slashes). It turned 10+ legal edits red (a `/release` re-wrap at width 80, a fourth
+  usage example, "lower-cased", three correct branches on one line). Its "no Step 1 sentence
+  names three, in any form" was false for lowercase and spelled-out names.
+  **Wade chose by menu (recommended option): trim it and file the rest; no third round.**
+  - Deleted: the Step 1 sentence rule, the carve-out regex, the per-clause
+    directory/leaf/lowercase checks, and their four mutation rows.
+  - Kept, as executable checks: Step 1's grammar equals the validator's; every shipped
+    `ID` → `dir/leaf` example follows Step 3; the population rule.
+  - The population rule and the `/release` check now read whole paragraphs, whitespace-normalised.
+    Both count only **bare** prefixes and directories (`` `FEAT-` ``, `` `feat/` ``), so example
+    ids and example branches no longer count.
+  - Lens 5's controls re-run against the trim: the `/release` re-wraps at 80 and 100, the usage
+    example, three canonical example ids in the arm, three correct branches, `*` markers, "but not",
+    "segment, lowercased" and a width-1 re-wrap of `claim-task` are all green. One exception, C16,
+    deletes the `;` a row anchors on, so that row fails as `AnchorMoved`, by design.
+  - The semantic gaps are filed into `Q-560`.
+
+**LOW, fixed:**
+- `batch_work.sh` credited with writing park records, in the validator docstring, a test docstring,
+  the record and the archive (lens 4);
+- an empty `notes:` container (`[]`, `{}`, `0`, `false`, `[""]`) counted as an annotation. Only
+  text counts now (lens 4);
+- `DERIVED_BRANCH_RE` made `docs/docs-refresh`, `hotfix/hotfix-login` or `wip/wip` an orphan with a
+  `git branch -D` suggestion. The derived shape now counts only for a prefix the index uses
+  (`_index_prefixes`, the same discovery `/document-work` Step 3b uses) (lens 4);
+- `Doc-Work ✓` rendered for any trailer on the branch. It now needs this task's own id (lens 4);
+- stale prose about the lock skip: `sitrep_survey.py`'s comment, and `claim-task/SKILL.md` Step 8's
+  "one reader is narrower than its name… that gap is filed and open". The batch gap closed in
+  Phase 248, and `tests/test_claim_task_orchestrator.py` had been pinning the stale claim. The
+  pin is inverted: Step 8 must say both claim kinds reach it and must not re-assert the gap
+  (lens 4);
+- the round-1 tally (lens 4): the 10 MED / 16 LOW count each lens's report findings, and the
+  PHASE_LOG bullets split some of them into several. A10' sat under "MED, all fixed" although it
+  was filed; the bullet now says so;
+- the validator's boundary, a whitespace-only `notes:` and a batch park record were unpinned
+  (lens 5 L-4, L-5, L-7, L-8). New cases: ±5 s / 60 s, whitespace notes, a `BATCH-4` park record;
+- sitrep's `TASK_ID_RE` was a retyped copy. A test now pins it to `vt._TASK_ID_RE` (lens 5 S-3);
+- `_is_review_batch_lock`'s `fullmatch` was unpinned; `BATCH-7X` is now a case (lens 5 S-5);
+- `claim_task.sh`'s comment on the warning's conditions was stale (lens 5).
+
+**Filed into `Q-560`, not fixed:** lens 5's rewordings the trimmed guard does not read (V-D1, D2,
+D4–D7, D9–D14). Also R-2 ("no runtime reader") and R-G1 (the case-fold unexercised by a planted
+row), which are the same class.
+
+**Round-2 fix battery** (the same hygiene): **8 of 8 killed**, with a clean run green (269
+passed). The rows: the park arm accepting any record (V1); `notes` read as `str()` (V2); the
+derived shape without the index-prefix check (S1); the old `Doc-Work ✓` (S2); the lock loop's
+`continue` → `pass` (S3); a re-added `startswith("TASK-")` skip (S4); the grammar bound moved
+(S5); F-both9 in both skills (F9). The trimmed guard keeps 21 `test_guard_refuses` rows, plus the
+planted population and example tests.
+
+**My first run of this battery was void, and it nearly cost the phase's uncommitted work.** I
+wrote it in zsh, which does not word-split `$FILES`. The backup `cp` failed, the per-row restore
+failed, and all eight mutations stacked in the working tree, so each row's result was cumulative.
+The round-2 edits were not committed yet, so `git checkout` would have destroyed them. I restored
+by applying each mutation's exact inverse in reverse order, confirmed that the diff against
+`a9b5dfb` was only the intended edits, and re-ran the battery under `/bin/bash`, where every row
+restores from saved bytes and checks with `cmp`. The numbers above are that second run. The
+first draft of this section said "all killed" before either run existed.
+
+**The ledger row moved the derived figures**, as it is meant to. `tools/ledger_stats.py` now reads
+194 rounds over 172 numbered phases (161–332): 118 all-killed author batteries, 115 falsified by
+a lens, 3 unknown. `AUTHOR_DEFECT_REGISTER.md` (population line, load-bearing sentence, class
+table), the ledger's reading note and the brief are updated to match, and `tests/test_ledger_stats.py`
+passes over them.
+
+**Final full suite over the round-2 fixes: 8,948 passed, 223 skipped, 0 failed.** No third round,
+on Wade's menu answer: round 2's fixes are bounded patches, and the one guard it broke was trimmed
+rather than hardened again.
+
+### CI on #742: one failure the local suite could not see
+
+CI's `pytest` shard 1 failed on `test_lock_placeholder_expiry.py::test_an_unreadable_locks_dir_does_not_crash_the_validator`
+with `PermissionError`. **The crash was the validator's own, and it predates this phase.**
+Invariant 9's `lock_path.is_file()` (`validate_tasks.py`) raises `EACCES` on Python 3.13, which is
+CI's interpreter, and returns `False` on 3.14, which is the local venv's. So a locks directory the
+caller cannot search crashed the whole schema run on older interpreters. Executor B's test was the
+first thing to exercise it, and it passed locally only because of the interpreter.
+- Reproduced with `/usr/local/bin/python3.13` (CRASH `PermissionError`), with 3.14 reading
+  `OK, 2 errors`.
+- **Fixed:** `_is_file()` answers False on any `OSError`, at the Invariant 9 site and in the batch
+  listing, so Invariant 9 reports the lock it cannot see. Both interpreters now read `OK, 2 errors`.
+- Under 3.13, the two validator modules read 95 passed. Reverting the call site fails the test
+  (1 failed).
+- **Left alone, with the reason:** the `index.yml` and task-body `is_file()` calls. An unreadable
+  index crashing loudly is more honest than reporting it missing, and the body check is warn-only.
+
+## Phase 333 (executed 2026-09-25 — a bundle: `Q-550`, `Q-588`, `Q-566`, `Q-555`)
+
+**Wade's menu answers, each the recommended option:**
+- **The bundle:** `Q-550` + `Q-588` + `Q-566`, with `Q-555` riding along. `Q-557`, `Q-556` and
+  `Q-574` were offered as riders and not taken.
+- **`Q-550`'s rule:** a decode error goes down the path each site already takes for an unreadable
+  file. Nothing uses `errors="replace"`.
+- **`Q-555`:** a comment beside `runs-on`, not a flip.
+- **`Q-588`, asked once the build showed the question:** a denied placement stops the fan-out and
+  names the rule. The rules are not added to the pre-flight hard-stop list. **Round 1 replaced the
+  stop with an unisolated fallback, on Wade's answer (below).**
+- **At integration:** `security_partition.py` refuses cleanly and names a non-UTF-8 tracked path,
+  and the skill-heredoc residue is filed as its own entry (`Q-612`).
+
+### The shape as run
+
+Two executors, grouped by file, each in its own worktree at base `3588ab4` with `.venv`
+symlinked in. Each echoed the SHA and `claude-opus-5-5` before anything else, owned only its
+files, and never touched a record file:
+- **A:** `Q-550`, every `core/companion/scripts/**/*.py` and their tests.
+- **B:** `Q-588` + `Q-566` + `Q-555`: `install.sh`, both review skills and their `REFERENCE.md`s,
+  `core/companion/ci/`, docs, and the loop-mode and CI test modules.
+
+The shared brief named 22 cross-cutting guard modules plus every importer of
+`tests/_section_call_sites.py`, and required a full suite run. It lives in the session scratchpad
+and was not committed. A `claude-code-guide` agent answered one harness question from the
+permissions docs (below) while the executors ran.
+
+### The measurements
+
+| measure | this phase | Phase 332 |
+|---|---|---|
+| entries closed | **4** (`Q-550`, `Q-588`, `Q-566`, `Q-555`) | 4, + `Q-040` by its round 1 |
+| executor wall clock (harness) | A 40.4, B 38.2 min, concurrent | A 42.3, B 53.5, C 60.4 |
+| executor tokens (harness `subagent_tokens`) | A 270,921 · B 277,504 = **548,425** | 798,298 |
+| git merge conflicts | **0** (two `--no-ff` merges, file-disjoint) | 0 |
+| integration defects, counted as Phase 329 counts them | **1**: B's reported `test_reader_census` red (its `REFERENCE.md` sections add 6 `Q-` ids to `core/`; published 495, computed 501). The integrator did not run the suite at the bare merge `52d0d7c`; the full run below covers it | 3 |
+
+**Executors' own full suites:** A 8,989 passed, 0 failed, at `74cbd46`. B 8,959 passed, 1 failed
+(the census figure above), at `0a12c14`, before its test-only `2debbe3`.
+
+### What the entries assumed, and what the tree said
+
+- **`Q-550` was 12 sites in 4 scripts plus the unguarded `clear_user_action.py:222`, not 13 in
+  5.** `parse_subagent_envelope.py:222` was fixed by Phase 319 (`2eff074`) after the entry was
+  filed. The integrator's re-run of the entry's AST predicate at the open found it; executor A
+  confirmed it. The entry's recipe was half wrong: `args[0]` holds the mode only for `Path.open`.
+- **`Q-550`'s "the whole run dies with a traceback" was partly true.** `next_task.py` and
+  `scope_overlap.py` have top-level `except Exception` nets, so a bad byte cost the run with exit 2
+  and no raw traceback. `ingest_security_report.py:136` was already caught by its caller's loop.
+  The real tracebacks came from `clear_user_action`, `sitrep_survey`, ingest `:414`/`:541` and the
+  semgrep pre-scan.
+- **`Q-550`'s class reached past its predicate**, to `subprocess … text=True` readers of path
+  lists git prints raw (`-z`). A reproduced three with a Latin-1 name added through
+  `update-index --cacheinfo`: ingest `_commit_changed_files`, semgrep `_git_lines` and
+  `security_partition._git`. `sitrep_survey._worktree_dirty` breaks the same way under a consumer's
+  `core.quotePath=false`. `git log %B` did not reproduce: git 2.50.1 re-encoded the message.
+- **`Q-588`'s open question, the full-mode seed, was already answered:** the master template
+  carries `git worktree add`, `remove` and `list`. The gap was loop-mode only.
+- **`Q-566`'s cited `:768` was `:800` at base**, and the sentence it named had a twin in
+  `.github/workflows/tests.yml`, which called this test "the binding reason" for the tester entry.
+  The test's own reason was the retired mirror, so the two cited each other.
+- **`Q-555`'s figures were the first-published ones.** Phase 315's record re-measured arm64 to
+  12 samples (mean 271.8 s, 25.1%); the entry kept 8, and its 24.9% does not follow from its own
+  rounded means.
+- **Executor A's heredoc residue was 10 read sites, not 14.** Four of its grep's hits are
+  `os.fdopen(fd, "w", …)` writes, and the integrator read each line before filing `Q-612`.
+
+### What changed
+
+Per entry, `REVIEW_ARCHIVE.md` § *Resolved — Phase 333* has each resolution. In short:
+- **`Q-550` (A):** the arm is added at every site; `clear_user_action.py` exits 1 with its existing
+  error shape. Ingest's unreadable JSONL now marks the report skipped instead of reading it as
+  empty. `next_task.load_index` gains the `OSError` arm it never had. The three `-z` readers route
+  into their "git could not answer" paths, and `_worktree_dirty` forces `core.quotePath=true`,
+  because catching would report a dirty tree clean. New `tests/test_strict_decode_class.py`: an
+  AST class guard over every shipped script's file reads, a population floor of 25, 20 arm
+  controls, and behaviour tests per script. Round 1 widened all three (below).
+- **`Q-588` (B):** `LOOP_ALLOW` gains `git worktree add` and `remove` (24 → 26). Both runners'
+  placement paragraph (byte-identical) prescribes removal and the deny-stop. The pre-flight names
+  the two rules as conditional. Each `REFERENCE.md` holds the why. New
+  `tests/test_loop_worktree_placement.py` (12 tests). `install.sh` stays at 6,009 lines, because
+  three comments were re-wrapped.
+- **`Q-566` (B + integrator):** the docstring and the `tests.yml` comment say what is true now, and
+  the test asserts the public mirror by name.
+- **`Q-555` (B):** a five-line comment above `runs-on: ubuntu-latest`; the value is unchanged.
+
+### Integration
+
+- **The census figure:** `tools/CONTEXT_THINNING_SPEC.md` § 7.2's `Q- ids across core/` moves 495 →
+  501, re-derived with `tools/phase294_figures.py`. A dropped `Q-550` from its one `core/`
+  comment, so B's six ids are the whole move.
+- **`security_partition.py`, on Wade's menu answer:** `_git` decodes bytes and raises
+  `UndecodablePath` naming the first bad entry. `build()` returns status `undecodable-path`, with a
+  note naming the path and `git mv` as the remedy, at exit 0. That is the script's own shape for
+  every "could not assess" path, and its documented exit contract (0 report, 2 unexpected) is
+  unchanged. A's test pinned the old exit 2 and is replaced by two: the refusal, and a valid-UTF-8
+  non-ASCII control.
+- **A refused removal, found by running the prescribed commands:** `git worktree remove <dir>`
+  exits 128 on a checkout holding an untracked file. A `.venv` symlink placed per
+  `_shared/adversarial-review.md` is untracked wherever `.gitignore` spells it `.venv/`, which
+  matches a directory and not a symlink. `Bash(git worktree remove:*)` also binds `--force`. Both
+  runners now say: on a refusal, list `git -C <dir> status --porcelain -uall` in the round's report,
+  leave the checkout, and never `--force` it. `REFERENCE.md` says why.
+- **Stale citations re-pointed in open entries:** `Q-579` (`security_partition.py:234`–`:235` →
+  `:250`–`:251`, `:462` → `:485`, `:474` → `:497`), `Q-581` (ingest `:434`–`:442` → `:439`–`:447`,
+  `:553` → `:558`), `Q-145` (`sysop-checks.yml.example:78` → `:83`), and a `test_install_loop_mode.py:162` citation,
+  corrected by round 1 (below).
+
+### Also fixed
+
+- `ingest_security_report._load_jsonl` read an unreadable (`EACCES`) report as an empty one;
+  `security-audit/SKILL.md` promises it is skipped.
+- `next_task.load_index` had no `OSError` arm, so a permission error ended the run.
+- `security_partition.py`'s last-resort comment called a reachable branch unreachable.
+- `tests/test_prescribed_command_coverage.py:379` (`:358` at base) said "21 rules … the full 71"; the real figures
+  were 24 and 80.
+- `docs/install-and-update.md` and `docs/loop-mode.md` said loop mode uses "no worktrees"; it uses no
+  per-task worktrees.
+- `.github/workflows/tests.yml` described the tester mirror in the present tense.
+
+### Filed and extended
+
+- **`Q-612` (§ Medium), new:** the strict-decode residue outside the guard. It covers 10 heredoc
+  reads in skill bodies (`review-close/SKILL.md:403` among them, so never a bundle item),
+  `claim_task.sh:467` and `:774`, and `scope_overlap.py`'s git readers under
+  `core.quotePath=false`, whose fix is `-z` plus `os.fsdecode`.
+- **`Q-078`, extended:** the reviewer's `git -C <dir> rev-parse HEAD` echo. The permissions docs
+  say the built-in read-only set covers "read-only forms of `git`" without listing them, and that
+  `Bash(git push *)` does not match `git -C . push origin main`. So whether the echo runs under
+  `dontAsk` is unsettled, and no rule covers it in either mode. A denial is loud, so no speculative
+  rule was seeded; the same one-run probe settles it.
+
+### Dropped, with the reason
+
+- **Deleting the tester mirror's inert deny entry:** Phase 316 decided to keep it, and nothing has
+  changed except that the comment now says so honestly.
+- **`docs/index.html:511` and `docs/workflow.html:3274`'s "no worktrees":** both describe what the
+  loop imposes on a consumer's workflow, which is still no per-task worktrees. A transient placement
+  checkout outside the repository is not that. Executor B qualified the two `.md` sites to "no
+  per-task worktrees", which is true of both readings.
+- **Scoping `test_loop_worktree_placement.py` to `_shared/`:** `_shared/adversarial-review.md:36`
+  also prescribes `git worktree add`, which `LOOP_ALLOW` covers. But `_shared/permission-guard.md:68`
+  names `git worktree list` as a rule-matching example, not a prescription. A population that
+  included `_shared/` would go red on the example, so the guard reads runners (`SKILL.md`) only.
+
+### Author-side pass
+
+- **Executors** (their reports; the integrator's full suite re-checks them at merge):
+  - **A:** revert-the-fix rows R1–R16 were all killed, with behaviour-only reruns R1'–R14'
+    also killed. Code mutations: B1, B2, B4 and B5 were killed. B3 survived and is equivalent: a
+    fall-through after `skipped_reason` is set still skips. Guard mutations G1–G19 were all killed
+    after controls were added. G13, G14 and G17–G19 survived the first run for want of a control.
+    G16 (the floor alone) survives by design. S1 and S2 were killed. Not tried: builtin `open`'s
+    positional `errors` and the `ClassDef`/`Lambda` scope arms.
+  - **B:** 26 rows, 23 killed and 3 green controls. M14, whitespace flattening, is killed only by
+    a control: both real paragraphs sit on one line today. M25 went red on the first run because
+    its control assumed a one-line paragraph, and `2debbe3` fixed the control.
+  - Both ran with `PYTHONDONTWRITEBYTECODE=1` and restored from saved copies.
+- **Integrator:**
+  - `security_partition.py` rows P1 (catch removed), P2 (decode with `replace`), P3 (note unnamed),
+    P4 (status `ok`) and P5 (wrong entry named) were all killed; the control stayed green; every
+    restore was compared with `cmp`.
+  - Rule 3: the placement and removal commands were run in a throwaway repo, which found the
+    refused-removal case above.
+  - Rule 2: the new `tests.yml` and `REFERENCE.md` prose was re-read against the files it
+    describes.
+
+### Round 1: three lenses at `b1fce1d`, each placed in its own detached checkout
+
+Three lenses, because the phase ships behaviour **and** a numeric record, which is the
+governor's condition for a third. Each was placed with `git worktree add --detach` at `b1fce1d`,
+had `.venv` symlinked in and a private temp directory, and echoed `b1fce1de…` and
+`claude-opus-5-5` before its first finding. Harness figures: lens 1 (execution + dimension 10)
+208,595 tokens, 61.3 min; lens 2 (guard strength) 229,359 tokens, 88.6 min; lens 3 (claims +
+record) 271,057 tokens, 63.3 min. All three full runs at `b1fce1d` read **9,002 passed, 0
+failed**.
+
+**The integrator's own full run, which the first record cited and did not contain** (lens 3):
+9,001 passed and 1 failed, on the uncommitted tree just before `b1fce1d`. The failure was
+`test_the_brief_ranks_every_filing_the_previous_phase_left_open`: `Q-078`'s new "Extended … by
+Phase 333" makes it a Phase 333 filing, and the brief had not ranked it. The brief alone was
+fixed and that module re-run (17 passed) before the commit.
+
+Every finding was re-read against the tree before anything changed.
+
+**Wade's three menu answers on the round, each the recommended option:**
+- **Absorb, but say so.** The build's rule, "each site's existing unreadable-file path", landed
+  on **silent** paths (lens 1, MED ×3, all reproduced). One stray byte in `tasks/index.yml` made
+  `/sitrep` print *idle* over a live task. A bad `--scope-file` quietly meant "no scoping", the
+  flood `security-audit` Step 3c exists to stop. Semgrep dropped untracked targets while the stage
+  read `executed`. The base had crashed loudly at all three. Now every absorbing site the round
+  named says what it could not read (round 2 found two more and narrowed the claim, below); an explicit `--scope-file` that cannot be read refuses with exit 1; and
+  semgrep's untracked read degrades like its tracked one.
+- **On a denied `git worktree add`, dispatch without `isolation`** in the runner's own checkout,
+  with the snapshot-and-diff the same paragraph already prescribes, instead of stopping the
+  fan-out (lens 1, LOW, reasoned). An unplaced *isolated* agent is still never dispatched.
+- **Force removal only when the one untracked entry is the runner's own `.venv` link** (lens 1,
+  LOW/MED). Following the placement recipe made every checkout unremovable under "never
+  `--force`", and not only under a `.venv/` ignore line, as the record claimed: it also happens
+  with no `.venv` entry at all.
+
+**Fixed (by the executors on fix branches from `b1fce1d`, merged as `63872e2` and `53d64dc`):**
+- **A, the absorbing sites** (loud now, before → after, in `REVIEW_ARCHIVE.md`'s `Q-550`
+  resolution):
+  - `sitrep_survey` reports an `input unreadable` discrepancy for the index, the review file and
+    a lock.
+  - `scope_overlap`, `next_task`'s body read and `ingest.read_marker` warn on stderr.
+  - `ingest._load_scope` refuses.
+  - `_commit_changed_files` gives its true reason, not always "not in local history".
+  - semgrep's untracked read returns degraded.
+- **A, the `security_partition` note:** it printed `caf\xe9.py` with a literal backslash (lens 1,
+  LOW). It now prints a bash `$'…'` operand, tested by evaluating it in bash against nine names.
+- **A, the class guard** (lens 2, LOW ×4, plus the S18 false kill):
+  - `codecs.decode`'s `errors` is read from positional 2, and `errors=None` is strict.
+  - `input()`, iteration over `sys.stdin`, `sys.stdin` handed to a reader, and `fileinput` are
+    reads.
+  - A handler named by a module-level tuple constant is resolved.
+  - The population includes `packs/*/companion/scripts/`, which `install.sh` ships into
+    `sysop/scripts/`.
+  - Two real sites it then flagged are fixed: `archive_review_tasks.py`'s confirmation `input()`
+    and `packs/python/companion/scripts/shared_cli.py`'s, which had no handler at all.
+  - The floor is 29 strict reads over 32 scripts, measured. The comment said 25 while the function
+    returned 27 (lenses 2 and 3).
+- **B, the placement text:** the fallback and the conditional force are in both runners,
+  byte-identical, at the same line counts. Both `REFERENCE.md`s state the two measured removal facts, including
+  that a plain `git worktree remove` already deletes an agent's writes into **ignored** paths, so
+  leaving a checkout protects un-ignored files only (lens 1, LOW).
+- **B, the guard** (lens 1 MED: the removal rule was pinned by nothing, and inverting it passed
+  9,002 tests; lens 2 MED ×2):
+  - The removal arm, the fallback arm and the pre-flight note are **hash-pinned** in both skills
+    through `PINNED_SPANS` (six entries, three shared hashes). They replace the prose predicates
+    that `unless the user says to continue anyway` walked through (D3), along with three false
+    kills (D6b, D7, P3).
+  - `WORKTREE_CMD` accepts any global option before `worktree` and refuses every non-bare
+    spelling. `git -c core.hooksPath=/dev/null worktree remove` had passed the full suite (FF).
+  - `Bash(…)` rule names no longer count as prescriptions, so deleting every real command cannot
+    hide behind the rule names.
+- **B, the parsers:** `_loop_allow()` and `_install_sh_loop_allow` read `LOOP_ALLOW` with
+  `ast.literal_eval`, so a commented-out rule is not live (W1b). The disclosure check strips
+  `  • ` bullets (I2), and `test_ci_shard.py` compares repository names case-insensitively (C2).
+  GitHub's expressions page says "GitHub ignores case when comparing strings", fetched by B.
+- **B:** `test_ci_shard.py`'s docstring still described the mutual citation that `b1fce1d`'s own
+  `tests.yml` rewrite had removed (lens 3, MED).
+- **Integrator:**
+  - `tests/test_round_markers.py:414` had the same comment-blind `LOOP_ALLOW` read (B's sibling).
+    It now uses `_loop_allow()`, and commenting out `Bash(python3 -:*)` turns it red.
+  - `security-audit` Step 3c now says an exit 1 naming `--scope-file` means rewrite the file and
+    re-run, never re-run without it.
+- **Record** (lens 3):
+  - The first record re-pointed a `test_install_loop_mode.py:162` citation and credited it to
+    `Q-608`, an archived entry. It was `Q-288`'s. The new line, `:165`, was a different function,
+    and "off by one at base" was false. `Q-288` now cites `_commit_all` at `:184` and its five
+    call sites at `:423`–`:501`.
+  - `Q-579` and `Q-581` were re-pointed again after A's edits.
+  - "19 arm controls" was 20 at `b1fce1d`. It is 29 after round 1.
+  - Phase 332's "5 closed" was 4 plus `Q-040` by its round.
+  - "`list` is prescribed nowhere" is true only of the loop-shipped runners.
+
+**Filed or extended, not fixed:**
+- **`Q-612`, extended.** Lens 3's own sweep found four heredoc reads the grep behind the "10"
+  had missed (`claim-task:1453`, `review-close:3567` single-quoted, `document-work:293`/`:310`
+  with no `encoding=`) and `install.sh`'s heredocs. Lenses 2 and 3 each reproduced
+  `sitrep_survey._git` ending the survey on raw bytes: a raw-message commit object reaching
+  `%B`, and a non-UTF-8 packed ref reaching `worktree list --porcelain`. **The record's "`git
+  log %B` did not reproduce" held only for commits `git commit` writes.**
+- **`Q-078`, extended.** Lens 3 read the permissions docs: read-only tools need no approval only
+  inside the working and additional directories. So a placed reviewer's Read and Grep on a
+  checkout **outside** the repository may be denied under `dontAsk`, which would undercut
+  `Q-588` more than the `-C` echo does. PLAUSIBLE, and the same probe session settles it. B's
+  new removal arm adds a third `git -C <dir> status` to that question.
+- **`Q-466`.** Lens 2 saw `test_cut_release_gate.py::…[REVIEW_CHECKLIST.md]` die with exit 141
+  (SIGPIPE) under three concurrent suites, and pass in three other runs.
+
+**Dropped, with the reason:**
+- A handler that re-raises passes the class guard (lens 2). It is declared scope in the module
+  docstring: a re-raise is a choice to propagate, and judging it needs the call graph.
+- `json.loads(p.read_bytes())` (lens 2, S7): the decode happens inside `json`, and no shipped
+  script uses the shape.
+- The `--git-dir=` and backslash-continuation spellings (lens 2 FB, W8) are closed by B's
+  option grammar. `GIT_DIR=x git worktree …` and `cd … && git worktree …` are named limits in
+  the module docstring; neither appears in a skill.
+- A paragraph **added after** a pinned span can still license something the pins cannot see
+  (lens 2 D4). That is `Q-560`'s open question about prose guards.
+
+**Round-1 fix batteries:**
+- **A:** 22 code rows and 10 guard rows (G20–G29), all killed. G30, the floor removed alone,
+  survives by design. Two rows whose first kills were unrelated crashes (F5b, F12) were replaced
+  by rows killed by the naming assertion.
+- **B:** 22 rows, every one as expected, with no survivor. D6b, D7 and P3 now fail on the pins
+  only, which a deliberate restructure re-pins in the same commit. A legal re-wrap inside all three
+  pinned spans stays green.
+- **Executors' full suites:** A at `f3b44da` 9,031 passed, 0 failed; B at `2aff126` 9,038 passed,
+  0 failed.
+- **Integrator's full suite on the merged round-1 tree** (before its commit): 9,067 passed, 0 failed.
+- **Harness `subagent_tokens` after the resume:** A 385,713, B 348,246. Whether a resumed agent's
+  figure is cumulative is not established, so neither is added to the executors' first figures.
+
+### Round 2: two lenses at `5d19055`
+
+**State at the pause (2026-09-25):** round 2 ran on the governor's replaced-mechanism condition
+(round 1 replaced the deny-stop with a fallback and rewrote the placement guard). Two lenses, each
+placed with `git worktree add --detach` at `5d19055`, `.venv` symlinked, private temp dir, echoing
+`5d19055f…` and `claude-opus-5-5`. Both were cut off once by an expired login and resumed in
+place; each re-echoed the SHA and confirmed a clean checkout. **Every finding below is the lens's
+report as the lens gave it.** The session resumed after the pause, re-verified lens 4's MED-1 and
+lens 5's MED-1/2 in the code, and the executors re-verified the rest; every finding held. Fixes below.
+
+**Lens 4 (the round-1 fixes run for real + the record)** — full suite at `5d19055`: 9,067 passed,
+0 failed. Battery 18 of 19 killed; M16 (the `input unreadable` discrepancies appended last instead
+of next to the default-branch line) survived. Findings:
+- **MED-1.** An undecodable (or `chmod 000`) lock makes `/sitrep` classify a live claim as
+  `claimed, no branch` and route `RECOMMENDED NEXT` to `claim_task.sh --release <ID>`, which tears
+  down the worktree and lock. The new discrepancy prints but the state and the release are asserted
+  as fact (`sitrep_survey.py:~321` plus the classifier). The `chmod 000` half was silent at base.
+- **LOW-MED-2.** An unreadable index still ends in `(idle — … no claimable roadmap tasks)`, a
+  positive false claim beside the discrepancy. The P8 idle arm should not fire while an input is
+  unreadable.
+- **LOW-3.** The index message says task states "below" are unreliable; `ACTIVE WORK` prints above
+  `DISCREPANCIES`. The "re-save as UTF-8, or repair its YAML" remedy is also shown for a
+  `PermissionError` and for `review_tasks.md`.
+- **LOW-4.** "Every absorbing site names what it could not read" is false twice: `sitrep_survey.py
+  :~1637`'s round-receipt reader (`except (OSError, ValueError): continue`) and
+  `security_partition.py:~295` `read_vendor_paths` (a non-UTF-8 lock → `set()`, silently counting
+  Sysop's files as the consumer's). The claim sits in `PHASE_LOG.md`, the `Q-550` resolution and the
+  brief.
+- **LOW-5.** Under the unisolated fallback, the `git status` snapshot cannot see an agent switching
+  the runner's branch (`git checkout main` from a clean checkout reads "tree unchanged"). Snapshot
+  `git rev-parse HEAD` too. Pinned text: re-pin in the same commit.
+- **LOW-6.** "Only a bare `.venv` entry ignores the symlink" is overbroad: `/.venv` and `.venv*`
+  also do; only the directory-only `.venv/` does not. In both `REFERENCE.md`s and the brief.
+- **LOW-7.** The runner paragraph says "if you use `isolation`, place each agent" with no
+  default-branch exemption, so on the default branch with `add` denied it forbids the bare isolation
+  that is correct there. And a denied `remove` (with `add` allowed) is not covered: "if it refuses"
+  means git refusing. Pinned text.
+- **LOW-8.** Stale text in entries this phase edited: the `Q-588` resolution still says the module
+  "pins the deny-stop"; `Q-612` still says `shared_cli.py` "was not swept"; `Q-581`'s
+  `security-audit/SKILL.md:700`, `:703`–`:706` and `:1179` were already wrong at base (now `:703`,
+  `:706`/`:709`, `:1296`).
+- **LOW-9.** `scope_overlap`'s lock warning repeats once per candidate (6 lines for 6 candidates),
+  and the lock and body cases do not reach `--json`'s `notes`, which the index case uses.
+- **LOW-10 (pre-existing, write side).** `ingest --mark` over a `chmod 000` marker prints
+  `{"marked": [...]}` at exit 0 while `append_marker`'s `except OSError: pass` wrote nothing.
+
+**Lens 5 (the rewritten guard code)** — a `/bin/bash` battery with `PYTHONDONTWRITEBYTECODE=1`, a
+fresh `PYTHONPYCACHEPREFIX` per run, `cp` restores checked with `cmp`. The key prose rows were re-run
+against all 41 test modules that name either review skill (2,133 tests). Inside their spans the pins
+held: no meaning-changing edit kept a hash, and decoys, comment/fence/blockquote wrapping and
+one-skill edits were all killed. The `$'…'` encoder round-tripped 510 names on bash 3.2, bash 5.3,
+zsh and `/bin/sh` with 0 mismatches. Findings:
+- **MED-1.** A sentence placed **before** the pinned removal arm ("If the round ends early, run
+  `git worktree remove --force <dir>` on every checkout without reading its status.") reverses Wade's
+  force decision, and all 2,133 tests stay green. The pin starts mid-paragraph. Fix: start it at the
+  paragraph's opener.
+- **MED-2.** A bold paragraph **after** the fallback arm ("On a loop install the fallback above does
+  not apply …") overrides it, and 2,133 tests stay green. The pin ends at a literal `"\n\n"`. Fix:
+  end it on the next paragraph's lead.
+- **MED-3.** `test_pre_flight_does_not_hard_stop_on_the_worktree_rules` reads bullets through
+  `^\s*[-*] ` only, so a `+` bullet, a `1.` item, a hard-stop sentence before the pinned note, or a
+  "superseded" paragraph after it all pass. Fix: widen the marker regex to `[-*+]|\d+[.)]`, and pin
+  the note from "If any are missing, stop with" to "If `$ARGUMENTS` contains".
+- **LOW-MED-4.** The non-bare-spelling refusal's option-value token is `[^\s`]+`, so
+  `git -C <main checkout> worktree add` (house-style placeholder with a space), `git -C "$(…)"` and
+  `-c user.name="Sysop Bot"` are neither counted nor refused. The docstring overstates it.
+- **LOW-5 (latent).** `_module_constants` resolves top-level plain assignments only, last one wins.
+  So a function-local shadow, a module-level `if` narrowing or a `global` rebinding reads as
+  guarded. No shipped script uses a handler constant today.
+- **LOW-6 (latent).** The class guard does not see `json.load(fp=sys.stdin)` (keyword),
+  `json.loads(p.read_bytes())`, `json.load(open(p, "rb"))`, `str(b, "utf-8")`,
+  `io.TextIOWrapper(sys.stdin.buffer)`, `fileinput.FileInput()` or a stdin alias. The floor catches
+  a seen read being *swapped* for one of these, not one being *added*. None occurs today.
+- **LOW-7.** `next_task.py:~1250`'s `review_tasks.md` warning test asserts only
+  `"WARN: could not read"`, so dropping the path passes. Every other absorbing site asserts the path
+  (11 naming mutations killed).
+- **LOW-8 (pre-existing shape).** `&&` → `||` between the deny-list's two `!=` clauses in
+  `tests.yml` makes it always true, and `test_the_nightly_still_declines_to_run_on_the_mirrors`
+  stays green.
+- **LOW-9 (false kill).** A whitespace-only line after the fallback paragraph reddens its pin, because
+  the `"\n\n"` end anchor slides. CommonMark treats it as blank.
+- **LOW-10 (false kill, older guard).** A re-wrap inside the code span (`` `git worktree\nadd <dir>` ``)
+  reddens `test_reviewer_placement`'s placement regex.
+- **Note:** a computed `LOOP_ALLOW` element (`"Bash(git worktree " + "add:*)"`) works in the
+  installer, but all four parsers fail with a bare `literal_eval` `ValueError` that does not name
+  `LOOP_ALLOW`. It fails loudly, not silently.
+
+**Fixed** (executors on fix branches from `d14cf18`, merged as `d6be74e` and `e2a5772`):
+- **A, lens 4 MED-1:** an unreadable lock is its own state, `lock unreadable`, on the task path and the
+  batch path. Its next action is to repair the named lock and re-run, never release. It has new routing
+  arms (P0b task, P0c batch) and suggested-order block 0. An unreadable `BATCH-<N>` lock no open batch
+  owns now reaches ACTIVE WORK. While any lock is unreadable, the orphan-worktree, orphan-branch and
+  index-drift discrepancies say to repair it first. `sitrep/SKILL.md` gains the rows. The
+  `roadmap/SKILL.md` batch-state enum and actuator table gain the state, from A's patch applied by the
+  integrator; without it, `test_the_skill_lists_exactly_the_batch_states_the_survey_can_emit` was red.
+- **A, lens 4 LOW-MED-2 / LOW-3:** while any input is unreadable, P0a routes to the repair, so the idle
+  arm cannot fire. The index message says "in this report", and each remedy matches its exception.
+- **A, lens 4 LOW-4:** the round-receipt reader and `security_partition.read_vendor_paths` name what
+  they cannot read. A's AST sweep of all 48 absorbing arms left six silent: the hooks, a display-only
+  line, the stub-lock check and the `classification.md` probe, all by design. The record's claim is
+  narrowed to say so.
+  `run_checks/grep.py`'s two silent `except OSError` arms now warn. That was found by the sweep; the
+  stage accounting is unchanged.
+- **A, lens 4 LOW-9 / LOW-10 / M16, lens 5 LOW-7, LOW-5/6:**
+  - `scope_overlap` warns once per file and carries it in `--json` `notes`.
+  - `ingest --mark` exits 1 when the mark did not land.
+  - The discrepancies' placement is pinned.
+  - The `next_task` warning test asserts the path.
+  - The class guard sees `sys.stdin` by keyword, and resolves a handler constant only when it has
+    exactly one unconditional binding (fail closed). Its remaining blind shapes are declared in its
+    docstring.
+- **B, lens 4 LOW-5 / LOW-7:**
+  - The fallback also snapshots `git rev-parse HEAD`.
+  - Placement is scoped to runs off the default branch, where bare `isolation` stays correct.
+  - A denied `git worktree remove` leaves the checkout and names the rule.
+- **B, lens 5 MED-1/2:** two pins per skill replace the six narrow ones. The placement pin runs from
+  the paragraph's opener to the next paragraph's lead (both skills share hash `c67f4fbc281ebd4b`). The
+  pre-flight pin runs from "If any are missing, stop with" to "If `$ARGUMENTS` contains". A sentence
+  before the arms, or a paragraph after them, now lands inside a hash. The whitespace-only-line false
+  kill (LOW-9) is gone.
+- **B, lens 5 MED-3 / LOW-MED-4 / LOW-8 / LOW-10, note:**
+  - `declared_required()` reads every list-item marker.
+  - A `git … worktree` command in a code span or fence counts as bare only if it begins with exactly
+    `git worktree <sub>`.
+  - `tests.yml`'s deny-list shape is asserted.
+  - `test_reviewer_placement` tolerates a re-wrap inside the code span.
+  - All three `LOOP_ALLOW` parsers name `LOOP_ALLOW` on a computed element. The third,
+    `test_review_skill_record_contracts._loop_allow`, is the integrator's.
+- **B, lens 4 LOW-6:** both `REFERENCE.md`s name the directory-only ignore forms as the ones that miss
+  the symlink.
+- **Integrator:**
+  - `security-audit` Step 3c says an exit 1 from `--mark` means the mark did not land.
+  - `Q-581` and `Q-579` were re-pointed after both branches, including `Q-581`'s three
+    `security-audit/SKILL.md` cites (`:703`, `:706`–`:709`, `:1296`), which were wrong before this
+    phase.
+  - The `Q-588` resolution and `Q-612` text are corrected (lens 4 LOW-8).
+- **Batteries:** A 30 of 30. B killed every one of lens 5's rows and 9 guard rows (G1–G8), with lens
+  5's false-kill rows as green controls. B's first guard run restored the wrong `SKILL.md` into
+  `codebase-review` (a basename save slot). It was caught from `git status` and restored from `HEAD`;
+  nothing was lost, and the table is the clean re-run.
+- **Suites:** executors A at `1cabd66` 9,099 passed, 1 failed (the roadmap enum above); B at `4384e10`
+  9,061 passed, 0 failed. **The integrator's full suite on the merged tree: 9,094 passed, 0 failed.**
+
+### Round 3: one execution lens at `360a598`, on Wade's call
+
+**Wade's menu answer, the recommended option:** one focused execution lens on the round-2 delta,
+not the full two-lens round and not none. The governor puts a round past the second in his hands;
+it was brought with this phase's ledger row. The lens was placed with `git worktree add --detach`
+at `360a598`, echoed `360a5989…` and `claude-opus-5-5`, and ran no mutation battery by
+instruction. It built a real full-mode install with real claims and review batches and corrupted
+their inputs. Harness: 243,773 tokens, 13.3 min.
+
+**No HIGH, and no regression against `3588ab4`:** every case behaved the same at base or crashed
+there. On a healthy tree the survey's text output is byte-identical to base's. In 32 runs over
+corrupted task and batch locks, no route advised release, reclaim or a drainer.
+
+**Fixed (executors on fix branches from `360a598`, merged as `0f1c417` and `247466f`):**
+- **LOW-MED-1:** one unreadable round receipt took RECOMMENDED NEXT away from a ready
+  `/review-close`, and `sitrep/SKILL.md`'s reason for gating ("every other row is read through the
+  input") is false for a receipt. Receipts are now a plain `round receipt unreadable` discrepancy,
+  with the remedy "delete it, or restore it". Only the index, `review_tasks.md` and locks gate
+  (A).
+- **LOW-2 (same at base):** a lock that parses to no fields (an empty file, a YAML list or a
+  scalar) took the release and drainer routes round 2 closed. It is now `lock unreadable`, "parsed
+  to no fields". A mapping without `branch:` stays `claimed, no branch` (A).
+- **LOW-3:**
+  - An agent's `git switch -qc` leaves both `git status` and `git rev-parse HEAD` unchanged, and
+    the runner's next commit then lands on the agent's branch.
+  - Both unisolated arms in both review skills now snapshot status, `git rev-parse HEAD` and
+    `git symbolic-ref -q HEAD`. The existing no-isolation arm had no HEAD snapshot at all.
+  - B measured the three cases in a scratch repo, and `snapshot_gaps()` guards both arms (B).
+- **LOW-4 / LOW-5:**
+  - The fallback is scoped to runs off the default branch, where the paragraph had contradicted
+    itself.
+  - The pre-flight note says what each missing rule does.
+  - Re-pinned in the same commit (B).
+- **LOW-6:** `ingest --mark` exited 0 when the marker was undecodable, although the mark could never
+  be read back. It now refuses before appending to an unreadable marker, and it re-reads after the
+  append (A).
+- **LOW-7 (same at base):** with the index unreadable, the orphan-worktree line said "no matching
+  lock or index entry" with no caveat. The caveat now names every unreadable gating input (A).
+- **Integrator:**
+  - `Q-581` re-pointed once more (`:475`–`:483`, `:601`).
+  - **A record defect of my own, from round 2:** adding the round's ledger row moved
+    `tools/ledger_stats.py`'s derived headline from 118/115/3 to 119/116/3, and 172 phases to 173.
+    I ran the ledger and currency modules and not `tests/test_ledger_stats.py`, so `360a598` was
+    red on five tests until executor B's suite named them. The register, the ledger's reading note
+    and the brief's caution now carry the derived figures.
+
+**Filed, not fixed:**
+- **`Q-613` (new, § Medium):** `scope_overlap` reads an unreadable in-flight lock as a lost overlap,
+  and `next_task --avoid-inflight` picks an unreadable-bodied task with "none detected". Round 2
+  had put the reason only in `notes`, which neither `next_task`'s stdout nor `/auto-build`'s rank
+  reads. The fix, an `unknown` grade, is a design call in an advisory surface.
+- **`Q-530` (extended):** `/review-close` Step 2b has the same status-only snapshot, and a bundle
+  never edits `review-close`.
+
+**Dropped, with the reason:** LOW-9. An unreadable lock appears three times in SUGGESTED ORDER
+(the generic repair, the specific one, and `triage 1 discrepancy`). Every line is true, and nothing
+routes wrong.
+
+**Round-3 fix batteries:**
+- **A:** 8 of 8 revert rows killed; the control suite was 195 passed.
+- **B:** R1–R6 and G1–G3 all killed. G3 survived its first run because the control looped over
+  the table it checked, and `f6d5e74` closed it. The C1 re-wrap control stayed green.
+- **Executors' suites:** each was 5 failed, all five being the `test_ledger_stats` failures
+  above; A 9,097 passed at `c408562`, B 9,091 passed at `f6d5e74`.
+- **The integrator's full suite on the closing tree:** 9,104 passed, 0 failed.
+- **CI on #743 then failed one test the local suite passed:**
+  `test_archive_prompt_declines_an_undecodable_answer_through_a_real_pipe` on shard 0. Linux under
+  the C/POSIX locale decodes stdin with `surrogateescape` (PEP 540), so `input()` returned
+  `'\udcff'` rather than raising, and the script printed its plain `Aborted.`. That is a safe
+  decline, but not the message the test pinned. The test now pins `PYTHONIOENCODING` per case
+  (`strict`, `surrogateescape`), and both decline. Reverting the fix's decode arm kills the strict
+  case. The first mutation I ran missed its target (a handler tuple, not a bare
+  `except UnicodeDecodeError:`), changed nothing, and read green; it was re-run against the real text.
+
+## Phase 334 (executed 2026-09-26 — `Q-612`: the strict-decode residue in heredocs and git readers)
+
+**Wade's menu answer, the recommended option:** `Q-612` on its own. It touches
+`review-close/SKILL.md`, so it could not be a bundle, and `Q-550`'s rule (the path each site
+already takes for an unreadable file, never `errors="replace"`) carried over, so it held no design
+question. `Q-613`, a small-riders bundle and `Q-611` were the other options offered.
+
+### What the entry assumed, and what the tree said
+
+The entry said to build the sweep by AST, because the grep behind its first count missed four
+reads. The AST sweep needed a population first, and the tree's widest heredoc extractor was short
+too:
+
+- **`test_python_floor_portability.py` saw 27 of the 46 heredocs at base.** It matched 31, and 4
+  of those were prose lines quoting a command, which do not parse. Its opener allowed only a
+  redirect between `python3 -` and `<<`, so every heredoc with a positional argument there was
+  outside it (`python3 - "$manifest" <<'PY'`, most of `install.sh`'s), and it had no arm for
+  `install.sh`'s `"$_py" -` command word (five). The 3.9 floor check never ran on those 19. The
+  extractor is now shared, in `tests/_heredoc_population.py`.
+- **At base the shipped heredocs held 35 strict reads, 29 of them unguarded:** 12 in skill bodies,
+  2 in `claim_task.sh` and 15 in `install.sh`. The entry's 14 skill sites held two already guarded
+  (`claim-task/SKILL.md:907` and `:1302` catch `ValueError`), and its "about 16" `install.sh` reads
+  were 17, of which 2 were guarded (`:1294`, `:1488`).
+- **`scope_overlap`'s committed-path reader was wrong on stock git, not only under
+  `core.quotePath=false`.** The entry said valid-UTF-8 non-ASCII names "pass raw today". Under
+  git's default `core.quotePath=true`, `diff --name-only` prints such a name as a quoted octal
+  escape (`"n\303\251.py"`), so a non-ASCII path in an in-flight worktree matched no task's key
+  files. `status --porcelain` stripped the quotes and kept the escapes. Measured in a scratch repo
+  at base; `-z` fixes both configurations.
+- **"How the shell handles that exit is unchecked" — now checked.** Both `claim_task.sh` heredocs
+  run under `set +e` and read a sentinel off the last line, so a decode error already reached the
+  `*)` arm, loudly, at exit 1. But `--release`'s pre-flight checked only that PyYAML imports, never
+  that the index reads, so on an unreadable index it removed a clean worktree first and failed the
+  flip after. Its header promised "bail before touching anything if we can't do it safely".
+- **`sitrep_survey._git`** reproduced on four commands at base: `log %B` over a raw commit object,
+  `branch --list`, `for-each-ref`, and `worktree list --porcelain` over a packed ref
+  `refs/heads/caf\xe9`. Each ended the survey in a traceback.
+
+### What changed
+
+- **Skill heredocs (12 reads, 6 skills):** each read sits in a `try` whose handler names the file
+  and exits on the step's existing error path, before any write. `/claim-task` Step 2 exits 2, and
+  its typed exit contract now says 2 also covers an index that is present but unreadable. Step 4a
+  exits 1 with "Nothing was changed", as its guards do. Option C exits 4 for `plan.md` and 5 for the
+  body, the codes beside them. `/auto-build`'s pool read exits 2 to stdout, like its other errors,
+  and its 5.1 flip exits 1. `/document-work` Step 3b exits 2, not the 1 that means "file the missing
+  stubs", and its prose now says so; both of its reads also gained `encoding="utf-8"`, since a bare
+  `open()` decodes with the locale's encoding. Both review skills' round-marker clear refuses the
+  removal at exit 0, as a nonce mismatch does, because an unreadable marker's nonce cannot be
+  checked. `/review-close`'s Step 2b conventions measure and Step 4c round-trip exit 1 naming the
+  file.
+- **`install.sh` (15 reads):** each heredoc prints one line naming the file where the traceback
+  was, and exits 1, the code its shell arm already reads (`|| return 1`, `|| note … (unparseable)`,
+  `err "… (see python error above)"`). The two paired reads per heredoc became one `load()` each,
+  so the message names the file that failed; `UnicodeDecodeError` has no `filename`, which the
+  first cut used and would have crashed on.
+- **`claim_task.sh`:** `--release` probes the index (read and parse) after the PyYAML check and
+  before the mutex, and refuses with the claim intact. The two strict reads name the file, and
+  both still reach their `*)` arms.
+- **Git readers:** `sitrep_survey._git` takes bytes and `os.fsdecode`s them, which round-trips,
+  so a ref name handed back to git still names the same ref; its stdout escapes a lone surrogate as
+  a visible `\udcXX`. `scope_overlap._run_git_name_only` and `_run_git_porcelain` read `-z` bytes
+  through `_git_name`: UTF-8, or else the bytes as a visible `\xe9` escape. Under `-z` a rename is
+  `XY <new>` then `<old>`, measured on a real repo before the parser was written. **The first cut
+  used `os.fsdecode` there too, and the round found it a HIGH** (below).
+- **The guard:** `tests/test_strict_decode_heredocs.py`, 76 tests after the round (54 at the build). It runs
+  `test_strict_decode_class.strict_reads` over every body the shared extractor finds, fails on a
+  body that does not parse and on an opener with no delimiter line, pins the population (47
+  heredocs, 33 strict reads) and each opener shape by a heredoc only that shape reaches, and runs
+  every fixed site verbatim against a byte that is not UTF-8.
+
+### Also fixed
+
+- `claim_task.sh --release`'s pre-flight never read the index it was about to flip.
+- `test_python_floor_portability.py`'s heredoc population missed 19 of 46 heredocs.
+- `permission_denied_hook._current_branch` crashed on a non-UTF-8 branch; such a name is never a
+  protected branch, so it now reads as one that is not.
+- Two citations of `document-work/SKILL.md:311` (`tests/test_intra_repo_citations.py` and
+  `Q-106`) meant the "`tasks/schema.md` line 60" prose, which sat at `:380` at base; they now cite
+  `:388`.
+
+### Deliberately not changed
+
+- **`install.sh`'s reads keep the locale encoding.** Several of those heredocs write the same file
+  back with the locale encoding, so changing only the read side could re-encode a consumer's file.
+  `/document-work`'s two reads write nothing and did gain `encoding="utf-8"`.
+- **The `rev-parse --git-common-dir` and `--show-toplevel` readers** keep `text=True`. They print
+  the repository's own path, so they fail only when the checkout itself lives under a non-UTF-8
+  directory name. A sweep of every shipped script's `text=True` git call found one more reader of
+  raw names, the hook above; the rest print hashes and dates. **That sweep did not cover the
+  heredocs, and the round found four there** (below). The same sweep over the heredocs, by AST,
+  now finds 27 text-mode calls outside a `UnicodeDecodeError` handler: 25 are `rev-parse
+  --git-common-dir`, one is `rev-parse HEAD` (a SHA), and one is the stranded-body probe, now
+  forced to quote.
+
+### Citations the phase moved
+
+The build added lines to 13 shipped files, so every citation past an edit moved. **The first
+record re-pointed 97 explicit citations mechanically, through a base-to-final line map, and the
+round showed that wrong** (lens 3, MED): most of them were already stale at base, and some were
+correct at the older commit their own sentence pins ("verified still-fixed at `6b3a84d`: … `:1017`"),
+so the move turned a right pointer into a wrong one. **The rule now applied to every citation:
+move it only when its base line holds what its sentence claims.**
+- Every candidate was read against the attributed file's base line: the 99 explicit ones and the
+  73 bare `:NNN` tokens a scan of the open queue found (a number after an earlier file citation in
+  the same sentence, whose attribution by nearest file named was measured wrong twice).
+- **Moved, 26 in the queue:** 12 explicit (`Q-571`, `Q-491`, `Q-463`, `Q-385`, `Q-052`, `Q-476`,
+  `Q-525`, `Q-574` ×2, `Q-316`, `Q-440`, and `Q-106`'s stale `document-work/SKILL.md:311`, which
+  meant the "`tasks/schema.md` line 60" prose) and 14 bare (`Q-571`'s `:742`, which the first
+  record had left as misattributed, `Q-574` ×3, `Q-611` ×2, `Q-052` ×3, `Q-544` ×3, `Q-316` ×2).
+  `Q-611`'s plain ranges moved too; it is the one entry whose subject is review-close line ranges. Outside the queue: `review-close/SKILL.md:861`'s two citations with their registry pair
+  in `tests/test_intra_repo_citations.py`, that module's own `document-work` citation, and
+  `tests/test_scope_overlap.py`'s `auto-build/SKILL.md:199`.
+- **Left at their base values:** everything else, including historical narration ("the first
+  version pinned `review-close/SKILL.md:930`") and five `tools/` records of past phases. Short
+  forms (`claim-task:NNN`, 28 in the base queue) were not re-pointed; lens 3 sampled 20 and found
+  them stale or pinned to an older commit.
+- The `review-close/SKILL.md:861` paragraph changed only line numbers of equal length, so its census
+  verdict was re-keyed (text identical but for digits, checked) and the `review-close 2-also arm`
+  hash pin moved, twice, once per edit. **Neither is a change to the rule either pins.**
+- `tools/CONTEXT_THINNING_SPEC.md` § 8.1 moves to 2,175 / 367,254 / 77.2% for review-close's six new
+  code lines and two widened `except` lines, and § 7.2's `Q-` ids across `core/` to 506, both
+  re-derived. `editor`+`mixed` is unchanged at 105,888.
+
+### Author-side pass
+
+- **Rule 1, one battery (`PYTHONDONTWRITEBYTECODE=1`, a fresh `PYTHONPYCACHEPREFIX` per run, every
+  restore compared byte for byte): 36 of 36 killed, control green.** Code rows M1–M23 plus M3b
+  revert each fix or change its exit code, and each is killed by its behaviour test. Guard rows
+  G1–G3 revert one handler each and are killed by the class guard alone. G4–G10 attack the
+  extractor: the variable command word, the backtick rule, the dedent, the positional-argument arm,
+  `install.sh` dropped from the population, the dashless opener, and a script argument read as an
+  opener. D1–D2 mangle a closer. **One row survived its first target:** a mangled closer followed by
+  a later delimiter satisfies the delimiter test, because the body runs on to the next heredoc's
+  closer; the parse test kills it, and the delimiter test kills the no-later-delimiter case.
+- **Rule 2:** the new prose was re-read against the files it describes. The census paragraph first
+  named "Step 0's section measure"; the heredoc is in Step 2b, and the paragraph was corrected.
+  Its "22.3% together", copied from Phase 330's sentence, was 22.2% for the larger file.
+- **Rule 3:** every fixed heredoc runs verbatim in the new module against a fixture holding a byte
+  that is not UTF-8, including `--release` and `--commit-claim` through the real script. The
+  `sitrep` survey ran end to end over a worktree on `refs/heads/caf\xe9`.
+- **Rule 4:** the extractor is a delimiter rule over markdown. Its corpus cases: a prose line
+  quoting an opener (excluded by the backtick rule, arm-tested), a construct that never closes
+  (now a failure, not a skip), and the live tree (47 openers, 47 bodies, none unterminated).
+- **The full suite on the build tree, records included: 9,159 passed, 0 failed.** The first full
+  run, before the census and pin moves, had 6 failures, all in the census and the moved pin.
+
+### Round 1: three lenses at `c21de56`, each placed in its own detached checkout
+
+Three lenses, because the phase ships behaviour **and** a numeric record, which is the governor's
+condition for a third. Each was placed with `git worktree add --detach` at `c21de56`, had `.venv`
+symlinked in and a private temp directory, and echoed `c21de5694aa5…` and `claude-opus-5-5` before
+its first finding. Harness figures: lens 1 (execution + dimension 10) 251,246 tokens, 43.7 min;
+lens 2 (guard strength) 206,658 tokens, 47.3 min; lens 3 (claims + record) 250,012 tokens,
+42.7 min. Every finding below was re-read against the tree, and every behaviour finding reproduced,
+before anything changed. **Lens 2's independent battery: 36 rows, 16 killed by the three guard modules
+and 19 by the full suite**, against the author's 36 of 36; its survivors are the findings below.
+
+**Found and fixed:**
+- **HIGH (lens 1, reproduced): the phase added a crash on stock git.** `scope_overlap`'s
+  `os.fsdecode` put a lone surrogate into `assess().overlaps[].evidence`. `/auto-build`'s pool
+  heredoc and `next_task.py --avoid-inflight` print that evidence to a strict stdout, and both died
+  where base had printed git's octal escape. The `_emit` escape covered only scope_overlap's own
+  `main()`, and the phase's fixture never reached the crash, because a `likely` overlap drops the
+  other paths and only a `possible` one lists them. `_git_name` now decodes a name that is not
+  UTF-8 to a visible `\xe9` escape: it is only matched and displayed, never handed back to git.
+  `_emit` is gone. A new test runs `assess` on a `possible` overlap and encodes every surface.
+- **MED (lenses 1 and 2, reproduced): four heredoc git reads under `text=True`, outside the class
+  guard's vocabulary.** `claim-task` Step 8's and `/auto-build`'s `git show <branch>:<body>` twins
+  now route a decode error into their existing `UNREADABLE` arm. `/document-work` Step 3b's
+  `git branch --show-current` exits 2 naming a branch that is not UTF-8, where it had exited 1, the
+  code that means "file the missing stubs". `/review-close`'s Step 3c `git()` and Step 3b `_git`
+  helpers, whose docstrings say they never raise, now catch `UnicodeDecodeError`. `claim-task`'s
+  stranded-body probe forces `core.quotePath=true` (lens 1 reasoned it; the new test reproduces it).
+- **MED (lens 3, reproduced): the mechanical re-point moved correct citations.** Corrected as
+  § *Citations the phase moved* now describes.
+- **MED (lens 3): `Q-571`'s `:742` was accurate at base and left unmoved.** Moved to `:751`.
+- **MED (lens 2, reproduced): `install.sh`'s lock write reset both timestamps silently** on a lock
+  with a byte that is not UTF-8. The reset stands, since Phase 148 decided a malformed lock is
+  tolerated, and it now says so on stderr, as Phase 333's "absorb, but say so" rules.
+- **LOW:**
+  - The extractor's variable arm read data heredocs as programs (`cat > "$pyproject" <<EOF`,
+    `tee "$COPY_LOG" <<EOF`, `cat > run_python <<EOF`). A variable now needs ` -`, and the
+    interpreter must start a token.
+  - The extractor missed `python3 -u -`, `"$ROOT/.venv/bin/python3" -`, `${PYTHON:-python3}` and
+    `python3.12 -`. It now sees them; its docstring names the shapes still unseen, none of which the
+    tree uses.
+  - The list-indented shape pin was vacuous, since a column-0 opener satisfied it. It now reads the
+    raw line's indent.
+  - The install rows now assert that nothing was written before the refusal, and five readable
+    controls were added. `--entry-state` gained a behaviour test.
+  - Lens 3's `:1295`/`:1489` in this record were the `json.load` lines; the reads are `:1294` and
+    `:1488`.
+  - `Q-466` gained this round's three `test_cut_release_gate` instances, all under concurrent suites.
+
+**Dropped, with the reason:**
+- **A ban on `errors="replace"` (lens 2).** The tree carries about 40 deliberate uses, several with
+  their reason written beside them; Wade's rule governs how a decode fix is made, not every read.
+  Lens 2's mutation of one fixed site to `replace` is killed by the read-count floor.
+- **`claim-task`'s two envelope reads absorbing a decode error into `payload = {}` (lens 2).** The
+  hook writes those files with `json.dump`, which emits ASCII, and the site routes a malformed
+  envelope as an absent one by design. A bad byte there is corruption on the malformed arm.
+- **Malformed YAML still ending some heredocs in a traceback (lens 1, LOW, same at base).** The
+  phase claims decode and OS errors only.
+- **Lens 2's remaining extractor shapes** (a backslash-continued opener, `cat <<PY | python3 -`,
+  `python3 /dev/stdin`, `<<\PY`, `"$(command -v python3)"`): none occurs in the shipped tree, and
+  the module docstring names them.
+
+**No second round.** The governor wants one when the fixes produce substantial new material: a
+mechanism replaced or a guard module rewritten. These are a helper swapped inside one reader, four
+site handlers, a patched opener regex and a record correction, and each fix has a revert row its
+new test kills (R1–R10, all killed; control 76/76 green).
+
+**The full suite on the round-fix tree: 9,179 passed, 2 failed**, both guards that read the sites
+the round changed. `test_claim_task_step7_contracts.py`'s M5 mutation anchored on the stranded-body
+probe's old command text, and now anchors on the new one. `test_install_lock_timestamps.py`'s ladder
+test compared `except` clauses as text, so `ValueError as exc` read as a new class. It now strips the
+binding and requires exactly {`FileNotFoundError`, `ValueError`, `OSError`}, which is stricter than
+its old either-or; inserting `except BlockingIOError: prev = None` still turns it red. Both modules
+re-run: 95 passed.
+
+## Phase 335 (executed 2026-09-26 — `Q-570`: every reviewer gets a scratch directory of its own)
+
+**Wade's menu answer, the recommended option:** `Q-570` on its own, a § High from GDP (upstream
+#705). It edits `review-close/SKILL.md`, so it could not be a bundle, and the entry prescribed its
+own fix, so it held no design question. `Q-569` + `Q-578`, a `Q-602` measurement, and `Q-571`
+were the other options offered; none was rejected.
+
+### What the entry assumed, and what the tree said
+
+- **The entry named one site; the class had three.** `/review-close` Step 2b's prompt said *"run
+  it from a heredoc or write under `/tmp`"*. `/codebase-review` and `/security-audit` paste a
+  containment rule into every fan-out agent that said *"Compute from a heredoc or write under
+  `/tmp`"*, the same shared location for agents running at once. `grep -rn '/tmp' core/skills`
+  found no fourth licence.
+- **The entry's `:656` was `:671` at base.** The sentence it quoted was there verbatim.
+- **Two more spawn sites reuse Step 2b's prompt and needed the directory to exist:** the
+  security twin (step 3b, "the same step-3 placement") and `4a-fix`'s one-agent re-check. The
+  re-check has no sibling to collide with, but its prompt is Step 2b's, so the placeholder has to
+  name a real directory.
+- **`mktemp` binds no seeded rule, in either mode.** `review-close` already runs one per agent
+  for the pinned checkout, so a second changes nothing about its permission surface. The fan-out
+  skills run no per-agent command on the default branch today, and they ship in loop mode, where
+  an unmatched command is denied under `dontAsk`.
+- **The shared source already carried the rule.** `_shared/adversarial-review.md` has said *"Name
+  a private scratch directory in each prompt too, one you created for that lens"* since Phase 326.
+  It reached none of the three runners. My first cut added a second copy four lines below it and
+  credited this phase with it; round 1 caught that and the copy is gone.
+
+### What changed
+
+- **`/review-close` Step 2b placement:** a line that makes `$SCRATCH` with `mktemp -d
+  "${TMPDIR:-/tmp}/sysop-scratch-XXXXXX"` and prints `PINNED=` and `SCRATCH=` as absolute paths,
+  after the containment check. The bullet beside it says the directory is one per agent and that
+  both printed paths go into the prompt, because no shell variable survives to the next call. The
+  prompt says *"Compute from a heredoc, or write under <absolute path to this agent's scratch
+  directory> and nowhere else"*. The prefix is `sysop-scratch-`, because the removal loop and the
+  leak assertion find pinned checkouts by `/sysop-2b-`.
+- **The containment check asks git where the pin is**, `git -C "$PINNED" rev-parse
+  --show-toplevel`, and refuses when that is this repository's own toplevel, in both placement
+  blocks. Two string comparisons before it failed (round 1: spelling; round 2: case).
+- **The security twin and `4a-fix`'s re-check** each get their own `$SCRATCH`.
+- **`/codebase-review` and `/security-audit`:** the containment rule's lead says to paste it with
+  its one placeholder filled per agent, from `mktemp -d "$(cd "${TMPDIR:-/tmp}" && pwd -P)/…"` run
+  once per agent in one call (so each printed path is absolute), and to write `(none — write no
+  file)` instead when `mktemp` is denied or `git -C <path> rev-parse --show-toplevel` prints this
+  repository's toplevel. The pasted block names `<this agent's scratch directory>`.
+- **Step 4a's stage extracts** (the `tasks/notes.md` and `tasks/index.yml` conflict recipes)
+  go into a `mktemp -d` directory each block makes and prints, not fixed names in the shared temp
+  dir.
+- **Rationale** went to `review-close/REFERENCE.md` § *Step 2b — provenance* and to a new
+  § *Step 3 — why each agent gets its own scratch directory* in both fan-out skills' references.
+- **`Q-485` leg (4)'s proposal 1 is discharged**, as the entry said it would be: same edit, same
+  site. Its headline now counts four actionable legs.
+
+### Also fixed
+
+- `/codebase-review` and `/security-audit`'s containment rule: the same shared-`/tmp` licence,
+  fixed in-branch as the class (above).
+- The placement blocks' containment check compared the path as spelled, so a temp dir inside the
+  repository reached through macOS's `/var` symlink, a relative `TMPDIR` (round 1) or a different
+  case (round 2) passed it.
+- The pin liveness check (`_pin_liveness`, shared by every pin module) counted `<!--` and `-->`,
+  so a real comment around a pinned span, balanced by a literal `` `-->` `` in a code span
+  earlier in the file, read as live (round 2). It now also walks comment state in order, over the
+  text with fenced lines and paragraph-bounded code spans removed.
+- Step 4a's stage extracts were fixed names under the shared temp root, overwritten silently by a
+  concurrent close's `>` (round 1).
+- The "Keep `isolation`" bullet said the isolated worktree is where an agent's writes land; it is
+  where its *stray* writes land now.
+
+### Deliberately not changed
+
+- **No allow-rule for `mktemp`.** Seeding one widens every install's permission surface to buy a
+  scratch file a heredoc already replaces; the fan-out's denied arm falls back to heredocs only,
+  which cannot collide. `review-close`'s `PINNED=$(mktemp …)` assignment form binds no rule
+  anyway (`Q-078`'s question).
+- **`4a-post`'s `sysop-base-probe` keeps its fixed name.** It is a `git worktree add` target,
+  which refuses a non-empty existing path, so a collision stops the arm rather than corrupting it.
+  Minting it puts an assignment in front of the call, which then binds none of full mode's seeded
+  `Bash(git worktree add:*)`, so an autonomous close would lose the arm to a denied prompt. The
+  sweep allow-lists it, and a test keeps it a `git worktree add` target.
+- **No removal of scratch directories.** Nothing reads one after its agent's verdict, and a
+  prescribed `rm -rf` over a substituted path is a larger hazard than a leftover directory in the
+  temp dir.
+- **Spawns whose prompts name no write location** (`/auto-build`'s plan reviewers and executors,
+  `/auto-fix`'s review pass, `/test-audit`'s sub-auditors) were not touched: there is no shared
+  location in them to replace.
+- **The shared rule's other half**, *"Export a private `TMPDIR` per reviewer"* (for pytest's
+  shared `pytest-of-<user>` prune), is still used by no runner. It concerns maintainer rounds that
+  run the suite; no shipped fan-out prompt runs pytest.
+
+### Citations the phase moved
+
+None. Step 2b and both fan-out skills are net zero lines: the scratch line took the blank after the
+containment check, the prompt's extra line was offset by a doubled blank line under `3b.`, and the
+fan-out block's by the blank between its lead and its fence (CommonMark lets a fence interrupt a
+paragraph, so the rendering is the same). `review-close/SKILL.md` gained three lines further down:
+one in each Step 4a stage block (after base lines 3099 and 3112, the two fence openers) and one in
+`4a-fix` (after base line 3198). Past the first, the tree holds **11** colon-form citations (`review-close/SKILL.md:3154`,
+`:3156`, `:3221`, `:3378`, `:3468`, `:3486`, `:3567`, `:3580`, `:3617`, `:3699`, `:3740`) and
+`REVIEW_CHECKLIST.md` holds **10** bare-form ones in lines naming `review-close` (`:3140`,
+`:3154`, `:3158`, `:3160`, `:3347`, `:3479`, `:3701`, `:3703`, `:3764`, `:3792`). **Every one was
+already stale at base**: none of their base lines holds what its sentence claims. Per Phase 334's
+rule, none was moved. My first record counted the colon form only (nine) and put the shift at 3196;
+round 1 corrected both.
+
+### Pins and the census
+
+- **Six new pin labels, five distinct hashes**, in `tests/test_fix_in_branch_tier.py`'s
+  `PINNED_SPANS`, each from its opener to the next lead: Step 2b's placement item, the prompt's
+  write clause (declared in `FENCED_PINS`, since it sits in the prompt's fence), the twin's spawn
+  sentence, each fan-out skill's containment rule (lead and pasted block, ending where the Phase
+  333 placement pin begins; the two labels share one hash), and the shared rule's scratch bullet. Round 1's guard lens
+  walked 18 of 40 softenings through the prose predicates, and a hash sees rewording they cannot.
+  **The trade is stated:** a consistent rename of `$SCRATCH` now reddens a pin, as any pinned
+  text does.
+- **Two moved pins:** `review-close 4a-fix step` (the scratch-and-print line, the resolved
+  containment check) and `review-close shared-append section` (the stage directories). Neither
+  decided rule changed.
+- **The census** re-authored four `runner` blocks' verdicts in place (five re-keyings over the
+  phase's commits, since one block was edited twice). `runner` rose by the four new code lines to
+  **2,179 / 368,047**; `editor` (34,241) and `mixed` (71,647) did not move, so
+  `EDITOR_MIXED_CEILING` was not touched. `tools/CONTEXT_THINNING_SPEC.md` § 8.1 carries the
+  figures.
+
+### Author-side pass
+
+- **Rule 3, run what the change prescribes:** the first cut's execution tests ran the placement
+  blocks, **but appended the `echo` the skill left out**, so they proved a print no orchestrator
+  ever saw. Both round-1 execution lenses found the missing print independently. The tests now run
+  each block exactly as written and read only what it prints; they also run the notes stage block
+  mid-rebase on a real `tasks/notes.md` conflict.
+- **The battery, first cut:** ten rows outside the module's own control table, 5 of 10 killed,
+  then 9 of 10 after three predicate rules. **That figure was not reproducible**: no script was
+  committed and the killed rows were never named. Round 1 also noted that four of the five
+  first-run survivors had become controls, so the re-run scored the guards against their own
+  tuning targets.
+- **The battery, committed:** `tools/phase335_mutations.py` carries the author's ten rows, the
+  survivors lenses 2 and 3 walked through the first cut, round 2's structural survivors, and
+  reverts of the round fixes, run against the four guard modules. **33 of 33 killed**, after a
+  green baseline and with a green restore (26 of 26 before round 2's rows were added). It has no legal-edit controls; the module's own test table carries those, and the pins
+  make a consistent rename red by design.
+- **Rule 2, the prose against the tree:** three of my own sentences were cut back before commit
+  (a temp dir "reaped by the system", a fan-out that "runs more agents at once than a close
+  does", reviewers that "pick the same obvious names"). The round found more, below.
+- **Guard:** `tests/test_reviewer_scratch_dirs.py`, 89 tests.
+
+### Round 1: three lenses at `ffe8018`, each placed in its own detached checkout
+
+Three fresh-context `general-purpose` lenses on `claude-opus-5-5` (execution + dimension 10 /
+guard strength / claims + record), the third on the governor's behaviour+numbers condition. Each
+was placed in its own `git worktree add --detach` checkout outside the repository with the primary
+`.venv` linked in and its own `mktemp -d` scratch directory, and each echoed `ffe8018` and its
+model id before its first finding. Every finding below was re-verified by the author.
+
+- **HIGH (lenses 1 and 3, independently): the placement blocks made `$SCRATCH` and never printed
+  it.** The skill says no variable survives to the next block, so the orchestrator had no path
+  to write into the prompt; `$PINNED` could be recovered from `git worktree list`, a scratch
+  directory could not. My test hid it by appending the echo. **Fixed:** both blocks print both
+  paths, absolute; the tests read the block's own output.
+- **MED (lens 1), a regression I introduced: the fan-out skills now put agent scratch inside the
+  repository under a project-local `TMPDIR`**, where the old literal `/tmp` never was, and the
+  skill's own after-dispatch snapshot then reads a compliant agent as a breach. **Fixed:** a
+  printed path inside the repository gets `(none — write no file)`.
+- **MED (lenses 1 and 3): the containment check compared spellings.** Measured: `/var/…` passes
+  while `--show-toplevel` answers `/private/var/…`, and a relative `TMPDIR` passes too, putting
+  both the pin and the scratch directory in the tree. Pre-existing, and my record leaned on it.
+  **Fixed** with `pwd -P`; three spellings are execution-tested.
+- **MED (lens 2): the prose guards could not see meaning.** 18 of 40 softenings survived, 5 HIGH
+  (one scratch directory per close, a comment saying the lenses share it, a `/tmp` alternative
+  after the hazard phrase, a per-wave shared path, a fallback to the system temp dir). 14 of the
+  22 "kills" were controls whose anchor text had moved. **Fixed** with the five pins above; the
+  guard-of-guard survivors (ordering, the refusal test's prefix filter, the fan-out prefix, the
+  twin's "its own", the sweep population) each got a control or a structural check, and the
+  over-strict predicates became whitespace- and rename-tolerant.
+- **MED (lens 3): the record credited this phase with the shared rule** and a refusal that
+  "leaves nothing behind" (the empty `$PINNED` stays; git does not list it). **Fixed** in the
+  record, the archive and `REFERENCE.md`.
+- **MED (lens 3): the battery figures could not be reproduced.** **Fixed:** committed, above.
+- **LOW (lens 3): Step 4a's stage extracts used fixed names** under the shared temp root. The
+  lens found them adjacent to the class; `Q-448` had covered Python and shell writers only.
+  **Fixed**; the sweep now looks for fixed names too, and found `sysop-base-probe` (kept, above).
+- **LOW:** the citation count and shift point (lens 3); the brief's universal *"every reviewer a
+  Sysop skill spawns"* (lens 3; it is the three prompts that licensed a shared `/tmp`); `Q-485`'s
+  headline still saying five actionable (lens 3); the stale isolation bullet (lenses 1 and 3); the
+  denied arm's sentence reading as if a unique `/tmp` name were fine (lens 1); the fan-out lead's
+  colon introducing the wrong thing (lens 1); and one dimension-10 failure, a justification
+  sentence in both fan-out leads (lens 1), now in `REFERENCE.md`. **All fixed.**
+- **The sweep's population** read `SKILL.md` and `_shared/` only, so a licence in
+  `core/companion/docs/WORKFLOW.md` passed (lens 2). It now reads every shipped markdown file in
+  `core/` and `packs/` except `REFERENCE.md`.
+- **What survives, named:** a licence phrased with a verb or preposition outside the sweep's
+  vocabulary (*"store … in `/tmp`"*) in a file no pin covers. That is `Q-560`'s class, and there is
+  no such site today.
+
+### Round 2: two lenses at `32eeccf`, each placed in its own detached checkout
+
+Two fresh-context lenses on `claude-opus-5-5` (the round-1 fixes run + the record / the rewritten
+guards), placed and echoing as in round 1. The governor's second-round condition held: round 1
+replaced mechanisms (the printed paths, the containment check, the pins). Every finding below was
+re-verified by the author; the case bypass was reproduced before it was fixed.
+
+- **MED (lens 4): the containment check still compared spellings, by case.** Under bash,
+  `pwd -P` keeps the typed case, so a `TMPDIR` of `…/R1/tmpin` passed against a toplevel of
+  `…/r1` on case-insensitive APFS (reproduced: old check `PASSED`, git form `REFUSING`, an
+  outside directory still passes). `claim_task.sh` and `close_batch.sh` already document this
+  primitive's limit. **Fixed** by asking git (above); a case-variant spelling is execution-tested.
+- **MED (lens 5): 22 of 33 softenings survived the rewritten guards.** The structural ones are
+  fixed: writes climbing out of a minted directory (`<pinned checkout>/../review.diff`,
+  `$STAGES/../sysop-ours.yml`) now fail an escape sweep; the licence sweep now reads the house
+  spelling `${TMPDIR:-/tmp}` and more verbs; the fixed-name sweep reads nested, quoted,
+  comma- and semicolon-terminated and literal `/tmp` forms; every sweep has planted examples of
+  its own; the allow-list checks every entry against a stated context; the population must hold
+  a `packs/` file; the stage-write check has its own control. Widening the fixed-name sweep to
+  every shipped markdown file found `WORKFLOW.md`'s `--accept-upstream-list /tmp/accept.txt`, an
+  example path a human types, now allow-listed with that context.
+- **MED (lens 5): the fan-out `mktemp` printed a relative path under a relative `TMPDIR`**, which
+  each agent resolves against its own working directory, and its inside-the-repository check was
+  a comparison by eye (also lens 4). **Fixed:** the command makes the path absolute, and the
+  check asks git.
+- **MED (lens 5): a comment around a pinned span, balanced by a decoy `` `-->` ``, kept every
+  pin green.** Pre-existing in `_pin_liveness`. **Fixed** (above), with the decoy as a control.
+  The first cut of that fix stripped code spans across paragraphs, so an unmatched backtick
+  swallowed the wrapper; the suite's own comment-wrapper tests caught it.
+- **Filed, not fixed:** six additions OUTSIDE every pin that reverse the rule with the suite
+  green (A1c, A3, A4, B1, C1, C2: a spawn bullet, the paragraph after a pin's end anchor, a
+  paragraph above item 3, a `DO:` bullet, a bullet above the shared pin, a `WORKFLOW.md`
+  paragraph). A pin sees rewording inside its span and nothing beside it. **Extended `Q-560`**
+  with all six and the trade that would close them (contiguous pins over a whole step).
+- **LOW (lens 4), record:** "five new hash pins" against the brief's six (six labels, five
+  hashes); "five verdicts" where four blocks were re-authored; the index stage block's insertion
+  point one line off; the battery's docstring promising controls it did not have. **All fixed.**
+- **LOW, not changed:** if `$SCRATCH`'s `mktemp` fails, the `&&` suppresses both printed paths
+  (lens 4); the orchestrator then has no `PINNED=` line to put in a prompt, so the failure is
+  visible rather than silent. A `|| SCRATCH="${TMPDIR:-/tmp}"` fallback appended to the placement's
+  scratch line (lens 5, H1) is killed by the placement pin. Control anchors keyed to the literal scratch line
+  go red on a `printf` or a continuation (K3, K4, K5); the placement pin makes those edits red
+  anyway, by design.
+- **The full suite after the round-2 fixes caught one more of my own:** the new `REFERENCE.md`
+  sentence wrote the git check as an inline command reading `$PINNED`, which
+  `tests/test_phantom_shell_vars.py` refuses (inline code has no block to assign it in). It now
+  names `<the pinned checkout>`.
+- **Lens 5's own run 1** wrote a partial edit on an anchor miss and ran eleven rows on the
+  corrupted file; it restored from the reviewed tree, disclosed it, and re-ran them. Runs 2 to 5
+  are the valid ones.
+
+**No third round.** Both round-2 lenses' structural findings are fixed and each has a battery row
+or a planted control that its fix kills; what remains is `Q-560`'s class, filed. A third round is
+Wade's decision under the governor, and this record is what it would be decided on.
+
+## Phase 336 (executed 2026-09-26 — the cut, and the surface a currency pass had never had written down)
+
+**Wade's three menu answers at the open, each the recommended option:** the cut (Phase 320's record
+tail, 320.1 and 321–336) with `Q-567` riding it; a **targeted** currency scan over the **full**
+derived surface (Phase 320's shape, not Phase 310's full monograph pass); and closing upstream
+**#705** with a comment naming Phase 335, which was done at the open (`gh issue view 705` reads
+`CLOSED`). The brief ranked no cut. The public repo's own snapshot message named private
+`683a849`, Phase 320's first commit, 22 commits back. (My first record called this the longest gap
+between cuts; the round measured two earlier gaps of 40 and 28 commits, so that claim is withdrawn.)
+
+### The window, read from the published side
+
+`gh api repos/getsysop/sysop/commits --jq '.[0].commit.message'` printed
+`sysop public snapshot (private 683a849) (#51)`. `git rev-list --count 683a849..4c90176` counts
+**22** commits: `65d7d06` (Phase 320's record tail), `7986aa2` (320.1), one commit each for Phases
+321–335, and **five non-phase `docs:` commits** (`76975d8`, `831e6d6`, `620f05b`, `f88f236`,
+`8250e2e`). The 17 phase commits each touch `PHASE_LOG.md`, which ships. The five touch only
+`REVIEW_CHECKLIST.md` and `tools/`, neither of which ships, so they publish nothing. The window is
+those 22 plus this phase's own commits. (My first record said "every one touches `PHASE_LOG.md`",
+which was false for five of 22; the round caught it.)
+
+### `Q-567` — the surface is a command
+
+`tools/TESTER_MIRROR_RUNBOOK.md` gains § *Before step 1: the currency pass's surface*, above
+`## Steps`, because a currency pass lands on the phase branch before step 1 cuts from merged
+`main`. The command prints every shipped `.md`/`.html` file through
+`test_mirror_leak_gate._shipped_files()`, which reads the builder's strip list rather than
+retyping it: `test_exclusion_set_still_matches_the_mirror_script` ties the set to
+`make_public_mirror.sh`, and step 3's population diff ties it to the built tree. At `4c90176` it
+printed **75**, **38** of them under `core/skills/`. Those are the entry's own figures.
+
+`tests/test_mirror_runbook_gates.py` runs the block **as written**, twice. It substitutes only the
+`<source repo>` placeholder, and shims the block's bare `python3` fallback to the test's own
+interpreter, so the fallback runs in a placed reviewer's checkout with no `.venv`. The first run, in
+this repo, must print the shipped `.md`/`.html` set. The second runs against a stub directory whose
+`tests/test_mirror_leak_gate.py` returns five sentinel paths, and must print exactly the three
+`.md`/`.html` ones. That run is what makes the output come *from* `_shipped_files()`: a pasted list
+prints the right set today and the wrong one against the stub. Its controls cover a filter narrowed
+back to Phase 320's browsed pages, an unfiltered superset, a pasted list, a pasted list with the call
+named in a live no-op, and a `git ls-files` pipe with the strip list retyped.
+
+The section sits before step 5, so `test_every_step_that_needs_the_source_repo_says_so_before_using_it`
+does not scan it; it carries `cd <source repo>` anyway. The insertion moved every later line down by
+23 lines. **Seven citations name the runbook by line at base** (`git grep -o 'RUNBOOK\.md:[0-9]*'
+4c90176`): `PHASE_LOG.md:7257` and `:7767` (`:42`), `:9518` (`:61`), `:18745` (`:184`),
+`tools/ANNOUNCE_RUNWAY.md:81` and `REVIEW_ARCHIVE.md:704` (both `:118`), and `REVIEW_ARCHIVE.md:3308`
+(`:11`, above the insertion). The six below it were read against the base file and none held what
+its sentence claims, so none was moved. (My first record counted `PHASE_LOG.md`'s four and called
+them the whole set.)
+
+### The currency scan
+
+**Method.** Three read-only agents, one per phase group (323/326–328; 325/329/330/332;
+331/333–335 plus every public number), each given the surface file and told to report the verbatim
+false text, the contradicting line, and every vector it ran clean. `PHASE_LOG.md` and
+`tests/PORT_LOG.md` were excluded as dated records, so the scan read **73** of the 75. Each agent reported the tree changing under it:
+that was this phase's Q-567 edits, not another session. **Every finding below was re-read by me at
+both cited sites before it was edited.**
+
+**Nine items, ten sentences (item 3 is two sites), in seven files:**
+
+1. **`docs/workflow.html`, the 2026-09-23 fix-by-default addendum (Phase 323).** It said the agent
+   asks and fixes whenever an answer would make a finding fixable, except in an unattended run.
+   `/claim-task`'s executor has nobody to ask and files the task with the question in it
+   (`claim-task/SKILL.md:1155`), as `/auto-build`'s does (`:1068`); `Q-593` is the open build.
+   The runs that ask and fix are an interactive `/document-work` (`document-work/SKILL.md:196`)
+   and `/review-close` for its reviewers' notes (`review-close/SKILL.md:3182`, Phase 328). The
+   sentence was false from the commit that wrote it. It now names which runs ask.
+2. **`core/companion/tasks/README.md`, the `/review-close` row of the skills table (Phase 328).**
+   It listed the close's writes as the status flip and the archive move. The close also files or
+   extends tasks by `/add-task`'s route: reviewer notes `4a-fix` did not fix (`review-close/SKILL.md:3233`)
+   and a smoke check answered "unrunnable as specified" (`:1670`). Incomplete rather than false,
+   and fixed under fix-by-default.
+3. **`core/skills/codebase-review/SKILL.md` and `security-audit/SKILL.md`, the placement paragraph
+   (Phase 333).** Both said `/review-close` Step 2b *"prescribes that sequence in full"*, the three
+   snapshots of status, commit and branch. Step 2b snapshots status only (`review-close:460`,
+   `:737`); its other two are `Q-530`'s open half. The sentence was true at `683a849`, when the
+   sequence was status alone; Phase 333 widened it and left the pointer. Now *"prescribes the status
+   half of it"*, keeping the anchor `test_loop_worktree_placement.py`'s slice ends on.
+4. **`core/skills/sitrep/SKILL.md:44`.** *"Exit 1 means the script itself failed (corrupt YAML,
+   …)"*. A corrupt `tasks/index.yml` exits 0 with an `input unreadable` discrepancy
+   (`sitrep_survey.py` `_read_index`, `:423`); the scan agent reproduced that in a scratch repo. It
+   was already wrong before the window (corrupt YAML read as empty), and Phase 333 made the case a
+   named discrepancy without touching the sentence.
+5. **`core/skills/security-audit/SKILL.md:422`, the residual formula.** *"manifest minus mapped
+   minus `CLAUDE.md` § Map coverage exclusions"*; the script subtracts mapped only
+   (`security_partition.py:509`, *"NOT `- excluded`"*), and `WORKFLOW.md:2061` agrees. Introduced
+   in Phase 231, outside the window. This is `Q-579`'s prose half, which the entry deferred (*"Fix the
+   sentence when the manifest is fixed."*); it was false in shipped runtime text on its own, so it is fixed now and
+   the entry records that. The manifest half stays open.
+6. **`core/companion/docs/WORKFLOW.md:135`.** *"`--release` refuses in five ways"*. Phase 334 added
+   a pre-mutation refusal for an unreadable index. `claim-task/SKILL.md` already says *"at least
+   five"*; WORKFLOW.md now does too.
+7. **`core/companion/docs/WORKFLOW.md:352`, the Step 3c smoke gate (Phase 330).** It listed three
+   answers and said the skill always halts. There are four (`review-close:1659`, `:1663`), and a
+   recorded answer can be reported as `PREVIOUSLY ANSWERED:` rather than asked again (`:1640`).
+   Phase 330 fixed this sentence's twin in `tasks/schema.md` and missed this one. **My first fix
+   overclaimed**: a recorded answer is honoured only if it was confirmed or unrunnable (`:1497`), and
+   only while its doc's branch is not merging (`:1507`). The sentence now copies the schema twin's
+   scope.
+8. **`core/skills/document-work/SKILL.md:129`.** *"`<type>` chosen from the ID prefix per Step 3's
+   type table (FEAT → feat, TECH → tech, BUG → fix, etc.)"*. Step 3 does hold a table, *Type
+   selection* (`:175`–`:185`), but it maps work to the pending doc's `type:` (`feature`, `bugfix`,
+   `infrastructure`, …), not to a commit type, and it has no `FEAT → feat` row. The parenthetical
+   was the only commit-type mapping there is. The pointer is gone, and the sentence now has a
+   fallback for any other prefix, since Phase 332 made prefixes project-chosen. **My first record
+   said Step 3 "holds no table" and that none existed at `683a849`.** Both were false: I had grepped
+   for `type table`, and the heading says *Type selection*. The round caught it.
+9. **`core/skills/sitrep/SKILL.md:161`, the orphan-branch row.** It said `task/*` or `review/*`.
+   The script treats any fixed task or review directory, or Step 3's derived
+   `<prefix>/<prefix>-…` name for a prefix the index uses, as task-shaped, and also requires no
+   worktree (`sitrep_survey.py` `_is_task_shaped_branch`). Incomplete before Phase 332 and more so
+   after it.
+
+**Recorded non-edits, because a page passed over in silence reads like a page never opened:**
+
+- **`review-close/SKILL.md:87`, *"the 71-rule seed already carries"*.** Recorded here as a non-edit
+  at first, because the sentence narrates Phase 210. **The round overturned that** (below): the
+  clause is present tense, and the seed is 80 rules.
+- **`SECURITY.md:29`**, mirror and tester repos rebuilt on every refresh. Phase 320 recorded this
+  one as still-true advice with a lost referent; that disposition stands.
+- **`docs/index.html:511` and `docs/workflow.html:3274`, *"no worktrees"* for loop mode.** Phase
+  333 dropped these with a reason.
+- **`docs/history.md`** stops at Phase 312. A dated snapshot may lag (Phase 118), and Wade chose
+  the targeted scan.
+- **`docs/install-and-update.md:31`**, *"the probe reads every armed hook"*: line 44 of the same
+  page covers `core.hooksPath`. Incomplete, not false.
+- **ESLint's old "skips silently" wording:** swept over the surface after Phase 327's comment
+  change; the only hits are about a hand-rolled grep fallback.
+
+**Vectors run clean.** 323: the notes ledger, the tier and size bound, the filing bar, the
+never-list, the measure. 327: `tsc`/ESLint discovery and the dirty-source probe. 328: `4a-fix`,
+`NOTES:`, the `convention-gate` pin counts (34 / 30 / 2 / 8 against the census). 325: exit 8 and
+`OPEN CLAIM`. 329: semgrep promotion's registry entry and hook re-arming. 330: every other smoke
+reference. 332: branch vocabulary, the id grammar, `plan_summary`, the receipt's `fanout` key.
+333–335: placement, fallback, `--force`, loop worktree rules, `security_partition`, strict decode,
+`--release`, per-agent scratch. **Numbers:** 23 skills, 5 loop skills, 5 populated and 6
+placeholder packs, 7 blocking checks, 12 invariants, 80 full-mode and 26 loop-mode seeded rules,
+each derived by a command.
+
+### Pins moved
+
+Four `PIN_HASHES` entries in `tests/test_fix_in_branch_tier.py`, each on a deliberate correction
+that makes decided text match the behaviour it describes: `monograph addendum` (item 1),
+`tasks README skills table` (item 2), and `codebase-review placement paragraph` and
+`security-audit placement paragraph` (item 3, still byte-identical between the two skills).
+
+### Stamps
+
+`docs/workflow.html`'s masthead, hero figure and both colophon sites read Phase 336 · 2026-09-26.
+
+### Author-side pass, run after `558d92f` and before anyone was spawned
+
+**Rule 1, one battery, `tools/phase336_mutations.py`**, applied from bytes held in memory and
+restored the same way, each run with its own `PYTHONPYCACHEPREFIX`. **The first cut of my guard
+failed it three ways, and all three are fixed:**
+
+- **A legal retitle reddened it.** The heading regex wanted "currency pass" before "surface", so
+  *"the surface a currency pass must cover"* failed. It now needs both words, in either order.
+- **The source check was a substring test.** It asked for `_shipped_files(` in a live line, which a
+  pasted list plus `: m._shipped_files()` satisfies. It became the stub run above. Weakening that
+  run's predicate to a subset check then survived, because no control printed a superset of the
+  stub; the unfiltered control closes it.
+- **Nothing controlled the real-repo comparison.** Replacing it with `rc == 0` survived. The
+  comparison is now a shared predicate, and the narrowed block must fail it.
+
+**Final: 20 rows.** All 9 content defects are killed: section deleted, `core/skills/` filtered out,
+`.md` only, unfiltered, a pasted list, the command commented out, `git ls-files` with no strip, the
+`cd` dropped, and the fence dissolved into prose. All 4 legal edits stay green: retitle, a second
+`text` fence, a backslash continuation, and a `sh` fence tag. Of the 7 guard mutations, 5 are killed.
+**The two survivors are equivalent under the current text.** Picking the last live fence instead of
+the first changes nothing while the section has one. Dropping the `core/skills/` non-vacuity
+assertion leaves set equality, which already requires those 38 files. An all-killed figure is worth
+less than this list.
+
+**Rule 2, the new prose against what it describes.** The runbook section's claim that Phase 320's
+scan missed `core/skills/**` was checked against that phase's record (*"the scan that never ran over
+`core/skills/**`"*). The line shift in this entry was re-derived as 23 after the pass added a line;
+the first draft said 21.
+
+**Rule 3, the prescribed command, run in a throwaway checkout of this commit.** With no `.venv` the
+bare `python3` fallback fails on `No module named 'pytest'`, which the block's new comment now says,
+as step 3's Pass 5 block does. With the venv it prints 75. **Rule 4** does not apply: no delimiter
+or predicate over another writer's text moved.
+
+### The dry run
+
+Before any edit went in, `cut_public_release.sh` was run in a detached worktree at `4c90176`:
+**GATE GREEN**, Passes 1a–4b empty. The suite inside that built tree read **8,479 passed,
+768 skipped, 0 failed** (944.98s). No cut-blocker was waiting in the window.
+
+### Round 1: three lenses at `b9ec8b7`, each placed in its own detached checkout
+
+**Three lenses, on the governor's behaviour-plus-numbers condition:** record and currency truth;
+guard strength and execution; cut-readiness, leaks, scope and dimension 10. Each ran in a detached
+worktree at `b9ec8b7` with its own scratch directory, and each echoed `git -C <dir> rev-parse HEAD`
+before its first finding. The prompts did not ask for the model id, so none was echoed; all three
+ran on the `opus` alias.
+
+**Lens 3 found the tree cut-ready.** `cut_public_release.sh` returned **GATE GREEN** at `b9ec8b7`,
+with Passes 1a–4b and the rename residue empty. Step 3's population diff was empty, and the
+source-repo gate modules passed (182). The suite inside the built tree read **8,479 passed,
+771 skipped, 0 failed**; the three extra skips are this phase's new tests, which skip once `tools/`
+is stripped. Dimension 10 was clean: every runner edit is an instruction or a table correction.
+
+**What the round found, all verified before any edit** (MED unless marked):
+
+- **My test's shim did not work where its comment said it would** (lens 2). A symlink to a venv's
+  `python3` resolves to the base interpreter and loses the venv's site-packages, so the first test
+  went red in a checkout with no `.venv`. The shim is now an exec wrapper, and the stub module
+  refuses any interpreter but the test's own, so the fallback is exercised. Re-run in a fresh
+  checkout with no `.venv`, all five tests pass.
+- **The rule could be reversed in prose with every test green** (lens 2). Examples: *"the pages a
+  human browses … need not be scanned"*, deleting the dated-records exemption, or moving the
+  section below `## Steps`. The tests checked what the command prints, not what the operator is
+  told to do with it. The section's prose is now hash-pinned, and a test requires it to precede
+  `## Steps`.
+- **Two of my corrections overclaimed.** In the monograph addendum, `/review-close` also asks and
+  fixes, for its reviewers' notes (lens 2). In `WORKFLOW.md:352`, a recorded smoke answer is
+  honoured only if it was confirmed or unrunnable, and only while its doc is not merging (lens 1).
+  Both are fixed and re-pinned. The addendum also now says the executor's ask-and-fix is decided
+  and not yet built (lens 1, a judgement call rather than a defect).
+- **`sitrep_survey.py` crashed on a wrong-shaped index** (lens 3). My corrected sentence at
+  `sitrep/SKILL.md:44` says an unreadable input exits 0. That is true of a YAML syntax error, but
+  `- a list` or `tasks: 5` parse, and then `data.get("tasks")` raised at exit 1. `_read_index` now
+  names a wrong shape as unreadable input (`ValueError`, through the same `_unreadable_input` path).
+  Four parametrized tests cover it, and a revert of the fix fails all four.
+- **My record's premise for item 8 was false** (lens 1). The Step 3 table exists. Item 8 now says
+  so and says how I missed it.
+- **LOW, in shipped text:** `review-close/SKILL.md:87`'s *"71-rule seed"* became *"the default
+  seed"*. That is the same length, so the census verdict was re-keyed (`d919a5e64ae9f32e` →
+  `62ad93c24b110656`, still `mixed`) and every census figure is unchanged (lens 3). The
+  `tasks/README.md` row now says *"files or extends"* (lens 1).
+- **LOW, in my record:** the five non-phase commits in the window, "every one touches
+  `PHASE_LOG.md`", 73 of 75 read, ten sentences in seven files, the seven runbook citations, a
+  paraphrase in quote marks, the stale archive note, and the "longest gap between cuts" (withdrawn:
+  two earlier gaps were 40 and 28 commits). Lenses 1 and 3 each found the gap and the citation
+  count on their own. All corrected above.
+- **LOW, in the guard (lens 2):** it rejected legal edits. A quoted placeholder, an example fence
+  before the command, a `~~~` fence, an info string after the tag, and a heading without
+  "currency" now pass. It also re-imported the leak-gate module on every call; that import is now
+  guarded. And the surface lists tracked files only, which the runbook now says.
+
+**Kept as they are, with the reason:** `cd "$(git rev-parse --show-toplevel)"` in place of
+`cd <source repo>` is still rejected. The harness runs the block from outside the repository on
+purpose, which is what makes a dropped `cd` detectable, and the placeholder is the page's own
+convention. Test 3's controls are still built by exact `.replace` on the current spelling, and
+they say *"re-point it"* when that spelling changes.
+
+**My fix for the prose pin was itself wrong on the first cut.** It hashed the whole section, so
+every legal edit to the heading or the command went red; re-running the battery showed it. The pin
+now covers the prose only, with blank-line runs collapsed. A fence parser that matched only shell
+openers read an example fence's *closer* as an opener and swallowed the command after it, so fences
+are now parsed first and filtered after. Removing the command from the pin reopened lens 2's G1: a
+harness run from inside the repository, with the `cd` dropped, went green. A "cd dropped" control
+closes it.
+
+**Batteries.** Lens 2 wrote its own: content defects **9 of 13** killed, legal edits **3 of 12**
+green, guard mutations **3 of 17** killed. It named G1 and G11 as real holes and most of the rest as
+equivalent. `tools/phase336_mutations.py` now carries the round's survivors, and its final run is
+**28 rows**:
+
+- all **12** content defects killed (D7, D8 and D13 added);
+- all **6** legal edits green (L1r, L2r and L8r added);
+- one prose-adding edit reddens the pin, by design, with a re-pin message;
+- **7 of 9** guard mutations killed (G1 and G11 added). The two survivors are equivalent under the
+  current text.
+
+Lens 1 re-ran the pre-round 20 rows and reproduced them exactly.
+
+**No round 2.** Every fix is bounded and has a row or test that kills its revert. The sitrep change
+is ten added lines, two of them a comment, behind four tests. The governor's second-round condition is fixes that produce
+substantial unreviewed material, and it is not met. **Nothing was filed:** every finding was fixed,
+or kept with its reason above.

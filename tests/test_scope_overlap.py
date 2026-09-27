@@ -287,14 +287,15 @@ def test_lock_files_impacted_trusts_declared_config_files():
 
 
 class _FakeProc:
-    def __init__(self, returncode: int, stdout: str):
+    def __init__(self, returncode: int, stdout: bytes):
         self.returncode = returncode
         self.stdout = stdout
 
 
 def test_run_git_porcelain_parses_rename_to_new_path(monkeypatch):
+    # `-z` (`Q-612`): a rename is two fields, the NEW path first, then the old one.
     def fake_run(cmd, **kw):
-        return _FakeProc(0, " M src/a.py\nR  src/old.py -> src/new.py\n?? src/u.py\n")
+        return _FakeProc(0, b" M src/a.py\0R  src/new.py\0src/old.py\0?? src/u.py\0")
 
     monkeypatch.setattr(so.subprocess, "run", fake_run)
     assert so._run_git_porcelain("/ws") == ["src/a.py", "src/new.py", "src/u.py"]
@@ -305,8 +306,8 @@ def test_worktree_changed_paths_unions_committed_and_uncommitted(monkeypatch, tm
 
     def fake_run(cmd, **kw):
         if "diff" in cmd:  # git -C ws diff --name-only main...HEAD
-            return _FakeProc(0, "src/api/routes.py\n")
-        return _FakeProc(0, "?? src/api/new.py\n")  # status --porcelain
+            return _FakeProc(0, b"src/api/routes.py\0")
+        return _FakeProc(0, b"?? src/api/new.py\0")  # status --porcelain -z
 
     monkeypatch.setattr(so.subprocess, "run", fake_run)
     assert so._worktree_changed_paths(ws) == ["src/api/new.py", "src/api/routes.py"]
@@ -329,8 +330,8 @@ def test_worktree_changed_paths_diffs_against_the_RESOLVED_default_branch(
     def fake_run(cmd, **kw):
         if "diff" in cmd:
             calls.append(cmd[-1])
-            return _FakeProc(0, "src/x.py\n")
-        return _FakeProc(0, "")
+            return _FakeProc(0, b"src/x.py\0")
+        return _FakeProc(0, b"")
 
     monkeypatch.setattr(so.subprocess, "run", fake_run)
     assert so._worktree_changed_paths(ws) == ["src/x.py"]
@@ -355,8 +356,8 @@ def test_worktree_changed_paths_skips_committed_half_when_base_unresolvable(
     def fake_run(cmd, **kw):
         if "diff" in cmd:
             calls.append(cmd[-1])
-            return _FakeProc(0, "src/committed.py\n")
-        return _FakeProc(0, "?? src/u.py\n")
+            return _FakeProc(0, b"src/committed.py\0")
+        return _FakeProc(0, b"?? src/u.py\0")
 
     monkeypatch.setattr(so.subprocess, "run", fake_run)
     assert so._worktree_changed_paths(ws) == ["src/u.py"]
@@ -739,7 +740,7 @@ def test_an_injected_wrapper_around_the_real_reader_still_gets_the_note(monkeypa
     """`/auto-build` is the tree's only production injection, and it wraps the REAL reader.
 
     The first cut gated the note on `worktree_reader is None`, justified as "an injected
-    reader means the boundary is faked". `auto-build/SKILL.md:199` passes a caching wrapper
+    reader means the boundary is faked". `auto-build/SKILL.md:203` passes a caching wrapper
     around `_so._worktree_changed_paths`, so the entire `Q-380` product — a degrade that
     announces itself — was silent on that path (Phase 255 round, guards lens).
     """

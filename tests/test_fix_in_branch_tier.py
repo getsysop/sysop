@@ -1,32 +1,35 @@
-"""Drift guards for the fix-in-branch tier (Phase 276, `Q-410` + brief section G).
+"""Drift guards for the fix-by-default rule (Phase 323, `Q-591`; replaces Phase 276's tier).
 
-The tier is one rule stated in three prompt bodies, recorded by one new task-body
-heading, and enforced at one gate. Every one of those five places can be edited
-independently, and section G's whole argument is that the *bound* is the design:
-    "Dropped in the name of throughput, tier 1 becomes a source of defects rather
-     than a sink for tasks."
-So these guards are aimed at the bound, not at the prose around it. A guard that
-only checks the heading exists would go green on a tier that had quietly lost its
-never-list, which is the exact failure mode section G names.
+The rule is stated in three prompt bodies, recorded by one task-body heading, and
+checked at one gate. Every one of those places can be edited independently.
 
-Two deliberate negative guards live here as well:
+**What changed, and why these guards changed with it.** Phase 276 shipped a three-tier
+fallthrough (fix in-branch under a narrow bound, extend an open task, file), and Phase
+278 added a filing bar that sent anything unable to name what it blocked to a
+`tasks/notes.md` ledger. Phase 322's re-measurement found the open queue growing anyway,
+at close to three findings per close, and Wade decided the opposite of the pre-written
+tightening: **fix by default, close-time review as the safety net, three outcomes (fix,
+task, drop), the notes ledger retired, and net open work per close as the measure.**
+The never-list is exactly migrations, production writes, and auth or payment logic --
+Wade's choice, over keeping prompt bodies, declared security files and the gate-weakening
+backstop. So the guards below pin the new rule in both directions: the default is to
+fix, and the parking paths the old rule prescribed must not come back.
+
+Two deliberate negative guards survive from Phase 276:
 
 * `test_validator_gains_no_also_fixed_invariant` pins a *decision not to build*.
-  The brief costed a warn-only validator invariant on the Phase 58b precedent;
-  Phase 234 had already retired that precedent, and `tasks/schema.md` argues
-  against reviving it for both of the reasons that apply to `## Also fixed` at
-  once. A future author reading only the brief would add it back. This fails when
-  they do.
-* `test_also_fixed_arm_is_not_silenced_by_the_doc_only_skip` pins the one thing
-  the arm gets wrong if it is written carelessly: Step 2d's doc-only skip would
-  otherwise silence it on precisely the branches most likely to carry a tier-1
-  doc fix.
+  `tasks/schema.md` argues against a warn-only validator invariant for both of the
+  reasons that apply to `## Also fixed` at once.
+* `test_also_fixed_arm_is_not_silenced_by_the_doc_only_skip` pins the one thing the
+  arm gets wrong if it is written carelessly: Step 2d's doc-only skip would otherwise
+  silence it on precisely the branches most likely to carry an in-branch doc fix.
 """
 from __future__ import annotations
 
 import re
 import subprocess
 import sys
+import textwrap
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -53,7 +56,7 @@ CLAUDE_MD = REPO_ROOT / "CLAUDE.md"
 # The three sites an executor actually reads. document-work is here because it is
 # also invoked directly, outside either executor, and it is the site that *decides*
 # to file -- Step 3b only verifies that an already-named follow-up exists.
-TIER_SITES = [
+RULE_SITES = [
     pytest.param(CLAIM, id="claim-task"),
     pytest.param(BUILD, id="auto-build"),
     pytest.param(DOCWORK, id="document-work"),
@@ -74,7 +77,7 @@ def live_prose(text: str, start: str, end: str, name: str) -> str:
 
     So a needle only counts where an executing reader would actually meet it.
     """
-    block = slice_between(text, start, end, name)
+    block = re.sub(r"<!--.*?-->", "", slice_between(text, start, end, name), flags=re.S)
     out, fenced = [], False
     for ln in block.split("\n"):
         s = ln.strip()
@@ -103,281 +106,366 @@ def require_maintainer_side(p: Path) -> str:
 
 
 # --------------------------------------------------------------------------
-# The bound itself
+# The rule itself -- fix by default (Phase 323)
 # --------------------------------------------------------------------------
 
-# Every conjunct of tier 1. Section G states these as a conjunction ("when *all*
-# of these hold"), so losing any one of them widens the tier -- which is why they
-# are pinned individually rather than as one blob of prose.
-TIER_1_CONJUNCTS = {
-    "same module": r"file or module th\w+ (?:task|work) already touches",
-    "mechanical or doc/test/config": r"mechanical, or a doc, test, or convention-config correction",
-    "gated or tested": r"existing gate already covers it, or you add the test that does",
-    "small": r"on the order of 20 lines",
-    "few per branch": r"no more than a few per branch",
-    "not an unverified meaning claim": r"not a claim about what the code means that you have not verified",
-}
-
-# The categories excluded at any size. Section G calls these "Never in tier 1
-# regardless of size" -- a size-based reading of them is the failure this pins.
-NEVER_LIST = ["migration", "prompt", "auth", "money-path", "security", "production"]
-
-
-@pytest.mark.parametrize("path", TIER_SITES)
-@pytest.mark.parametrize("label,pattern", sorted(TIER_1_CONJUNCTS.items()))
-def test_tier_1_keeps_every_conjunct(path: Path, label: str, pattern: str) -> None:
-    """Tier 1 is a conjunction; dropping one conjunct silently widens it."""
-    assert re.search(pattern, read(path)), (
-        f"{path.name} no longer states the tier-1 conjunct {label!r} "
-        f"(pattern {pattern!r}). Tier 1 is licensed only when ALL conjuncts hold; "
-        "removing one widens the tier, which brief section G names as the way tier 1 "
-        "becomes a source of defects rather than a sink for tasks."
-    )
-
-
-@pytest.mark.parametrize("path", TIER_SITES)
-def test_never_list_is_stated_and_is_not_size_qualified(path: Path) -> None:
-    """The never-list excludes by category, not by size."""
-    text = read(path)
-    # Bounded by the SENTENCE, not by a character window. The round measured 109
-    # characters of slack past the last required category in the first cut and used it
-    # to append "-- unless the change is a typo or a comment." inside the window.
-    m = re.search(
-        r"\*\*Never tier 1, at any size:\*\*(.*?writes to production[^.]*\.)", text, re.S
-    )
-    assert m, (
-        f"{path.name} lost the never-tier-1 list, or its 'at any size' qualifier. "
-        "These categories are excluded by category rather than by size -- a small, "
-        "correct fix to a migration or an auth path is still a task."
-    )
-    clause = m.group(1).lower()
-    missing = [c for c in NEVER_LIST if c not in clause]
-    assert not missing, f"{path.name}: never-list lost {missing}"
-    # An exception appended to the list is the same defect as deleting a category.
-    # Phrases, not bare tokens. A first cut listed "except" and false-killed
-    # document-work's legitimate "the one further exception to the do-not-modify rule",
-    # which is about a different rule entirely -- over-strictness is a defect too, and
-    # a guard that reddens on correct prose is the shape that teaches the next author
-    # to delete it.
-    for escape in ("unless the", "though a one-line", "except when", "use judgment", "is fine"):
-        assert escape not in clause, (
-            f"{path.name}: the never-list carries an escape clause ({escape!r}). These "
-            "categories are excluded by CATEGORY, not by size or judgment -- a correct "
-            "one-line fix to a migration is still a task."
-        )
-
-
-@pytest.mark.parametrize("path", TIER_SITES)
-def test_all_three_tiers_are_present_and_ordered(path: Path) -> None:
-    """Filing is tier 3. A site that lost tiers 1-2 has filing as the default again."""
-    text = read(path)
-    fix_at = text.find("**Fix it in this branch**")
-    extend_at = text.find("**Extend an existing open task**")
-    file_at = text.find("**File a new task**")
-    assert -1 not in (fix_at, extend_at, file_at), (
-        f"{path.name} is missing one of the three tiers "
-        f"(fix={fix_at}, extend={extend_at}, file={file_at})."
-    )
-    assert fix_at < extend_at < file_at, (
-        f"{path.name}: tiers are out of order. They are an ordered fallthrough -- "
-        "'take the first that fits' -- so order is the rule, not presentation."
-    )
-    # Position order alone is not enough: a renumbered list marker ("9." for tier 2)
-    # leaves every position intact while telling the reader a different sequence.
-    # The executor reads this prompt as text, so the visible numbering is the rule
-    # it follows. Found by this phase's own mutation battery (M05 survived without
-    # this half).
-    markers = [
-        text[text.rfind("\n", 0, at) + 1:at].strip()
-        for at in (fix_at, extend_at, file_at)
-    ]
-    # DECIDED, not accidental: the markdown `1. / 1. / 1.` auto-numbering idiom is
-    # rejected here even though every renderer displays 1-2-3. These files are read as
-    # RAW TEXT by the agent that has to obey them -- nothing renders them first -- so
-    # three literal `1.`s state three first-choices. The round flagged this as a
-    # possible false-kill and asked for it to be a decision; this is the decision.
-    assert markers == ["1.", "2.", "3."], (
-        f"{path.name}: the three tiers are positioned correctly but numbered "
-        f"{markers!r}. An executor reads the numeral, not the byte offset."
-    )
-
-
-# The tier block's own bounds, per site: (start anchor, end anchor). Sliced rather
-# than read whole, because every assertion below is about THIS rule and a file-wide
-# read is what let a mutation satisfy a guard from an unrelated mention elsewhere.
-TIER_BLOCKS = {
-    "claim-task": (CLAIM, "Three tiers; take the first that fits.", "\n3. **Persist the `## Test decision`**"),
-    # Re-anchored by Phase 277 from "\n4. **Post-fix convention verification**" to the
-    # record item it now precedes. Phase 277 inserted `3-record` between the tier block
-    # and item 4, so the old anchor silently widened this slice to cover an item that is
-    # not the tier -- exactly what slicing exists to prevent, and the reversal screens
-    # below would then have been reading prose they were never scoped to. This also makes
-    # the two executor sites parallel: claim-task's anchor is already its record item.
-    "auto-build": (BUILD, "Three tiers; take the first that fits.", "\n3‑record. **Persist the `## Test decision`**"),
-    "document-work": (DOCWORK, "Three tiers; take the first that fits.", "\nTiers 1 and 2 put no"),
+# Each site's rule block: (path, start anchor, end anchor). Sliced rather than read
+# whole, because every assertion below is about THIS rule and a file-wide read is
+# satisfied by an unrelated mention elsewhere in the same file.
+RULE_BLOCKS = {
+    "claim-task": (
+        CLAIM,
+        "2b. **When the work surfaces something adjacent, fix it here",
+        "\n3. **Persist the `## Test decision`**",
+    ),
+    "auto-build": (
+        BUILD,
+        "3‑tier. **When the work surfaces something adjacent, fix it here",
+        "\n3‑record. **Persist the `## Test decision`**",
+    ),
+    "document-work": (
+        DOCWORK,
+        "**Before filing one, fix it if you can",
+        "\nA fix or a drop puts no",
+    ),
 }
 
 
-def tier_block(name: str) -> str:
-    path, start, end = TIER_BLOCKS[name]
-    return slice_between(read(path), start, end, f"{name} tier block")
+def rule_block(name: str) -> str:
+    """The rule as an executing reader meets it: fences and blockquotes removed.
 
-
-@pytest.mark.parametrize("name", sorted(TIER_BLOCKS))
-def test_the_tier_block_carries_no_reversal_vocabulary(name: str) -> None:
-    """The layer that presence checks cannot replace.
-
-    Wired here by the round, which wrote 64 mutations against the first cut of this
-    module and watched 51 survive. Roughly twenty of those were one move: leave every
-    string the guards grep for byte-perfect, and add a sentence beside it that cancels
-    it -- "In practice these bounds are advisory", "For most follow-ups filing remains
-    the right first move", "filing is never wrong". A presence check cannot see that
-    by construction. Step 2d has carried this layer since Phase 249 and the round's
-    equivalent mutation there was killed; the three files an executor actually reads
-    had none.
-
-    `extra` holds softenings specific to THIS rule -- a reversal of the tier that
-    would be noise in any other step.
+    `live_prose` rather than a bare slice, so a needle parked in a blockquote or a
+    fence labelled "a rule this step does NOT follow" does not count. The one fence the
+    claim-task block legitimately carries is the `questions.md` shape, which is read
+    separately by `questions_shape()`.
     """
-    block = tier_block(name)
+    path, start, end = RULE_BLOCKS[name]
+    return live_prose(read(path), start, end, f"{name} rule block")
+
+
+def raw_rule_block(name: str) -> str:
+    path, start, end = RULE_BLOCKS[name]
+    return slice_between(read(path), start, end, f"{name} rule block")
+
+
+@pytest.mark.parametrize("name", sorted(RULE_BLOCKS))
+def test_fixing_is_the_stated_default(name: str) -> None:
+    """The reversal Phase 323 made, pinned where each executor reads it."""
+    block = rule_block(name)
+    assert "that is the default" in block or "filing is not the default" in block, (
+        f"{name}: the rule no longer states that fixing is the default. Without it the "
+        "three outcomes read as a menu, and a menu drifts back to filing."
+    )
+    assert "nothing is parked" in block, (
+        f"{name}: the rule lost 'nothing is parked'. Parking is the failure the "
+        "re-measurement measured: findings moved between piles and the open work grew."
+    )
+
+
+@pytest.mark.parametrize("name", sorted(RULE_BLOCKS))
+def test_the_three_outcomes_are_present_and_ordered(name: str) -> None:
+    """Fix, then task, then drop -- by position AND by the visible numeral."""
+    block = rule_block(name)
+    fix_at = block.find("**Fix it in this branch**")
+    task_at = block.find("**File a task**")
+    drop_at = block.find("**Drop it**")
+    assert -1 not in (fix_at, task_at, drop_at), (
+        f"{name} is missing one of the three outcomes (fix={fix_at}, task={task_at}, drop={drop_at})."
+    )
+    assert fix_at < task_at < drop_at, f"{name}: the outcomes are out of order"
+    # An executor reads the numeral, not the byte offset. Three literal `1.`s state
+    # three first choices -- the Phase 276 decision on the markdown auto-numbering idiom,
+    # kept because these files are read as raw text.
+    markers = [block[block.rfind("\n", 0, at) + 1:at].strip() for at in (fix_at, task_at, drop_at)]
+    assert [m.replace(")", ".") for m in markers] == ["1.", "2.", "3."], f"{name}: the outcomes are numbered {markers!r}"
+
+
+@pytest.mark.parametrize("name", sorted(RULE_BLOCKS))
+def test_the_never_list_is_exactly_the_decided_three(name: str) -> None:
+    """Migrations, production writes, auth or payment logic -- no more, no fewer.
+
+    Both directions are the decision. Losing a category puts a migration in a branch
+    under review that cannot make it safe. Re-adding one of the categories Wade chose
+    to drop (prompt bodies, declared security files, the gate-weakening backstop)
+    rebuilds the narrow bound the re-measurement retired, one clause at a time.
+    Bounded by the sentence, so an exception appended inside it is read.
+    """
+    m = re.search(r"\*\*Never, at any size:\*\*(.*?production[^.]*\.)", _WS_NORM.sub(" ", rule_block(name)))
+    assert m, f"{name}: the never-list or its 'at any size' qualifier is gone"
+    clause = m.group(1).lower()
+    for cat in ("migration", "production", "auth", "payment"):
+        assert cat in clause, f"{name}: the never-list lost {cat!r}"
+    for dropped in ("prompt", "security-critical", "gate", "money-path", "eval"):
+        assert dropped not in clause, (
+            f"{name}: the never-list gained {dropped!r}. Wade decided on 2026-09-23 that "
+            "the list is exactly migrations, production writes, and auth or payment logic."
+        )
+    for escape in ("unless the", "though a one-line", "except when", "use judgment", "is fine"):
+        assert escape not in clause, f"{name}: the never-list carries an escape clause ({escape!r})"
+
+
+_WS_NORM = re.compile(r"\s+")
+
+
+# The four reasons a finding cannot be fixed now. Each is a different kind of block, and
+# losing one either forces a fix nobody can make safely here or, if one is widened,
+# reopens filing as the easy path.
+CANNOT_REASONS = {
+    "design decision": "it needs a design decision or a human action",
+    "too large": "it is too large to review in this branch",
+    "never-list": "it is on the never-list",
+}
+
+
+@pytest.mark.parametrize("name", sorted(RULE_BLOCKS))
+@pytest.mark.parametrize("label,needle", sorted(CANNOT_REASONS.items()))
+def test_a_task_is_only_for_what_cannot_be_fixed_now(name: str, label: str, needle: str) -> None:
+    block = rule_block(name)
+    assert "**File a task** only when it cannot be fixed now" in block, (
+        f"{name}: filing is no longer conditional on the finding being unfixable now."
+    )
+    assert needle in block, f"{name}: the 'cannot be fixed now' list lost {label!r} ({needle!r})"
+    # The list as one sentence, so a fifth reason ("or it is inconvenient") cannot join it
+    # with every pinned reason still present.
+    assert carries(block, "only when it cannot be fixed now: it needs a design decision or a human "
+                          "action, it is too large to review in this branch, or it is on the never-list."), (
+        f"{name}: the 'cannot be fixed now' list is no longer exactly the decided reasons"
+    )
+
+
+@pytest.mark.parametrize("name", sorted(RULE_BLOCKS))
+def test_a_task_extends_before_it_adds(name: str) -> None:
+    """Phase 276's tier 2 survives as a rule inside the task outcome."""
+    assert carries(rule_block(name), "Add it to an existing open task in that module before opening a new entry."), (
+        f"{name}: the task outcome no longer extends an existing open task first, so "
+        "one module's findings become several entries against the same code."
+    )
+
+
+@pytest.mark.parametrize("name", sorted(RULE_BLOCKS))
+def test_a_drop_is_only_for_what_is_not_wrong(name: str) -> None:
+    block = rule_block(name)
+    # The whole sentence, period included: a criterion appended inside it ("..., or it
+    # would take long to fix.") widens the drop into a discard path and keeps every
+    # shorter needle green.
+    assert carries(block, "**Drop it** when nothing is wrong: nothing is broken today, it is a "
+                          "preference or a hypothetical, or it is already handled."), (
+        f"{name}: the drop criteria are no longer exactly the four decided ones."
+    )
+    assert "**Drop it** when nothing is wrong" in block, (
+        f"{name}: the drop outcome is no longer limited to findings that are not wrong. "
+        "A drop licensed by anything wider discards real defects silently."
+    )
+    assert "not in a ledger" in block, (
+        f"{name}: the drop outcome no longer routes a real future condition to the site. "
+        "Without it a future condition has nowhere to go but a ledger again."
+    )
+
+
+# How each site handles a finding an answer would unblock. Three sites, three shapes,
+# because the three are run by agents with different access to a human.
+ASK_ROUTING = {
+    "claim-task": ("`<ARTIFACT_DIR>/questions.md`", "this run has nobody to ask. File the task in the worktree with the question and both candidate fixes"),
+    "auto-build": ("this run has nobody to ask, so file the task", "write the question into its body"),
+    "document-work": ("ask with `AskUserQuestion`", "Under `--non-interactive`, or when no answer comes, file the task"),
+}
+
+
+@pytest.mark.parametrize("name", sorted(ASK_ROUTING))
+def test_each_site_routes_the_question_for_who_can_answer_it(name: str) -> None:
+    block = rule_block(name)
+    assert "**When an answer from the human would make it fixable**" in block, (
+        f"{name}: the rule lost the ask-before-file case. Without it a finding one "
+        "answer away from a fix is filed, and the next session re-derives the question."
+    )
+    for needle in ASK_ROUTING[name]:
+        assert needle in block, f"{name}: the question routing lost {needle!r}"
+
+
+def questions_shape() -> str:
+    """The `questions.md` entry shape the claim-task executor is told to write."""
+    block = raw_rule_block("claim-task")
+    m = re.search(r"(```|~~~)markdown\n(.*?)\1", block, re.S)
+    assert m, "claim-task's rule block no longer carries the questions.md shape"
+    return textwrap.dedent(m.group(2))
+
+
+def test_the_questions_shape_carries_what_the_orchestrator_needs() -> None:
+    """Step 8 reports each entry, so each has to name the task it was filed as."""
+    shape = questions_shape()
+    assert shape.startswith("## "), "a questions.md entry no longer opens with a `## ` heading"
+    for field in ("filed as:", "where:", "question:", "recommended:"):
+        assert re.search(r"(?m)^[-*+] " + re.escape(field), shape), f"the questions.md shape lost {field!r}"
+
+
+def test_claim_task_step_8_reports_the_filed_questions() -> None:
+    """Step 8 reports; it does not ask-and-fix (Wade's call after round 2, Phase 323).
+
+    Two rounds disqualified in-branch ask-and-fix for `/claim-task`: first the orchestrator
+    was told to edit files, then a follow-up executor could report a failed fix as success.
+    So the executor files the task with the question in it, and Step 8 puts the question in
+    front of the human. The in-branch version is `Q-593`.
+    """
+    text = read(CLAIM)
+    step = slice_between(
+        text, "**Then report the questions the executor filed.**", "\n\nThen:\n", "claim-task Step 8 report"
+    )
+    for needle, why in [
+        ("`<ARTIFACT_DIR>/questions.md`", "the file the executor writes"),
+        ("filed on the branch as a task carrying the question", "where the finding went"),
+        ("`filed as:` id", "the task id the human answers on"),
+        ("Do not answer or fix them yourself; this skill never implements.", "the orchestrator boundary"),
+    ]:
+        assert carries(step, needle), f"claim-task Step 8's report lost {why} ({needle!r})"
+    for gone in ("answers.md", "spawn the executor again", "AskUserQuestion"):
+        assert gone not in step, f"claim-task Step 8 carries {gone!r}, the ask-and-fix shape round 2 disqualified"
+    at = text.index("**Then report the questions the executor filed.**")
+    assert text.index("**If that printed `MISSING` or `TEMPLATE`, stop and say so") < at < text.index("## Claim complete: <CLAIM_ID>")
+
+
+def test_document_work_commits_what_step_3_fixes() -> None:
+    """Step 2 is `/document-work`'s last commit; a Step 3 fix has to commit itself.
+
+    Round finding 2 on Phase 323: a fix made under the new rule in Step 3 would sit
+    uncommitted, and `/review-close` Step 1a classifies a dirty worktree `dirty` and skips
+    the branch.
+    """
+    block = raw_rule_block("document-work")
+    for needle in ("so commit it yourself", "`Doc-Work: <TASK_ID>` trailer", "re-stamp `branch_tip:`"):
+        assert needle in block, f"document-work's rule block lost {needle!r}"
+
+
+@pytest.mark.parametrize("name", sorted(RULE_BLOCKS))
+def test_the_rule_retires_the_ledger(name: str) -> None:
+    block = rule_block(name)
+    assert "`tasks/notes.md` is retired" in block and "write nothing to it" in block, (
+        f"{name}: the rule no longer retires the notes ledger, so an executor that "
+        "remembers the old rule has nothing telling it the file is closed."
+    )
+    # Named once, to retire it. A second mention inside the block is a destination --
+    # "when unsure, a note in `tasks/notes.md` is fine" keeps every other pin green.
+    assert block.count("notes.md") == 1, (
+        f"{name}: the rule block names `notes.md` {block.count('notes.md')} times. It is "
+        "named once, to retire it; any other mention routes findings back to it."
+    )
+    assert "theirs to clear; leave it alone" in block, (
+        f"{name}: the rule no longer protects a consumer's existing ledger. Retirement "
+        "must not delete one; each consumer clears its own."
+    )
+
+
+# Strings only the retired rule used. Each one returning is a piece of the parking path
+# coming back, and each is the kind of edit a reader "restoring" the old rule would make.
+RETIRED_RULE = (
+    "name what the filing blocks",
+    "Everything else goes to `tasks/notes.md`",
+    "append those lines to `<WORKTREE_PATH>/tasks/notes.md`",
+    "on the order of 20 lines",
+    "no more than a few per branch",
+    "When you are between tiers 1 and 2, take 2",
+    "The bound is the design, not a formality.",
+    "print the exact line in your final message",
+)
+
+
+@pytest.mark.parametrize("path", RULE_SITES)
+@pytest.mark.parametrize("phrase", RETIRED_RULE)
+def test_the_retired_rule_does_not_come_back(path: Path, phrase: str) -> None:
+    assert phrase not in read(path), (
+        f"{path.name} carries {phrase!r}, a clause of the rule Phase 323 retired. "
+        "Fix-by-default replaced the tier bound, the filing bar and the notes ledger."
+    )
+
+
+# Where `notes.md` may still be named in each executor-facing file. The rule block names
+# it to retire it; claim-task's Step 8 stranded-body probe partitions it out because
+# `/add-task` still promotes from an existing ledger. Anywhere else, a mention is a new
+# instruction about the file -- the shape a "restore the old rule" edit takes when it is
+# reworded rather than copied, which `RETIRED_RULE` cannot see.
+LEDGER_SPANS = {
+    "claim-task": [
+        RULE_BLOCKS["claim-task"][1:],
+        ("# The pathspec stays exactly `tasks/`.",
+         "**An untracked body is not `STRANDED`"),
+    ],
+    "auto-build": [RULE_BLOCKS["auto-build"][1:]],
+    "document-work": [RULE_BLOCKS["document-work"][1:]],
+}
+
+
+@pytest.mark.parametrize("name", sorted(LEDGER_SPANS))
+def test_no_other_part_of_an_executor_file_names_the_ledger(name: str) -> None:
+    text = read(RULE_BLOCKS[name][0])
+    allowed = []
+    for start, end in LEDGER_SPANS[name]:
+        a = text.index(start)
+        allowed.append((a, text.index(end, a)))
+    stray = [m.start() for m in re.finditer(r"notes\.md", text)
+             if not any(a <= m.start() < b for a, b in allowed)]
+    assert not stray, (
+        f"{name}: `notes.md` is named outside the rule block"
+        + (" and the stranded probe" if name == "claim-task" else "")
+        + f", at {[text.count(chr(10), 0, s) + 1 for s in stray]}. The ledger is retired; a "
+        "new mention is a new instruction about it."
+    )
+    assert allowed and all(b > a for a, b in allowed), "an allowed span is empty -- vacuous"
+
+
+def test_the_close_arm_never_list_is_exactly_the_decided_three() -> None:
+    """The gate's copy of the never-list, held to the same decision as the executors'."""
+    arm = slice_between(read(CLOSE), "**2\u2011also. The `## Also fixed` arm", "**3. On a clean match", "2-also arm")
+    m = re.search(r"\*\*No line concerns a never-list item without a recorded approval\.\*\*([^.]*\.)", arm)
+    assert m, "the arm's check 2 is gone or reworded"
+    clause = m.group(1).lower()
+    for cat in ("migration", "production", "auth", "payment"):
+        assert cat in clause, f"the arm's never-list lost {cat!r}"
+    for dropped in ("prompt", "security-critical", "money-path"):
+        assert dropped not in clause, f"the arm's never-list gained {dropped!r}"
+    for retired in ("never-tier-1", "on the order of 20 lines", "a few per branch", "§ G is explicit"):
+        assert retired not in arm, f"the arm carries {retired!r}, a clause of the retired tier bound"
+
+
+@pytest.mark.parametrize("name", sorted(RULE_BLOCKS))
+def test_the_rule_block_carries_no_reversal_vocabulary(name: str) -> None:
+    """Presence checks cannot see a sentence added beside a pinned one that cancels it.
+
+    `extra` is this rule's own softenings -- each restores filing, parking, or the
+    narrow bound while leaving every pinned string byte-perfect.
+    """
+    # The RAW block, not `rule_block()`: that strips blockquotes, and a reversal written as a
+    # `>` line is still read by an executor. The round's T09 walked through exactly that.
     assert_no_reversal(
-        block,
-        f"{name} tier block",
+        raw_rule_block(name),
+        f"{name} rule block",
         extra=(
-            "filing is never wrong",
-            "prefer this one",
-            "use judgment",
-            "rough guide",
-            "counts as verification",
-            "leave it alone",
-            "whichever fits best",
-            "if you like",
-            "the diff speaks for itself",
-            "anywhere convenient",
-            "remains the right first move",
-            "in the ordinary case, file",
             "file first",
-            "a quick skim",
-            "always safe",
-            "whenever you are unsure",
-            "would consider adjacent",
-            "take 1 —",
-            # Phase 278. The bar decays by WIDENING as readily as by deletion: a fifth
-            # "legal answer" phrased as judgment accepts every follow-up and leaves
-            # each pinned answer byte-perfect. The author-side battery walked the
-            # first cut of the bar with exactly this.
+            "when in doubt, file",
+            "prefer filing",
+            "filing is never wrong",
+            "keep the fix small",
+            "only in files the task",
+            "a note is fine",
+            "park it",
+            "leave it for later",
             "at your discretion",
-            "anything you judge",
-            "worth filing",
-            "if it seems important",
+            "use judgment",
+            "if you like",
+            "whichever fits best",
+            "take 2",
             "may go to",
-            "you may still file",
+            "worth filing",
+            "rough guide",
         ),
     )
 
 
-@pytest.mark.parametrize("name", sorted(TIER_BLOCKS))
-def test_the_tie_break_favours_filing(name: str) -> None:
-    """Between tiers 1 and 2, take 2. Inverting one digit inverts the safety margin."""
-    block = tier_block(name)
-    assert "When you are between tiers 1 and 2, take 2" in block, (
-        f"{name}: the tie-break no longer favours the safer tier. `take 1` resolves every "
-        "borderline case into an in-branch fix, which is precisely the drift section G "
-        "says turns tier 1 into a source of defects."
-    )
-
-
-@pytest.mark.parametrize(
-    "path,start,end,name",
-    [
-        pytest.param(CLAIM, "- Do **NOT** flip `status:` fields", "- Do **NOT** push to origin",
-                     "claim-task filing demotion", id="claim-task"),
-        pytest.param(BUILD, "- ADDING a new task entry", "\n\n", "auto-build filing demotion", id="auto-build"),
-        pytest.param(DOCWORK, "**Before filing one, take the tiers in order**",
-                     "\n1. **Fix it in this branch**", "document-work filing demotion", id="document-work"),
-    ],
-)
-def test_the_filing_demotion_is_not_re_softened(path: Path, start: str, end: str, name: str) -> None:
-    """The demotion sentence sits OUTSIDE the tier block and needed its own layer.
-
-    The round appended "For most follow-ups filing remains the right first move" and
-    "In the ordinary case, file." to these sentences. Both restore filing as the
-    default -- the exact behaviour `Q-410` was filed against -- while every guard over
-    the tier block itself stayed green, because the sentence is not in that block.
-    """
-    block = slice_between(read(path), start, end, name)
-    assert_no_reversal(
-        block, name,
-        extra=("remains the right first move", "in the ordinary case, file",
-               "file first", "filing is never wrong", "usually the right"),
-    )
-
-
-@pytest.mark.parametrize("name", sorted(TIER_BLOCKS))
-def test_tier_1_is_a_conjunction(name: str) -> None:
-    """`all` is the single word the whole tier rests on, and no other pattern held it.
-
-    The round's sharpest mutation: `when **all** of these hold` -> `when **any** of
-    these hold`. Six conjuncts become six independent licences -- "it is small" alone
-    would authorise an unverified meaning claim in a migration. Every one of this
-    module's conjunct patterns stayed green, because each pins its own clause and none
-    pinned the quantifier joining them.
-    """
-    block = tier_block(name)
-    assert "when **all** of these hold" in block, (
-        f"{name}: tier 1 is no longer stated as a conjunction. It is licensed only when "
-        "ALL conjuncts hold; `any` turns each bound into an independent permission and "
-        "guts the rule while leaving every conjunct guard green."
-    )
-    assert "**any** of these hold" not in block, f"{name}: tier 1 reads as a disjunction"
-
-
-@pytest.mark.parametrize("name", sorted(TIER_BLOCKS))
-def test_the_bound_is_the_design_paragraph_survives(name: str) -> None:
-    """Section G's argument, deletable from two of three sites with the suite green."""
-    block = tier_block(name)
-    assert "The bound is the design, not a formality." in block, (
-        f"{name}: the paragraph carrying the tier's whole rationale is gone. It is the "
-        "text this module's own docstring quotes as the reason these guards exist, and "
-        "the round deleted it from two sites without reddening anything."
-    )
-    assert "source of defects rather than a sink for tasks" in block, (
-        f"{name}: the consequence clause is gone -- the half that says what happens when "
-        "the bound is dropped for throughput."
-    )
-
-
-@pytest.mark.parametrize("name", sorted(TIER_BLOCKS))
-def test_the_selection_rule_is_first_match_not_best_match(name: str) -> None:
-    """Order is enforced by position, numeral AND selection rule.
-
-    The round found a third way past the first two: leave positions and numerals
-    intact and change `take the first that fits` to `take whichever fits best`, or
-    append `When two tiers both fit, prefer this one` inside tier 3. Both tell the
-    executor the opposite sequence with the structural guards green.
-    """
-    block = tier_block(name)
-    assert "take the first that fits" in block, (
-        f"{name}: the tiers are no longer a first-match fallthrough. `whichever fits "
-        "best` makes the ordering advisory while leaving the 1./2./3. markers intact."
-    )
-
-
-@pytest.mark.parametrize("name", sorted(TIER_BLOCKS))
-def test_tier_1_records_under_also_fixed(name: str) -> None:
-    """A tier-1 fix with no record is indistinguishable from unplanned scope.
-
-    Read inside the tier block. File-wide, this was satisfied by an incidental
-    mention elsewhere in the same file -- which is how the round renamed the heading
-    to `## Adjacent fixes` in document-work's tier text and stayed green, and how the
-    collapsed spans in claim-task's item 3 passed unnoticed.
-    """
-    path = TIER_BLOCKS[name][0]
-    block = tier_block(name)
-    assert "`## Also fixed`" in block, (
-        f"{path.name} no longer tells the executor to record the fix under "
-        "`## Also fixed`. Without the record, /review-close Step 2a sees a diff hunk "
-        "the task body does not explain -- correctly a finding."
+@pytest.mark.parametrize("name", sorted(RULE_BLOCKS))
+def test_the_fix_records_under_also_fixed(name: str) -> None:
+    """An in-branch fix with no record is indistinguishable from unplanned scope."""
+    assert "`## Also fixed`" in rule_block(name), (
+        f"{name} no longer tells the executor to record the fix under `## Also fixed`. "
+        "Without the record, /review-close Step 2a sees a diff hunk the task body does "
+        "not explain -- correctly a finding."
     )
 
 
@@ -385,95 +473,61 @@ def test_tier_1_records_under_also_fixed(name: str) -> None:
     "path,ordering_site",
     [
         pytest.param(CLAIM, "Sequence item 3's body write", id="claim-task"),
-        pytest.param(BUILD, "Sequence item 3b's tier 1", id="auto-build"),
+        pytest.param(BUILD, "Sequence item 3-record's body write", id="auto-build"),
     ],
 )
 def test_the_placement_rule_names_both_neighbouring_headings(path: Path, ordering_site: str) -> None:
     """The ordering clause must survive, spans intact.
 
     Phase 276 shipped this sentence into claim-task with three backtick spans EATEN
-    by an unquoted heredoc -- `## Also fixed`, `## Test decision` and `## Plan` each
-    began with `#`, so the shell ran them as command substitutions, `#` opened a
-    comment, and each returned empty. The executor was left being told to "write ␣"
-    and to place it "after ␣ and before any ␣ section". The Phase 188 class, at the
-    one site the whole tier hangs off.
-
-    `test_tier_1_records_under_also_fixed` was GREEN over it, because item 2b's
-    surviving mention of the heading satisfied it. That guard proves wiring; this one
-    proves the sentence. Keyed to the ordering clause specifically, since that is what
-    the eaten spans destroyed and what no other guard reads.
+    by an unquoted heredoc -- each `#`-leading span ran as a command substitution and
+    then a comment, and vanished. Keyed to the ordering clause, since that is what the
+    eaten spans destroyed and what no other guard reads.
     """
     text = read(path)
-    assert "`## Test decision`" in text and "`## Plan`" in text, (
-        f"{path.name}: the ordering clause at {ordering_site} no longer names both "
-        "neighbouring headings with their backticks intact. If you edited this file "
-        "through an UNQUOTED heredoc, check for eaten spans -- a `#`-leading backtick "
-        "span becomes a command substitution and then a comment, and vanishes silently."
-    )
     m = re.search(r"placed after [^.]*?`## Test decision`[^.]*?`## Plan` section", text)
     assert m, (
-        f"{path.name}: the placement rule no longer reads 'placed after … "
-        "`## Test decision` … before any `## Plan` section'. The order is load-bearing: "
-        "the plan section is a fenced block that can quote either heading, so a "
-        "first-match heading reader must meet the real section first."
+        f"{path.name}: the placement rule at {ordering_site} no longer reads 'placed "
+        "after … `## Test decision` … before any `## Plan` section'. If you edited this "
+        "file through an UNQUOTED heredoc, check for eaten spans."
     )
 
-
-@pytest.mark.parametrize("path", TIER_SITES)
-def test_the_gate_weakening_backstop_is_present(path: Path) -> None:
-    """Tier 1's own predicate is self-satisfying for a gate-disarming edit.
-
-    "An existing gate already covers it" is satisfied BY the disarming change when the
-    change is what stops the gate firing -- so narrowing a semgrep rule, adding a
-    checks.yml exclusion, widening an allowlist or lowering a numeric bound qualified
-    for tier 1 AND self-certified. This repo has shipped that failure twice already
-    (Phase 196's ignore list that ate the test tree; Phase 205's escape hatch that
-    nullified the check). The backstop is stated as a property of the CHANGE rather
-    than a file list, because an enumeration rots.
-    """
-    text = read(path)
-    assert "weaken, disarm, narrow or delete a gate" in text, (
-        f"{path.name} lost the gate-weakening backstop. Without it, tier 1 admits an "
-        "edit that disarms the very gate its own predicate points at."
-    )
-    assert "satisfied by the disarming edit itself" in text, (
-        f"{path.name} states the backstop but not the reason it is needed. The reason "
-        "is the load-bearing part: a reader who does not see WHY tier 1's predicate is "
-        "self-satisfying here will treat the backstop as belt-and-braces and drop it."
-    )
-
-
-# --------------------------------------------------------------------------
-# Filing is no longer the default at the sites that used to say it was
-# --------------------------------------------------------------------------
 
 @pytest.mark.parametrize(
-    "path,marker",
+    "path,start,end,marker,name",
     [
-        pytest.param(CLAIM, "it is **tier 3**, not the default", id="claim-task"),
-        pytest.param(BUILD, "**tier 3**, not the default", id="auto-build"),
-        pytest.param(DOCWORK, "filing is tier 3, not the default", id="document-work"),
+        pytest.param(CLAIM, "- Do **NOT** flip `status:` fields", "- Do **NOT** push to origin",
+                     "item 2b's **second** outcome, not the default: fix first",
+                     "claim-task filing demotion", id="claim-task"),
+        pytest.param(BUILD, "- ADDING a new task entry", "\n\n",
+                     "Sequence item 3‑tier's **second** outcome, not the default: fix first",
+                     "auto-build filing demotion", id="auto-build"),
     ],
 )
-def test_filing_is_demoted_to_tier_3(path: Path, marker: str) -> None:
-    """Each site's pre-existing 'filing IS allowed and expected' now routes via the tiers."""
-    assert marker in read(path), (
-        f"{path.name} lost the sentence demoting filing to tier 3. The shipped text "
-        "before Phase 276 read 'IS allowed and expected', which makes filing the "
-        "default -- the exact behaviour Q-410 was filed against."
+def test_the_hard_constraints_keep_filing_second(path: Path, start: str, end: str, marker: str, name: str) -> None:
+    """The constraint sentence sits OUTSIDE the rule block and needs its own pin."""
+    block = slice_between(read(path), start, end, name)
+    assert marker in block, f"{name}: the hard constraint no longer puts filing second"
+    assert_no_reversal(block, name, extra=("file first", "usually the right", "filing is never wrong"))
+
+
+def test_document_work_step_3b_is_named_as_a_filed_task_gate() -> None:
+    """Step 3b cannot see an in-branch fix, and must not be relied on as if it could."""
+    assert "that gate is a filed-task gate" in read(DOCWORK), (
+        "document-work no longer states that Step 3b sees only filed tasks. It fires on "
+        "<PREFIX>-<NAME> tokens; a fix or a drop emits none, so a reader who takes it as "
+        "the backstop for in-branch fixes is wrong by construction."
     )
 
 
-def test_document_work_step_3b_is_named_as_a_tier_3_gate() -> None:
-    """Step 3b cannot see a tier-1 fix, and must not be relied on as if it could."""
+def test_document_work_keeps_its_carve_out_count() -> None:
+    """Two carve-outs to its do-not-modify rule: filing a body, and `## Also fixed`."""
     text = read(DOCWORK)
-    assert "that gate is a tier-3 gate" in text, (
-        "document-work no longer states that Step 3b is a tier-3 gate. Step 3b fires "
-        "on <PREFIX>-<NAME> tokens in pending-docs prose; tiers 1 and 2 emit none, so "
-        "a reader who takes it as the backstop for in-branch fixes is wrong by "
-        "construction."
+    assert "with two exceptions, both named below" in text
+    assert "it is not a further exception to the do-not-modify rule above" in text, (
+        "document-work no longer says the retired ledger is outside its carve-outs. A "
+        "reader who remembers the ledger reads its absence from the list as an oversight."
     )
-
 
 # --------------------------------------------------------------------------
 # The schema
@@ -551,8 +605,8 @@ def test_review_close_carries_the_also_fixed_arm() -> None:
     "label,needle",
     [
         ("paths are in the diff", "Every path a line names is in the diff"),
-        ("never-list is checked", "No line names a never-tier-1 path"),
-        ("count is bounded", "The count is small"),
+        ("never-list is checked", "No line concerns a never-list item without a recorded approval"),
+        ("the set is reviewable", "The fixes are reviewable here"),
     ],
 )
 def test_also_fixed_arm_checks_all_three_things(label: str, needle: str) -> None:
@@ -626,8 +680,9 @@ def test_the_arm_judges_against_the_bound_in_force_not_todays() -> None:
     an arm whose other branch is already silent by design.
     """
     text = read(CLOSE)
-    assert "Judge a section against the bound in force when its branch was claimed" in text, (
-        "the `## Also fixed` arm lost its as-of-claim rule for a changing convention."
+    assert "**Judge checks 2 and 3 against today's rule.**" in text, (
+        "the `## Also fixed` arm lost its judge-by-today rule. The as-of-claim rule it replaced "
+        "(Phase 323) named a bound no shipped text states any more."
     )
     assert "A section that predates this rule is not a finding." not in text, (
         "the false pre-rule carve-out is back. Its stated ground -- that the heading "
@@ -697,23 +752,17 @@ def test_the_arm_carries_no_reversal_vocabulary() -> None:
     )
 
 
-def test_the_schema_never_list_is_complete() -> None:
-    """The list a consumer reads when authoring a body, guarded like the executors'.
-
-    NEVER_LIST was checked only in the three skill files. The round gutted
-    `tasks/schema.md`'s own never-list to two categories with nothing red -- and that
-    is the copy a human authoring a task body actually reads.
-    """
+def test_the_schema_never_list_is_exactly_the_decided_three() -> None:
+    """The list a consumer reads when authoring a body, guarded like the executors'."""
     text = read(SCHEMA)
     m = re.search(r"\*\*What may never go in it,\*\* at any size:(.*?)\n\n", text, re.S)
     assert m, "tasks/schema.md lost its `What may never go in it` never-list"
     clause = m.group(1).lower()
-    missing = [c for c in NEVER_LIST if c not in clause]
-    assert not missing, (
-        f"tasks/schema.md's never-list lost {missing}. This is the copy a body author "
-        "reads; the executors' three copies are guarded separately and cannot cover it."
-    )
-    assert "outside the tier by category, not by size" in text, (
+    for cat in ("migration", "production", "auth", "payment"):
+        assert cat in clause, f"tasks/schema.md's never-list lost {cat!r}"
+    for dropped in ("prompt", "security-critical", "money-path"):
+        assert dropped not in clause, f"tasks/schema.md's never-list gained {dropped!r}"
+    assert "outside the rule by category, not by size" in text, (
         "tasks/schema.md no longer says the never-list excludes by CATEGORY. Without "
         "that, a correct one-line fix to a migration reads as admissible."
     )
@@ -722,9 +771,9 @@ def test_the_schema_never_list_is_complete() -> None:
 @pytest.mark.parametrize(
     "path,start,end,name",
     [
-        pytest.param(JUDGE, "**This is narrower than the fix-in-branch tier",
+        pytest.param(JUDGE, "**This is narrower than the fix-by-default rule",
                      "</if>", "auto-judge reconciliation", id="auto-judge"),
-        pytest.param(FIX, "These limits are **tighter than the fix-in-branch tier",
+        pytest.param(FIX, "These limits are **tighter than the fix-by-default rule",
                      "**Report format**", "auto-fix reconciliation", id="auto-fix"),
     ],
 )
@@ -739,7 +788,7 @@ def test_the_reconciliation_clauses_are_not_reversed(path: Path, start: str, end
     block = slice_between(read(path), start, end, name)
     assert_no_reversal(
         block, name,
-        extra=("the tier wins", "as widening this scan where", "tier takes precedence"),
+        extra=("the rule wins", "as widening this scan where", "rule takes precedence"),
     )
 
 
@@ -831,12 +880,12 @@ def test_validator_gains_no_also_fixed_invariant(tmp_path: Path) -> None:
     "path,needle,why",
     [
         pytest.param(
-            JUDGE, "This is narrower than the fix-in-branch tier and stays narrower on purpose.",
+            JUDGE, "This is narrower than the fix-by-default rule and stays narrower on purpose.",
             "an architectural task's blast radius is the thing under review",
             id="auto-judge",
         ),
         pytest.param(
-            FIX, "tighter than the fix-in-branch tier",
+            FIX, "tighter than the fix-by-default rule",
             "a sibling scan admits only the convention already being enforced",
             id="auto-fix",
         ),
@@ -846,7 +895,7 @@ def test_scope_limit_rules_state_their_relation_to_the_tier(path: Path, needle: 
     """Two shipped rules restrict scope; without this, a reader gets two unrelated rules."""
     assert carries(read(path), needle), (
         f"{path.name} no longer states how its scope limit relates to the "
-        f"fix-in-branch tier ({why}). Both rules are live and one is narrower; a "
+        f"fix-by-default rule ({why}). Both rules are live and one is narrower; a "
         "reader who meets them separately has no way to know which governs."
     )
 
@@ -863,7 +912,7 @@ GUIDE = REPO_ROOT / "core" / "companion" / "docs" / "WORKFLOW_GUIDE.md"
     "path,needle,why",
     [
         pytest.param(
-            WORKFLOW, "fix-in-branch tier",
+            WORKFLOW, "fix-by-default rule",
             "step 10 enumerates the Step 7e executor sequence and gained item 2b",
             id="workflow-executor",
         ),
@@ -873,7 +922,7 @@ GUIDE = REPO_ROOT / "core" / "companion" / "docs" / "WORKFLOW_GUIDE.md"
             id="workflow-2also",
         ),
         pytest.param(
-            GUIDE, "Fix it in the branch before you file it.",
+            GUIDE, "Fix it in the branch — that is the default.",
             "the guide's 'Record the test decision' section is the human-readable twin",
             id="guide",
         ),
@@ -888,56 +937,74 @@ def test_the_workflow_spec_describes_the_tier(path: Path, needle: str, why: str)
     class for exactly this -- Phase 145 backfilled § 8.4 for the same reason, and
     Phase 161 found three retired behaviours still documented as live.
     """
-    assert carries(read(path), needle), f"{path.name} does not describe the tier: {why}"
+    assert carries(read(path), needle), f"{path.name} does not describe the rule: {why}"
 
 
 # --------------------------------------------------------------------------
 # Sysop's own adoption, and the measurement
 # --------------------------------------------------------------------------
 
-def test_claude_md_carries_the_sysop_side_rule() -> None:
-    """Shipping the skills does not change this repo; it closes phases inline."""
+def claude_md_stanza() -> str:
     text = require_maintainer_side(CLAUDE_MD)
-    assert "**Fix-in-branch before filing (Phase 276).**" in text, (
-        "CLAUDE.md lost the Sysop-side stanza. Sysop closes phases inline rather than "
-        "through /claim-task + /review-close, so the shipped skill change does not "
-        "apply here -- this stanza is the only thing that does."
+    m = re.search(r"- \*\*Fix by default \(Phase 323[^\n]*", text)
+    assert m, (
+        "CLAUDE.md lost the Sysop-side fix-by-default stanza. Sysop closes phases inline "
+        "rather than through /claim-task + /review-close, so the shipped skill change does "
+        "not apply here -- this stanza is the only thing that does."
     )
-    m = re.search(r"\*\*Fix-in-branch before filing \(Phase 276\)\.\*\*(.*?)\n- \*\*", text, re.S)
-    assert m, "the stanza's bounds could not be isolated"
+    return m.group(0)
+
+
+def test_claude_md_carries_the_sysop_side_rule() -> None:
+    stanza = claude_md_stanza()
+    for needle, why in [
+        ("**(1) Fix it in this phase**", "the default outcome"),
+        ("**(2) File a `Q-NNN`** only when it cannot be fixed now", "filing as the exception"),
+        ("**(3) Drop it** when nothing is wrong", "the drop outcome"),
+        ("**When an answer from Wade would make it fixable, ask as a menu", "the ask step"),
+        ("**`REVIEW_CHECKLIST.md` § *Notes* is gone**", "the retired ledger"),
+        ("`PHASE_LOG.md` entry is the `## Also fixed` equivalent", "this repo's record of an in-branch fix"),
+        ("**The measure is net open work per close**", "the measure"),
+    ]:
+        assert needle in stanza, f"CLAUDE.md's stanza lost {why} ({needle!r})"
+    m = re.search(r"\*\*Never in-branch, at any size:\*\*([^.]*\.)", stanza)
+    assert m, "CLAUDE.md's stanza lost its never-list"
     clause = m.group(1).lower()
-    for cat in ("migration", "prompt", "security", "production", "weaken, disarm"):
+    for cat in ("migration", "production", "auth", "payment"):
         assert cat in clause, f"the Sysop-side never-list lost {cat!r}"
-    assert "when *all* hold" in clause or "when *all* hold:" in m.group(1), (
-        "CLAUDE.md's tier 1 is no longer a conjunction. `any` turns each bound into an "
-        "independent licence."
+    for dropped in ("prompt", "security", "gate", "core/skills"):
+        assert dropped not in clause, f"the Sysop-side never-list gained {dropped!r}"
+    assert_no_reversal(stanza, "CLAUDE.md fix-by-default stanza",
+                       extra=("is a guideline", "file first", "a note is fine"))
+    # § Notes named once, to say it is gone. A second mention is a destination.
+    assert stanza.count("§ *Notes*") == 1, (
+        f"CLAUDE.md's stanza names § *Notes* {stanza.count('§ *Notes*')} times; it is named "
+        "once, to say it is gone, and any other mention routes findings back to it."
     )
-    assert_no_reversal(
-        m.group(1), "CLAUDE.md fix-in-branch stanza",
-        extra=("is a guideline", "fix what it sees", "when *any* hold"),
-    )
-    assert "phase_log.md" in clause, (
-        "the stanza no longer names PHASE_LOG.md as the `## Also fixed` equivalent, "
-        "which is the only in-repo record a Sysop phase's in-branch fix gets."
-    )
+    for retired in ("name what it blocks**", "Everything else goes to `REVIEW_CHECKLIST.md` § *Notes*",
+                    "on the order of 20 lines"):
+        assert retired not in stanza, f"CLAUDE.md's stanza carries the retired clause {retired!r}"
 
 
-def test_baseline_record_exists_and_states_the_tripwire() -> None:
+def test_baseline_record_exists_and_states_the_new_measure() -> None:
     text = require_maintainer_side(BASELINE)
     assert "tripwire" in text.lower()
     assert "do not restate the gdp figures as sysop figures" in text.lower(), (
         "tools/FIX_IN_BRANCH_BASELINE.md lost the warning against restating GDP's "
-        "numbers as Sysop's. The two denominators are different populations, and the "
-        "brief's own review record caught an earlier revision doing exactly this."
+        "numbers as Sysop's. The two denominators are different populations."
     )
+    assert "## The measure from Phase 323 on — net open work per close" in text, (
+        "the baseline file no longer defines the measure fix-by-default is judged on."
+    )
+    assert "tools/baselines/net_open_per_close.py" in text
 
 
 @pytest.mark.parametrize(
     "script",
-    ["fix_in_branch_baseline_sysop.py", "fix_in_branch_baseline_consumer.py"],
+    ["fix_in_branch_baseline_sysop.py", "fix_in_branch_baseline_consumer.py", "net_open_per_close.py"],
 )
 def test_baseline_scripts_are_importable(script: str) -> None:
-    """Section G says measure again after. A script that no longer parses cannot."""
+    """A measure whose script no longer parses cannot be taken again."""
     path = REPO_ROOT / "tools" / "baselines" / script
     if not path.is_file():
         pytest.skip(f"{script} lives under mirror-excluded tools/ and is absent here")
@@ -948,420 +1015,163 @@ def test_baseline_scripts_are_importable(script: str) -> None:
     assert r.returncode == 0, f"{script} does not compile:\n{r.stderr}"
 
 
+def _net_open():
+    path = REPO_ROOT / "tools" / "baselines" / "net_open_per_close.py"
+    if not path.is_file():
+        pytest.skip("net_open_per_close.py lives under mirror-excluded tools/")
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("net_open_per_close", path)
+    mod = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_LOG = """## Phase 1 (executed)
+
+### Also fixed
+- a
+- b
+  - a nested sub-point, not an item
+1. c
+
+```
+this opener is never closed inside Phase 1
+## Also fixed
+- not a real item either
+## Phase 2 (executed)
+
+````markdown
+### Also fixed
+- quoted inside a real fence, not an item
+````
+
+#### Also fixed, in branch
+- d
+### Next heading
+- not under the section
+"""
+
+
+def test_the_fix_counter_counts_every_section_and_skips_what_is_quoted() -> None:
+    """The instrument's reading, pinned on a fixture that carries both of its hazards.
+
+    `PHASE_LOG.md` has unclosed openers: a CommonMark reader runs one to EOF and read 18
+    of the file's 32 `Also fixed` headings as fenced on 2026-09-23. It also quotes the
+    heading inside real fences (Phase 280's two headings, 21 phantom items). The scoped
+    reading must take the first hazard as text and the second as quoted.
+    """
+    mod = _net_open()
+    # Scoped: a, b, c from Phase 1 (the indented marker is a sub-point, not an item);
+    # the Phase-1 opener closes nowhere before `## Phase 2`, so it is text and the
+    # `## Also fixed` after it contributes its one item; the ````markdown fence is real
+    # and its quoted heading is skipped; d. 3 + 1 + 1.
+    assert mod.also_fixed_items(_LOG, scope=mod.PHASE_HEAD) == 5
+    # Fence-blind takes the quoted section as well, and that section (depth 3) runs on
+    # past the depth-4 heading, so it takes d a second time: 3 + 1 + 2 + 1.
+    assert mod.also_fixed_items(_LOG, fences=False) == 7
+    # CommonMark with no scope: the Phase-1 opener runs until the bare ```` closer in
+    # Phase 2 and hides everything between, so the Phase-1 section (depth 3) runs on
+    # through the hidden lines and past the depth-4 heading: a, b, c, d, and d again.
+    # Wrong in both directions at once, which is why the scoped reading exists.
+    assert mod.also_fixed_items(_LOG) == 5
+    # Phases 302 and 305 write the heading as a code span of itself. The first cut missed
+    # both (4 items), which is how its 276-321 reading came out 2 under Phase 322's.
+    assert mod.also_fixed_items("### `## Also fixed`\n- x\n- y\n") == 2
+    # An explicit none-marker in any of its spellings is zero entries, not one.
+    assert mod.also_fixed_items("### Also fixed\n- None\n") == 0
+    assert mod.also_fixed_items("### Also fixed\n- _(none)._\n") == 0
+
+
 # --------------------------------------------------------------------------
-# The filing bar -- `Q-410`'s other half (Phase 278)
+# The retired ledger -- what still reads it, and what must not write it
 # --------------------------------------------------------------------------
-#
-# Phase 276 shipped the three-tier fallthrough and left tier 3 filing
-# unconditionally. `Q-410` asked for two things and only one arrived: a
-# follow-up reaching tier 3 must NAME WHAT IT BLOCKS, or go to a ledger rather
-# than the queue. These guards are aimed at the two ways that bar decays into
-# nothing -- the naming test losing its legal answers (so nothing can satisfy
-# it and everything is filed anyway, or so much satisfies it that it binds
-# nothing), and the exemption list losing the entry that keeps defects out of
-# the ledger.
 
 ADDTASK = REPO_ROOT / "core" / "skills" / "add-task" / "SKILL.md"
 TASKS_README = REPO_ROOT / "core" / "companion" / "tasks" / "README.md"
 INSTALLER = REPO_ROOT / "install.sh"
 
-# What a tier-3 filing may name. Four legal answers, and each one is a
-# different project shape: a project mid-phase, a project with a plan, a
-# project with declared gates, and a project whose queue is its own plan. Lose
-# one and the bar refuses a shape of project it was written to serve -- which
-# is how a bar gets deleted rather than fixed.
-BAR_LEGAL_ANSWERS = {
-    "the current phase": "`current_focus: true`",
-    "a planned phase": "a named `planned` phase",
-    "a declared gate": "a gate the project declares",
-    "an open task's acceptance": "an open task whose stated acceptance this stops",
-}
 
-# Filed whatever the naming test says. The last entry is the load-bearing one:
-# without it a bar that reads "name what it blocks" sends an unfilable BUG to a
-# ledger, which is strictly worse than the unbounded filing it replaced.
-#
-# **Pinned as one contiguous run, not as four independent substrings**, and that
-# is the author-side battery's doing: M10 deleted `a `user_action`;` from the
-# exemption list and SURVIVED, because tier 3's own shipped line already reads
-# "needs a `user_action`" a sentence earlier. A per-entry `in` check was marking
-# a list with a hole in it compliant -- the "satisfied by an incidental use of
-# that substring" failure the author-side pass names.
-BAR_EXEMPTION_RUN = (
-    "a design question or a call that is the human's; "
-    "a `user_action`; "
-    "a production write; "
-    "and a defect in shipped behaviour **you can state as a falsifiable failure** — the input, "
-    "the expected result, the actual one — or a security finding"
-)
-BAR_EXEMPTIONS = {
-    "design question": "a design question or a call that is the human's",
-    "user_action": "; a `user_action`; ",
-    "production write": "a production write",
-    "defect or security": "a defect in shipped behaviour **you can state as a falsifiable failure**",
-}
-
-
-@pytest.mark.parametrize("name", sorted(TIER_BLOCKS))
-def test_the_filing_bar_lives_inside_the_reversal_screened_block(name: str) -> None:
-    """The bar has to sit in the slice, not merely in the file.
-
-    Every negative guard in this module reads `tier_block(name)`. A bar that
-    drifts out of that slice -- moved below the record item, hoisted above the
-    tier list -- keeps every presence check green while losing the reversal
-    layer entirely, and the reversal layer is the one a mutation walks through.
-    Assert the containment directly rather than trusting the placement.
-    """
-    assert "name what the filing blocks" in tier_block(name), (
-        f"{name}: the tier-3 filing bar is outside the reversal-screened tier "
-        "block. Presence checks still pass; nothing screens it for softening."
-    )
-
-
-@pytest.mark.parametrize("name", sorted(TIER_BLOCKS))
-@pytest.mark.parametrize("label,needle", sorted(BAR_LEGAL_ANSWERS.items()))
-def test_the_bar_keeps_every_legal_answer(name: str, label: str, needle: str) -> None:
-    """Four ways to satisfy the naming test, one per project shape."""
-    assert carries(tier_block(name), needle), (
-        f"{name}: the filing bar no longer accepts {label!r} as a thing a "
-        f"follow-up can name ({needle!r} is gone). A bar whose only legal answer "
-        "is the current phase refuses every project that plans further ahead "
-        "than one phase, and a refused bar gets deleted rather than widened."
-    )
-
-
-@pytest.mark.parametrize("name", sorted(TIER_BLOCKS))
-def test_the_exemption_list_is_intact_as_one_run(name: str) -> None:
-    """The whole list, contiguously -- see BAR_EXEMPTION_RUN for why."""
-    block = tier_block(name)
-    assert BAR_EXEMPTION_RUN in block, (
-        f"{name}: the exemption list is no longer intact. It is pinned as one run "
-        "because three of its four entries appear elsewhere in the same block, so a "
-        "deletion from the list leaves every per-entry substring check green."
-    )
-    # ...and the run must TERMINATE. A contiguous-run pin forbids holes and says
-    # nothing about additions, so appending "; and anything the agent considers
-    # material" leaves every pinned string byte-perfect and exempts everything.
-    # Found by the round's independent battery (its M10); the author's battery
-    # probed only the deletion direction.
-    tail = block.split(BAR_EXEMPTION_RUN, 1)[1][:2]
-    assert tail.startswith("."), (
-        f"{name}: the exemption list no longer ends where it is pinned to end — the "
-        f"run is followed by {tail!r}, not a full stop. A fifth exemption appended "
-        "here satisfies every existing assertion and makes the bar non-binding."
-    )
-
-
-@pytest.mark.parametrize("name", sorted(TIER_BLOCKS))
-@pytest.mark.parametrize("label,needle", sorted(BAR_EXEMPTIONS.items()))
-def test_the_bar_keeps_every_exemption(name: str, label: str, needle: str) -> None:
-    """Losing `defect or security` is the mutation that makes this bar harmful.
-
-    Kept alongside the contiguous-run check above so a failure NAMES the entry
-    that went missing rather than reporting the whole list as changed.
-    """
-    assert carries(tier_block(name), needle), (
-        f"{name}: the filing bar lost its {label!r} exemption. Each of the four "
-        "is its own justification for a queue entry regardless of what it blocks; "
-        "the last one especially -- a queue that cannot hold a bug because nobody "
-        "has scheduled the bug is not a queue."
-    )
-
-
-@pytest.mark.parametrize("name", sorted(TIER_BLOCKS))
-def test_the_bar_names_the_ledger_as_the_alternative(name: str) -> None:
-    """A bar with no destination is a bar that silently discards."""
-    block = tier_block(name)
-    assert "**Everything else goes to `tasks/notes.md`**" in block, (
-        f"{name}: the filing bar no longer names where a refused follow-up goes, or "
-        "names it without the imperative. A bare mention is satisfied by a sentence "
-        "saying a note MAY be written, and an optional ledger beside a mandatory bar "
-        "is a bar that discards -- the opposite of what a ledger is for."
-    )
-    assert "A note is not a silent drop" in block, (
-        f"{name}: the bar lost the sentence requiring the agent to SAY it wrote a "
-        "note. A ledger nobody is told about is indistinguishable from a drop, and "
-        "the human is the only one who can promote the line."
-    )
-
-
-@pytest.mark.parametrize("name", sorted(TIER_BLOCKS))
-def test_the_bar_warns_that_a_note_has_no_task_id(name: str) -> None:
-    """The interaction that turns this bar into a hard failure if left unstated.
-
-    `/document-work` Step 3b hard-fails when a `<PREFIX>-<NAME>` token in the
-    pending-docs prose resolves to no entry in `index.yml`. A note carries no
-    id, so an agent that routes a finding to the ledger AND writes an id-shaped
-    token for it into the docs has built a gate failure out of a bar that was
-    supposed to cost nothing. Stated at every site because the docs prose can be
-    written from any of them.
-    """
-    block = tier_block(name)
-    assert "a note carries no task id" in block, (
-        f"{name}: the bar no longer warns that a note has no id to cite. "
-        "Step 3b hard-fails on a token that resolves to nothing."
-    )
-    assert "`/document-work` Step 3b hard-fails" in block, (
-        f"{name}: the bar no longer names the gate it interacts with. Pinned as the "
-        "whole clause, not a bare `Step 3b`: that substring occurs twice in "
-        "document-work's own tier block (the second is pre-existing prose about what "
-        "Step 3b verifies), so a bare check passes there with the warning deleted."
-    )
-
-
-def test_the_bar_does_not_replace_the_three_shipped_tier_3_reasons() -> None:
-    """The bar is ADDITIVE. Tier 3's original text is the fallthrough it qualifies.
-
-    The cheapest wrong edit here is to rewrite tier 3 as the bar -- which drops
-    "only past both" and turns an ordered fallthrough into a standalone filing
-    rule that no longer requires tiers 1 and 2 to have been tried.
-    """
-    for name in sorted(TIER_BLOCKS):
-        block = tier_block(name)
-        assert "**File a new task** only past both" in block, (
-            f"{name}: tier 3 lost 'only past both'. The bar qualifies the "
-            "fallthrough; it does not replace it."
-        )
-
-
-# The record item at each executor, sliced. The positive half of the containment the
-# phase asserted only negatively: it pinned that the TIER block names no write path and
-# left "the record item performs the write" to a file-wide read, which is satisfied by
-# the sentence sitting anywhere in the file.
-RECORD_ITEMS = {
-    CLAIM: ("3. **Persist the `## Test decision`**", "\n4. **Post-fix convention verification \u2014 BOTH maps**"),
-    BUILD: ("3\u2011record. **Persist the `## Test decision`**", "\n4. **Post-fix convention verification**"),
-}
-
-
-def record_item_of(path: Path) -> str:
-    start, end = RECORD_ITEMS[path]
-    return slice_between(read(path), start, end, f"{path.name} record item")
-
-
-@pytest.mark.parametrize("path", [pytest.param(CLAIM, id="claim-task"), pytest.param(BUILD, id="auto-build")])
-def test_the_executor_sites_write_the_ledger_into_the_worktree(path: Path) -> None:
-    """Same defect as `Q-322`, one file over -- and the write is delegated.
-
-    A note written into the main checkout is on no branch, so it never reaches
-    the PR and it dirties the primary tree, which `/review-close` Step 2a then
-    classifies as `dirty` and auto-SKIPs on.
-
-    **Why it lives in the record item and not beside the tier that decides it.**
-    Phase 277 pinned that `auto-build`'s tier block names no body write path at
-    all (`test_the_record_item_states_why_it_is_one_write_not_two`), because two
-    independent writes invert the schema order for `## Also fixed`. That pin
-    caught the first cut of this change, which put the ledger path in the tier
-    block. The ledger is a *different* file with no ordering relationship to
-    those sections, so the inversion argument does not apply to it -- but the
-    structural reason does: the record item is the step that owns worktree
-    paths, so every record write belongs there and the tier decides routing only.
-    """
-    item = record_item_of(path)
-    assert "`<WORKTREE_PATH>/tasks/notes.md`" in item, (
-        f"{path.name}: the ledger append no longer names the worktree copy INSIDE the "
-        "record item. A main-checkout write is on no branch -- and a file-wide check "
-        "here passed with the sentence moved to an HTML comment near Step 1, which is "
-        "how the round's battery walked the first version of this guard."
-    )
-    assert "append those lines to" in item, (
-        f"{path.name}: the record item no longer performs the ledger append, so the "
-        "tier can route a finding to a file nothing writes."
-    )
-
-
-@pytest.mark.parametrize("name", ["claim-task", "auto-build"])
-def test_the_tier_block_delegates_the_ledger_write(name: str) -> None:
-    """The containment Phase 277's pin requires, asserted for this write too.
-
-    If the path drifts back into the tier block, Phase 277's guard reddens on
-    `auto-build` -- but `claim-task` has no equivalent pin, so on that site the
-    drift would be silent. Assert the delegation at both.
-    """
-    block = tier_block(name)
-    assert "<WORKTREE_PATH>" not in block, (
-        f"{name}: the tier block names a write path again. Routing is decided here; "
-        "writing belongs to the record item, which owns the worktree paths."
-    )
-    assert "the record item's write, not this item's" in block, (
-        f"{name}: the tier block no longer says who performs the ledger append. A "
-        "bare destination with no writer is a finding routed to a file nothing writes."
-    )
-
-
-def test_document_work_routes_the_note_but_does_not_write_it() -> None:
-    """A decision the round forced, pinned so it is not "finished" back into a write.
-
-    The first cut made `/document-work` the ledger's third writer. It cannot be:
-    the skill states no working directory and makes no commit after Step 2, so the
-    write lands in an undetermined tree with nothing to carry it -- in a worktree it
-    dirties the branch and Step 1a then classifies it `dirty`, skipping the whole
-    close; in the main checkout it is on no branch. It routes instead, and prints
-    the line for a human when it is invoked outside an executor.
-    """
-    text = read(DOCWORK)
-    assert "**You route the note; you do not write it.**" in text, (
-        "/document-work is writing the ledger again. It has no defined tree and no "
-        "commit after Step 2, so the write is lost or it skips the close."
-    )
-    assert "with two exceptions, both named below" in text, (
-        "document-work's do-not-modify exception count no longer matches its carve-outs "
-        "(filing a body, `## Also fixed`). An overcount reads as a licence it does not grant."
-    )
-    assert "print the exact line in your final message" in text, (
-        "/document-work no longer surfaces the note when invoked directly. Routing with "
-        "no destination and no output is a silent drop."
-    )
-
-
-# The population question, asked of the bar rather than of the tier. Phase 178's
-# round found `WORKFLOW_GUIDE.md` -- a third restatement shipped to consumers --
-# untouched by a change that had edited every skill body. Both spec surfaces
-# describe the executor sequence step by step; a bar absent from them is a bar a
-# reader of the spec does not know exists, and the spec is what CLAUDE.md calls
-# authoritative.
 @pytest.mark.parametrize(
     "path,needle,why",
     [
-        pytest.param(WORKFLOW, "must name what it blocks",
+        pytest.param(WORKFLOW, "`tasks/notes.md` is retired and never written",
                      "the authoritative spec enumerates the Step 7e sequence", id="workflow"),
-        pytest.param(WORKFLOW, "`tasks/notes.md` ledger",
-                     "the spec names the tier's destination for a refused follow-up", id="workflow-ledger"),
-        pytest.param(GUIDE, "**name what the new task blocks**",
+        pytest.param(WORKFLOW, "`questions.md` in the run directory",
+                     "the spec names where an executor's question goes", id="workflow-questions"),
+        pytest.param(GUIDE, "`tasks/notes.md` is retired",
                      "the guide is the human-readable twin shipped to consumers", id="guide"),
-        pytest.param(GUIDE, "`tasks/notes.md`",
-                     "the guide names the ledger a consumer will otherwise never meet", id="guide-ledger"),
     ],
 )
-def test_the_spec_surfaces_describe_the_filing_bar(path: Path, needle: str, why: str) -> None:
-    assert carries(read(path), needle), (
-        f"{path.name} does not describe the tier-3 filing bar: {why}. The three skill "
-        "bodies are not the whole population -- these two restate the same sequence to "
-        "readers who never open a SKILL.md."
-    )
+def test_the_spec_surfaces_describe_the_retirement(path: Path, needle: str, why: str) -> None:
+    assert carries(read(path), needle), f"{path.name} does not describe the retired ledger: {why}"
 
 
-# --------------------------------------------------------------------------
-# The ledger itself
-# --------------------------------------------------------------------------
-
-def test_the_readme_documents_the_ledger() -> None:
-    text = read(TASKS_README)
-    assert "## The notes ledger (`notes.md`)" in text, (
-        "tasks/README.md lost the ledger's section. It is the only shipped "
-        "documentation of the file's shape, and three skill bodies point at it "
-        "by name -- a dangling pointer into a managed path."
-    )
-
-
-def test_the_readme_states_why_the_flat_shape_is_load_bearing() -> None:
-    """Structure in this file makes the prescribed conflict resolution corrupting.
-
-    Every branch appends here, so conflicts are deterministic rather than rare.
-    A flat list of independent lines is the one shape where keeping both sides is
-    correct. `tasks/index.yml` is the counter-example in the same repo: the same
-    resolution on an indented list splits an entry across two hunks and validates
-    green. If the README stops saying WHY, the next author adds sub-bullets.
-    """
-    text = ledger_section()
-    assert "the flatness is load-bearing" in text, (
-        "tasks/README.md no longer states that the ledger's flat shape is what "
-        "makes union-on-conflict a safe resolution."
-    )
-    assert "Make sure the file ends in a newline before you append" in text, (
-        "the ledger lost its trailing-newline rule. `>>` onto a file whose last line "
-        "has no newline joins two notes into one line -- and one-line-per-note is the "
-        "property the union resolution, the dedup read and the promotion delete all "
-        "rest on. Found surviving by the author-side battery's own re-run (M52)."
-    )
-    assert "No nesting, no sub-bullets, no sections." in text, (
-        "the shape rule lost its explicit prohibition. 'Flat' as an adjective is "
-        "advice; the prohibition is the rule."
-    )
+@pytest.mark.parametrize("path", [pytest.param(WORKFLOW, id="workflow"), pytest.param(GUIDE, id="guide")])
+def test_the_spec_surfaces_name_the_ledger_only_to_retire_it(path: Path) -> None:
+    """A spec sentence routing a finding to the ledger restores it for every reader."""
+    text = read(path)
+    hits = [m.start() for m in re.finditer(r"`tasks/notes\.md`", text)]
+    assert hits, f"{path.name} no longer names the ledger at all -- vacuous"
+    stray = [text[max(0, h - 60):h + 40] for h in hits
+             if not text.startswith("`tasks/notes.md` is retired", h)]
+    assert not stray, f"{path.name} names `tasks/notes.md` other than to retire it: {stray!r}"
 
 
 def ledger_section() -> str:
-    """The ledger's own section, sliced.
-
-    File-wide reads are why M33 survived the author-side battery: the intent-layer
-    section three headings up says `protection by absence` about `vision.md`, so
-    deleting the ledger's own statement of the same contract left the substring
-    standing and the guard green over a section that no longer said it.
-    """
     return slice_between(
         read(TASKS_README),
-        "## The notes ledger (`notes.md`)",
+        "## The notes ledger (`notes.md`) — retired",
         "## Migrating from `product_roadmap.md`",
         "tasks/README.md notes-ledger section",
     )
 
 
-def test_the_readme_states_the_ownership_contract() -> None:
-    """Consumer-owned, seeded by nobody -- the `vision.md` / `decisions.md` shape."""
-    assert "protection by absence" in ledger_section(), (
-        "tasks/README.md no longer states that `notes.md` is protected from "
-        "`--update` by never being created rather than by a skip-if-exists guard. "
-        "A reader who assumes a guard exists will look for one that does not."
-    )
+def test_the_readme_retires_the_ledger() -> None:
+    section = ledger_section()
+    for needle, why in [
+        ("**It is retired: no skill writes to it any more.**", "the retirement"),
+        ("**An existing ledger is the consumer's to clear, and nothing deletes it.**", "the no-delete contract"),
+        ("Triage each line as fix, task or drop", "how a consumer clears it"),
+        ("`/add-task` Step 2 dedups against it", "the reader that remains"),
+        ("No nesting, no sub-bullets, no sections", "the shape the union resolution rests on"),
+        ("`install.sh` never created it and never deletes it", "the ownership contract"),
+    ]:
+        assert needle in section, f"tasks/README.md's ledger section lost {why} ({needle!r})"
 
 
-def test_the_readme_states_that_promotion_is_a_human_act() -> None:
-    assert "Promotion is a human act." in ledger_section(), (
-        "the ledger lost its exit. A ledger with no promotion path is where "
-        "findings go to die, which is the objection this bar has to answer."
+def test_the_ledger_section_carries_no_reversal_vocabulary() -> None:
+    assert_no_reversal(
+        ledger_section(), "tasks/README.md notes-ledger section",
+        extra=("sub-bullet is fine", "nest freely", "append new", "still write", "may still add",
+               "may still append", "still append", "append a note", "delete the file",
+               "remove the ledger", "when unsure"),
     )
 
 
 def test_the_installer_does_not_seed_the_ledger() -> None:
-    """A decision NOT to build, pinned so a future author does not 'finish' it.
-
-    `install.sh` seeds `tasks/index.yml` (skip-if-exists) and copies `schema.md`
-    and `README.md` (managed). `notes.md` is deliberately neither. Managed would
-    overwrite the consumer's accumulated notes on every `--update`; seeded would
-    add a third write mode and a managed-path entry for a file whose entire
-    content is consumer-authored. `/intake` already documents this exact contract
-    for `vision.md` and `decisions.md`, and this is the third member of that set.
-    """
-    # `read`, not `require_maintainer_side`: install.sh ships (the public-release spec
-    # counts identifiers in its comments in the SHIPPED tree), so the skip contract of
-    # that helper does not apply and would only hide the file going missing.
-    text = read(INSTALLER)
-    assert "notes.md" not in text, (
-        "install.sh now references the notes ledger. It must not: the file is "
-        "consumer-owned and its protection from `--update` is that the installer "
-        "never creates it. Seeding it makes an accumulating file installer-touched "
-        "for the first time, and a managed path would overwrite real notes."
+    """A decision NOT to build, pinned: the installer neither creates nor deletes it."""
+    # `read`, not `require_maintainer_side`: install.sh ships.
+    assert "notes.md" not in read(INSTALLER), (
+        "install.sh now references the notes ledger. It never created the file, and "
+        "retirement must not delete a consumer's existing one."
     )
 
-
-# --------------------------------------------------------------------------
-# The readers, and the conflict the ledger causes
-# --------------------------------------------------------------------------
 
 def test_add_task_dedups_against_the_ledger() -> None:
-    """Without this the ledger is write-only and the same finding lands twice."""
-    text = read(ADDTASK)
-    assert "**Search `tasks/notes.md` too, tolerating its absence**" in text, (
-        "/add-task Step 2 no longer dedups against the ledger. It is the only "
-        "reader the ledger has; without it a note is invisible to the one skill "
-        "that could turn it into a task."
-    )
+    """Existing ledgers persist until each consumer clears them, so the reader stays."""
+    assert "**Search `tasks/notes.md` too, tolerating its absence** — that is the retired notes ledger" in read(ADDTASK)
 
 
 def test_add_task_promotion_removes_the_promoted_line() -> None:
     """One finding, one record. A promoted note left behind is a second record."""
     text = read(ADDTASK)
-    assert "delete that line from `notes.md` in the same run" in text, (
-        "/add-task no longer deletes a promoted note. The finding then exists as "
-        "both a task and a note, and the two drift -- which is the duplicate-record "
-        "shape the dedup step exists to prevent."
-    )
-    assert "The one write outside that rule is deleting a promoted line" in text, (
-        "/add-task's `## What this skill never does` still claims capture-only "
-        "appends without carving out the promotion delete, so its own boundary "
-        "section forbids the write Step 2 now prescribes."
-    )
+    assert "delete that line from `notes.md` in the same run" in text
+    assert "The one write outside that rule is deleting a promoted line" in text
 
+# --------------------------------------------------------------------------
+# The readers, and the conflict the ledger causes
+# --------------------------------------------------------------------------
 
 def test_review_close_counts_three_shared_append_files() -> None:
     """Three files, and the lead sentence must not contradict the third's bullet.
@@ -1397,7 +1207,7 @@ def ledger_bullet() -> str:
         read(CLOSE),
         # `Q-495`: `[-*+]`, because a uniform bullet-marker swap is rendering-identical
         # and reddened this anchor — a guard about the NOTES LEDGER, not about bullets.
-        re.compile(r"[-*+] \*\*`tasks/notes\.md`\*\* — the notes ledger"),
+        re.compile(r"[-*+] \*\*`tasks/notes\.md`\*\* — the retired notes ledger"),
         "**Resolve `tasks/index.yml` from the merge stages, structurally.**",
         "review-close notes-ledger bullet",
     )
@@ -1438,136 +1248,71 @@ def test_the_ledger_resolution_states_its_own_precondition() -> None:
     )
 
 
-def test_claude_md_carries_the_sysop_side_bar() -> None:
-    """Sysop closes phases inline, so the shipped skills do not bind it."""
-    text = require_maintainer_side(CLAUDE_MD)
-    m = re.search(r"\*\*Fix-in-branch before filing \(Phase 276\)\.\*\*(.*?)\n- \*\*", text, re.S)
-    assert m, "the stanza's bounds could not be isolated"
-    clause = m.group(1)
-    assert "name what it blocks" in clause, (
-        "CLAUDE.md's tier 3 files unconditionally again. The shipped skills carry "
-        "the bar; this stanza is the only thing that applies it to this repo, and "
-        "shipping a filing rule this repo does not follow is the asymmetry the "
-        "stanza exists to close."
-    )
-    assert "**Everything else goes to `REVIEW_CHECKLIST.md` § *Notes***" in clause, (
-        "the Sysop-side bar no longer names its ledger. Consumers get "
-        "`tasks/notes.md`; this repo has no `tasks/` queue, so § Notes is the "
-        "local equivalent and a bar with no destination discards."
-    )
-    assert "outside this bar as it is outside the tier" in clause, (
-        "the stanza lost the carve-out for a round's findings about a phase's own "
-        "record. Those name no repo path, can never be tier 1, and can rarely name "
-        "a gate -- a bar that catches them would route this repo's most valuable "
-        "filings into a ledger."
-    )
+def notes_section_problems(text: str) -> list[str]:
+    """Every spelling of a revived `## Notes` section, or of a ledger line parked without one.
+
+    Phase 327's round renamed it `## notes`, wrote it as a setext heading and as a bold lead,
+    and changed the bullet and separator of a parked line; each passed the first cut. A
+    heading whose text only CONTAINS the word (`## Release Notes checklist`) is not the ledger,
+    and going red on it is the over-strictness that gets a guard deleted.
+    """
+    problems = []
+    title = r"(?:sysop[- ]side\s+|sysop\s+)?notes(?![a-z0-9])"
+    for pattern, shape in (
+        (rf"^#{{1,6}}\s+{title}", "a Notes heading"),
+        (rf"^{title}.*\n[=-]+\s*$", "a setext Notes heading"),
+        (rf"^(?:\*\*|__){title}", "a bold Notes lead"),
+        (r"^\s*[-*+]\s+20\d\d-\d\d-\d\d\s*(?:·|—|-|\|)", "a dated ledger line"),
+    ):
+        for m in re.finditer(pattern, text, re.M | re.I):
+            problems.append(f"{shape}: {m.group(0).splitlines()[0]!r}")
+    return problems
 
 
-def test_the_sysop_notes_section_exists_and_is_last() -> None:
-    """Placement is load-bearing: the derive commands bound § Low with § Proposed."""
-    text = require_maintainer_side(REPO_ROOT / "REVIEW_CHECKLIST.md")
-    assert "## Notes — recorded, not queued" in text, (
-        "REVIEW_CHECKLIST.md lost § Notes, which CLAUDE.md's stanza names as the "
-        "Sysop-side ledger."
-    )
-    headings = re.findall(r"^## .*$", text, re.M)
-    assert headings[-1].startswith("## Notes"), (
-        "§ Notes is no longer the last section. The documented derive commands "
-        f"slice § Low as `/^## Low/,/^## Proposed/`; the current order is {headings!r}. "
-        "A § Notes above § Proposed silently changes what those counts report."
-    )
-
-
-# --------------------------------------------------------------------------
-# The population the first cut of these guards missed
-# --------------------------------------------------------------------------
-#
-# Every finding below came from the round's independent battery, which derived the
-# population from the tree rather than from this module's own site list and found
-# 37 of 73 mutations surviving. The shape is always the same: the rule is stated at
-# N places and asserted at one.
-
-def sysop_notes_section() -> str:
-    """`REVIEW_CHECKLIST.md` § Notes -- the ledger THIS repo actually uses."""
-    text = require_maintainer_side(REPO_ROOT / "REVIEW_CHECKLIST.md")
-    return text[text.index("## Notes — recorded, not queued"):]
-
-
-def test_the_sysop_ledger_states_its_own_shape_rule() -> None:
-    """Wholly unguarded in the first cut: reversing it to "nest freely" went green."""
-    section = sysop_notes_section()
-    assert "Flat lines only, no nesting." in section, (
-        "REVIEW_CHECKLIST.md § Notes lost its shape rule. The flat shape is what makes "
-        "the union-on-conflict resolution safe; this is the ledger this repo writes to, "
-        "and it had no guard at all until the round wrote a mutation that deleted it."
-    )
-    assert "delete the line in the same commit" in section, (
-        "§ Notes lost its promotion rule, so a promoted note stays as a second record."
-    )
-
-
-def test_there_is_exactly_one_sysop_notes_section() -> None:
-    """A last-heading check does not stop a SECOND section being added earlier.
-
-    The round's battery inserted a duplicate § Notes inside the `## Low` -> `## Proposed`
-    sed range while renaming the EOF one, and passed both the exact-string check and the
-    `headings[-1]` check. Two ledgers is worse than none: half the notes are invisible to
-    the derive commands and half are counted as § Low entries.
+def test_the_sysop_notes_section_is_gone() -> None:
+    """`REVIEW_CHECKLIST.md` § Notes, the ledger this repo froze, was emptied by `Q-592` and
+    DELETED by Phase 327, on Wade's call at Phase 326's open: delete it and pin its absence
+    rather than keep an empty marker. An empty `## Notes` heading is a destination waiting for
+    the first finding the retired filing bar would have parked there. These replace the three
+    tests that pinned it frozen, last and single.
     """
     text = require_maintainer_side(REPO_ROOT / "REVIEW_CHECKLIST.md")
-    n = len(re.findall(r"^## Notes\b", text, re.M))
-    assert n == 1, (
-        f"REVIEW_CHECKLIST.md has {n} `## Notes` sections, expected exactly 1. A second "
-        "one above `## Proposed` is counted by the documented § Low derive command."
+    problems = notes_section_problems(text)
+    assert not problems, (
+        f"REVIEW_CHECKLIST.md carries the retired notes ledger again: {problems!r}. It was "
+        "retired by fix-by-default (Phase 323) and the section deleted by Phase 327: a finding "
+        "is fixed, filed as a `Q-NNN`, or dropped."
     )
 
 
-def test_the_readme_example_obeys_the_shape_it_prescribes() -> None:
-    """The example is what an agent copies; the prohibition is what it skims.
-
-    The round nested the shipped example two lines below `No nesting, no sub-bullets,
-    no sections.` and every guard stayed green.
-    """
-    section = ledger_section()
-    fence = section.split("```", 2)
-    assert len(fence) >= 3, "the ledger section no longer carries a shipped example"
-    body = [ln for ln in fence[1].splitlines() if ln.strip()]
-    assert body, "the ledger example is empty"
-    for ln in body:
-        assert re.match(r"[-*+] ", ln), (
-            f"the ledger's shipped example is no longer flat: {ln!r} is indented or is "
-            "not a top-level list item. An agent copies the example, not the prohibition "
-            "above it."
-        )
-
-
-def test_the_readme_restatement_of_the_bar_stays_complete() -> None:
-    """`tasks/README.md` restates the whole bar -- a surface no guard read.
-
-    The round dropped the defect/security exemption there, and inverted the naming
-    test there, with the suite green both times. It is shipped consumer documentation
-    of the same rule, so it is part of the population.
-    """
-    section = ledger_section()
-    for needle, why in [
-        ("names what it blocks", "the naming test"),
-        ("`current_focus: true`", "the current-phase answer"),
-        ("a named `planned` phase", "the planned-phase answer"),
-        ("a gate the project declares", "the declared-gate answer"),
-        ("stated acceptance", "the open-task answer"),
-        ("a `user_action`", "the user_action exemption"),
-        ("a production write", "the production-write exemption"),
-        ("a defect in shipped behaviour", "the defect exemption"),
-        ("security finding", "the security exemption"),
-    ]: 
-        assert carries(section, needle), (
-            f"tasks/README.md's restatement of the filing bar lost {why} ({needle!r}). "
-            "It is shipped documentation of the rule and diverging from the skill "
-            "bodies is how a consumer ends up following a different bar."
-        )
+@pytest.mark.parametrize("revived", [
+    "## Notes — frozen 2026-09-23, not queued\n",
+    "### notes\n",
+    "## Sysop notes\n",
+    "Notes\n-----\n",
+    "**Notes**\n",
+    "- 2026-09-24 · `x` · surfaced by Phase 328 · parked\n",
+    "* 2026-09-24 — parked\n",
+    # Every other alternative of each arm, one row each (round 2 narrowed each unseen).
+    "# Notes\n", "###### Notes\n", "##\tNotes\n", "## Sysop-side notes\n",
+    "Notes\n=====\n", "Notes\n--\n", "__Notes__\n",
+    "+ 2026-09-24 · parked\n", "- 2026-09-24 - parked\n", "- 2026-09-24 | parked\n",
+    "  - 2026-09-24 · an indented parked line\n",
+])
+def test_every_spelling_of_the_ledger_is_seen(revived: str) -> None:
+    assert notes_section_problems("## Planned phases\n\n" + revived), revived
 
 
-def test_the_readme_skills_table_lists_every_ledger_writer() -> None:
+@pytest.mark.parametrize("innocent", [
+    "## Release Notes checklist\n",
+    "- [ ] <!-- id: Q-999 --> **(Filed 2026-09-24)** a real entry\n",
+    "See `_shared/permission-guard.md` § Notes for skill authors.\n",
+])
+def test_an_innocent_mention_is_not_the_ledger(innocent: str) -> None:
+    assert notes_section_problems(innocent) == [], innocent
+
+
+def test_the_readme_skills_table_lists_every_queue_writer() -> None:
     """The round deleted the `/auto-build` row this phase added, with the suite green."""
     text = read(TASKS_README)
     table = slice_between(text, "## How skills use it", "## Rules", "tasks/README.md skills table")
@@ -1606,29 +1351,6 @@ def test_the_ledger_bullet_carries_no_reversal_vocabulary() -> None:
             "as it is for",
             "no need to check",
             "you can skip the",
-        ),
-    )
-
-
-def test_the_ledger_section_carries_no_reversal_vocabulary() -> None:
-    """`tasks/README.md` had presence checks and no screen either.
-
-    The round kept `**No nesting, no sub-bullets, no sections.**` byte-perfect and
-    added *"A single short sub-bullet is fine when one sentence will not hold the
-    finding."* beside it. The prohibition and its cancellation coexisted, green.
-    """
-    assert_no_reversal(
-        ledger_section(), "tasks/README.md notes-ledger section",
-        extra=(
-            "sub-bullet is fine",
-            "nest freely",
-            "is fine when",
-            "if one sentence",
-            "structure is fine",
-            "a little structure",
-            "may optionally name",
-            "whenever the finding seems",
-            "worth a queue entry",
         ),
     )
 
@@ -1991,7 +1713,7 @@ def test_a_subheading_inside_a_section_does_not_terminate_it() -> None:
         ("do not stop at the first", "do not stop at the first match"),
         ("the terminator is stated", "ends at the next heading of the **same or shallower** depth"),
         ("the checks run over each section", "Run all three over each section you found"),
-        ("the bound is judged on the sum", "**Judge the summed count**"),
+        ("the bound is judged on the sum", "**Judge the summed set**"),
         ("the tally sums", "sums every section found"),
         ("a two-section branch counts once", "still counts once in the first field"),
         ("a `_(none)_` section is zero", "contributes **zero**"),
@@ -2012,9 +1734,9 @@ def test_the_arm_iterates_rather_than_taking_the_first_match(label: str, needle:
     )
     assert carries(arm, needle), (
         f"the `## Also fixed` arm lost its {label!r} rule. A first-match reader "
-        "undercounts `## Also fixed` lines per branch -- one of the three numbers "
-        "section G judges the tier on -- in the direction that reads as the tier "
-        "staying inside its bound."
+        "undercounts `## Also fixed` lines per branch -- fixes per close, the number "
+        "the fix-by-default rule is judged on beside net open work -- and under-reads "
+        "how much a branch carries for review."
     )
 
 
@@ -2356,3 +2078,708 @@ def test_the_re_pointed_rows_are_not_quoted_only_to_be_repudiated(label: str, ne
         f"carrying it repudiates it ({found!r}):\n\n  {sentence.strip()[:400]}\n\n"
         "A rule quoted only to be overturned is not a rule."
     )
+
+
+# --------------------------------------------------------------------------
+# Verbatim pins over the decided text (Phase 323's round)
+# --------------------------------------------------------------------------
+#
+# The round's guards lens walked 39 of 50 mutations through the semantic guards above.
+# Nearly all of them were one move: keep every pinned phrase, and widen the rule with a
+# clause or a sentence in new words ("…, CI configuration, dependency manifests, and auth",
+# "Drop it as well when a fix would take more than an hour"). A phrase guard cannot see
+# that, and `_reversal`'s docstring records 25 of 25 out-of-vocabulary softenings surviving
+# the same way. The rule text here is Wade's decision, stated at a dozen sites. So each span
+# is pinned whole: its whitespace-normalized SHA-256 must equal the one recorded below. Any
+# edit, including a correct one, fails until the hash is updated in the same commit. That
+# cost is the point: an edit to a ratified rule should be visible in review, not silent.
+# Normalization absorbs re-wraps, `N)` for `N.`, and `*`/`+` for `-` list markers, which
+# the lens showed are legitimate rewrites a raw pin would false-kill.
+#
+# `_pin_norm`, `_pin_span` and `_pin_liveness` are shared with
+# `test_review_loop_decided_text.py` and `test_review_close_smoke_decided_text.py`, so a
+# change here re-derives every hash in all three modules; `test_pin_normalizer.py` holds
+# the controls for all of them.
+
+import hashlib  # noqa: E402
+
+from _prose_guard_helpers import _fence_state  # noqa: E402
+
+_WS = re.compile(r"\s+")
+# A list marker is followed by a space, a tab, or the end of the line (CommonMark 5.2), so
+# `(Step 8),` wrapped to a line start is prose, not an item.
+_PIN_MARKER = re.compile(r"^([-+*]|\d{1,9}[.)])(?=[ \t]|$)")
+_PIN_HEADING = re.compile(r"^#{1,6}(?=[ \t]|$)")
+# What may precede an anchor on its line and still be layout: indentation, a quote prefix,
+# a list marker.
+_PIN_LEAD = re.compile(r"^[ \t]*(?:>[ \t]?)*[ \t]*(?:(?:[-+*]|\d{1,9}[.)])(?:[ \t]+|$))?$")
+_PIN_LAYOUT = re.compile(r"[ \t]*(?:>[ \t]?)*[ \t]*(?:(?:[-+*]|\d{1,9}[.)])[ \t]+)?")
+
+
+def _pin_quote(body: str) -> tuple[int, int, str]:
+    """(blockquote depth, indentation inside the quote, the rest) of a de-indented line."""
+    depth, rest = 0, body
+    while rest.startswith(">"):
+        depth += 1
+        rest = rest[1:]
+        if rest.startswith(" "):
+            rest = rest[1:]
+        nxt = rest.lstrip(" ")
+        if nxt.startswith(">") and len(rest) - len(nxt) <= 3:
+            rest = nxt
+    inner = rest.lstrip(" ")
+    return depth, len(rest) - len(inner), inner
+
+
+def _pin_lines(lines: list[str]) -> list[tuple[str, str]]:
+    """(kind, record) per line; kind is `blank`, `fence`, `start` or `cont`.
+
+    A `start` line opens a block, so its indentation is structure and is recorded; a `cont`
+    line continues a paragraph, where a re-wrap may move it, so only its words are. Tabs
+    count to CommonMark's tab stop of 4. Every line of a fenced block, its opener and closer
+    included, is recorded whole: a closer moved out of its list item re-fences the rest of
+    the document. A line opens a block after a blank, a fence or a heading; as a list item
+    with content, a heading, a table row or an HTML comment; or when it deepens a quote.
+    """
+    fenced = [f for _, f in _fence_state(lines)]
+    out: list[tuple[str, str]] = []
+    after_para, quote = False, 0
+    for i, raw in enumerate(lines):
+        line = raw.expandtabs(4)
+        body = line.lstrip(" ")
+        indent = len(line) - len(body)
+        if fenced[i]:
+            out.append(("fence", "{}|{}".format(indent, _WS.sub(" ", body.strip()))))
+            after_para = False
+            continue
+        if not body.strip():
+            out.append(("blank", ""))
+            after_para = False
+            continue
+        depth, inner_indent, inner = _pin_quote(body)
+        inner = inner.rstrip()
+        if not inner:
+            # A bare `>` is a blank line inside the quote: it ends the paragraph.
+            out.append(("start", "{}|{}|0|".format(indent, depth)))
+            after_para, quote = False, depth
+            continue
+        mark = _PIN_MARKER.match(inner)
+        rest = inner[mark.end():] if mark else ""
+        item = bool(mark and rest.strip())
+        closed = _PIN_HEADING.match(inner) or inner.startswith(("|", "<!--"))
+        if after_para and not (item or closed or depth > quote):
+            out.append(("cont", _WS.sub(" ", inner)))
+            continue
+        gap = ""
+        if mark:
+            marker = mark.group(1)
+            marker = "-" if marker in "-+*" else marker[:-1] + "."
+            # The gap after the marker sets the item's content column, which decides whether
+            # a child block below is a paragraph or code; five or more opens code at once.
+            gap = str(len(rest) - len(rest.lstrip(" ")))
+            inner = marker + " " + rest.strip()
+        record = "{}|{}|{}|{}{}".format(indent, depth, inner_indent, gap, _WS.sub(" ", inner))
+        out.append(("start", record))
+        after_para, quote = not closed, depth
+    return out
+
+
+def _pin_norm(text: str) -> str:
+    """Whitespace-normalized, but structure-preserving.
+
+    Each block start keeps its own indentation (and quote depth), each fenced line is kept
+    whole, and only paragraph continuation lines are folded into the line above -- which is
+    all a re-wrap changes. A removed blank line between two paragraphs is structure too.
+    """
+    out = []
+    for kind, record in _pin_lines(text.split("\n")):
+        if kind == "start":
+            out.append("\n" + record)
+        elif kind == "fence":
+            out.append("\nF" + record)
+        elif kind == "cont":
+            out.append(" " + record)
+    return "".join(out).strip()
+
+
+def _pin_hash(text: str) -> str:
+    return hashlib.sha256(_pin_norm(text).encode("utf-8")).hexdigest()[:16]
+
+
+# A trailing block of its own, so it cannot change how the span's first line parses.
+_PIN_INSIDE = "\u2026 span starts inside a paragraph"
+
+
+def _pin_span(path: Path, text: str, at: int, span: str) -> str:
+    """What a pin hashes: *span*, sliced from *text* at offset *at*, with the context a
+    slice drops put back.
+
+    * The first line's lead (indentation, quote prefix, list marker) is restored when that
+      line opens a block: indenting it four spaces makes a code block (Phase 328's P5).
+    * An anchor inside a paragraph, where a re-wrap may move it, gets the layout of the
+      line that opened the paragraph instead: indenting that line makes the whole
+      paragraph code. It is also marked as inside, so a span that opened a paragraph and
+      is joined to the one above (its blank line deleted) moves the pin.
+    * A span that starts inside a fence carries the fence's opener line, so its closer
+      reads as a closer and removing the fence moves the hash.
+    * A last line that is only the next item's marker is dropped, so a swap there is legal.
+
+    HTML files get the slice alone: indentation and fences mean nothing there.
+    """
+    if path.suffix != ".md":
+        return span
+    tail = span[span.rfind("\n") + 1:]
+    if tail.strip() and _PIN_LEAD.match(tail):
+        span = span[:len(span) - len(tail)]
+    lines = text.split("\n")
+    ln = text.count("\n", 0, at)
+    lead = text[text.rfind("\n", 0, at) + 1:at]
+    kinds = _pin_lines(lines[:ln + 1])
+    kind = kinds[ln][0]
+    if _PIN_LEAD.match(lead) and kind != "cont":
+        span = lead + span
+    else:
+        # The anchor sits inside a paragraph (or a code line): the span starts with the
+        # layout of the line that opened that block, which is what a re-indent changes.
+        # The mark says so: deleting the blank line above a span that opens a paragraph
+        # makes it a continuation of the paragraph above, and that must move the pin.
+        j = ln
+        while j > 0 and kinds[j][0] == "cont":
+            j -= 1
+        span = _PIN_LAYOUT.match(lines[j]).group(0) + span + "\n\n" + _PIN_INSIDE
+    opener = _pin_opener(lines, ln) if kind == "fence" else None
+    if opener is not None:
+        span = lines[opener] + "\n" + span
+    return span
+
+
+def _pin_opener(lines: list[str], ln: int) -> int | None:
+    """The index of the opener of the fence line *ln* sits inside, or None.
+
+    `_fence_state` marks an opener, its body and its closer alike, so a blank line is
+    woven in after each line: its state says whether a fence is still open after that line.
+    """
+    woven = [x for line in lines[:ln] for x in (line, "")]
+    open_after = [f for i, f in _fence_state(woven) if i % 2]
+    if not open_after or not open_after[-1]:
+        return None
+    j = len(open_after) - 1
+    while j > 0 and open_after[j - 1]:
+        j -= 1
+    return j
+
+
+def _comment_open(before: str, markdown: bool) -> bool:
+    """Is an HTML comment open at the end of *before*? Read in order, not by counting.
+
+    Phase 335's round (lens 5, G1) disabled a whole pinned block with `<!-- retired` before it
+    and `-->` after it, balanced by a literal `` `-->` `` in prose earlier in the file: the
+    counts matched, so the span read as live. In markdown a code span is literal text, never a
+    comment delimiter, so code spans (and fences, whose backtick runs pair the same way) are
+    removed first; then the delimiters are walked in order.
+    """
+    t = before
+    if markdown:
+        lines = before.split("\n")
+        fenced = dict(_fence_state(lines))
+        t = "\n".join(l for n, l in enumerate(lines) if not fenced.get(n, False))
+        # A code span never crosses a blank line: an unmatched backtick earlier in the file must
+        # not pair with a run past the comment and swallow it (the first cut of this fix did).
+        t = re.sub(r"(`+)(?:(?!\1)(?!\n[ \t]*\n)[^`]|`(?!\1))*?\1", "", t, flags=re.S)
+    open_, i = False, 0
+    while True:
+        j = t.find("-->" if open_ else "<!--", i)
+        if j < 0:
+            return open_
+        open_, i = not open_, j + (3 if open_ else 4)
+
+
+def _pin_liveness(path: Path, text: str, at: int, fenced_ok: bool) -> str | None:
+    """Why a span a reader should meet is not live, or None.
+
+    A wrapper outside the anchors keeps every hash: an HTML comment opened before the span,
+    or (in markdown) a fence around a span that is not a template. *fenced_ok* marks a
+    span that belongs inside its fence; it is checked both ways, so a stale mark fails too.
+    """
+    before = text[:at]
+    # Either reading. The count is the conservative one a fenced prompt needs (a `<!--` pasted
+    # into an agent's prompt is not "literal" to the agent); the in-order scan is the one a
+    # balanced decoy cannot fool. Neither is sufficient alone.
+    if before.count("<!--") != before.count("-->") or _comment_open(before, path.suffix == ".md"):
+        return "sits inside an HTML comment"
+    if path.suffix != ".md":
+        return None
+    ln = text.count("\n", 0, at)
+    inside = dict(_fence_state(text.split("\n")[:ln + 1])).get(ln, False)
+    if inside and not fenced_ok:
+        return "sits inside a fenced block"
+    if fenced_ok and not inside:
+        return "is marked as fenced but is not; drop the mark"
+    return None
+
+
+WORKFLOW_HTML = REPO_ROOT / "docs" / "workflow.html"
+
+# label: (path, start, end, maintainer_side)
+PINNED_SPANS = {
+    # Anchors here carry no list marker: `_pin_span` restores a marker lead and drops a
+    # trailing one, so a `N.`/`N)` or `-`/`*` swap keeps both the slice and the hash.
+    "claim-task rule block": (CLAIM, RULE_BLOCKS["claim-task"][1], "**Persist the `## Test decision`**", False),
+    "auto-build rule block": (BUILD, RULE_BLOCKS["auto-build"][1], RULE_BLOCKS["auto-build"][2], False),
+    "document-work rule block": (DOCWORK, RULE_BLOCKS["document-work"][1], RULE_BLOCKS["document-work"][2], False),
+    "claim-task Step 8 report": (CLAIM, "**Then report the questions the executor filed.**", "\n\nThen:\n", False),
+    "claim-task hard constraints": (CLAIM, "Do **NOT** invoke the Agent tool — this run is a leaf", "### Required final-message format", False),
+    "claim-task record item": (CLAIM, "**Persist the `## Test decision`**", "**Post-fix convention verification", False),
+    "claim-task stranded probe": (CLAIM, "# The pathspec stays exactly `tasks/`.", "**An untracked body is not `STRANDED`", False),
+    "auto-build record item": (BUILD, "3\u2011record. **Persist the `## Test decision`**", "**Post-fix convention verification", False),
+    "document-work carve-out": (DOCWORK, "**Do NOT** modify `PROJECT_STATUS.md`", "**Before filing one, fix it if you can", False),
+    "add-task never-does": (ADDTASK, "## What this skill never does", "## Permissions", False),
+    "tasks README skills table": (TASKS_README, "| Skill | Reads | Writes |", "## Rules", False),
+    "review-close REFERENCE ledger note": (REPO_ROOT / "core" / "skills" / "review-close" / "REFERENCE.md",
+                                           "### The retired notes ledger's conflict bullet", "## Step 4a-fix — provenance", False),
+    "WORKFLOW 2-also bullet": (WORKFLOW, "Verify any **`## Also fixed` record**", "Verify the recorded **test decision**", False),
+    "monograph tier-3 paragraph": (WORKFLOW_HTML, "Tier 3 then needed a bar of its own", "</p>", False),
+    "auto-build hard constraints": (BUILD, "Do **NOT** invoke the Agent tool — the orchestrator has already done", "### Required final-message format", False),
+    "review-close 2-also arm": (CLOSE, "**2\u2011also. The `## Also fixed` arm.**", "**3. On a clean match", False),
+    "review-close shared-append section": (CLOSE, "Three tracked files are appended to across branches",
+                                           "**Resolve `tasks/index.yml` from the merge stages, structurally.**", False),
+    "schema Also fixed": (SCHEMA, "### Also fixed", "### User ops", False),
+    "tasks README ledger": (TASKS_README, "## The notes ledger (`notes.md`) — retired", "## Migrating from `product_roadmap.md`", False),
+    "add-task dedup": (ADDTASK, "## Step 2 — Dedup", "## Step 3 — Draft", False),
+    "WORKFLOW step 10 rule": (WORKFLOW, "applies the **fix-by-default rule**", ", persists the `## Test decision`", False),
+    "GUIDE rule paragraph": (GUIDE, "**Fix it in the branch — that is the default.**", "**Record the test decision.**", False),
+    "auto-judge reconciliation": (JUDGE, "**This is narrower than the fix-by-default rule", "</if>", False),
+    "auto-fix reconciliation": (FIX, "These limits are **tighter than the fix-by-default rule", "**Report format**", False),
+    "monograph addendum": (WORKFLOW_HTML, "<strong>Addendum (2026-09-23).</strong>", "</p>", False),
+    "CLAUDE.md conventions": (CLAUDE_MD, "## Conventions for working in this repo", "## Things NOT to do", True),
+    # Phase 328 (`Q-459`): the close-time extension of the same rule, decided by Wade's three
+    # menu answers of 2026-09-24. Its round walked 23 meaning-changing rewordings through the
+    # structural predicates in `test_review_close_fix_at_close.py`; a hash sees every one.
+    "review-close 4a-fix step": (CLOSE, "### 4a-fix. Fix the Close's Notes", "### 4a-post. Verify the Merged Tree", False),
+    "review-close 2b NOTES block": (CLOSE, "     Then, whatever the verdict:", "     Be thorough.", False),
+    "review-close 2b notes collect": (CLOSE, "Collect all verdicts **and every `NOTES:` line**", "**Record outcomes for Step 8.** Tally", False),
+    # Item 4's lead is inside the span on purpose: round 2 planted "a fix commit is never the
+    # failure; keep it" there, outside a span that began at the arm.
+    "review-close 4a-post fix arm": (CLOSE, "**On failure, stop — unless the failure is one this close inherited", "   **The inherited-failure arm fires", False),
+    "review-close 4d filing pointer": (CLOSE, "**First, file the notes `4a-fix` routed to a task**", "How the assembled work reaches `main`", False),
+    "review-close 4a PR-reuse lead": (CLOSE, "**Skip this step entirely under the Step 4-pre PR-reuse shape**", "For each approved feature branch (oldest first)", False),
+    "review-close Step 8 close notes": (CLOSE, "Close notes:   <N collected", "Orchestrator artifacts:", False),
+    "review-close 2b twin substitutions": (CLOSE, "The prompt is step 3's, with four substitutions", "Everything else is carried verbatim", False),
+    "WORKFLOW 5a item": (WORKFLOW, "5a. **Fix the close's notes**", "\n5b. **Run verification", False),
+    # Phase 335 (`Q-570`): Wade's pick, the per-agent scratch directory. Its round's guard lens
+    # walked 18 of 40 softenings through the prose predicates in `test_reviewer_scratch_dirs.py`
+    # ("make it once for the close and write that one `$SCRATCH` into every prompt", with the
+    # bold "is one per agent too" kept). Each span runs from its opener to the next lead.
+    "review-close 2b placement": (CLOSE, "**Create each reviewer's checkout AT the target's commit",
+                                  "   Then spawn an Agent with:", False),
+    "review-close 2b write clause": (CLOSE, "     Do NOT create new files either",
+                                     "3b. **Spawn the security twin", False),
+    "review-close 2b twin spawn": (CLOSE, "Spawn one Agent per surviving target",
+                                   "The prompt is step 3's, with four substitutions", False),
+    "adversarial-review scratch bullet": (REPO_ROOT / "core" / "skills" / "_shared" / "adversarial-review.md",
+                                          "**Give each concurrent reviewer its own `TMPDIR`.**",
+                                          "**Why this is a rule here and not a caveat below.**", False),
+}
+# Phase 333 (`Q-588`): Wade's 2026-09-25 menu decisions on the two review skills' reviewer
+# placement -- a denied `git worktree add` falls back to no isolation, and a refused removal is
+# forced only over the runner's own `.venv` symlink. Its round walked meaning-changing rewrites
+# ("unless the user says to continue anyway") through the prose predicates that stood here first.
+# Round 2 then walked two more around narrow pins -- a sentence BEFORE a pin that started mid-
+# paragraph, and a paragraph AFTER a pin that ended on a bare blank line -- so each pin now runs
+# from its paragraph's opener to the NEXT paragraph's lead, and anything inserted anywhere in
+# between lands inside the hash.
+REVIEW_SKILL_PATHS = {
+    "codebase-review": REPO_ROOT / "core" / "skills" / "codebase-review" / "SKILL.md",
+    "security-audit": REPO_ROOT / "core" / "skills" / "security-audit" / "SKILL.md",
+}
+# The lead of the paragraph that follows the containment/placement paragraph in each skill.
+_AFTER_PLACEMENT = {"codebase-review": "**Sub-agent return contract (`_shared/fanout-evidence.md`).**",
+                    "security-audit": "**Do-not-report list (dispatch-side FP guard"}
+for _skill, _path in REVIEW_SKILL_PATHS.items():
+    PINNED_SPANS.update({
+        f"{_skill} placement paragraph": (
+            _path, "**This rule has been measured failing, so send it AND check afterwards.**",
+            _AFTER_PLACEMENT[_skill], False),
+        # Phase 335: the containment rule's lead and pasted block, up to where the placement
+        # paragraph's pin begins, so the two pins meet.
+        f"{_skill} containment rule": (
+            _path, "**Containment rule — paste into every agent's prompt",
+            "**This rule has been measured failing, so send it AND check afterwards.**", False),
+        f"{_skill} pre-flight stop and worktree note": (
+            _path, "If any are missing, stop with", "If `$ARGUMENTS` contains `--skip-permission-guard`", False),
+    })
+
+PIN_HASHES = {
+    # Regenerate with:  .venv/bin/python3 -c "import sys; sys.path.insert(0,'tests'); import test_fix_in_branch_tier as T; T._print_pins()"
+    # and review the diff of the SPAN you changed, not just this table.
+    "claim-task rule block": "be3cc02ba829778b",
+    "auto-build rule block": "d158bf6def0a688e",
+    "document-work rule block": "d03794dec1f817ef",
+    "claim-task Step 8 report": "ae30f94842ed74eb",
+    "claim-task hard constraints": "9e52400a383bee4e",
+    "claim-task record item": "d3c36f3acc130de6",
+    "claim-task stranded probe": "564f368b066357bc",
+    "auto-build record item": "90b9df8ae8854ee5",
+    "document-work carve-out": "ede14c90a84147d1",
+    "add-task never-does": "3616d9ee9d839111",
+    "tasks README skills table": "bada255480a1b612",
+    "review-close REFERENCE ledger note": "c3e9d55be1fac172",
+    "WORKFLOW 2-also bullet": "89f3643416d5bc37",
+    "monograph tier-3 paragraph": "331943fca9321557",
+    "auto-build hard constraints": "828ad2d5914aad26",
+    "review-close 2-also arm": "4115d21469ae0260",
+    # Phase 335: the two stage-extract blocks write into a minted, printed `$STAGES` directory
+    # instead of fixed names in the shared temp dir (a concurrent close overwrote them silently).
+    # The decided resolution rules in this span are unchanged.
+    "review-close shared-append section": "4cb287cb9c4e3b4c",
+    "schema Also fixed": "40c65b1e595183b0",
+    "tasks README ledger": "53f05416e72bcf25",
+    "add-task dedup": "96ed49b800bae922",
+    "WORKFLOW step 10 rule": "c60fe97f1e01053a",
+    "GUIDE rule paragraph": "51fc3e7f1e69a5ce",
+    "auto-judge reconciliation": "744be3a99d184d53",
+    "auto-fix reconciliation": "5a90677d023da92a",
+    "monograph addendum": "57bd01419188cd6b",
+    "CLAUDE.md conventions": "79ce7ef50a1345c0",
+    "review-close 2b NOTES block": "287334bc6bb8aa70",
+    "review-close 2b notes collect": "04bf180090c9b32c",
+    # Phase 335 (`Q-570`): the re-check placement gained its `SCRATCH=$(mktemp -d …)` line, which
+    # also prints both paths, and its containment check asks git for the pin's toplevel.
+    # The decided fix-at-close rule in this span is unchanged.
+    "review-close 4a-fix step": "b7a90b5c0a950ed4",
+    "review-close 4a-post fix arm": "3b18633ad2827724",
+    "review-close 4d filing pointer": "f0f1ea34763e4ec8",
+    "review-close 4a PR-reuse lead": "14bbe3f08cf3eca3",
+    "review-close Step 8 close notes": "d2508bea347f6163",
+    "review-close 2b twin substitutions": "a2da6151437f458e",
+    "WORKFLOW 5a item": "019ee9cc432d2c20",
+    # Phase 333: the placement paragraph is identical in both review skills by decision, so its
+    # pair shares one hash. The pre-flight spans differ only in each skill's own one-line reason.
+    "codebase-review placement paragraph": "cc89d229b5dc483a",
+    "codebase-review pre-flight stop and worktree note": "2a51c86ad2c626fc",
+    "security-audit placement paragraph": "cc89d229b5dc483a",
+    "security-audit pre-flight stop and worktree note": "77ffb4915340c9a8",
+    # Phase 335 (`Q-570`). The two containment rules are identical by decision, as the placement
+    # paragraphs are, so the pair shares one hash.
+    "review-close 2b placement": "060f3f88fcf336dc",
+    "review-close 2b write clause": "e9b16c8af664fa35",
+    "review-close 2b twin spawn": "351c44f304d6933b",
+    "adversarial-review scratch bullet": "a2884d2317529826",
+    "codebase-review containment rule": "7c45848ad743f777",
+    "security-audit containment rule": "7c45848ad743f777",
+}
+
+
+def _located(label: str) -> tuple[Path, str, int, str]:
+    path, start, end, maintainer = PINNED_SPANS[label]
+    text = require_maintainer_side(path) if maintainer else read(path)
+    span = slice_between(text, start, end, label)
+    return path, text, text.index(span), span
+
+
+def _span(label: str) -> str:
+    """The slice, with the context `_pin_span` puts back (first-line indentation, and the
+    enclosing fence's opener)."""
+    span = _pin_span(*_located(label))
+    assert len(_pin_norm(span)) > 80, f"{label}: the pinned span is nearly empty -- anchors drifted"
+    return span
+
+
+def _print_pins() -> None:
+    for label in PINNED_SPANS:
+        print(f'    "{label}": "{_pin_hash(_span(label))}",')
+
+
+@pytest.mark.parametrize("label", sorted(PINNED_SPANS))
+def test_the_decided_text_is_pinned(label: str) -> None:
+    got = _pin_hash(_span(label))
+    assert label in PIN_HASHES, f"{label}: no pin recorded; add \"{label}\": \"{got}\""
+    assert got == PIN_HASHES[label], (
+        f"{label} changed (hash {got}, pinned {PIN_HASHES[label]}). This text states the "
+        "fix-by-default rule Wade decided on 2026-09-23, or its close-time extension (Phase 328, "
+        "2026-09-24), or -- for the review-skill spans -- his reviewer-placement decisions (Phase "
+        "333, 2026-09-25). The hash covers the span's words, its block structure, its first line's "
+        "indentation and the fence it sits in; a re-wrap or a list-marker swap keeps it. If the "
+        "edit is a deliberate change to that rule, update the pin in the same commit "
+        "(`_print_pins()`) and say so in the phase record; if it is not, it is the widening or "
+        "reversal these pins exist to stop."
+    )
+
+
+# The pinned spans that belong inside a fence: a prompt or report template the runner
+# copies. Every other span must be live prose. Checked both ways by `_pin_liveness`.
+FENCED_PINS = {"claim-task stranded probe", "review-close 2b NOTES block", "review-close Step 8 close notes",
+               "review-close 2b write clause"}
+
+
+@pytest.mark.parametrize("label", sorted(PINNED_SPANS))
+def test_every_pinned_span_is_live(label: str) -> None:
+    """A wrapper outside the anchors -- `<!--` before the span and `-->` after it, or a
+    fence around it -- turns the rule off and keeps every hash."""
+    path, text, at, _ = _located(label)
+    problem = _pin_liveness(path, text, at, label in FENCED_PINS)
+    assert problem is None, f"{label} {problem}"
+
+
+def test_a_balanced_decoy_cannot_hide_a_comment_around_a_pin() -> None:
+    """Lens 5's G1, as a control: a real `<!--` before the span, balanced by a literal
+    `` `-->` `` in a code span earlier on, is still an open comment."""
+    decoy = "Close a comment with `-->`.\n\n<!-- retired\n\n**The rule.**\n"
+    assert _comment_open(decoy, True)
+    assert not _comment_open("Open one with `<!--`.\n\n**The rule.**\n", True)
+    assert not _comment_open("<!-- a -->\n**The rule.**\n", True)
+    assert _comment_open("<!-- a --> <!-- b\n**The rule.**\n", False)
+
+
+def _anchor_count(text: str, start) -> int:
+    from _prose_guard_helpers import anchor as _anchor
+    pattern = start if hasattr(start, "finditer") else _anchor(start)
+    return len(list(pattern.finditer(text)))
+
+
+def _pin_quoted(phrase: str) -> re.Pattern:
+    """An anchor for a phrase inside a blockquote: its words may re-wrap onto a new `> `
+    line, which `anchor()` refuses on purpose (its docstring: a site that needs it says so).
+    The phrase carries no `>`; `_pin_span` restores the quote prefix as the line's lead."""
+    gap = r"(?:[ \t]*\n[ \t]{0,3}(?:>[ \t]?)+[ \t]*|[ \t]+)"
+    return re.compile(gap.join(re.escape(word) for word in phrase.split()))
+
+
+def _anchored_spans():
+    for label, (path, start, _end, maintainer) in PINNED_SPANS.items():
+        yield label, path, start, maintainer
+    for name, (path, start, _end) in RULE_BLOCKS.items():
+        yield name + " (rule block)", path, start, False
+    for path, spans in LEDGER_ALLOWED.items():
+        for start, _end in spans:
+            yield f"{path.name} ledger span", path, start, False
+
+
+def test_every_span_start_anchor_is_unique() -> None:
+    """A second copy of a start anchor, earlier in the file, becomes the slice.
+
+    Round 2's decoy: paste the pinned span, end anchor included, into an HTML comment above
+    the real one, then edit the real text. Every pin read the copy and stayed green.
+    """
+    dup = []
+    for label, path, start, maintainer in _anchored_spans():
+        if maintainer and not path.is_file():
+            continue
+        n = _anchor_count(read(path), start)
+        if n != 1:
+            dup.append(f"{label}: {start[:50]!r} occurs {n} times")
+    assert not dup, f"span start anchors are not unique, so a decoy copy can stand in: {dup}"
+
+
+def test_pin_normalization_absorbs_legitimate_rewrites() -> None:
+    """Negative control: the rewrites the lens showed a raw pin false-kills."""
+    base = "1. **Fix it** — whatever module.\n2. **File a task** only when it cannot.\n- a\n- b"
+    assert _pin_hash(base) == _pin_hash("1) **Fix it** — whatever\n   module.\n2) **File a task** only when it cannot.\n* a\n+ b")
+    assert _pin_hash(base) != _pin_hash(base.replace("only when", "when"))
+    # Structure is not absorbed: an indented block, or a merged paragraph, is a different text.
+    para = "First rule here.\n\nSecond rule here."
+    assert _pin_hash(para) != _pin_hash(para.replace("\n\n", "\n"))
+    assert _pin_hash(para) != _pin_hash("    First rule here.\n\n    Second rule here.")
+
+
+# The shipped surface a `notes.md` mention can reach a consumer through, derived from the
+# tree rather than from the sites this phase edited: the lens re-introduced the ledger at
+# add-task, the tasks README's Rules, and the top-level README, none of which a
+# site-listed guard read. Case-insensitive, because `tasks/NOTES.md` resolves to the same
+# file on macOS and Windows.
+LEDGER_ALLOWED = {
+    CLAIM: [RULE_BLOCKS["claim-task"][1:], ("# The pathspec stays exactly `tasks/`.", "**An untracked body is not `STRANDED`")],
+    BUILD: [RULE_BLOCKS["auto-build"][1:]],
+    DOCWORK: [RULE_BLOCKS["document-work"][1:]],
+    ADDTASK: [("## Step 2 — Dedup", "## Step 3 — Draft"), ("## What this skill never does", "## Permissions")],
+    CLOSE: [("Three tracked files are appended to across branches", "**Resolve `tasks/index.yml` from the merge stages, structurally.**")],
+    REPO_ROOT / "core" / "skills" / "review-close" / "REFERENCE.md": [("### The retired notes ledger's conflict bullet", "## Step 4a-post — provenance")],
+    TASKS_README: [("| `/add-task` |", "\n"), ("## The notes ledger (`notes.md`) — retired", "## Migrating from `product_roadmap.md`")],
+    WORKFLOW: [("applies the **fix-by-default rule**", ", persists the `## Test decision`")],
+    GUIDE: [("**Fix it in the branch — that is the default.**", "**Record the test decision.**")],
+    WORKFLOW_HTML: [("Tier 3 then needed a bar of its own", "</p>")],
+    # `docs/history.md` is deliberately absent. Round 2 showed a per-sentence span there
+    # false-kills a historical mention (C4), and the wholesale allowance that fixed it let an
+    # instruction through (L10). The page names no ledger file today; a future historical
+    # mention needs its own span here, which is a cheaper failure than a silent instruction.
+}
+
+
+_TEXT_SUFFIXES = (".md", ".html", ".sh", ".py", ".yml", ".yaml", ".json", ".txt", ".toml",
+                  ".fragment", ".example", "")
+_LEDGER_RE = re.compile(r"notes\.md|tasks/notes\b", re.I)
+
+
+def _shipped_files() -> list[Path]:
+    """Every text file under the shipped trees, suffix-less ones included.
+
+    Suffix-less files are real ship paths (`core/companion/git-hooks/pre-commit`), and the
+    round showed a ledger instruction there passing a suffix-filtered scan (L5).
+    """
+    out = [REPO_ROOT / "README.md", REPO_ROOT / "install.sh"]
+    for base in ("core", "docs", "packs"):
+        for p in (REPO_ROOT / base).rglob("*"):
+            if p.is_file() and "__pycache__" not in p.parts and p.suffix in _TEXT_SUFFIXES:
+                out.append(p)
+    return out
+
+
+def _visible(text: str) -> str:
+    """Format characters removed: `notes\u200b.md` renders as `notes.md` (the round's L7b)."""
+    import unicodedata
+    return "".join(ch for ch in text if unicodedata.category(ch) != "Cf")
+
+
+def test_the_ledger_is_named_only_where_it_is_retired_or_still_read() -> None:
+    files = _shipped_files()
+    assert len(files) > 100, f"only {len(files)} shipped files found -- the population is wrong"
+    stray = []
+    for p in files:
+        text = _visible(p.read_text(encoding="utf-8", errors="replace"))
+        hits = [m.start() for m in _LEDGER_RE.finditer(text)]
+        if not hits:
+            continue
+        spans = []
+        for start, end in LEDGER_ALLOWED.get(p, []):
+            a = text.index(start)
+            spans.append((a, text.index(end, a + len(start))))
+        for h in hits:
+            if not any(a <= h < b for a, b in spans):
+                stray.append(f"{p.relative_to(REPO_ROOT)}:{text.count(chr(10), 0, h) + 1}")
+    assert not stray, (
+        f"`notes.md` is named outside the places that retire it or still read it: {stray}. "
+        "The ledger is retired (Phase 323); a new mention is a new instruction about it."
+    )
+
+
+def _scratch_repo(tmp_path: Path):
+    import os
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env.update(GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t",
+               GIT_COMMITTER_EMAIL="t@t")
+
+    def g(*args):
+        return subprocess.run(["git", *args], cwd=tmp_path, env=env, check=True,
+                              capture_output=True, text=True).stdout.strip()
+
+    def commit(msg, files):
+        for rel, body in files.items():
+            f = tmp_path / rel
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text(body, encoding="utf-8")
+        g("add", "-A")
+        g("commit", "-q", "-m", msg)
+        return g("rev-parse", "HEAD")
+
+    g("init", "-q", "-b", "main")
+    return commit
+
+
+def _run(tmp_path: Path, fn, *args) -> str:
+    import contextlib
+    import io
+    import os
+    cwd = os.getcwd()
+    buf = io.StringIO()
+    try:
+        os.chdir(tmp_path)
+        with contextlib.redirect_stdout(buf):
+            fn(*args)
+    finally:
+        os.chdir(cwd)
+    return buf.getvalue()
+
+
+def test_the_sysop_reading_counts_what_the_record_says_it_counts(tmp_path: Path) -> None:
+    """The instrument's `sysop()` path, run end to end on a scratch repo with no remote.
+
+    Round 1 found `sysop()` unguarded. Round 2 found the first version of this test never
+    asserted the headline figures and had an empty FROM side, so 11 of 11 arithmetic
+    mutations survived it. Every printed number is asserted here, and FROM carries notes and
+    fixes of its own.
+    """
+    mod = _net_open()
+    commit = _scratch_repo(tmp_path)
+    q = "- [ ] <!-- id: Q-{} --> x\n"
+    n0, n1 = "- 2026-01-01 · a · n0\n", "- 2026-01-02 · a · n1\n"
+    log1 = "## Phase 1 (executed)\n### Also fixed\n- z\n```\nunclosed\n"
+    log2 = log1 + "## Phase 2 (executed)\n### Also fixed\n- a\n- b\n"
+    base = commit("base", {"REVIEW_CHECKLIST.md": "## High\n" + q.format(1) + "## Notes\n" + n0,
+                           "PHASE_LOG.md": log1})
+    commit("Phase 2: work", {"REVIEW_CHECKLIST.md": "## High\n" + q.format(1) + q.format(2) + "## Notes\n" + n0 + n1,
+                             "PHASE_LOG.md": log2})
+    # A second PR for the same phase: one close, not two (Phase 277 shipped as four PRs).
+    commit("Phase 2: follow-up PR", {"PHASE_LOG.md": log2 + "text\n"})
+    commit("docs: inbound triage", {"REVIEW_CHECKLIST.md": "## High\n" + q.format(1) + q.format(2) + q.format(3)
+                                    + "## Notes\n" + n0 + n1})
+    commit("docs: archive Q-1", {"REVIEW_CHECKLIST.md": "## High\n" + q.format(2) + q.format(3)
+                                 + "## Notes\n" + n0 + n1})
+    commit("docs: a diagnostic round", {"REVIEW_CHECKLIST.md": "## High\n" + q.format(2) + q.format(3) + q.format(5)
+                                        + "## Notes\n" + n0 + n1})
+    to = commit("Phase 2.1: correction", {"REVIEW_CHECKLIST.md": "## High\n" + q.format(2) + q.format(3) + q.format(5)
+                                          + "## Decisions\n" + q.format(4) + "- 2026-02-02 · a dated decision, not a note\n"
+                                          + "## Notes\n" + n0 + n1})
+    out = _run(tmp_path, mod.sysop, base, to)
+    # Open work: Q1 + n0 = 2 at FROM; Q2, Q3, Q5, Q4 (§ Decisions counts) + n0, n1 = 6 at TO.
+    # The dated line under § Decisions is not a note.
+    assert "open work   2 -> 6  (delta +4)" in out, out
+    assert "closes      2\n" in out, out                       # 2 and 2.1, not three commits
+    assert "net open    +2.00 per close" in out, out
+    # Scoped: the Phase-1 opener is text, so Phase 2's two items count. FROM has one.
+    assert "fixes       1 -> 3  (+2, 1.00 per close)" in out, out
+    # +1, -1, +1: the non-phase share is +1, not the 3 a per-commit abs would give, and it is
+    # subtracted once: (4 - 1) / 2.
+    assert "non-phase   +1 open work from 3 non-phase commits; net open without it +1.50 per close" in out, out
+    assert "full phases 1 of the 2 closes (N.M point phases excluded): net open +4.00, fixes 2.00" in out, out
+
+
+def test_the_consumer_reading_counts_every_pile(tmp_path: Path) -> None:
+    """`consumer()` had no test at all; round 2 walked three mutations through it."""
+    mod = _net_open()
+    commit = _scratch_repo(tmp_path)
+
+    def index(**status):
+        rows = "".join(
+            "  - id: {i}\n    status: {s}\n    body: open/{i}.md\n".format(i=i, s=s)
+            for i, s in status.items())
+        return "schema_version: 1\ntasks:\n" + rows
+
+    notes_hdr = "# Notes\n\n## Also fixed (quoted in the ledger header)\n- not a body\n\n"
+    base = commit("base", {
+        "tasks/index.yml": index(A="open", B="open", H="open", C="deferred", D="in_progress", E="done"),
+        "tasks/notes.md": notes_hdr + "- 2026-01-01 · a · n0\n",
+        "tasks/open/A.md": "# A\n\n## Also fixed\n- one\n",
+    })
+    to = commit("later", {
+        "tasks/index.yml": index(A="done", B="done", H="deferred", C="deferred", D="in_progress", E="done",
+                                 F="open", G="open"),
+        "tasks/notes.md": notes_hdr + "- 2026-01-01 · a · n0\n- 2026-01-02 · a · n1\n",
+        "tasks/open/A.md": "# A\n\n## Also fixed\n- one\n- two\n",
+    })
+    out = _run(tmp_path, mod.consumer, str(tmp_path), base, to)
+    # FROM: A, B, H open + D + C deferred = 5, + 1 note = 6. TO: F, G + D + C, H deferred = 5,
+    # + 2 notes = 7. H moving to deferred is not a close and not a fall.
+    assert "open work   6 -> 7  (delta +1)" in out, out
+    assert "closes      2\n" in out, out                       # A and B; E was already done
+    assert "net open    +0.50 per close" in out, out
+    # notes.md is not a body, so its quoted heading counts nowhere.
+    assert "fixes       1 -> 2  (+1, 0.50 per close)" in out, out
+
+
+def test_no_test_in_this_module_carries_a_skip_marker() -> None:
+    """A `@pytest.mark.skip` on the pin test disables all of it, and every other test stays green.
+
+    Round 2's S8. The module's legitimate skips are `pytest.skip()` CALLS inside a test,
+    for maintainer-side files absent from the public mirror; a marker skips the test on
+    every tree, which is never what this module means.
+    """
+    import ast
+    tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+    bad = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            for d in node.decorator_list:
+                src = ast.unparse(d)
+                if any(k in src for k in ("mark.skip", "mark.xfail", "mark.skipif")):
+                    bad.append(f"{node.name}: {src}")
+    assert not bad, f"skip/xfail markers in the fix-by-default guards: {bad}"

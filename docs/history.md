@@ -85,13 +85,15 @@ that it's a working log written for the project's own continuity, not an introdu
   review that found it — review had read it closely more than once — but a probe that measured its
   reach.
   Later in the month, a question the queue had never been asked got an answer: what to do with the
-  thing you notice while working on something else. It is now three tiers — fix it in the branch
-  under stated conditions, extend an open task, or file a new one — with a never-list that is
-  mostly an ordinary enumeration and ends in one member written as a property of the change
-  instead, because an enumeration rots: any edit that would weaken or remove a check is excluded
-  at every size, whatever file it lives in. A tier-1 fix is declared in the task body and checked against the
-  branch's own diff at close; a filing has to name what it blocks, and everything that does not
-  goes to a flat notes file that nothing routes off. Alongside it, three fixes to the same
+  thing you notice while working on something else. It became three tiers — fix it in the branch
+  under stated conditions, extend an open task, or file a new one — with a never-list that was
+  mostly an ordinary enumeration and ended in one member written as a property of the change
+  instead, because an enumeration rots: any edit that would weaken or remove a check was excluded
+  at every size, whatever file it lived in. A tier-1 fix is declared in the task body and checked against the
+  branch's own diff at close; a filing had to name what it blocks, and everything that did not
+  went to a flat notes file that nothing routes off. (Two weeks later a re-measurement reversed
+  the default: fixing in the branch became the rule, the never-list shrank to migrations,
+  production writes and auth or payment logic, and the notes file was retired.) Alongside it, three fixes to the same
   confusion in three different places: a narration handed to review is now stamped with the
   revision it was written against, so a branch that kept moving is caught rather than merged on a
   stale account of itself; the recovery paths around that step, three of which had been

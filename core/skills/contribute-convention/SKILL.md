@@ -47,7 +47,7 @@ in place (to annotate what was contributed). Its only network side effect is
 creating GitHub issues, and only under `--execute` after you pick which pack
 groups.
 
-Read `.claude/settings.json` and confirm `permissions.allow` contains:
+Read `.claude/settings.json` (and `.claude/settings.local.json` if present — allow-rules union across the two) and confirm `permissions.allow` contains:
 
 - `Bash(gh issue create:*)` — file the consented proposals (only reached under `--execute`)
 - `Bash(gh issue list:*)` — pre-file duplicate check (soft, read-only)
@@ -152,14 +152,20 @@ Detect the two contexts (per `_shared/promotion-write-target.md`):
 
 The overlay is **deliberately loose, consumer-restructurable markdown** — the
 same property `/report-issues` relies on for the friction log. Read it with
-judgment; do not assume a rigid shape. Read the consumer name from `.claude/sysop.lock`
-(or the overlay H1) so you can attribute the proposal's origin ("grown in
+judgment; do not assume a rigid shape. Read the consumer name from the overlay H1, else
+from `sysop/SYSOP_ISSUES.md`'s H1 (`# Sysop Issues — <consumer>`, seeded on a full install
+only; loop mode never creates that file), else the primary checkout's directory name:
+`git rev-parse --path-format=absolute --git-common-dir` minus its trailing `/.git` (right from
+a worktree too; it is the name `install.sh` seeds when it installed into the primary checkout). `.claude/sysop.lock` has no name field. Use it to attribute the proposal's origin ("grown in
 `<consumer>`") without leaking it into the generalized rule text.
 
 ## Step 2: Parse the overlay into candidate conventions
 
 From `convention_map.project.md`, read each glob-section (`## <globs> — <Section
-Name>`) and its bullets. From `checks.project.yml`, read each check entry. From
+Name>`) and its bullets. From `checks.project.yml`, read each check entry; an
+entry whose `id` is `semgrep-<rule>` and has no `pattern:` is a registry stub, so
+the candidate is the `.claude/semgrep/*.yaml` rule whose `id:` is `<rule>` —
+read that file, and carry the rule with the stub. From
 `security_map.project.md` (only under `--include-security`), read each entry.
 
 **Exclude, do not contribute:**
@@ -187,13 +193,32 @@ Name>`) and its bullets. From `checks.project.yml`, read each check entry. From
     test excludes everything — both readings are uninformative, in opposite
     directions.
 
-    **Resolve it against the Sysop source, or not at all:**
-    - If the install clone is reachable (`$SYSOP_SRC`, the durable dependency
-      recorded in the install lock), compare the candidate `id` against the
-      shipped fragments — `core/companion/checks.yml.fragment` and
-      `packs/*/companion/checks.yml.fragment`. Present there → it is an override;
-      skip it.
-    - If the clone is **not** reachable, do **not** guess in either direction.
+    **Resolve it against the Sysop source clone, or not at all.** Do not look for
+    the clone's path in `.claude/sysop.lock`; the lock holds no source path.
+    The path is `$SYSOP_SRC`, an environment variable the human exports in
+    their shell rc for `sysop/scripts/sysop-update.sh` (a fresh install's
+    closing output prints the exact `export SYSOP_SRC="<path>"` line).
+    - Run this once, before judging any `checks.project.yml` candidate:
+      ```bash
+      grep -Hn 'id:' "$SYSOP_SRC"/core/companion/checks.yml.fragment "$SYSOP_SRC"/packs/*/companion/checks.yml.fragment
+      ```
+      It prints every `id:` line in the shipped fragments, each prefixed with
+      its fragment's path. A candidate whose `id` equals the value of one of
+      those entries' `- id:` lines, in `core/` or in a `packs/<name>/` whose `<name>` is
+      in the `packs` list of the JSON lock `.claude/sysop.lock`, is an override; skip it. A match only in a
+      pack this project did not install is not an override. Compare the whole
+      value (`lint` does not match `lint-error`), and ignore an `id:` that sits
+      inside a `#` comment.
+    - If it prints no `id:` lines (`$SYSOP_SRC` is unset in this shell, or
+      names a directory without the fragments), do not treat that as "not
+      shipped". Ask the human, in one plain question, for the absolute path of
+      the Sysop clone they install and update from, and run the same `grep`
+      with that path in place of `$SYSOP_SRC`. Every consumer lock was written
+      by `install.sh` run from a Sysop source checkout, and a variable exported
+      after this session started may not be visible to it, so an empty result
+      here says nothing about whether a clone exists.
+    - If there is still no reachable clone (the human has none on this machine,
+      or does not give a path), do **not** guess in either direction.
       Carry the candidate forward marked `could not determine whether this
       overrides a Sysop-shipped check — source clone unavailable`, and let the
       Step 3 provenance record and the Step 7 per-candidate consent decide. A
@@ -238,12 +263,49 @@ section or entry.
 ## Step 3: Discover provenance for each candidate
 
 Provenance is Sysop's earn-their-way bar, and this skill enforces it by *showing*
-it rather than asking the human to assert it by hand. For each candidate, search
-`review_tasks.md` (consumer-repo root) for evidence the rule earned promotion:
+it rather than asking the human to assert it by hand. For each candidate, look
+in two places for evidence the rule earned promotion.
 
-- A rule that recurred across **2+ distinct `## Round N` blocks**, or is named in
-  a `Promotion summary:` trailer → record it: `recurred across Rounds N and M`
-  (or the promotion-summary citation). This is the promotion-grade signal.
+**1. The commit that added the entry to the overlay.** `/codebase-review` and
+`/security-audit` Step 9 promote only a pattern that recurred across two review
+rounds, and commit the overlay write under the subject
+`docs: promote <N> conventions from Round <M>`. Find the commit that first
+added the candidate:
+
+```bash
+git log --reverse --format='%h %s' -S '<string>' -- '<overlay file>'
+```
+
+`<string>` is the check's `id` for a `checks.project.yml` entry, or a short
+phrase copied exactly from the bullet (one with no quote characters) for a map
+entry. `<overlay file>` is the `.claude/*.project.*` file you read the
+candidate from. Each output line is a commit that changed how often
+`<string>` occurs, oldest first. Take the first one whose diff adds the
+candidate itself, and check with:
+
+```bash
+git show --format= <short sha> -- '<overlay file>'
+```
+
+The candidate must be on one of its `+` lines (for a check, its own
+`- id: <id>` line). A commit that added only a longer entry containing
+`<string>` (`lint-error` when the candidate is `lint`) does not count; move to
+the next line. If the adding commit's subject has the
+`promote … conventions from Round <M>` shape, record
+`promoted by the cross-round gate in Round <M> (<short sha>)`. This is
+promotion-grade. Any other subject, or no adding commit, is not promotion
+evidence: go on to 2.
+
+**2. The review rounds.** Search `review_tasks.md` **and**
+`review_tasks_archive.md`, both at the consumer-repo root.
+`sysop/scripts/archive_review_tasks.py` moves merged batches from the first file
+into the second, each under its round's `## Round N` heading, so a rule whose
+earning rounds were archived shows up only in the archive.
+
+- A rule whose findings appear under **2+ distinct round numbers**, across both
+  files → record `recurred across Rounds N and M`. This is the promotion-grade
+  signal. Count round numbers, not headings: a partly archived round has its
+  `## Round N` heading in both files.
 - **Never read the `## Convention fire ledger` as promotion evidence — it is the
   demotion record, and it means the opposite.** Its rows are *stale-verdicts*:
   rounds in which the rule fired **falsely**. Step 9b retires a rule once it
@@ -254,9 +316,9 @@ it rather than asking the human to assert it by hand. For each candidate, search
   use. A candidate whose only in-repo evidence is a fire-ledger row has **no**
   promotion provenance — treat it as the `no match` case below, and say so in
   the rendered body rather than counting it.
-- **No match** → the overlay entry was likely hand-authored at bootstrap (a
-  common, legitimate case — a project can seed its own conventions before ever
-  running the Step 9 loop). Record `no in-repo round provenance found`. **Do not
+- **No match in either place** → the overlay entry was likely hand-authored at
+  bootstrap (a common, legitimate case — a project can seed its own conventions
+  before ever running the Step 9 loop). Record `no in-repo round provenance found`. **Do not
   fabricate provenance and do not silently drop the candidate.**
 
 **Collect the human's attestation here — as a normal conversational turn, before
@@ -281,9 +343,9 @@ history or session logs, and never press. The answer is project text like the
 attestation: it flows through Step 4 generalization and appears in the Step 6
 body, so shown-equals-filed holds.
 
-Never invent a round number or a recurrence count. If `review_tasks.md` is
-absent entirely, every candidate is `no in-repo round provenance found` — that
-is fine; the human attests here.
+Never invent a round number or a recurrence count. If neither file exists and
+no candidate's commit has the promotion subject, every candidate is
+`no in-repo round provenance found` — that is fine; the human attests here.
 
 ## Step 4: Generalize each candidate — strip project fingerprints
 
@@ -375,8 +437,9 @@ literal markdown the human can read in full:
 "a new `<stack>` pack">
 
 **Where these come from**
-<per-candidate provenance from Step 3: "recurred across Rounds N and M" where
-found; where not found, the human's attestation collected in Step 3 and
+<per-candidate provenance from Step 3: "promoted by the cross-round gate in
+Round M (<short sha>)" or "recurred across Rounds N and M" where found; where
+not found, the human's attestation collected in Step 3 and
 generalized in Step 4 — "grown in <consumer>; catches <the recurring mistake,
 generalized>">
 
@@ -389,7 +452,8 @@ the human offered it in Step 3 — omit this line entirely when unknown>
 - security_map entries, if any:
   <generalized security entries, only under --include-security>
 - Mechanical checks (grep / semgrep), if applicable:
-  <generalized check ids + patterns from checks.project.yml, placeholder paths>
+  <generalized check ids + patterns from checks.project.yml (for a semgrep-<rule>
+   stub, the rule from .claude/semgrep/), placeholder paths>
 
 **Have you used Sysop on the project this came from?**
 Yes — grown in <consumer> (via .claude/*.project.* overlay / /contribute-convention).
@@ -542,8 +606,9 @@ the human reviews and commits the annotations intentionally.
   Sysop's own conventions back to Sysop. The base map is read once, in Step 2, only
   to *exclude* verbatim restatements.
 - **Provenance shown, not asserted.** CONTRIBUTING.md asks a human contributor to
-  attest where a convention came from. This skill surfaces the `review_tasks.md`
-  cross-round evidence directly when it exists, and asks for an honest one-line
+  attest where a convention came from. This skill surfaces the promotion commit
+  and the cross-round evidence in `review_tasks.md` and its archive directly
+  when they exist, and asks for an honest one-line
   attestation when it doesn't — never fabricating a recurrence count. That is the
   earn-their-way bar, mechanized.
 - **Upstream, not local.** Files to `getsysop/sysop` by default; the give-back

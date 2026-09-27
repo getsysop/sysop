@@ -46,6 +46,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
+import pytest
+
 import yaml
 
 import sitrep_survey as ss
@@ -194,6 +196,27 @@ def test_read_index_silent_on_yaml_error(tmp_path):
     assert ss._read_index(tmp_path) == {}
 
 
+@pytest.mark.parametrize("body", ["- a list\n", "tasks: 5\n", "tasks: {a: 1}\n", "just a string\n"])
+def test_read_index_names_a_wrong_shaped_index_instead_of_crashing(tmp_path, body):
+    """YAML that parses with the wrong shape is unreadable input, not a traceback. It crashed
+    the survey at exit 1 until Phase 336's round, while /sitrep's skill said an unreadable
+    input arrives as an `input unreadable` discrepancy at exit 0."""
+    tasks_dir = tmp_path / "tasks"
+    tasks_dir.mkdir()
+    (tasks_dir / "index.yml").write_text(body, encoding="utf-8")
+    unreadable: list = []
+    assert ss._read_index(tmp_path, unreadable) == {}
+    assert len(unreadable) == 1 and "tasks:" in unreadable[0][1]
+
+
+def test_read_index_still_reads_an_index_with_no_tasks_key(tmp_path):
+    tasks_dir = tmp_path / "tasks"
+    tasks_dir.mkdir()
+    (tasks_dir / "index.yml").write_text("version: 2\n", encoding="utf-8")
+    unreadable: list = []
+    assert ss._read_index(tmp_path, unreadable) == {} and unreadable == []
+
+
 # === _extract_doc_work_trailers ============================================
 
 
@@ -262,6 +285,55 @@ def test_is_task_shaped_branch_accepts_review_prefixes():
 def test_is_task_shaped_branch_rejects_unrelated():
     for b in ("main", "master", "release/1.0", "hotfix/x", "wip-feature"):
         assert not ss._is_task_shaped_branch(b), f"{b} should not match"
+
+
+def test_is_task_shaped_branch_accepts_any_derived_prefix():
+    """`/claim-task` Step 3 derives `<segment>/<id>` for every prefix (Phase 332), so an
+    orphan `ops/ops-foo` is as task-shaped as an orphan `feat/feat-foo`."""
+    prefixes = ss._index_prefixes({"OPS-FOO": {}, "QA2-X": {}, "ABC123": {}, "A-1": {}})
+    assert prefixes == {"ops", "qa2", "abc123", "a"}
+    for b in ("ops/ops-foo", "qa2/qa2-x", "abc123/abc123", "a/a-1", "ops/ops-gone"):
+        assert ss._is_task_shaped_branch(b, prefixes), f"{b} should match"
+    # The directory must repeat as the leaf's leading segment: that is the derived shape.
+    for b in ("ops/foo", "ops/opsx-foo", "wip/feature", "ops/ops_foo", "Ops/ops-foo"):
+        assert not ss._is_task_shaped_branch(b, prefixes), f"{b} should not match"
+    # A human branch with the derived SHAPE, for a prefix no task uses, is not a task
+    # branch (round 2, lens 4): it must not be reported as an orphan with `git branch -D`.
+    for b in ("docs/docs-refresh", "hotfix/hotfix-login", "wip/wip", "release/release-2026-09"):
+        assert not ss._is_task_shaped_branch(b, prefixes), f"{b} should not match"
+    assert not ss._is_task_shaped_branch("ops/ops-foo"), "no index, no derived prefixes"
+
+
+def test_review_batch_lock_is_batch_n_or_an_unindexed_task_lock():
+    assert ss._is_review_batch_lock("BATCH-12", {})
+    assert ss._is_review_batch_lock("TASK-0042", {})
+    # Project-chosen prefixes: an INDEXED TASK- id and a BATCH-X id are roadmap claims.
+    assert not ss._is_review_batch_lock("TASK-7", {"TASK-7": {}})
+    assert not ss._is_review_batch_lock("BATCH-X1", {})
+    assert not ss._is_review_batch_lock("OPS-FOO", {})
+    assert not ss._is_review_batch_lock("BATCH-7X", {}), "fullmatch: a schema-valid BATCH-7X is no batch"
+
+
+def test_sitrep_task_id_grammar_is_the_validators():
+    """A retyped copy drifts (round 2, lens 5: the 80 bound moved to 90 unseen)."""
+    import validate_tasks as vt
+    assert ss.TASK_ID_RE.pattern == vt._TASK_ID_RE.pattern
+
+
+def test_the_doc_work_tick_is_this_tasks_trailer():
+    """`Doc-Work: NONE` on the branch is not OPS-FOO's documentation (round 2, lens 4)."""
+    other = ss.TaskState(task_id="OPS-FOO", state="in progress", doc_work_ids=["NONE"])
+    mine = ss.TaskState(task_id="OPS-FOO", state="in progress", doc_work_ids=["OPS-FOO"])
+    assert "Doc-Work ✓" not in ss._task_detail(other)
+    assert "Doc-Work ✓" in ss._task_detail(mine)
+
+
+def test_doc_work_trailer_takes_any_schema_valid_id():
+    for tid in ("ABC123", "QA2-X", "A-1", "OPS-FOO"):
+        body = f"feat: thing\n\nDoc-Work: {tid}\n"
+        assert ss._extract_doc_work_trailers(body) == [tid], tid
+    for bad in ("feat-x", "AB", "OPS FOO"):
+        assert ss._extract_doc_work_trailers(f"x\n\nDoc-Work: {bad}\n") == [], bad
 
 
 # === _derive_task_id_from_branch ===========================================
@@ -1532,13 +1604,13 @@ def test_run_survey_wires_the_resolver_to_the_classifier(tmp_path, monkeypatch):
     monkeypatch.setattr(ss, "_resolve_main_repo_root", lambda: tmp_path)
     monkeypatch.setattr(ss, "_git", lambda *a, **k: "abc1234")
     monkeypatch.setattr(ss, "_read_worktrees", lambda root: [])
-    monkeypatch.setattr(ss, "_read_index", lambda root: {"FEAT-1": {"status": "in_progress"}})
-    monkeypatch.setattr(ss, "_read_review_batches", lambda root: [])
+    monkeypatch.setattr(ss, "_read_index", lambda root, unreadable=None: {"FEAT-1": {"status": "in_progress"}})
+    monkeypatch.setattr(ss, "_read_review_batches", lambda root, unreadable=None: [])
     monkeypatch.setattr(ss, "_commits_unpushed", lambda b, r: 0)
     monkeypatch.setattr(ss, "_worktree_dirty", lambda p: False)
     monkeypatch.setattr(ss, "_find_discrepancies", lambda *a, **k: [])
     monkeypatch.setattr(ss, "_open_roadmap_ids", lambda idx: [], raising=False)
-    monkeypatch.setattr(ss, "_read_locks", lambda root: [
+    monkeypatch.setattr(ss, "_read_locks", lambda root, unreadable=None: [
         ss.Lock(task_id="FEAT-1", path=tmp_path / "x.lock", branch="feat/no-doc",
                 workspace=str(tmp_path), started="2026-08-21T10:00:00Z")])
     monkeypatch.setattr(ss, "_commits_ahead_of_main", lambda b, r: [
@@ -1552,6 +1624,32 @@ def test_run_survey_wires_the_resolver_to_the_classifier(tmp_path, monkeypatch):
     assert seen["branch"] == "feat/no-doc", "the resolver got the wrong branch"
     assert survey.tasks[0].state == "code committed, docs pending"
     assert survey.tasks[0].pending_doc is False
+
+
+def test_run_survey_lock_loop_skips_only_review_batch_locks(tmp_path, monkeypatch):
+    """Drives the lock loop itself (round 2, lens 5: the `Q-317` pin checked that the
+    call existed, and `continue` → `pass` or a re-added `startswith("TASK-")` skip both
+    passed). An indexed `TASK-7` is a roadmap claim and must reach ACTIVE WORK; a
+    `BATCH-<N>` lock and an unindexed `TASK-` lock belong to the batch path."""
+    index = {"TASK-7": {"status": "in_progress"}, "OPS-FOO": {"status": "in_progress"}}
+    monkeypatch.setattr(ss, "_pending_doc_for", lambda *a, **k: None)
+    monkeypatch.setattr(ss, "_resolve_main_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(ss, "_git", lambda *a, **k: "abc1234")
+    monkeypatch.setattr(ss, "_read_worktrees", lambda root: [])
+    monkeypatch.setattr(ss, "_read_index", lambda root, unreadable=None: index)
+    monkeypatch.setattr(ss, "_read_review_batches", lambda root, unreadable=None: [])
+    monkeypatch.setattr(ss, "_commits_unpushed", lambda b, r: 0)
+    monkeypatch.setattr(ss, "_worktree_dirty", lambda p: False)
+    monkeypatch.setattr(ss, "_find_discrepancies", lambda *a, **k: [])
+    monkeypatch.setattr(ss, "_open_roadmap_ids", lambda idx: [], raising=False)
+    monkeypatch.setattr(ss, "_commits_ahead_of_main", lambda b, r: [])
+    monkeypatch.setattr(ss, "_read_locks", lambda root, unreadable=None: [
+        ss.Lock(task_id=tid, path=tmp_path / f"{tid}.lock", branch=br,
+                workspace=str(tmp_path), started="2026-09-24T10:00:00Z")
+        for tid, br in (("BATCH-1", "review/b1"), ("TASK-7", "task/task-7"),
+                        ("TASK-0042", "review/t42"), ("OPS-FOO", "ops/ops-foo"))])
+    survey = ss.run_survey()
+    assert sorted(t.task_id for t in survey.tasks) == ["OPS-FOO", "TASK-7"], survey.tasks
 
 
 def test_the_worktree_arm_of_the_resolver_is_exercised(tmp_path):

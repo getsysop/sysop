@@ -14,9 +14,9 @@ This skill does NOT merge anything. It batches the front of the pipeline (claim 
 
 ## Pre-flight: Permission Guard
 
-Verify `.claude/settings.json` carries the allow-rules this skill depends on. Under `dontAsk` mode a missing rule is auto-denied with no prompt, halting mid-batch — worst case after Step 5 has pre-claimed several tasks on main.
+Verify `.claude/settings.json` (with `.claude/settings.local.json`, if present) carries the allow-rules this skill depends on. Under `dontAsk` mode a missing rule is auto-denied with no prompt, halting mid-batch — worst case after Step 5 has pre-claimed several tasks on main.
 
-Read `.claude/settings.json` and confirm `permissions.allow` contains:
+Read `.claude/settings.json` (and `.claude/settings.local.json` if present — allow-rules union across the two) and confirm `permissions.allow` contains:
 
 - `Bash(bash sysop/scripts/claim_task.sh:*)` — Step 5.2 sequential pre-claim (also invoked transitively by every spawned execution agent's local context).
 - `Bash(python3 -:*)` — Step 1's queue-read/readiness-filter heredoc and Step 5.1's yaml-round-trip status flip (both single `python3 - <<` commands; venv PyYAML is resolved by an in-heredoc `sys.path` bootstrap, not a `.venv/bin/python3` command word or an env prefix — either of which would bind to no rule; Sysop Phase 126).
@@ -99,8 +99,12 @@ from pathlib import Path
 # Step 0 explicit subset; empty set = no restriction.
 subset = set(sys.argv[1].split())
 
-with open("tasks/index.yml", encoding="utf-8") as f:
-    data = yaml.safe_load(f)
+try:
+    with open("tasks/index.yml", encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+except (OSError, UnicodeDecodeError) as e:
+    print(f"ERROR: tasks/index.yml could not be read ({type(e).__name__}: {e})")
+    raise SystemExit(2)
 
 phases = data.get("phases", []) or []
 active = next((p for p in phases if p.get("current_focus")), None)
@@ -445,8 +449,13 @@ import os, tempfile
 from pathlib import Path
 task_id = sys.argv[1]
 index_path = Path("tasks/index.yml")
-with index_path.open(encoding="utf-8") as f:
-    data = yaml.safe_load(f)
+try:
+    with index_path.open(encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+except (OSError, UnicodeDecodeError) as e:
+    print(f"ERROR: tasks/index.yml could not be read ({type(e).__name__}: {e}). "
+          "Nothing was changed.", file=sys.stderr)
+    sys.exit(1)
 # A concurrent writer that truncates in place leaves this file zero-length for a
 # moment, and `safe_load("")` returns None — which then dies on `.get` with a raw
 # AttributeError and loses the claim (Phase 261, `Q-397`). Until Phase 263 this
@@ -541,7 +550,7 @@ python3 sysop/scripts/validate_tasks.py
 bash sysop/scripts/claim_task.sh --commit-claim "<TASK_ID>"
 ```
 
-Branch-name generation (matches `/claim-task` Step 3): lowercase task ID with prefix `feat/` / `tech/` / `data/` / `ux/` / `fix/` based on the ID prefix; or honour `branch:` field in `index.yml` if present.
+Branch-name generation (matches `/claim-task` Step 3): the directory is the id's leading `^[A-Z][A-Z0-9]*` segment lowercased and the leaf is the whole id lowercased (`FEAT-X` → `feat/feat-x`, `OPS-FOO` → `ops/ops-foo`); or honour `branch:` field in `index.yml` if present.
 
 Collect `(task_id, worktree_path, branch_name)` tuples. Worktree path is `${WORKTREE_ROOT:-..}/${WORKTREE_PREFIX:-$(basename "$REPO_ROOT")}-<task-id-lowercase>/` — note **both** overrides the script honors: `WORKTREE_PREFIX` on the leaf (an earlier version of this sentence omitted it) and `WORKTREE_ROOT` (Phase 262) on the parent directory, which is why the default is written here as a defaulted `..` rather than a literal one. The path is computed by `sysop/scripts/claim_task.sh` itself, at its `WORKTREE_DIR=` assignment (cited by symbol, not line — the line number in this sentence went stale at Phase 32 and stayed wrong until Phase 163), so the orchestrator just records what the script printed rather than recomputing.
 
@@ -773,7 +782,7 @@ Phase 7 (below) uses this value to distinguish "agent omitted the envelope but t
 
 When a background agent's completion notification arrives in any phase:
 
-1. Collect that agent's result. For Phase 6e, get the envelope by trying — in this order, first hit wins — (a) read `sysop/runtime/subagent-envelopes/<TASK_ID>.json` (Phase 37 `SubagentStop` hook output; resolve `<repo>/sysop/runtime/subagent-envelopes/` against the main repo root via `git rev-parse --git-common-dir`); (b) regex-parse the YAML envelope from the LAST fenced block of the agent's return text (existing behavior — see Step 7c). After consuming the JSON file, `rm -f sysop/runtime/subagent-envelopes/<TASK_ID>.json` to keep the dir clean for in-flight handoff; leave `_unparseable_*.json` diagnostics in place (the hook reclaims them after 7 days; you never delete them).
+1. Collect that agent's result. For Phase 6e, get the envelope by trying — in this order, first hit wins — (a) read `sysop/runtime/subagent-envelopes/<TASK_ID>.json` (Phase 37 `SubagentStop` hook output; resolve `<repo>/sysop/runtime/subagent-envelopes/` against the main repo root via `git rev-parse --git-common-dir`); (b) regex-parse the YAML envelope from the LAST fenced block of the agent's return text (existing behavior — see Step 7c). After consuming the JSON file, `rm -f sysop/runtime/subagent-envelopes/<TASK_ID>.json` to keep the dir clean for in-flight handoff; leave `_unparseable_*.json` diagnostics in place (the hook reclaims them after 7 days; you never delete them).\
 1‑record. **Re-read the `## Test decision` record at the branch tip before this task counts as executed** — for a Phase-6e agent only, and only when its envelope says `STATUS: EXECUTED`. **Numbered `1‑record` rather than renumbered into the sequence**, for the reason item `3‑record` carries in this same file: shifting `2` and `3` down one would rewrite markers other steps cite by number to say nothing new.
 
 **Why this exists, and what a self-check structurally cannot catch.** `/claim-task` has two layers on this record — the executor's own grep at Step 7e, and **Step 8's authoritative read-back**, which reads the revision that will actually be graded and blocks before `/document-work`. This orchestrator had only the first: item `3‑record` is written by the same agent that reports its own success, so an executor that reports `EXECUTED` without running its check, or that writes the section into the **main checkout** instead of the worktree (on no branch, invisible to `/review-close` Step 2d), produces an envelope indistinguishable from a compliant one. No grep run by the writing agent can see either. This step is the second layer, and it is the same block `/claim-task` Step 8 runs — pinned identical by `tests/test_autobuild_record_readback.py`, because a second copy that drifts is worse than none.
@@ -819,8 +828,11 @@ main_root = Path(common).resolve().parent
 # `git show <path>` means `git show HEAD -- <path>` and exits 0 off the WRONG revision:
 # the one failure here that can fabricate a pass (Step 2d documents it at length). The
 # operand is built by .format() so it cannot lose the colon.
-r = subprocess.run(["git", "-C", str(main_root), "show", "{}:{}".format(branch, body_rel)],
-                   capture_output=True, text=True)
+try:
+    r = subprocess.run(["git", "-C", str(main_root), "show", "{}:{}".format(branch, body_rel)],
+                       capture_output=True, text=True)
+except UnicodeDecodeError as e:  # a body that is not UTF-8 takes the UNREADABLE arm below
+    r = subprocess.CompletedProcess([], 1, "", "not UTF-8: {}".format(e))
 if r.returncode != 0:
     err = (r.stderr or "").strip()
     # git says "does not exist in '<rev>'" when the path is absent from the worktree too,
@@ -1046,19 +1058,17 @@ You are executing roadmap task `<TASK_ID>`. The orchestrator has already:
    - **Incorporate** — revise your mental model of the plan so the implementation accounts for it.
    - **Reject after consideration** — document the rejection rationale inline when you implement, so the same issue does not resurface during human review.
 2. **Call `ExitPlanMode`** with the revised plan as the plan content. This is the agent's only ExitPlanMode call.
-3. **Implement** per the revised plan.
-3‑tier. **When the work surfaces something adjacent, decide the tier before you decide the fix.** Three tiers; take the first that fits.
+3. **Implement** per the revised plan.\
+3‑tier. **When the work surfaces something adjacent, fix it here — that is the default.** Each finding gets one of three outcomes; nothing is parked.
 
-   1. **Fix it in this branch** when **all** of these hold: it is in a file or module this task already touches; it is mechanical, or a doc, test, or convention-config correction; an existing gate already covers it, or you add the test that does; it is small — on the order of 20 lines, and no more than a few per branch; and it is **not a claim about what the code means that you have not verified by reading the consumer**. **Never tier 1, at any size:** migrations; prompts under whatever eval gate the consumer declares (`<project>/CLAUDE.md`; if it declares none, read this as the project's shipped agent/skill prompt bodies); auth and money-path code; every path in `<project>/CLAUDE.md` § *Security-critical always-include files*; and anything that writes to production. Record each one as a single line under an `## Also fixed` heading in the task body — **the same write as item 3‑record**, in your worktree and never the main checkout (an edit there is on no branch and reaches no PR) — so the close reviews it as *intended* scope rather than as an unexplained hunk, and the test decision covers it. **One write, not two, and the reason is the ordering:** `tasks/schema.md` § *Also fixed* puts this section between `## Test decision` and `## Plan`, and two writes at two moments cannot guarantee that — whichever runs second places itself relative to whatever it happens to find. One write emits both sections in order and the question does not arise.
-   2. **Extend an existing open task** in that module — add what you found to that task's body rather than opening a second entry against the same code. This is `/add-task` Step 2's move, made the default here rather than one branch of a judgment.
-   3. **File a new task** only past both — or when it is a design question, needs a `user_action`, or writes to production. Tier 3 is the path step 5b's stub check is about; tiers 1 and 2 produce no `<PREFIX>-<NAME>` token for it to resolve.
+   1. **Fix it in this branch** — whatever module it is in, and past a one-line change, as long as the close can still review the branch. Read the code before you change what it does, and add a test when the fix changes behaviour. **Never, at any size:** migrations, anything that writes to production, and auth or payment logic. Record each fix as one line under an `## Also fixed` heading in the task body — **the same write as item 3‑record**, in your worktree and never the main checkout (an edit there is on no branch and reaches no PR) — so the close reviews it as *intended* scope rather than as an unexplained hunk, and the test decision covers it. **One write, not two:** `tasks/schema.md` § *Also fixed* puts this section between `## Test decision` and `## Plan`, and one write emits both sections in that order.
+   2. **File a task** only when it cannot be fixed now: it needs a design decision or a human action, it is too large to review in this branch, or it is on the never-list. Add it to an existing open task in that module before opening a new entry. A filed task is the path step 5b's stub check is about; a fix or a drop produces no `<PREFIX>-<NAME>` token for it to resolve.
+   3. **Drop it** when nothing is wrong: nothing is broken today, it is a preference or a hypothetical, or it is already handled. A real future condition goes in a comment or a test at the site, not in a ledger.
 
-   **Past those, tier 3 has one more test: name what the filing blocks.** One of — the phase carrying `current_focus: true`; a named `planned` phase; a gate the project declares (`<project>/CLAUDE.md`, a release checklist, an ops runbook — whatever it calls them); or an open task whose stated acceptance this stops. Write that name into the body so a reader can check it. **Four kinds are filed whatever this test says**, each being its own justification: a design question or a call that is the human's; a `user_action`; a production write; and a defect in shipped behaviour **you can state as a falsifiable failure** — the input, the expected result, the actual one — or a security finding. **Everything else goes to `tasks/notes.md`** — the flat ledger beside the queue, one line per note, shape in `tasks/README.md` § *The notes ledger*. Nothing routes to that file and nothing counts it; that is what it is for. **A note is not a silent drop:** say in your final message that you wrote one and what it concerns, so the human can promote it with `/add-task`. And a note carries no task id, so do not put a `<PREFIX>-<NAME>` token for it into the docs prose — `/document-work` Step 3b hard-fails on a token that resolves to nothing. The ledger holds a finding nobody has committed to yet; it is never the place for one you would rather not defend. **The append itself is the record item's write, not this item's** — same delegation as `## Also fixed`, and for a plainer reason: this item runs while the work does, and a record write belongs in the one step that owns the worktree paths. Decide the routing here; name the line you want appended; leave the writing to it.
+   **When an answer from the human would make it fixable** — a design choice, which of two readings is intended, permission for a never-list item — this run has nobody to ask, so file the task and write the question into its body with the fix you would make for each answer and the one you recommend. The next session starts from the question rather than re-deriving it.
 
-   **The backstop is a property of the CHANGE, not a lookup over a file list** — an enumeration rots. **If the change would weaken, disarm, narrow or delete a gate — a check, a semgrep rule, a numeric bound, an allowlist or ignore entry, a deletion-protection flag — it is never tier 1, whatever file it lives in**, because tier 1's "an existing gate already covers it" predicate is satisfied by the disarming edit itself. If you cannot name a gate that would still fail were your fix wrong, file instead.
-
-   **The bound is the design, not a formality.** Unplanned scope inside a narrow plan is a real failure mode, and an agent mid-task verifies an adjacent thing less carefully than a fresh one would. Tier 1 dropped in the name of throughput becomes a source of defects rather than a sink for tasks. When you are between tiers 1 and 2, take 2 — a filed line costs a reader, a wrong in-branch fix costs a revert.
-3‑record. **Persist the `## Test decision`** section into the task's body file, from the plan's `## Test decision` element above. **Write the worktree copy** (`<WORKTREE_PATH>/tasks/…`), never the main checkout's — an edit there is on no branch, so it never reaches the PR, and `/review-close` Step 2d reads this record at the branch tip. **If item 3‑tier produced any tier-1 fixes, write `## Also fixed` in this same write** — one line each, placed after this `## Test decision` section and before any `## Plan` section, per `tasks/schema.md` § *Also fixed*. **The order is the schema's contract; do not restate the reason you may have read elsewhere.** Two sibling sites justify it as protecting a first-match reader from a heading quoted inside the fenced plan. That is true of the *test-decision* reader, which is fence-blind, and **false of the `## Also fixed` reader**, which `/review-close` Step 2d says in as many words is fence-aware and does not depend on the ordering. Follow the order because the schema declares it and a human reads the body top-down, not because of a protection that reader does not need. **If item 3‑tier routed anything to the notes ledger, append those lines to `<WORKTREE_PATH>/tasks/notes.md` in this same pass** — create the file if it is absent, one flat line per note, appended at the end, per `tasks/README.md` § *The notes ledger*. It is a different file from the body and carries no ordering relationship to these sections; it is written here because this is the step that owns the worktree paths. **A note written into the main checkout is on no branch, so it never reaches the PR** — and it is not Step 2a that catches that: Step 1a skips the primary checkout by inode identity, so the dirty classification never sees it. What it reaches instead is Step 6's post-merge `git diff --quiet HEAD --` gate, which halts the close *after* the PR has merged. Late and loud rather than early and loud; write the worktree copy.
+   **`tasks/notes.md` is retired — write nothing to it.** A consumer's existing ledger is theirs to clear; leave it alone.\
+3‑record. **Persist the `## Test decision`** section into the task's body file, from the plan's `## Test decision` element above. **Write the worktree copy** (`<WORKTREE_PATH>/tasks/…`), never the main checkout's — an edit there is on no branch, so it never reaches the PR, and `/review-close` Step 2d reads this record at the branch tip. **If item 3‑tier produced any in-branch fixes, write `## Also fixed` in this same write** — one line each, placed after this `## Test decision` section and before any `## Plan` section, per `tasks/schema.md` § *Also fixed*. **The order is the schema's contract; do not restate the reason you may have read elsewhere.** Two sibling sites justify it as protecting a first-match reader from a heading quoted inside the fenced plan. That is true of the *test-decision* reader, which is fence-blind, and **false of the `## Also fixed` reader**, which `/review-close` Step 2d says in as many words is fence-aware and does not depend on the ordering. Follow the order because the schema declares it and a human reads the body top-down, not because of a protection that reader does not need.
 
    **If the body already carries a `## Test decision`, REPLACE that section — do not append a second one.** This is not hypothetical: `/claim-task --plan-only` (option C) writes `## Test decision` and `## Plan` into the body and then **releases the claim**, so the task returns to `open` carrying a record, and `/auto-build` Step 1 can claim it — Phase 6a spawns a fresh planner and never inspects the body. A second section leaves two, and every reader downstream takes the first match, so the stale one wins and is reported as verified. If the existing record still holds, say so in your final message and leave it; if your plan's decision differs, replace it and say why.
 
@@ -1072,7 +1082,7 @@ You are executing roadmap task `<TASK_ID>`. The orchestrator has already:
    body="<WORKTREE_PATH>/<BODY_PATH_AS_RESOLVED>"
    case "$body" in *"<"*) echo "ERROR: placeholder not substituted: $body" >&2; exit 2 ;; esac
    [ -f "$body" ] || { echo "ERROR: no such body file: $body -- <BODY_PATH_AS_RESOLVED> is the \
-'body:' value from tasks/index.yml, which is relative to tasks/ (e.g. open/<TASK_ID>.md)" >&2; exit 2; }
+   'body:' value from tasks/index.yml, which is relative to tasks/ (e.g. open/<TASK_ID>.md)" >&2; exit 2; }
    grep -niE -A1 '^#{1,6}[[:space:]]*test[[:space:]]+decision\b' "$body"
    ```
 
@@ -1083,7 +1093,7 @@ You are executing roadmap task `<TASK_ID>`. The orchestrator has already:
    That version tried to assert the record itself, requiring one of the two legal forms under the heading. Its own review round disqualified it on measurement. **Too permissive where it mattered:** `grep -A2` returns the union of *every* match's window, so a legal form quoted inside `## Plan` satisfied it while the real section was empty — and it exited **0** on a body with no unfenced heading at all, the exact failure it existed to catch. **Too strict everywhere else:** run over the live consumer corpus it rejected **166 of 207** bodies that carry a perfectly good record, with the false message *"empty section, or still the schema placeholder"*. The mechanism was wrong, not its parameters — a fence-blind scan of the whole file cannot answer "does the first *real* section hold a legal form".
 
    The check that *can* answer it is fence-aware and reads one section: `/claim-task` Step 8's verifier, which is what makes that path's shallow grep affordable. **This path has no such backstop** — the orchestrator parses your envelope and never re-reads the body — and building one is filed as `Q-462` rather than approximated here. A shallow check that says so is worth more than a strong-sounding one that certifies clean over the failure it names.
-4. **Post-fix convention verification** (the same gate `/claim-task` Step 7e's executor runs internally): list changed files via `git diff --name-only <default branch>...HEAD`, check each against **`.claude/convention_map.md` and `.claude/security_map.md`** (with their `.project.md` overlays where present) for the relevant section — **both maps (`Q-352`), matching what this skill's own planner reads.** The autonomous path had the same one-map gap `/claim-task` Step 7e had, and the parenthetical above claims parity with that step, so fixing one and not this one would have made the claim false as well as the behaviour wrong, scan new lines for the listed conventions, fix any regressions before committing.
+4. **Post-fix convention verification** (the same gate `/claim-task` Step 7e's executor runs internally): list changed files via `git diff --name-only <default branch>...HEAD`, check each against **`.claude/convention_map.md` and `.claude/security_map.md`** (with their `.project.md` overlays where present) for the relevant section — **both maps (`Q-352`), matching what this skill's own planner reads.** The autonomous path had the same one-map gap `/claim-task` Step 7e had, and the parenthetical above claims parity with that step, so fixing one and not this one would have made the claim false as well as the behaviour wrong, scan new lines for the listed conventions, fix any regressions before committing.\
 4b. **Run the consumer's pre-merge verification gates.** The consumer project's `<project>/CLAUDE.md` has a `## Pre-merge verification` section (per WORKFLOW.md § 6.1) that may contain two subsections:
    - **`### Always`** — full-tree commands run unconditionally (lint, typecheck, tests).
    - **`### Ratchet (changed files only)`** — a single bash block that filters `git diff --name-only origin/<default branch>...HEAD` to specific file types and invokes lint/typecheck against changed files only (Phase 17 split shape; empty filtered list short-circuits and passes).
@@ -1091,7 +1101,7 @@ You are executing roadmap task `<TASK_ID>`. The orchestrator has already:
    Run the commands listed under each subsection that is present. If both subsections are absent, skip this step — `/review-close` will run any project-side verification at merge time (its `4a-post` step, on the merged tree), and the consumer accepts the risk. (`4a-post` also runs the Sysop pre-scan on its own, declared or not — `Q-353` — so the promoted checks are not part of what the consumer is accepting risk on; the branch-in-isolation pass is.) Note the division of labour: this run verifies **this branch in its own worktree**, and is the only thing that ever does — so when the consumer ships no `## Pre-merge verification` section and this step skips, *nothing* verifies the branch in isolation; `4a-post` verifies the **assembled** result and cannot substitute for it.
 
    Treat any non-zero exit like an implementation finding: fix the underlying issue, do not silence it without a `# type: ignore[...]` or `// eslint-disable-next-line <rule> -- <reason>` justified inline. If the gate exits non-zero and you cannot fix it (e.g., missing toolchain dependency in the worktree), emit `STATUS: FAILED` with the stderr in `ERROR`.
-5. **Post-fix UI verification** (the same gate `/claim-task` Step 7e's executor runs internally) only if any `frontend/` files changed — invoke `.claude/skills/_shared/ui-verify.md`.
+5. **Post-fix UI verification** (the same gate `/claim-task` Step 7e's executor runs internally) only if any `frontend/` files changed — invoke `.claude/skills/_shared/ui-verify.md`.\
 5b. **Invoke `/document-work --non-interactive`** via the `Skill` tool to commit your work, write `sysop/runtime/pending-docs/<sanitized-branch>.md`, and enforce the follow-up stub check.
 
    The `--non-interactive` flag (see `/document-work` Step 0) tells the skill to:
@@ -1110,7 +1120,7 @@ You are executing roadmap task `<TASK_ID>`. The orchestrator has already:
 
 - Do **NOT** invoke the Agent tool — the orchestrator has already done the planning + adversarial-review fan-out. No nested adversarial pass, even on harness versions (Claude Code ≥2.1.172) where nested spawns are permitted.
 - Do **NOT** flip `status:` fields in `tasks/index.yml` — `/claim-task` (open → in_progress) and `/review-close` (in_progress → done) own status transitions.
-- ADDING a new task entry (a follow-up surfaced during the work) IS allowed — but it is **tier 3**, not the default: take Sequence item 3‑tier's tiers in order first. When a follow-up does reach tier 3, `/document-work` Step 3b (follow-up stub check) requires every `<PREFIX>-<NAME>` token in pending-docs prose to resolve to a real entry in `tasks/index.yml` — file the entry + body file before invoking `/document-work`, or whitelist it intentionally per `tasks/schema.md`.
+- ADDING a new task entry (a follow-up surfaced during the work) IS allowed — but it is Sequence item 3‑tier's **second** outcome, not the default: fix first. When a follow-up is filed, `/document-work` Step 3b (follow-up stub check) requires every `<PREFIX>-<NAME>` token in pending-docs prose to resolve to a real entry in `tasks/index.yml` — file the entry + body file before invoking `/document-work`, or whitelist it intentionally per `tasks/schema.md`.
 
 ### Required final-message format
 

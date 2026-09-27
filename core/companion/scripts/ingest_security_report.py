@@ -60,6 +60,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -127,15 +128,16 @@ class Report:
     skipped_reason: str = ""  # non-empty => the whole report could not be used
 
 
-def _load_jsonl(path: Path) -> list:
+def _load_jsonl(path: Path) -> list | None:
     """Load a JSONL findings file tolerantly. Blank lines and lines missing a
     required field are dropped (not fatal); a line that is not JSON is dropped
-    with the rest of the file left intact."""
+    with the rest of the file left intact. None when the file cannot be read or
+    is not UTF-8 — the caller skips the report loudly, never reads it as empty."""
     out = []
     try:
         raw = path.read_text(encoding="utf-8")
-    except OSError:
-        return out
+    except (OSError, UnicodeDecodeError):
+        return None
     for line in raw.splitlines():
         line = line.strip()
         if not line:
@@ -213,7 +215,11 @@ def parse_report(report_dir: Path) -> Report:
     if not jsonl.is_file():
         rep.skipped_reason = "no CLAUDE-SECURITY-RESULTS.jsonl (aborted or non-report dir)"
         return rep
-    rep.findings = _load_jsonl(jsonl)
+    findings = _load_jsonl(jsonl)
+    if findings is None:
+        rep.skipped_reason = f"{RESULTS_JSONL} could not be read, or is not UTF-8"
+        return rep
+    rep.findings = findings
     stamp = _load_stamp(report_dir)
     if stamp is None:
         # No usable stamp -> cannot establish trust or paths. Keep findings but
@@ -255,16 +261,18 @@ def rebase_path(scan_root: str, finding_file: str, repo_root: Path) -> str | Non
     return rel.replace(os.sep, "/")
 
 
-def _commit_changed_files(repo_root: Path, commit: str) -> set | None:
-    """Best-effort: the set of paths changed between `commit` and the working
-    tree. None if git can't answer (shallow clone, gc'd object, not a repo)."""
+def _commit_changed_files(repo_root: Path, commit: str) -> tuple[set | None, str]:
+    """Best-effort: (the set of paths changed between `commit` and the working
+    tree, ""), or (None, why git could not answer) — the reason is shown on every
+    finding whose staleness it leaves unknown, so it must be the true one."""
+    short = str(commit)[:12]
     try:
         exists = subprocess.run(
             ["git", "-C", str(repo_root), "cat-file", "-e", f"{commit}^{{commit}}"],
             capture_output=True,
         )
         if exists.returncode != 0:
-            return None
+            return None, f"commit {short} not in local history"
         # -c core.quotePath=false + -z: git C-quotes non-ASCII paths by default,
         # which would never match the UTF-8 repo_rel and silently mis-read a
         # changed non-ASCII file as "current". `--` pins commit as a revision.
@@ -274,10 +282,12 @@ def _commit_changed_files(repo_root: Path, commit: str) -> set | None:
             capture_output=True, text=True,
         )
         if res.returncode != 0:
-            return None
-    except (OSError, subprocess.SubprocessError):
-        return None
-    return {p for p in res.stdout.split("\0") if p}
+            return None, f"git diff against {short} failed"
+    except UnicodeDecodeError:
+        return None, f"git names a file changed since {short} whose path is not UTF-8"
+    except (OSError, subprocess.SubprocessError) as exc:
+        return None, f"git could not be run ({type(exc).__name__})"
+    return {p for p in res.stdout.split("\0") if p}, ""
 
 
 class _StalenessResolver:
@@ -289,6 +299,9 @@ class _StalenessResolver:
         self._cache: dict = {}
 
     def changed(self, commit: str) -> set | None:
+        return self._lookup(commit)[0]
+
+    def _lookup(self, commit: str) -> tuple[set | None, str]:
         if commit not in self._cache:
             self._cache[commit] = _commit_changed_files(self.repo_root, commit)
         return self._cache[commit]
@@ -307,9 +320,9 @@ class _StalenessResolver:
             return "unknown", "report stamp commit is not a valid hash"
         if repo_rel_path is None:
             return "unknown", "finding path could not be rebased into this repo"
-        changed = self.changed(commit)
+        changed, why = self._lookup(commit)
         if changed is None:
-            return "unknown", f"commit {str(commit)[:12]} not in local history"
+            return "unknown", why
         dirty_note = " (scanned tree was dirty)" if revision.get("dirty") else ""
         if repo_rel_path in changed:
             return "stale", f"file changed since scan at {str(commit)[:12]}{dirty_note}"
@@ -408,27 +421,55 @@ def union(findings_by_report: list) -> list:
 # --------------------------------------------------------------------------- #
 # Marker (fold-once)
 # --------------------------------------------------------------------------- #
-def read_marker(repo_root: Path) -> set:
-    p = repo_root / MARKER_REL
+def _marker_entries(p: Path) -> tuple[set | None, str]:
+    """(the recorded dir names, "") — or (None, why) when the marker exists but
+    cannot be read or decoded. A missing marker is (set(), "")."""
     try:
-        return {ln.strip() for ln in p.read_text(encoding="utf-8").splitlines() if ln.strip()}
-    except OSError:
-        return set()
+        return {ln.strip() for ln in p.read_text(encoding="utf-8").splitlines() if ln.strip()}, ""
+    except FileNotFoundError:
+        return set(), ""
+    except (OSError, UnicodeDecodeError) as exc:
+        return None, f"{type(exc).__name__}: {exc}"
 
 
-def append_marker(repo_root: Path, dir_names: list) -> None:
+def read_marker(repo_root: Path) -> set:
+    """The report dirs already folded. No marker yet is the ordinary first run and
+    reads as empty in silence. A marker that EXISTS but cannot be read or decoded
+    also reads as empty, so every folded report is offered again — said on stderr."""
     p = repo_root / MARKER_REL
-    have = read_marker(repo_root)
+    have, why = _marker_entries(p)
+    if have is None:
+        print(f"WARN: could not read the ingested marker {sanitize(str(p), 300)} "
+              f"({sanitize(why, 300)}) — every report it "
+              "recorded is treated as NOT yet ingested and will be offered again",
+              file=sys.stderr)
+        return set()
+    return have
+
+
+def append_marker(repo_root: Path, dir_names: list) -> str:
+    """Record `dir_names` as folded. Returns "" on success, or why the mark did not
+    land — the caller reports it. "Landed" means READ BACK: a mark appended to a
+    marker that cannot be decoded is written and never read, so the report is
+    offered again while the run said `marked`."""
+    p = repo_root / MARKER_REL
+    have, why = _marker_entries(p)
+    if have is None:
+        return f"the marker cannot be read ({why}); nothing was appended"
     new = list(dict.fromkeys(d for d in dir_names if d and d not in have))  # dedup input too
     if not new:
-        return
+        return ""
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
         with p.open("a", encoding="utf-8") as fh:
             for d in new:
                 fh.write(d + "\n")
-    except OSError:
-        pass  # best-effort; a missed mark re-ingests once, not data loss
+    except OSError as exc:
+        return f"{type(exc).__name__}: {exc}"
+    back, why = _marker_entries(p)
+    if back is None or not set(new) <= back:
+        return f"the mark was written but does not read back ({why or 'entries missing'})"
+    return ""
 
 
 def find_reports(repo_root: Path, include_ingested: bool) -> list:
@@ -534,13 +575,20 @@ def ingest(repo_root: Path, scope: set | None, include_ingested: bool) -> dict:
     }
 
 
+class ScopeFileUnreadable(Exception):
+    """An explicit --scope-file that cannot be read or decoded."""
+
+
 def _load_scope(scope_file: str | None) -> set | None:
+    """None means "no scoping" and is returned ONLY when no --scope-file was given.
+    A named file that cannot be read raises: reading it as "no scoping" would file
+    a whole-repo report as this round's delta — the flood the flag exists to stop."""
     if not scope_file:
         return None
     try:
         text = Path(scope_file).read_text(encoding="utf-8")
-    except OSError:
-        return None
+    except (OSError, UnicodeDecodeError) as exc:
+        raise ScopeFileUnreadable(f"{type(exc).__name__}: {exc}") from None
     return {ln.strip().replace(os.sep, "/") for ln in text.splitlines() if ln.strip()}
 
 
@@ -557,8 +605,21 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
 
     repo_root = Path(args.root)
+    if args.mark is None:
+        try:
+            scope = _load_scope(args.scope_file)
+        except ScopeFileUnreadable as exc:
+            print(f"ERROR: --scope-file {sanitize(args.scope_file, 300)} could not be read "
+                  f"({sanitize(str(exc), 300)}). Refusing to ingest unscoped — fix the file "
+                  "and re-run; do not drop the flag on a non-full round.", file=sys.stderr)
+            return 1
     if args.mark is not None:
-        append_marker(repo_root, args.mark)
+        failed = append_marker(repo_root, args.mark)
+        if failed:
+            print(f"ERROR: could not record the mark in {sanitize(str(repo_root / MARKER_REL), 300)} "
+                  f"({sanitize(failed, 300)}) — the mark did not land (or landed only in "
+                  "part), so these reports can be offered again next round.", file=sys.stderr)
+            return 1
         if args.json:
             print(json.dumps({"marked": args.mark}))
         return 0
@@ -569,7 +630,7 @@ def main(argv=None) -> int:
                   "counts": {"in_scope": 0, "out_of_scope": 0, "stale": 0, "stale_unknown": 0,
                              "reports": 0, "skipped": 0}}
     else:
-        result = ingest(repo_root, _load_scope(args.scope_file), args.include_ingested)
+        result = ingest(repo_root, scope, args.include_ingested)
 
     if args.json:
         print(json.dumps(result, indent=2, ensure_ascii=False))

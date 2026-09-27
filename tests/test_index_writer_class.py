@@ -1364,7 +1364,10 @@ def test_step4c_joins_the_mkstemp_roster_rather_than_standing_apart():
         "auto-build Step 5.1": (REPO_ROOT / "core/skills/auto-build/SKILL.md", 1),
         "claim_task.sh --commit-claim + --release":
             (REPO_ROOT / "core/companion/scripts/claim_task.sh", 2),
-        "review-close Step 4c": (REPO_ROOT / "core/skills/review-close/SKILL.md", 1),
+        # Step 4c (the index) + Step 3c's answer recorder (Phase 330). The recorder writes
+        # a pending doc's frontmatter, not the index, and is counted here because the
+        # count is per file: without it, reverting Step 4c's writer would read as 1 == 1.
+        "review-close Step 4c + Step 3c recorder": (REPO_ROOT / "core/skills/review-close/SKILL.md", 2),
         "clear_user_action.py":
             (REPO_ROOT / "core/companion/scripts/clear_user_action.py", 1),
         # `Q-442`, Phase 271 — moved here out of `STILL_FIXED_NAME`.
@@ -1404,7 +1407,13 @@ def test_step4c_joins_the_mkstemp_roster_rather_than_standing_apart():
         )
 
     for name, (path, expected) in CONVERTED.items():
-        body = _live(path.read_text(encoding="utf-8"))
+        raw = path.read_text(encoding="utf-8")
+        if path.suffix == ".md":
+            # In a skill, only a call inside a fenced block is a writer. A prose sentence
+            # naming `tempfile.mkstemp()` is not one, and counting it false-killed a legal
+            # edit (Phase 330 round 1, lens 2's control C9).
+            raw = "\n".join(raw[a:b] for a, b in _fenced_spans(raw))
+        body = _live(raw)
         # `mkstemp(` regardless of module spelling: `import tempfile as tf` is a
         # legal rewrite and the literal count reddened on it. The receiver is not
         # the property — the call is.

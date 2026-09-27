@@ -113,8 +113,10 @@ Read `sysop/SYSOP_ISSUES.md` — inside the `sysop/` vendor dir at the consumer-
 root (Phase 128; NOT under `.claude/`, and no longer at the bare repo root). If a
 pre-Phase-128 install left it at the root, read that instead rather than
 reporting nothing. If neither exists, stop with one line: `note:
-sysop/SYSOP_ISSUES.md not present — nothing to report. (Re-run bash install.sh to
-seed it, or capture friction via /review-close Step 7 first.)` and stop.
+sysop/SYSOP_ISSUES.md not present — nothing to report. (Create it and log friction
+there first — one "## ISSUE-0001 — <title> (<date>)" heading per entry, with a
+"**Status:** Open" line. A loop-mode install never seeds it; on a full install
+/review-close Step 7 also appends to it.)` and stop.
 
 Read the entry blocks. **This file is deliberately loose,
 consumer-restructurable markdown** — the seed template invites "you can
@@ -250,7 +252,7 @@ that the tester was blocked and how they unblocked>
 
 **Environment**
 - Reported from: <consumer> (via SYSOP_ISSUES.md / /report-issues)
-- Sysop commit or install date: <from .claude/sysop.lock if readable, else "unknown">
+- Sysop commit or install date: <from .claude/sysop.lock if readable, with " (installed from a dirty source tree)" appended when the lock carries "source_dirty": true, else "unknown">
 ```
 
 **Include only the sections the entry actually has — a loose entry may omit

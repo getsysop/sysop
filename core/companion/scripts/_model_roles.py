@@ -239,7 +239,7 @@ class RoleAliasError(ValueError):
 def _resolve_role_aliases(roles: dict[str, str]) -> dict[str, str]:
     """Let a role's value name ANOTHER ROLE, and resolve it to that role's model.
 
-    Phase 262. A narrow role split — `convention-gate`, which governs one pin —
+    Phase 262. A narrow role split — `convention-gate`, which governed one pin (two since Phase 328) —
     needed a default, and a hard-coded one was WRONG in a way that only showed up
     on upgrade. A consumer who had set `reasoning: sonnet` (the documented cheap
     lever) had both Step 2b agents on sonnet; adding `convention-gate: opus` as a

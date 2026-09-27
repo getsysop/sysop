@@ -45,6 +45,7 @@ import pytest
 from _case_pins import (
     case_pin_problems,
     parametrize_shape_problems,
+    unpinned_list_problems,
     parametrized_cases,
 )
 
@@ -542,6 +543,33 @@ def test_the_spec_publishes_the_figures_the_census_computes():
     )
     assert abs(pct - shares["runner"]) < 0.05, f"§ 8.1 publishes {pct}%, computed {shares['runner']:.1f}%"
 
+    # The rest of the close-of-phase paragraph (Phase 330 round 1, lens 2): the file size, the
+    # editor and mixed characters, their sum and the headroom were published and bound by
+    # nothing, so a verdict flip between editor and mixed falsified "`editor` is unchanged"
+    # with the suite green. Round 2 (lens 5) then found the sum's pattern matching nothing and
+    # the `mixed` pattern falling through to the sum phrase, and each binding switching itself
+    # off when its sentence was reworded. So every figure is now REQUIRED in the paragraph, in
+    # these phrasings, and `mixed` may not be read out of `editor`+`mixed`.
+    para = spec[claim.start():spec.find("\n\n", claim.start())]
+    def _n(pattern):
+        m = re.search(pattern, para)
+        return int(m.group(1).replace(",", "")) if m else None
+    tot = c["tally"]["editor"]["chars"] + c["tally"]["mixed"]["chars"]
+    for label, pattern, computed in (
+        ("lines", r"over\s+([\d,]+)\s+lines", c["lines"]),
+        ("chars", r"lines\s+and\s+([\d,]+)\s+chars", c["chars"]),
+        ("editor chars", r"`editor`\s+(?:is\s+unchanged\s+at|is)\s+([\d,]{4,})", c["tally"]["editor"]["chars"]),
+        ("mixed chars", r"(?<!\+)`mixed`\s+is\s+([\d,]{4,})", c["tally"]["mixed"]["chars"]),
+        ("editor+mixed", r"`editor`\+`mixed`\s+is\s+\**([\d,]+)", tot),
+        ("headroom", r"([\d,]+)\s+under\s+`EDITOR_MIXED_CEILING`", EDITOR_MIXED_CEILING - tot),
+    ):
+        got = _n(pattern)
+        assert got is not None, (
+            f"§ 8.1's close-of-phase paragraph no longer states {label} in the bound phrasing "
+            f"({pattern!r}); a reworded figure is an unchecked one")
+        assert got == computed, (
+            f"§ 8.1's close-of-phase paragraph publishes {label} {got:,}; the census computes {computed:,}")
+
     for verdict in ("editor", "mixed"):
         assert f"**{shares[verdict]:.1f}%**" in spec, (
             f"§ 8.1 no longer publishes the computed {verdict} share "
@@ -895,12 +923,12 @@ _PINNED_FIXTURE_SECTIONS = {"3b": 24_487, "4c": 11_971, "2b": 25_804}
 #: seven pinned tests were reached — so `checked >= 7` can never fail once that line passes. It
 #: was dead code wearing a number.
 #:
-#: Exact, because the population it protects cannot be pinned any other way. Seven of these
-#: controls are `ast.Name`-driven (`CENSUSED` x6, `_PUBLISHED_FIGURE_GROUPS` x1) and carry no
-#: inline rows, so `_CASE_PINS` cannot reach them; deleting all seven left the predecessor red
-#: and left the first replacement silent. Raising this when a control is added is a one-line,
+#: Exact, because the population it protects cannot be pinned any other way. Eight of these
+#: controls are `ast.Name`-driven (`CENSUSED` x6, `_PUBLISHED_FIGURE_GROUPS` x1, `_PINNED_TESTS`
+#: x1 since Phase 327) and carry no inline rows, so `_CASE_PINS` cannot reach them; deleting the
+#: first seven left the predecessor red and left the first replacement silent. Raising this when a control is added is a one-line,
 #: reviewable edit — the trade `EDITOR_MIXED_CEILING` already makes in this module.
-_PARAMETRIZE_DECORATOR_COUNT = 14
+_PARAMETRIZE_DECORATOR_COUNT = 15
 
 #: The case rows that may not leave this module, keyed by the test they control.
 #:
@@ -991,6 +1019,18 @@ _CASE_PINS = {
 }
 
 
+def pin_guard_problems(source: str, pins: dict) -> list[str]:
+    """The whole pin guard, as ONE function the guard test and every control call.
+
+    Phase 327's round: the partition was wired into the guard test while its control called
+    `unpinned_list_problems` directly, so deleting the wiring left every test green and reopened
+    the deletion bypass the partition closes. A control that drives a part is not a control on
+    the whole.
+    """
+    return (case_pin_problems(source, pins) + unpinned_list_problems(source, pins)
+            + parametrize_shape_problems(source, _PARAMETRIZE_DECORATOR_COUNT, globals()))
+
+
 def test_no_parametrized_case_list_here_can_be_silently_emptied():
     """Ported from `tests/test_thinning_transforms.py` after the round found it missing HERE.
 
@@ -1013,12 +1053,8 @@ def test_no_parametrized_case_list_here_can_be_silently_emptied():
     message); the content pin in `case_pin_problems` is what makes the enumerated bypasses die.
     """
     source = Path(__file__).read_text(encoding="utf-8")
-    problems = case_pin_problems(source, _CASE_PINS)
+    problems = pin_guard_problems(source, _CASE_PINS)
     assert not problems, "\n\n".join(problems)
-
-    assert not parametrize_shape_problems(
-        source, _PARAMETRIZE_DECORATOR_COUNT, globals()), "\n".join(
-            parametrize_shape_problems(source, _PARAMETRIZE_DECORATOR_COUNT, globals()))
 
 
 @pytest.mark.parametrize("find,replace,why", [
@@ -1060,10 +1096,46 @@ def test_the_case_pin_actually_bites(find, replace, why):
         f"the injection point for {why!r} is not unique ({body.count(find)} occurrence(s)) — "
         f"this control is testing nothing until it is re-anchored")
     tampered = body.replace(find, replace)
-    assert case_pin_problems(tampered, _CASE_PINS), (
+    assert pin_guard_problems(tampered, _CASE_PINS), (
         f"the pin did not see {why}. A pin that cannot see this edit is the count check it "
         f"replaced, wearing a longer docstring."
     )
+
+
+#: A module constant because `parametrize_shape_problems` sizes a named list and refuses a call.
+_PINNED_TESTS = sorted(_CASE_PINS)
+
+
+def test_the_composite_drives_its_shape_term():
+    """Round 2 deleted `parametrize_shape_problems` from `pin_guard_problems` with the module
+    green: the tamper rows drive the content term and the per-entry control the partition, and
+    nothing drove the third. A NAME-driven control added (count off by one, no inline rows) and a
+    name-driven list sliced to nothing each reach that term alone."""
+    source = Path(__file__).read_text(encoding="utf-8")
+    added = source + '\n@pytest.mark.parametrize("x", _PINNED_TESTS)\ndef test_extra(x): pass\n'
+    assert pin_guard_problems(added, _CASE_PINS), "an extra control went uncounted"
+    # Anchored on REAL newlines, which this literal spells `\\n`, so it cannot match itself.
+    anchor = '\n@pytest.mark.parametrize("dropped", _PINNED_TESTS)\ndef test_a_deleted'
+    assert source.count(anchor) == 1, "re-anchor this control"
+    sliced = source.replace(anchor, anchor.replace("_PINNED_TESTS)", "_PINNED_TESTS[:0])"))
+    assert pin_guard_problems(sliced, _CASE_PINS), "a sliced control list went unseen"
+    # And the per-entry control's population is the whole pin table, not a prefix of it.
+    assert _PINNED_TESTS == sorted(_CASE_PINS)
+
+
+@pytest.mark.parametrize("dropped", _PINNED_TESTS)
+def test_a_deleted_pin_entry_is_seen_even_with_its_rows_gone(dropped):
+    """Phase 327 (`Q-592` line 27): the tamper rows above reach three of the seven entries.
+
+    Deleting any one entry from `_CASE_PINS` must report, whichever it is, because every inline
+    list here is pinned. Driven over `_PINNED_TESTS` (the sorted keys) rather than an inline list, so adding a
+    pin brings its own case with it.
+    """
+    source = Path(__file__).read_text(encoding="utf-8")
+    fewer = {k: v for k, v in _CASE_PINS.items() if k != dropped}
+    problems = pin_guard_problems(source, fewer)
+    assert any(p.startswith(f"{dropped}:") for p in problems), (
+        f"deleting the {dropped!r} pin entry went unseen — the four-of-seven bypass is open")
 
 
 def test_the_campaign_rosters_partition_the_file():

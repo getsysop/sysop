@@ -331,7 +331,10 @@ def _run_position_check(
         try:
             with open(fpath, encoding="utf-8", errors="replace") as f:
                 lines = f.readlines()
-        except (OSError, IOError):
+        except (OSError, IOError) as exc:
+            # A file this check could not read is a file it did not check: say so.
+            print(f"warn: check {check_id}: could not read {_sanitize_log(fpath)} "
+                  f"({_sanitize_log(exc)}) — not checked", file=sys.stderr)
             continue
         e_line = _first_match_line(lines, earlier_re)
         l_line = _first_match_line(lines, later_re)
@@ -536,8 +539,9 @@ def run_check(check, repo_root, report=None):
                     rel = fpath.replace(repo_root.rstrip("/") + "/", "")
                     # File-level: identity deliberately omitted — see _emit.
                     _emit(findings, rel, content)
-            except (OSError, IOError):
-                pass
+            except (OSError, IOError) as exc:
+                print(f"warn: check {check_id}: could not read {_sanitize_log(fpath)} "
+                      f"({_sanitize_log(exc)}) — not checked", file=sys.stderr)
 
     elif neg_pattern:
         # Per-line filter: keep hits that do NOT match negative_pattern

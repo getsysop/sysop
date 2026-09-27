@@ -438,7 +438,8 @@ class TestLockSchema:
         assert "branch: feat/x" in lock
         assert "mode: branch" in lock
         # The anti-malformed-lock invariant: expires is a real ISO-8601 stamp,
-        # never blank (downstream validators treat a blank expires as malformed).
+        # never blank (nothing treats a blank expires as malformed, but the
+        # validator's expired-placeholder warning cannot read one).
         m = re.search(r"^expires: (.+)$", lock, re.MULTILINE)
         assert m, "no expires line"
         assert re.match(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$", m.group(1)), \

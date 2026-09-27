@@ -30,8 +30,9 @@ checks:
   # `_run_eslint()` in sysop/scripts/run_checks/lint.py, which invokes
   # `eslint --format json .` from the discovered frontend dir and maps
   # each message to `lint-error` (single catch-all check_id with the
-  # original ESLint rule_id embedded in the message text). Skips silently
-  # if eslint or node_modules/eslint is missing.
+  # original ESLint rule_id embedded in the message text). Skips without a
+  # warning when no node_modules/eslint exists; warns when the eslint binary
+  # or node_modules/eslint-config-next is missing.
   # used_by: both — frontend a11y findings (jsx-a11y/*) map to OWASP A07
   # (auth) and A05 (misconfiguration), so the security audit also benefits
   # from the same ESLint output.

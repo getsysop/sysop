@@ -286,6 +286,25 @@ class Assessment:
 # ---------------------------------------------------------------------------
 # Index + body reading (soft — degrade to a note, never SystemExit)
 # ---------------------------------------------------------------------------
+_WARNED: set[str] = set()
+
+
+def _warn_unreadable(path: Path, exc: BaseException, consequence: str,
+                     notes: list | None = None) -> None:
+    """Name an input the advisory absorbed. The advisory never blocks, but an
+    unreadable file read as "no signal" is a quiet wrong answer. It goes into the
+    assessment's `notes` (so `--json` carries it) and to stderr ONCE per file per
+    process — `/auto-build` and `/next-task --avoid-inflight` assess many
+    candidates in one run, and a per-candidate line repeated it N times."""
+    msg = (f"could not read {_sanitize_log(path, 300)} "
+           f"({_sanitize_log(f'{type(exc).__name__}: {exc}', 300)}) — {consequence}")
+    if notes is not None and msg not in notes:
+        notes.append(msg)
+    if str(path) not in _WARNED:
+        _WARNED.add(str(path))
+        print(f"WARN: scope_overlap: {msg}", file=sys.stderr)
+
+
 def _load_index_soft(index_path: Path) -> dict[str, Any] | None:
     """Load tasks/index.yml. Returns None (caller notes + exits 0) on any
     problem — advisory-non-blocking, so a broken/missing index must not break
@@ -299,7 +318,8 @@ def _load_index_soft(index_path: Path) -> dict[str, Any] | None:
     try:
         with open(index_path, "r", encoding="utf-8") as fh:
             data = yaml.safe_load(fh)
-    except (OSError, yaml.YAMLError):
+    except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
+        _warn_unreadable(index_path, exc, "no candidate scope can be inferred")
         return None
     return data if isinstance(data, dict) else None
 
@@ -396,6 +416,7 @@ def _candidate_scope(
     index_data: dict[str, Any] | None,
     base_tasks_dir: Path,
     project_root: Path,
+    notes: list | None = None,
 ) -> CandidateScope:
     """Infer the candidate's likely file scope from declared signals only."""
     if not index_data:
@@ -417,7 +438,9 @@ def _candidate_scope(
         return CandidateScope(candidate_id, [], blast, "blast_radius_only" if blast else "none")
     try:
         text = body_path.read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeDecodeError) as exc:
+        _warn_unreadable(body_path, exc, f"{candidate_id}'s ## Key files are unknown; "
+                         "only its blast_radius is used", notes)
         return CandidateScope(candidate_id, [], blast, "blast_radius_only" if blast else "none")
     paths = _extract_key_files(text)
     if paths:
@@ -428,7 +451,7 @@ def _candidate_scope(
 # ---------------------------------------------------------------------------
 # Lock + worktree reading (the in-flight, factual side)
 # ---------------------------------------------------------------------------
-def _parse_lock_file(path: Path) -> dict[str, Any]:
+def _parse_lock_file(path: Path, notes: list | None = None) -> dict[str, Any]:
     """Lock files are YAML-shaped. Parse defensively; {} on failure. Mirror of
     ``sitrep_survey.py:_parse_lock_file``."""
     try:
@@ -439,11 +462,13 @@ def _parse_lock_file(path: Path) -> dict[str, Any]:
         with path.open(encoding="utf-8") as f:
             data = yaml.safe_load(f)
         return data if isinstance(data, dict) else {}
-    except (OSError, yaml.YAMLError):
+    except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
+        _warn_unreadable(path, exc, "this in-flight claim's lock fields are unknown",
+                         notes)
         return {}
 
 
-def _read_locks(project_root: Path) -> list[dict[str, Any]]:
+def _read_locks(project_root: Path, notes: list | None = None) -> list[dict[str, Any]]:
     """Return the parsed lock dicts (id-bearing) under the canonical sysop/runtime/locks/."""
     locks_dir = _resolve_canonical_locks_dir(project_root)
     if not locks_dir.is_dir():
@@ -452,21 +477,40 @@ def _read_locks(project_root: Path) -> list[dict[str, Any]]:
     for p in sorted(glob.glob(str(locks_dir / "*.lock"))):
         if os.path.basename(p) == ".gitkeep":
             continue
-        raw = _parse_lock_file(Path(p))
+        raw = _parse_lock_file(Path(p), notes)
         task_id = raw.get("task_id") or Path(p).stem
         raw["task_id"] = str(task_id)
         out.append(raw)
     return out
 
 
+def _git_name(raw: bytes) -> str:
+    """A path git printed under ``-z``, as text.
+
+    A name that is not UTF-8 keeps its bytes as a visible ``\\xe9`` escape. It
+    can match no task's key files either way, since those are UTF-8 text, and it
+    is never handed back to git. What it must not become is a lone surrogate
+    (``os.fsdecode``): every caller that prints this module's evidence would then
+    die on a strict stdout, `/auto-build`'s pool read and `next_task
+    --avoid-inflight` among them (Phase 334's round)."""
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw.decode("utf-8", "backslashreplace")
+
+
 def _run_git_name_only(workspace: str, base: str) -> tuple[bool, list[str]]:
-    """``git -C <ws> diff --name-only <base>...HEAD``. Returns (base_resolved,
-    paths). base_resolved is False when the ref doesn't exist / git errors."""
+    """``git -C <ws> diff --name-only -z <base>...HEAD``. Returns (base_resolved,
+    paths). base_resolved is False when the ref doesn't exist / git errors.
+
+    ``-z`` and ``_git_name``, not ``text=True`` (`Q-612`): without ``-z`` git
+    prints a non-ASCII name as a quoted octal escape (``"n\\303\\251.py"``) under
+    the default ``core.quotePath``, so it matched no task's key files, and under
+    ``core.quotePath=false`` a non-UTF-8 name ended the advisory."""
     try:
         r = subprocess.run(
-            ["git", "-C", workspace, "diff", "--name-only", f"{base}...HEAD"],
+            ["git", "-C", workspace, "diff", "--name-only", "-z", f"{base}...HEAD"],
             capture_output=True,
-            text=True,
             timeout=_GIT_TIMEOUT_S,
             check=False,
         )
@@ -474,17 +518,19 @@ def _run_git_name_only(workspace: str, base: str) -> tuple[bool, list[str]]:
         return False, []
     if r.returncode != 0:
         return False, []
-    return True, [ln.strip() for ln in r.stdout.splitlines() if ln.strip()]
+    return True, [_git_name(n) for n in r.stdout.split(b"\0") if n]
 
 
 def _run_git_porcelain(workspace: str) -> list[str]:
-    """Uncommitted + untracked paths via ``git status --porcelain``. Best-effort
-    (returns [] on any error) — captures work not yet committed on the branch."""
+    """Uncommitted + untracked paths via ``git status --porcelain -z``. Best-effort
+    (returns [] on any error) — captures work not yet committed on the branch.
+
+    Under ``-z`` a name is never quoted, and a rename or copy is two fields,
+    ``XY <new>`` then ``<old>``: the new path is kept and the old one skipped."""
     try:
         r = subprocess.run(
-            ["git", "-C", workspace, "status", "--porcelain"],
+            ["git", "-C", workspace, "status", "--porcelain", "-z"],
             capture_output=True,
-            text=True,
             timeout=_GIT_TIMEOUT_S,
             check=False,
         )
@@ -493,13 +539,13 @@ def _run_git_porcelain(workspace: str) -> list[str]:
     if r.returncode != 0:
         return []
     out: list[str] = []
-    for ln in r.stdout.splitlines():
-        if len(ln) < 4:
+    fields = iter(r.stdout.split(b"\0"))
+    for f in fields:
+        if len(f) < 4:
             continue
-        path = ln[3:]  # strip the 2-char XY status + separating space
-        if " -> " in path:  # rename: ``old -> new`` — take the new path
-            path = path.split(" -> ", 1)[1]
-        path = path.strip().strip('"')
+        if b"R" in f[:2] or b"C" in f[:2]:
+            next(fields, None)  # the rename's or copy's old path
+        path = _git_name(f[3:])  # strip the 2-char XY status + separating space
         if path:
             out.append(path)
     return out
@@ -609,6 +655,7 @@ def _inflight_scope(
     project_root: Path,
     index_data: dict[str, Any] | None,
     worktree_reader,
+    notes: list | None = None,
 ) -> tuple[list[str], str]:
     """Resolve one in-flight lock's scope, best-source-first. Returns
     (paths, source)."""
@@ -622,7 +669,7 @@ def _inflight_scope(
     # Last resort: the in-flight task's own body ## Key files.
     task_id = str(raw.get("task_id") or "")
     if task_id and index_data:
-        cand = _candidate_scope(task_id, index_data, base_tasks_dir, project_root)
+        cand = _candidate_scope(task_id, index_data, base_tasks_dir, project_root, notes)
         if cand.paths:
             return cand.paths, "key_files"
     return [], "none"
@@ -730,14 +777,14 @@ def assess(
             "candidate scope could not be inferred"
         )
 
-    cand = _candidate_scope(candidate_id, index_data, base_tasks_dir, project_root)
+    cand = _candidate_scope(candidate_id, index_data, base_tasks_dir, project_root, notes)
     if cand.source == "none" and index_data is not None:
         notes.append(
             f"{candidate_id} not found in index (or has no body) — "
             "overlap assessed only against in-flight facts I could read"
         )
 
-    locks = _read_locks(project_root)
+    locks = _read_locks(project_root, notes)
     overlaps: list[Overlap] = []
     in_flight_count = 0
     in_flight_with_workspace = False
@@ -752,7 +799,7 @@ def assess(
             if os.path.isdir(_ws) and not _resolve_default_branch_for(_ws):
                 unresolved_workspaces.append(tid)
         paths, src = _inflight_scope(
-            raw, base_tasks_dir, project_root, index_data, worktree_reader
+            raw, base_tasks_dir, project_root, index_data, worktree_reader, notes
         )
         verdict, evidence = _grade(cand.paths, paths)
         if verdict != "none":

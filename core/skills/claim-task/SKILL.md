@@ -22,9 +22,9 @@ Claim a roadmap task or review batch, create an isolated worktree, then **orches
 
 ## Pre-flight: Permission Guard
 
-Verify `.claude/settings.json` carries the allow-rules this skill depends on. Under `dontAsk` mode a missing worktree-add or branch-creation rule is auto-denied with no prompt, halting before the workspace is created.
+Verify `.claude/settings.json` (with `.claude/settings.local.json`, if present) carries the allow-rules this skill depends on. Under `dontAsk` mode a missing worktree-add or branch-creation rule is auto-denied with no prompt, halting before the workspace is created.
 
-Read `.claude/settings.json` and confirm `permissions.allow` contains:
+Read `.claude/settings.json` (and `.claude/settings.local.json` if present — allow-rules union across the two) and confirm `permissions.allow` contains:
 
 - `Bash(git checkout:*)` — Step 4 rollback path on 4b/4c failure (`git checkout tasks/index.yml`, followed by a `git diff --cached --quiet` check: the checkout restores from the index and no-ops over a staged flip, and the wider `HEAD --` form was refused because it destroys a concurrent session's staged claim — `Q-445`).
 - `Bash(git worktree add:*)` — transitively invoked by `sysop/scripts/claim_task.sh`.
@@ -41,11 +41,11 @@ If `$ARGUMENTS` contains `--skip-permission-guard`, print a one-line warning and
 
 ## Step 1: Parse Argument & Classify
 
-Parse `$ARGUMENTS`:
+Parse `$ARGUMENTS`, testing the arms in this order (`BATCH-120` also matches the task-id grammar):
 
 - **Bare integer** (e.g., `116`) or **`BATCH-<N>`** → review batch. Extract the number.
-- **Known prefix** (`FEAT-*`, `TECH-*`, `DATA-*`, `UX-*`, `FIX-*`) → roadmap task.
-- **Empty or unrecognized** → print usage and stop:
+- **Any other task id** — a token matching the schema's id grammar `^[A-Z][A-Z0-9-]{2,80}$` (`tasks/schema.md`, enforced by `validate_tasks.py`) → roadmap task, whatever its prefix: `OPS-FOO` classifies exactly as `FEAT-FOO` does. Do not check here that the id exists; Step 2's `--entry-state` answers `absent` for one that does not, and stops.
+- **Empty or unrecognized** (not a batch and not id-shaped) → print usage and stop:
   ```
   Usage: /claim-task <TASK_ID | BATCH_NUMBER>
 
@@ -82,7 +82,7 @@ Re-run without --plan-only to claim this batch under option A or B.
 
 **This check cannot be deferred to Step 6, and that is the whole reason it is here.** Step 6 is where the two-options-not-three offer lives, but `_shared/plan-review-preference.md` resolution tier 1 puts the flag *above* the offer and says "never prompt when tier 1 resolves" — so `/claim-task --plan-only BATCH-5` never reaches the offer that is supposed to make C roadmap-only. Placing it at Step 6 would leave the one path that skips the offer as the one path that gets it wrong. Placing it here also means the batch is **not claimed** when the rejection fires: Step 6 runs after `batch_work.sh` has already taken the lock and committed a `review_tasks.md` mutation on `main`, so a stop there would cost a claim-and-release for a run that could never have produced anything.
 
-**Roadmap tasks are unaffected** — `--plan-only` on a `FEAT-*`/`TECH-*`/… id passes straight through to Step 6, which reads it as tier 1 and resolves to option C.
+**Roadmap tasks are unaffected** — `--plan-only` on a roadmap task id, of any prefix, passes straight through to Step 6, which reads it as tier 1 and resolves to option C.
 
 ### Normalise the claim ID here, not later
 
@@ -226,8 +226,12 @@ if not index_path.exists():
     print("ERROR: tasks/index.yml not found", file=sys.stderr)
     sys.exit(2)
 
-with index_path.open(encoding="utf-8") as f:
-    data = yaml.safe_load(f)
+try:
+    with index_path.open(encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+except (OSError, UnicodeDecodeError) as e:
+    print(f"ERROR: tasks/index.yml could not be read ({type(e).__name__}: {e})", file=sys.stderr)
+    sys.exit(2)
 
 tasks = data.get("tasks", []) or []
 match = next((t for t in tasks if t.get("id") == task_id), None)
@@ -267,7 +271,7 @@ PY
 
 Hard-fail (exit and report) if the script exits non-zero. Surface the stderr message verbatim. **Exit-code contract** (typed so the parent can branch without re-parsing stderr):
 
-- `2` — `tasks/index.yml` itself missing (consumer not bootstrapped, or wrong cwd).
+- `2` — `tasks/index.yml` itself missing (consumer not bootstrapped, or wrong cwd), or present but unreadable (a permission error or a byte that is not UTF-8; stderr names which).
 - `3` — task ID not found. The user mistyped the ID, or the task lives in `deferred/` / `archive/`. Suggest `/next-task` to find a claimable one.
 - `4` — status is neither `open` nor `in_progress` (i.e. `done` / `deferred` / unknown). The task is closed; stop. `in_progress` no longer exits here — the `--entry-state` gate above already separated `resumable` (no lock) from `held` (lock present), and re-deciding it in this heredoc would just make the resume path unreachable.
 - `5` / `6` — `body:` field missing or the body file doesn't exist on disk. The index entry is broken — `validate_tasks.py` will reject it; fix the entry before re-claiming.
@@ -318,12 +322,12 @@ To hand a stranded batch back, use `bash sysop/scripts/batch_work.sh --release <
 **Roadmap tasks:**
 - If `--branch <name>` was provided, use that.
 - Else if the task entry has a `branch:` field set in `tasks/index.yml` (surfaced as the `branch=...` line by Step 2's Python script), use it.
-- Otherwise, auto-generate from the task ID by lowercasing and mapping the prefix:
-  - `FEAT-X` → `feat/feat-x`
-  - `TECH-X` → `tech/tech-x`
-  - `DATA-X` → `data/data-x`
-  - `UX-X` → `ux/ux-x`
-  - `FIX-X` → `fix/fix-x`
+- Otherwise, derive it from the task ID by one rule, for every prefix:
+  the directory is the id's leading `^[A-Z][A-Z0-9]*` segment
+  lowercased, and the leaf is the whole id lowercased.
+  `FEAT-X` → `feat/feat-x`, `OPS-FOO` → `ops/ops-foo`.
+  `QA2-X` → `qa2/qa2-x`, and a hyphenless id is its own
+  directory: `ABC123` → `abc123/abc123`.
 
 **Review batches:** The branch is specified in `review_tasks.md` metadata and handled by `batch_work.sh`, so nothing is *generated* here — but `<BRANCH_NAME>` still has to be **established**, because all three Step 7 prompts substitute it and every envelope requires it. `batch_work.sh` prints it in its summary box (`│  Branch: <name>`); read it off Step 4's output there and hold it in context. See Step 4's review-batch block.
 
@@ -371,8 +375,13 @@ from pathlib import Path
 task_id = sys.argv[1]
 index_path = Path("tasks/index.yml")
 
-with index_path.open(encoding="utf-8") as f:
-    data = yaml.safe_load(f)
+try:
+    with index_path.open(encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+except (OSError, UnicodeDecodeError) as e:
+    print(f"ERROR: tasks/index.yml could not be read ({type(e).__name__}: {e}). "
+          "Nothing was changed.", file=sys.stderr)
+    sys.exit(1)
 
 # A concurrent writer that truncates in place leaves this file zero-length for a
 # moment, and `safe_load("")` returns None — which then died on `.get` with a raw
@@ -1136,19 +1145,25 @@ Read your three inputs from disk rather than from this prompt: `<ARTIFACT_DIR>/p
 ### Sequence
 
 1. **Absorb the classification.** For each `fixable` finding, apply its recorded `response` to the plan as you implement. Where a finding was rejected, its rationale is in `classification.md` — do not silently re-litigate it.
-2. **Implement** per the plan. Re-open the files it touches; do not rely on its summaries.
-2b. **When the work surfaces something adjacent, decide the tier before you decide the fix.** Three tiers; take the first that fits.
+2. **Implement** per the plan. Re-open the files it touches; do not rely on its summaries.\
+2b. **When the work surfaces something adjacent, fix it here — that is the default.** Each finding gets one of three outcomes; nothing is parked.
 
-   1. **Fix it in this branch** when **all** of these hold: it is in a file or module this task already touches; it is mechanical, or a doc, test, or convention-config correction; an existing gate already covers it, or you add the test that does; it is small — on the order of 20 lines, and no more than a few per branch; and it is **not a claim about what the code means that you have not verified by reading the consumer**. **Never tier 1, at any size:** migrations; prompts under whatever eval gate the consumer declares (`<project>/CLAUDE.md`; if it declares none, read this as the project's shipped agent/skill prompt bodies); auth and money-path code; every path in `<project>/CLAUDE.md` § *Security-critical always-include files*; and anything that writes to production. Record each one as a single line under an `## Also fixed` heading in the task body — the same write as item 3 — so the close reviews it as *intended* scope rather than as an unexplained hunk, and the test decision covers it.
-   2. **Extend an existing open task** in that module — add what you found to that task's body rather than opening a second entry against the same code. This is `/add-task` Step 2's move, made the default here rather than one branch of a judgment.
-   3. **File a new task** only past both — or when it is a design question, needs a `user_action`, or writes to production.
+   1. **Fix it in this branch** — whatever module it is in, and past a one-line change, as long as the close can still review the branch. Read the code before you change what it does, and add a test when the fix changes behaviour. **Never, at any size:** migrations, anything that writes to production, and auth or payment logic. Record each fix as one line under an `## Also fixed` heading in the task body — the same write as item 3 — so the close reviews it as *intended* scope rather than as an unexplained hunk, and the test decision covers it.
+   2. **File a task** only when it cannot be fixed now: it needs a design decision or a human action, it is too large to review in this branch, or it is on the never-list. Add it to an existing open task in that module before opening a new entry.
+   3. **Drop it** when nothing is wrong: nothing is broken today, it is a preference or a hypothetical, or it is already handled. A real future condition goes in a comment or a test at the site, not in a ledger.
 
-   **Past those, tier 3 has one more test: name what the filing blocks.** One of — the phase carrying `current_focus: true`; a named `planned` phase; a gate the project declares (`<project>/CLAUDE.md`, a release checklist, an ops runbook — whatever it calls them); or an open task whose stated acceptance this stops. Write that name into the body so a reader can check it. **Four kinds are filed whatever this test says**, each being its own justification: a design question or a call that is the human's; a `user_action`; a production write; and a defect in shipped behaviour **you can state as a falsifiable failure** — the input, the expected result, the actual one — or a security finding. **Everything else goes to `tasks/notes.md`** — the flat ledger beside the queue, one line per note, shape in `tasks/README.md` § *The notes ledger*. Nothing routes to that file and nothing counts it; that is what it is for. **A note is not a silent drop:** say in your final message that you wrote one and what it concerns, so the human can promote it with `/add-task`. And a note carries no task id, so do not put a `<PREFIX>-<NAME>` token for it into the docs prose — `/document-work` Step 3b hard-fails on a token that resolves to nothing. The ledger holds a finding nobody has committed to yet; it is never the place for one you would rather not defend. **The append itself is the record item's write, not this item's** — same delegation as `## Also fixed`, and for a plainer reason: this item runs while the work does, and a record write belongs in the one step that owns the worktree paths. Decide the routing here; name the line you want appended; leave the writing to it.
+   **When an answer from the human would make it fixable** — a design choice, which of two readings is intended, permission for a never-list item — do not guess: this run has nobody to ask. File the task in the worktree with the question and both candidate fixes written into its body, and add an entry for it to `<ARTIFACT_DIR>/questions.md` in this shape, one `## ` entry per finding, so Step 8 can put the question in front of the human:
 
-   **The backstop is a property of the CHANGE, not a lookup over a file list** — an enumeration rots. **If the change would weaken, disarm, narrow or delete a gate — a check, a semgrep rule, a numeric bound, an allowlist or ignore entry, a deletion-protection flag — it is never tier 1, whatever file it lives in**, because tier 1's "an existing gate already covers it" predicate is satisfied by the disarming edit itself. If you cannot name a gate that would still fail were your fix wrong, file instead.
+   ```markdown
+   ## <the finding, one line>
+   - filed as: <TASK-ID>
+   - where: <path:line>
+   - question: <what the human has to decide>
+   - recommended: <the answer you would pick>
+   ```
 
-   **The bound is the design, not a formality.** Unplanned scope inside a narrow plan is a real failure mode, and an agent mid-task verifies an adjacent thing less carefully than a fresh one would. Tier 1 dropped in the name of throughput becomes a source of defects rather than a sink for tasks. When you are between tiers 1 and 2, take 2 — a filed line costs a reader, a wrong in-branch fix costs a revert.
-3. **Persist the `## Test decision`** section into the task's body file, per the plan's step for it. **Write the worktree copy** (`<WORKTREE_PATH>/tasks/…`), never the main checkout's — an edit there is on no branch, so it never reaches the PR, and `/review-close` Step 2d reads this record at the branch tip. **If the plan's step names a main-checkout path, correct it and note the correction** rather than following it. **If item 2b produced any tier-1 fixes, write `## Also fixed` in this same write** — one line each, placed after this `## Test decision` section and before any `## Plan` section, per `tasks/schema.md` § *Also fixed*. That order is not cosmetic: the plan section is a fenced block that can quote either heading, so a first-match heading reader must meet the real section first. The one exception is a body that is untracked in the main checkout (`/add-task` filed it and nobody committed it): it is on no branch and cannot be put on one, so write the main-checkout copy and **say so in your final message** — that record will not reach the PR and the body needs committing before `/review-close` runs. **If item 2b routed anything to the notes ledger, append those lines to `<WORKTREE_PATH>/tasks/notes.md` in this same pass** — create the file if it is absent, one flat line per note, appended at the end, per `tasks/README.md` § *The notes ledger*. It is a different file from the body and carries no ordering relationship to these sections; it is written here because this is the step that owns the worktree paths. **A note written into the main checkout is on no branch, so it never reaches the PR** — and it is not Step 2a that catches that: Step 1a skips the primary checkout by inode identity, so the dirty classification never sees it. What it reaches instead is Step 6's post-merge `git diff --quiet HEAD --` gate, which halts the close *after* the PR has merged. Late and loud rather than early and loud; write the worktree copy.
+   **`tasks/notes.md` is retired — write nothing to it.** A consumer's existing ledger is theirs to clear; leave it alone.
+3. **Persist the `## Test decision`** section into the task's body file, per the plan's step for it. **Write the worktree copy** (`<WORKTREE_PATH>/tasks/…`), never the main checkout's — an edit there is on no branch, so it never reaches the PR, and `/review-close` Step 2d reads this record at the branch tip. **If the plan's step names a main-checkout path, correct it and note the correction** rather than following it. **If item 2b produced any in-branch fixes, write `## Also fixed` in this same write** — one line each, placed after this `## Test decision` section and before any `## Plan` section, per `tasks/schema.md` § *Also fixed*. That order is not cosmetic: the plan section is a fenced block that can quote either heading, so a first-match heading reader must meet the real section first. The one exception is a body that is untracked in the main checkout (`/add-task` filed it and nobody committed it): it is on no branch and cannot be put on one, so write the main-checkout copy and **say so in your final message** — that record will not reach the PR and the body needs committing before `/review-close` runs.
 
    **Then read it back, before you go on.** This write is skipped more often than any other step in this sequence — measured on one consumer cycle at **three of four branches**, all claimed the same day through this path, two of them shipping substantial tests. So it is a missing *record*, not missing coverage, and nothing downstream catches it in time: the validator's warn-only invariant on this fact was retired (it read the working tree, where the record does not live), leaving `/review-close` Step 2d as the only enforcement — at the merge, after implementation, where the sole dispositions are waive it or hold otherwise-ready work. The record is cheap here and expensive there. Confirm the heading is really in the file you just wrote:
 
@@ -1178,7 +1193,7 @@ Read your three inputs from disk rather than from this prompt: `<ARTIFACT_DIR>/p
 
 - Do **NOT** invoke the Agent tool — this run is a leaf, and the envelope contract assumes a flat hierarchy.
 - Do **NOT** write to `sysop/runtime/subagent-envelopes/`. That directory is written **only** by the `SubagentStop` hook, and that is the entire reason it is evidence: no agent can cause it to exist. Writing it yourself converts the one unforgeable artifact into a forgeable one.
-- Do **NOT** flip `status:` fields in `tasks/index.yml`. Adding a new follow-up task entry IS allowed — and is required if `/document-work` Step 3b would flag an unfiled follow-up ID — but it is **tier 3**, not the default: take item 2b's tiers in order first.
+- Do **NOT** flip `status:` fields in `tasks/index.yml`. Adding a new follow-up task entry IS allowed — and is required if `/document-work` Step 3b would flag an unfiled follow-up ID — but it is item 2b's **second** outcome, not the default: fix first.
 - Do **NOT** push to origin (`/review-close` owns the push).
 - Do **NOT** invoke `/document-work` (the orchestrator does, at Step 8).
 
@@ -1266,7 +1281,12 @@ if not plan_md.is_file():
     print("ERROR: no plan.md in {} -- refusing to write an empty plan back".format(run_dir),
           file=sys.stderr)
     sys.exit(4)
-plan_text = plan_md.read_text(encoding="utf-8").strip()
+try:
+    plan_text = plan_md.read_text(encoding="utf-8").strip()
+except (OSError, UnicodeDecodeError) as e:
+    print("ERROR: {} could not be read ({}: {})".format(plan_md, type(e).__name__, e),
+          file=sys.stderr)
+    sys.exit(4)
 if not plan_text:
     print("ERROR: plan.md is empty", file=sys.stderr)
     sys.exit(4)
@@ -1444,8 +1464,13 @@ def strip_sections(lines, headings, preserve=()):
 # AND on every currently-supported Python below 3.13, taking the whole option-C
 # body rewrite with it. It went unseen because the suite's venv is 3.14.
 # `open` has accepted `newline` since 3.0.
-with open(body, encoding="utf-8", newline="") as _f:
-    raw = _f.read()
+try:
+    with open(body, encoding="utf-8", newline="") as _f:
+        raw = _f.read()
+except (OSError, UnicodeDecodeError) as e:
+    print("ERROR: {} could not be read ({}: {}) -- nothing was written".format(
+        body, type(e).__name__, e), file=sys.stderr)
+    sys.exit(5)
 crlf = "\r\n" in raw
 text = raw.replace("\r\n", "\n")
 # Replace IN PLACE, both sections, at the position the earlier of them held.
@@ -1731,7 +1756,7 @@ Read the envelope in this order — first hit wins; never go past a clean hit:
 
 **What reads it, said as plainly as the cleanup above — and what that does not buy.** All three of part B's legs now ship: close-time cleanup (leg 3), `/review-close` **Step 2e**'s per-branch artifact report (leg 1), and `/sitrep`'s **park + awaiting-approval** classification (leg 2). So the artifact set is created, read and reaped. **Both readers report and neither rejects**, which is the deliberate shape and not a gap to be closed later: an absent artifact set is surfaced where a human is already looking, and nothing is blocked on it. A blocked run is therefore conspicuous rather than impossible — do not describe either reader as a gate, and do not read "part B shipped" as "a skipped review is now prevented."
 
-**One reader is narrower than its name.** `/sitrep`'s predicate is reached on the **roadmap** path only: `run_survey`'s lock loop skips a `BATCH-`/`TASK-` prefixed id before `_classify_task` runs, so a `/claim-task` park of a *review batch* still classifies under the separate batch vocabulary, which has no park state. That gap is filed and open; say "for roadmap claims" rather than implying batch coverage this does not have.
+**Both claim kinds reach `/sitrep`'s park classification.** `run_survey`'s lock loop leaves a review batch's `BATCH-<N>` lock, and an unindexed `TASK-` id, to the batch path, and `_classify_review_batches` runs the same park probe there, keyed `BATCH-<N>`. A `/claim-task` park of a review batch therefore classifies as parked, like a roadmap park, not as ordinary in-progress work.
 
 **On `BLOCKED`, rewrite the classification FIRST — before the outcome record below.** The order is load-bearing and a different-model review of the whole pipeline is what found it: a crash between the two writes must leave the run in the state that routes *back into adjudication*, not the one that reports it as finished. Writing `outcome.md` first and crashing leaves `classification.md` still reading `PROCEED`, and the routing table then matches the outcome row and reports a blocked run as complete. Writing the classification first and crashing leaves `verdict: BLOCKED` with no outcome record, which routes to 7c — correct, and the safe direction.
 
@@ -1778,7 +1803,7 @@ common = subprocess.run(["git", "rev-parse", "--git-common-dir"],
                         capture_output=True, text=True, check=True).stdout.strip()
 main_root = Path(common).resolve().parent
 changed = subprocess.run(
-    ["git", "-C", str(main_root), "diff", "--name-only", "HEAD", "--", "tasks/"],
+    ["git", "-C", str(main_root), "-c", "core.quotePath=true", "diff", "--name-only", "HEAD", "--", "tasks/"],
     capture_output=True, text=True, check=True).stdout.split()
 # The pathspec stays exactly `tasks/`. `tasks/notes.md` is partitioned out AFTER the
 # diff, not excluded from it: narrowing what the probe looks at is how it stops
@@ -1831,8 +1856,11 @@ main_root = Path(common).resolve().parent
 # `git show <path>` means `git show HEAD -- <path>` and exits 0 off the WRONG revision:
 # the one failure here that can fabricate a pass (Step 2d documents it at length). The
 # operand is built by .format() so it cannot lose the colon.
-r = subprocess.run(["git", "-C", str(main_root), "show", "{}:{}".format(branch, body_rel)],
-                   capture_output=True, text=True)
+try:
+    r = subprocess.run(["git", "-C", str(main_root), "show", "{}:{}".format(branch, body_rel)],
+                       capture_output=True, text=True)
+except UnicodeDecodeError as e:  # a body that is not UTF-8 takes the UNREADABLE arm below
+    r = subprocess.CompletedProcess([], 1, "", "not UTF-8: {}".format(e))
 if r.returncode != 0:
     err = (r.stderr or "").strip()
     # git says "does not exist in '<rev>'" when the path is absent from the worktree too,
@@ -1945,6 +1973,8 @@ PY
 ```
 
 **If that printed `MISSING` or `TEMPLATE`, stop and say so — do not run `/document-work`.** Nothing else about the branch is wrong: the work is committed and the worktree is still checked out at `<WORKTREE_PATH>`, so the repair is to write the section into the **worktree** copy and **amend** the executor's single commit, then re-run the block. Report which of the two fired and what the plan's recorded decision text was, so the record is restored rather than reinvented. **Do not compose it yourself from the diff** — 7a decided it and 7b scrutinised the `Z`; writing a fresh one here substitutes an unreviewed judgment for a reviewed one, which is the substitution Step 2d exists to catch. `NOT ON BRANCH` and `UNREADABLE` are different in kind and do **not** block: neither asserts anything about the record, so both report and exit 0.
+
+**Then report the questions the executor filed.** If `<ARTIFACT_DIR>/questions.md` holds `## ` entries, each is a finding the executor could fix only with an answer from the human, filed on the branch as a task carrying the question (Step 7e item 2b). Print every entry's finding, question, recommendation and `filed as:` id under the report below, so the human can answer it on that task. Do not answer or fix them yourself; this skill never implements. An absent or empty file means there were none.
 
 Then:
 

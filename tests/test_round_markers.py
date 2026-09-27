@@ -410,6 +410,8 @@ def test_loop_allow_subset_still_carries_the_heredoc_rule():
     """The marker rides the existing `Bash(python3 -:*)` rule — zero new
     permission surface. If loop mode ever drops it, layer 1 silently disarms in
     exactly the install mode the public docs route newcomers to."""
-    text = (REPO_ROOT / "install.sh").read_text(encoding="utf-8")
-    subset = text.split("LOOP_ALLOW = {", 1)[1].split("}", 1)[0]
-    assert '"Bash(python3 -:*)"' in subset
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from test_prescribed_command_coverage import _loop_allow
+    # The installer's set as Python evaluates it: a substring scan read a commented-out
+    # rule as live (Phase 333's round, the same defect as that module's W1b).
+    assert "Bash(python3 -:*)" in _loop_allow()

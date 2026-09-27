@@ -32,6 +32,11 @@ permissions:
 
 jobs:
   sysop-checks:
+    # `ubuntu-24.04-arm` is an option. On Sysop's own pure-Python suite it measured ~25% faster
+    # at the same 2 workers (x64 mean 363 s over 20 samples, arm64 mean 272 s over 12). It can
+    # break a project with compiled dependencies lacking `aarch64` wheels, or service containers
+    # without arm64 images, and it may be unschedulable on some plans for private repos: a job
+    # that queues never reports, which blocks a required check. Measure on your own tree first.
     runs-on: ubuntu-latest
     steps:
       # fetch-depth: 0 — the coverage/diff stages of run_checks compare changed

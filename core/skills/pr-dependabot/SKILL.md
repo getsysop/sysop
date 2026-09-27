@@ -32,7 +32,7 @@ then the human is the one invoking it. Hold/surface PRs are never actuated.
 This skill shells out to `gh` and `python3`. It writes nothing to the filesystem
 — its only side effects are GitHub PR merges/closes, and only under `--execute`.
 
-Read `.claude/settings.json` and confirm `permissions.allow` contains:
+Read `.claude/settings.json` (and `.claude/settings.local.json` if present — allow-rules union across the two) and confirm `permissions.allow` contains:
 
 - `Bash(python3 sysop/scripts/pr_dependabot.py:*)` — the classifier/executor itself
 - `Bash(gh pr list:*)` — enumerate open Dependabot PRs

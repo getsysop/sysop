@@ -24,6 +24,7 @@ import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass, field
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 try:
@@ -169,6 +170,13 @@ _BATCH_EXTERNAL_RE = re.compile(r"^BATCH-\d+$")
 _IMPORTED_SENTINEL = "imported"
 _PHASE_SUMMARY_RE = re.compile(r"^_phase_\d+\.md$")
 _BODY_FIRST_HEADING_RE = re.compile(r"^#\s+([^\s#].*?)\s*$")
+
+# The `plan_summary:` value both lock writers seed (claim_task.sh and
+# batch_work.sh). Byte-identical to what they emit, after YAML parsing —
+# tests/test_lock_placeholder_expiry.py derives it by RUNNING both writers, so a
+# reworded seed reddens that test instead of silently disabling the check below.
+LOCK_PLAN_SUMMARY_PLACEHOLDER = "(update with a one-line description of the work)"
+_BATCH_LOCK_NAME_RE = re.compile(r"^BATCH-\d+\.lock$")
 
 # Secret-scan patterns (warn-only). All module-scope.
 _LONG_HEX_RE = re.compile(r"\b[0-9a-fA-F]{32,}\b")
@@ -589,7 +597,7 @@ def _validate_tasks(
         # Invariant 9: in_progress requires lock
         if status == "in_progress" and tid_for_use is not None:
             lock_path = locks_dir / f"{tid_for_use}.lock"
-            if not lock_path.is_file():
+            if not _is_file(lock_path):
                 report.error(
                     loc_id,
                     f"status=in_progress but lock file missing at {lock_path}. "
@@ -598,8 +606,129 @@ def _validate_tasks(
                     "`bash sysop/scripts/claim_task.sh --lock <TASK_ID> <BRANCH>` to "
                     "recreate it, or flip the task back to status=open.",
                 )
+            else:
+                _check_expired_placeholder_lock(lock_path, tid_for_use, report)
+
+    # The same check for review-batch claims. batch_work.sh seeds the same
+    # placeholder, and a BATCH-<N>.lock has no tasks/index.yml entry to reach it
+    # through the loop above. Other locks with no in_progress task are NOT read
+    # here: that is a different defect (an orphan lock), not an unannotated one.
+    try:
+        batch_locks = sorted(
+            p for p in locks_dir.iterdir()
+            if _BATCH_LOCK_NAME_RE.match(p.name) and _is_file(p)
+        ) if locks_dir.is_dir() else []
+    except OSError:
+        batch_locks = []  # an unreadable locks dir is not this warning's to report
+    for batch_lock in batch_locks:
+        _check_expired_placeholder_lock(batch_lock, batch_lock.stem, report)
 
     return task_ids
+
+
+def _parse_lock_expiry(value: object) -> datetime | None:
+    """`expires:` as an aware UTC datetime, or None when it cannot be read.
+
+    The writers emit `%Y-%m-%dT%H:%M:%SZ`, which PyYAML already loads as a
+    datetime (aware on PyYAML 6, naive-UTC before it). A string is tried in the
+    writers' format, then as ISO 8601; a bare date (a hand-extended expiry such
+    as `2026-10-01`) is midnight UTC. Anything else is None.
+    """
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, date):
+        return datetime(value.year, value.month, value.day, tzinfo=timezone.utc)
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip()
+    try:
+        return datetime.strptime(text, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    except ValueError:
+        pass
+    try:
+        parsed = datetime.fromisoformat(text[:-1] + "+00:00" if text.endswith("Z") else text)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _is_file(path: Path) -> bool:
+    """`Path.is_file()` that answers False on any OSError. On Python <= 3.13 it raises
+    for EACCES (a locks dir the caller cannot search) where 3.14 returns False, so an
+    unreadable locks dir crashed the whole schema run on older interpreters."""
+    try:
+        return path.is_file()
+    except OSError:
+        return False
+
+
+def _has_text(value: object) -> bool:
+    """True when a lock field holds some non-blank text, at any depth: an empty list,
+    an empty mapping, `0` or `false` annotates nothing."""
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (list, tuple)):
+        return any(_has_text(v) for v in value)
+    if isinstance(value, dict):
+        return any(_has_text(v) for v in value.values())
+    return False
+
+
+def _check_expired_placeholder_lock(lock_path: Path, claim_id: str, report: Report) -> None:
+    """Warn when a lock is past `expires:` AND nothing says why it is still held.
+
+    Once `expires:` lapses, a deliberate park and an abandoned claim look the same
+    unless someone wrote which it is. So the warning needs all of: an expired lock,
+    the seeded `plan_summary`, an empty `notes:`, and no park record under
+    `sysop/runtime/parked/<ID>__*.md` written since the claim started (where
+    `/claim-task` and `/auto-build` record a deliberate park, leaving the lock in
+    place; a batch's is `BATCH-<N>__*.md`). Any one of those three is a statement of
+    what the claim is. A release leaves an older park record behind, so a record
+    from before this claim's `started:` says nothing about this claim.
+
+    A WARNING, never an error. `sysop/runtime/` is gitignored, so CI never sees a
+    real lock, and a consumer's CI may seed stub locks before running this
+    validator — a blocking check there would be measuring the stub. Warnings do
+    not change the exit code (module docstring).
+
+    A lock that cannot be read or parsed as a mapping, or whose `expires:` is
+    missing or unparseable, gets no warning: expiry cannot be established, and a
+    stub or hand-edited lock must not crash or fail validation.
+    """
+    try:
+        raw = yaml.safe_load(lock_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, yaml.YAMLError, ValueError):
+        return
+    if not isinstance(raw, dict):
+        return
+    summary = raw.get("plan_summary")
+    if not isinstance(summary, str) or summary.strip() != LOCK_PLAN_SUMMARY_PLACEHOLDER:
+        return
+    if _has_text(raw.get("notes")):
+        return
+    expires = _parse_lock_expiry(raw.get("expires"))
+    if expires is None or expires > datetime.now(timezone.utc):
+        return
+    started = _parse_lock_expiry(raw.get("started"))
+    try:
+        for marker in (lock_path.parent.parent / "parked").glob(f"{glob.escape(claim_id)}__*.md"):
+            if started is not None and marker.stat().st_mtime >= started.timestamp():
+                return
+    except OSError:
+        pass
+    if _BATCH_LOCK_NAME_RE.match(lock_path.name):
+        release = f"bash sysop/scripts/batch_work.sh --release {claim_id[len('BATCH-'):]}"
+    else:
+        release = f"bash sysop/scripts/claim_task.sh --release {claim_id}"
+    report.warn(
+        str(lock_path),
+        f"claim {_sanitize_log(claim_id)} expired at {expires.strftime('%Y-%m-%dT%H:%M:%SZ')} "
+        "and the lock does not say why it is still held (plan_summary is the seeded "
+        "placeholder, notes is empty, no park record). If parked: write why in "
+        "plan_summary or notes and extend expires:. If the work is finished and waiting "
+        "to merge: close it with /document-work and /review-close, and do not release it, "
+        f"which reopens the task. If abandoned: {release}",
+    )
 
 
 def _check_status_consistency(task: dict, status: object, loc: str, report: Report) -> None:
@@ -1367,6 +1496,41 @@ def _build_manual_smoke_bad_type_fixture(root: Path) -> Path:
     return tasks_dir
 
 
+def _build_placeholder_lock_fixture(root: Path) -> Path:
+    """Expired-placeholder lock warning: one row per state the check separates.
+
+    Warns: STALE (expired + placeholder) and BATCH-3 (the same, batch lock).
+    Silent: PARKED (annotated + extended), FILLED (expired, summary written),
+    FRESH (placeholder, not yet expired).
+    """
+    tasks_dir = root / "tasks"
+    rows = ("STALE", "PARKED", "FILLED", "FRESH")
+    entries = "".join(
+        f"  - id: FEAT-LOCK-{r}\n    title: \"lock {r}\"\n    phase: 1\n"
+        f"    status: in_progress\n    effort: Low\n    user_action: false\n"
+        f"    depends_on: []\n    surfaced_by: []\n    body: tasks/open/FEAT-LOCK-{r}.md\n"
+        for r in rows
+    )
+    _write(tasks_dir / "index.yml",
+           "schema_version: 1\n\nphases:\n  - number: 1\n    title: \"P\"\n"
+           "    status: in_progress\n    current_focus: true\n\ntasks:\n" + entries)
+    for r in rows:
+        _write(tasks_dir / "open" / f"FEAT-LOCK-{r}.md", f"# FEAT-LOCK-{r}\n\nbody.\n")
+    placeholder = LOCK_PLAN_SUMMARY_PLACEHOLDER
+    locks = {
+        "FEAT-LOCK-STALE": ("2020-01-01T00:00:00Z", placeholder),
+        "FEAT-LOCK-PARKED": ("2999-01-01T00:00:00Z", "PARKED: blocked on vendor API key"),
+        "FEAT-LOCK-FILLED": ("2020-01-01T00:00:00Z", "wire the importer"),
+        "FEAT-LOCK-FRESH": ("2999-01-01T00:00:00Z", placeholder),
+        "BATCH-3": ("2020-01-01T00:00:00Z", placeholder),
+    }
+    for claim, (expires, summary) in locks.items():
+        _write(root / "sysop/runtime/locks" / f"{claim}.lock",
+               f"task_id: {claim}\nstatus: in_progress\nexpires: {expires}\n"
+               f"plan_summary: {summary}\nnotes:\n")
+    return tasks_dir
+
+
 def _build_forward_compat_fixture(root: Path) -> Path:
     """Decision 2: schema_version > MIN_SCHEMA_VERSION must be accepted."""
     tasks_dir = root / "tasks"
@@ -1560,6 +1724,26 @@ def _self_test() -> int:
                     failures.append("    " + f.format())
             else:
                 print("  manual_smoke bad-type fixture (Phase 35): correctly rejected")
+
+    # Expired lock still carrying the seeded plan_summary — warn-only, and it
+    # must separate the two warned rows from the three silent ones.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        tasks_dir = _build_placeholder_lock_fixture(root)
+        report = validate(tasks_dir, project_root=root)
+        flagged = sorted(
+            claim for claim in ("FEAT-LOCK-STALE", "FEAT-LOCK-PARKED", "FEAT-LOCK-FILLED",
+                                "FEAT-LOCK-FRESH", "BATCH-3")
+            if any(f"claim {claim} expired" in f.message for f in report.warnings)
+        )
+        if not report.ok:
+            failures.append("placeholder-lock fixture failed validation (warn-only check must not block):")
+            for f in report.errors:
+                failures.append("  " + f.format())
+        elif flagged != ["BATCH-3", "FEAT-LOCK-STALE"]:
+            failures.append(f"placeholder-lock fixture warned for {flagged}, expected BATCH-3 + FEAT-LOCK-STALE")
+        else:
+            print("  placeholder-lock fixture: warned for the two expired placeholder locks only")
 
     if failures:
         print("SELF-TEST FAILED:")

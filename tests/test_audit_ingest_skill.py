@@ -66,7 +66,9 @@ def test_truncation_surfaced_loudly():
     body = _step3c()
     assert "floor, not a coverage claim" in body
     assert "trust.reasons" in body
-    assert 'trust.status != "verified"' in body
+    # The loud arm is `unverified`, not `!= "verified"`: the parser's third value, `none`,
+    # is every round with no report (tests/test_review_skill_record_contracts.py).
+    assert '**`"unverified"` → surface it loudly.**' in body
     # verified must be described as NOT a coverage guarantee
     assert "not** that the scan covered the repo" in body or \
            "not a coverage claim" in body

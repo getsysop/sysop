@@ -27,7 +27,7 @@ This skill is the prerequisite step for `/auto-fix` (which fixes auto batches) a
 
 This skill stages and commits a single file (`review_tasks.md`) when it writes triage records. Under `dontAsk` mode those commits are auto-denied with no prompt unless explicit allow-rules cover them.
 
-Read `.claude/settings.json` and confirm `permissions.allow` contains:
+Read `.claude/settings.json` (and `.claude/settings.local.json` if present — allow-rules union across the two) and confirm `permissions.allow` contains:
 
 - `Bash(git add review_tasks.md)`
 - `Bash(git commit -m docs:*)`

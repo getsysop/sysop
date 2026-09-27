@@ -18,10 +18,10 @@ Two designs that would have claimed it were refuted BEFORE being built:
   * Deriving "the newest cut" from `PHASE_LOG.md` prose. The obvious marker, `sysop-tester`,
     appears in **24** phase entries — most of them not cuts — and is **absent** from
     Phase 296, which is one. Wrong in both directions.
-  * A recency gate. `tests/test_doc_currency.py:264` already declined that class for
-    `docs/history.md`, in a comment that is the handoff: every shape of it was either
-    flaky (it fails on a quiet fortnight) or circular (it derives "current" from the file
-    it is checking). The objection holds here verbatim.
+  * A recency gate. `tests/test_doc_currency.py` already declined that class for
+    `docs/history.md`, in the NOT MECHANIZED comment above its `HISTORY` constant, which
+    is the handoff: every shape of it was either flaky (it fails on a quiet fortnight)
+    or circular (it derives "current" from the file it is checking). The objection holds here verbatim.
 """
 from __future__ import annotations
 
