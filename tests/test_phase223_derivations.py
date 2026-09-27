@@ -100,7 +100,8 @@ def test_the_cheap_tier_really_is_two_pins():
     # the docs must constrain — naming them, so an unexplained one is visible.
     other = {r: n for r, n in c["by_role"].items()
              if r not in ("reasoning", "mechanical", "quick")}
-    assert other == {"convention-gate": 1}, (
+    # Two since Phase 328: Step 2b's convention agent and the 4a-fix re-check.
+    assert other == {"convention-gate": 2}, (
         f"a role outside the documented tiers governs pins: {other}. Widen "
         f"docs/configuration.md's mapping sentence before widening this."
     )

@@ -21,10 +21,10 @@ Source of truth for the project's task queue. Replaces the single-file `product_
 | `/roadmap` | `index.yml`, `vision.md`, `decisions.md`, `review_tasks.md` | — (read-only strategy view: groups both queues' outstanding work by kind + proposes orderings of attack; never mutates) |
 | `/daily-summary` | `index.yml` (completed tasks for the milestone section), git history | — (read-only retrospective: standup/async report of the last day + week, git-log-driven; never mutates) |
 | `/test-audit` | source + test trees, `.claude/checks.yml` (`critical_path:` globs), optional coverage artifact | — (read-only test-quality audit: recommends new tests on load-bearing surfaces + retirements of dead/redundant/hollow tests; routes accepted recs to `/intake`; never writes tests or mutates) |
-| `/claim-task <ID>` | `index.yml`, body | flips `status: open → in_progress` in `index.yml`; creates `sysop/runtime/locks/<ID>.lock`; its executor writes the branch's `## Test decision` / `## Also fixed` records and, at tier 3 of the fix-in-branch rule, appends to `notes.md` |
-| `/auto-build` | `index.yml`, bodies, `sysop/runtime/locks/*.lock` | the batch equivalent of `/claim-task`: claims each task in the batch and its executors write the same branch records, including tier-3 appends to `notes.md` |
-| `/document-work` | `index.yml`, body | verifies referenced IDs exist; may file a new follow-up entry + body, write `## Also fixed`, or append to `notes.md` — the three carve-outs to its own do-not-modify rule |
-| `/review-close` | `index.yml`, body | sets `status: done` + `completed_date`; `git mv` body to `archive/` |
+| `/claim-task <ID>` | `index.yml`, body | flips `status: open → in_progress` in `index.yml`; creates `sysop/runtime/locks/<ID>.lock`; its executor writes the branch's `## Test decision` / `## Also fixed` records |
+| `/auto-build` | `index.yml`, bodies, `sysop/runtime/locks/*.lock` | the batch equivalent of `/claim-task`: claims each task in the batch and its executors write the same branch records |
+| `/document-work` | `index.yml`, body | verifies referenced IDs exist; may file a new follow-up entry + body, or write `## Also fixed` — the two carve-outs to its own do-not-modify rule |
+| `/review-close` | `index.yml`, body | sets `status: done` + `completed_date`; `git mv` body to `archive/`; files or extends entries by `/add-task`'s route (reviewer notes `4a-fix` did not fix, and a smoke check answered "unrunnable as specified") |
 | `/release` | `index.yml` (done tasks since last tag → highlights), git history | writes a `CHANGELOG.md` entry (uncommitted) + creates/pushes an annotated tag; optional GitHub Release. Write-side, human-gated, dry-run by default; never rewrites a version manifest |
 
 ## Rules
@@ -83,27 +83,17 @@ One construct the seed still uses is worth naming, because it is the exception t
 
 Both are authored only by `/intake` (or drafted by `/onboard` when an existing project adopts Sysop) — `install.sh` never creates them, so there is nothing for `--update` to overwrite (protection by absence, not by the skip-if-exists guard `index.yml` gets). They are not managed paths. They live at the `tasks/` root, so the validator's orphan check (which scans only `open/`, `deferred/`, `archive/`) ignores them.
 
-## The notes ledger (`notes.md`)
+## The notes ledger (`notes.md`) — retired
 
-`notes.md` is where a finding goes when it is **real but nothing has committed to it yet**. It sits beside the queue and is deliberately not in it.
+`notes.md` was where a finding went when it was real but nothing had committed to it yet. **It is retired: no skill writes to it any more.** A finding now gets one of three outcomes where it is found — fixed in the branch, filed as a task when it cannot be fixed now, or dropped when nothing is wrong (`/claim-task` Step 7e item 2b). The ledger parked real, small findings instead of fixing them, and the open work grew anyway.
 
-**Who writes it.** The executors — `/claim-task`, `/auto-build` — and `/document-work`, at tier 3 of the fix-in-branch rule. That rule's first two tiers fix the finding in the branch or fold it into an existing open task. Tier 3 files a new task only when the follow-up **names what it blocks**: the phase carrying `current_focus: true`, a named `planned` phase, a gate the project declares, or an open task whose stated acceptance it stops. Four kinds are filed whatever that test says — a design question, a `user_action`, a production write, and a defect in shipped behaviour or a security finding. Everything else lands here instead of growing the queue.
+**An existing ledger is the consumer's to clear, and nothing deletes it.** Triage each line as fix, task or drop: fix the ones that are still wrong and can be fixed now, file the ones that cannot with `/add-task`, and delete the rest. Delete a line in the same commit that fixes or files it.
 
-**Shape — flat, one line per note, and the flatness is load-bearing.** Append at the end:
+**What still reads it until you clear it.** `/add-task` Step 2 dedups against it and promotes a matching line by filing the task and deleting the line. `/review-close` § *Sysop-written shared append files* still resolves a conflict in it, because a hand edit or a promotion on two branches can still collide, and it carries the check that keeping both sides is safe. `validate_tasks.py`'s warn-only secret scan reaches it, since that walks `tasks/**/*.md`.
 
-```
-- 2026-09-10 · `agent/router.py` · surfaced by FIX-0042 · the retry ceiling is hard-coded where every sibling reads it from config
-```
+**Shape, for the lines that remain:** flat, one line per note — date, the file or module, the task that surfaced it, then the finding in one sentence. **No nesting, no sub-bullets, no sections**; the flatness is what makes keeping both sides of a conflict safe.
 
-Date, the file or module it concerns, the task that surfaced it (omit when a human wrote it by hand), then the finding in one sentence. **No nesting, no sub-bullets, no sections.** **Make sure the file ends in a newline before you append** — a `>>` onto a file whose last line has none joins two notes into one, and one-line-per-note is the property everything below rests on.
-
-Two branches that both write a note in one cycle conflict here, and **for a flat list of independent lines keeping both sides is the correct resolution — but only when both sides merely appended.** Structure breaks it (that is how `tasks/index.yml` corrupts silently under the same conflict), and so does a **deletion**, which leaves the file just as flat: promoting a note removes its line, and a union against another branch's append puts the promoted note back. `/review-close` § *Sysop-written shared append files* carries the check for both properties and is the only place that resolution is licensed. **One case no resolution step can catch:** two branches appending a byte-identical line merge cleanly and collapse to one, because there is no conflict to resolve. Write the date and the surfacing task into every note and that case stops arising.
-
-**What reads it.** `/add-task` Step 2 dedups against it, so the same finding is not noted twice and a note can be promoted rather than duplicated. No other *skill* does — no skill routes to it, `/next-task` cannot select from it, `/roadmap` does not count it. That is the entire point: it is a record, not a queue. (`validate_tasks.py`'s warn-only secret scan reaches it too, as the ownership note below says; that is a screen, not a reader.)
-
-**Promotion is a human act.** When a note starts blocking something you can name, run `/add-task` on it and delete the line. A note nobody promotes is a note nobody needed, which is the outcome the ledger exists to make visible.
-
-**Ownership.** Consumer-owned, like `vision.md` and `decisions.md` — `install.sh` never creates it, so there is nothing for `--update` to overwrite (protection by absence). Whoever writes the first note creates the file. It is not a managed path, and it lives at the `tasks/` root, so the validator's orphan check (which scans only `open/`, `deferred/`, `archive/`) ignores it. The validator's warn-only secret scan does cover it, since that walks `tasks/**/*.md` — a note pasted out of a log gets the same screen a task body does.
+**Ownership.** Consumer-owned, like `vision.md` and `decisions.md`. `install.sh` never created it and never deletes it. It is not a managed path, and it lives at the `tasks/` root, so the validator's orphan check (which scans only `open/`, `deferred/`, `archive/`) ignores it.
 
 ## Migrating from `product_roadmap.md`
 

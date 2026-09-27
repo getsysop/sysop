@@ -1,6 +1,6 @@
 ---
 name: share-wins
-description: Share the `[good]` positive-signal entries from SYSOP_ISSUES.md upstream as one aggregated comment on a standing "Wins" Discussion in the Sysop repo — per-entry human consent, shown-equals-posted, then flip each shared entry to `Status: Shared` with a back-ref so re-runs never double-post. Dry-run by default. GitHub-specific by design.
+description: Share the `[good]` positive-signal entries from SYSOP_ISSUES.md upstream as one aggregated comment on a standing "Wins" Discussion in the Sysop repo — per-entry human consent, shown-equals-posted, then flip each shared entry's status to `Shared` with a back-ref so re-runs never double-post. Dry-run by default. GitHub-specific by design.
 argument-hint: "[--execute] [--repo owner/name]"
 model: opus
 ---
@@ -52,7 +52,7 @@ side effect is posting a Discussion comment (and, once, creating the standing
 Wins thread if it doesn't exist yet) — and only under `--execute` after you pick
 which entries.
 
-Read `.claude/settings.json` and confirm `permissions.allow` contains:
+Read `.claude/settings.json` (and `.claude/settings.local.json` if present — allow-rules union across the two) and confirm `permissions.allow` contains:
 
 - `Bash(gh api graphql:*)` — resolve the repo/category/discussion **and** post the
   comment. This is **one rule for both** because a GraphQL query (read) and a
@@ -94,8 +94,8 @@ Parse `$ARGUMENTS`:
   § Sysop upstream repo` if that section exists, else the shipped default
   `getsysop/sysop`. Use the flag for one-off exceptions and a fork; use the
   CLAUDE.md section for a standing default (see Step 0.6) — e.g. a tester on a
-  private Sysop mirror who wants every win on that repo (both `getsysop/sysop`
-  and the tester mirror have Discussions enabled).
+  private Sysop mirror who wants every win on that repo (the target must have
+  Discussions enabled and not be archived; `getsysop/sysop` has them on).
 
 There is no `--include-resolved` analog (`/report-issues` has one): a win has
 only two states — `Good — keep` (eligible) and `Shared` (already sent) — so
@@ -140,8 +140,9 @@ Read `sysop/SYSOP_ISSUES.md` — inside the `sysop/` vendor dir at the consumer-
 root (Phase 128; NOT under `.claude/`, and no longer at the bare repo root). If a
 pre-Phase-128 install left it at the root, read that instead rather than
 reporting nothing. If neither exists, stop with one line: `note:
-sysop/SYSOP_ISSUES.md not present — no wins to share. (Re-run bash install.sh to
-seed it, or capture wins via /review-close Step 7 first.)` and stop.
+sysop/SYSOP_ISSUES.md not present — no wins to share. (Create it and log wins
+there first — one "## GOOD-0001 — <title> (<date>)  [good]" heading per win, with a
+"**Status:** Good — keep" line; /review-close Step 7 also appends to it.)` and stop.
 
 The file mixes friction (`ISSUE-NNNN`) and wins (`GOOD-NNNN`). **This skill
 handles only the wins** — the `[good]` entries. An entry is a win if its heading
@@ -284,7 +285,7 @@ and are worth protecting from a future change.
 <its text, verbatim>
 
 ---
-Shared from <consumer> via /review-close Step 7 + /share-wins. Sysop commit/install: <from .claude/sysop.lock if readable, else "unknown">.
+Shared from <consumer> via /review-close Step 7 + /share-wins. Sysop commit/install: <from .claude/sysop.lock if readable, with " (installed from a dirty source tree)" appended when the lock carries "source_dirty": true, else "unknown">.
 ```
 
 Omit the `<consumer>` bits if no consumer name was found.

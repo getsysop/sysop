@@ -201,7 +201,7 @@ def test_review_close_runs_the_prescan_itself_and_not_via_the_resolution_chain()
         step, "4a-post step 3a",
         exempt=(
             "and **continue**. This is an environment fault",
-            "otherwise `pre-scan: clean, but N blocking checks degraded — <ids>`, and continue",
+            "line verbatim, and continue. Any other `⚠` line (review rounds",
             "and report `pre-scan: consumer's list runs an ungated scan — ran the gate as well`",
         ),
     )
@@ -210,6 +210,99 @@ def test_review_close_runs_the_prescan_itself_and_not_via_the_resolution_chain()
     # merged-tree count, which would lose which of the two gates refused.
     # Step 8's element -- anchored on the label and the two dispositions that
     # distinguish it, not on the full first line, which now carries the degraded arm.
-    assert "               pre-scan <clean | clean, but N blocking checks degraded" in text
+    assert "               pre-scan <clean | clean, but not every check ran fully" in text
     assert "ran via the consumer's list\n" in text
     assert "could not run — <tool's own first error line>" in text
+
+
+# ── Q-609 (Phase 330): the Exit 0 arm keys on what the accounting block PRINTS ──
+#
+# `--fail-on-blocking` exits 0 over a blocking check that was `skipped`, `unroutable` or
+# `degraded` (only `failed` is fatal). The arm keys on the header's counts, which cover every
+# check whatever its scope, and on the `⚠ BLOCKING CHECK` marker, which `render()` adds only
+# for a LOCALIZED blocking check. Round 1 found the first cut keyed on any `⚠`: it missed a
+# degraded blocking check with placeholder `paths:` (no marker), and counted the unrelated
+# review-rounds note `cli.py` appends to the same block. These tests bind the arm's tokens
+# to `run_checks/accounting.py`'s own `render()`.
+
+sys.path.insert(0, str(REPO_ROOT / "core/companion/scripts"))
+
+
+def _exit0_arm() -> str:
+    text = REVIEW_CLOSE.read_text(encoding="utf-8")
+    i = text.index("**Exit 0** — **not automatically clean")
+    return text[i:text.index("**Non-zero** —", i)]
+
+
+def _render(status, paths=("src/**",)):
+    from run_checks import accounting as A
+    check = {"id": "semgrep-x", "blocking": True}
+    if paths is not None:
+        check["paths"] = list(paths)
+    report = A.RunReport([check])
+    if status != "unaccounted":
+        report.record(["semgrep-x"], status, stage="semgrep", reason="r", detail="d")
+    return report.render([], mode="both")
+
+
+def _header(out: str) -> str:
+    return out.strip().splitlines()[0]
+
+
+def test_the_exit0_arm_names_the_counts_and_the_marker_it_keys_on():
+    arm = _exit0_arm()
+    assert ("`pre-scan: clean` only when its header shows `0 failed` and no `degraded`, "
+            "`unroutable` or `unaccounted` count, and no line carries `⚠ BLOCKING CHECK`") in arm
+    assert "Any other `⚠` line (review rounds, stale baseline entries) is not a check's state" in arm
+
+
+def test_every_non_running_state_shows_in_the_header_or_the_marker():
+    """Each state the arm must not call clean leaves a token the arm names, for a localized
+    check AND for one with placeholder or absent paths."""
+    from run_checks import accounting as A
+    for paths in (("src/**",), ("<api module>/**",), None):
+        for status, token in ((A.DEGRADED, "degraded"), (A.UNROUTABLE, "unroutable"),
+                              ("unaccounted", "unaccounted")):
+            assert f" {token}" in _header(_render(status, paths)), (status, paths)
+    assert "⚠ BLOCKING CHECK" in _render(A.SKIPPED)
+    # The limit the arm states: a non-localized blocking check gets no marker.
+    assert "⚠" not in _render(A.DEGRADED, None)
+
+
+def test_a_blocking_check_that_ran_leaves_none_of_the_tokens():
+    from run_checks import accounting as A
+    out = _render(A.EXECUTED)
+    assert "⚠ BLOCKING CHECK" not in out, out
+    for token in (" degraded", " unroutable", " unaccounted"):
+        assert token not in _header(out), out
+
+
+def test_the_review_rounds_note_is_not_a_blocking_check_marker():
+    """`cli.py` appends this note to the same block; the arm must not read it as a check."""
+    from run_checks import cli
+    import inspect
+    src = inspect.getsource(cli._pending_rounds_note)
+    assert "⚠" in src and "BLOCKING CHECK" not in src
+
+
+def test_skipped_unroutable_and_degraded_blocking_checks_are_not_fatal():
+    """The arm's premise: none of these exits non-zero, so the Exit 0 arm is where they are
+    reported. If `blocking_failures()` ever made one fatal, the arm would be describing a
+    state `--fail-on-blocking` no longer produces."""
+    from run_checks import accounting as A
+    for status in (A.SKIPPED, A.UNROUTABLE, A.DEGRADED):
+        report = A.RunReport([{"id": "semgrep-x", "blocking": True, "paths": ["src/**"]}])
+        report.record(["semgrep-x"], status, stage="semgrep", reason="r", detail="d")
+        assert report.blocking_failures() == [], status
+
+
+def test_a_failed_non_blocking_stage_shows_in_the_header_the_arm_reads():
+    """Round 2: an invalid semgrep rule crashes a non-blocking stage; `--fail-on-blocking`
+    exits 0 and no `⚠` is printed, so only the header's `failed` count can withhold `clean`."""
+    from run_checks import accounting as A
+    report = A.RunReport([{"id": "semgrep-x", "blocking": False, "paths": ["src/**"]}])
+    report.record(["semgrep-x"], A.FAILED, stage="semgrep", reason="r", detail="d")
+    out = report.render([], mode="both")
+    assert " 1 failed" in _header(out) and "⚠" not in out, out
+    assert report.blocking_failures() == []
+    assert " 0 failed" in _header(_render(A.EXECUTED))

@@ -17,19 +17,29 @@ from .accounting import EXECUTED, FAILED, SKIPPED, stderr_excerpt
 from .config import _SKIP_DIRS
 
 
-def _find_frontend_dir(repo_root):
-    """Return the absolute path of the directory containing node_modules/eslint.
+def _find_frontend_dir(repo_root, package="eslint", beside=None, skip_nested_checkouts=False):
+    """Return the absolute path of the directory containing node_modules/<package>.
+
+    ``beside`` names a file that must sit next to that ``node_modules`` for the
+    directory to count — tsc passes ``tsconfig.json``, because its types resolve
+    from the adjacent install. ``skip_nested_checkouts`` leaves out any directory
+    holding a ``.git`` entry (an in-repo agent worktree or another clone): its files
+    are another checkout's, not this one's. tsc passes it; ESLint's discovery is
+    unchanged from before tsc shared this helper.
 
     Raises FrontendDirAmbiguous if multiple candidates exist. Returns None
     when no candidate is found. Resolves symlinks during walk to avoid
     infinite recursion on cyclic links.
     """
+    repo_root = os.path.abspath(repo_root)
     matches = []
     seen_real = set()
-    for dirpath, dirnames, _filenames in os.walk(repo_root, followlinks=False):
-        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
-        candidate = os.path.join(dirpath, "node_modules", "eslint")
-        if os.path.isdir(candidate):
+    for dirpath, dirnames, filenames in os.walk(repo_root, followlinks=False):
+        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS and not (
+            skip_nested_checkouts and os.path.lexists(os.path.join(dirpath, d, ".git")))]
+        if beside is not None and beside not in filenames:
+            continue
+        if os.path.isdir(os.path.join(dirpath, "node_modules", package)):
             real = os.path.realpath(dirpath)
             if real in seen_real:
                 continue
@@ -39,14 +49,29 @@ def _find_frontend_dir(repo_root):
         return None
     if len(matches) > 1:
         raise FrontendDirAmbiguous(
-            f"multiple node_modules/eslint candidates: {sorted(matches)} — "
-            "set the frontend dir explicitly or remove the stray install"
+            f"multiple node_modules/{package} candidates: {sorted(matches)} — "
+            "this stage checks a single directory, so none is chosen"
         )
     return matches[0]
 
 
+def _node_bin(frontend_dir, name):
+    """The project's own ``node_modules/.bin/<name>`` when it is there, else the bare name.
+
+    The stages used to run the bare name and rely on ``run_checks.sh`` putting
+    ``frontend/node_modules/.bin`` on ``PATH``, which only works for a directory
+    literally named ``frontend/``: a discovered ``web/`` found its eslint and then
+    could not run it. The bare-name fallback keeps a global install working, and
+    keeps a missing binary a ``FileNotFoundError`` the callers already report.
+    """
+    # Absolute, because the callers run it with `cwd=frontend_dir`: a relative
+    # `--repo-root` would otherwise resolve the path a second time from inside it.
+    local = os.path.join(os.path.abspath(frontend_dir), "node_modules", ".bin", name)
+    return local if os.path.isfile(local) and os.access(local, os.X_OK) else name
+
+
 class FrontendDirAmbiguous(RuntimeError):
-    """Raised when _find_frontend_dir finds >1 node_modules/eslint candidate."""
+    """Raised when _find_frontend_dir finds more than one candidate."""
 
 
 def _run_eslint(repo_root, included_ids, report=None):
@@ -112,7 +137,7 @@ def _run_eslint(repo_root, included_ids, report=None):
         # crash discriminator below depends on it (see the comment there and
         # deliverable 04). A drift-guard test forbids the flag in this argv.
         r = subprocess.run(
-            ["eslint", "--format", "json", "."],
+            [_node_bin(frontend_dir, "eslint"), "--format", "json", "."],
             capture_output=True, text=True, cwd=frontend_dir, timeout=300,
         )
     except FileNotFoundError:

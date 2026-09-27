@@ -74,7 +74,9 @@ def _current_branch(cwd: str) -> str:
             ["git", "-C", cwd, "rev-parse", "--abbrev-ref", "HEAD"],
             capture_output=True, text=True, timeout=5, check=False,
         )
-    except (subprocess.SubprocessError, OSError):
+    # A branch named in bytes that are not UTF-8 is never a protected branch, so
+    # "" (no match) is the true answer, not a traceback out of the hook (`Q-612`).
+    except (subprocess.SubprocessError, OSError, UnicodeDecodeError):
         return ""
     return cp.stdout.strip() if cp.returncode == 0 else ""
 

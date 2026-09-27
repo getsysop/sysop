@@ -16,9 +16,9 @@ Two-pass workflow:
 
 ## Pre-flight: Permission Guard
 
-Before parsing arguments or doing any work, verify `.claude/settings.json` carries the allow-rules this skill depends on. Under `dontAsk` mode a missing rule for `git worktree add`, `git push -u origin`, or `bash sysop/scripts/batch_work.sh` is auto-denied with no prompt, halting subagents mid-fix.
+Before parsing arguments or doing any work, verify `.claude/settings.json` (with `.claude/settings.local.json`, if present) carries the allow-rules this skill depends on. Under `dontAsk` mode a missing rule for `git worktree add`, `git push -u origin`, or `bash sysop/scripts/batch_work.sh` is auto-denied with no prompt, halting subagents mid-fix.
 
-Read `.claude/settings.json` and confirm `permissions.allow` contains:
+Read `.claude/settings.json` (and `.claude/settings.local.json` if present — allow-rules union across the two) and confirm `permissions.allow` contains:
 
 - `Bash(git checkout:*)`
 - `Bash(git worktree add:*)`
@@ -286,7 +286,7 @@ After all tasks are fixed, scan each file you modified for **sibling violations*
 - Only check conventions you already enforced in this batch — do not audit for unrelated conventions
 - If a sibling violation requires a non-trivial design decision (not a mechanical fix), skip it and note it in the report as `SIBLING_SKIPPED`
 
-These limits are **tighter than the fix-in-branch tier** (`/claim-task` Step 7e item 2b), and that is deliberate: the tier admits any small mechanical, doc, test or convention-config fix in a touched file, whereas a sibling scan admits only the *same convention* you were already enforcing. Do not read the tier as widening this scan. A sibling violation outside the convention you enforced is `SIBLING_SKIPPED` here and stops there: on the review-batch path this agent *is* the executor that owns the branch, and the flow runs `batch_work.sh` → this skill → `/review-close` without passing through any skill that carries the tiers. So `SIBLING_SKIPPED` is a report line, not a hand-off — if it deserves to become work, it needs filing by whoever reads the report.
+These limits are **tighter than the fix-by-default rule** (`/claim-task` Step 7e item 2b), and that is deliberate: that rule admits any fix the close can review, in any module, whereas a sibling scan admits only the *same convention* you were already enforcing. Do not read the rule as widening this scan. A sibling violation outside the convention you enforced is `SIBLING_SKIPPED` here and stops there: on the review-batch path this agent *is* the executor that owns the branch, and the flow runs `batch_work.sh` → this skill → `/review-close` without passing through any skill that carries the rule. So `SIBLING_SKIPPED` is a report line, not a hand-off — if it deserves to become work, it needs filing by whoever reads the report.
 
 **Report format** (append to step 6 report):
 ```

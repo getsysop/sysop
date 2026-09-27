@@ -45,10 +45,15 @@ def confirm_production(env: str) -> None:
         if not sys.stdin.isatty():
             print(f"Non-interactive mode — proceeding with {env.upper()} database.")
             return
-        confirm = input(
-            f"You are about to target the {env.upper()} database. "
-            "Type 'yes' to continue: "
-        )
+        try:
+            confirm = input(
+                f"You are about to target the {env.upper()} database. "
+                "Type 'yes' to continue: "
+            )
+        except (EOFError, UnicodeDecodeError):
+            # No answer, or one that is not text, is not "yes": decline.
+            print("\nAborted: no readable answer.")
+            sys.exit(0)
         if confirm.strip().lower() != "yes":
             print("Aborted.")
             sys.exit(0)

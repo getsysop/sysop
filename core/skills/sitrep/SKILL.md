@@ -41,7 +41,7 @@ Invoke from the repo root (the script resolves `git rev-parse --git-common-dir` 
 python3 sysop/scripts/sitrep_survey.py [--json] [--stale-days N]
 ```
 
-The script is idempotent and read-only. It exits 0 on a successful survey regardless of how many discrepancies it finds — discrepancies are reported in the body, not via exit code. Exit 1 means the script itself failed (corrupt YAML, missing repo, etc.); surface the error to the human and stop.
+The script is idempotent and read-only. It exits 0 on a successful survey regardless of how many discrepancies it finds — discrepancies are reported in the body, not via exit code. Exit 1 means the script itself failed (a missing repo, for example; an unreadable input file is not one, and is reported as an `input unreadable` discrepancy at exit 0); surface the error to the human and stop.
 
 ## Step 2: Surface the Report
 
@@ -63,6 +63,9 @@ The `RECOMMENDED NEXT` block applies a priority cascade — first match wins:
 
 | Priority | State                                                                  | Recommendation                                                       | /clear nudge |
 | -------- | ---------------------------------------------------------------------- | -------------------------------------------------------------------- | ------------ |
+| 0a       | `tasks/index.yml`, `review_tasks.md` or a lock could not be read (an `input unreadable` discrepancy) | `repair <file>: <remedy>; then re-run /sitrep`                       | no           |
+| 0b       | Any task `lock unreadable`                                             | repair the named lock and re-run — never `--release` it              | no           |
+| 0c       | Any review batch `lock unreadable`                                     | repair the named lock and re-run — never `--release` it              | no           |
 | 1        | Any task `ready for /review-close`                                     | `/review-close <ID>`                                                 | no           |
 | 2        | Any review batch with all tasks Doc-Work'd, **or header status `Review Ready`** | `/review-close (batch N)`                                            | no           |
 | 3        | Any task `doc-work done, unpushed`                                     | `/review-close <ID>`                                                 | no           |
@@ -86,7 +89,9 @@ The `RECOMMENDED NEXT` block applies a priority cascade — first match wins:
 | 6k       | Any task `stale`                                                       | `investigate <ID>; confirm dead and rm the lock if abandoned`        | no           |
 | 7a       | No active work, **> 4** open roadmap tasks (deeper than one `/auto-build` batch) | `/roadmap` (strategy view: group + order before batching; with sample of open IDs) | no           |
 | 7b       | No active work, **1–4** open roadmap tasks (fits one batch)            | `/auto-build` (with sample of open IDs)                             | yes          |
-| 8        | Truly idle (no work, no roadmap)                                       | none — block reads `(idle …)`                                        | no           |
+| 8        | Truly idle (no work, no roadmap, every input read)                     | none — block reads `(idle …)`                                        | no           |
+
+**Rows `0a`–`0c` gate on the three inputs every other row is read through: the index, `review_tasks.md` and the locks.** An unreadable `tasks/index.yml` reads as an empty index, so without `0a` the survey ends in row `8`'s *idle* over live work. A lock that cannot be read, or parses to no fields (an empty file, a YAML list), has unknown fields, not empty ones: `0b`/`0c` route to the repair, because reading its empty `branch` as `claimed, no branch` would route a possibly-live claim to `--release`. A lock that is a mapping without `branch:` is readable and stays `claimed, no branch`. **A round receipt does not gate:** only the round-coverage check reads it, so an unreadable one is a plain `round receipt unreadable` discrepancy and routing is unaffected.
 
 **Row `4e` is not a batch row**, despite sitting in the `4` block: `4a`–`4d` route the review-batch queue and `4e` routes a single task whose build is committed but undocumented. It is placed there because that task is *further along* than an in-progress one and still not closable — the same reason the code puts its arm between P4 and P5. **This row was missing from this table until Phase 237**, while the arm had shipped in `_recommended_next`'s cascade since Q-019: the states table was guarded and this one was not, so a state could be wired into the cascade with no routing row and nothing went red. The guard added in Phase 237 closes that, and finding this row absent is what it found first.
 
@@ -114,6 +119,7 @@ The survey script classifies each discovered task into exactly one state. Listed
 
 | State | Deterministic signal |
 |---|---|
+| **Lock unreadable** | A lock file at `<git-common-dir>/sysop/runtime/locks/<ID>.lock` could not be read or parsed (permissions, a non-UTF-8 byte, bad YAML), or parsed to no fields (an empty file, a YAML list or scalar). Its fields are unknown, so no other state is inferred from them; the next action names the lock and the repair, never a release. Precedes every other state, on both paths |
 | **Claimed, no branch** | Lock present at `<git-common-dir>/sysop/runtime/locks/<TASK_ID>.lock`; the lock records no branch (task path) or the recorded branch does not exist (batch path). Park evidence, when present, is carried in `notes` (`Q-363`) |
 | **Planning** | Lock + branch present; branch has 0 commits ahead of the default branch |
 | **In progress** | Branch has ≥1 commits ahead of the default branch (reachable from neither the local branch nor its remote-tracking ref); no commit on the branch carries a `Doc-Work:` trailer |
@@ -152,11 +158,14 @@ The survey flags every mismatch between filesystem reality and the state files. 
 |---|---|---|
 | Stale lock | Lock exists, no worktree on disk | Investigate, then `rm <lock-path>` if dead |
 | Orphan worktree | Worktree exists, no matching lock | Check uncommitted work, then `git worktree remove` |
-| Orphan branch | `task/*` or `review/*` branch with no lock + no index entry | Investigate, delete if dead |
+| Orphan branch | Task-shaped branch (a fixed directory such as `task/`, `feat/`, `fix/`, `review/` or `batch/`, or `/claim-task` Step 3's derived `<prefix>/<prefix>-…` name for a prefix the index uses) with no lock, no worktree and no index entry | Investigate, delete if dead |
 | Index drift (in_progress without lock) | `tasks/index.yml` says `in_progress`, no `sysop/runtime/locks/<id>.lock` | Resync index or recreate lock |
 | Abandoned claim | Lock + worktree exist, no commits + claimed ≥ stale-days ago | Confirm dead with human, release lock |
 | Uncommitted work in stale worktree | Dirty status + no commits in N days | DO NOT cleanup — likely user's parked work |
 | Abandoned review round | `sysop/runtime/pending-rounds/*.pending` older than 2h | Re-run the skill; delete the marker only once the round is confirmed dead |
+| Input unreadable | `tasks/index.yml`, `review_tasks.md` or a lock could not be read or parsed; reported next to the default-branch line, since every state in the report is read through these | Apply the named remedy (restore read access, re-save as UTF-8, or repair the YAML), then re-run `/sitrep` |
+| Round receipt unreadable | A receipt under `sysop/runtime/round-receipts/` could not be read, or is not a JSON object; only the round-coverage check reads it, so it does not gate `RECOMMENDED NEXT` | Delete it, or restore it from the round that wrote it — it is machine-written, so its content cannot be repaired by hand |
+| Round coverage | Newest receipt in `sysop/runtime/round-receipts/` recorded no coverage, a solo round with no reason, a narrowed round with no basis, a Full round that reached under a third of its scope, or a fan-out round with no per-worker `Fan-out coverage` line | Fill the round header's `Coverage` / `Fan-out coverage` line (Step 5b), or relabel the round `Sampled` and name the basis |
 
 ## Deferred features
 

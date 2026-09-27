@@ -68,10 +68,13 @@ _TEXT_EXPR_BY_MODULE = {
     # `if rel == _QUOTING_FILE`, so the one text it ever slices is that constant's file.
     ("tests/test_review_close_smoke_gate.py", "path.read_text(encoding='utf-8')"):
         "core/companion/tasks/schema.md",
+    ("tests/test_claim_task_id_vocabulary.py", "skill_text"): "core/skills/claim-task/SKILL.md",
+    ("tests/test_claim_task_id_vocabulary.py", "release_text"): "core/skills/release/SKILL.md",
 }
 _MODULE_SKILL = {
     "tests/test_review_close_claim_artifact_report.py": "core/skills/review-close/SKILL.md",
     "tests/test_prose_guard_section.py": "core/skills/review-close/SKILL.md",
+    "tests/test_contribute_convention_sources.py": "core/skills/contribute-convention/SKILL.md",
 }
 # `test_review_close_smoke_gate.py` was listed here and never consulted — it resolves
 # through `path.read_text(...)` instead. Dead configuration reads as coverage.

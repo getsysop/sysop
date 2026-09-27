@@ -21,9 +21,9 @@ Two-pass workflow mirrors `/auto-fix`:
 
 ## Pre-flight: Permission Guard
 
-Before parsing arguments, verify `.claude/settings.json` carries the allow-rules this skill depends on. Same failure mode as `/auto-fix`: under `dontAsk` mode a missing rule is auto-denied with no prompt, halting Opus subagents mid-fix.
+Before parsing arguments, verify `.claude/settings.json` (with `.claude/settings.local.json`, if present) carries the allow-rules this skill depends on. Same failure mode as `/auto-fix`: under `dontAsk` mode a missing rule is auto-denied with no prompt, halting Opus subagents mid-fix.
 
-Read `.claude/settings.json` and confirm `permissions.allow` contains:
+Read `.claude/settings.json` (and `.claude/settings.local.json` if present — allow-rules union across the two) and confirm `permissions.allow` contains:
 
 - `Bash(git checkout:*)`
 - `Bash(git worktree add:*)`
@@ -261,7 +261,7 @@ These tasks ask you to choose between viable alternatives. Read the code at each
 </if>
 
 <if category == "architectural">
-These tasks request refactors or abstractions. **Scope discipline is critical** — do not expand the refactor beyond the explicit task. If a task asks for a shared helper, create it minimally with only the arguments the current call sites need; do not add speculative parameters. If the refactor would touch files outside the batch's stated scope, DROP the task with reason "out-of-scope for batch; needs dedicated roadmap task". **This is narrower than the fix-in-branch tier and stays narrower on purpose.** That tier (`/claim-task` Step 7e item 2b) licenses a small mechanical or doc fix in a file the task already touches; it does not license widening a *refactor's design surface*, which is what this paragraph forbids. Where the two could both apply, this one wins: an architectural task's blast radius is the thing under review.
+These tasks request refactors or abstractions. **Scope discipline is critical** — do not expand the refactor beyond the explicit task. If a task asks for a shared helper, create it minimally with only the arguments the current call sites need; do not add speculative parameters. If the refactor would touch files outside the batch's stated scope, DROP the task with reason "out-of-scope for batch; needs dedicated roadmap task". **This is narrower than the fix-by-default rule and stays narrower on purpose.** That rule (`/claim-task` Step 7e item 2b) licenses adjacent fixes the close can review; it does not license widening a *refactor's design surface*, which is what this paragraph forbids. Where the two could both apply, this one wins: an architectural task's blast radius is the thing under review.
 </if>
 
 <if category == "investigation">

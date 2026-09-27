@@ -35,11 +35,14 @@ VENV_BIN="${MAIN_REPO_ROOT}/.venv/bin"
 # covered separately: the pip-audit stage falls back to `python -m pip_audit`
 # via whichever interpreter runs the checks.
 [[ ! -d "$VENV_BIN" ]] && VENV_BIN="${MAIN_REPO_ROOT}/venv/bin"
+# The tsc and ESLint stages DISCOVER their frontend directory and run its own
+# node_modules/.bin binary (run_checks/lint.py `_node_bin`), so any layout works
+# without this. What follows only puts a `frontend/` directory's binaries on
+# PATH for the bare-name fallback, which runs when the discovered directory has
+# no node_modules/.bin copy. Worktrees typically lack frontend/node_modules, so
+# it falls back to the main repo's install; the stages still skip, loudly, when
+# no node_modules/typescript sits beside a tsconfig.json.
 FRONTEND_BIN="${REPO_ROOT}/frontend/node_modules/.bin"
-# Worktrees typically lack frontend/node_modules — fall back to the main
-# repo's install so `tsc` is at least resolvable. Note: _run_tsc will still
-# skip gracefully if the worktree's frontend/node_modules/typescript is
-# absent, because type resolution needs the adjacent node_modules.
 [[ ! -d "$FRONTEND_BIN" ]] && FRONTEND_BIN="${MAIN_REPO_ROOT}/frontend/node_modules/.bin"
 [[ -d "$VENV_BIN" ]] && export PATH="${VENV_BIN}:${PATH}"
 [[ -d "$FRONTEND_BIN" ]] && export PATH="${FRONTEND_BIN}:${PATH}"

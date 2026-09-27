@@ -41,6 +41,8 @@ sys.path.insert(0, str(_P(__file__).resolve().parent))
 
 from _case_pins import case_pin_problems  # noqa: E402
 from _prose_guard_helpers import anchor  # noqa: E402
+import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -464,10 +466,18 @@ def section_problems(section: str, raw: str | None = None) -> list[str]:
 # `--show-toplevel` and exited 127 in exactly the case it claimed to have fixed, inside the
 # module that pins the rule forbidding it.
 #
-#     "$(cd "$(git rev-parse --git-common-dir)/.." && pwd -P)/.venv/bin/python3" -c \
+#     ( top=$(git rev-parse --show-cdup) && cd "./$top" && \
+#       "$(cd "$(git rev-parse --git-common-dir)/.." && pwd -P)/.venv/bin/python3" -c \
 #       "import sys; sys.path.insert(0,'.'); \
 #        import tests.test_review_close_reference_pins as P; \
-#        print(repr(P._block_canon(P._flat(P._step_3_section()))))"
+#        print(repr(P._block_canon(P._flat(P._step_3_section()))))" )
+#
+# The subshell first moves to the top of the checkout you are standing in (`--show-cdup`,
+# which is the worktree whose `tests/` module you mean to import), so the recipe runs from any
+# directory inside it; outside a repo, `git` fails and the subshell stops there. Phase 327
+# (`Q-592` line 17): the first recipe imported from `'.'` and gave `ModuleNotFoundError` when
+# run from `tests/`. `test_the_recipe_in_the_comment_runs_from_anywhere_in_the_checkout`
+# executes these lines, not a paraphrase of them.
 #
 # Paste the output below. The diff then carries the prose change and its re-approval together,
 # which is the whole mechanism. A REGENERATION IS THE RE-APPROVAL: name it in the commit
@@ -687,6 +697,168 @@ def test_the_required_patterns_fire_on_an_empty_section():
 # ---------------------------------------------------------------------------------------
 
 
+_NUMBER_WORDS = ("zero one two three four five six seven eight nine ten eleven twelve "
+                 "thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty").split()
+MONOGRAPH = REPO_ROOT / "docs/workflow.html"
+
+
+def _count_of(token: str):
+    """A published count as an int, written as a word or as digits; None if it is neither."""
+    t = token.lower()
+    if t.isdigit():
+        return int(t)
+    return _NUMBER_WORDS.index(t) if t in _NUMBER_WORDS else None
+
+
+def _declared_order(declared):
+    return sorted(declared, key=lambda i: [(0, int(p), "") if p.isdigit() else (1, 0, p)
+                                           for p in i.split("-")])
+
+
+#: Every sentence that publishes how much of `review-close` is declared: (where, what, regex).
+#: Group names say what each capture must equal. EVERY occurrence is checked, and each site must
+#: occur at least once — a site that vanished is reported, not passed over.
+_COVERAGE_SITES = (
+    ("reference", "the coverage sentence",
+     r"Only Step `(?P<step>[^`]+)` is declared today, and only (?P<count>\w+) of its rules"),
+    ("reference", "the screening-limit sentence",
+     r"contradicting one of these (?P<count>\w+) rules"),
+    ("reference", "the known-debt range",
+     r"naming `(?P<first>RC-[0-9a-z-]+)` through `(?P<last>RC-[0-9a-z-]+)`"),
+    ("skill", "Step 3's opening",
+     r"§ `(?P<first>RC-[0-9a-z-]+)` through § `(?P<last>RC-[0-9a-z-]+)`\.\*\* Those (?P<count>\w+) rules"),
+    ("monograph", "the monograph's reference paragraph",
+     r"(?P<count>\w+) rules are declared, all of them in (?P<steps>\w+) step"),
+)
+
+
+def published_coverage_problems(texts: dict, declared) -> list[str]:
+    """Every published statement of the declared coverage must match `DECLARED_IDS`.
+
+    Phase 327 (`Q-592` line 28), and widened by its round. The first cut checked two
+    sentences with `re.search`, so a third and fourth site publishing the same count
+    (`REFERENCE.md`'s screening limit, the monograph) went stale green, and a second, stale
+    copy of a guarded sentence was never read. ``texts`` maps ``reference``/``skill``/
+    ``monograph`` to file contents.
+    """
+    ids = _declared_order(declared)
+    steps = sorted({i.rsplit("-", 1)[0][len("RC-"):] for i in ids})
+    want = {"count": len(ids), "first": ids[0], "last": ids[-1], "steps": len(steps)}
+    problems = []
+    for where, what, pattern in _COVERAGE_SITES:
+        text = texts[where].replace("\n>", "\n")
+        if where == "monograph":
+            text = re.sub(r"<[^>]+>", "", text)    # `<strong>eight</strong>` is still eight
+        flat = re.sub(r"\s+", " ", text)
+        found = list(re.finditer(pattern, flat, re.I if where == "monograph" else 0))
+        if not found:
+            problems.append(f"{where}: {what} is gone or reworded; restate it from DECLARED_IDS")
+            continue
+        for m in found:
+            got = m.groupdict()
+            for key, value in got.items():
+                if key == "step":
+                    ok = [value] == steps
+                elif key in ("count", "steps"):
+                    ok = _count_of(value) == want[key]
+                else:
+                    ok = value == want[key]
+                if not ok:
+                    problems.append(f"{where}: {what} says {key} {value!r}; DECLARED_IDS gives "
+                                    f"{steps if key == 'step' else want[key]!r}")
+    return problems
+
+
+def _coverage_texts() -> dict:
+    return {"reference": REFERENCE.read_text(encoding="utf-8"),
+            "skill": SKILL.read_text(encoding="utf-8"),
+            "monograph": MONOGRAPH.read_text(encoding="utf-8")}
+
+
+def test_the_published_coverage_figures_are_derived_from_the_declared_set():
+    assert published_coverage_problems(_coverage_texts(), DECLARED_IDS) == []
+
+
+#: Each control finds its anchor by PATTERN, with the figure as group 1, so a legal respelling of
+#: the figure (`8` for `eight`) moves the anchor with it. The first cut used literal anchors, and
+#: the round's digit respelling reddened the control rather than the guard: a false kill.
+@pytest.mark.parametrize("where, pattern, new, why", [
+    # One per arm and per site, each with the real DECLARED_IDS, so only the arm under test can
+    # see it. Moving the set instead trips two arms at once, which left each arm neuterable
+    # alone (Phase 327's own battery: three survivors).
+    ("reference", r"Only Step `(\w+)` is declared today", "4", "the declared step misstated"),
+    ("reference", r"and only (\w+) of\s+its rules", "nine",
+     "the rule count misstated in REFERENCE.md's coverage sentence"),
+    ("reference", r"contradicting one of these (\w+) rules", "seven",
+     "the count misstated in the screening-limit sentence"),
+    ("reference", r"naming `RC-3-1` through `(RC-[0-9a-z-]+)`", "RC-3-7",
+     "the known-debt range misstated"),
+    ("skill", r"Those (\w+) rules are declared", "nine",
+     "the rule count misstated in Step 3's opening"),
+    ("skill", r"through § `(RC-[0-9a-z-]+)`\.\*\* Those", "RC-3-7",
+     "the range's end misstated in Step 3's opening"),
+    ("skill", r"§ `(RC-[0-9a-z-]+)`\n> through §", "RC-3-2",
+     "the range's start misstated in Step 3's opening"),
+    ("monograph", r"(\w+) rules are declared,", "nine", "the monograph's count misstated"),
+    ("monograph", r"all of them in (\w+) step", "two", "the monograph's step count misstated"),
+    ("reference", r"(Only Step `3` is declared today, and only \w+ of\s+its rules\.)",
+     r"\g<0> (Earlier: Only Step `4` is declared today, and only nine of its rules.)",
+     "a second, stale copy of the sentence"),
+    ("reference", r"(Only Step `3` is declared today, and only \w+ of\s+its rules\.)", "",
+     "the coverage sentence deleted"),
+    ("reference", r"(Only Step `3` is declared today, and only \w+ of\s+its rules\.)",
+     r"(Earlier: Only Step `4` is declared today, and only nine of its rules.) \g<0>",
+     "a stale copy placed BEFORE the real sentence"),
+    ("reference", r"(A sentence contradicting one of these \w+ rules,)", "A sentence contradicting any rule,",
+     "the screening-limit sentence reworded away"),
+    ("reference", r"(naming `RC-3-1` through `RC-3-8`)", "naming the declared rules",
+     "the known-debt range reworded away"),
+    ("reference", r"naming `(RC-[0-9a-z-]+)` through", "RC-3-2", "the known-debt range's start misstated"),
+    ("monograph", r"(\w+ rules are declared, all of them in \w+ step)", "a few rules are declared",
+     "the monograph's sentence reworded away"),
+    ("skill", r"(Those \w+ rules) are declared", "These rules", "Step 3's count sentence reworded away"),
+])
+def test_each_published_coverage_arm_sees_its_own_misstatement(where, pattern, new, why):
+    texts = _coverage_texts()
+    # Spaces in an anchor match any run of whitespace, so a legal re-wrap of the sentence does
+    # not leave the control with nothing to find (round 2's false kills F5, F5b, F5c).
+    # Markup inside the monograph's sentence (`<strong>eight</strong>`) is legal, so the anchor
+    # may cross a tag: round 2's re-run found this control false-killing where the guard did not.
+    ws = r"(?:\s|<[^>]+>)+" if where == "monograph" else r"\s+"
+    found = list(re.finditer(pattern.replace(" ", ws).replace(r"(\w+)", r"(?:<[^>]+>)*(\w+)(?:<[^>]+>)*")
+                             if where == "monograph" else pattern.replace(" ", ws), texts[where]))
+    assert len(found) == 1, f"the anchor for {why!r} matched {len(found)} times; re-anchor it"
+    m = found[0]
+    replacement = m.expand(new) if "\\g<" in new else new
+    texts[where] = texts[where][:m.start(1)] + replacement + texts[where][m.end(1):]
+    assert published_coverage_problems(texts, DECLARED_IDS), (
+        f"the coverage prose stayed green over {why}")
+
+
+def test_a_count_written_as_digits_is_not_a_misstatement():
+    """Over-strictness: `8` and `eight` are the same figure."""
+    texts = _coverage_texts()
+    texts["reference"] = texts["reference"].replace("one of these eight rules",
+                                                    "one of these 8 rules")
+    assert published_coverage_problems(texts, DECLARED_IDS) == []
+
+
+@pytest.mark.parametrize("declared, why", [
+    # One DERIVED value moved at a time, so each expected value is isolated on the input side
+    # too: round 2 hard-coded each of `count`, `first` and `last` in turn and all survived,
+    # because every earlier row moved two of them at once.
+    (DECLARED_IDS - {"RC-3-4"}, "a middle rule retired: only the count moves"),
+    ((DECLARED_IDS - {"RC-3-8"}) | {"RC-3-9"}, "the last rule renumbered: only the range end moves"),
+    ((DECLARED_IDS - {"RC-3-1"}) | {"RC-3-0"}, "the first rule renumbered: only the range start moves"),
+    (DECLARED_IDS | {"RC-3-9"}, "a ninth rule declared with every sentence left at eight"),
+    (DECLARED_IDS - {"RC-3-8"}, "a rule removed with every sentence left at eight"),
+    ((DECLARED_IDS - {"RC-3-8"}) | {"RC-4c-1"}, "a second step declared, the count unchanged"),
+])
+def test_the_published_coverage_figures_move_with_the_declared_set(declared, why):
+    assert published_coverage_problems(_coverage_texts(), declared), (
+        f"the coverage prose stayed green over {why}")
+
+
 def test_the_roster_is_a_three_way_identity():
     """Roster bullets, REFERENCE.md sections, and DECLARED_IDS must be one set.
 
@@ -883,16 +1055,83 @@ def test_the_regeneration_recipe_runs_and_round_trips():
     assert "Regeneration probe." in regenerated
 
 
+#: The recipe's interpreter word, verbatim. CI has no repo-root `.venv`, so there — and only
+#: there — the execution below swaps this one word for the running interpreter; everything else
+#: in the recipe runs as written.
+_RECIPE_INTERPRETER = '"$(cd "$(git rev-parse --git-common-dir)/.." && pwd -P)/.venv/bin/python3"'
+
+
+def _recipe_from_comment() -> str:
+    """The shell lines of the § 6 recipe, exactly as the comment above `STEP_3_VERBATIM` prints
+    them: the `#     `-indented run that follows "To re-approve a deliberate edit"."""
+    body = Path(__file__).read_text(encoding="utf-8")
+    comment = body.split("To re-approve a deliberate edit", 1)[1].split("\nSTEP_3_VERBATIM", 1)[0]
+    lines = []
+    for ln in comment.splitlines():
+        if ln.startswith("#     "):
+            lines.append(ln[2:])
+        elif lines:
+            break
+    assert lines, "the recipe's command lines vanished from the comment"
+    return "\n".join(lines)
+
+
+def _run_recipe(cwd: Path):
+    recipe = _recipe_from_comment()
+    assert recipe.count(_RECIPE_INTERPRETER) == 1, (
+        "the recipe no longer resolves its interpreter through --git-common-dir, which is the "
+        "one form that finds the primary checkout's `.venv` from a worktree (Phase 234)"
+    )
+    if _recipe_interpreter() == sys.executable:
+        recipe = recipe.replace(_RECIPE_INTERPRETER, shlex.quote(sys.executable))
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    return subprocess.run(["/bin/bash", "-c", recipe], cwd=cwd, env=env,
+                          capture_output=True, text=True)
+
+
+@pytest.mark.parametrize("where", ["", "tests", "core/skills/review-close"])
+def test_the_recipe_in_the_comment_runs_from_anywhere_in_the_checkout(where):
+    """Execute the comment's own lines, not a paraphrase of them (Phase 327, `Q-592` line 17).
+
+    The predecessor compared four string fragments, while the command it actually ran differed
+    from the comment three ways, so the comment was never executed. And it was CWD-bound: its
+    `sys.path.insert(0,'.')` gave `ModuleNotFoundError: No module named 'tests'` from `tests/`.
+    Run from the top, from `tests/` and from a directory two levels down, the printed constant
+    must be the one this module computes for the same tree.
+    """
+    recipe = _recipe_from_comment()
+    # Run on the unmutated tree, the recipe's output equals the stored pin either way, so these
+    # two are what tell REGENERATING the constant from echoing it (the round's P1), and what
+    # keeps the `cd` inside a subshell rather than moving the maintainer's own shell (P4).
+    assert "P._block_canon(P._flat(P._step_3_section()))" in recipe and "STEP_3_VERBATIM" not in recipe, (
+        "the recipe no longer recomputes the block from the skill; it would print the stored "
+        "constant back, and a re-approval would re-approve nothing")
+    assert (recipe.lstrip().startswith("( top=$(git rev-parse --show-cdup) && cd ")
+            and recipe.rstrip().endswith(" )")), (
+        "the recipe's `cd` is no longer inside a subshell, so pasting it moves your shell")
+    out = _run_recipe(REPO_ROOT / where)
+    assert out.returncode == 0, f"the recipe fails from {where or '.'!r}: {out.stderr}"
+    assert ast.literal_eval(out.stdout.strip()) == _block_canon(_flat(_step_3_section())), (
+        f"run from {where or '.'!r}, the recipe prints a constant other than the one this "
+        "module derives from the same tree"
+    )
+
+
+def test_the_recipe_stops_outside_a_checkout(tmp_path):
+    """Outside any repo the first recipe ran on and exited 127 at `//.venv/bin/python3`. The
+    subshell must stop at the failed `git` instead and print nothing to paste."""
+    out = _run_recipe(tmp_path)
+    # 128 is git's own exit. A recipe that carries on past the failed `git` exits 127 at the
+    # missing interpreter here, or 1 at the failed import where CI substitutes one, and both
+    # also print "not a git repository" on the way, so the code is the discriminator.
+    assert out.returncode == 128 and not out.stdout.strip(), (out.returncode, out.stdout)
+
+
 def test_the_recipe_in_the_comment_is_the_one_the_test_runs():
     """The comment teaches a command; drift between it and the executed one is the class
     this module exists to catch, one level up."""
     body = Path(__file__).read_text(encoding="utf-8")
     comment = body.split("STEP_3_VERBATIM_LEN")[0]
-    for fragment in (
-        "import tests.test_review_close_reference_pins as P",
-        "P._block_canon(P._flat(P._step_3_section()))",
-    ):
-        assert fragment in comment, f"the recipe comment lost {fragment!r}"
     assert "git rev-parse --git-common-dir" in comment, (
         "the recipe must resolve the interpreter with --git-common-dir: a relative "
         ".venv/bin/python3 exits 127 in a worktree, and --show-toplevel returns the WORKTREE "

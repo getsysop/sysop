@@ -445,9 +445,11 @@ def test_the_ladder_does_not_discriminate_on_errno():
         "the lock-read ladder discriminates on errno. That turns a rule into a list, "
         "and every errno not on the list is silently tolerated again."
     )
-    tolerated = set(re.findall(r"^except ([A-Za-z_, ()]+):", src, re.M))
-    assert tolerated == {"FileNotFoundError", "ValueError", "OSError as exc"} or \
-        tolerated == {"FileNotFoundError", "ValueError"} | {t for t in tolerated if "as exc" in t}, (
+    # `as <name>` is a binding, not a class: Phase 334 bound `ValueError as exc` to name the
+    # malformed lock on stderr, and the rule is about which classes the ladder catches.
+    tolerated = {re.sub(r"\s+as\s+\w+$", "", t)
+                 for t in re.findall(r"^except ([A-Za-z_, ()]+(?: as \w+)?):", src, re.M)}
+    assert tolerated == {"FileNotFoundError", "ValueError", "OSError"}, (
         f"the ladder's except clauses changed to {sorted(tolerated)}. Exactly two classes "
         "may resolve to `prev = None`: FileNotFoundError (absence) and ValueError "
         "(malformed, Phase 148). Anything else added there is silently tolerated."

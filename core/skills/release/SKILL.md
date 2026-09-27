@@ -21,7 +21,7 @@ It is deliberately **lightweight**. v1 = changelog + version proposal + tag + op
 
 The **dry-run default requires no permission rules** — it only reads git history, `tasks/index.yml`, and `CHANGELOG.md`, and prints a plan. Per `_shared/permission-guard.md` § Notes, read-only git ops (`git log`, `git describe`, `git tag --list`) are auto-approved and not listed as allow-rules. On this default path the skill is as portable as `/daily-summary` — with one caveat: the *optional* Step 5 PR-link enrichment (only under `pr` merge policy) shells `gh pr list`, which relies on the `Bash(gh pr list:*)` rule already in the Sysop template. It is deliberately **not** on the required list — a missing rule or absent `gh` degrades it silently (the plan is complete without PR links), so it never blocks a dry-run.
 
-The write path requires rules **conditionally**, mirroring `/review-close`'s policy-gated requirement (only demand what the chosen path invokes). Read `.claude/settings.json` and confirm `permissions.allow` contains:
+The write path requires rules **conditionally**, mirroring `/review-close`'s policy-gated requirement (only demand what the chosen path invokes). Read `.claude/settings.json` (and `.claude/settings.local.json` if present — allow-rules union across the two) and confirm `permissions.allow` contains:
 
 - **When `--execute` is passed** (the local + tag path):
   - `Bash(git tag:*)` — create the annotated release tag
@@ -98,7 +98,7 @@ Extract the scope from a parenthetical when present (`feat(report-issues):` → 
 
 A commit subject is terse where a task title is meaningful. `Read` `tasks/index.yml` (tolerate absence) and select tasks with `status: done` whose `completed_date` falls in the release window — i.e. `completed_date >= <lasttag date>` (from Step 1), or all done tasks for a first release. `completed_date` is an ISO `YYYY-MM-DD` string, so the comparison is plain lexicographic — no date parsing (the same in-model index read `/daily-summary` and `/roadmap` use; no script, no `.venv` dependency).
 
-For each, pull `id`, `title`, the `id`-prefix category (`FEAT-`/`TECH-`/`DATA-`/`FIX-`/`UX-` → Feature / Technical / Data-ops / Fix / UX), and `blast_radius` **when present** (optional at `schema_version: 1`). Use `blast_radius: architectural | cross-module` as a **highlights signal** — those are the changes worth leading the release notes with. Cross-reference task IDs that appear in commit subjects so each highlighted task links to its landing commit.
+For each, pull `id`, `title`, the `id`-prefix category (`FEAT-`/`TECH-`/`DATA-`/`FIX-`/`UX-` → Feature / Technical / Data-ops / Fix / UX; **any other prefix → a category named by the literal prefix**, `OPS-` → `OPS`, as `/roadmap` groups kinds — prefixes are project-chosen, so an unmapped one is never dropped from the highlights), and `blast_radius` **when present** (optional at `schema_version: 1`). Use `blast_radius: architectural | cross-module` as a **highlights signal** — those are the changes worth leading the release notes with. Cross-reference task IDs that appear in commit subjects so each highlighted task links to its landing commit.
 
 If `tasks/index.yml` is missing or unparseable, note "task index unavailable — highlights from commits only" and continue. The release is complete from `git log` alone; the index join only makes it more legible.
 

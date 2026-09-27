@@ -38,11 +38,25 @@ def _repo_with_stub(root):
     return root
 
 
-def _run(cwd, *args):
+def _run(cwd, *args, env=None):
     return subprocess.run(
         ["bash", str(SCRIPT), *args],
-        cwd=str(cwd), capture_output=True, text=True,
+        cwd=str(cwd), capture_output=True, text=True, env=env,
     )
+
+
+def _bytecode_env():
+    """The caller's environment minus both bytecode switches.
+
+    A mutation battery runs under `PYTHONDONTWRITEBYTECODE=1` and a fresh
+    `PYTHONPYCACHEPREFIX`. Inherited, the first makes the wrapper's own export
+    untestable and the second sends bytecode out of the tree, so the two tests
+    below would pass or fail on the runner's settings rather than the wrapper's.
+    """
+    env = dict(os.environ)
+    env.pop("PYTHONDONTWRITEBYTECODE", None)
+    env.pop("PYTHONPYCACHEPREFIX", None)
+    return env
 
 
 def _impl_argv(stdout):
@@ -133,7 +147,7 @@ def test_wrapper_suppresses_bytecode_in_the_consumer_tree(tmp_path):
         "import _probe_mod\n"
         "print('IMPL_ARGV:', repr(sys.argv[1:]))\n"
     )
-    r = _run(root)
+    r = _run(root, env=_bytecode_env())
     assert r.returncode == 0, r.stdout + r.stderr
 
     caches = sorted(str(p.relative_to(root)) for p in root.rglob("__pycache__"))
@@ -160,8 +174,7 @@ def test_the_bytecode_probe_fixture_can_actually_fail(tmp_path):
         "import _probe_mod\n"
         "print('IMPL_ARGV:', repr(sys.argv[1:]))\n"
     )
-    env = dict(os.environ)
-    env.pop("PYTHONDONTWRITEBYTECODE", None)
+    env = _bytecode_env()
     r = subprocess.run(
         [sys.executable, "-c",
          "import sys, os;"

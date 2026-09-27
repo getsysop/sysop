@@ -339,9 +339,9 @@ def test_the_record_item_states_why_it_is_one_write_not_two() -> None:
     item = record_item()
     tier = slice_between(
         read(BUILD),
-        "Three tiers; take the first that fits.",
+        "3\u2011tier. **When the work surfaces something adjacent, fix it here",
         f"\n{RECORD_MARKER} **Persist the `## Test decision`**",
-        "auto-build tier block",
+        "auto-build rule block",
     )
     assert "the same write as item" in tier and RECORD_MARKER.rstrip(".") in tier, (
         "auto-build's tier 1 no longer delegates the `## Also fixed` write to the "
@@ -758,7 +758,7 @@ def test_review_close_does_not_call_auto_build_a_non_writer_in_any_wording() -> 
 def test_the_tier_block_anchor_is_pinned_to_the_record_item() -> None:
     """Round M28: reverting the re-anchor was green, in the guard file alone.
 
-    `TIER_BLOCKS["auto-build"]` was re-anchored this phase from item 4 to the record
+    `RULE_BLOCKS["auto-build"]` (named `TIER_BLOCKS` before Phase 323) was re-anchored this phase from item 4 to the record
     item, because inserting `3-record` between them had silently widened that slice to
     cover an item that is not the tier -- so the reversal screens there were reading
     prose they were never scoped to. Nothing detected the widening, which meant the
@@ -767,9 +767,9 @@ def test_the_tier_block_anchor_is_pinned_to_the_record_item() -> None:
     """
     import test_fix_in_branch_tier as T
 
-    _, _, end = T.TIER_BLOCKS["auto-build"]
+    _, _, end = T.RULE_BLOCKS["auto-build"]
     assert RECORD_MARKER.rstrip(".") in end, (
-        "test_fix_in_branch_tier.TIER_BLOCKS['auto-build'] no longer ends at the record "
+        "test_fix_in_branch_tier.RULE_BLOCKS['auto-build'] no longer ends at the record "
         f"item (end anchor is {end!r}). Anchoring it at item 4 again puts item 3-record "
         "inside the tier slice, so that module's reversal screens read an item they are "
         "not scoped to and the tier's own bounds go partly unread."

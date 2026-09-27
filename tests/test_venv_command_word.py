@@ -263,8 +263,8 @@ def _variable_held_hits(text: str) -> list[tuple[int, str]]:
     not merely unattempted — so it is closed here on the lens's own predicate.
 
     The discriminator is the fallback, not the probe: a probed resolver ALWAYS
-    assigns a non-venv candidate too (`run_checks.sh:55` `PYTHON="python3"`;
-    `self_check.sh:93` `RC_PY="python3"`; both git-hook examples the same). So
+    assigns a non-venv candidate too (`run_checks.sh:58` `PYTHON="python3"`;
+    `self_check.sh:100` `RC_PY="python3"`; both git-hook examples the same). So
     flag `$VAR <stem>` only when EVERY assignment to VAR in that file is a venv
     path. Zero false positives across the shipped tree; catches the blind case.
     """

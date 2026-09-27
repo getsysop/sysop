@@ -54,6 +54,23 @@ INSTALL_SH = REPO_ROOT / "install.sh"
 SKILLS = REPO_ROOT / "core" / "skills"
 
 READERS = ("report-issues", "share-wins")
+# What makes a skill a reader of ENTRIES: it names the log and says it classifies each
+# entry. Phase 326 first keyed this on "Classify each" alone, which caught
+# `/contribute-convention` (it names the log only to read its H1 for a name, and its
+# "Classify each candidate" is about overlay conventions), and an exemption for it was
+# pinned to a 40-character "H1" window that a round showed both leaks and false-kills.
+# Naming what is classified removes the need for any exemption. Lexical by nature: a
+# reader that classifies entries under some other wording escapes it.
+CLASSIFIES_ENTRIES = re.compile(
+    r"(?i:classif\w*) (?:each|every|all)\b.{0,32}?(?:\bentr|ISSUE-|GOOD-|\[good\])"
+)
+
+
+def classifies_entries(text: str) -> bool:
+    # Flatten first: round 2 walked a line wrap, a double space and `**Classify**` straight
+    # through a per-line pattern. Whitespace runs become one space and bold markers go.
+    flat = " ".join(text.replace("**", "").split())
+    return "SYSOP_ISSUES.md" in text and bool(CLASSIFIES_ENTRIES.search(flat))
 
 # The shipped rule: an entry id is the kind plus DIGITS. The seed's template
 # headings carry the literal placeholder `NNNN`, so this pattern excludes them —
@@ -499,8 +516,7 @@ def test_the_population_of_readers_is_derived_and_complete():
     """
     classifiers = sorted(
         p.parent.name for p in SKILLS.glob("*/SKILL.md")
-        if "SYSOP_ISSUES.md" in (t := p.read_text(encoding="utf-8"))
-        and re.search(r"Classify (?:each|every|all)", t)
+        if classifies_entries(p.read_text(encoding="utf-8"))
     )
     assert classifiers == sorted(READERS), classifiers
     for skill in classifiers:
@@ -679,3 +695,27 @@ def test_the_wins_exclusion_is_an_instruction_not_a_preference():
                      "in principle", "need not end", "clearly belong together"):
         assert softener not in wflat.lower(), (
             f"share-wins' reciprocal clause was softened ({softener!r})")
+
+
+def test_the_reader_predicate_separates_entries_from_other_classifying():
+    """Controls for `classifies_entries`, through the same function the population uses."""
+    log = "Read `sysop/SYSOP_ISSUES.md`.\n"
+    assert classifies_entries(log + "Classify each entry by `**Status:**`:")
+    assert classifies_entries(log + "Classify each `[good]` entry by `**Status:**`:")
+    assert classifies_entries(log + "Classify every ISSUE-NNNN block.")
+    assert classifies_entries(log + "Classify each GOOD-NNNN heading.")
+    assert classifies_entries(log + "Classify each `[good]` one.")
+    assert classifies_entries(log + "Classify all entries.")
+    # Formatting is not wording: these escaped the per-line first cut.
+    assert classifies_entries(log + "**Classify** each entry.")
+    assert classifies_entries(log + "Classify each\nentry.")
+    assert classifies_entries(log + "Classify  each entry.")
+    assert classifies_entries(log + "Classifying each entry by status.")
+    assert classifies_entries(log + "Classify each one of the friction-log entries.")
+    # The noun must sit within reach of the verb (32 characters after `each`).
+    assert not classifies_entries(log + "Classify each of the many candidates we found, then the entry.")
+    # An entry reader that names no entry kind within reach is outside the lexical
+    # predicate, and that is the declared limit, not a pass.
+    assert not classifies_entries(log + "## Step 5: Classify each candidate by target pack")
+    assert not classifies_entries("Classify each entry by status.")  # no log named
+

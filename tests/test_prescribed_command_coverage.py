@@ -48,12 +48,18 @@ WHAT THIS CANNOT DO.
   tail, an assignment prefix or a `for … done` wrapper each defeat an otherwise
   correct rule; `WORKFLOW.md` § 8.2a *Invocation shapes* carries that list, and
   Invariant 3 pins only the one shape this phase removed.
+* **It sees `sysop/scripts/` invocations only, never a bare `git` subcommand.** That is how
+  `Q-588` got past it: both review skills prescribe `git worktree add` inline in prose, and
+  loop mode seeded no rule for it. `tests/test_loop_worktree_placement.py` guards that class
+  (every `git worktree` subcommand a loop-shipped runner names) and says why this module was
+  not widened to every `git` command.
 * **Loop mode is checked by script, not by skill.** If loop mode ships the
   script and any shipped file prescribes it, `LOOP_ALLOW` must cover it. That
   over-approximates: a loop-shipped script prescribed only by a lifecycle-only
   skill would fail here wrongly. No such case exists today; if one appears, the
   fix is to narrow this to the loop-shipped doc set, not to delete the check.
 """
+import ast
 import json
 import re
 from pathlib import Path
@@ -121,16 +127,31 @@ def _template_rules():
     return set(json.loads(TEMPLATE.read_text(encoding="utf-8"))["permissions"]["allow"])
 
 
-def _loop_allow():
-    """Parse `LOOP_ALLOW = { ... }` out of install.sh.
+def _loop_allow(text=None):
+    """Parse `LOOP_ALLOW = { ... }` out of install.sh (or out of *text*, for a control).
 
     Derived from the installer, not restated here — a second copy of the set is
     the drift this whole module exists to catch, one layer up.
     """
-    text = INSTALLER.read_text(encoding="utf-8")
-    m = re.search(r"^LOOP_ALLOW = \{(.*?)^\}", text, re.S | re.M)
+    if text is None:
+        text = INSTALLER.read_text(encoding="utf-8")
+    m = re.search(r"^LOOP_ALLOW = (\{.*?^\})", text, re.S | re.M)
     assert m, "LOOP_ALLOW is no longer a `LOOP_ALLOW = { ... }` block in install.sh"
-    return set(re.findall(r'"(Bash\([^"]*\))"', m.group(1)))
+    # Evaluated as the Python literal it is, not scanned for quoted strings: a scan reads a
+    # commented-out `# "Bash(...)",` line as a live rule (Phase 333's round, W1b), while the
+    # installer's own Python drops it -- so the guard would certify a rule no install writes.
+    try:
+        rules = ast.literal_eval(m.group(1))
+    except ValueError as exc:
+        raise AssertionError(
+            f"install.sh's LOOP_ALLOW is no longer a literal set of strings ({exc}); the "
+            "installer may still run it, but no guard can read a computed element -- write it "
+            "as a plain string"
+        ) from None
+    assert isinstance(rules, set) and all(isinstance(r, str) for r in rules), (
+        "LOOP_ALLOW is no longer a set of strings"
+    )
+    return {r for r in rules if r.startswith("Bash(")}
 
 
 def _loop_excluded_scripts():
@@ -355,7 +376,7 @@ def test_every_fenced_invocation_has_a_covering_rule():
 
 
 def test_loop_mode_covers_the_scripts_it_ships():
-    """A loop-mode install seeds only LOOP_ALLOW — 21 rules, not the full 71.
+    """A loop-mode install seeds only LOOP_ALLOW, a subset of the full template.
 
     `self_check.sh` ships in loop mode and the installer's footer prescribes it
     there; until Phase 184 LOOP_ALLOW did not carry it.

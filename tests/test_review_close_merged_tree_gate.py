@@ -314,7 +314,7 @@ PINS: list[tuple[str, str, str]] = [
     # class recurs at CALL-SITE granularity, so pinning the new step's own sentence says
     # nothing about whether anything routes to it.
     ("step4a",
-     "go straight to **`4a-post`** — **not** to Step 4b.",
+     "go straight to **`4a-fix`**, then **`4a-post`** — **not** to Step 4b.",
      "Step 4a's forward pointer. It said 'go straight to Step 4b', so under the PR-reuse "
      "shape — where 4a is skipped and nothing else re-verifies — an agent executing "
      "literally routed PAST the new gate and squash-merged an unverified branch to a "
@@ -1114,10 +1114,10 @@ MUTATIONS: list[tuple[str, Callable[[str], str]]] = [
         "but **before** doc consolidation")),
     # ---- the round's findings: each survived the first version's whole battery ----
     ("W1 restore Step 4a's route past the gate", _sub(
-        "go straight to **`4a-post`** — **not** to Step 4b.", "go straight to Step 4b.")),
+        "go straight to **`4a-fix`**, then **`4a-post`** — **not** to Step 4b.", "go straight to Step 4b.")),
     ("W2 ship both sentences (the pin alone would pass)", _sub(
-        "go straight to **`4a-post`** — **not** to Step 4b.",
-        "go straight to **`4a-post`** — **not** to Step 4b. On reflection, go straight to Step 4b.")),
+        "go straight to **`4a-fix`**, then **`4a-post`** — **not** to Step 4b.",
+        "go straight to **`4a-fix`**, then **`4a-post`** — **not** to Step 4b. On reflection, go straight to Step 4b.")),
     ("W3 add a NEW route past the gate somewhere else entirely", _sub(
         "### 4b. Close Merged Batches\n",
         "### 4b. Close Merged Batches\n\nIf you are in a hurry, proceed to Step 4b directly.\n")),

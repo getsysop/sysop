@@ -1352,8 +1352,10 @@ def main():
     # instead of a traceback that looks like a script bug.
     try:
         response = input(f"\nArchive {total_tasks} tasks? [y/N] ")
-    except (KeyboardInterrupt, EOFError):
-        print("\nAborted.")
+    except (KeyboardInterrupt, EOFError, UnicodeDecodeError) as exc:
+        # An answer that is not UTF-8 is not a "y"; it declines, and says why.
+        print("\nAborted." if not isinstance(exc, UnicodeDecodeError)
+              else "\nAborted: the answer was not readable text.")
         sys.exit(0)
     if response.lower() not in ("y", "yes"):
         print("Aborted.")

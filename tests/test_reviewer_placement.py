@@ -134,16 +134,6 @@ def _twin_spawn_sentence(text: str) -> str:
     )
 
 
-def _step_3c_spawn(text: str) -> str:
-    """Step 2b's security twin — the second fleet, spawned from the same step."""
-    return _slice(
-        text,
-        r"Spawn one Agent per surviving target",
-        r"^\s*4\.\s+\*\*Collect all verdicts",
-        "the security twin's spawn paragraph",
-    )
-
-
 # --------------------------------------------------------------------------------------
 # Predicates. Each returns a list of problems; the real file must yield none.
 # --------------------------------------------------------------------------------------
@@ -666,11 +656,27 @@ def test_the_venv_remedy_is_the_symlink_alone() -> None:
     assert venv_remedy_problems(PARTIAL.read_text(encoding="utf-8")) == []
 
 
-def _standing_containment(skill: Path) -> str:
-    """The containment paragraph of a standing review skill."""
-    return _slice(skill.read_text(encoding="utf-8"),
-                  r"This rule has been measured failing", r"^\*\*",
-                  "the containment rule")
+def _standing_containment(skill: Path, text: str | None = None) -> str:
+    """The containment paragraph of a standing review skill — ONE paragraph, or a refusal.
+
+    Phase 327 (`Q-592` line 20). The end anchor `^\\*\\*` is "the next line that opens in bold",
+    and nothing checked where that landed: widening it to `^#` grew the slice 1,670 → 5,586
+    characters (3.3×) with the module green, while the sibling span has
+    `test_the_slicer_fails_CLOSED_when_an_end_anchor_moves`. Width was the enabling condition
+    for the bypass Phase 296's round found. So the span must be the paragraph it is named for:
+    a blank line inside it means the end anchor overshot into the next one.
+    """
+    if text is None:
+        text = skill.read_text(encoding="utf-8")
+    span = _slice(text, r"This rule has been measured failing", r"^\*\*", "the containment rule")
+    # A line holding only spaces or tabs is a blank line too (CommonMark), so it ends a
+    # paragraph; Phase 327's round widened the span through one with the plain `\n\n` test green.
+    assert not re.search(r"\n[ \t]*\n", span.rstrip(" \t\n")), (
+        f"{skill.name}: the containment span runs past its own paragraph "
+        f"({len(span):,} chars) — its end anchor no longer lands on the next paragraph's bold "
+        "lead, so every scoped check below is reading neighbouring prose"
+    )
+    return span
 
 
 @pytest.mark.parametrize("skill", [CODEBASE_REVIEW, SECURITY_AUDIT],
@@ -694,13 +700,35 @@ def test_the_standing_review_skills_state_the_placement_requirement(skill: Path)
     # and these two skills ship `git worktree add <dir> --detach <sha>`; both are valid
     # git, and a guard demanding one spelling goes red on a writer using the other -- the
     # round demonstrated exactly that, using this repo's own house spelling.
-    assert re.search(r"git worktree add\s+(?:--detach\s+<[^>]+>|<[^>]+>\s+--detach)", span), (
+    # `\s+` between every word, not a literal space: a re-wrap may break the line inside the
+    # code span (`git worktree` / `add <dir>`), and CommonMark renders that as one space
+    # (Phase 333's round, LOW-10 -- the literal form false-killed it).
+    assert re.search(r"git\s+worktree\s+add\s+(?:--detach\s+<[^>]+>|<[^>]+>\s+--detach)", span), (
         "no mechanics — an instruction to 'place each agent' with no command behind it "
         "is the pointer-not-an-invoker shape this whole phase is about"
     )
-    assert re.search(r"git -C\s+<[^>]*>\s+rev-parse HEAD", span), (
+    assert re.search(r"git\s+-C\s+<[^>]*>\s+rev-parse\s+HEAD", span), (
         "no echo requirement, so a misplacement is undetectable from outside the run"
     )
+
+
+@pytest.mark.parametrize("skill", [CODEBASE_REVIEW, SECURITY_AUDIT],
+                         ids=["codebase-review", "security-audit"])
+def test_the_containment_span_refuses_to_run_into_the_next_paragraph(skill: Path) -> None:
+    """The end-anchor control `_standing_containment` lacked. Un-bolding the next paragraph's
+    lead moves the `^\\*\\*` end past it; the slicer must refuse rather than widen."""
+    text = skill.read_text(encoding="utf-8")
+    span = _standing_containment(skill, text)
+    after = text[text.index(span) + len(span):]
+    assert after.startswith("**"), "precondition: the span ends on the next paragraph's bold lead"
+    unbolded = text.replace(span + "**", span + "Lead: ", 1)
+    with pytest.raises(AssertionError, match="runs past its own paragraph"):
+        _standing_containment(skill, unbolded)
+    # The round's shape: a new paragraph joined by a whitespace-only line, not an empty one.
+    for blank in (" ", "\t", "   ", " \t "):
+        spaced = text.replace(span, span.rstrip("\n") + f"\n{blank}\nA reviewer may echo it.\n\n", 1)
+        with pytest.raises(AssertionError, match="runs past its own paragraph"):
+            _standing_containment(skill, spaced)
 
 
 @pytest.mark.parametrize("skill", [CODEBASE_REVIEW, SECURITY_AUDIT],
@@ -795,8 +823,11 @@ def test_the_two_standing_skills_carry_the_containment_rule_identically() -> Non
     The divergence is what let a defect in one file hide behind a control that only
     ever mutated the other.
     """
-    a = _standing_containment(CODEBASE_REVIEW)
-    b = _standing_containment(SECURITY_AUDIT)
+    # Trailing whitespace is dropped before comparing: the slice runs to the next paragraph's
+    # bold lead, so it carries the blank line(s) between, and a whitespace-only line there is
+    # still a blank line to CommonMark (Phase 333's round, P10C -- it false-killed this).
+    a = _standing_containment(CODEBASE_REVIEW).rstrip()
+    b = _standing_containment(SECURITY_AUDIT).rstrip()
     assert a == b, (
         "the containment paragraph has diverged between codebase-review and "
         "security-audit — a fix applied to one and not the other now reads as covered"

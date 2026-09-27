@@ -11,7 +11,7 @@ The "I'm done" skill. Commits code changes, writes documentation to the right fi
 
 This skill ends with `git push -u origin HEAD`. Under `dontAsk` mode a missing push allow-rule halts the session after work is committed locally but before it reaches the remote — confusing because everything *looks* successful until the push step.
 
-Read `.claude/settings.json` and confirm `permissions.allow` contains:
+Read `.claude/settings.json` (and `.claude/settings.local.json` if present — allow-rules union across the two) and confirm `permissions.allow` contains:
 
 - `Bash(git push -u origin:*)`
 - `Bash(git push origin:*)`
@@ -126,7 +126,7 @@ git rev-parse --abbrev-ref --quiet '@{u}' >/dev/null 2>&1
 
 This is the only Step-2 path that could use `--amend`, and the probe-then-branch shape hardens the no-upstream-yet pipeline invariant into a check that catches `/document-work` invocations outside the orchestrated flow before they can rewrite pushed history.
 
-**If invoked with `--non-interactive`** (Phase 6e execution agent): if there are uncommitted changes, stage tracked changes via `git add` (never add `.env`, credentials, or secrets) and commit with a derived message + trailer. Derive `<TASK_ID>` by matching the current branch name (`git branch --show-current`) against `tasks[].branch` first, then by lowercase-mapping the branch suffix back to a task ID (e.g., `tech/tech-foo` → `TECH-FOO`). Format: `<type>: <title> (<TASK_ID>)` for the subject, with `<type>` chosen from the ID prefix per Step 3's type table (FEAT → feat, TECH → tech, BUG → fix, etc.), and `Doc-Work: <TASK_ID>` as the final trailer line. If there are no uncommitted changes, apply the trailer-placement rule above to the most recent commit.
+**If invoked with `--non-interactive`** (Phase 6e execution agent): if there are uncommitted changes, stage tracked changes via `git add` (never add `.env`, credentials, or secrets) and commit with a derived message + trailer. Derive `<TASK_ID>` by matching the current branch name (`git branch --show-current`) against `tasks[].branch` first, then by lowercase-mapping the branch suffix back to a task ID (e.g., `tech/tech-foo` → `TECH-FOO`). Format: `<type>: <title> (<TASK_ID>)` for the subject, with `<type>` chosen from the ID prefix (FEAT → feat, TECH → tech, BUG → fix; for any other prefix, the conventional type that fits the change), and `Doc-Work: <TASK_ID>` as the final trailer line. If there are no uncommitted changes, apply the trailer-placement rule above to the most recent commit.
 
 **Interactive invocation (default):** if there are uncommitted changes (staged or unstaged):
 
@@ -159,7 +159,7 @@ summary: "<one-sentence description of the work, including key files affected>"
 
 > **`branch_tip:` is the commit this doc's `summary:` describes, and it is a provenance field, not a timestamp** (`Q-471`). `/review-close` Step 3b compares it against the branch tip and **refuses to collect** a doc that later commits have overtaken — because Step 4c routes `summary:` into `PROJECT_STATUS.md` §6 in the same commit that flips the task to `done`, and a doc that no longer describes its branch writes a false statement into the durable record. `date:` cannot serve: it is day-granular and cannot see same-day drift, which is the whole of the reported case.
 >
-> **Stamp it here, at Step 3, and not earlier.** Step 2 is the last step that commits — Steps 3b through 6 create no commits, and the pending-doc is itself untracked (gitignored), so writing it does not move `HEAD`. That is what makes `git rev-parse HEAD` at this moment stable through the rest of the skill. **If you commit anything to the branch after this point, re-stamp it**; a stale value is exactly the defect the field exists to catch, and it stops the next close at **exit 6** rather than hiding — nothing collected, main untouched, the branch SKIP'd with its worktree intact so re-running this skill is still possible.
+> **Stamp it here, at Step 3, and not earlier.** Step 2 is the last step that commits, unless a finding below is fixed or filed in Step 3 — Steps 3b through 6 create no commits, and the pending-doc is itself untracked (gitignored), so writing it does not move `HEAD`. That is what makes `git rev-parse HEAD` at this moment stable through the rest of the skill. **If you commit anything to the branch after this point, re-stamp it**; a stale value is exactly the defect the field exists to catch, and it stops the next close at **exit 6** rather than hiding — nothing collected, main untouched, the branch SKIP'd with its worktree intact so re-running this skill is still possible.
 >
 > **Full SHA, unabbreviated, and unquoted is fine** — a hex string parses as a YAML string and carries none of the shapes the `summary:` note below warns about. The reader validates it as an object name before handing it to git and reports anything else as unknown-not-stale, so a hand-mangled value degrades to the pre-`Q-471` behaviour rather than halting; that is a fallback, not a licence to omit the field.
 
@@ -187,19 +187,19 @@ If multiple types could apply, use the primary one.
 
 **Do NOT** modify `PROJECT_STATUS.md`, `CHANGELOG.md`, `UI_Iterations.md`, `tasks/index.yml`, or `tasks/**/*.md` body files directly (with two exceptions, both named below). Status transitions on `tasks/index.yml` are owned by `/claim-task` and `/review-close`. **Filing a NEW follow-up task entry (id + body file under `tasks/open/`) IS allowed and is required when the work surfaces a follow-up that Step 3b would otherwise hard-fail on.**
 
-**Before filing one, take the tiers in order** — filing is tier 3, not the default. Three tiers; take the first that fits. This is the same rule the `/claim-task` and `/auto-build` executors run (Step 7e Sequence item 2b and Step 7c Sequence item 3b respectively); it is restated here because `/document-work` is also invoked directly, outside either executor, and the decision to file is made *here* — Step 3b only verifies that something already decided-and-named actually exists.
+**Before filing one, fix it if you can — filing is not the default.** Each finding gets one of three outcomes; nothing is parked. This is the same rule the `/claim-task` and `/auto-build` executors run (Step 7e Sequence item 2b and Step 7c Sequence item 3‑tier respectively); it is restated here because `/document-work` is also invoked directly, outside either executor, and the decision to file is made *here* — Step 3b only verifies that something already decided-and-named actually exists.
 
-1. **Fix it in this branch** when **all** of these hold: it is in a file or module this work already touches; it is mechanical, or a doc, test, or convention-config correction; an existing gate already covers it, or you add the test that does; it is small — on the order of 20 lines, and no more than a few per branch; and it is **not a claim about what the code means that you have not verified by reading the consumer**. **Never tier 1, at any size:** migrations; prompts under whatever eval gate the consumer declares (`<project>/CLAUDE.md`; if it declares none, read this as the project's shipped agent/skill prompt bodies); auth and money-path code; every path in `<project>/CLAUDE.md` § *Security-critical always-include files*; and anything that writes to production. Record each one as a single line under an `## Also fixed` heading in the task body, per `tasks/schema.md` § *Also fixed* — which is the **one further exception** to the "do not modify `tasks/**/*.md` body files" rule above, alongside filing a new body.
-2. **Extend an existing open task** in that module rather than opening a second entry against the same code.
-3. **File a new task** only past both — or when it is a design question, needs a `user_action`, or writes to production.
+1. **Fix it in this branch** — whatever module it is in, and past a one-line change, as long as the close can still review the branch. Read the code before you change what it does, and add a test when the fix changes behaviour. **Never, at any size:** migrations, anything that writes to production, and auth or payment logic. Only the human's answer (below) can clear one, and the fix's `## Also fixed` line then ends `(approved: <YYYY-MM-DD>, "<the question as asked>")`. Record each fix as one line under an `## Also fixed` heading in the task body, per `tasks/schema.md` § *Also fixed* — which is the **one further exception** to the "do not modify `tasks/**/*.md` body files" rule above, alongside filing a new body.
+2. **File a task** only when it cannot be fixed now: it needs a design decision or a human action, it is too large to review in this branch, or it is on the never-list. Add it to an existing open task in that module before opening a new entry.
+3. **Drop it** when nothing is wrong: nothing is broken today, it is a preference or a hypothetical, or it is already handled. A real future condition goes in a comment or a test at the site, not in a ledger.
 
-**Past those, tier 3 has one more test: name what the filing blocks.** One of — the phase carrying `current_focus: true`; a named `planned` phase; a gate the project declares (`<project>/CLAUDE.md`, a release checklist, an ops runbook — whatever it calls them); or an open task whose stated acceptance this stops. Write that name into the body so a reader can check it. **Four kinds are filed whatever this test says**, each being its own justification: a design question or a call that is the human's; a `user_action`; a production write; and a defect in shipped behaviour **you can state as a falsifiable failure** — the input, the expected result, the actual one — or a security finding. **Everything else goes to `tasks/notes.md`** — the flat ledger beside the queue, one line per note, shape in `tasks/README.md` § *The notes ledger*. Nothing routes to that file and nothing counts it; that is what it is for. **A note is not a silent drop:** say in your final message that you wrote one and what it concerns, so the human can promote it with `/add-task`. And a note carries no task id, so do not put a `<PREFIX>-<NAME>` token for it into the docs prose — `/document-work` Step 3b hard-fails on a token that resolves to nothing. The ledger holds a finding nobody has committed to yet; it is never the place for one you would rather not defend. **You route the note; you do not write it.** This skill states no working directory and makes no commit after Step 2, so a write here lands in an undetermined tree with nothing to commit it: in a worktree it dirties the branch and Step 1a then classifies it `dirty`, skipping the whole close; in the main checkout it is on no branch. So `tasks/notes.md` is **not** a further exception to the do-not-modify rule above. On the executor path the record item performs the append (`/claim-task` Sequence item 3, `/auto-build` item `3‑record`) — hand it the line. Invoked directly, **print the exact line in your final message** and say it belongs in `tasks/notes.md`, committed with the next commit; a line a human can paste is worth more than a write nothing carries.
+**When an answer from the human would make it fixable** — a design choice, which of two readings is intended, permission for a never-list item — ask before you file. Interactive: ask with `AskUserQuestion`, as a menu with your recommended answer first, and make the fix on the answer. Under `--non-interactive`, or when no answer comes, file the task and write the question into its body with the fix you would make for each answer, so the next session starts from the question rather than re-deriving it.
 
-**The backstop is a property of the CHANGE, not a lookup over a file list** — an enumeration rots. **If the change would weaken, disarm, narrow or delete a gate — a check, a semgrep rule, a numeric bound, an allowlist or ignore entry, a deletion-protection flag — it is never tier 1, whatever file it lives in**, because tier 1's "an existing gate already covers it" predicate is satisfied by the disarming edit itself. If you cannot name a gate that would still fail were your fix wrong, file instead.
+**A fix or a filing made here comes after Step 2's commit, so commit it yourself**: the fix, its `## Also fixed` line and any new task entry and body, in one commit on the branch carrying the `Doc-Work: <TASK_ID>` trailer (none when no `<TASK_ID>` resolves, as Step 2 does), then re-stamp `branch_tip:` in the pending-doc. Left uncommitted, it dirties the worktree and `/review-close` skips the branch.
 
-**The bound is the design, not a formality.** Unplanned scope inside a narrow plan is a real failure mode, and an agent mid-task verifies an adjacent thing less carefully than a fresh one would. Tier 1 dropped in the name of throughput becomes a source of defects rather than a sink for tasks. When you are between tiers 1 and 2, take 2 — a filed line costs a reader, a wrong in-branch fix costs a revert.
+**`tasks/notes.md` is retired — write nothing to it**, and it is not a further exception to the do-not-modify rule above. A consumer's existing ledger is theirs to clear; leave it alone.
 
-Tiers 1 and 2 put no `<PREFIX>-<NAME>` token into the pending-docs prose, so neither one reaches Step 3b's gate at all: **that gate is a tier-3 gate**, and a tier-1 fix is invisible to it by construction. The record that keeps a tier-1 fix honest is `## Also fixed` plus `/review-close` Step 2a reading the diff against the body, not this check.
+A fix or a drop puts no `<PREFIX>-<NAME>` token into the pending-docs prose, so neither reaches Step 3b's gate at all: **that gate is a filed-task gate**, and an in-branch fix is invisible to it by construction. The record that keeps an in-branch fix honest is `## Also fixed` plus `/review-close` Step 2a reading the diff against the body, not this check.
 
 <!-- Routing logic (which shared docs to update based on type) lives in /review-close Step 4c -->
 <!-- Canonical process: WORKFLOW.md §2.4 (Documentation) -->
@@ -288,10 +288,18 @@ except ImportError:  # PyYAML lives only in the project venv (BeanRider ISSUE-00
               "PEP-668 system Python refuses a bare `pip install`.", file=sys.stderr)
         sys.exit(2)
 
-branch = subprocess.check_output(["git", "branch", "--show-current"], text=True).strip()
+try:
+    branch = subprocess.check_output(["git", "branch", "--show-current"], text=True).strip()
+except UnicodeDecodeError as e:
+    print(f"ERROR: the current branch name is not UTF-8 ({e})", file=sys.stderr)
+    sys.exit(2)
 pending_path = f"sysop/runtime/pending-docs/{branch.replace('/', '-')}.md"
-with open(pending_path) as f:
-    raw = f.read()
+try:
+    with open(pending_path, encoding="utf-8") as f:
+        raw = f.read()
+except (OSError, UnicodeDecodeError) as e:
+    print(f"ERROR: {pending_path} could not be read ({type(e).__name__}: {e})", file=sys.stderr)
+    sys.exit(2)
 
 # Split YAML frontmatter from body
 fm = {}
@@ -307,8 +315,12 @@ if not os.path.exists("tasks/index.yml"):
     print("Follow-up check: skipped (no tasks/index.yml)")
     sys.exit(0)
 
-with open("tasks/index.yml") as f:
-    idx = yaml.safe_load(f) or {}
+try:
+    with open("tasks/index.yml", encoding="utf-8") as f:
+        idx = yaml.safe_load(f) or {}
+except (OSError, UnicodeDecodeError) as e:
+    print(f"ERROR: tasks/index.yml could not be read ({type(e).__name__}: {e})", file=sys.stderr)
+    sys.exit(2)
 tasks_by_id = {t["id"]: t for t in (idx.get("tasks") or []) if isinstance(t, dict) and t.get("id")}
 known_ids = set(tasks_by_id)
 
@@ -367,7 +379,7 @@ print(f"Follow-up check: {len(found)} task IDs named, all resolved")
 PY
 ```
 
-A non-zero exit is the hard-fail; block Step 4 until the consumer files the missing stubs (or bypasses them via one of the two whitelist paths below).
+A non-zero exit is the hard-fail; block Step 4 until the consumer files the missing stubs (or bypasses them via one of the two whitelist paths below). Exit 2 is not a missing stub: PyYAML is absent, the branch name is not UTF-8, or the pending doc or `tasks/index.yml` could not be read, and stderr names which.
 
 **Why this gate:** prevents the recurring drift where pending-docs prose claims "filed as TECH-X" but TECH-X never makes it into `tasks/index.yml`. The failure mode is invisible without the gate — the close-out commit lands clean, the follow-up disappears into prose, and `/next-task` never surfaces it.
 

@@ -307,6 +307,7 @@ def test_every_skill_naming_the_log_also_names_the_real_path():
 _LOG_NAMING_SKILLS = {
     "add-task",
     "auto-build",
+    "contribute-convention",
     "intake",
     "onboard",
     "report-issues",

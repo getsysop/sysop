@@ -67,7 +67,7 @@ the step exists to answer.
 
 **Provenance.** `Q-553`, filed by Phase 314's round, closed by Phase 319. Phase 314 corrected the
 three surfaces it was permitted to touch in-branch and could not touch this one, because
-`core/skills/**` is never tier 1 under CLAUDE.md's fix-in-branch stanza, at any size. The sharp
+`core/skills/**` was then never tier 1 under CLAUDE.md's fix-in-branch stanza, at any size. The sharp
 part of the record: `Q-334`'s own body had *named* this surface as one of three documenting
 retention as intended, and Phase 314 copied that sentence into the archive and wrote "RESOLVED"
 beneath it without changing the surfaces. The sibling sentence in `auto-build/SKILL.md`'s
@@ -77,3 +77,38 @@ its runner carries the bound in a parenthetical and nothing more.
 **Adjacent, still open.** `Q-052` — the diagnostics are keyed `_unparseable_<session>_<agent>.json`,
 never by claim or phase, so the "go and look" instruction this paragraph gives is still not
 filterable by an orchestrator. The cap made that population smaller, not navigable.
+
+## Steps 1 and 3 — a roadmap task is classified by its shape, and named by one rule
+
+**The rule.** Step 1 takes any argument matching the schema's id grammar as a roadmap task,
+after the batch arm has had first refusal, and does not check that the id exists. Step 3 derives
+the branch from the id by one rule: the leading `^[A-Z][A-Z0-9]*` segment, lowercased, is the
+directory, and the whole id, lowercased, is the leaf.
+
+**What it protects.** Both steps used to carry a fixed list of five prefixes (`FEAT`, `TECH`,
+`DATA`, `UX`, `FIX`). `tasks/schema.md` leaves prefixes to the project, and `validate_tasks.py`
+accepts any id that matches the grammar, so a consumer whose queue used `OPS-` had tasks its own
+validator passed and this skill refused with a usage message. The reasonable reaction to that
+message is to doubt the id, not the skill. The Step 3 table was the same five-item list written
+out as five branch names, so even an id that got past Step 1 had no branch to generate.
+`/document-work`'s follow-up gate had already solved the vocabulary question by reading the
+prefixes from the index, and `/roadmap` groups kinds under the literal prefix for the same reason.
+
+**Why shape, and not a lookup, at Step 1.** Step 2 already resolves the id, through
+`claim_task.sh --entry-state`, which answers `absent` for an id the task index does not list,
+and Step 2 stops there with a named remedy. A second existence check at Step 1 would read the
+index twice and give a missing id a usage message instead of that remedy. So Step 1 answers only "is this a batch,
+a task id, or neither", and the grammar is the whole of that answer. The batch arm goes first
+because `BATCH-120` matches the task grammar.
+
+**What its loss or softening would change.** Put a prefix list back into either step and every
+consumer with a prefix outside it loses `/claim-task`: with a misleading usage message at Step 1,
+and with no branch rule at Step 3. Swap the arm order and `BATCH-<N>` is classified as a roadmap
+task, which `--entry-state` then refuses as a batch. Change the leaf half of the Step 3 rule
+and the branch no longer matches what `sitrep_survey.py` reverses when it maps a branch with no
+`branch:` field back to a task: it upper-cases everything after the first `/`, so
+`ops/ops-foo` → `OPS-FOO`.
+
+**Provenance.** Reported upstream by a consumer with 34 outstanding `OPS-` tasks, and fixed in
+Phase 332. `/release` Step 4's category map had the same five-prefix list and gained a literal-prefix
+fallback in the same phase. It has no reference file, so its runner carries the one-clause reason.

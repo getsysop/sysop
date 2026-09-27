@@ -129,7 +129,12 @@ DEFAULT_STALE_DAYS = 7
 STALE_ROUND_HOURS = 2
 TASK_BRANCH_PREFIXES = ("task/", "feat/", "tech/", "data/", "ux/", "fix/", "bug/")
 REVIEW_BRANCH_PREFIXES = ("review/", "batch/")
-TASK_ID_RE = re.compile(r"^([A-Z][A-Z0-9]*)-([A-Z0-9][A-Z0-9-]+)$")
+# The schema's id grammar (`validate_tasks.py` `_TASK_ID_RE`): prefixes are project-chosen,
+# so `ABC123` and `QA2-X` are ids too. A narrower pattern dropped their Doc-Work trailers.
+TASK_ID_RE = re.compile(r"^[A-Z][A-Z0-9-]{2,80}$")
+# `/claim-task` Step 3's generated name: the leading segment lowercased, then the whole id
+# lowercased (`OPS-FOO` → `ops/ops-foo`, `ABC123` → `abc123/abc123`), for any prefix.
+DERIVED_BRANCH_RE = re.compile(r"^([a-z][a-z0-9]*)/\1(?:-[a-z0-9-]*)?$")
 SUBJECT_TASK_RE = re.compile(r"\(([A-Z][A-Z0-9]*-[A-Z0-9][A-Z0-9-]+)\)\s*$")
 
 
@@ -137,19 +142,23 @@ SUBJECT_TASK_RE = re.compile(r"\(([A-Z][A-Z0-9]*-[A-Z0-9][A-Z0-9-]+)\)\s*$")
 
 
 def _git(args: list[str], cwd: str | None = None, check: bool = False) -> str:
-    """Run a git command, return stdout (stripped). On non-zero exit, return ''."""
+    """Run a git command, return stdout (stripped). On non-zero exit, return ''.
+
+    Decoded with ``os.fsdecode``, not ``text=True`` (`Q-612`): git prints ref
+    names and commit messages as raw bytes, so a non-UTF-8 packed ref or a commit
+    object written without an encoding header ended the whole survey. The decode
+    round-trips, so a name handed back to git still names the same ref."""
     try:
         r = subprocess.run(
             ["git", *args],
             cwd=cwd,
             check=check,
             capture_output=True,
-            text=True,
             timeout=15,
         )
         if r.returncode != 0:
             return ""
-        return r.stdout.rstrip("\n")
+        return os.fsdecode(r.stdout).rstrip("\n")
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return ""
 
@@ -181,6 +190,10 @@ class Lock:
     started: str = ""
     expires: str = ""
     raw: dict[str, Any] = field(default_factory=dict)
+    # Non-empty when the lock file could not be read or parsed: every field
+    # above is then UNKNOWN, not empty, and the classifiers must not read an
+    # empty `branch` as "claimed, no branch" (whose remedy is a release).
+    unreadable: str = ""
 
 
 @dataclass
@@ -259,7 +272,7 @@ class Discrepancy:
 # ── Lock reading ─────────────────────────────────────────────────
 
 
-def _read_locks(main_root: Path) -> list[Lock]:
+def _read_locks(main_root: Path, unreadable: list | None = None) -> list[Lock]:
     locks_dir = main_root / "sysop/runtime/locks"
     if not locks_dir.is_dir():
         return []
@@ -267,7 +280,10 @@ def _read_locks(main_root: Path) -> list[Lock]:
     for p in sorted(locks_dir.glob("*.lock")):
         if p.name == ".gitkeep":
             continue
-        raw = _parse_lock_file(p)
+        raw, exc = _load_lock_file(p)
+        if exc is not None:
+            _unreadable_input(p, exc, "this claim's lock fields are unknown, so its "
+                              "state is reported as `lock unreadable`", unreadable)
         task_id = raw.get("task_id", p.stem)
         out.append(
             Lock(
@@ -285,19 +301,75 @@ def _read_locks(main_root: Path) -> list[Lock]:
                 started=str(raw.get("started") or ""),
                 expires=str(raw.get("expires") or ""),
                 raw=raw,
+                unreadable=_input_reason(exc) if exc is not None else "",
             )
         )
     return out
 
 
-def _parse_lock_file(path: Path) -> dict[str, Any]:
-    """Lock files are YAML-shaped. Parse defensively; return {} on failure."""
+def _printable(path: Path) -> str:
+    return re.sub(r"[\x00-\x1f\x7f]", "?", str(path))
+
+
+def _input_reason(exc: BaseException) -> str:
+    return re.sub(r"[\x00-\x1f\x7f]", " ", f"{type(exc).__name__}: {exc}")[:300]
+
+
+def _input_remedy(exc: BaseException) -> str:
+    """The repair that matches the failure: a permission error is not fixed by
+    re-encoding, and a markdown file has no YAML to repair."""
+    if isinstance(exc, UnicodeDecodeError):
+        return "re-save it as UTF-8 (the reason names the bad byte's position)"
+    if isinstance(exc, OSError):
+        return "restore read access to it (or restore the file)"
+    if isinstance(exc, yaml.YAMLError):
+        return "repair its YAML (the reason names the line)"
+    if isinstance(exc, json.JSONDecodeError):
+        return "repair its JSON (the reason names the line)"
+    return "repair its contents (the reason says what is wrong)"
+
+
+def _unreadable_input(path: Path, exc: BaseException, consequence: str,
+                      unreadable: list | None) -> None:
+    """Name an input a reader absorbed. `run_survey` passes a list and turns each
+    entry into a DISCREPANCIES line and routes RECOMMENDED NEXT to the repair;
+    any other caller gets a stderr warning. Absorbing silently is what this
+    exists to stop: an unreadable index read as `{}` made /sitrep report "idle"
+    over a live claim (Phase 333's round)."""
+    where = re.sub(r"[\x00-\x1f\x7f]", "?", str(path))
+    reason = _input_reason(exc)
+    entry = (where, reason, consequence, _input_remedy(exc))
+    if unreadable is None:
+        print(f"WARN: sitrep_survey: could not read {where} ({reason}) — {consequence}",
+              file=sys.stderr)
+    else:
+        unreadable.append(entry)
+
+
+def _load_lock_file(path: Path) -> tuple[dict[str, Any], BaseException | None]:
+    """(fields, None), or ({}, the exception) when the lock cannot be read or parsed.
+
+    An empty file or a YAML list/scalar parses to no fields, which is "unknown",
+    not "empty": `{}` routed it to the release/drainer arms an unreadable lock
+    was taken off. A MAPPING without `branch:` is a readable lock and stays
+    `claimed, no branch`."""
     try:
         with path.open(encoding="utf-8") as f:
             data = yaml.safe_load(f)
-        return data if isinstance(data, dict) else {}
-    except (OSError, yaml.YAMLError):
-        return {}
+    except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
+        return {}, exc
+    if not isinstance(data, dict):
+        return {}, ValueError(f"parsed to no fields ({type(data).__name__})")
+    return data, None
+
+
+def _parse_lock_file(path: Path, unreadable: list | None = None) -> dict[str, Any]:
+    """Lock files are YAML-shaped. Parse defensively; return {} on failure, and
+    name the failure (see `_unreadable_input`)."""
+    data, exc = _load_lock_file(path)
+    if exc is not None:
+        _unreadable_input(path, exc, "this claim's lock fields are unknown", unreadable)
+    return data
 
 
 # ── Worktree reading ─────────────────────────────────────────────
@@ -341,17 +413,28 @@ def _finalize_worktree(d: dict[str, str], main_root: Path) -> Worktree:
 # ── tasks/index.yml reading ──────────────────────────────────────
 
 
-def _read_index(main_root: Path) -> dict[str, dict[str, Any]]:
+def _read_index(main_root: Path, unreadable: list | None = None) -> dict[str, dict[str, Any]]:
     p = main_root / "tasks" / "index.yml"
     if not p.is_file():
         return {}
     try:
         with p.open(encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
-    except (OSError, yaml.YAMLError):
+    except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
+        _unreadable_input(p, exc, "the survey read the task index as EMPTY, so every "
+                          "task state in this report is unreliable", unreadable)
+        return {}
+    # YAML that parses with the wrong shape (a top-level list, `tasks: 5`) is unreadable
+    # too; it used to crash the survey with a traceback at exit 1 (Phase 336's round).
+    tasks = data.get("tasks") if isinstance(data, dict) else None
+    if not isinstance(data, dict) or not isinstance(tasks, (list, type(None))):
+        got = type(tasks if isinstance(data, dict) else data).__name__
+        _unreadable_input(p, ValueError(f"expected a mapping whose `tasks:` is a list, got {got}"),
+                          "the survey read the task index as EMPTY, so every "
+                          "task state in this report is unreliable", unreadable)
         return {}
     out: dict[str, dict[str, Any]] = {}
-    for t in data.get("tasks") or []:
+    for t in tasks or []:
         if isinstance(t, dict) and t.get("id"):
             out[t["id"]] = t
     return out
@@ -475,7 +558,7 @@ def _warn_on_duplicate_batch_numbers(batches, source: str) -> None:
         )
 
 
-def _read_review_batches(main_root: Path) -> list[dict[str, Any]]:
+def _read_review_batches(main_root: Path, unreadable: list | None = None) -> list[dict[str, Any]]:
     p = main_root / "review_tasks.md"
     if not p.is_file():
         return []
@@ -484,7 +567,9 @@ def _read_review_batches(main_root: Path) -> list[dict[str, Any]]:
     try:
         with p.open(encoding="utf-8") as f:
             lines = f.readlines()
-    except OSError:
+    except (OSError, UnicodeDecodeError) as exc:
+        _unreadable_input(p, exc, "no review batch is shown, including any in "
+                          "progress", unreadable)
         return []
     # Fenced content is example text, not structure — see review_index.py's
     # note. Without this a task quoting the tracker's own shapes both
@@ -764,7 +849,7 @@ def _commits_unpushed(branch: str, main_root: Path) -> int:
 
 
 def _worktree_dirty(worktree_path: Path) -> bool:
-    raw = _git(["status", "--porcelain"], cwd=str(worktree_path))
+    raw = _git(["-c", "core.quotePath=true", "status", "--porcelain"], cwd=str(worktree_path))
     return bool(raw.strip())
 
 
@@ -933,6 +1018,17 @@ _PARKED_STATE = "parked"
 # re-resume live work.
 _PARKED_WIP_STATE = "parked, work in progress"
 _AWAITING_STATE = "awaiting approval"
+# A lock whose file cannot be read or parsed. Its fields are unknown, so no
+# field-keyed arm may classify it: an empty `branch` read as `claimed, no
+# branch` routed a possibly-live claim to `--release` (Phase 333, round 2).
+_LOCK_UNREADABLE_STATE = "lock unreadable"
+
+
+def _lock_unreadable_action(claim_id: str, lock_path: Path, reason: str) -> str:
+    return (
+        f"repair {lock_path} ({reason}) and re-run /sitrep — do NOT release "
+        f"{claim_id}: its lock fields are unknown and the claim may be live"
+    )
 
 
 def _park_markers(main_root: Path, claim_id: str) -> list[Path]:
@@ -1193,6 +1289,24 @@ def _classify_task(
     notes: list[str] = []
     doc_work_ids = sorted({tid for c in commits for tid in c.doc_work_ids})
 
+    # First, before any arm that reads a lock field: an unreadable lock's
+    # fields are unknown, not empty.
+    if lock is not None and lock.unreadable:
+        return TaskState(
+            task_id=task_id,
+            state=_LOCK_UNREADABLE_STATE,
+            branch=branch,
+            worktree=str(worktree.path) if worktree else "",
+            commits_ahead=len(commits),
+            has_lock=True,
+            has_index_entry=bool(index_entry),
+            index_status=str((index_entry or {}).get("status", "")),
+            dirty=dirty,
+            doc_work_ids=doc_work_ids,
+            next_action=_lock_unreadable_action(task_id, lock.path, lock.unreadable),
+            notes=[f"lock {lock.path} could not be read: {lock.unreadable}"],
+        )
+
     # **The stall probe runs BEFORE the stale check, and the order is the whole
     # point.** A park is by construction long-lived — it is waiting on an absent
     # human — so past `--stale-days` (default 7) the stale arm would classify it
@@ -1427,11 +1541,26 @@ def _find_discrepancies(
     worktrees: list[Worktree],
     index: dict[str, dict[str, Any]],
     main_root: Path,
+    unreadable: list | None = None,
 ) -> list[Discrepancy]:
     out: list[Discrepancy] = []
 
     lock_ids = {l.task_id for l in locks}
     wt_branches = {w.branch for w in worktrees if not w.is_main}
+    # An unreadable lock's `branch` is unknown, so a worktree or branch that
+    # matches "no lock" may be that claim's. Say so before any removal advice.
+    # So can an unreadable index or tracker: "no index entry" is then unknown,
+    # not false. `unreadable` holds the gating inputs the readers could not read.
+    unread_paths = list(dict.fromkeys(
+        [str(l.path) for l in locks if l.unreadable]
+        + [entry[0] for entry in (unreadable or [])]
+    ))
+    caveat = (
+        f"first repair the unreadable input(s) {', '.join(unread_paths)} and "
+        "re-run — while they are unread, whether this is live work is unknown; "
+        "only then: "
+        if unread_paths else ""
+    )
 
     # Stale lock: lock present, no worktree on disk at the recorded workspace
     for l in locks:
@@ -1470,7 +1599,7 @@ def _find_discrepancies(
                         f"status='{index[derived].get('status')}' but no lock"
                     ),
                     suggestion=(
-                        f"recreate lock via claim_task.sh --lock {derived} "
+                        f"{caveat}recreate lock via claim_task.sh --lock {derived} "
                         f"{w.branch} or flip status back"
                     ),
                 )
@@ -1484,7 +1613,7 @@ def _find_discrepancies(
                         "matching lock or index entry"
                     ),
                     suggestion=(
-                        f"investigate uncommitted work, then "
+                        f"{caveat}investigate uncommitted work, then "
                         f"git worktree remove {w.path}"
                     ),
                 )
@@ -1495,8 +1624,9 @@ def _find_discrepancies(
     all_branches = _git(
         ["branch", "--list", "--format=%(refname:short)"], cwd=str(main_root)
     ).splitlines()
+    prefixes = _index_prefixes(index)
     for b in all_branches:
-        if not _is_task_shaped_branch(b):
+        if not _is_task_shaped_branch(b, prefixes):
             continue
         if b in wt_branches:
             continue
@@ -1510,7 +1640,7 @@ def _find_discrepancies(
                 kind="orphan branch",
                 detail=f"branch {b} has no lock, no worktree, no index entry",
                 suggestion=(
-                    f"investigate; if dead, git branch -D {b}"
+                    f"{caveat}investigate; if dead, git branch -D {b}"
                 ),
             )
         )
@@ -1601,13 +1731,28 @@ def _round_coverage_discrepancies(main_root: Path) -> list[Discrepancy]:
     if not d.is_dir():
         return []
     newest: dict[str, tuple[float, dict[str, Any]]] = {}
+    # An unreadable receipt conditions only this check, so it is a plain
+    # discrepancy, not a gating input (`unreadable` is not fed). It is machine
+    # written, so its content is unknowable: the remedy is delete or restore.
+    bad: list[Discrepancy] = []
+
+    def _receipt_unreadable(f: Path, exc: BaseException) -> None:
+        bad.append(Discrepancy(
+            kind="round receipt unreadable",
+            detail=(f"{_printable(f)} could not be read "
+                    f"({_input_reason(exc)}) — its round's coverage is not checked, "
+                    "and an older receipt for the same skill may be judged in its place"),
+            suggestion="delete it, or restore it from the round that wrote it",
+        ))
     for f in d.glob("*.json"):
         try:
             r = json.loads(f.read_text(encoding="utf-8"))
             mtime = f.stat().st_mtime
-        except (OSError, ValueError):
+        except (OSError, ValueError) as exc:
+            _receipt_unreadable(f, exc)
             continue
         if not isinstance(r, dict):
+            _receipt_unreadable(f, ValueError(f"not a JSON object ({type(r).__name__})"))
             continue
         skill = str(r.get("skill", "unknown"))
         if skill not in newest or mtime > newest[skill][0]:
@@ -1678,6 +1823,28 @@ def _round_coverage_discrepancies(main_root: Path) -> list[Discrepancy]:
                 )
             )
 
+        # The writer records `fanout: "unreported"` only when workers ran and
+        # the round header carried no `Fan-out coverage` line for that skill.
+        # Keyed to that exact value, so a receipt written before the field
+        # existed (no key) stays silent. Outside the Full gate for the same
+        # reason as the solo check: a bare `Sampled` must not switch it off.
+        if workers > 0 and r.get("fanout") == "unreported":
+            out.append(
+                Discrepancy(
+                    kind="fan-out round with no per-worker coverage",
+                    detail=(
+                        f"{skill}: last round dispatched {workers} worker(s) "
+                        "but recorded no `Fan-out coverage` line — which "
+                        "workers opened how much of their scope is unknown"
+                    ),
+                    suggestion=(
+                        "a written receipt is never rewritten, so this clears when "
+                        "the next round closes; give that round's header its "
+                        "`Fan-out coverage` line (Step 5b) before Step 5f runs"
+                    ),
+                )
+            )
+
         # A narrowed round is exempt from the look-ratio only if it says what it
         # narrowed to. `Sampled (highest-exposure modules)` declared its own
         # narrowness; a bare `Sampled` declared nothing and would otherwise buy
@@ -1719,12 +1886,37 @@ def _round_coverage_discrepancies(main_root: Path) -> list[Discrepancy]:
                     ),
                 )
             )
-    return out
+    return bad + out
 
 
-def _is_task_shaped_branch(branch: str) -> bool:
-    return branch.startswith(TASK_BRANCH_PREFIXES) or branch.startswith(
-        REVIEW_BRANCH_PREFIXES
+def _is_review_batch_lock(task_id: str, index: dict[str, Any]) -> bool:
+    """A lock the review-batch path owns, not a roadmap claim.
+
+    `batch_work.sh` writes `BATCH-<N>` only, and a `TASK-` lock is review-shaped only
+    when the index does not list it: prefixes are project-chosen, so an index task may
+    be `TASK-7`, and its claim must stay in ACTIVE WORK.
+    """
+    return bool(re.fullmatch(r"BATCH-\d+", task_id)) or (
+        task_id.startswith("TASK-") and task_id not in index
+    )
+
+
+def _index_prefixes(index: dict[str, Any]) -> set[str]:
+    """The lowercased leading segment of every id in the index: the directories
+    Step 3 can have generated (`/document-work` Step 3b discovers prefixes the same way)."""
+    return {m.group(0).lower() for tid in index
+            if (m := re.match(r"[A-Z][A-Z0-9]*", str(tid)))}
+
+
+def _is_task_shaped_branch(branch: str, prefixes: frozenset[str] | set[str] = frozenset()) -> bool:
+    """A fixed task/review directory, or Step 3's derived `<segment>/<segment>[-…]` shape
+    for a segment the project's index actually uses. A human `docs/docs-refresh` or
+    `wip/wip` has the derived shape, and must not be reported as an orphan task branch."""
+    m = DERIVED_BRANCH_RE.match(branch)
+    return (
+        branch.startswith(TASK_BRANCH_PREFIXES)
+        or branch.startswith(REVIEW_BRANCH_PREFIXES)
+        or bool(m and m.group(1) in prefixes)
     )
 
 
@@ -1739,6 +1931,7 @@ def _classify_review_batches(
 ) -> list[ReviewBatchState]:
     out: list[ReviewBatchState] = []
     lock_by_branch = {l.branch: l for l in locks if l.branch}
+    unreadable_by_claim = {l.task_id: l for l in locks if l.unreadable}
     wt_branches = {w.branch for w in worktrees if not w.is_main}
     for b in batches:
         if b["status"] not in ("Pending", "In Progress"):
@@ -1792,6 +1985,9 @@ def _classify_review_batches(
         # have Doc-Work trailers yet`, verbatim the string `Q-317` was filed
         # about, and Phase 248 declined to widen one path alone.
         claim_id = f"BATCH-{b['number']}"
+        unreadable_lock = unreadable_by_claim.get(claim_id)
+        if unreadable_lock is not None:
+            has_lock = True
         stall_state, stall_action, stall_notes = _claim_stall(
             main_root, claim_id
         ) if has_lock else ("", "", [])
@@ -1812,7 +2008,16 @@ def _classify_review_batches(
                 "was answered; classified by its commits"
             )
 
-        if b["status"] == "Pending" and not has_lock:
+        if unreadable_lock is not None:
+            # Before every arm: without it, a `BATCH-<N>.lock` that cannot be
+            # read matched no branch, read as unclaimed, and was offered to a
+            # drainer (or as `claimed, no branch`, to `--release`).
+            state = _LOCK_UNREADABLE_STATE
+            next_action = _lock_unreadable_action(
+                claim_id, unreadable_lock.path, unreadable_lock.unreadable)
+            notes.append(f"lock {unreadable_lock.path} could not be read: "
+                         f"{unreadable_lock.unreadable}")
+        elif b["status"] == "Pending" and not has_lock:
             state = "pending (not claimed)"
             if not has_triage_record:
                 # No durable verdict — /triage has never classified this batch,
@@ -1886,7 +2091,8 @@ def _classify_review_batches(
             # `sysop/runtime/claim/<CLAIM_ID>/`, with `<CLAIM_ID>` = `BATCH-<N>`
             # for a batch). What it had was exactly ONE call site,
             # `_classify_task`, which `run_survey`'s lock loop never reaches for
-            # a batch: it `continue`s on the `BATCH-`/`TASK-` prefix first. So a
+            # a batch: it `continue`d on the `BATCH-`/`TASK-` prefix first (now
+            # `_is_review_batch_lock`: `BATCH-<N>` and unindexed `TASK-` ids). So a
             # `/claim-task` Step-7c park of a review batch classified as
             # `in progress — continue work; 0 of N tasks have Doc-Work trailers
             # yet`, indistinguishable from a claim that had not started.
@@ -1959,6 +2165,10 @@ class Survey:
     # headers, and the payload contract is untouched. Defaulted so existing
     # fixture constructors stay valid; run_survey always populates it.
     review_ready_batches: list[tuple[int, str]] = field(default_factory=list)
+    # (path, reason, consequence, remedy) for every input a reader could not
+    # read. Non-empty → RECOMMENDED NEXT routes to the repair first and the
+    # idle arm cannot fire: a survey over an unread input is not a survey.
+    unreadable_inputs: list[tuple[str, str, str, str]] = field(default_factory=list)
 
 
 def run_survey(stale_days: int = DEFAULT_STALE_DAYS) -> Survey:
@@ -1966,10 +2176,11 @@ def run_survey(stale_days: int = DEFAULT_STALE_DAYS) -> Survey:
     head_short = _git(["rev-parse", "--short", "HEAD"], cwd=str(main_root))
     default_branch = resolve_default_branch(main_root)
 
-    locks = _read_locks(main_root)
+    unreadable: list = []
+    locks = _read_locks(main_root, unreadable)
     worktrees = _read_worktrees(main_root)
-    index = _read_index(main_root)
-    review_batches_raw = _read_review_batches(main_root)
+    index = _read_index(main_root, unreadable)
+    review_batches_raw = _read_review_batches(main_root, unreadable)
 
     phase40_cutoff = datetime.fromisoformat(
         PHASE_40_CUTOFF_ISO.replace("Z", "+00:00")
@@ -1982,17 +2193,21 @@ def run_survey(stale_days: int = DEFAULT_STALE_DAYS) -> Survey:
     # Index entries with in_progress status drive the primary classification
     # set.
     seen_task_ids: set[str] = set()
+    open_batch_claims = {
+        f"BATCH-{b['number']}" for b in review_batches_raw
+        if b.get("status") in ("Pending", "In Progress")
+    }
 
     for lock in locks:
         task_id = lock.task_id
         if not task_id:
             continue
-        # Skip review-batch locks (BATCH-* / TASK-* shaped); those are handled
-        # by the review-batch path. Heuristic: roadmap IDs match a prefix that
-        # ALSO has an entry in tasks/index.yml. If neither side knows the lock,
-        # treat as roadmap-style task for completeness.
-        if task_id.startswith("BATCH-") or task_id.startswith("TASK-"):
-            continue
+        # The review-batch path handles review-batch locks — except an
+        # unreadable one no open batch will pick up (its batch path keys on
+        # `BATCH-<N>`), which would otherwise vanish from ACTIVE WORK.
+        if _is_review_batch_lock(task_id, index):
+            if not (lock.unreadable and task_id not in open_batch_claims):
+                continue
         seen_task_ids.add(task_id)
         index_entry = index.get(task_id)
         branch = lock.branch or (index_entry or {}).get("branch", "")
@@ -2044,7 +2259,7 @@ def run_survey(stale_days: int = DEFAULT_STALE_DAYS) -> Survey:
     )
 
     discrepancies = _find_discrepancies(
-        locks, worktrees, index, main_root
+        locks, worktrees, index, main_root, unreadable
     )
     if not default_branch:
         # `Q-365`: with no resolvable default branch every claim above read 0
@@ -2067,6 +2282,18 @@ def run_survey(stale_days: int = DEFAULT_STALE_DAYS) -> Survey:
             ),
         ))
 
+    # An input a reader could not read is reported next to the default-branch
+    # line: like it, it conditions every state above rather than being one.
+    at = 1 if not default_branch else 0
+    discrepancies[at:at] = [
+        Discrepancy(
+            kind="input unreadable",
+            detail=f"{path} could not be read ({reason}) — {consequence}",
+            suggestion=f"{remedy}, then re-run /sitrep",
+        )
+        for path, reason, consequence, remedy in unreadable
+    ]
+
     open_roadmap_ids = sorted(
         tid for tid, t in index.items() if t.get("status") == "open"
     )
@@ -2085,6 +2312,7 @@ def run_survey(stale_days: int = DEFAULT_STALE_DAYS) -> Survey:
         discrepancies=discrepancies,
         stale_days=stale_days,
         open_roadmap_ids=open_roadmap_ids,
+        unreadable_inputs=list(unreadable),
     )
 
 
@@ -2201,7 +2429,9 @@ def _task_detail(ts: TaskState) -> str:
         bits.append(f"{ts.commits_ahead} commits ahead")
     if ts.unpushed and ts.unpushed != ts.commits_ahead:
         bits.append(f"{ts.unpushed} unpushed")
-    if ts.doc_work_ids:
+    # The check is for THIS task's trailer, as the lifecycle classification reads it; a
+    # trailer naming some other token on the branch is not this task's documentation.
+    if ts.task_id in ts.doc_work_ids:
         bits.append("Doc-Work ✓")
     return ", ".join(bits)
 
@@ -2215,7 +2445,8 @@ _AUTO_BUILD_MAX_BATCH = 4
 def _recommended_next(s: Survey) -> Recommendation | None:
     """Single top routing recommendation. See SKILL.md § Recommendation routing rules.
 
-    Priority order: review-close (task) → review-close (batch) → unpushed doc-work →
+    Priority order: unreadable input → lock unreadable (task, batch) →
+    review-close (task) → review-close (batch) → unpushed doc-work →
     /triage if any pending batch lacks a Triaged: record → /auto-fix and/or /auto-judge →
     code committed, docs pending → continue in-progress (task, then batch) →
     parked with work in progress → parked → awaiting approval (task, then the
@@ -2232,6 +2463,40 @@ def _recommended_next(s: Survey) -> Recommendation | None:
     same way when `Q-363` was taken (`stale`, `empty batch`, batch
     `in progress`), so the guard covers the class rather than the filing.
     """
+    # P0a: an input the survey could not read. Every state below is read
+    # through it (an unreadable index reads as empty, so the idle arm would
+    # fire over live work), so the repair comes first.
+    if s.unreadable_inputs:
+        path, reason, consequence, remedy = s.unreadable_inputs[0]
+        more = (f" ({len(s.unreadable_inputs) - 1} more under DISCREPANCIES)"
+                if len(s.unreadable_inputs) > 1 else "")
+        return Recommendation(
+            command=f"repair {path}: {remedy}; then re-run /sitrep",
+            reason=f"{path} could not be read ({reason}) — {consequence}{more}",
+        )
+    # P0b/P0c: a claim whose lock is unreadable. Reached on its own only when
+    # the survey is built without the input list; its move is the repair,
+    # never a release.
+    lock_unreadable = [t for t in s.tasks if t.state == _LOCK_UNREADABLE_STATE]
+    if lock_unreadable:
+        t = lock_unreadable[0]
+        return Recommendation(
+            command=t.next_action,
+            reason=f"{t.task_id}'s lock cannot be read, so its claim state is unknown",
+            detail_lines=list(t.notes),
+        )
+    lock_unreadable_batches = [
+        rb for rb in s.review_batches if rb.state == _LOCK_UNREADABLE_STATE
+    ]
+    if lock_unreadable_batches:
+        rb = lock_unreadable_batches[0]
+        return Recommendation(
+            command=rb.next_action,
+            reason=(f"Batch {rb.batch_number}'s lock cannot be read, so its claim "
+                    "state is unknown"),
+            detail_lines=list(rb.notes),
+        )
+
     # P1: tasks ready for /review-close
     ready_tasks = [t for t in s.tasks if t.state == "ready for /review-close"]
     if ready_tasks:
@@ -2650,6 +2915,16 @@ def _suggested_order(s: Survey) -> list[str]:
     `_recommended_next`'s docstring states, guarded without an allowlist.
     """
     out: list[str] = []
+    # 0. Inputs the survey could not read, then the claims whose lock is one
+    # of them: the repair precedes everything the survey read through them.
+    for path, _reason, _consequence, remedy in s.unreadable_inputs:
+        out.append(f"repair {path}: {remedy}; then re-run /sitrep")
+    for ts in s.tasks:
+        if ts.state == _LOCK_UNREADABLE_STATE:
+            out.append(f"{ts.task_id}: {ts.next_action}")
+    for rb in s.review_batches:
+        if rb.state == _LOCK_UNREADABLE_STATE:
+            out.append(f"batch {rb.batch_number}: {rb.next_action}")
     # 1. Ready for /review-close
     for ts in s.tasks:
         if ts.state == "ready for /review-close":
@@ -2867,10 +3142,10 @@ def main() -> int:
         survey = run_survey(stale_days=args.stale_days)
     except KeyboardInterrupt:
         return 130
-    if args.json:
-        sys.stdout.write(render_json(survey))
-    else:
-        sys.stdout.write(render_text(survey))
+    text = render_json(survey) if args.json else render_text(survey)
+    # A surrogate from `_git`'s decode prints as a visible `\\udcXX` escape
+    # rather than failing a strict stdout (`Q-612`).
+    sys.stdout.write(re.sub("[\ud800-\udfff]", lambda m: "\\u%04x" % ord(m.group()), text))
     return 0
 
 

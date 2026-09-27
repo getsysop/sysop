@@ -799,7 +799,10 @@ def test_default_branch_prefix() -> None:
     assert nt._default_branch_prefix("FEAT-FOO") == "feat/"
     assert nt._default_branch_prefix("FIX-FOO") == "fix/"
     assert nt._default_branch_prefix("TECH-FOO") == "tech/"
-    assert nt._default_branch_prefix("DATA-FOO") == "tech/"
+    assert nt._default_branch_prefix("DATA-FOO") == "data/"
+    assert nt._default_branch_prefix("UX-FOO") == "ux/"
+    assert nt._default_branch_prefix("OPS2-FOO") == "ops2/"
+    assert nt._default_branch_prefix("feat-foo") == "tech/"  # not id-shaped: the fallback
 
 
 def test_slugify_for_branch() -> None:

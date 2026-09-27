@@ -22,8 +22,8 @@ degrades.
 
 THE FIX IS RESOLUTION ORDER, NOT A REFUSAL. `--git-common-dir` answers "which
 checkout is PRIMARY"; the worktree's own root answers a different question, and
-conflating the two is the Phase 234 class. `run_checks.sh:50` and
-`self_check.sh:90` already resolve in this order, and `self_check.sh`'s comment
+conflating the two is the Phase 234 class. `run_checks.sh:53` and
+`self_check.sh:91` already resolve in this order, and `self_check.sh`'s comment
 records Phase 182 fixing this same bug there. `scan_public_history.sh` is the
 site that never got it.
 

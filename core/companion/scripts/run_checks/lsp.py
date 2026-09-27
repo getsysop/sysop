@@ -11,9 +11,12 @@ import re
 import subprocess
 import sys
 
+from _log import _sanitize_log
+
 from .accounting import EXECUTED, FAILED, SKIPPED, stderr_excerpt
-from .config import check_paths_by_id, finding_in_scope
+from .config import _SKIP_DIRS, check_paths_by_id, finding_in_scope
 from .baseline import identity_of
+from .lint import FrontendDirAmbiguous, _find_frontend_dir, _node_bin
 
 
 def run_lsp_diagnostics(repo_root, included_ids, report=None):
@@ -121,6 +124,7 @@ def _run_pyright(repo_root, included_ids, report=None):
     return out
 
 
+_TSC_CONFIG_ERROR_RE = re.compile(r"^error TS\d+: .*$", re.M)
 _TSC_HEADER_RE = re.compile(
     r"^(.+?)\((\d+),(\d+)\):\s+(error|warning)\s+TS(\d+):\s+(.+)$"
 )
@@ -133,28 +137,82 @@ def _run_tsc(repo_root, included_ids, report=None):
         if report is not None and "tsc-type-error" in included_ids:
             report.record(["tsc-type-error"], status, "tsc", reason, detail)
 
-    frontend_dir = os.path.join(repo_root, "frontend")
-    if not os.path.exists(os.path.join(frontend_dir, "tsconfig.json")):
-        _record(SKIPPED, "input-missing", "no frontend/tsconfig.json")
+    # The frontend is DISCOVERED, the way ESLint's is: the directory holding a
+    # tsconfig.json beside node_modules/typescript. It used to be `frontend/`,
+    # hard-coded here and in run_checks.sh's PATH, so tsc was dead for any other
+    # layout while the skill described `<frontend>` as a placeholder (Phase 327).
+    # tsc resolves @types/* relative to the tsconfig's adjacent
+    # node_modules, which is why the install must sit beside the config.
+    try:
+        frontend_dir = _find_tsc_dir(repo_root)
+    except FrontendDirAmbiguous as e:
+        print(f"warn: {_sanitize_log(e)} — skipping tsc (with no frontend/tsconfig.json, "
+              "it checks only a directory that is the one candidate)", file=sys.stderr)
+        _record(SKIPPED, "misconfigured", "multiple node_modules/typescript candidates")
         return out
-    # tsc resolves @types/* relative to the tsconfig's adjacent node_modules;
-    # worktrees typically lack a frontend/node_modules install, which would
-    # produce spurious "Cannot find module" errors. Skip gracefully so the
-    # pre-scan stays useful instead of emitting noise.
-    if not os.path.isdir(os.path.join(frontend_dir, "node_modules", "typescript")):
-        print("warn: frontend/node_modules/typescript missing — skipping tsc "
-              "(install: cd frontend && npm ci)", file=sys.stderr)
-        _record(SKIPPED, "input-missing",
-                "frontend/node_modules/typescript absent")
+    if frontend_dir is None:
+        configs = _tsconfig_dirs(repo_root)
+        if not configs:
+            nested = _tsconfig_dirs(repo_root, nested_only=True)
+            if nested:
+                # Silence here would read as "no TypeScript", which is false.
+                rels = ", ".join(sorted(os.path.relpath(d, repo_root) for d in nested))
+                print(f"warn: tsconfig.json found only inside nested checkouts ({rels}), whose "
+                      "files are another checkout's — skipping tsc", file=sys.stderr)
+                _record(SKIPPED, "input-missing", "tsconfig.json only inside nested checkouts")
+                return out
+            _record(SKIPPED, "input-missing", "no tsconfig.json under the repo root")
+            return out
+        # A config with no install beside it. Worktrees typically lack
+        # node_modules, which would produce spurious "Cannot find module" errors,
+        # so skip loudly rather than run.
+        rels = [os.path.relpath(d, repo_root) for d in configs]
+        rels.sort(key=lambda r: (r.count(os.sep), r))
+        where = (f"{rels[0]}/node_modules/typescript missing" if len(rels) == 1 else
+                 f"no node_modules/typescript beside any tsconfig.json ({', '.join(rels)})")
+        # tsc resolves types from the install beside the config, so a hoisted or
+        # workspace-root install cannot satisfy it; the advice says so.
+        print(f"warn: {where} — skipping tsc (install: cd {rels[0]} && npm ci); a hoisted "
+              "or workspace-root install is not read", file=sys.stderr)
+        _record(SKIPPED, "input-missing", f"{where.replace(' missing', ' absent')}")
+        return out
+    fe_rel = os.path.relpath(frontend_dir, repo_root)
+    tsc_bin = _node_bin(frontend_dir, "tsc")
+    # Ask tsc which files the config puts in the program before type-checking it.
+    # A config that lists none — solution-style (`"files": []` plus `references`,
+    # Vite's and Nx's defaults), whatever its spelling, encoding or `extends`
+    # chain — makes `tsc -p` check nothing and exit 0, a clean that is false. Only
+    # an exit-0 listing with no file outside node_modules skips; anything else
+    # (an older tsc without the flag, a config error) falls through to the real
+    # run, which reports it. Phase 327's round 2 broke a JSON reading of the
+    # config three ways; tsc resolves the config itself, so this has no spelling.
+    try:
+        listing = subprocess.run(
+            [tsc_bin, "--listFilesOnly", "-p", "tsconfig.json"],
+            capture_output=True, text=True, cwd=frontend_dir, timeout=600,
+        )
+    except FileNotFoundError:
+        listing = None
+    except subprocess.TimeoutExpired:
+        print("warn: tsc --listFilesOnly exceeded 600s timeout — skipping TypeScript "
+              "typecheck (findings may be incomplete)", file=sys.stderr)
+        _record(FAILED, "timeout", "tsc --listFilesOnly timed out after 600s")
+        return out
+    if (listing is not None and listing.returncode == 0
+            and not _project_files(listing.stdout, frontend_dir)):
+        print(f"warn: {fe_rel}/tsconfig.json puts no files in the program (a solution-style "
+              "config checks nothing with `tsc -p`) — skipping tsc", file=sys.stderr)
+        _record(SKIPPED, "not-configured", "tsc lists no project files for tsconfig.json")
         return out
     try:
         r = subprocess.run(
-            ["tsc", "--noEmit", "-p", "tsconfig.json", "--pretty", "false"],
+            [tsc_bin, "--noEmit", "-p", "tsconfig.json",
+             "--pretty", "false"],
             capture_output=True, text=True, cwd=frontend_dir, timeout=600,
         )
     except FileNotFoundError:
         print("warn: tsc not available — skipping TypeScript typecheck "
-              "(install: (cd frontend && npm ci))", file=sys.stderr)
+              f"(install: (cd {fe_rel} && npm ci))", file=sys.stderr)
         _record(SKIPPED, "tool-missing", "tsc not on PATH")
         return out
     except subprocess.TimeoutExpired:
@@ -171,6 +229,23 @@ def _run_tsc(repo_root, included_ids, report=None):
               f"typecheck did NOT run: {stderr_excerpt(r.stderr)}", file=sys.stderr)
         _record(FAILED, "nonzero-no-output",
                 f"exit {r.returncode}: {stderr_excerpt(r.stderr)}")
+        return out
+    # A config-level error has no `path(line,col)` — `error TS18003: No inputs were
+    # found in config file …` — so the parser below reads nothing and the run looked
+    # clean. With no located diagnostic at all, it is a run that checked nothing.
+    #
+    # tsc also suppresses every semantic diagnostic while an OPTIONS diagnostic stands,
+    # and those are located in the config file (`tsconfig.json(1,81): error TS5107` for a
+    # tsc 6 deprecation). So the test is: a nonzero exit with no diagnostic located in a
+    # source file — only config-level or `.json`-located ones (Phase 327's round 3).
+    config_errors = _TSC_CONFIG_ERROR_RE.findall(r.stdout)
+    located = [m for m in (_TSC_HEADER_RE.match(ln) for ln in r.stdout.splitlines()) if m]
+    in_source = [m for m in located if not m.group(1).lower().endswith(".json")]
+    if r.returncode != 0 and not in_source and (config_errors or located):
+        first = config_errors[0] if config_errors else located[0].group(0)
+        print(f"warn: tsc reported only config-level errors — TypeScript typecheck did NOT "
+              f"run: {stderr_excerpt(first)}", file=sys.stderr)
+        _record(FAILED, "config-error", stderr_excerpt(first))
         return out
     _record(EXECUTED)
 
@@ -189,6 +264,79 @@ def _run_tsc(repo_root, included_ids, report=None):
         elif current is not None:
             current[1].append(raw.rstrip())
     _emit_tsc_finding(current, frontend_dir, repo_root, included_ids, out)
+    return out
+
+
+def _find_tsc_dir(repo_root):
+    """The directory tsc checks: `frontend/` whenever it has a `tsconfig.json`, else the walk.
+
+    `<root>/frontend/tsconfig.json` is AUTHORITATIVE, and it was the only config tsc read
+    before discovery existed. If an install sits beside it, that is the answer; if not, the
+    answer is None — a loud skip naming `frontend/` — and the walk never runs. Phase 327's
+    round 3 found the walk adopting a sibling project (or a hoisted workspace root) in place
+    of an uninstalled `frontend/`, and recording `executed` over code that was never the
+    frontend's. So every repo with a `frontend/tsconfig.json` behaves exactly as before the
+    phase; discovery serves only repos without one. The walk skips nested checkouts, so no
+    in-repo agent worktree's INSTALL is adopted — though a root config's own `include` can
+    still reach files under one, which is that config's choice, not this function's.
+    """
+    conventional = os.path.join(os.path.abspath(repo_root), "frontend")
+    if os.path.isfile(os.path.join(conventional, "tsconfig.json")):
+        if os.path.isdir(os.path.join(conventional, "node_modules", "typescript")):
+            return conventional
+        return None
+    return _find_frontend_dir(repo_root, "typescript", beside="tsconfig.json",
+                              skip_nested_checkouts=True)
+
+
+def _tsconfig_dirs(repo_root, nested_only=False):
+    """Where a tsconfig.json sits with no install beside it, for the skip warning.
+
+    `<repo_root>/frontend` alone when it has one (the pre-discovery message), else
+    every other config the walk finds, nested checkouts excluded as in discovery.
+    ``nested_only`` returns the configs inside nested checkouts instead, so a repo
+    whose only TypeScript is in one can say so rather than claim it has none.
+    """
+    conventional = os.path.join(os.path.abspath(repo_root), "frontend")
+    if not nested_only and os.path.isfile(os.path.join(conventional, "tsconfig.json")):
+        return [conventional]
+    found = []
+    for dirpath, dirnames, filenames in os.walk(os.path.abspath(repo_root), followlinks=False):
+        inside = os.path.lexists(os.path.join(dirpath, ".git")) and dirpath != os.path.abspath(repo_root)
+        if nested_only:
+            dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
+            if inside:
+                for sub, subdirs, subfiles in os.walk(dirpath, followlinks=False):
+                    subdirs[:] = [d for d in subdirs if d not in _SKIP_DIRS]
+                    if "tsconfig.json" in subfiles:
+                        found.append(sub)
+                dirnames[:] = []
+            continue
+        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS
+                       and not os.path.lexists(os.path.join(dirpath, d, ".git"))]
+        if "tsconfig.json" in filenames:
+            found.append(dirpath)
+    return sorted(found)
+
+
+def _project_files(listing, frontend_dir):
+    """The files a `--listFilesOnly` listing names outside node_modules (lib and @types
+    declarations live there, and are listed for every program with any source).
+
+    Judged on each path RELATIVE to the frontend dir, by component: a repo that itself
+    lives under a `node_modules/` directory would otherwise have every file excluded
+    (round 3), and a name merely containing the word (`my_node_modules_app`) is not one.
+    """
+    base = os.path.abspath(frontend_dir)
+    out = []
+    for ln in listing.splitlines():
+        entry = ln.strip()
+        if not entry:
+            continue
+        rel = os.path.relpath(entry, base) if os.path.isabs(entry) else entry
+        if "node_modules" in rel.replace("\\", "/").split("/"):
+            continue
+        out.append(entry)
     return out
 
 

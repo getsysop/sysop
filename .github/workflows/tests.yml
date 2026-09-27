@@ -113,7 +113,7 @@ jobs:
         # everything, so the nightly and a manual dispatch still run the WHOLE
         # suite on ONE machine — deliberately, and not merely because sharding
         # a nightly buys nothing. `Q-466` is a flake that needs the full
-        # ~6,650-test population under contention to surface at all; sharding
+        # test population under contention to surface at all; sharding
         # changes that contention profile, so if every run were sharded the
         # class would stop being observable anywhere. The nightly is now the
         # one run that preserves it, and nobody waits on a nightly.
@@ -131,18 +131,18 @@ jobs:
     # after a rename the nightly keeps running, and the worst case is a visible
     # run on a repo that did not want one.
     #
-    # BOTH mirrors are named, not just the public one. `.github/` ships to the
-    # private tester mirror too, that repo has Actions enabled, and its default
-    # branch IS the snapshot — so a single-mirror deny starts a daily billed run
-    # on a private repo. Found by Phase 268's round, before the first cut
-    # that would have published the nightly.
+    # BOTH mirrors are named, not just the public one. Until Phase 316 `.github/`
+    # also shipped to the private tester mirror, that repo had Actions enabled,
+    # and its default branch WAS the snapshot — so a single-mirror deny would
+    # have started a daily billed run on a private repo. Found by Phase 268's
+    # round, before the first cut that would have published the nightly.
     #
     # THE TESTER MIRROR IS RETIRED (Phase 316) AND ITS NAME STAYS HERE ANYWAY.
     # The repo is archived and nothing pushes to it, so this clause is inert —
-    # inert is not wrong. **The binding reason is mechanical, not prudential:**
+    # inert is not wrong. It is kept by Phase 316's decision, which
     # `tests/test_ci_shard.py::test_the_nightly_still_declines_to_run_on_the_mirrors`
-    # asserts at least two denied mirrors, counted as distinct repositories,
-    # and removing this entry reddens it. Phase 316's first draft argued the
+    # enforces (two distinct denied repos); the test is not a reason of its
+    # own, since its reason was this mirror. Phase 316's first draft argued the
     # prudential case instead ("it would arm a nightly on unarchive") and that
     # is the weaker half: the deny-list is already in the snapshot sitting on
     # that repo, so arming needs an unarchive AND a fresh push, which the same

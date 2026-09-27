@@ -4,9 +4,10 @@
 and a security twin — and both were pinned to `reasoning`. GDP measured the
 convention agent at a median 8.6M cache-read and ~$7.60 a spawn against ~$3.00
 on Sonnet 5, across 43 transcripts; it is the deep spawn a close runs most
-often. Splitting it onto `convention-gate` makes it the one pin a consumer can
-move from `served_models.local.yml` without moving the security twin beside it
-or anything else on `reasoning`.
+often. Splitting it onto `convention-gate` makes it a knob a consumer can move
+from `served_models.local.yml` without moving the security twin beside it or
+anything else on `reasoning`. Since Phase 328 the role also governs Step 4
+`4a-fix`'s re-check of the close's own fix commit, so the knob moves two pins.
 
 **The default is `opus`, so this phase ships a knob and no behaviour change.**
 That is deliberate — an upgrade must not silently downgrade anybody's review —
@@ -15,7 +16,7 @@ to `sonnet` would change every consumer's convention gate on their next
 `--update` with nothing to catch it.
 
 The consequential test is the last one: it runs the real resolver under a real
-consumer override and asserts exactly one pin moves. Everything above it is
+consumer override and asserts exactly the two convention-gate pins move. Everything above it is
 structure that could be true while the knob does nothing.
 """
 import re
@@ -70,14 +71,17 @@ def test_the_role_resolves_to_a_served_and_inline_legal_model():
     assert resolved in cfg["inline_models"]
 
 
-def test_exactly_one_pin_in_the_tree_carries_the_marker():
-    """Scoped to the 2b convention spawn and nothing else. A second marker means
-    somebody widened the role by copy-paste, which silently re-couples the
-    security twin to a knob labelled for the convention gate."""
+def test_exactly_two_pins_in_the_tree_carry_the_marker():
+    """Scoped to the two convention-gate spawns and nothing else: Step 2b's
+    convention agent, and Step 4 `4a-fix`'s re-check of the close's own fix
+    commit (Phase 328), which is a convention gate over new hunks. A third
+    marker means somebody widened the role by copy-paste, which silently
+    re-couples the security twin to a knob labelled for the convention gate.
+    The next test pins WHICH two."""
     hits = [(p.relative_to(REPO_ROOT), p.read_text().count(MARKER))
             for p in (REPO_ROOT / "core/skills").rglob("*.md")
             if MARKER in p.read_text()]
-    assert hits == [(SKILL.relative_to(REPO_ROOT), 1)], hits
+    assert hits == [(SKILL.relative_to(REPO_ROOT), 2)], hits
 
 
 def test_the_marker_sits_on_the_convention_spawn_not_the_security_twin():
@@ -98,7 +102,7 @@ def test_the_marker_sits_on_the_convention_spawn_not_the_security_twin():
     """
     lines = SKILL.read_text().splitlines()
     marked = [i for i, l in enumerate(lines) if MARKER in l]
-    assert len(marked) == 1
+    assert len(marked) == 2, marked
     idx = marked[0]
     assert 'model: "opus"' in lines[idx]
 
@@ -120,6 +124,25 @@ def test_the_marker_sits_on_the_convention_spawn_not_the_security_twin():
     )
     assert 'description: "Convention check:' in descriptions[0], descriptions[0]
     assert "Security check" not in "\n".join(between)
+
+
+def test_the_second_marker_sits_on_the_4a_fix_recheck():
+    """Phase 328. The second marked pin must be the `4a-fix` re-check's, inside
+    that step, with ITS description as the next `description:` bullet — the
+    same decoy shape the test above guards, applied to the second spawn. The
+    re-check's prompt is Step 2b step 3's with substitutions, so identity is
+    pinned to the step heading and the description, not to a prompt sentence."""
+    lines = SKILL.read_text().splitlines()
+    marked = [i for i, l in enumerate(lines) if MARKER in l]
+    assert len(marked) == 2, marked
+    idx = marked[1]
+    assert 'model: "opus"' in lines[idx]
+    heads = [i for i, l in enumerate(lines) if l.startswith("### ")]
+    owner = max(h for h in heads if h < idx)
+    assert lines[owner].startswith("### 4a-fix."), lines[owner]
+    after = [l for l in lines[idx + 1:idx + 6] if "description:" in l]
+    assert after and 'description: "Fix re-check:' in after[0], after
+    assert "Security check" not in "\n".join(lines[owner:idx + 6])
 
 
 def test_the_security_twin_is_still_governed_by_reasoning():
@@ -160,16 +183,17 @@ def test_a_consumer_override_moves_the_convention_pin_and_only_it(tmp_path):
 
     out = (skills / "review-close" / "SKILL.md").read_text().splitlines()
     moved = [l for l in out if 'model: "sonnet"' in l]
-    assert len(moved) == 1, moved
-    assert MARKER in moved[0]
-    assert 'description: "Security check:' not in "\n".join(out[out.index(moved[0]):][:6])
+    assert len(moved) == 2, moved
+    for m in moved:
+        assert MARKER in m
+        assert 'description: "Security check:' not in "\n".join(out[out.index(m):][:6])
     # ...and the twin did NOT move. Its pin and its description share one line,
     # so this reads the twin directly rather than inferring it from a window.
     twin = [l for l in out if 'description: "Security check:' in l]
     assert len(twin) == 1, twin
     assert 'model: "opus"' in twin[0], twin[0]
     assert 'model: "sonnet"' not in twin[0], twin[0]
-    assert "APPLIED: 1 pin(s)" in r.stdout, r.stdout
+    assert "APPLIED: 2 pin(s)" in r.stdout, r.stdout
 
 
 def test_the_default_config_is_a_no_op_for_this_role(tmp_path):
@@ -208,11 +232,13 @@ def _resolve(tmp_path, local_text):
     body = (skills / "review-close" / "SKILL.md").read_text().splitlines()
     conv = [l for l in body if MARKER in l]
     twin = [l for l in body if 'description: "Security check:' in l]
-    assert len(conv) == 1 and len(twin) == 1
+    assert len(conv) == 2 and len(twin) == 1
     def model(line):
         import re
         m = re.search(r'model: "([a-z0-9-]+)"', line)
         return m.group(1) if m else None
+    # Both convention-gate pins answer to one knob; a split here is a defect.
+    assert model(conv[0]) == model(conv[1]), conv
     return r, model(conv[0]), model(twin[0])
 
 

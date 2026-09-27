@@ -58,7 +58,7 @@ the one thing a sweep cannot infer.
 
 WHAT THIS CANNOT DO.
 
-* **Prose citation forms are invisible.** `document-work/SKILL.md:311` cites
+* **Prose citation forms are invisible.** `document-work/SKILL.md:392` cites
   "`tasks/schema.md` line 60" in words; the sweep's regex wants `file:NN`. The
   registry cannot pin what the sweep cannot find, and widening the regex to
   natural language is the judgement this module declines to make.
@@ -175,7 +175,7 @@ CITATION_ANCHORS = {
     # something the code does not do.
     ("core/companion/scripts/batch_work.sh", "review_index.py:47"):
         'TASKS_FILE = os.path.join(REPO_ROOT, "review_tasks.md")',
-    ("core/companion/scripts/claim_task.sh", "self_check.sh:77-85"):
+    ("core/companion/scripts/claim_task.sh", "self_check.sh:78-86"):
         "then verify PyYAML on THAT interpreter",
     # Phase 256. `Q-375`'s design rests on this note: widening the batch-header
     # counter without its `H3_HEADER_RE` sibling leaves the counter unreachable
@@ -195,9 +195,9 @@ CITATION_ANCHORS = {
     # citation pointed at -- so the prose named the wrong site for BOTH -- stayed GREEN.
     # The anchor kept line-precision and lost site-discrimination. This one is a
     # sentence only Step 7f's copy carries.
-    ("core/skills/review-close/SKILL.md", "claim-task/SKILL.md:1305"):
+    ("core/skills/review-close/SKILL.md", "claim-task/SKILL.md:1325"):
         'emits `fence + "markdown"` below',
-    ("core/skills/review-close/SKILL.md", "claim-task/SKILL.md:1900"):
+    ("core/skills/review-close/SKILL.md", "claim-task/SKILL.md:1928"):
         "and not line.strip().strip(mark[0])",
     ("core/skills/auto-fix/SKILL.md", "archive_review_tasks.py:175"):
         "Merged|Complete",

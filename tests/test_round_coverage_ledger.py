@@ -725,13 +725,14 @@ def test_sitrep_judges_each_skill_independently(tmp_path):
 
 def test_sitrep_survives_a_corrupt_receipt(tmp_path):
     """A probe that breaks /sitrep would be a worse defect than the silence it
-    reports on."""
+    reports on — and since Phase 333 it is not silent either: each unreadable
+    receipt is named, as a plain discrepancy that does not gate routing."""
     root = _repo(tmp_path / "corrupt")
     d = root / RECEIPT_REL
     d.mkdir(parents=True)
     (d / "codebase-review.x.json").write_text("{not json")
     (d / "codebase-review.y.json").write_text("[]")
-    assert _kinds(root) == []
+    assert _kinds(root) == ["round receipt unreadable"] * 2
 
 
 # ── §3 self_check.sh reads the receipt (the loop-mode surface) ──────────────

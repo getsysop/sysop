@@ -847,8 +847,8 @@
     <div class="hero-grid">
       <aside class="hero-margin rise">
         <span class="line">Vol. <span class="accent">I</span></span>
-        <span class="line">Issue 320</span>
-        <span class="line">2026.09.20</span>
+        <span class="line">Issue 336</span>
+        <span class="line">2026.09.26</span>
         <span class="line" style="margin-top:22px">An essay on</span>
         <span class="line">software workflow</span>
       </aside>
@@ -871,7 +871,7 @@
             <div class="hero-stat-label">Skills</div>
           </div>
           <div class="hero-stat">
-            <div class="hero-stat-fig">320</div>
+            <div class="hero-stat-fig">336</div>
             <div class="hero-stat-label">Phases shipped through</div>
           </div>
           <div class="hero-stat">
@@ -1162,6 +1162,22 @@
           note creates it, which is protection by absence rather than another thing to configure.</span> Promoting a
           note is the one carve-out to <code>/add-task</code>'s otherwise append-only rule: it files the task and
           deletes the line in the same run, so a thought cannot be live in two places at once.
+        </p>
+        <p>
+          <strong>Addendum (2026-09-23).</strong> That day's re-measurement reversed the default, and this
+          paragraph supersedes the three above. The bound kept a large middle group of real, small findings out of
+          the branch, and the filing bar then sent most of them to the notes file, which nothing reads. In one
+          consumer the open queue grew from 316 to 341 open tasks in sixteen days while 94 closed, at close to three
+          findings per close: the routing moved work between piles without shrinking any of them. Close-time review,
+          meanwhile, caught nearly every in-branch fix that went wrong before it merged. So fixing is now the default.
+          A finding the agent can fix is fixed in the branch, in any module and past a one-liner, as long as the close
+          can still review it, and it is declared under <code>## Also fixed</code> as before. The never-list shrank
+          to migrations, production writes, and auth or payment logic. A finding that cannot be fixed now becomes a
+          task, and one that is not actually wrong is dropped. When an answer from the human would make a finding
+          fixable, an interactive <code>/document-work</code>, or <code>/review-close</code> for its reviewers' notes, asks
+          first and fixes it on the answer; a subagent executor or an unattended run files the task with the question written in
+          (asking from inside the executor is decided and not yet built). The notes file is retired, and the measure is net open work per close rather than
+          filings per close.
         </p>
         <aside class="pullquote">
           <p>From here, the rest of the document applies. <code>/next-task</code> picks the first claimable entry;
@@ -2806,9 +2822,10 @@
         <h3>What's in a map entry</h3>
         <p>
           Each entry is a glob pattern and a one-line rule, plus provenance. In the map the loop maintains in <em>your</em>
-          project, a promoted entry is attributed to the review round that surfaced it — and that attribution is
-          load-bearing: the cross-round recurrence gate reads it, and when an entry later turns out to be wrong, you can
-          find the review that promoted it and learn what changed. The shipped pack entries are those same rules with the
+          project, a promoted entry's provenance is the commit that promoted it — <code>docs: promote … from Round
+          &lt;N&gt;</code> — and that is load-bearing: when an entry later turns out to be wrong, you can find the review
+          that promoted it and learn what changed. (The cross-round recurrence gate reads the review rounds themselves,
+          not the map.) The shipped pack entries are those same rules with the
           project-specific detail generalized out — placeholder globs you localize, a pointer to the paired mechanical
           check, provenance kept inline where it still explains the rule — with their full round history living in the
           source archive behind Fig.&nbsp;7 rather than as inline tags. One section of the real file, trimmed:
@@ -3455,7 +3472,7 @@
       <aside class="col-rule">Colophon</aside>
       <div>
         <p class="col-body">
-          A monograph on <em>Sysop</em>, as of <em>Phase 320</em> · 2026-09-20, with dated addenda where the record
+          A monograph on <em>Sysop</em>, as of <em>Phase 336</em> · 2026-09-26, with dated addenda where the record
           moved after the snapshot. Phase numbers throughout are iterations
           of the workflow's own development — each one planned, adversarially reviewed, and shipped through the process it
           extends; <a href="https://github.com/getsysop/sysop/blob/main/PHASE_LOG.md">PHASE_LOG.md</a> carries one entry per phase. Set in the reader's native serif —
@@ -3496,7 +3513,7 @@
             <ul>
               <li>Extracted from <em>gdp-query-system</em></li>
               <li>First consumer · BeanRider</li>
-              <li>Phase 320 · 2026-09-20</li>
+              <li>Phase 336 · 2026-09-26</li>
             </ul>
           </div>
           <div>

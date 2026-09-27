@@ -17,7 +17,7 @@ at. Two layers:
      than silently leaking into (or dropping out of) the "smallest install".
 
   2. End-to-end — a real `--mode loop` install must ship *exactly* the loop
-     bundle and nothing lifecycle, write the 24-rule hookless settings.json,
+     bundle and nothing lifecycle, write the 26-rule hookless settings.json,
      leave a clean root footprint, record `mode: loop`, and satisfy the full
      mode/update state machine (preserve on --update, additive loop→full
      upgrade, rejected full→loop downgrade).
@@ -26,6 +26,7 @@ Design intent under test: the loop bundle is a *carving*, so the exact set is th
 contract — an over-ship (a lifecycle file leaking in) undercuts the footprint
 pitch, an under-ship (a loop file dropped) breaks the loop.
 """
+import ast
 import json
 import os
 import re
@@ -86,9 +87,9 @@ EXCLUDED_SCRIPTS = {
     "pr_dependabot.py", "scope_overlap.py", "sitrep_survey.py",
     "validate_tasks.py",
 }
-LOOP_ALLOW_COUNT = 24
+LOOP_ALLOW_COUNT = 26
 # The exact loop-mode allow-list (LOOP_ONLY_SPEC § "Leg 1 findings"). Asserting
-# the *set*, not just the count, is what stops a wrong-but-19 permission set
+# the *set*, not just the count, is what stops a wrong-but-same-size permission set
 # (e.g. a dropped `gh release create` swapped in for a loop rule) shipping green.
 EXPECTED_LOOP_ALLOW = {
     # Phase 152: both loop-mode review skills run a plain
@@ -97,6 +98,10 @@ EXPECTED_LOOP_ALLOW = {
     "Bash(git add:*)",
     "Bash(git add review_tasks.md)",
     "Bash(git commit -m docs:*)",
+    # Q-588 (Phase 333): both loop review skills place each isolated agent with
+    # `git worktree add <dir> --detach <sha>` off the default branch, and remove it after.
+    "Bash(git worktree add:*)",
+    "Bash(git worktree remove:*)",
     "Bash(bash sysop/scripts/run_checks.sh)",
     "Bash(bash sysop/scripts/run_checks.sh:*)",
     "Bash(bash sysop/scripts/install_hooks.sh)",
@@ -194,9 +199,16 @@ def _install_sh_loop_allow():
     test and install.sh can't silently drift (the exclude lists already have this
     cross-check; the permission keep-set lacked one)."""
     text = INSTALL_SH.read_text()
-    m = re.search(r"LOOP_ALLOW = \{(.*?)\}", text, re.S)
+    m = re.search(r"^LOOP_ALLOW = (\{.*?^\})", text, re.S | re.M)
     assert m, "LOOP_ALLOW block not found in install.sh"
-    return set(re.findall(r'"(Bash\([^"]*\))"', m.group(1)))
+    # A Python literal, evaluated -- a quoted-string scan reads a commented-out rule as live
+    # (Phase 333's round, W1b), which the installer's own Python does not.
+    try:
+        return set(ast.literal_eval(m.group(1)))
+    except ValueError as exc:
+        raise AssertionError(
+            f"install.sh's LOOP_ALLOW is no longer a literal set of strings ({exc})"
+        ) from None
 
 
 def _lock(target):
@@ -305,7 +317,7 @@ class TestLoopSettings:
         data = json.loads((root / ".claude/settings.json").read_text())
         allow = data["permissions"]["allow"]
         # Exact set — count-only would let a dropped lifecycle rule (gh release
-        # create, git push, ...) swap in for a loop rule and still read 17.
+        # create, git push, ...) swap in for a loop rule and still read the same count.
         assert set(allow) == EXPECTED_LOOP_ALLOW
         assert len(allow) == LOOP_ALLOW_COUNT  # no duplicates
         assert "hooks" not in data
@@ -369,6 +381,16 @@ class TestLoopDryRun:
         # Guard the user-visible count too — the dry-run "plan" must not claim a
         # different number than the apply actually writes (LOOP_ALLOW_COUNT).
         assert f"loop allow-subset: {LOOP_ALLOW_COUNT} rules" in r.stdout
+        # Q-588 (Phase 333): the subset gained two worktree write verbs, so the
+        # install-time disclosure must name them (Phase 131: no grant applied silently).
+        # Strip each `note` line's `  • ` bullet before joining, or a legal re-wrap of the
+        # disclosure across two note lines reads `'git • worktree` (Phase 333's round, I2).
+        flat = " ".join(
+            " ".join(re.sub(r"^\s*•\s*", "", line).split()) for line in r.stdout.splitlines()
+        )
+        assert "'git worktree add/remove'" in flat, (
+            "the loop disclosure no longer names its git worktree add/remove grants"
+        )
 
 
 class TestFullModeUnchanged:

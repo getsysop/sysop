@@ -289,3 +289,50 @@ class TestTheRulesArePinnedInProse:
             "Step 2e was deleted — whole-section removal passed the suite "
             "before this module existed"
         )
+
+
+def test_a_lock_that_is_not_a_regular_file_is_skipped_not_waited_on(script, repo):
+    """Phase 325's round: this loop had no `is_file()` guard, so a FIFO named `*.lock`
+    blocked `read_text` forever. The directory is a control: `except OSError` already
+    covered it, and it must stay harmless."""
+    locks = repo / "sysop/runtime/locks"
+    os.mkfifo(locks / "A-FIFO.lock")
+    (locks / "B-DIR.lock").mkdir()
+    _lock(repo, "TASK-1", "feat/x")
+    r = subprocess.run([sys.executable, str(script), "feat/x"], cwd=str(repo),
+                       capture_output=True, text=True, timeout=30)
+    assert r.returncode == 0, r.stderr
+    assert "TASK-1" in r.stdout, r.stdout
+
+
+def _pre_313_python():
+    """An interpreter where `Path.is_file()` still RAISES on EACCES, if this host has one."""
+    import shutil
+    for cand in ("/usr/bin/python3", shutil.which("python3.12"), shutil.which("python3.9")):
+        if not cand or not os.path.exists(cand):
+            continue
+        v = subprocess.run([cand, "-c", "import sys; print(sys.version_info[:2] < (3, 13))"],
+                           capture_output=True, text=True)
+        if v.stdout.strip() == "True":
+            return cand
+    return None
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root stats through a mode-000 directory")
+@pytest.mark.skipif(_pre_313_python() is None, reason="no pre-3.13 interpreter on this host")
+def test_a_lock_that_cannot_be_stated_does_not_kill_the_report_on_the_floor(script, repo, tmp_path):
+    """Phase 325's round 2: below 3.13 `is_file()` raised `PermissionError` out of the
+    loop, exit 1. The report must still name the readable claim."""
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "real.lock").write_text("task_id: AAA\nbranch: feat/x\n", encoding="utf-8")
+    (repo / "sysop/runtime/locks" / "AAA.lock").symlink_to(vault / "real.lock")
+    _lock(repo, "TASK-1", "feat/x")
+    vault.chmod(0)
+    try:
+        r = subprocess.run([_pre_313_python(), str(script), "feat/x"], cwd=str(repo),
+                           capture_output=True, text=True, timeout=30)
+    finally:
+        vault.chmod(0o755)
+    assert r.returncode == 0, r.stderr
+    assert "TASK-1" in r.stdout, r.stdout

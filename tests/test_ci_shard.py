@@ -464,6 +464,38 @@ def test_a_valid_shard_environment_parses(env, expected):
     assert shard_config(env) == expected
 
 
+def _report_headers(env_pairs):
+    """`sysop shard:` lines a REAL pytest session prints, for `None` or an `(id, count)`."""
+    env = {k: v for k, v in os.environ.items()
+           if k not in (SHARD_ID_VAR, SHARD_COUNT_VAR)}
+    if env_pairs is not None:
+        env[SHARD_ID_VAR], env[SHARD_COUNT_VAR] = (str(v) for v in env_pairs)
+    # Not `-q`: pytest suppresses the whole header at negative verbosity.
+    p = subprocess.run(
+        [sys.executable, "-m", "pytest", "tests/test_case_pins.py", "--collect-only", "-n0"],
+        cwd=REPO_ROOT, capture_output=True, encoding="utf-8", env=env,
+    )
+    assert p.returncode == 0, f"collection failed under {env_pairs}:\n{p.stdout}{p.stderr}"
+    return [ln.strip() for ln in p.stdout.splitlines() if ln.startswith("sysop shard:")]
+
+
+def test_the_report_header_names_the_slice_pytest_actually_parsed():
+    """The header half of the workflow's echo/header pair (Phase 327, `Q-592` line 8).
+
+    `.github/workflows/tests.yml` echoes `shard <id> of <count>` before invoking pytest and
+    calls `pytest_report_header` the half that proves pytest agreed with those numbers. Phase
+    279's round showed nothing checked that half: `return "sysop shard: 0 of 1"` as a constant
+    kept every test green. Two pairs, neither of which is `0 of 1`, so a constant cannot match
+    both, and an unsharded control, because a header on an unsharded run would read as a slice.
+    """
+    for pair in ((2, 5), (1, 3)):
+        assert _report_headers(pair) == [f"sysop shard: {pair[0]} of {pair[1]}"], (
+            f"a session sharded as {pair} does not report that slice in its header, so the "
+            "run log cannot confirm pytest read the numbers the workflow echoed"
+        )
+    assert _report_headers(None) == [], "an unsharded session claims a slice in its header"
+
+
 def test_a_broken_shard_environment_says_why_under_the_flags_ci_actually_uses():
     """The refusal above is a unit call and cannot see WHERE the exception is raised.
 
@@ -765,19 +797,66 @@ def test_the_workflow_has_no_path_filter():
 def test_the_nightly_still_declines_to_run_on_the_mirrors():
     """The deny-list survived being moved onto the sharded job.
 
-    `.github/` is mirrored to both the public repo and the private tester repo, and both
-    have Actions. Counted as DISTINCT repositories rather than as `!=` occurrences -- the
-    round duplicated one mirror to satisfy a `count("!=") >= 2` check and started a daily
-    billed run on the other.
+    `.github/` is mirrored to the public repo only, which has Actions, so the public entry is
+    the live protection and is asserted by name. The second entry names the private tester
+    mirror, which Phase 316 retired and archived: nothing pushes `.github/` there any more, so
+    that clause is inert. It is kept by Phase 316's decision (not to weaken a deny-list for one
+    line), and the `>= 2` below enforces that decision; `tests.yml`'s comment says the same, and
+    neither treats this test as a reason of its own. Names are compared case-insensitively,
+    because GitHub ignores case when comparing expression strings, and counted as DISTINCT
+    repositories rather than as `!=` occurrences: a round duplicated one mirror to satisfy a
+    `count("!=") >= 2` check, which would have started a daily billed run on the other while it
+    was live.
     """
+    public_mirror = "getsysop/sysop"  # the one mirror `.github/` still reaches
     cond = str(_workflow()["jobs"]["shard"]["if"])
     assert "schedule" in cond, "the nightly is no longer scoped at all"
-    denied = set(re.findall(r"repository\s*!=\s*'([^']+)'", cond))
+    denied = {r.lower() for r in re.findall(r"repository\s*!=\s*'([^']+)'", cond)}
+    assert public_mirror in denied, (
+        f"the deny-list ({sorted(denied)}) no longer names the public mirror {public_mirror!r}, "
+        "the one repository `.github/` still reaches -- the nightly would run daily on a repo "
+        "that did not ask for it."
+    )
     assert len(denied) >= 2, (
-        f"the deny-list names {len(denied)} distinct repositories ({sorted(denied)}); both "
-        "mirrors have to be named, and a duplicate of one does not cover the other."
+        f"the deny-list names {len(denied)} distinct repositories ({sorted(denied)}); the "
+        "retired tester mirror's inert entry is kept by decision (Phase 316), and a duplicate "
+        "of the public entry does not stand in for it."
     )
     assert not re.search(r"repository\s*==", cond), (
         f"the deny-list turned into an allow-list: {cond!r}. Keyed to this repo's name it "
         "would stop the nightly silently on the next rename."
     )
+    assert deny_list_structure_problems(cond) == [], deny_list_structure_problems(cond)
+
+
+_DENY_CLAUSE = r"github\.repository\s*!=\s*'[^']+'"
+
+
+def deny_list_structure_problems(cond: str) -> list[str]:
+    """The shape the deny-list means: `not a schedule`, OR every mirror clause, joined by AND.
+
+    Phase 333's round turned the `&&` between the two `!=` clauses into `||`, which makes the
+    group true on every repository -- a repo is always unequal to at least one of two names --
+    and every other assertion above stayed green, because they read names, not operators.
+    """
+    m = re.fullmatch(r"\s*github\.event_name\s*!=\s*'schedule'\s*\|\|\s*\((.*)\)\s*", cond, re.S)
+    if m is None:
+        return [f"the `if:` is no longer `github.event_name != 'schedule' || ( … )`: {cond!r}"]
+    group = m.group(1)
+    clauses = list(re.finditer(_DENY_CLAUSE, group))
+    if not clauses:
+        return [f"the deny group names no `github.repository != '…'` clause: {group!r}"]
+    joins = [group[x.end():y.start()] for x, y in zip(clauses, clauses[1:])]
+    problems = [f"a deny clause is joined by {j.strip()!r}, not `&&`" for j in joins if j.strip() != "&&"]
+    if group[:clauses[0].start()].strip() or group[clauses[-1].end():].strip():
+        problems.append(f"the deny group carries more than `!=` clauses joined by `&&`: {group!r}")
+    return problems
+
+
+def test_controls_deny_list_structure():
+    good = ("github.event_name != 'schedule' || (github.repository != 'a/b'\n"
+            "    && github.repository != 'c/d')")
+    assert deny_list_structure_problems(good) == []
+    assert deny_list_structure_problems(good.replace("&&", "||")), "the S1 flip walked through"
+    assert deny_list_structure_problems(good.replace(")", " || true)")), "a tail walked through"
+    assert deny_list_structure_problems(good.replace("|| (", "&& (")), "the outer OR flip walked through"

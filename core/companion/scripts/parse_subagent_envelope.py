@@ -5,7 +5,7 @@ SubagentStop hook (Claude Code 2.1.47+ primary path; 2.0.42+ fallback path).
 Reads SubagentStop hook input on stdin, extracts the YAML envelope that
 Sysop's /claim-task planner/reviewer/executor (Phase 171) and /auto-build
 execution agent (Phase 29) emit as the LAST content of their final message,
-and writes structured JSON to ``<repo>/sysop/runtime/subagent-envelopes/<TASK_ID>.json``
+and writes structured JSON to ``<repo>/sysop/runtime/subagent-envelopes/<TASK_ID>[.<phase>].json``
 so the parent skill can read JSON instead of regex-parsing free text.
 
 Input-field provenance (verified against the Claude Code changelog,

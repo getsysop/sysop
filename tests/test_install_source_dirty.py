@@ -207,6 +207,78 @@ def test_dirty_outside_the_scanned_paths_stays_quiet(source, tmp_path):
     assert "source_dirty" not in _lock(tgt)
 
 
+def _ignore(src, *patterns):
+    """Commit a root `.gitignore`, so the source is clean and the patterns are live."""
+    (src / ".gitignore").write_text("".join(f"{p}\n" for p in patterns))
+    _git(src, "add", ".gitignore")
+    _git(src, "commit", "-qm", "ignore")
+    assert _git_out(src, "status", "--porcelain") == ""
+
+
+def test_an_ignored_file_the_installer_copies_warns_and_records(source, tmp_path):
+    """Phase 327 (`Q-592` line 31). `status --porcelain` never reports an ignored path,
+    while the copy loops read the filesystem: Phase 306's round installed a stray
+    `core/companion/scripts/stray.pyc` with the lock asserting a clean source. The
+    file must land AND the probe must say so, asserted together."""
+    _ignore(source, "*.pyc", "__pycache__/", ".DS_Store")
+    (source / "core/companion/scripts/stray.pyc").write_bytes(b"not in HEAD")
+    assert _git_out(source, "status", "--porcelain") == "", "the fixture is ignored, not untracked"
+    tgt = _target(tmp_path)
+    res = _run(source, tgt, "--packs", "python", "--no-arm-hooks")
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert (tgt / "sysop/scripts/stray.pyc").exists(), "precondition: the installer copies it"
+    combined = res.stdout + res.stderr
+    assert WARN_LINE in combined, combined
+    assert "1 of them gitignored" in combined, combined
+    assert "dirty:     1 path(s)" in combined, "the ignored file is not in the dirty count"
+    assert _lock(tgt)["source_dirty"] is True
+
+
+def test_ignored_files_the_installer_skips_stay_quiet(source, tmp_path):
+    """The alarm-fatigue control, and the reason the fix is not `--ignored=matching`.
+
+    Every maintainer clone holds `__pycache__/` under `core/`; the copy loops skip a
+    directory by that name and their `*` globs never match a dotfile. Neither may warn —
+    and neither may land, which is what makes the silence correct rather than lucky."""
+    _ignore(source, "*.pyc", "__pycache__/", ".DS_Store")
+    cache = source / "core/companion/scripts/run_checks/__pycache__"
+    cache.mkdir(parents=True, exist_ok=True)
+    (cache / "stage.cpython-314.pyc").write_bytes(b"bytecode")
+    (source / "core/skills/sitrep/.DS_Store").write_bytes(b"finder")
+    tgt = _target(tmp_path)
+    res = _run(source, tgt, "--packs", "python", "--no-arm-hooks")
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert WARN_LINE not in res.stdout + res.stderr, res.stdout
+    assert "source_dirty" not in _lock(tgt)
+    assert not list(tgt.rglob("stage.cpython-314.pyc")), "a skipped cache file landed after all"
+    assert not (tgt / ".claude/skills/sitrep/.DS_Store").exists(), "a dotfile landed after all"
+
+
+def test_a_failing_ignored_probe_does_not_hide_a_dirty_source(source, tmp_path):
+    """Phase 327's round. The ignored-file read runs after `status` has already found the
+    source dirty; if it failed and returned early, a dirty source read clean — the fail-open
+    direction this probe exists to prevent. A `git` shim fails `ls-files` alone."""
+    _dirty(source)
+    real_git = shutil.which("git")
+    shim = tmp_path / "shim"
+    shim.mkdir()
+    (shim / "git").write_text(
+        "#!/bin/sh\n"
+        'for a in "$@"; do [ "$a" = ls-files ] && exit 1; done\n'
+        f'exec "{real_git}" "$@"\n')
+    (shim / "git").chmod(0o755)
+    tgt = _target(tmp_path)
+    env = dict(os.environ)
+    env["PATH"] = str(shim) + os.pathsep + os.path.dirname(sys.executable) + os.pathsep + env["PATH"]
+    env.update(_GIT_ISOLATION)
+    res = subprocess.run(["bash", str(source / "install.sh"), str(tgt), "--packs", "python",
+                          "--no-arm-hooks", "--yes"],
+                         capture_output=True, text=True, env=env, cwd=str(tgt))
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert WARN_LINE in res.stdout + res.stderr, "a failed ls-files hid the dirty source"
+    assert _lock(tgt)["source_dirty"] is True
+
+
 def test_ref_install_from_a_dirty_source_is_clean(source, tmp_path):
     """--ref re-points REPO_ROOT at a fresh detached worktree, which is clean by
     construction — so the probe, which runs after that re-point, must report

@@ -47,6 +47,11 @@ def t(a, b): pass
     # that cries on a correct commit is a guard that gets edited to stop crying.
     ('\nimport pytest\n@pytest.mark.parametrize("a,b", [[1, 2], [3, 4]])\ndef t(a, b): pass\n',
      False, "a list row and a tuple row parametrize identically"),
+    # The case LIST written as a tuple is legal pytest too. Phase 327 (`Q-592` line 26): no
+    # list in the suite was spelled this way, so dropping the extractor's `ast.Tuple` arm was
+    # green; this row is what reads it.
+    ('\nimport pytest\n@pytest.mark.parametrize("a,b", ((1, 2), (3, 4)))\ndef t(a, b): pass\n',
+     False, "a case list written as a tuple rather than a list"),
     # ── the escape routes, each of which must report ────────────────────────────────────────
     ('\nimport pytest\n@parametrize("a,b", [(1, 2), (3, 4)])\ndef t(a, b): pass\n',
      True, "the decorator aliased to a bare name, which the Attribute walk cannot see"),
@@ -125,8 +130,8 @@ def test_the_tuple_list_equivalence_applies_only_where_pytest_unpacks(decorator,
 
     Phase 301's round measured this: `_norm` coerced every sequence on every row, which is right
     at 2+ argnames and WRONG at one, where pytest hands the row to the test verbatim and a list
-    and a tuple are genuinely different values. The § *Notes* target below sends the next consumer at a
-    single-argname list, so this is not hypothetical.
+    and a tuple are genuinely different values. `tests/test_thinning_transforms.py` pins a
+    single-argname list (Phase 327), so this is not hypothetical.
 
     Each row below pins the TUPLE form `(1, 2)` against a source written with the LIST form. It
     must be silent where pytest makes them the same case and must report where it does not.
@@ -144,8 +149,7 @@ def test_a_column_pin_over_scalar_rows_is_refused_rather_than_answered_wrongly()
     single-argname list of strings is a sequence of CHARACTERS, so a pin of first letters reported
     CLEAN — a false pass — and an int row raised `TypeError` out of the guard instead of reporting.
     `tests/test_thinning_transforms.py::test_transform_1_refuses_every_state_that_is_not_editor`
-    is exactly that shape, and `REVIEW_CHECKLIST.md` § *Notes* (2026-09-16) points the next phase at it.
-    That pointer is deliberately not a `Q-NNN` — see the note in `_case_pins.py`'s `_norm`.
+    is exactly that shape, and Phase 327 pins it with a whole-row pin, the remedy below.
 
     The predicate now refuses the pin and says what to do instead.
     """
@@ -159,6 +163,83 @@ def test_a_column_pin_over_scalar_rows_is_refused_rather_than_answered_wrongly()
 
     # And the whole-row pin over the same scalar rows still works, which is the documented remedy.
     assert not case_pin_problems(src, {"t": (None, ("mixed",))})
+
+
+def test_an_int_projection_reads_the_column_it_names():
+    """Phase 327 (`Q-592` line 26). Every `int` projection in the suite was column 0, so
+    hard-coding `row[0]` in `project()` survived everywhere. Column 1 tells them apart."""
+    src = ('\nimport pytest\n@pytest.mark.parametrize("key, why", [("k1", "first"), ("k2", "second")])'
+           '\ndef t(key, why): pass\n')
+    assert not case_pin_problems(src, {"t": (1, ("second",))})
+    problems = case_pin_problems(src, {"t": (1, ("k2",))})
+    assert problems, "a column-1 pin matched a value that only column 0 holds"
+
+
+def test_an_overflowing_row_is_counted_not_raised():
+    """Phase 327's round. `literal_eval` computes `int + complex` itself, and a 400-digit int
+    overflows the float conversion. The row is unevaluatable like any other; the guard must
+    count it and go on, not crash the module that imports it."""
+    big = "1" + "0" * 400
+    src = (f'\nimport pytest\n@pytest.mark.parametrize("a,b", [({big} + 1j, 2), (3, 4)])\n'
+           'def t(a, b): pass\n')
+    found = parametrized_cases(src)["t"]
+    assert found.unevaluated == 1 and found.rows == [(3, 4)], found
+    argnames_src = f'\nimport pytest\n@pytest.mark.parametrize({big} + 1j, [(1, 2)])\ndef t(*a): pass\n'
+    assert parametrized_cases(argnames_src)["t"].argnames == 1
+
+
+def test_stacked_decorators_sum_their_unevaluated_rows():
+    """Each stacked list contributes its own count; dropping either side of the sum was green."""
+    src = ('\nimport pytest\n'
+           '@pytest.mark.parametrize("a", [x, 1])\n'
+           '@pytest.mark.parametrize("b", [y, z, 2])\n'
+           'def t(a, b): pass\n')
+    assert parametrized_cases(src)["t"].unevaluated == 3
+
+
+@pytest.mark.parametrize("site", ["rows", "argnames"])
+def test_an_unexpected_error_is_not_swallowed(monkeypatch, site):
+    """The other side of the tuple, at EACH of its two sites. A bug in `literal_eval` itself —
+    anything outside the errors it documents — must surface, not be counted as unreadable.
+    Round 2 broadened one site at a time and each survived, because one patch that raised at
+    both sites was caught by whichever site was still narrow."""
+    import ast as _ast
+    import _case_pins
+    real = _ast.literal_eval
+
+    def boom(node):
+        argnames = isinstance(node, _ast.Constant) and isinstance(node.value, str)
+        if (site == "argnames") == argnames:
+            raise AttributeError("not a literal_eval error")
+        return real(node)
+    monkeypatch.setattr(_case_pins.ast, "literal_eval", boom)
+    with pytest.raises(AttributeError):
+        parametrized_cases(_BASELINE)
+
+
+def test_an_unhashable_row_is_counted_not_raised():
+    """`literal_eval` raises `TypeError` on a dict keyed by a list; round 2 removed `TypeError`
+    from the tuple with every module green."""
+    src = '\nimport pytest\n@pytest.mark.parametrize("a,b", [({[1]: 2}, 3), (3, 4)])\ndef t(a, b): pass\n'
+    found = parametrized_cases(src)["t"]
+    assert found.unevaluated == 1 and found.rows == [(3, 4)], found
+
+
+def test_a_row_that_cannot_be_evaluated_is_named_as_the_likely_cause():
+    """Phase 327 (`Q-592` line 25). A pinned row rewritten as an expression reads as missing
+    either way; what the extractor adds is the count that lets the report say so. Without it the
+    maintainer is told a row was deleted when it was rewritten."""
+    rewritten = ('\nimport pytest\n@pytest.mark.parametrize("a,b", [(1, 1 + 1), (3, 4)])\n'
+                 'def t(a, b): pass\n')
+    problems = case_pin_problems(rewritten, _PINS)
+    assert problems and "1 row(s) in this list are not literals" in problems[0], problems
+    assert parametrized_cases(rewritten)["t"].unevaluated == 1
+    assert parametrized_cases(rewritten)["t"].rows == [(3, 4)], "a non-literal row entered `rows`"
+
+    deleted = '\nimport pytest\n@pytest.mark.parametrize("a,b", [(3, 4), (5, 6)])\ndef t(a, b): pass\n'
+    problems = case_pin_problems(deleted, _PINS)
+    assert problems and "not literals" not in problems[0], (
+        "a plain deletion was blamed on an unevaluatable row it does not have")
 
 
 @pytest.mark.parametrize("argnames_src,expect", [
@@ -188,7 +269,7 @@ def test_argnames_are_counted_conservatively(argnames_src, expect):
 #: free to be reworded.
 _SELF_PINS = {
     # The first row of that table passes `_BASELINE`, a module NAME, so `literal_eval` cannot
-    # read it and the extractor records it `_UNEVALUATABLE` — correctly, and it is therefore
+    # read it and the extractor counts it as unevaluated — correctly, and it is therefore
     # unpinnable by content. Said out loud rather than papered over: that one row is covered by
     # the count check, not by this pin. The other two `False` rows hold the silent direction.
     "test_the_predicate_reports_exactly_the_escape_routes": ((0, 1), (
@@ -206,6 +287,8 @@ _SELF_PINS = {
          True),
         ('\nimport pytest\n@pytest.mark.parametrize("a,b", [(1, 1 + 1), (3, 4)])\n'
          'def t(a, b): pass\n', True),
+        ('\nimport pytest\n@pytest.mark.parametrize("a,b", ((1, 2), (3, 4)))\ndef t(a, b): pass\n',
+         False),
     )),
     "test_the_tuple_list_equivalence_applies_only_where_pytest_unpacks": ((0, 1), (
         ('@pytest.mark.parametrize("a,b", [[1, 2], [3, 4]])', False),
@@ -252,6 +335,8 @@ def u(a, b): pass
      "a NAMED list emptied — the `ast.Name` arm"),
     (lambda s: s.replace('@pytest.mark.parametrize("a,b", ROWS)\ndef u(a, b): pass\n', ""), True,
      "a whole control DELETED — the count ratchet, which no content pin can see"),
+    (lambda s: s + '@pytest.mark.parametrize("a,b", ROWS)\ndef v(a, b): pass\n', True,
+     "a control ADDED without raising the pin — the ratchet is exact in both directions"),
     (lambda s: s.replace('@pytest.mark.parametrize("a,b", [(1, 2), (3, 4)])\ndef t(a, b): pass\n',
                          '@pytest.mark.parametrize("a,b", (x for x in []))\ndef t(a, b): pass\n'),
      True, "a case list of a shape the guard cannot size"),

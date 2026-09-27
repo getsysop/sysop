@@ -36,7 +36,7 @@ Apply the atomicity litmus from `.claude/skills/_shared/decomposition-rubric.md`
 
 ## Step 2 — Dedup
 
-Search the queue for overlap before drafting: task titles in `index.yml` plus a `Grep` over `tasks/open/` and `tasks/deferred/` bodies for the task's key nouns. **Search `tasks/notes.md` too, tolerating its absence** — that is the notes ledger, where an executor records a finding that reached tier 3 of the fix-in-branch rule without being able to name what it blocks (`tasks/README.md` § *The notes ledger*). If a plausible match exists:
+Search the queue for overlap before drafting: task titles in `index.yml` plus a `Grep` over `tasks/open/` and `tasks/deferred/` bodies for the task's key nouns. **Search `tasks/notes.md` too, tolerating its absence** — that is the retired notes ledger. No skill writes to it any more, but a consumer may still hold one it has not cleared (`tasks/README.md` § *The notes ledger*). If a plausible match exists:
 
 - **An open task already covers it** → surface it; offer to extend that task's body with the new detail instead of filing a duplicate.
 - **A deferred task covers it** → surface it; the right move may be un-parking that task (a human decision), not filing a twin.
