@@ -1025,7 +1025,7 @@ def step8_envelope_problems(text=None):
 
 
 def phase_emission_problems(text=None):
-    """All three spawn prompts must emit PHASE:, or their envelopes collide on
+    """Every spawn prompt must emit PHASE:, or their envelopes collide on
     <CLAIM_ID>.json and last-writer-wins -- the exact defect Phase 159a built
     the optional key to prevent. Step 8's deterministic read of
     <CLAIM_ID>.exec.json rests on this and on nothing else, so the emission and
@@ -1033,8 +1033,26 @@ def phase_emission_problems(text=None):
     """
     text = _CLAIM_SKILL.read_text(encoding="utf-8") if text is None else text
     problems = []
-    for phase in ("plan", "review", "exec"):
+    for phase in ("plan", "review"):
         if not _re.search(r"^PHASE: %s$" % phase, text, _re.M):
+            problems.append("no spawn prompt emits `PHASE: %s`" % phase)
+    # Step 7e's prompt serves two spawns since Phase 345: the executor and Step 8c's answers
+    # run. Its envelope line is a placeholder each spawn substitutes, so both substitutions
+    # must be stated, or one of the two envelopes lands on the other's name.
+    placeholder = _re.search(r"^PHASE: <ENVELOPE_PHASE>$", text, _re.M)
+    # Each substitution is read at the spawn it governs, not anywhere in the file: stated
+    # at another spawn, the sentence reads right and binds nothing (Phase 345 round 1, R07b).
+    def at(start, end):
+        i = text.find(start)
+        if i < 0:
+            return ""
+        j = text.find(end, i) if end else -1
+        return text[i:j] if j > i else text[i:]
+    for phase, said, where in (
+            ("exec", "`exec` substituted for `<ENVELOPE_PHASE>`", at("### Step 7e", "**START OF EXECUTOR PROMPT**")),
+            ("answers", "except `answers` for `<ENVELOPE_PHASE>`", at("### Step 8c", "**START OF ANSWERS ADDENDUM**"))):
+        literal = phase == "exec" and _re.search(r"^PHASE: exec$", text, _re.M)
+        if not literal and not (placeholder and said in where):
             problems.append("no spawn prompt emits `PHASE: %s`" % phase)
     return problems
 
@@ -1087,11 +1105,30 @@ def test_guard_catches_a_step8_that_ignores_unparseable_diagnostics():
 def test_guard_catches_a_prompt_that_drops_its_phase_key():
     """Dropping PHASE from one prompt collides that envelope onto the
     un-phased name -- silent, and it makes Step 8's read find nothing."""
-    for phase in ("plan", "review", "exec"):
-        text = _CLAIM_SKILL.read_text(encoding="utf-8")
-        broken = text.replace("PHASE: %s" % phase, "PHASE: none", 1)
-        assert broken != text, phase
-        assert any(phase in p for p in phase_emission_problems(broken)), phase
+    text = _CLAIM_SKILL.read_text(encoding="utf-8")
+    breaks = {
+        "plan": [("PHASE: plan", "PHASE: none")],
+        "review": [("PHASE: review", "PHASE: none")],
+        # The shared prompt's line, then each spawn's substitution on its own.
+        "exec": [("PHASE: <ENVELOPE_PHASE>", "PHASE: none"),
+                 ("`exec` substituted for `<ENVELOPE_PHASE>`", "`none` substituted for it")],
+        "answers": [("PHASE: <ENVELOPE_PHASE>", "PHASE: none"),
+                    ("`answers` for `<ENVELOPE_PHASE>`", "`none` for it"),
+                    # "except" is what makes it the one substitution that differs.
+                    ("except `answers` for `<ENVELOPE_PHASE>`", "including `exec` for `<ENVELOPE_PHASE>` (not `answers` for `<ENVELOPE_PHASE>`)")],
+    }
+    for phase, edits in breaks.items():
+        for old, new in edits:
+            broken = text.replace(old, new, 1)
+            assert broken != text, (phase, old)
+            assert any(phase in p for p in phase_emission_problems(broken)), (phase, old)
+
+    # R07b: the substitution moved to another spawn still reads right in the file.
+    said = ", and `exec` substituted for `<ENVELOPE_PHASE>`."
+    assert text.count(said) == 1
+    moved = text.replace(said, ".", 1).replace(
+        "### Step 7b: Spawn the reviewer", "### Step 7b: Spawn the reviewer\n\n`exec` substituted for `<ENVELOPE_PHASE>`.", 1)
+    assert any("exec" in p for p in phase_emission_problems(moved))
 
 
 def test_claim_task_carries_no_run_in_background_agent_parameter():

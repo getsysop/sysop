@@ -36,3 +36,9 @@ pytest-xdist==3.8.0
 # note exists to be checked against on a version bump: a release that ships
 # x86_64 and not aarch64 now breaks CI while reading as cleared.
 semgrep==1.157.0
+# Phase 341 (`Q-611`). A HARD dep: `tests/test_commonmark_code_blocks.py` parses the
+# tracked markdown files (all but one) as CommonMark and fails on an indented code block. 948 lines
+# of `review-close/SKILL.md` rendered as three on GitHub, and the guards that read
+# the raw text could not see it, because only a CommonMark reading decides where a list
+# ends. It is also `rich`'s dependency, which semgrep pulls in; the pin must satisfy both.
+markdown-it-py==4.2.0

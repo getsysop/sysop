@@ -412,9 +412,10 @@ def test_cli_scope_file(tmp_path, capsys):
 
 
 def test_cli_mark(tmp_path):
-    rc = ing.main(["--root", str(tmp_path), "--mark", "CLAUDE-SECURITY-y", "--json"])
+    (tmp_path / "CLAUDE-SECURITY-20260901-000003").mkdir()
+    rc = ing.main(["--root", str(tmp_path), "--mark", "CLAUDE-SECURITY-20260901-000003", "--full", "--json"])
     assert rc == 0
-    assert "CLAUDE-SECURITY-y" in ing.read_marker(tmp_path)
+    assert "CLAUDE-SECURITY-20260901-000003" in ing.read_marker(tmp_path)
 
 
 def test_cli_bad_root_degrades_cleanly(tmp_path, capsys):

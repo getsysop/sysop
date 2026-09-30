@@ -319,9 +319,11 @@ by demonstration, not by argument.
 - **A rule indented four spaces is invisible to the pin.** That is markdown's undelimited code
   form, and `_flat` collapses indentation before the pin compares. Every *delimited* neutering
   form is covered (``` and `~~~` at any length, `<!-- -->`, `<details>`, `>`), and a WHOLESALE
-  re-indent of a step is refused — but a single indented rule is not. No general detector is
-  built because 68 of the 69 deep-indented lines in `SKILL.md` are list continuations, so one
-  would mis-tag them to catch this. Filed as `Q-497`.
+  re-indent of a step is refused — but a single indented rule is not refused by the pin. It is
+  refused by `tests/test_commonmark_code_blocks.py` (Phase 341), which parses every tracked
+  markdown file but `PHASE_LOG.md` as CommonMark and fails on any indented code block. A block parser tells a code
+  block from a list continuation, which a line rule could not (68 of the 69 deep-indented lines
+  in `SKILL.md` are continuations). `Q-497` is closed by it.
 - **A declared rule can be retired in three edits, not the eight this section used to imply.**
   Measured by a round: re-point the rule's subject pattern at another sentence of the same step,
   delete the rule, regenerate the block pin. The roster, the section and `DECLARED_IDS` stay
@@ -645,7 +647,7 @@ should know they genuinely differ rather than assume a duplication.
 said *track fences the way `/claim-task`'s Step 8 verifier does*. That was unsafe when written —
 that walker carried no info-string check, so following it reproduced the very defect the rule
 prevents — and it stayed wrong as an instruction even after `Q-468` closed it, because a rule held
-only by pointing at another skill's code moves when that code does. Both of `/claim-task`'s walkers
+only by pointing at another skill's code moves when that code does. All of `/claim-task`'s walkers
 now delegate the closer decision to one `fence_closes` predicate per block, defined once per
 heredoc since nothing is shared across them, and cited at two lines that cannot be swapped for one
 another: the writer's clause explaining why its own openers carry info strings, and the clause in
@@ -1581,11 +1583,19 @@ The fallback covers in-flight pending-docs authored before the `task_ids` → `r
 behaviour: Step 4c's heredoc was already treating them as roadmap ids, silently no-op'ing on the
 non-matches.
 
-**Removal trigger.** Drop the `or pending.get('task_ids')` clause in any subsequent phase that
-touches Step 4c, once BeanRider has run one full `/review-close` cycle on a pending-doc authored
-after the 23a absorption — confirmable via `git log -p sysop/runtime/pending-docs/` or via the
-merged consolidation commit. Pending-docs are minutes-to-hours lived, so the shim's exposure window
-is one absorption cycle.
+**Removal trigger.** The fallback can go once BeanRider has run one full `/review-close` cycle on a
+pending-doc authored after the 23a absorption. The merged consolidation commit is the evidence;
+`sysop/runtime/pending-docs/` is gitignored, so `git log` over it shows nothing. Pending-docs are
+minutes-to-hours lived, so the shim's exposure window is one absorption cycle.
+
+**Remove it from every reader in one change, never from Step 4c alone.** Six steps read it: Step
+3c's smoke gate, Step 3b (its collect and its `WS`-empty open-claims line), `4a-post`'s
+inherited-failure arm, and Step 4c's 1b short-circuit, 1c hold and step-3 shim. `grep -n task_ids
+SKILL.md` lists them, and `tests/test_pending_doc_integrity.py` asserts some of them. Step 1b's note
+says why a partial removal is a defect: a reader keyed to one field resolves a ref for exactly the
+legacy doc 1c holds. This paragraph said "in any subsequent phase that touches Step 4c" until Phase
+337, which touched Step 4c, found the other readers, and left all of them in place. Its first count
+of them was five; its round found the sixth step.
 
 ### Why the `git mv` needs its parent created
 
@@ -1635,6 +1645,99 @@ Step 4b has had a trust-but-verify gate for this failure class for some time and
 which is what let a rename-only commit pass as a consolidation (Sysop's internal tracker #203). The
 `git mv`s inside the heredoc stage themselves, so a commit can carry the renames and none of the
 shared-doc edits and still look like a successful consolidation from its subject line alone.
+
+### Where §6's entries end, and why item 5's check compares everything else
+
+Internal tracker #707 reported one rotation write that was wrong in two files. The Rotation check
+said which entries to move and where to put them, and never said where §6's entries stop. On that
+consumer §6 is the file's last section, so an end found by looking for the next numbered heading is
+the end of the file. The section's closing furniture, a rotated-to marker and a standing note to
+agents, has no entry shape and no marker the step named. It rode along as the tail of the last
+entry: deleted from `PROJECT_STATUS.md` and joined onto a rotated bullet in the changelog. The
+reporter caught it only by reading the staged diff, which showed 16 deletions where 6 were
+expected.
+
+**Sysop ships no `PROJECT_STATUS.md` template, so the step cannot name a marker to keep.** The
+filing's "shipped template" was that consumer's. So the runner's rule bounds the entries by their
+own shape, the writer's `<date>:` lines, and the check looks for no marker at all. It requires every
+non-blank line outside §6's entry run to be unchanged apart from trailing whitespace, which catches
+a lost line of furniture whatever a consumer calls it. §6's first entry is looked for only up to the
+next section: a heading no deeper than §6's own (level 2 when §6 is a plain numbered line), or a
+numbered line above 6. So a subheading or a numbered lead-in inside §6 does not end it.
+
+**An indented line directly under an entry is reported, not resolved, because the text cannot say
+what it is.** It may be the second line of a wrapped entry or a marker indented under the last one.
+The phase that wrote this tried both readings, and each lost text in the other shape. Ending an
+entry at its first line let the prescribed rotation split a wrapped entry, and the check passed the
+split (round 2). Carrying the indented line with its entry let indented furniture ride out with the
+last entry, and the only write the check passed was the one that deleted it (round 3), which is the
+reported loss class again. So the rule names the ambiguity: the runner does not rotate, and the
+check exits 2. Neither consumer's §6 has the shape today; a writer that makes one-line entries
+never creates it. An unindented line under an entry is not ambiguous: it ends the run, as a marker
+written straight after the last entry does in the reported case.
+
+**What the check compares, and what it leaves to the prose.** Everything outside the entry run is
+unchanged; §6 holds the count the Rotation check leaves, with the new entries above the newest old
+ones in order; no line of §6's furniture reached the changelog, which was the durable half of the
+reported loss; no line the changelog had at `HEAD` is gone; and, under `[Unreleased]` and outside
+code fences (a closer needs its opener's character, at least its length, and no info string, the
+rule Phase 281 settled), no class heading or `## [Unreleased]` that appears more than once appears more often
+than at `HEAD`. A first copy is not counted, because creating a missing heading is the contract. It
+does **not** check that a rotated entry arrived in the changelog. The dedupe may drop it on purpose,
+and deciding whether an existing bullet is that entry's own takes the reading the prose prescribes.
+
+**Why it runs before item 6.** Item 6 deletes the pending-docs, and a doc is the only other copy of
+the entry it produced. It cannot run before everything: item 4's heredoc has already staged the
+index flip and reaped the claim artifacts by then, and the first rewording of its lead said nothing
+was staged. A check after the deletion hands its runner a remedy that can destroy the one
+copy left. The first cut of this check sat in item 7, and its round showed exactly that: a
+subheading above §6's first entry made a correct write report the new entry as an added line, and
+the remedy read as "delete it".
+
+**Why exit 2 continues rather than stops, and what counts as exit 2.** No repository, a §6 the
+check cannot find or finds twice, a file that will not decode, a git read that fails, or two tracked
+changelogs is not evidence of loss. It is the state every close was in before the check existed, so the fallback is the diff read
+that caught the reported case. A stop there would block every close on that consumer for a reason
+unrelated to the close. **A git failure is kept apart from absence on purpose:** the first cut read
+any failed `git show` as "not at `HEAD`", which skips the comparison and passes. The check resolves
+the repository root itself for the same reason: run from a subdirectory, the first cut found neither
+file and passed over a real loss.
+
+**Why a fork the file already had only warns.** A copy of one consumer's live changelog, taken while
+this check was built, carried `### Changed` three times and `### Fixed` twice under `[Unreleased]`.
+Stopping the close on history it did not write would stop every close until a human edits the file.
+So a fork this close created stops it, and one that was already there is reported.
+
+### The changelog dedupe's join key, and where a class heading is looked for
+
+Internal tracker #684 said the rotation dedupe's summary match cannot fire, because the two records
+paraphrase each other. **It was right, and the refutation this repository first wrote was not.** The
+triage that filed it argued that §6's line and the changelog bullet are written from the same
+`summary` in one pass, so they match by construction, and put the reporter's divergent pairs down to
+older writers or hand edits. The first draft of this subsection repeated that. The reporter's history
+shows one stock close, on the current writers, writing both records for the same task with the
+bullet reworded. The writer is an agent composing two lines, not a template filling one field twice.
+**Neither key finds every record on its own.** A later stock close wrote three bullets titled in
+prose, with no task id and reworded summaries, so the id search finds nothing for them, and the
+summary search finds nothing either. So the runner runs both searches for every line and reads every
+hit, since an id mentioned inside another entry's prose looks like a hit; and the rule's last clause,
+write what neither search finds, turns a miss into a visible duplicate rather than a silent loss.
+**The bullet shape now carries the entry's task ids and the doc's `summary` as written**, so records
+this workflow writes from here on match on either key. The phase's round 2 had made the id the only
+key for a line that has one, which dropped the summary search that finds a bullet with a prose
+title; round 3 found both gaps in the reporter's history. **The Consolidation
+clause's §6 line is the one rotation meets whose content is already recorded but which has no bullet
+of its own**: it summarises many branches, and the clause wrote each one's detail separately. With
+no rule for it, it would match nothing and be written back as a bullet pointing at the changelog.
+
+Internal tracker #689 reported `## [Unreleased]` holding `### Changed`, then `### Fixed`, then a
+second `### Changed`, and `git blame` showed the lower one was older. A rotation had appended a
+`### Changed` at the end of `[Unreleased]`, which is legitimate because Keep a Changelog imposes no
+class order. A later close looked near the top, found no `### Changed`, and made another. Both
+readings fit "creates what is missing", so the runner now says where *missing* is judged. **The
+filing's figures match the reporter's file as of 2026-09-16, and the fork recurred before it was
+posted:** the next day a close added another `### Changed` and a merged fix added another
+`### Fixed`, which is the five-heading state the check's `WARN:` lines describe.
 
 ### What the silent-denial paragraph leaves out
 

@@ -147,7 +147,7 @@ This is the **plan-time recording** half of Sysop's test discipline; the adversa
 
 **What goes in it.** One line per fix: what was wrong, where, and which gate or test covers it. Not a narrative — the diff carries the detail.
 
-**What may never go in it,** at any size: migrations, auth or payment logic, and anything that writes to production. These are outside the rule by category, not by size, so a correct one-line fix to one of them is still a task, not an `## Also fixed` entry — unless the human approved that fix when asked, and then the line ends `(approved: <YYYY-MM-DD>, "<the question as asked>")`.
+**What may never go in it,** at any size: migrations, auth or payment logic, and anything that writes to production. These are outside the rule by category, not by size, so a correct one-line fix to one of them is still a task, not an `## Also fixed` entry — unless the human approved that fix when asked, and then the line ends `(approved: <YYYY-MM-DD>, "<the question as asked>")`. `/claim-task`'s answers run (Step 8c) adds `, answers: <path to the run's answers.md>` before the closing parenthesis, and `/review-close` Step 2d check 2 reads that file.
 
 ```markdown
 ## Also fixed

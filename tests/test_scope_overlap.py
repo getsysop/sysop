@@ -403,6 +403,7 @@ def test_assess_notes_an_unresolvable_default_branch(monkeypatch, tmp_path):
     )
     (tmp_path / "ws-tb").mkdir()
     _patch_module_paths(monkeypatch, repo)
+    monkeypatch.setattr(so, "_git_can_read", lambda ws: (True, ""))  # the dir is no checkout
     monkeypatch.setattr(so, "_resolve_default_branch_for", lambda c: "")
     monkeypatch.setattr(so, "_worktree_changed_paths", lambda ws: [])
     a = so.assess(
@@ -740,7 +741,7 @@ def test_an_injected_wrapper_around_the_real_reader_still_gets_the_note(monkeypa
     """`/auto-build` is the tree's only production injection, and it wraps the REAL reader.
 
     The first cut gated the note on `worktree_reader is None`, justified as "an injected
-    reader means the boundary is faked". `auto-build/SKILL.md:203` passes a caching wrapper
+    reader means the boundary is faked". `auto-build/SKILL.md:201` passes a caching wrapper
     around `_so._worktree_changed_paths`, so the entire `Q-380` product — a degrade that
     announces itself — was silent on that path (Phase 255 round, guards lens).
     """
@@ -753,6 +754,7 @@ def test_an_injected_wrapper_around_the_real_reader_still_gets_the_note(monkeypa
         {"TECH-B.lock": _lock("TECH-B", workspace=str(ws))},
     )
     _patch_module_paths(monkeypatch, repo)
+    monkeypatch.setattr(so, "_git_can_read", lambda ws: (True, ""))  # the dir is no checkout
     monkeypatch.setattr(so, "_resolve_default_branch_for", lambda c: "")
     cache: dict = {}
 
@@ -771,3 +773,524 @@ def test_an_injected_wrapper_around_the_real_reader_still_gets_the_note(monkeypa
     assert any("could not resolve the default branch" in n for n in a.notes), (
         "an injected wrapper around the REAL reader got no degrade note — the note is "
         "gated on how the reader was injected rather than on the workspace")
+
+
+# ── `unknown`: a declared input that could not be read (Q-613, Phase 339) ─────
+#
+# Each arm below has ONE control that changes only what that arm reads: the same
+# input, readable. A control that also moved another input would let a second arm
+# answer for the first.
+
+_BAD = b"\xff\xfe not utf-8 \xe9\n"
+
+
+def _unknown_repo(tmp_path: Path, cand_body: str | None = "# C\n\n## Key files\n- `src/a.py`\n",
+                  inflight_body: str = "# B\n", lock: str | None = None) -> Path:
+    bodies = {"TECH-B.md": inflight_body}
+    if cand_body is not None:
+        bodies["FEAT-CAND.md"] = cand_body
+    return _build_repo(
+        tmp_path,
+        _index(_task("FEAT-CAND") + _task("TECH-B")),
+        bodies,
+        {"TECH-B.lock": lock if lock is not None else _lock("TECH-B", workspace="/ws/tb")},
+    )
+
+
+def _only(a: so.Assessment) -> so.Overlap:
+    assert len(a.overlaps) == 1, a.overlaps
+    return a.overlaps[0]
+
+
+def test_unknown_rank_sits_between_possible_and_likely():
+    r = so._VERDICT_RANK
+    assert r["none"] < r["possible"] < r["unknown"] < r["likely"], r
+
+
+def test_an_unreadable_lock_is_unknown_not_none(tmp_path):
+    repo = _unknown_repo(tmp_path)
+    (repo / "sysop/runtime/locks/TECH-B.lock").write_bytes(b"task_id: TECH-B\n" + _BAD)
+    o = _only(_assess(repo, "FEAT-CAND", lambda ws: []))
+    assert o.task_id == "TECH-B" and o.verdict == "unknown", o
+    assert "lock could not be read" in o.reason and o.evidence == [], o
+
+
+def test_control_a_readable_lock_with_no_scope_is_none(tmp_path):
+    repo = _unknown_repo(tmp_path)
+    a = _assess(repo, "FEAT-CAND", lambda ws: [])
+    assert a.overlaps == [] and a.max_verdict == "none", a
+
+
+def test_a_lock_that_parses_to_no_fields_is_unknown(tmp_path):
+    for content in ("", "- a\n- b\n", "just a scalar\n"):
+        repo = _unknown_repo(tmp_path / str(len(content)), lock=content)
+        o = _only(_assess(repo, "FEAT-CAND", lambda ws: []))
+        assert o.verdict == "unknown" and "parsed to no fields" in o.reason, (content, o)
+
+
+def test_control_an_empty_mapping_lock_is_readable(tmp_path):
+    """`sitrep_survey._load_lock_file` reads `{}` as a readable lock with no fields;
+    this tool agrees, so the two do not disagree about the same file."""
+    repo = _unknown_repo(tmp_path, lock="{}\n")
+    a = _assess(repo, "FEAT-CAND", lambda ws: [])
+    assert a.overlaps == [] and a.in_flight_count == 1, a
+
+
+def test_an_unreadable_lock_keeps_a_known_positive(tmp_path):
+    """The fallback still reads TECH-B's body. An exact match there is a KNOWN
+    `likely`, and outranks the unknown the lost lock would otherwise report."""
+    repo = _unknown_repo(tmp_path, inflight_body="# B\n\n## Key files\n- `src/a.py`\n")
+    (repo / "sysop/runtime/locks/TECH-B.lock").write_bytes(_BAD)
+    o = _only(_assess(repo, "FEAT-CAND", lambda ws: []))
+    assert o.verdict == "likely" and o.evidence == ["src/a.py"], o
+    assert "lock could not be read" in o.reason, o  # still said, beside the positive
+
+
+def test_a_reader_that_could_not_read_the_worktree_is_unknown(tmp_path):
+    repo = _unknown_repo(tmp_path)
+    failed = so._ChangedPaths()
+    failed.unreadable = "git status failed in its worktree (exit 128)"
+    o = _only(_assess(repo, "FEAT-CAND", lambda ws: failed))
+    assert o.verdict == "unknown" and "git status failed" in o.reason, o
+
+
+def test_control_a_reader_that_read_an_empty_worktree_is_none(tmp_path):
+    repo = _unknown_repo(tmp_path)
+    a = _assess(repo, "FEAT-CAND", lambda ws: so._ChangedPaths())
+    assert a.overlaps == [], a
+
+
+def test_a_partly_read_worktree_keeps_its_positive(tmp_path):
+    repo = _unknown_repo(tmp_path)
+    partial = so._ChangedPaths(["src/a.py"])
+    partial.unreadable = "its default branch could not be resolved"
+    o = _only(_assess(repo, "FEAT-CAND", lambda ws: partial))
+    assert o.verdict == "likely" and "default branch" in o.reason, o  # the reason travels too
+
+
+def test_a_partly_read_possible_is_unknown(tmp_path):
+    """Round 1 (execution lens, HIGH): a partial read whose remainder grades
+    `possible` kept `possible`, which ranks BELOW `unknown`, so the one task whose
+    unread half held the exact match sorted first, with no reason given."""
+    repo = _unknown_repo(tmp_path)
+    partial = so._ChangedPaths(["src/b.py"])  # same directory as the candidate's src/a.py
+    partial.unreadable = "git status failed in its worktree (exit 128)"
+    o = _only(_assess(repo, "FEAT-CAND", lambda ws: partial))
+    assert o.verdict == "unknown" and o.evidence == ["src/b.py"], o
+    assert "git status failed" in o.reason, o
+    text = so.render_text(_assess(repo, "FEAT-CAND", lambda ws: partial))
+    assert "shared: src/b.py" in text and "why: git status failed" in text, text
+
+
+def test_a_partly_read_worktree_with_no_positive_is_unknown(tmp_path):
+    repo = _unknown_repo(tmp_path)
+    partial = so._ChangedPaths(["docs/x.md"])
+    partial.unreadable = "its default branch could not be resolved"
+    o = _only(_assess(repo, "FEAT-CAND", lambda ws: partial))
+    assert o.verdict == "unknown" and "default branch" in o.reason, o
+    assert o.scope_source == "worktree_diff", o
+
+
+def test_an_unreadable_inflight_body_on_the_fallback_is_unknown(tmp_path):
+    repo = _unknown_repo(tmp_path)
+    (repo / "tasks/open/TECH-B.md").write_bytes(b"## Key files\n" + _BAD)
+    o = _only(_assess(repo, "FEAT-CAND", lambda ws: []))
+    assert o.verdict == "unknown" and "TECH-B's body could not be read" in o.reason, o
+
+
+def test_an_inflight_body_is_not_read_when_the_worktree_answered(tmp_path):
+    """A source never consulted is not a failed read: the worktree diff answered,
+    so TECH-B's unreadable body plays no part."""
+    repo = _unknown_repo(tmp_path)
+    (repo / "tasks/open/TECH-B.md").write_bytes(_BAD)
+    a = _assess(repo, "FEAT-CAND", lambda ws: ["docs/x.md"])
+    assert a.overlaps == [], a
+
+
+def test_an_unreadable_candidate_body_makes_every_inflight_task_unknown(tmp_path):
+    repo = _unknown_repo(tmp_path)
+    (repo / "tasks/open/FEAT-CAND.md").write_bytes(b"## Key files\n- `src/a.py`\n" + _BAD)
+    o = _only(_assess(repo, "FEAT-CAND", lambda ws: ["src/a.py"]))
+    assert o.verdict == "unknown" and "FEAT-CAND's body could not be read" in o.reason, o
+
+
+def test_control_a_candidate_body_without_key_files_is_none(tmp_path):
+    """No `## Key files` is an absent declaration, not a failed read."""
+    repo = _unknown_repo(tmp_path, cand_body="# C\n\nprose only\n")
+    a = _assess(repo, "FEAT-CAND", lambda ws: ["src/a.py"])
+    assert a.overlaps == [] and a.max_verdict == "none", a
+
+
+def test_a_declared_candidate_body_that_is_missing_is_unknown(tmp_path):
+    repo = _unknown_repo(tmp_path, cand_body=None)
+    o = _only(_assess(repo, "FEAT-CAND", lambda ws: []))
+    assert o.verdict == "unknown" and "is not a file" in o.reason, o
+
+
+def test_a_candidate_body_outside_tasks_is_unknown(tmp_path):
+    (tmp_path / "escape.md").write_text("## Key files\n- `src/a.py`\n", encoding="utf-8")
+    repo = _build_repo(
+        tmp_path,
+        _index(_task("FEAT-CAND", body="../escape.md") + _task("TECH-B")),
+        {"TECH-B.md": "# B\n"},
+        {"TECH-B.lock": _lock("TECH-B", workspace="/ws/tb")},
+    )
+    o = _only(_assess(repo, "FEAT-CAND", lambda ws: []))
+    assert o.verdict == "unknown" and "outside tasks/" in o.reason, o
+
+
+def test_control_a_candidate_with_no_body_field_is_none(tmp_path):
+    repo = _build_repo(
+        tmp_path,
+        _index("  - {id: FEAT-CAND, title: T, phase: 6, status: open, effort: Low}\n"
+               + _task("TECH-B")),
+        {"TECH-B.md": "# B\n"},
+        {"TECH-B.lock": _lock("TECH-B", workspace="/ws/tb")},
+    )
+    a = _assess(repo, "FEAT-CAND", lambda ws: [])
+    assert a.overlaps == [], a
+
+
+def test_an_unreadable_index_is_unknown(tmp_path):
+    repo = _unknown_repo(tmp_path)
+    (repo / "tasks/index.yml").write_bytes(b"tasks: []\n" + _BAD)
+    o = _only(_assess(repo, "FEAT-CAND", lambda ws: []))
+    assert o.verdict == "unknown" and "tasks/index.yml could not be read" in o.reason, o
+
+
+def test_control_a_missing_index_is_none(tmp_path):
+    repo = _unknown_repo(tmp_path)
+    (repo / "tasks/index.yml").unlink()
+    a = _assess(repo, "FEAT-CAND", lambda ws: [])
+    assert a.overlaps == [] and a.in_flight_count == 1, a
+
+
+def test_nothing_in_flight_is_never_unknown(tmp_path):
+    repo = _build_repo(tmp_path, _index(_task("FEAT-CAND")), {})
+    a = _assess(repo, "FEAT-CAND", lambda ws: [])
+    assert a.in_flight_count == 0 and a.max_verdict == "none" and a.overlaps == [], a
+
+
+def test_unknown_outranks_possible_and_yields_to_likely(tmp_path):
+    repo = _build_repo(
+        tmp_path,
+        _index(_task("FEAT-CAND") + _task("TECH-B") + _task("TECH-C") + _task("TECH-D")),
+        {"FEAT-CAND.md": "# C\n\n## Key files\n- `src/api/routes.py`\n",
+         "TECH-B.md": "# B\n", "TECH-C.md": "# C\n", "TECH-D.md": "# D\n"},
+        {"TECH-B.lock": _lock("TECH-B", workspace="/ws/tb"),
+         "TECH-C.lock": _lock("TECH-C", workspace="/ws/tc"),
+         "TECH-D.lock": _lock("TECH-D", workspace="/ws/td")},
+    )
+    failed = so._ChangedPaths()
+    failed.unreadable = "git diff main...HEAD failed in its worktree"
+    reads = {"/ws/tb": ["src/api/models.py"], "/ws/tc": failed, "/ws/td": ["src/api/routes.py"]}
+    a = _assess(repo, "FEAT-CAND", lambda ws: reads.get(ws, []))
+    assert [(o.task_id, o.verdict) for o in a.overlaps] == [
+        ("TECH-D", "likely"), ("TECH-C", "unknown"), ("TECH-B", "possible")], a.overlaps
+    assert a.max_verdict == "likely"
+    reads.pop("/ws/td")
+    assert _assess(repo, "FEAT-CAND", lambda ws: reads.get(ws, [])).max_verdict == "unknown"
+
+
+def test_the_real_reader_names_each_failed_git_read(monkeypatch, tmp_path):
+    ws = str(tmp_path)
+    monkeypatch.setattr(so, "_resolve_default_branch_for", lambda c: "main")
+
+    def run(diff_rc, status_rc):
+        def fake_run(cmd, **kw):
+            if "rev-parse" in cmd:
+                return _FakeProc(0, b".git\n")
+            if "diff" in cmd:
+                return _FakeProc(diff_rc, b"" if diff_rc else b"src/c.py\0")
+            return _FakeProc(status_rc, b"" if status_rc else b"?? src/u.py\0")
+        monkeypatch.setattr(so.subprocess, "run", fake_run)
+        return so._worktree_changed_paths(ws)
+
+    healthy = run(0, 0)
+    assert healthy == ["src/c.py", "src/u.py"] and healthy.unreadable == "", healthy.unreadable
+    diff_failed = run(128, 0)
+    assert diff_failed == ["src/u.py"], diff_failed
+    assert "git diff main...HEAD failed" in diff_failed.unreadable, diff_failed.unreadable
+    status_failed = run(0, 128)
+    assert status_failed == ["src/c.py"], status_failed
+    assert "git status failed" in status_failed.unreadable, status_failed.unreadable
+
+
+def test_the_real_reader_names_an_unresolved_base(monkeypatch, tmp_path):
+    monkeypatch.setattr(so, "_resolve_default_branch_for", lambda c: "")
+    monkeypatch.setattr(so.subprocess, "run", lambda cmd, **kw: _FakeProc(0, b""))
+    got = so._worktree_changed_paths(str(tmp_path))
+    assert got == [] and "default branch could not be resolved" in got.unreadable
+
+
+def test_the_real_reader_treats_a_missing_workspace_as_absent():
+    got = so._worktree_changed_paths("/no/such/workspace/xyz")
+    assert got == [] and getattr(got, "unreadable", "") == ""
+
+
+def test_render_text_says_unknown_is_not_ruled_out(tmp_path):
+    repo = _unknown_repo(tmp_path)
+    (repo / "sysop/runtime/locks/TECH-B.lock").write_bytes(_BAD)
+    text = so.render_text(_assess(repo, "FEAT-CAND", lambda ws: []))
+    assert "could not be ruled out" in text and "No declared overlap" not in text, text
+    assert "TECH-B (in flight) — overlap unknown" in text, text
+    assert "why: its lock could not be read" in text, text
+    assert text.count("overlap unknown") == 1 and "shared: \n" not in text, text
+
+
+def test_render_text_mixed_keeps_the_overlap_header(tmp_path):
+    repo = _build_repo(
+        tmp_path,
+        _index(_task("FEAT-CAND") + _task("TECH-B") + _task("TECH-C")),
+        {"FEAT-CAND.md": "# C\n\n## Key files\n- `a.py`\n", "TECH-B.md": "# B\n",
+         "TECH-C.md": "# C\n"},
+        {"TECH-B.lock": _lock("TECH-B", workspace="/ws/tb")},
+    )
+    # Bytes, not text: `_build_repo` writes text, which would re-encode the bad bytes as
+    # valid UTF-8 and test the no-fields arm instead (round 1, guards lens).
+    (repo / "sysop/runtime/locks/TECH-C.lock").write_bytes(_BAD)
+    text = so.render_text(_assess(repo, "FEAT-CAND", lambda ws: ["a.py"]))
+    assert "⚠  Overlap with work in flight:" in text and "could not be ruled out" not in text, text
+    assert "likely merge conflict" in text and "overlap unknown" in text, text
+
+
+def test_render_json_carries_the_reason(tmp_path):
+    repo = _unknown_repo(tmp_path)
+    (repo / "sysop/runtime/locks/TECH-B.lock").write_bytes(_BAD)
+    obj = json.loads(so.render_json(_assess(repo, "FEAT-CAND", lambda ws: [])))
+    assert obj["max_verdict"] == "unknown", obj
+    assert obj["overlaps"][0]["verdict"] == "unknown" and obj["overlaps"][0]["reason"], obj
+
+
+def test_a_lock_is_unreadable_when_pyyaml_is_missing(tmp_path, monkeypatch):
+    import sys as _sys
+    lock = tmp_path / "TECH-B.lock"
+    lock.write_text(_lock("TECH-B", workspace="/ws/tb"), encoding="utf-8")
+    monkeypatch.setitem(_sys.modules, "yaml", None)  # `import yaml` raises ImportError
+    got = so._parse_lock_file(lock)
+    assert got == {} and "PyYAML unavailable" in got.unreadable, got.unreadable
+
+
+def _needs_a_user():
+    import os as _os
+    import pytest as _pytest
+    if hasattr(_os, "geteuid") and _os.geteuid() == 0:
+        _pytest.skip("root searches a mode-000 directory; the control needs a user")
+
+
+def test_an_unlistable_locks_directory_is_unknown_not_nothing_in_flight(tmp_path):
+    """Round 1 (execution and record lenses): `glob` returns [] for a directory it
+    cannot list, and the advisory printed "✓ No work in flight"."""
+    _needs_a_user()
+    repo = _unknown_repo(tmp_path)
+    locks = repo / "sysop/runtime/locks"
+    locks.chmod(0)
+    try:
+        a = _assess(repo, "FEAT-CAND", lambda ws: [])
+        text = so.render_text(a)
+    finally:
+        locks.chmod(0o755)
+    assert a.max_verdict == "unknown" and a.in_flight_count == 0, a
+    assert "locks directory could not be listed" in a.overlaps[0].reason, a
+    assert "No work in flight" not in text and "could not be ruled out" in text, text
+
+
+def test_control_a_missing_locks_directory_is_nothing_in_flight(tmp_path):
+    repo = _unknown_repo(tmp_path)
+    import shutil
+    shutil.rmtree(repo / "sysop/runtime/locks")
+    a = _assess(repo, "FEAT-CAND", lambda ws: [])
+    assert a.overlaps == [] and a.max_verdict == "none", a
+    assert "No work in flight" in so.render_text(a)
+
+
+def test_a_tasks_field_that_is_not_a_list_is_unknown(tmp_path):
+    """`tasks: 5` ended the advisory at exit 2, which `/auto-build` swallowed as `none`
+    for every candidate (round 1, record lens). A mapping there is the same shape."""
+    for body in ("5", "{a: 1}"):
+        repo = _unknown_repo(tmp_path / body.replace(" ", "").replace(":", ""))
+        idx = repo / "tasks/index.yml"
+        idx.write_text(idx.read_text(encoding="utf-8").split("tasks:\n")[0] + f"tasks: {body}\n",
+                       encoding="utf-8")
+        o = _only(_assess(repo, "FEAT-CAND", lambda ws: []))
+        assert o.verdict == "unknown" and "`tasks:` is not a list" in o.reason, (body, o)
+
+
+def test_a_body_behind_an_unsearchable_directory_is_named_as_that(tmp_path):
+    """From Python 3.14 `Path.is_file()` answers False here instead of raising, and the
+    first cut then called the body "not a file" (round 1, record lens)."""
+    _needs_a_user()
+    repo = _unknown_repo(tmp_path)
+    open_dir = repo / "tasks/open"
+    open_dir.chmod(0)
+    try:
+        o = _only(_assess(repo, "FEAT-CAND", lambda ws: []))
+    finally:
+        open_dir.chmod(0o755)
+    assert o.verdict == "unknown" and "could not be checked (PermissionError)" in o.reason, o
+    assert "not a file" not in o.reason, o
+
+
+def test_a_workspace_behind_an_unsearchable_parent_is_unknown(tmp_path):
+    _needs_a_user()
+    parent = tmp_path / "wts"
+    ws = parent / "tb"
+    ws.mkdir(parents=True)
+    parent.chmod(0)
+    try:
+        got = so._worktree_changed_paths(str(ws))
+    finally:
+        parent.chmod(0o755)
+    assert got == [] and "could not be checked (PermissionError)" in got.unreadable, got.unreadable
+
+
+def test_a_git_status_that_raises_is_named(monkeypatch, tmp_path):
+    """The exception arm, as a timeout in a large worktree would take it (round 1,
+    guards lens: silencing it graded `none` again with every test green)."""
+    import subprocess as _sp
+    monkeypatch.setattr(so, "_resolve_default_branch_for", lambda c: "main")
+
+    def fake_run(cmd, **kw):
+        if "rev-parse" in cmd:
+            return _FakeProc(0, b".git\n")
+        if "diff" in cmd:
+            return _FakeProc(0, b"")
+        raise _sp.TimeoutExpired(cmd, 10)
+
+    monkeypatch.setattr(so.subprocess, "run", fake_run)
+    got = so._worktree_changed_paths(str(tmp_path))
+    assert "git status failed in its worktree (TimeoutExpired)" in got.unreadable, got.unreadable
+
+
+def test_a_lock_that_cannot_be_opened_is_unknown(tmp_path):
+    """The OSError arm: a directory where a lock file should be."""
+    repo = _unknown_repo(tmp_path)
+    lock = repo / "sysop/runtime/locks/TECH-B.lock"
+    lock.unlink()
+    lock.mkdir()
+    o = _only(_assess(repo, "FEAT-CAND", lambda ws: []))
+    assert o.verdict == "unknown" and "lock could not be read (IsADirectoryError)" in o.reason, o
+
+
+def test_an_index_behind_an_unsearchable_directory_is_unknown(tmp_path):
+    """Round 1, guards lens: below Python 3.14 `index_path.is_file()` raised here and
+    ended the advisory at exit 2; from 3.14 it answers False and the index read as
+    absent, hiding an overlap. Both interpreters must answer `unknown`."""
+    _needs_a_user()
+    repo = _unknown_repo(tmp_path)
+    tasks = repo / "tasks"
+    tasks.chmod(0)
+    try:
+        a = _assess(repo, "FEAT-CAND", lambda ws: [])
+    finally:
+        tasks.chmod(0o755)
+    o = _only(a)
+    assert o.verdict == "unknown" and "tasks/index.yml could not be checked" in o.reason, o
+
+
+def test_absent_or_inaccessible_tells_the_two_apart(tmp_path):
+    _needs_a_user()
+    assert so._absent_or_inaccessible(tmp_path / "nope") == ""
+    (tmp_path / "file").write_text("x")
+    assert so._absent_or_inaccessible(tmp_path / "file" / "under") == ""
+    d = tmp_path / "d"
+    (d / "e").mkdir(parents=True)
+    d.chmod(0)
+    try:
+        why = so._absent_or_inaccessible(d / "e")
+    finally:
+        d.chmod(0o755)
+    assert why == "could not be checked (PermissionError)", why
+
+
+# ── Round 2 (Phase 339): the survivors of its execution lens's battery ───────
+
+
+def test_a_locks_directory_behind_an_unsearchable_parent_is_unknown(tmp_path):
+    """M2/M13: `is_dir()` raises below Python 3.14 and answers False from it; both must
+    name the directory, not read as "no work in flight"."""
+    _needs_a_user()
+    repo = _unknown_repo(tmp_path)
+    runtime = repo / "sysop/runtime"
+    runtime.chmod(0)
+    try:
+        a = _assess(repo, "FEAT-CAND", lambda ws: [])
+    finally:
+        runtime.chmod(0o755)
+    assert a.max_verdict == "unknown", a
+    assert "the locks directory could not be checked (PermissionError)" in a.overlaps[0].reason, a
+
+
+def test_a_file_in_the_locks_directory_that_is_not_a_lock_is_ignored(tmp_path):
+    """M21: only `*.lock` names a claim."""
+    repo = _unknown_repo(tmp_path)
+    (repo / "sysop/runtime/locks/README.md").write_text("notes\n", encoding="utf-8")
+    a = _assess(repo, "FEAT-CAND", lambda ws: [])
+    assert a.in_flight_count == 1 and a.overlaps == [], a
+
+
+def test_git_can_read_names_a_git_that_cannot_run(monkeypatch, tmp_path):
+    """M9: the exception arm (git missing, or timed out)."""
+    import subprocess as _sp
+
+    def raises(cmd, **kw):
+        raise _sp.TimeoutExpired(cmd, 10)
+
+    monkeypatch.setattr(so.subprocess, "run", raises)
+    assert so._git_can_read(str(tmp_path)) == (False, "git could not read its worktree (TimeoutExpired)")
+    got = so._worktree_changed_paths(str(tmp_path))
+    assert got == [] and "TimeoutExpired" in got.unreadable, got.unreadable
+
+
+def test_a_likely_that_carries_a_reason_prints_it(tmp_path):
+    """M16: the reason travels on every grade, and the text says it."""
+    repo = _unknown_repo(tmp_path)
+    partial = so._ChangedPaths(["src/a.py"])
+    partial.unreadable = "git status failed in its worktree (exit 128)"
+    text = so.render_text(_assess(repo, "FEAT-CAND", lambda ws: partial))
+    assert "likely merge conflict" in text and "why: git status failed" in text, text
+
+
+def test_a_nul_in_a_workspace_path_is_unknown_not_a_crash(tmp_path):
+    """F3: `os.stat` raises ValueError on an embedded NUL, a legal YAML escape; the
+    first cut of `_absent_or_inaccessible` caught only OSError and ended the run."""
+    repo = _unknown_repo(tmp_path, lock=_lock("TECH-B").replace(
+        "status:", 'workspace: "/tmp/a\\0b"\nstatus:'))
+    o = _only(so.assess("FEAT-CAND", index_path=repo / "tasks/index.yml",
+                        base_tasks_dir=repo / "tasks", project_root=repo))
+    assert o.verdict == "unknown" and "could not be checked (ValueError)" in o.reason, o
+
+
+def test_the_reader_ignores_a_hooks_git_dir(monkeypatch, tmp_path):
+    """F6 (round 2): inside a hook git exports GIT_DIR, which outranks `-C`, so every
+    worktree read went to the hook's repository. Built so both reads answer differently
+    there: the workspace commits `feature.py` ahead of `main` (the diff), and leaves
+    `mine.py` untracked, which the other repository tracks with the same content (the
+    status)."""
+    import subprocess as _sp
+    env = {k: v for k, v in __import__("os").environ.items() if not k.startswith("GIT_")}
+    env.update(GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.invalid",
+               GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.invalid")
+
+    def git(cwd, *args):
+        _sp.run(["git", "-C", str(cwd), *args], check=True, capture_output=True, env=env)
+
+    ws, other = tmp_path / "ws", tmp_path / "other"
+    for r in (ws, other):
+        r.mkdir()
+        git(r, "init", "-q", "-b", "main")
+        (r / "x").write_text("x")
+        git(r, "add", "-A")
+        git(r, "commit", "-qm", "x")
+    (other / "mine.py").write_text("y")
+    git(other, "add", "-A")
+    git(other, "commit", "-qm", "mine")
+    git(ws, "switch", "-qc", "feat")
+    (ws / "feature.py").write_text("f")
+    git(ws, "add", "-A")
+    git(ws, "commit", "-qm", "f")
+    (ws / "mine.py").write_text("y")
+    monkeypatch.setattr(so, "_resolve_default_branch_for", lambda c: "main")
+    monkeypatch.setenv("GIT_DIR", str(other / ".git"))
+    got = so._worktree_changed_paths(str(ws))
+    assert list(got) == ["feature.py", "mine.py"] and got.unreadable == "", (list(got), got.unreadable)

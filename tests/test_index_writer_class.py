@@ -1359,8 +1359,10 @@ def test_step4c_joins_the_mkstemp_roster_rather_than_standing_apart():
     `tempfile.mkstemp(` would satisfy `in` as well."""
     # (file, how many index writers it holds)
     CONVERTED = {
-        # Step 4a (the index) + Step 7f (the task BODY, `Q-444`, Phase 271).
-        "claim-task Step 4a + Step 7f": (REPO_ROOT / "core/skills/claim-task/SKILL.md", 2),
+        # Step 4a (the index) + Step 7f (the task BODY, `Q-444`, Phase 271) + Step 8b's
+        # answers record (Phase 345), which writes a run artifact, not the index, and is
+        # counted because the count is per file, as review-close's recorder is below.
+        "claim-task Step 4a + Step 7f + Step 8b": (REPO_ROOT / "core/skills/claim-task/SKILL.md", 3),
         "auto-build Step 5.1": (REPO_ROOT / "core/skills/auto-build/SKILL.md", 1),
         "claim_task.sh --commit-claim + --release":
             (REPO_ROOT / "core/companion/scripts/claim_task.sh", 2),

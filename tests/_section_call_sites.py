@@ -70,6 +70,7 @@ _TEXT_EXPR_BY_MODULE = {
         "core/companion/tasks/schema.md",
     ("tests/test_claim_task_id_vocabulary.py", "skill_text"): "core/skills/claim-task/SKILL.md",
     ("tests/test_claim_task_id_vocabulary.py", "release_text"): "core/skills/release/SKILL.md",
+    ("tests/test_auto_build_plan_on_disk.py", "_read(BUILD)"): "core/skills/auto-build/SKILL.md",
 }
 _MODULE_SKILL = {
     "tests/test_review_close_claim_artifact_report.py": "core/skills/review-close/SKILL.md",

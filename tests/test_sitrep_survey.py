@@ -1752,3 +1752,29 @@ def test_review_ready_arm_reads_the_raw_headers_not_the_filtered_list():
         "run_survey no longer derives review_ready_batches from the raw headers"
     )
     assert src.index('review_batches_raw\n            if b.get("status") == "Review Ready"') > 0
+
+
+
+def test_read_locks_names_a_locks_directory_it_cannot_list(tmp_path):
+    """Phase 339's round 2: `glob` answered [] for a directory it could not list, so every
+    live claim's worktree read as an orphan and its removal was suggested."""
+    import os as _os
+    import pytest as _pytest
+    if hasattr(_os, "geteuid") and _os.geteuid() == 0:
+        _pytest.skip("root lists a mode-000 directory")
+    locks = tmp_path / "sysop/runtime/locks"
+    locks.mkdir(parents=True)
+    (locks / "FEAT-1.lock").write_text("task_id: FEAT-1\nbranch: feat/1\n", encoding="utf-8")
+    unreadable: list = []
+    locks.chmod(0)
+    try:
+        got = ss._read_locks(tmp_path, unreadable)
+    finally:
+        locks.chmod(0o755)
+    assert got == [] and len(unreadable) == 1, unreadable
+    assert unreadable[0][0] == str(locks) and "no worktree can be called an orphan" in unreadable[0][2]
+    # Control: absent is not unreadable.
+    import shutil
+    shutil.rmtree(locks)
+    unreadable = []
+    assert ss._read_locks(tmp_path, unreadable) == [] and unreadable == []

@@ -474,6 +474,15 @@ def venv_remedy_problems(partial: str) -> list[str]:
             "interpreter from the tree it stands in) is no longer stated, so the "
             "alternative reads as an arbitrary preference rather than a falsehood"
         )
+    # `Q-563` (Phase 342): the reds are a clone's. The script resolves the primary checkout's
+    # `.venv` through the git common directory, so a linked worktree reads green, and the old
+    # universal told every worktree lens to expect ~25 reds it would never see.
+    if re.search(r"(?<!not )\b(?:every|all|each)\b[^.]{0,40}\b(?:lens|lenses|reviewers?)\b"
+                 r"[^.]{0,20}?\bmeets?\b", span, re.I):
+        problems.append("the universal is back -- a linked worktree does not meet the reds")
+    if not re.search(r"linked worktree does not meet", span):
+        problems.append("the bullet no longer says a linked worktree reads green, so the "
+                        "numbers read as true for every placement")
     return problems
 
 
@@ -933,8 +942,12 @@ def test_a_narrowed_scope_is_caught(mutate, why: str) -> None:
 
 def test_the_false_venv_alternative_coming_back_is_caught() -> None:
     text = PARTIAL.read_text(encoding="utf-8")
+    anchor = ("**Wherever a check's resolution does not reach the primary checkout — a clone always, "
+              "and a linked worktree for a check that reads only its own tree — symlink the "
+              "primary checkout's `.venv` into the reviewer's checkout.**")
+    assert anchor in text, "control anchor is stale -- this control would prove nothing"
     restored = text.replace(
-        "**Symlink the primary checkout's `.venv` into the reviewer's checkout.**",
+        anchor,
         "Tell the reviewer the interpreter to use (an absolute path to the primary "
         "checkout's `.venv`, or symlink it in).",
     )
@@ -942,6 +955,18 @@ def test_the_false_venv_alternative_coming_back_is_caught() -> None:
         "the `or` came back and the predicate did not notice — an absolute interpreter "
         "does not reach `scan_public_history.sh`, which resolves its own"
     )
+
+
+def test_the_venv_numbers_going_universal_again_is_caught() -> None:
+    """`Q-563`: the reds are a clone's, and a linked worktree reads green."""
+    text = PARTIAL.read_text(encoding="utf-8")
+    scope = "**A linked worktree does not meet them:**"
+    assert scope in text, "control anchor is stale -- this control would prove nothing"
+    assert venv_remedy_problems(text.replace(scope, "**Every placement meets them:**"))
+    universal = "Tell the lens which placement it has"
+    assert universal in text, "control anchor is stale -- this control would prove nothing"
+    assert venv_remedy_problems(text.replace(
+        universal, "From Phase 288 onward every correctly-placed lens meets those reds. " + universal))
 
 
 def test_a_HEAD_based_retrieval_command_is_caught() -> None:

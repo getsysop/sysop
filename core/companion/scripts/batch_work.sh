@@ -462,6 +462,7 @@ started: ${timestamp}
 expires: ${expires}
 files_impacted:
   - (update manually or via git diff --name-only ${DEFAULT_BRANCH}...HEAD)
+# plan_summary and notes are free text: quote a value that contains ": " (plan_summary: "a: b"), or every YAML reader of this lock (/sitrep, the collision checks) sees it as unreadable.
 plan_summary: (update with a one-line description of the work)
 notes:
 EOF

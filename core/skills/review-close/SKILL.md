@@ -858,7 +858,7 @@ See `REFERENCE.md` § *Step 2d — provenance*.
 
 **This arm runs for every claimed task on every approved branch, including a task item 0 skipped.** It is inside Step 2d's loop, so its reach is that loop's: a branch claiming no roadmap task id — a review-batch branch, which holds a `BATCH-<N>.lock` rather than a `tasks/index.yml` claim, or a hand-cut branch — never enters it and is not covered here. Said plainly rather than left implied, because an earlier draft of this sentence claimed *every branch* and Step 2d cannot deliver that. Item 0's doc-only skip is scoped to *test-decision verification* — it exists because a docs branch carrying a `no test because Z` needs no test hunt. Carrying that skip across to this arm would silence it on precisely the branches most likely to trip it: a doc correction is the archetypal in-branch fix, so doc-only branches are where `## Also fixed` is *most* expected, not least. If item 0 skipped this branch, read the body anyway for this arm alone.
 
-Once the body is in hand, this arm re-reads nothing. Find **every** section under a heading matching `also\s+fixed` (case-insensitive) — a **search, not an equality test**: `## Also fixed (PR 1)` is a real heading in a live consumer corpus and must match. **Two sections in one body is a reachable shape, so do not stop at the first match.** Each section ends at the next heading of the **same or shallower** depth, so a `#### ` sub-heading inside one belongs to it rather than terminating it. **Count three things as headings, because two of them are easy to miss and both fail in the over-counting direction**: an ATX heading indented by up to three spaces is still a heading (four or more is a code block), and a **setext** heading — a line of text underlined by `===` (depth 1) or `---` (depth 2) — is one too. A terminator model anchored to a column-0 `#` sees neither, so the section over-runs into the next one and the tally reports its entries as well. The error a first-match reader makes is an **undercount**, and that is the damaging direction. **Skip fenced content when you look** — a plan that discusses this very rule will quote the heading, and a fence-blind reader then reports check-1 findings against paths the branch legitimately never touched, a fabricated finding, which is the worst outcome this skill has. A fence opens on ``` or `~~~` and closes on a marker using the **same character**, **at least as long** as the opener, **and carrying no info string** — take only headings outside one. **Stated here in full rather than by reference to another skill**, because a rule held only by pointing at another skill's code moves when that code does. Both of `/claim-task`'s walkers now delegate the closer decision to one `fence_closes` predicate per block, cited at two lines that cannot be swapped for one another — `claim-task/SKILL.md:1325` and `claim-task/SKILL.md:1928`; an opener may carry an info string, a closer may not.
+Once the body is in hand, this arm re-reads nothing. Find **every** section under a heading matching `also\s+fixed` (case-insensitive) — a **search, not an equality test**: `## Also fixed (PR 1)` is a real heading in a live consumer corpus and must match. **Two sections in one body is a reachable shape, so do not stop at the first match.** Each section ends at the next heading of the **same or shallower** depth, so a `#### ` sub-heading inside one belongs to it rather than terminating it. **Count three things as headings, because two of them are easy to miss and both fail in the over-counting direction**: an ATX heading indented by up to three spaces is still a heading (four or more is a code block), and a **setext** heading — a line of text underlined by `===` (depth 1) or `---` (depth 2) — is one too. A terminator model anchored to a column-0 `#` sees neither, so the section over-runs into the next one and the tally reports its entries as well. The error a first-match reader makes is an **undercount**, and that is the damaging direction. **Skip fenced content when you look** — a plan that discusses this very rule will quote the heading, and a fence-blind reader then reports check-1 findings against paths the branch legitimately never touched, a fabricated finding, which is the worst outcome this skill has. A fence opens on ``` or `~~~` and closes on a marker using the **same character**, **at least as long** as the opener, **and carrying no info string** — take only headings outside one. **Stated here in full rather than by reference to another skill**, because a rule held only by pointing at another skill's code moves when that code does. All of `/claim-task`'s walkers now delegate the closer decision to one `fence_closes` predicate per block, cited at two lines that cannot be swapped for one another — `claim-task/SKILL.md:1420` and `claim-task/SKILL.md:2023`; an opener may carry an info string, a closer may not.
 See `REFERENCE.md` § *Step 2d — provenance*.
 
 **Why the info-string clause is load-bearing.** A ```` ```json ```` line *inside* a ```` ``` ```` fence is content, not a closer — a reader that accepts it as one believes it has left the fence while it is still inside, and then reads the fence's remaining lines as real sections, the fabricated-finding outcome this paragraph exists to prevent.
@@ -868,8 +868,8 @@ See `REFERENCE.md` § *Step 2d — provenance*.
 
 - **No section anywhere → done. Absence is never a finding here**, and this arm never halts on it. The section is optional by design (`tasks/schema.md` § *Also fixed*): most branches carry no adjacent fix, and a branch that fixed nothing extra is the normal case, not an omission. This is the opposite of the test-decision arm above, where `missing` *is* the finding — do not carry the halt across.
 - **One or more sections → check three things**, all against `git diff --name-only <default branch>...<branch>` (three dots, per Step 2a's note), which you already have. **Run all three over each section you found and report the union** — a finding in the second section is a finding, and the numbers item 4 asks for are sums across the sections rather than the first one's:
-  1. **Every path a line names is in the diff.** A line naming a path the branch does not touch is a record of something that did not happen — a fabricated or copy-pasted entry — and the human reads the record. **Know this check's reach before you rely on it:** it compares against the *whole* branch diff, so it catches a line naming a file the branch never touched and nothing narrower. A fabricated line naming a file the task itself changed passes it trivially. That is a real bound, not a quibble — the check is a cheap screen against copy-paste, not a proof the fix happened.
-  2. **No line concerns a never-list item without a recorded approval.** Migrations, auth or payment logic, or anything that writes to production. These are fixed in-branch only on the human's answer, and the line then ends `(approved: <YYYY-MM-DD>, "<the question as asked>")`. A line concerning one without that suffix means the rule was exceeded, whether or not the fix itself is correct.
+  1. **Every path a line names is in the diff.** A line naming a path the branch does not touch is a record of something that did not happen — a fabricated or copy-pasted entry — and the human reads the record. **Know this check's reach before you rely on it:** it compares against the *whole* branch diff, so it catches a line naming a file the branch never touched and nothing narrower. A fabricated line naming a file the task itself changed passes it trivially. That is a real bound, not a quibble — the check is a cheap screen against copy-paste, not a proof the fix happened. The `answers:` path in an approval suffix is not a path the line names: it is a gitignored run artifact that is never in the diff, and check 2 reads it. A path inside the quoted question still is.
+  2. **No line concerns a never-list item without a recorded approval.** Migrations, auth or payment logic, or anything that writes to production. These are fixed in-branch only on the human's answer, and the line then ends `(approved: <YYYY-MM-DD>, "<the question as asked>")`. A line concerning one without that suffix means the rule was exceeded, whether or not the fix itself is correct. `/claim-task`'s answers run writes the suffix with `, answers: <path>` before the closing parenthesis: open that path in the main checkout, and if it exists and neither it nor an archived `answers.<n>.md` beside it records the line's question with `decision: fix`, that is a finding. An absent file, reaped by an earlier close or on another machine, is a note and not a finding.
   3. **The fixes are reviewable here.** The rule admits fixes of any size and in any module, as long as this close can read them. **Judge the summed set**, never each section's alone: the bound is per *branch*, so two sections that are each readable can still add up to a branch that is not. A branch whose fixes you cannot review properly in this close is a finding, even when each fix looks right.
 
 **Judge checks 2 and 3 against today's rule.** Every earlier bound was narrower, with a longer never-list and a size limit, so a section written under one cannot fail them. A pre-Phase-323 section that breached its own older bound, such as a fix to a prompt body, passes today by that decision.
@@ -962,7 +962,7 @@ if locks_dir.is_dir():
             by_branch.setdefault(fields["branch"], []).append(
                 fields.get("task_id") or lf.stem)
 
-# The five files Step 7-pre's own resume router treats as authoritative; with
+# Five of nine files Step 7-pre's resume router treats as authoritative; with
 # the hook envelope(s) that is the six-artifact set. The spec's Q1 names four —
 # it predates Part A, which shipped `planner-integrity.md` and `outcome.md` as
 # first-class routing artifacts, so a four-item report is blind to the two files
@@ -1920,7 +1920,7 @@ PY
 **If `WS` is empty**, there is nothing to collect and nothing to remove — the branch is already free for checkout. Say which of the two reasons applies (the `main-checkout` shape — a fixed enum value Step 0 prints verbatim, never a branch name — or no workspace found at all); they are not the same fact and a later step that has to reconstruct what happened cannot tell them apart from silence. **Then apply the collect's exit-8 test by hand (`Q-594`), since the collect does not run here:** if a lock in `sysop/runtime/locks/` other than a review batch's `BATCH-<N>.lock` has this branch as its first column-0 `branch:` value, and no doc in main's `sysop/runtime/pending-docs/` carries `branch: <this branch>` in its frontmatter, SKIP the branch exactly as exit 8's row says. If a doc there does claim the branch, list each claimed id that no such doc names in `roadmap_ids` (or `task_ids`) under Step 8's `Open claims:`.
 
 **1. Collect this branch's pending-docs from the workspace step 0 resolved, whatever its shape** — worktree, clone, or discovered. Step 0 *prints* `workspace=… shape=…`; it does not export them, and the heredoc below takes the path as a quoted positional argument. **Substitute the printed values by hand** — `WS` and `SHAPE` are names for the two things step 0 told you, not shell variables that survive into this block. (Every fenced block in this skill is independent: nothing set in one reaches the next.)
-   a. **Collect pending-docs**: bring each `sysop/runtime/pending-docs/*.md` from the worktree into main's `sysop/runtime/pending-docs/` (these are untracked files that would be lost when the worktree is removed). **The copy is provenance-checked, because the destination is keyed by basename and a basename is not unique to a branch.**
+ - a. **Collect pending-docs**: bring each `sysop/runtime/pending-docs/*.md` from the worktree into main's `sysop/runtime/pending-docs/` (these are untracked files that would be lost when the worktree is removed). **The copy is provenance-checked, because the destination is keyed by basename and a basename is not unique to a branch.**
 
       ```bash
       # `python3` command word + in-heredoc PyYAML bootstrap (Phase 126) so
@@ -2601,13 +2601,13 @@ PY
       **Why refuse rather than preserve-and-continue.** An earlier draft of this phase moved main's copy into a `sysop/runtime/pending-docs/superseded/` subdirectory and carried on. Its own review round disqualified that: **nothing in the shipped tree reads that directory.** Step 4c step 1 is a non-recursive `ls …/*.md`, so a parked doc is never consolidated — its branch's `roadmap_ids` never flip, its body is never archived, its lock never drops — and the phase had shipped, as the steady-state result of an ordinary collision, the exact end state the rollback note below condemns. Preserving bytes where no reader looks is not preservation. Refusing keeps both records in the two places a reader already checks.
 
       **The `mkdir` is still load-bearing, for the original reason.** Main's `sysop/runtime/pending-docs/` often does not exist (it is gitignored — absent from any fresh clone — authored lazily by `/document-work` in the *worktree*, and removed-when-empty by Step 4c's cleanup), so a copy into a missing destination fails; the very next `git worktree remove` then deletes the gitignored pending-doc for good. For the same reason, if the collect could not run at all (e.g. a permission halt — see the pre-flight guard's deliberate-non-entry note), do **NOT** proceed to (b): removing the worktree with the docs uncollected is exactly the data loss this step exists to prevent.
-   b. **ONLY WHEN `SHAPE=worktree`** — strip the non-work symlinks Step 1a downgraded, then **remove the worktree**, **never `--force`**.
+ - b. **ONLY WHEN `SHAPE=worktree`** — strip the non-work symlinks Step 1a downgraded, then **remove the worktree**, **never `--force`**.
 
       > **This gate is stated here, before the command, and item 2 below only elaborates it.** The first cut of this step put the gate 80 lines *after* this sub-item, and an operator following the steps in written order on a clone workspace did all of this: collected the doc (a), ran `git worktree remove` on a directory that is not a worktree, got `fatal: '<path>' is not a working tree` (exit 128), read *this sub-item's own* refusal prose — *"stop, surface the error, then roll back the pending-docs this branch copied in step (a)"* — rolled the doc back out of main, and downgraded the branch to SKIP. **Net result: the doc collected and then deleted, and the branch not merged** — the pre-Phase-218 end state plus a lost merge, produced by the very step that was supposed to fix it. A rule an operator reaches after the command it governs is not a gate.
       >
       > **For any other `SHAPE`, skip straight to item 2.** The removal is the only part of this step that needs a worktree, and `git worktree remove`'s failure on a clone carries **no** claim about untracked files — so it is never the ISSUE-0016 remove-refusal, and must never trigger the rollback below.
- Step 1a can now classify a worktree `clean-ahead` while a downgraded tooling symlink (an untracked `.venv`-into-the-main-venv, BeanRider ISSUE-0043) is still physically present, and that lone symlink is enough to make an *unforced* `git worktree remove` refuse (`contains modified or untracked files`). So before removing, re-apply the same downgrade rule and delete just those symlinks — removing a symlink deletes only the pointer, never its (gitignored) target, and we stay unforced, so any *real* untracked or modified file still blocks the remove:
 
+      Step 1a can now classify a worktree `clean-ahead` while a downgraded tooling symlink (an untracked `.venv`-into-the-main-venv, BeanRider ISSUE-0043) is still physically present, and that lone symlink is enough to make an *unforced* `git worktree remove` refuse (`contains modified or untracked files`). So before removing, re-apply the same downgrade rule and delete just those symlinks — removing a symlink deletes only the pointer, never its (gitignored) target, and we stay unforced, so any *real* untracked or modified file still blocks the remove:
       ```bash
       # The .gitignore owner is the PRIMARY checkout, so resolve it the way Step 1a
       # does — `--show-toplevel` would name whichever worktree the runner is standing in.
@@ -3512,7 +3512,7 @@ After all branches are merged but **before** pushing:
 
    For each entry, generate the doc content from `type` + `summary` + `roadmap_ids` + `review_task_ids` + `date`:
 
-   **PROJECT_STATUS.md §6**: Generate a one-line entry: `<date>: [<ID(s)> Complete:] <summary>`. Pull IDs from `roadmap_ids` AND/OR `review_task_ids` — both kinds belong in the PROJECT_STATUS entry as provenance. Insert at the TOP of Section 6 "Recent Major Updates" (below the section header, above existing entries). Newest branch first.
+   **PROJECT_STATUS.md §6**: Generate a one-line entry: `<date>: [<ID(s)> Complete:] <summary>`. Copy `summary` as the doc has it, here and in any changelog bullet this close writes for the same entry. Pull IDs from `roadmap_ids` AND/OR `review_task_ids` — both kinds belong in the PROJECT_STATUS entry as provenance. Insert at the TOP of Section 6 "Recent Major Updates" (below the section header, above existing entries). Newest branch first.
 
    **Consolidation clause — a wide close writes ONE §6 entry, not one per branch.** Count the pending-docs this run is routing (the merged-only set from step 1b, the same `<N>` the commit subject carries). **If `<N>` is more than 4**, do not write the per-branch entries above. Write a single one-line entry instead — `<date>: <N> branches merged in one close: <batch or branch list> — per-branch detail in CHANGELOG.md` — and route **every** entry's detail to `CHANGELOG.md` (see § *The changelog contract* below) as a bullet under `## [Unreleased]`, classed by `type` (feature → `### Added`, bugfix → `### Fixed`, everything else → `### Changed`) with ` (<date>)` appended, whatever its `type`. Then §6 reads as one update, which is what a close of many branches is; a squash PR is one update however many branches it consolidated.
 
@@ -3524,13 +3524,15 @@ After all branches are merged but **before** pushing:
    >
    > The rejected alternative was to make the rotation skip anything dated today: that grows §6 without bound on a day with several closes, and has no answer for a §6 in which every entry is from today.
 
-   **Rotation check**: if §6 has more than 8 entries after adding, rotate the oldest entries to `CHANGELOG.md` — each as `- <summary> (<original date>)` under `## [Unreleased]` → `### Changed` — until only 6 remain. **Report the count you rotated** in the Step 8 summary — a truncation nothing announces is how this step's scaling defect survived unnoticed.
+   **Rotation check**: if §6 has more than 8 entries after adding, rotate the oldest entries to `CHANGELOG.md` — each as `- [<ID(s)>: ]<summary> (<original date>)` under `## [Unreleased]` → `### Changed` — until only 6 remain. **Report the count you rotated** in the Step 8 summary — a truncation nothing announces is how this step's scaling defect survived unnoticed.
 
-   > **Rotation is a MOVE, and it must not re-write an entry that is already there.** A `bugfix` entry was written to §6 *and* to `CHANGELOG.md` on the close that created it (the routing table's `Yes | Yes` row). Some later close then rotates that §6 line out — into the same file the bullet already sits in — and the file ends up carrying one piece of work twice, in two formats. **So for each line you are about to rotate: search the whole of `CHANGELOG.md` for that line's summary text first** — the whole file, not one section, because the existing bullet may sit under `## [Unreleased]` from the close that wrote it or under a `## [x.y.z]` heading if `/release` has folded it since. If a bullet already carries it, the entry is already recorded — **drop the §6 line instead of copying it**, and count it as rotated all the same (the §6 slot was still reclaimed). Only lines with no existing bullet are written. The two formats differ (`<date>: [ID Complete:] <summary>` in §6 versus `- **<Title>**: <summary> (<date>)` in the changelog), so match on the **summary**, not on the whole line — a whole-line match never fires and would leave this rule inert while looking present.
+   **Where §6's entries end.** An entry is a line in the shape the writer above produces: it starts with `<date>:`, after an optional list marker (`-`, `*` or `+`). §6's entries run from the section's first entry line, which may sit below a lead-in line or a subheading, through every entry or blank line after it, and end at the first line that is neither. An entry is one line. **If an indented line sits directly under an entry, with no blank line between, do not rotate:** a wrapped entry and indented furniture look the same there, and moving either the wrong way loses text. Add this close's entries, leave the rest of §6 as it is, and name the line in Step 8's §6 row; item 5's check exits 2 on it. That line may be text, the next section, or the end of the file, because §6 may be the file's last section, so never find the end by looking for the next numbered heading. Count, insert and rotate inside that run only: a new entry goes directly above its first entry, and the oldest leave from its bottom. Every other line in the section is furniture: a lead-in line, a `(Older entries rotated …)` marker, a note to agents. Furniture is never rotated, never deleted, and never joined onto an entry in either file. Item 5's check refuses a write that moved any of it.
 
-   **CHANGELOG.md** (bugfix type only, **and only when the Consolidation clause did not fire**): Generate entry `- **<Short Title>**: <summary> (<date>)`. Add under `## [Unreleased]` → `### Fixed`. Create the `### Fixed` class heading — and the `## [Unreleased]` section itself, directly under the file's title block — if missing.
+   > **Rotation is a MOVE, and it must not re-write an entry that is already there.** A `bugfix` entry was written to §6 *and* to `CHANGELOG.md` on the close that created it (the routing table's `Yes | Yes` row). Some later close then rotates that §6 line out — into the same file the bullet already sits in — and the file ends up carrying one piece of work twice, in two formats. **So for each line you are about to rotate: search the whole of `CHANGELOG.md` for it first** — the whole file, not one section, because the existing bullet may sit under `## [Unreleased]` from the close that wrote it or under a `## [x.y.z]` heading if `/release` has folded it since. If a bullet already carries it, the entry is already recorded — **drop the §6 line instead of copying it**, and count it as rotated all the same (the §6 slot was still reclaimed). Only lines with no existing bullet are written. **Run two searches for every line and read every hit: one for each of its task ids, and one for its summary.** A close can write the changelog bullet for the same work in different words, or without the id, so either search alone can miss it; and an id can appear inside another entry's prose, so a hit counts only when it is that entry's own bullet. The two formats differ (`<date>: [ID Complete:] <summary>` in §6 versus `- **<Title>**: <summary> (<date>)` in the changelog), so match on the **summary**, not on the whole line — a whole-line match never fires and would leave this rule inert while looking present. **A Consolidation clause line** (`<date>: <N> branches merged in one close: …`) **is already recorded**, because the clause wrote every entry's detail to the changelog: drop it, and count it as rotated. If neither search finds the entry, write it: a duplicate is visible, a dropped entry is not.
 
-   > **The changelog contract — one file, one grammar, shared with `/release` (Phase 222, Q-279).** The file is `CHANGELOG.md` in [Keep a Changelog](https://keepachangelog.com) shape: a title block, then `## [Unreleased]`, then the `## [x.y.z] - <date>` version sections `/release` owns. This step writes **only** inside `## [Unreleased]`, as `- ...` bullets under the standard class headings (`### Added` / `### Changed` / `### Fixed`) in the bugfix write's `- **<Short Title>**: <summary> (<date>)` shape (rotation's `- <summary> (<original date>)` is the one exception — a rotated §6 line has no title to bold), with ` (<date>)` appended because `[Unreleased]` carries no date headings; **every writer above creates what is missing** — the class heading, the `## [Unreleased]` section (directly under the title block; on a legacy changelog with no title block, add the standard Keep-a-Changelog title block first), or the file itself — the create contract is the contract, not the bugfix row's private property; `/release` folds `[Unreleased]` into the next version section when a release is cut. Two rules keep the two writers off each other: **(a)** if the project already tracks its changelog under a different case (check `git ls-files -- ':(icase)changelog.md'` — one read-only git command, no pipe to bind a second rule — `changelog.md` and `CHANGELOG.md` are the *same file* on a case-insensitive filesystem, which is the macOS and Windows default), write to that existing tracked path rather than creating a second name; **(b)** if no changelog exists under any case, create `CHANGELOG.md` with the standard Keep-a-Changelog header — the same create contract as `/release`. The pre-222 grammar (`### YYYY-MM-DD` date headings under month headings) is retired; leave any existing date-headed entries where they are — they are history, not a format to continue.
+   **CHANGELOG.md** (bugfix type only, **and only when the Consolidation clause did not fire**): Generate entry `- **[<ID(s)> — ]<Short Title>**: <summary> (<date>)`, where `<ID(s)>` are the doc's `roadmap_ids` and `review_task_ids` and the bracketed part is left out when it names none. Copy `summary` as the doc has it. Add under `## [Unreleased]` → `### Fixed`. Create the `### Fixed` class heading — and the `## [Unreleased]` section itself, directly under the file's title block — if missing.
+
+   > **The changelog contract — one file, one grammar, shared with `/release` (Phase 222, Q-279).** The file is `CHANGELOG.md` in [Keep a Changelog](https://keepachangelog.com) shape: a title block, then `## [Unreleased]`, then the `## [x.y.z] - <date>` version sections `/release` owns. This step writes **only** inside `## [Unreleased]`, as `- ...` bullets under the standard class headings (`### Added` / `### Changed` / `### Fixed`) in the bugfix write's `- **[<ID(s)> — ]<Short Title>**: <summary> (<date>)` shape, carrying the entry's task ids so a later rotation can find it by id (rotation's `- [<ID(s)>: ]<summary> (<original date>)` is the one exception — a rotated §6 line has no title to bold), with ` (<date>)` appended because `[Unreleased]` carries no date headings; **every writer above creates what is missing** — the class heading, the `## [Unreleased]` section (directly under the title block; on a legacy changelog with no title block, add the standard Keep-a-Changelog title block first), or the file itself — the create contract is the contract, not the bugfix row's private property; **a class heading is missing only when no `### <Class>` line lies anywhere between `## [Unreleased]` and the next `## ` heading, outside a code fence** — if one does, write under it wherever it sits and never create a second (if the file already has two, write under the first; item 5's check reports the fork for a human to merge); `/release` folds `[Unreleased]` into the next version section when a release is cut. Two rules keep the two writers off each other: **(a)** if the project already tracks its changelog under a different case (check `git ls-files -- ':(icase)changelog.md'` — one read-only git command, no pipe to bind a second rule — `changelog.md` and `CHANGELOG.md` are the *same file* on a case-insensitive filesystem, which is the macOS and Windows default), write to that existing tracked path rather than creating a second name; **(b)** if no changelog exists under any case, create `CHANGELOG.md` with the standard Keep-a-Changelog header — the same create contract as `/release`. The pre-222 grammar (`### YYYY-MM-DD` date headings under month headings) is retired; leave any existing date-headed entries where they are — they are history, not a format to continue.
 
    > **Why the second condition.** The Consolidation clause above routes **every** entry's detail to `CHANGELOG.md` on a close of more than 4 pending-docs — *including* the `bugfix` ones. Running this write as well would put **two bullets for one entry under the same class heading, in the same close**: the clause suppresses only the per-branch §6 writes "above", not this one. That is the `/auto-fix` and `/auto-judge` shape, so it is the automated path rather than an edge case. One clause fires or the other does; never both for the same entry.
 
@@ -3836,6 +3838,180 @@ After all branches are merged but **before** pushing:
    **UI_Iterations.md** (ui-iteration type only): Generate table row `| <name> | <date> | <summary> | <commit-hash> |`. Append to the markdown table.
 
 
+
+5. **Check what the writes above did, before the pending-docs are deleted.** Run this once every write in item 4 is done. Item 4's heredoc has already staged the index flip and the body renames and reaped the claim artifacts; the shared docs are not staged yet. The check compares `PROJECT_STATUS.md` and the tracked changelog on disk with `HEAD`, which does not yet carry these writes, and it resolves the repository root itself. It checks four things: every line of `PROJECT_STATUS.md` outside §6's entries is unchanged; §6 holds the entries the Rotation check leaves, the new ones above the newest old ones, in order; no line of §6's furniture reached the changelog; and the changelog lost no line and gained no second copy of a class heading, or of `## [Unreleased]`, under `[Unreleased]`. It does not check that a rotated entry reached the changelog, because the dedupe may drop it; that stays yours.
+
+   ```bash
+   python3 - <<'PY'
+   import os, re, subprocess, sys
+   from collections import Counter
+   sys.stdout.reconfigure(errors="backslashreplace")
+   KEEP, TRIGGER = 6, 8
+   ENTRY = re.compile(r"\s{0,3}(?:[-*+]\s+)?\d{4}-\d{2}-\d{2}:")
+   S6 = re.compile(r"\s{0,3}(?:(#{1,6})\s+)?(?:6\.\s+)?Recent Major Updates\s*#*\s*$", re.I)
+   FENCE = re.compile(r"[ ]{0,3}(`{3,}|~{3,})(.*)$")
+   ENV = {k: v for k, v in os.environ.items()
+          if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE")}
+   problems, warns = [], []
+
+   def unchecked(why):
+       print("RESULT: UNCHECKED — " + why)
+       sys.exit(2)
+
+   def git(*args):
+       return subprocess.run(["git", *args], capture_output=True, env=ENV)
+
+   top = git("rev-parse", "--show-toplevel")
+   if top.returncode:
+       unchecked("not inside a git work tree")
+   os.chdir(os.fsdecode(top.stdout.strip()))
+
+   def read(path, at_head):
+       try:
+           if at_head:
+               listed = git("ls-tree", "--name-only", "HEAD", "--", path)
+               if listed.returncode:
+                   unchecked("git could not list HEAD")
+               if not listed.stdout.strip():
+                   return None
+               shown = git("show", "HEAD:" + path)
+               if shown.returncode:
+                   unchecked(f"git could not read HEAD:{path}")
+               return shown.stdout.decode("utf-8").splitlines()
+           if not os.path.exists(path):
+               return None
+           with open(path, encoding="utf-8") as f:
+               return f.read().splitlines()
+       except (OSError, UnicodeDecodeError) as e:
+           unchecked(f"{path} could not be read ({type(e).__name__}: {e})")
+
+   def ends_section(line, level):
+       m = re.match(r"\s{0,3}(#{1,6})\s", line)
+       if m:
+           return len(m.group(1)) <= (level or 2)
+       m = re.match(r"\s{0,3}(\d+)\.\s+\S", line)
+       return bool(m) and int(m.group(1)) > 6
+
+   def split6(lines, where):
+       heads = [(i, m) for i, l in enumerate(lines) for m in [S6.match(l)] if m]
+       if len(heads) != 1:
+           unchecked(f"PROJECT_STATUS.md has {len(heads)} 'Recent Major Updates' headings, not 1")
+       h, level = heads[0][0], len(heads[0][1].group(1) or "")
+       stop = next((j for j in range(h + 1, len(lines)) if ends_section(lines[j], level)), len(lines))
+       start = next((j for j in range(h + 1, stop) if ENTRY.match(lines[j])), stop)
+       end, entries = start, []
+       while end < stop:
+           line = lines[end]
+           if ENTRY.match(line):
+               entries.append(line.strip())
+           elif line.strip():
+               if line[:1] in (" ", "\t") and ENTRY.match(lines[end - 1]):
+                   unchecked(f"PROJECT_STATUS.md {where}, line {end + 1}, is indented directly under a §6 entry:"
+                             " a wrapped entry and indented furniture look the same there")
+               break
+           end += 1
+       furniture = [l.rstrip() for l in lines[:start] + lines[end:] if l.strip()]
+       section = [l.strip() for l in lines[h + 1:stop] if l.strip() and not ENTRY.match(l)]
+       return entries, furniture, section
+
+   before, after = read("PROJECT_STATUS.md", True), read("PROJECT_STATUS.md", False)
+   section = []
+   if after is None:
+       print("S6: PROJECT_STATUS.md absent — nothing to check")
+       if before is not None:
+           problems.append("PROJECT_STATUS.md was deleted")
+   else:
+       eb, fb, section = split6(before, "at HEAD") if before is not None else ([], None, [])
+       ea, fa, _ = split6(after, "on disk")
+       added = list((Counter(ea) - Counter(eb)).elements())
+       total = len(eb) + len(added)
+       expect = KEEP if total > TRIGGER else total
+       print(f"S6_ENTRIES: before {len(eb)} · added {len(added)} · after {len(ea)} · expected {expect}")
+       print(f"ROTATED: {sum((Counter(eb) - Counter(ea)).values())}")
+       if fb is not None and fb != fa:
+           lost = [f"removed {l.strip()[:80]!r}" for l in (Counter(fb) - Counter(fa)).elements()]
+           got = [f"added {l.strip()[:80]!r}" for l in (Counter(fa) - Counter(fb)).elements()]
+           problems.append("PROJECT_STATUS.md changed outside §6's entries: "
+                           + ("; ".join(lost + got) or "lines reordered"))
+       if len(ea) != expect:
+           problems.append(f"§6 holds {len(ea)} entries; the Rotation check leaves {expect}")
+       elif (Counter(ea[:len(added)]) != Counter(added)
+             or ea[len(added):] != eb[:len(ea) - len(added)]):
+           problems.append("§6's entries are not the new ones above the newest old ones, in order")
+
+   tracked = [os.fsdecode(p) for p in git("ls-files", "-z", "--", ":(icase)CHANGELOG.md").stdout.split(b"\0") if p]
+   if len(tracked) > 1:
+       unchecked("more than one tracked changelog: " + ", ".join(tracked))
+   path = (tracked or ["CHANGELOG.md"])[0]
+   cl_after, cl_before = read(path, False), read(path, True)
+
+   def classes(lines):
+       live, opener = [], None
+       for l in lines:
+           m = FENCE.match(l)
+           if opener is None and m and not (m.group(1)[0] == "`" and "`" in m.group(2)):
+               opener = m.group(1)
+           elif opener and m and m.group(1)[0] == opener[0] and len(m.group(1)) >= len(opener) and not m.group(2).strip():
+               opener = None
+           elif opener is None:
+               live.append(True)
+               continue
+           live.append(False)
+       u = [i for i, l in enumerate(lines) if live[i] and re.match(r"##\s+\[Unreleased\]", l, re.I)]
+       if not u:
+           return 0, {}
+       end = next((j for j in range(u[0] + 1, len(lines)) if live[j] and re.match(r"##\s", lines[j])), len(lines))
+       at = {}
+       for j in range(u[0] + 1, end):
+           m = re.match(r"###\s+(\S.*?)\s*$", lines[j]) if live[j] else None
+           if m:
+               at.setdefault(m.group(1).lower(), []).append(j + 1)
+       return len(u), at
+
+   if cl_after is None:
+       print("CHANGELOG: absent — nothing to check")
+       if cl_before is not None:
+           problems.append(f"{path} was deleted")
+   else:
+       print("CHANGELOG: " + path)
+       cl_before = cl_before or []
+       ub, at_b = classes(cl_before)
+       ua, at_a = classes(cl_after)
+       if ua > 1:
+           (problems if ua > ub else warns).append(f"{path} has {ua} '## [Unreleased]' sections")
+       for name, where in sorted(at_a.items()):
+           if len(where) > 1:
+               msg = (f"'### {name.title()}' appears {len(where)} times under [Unreleased]"
+                      f" (lines {', '.join(map(str, where))})")
+               (problems if len(where) > len(at_b.get(name, [])) else warns).append(msg)
+       gone = list((Counter(l.rstrip() for l in cl_before if l.strip())
+                    - Counter(l.rstrip() for l in cl_after if l.strip())).elements())
+       if gone:
+           problems.append(f"{path} lost {len(gone)} line(s) it had at HEAD, the first {gone[0].strip()[:80]!r}")
+       new_lines = list((Counter(cl_after) - Counter(cl_before)).elements())
+       for line in section:
+           if len(line) >= 10 and any(line in n for n in new_lines):
+               problems.append(f"{path} gained a line of §6's furniture: {line[:80]!r}")
+
+   for w in warns:
+       print("WARN: " + w + " — the file already had this; report it, do not fix it here")
+   for p in problems:
+       print("PROBLEM: " + p)
+   print("RESULT: " + ("STOP" if problems else "ok"))
+   sys.exit(1 if problems else 0)
+   PY
+   ```
+
+   - **Exit 0:** continue. Carry `ROTATED:` and any `WARN:` line into the Step 8 summary.
+   - **Exit 1 stops the close here, before the pending-docs are deleted and before the shared docs are staged.** Fix each `PROBLEM:` line, then re-run the check until it exits 0:
+     - `removed` or `lost`: put the line back where `git show HEAD:<file>` has it, and take it out of any bullet it was joined onto.
+     - `lines reordered`: put the lines back in the order `git show HEAD:PROJECT_STATUS.md` has them.
+     - `added`: this close wrote the line in the wrong place. Move it into §6's entries, directly above the first one; do not delete it, because the pending-doc it came from is its only other copy.
+     - `gained a line of §6's furniture`: take that text out of the changelog bullet it was joined onto; the line stays in §6.
+     - the entry count or order: rotate exactly as the Rotation check says.
+     - a heading or `## [Unreleased]` that appears twice: move this close's bullets under the copy `HEAD` already had, and delete the copy `HEAD` did not have.
+     - a deleted file: restore it with `git checkout HEAD -- <file>` and redo this close's writes to it.
+   - **Exit 2:** the check could not do its job, and its `RESULT: UNCHECKED` line says why: no repository, §6 missing or there twice, an indented line directly under a §6 entry, a file or git read that failed, or more than one tracked changelog. Read `git diff -- PROJECT_STATUS.md` and the changelog's diff by hand for the four things above, then continue. Count `ROTATED:` by hand for Step 8.
 
 6. **Clean up pending-docs**: Delete the pending-docs **this step consolidated** — never a bare "delete all remaining". Remove the `sysop/runtime/pending-docs/` directory only if it is now empty; leave it in place if it is not.
 
@@ -4236,10 +4412,13 @@ Signal:        <N [good] entries appended> (or "none")
 
 Documentation written:
   ✓ PROJECT_STATUS.md §6: <N> new entries, <N> rotated out    (if any; say "consolidated" when the
-                                                              consolidation clause wrote one entry for many)
+                                                              consolidation clause wrote one entry for many;
+                                                              rotated out = the `ROTATED:` Step 4c item 5 printed)
   ✓ CHANGELOG.md:         <N> entries         (if any — count ALL THREE writers: the bugfix
                           routing row, the Consolidation clause, and the Rotation check. A count
                           taken from the routing table alone under-reports the other two.)
+                          <and each `WARN:` line Step 4c item 5 printed — a forked heading the file
+                           already had, for a human to merge>
   ✓ tasks/index.yml:      <the `CLOSED_IDS` Step 4c printed>  (if any — status flipped to done, body moved to archive/)
                           <and, when non-empty, `not in index: <NOT_IN_INDEX ids>` — ids this close was
                            asked to close and could not find. Never omit this line by choosing the other row.>

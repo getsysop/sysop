@@ -31,9 +31,11 @@ arithmetic hold.
 
 What no test here can do — stated because a green suite is not compliance — is
 prove an agent obeys the clause. `PROJECT_STATUS.md` is consumer-authored,
-Sysop ships no template for it, and Step 4c has no runnable extract: the whole
-step is instructions. What is executable is the relationship between the two
-numbers, and that is what fails when either drifts.
+Sysop ships no template for it, and Step 4c's writes are instructions. What is
+executable here is the relationship between the two numbers, and that is what
+fails when either drifts. Since Phase 337, item 5's post-write check also
+verifies the result of a write, including that §6 holds the count these two
+numbers leave; `tests/test_step4c_rotation_check.py` runs it.
 """
 import re
 from pathlib import Path

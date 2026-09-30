@@ -108,13 +108,13 @@ For each **✅ ready** candidate identified in Step 3 (the agent-executable fron
 python3 sysop/scripts/scope_overlap.py --json <TASK_ID>
 ```
 
-Read the JSON `max_verdict` (`likely` / `possible` / `none`), the `overlaps` list (each names the in-flight `task_id` and the `evidence` paths that matched), and `broad_radius_note`. This is the same primitive `/claim-task` Step 2 runs — it infers the candidate's scope from its `## Key files` + `blast_radius` (a *pre-plan guess*) and compares it against each in-flight worktree's **actual** changed set. Cache the result per task id; you'll reuse it in Step 3 (the readiness marker) and Step 4 (the `Run it:` caveat).
+Read the JSON `max_verdict` (`likely` / `unknown` / `possible` / `none`), the `overlaps` list (each names the in-flight `task_id`, its own `verdict`, and the `evidence` paths that matched or, for `unknown`, the `reason`), and `broad_radius_note`. This is the same primitive `/claim-task` Step 2 runs — it infers the candidate's scope from its `## Key files` + `blast_radius` (a *pre-plan guess*) and compares it against each in-flight worktree's **actual** changed set. Cache the result per task id; you'll reuse it in Step 3 (the readiness marker) and Step 4 (the `Run it:` caveat).
 
 **Keep it advisory and bounded:**
 
 - Run it **only for ✅-ready candidates** — a 🔒/⛔/⏸ task can't be batched, so its collision risk is moot until it becomes ready.
 - If there is **no work in flight** (Step 2a found no locks/worktrees), skip 2b entirely — nothing to collide with; note it in one line and move on.
-- A `none` verdict means *no declared overlap*, **not** *provably safe* (the candidate side is a guess). Never present it as a guarantee.
+- A `none` verdict means *no declared overlap*, **not** *provably safe* (the candidate side is a guess). Never present it as a guarantee. An `unknown` verdict means an input the primitive needed could not be read (the `reason` names it), so an overlap cannot be ruled out: never count it as clear.
 - If `scope_overlap.py` is missing or its permission rule absent, print the one-line degrade note from the Permission Guard and produce the roadmap **without** collision annotations — the orderings still stand.
 
 ## Step 3 — Group the outstanding work by kind
@@ -130,7 +130,7 @@ Read the JSON `max_verdict` (`likely` / `possible` / `none`), the `overlaps` lis
 - ✅ **Ready now:** `open`, not `user_action`, not on hold, and **every** `depends_on` target is `done`. The agent-executable frontier.
 - 📝 **Planned:** a ✅-ready task whose body (its `body:` path, resolved as `tasks/schema.md` states: relative to `tasks/`, or already `tasks/`-prefixed) carries a non-empty `## Plan` section — written by an earlier `/claim-task <ID> --plan-only` run, whose plan was already reviewed. Its claim skips the planner (`/claim-task` Step 7a), so it costs less to start than an unplanned task of the same `effort`. Read only the ✅-ready tasks' bodies. It is a presence test, the same one Step 7a runs: say nothing about the plan's quality.
 
-**Collision marker (only under `--in-flight`, from Step 2b):** a ✅-ready task whose likely scope collides with a worktree building right now carries a trailing 💥 marker — `💥 likely conflict with TECH-B` (exact-path overlap) or `💥 possible overlap with TECH-B` (same-directory/glob). This is orthogonal to the readiness flags (a task is still ✅ *ready* — it just isn't *clear*): the marker warns that claiming it now risks a merge conflict at `/review-close`, not that it can't be claimed. Absent `--in-flight`, or when nothing is in flight, no 💥 marker appears.
+**Collision marker (only under `--in-flight`, from Step 2b):** a ✅-ready task whose likely scope collides with a worktree building right now carries a trailing 💥 marker — `💥 likely conflict with TECH-B` (exact-path overlap), `💥 possible overlap with TECH-B` (same-directory/glob), or `💥 overlap unknown with TECH-B` (an input could not be read; name it). This is orthogonal to the readiness flags (a task is still ✅ *ready* — it just isn't *clear*): the marker warns that claiming it now risks a merge conflict at `/review-close`, not that it can't be claimed. Absent `--in-flight`, or when nothing is in flight, no 💥 marker appears.
 
 **Group by kind** for the human's category view. Derive kinds from the `id` prefix vocabulary actually present in the queue (`tasks/schema.md` leaves prefixes project-chosen), mapping the common ones:
 
@@ -284,7 +284,7 @@ PROPOSED ORDERINGS
    Run it: /claim-task FEAT-LEDGER-IMPORT   (heads up: 💥 possible overlap with in-flight TECH-DB-BOOTSTRAP on the schema — expect a /review-close conflict, or wait for it to merge)
 ```
 
-The 💥 marker warns; it never removes the task from an ordering (advisory, read-only). When every ready ID in a `Run it:` line is clear of in-flight work, say so (`… (both clear of in-flight work)`).
+The 💥 marker warns; it never removes the task from an ordering (advisory, read-only). When every ready ID in a `Run it:` line is clear of in-flight work, say so (`… (both clear of in-flight work)`). An `unknown` ID is not clear.
 
 ## Design notes
 

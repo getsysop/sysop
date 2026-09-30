@@ -469,7 +469,7 @@ class TestTheTempfileClass:
 
     def test_close_batch_tempfiles_keep_the_md_tmp_ending(self):
         """`archive_review_tasks.py:83` documents `review_tasks*.md.tmp` as the
-        orphan shape it recognises at the repo root, and `batch_work.sh:877`
+        orphan shape it recognises at the repo root, and `batch_work.sh:900`
         keeps its name inside that class deliberately. `review_tasks.md.<pid>.tmp`
         ends in `.tmp` but NOT `.md.tmp`, so the obvious PID-qualification would
         have dropped these two files out of that class silently. This test exists

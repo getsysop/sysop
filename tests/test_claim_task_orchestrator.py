@@ -160,11 +160,12 @@ def heredocs(text: str) -> list[tuple[str, str]]:
 
 
 def heredoc_containing(text: str, needle: str) -> tuple[str, str] | None:
-    """The prescribed block whose python body contains `needle`."""
-    for header, body in heredocs(text):
-        if needle in body:
-            return header, body
-    return None
+    """The prescribed block whose python body contains `needle`. Two such blocks is an error,
+    not a first match: a new block carrying another's needle would bind that block's guards to
+    itself (Phase 343)."""
+    found = [(header, body) for header, body in heredocs(text) if needle in body]
+    assert len(found) <= 1, f"{len(found)} prescribed blocks contain {needle!r}"
+    return found[0] if found else None
 
 
 def unfenced(text: str) -> str:
@@ -1102,7 +1103,7 @@ def _code_problems(t: str) -> list[str]:
                          "returned by a sub-agent, and inside double quotes a $(...) in it runs")
 
     # --- Step 7a: the planner integrity verdict --------------------------
-    hd = heredoc_containing(t, "planner-integrity")
+    hd = heredoc_containing(t, 'print("planner-integrity: "')
     if hd is None:
         p.append("Step 7a's post-plan integrity check is gone, re-fenced or commented out")
     else:
@@ -1138,8 +1139,27 @@ def _code_problems(t: str) -> list[str]:
             if delete_calls(tree):
                 p.append("Step 8's outcome write deletes something")
 
+    # --- Step 7a's pre-plan record, written before the spawn (Q-616) -----
+    hd = heredoc_containing(t, "PRE_PLAN_SOURCE")
+    if hd is None:
+        p.append("Step 7a's pre-plan record is gone -- a re-entry at 7a with no integrity file "
+                 "would capture a baseline holding the planner's commit (Q-616)")
+    else:
+        tree = parse(hd[1])
+        if tree is None:
+            p.append("Step 7a's pre-plan record is not valid python")
+        else:
+            p.extend(chain_problems(tree, "record", ["$", "pre-plan.md"], "Step 7a record"))
+            if not calls_named(tree, "write_text"):
+                p.append("Step 7a's pre-plan record no longer WRITES the SHAs -- held only in "
+                         "context they are lost to a crash before the check (Q-616)")
+            if delete_calls(tree):
+                p.append("Step 7a's pre-plan record deletes something")
+        if t.index("PRE_PLAN_SOURCE") > t.index("Spawning planner for <CLAIM_ID>"):
+            p.append("Step 7a's pre-plan record runs after the spawn, where it proves nothing")
+
     # --- Step 7a's integrity verdict, recorded per run -------------------
-    hd = heredoc_containing(t, "planner-integrity")
+    hd = heredoc_containing(t, 'print("planner-integrity: "')
     if hd is not None:
         tree = parse(hd[1])
         if tree is not None:

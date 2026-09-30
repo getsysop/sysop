@@ -6,7 +6,7 @@ model: opus
 ---
 <!-- sysop:model-roles frontmatter=reasoning inline=reasoning -->
 
-Read `tasks/index.yml`, pick a batch of N independent claimable tasks under a complexity ceiling, sequentially claim each on `main` (mirroring `/auto-fix`'s `batch_work.sh` pattern), then per task run three Opus phases at the orchestrator layer: plan-only agent → adversarial-reviewer agent → execution agent. Findings classified by the orchestrator itself (spawned sessions do not nest further agents — a deliberate design choice, see Step 6). Tasks with `blocker` findings park (worktree + lock intact, plan + verdict written to `sysop/runtime/auto-build/` scratch dir); the rest auto-execute. The human resumes parked tasks manually and runs `/review-close` on executed branches.
+Read `tasks/index.yml`, pick a batch of N independent claimable tasks under a complexity ceiling, sequentially claim each on `main` (mirroring `/auto-fix`'s `batch_work.sh` pattern), then per task run three Opus phases at the orchestrator layer: plan-only agent → adversarial-reviewer agent → execution agent. Findings classified by the orchestrator itself (spawned sessions do not nest further agents — a deliberate design choice, see Step 6). Tasks with `blocker` findings park (worktree + lock intact, plan in `sysop/runtime/claim/<TASK_ID>/`, verdict in the worktree's `sysop/runtime/auto-build/` scratch dir); the rest auto-execute. The human resumes parked tasks manually and runs `/review-close` on executed branches.
 
 This skill does NOT merge anything. It batches the front of the pipeline (claim + plan + execute) up to the point where the human re-engages.
 
@@ -115,17 +115,17 @@ active_phase = active.get("number")
 
 tasks = data.get("tasks", []) or []
 by_id = {t["id"]: t for t in tasks}
-locks = {os.path.basename(p)[:-5] for p in glob.glob("sysop/runtime/locks/*.lock")}
-
+try:  # `glob` answers [] for a directory it cannot list, and every claim would read as free
+    locks = {n[:-5] for n in os.listdir("sysop/runtime/locks") if n.endswith(".lock")}
+except (FileNotFoundError, NotADirectoryError):
+    locks = set()
+except OSError as e:
+    print(f"ERROR: sysop/runtime/locks could not be listed ({type(e).__name__}); cannot tell which tasks are claimed")
+    raise SystemExit(2)
 order = {"Low": 0, "Medium": 1, "High": 2}
-
-# unlock_count[id] = number of OPEN tasks in the active phase that list `id`
-# in depends_on. Direct dependents only (not transitive — a transitive count
-# overweights long chains whose tails are far off anyway). Phase-scoped because
-# the claimable pool is phase-scoped: only a same-phase dependent becoming
-# ready enlarges the NEXT batch's pool. It's the simple direct count — a
-# dependent still blocked by OTHER unmet deps is counted anyway (a good-enough
-# foundational-ness signal; precision isn't worth the extra graph walk).
+# unlock_count[id] = number of OPEN tasks in the active phase that list `id` in
+# depends_on: direct dependents only, phase-scoped because the claimable pool is.
+# A dependent still blocked by OTHER unmet deps is counted anyway (good enough).
 unlock_count = {}
 for t in tasks:
     if t.get("status") != "open" or t.get("phase") != active_phase:
@@ -184,8 +184,8 @@ if subset:
 # recoverable rework, not corruption). Degrade silently to "no overlap data" if
 # the primitive can't be imported (advisory-non-blocking, matching
 # scope_overlap.py's own stance) — the batch math is unaffected either way.
-inflight_verdict = {}    # tid -> "likely" | "possible" | "none"
-inflight_overlaps = {}   # tid -> [(in_flight_task_id, [shared_paths]), ...]
+inflight_verdict = {}    # tid -> "likely" | "unknown" | "possible" | "none"
+inflight_overlaps = {}   # tid -> [(in_flight_task_id, verdict, detail), ...]
 inflight_count = 0
 try:
     import sys as _sys
@@ -201,11 +201,11 @@ try:
         _a = _so.assess(_c["id"], worktree_reader=_reader)
         inflight_count = _a.in_flight_count
         inflight_verdict[_c["id"]] = _a.max_verdict
-        inflight_overlaps[_c["id"]] = [(o.task_id, o.evidence) for o in _a.overlaps]
+        inflight_overlaps[_c["id"]] = [(o.task_id, o.verdict, [o.reason] if o.verdict == "unknown" else o.evidence) for o in _a.overlaps]
 except Exception:
-    inflight_verdict = {}   # any failure → no annotation, batch math unchanged
+    inflight_verdict, inflight_overlaps, inflight_count = {}, {}, 0   # any failure → no annotation, batch math unchanged
 
-orank = {"none": 0, "possible": 1, "likely": 2}
+orank = {"none": 0, "possible": 1, "unknown": 2, "likely": 3}
 
 # Sort: unblocker-first, THEN in-flight-overlap-avoidance (soft, secondary),
 # then effort, then id. Overlap is secondary to unlock_count on purpose —
@@ -235,13 +235,13 @@ for t in candidates:
 if inflight_count:
     print(f"# inflight-set\t{inflight_count} task(s) building now")
     for _c in candidates:
-        for (otid, ev) in inflight_overlaps.get(_c["id"], []):
+        for (otid, ov, ev) in inflight_overlaps.get(_c["id"], []):
             shared = ", ".join(ev[:4]) + (f", +{len(ev)-4} more" if len(ev) > 4 else "")
-            print(f"# overlap\t{_c['id']}\t{inflight_verdict.get(_c['id'],'none')}\t{otid}\t{shared}")
+            print(f"# overlap\t{_c['id']}\t{ov}\t{otid}\t{shared}")
 PY
 ```
 
-Parse the output into the candidate list. The `unlocks=N` field is each task's `unlock_count` (open same-phase tasks that `depends_on` it); the `inflight=<verdict>` field is its collision risk against work building in another worktree right now (`likely` / `possible` / `none`, from the shared scope-overlap primitive — Leg B, Phase 103). The list is already sorted **unblocker-first, then in-flight-overlap-avoidance, then effort, then id** — so among equally-foundational candidates a non-colliding task comes first. Report total claimable count and carry both `unlocks` and `inflight` forward — `unlocks` appears in the Step 4 batch table, and any `# overlap` / `# inflight-set` detail lines feed the Step 4 **In-flight overlap** annotation. When nothing is in flight (or the primitive was unavailable), every candidate reads `inflight=none` and there are no `# overlap` lines — the sort *order* reduces to the pre-Phase-103 result exactly (only the always-present `inflight=none` field is added to each line). On a subset run, also carry every `EXCLUDED` line forward verbatim — they reappear under the Step 4 table. If zero candidates remain **without** a subset, stop:
+If it exits 2 with an `ERROR:` line, stop and report that line: with the index or the locks unreadable, nothing can be batched safely. Otherwise parse the output into the candidate list. The `unlocks=N` field is each task's `unlock_count` (open same-phase tasks that `depends_on` it); the `inflight=<verdict>` field is its collision risk against work building in another worktree right now (`likely` / `unknown` / `possible` / `none`, from the shared scope-overlap primitive — Leg B, Phase 103). `unknown` means an input the primitive needed could not be read, so it cannot rule an overlap out; it sorts behind `possible` and ahead of `likely`, and is never read as clear. The list is already sorted **unblocker-first, then in-flight-overlap-avoidance, then effort, then id** — so among equally-foundational candidates a non-colliding task comes first. Report total claimable count and carry both `unlocks` and `inflight` forward — `unlocks` appears in the Step 4 batch table, and any `# overlap` / `# inflight-set` detail lines feed the Step 4 **In-flight overlap** annotation. When nothing is in flight (or the primitive was unavailable), every candidate reads `inflight=none` and there are no `# overlap` lines — the sort *order* reduces to the pre-Phase-103 result exactly (only the always-present `inflight=none` field is added to each line). On a subset run, also carry every `EXCLUDED` line forward verbatim — they reappear under the Step 4 table. If zero candidates remain **without** a subset, stop:
 
 ```
 No claimable tasks in the current-focus phase (`<active_phase>`) of tasks/index.yml.
@@ -357,7 +357,7 @@ Print the batch composition table:
 | <TASK-ID>                   | <eff>  | <br>            | <u>     | <w>    |
 | ...                         | ...    | ...             | ...     | ...    |
 |                                                        Total: <sum> / 12.0
-
+```
 The **Unlocks** column is each task's `unlock_count` from Step 1 — how many open same-phase tasks `depends_on` it. It explains the row order (unblocker-first) and does not enter the weight math. For an imported-provenance task whose fields were re-estimated (Step 2), render the changed cell as `recorded→re-estimated (re-est)` so the human sees the gate ran on the heavier value.
 
 On a subset run, append a **Requested but not batched** list under the table — the fate of every ID the human asked for, before they confirm:
@@ -375,8 +375,8 @@ In-flight overlap (worktrees building now: <inflight-set count>):
   ⚠ FEAT-D — possible overlap with in-flight TECH-B (same dir: src/api/) → lower risk
 ```
 
-Build each line from a `# overlap` record (`candidate`, `verdict`, `in-flight task`, shared paths). This is **advisory, not a veto**: the batch already de-prioritized these in the Step 1 sort, but an overlapping task the ceilings admitted stays in the proposed batch — the human may accept it (the conflict is recoverable rework). If they'd rather not, they re-run with an explicit subset that omits it. When Step 1 emitted no `# overlap` lines (nothing in flight, or no collisions), omit this block entirely.
-
+Build each line from a `# overlap` record (`candidate`, `verdict`, `in-flight task`, then the shared paths, or for `unknown` the input that could not be read). Each record carries its own verdict against that one in-flight task. Write an `unknown` record as `⚠ FEAT-E — overlap unknown with in-flight TECH-F (<the input that could not be read>) → repair it and re-run to grade the overlap`. This is **advisory, not a veto**: the batch already de-prioritized these in the Step 1 sort, but an overlapping task the ceilings admitted stays in the proposed batch — the human may accept it (the conflict is recoverable rework). If they'd rather not, they re-run with an explicit subset that omits it. When Step 1 emitted no `# overlap` lines (nothing in flight, or no collisions), omit this block entirely.
+```
 Estimated Opus fan-out (per the lifted adversarial flow — see Steps 6a-6e):
   - Plan-only phase:    up to <N> concurrent Opus agents (one per task)
   - Adversarial phase:  up to <N> concurrent Opus agents (one per task, after plan returns)
@@ -582,7 +582,25 @@ The three phases run **sequentially within a task** but **in parallel across tas
 
 ### Phase 6a: Plan-Only Agents (parallel across tasks)
 
-**First, capture each task's pre-plan HEAD.** The integrity check below compares against it, so it has to be read *before* the spawn or it means nothing. Run this once per task in the batch, substituting the worktree path Step 5 recorded:
+**First, mint each task's artifact directory** in the main checkout, under the claim-artifact namespace `/claim-task` uses and `/review-close` Step 4c reaps at close. The planner writes `plan.md` there (Step 7a), 6d writes `classification.md`, and the executor writes `revised-plan.md` (Step 7c item 2). It outlives `git worktree remove`. Run from the project root, once per task:
+
+```bash
+date -u +%Y%m%dT%H%M%SZ            # the <CYCLE_TS> for the path below
+```
+
+```bash
+# `mkdir` does NOT fail on an unsubstituted placeholder: it would create a directory
+# literally named `<TASK_ID>` and every artifact would land where no reader looks. So
+# the path is substituted ONCE, into a variable, and the `case` tests that variable —
+# a partial substitution must not pass the gate and still reach the mkdir.
+CLAIM_DIR="sysop/runtime/claim/<TASK_ID>/<CYCLE_TS>"
+case "$CLAIM_DIR" in *'<'*|*'>'*) echo "❌ Placeholder not substituted — refusing to mint the artifact directory." >&2; exit 1 ;; esac
+mkdir -p "$(dirname "$CLAIM_DIR")" && mkdir "$CLAIM_DIR" && echo "CLAIM_DIR=$(pwd -P)/$CLAIM_DIR"
+```
+
+The last `mkdir` has no `-p`, so it fails on a directory that already exists. That is what makes the post-6a plan check below mean anything: a `plan.md` left by an earlier run cannot pass for this one. On `File exists`, read the date again and re-run. Hold the printed absolute path as that task's `<CLAIM_DIR>`; the sub-agents `cd` into the worktree and write to it by that path.
+
+**Then capture each task's pre-plan HEAD.** The integrity check below compares against it, so it has to be read *before* the spawn or it means nothing. Run this once per task in the batch, substituting the worktree path Step 5 recorded:
 
 ```bash
 git -C "<worktree path>" rev-parse HEAD
@@ -596,18 +614,20 @@ In a **single message**, spawn `min(N, len(batch))` plan-only agents via paralle
 - `model`: `"opus"`
 - Do NOT set `isolation: "worktree"`.
 - `description`: `"Plan <TASK_ID>"`
-- `prompt`: the **Plan-Only Agent Prompt** in Step 7a, filled with `(task_id, worktree_path, branch_name)`.
+- `prompt`: the **Plan-Only Agent Prompt** in Step 7a, filled with `(task_id, worktree_path, branch_name, claim_dir)`.
 
-When each plan-only agent returns, extract the plan text from the fenced ```` ```plan ```` block in its final message. Store as `PLAN_TEXT[<TASK_ID>]`.
+**The plan comes back on disk, not in the agent's reply.** The reply may carry only the agent's final report, so a plan printed earlier is lost, and a summary in its place reads like a plan.
 
-**Post-Phase-6a integrity check.** The plan-only agent is instructed not to commit anything. Verify in the orchestrator BEFORE spawning the reviewer:
+**Post-Phase-6a integrity check.** The plan-only agent is instructed not to commit anything, and to write its plan to `<CLAIM_DIR>/plan.md`. Verify both in the orchestrator BEFORE spawning the reviewer:
 
 ```bash
 # Assert the worktree branch HEAD is unchanged from before the plan agent ran.
 # If new commits exist, the plan agent violated the contract — abort and park.
-# Substitute this task's worktree path, id, and the pre-plan HEAD you captured above.
-# `NEW_HEAD` is assigned right here, so it is the one name safe to carry — the three
-# placeholders are values you hold. Run as written with a `"$PRE_PLAN_HEAD"` in place of
+# A consumer that fast-forwards the worktree during 6a false-parks here; `/claim-task` Step 7a
+# accepts that case, and its REFERENCE.md § *Step 7a* says how to port the check.
+# Substitute this task's worktree path, id, claim dir, and the pre-plan HEAD you captured above.
+# `NEW_HEAD` and `PARK` are assigned right here, so they are the names safe to carry — the
+# four placeholders are values you hold. Run as written with a `"$PRE_PLAN_HEAD"` in place of
 # the literal, the right side is the empty string, the comparison is ALWAYS true, and the
 # batch parks wholesale with nothing to reveal it: `git -C ""` does not fail, it runs in
 # the CWD and returns a real SHA (the defect Phase 169 fixed).
@@ -617,15 +637,25 @@ When each plan-only agent returns, extract the plan text from the fenced ```` ``
 # happily creates a directory named `<worktree path>` and returns 0, which would land the
 # park verdict in the project root under a literal-placeholder path while the run reports
 # PARKED (found by this phase's own round).
+#
+# A missing or empty plan parks too. An unsubstituted `<claim dir>` reads as missing,
+# so that slip parks loudly rather than passing.
 NEW_HEAD=$(git -C "<worktree path>" rev-parse HEAD)
+PARK=""
 if [ "$NEW_HEAD" != "<pre-plan head>" ]; then
-  echo "PLAN-ONLY-VIOLATION: <TASK_ID> committed during plan phase; parking"
+  PARK="PLAN_PHASE_VIOLATION: plan-only agent committed $(git -C "<worktree path>" log --oneline "<pre-plan head>..HEAD")"
+elif [ ! -s "<claim dir>/plan.md" ]; then
+  PARK="PLAN_MISSING: plan-only agent left no plan at <claim dir>/plan.md, or an empty one"
+fi
+if [ -n "$PARK" ]; then
+  echo "PLAN-PHASE-PARK: <TASK_ID>: $PARK"
   git -C "<worktree path>" rev-parse --show-toplevel >/dev/null && mkdir -p "<worktree path>/sysop/runtime/auto-build"
-  echo "PLAN_PHASE_VIOLATION: plan-only agent committed $(git -C "<worktree path>" log --oneline "<pre-plan head>..HEAD")" \
-    > "<worktree path>/sysop/runtime/auto-build/review.md"
+  printf '%s\n' "$PARK" > "<worktree path>/sysop/runtime/auto-build/review.md"
   # Mark this task PARKED and skip Phases 6b-6e for it.
 fi
 ```
+
+**Then `Read` `<CLAIM_DIR>/plan.md` and store its contents as `PLAN_TEXT[<TASK_ID>]`** for each task that did not park.
 
 ### Phase 6b: Adversarial-Reviewer Agents (parallel across tasks)
 
@@ -634,7 +664,7 @@ For each task whose plan-only agent returned cleanly (no Phase-6a violation), sp
 - `subagent_type`: `"general-purpose"`
 - `model`: `"opus"`
 - `description`: `"Adversarial plan review <TASK_ID>"`
-- `prompt`: the **Adversarial-Reviewer Agent Prompt** in Step 7b — the `PLAN_TEXT[<TASK_ID>]` **re-emitted in full**, followed by the Prompt Template block from `.claude/skills/_shared/adversarial-review.md`. See the note under Step 7b on what "in full" can and cannot mean here.
+- `prompt`: the **Adversarial-Reviewer Agent Prompt** in Step 7b — the **contents of `<CLAIM_DIR>/plan.md` verbatim**, followed by the Prompt Template block from `.claude/skills/_shared/adversarial-review.md`. See the note under Step 7b on emitting it in full.
 
 When each reviewer returns, store its findings as `RAW_FINDINGS[<TASK_ID>]`.
 
@@ -651,16 +681,14 @@ This is **not** delegated to another sub-agent. The orchestrator reads the rubri
 
 For each task:
 
-- **If any finding is `blocker`** → mark the task `PARKED`. Skip Phase 6e for it. Write the verdict and plan to a scratch directory in the worktree so the human picking up the parked task can resume:
+- **If any finding is `blocker`** → mark the task `PARKED`. Skip Phase 6e for it. The plan is already on disk at `<CLAIM_DIR>/plan.md`, the planner's own write, unrevised because parking happens before absorption. Write the verdict to a scratch directory in the worktree so the human picking up the parked task can resume:
 
-  **Write both files with the `Write` tool, not from the shell.** `PLAN_TEXT[<TASK_ID>]`
-  and `RAW_FINDINGS[<TASK_ID>]` are values *you* hold in context, subscripted per task —
-  they are not shell variables, they are not exported, and nothing survives from one
-  fenced block to the next (`WORKFLOW.md` § 8.2a *Persistence boundary*), so nothing you
-  set earlier would survive anyway. A bare `"$PLAN_TEXT"`
-  expands to the empty string and writes an **empty** `plan.md`, which then reads as a
-  successfully-written record. Create the directory, then write each file's contents
-  directly:
+  **Write it with the `Write` tool, not from the shell.** `RAW_FINDINGS[<TASK_ID>]` is a
+  value *you* hold in context, subscripted per task — not a shell variable, not exported,
+  and nothing survives from one fenced block to the next (`WORKFLOW.md` § 8.2a
+  *Persistence boundary*). A bare `"$RAW_FINDINGS"` expands to the empty string and
+  writes an **empty** `review.md`, which then reads as a successfully-written record.
+  Create the directory, then write the file's contents directly:
 
   ```bash
   # `&&`-gated on a read-only probe: `mkdir -p` is the one command in this skill that
@@ -670,17 +698,15 @@ For each task:
   git -C "<worktree path>" rev-parse --show-toplevel >/dev/null && mkdir -p "<worktree path>/sysop/runtime/auto-build"
   ```
 
-  - `Write` → `<WORKTREE_PATH>/sysop/runtime/auto-build/plan.md` — the verbatim
-    `PLAN_TEXT[<TASK_ID>]` for this task.
   - `Write` → `<WORKTREE_PATH>/sysop/runtime/auto-build/review.md` — the verbatim
     `RAW_FINDINGS[<TASK_ID>]` for this task.
 
-  If either value is empty for this task, say so in the file rather than writing a blank
+  If the value is empty for this task, say so in the file rather than writing a blank
   one — an empty record is indistinguishable from a lost one.
 
-  The orchestrator does NOT commit these files — they are scratch for the human. Step 8 references the paths in the final report.
+  The orchestrator does NOT commit this file — it is scratch for the human. Step 8 references both paths in the final report.
 
-  **Mirror the verdict to a central archive so it survives worktree cleanup.** The per-worktree `plan.md`/`review.md` above are the *only* record of why the task parked — and they are destroyed the moment the worktree is removed (`cleanup_worktrees.sh --force` removes the worktree wholesale). A parked task is by definition resumed *later*, often after that cleanup has run, so the worktree scratch alone loses the verdict exactly when the human comes back for it. Write a second copy at the **project root** — where the orchestrator runs, so it outlives any worktree — gitignored under `sysop/runtime/`. Note the archive is **not** under `sysop/runtime/auto-build/`: that dir is the per-worktree scratch home, and `/claim-task` parks here too, so the path carries no owning-skill name (renamed Phase 159b):
+  **Mirror the verdict to a central archive so it survives worktree cleanup.** The per-worktree `review.md` above is the *only* record of why the task parked — and it is destroyed the moment the worktree is removed (`cleanup_worktrees.sh --force` removes the worktree wholesale). A parked task is by definition resumed *later*, often after that cleanup has run, so the worktree scratch alone loses the verdict exactly when the human comes back for it. Write a second copy at the **project root** — where the orchestrator runs, so it outlives any worktree — gitignored under `sysop/runtime/`. Note the archive is **not** under `sysop/runtime/auto-build/`: that dir is the per-worktree scratch home, and `/claim-task` parks here too, so the path carries no owning-skill name (renamed Phase 159b):
 
   ```bash
   mkdir -p sysop/runtime/parked
@@ -704,37 +730,13 @@ For each task:
 
   The UTC timestamp keys the filename: a task parks at most once per cycle and cycles run minutes apart, so `<TASK_ID>__<timestamp>` is unique per park. This archive is the **durable** record — worktree cleanup never touches the project-root `sysop/runtime/parked/`. Closed work does not accumulate here: when a parked task is later resumed and closed, `/review-close` Step 4c removes its marker(s) alongside the lock — historically nothing did, so markers for done tasks piled up and this dir over-reported them as still parked. (A `claim_task.sh --release` of a parked task deliberately leaves its markers — a released park's verdict may still serve the next claimant.) (No telemetry is emitted here; this is the standalone park-archive fix, not the `parked_reason`/`task_outcome` instrumentation it was extracted from.)
 
-- **If all findings are `fixable` (or zero findings)** → the orchestrator passes `PLAN_TEXT` **and** `RAW_FINDINGS` into the Phase-6e execution agent's prompt and the **executor** absorbs the findings inline. **No `REVISED_PLAN` is produced — not in context, not on disk.** This bullet read *"the orchestrator builds a `REVISED_PLAN`"* until Phase 236, which is the reading its own § *Out of scope for v1* contradicts (*"v1 absorbs `fixable` findings inline by passing `PLAN_TEXT + RAW_FINDINGS` into the execution agent's prompt. A cleaner alternative is a third sub-agent that produces an explicit `REVISED_PLAN`"*) — there is no revise step, and naming one made the classification record below look redundant when it is the only durable trace of this arm. No separate plan-revise agent in v1 — see "Out of scope for v1" below.
+- **If all findings are `fixable` (or zero findings)** → the orchestrator passes `PLAN_TEXT` **and** `RAW_FINDINGS` into the Phase-6e execution agent's prompt and the **executor** absorbs the findings inline. **The orchestrator produces no `REVISED_PLAN`.** The executor writes the plan it will implement to `<CLAIM_DIR>/revised-plan.md` (Step 7c item 2). No separate plan-revise agent in v1 — see "Out of scope for v1" below.
 
-  **Write the classification record first — this arm is the dominant path and until Phase 236 it left nothing on disk at all.** `_shared/adversarial-review.md` requires that a finding rejected after consideration have its rationale recorded "so the same issue does not resurface during human review", and — for a High-severity or security-relevant rejection that cannot get a second independent pass — that the **full per-clause** rationale be recorded "in the sealed report / plan so the next reader with independent context (the parent, the human at plan approval, the review-close gate) adjudicates it". On this arm none of those readers could reach anything: Phase 6c is orchestrator-internal, `/auto-build` emits no sealed `REVIEW_REPORT:` anywhere, there is no plan-approval gate (Step 4's single destructive gate fires *before* planning), and the plan reaches disk **only on a park** — where the park arm above writes the *unrevised* `PLAN_TEXT`, because parking happens before absorption. So the mandate had a named reader set and an empty target.
+  **Write the classification record first — this arm is the dominant path and until Phase 236 it left nothing on disk at all.** `_shared/adversarial-review.md` requires that a finding rejected after consideration have its rationale recorded "so the same issue does not resurface during human review", and — for a High-severity or security-relevant rejection that cannot get a second independent pass — that the **full per-clause** rationale be recorded "in the sealed report / plan so the next reader with independent context (the parent, the human at plan approval, the review-close gate) adjudicates it". On this arm none of those readers could reach anything: Phase 6c is orchestrator-internal, `/auto-build` emits no sealed `REVIEW_REPORT:` anywhere, and there is no plan-approval gate (Step 4's single destructive gate fires *before* planning).
 
-  Write it to the **main checkout**, under the same claim-artifact namespace `/claim-task` Step 7c uses and that `/review-close` Step 4c now reaps at close — no new runtime directory, and closed work does not accumulate:
+  Write it into the task's `<CLAIM_DIR>`, which Phase 6a minted in the **main checkout** under the same claim-artifact namespace `/claim-task` Step 7c uses and that `/review-close` Step 4c reaps at close — no new runtime directory, and closed work does not accumulate.
 
-  ```bash
-  # Run from the project root (where the orchestrator runs), not the worktree — the
-  # record has to outlive `git worktree remove`, which is what destroys the per-worktree
-  # scratch. Substitute this task's id; the timestamp keys one directory per cycle.
-  date -u +%Y%m%dT%H%M%SZ            # the <CYCLE_TS> for the path below
-  # `mkdir -p` is the one command in this skill that does NOT fail on an unsubstituted
-  # placeholder — it would create a directory literally named `<TASK_ID>`, return 0, and the
-  # classification record would land where no reader ever looks, which is indistinguishable
-  # from never writing it. (The two worktree `mkdir -p` sites above gate on a `git rev-parse`
-  # probe instead; that probe cannot work here, because this path is in the main checkout and
-  # does not exist yet. A `case` on the path itself is the equivalent, and is a shell builtin,
-  # so it binds no new permission rule.)
-  #
-  # **The path is substituted ONCE, into a variable, and the gate tests that variable.** The
-  # first cut of this gate wrote the placeholders twice — once in the `case` subject and once
-  # in the `mkdir` — so an agent that substituted only the first passed the gate and then
-  # created the literal `<TASK_ID>` directory anyway: the exact outcome the gate exists to
-  # prevent, reproduced by this phase's own round. A guard must test the value the guarded
-  # command will use, not a second copy of it.
-  CLAIM_DIR="sysop/runtime/claim/<TASK_ID>/<CYCLE_TS>"
-  case "$CLAIM_DIR" in *'<'*|*'>'*) echo "❌ Placeholder not substituted — refusing to write the classification record." >&2; exit 1 ;; esac
-  mkdir -p "$CLAIM_DIR"
-  ```
-
-  Then **`Write`** → `sysop/runtime/claim/<TASK_ID>/<CYCLE_TS>/classification.md`. Again these are values *you* hold in context, subscripted per task — not shell variables, and nothing survives from one fenced block to the next (`WORKFLOW.md` § 8.2a *Persistence boundary*):
+  **`Write`** → `sysop/runtime/claim/<TASK_ID>/<CYCLE_TS>/classification.md`, the `<CLAIM_DIR>` Phase 6a printed. Again these are values *you* hold in context, subscripted per task — not shell variables, and nothing survives from one fenced block to the next (`WORKFLOW.md` § 8.2a *Persistence boundary*):
 
   ```markdown
   # <TASK_ID> — adversarial classification <CYCLE_TS>
@@ -755,7 +757,7 @@ For each task:
   indistinguishable from a lost one.>
   ```
 
-  **What this record is and is not.** It is the orchestrator's account of its own 6c classification, durable and readable by a human and by `/review-close`. It is **not** an input to Phase 6e — v1 still hands the executor `PLAN_TEXT` + `RAW_FINDINGS` and lets it absorb inline, so the executor's absorption and this record are two independent readings of the same findings and may differ. Say that rather than implying the executor followed it; a record that claims to bind execution and does not is worse than one that says what it is.
+  **What this record is and is not.** It is the orchestrator's account of its own 6c classification, durable and readable by a human and by `/review-close`. It is **not** an input to Phase 6e — v1 still hands the executor `PLAN_TEXT` + `RAW_FINDINGS` and lets it absorb inline, so the executor's absorption and this record are two independent readings of the same findings and may differ. The executor records its own reading beside this one, in `revised-plan.md`. Say that rather than implying the executor followed this record; a record that claims to bind execution and does not is worse than one that says what it is.
 
 ### Phase 6e: Execution Agents (parallel across tasks)
 
@@ -765,7 +767,7 @@ For each non-parked task, spawn one execution agent. Run these in parallel acros
 - `model`: `"opus"`
 - Do NOT set `isolation: "worktree"`.
 - `description`: `"Execute <TASK_ID>"`
-- `prompt`: the **Execution Agent Prompt** in Step 7c, filled with `(task_id, worktree_path, branch_name, plan_text, raw_findings)`.
+- `prompt`: the **Execution Agent Prompt** in Step 7c, filled with `(task_id, worktree_path, branch_name, claim_dir, plan_text, raw_findings)`.
 
 **Pre-execution HEAD capture (load-bearing for Phase 7).** Immediately BEFORE spawning each Phase-6e agent, capture the worktree branch HEAD so Phase 7 can compare against it:
 
@@ -864,8 +866,8 @@ WANT = re.compile(r"^\s*test\s+decision\b", re.I)
 def fence_mark(line):
     """`(char, length)` if this line is a fence marker, else None.
 
-    This is Step 7f's `fence_mark`, and it is the same function on purpose -- do not
-    re-derive it a third time. Same for `fence_closes` below. THREE properties are
+    This is Step 7f's `fence_mark`, and it is the same function on purpose -- copy it,
+    never re-derive it. Same for `fence_closes` below. THREE properties are
     load-bearing, and this block shipped missing a different one each time. A body can
     be fenced with ``` OR ~~~; a fence is closed only by the SAME character at the SAME
     length or longer; and a closer carries NO info string. Step 7f's own writer emits a
@@ -946,7 +948,9 @@ RECORD_PY
 
 **On `MISSING` or `TEMPLATE` (exit 1), this task's Step 8 status becomes `FAILED`** — **and so does `NOT ON BRANCH`, which on this path is a failure rather than the benign state its own text describes.** That arm exits 0 because `/claim-task` can legitimately meet a body `/add-task` left untracked in the main checkout. `/auto-build` cannot: Step 5 pre-claims from a committed `tasks/index.yml` on the default branch, so a body that is absent at the branch tip means the path was derived wrong or the body was never committed, and neither may pass as executed. **Read the printed line, not just the exit code.** with the printed line as its `Notes`, and **the batch continues** — go on to item 2 and refill as normal. Halting the whole run on one branch's missing record would strand every sibling that wrote theirs correctly, and deferring the check to the end would put it furthest from the work.
 
-**Do not write the record yourself from `PLAN_TEXT[<TASK_ID>]`.** You hold the plan and could, but Step 7b already documents that retype channel as lossy, and a record composed by the orchestrator is further from the diff than one written by the agent that made the change. A `FAILED` verdict the human can act on beats a record nobody stands behind — `/claim-task` Step 8 carries the same prohibition in as many words.
+**Do not write the record yourself from `PLAN_TEXT[<TASK_ID>]`.** You hold the plan and could, but a record composed by the orchestrator is further from the diff than one written by the agent that made the change. A `FAILED` verdict the human can act on beats a record nobody stands behind — `/claim-task` Step 8 carries the same prohibition in as many words.
+
+**Then check that `<CLAIM_DIR>/revised-plan.md` exists.** If it does not, write `no revised-plan.md: the executor skipped item 2` into that task's Step 8 `Notes`. It does not change the status.
 
 2. If the queue still has unstarted batch tasks at the same phase, spawn one more agent with the same shape in a single new message.
 3. No polling, no sleeping — the harness delivers completion notifications.
@@ -963,7 +967,7 @@ Three distinct prompts, one per phase. Each is verbatim with placeholders filled
 
 **START OF PLAN-ONLY AGENT PROMPT**
 
-You are planning roadmap task `<TASK_ID>` for the `/auto-build` orchestrator. Your **only** job is to produce a structured plan in the format below and emit it in your final message. Do NOT execute, do NOT call `ExitPlanMode`, do NOT spawn sub-agents, do NOT commit or modify files.
+You are planning roadmap task `<TASK_ID>` for the `/auto-build` orchestrator. Your **only** job is to produce a structured plan in the format below and write it to `<CLAIM_DIR>/plan.md`. Do NOT execute, do NOT spawn sub-agents, do NOT commit, and write no file but that one.
 
 The worktree at `<WORKTREE_PATH>` is already claimed — lock at `sysop/runtime/locks/<TASK_ID>.lock`, branch `<BRANCH_NAME>`, `tasks/index.yml` flipped to `in_progress` on main by the orchestrator.
 
@@ -975,20 +979,20 @@ The worktree at `<WORKTREE_PATH>` is already claimed — lock at `sysop/runtime/
 2. **Produce the plan.** Structure:
    - **Task summary** — one paragraph restating the task and goal.
    - **`## Constraints & Risks`** preamble — one bullet per file/directory the plan will touch, citing applicable conventions from `.claude/convention_map.md` AND applicable security checks from `.claude/security_map.md`, plus cross-cutting rules (logger formatting, APP_ENV default, log sanitization, fetch redirect guards). One bullet per risk; no prose padding. Include a `### Coverage gap` subsection listing files with no matching map section (write `_(none)_` if every file matches).
-   - **`## Test decision`** — state either **`test <X> proves <Y>`** (the regression test, existing or new, that pins the behaviour this change touches) or **`no test because <Z>`** with a reviewable rationale. Make `Z` reviewable, not a hand-wave: the plan reviewer scrutinises it under `_shared/adversarial-review.md` finding 7, which flags a behaviour-touching task whose decision is missing — so an omission here is caught before an executor is spawned, not at the merge. **Decide it; do not write it.** The execution agent persists this section into the body (Step 7c Sequence item 3‑record), because the body write has to land in the worktree on the branch and you are forbidden from editing files.
+   - **`## Test decision`** — state either **`test <X> proves <Y>`** (the regression test, existing or new, that pins the behaviour this change touches) or **`no test because <Z>`** with a reviewable rationale. Make `Z` reviewable, not a hand-wave: the plan reviewer scrutinises it under `_shared/adversarial-review.md` finding 7, which flags a behaviour-touching task whose decision is missing — so an omission here is caught before an executor is spawned, not at the merge. **Decide it; do not write it.** The execution agent persists this section into the body (Step 7c Sequence item 3‑record), because the body write has to land in the worktree on the branch and you are forbidden from editing worktree files.
    - **`## Implementation Steps`** — numbered steps with concrete file paths, line ranges, and expected diffs.
 3. **Hard constraints:**
-   - Do **NOT** edit any file in the worktree (no `Edit` / `Write` tool calls).
-   - Do **NOT** run `git commit` or any state-changing command.
-   - Do **NOT** call `ExitPlanMode` (you are not in plan mode).
+   - Do **NOT** edit any file in the worktree (no `Edit` / `Write` tool call inside it).
+   - Do **NOT** run `git commit` or any state-changing command. The one write you make is `<CLAIM_DIR>/plan.md`.
    - Do **NOT** invoke the Agent tool — the orchestrator handles fan-out.
 
-### Final-message format
+### Write the plan to disk
 
-Emit your plan as the LAST content in your final message, wrapped in a fenced ```` ```plan ```` block (exactly that fence tag — the orchestrator parses on it):
+Write the full plan to `<CLAIM_DIR>/plan.md` with the `Write` tool. That file is the orchestrator's only input: it reads the plan from there, and a missing or empty file parks this task. A plan that exists only in a message is lost, because the orchestrator sees only the report you hand back.
 
-````
-```plan
+`<CLAIM_DIR>` is an **absolute path in the main checkout, outside your worktree**. Use it exactly as given — do not re-derive it, do not make it relative to the working directory above, and do not `git add` it. The directory already exists. The file's contents, with no enclosing fence:
+
+```markdown
 <task summary>
 
 ## Constraints & Risks
@@ -1004,9 +1008,10 @@ test <X> proves <Y>   ("no test because <Z>" is the other legal form)
 1. ...
 2. ...
 ```
-````
 
-If the consuming project wires up sub-agent cost attribution, also emit `SPEND_USD: <float>` on a line BEFORE the fenced block. Otherwise omit it — `_shared/adversarial-review.md § Caller contract` documents the opt-in pattern. No other content after the closing fence.
+### Final message
+
+End the report you hand back with the line `PLAN_WRITTEN: <CLAIM_DIR>/plan.md`, with the path as given. Do not repeat the plan there. If the consuming project wires up sub-agent cost attribution, also emit `SPEND_USD: <float>` on a line before it. Otherwise omit it — `_shared/adversarial-review.md § Caller contract` documents the opt-in pattern.
 
 **END OF PLAN-ONLY AGENT PROMPT**
 
@@ -1014,13 +1019,9 @@ If the consuming project wires up sub-agent cost attribution, also emit `SPEND_U
 
 ### Step 7b: Adversarial-Reviewer Agent Prompt
 
-The orchestrator constructs this prompt as `PLAN_TEXT[<TASK_ID>]` re-emitted in full, immediately followed by the **Prompt Template** block copied verbatim from `.claude/skills/_shared/adversarial-review.md`. The sub-agent returns a prioritized list of concrete `file:line` findings under 500 words.
+The orchestrator constructs this prompt as the **contents of `<CLAIM_DIR>/plan.md` verbatim** — the `PLAN_TEXT[<TASK_ID>]` it read from that file after Phase 6a — immediately followed by the **Prompt Template** block copied verbatim from `.claude/skills/_shared/adversarial-review.md`. The sub-agent returns a prioritized list of concrete `file:line` findings under 500 words.
 
-> **"Verbatim" is the wrong word for what happens here, and using it hid a real failure.** `_shared/adversarial-review.md` tells every caller to pass "the full `PLAN_TEXT` verbatim". For `/claim-task` that is a **copy**: its planner writes `plan.md` to disk before the reviewer is spawned, so there is a file to reproduce. **`/auto-build` has no file.** Phase 6a's plan-only agents return their plans into orchestrator context, and the only `Write` of `plan.md` happens in Phase 6d — *after* this spawn, and only on the park arm. So `PLAN_TEXT[<TASK_ID>]` is a value you hold in context (the same warning Phase 6d gives: not a shell variable, nothing survives between fenced blocks), and emitting it into a prompt is a **retype**, not a copy.
->
-> **The observed harm, measured on a real 3-task cycle:** with plans of ~200–400 lines the orchestrator abbreviated all three. On one task the retype dropped a clause describing a test fake's differentiated return values, and the reviewer — correctly, against the text it was actually given — returned a finding describing *the transcription*, not the plan. It was caught only because the original text still happened to be in context at classification time. **The failure is bidirectional and leaves identical evidence either way:** dropping a clause manufactures a phantom finding the executor is then dispatched to fix, and smoothing a clause the plan got wrong makes a real finding invisible.
->
-> **So: emit the plan in full, and if you cannot, say so in the prompt rather than abbreviating silently.** A prompt that opens "the plan below is abridged" produces findings a classifier can discount; an abridgement presented as verbatim does not. The durable fix is pass-by-path, which needs Phase 6a to write `plan.md` before 6b rather than at 6d — filed, not built here.
+> **Emit the file in full, and if you cannot, say so in the prompt rather than abbreviating silently.** Copying a long plan into a prompt is still generated text: on a measured 3-task cycle with plans of ~200–400 lines, the orchestrator abbreviated all three, and one reviewer returned a finding describing *the transcription*, not the plan. The harm is bidirectional and leaves identical evidence either way: a dropped clause manufactures a phantom finding the executor is dispatched to fix, and a smoothed one hides a real finding. A prompt that opens "the plan below is abridged" produces findings a classifier can discount. Inlining rather than handing the reviewer the path is `/claim-task`'s trade too: the reviewer cannot skip a plan it was handed.
 
 Set the same agent params as Step 7a (`subagent_type: "general-purpose"`, `model: "opus"`, `description: "Adversarial plan review <TASK_ID>"`).
 
@@ -1055,9 +1056,9 @@ You are executing roadmap task `<TASK_ID>`. The orchestrator has already:
 ### Sequence
 
 1. **Absorb findings into the plan.** Re-read the plan above. For each `fixable` finding in `<RAW_FINDINGS>`, decide:
-   - **Incorporate** — revise your mental model of the plan so the implementation accounts for it.
-   - **Reject after consideration** — document the rejection rationale inline when you implement, so the same issue does not resurface during human review.
-2. **Call `ExitPlanMode`** with the revised plan as the plan content. This is the agent's only ExitPlanMode call.
+   - **Incorporate** — revise the plan so the implementation accounts for it.
+   - **Reject after consideration** — record why in item 2's file, so the same issue does not resurface during human review.
+2. **Write the revised plan to `<CLAIM_DIR>/revised-plan.md`** with the `Write` tool, before you implement. It is the only record of what you decided; the orchestrator's `classification.md` beside it is its own reading of the same findings, not yours. `<CLAIM_DIR>` is an **absolute path in the main checkout, outside your worktree**: use it as given and do not `git add` it. It is in the main checkout on purpose, because the record has to outlive `git worktree remove`. Contents: the plan as you will implement it, then a `## Findings` section with one line per finding, `absorbed` and what changed, or `rejected` and why, clause by clause. **There is no `ExitPlanMode` call:** a spawned agent does not have that tool.
 3. **Implement** per the revised plan.\
 3‑tier. **When the work surfaces something adjacent, fix it here — that is the default.** Each finding gets one of three outcomes; nothing is parked.
 
@@ -1219,14 +1220,15 @@ Print the result table:
 Cumulative orchestrator + agent spend: $X.XX  (logged only; no enforcement in v1)
 
 Next steps:
-  - Resume PARKED tasks: cd into the listed worktree. The orchestrator wrote
-    the plan-only agent's raw plan to `sysop/runtime/auto-build/plan.md` and the adversarial
-    verdict to `sysop/runtime/auto-build/review.md` (parking happens BEFORE inline absorption,
+  - Resume PARKED tasks: cd into the listed worktree. The plan-only agent's raw
+    plan is at `sysop/runtime/claim/<TASK_ID>/<CYCLE_TS>/plan.md` in the main checkout,
+    and the orchestrator wrote the adversarial verdict to the worktree's
+    `sysop/runtime/auto-build/review.md` (parking happens BEFORE inline absorption,
     so plan.md is the unrevised plan). Read both, resolve the blocker (answer
     the question, add the missing source data, etc.), then continue the work
     manually — implement it yourself, or hand it to `/claim-task`, which since
     Phase 171 orchestrates plan → independent review → classify → execute in
-    sub-agents. **It does not enter plan mode; nothing does.** The `sysop/runtime/auto-build/` scratch
+    sub-agents. **It does not enter plan mode; nothing in that pipeline does.** The `sysop/runtime/auto-build/` scratch
     directory is not committed by the orchestrator; clean it up before
     `/document-work`. If the worktree was already cleaned up (e.g. via
     `cleanup_worktrees.sh --force`, which removes every non-main worktree
@@ -1238,8 +1240,10 @@ Next steps:
     findings the orchestrator absorbed, which it rejected, and the per-clause reason
     for each rejection. This is the only durable record of that judgment; before
     Phase 236 the all-fixable path wrote nothing at all, so a rejected finding left
-    no trace for anyone to disagree with. It lives in the main checkout, survives
-    `git worktree remove`, and `/review-close` removes it when the task closes.
+    no trace for anyone to disagree with. The executor's own reading sits beside it
+    in `revised-plan.md` (Step 7c item 2), and the planner's `plan.md` with them. The
+    directory lives in the main checkout, survives `git worktree remove`, and
+    `/review-close` removes it when the task closes.
   - For EXECUTED tasks: start a fresh session (`/clear`, or a new terminal),
     then run /review-close to merge each branch — `/review-close` is
     context-independent (it reconstructs from the committed branches, the
@@ -1272,7 +1276,7 @@ After printing the table, the orchestrator's job is done. It does NOT run `/revi
 
 - `/auto-build` selects a batch using the Step 2 batch-sizing rule and presents per-task math to the human (Step 4).
 - After confirmation, the orchestrator pre-claims each task on `main` (Step 5), then runs the three-phase per-task pipeline: Phase 6a plan-only agents → Phase 6b adversarial-reviewer agents → Phase 6c orchestrator classification → Phase 6d halt-or-revise → Phase 6e execution agents (Steps 6-7).
-- Phase-6d `blocker` classification parks the task (lock + worktree intact, `plan.md` + `review.md` written to `<worktree>/sysop/runtime/auto-build/`, and the plan + verdict mirrored to the durable project-root archive `sysop/runtime/parked/<TASK_ID>__<timestamp>.md` so they survive worktree cleanup); other tasks continue.
+- Phase-6d `blocker` classification parks the task (lock + worktree intact, the plan already in `sysop/runtime/claim/<TASK_ID>/<CYCLE_TS>/plan.md`, `review.md` written to `<worktree>/sysop/runtime/auto-build/`, and the plan + verdict mirrored to the durable project-root archive `sysop/runtime/parked/<TASK_ID>__<timestamp>.md` so they survive worktree cleanup); other tasks continue.
 - Unparked tasks reach Phase 6e and execute. Final report (Step 8) prints `EXECUTED` / `PARKED` / `FAILED` with worktree paths.
 - One full cycle on a 2-task batch of Low-effort + single-file tasks from the consumer's `tasks/open/` completes end-to-end, and the human runs `/review-close` cleanly on each resulting branch.
 - A deliberately-broken plan (task body that mentions a non-existent file) causes Phase 6c to classify a `blocker` and Phase 6d to park the task — visible in the final report and via the scratch files.

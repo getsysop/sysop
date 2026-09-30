@@ -104,7 +104,7 @@ give the answer and ask for the plan to be revised with it — a bare re-run of
 tool call over a newer message) and halts again on the same finding.
 ```
 
-…and stop. **The rubric's *do not call `ExitPlanMode`* is a live prohibition here and vacuous everywhere else:** `/plan-review` is the only rubric consumer that reaches `ExitPlanMode` **while a classification is still live**. `/claim-task` never enters plan mode at all; `/auto-build`'s executor does call it (`auto-build/SKILL.md` Phase 6e), but only after the orchestrator has already parked every blocker and skipped that task's execution, so by then there is no blocker for the prohibition to bind.
+…and stop. **The rubric's *do not call `ExitPlanMode`* is a live prohibition here and vacuous everywhere else:** `/plan-review` is the only rubric consumer that reaches `ExitPlanMode` at all. `/claim-task` never enters plan mode, and `/auto-build` prescribes no `ExitPlanMode` call: its orchestrator never enters plan mode, and its agents are spawned sub-agents, which do not have the tool.
 
 **5c — Otherwise every finding is `fixable`.** Produce a revised plan (`REVISED_PLAN`) that is executable as the new source of truth — not a commentary on the original.
 

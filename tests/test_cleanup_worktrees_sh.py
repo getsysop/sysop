@@ -398,7 +398,8 @@ class TestRuntimeArtifactsAreNotSilentlyDestroyed:
     Both of the script's content probes exclude gitignored files: `--clean`'s
     classifier used `ls-files --others --exclude-standard`, and `--force`'s
     warning uses `status --porcelain`. `/auto-build` parks a task by writing
-    `sysop/runtime/auto-build/plan.md` + `review.md` INSIDE the worktree, and a
+    `sysop/runtime/auto-build/review.md` INSIDE the worktree (and, before Phase
+    344, `plan.md` beside it), and a
     parked task's branch carries no commit of its own — so it is an ancestor of
     main, classifies MERGED, and `--clean` removed it with a non-force
     `git worktree remove` that never got the chance to refuse.

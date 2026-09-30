@@ -36,8 +36,10 @@ def skill() -> str:
 @pytest.fixture(scope="module")
 def flat(skill: str) -> str:
     """Whitespace-collapsed. A line-oriented search cannot see a wrapped sentence, which
-    is how a Phase 218 sweep missed five sites it was written to find."""
-    return " ".join(skill.split())
+    is how a Phase 218 sweep missed five sites it was written to find. Blockquote markers go
+    too (Phase 337's round): re-wrapping a quoted rule puts a `>` between two of its words,
+    and every phrase spanning that wrap read as gone while the rule was intact."""
+    return " ".join(re.sub(r"(?m)^[ \t]*(?:>[ \t]?)+", "", skill).split())
 
 
 def _section(text: str, start, end) -> str:

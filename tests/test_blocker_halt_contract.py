@@ -6,9 +6,9 @@ do not execute, surface the question to the human." Two of the three skills that
 rubric said so. `/plan-review` gave `blocker` the *`fixable`* action at four sites and then
 called `ExitPlanMode` anyway — and it is the only rubric consumer that reaches `ExitPlanMode`
 while a classification is still live, so the rubric's one explicitly-named prohibition was
-violated at the only site where it binds. (`/claim-task` never enters plan mode; `/auto-build`
-does instruct an `ExitPlanMode` call in its Phase 6e executor prompt, but only after every
-blocker is parked and that task's execution skipped.)
+violated at the only site where it binds. (`/claim-task` never enters plan mode, and
+`/auto-build`'s agents are spawned sub-agents, which do not have the tool. Its Phase 6e
+executor prompt ordered an `ExitPlanMode` call until Phase 344, and nothing could obey it.)
 
 The contradiction was *created by an extraction*: `/plan-review` Step 5 has said "for each
 blocker → modify" since `94dc48e` (2026-04-11), the commit that added the skill, and never

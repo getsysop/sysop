@@ -49,13 +49,32 @@ stances, each earned by a finding:
   `unknown`, noted, never dropped. Paths are rebased from the stamp's `scan_root`.
 
 CLI: `python3 ingest_security_report.py --root . [--scope-file F] --json`
-     `python3 ingest_security_report.py --root . --mark <dir> [<dir> ...]`
-Exit is always 0 for a readable root (degrade cleanly); the skill treats any failure as
-"ingest unavailable, continue the audit."
+     `python3 ingest_security_report.py --root . --mark <dir> [<dir> ...] (--scope-file F --scope-digest D | --full)`
+
+A mark records what the round FOLDED, not the report as a whole. On a scoped round only
+the in-scope findings are recorded, and the report is offered again carrying just the
+rest, so an out-of-scope finding surfaces when a later round's scope reaches it or on
+the next `--full` round. A mark that names neither flag is refused: marking a scoped
+round's reports whole loses those findings in silence.
+
+A scoped mark re-reads the scope file, which is a fixed name another round can rewrite
+in between, so it also takes the `scope_digest` the ingest printed and refuses when the
+file no longer matches it. The flag is also what keeps an older script from taking a
+scoped mark: it does not know `--scope-digest`, so argparse exits 2 before anything is
+written, where `--scope-file` alone it ignored, and marked the report whole.
+
+The ingest exits 0 for a readable root (degrade cleanly), and 1 only on a `--scope-file` it
+cannot read, one given beside `--full`, or a `--scope-digest` given without a scoped mark;
+the skill treats any failure as "ingest unavailable, continue the audit". A mark exits 1
+when it refuses (a missing, contradictory or stale scope declaration, or a dir it cannot
+read; nothing is written) or when what it computed does not write and read back (part may
+have landed; the error says so). A mark whose reports had no finding in scope computes
+nothing new, records nothing, and exits 0. Options are never abbreviated (exit 2).
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -77,9 +96,13 @@ REQUIRED_FIELDS = ("title", "file", "line", "category", "severity")
 
 SEVERITY_EMOJI = {"HIGH": "🔴", "MEDIUM": "🟡", "LOW": "🟢"}
 
-# The ingested-report marker (gitignored via sysop/runtime/). One report dir
-# basename per line — a report folds in once, so a persistent gitignored report
-# dir is not re-surfaced on every subsequent audit.
+# The ingested-report marker (gitignored via sysop/runtime/). A bare report dir
+# basename on a line means the whole report is folded and is never offered again,
+# so a persistent gitignored report dir is not re-surfaced on every audit.
+# `<dir>\t<key>` means one finding of that report is folded (`finding_key`); the
+# report is still offered, without it. An older script reads a keyed line as a dir
+# name no report has and offers the report again in full, which re-files rather
+# than loses.
 MARKER_REL = "sysop/runtime/ingested-security-reports"
 
 
@@ -126,18 +149,20 @@ class Report:
     reason: str = ""
     caveats: list = field(default_factory=list)
     skipped_reason: str = ""  # non-empty => the whole report could not be used
+    malformed: int = 0        # results lines that were not a readable finding
 
 
-def _load_jsonl(path: Path) -> list | None:
-    """Load a JSONL findings file tolerantly. Blank lines and lines missing a
-    required field are dropped (not fatal); a line that is not JSON is dropped
-    with the rest of the file left intact. None when the file cannot be read or
-    is not UTF-8 — the caller skips the report loudly, never reads it as empty."""
-    out = []
+def _load_jsonl_counted(path: Path) -> tuple[list | None, int]:
+    """Load a JSONL findings file tolerantly: (findings, lines dropped). Blank lines
+    are skipped; a line that is not JSON, not an object, or missing a required
+    field is dropped (not fatal) and counted, so the caller can say so. None when
+    the file cannot be read or is not UTF-8 — the caller skips the report loudly,
+    never reads it as empty."""
+    out, bad = [], 0
     try:
         raw = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
-        return None
+        return None, 0
     for line in raw.splitlines():
         line = line.strip()
         if not line:
@@ -145,12 +170,18 @@ def _load_jsonl(path: Path) -> list | None:
         try:
             obj = json.loads(line)
         except (json.JSONDecodeError, ValueError):
+            bad += 1
             continue
-        if not isinstance(obj, dict):
-            continue
-        if all(k in obj for k in REQUIRED_FIELDS):
+        if isinstance(obj, dict) and all(k in obj for k in REQUIRED_FIELDS):
             out.append(obj)
-    return out
+        else:
+            bad += 1
+    return out, bad
+
+
+def _load_jsonl(path: Path) -> list | None:
+    """`_load_jsonl_counted` without the count."""
+    return _load_jsonl_counted(path)[0]
 
 
 def _load_stamp(report_dir: Path) -> dict | None:
@@ -215,7 +246,7 @@ def parse_report(report_dir: Path) -> Report:
     if not jsonl.is_file():
         rep.skipped_reason = "no CLAUDE-SECURITY-RESULTS.jsonl (aborted or non-report dir)"
         return rep
-    findings = _load_jsonl(jsonl)
+    findings, rep.malformed = _load_jsonl_counted(jsonl)
     if findings is None:
         rep.skipped_reason = f"{RESULTS_JSONL} could not be read, or is not UTF-8"
         return rep
@@ -332,18 +363,44 @@ class _StalenessResolver:
 # --------------------------------------------------------------------------- #
 # Normalization + union
 # --------------------------------------------------------------------------- #
-def normalize(raw: dict, rep: Report, repo_root: Path, resolver: _StalenessResolver) -> dict | None:
-    """Turn one raw finding into a sanitized, provenance-tagged Sysop finding.
-    Returns None if the finding is unusable (path escapes the repo)."""
+def identity(raw: dict, rep: Report, repo_root: Path) -> tuple[str, int, str] | None:
+    """(repo-relative path, line, dedup key) for one raw finding, or None when its
+    path escapes the repo. `normalize` and the mark both call it, so the finding a
+    mark records is exactly the finding the ingest emitted.
+
+    The dedup key uses the RAW (untruncated, unsanitized) title + category so two
+    *distinct* findings whose display titles collide after truncation/sanitization
+    are never merged-and-dropped (the never-supersede invariant). `ingest()` strips
+    it from the emitted output."""
     repo_rel = rebase_path(rep.scan_root, str(raw.get("file", "")), repo_root)
     if repo_rel is None:
         return None
-    severity = str(raw.get("severity", "")).upper()
-    emoji = SEVERITY_EMOJI.get(severity, "🔴")  # security default when unknown
     try:
         line = max(0, int(raw.get("line") or 0))   # a negative line is meaningless
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):   # OverflowError: JSON `1e999` is inf
         line = 0
+    dedup_key = "\x00".join(
+        [repo_rel, str(line), str(raw.get("category", "")), str(raw.get("title", ""))]
+    )
+    return repo_rel, line, dedup_key
+
+
+def finding_key(dedup_key: str) -> str:
+    """The marker's name for one finding. A hash, because the raw key can hold a
+    tab or a newline; `surrogatepass`, because `json.loads` turns a lone `\\ud800`
+    escape into a lone surrogate, which strict UTF-8 refuses to encode."""
+    return hashlib.sha256(dedup_key.encode("utf-8", "surrogatepass")).hexdigest()
+
+
+def normalize(raw: dict, rep: Report, repo_root: Path, resolver: _StalenessResolver) -> dict | None:
+    """Turn one raw finding into a sanitized, provenance-tagged Sysop finding.
+    Returns None if the finding is unusable (path escapes the repo)."""
+    ident = identity(raw, rep, repo_root)
+    if ident is None:
+        return None
+    repo_rel, line, dedup_key = ident
+    severity = str(raw.get("severity", "")).upper()
+    emoji = SEVERITY_EMOJI.get(severity, "🔴")  # security default when unknown
 
     category = sanitize(str(raw.get("category", "")), limit=60)
     title = sanitize(str(raw.get("title", "")), limit=160)
@@ -360,14 +417,6 @@ def normalize(raw: dict, rep: Report, repo_root: Path, resolver: _StalenessResol
         f"cat {category or 'n/a'}, rev {commit}"
         + (f", generated {rep.generated_at}" if rep.generated_at else "")
         + (f", {cwe}" if cwe else "")
-    )
-
-    # Cross-report dedup key uses the RAW (untruncated, unsanitized) title +
-    # category so two *distinct* findings whose display titles collide after
-    # truncation/sanitization are never merged-and-dropped (the never-supersede
-    # invariant). Stripped from the emitted output before return (see ingest()).
-    dedup_key = "\x00".join(
-        [repo_rel, str(line), str(raw.get("category", "")), str(raw.get("title", ""))]
     )
 
     return {
@@ -419,7 +468,7 @@ def union(findings_by_report: list) -> list:
 
 
 # --------------------------------------------------------------------------- #
-# Marker (fold-once)
+# Marker (what earlier rounds folded)
 # --------------------------------------------------------------------------- #
 def _marker_entries(p: Path) -> tuple[set | None, str]:
     """(the recorded dir names, "") — or (None, why) when the marker exists but
@@ -432,10 +481,24 @@ def _marker_entries(p: Path) -> tuple[set | None, str]:
         return None, f"{type(exc).__name__}: {exc}"
 
 
-def read_marker(repo_root: Path) -> set:
-    """The report dirs already folded. No marker yet is the ordinary first run and
-    reads as empty in silence. A marker that EXISTS but cannot be read or decoded
-    also reads as empty, so every folded report is offered again — said on stderr."""
+def _split_marker(entries: set) -> tuple[set, dict]:
+    """(whole-report dir names, {dir name: folded finding keys})."""
+    whole: set = set()
+    keyed: dict = {}
+    for e in entries:
+        d, tab, k = e.partition("\t")
+        if tab:
+            keyed.setdefault(d.strip(), set()).add(k.strip())
+        else:
+            whole.add(e)
+    return whole, keyed
+
+
+def read_marker_state(repo_root: Path) -> tuple[set, dict]:
+    """(whole-report dir names, {dir name: folded finding keys}). No marker yet is
+    the ordinary first run and reads as empty in silence. A marker that EXISTS but
+    cannot be read or decoded also reads as empty, so every folded report is
+    offered again — said on stderr."""
     p = repo_root / MARKER_REL
     have, why = _marker_entries(p)
     if have is None:
@@ -443,27 +506,36 @@ def read_marker(repo_root: Path) -> set:
               f"({sanitize(why, 300)}) — every report it "
               "recorded is treated as NOT yet ingested and will be offered again",
               file=sys.stderr)
-        return set()
-    return have
+        return set(), {}
+    return _split_marker(have)
 
 
-def append_marker(repo_root: Path, dir_names: list) -> str:
-    """Record `dir_names` as folded. Returns "" on success, or why the mark did not
-    land — the caller reports it. "Landed" means READ BACK: a mark appended to a
-    marker that cannot be decoded is written and never read, so the report is
-    offered again while the run said `marked`."""
+def read_marker(repo_root: Path) -> set:
+    """The report dirs folded whole (see `read_marker_state`)."""
+    return read_marker_state(repo_root)[0]
+
+
+def append_marker(repo_root: Path, dir_names: list, keys: dict | None = None) -> str:
+    """Record `dir_names` as folded whole, and each `keys[dir]` finding as folded.
+    Returns "" on success, or why the mark did not land — the caller reports it.
+    "Landed" means READ BACK: a mark appended to a marker that cannot be decoded is
+    written and never read, so the report is offered again while the run said
+    `marked`."""
     p = repo_root / MARKER_REL
     have, why = _marker_entries(p)
     if have is None:
         return f"the marker cannot be read ({why}); nothing was appended"
-    new = list(dict.fromkeys(d for d in dir_names if d and d not in have))  # dedup input too
+    lines = [d for d in dir_names if d]
+    for d, ks in (keys or {}).items():
+        lines.extend(f"{d}\t{k}" for k in ks)
+    new = list(dict.fromkeys(ln for ln in lines if ln not in have))  # dedup input too
     if not new:
         return ""
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
         with p.open("a", encoding="utf-8") as fh:
-            for d in new:
-                fh.write(d + "\n")
+            for ln in new:
+                fh.write(ln + "\n")
     except OSError as exc:
         return f"{type(exc).__name__}: {exc}"
     back, why = _marker_entries(p)
@@ -472,17 +544,76 @@ def append_marker(repo_root: Path, dir_names: list) -> str:
     return ""
 
 
-def find_reports(repo_root: Path, include_ingested: bool) -> list:
-    ingested = set() if include_ingested else read_marker(repo_root)
+def plan_mark(repo_root: Path, dir_names: list, scope: set | None) -> tuple[list, dict, dict, str]:
+    """What a mark records: (dirs folded whole, {dir: newly folded finding keys},
+    {dir: findings still deferred}, "" or why nothing may be recorded).
+
+    Every name must be a report directory under the root, whatever the scope: a
+    typo recorded is a report offered forever and a mark reported as landed.
+    `scope` None is a `--full` round: every finding was folded, so each dir is
+    recorded whole without its findings being read. Otherwise each is read, and only the
+    findings whose file is in `scope` are recorded, beside any recorded earlier;
+    a report whose every finding is now recorded goes whole. One dir that cannot
+    be read refuses the whole mark, so nothing is recorded that was not folded."""
+    # a shell's tab completion writes `CLAUDE-SECURITY-…/`, a name no report has
+    names = list(dict.fromkeys(d.rstrip("/") for d in dir_names if d.rstrip("/")))
+    for d in names:
+        if not REPORT_DIR_RE.match(d) or not (repo_root / d).is_dir():
+            return [], {}, {}, f"{d} is not a report directory under the root; nothing was appended"
+    if scope is None:
+        return names, {}, {}, ""
+    have, why = _marker_entries(repo_root / MARKER_REL)
+    if have is None:
+        return [], {}, {}, f"the marker cannot be read ({why}); nothing was appended"
+    whole_have, keyed_have = _split_marker(have)
+    whole, keys, deferred = [], {}, {}
+    for d in names:
+        if d in whole_have:
+            whole.append(d)          # already whole; `append_marker` writes no duplicate
+            continue
+        rep = parse_report(repo_root / d)
+        if rep.skipped_reason:
+            return [], {}, {}, f"{d} cannot be read ({rep.skipped_reason}); nothing was appended"
+        before = keyed_have.get(d, set())
+        folded, every = set(before), set()
+        for raw in rep.findings:
+            try:
+                ident = identity(raw, rep, repo_root)
+            except Exception:  # noqa: BLE001 — `ingest` drops the same finding
+                ident = None
+            if ident is None:
+                continue
+            k = finding_key(ident[2])
+            every.add(k)
+            if ident[0] in scope:
+                folded.add(k)
+        if every <= folded:
+            whole.append(d)
+        else:
+            if folded - before:
+                keys[d] = sorted(folded - before)
+            deferred[d] = len(every - folded)
+    return whole, keys, deferred, ""
+
+
+def scope_digest(scope: set) -> str:
+    """A short name for one scope set, printed by the ingest and required back by a
+    scoped mark, so the mark can tell the scope file was rewritten in between."""
+    return hashlib.sha256("\n".join(sorted(scope)).encode("utf-8", "surrogatepass")).hexdigest()[:16]
+
+
+def find_reports(repo_root: Path, include_ingested: bool) -> tuple[list, dict]:
+    """(report dirs to read, {dir name: finding keys already folded})."""
+    whole, keyed = (set(), {}) if include_ingested else read_marker_state(repo_root)
     dirs = []
     try:
         entries = sorted(repo_root.iterdir())
     except OSError:
-        return dirs
+        return dirs, keyed
     for d in entries:
-        if d.is_dir() and REPORT_DIR_RE.match(d.name) and d.name not in ingested:
+        if d.is_dir() and REPORT_DIR_RE.match(d.name) and d.name not in whole:
             dirs.append(d)
-    return dirs
+    return dirs, keyed
 
 
 # --------------------------------------------------------------------------- #
@@ -494,7 +625,8 @@ def ingest(repo_root: Path, scope: set | None, include_ingested: bool) -> dict:
     skipped = []
     all_findings = []
 
-    for rdir in find_reports(repo_root, include_ingested):
+    dirs, folded_keys = find_reports(repo_root, include_ingested)
+    for rdir in dirs:
         # Belt-and-suspenders on the never-raise contract: a single malformed
         # report (or one bad finding) is surfaced as `skipped`, never allowed to
         # abort the loop and suppress every other report's findings.
@@ -504,6 +636,7 @@ def ingest(repo_root: Path, scope: set | None, include_ingested: bool) -> dict:
                 skipped.append({"report": rep.dir_name, "reason": rep.skipped_reason})
                 continue
             norm = []
+            dropped = 0
             for raw in rep.findings:
                 try:
                     f = normalize(raw, rep, repo_root, resolver)
@@ -511,6 +644,22 @@ def ingest(repo_root: Path, scope: set | None, include_ingested: bool) -> dict:
                     f = None
                 if f is not None:
                     norm.append(f)
+                else:
+                    dropped += 1
+            if rep.malformed:
+                rep.caveats.append(f"{rep.dir_name}: {rep.malformed} line(s) of {RESULTS_JSONL} "
+                                   "were not a readable finding (not JSON, or missing a "
+                                   "required field) and were not ingested")
+            if dropped:
+                # said, never silent: a report scanned from another checkout drops them all
+                rep.caveats.append(f"{rep.dir_name}: {dropped} finding(s) not ingested: the path is outside "
+                                   "this repo, or the finding could not be normalized")
+            # a finding an earlier round's mark recorded is not offered again;
+            # the report's other findings are (`plan_mark`)
+            folded = folded_keys.get(rep.dir_name, set())
+            fresh = [f for f in norm if finding_key(f["_dedup"]) not in folded]
+            previously_folded = len(norm) - len(fresh)
+            norm = fresh
             all_findings.extend(norm)
             reports_meta.append({
                 "report": rep.dir_name,
@@ -522,6 +671,8 @@ def ingest(repo_root: Path, scope: set | None, include_ingested: bool) -> dict:
                 "reason": rep.reason,
                 "caveats": rep.caveats,
                 "finding_count": len(norm),
+                "previously_folded": previously_folded,
+                "dropped": dropped,
             })
         except Exception as exc:  # noqa: BLE001 — a bad report must not sink the ingest
             skipped.append({"report": rdir.name, "reason": f"unreadable report: {exc}"})
@@ -555,6 +706,7 @@ def ingest(repo_root: Path, scope: set | None, include_ingested: bool) -> dict:
         f.pop("_dedup", None)
 
     return {
+        "scope_digest": None if scope is None else scope_digest(scope),
         "reports": reports_meta,
         "skipped": skipped,
         "trust": {
@@ -593,7 +745,10 @@ def _load_scope(scope_file: str | None) -> set | None:
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(description="Ingest a claude-security report into /security-audit.")
+    # allow_abbrev=False: `--ma D --fu` would otherwise run as `--mark D --full`, a spelling
+    # the skill's guards do not look for
+    ap = argparse.ArgumentParser(description="Ingest a claude-security report into /security-audit.",
+                                 allow_abbrev=False)
     ap.add_argument("--root", default=".", help="repo root to scan for report dirs")
     ap.add_argument("--scope-file", default=None,
                     help="file listing in-scope repo-relative paths (one per line)")
@@ -601,31 +756,72 @@ def main(argv=None) -> int:
     ap.add_argument("--include-ingested", action="store_true",
                     help="do not skip reports already recorded in the marker")
     ap.add_argument("--mark", nargs="*", default=None, metavar="DIR",
-                    help="append these report dir names to the ingested marker, then exit")
+                    help="record what this round folded from these report dirs, then exit; "
+                         "needs --scope-file (a scoped round) or --full")
+    ap.add_argument("--scope-digest", default=None, metavar="D",
+                    help="with --mark --scope-file: the scope_digest the round's ingest printed")
+    ap.add_argument("--full", action="store_true",
+                    help="the round is --full: nothing is out of scope (with --mark, every "
+                         "finding of each named report was folded)")
     args = ap.parse_args(argv)
 
     repo_root = Path(args.root)
-    if args.mark is None:
-        try:
-            scope = _load_scope(args.scope_file)
-        except ScopeFileUnreadable as exc:
+    if args.full and args.scope_file:
+        print("ERROR: --full and --scope-file contradict each other: a --full round has no "
+              "scope file. Nothing was read or recorded.", file=sys.stderr)
+        return 1
+    if args.scope_digest is not None and not (args.mark is not None and args.scope_file):
+        print("ERROR: --scope-digest goes only with --mark --scope-file. Nothing was read or "
+              "recorded.", file=sys.stderr)
+        return 1
+    if args.mark is not None and args.scope_file and not args.scope_digest:
+        print("ERROR: a scoped --mark needs --scope-digest <the scope_digest this round's ingest "
+              "printed>, so it can tell the scope file was not rewritten since. Nothing was "
+              "recorded.", file=sys.stderr)
+        return 1
+    if args.mark is not None and not (args.full or args.scope_file):
+        print("ERROR: --mark needs --scope-file <this round's scope file> on a scoped round, "
+              "or --full on a --full round. Marking a scoped round's reports whole would hide "
+              "their out-of-scope findings for good. Nothing was recorded.", file=sys.stderr)
+        return 1
+    try:
+        scope = _load_scope(args.scope_file)
+    except ScopeFileUnreadable as exc:
+        if args.mark is not None:
+            print(f"ERROR: --scope-file {sanitize(args.scope_file, 300)} could not be read "
+                  f"({sanitize(str(exc), 300)}), so what this round folded is unknown. "
+                  "Nothing was recorded; these reports will be offered again.", file=sys.stderr)
+        else:
             print(f"ERROR: --scope-file {sanitize(args.scope_file, 300)} could not be read "
                   f"({sanitize(str(exc), 300)}). Refusing to ingest unscoped — fix the file "
                   "and re-run; do not drop the flag on a non-full round.", file=sys.stderr)
-            return 1
+        return 1
+    if args.mark is not None and scope is not None and scope_digest(scope) != args.scope_digest:
+        print(f"ERROR: {sanitize(args.scope_file, 300)} no longer matches the scope this round's "
+              f"ingest bucketed with (digest {scope_digest(scope)}, expected "
+              f"{sanitize(args.scope_digest, 40)}): another round may have rewritten it. Nothing "
+              "was recorded; these reports will be offered again.", file=sys.stderr)
+        return 1
     if args.mark is not None:
-        failed = append_marker(repo_root, args.mark)
+        whole, keys, deferred, failed = plan_mark(repo_root, args.mark, scope)
+        if not failed:
+            failed = append_marker(repo_root, whole, keys)
         if failed:
             print(f"ERROR: could not record the mark in {sanitize(str(repo_root / MARKER_REL), 300)} "
                   f"({sanitize(failed, 300)}) — the mark did not land (or landed only in "
                   "part), so these reports can be offered again next round.", file=sys.stderr)
             return 1
         if args.json:
-            print(json.dumps({"marked": args.mark}))
+            print(json.dumps({"marked": whole, "deferred": deferred}))
+        else:
+            print(f"claude-security mark: {len(whole)} report(s) folded whole; "
+                  f"{sum(deferred.values())} finding(s) in {len(deferred)} report(s) "
+                  "left for a round whose scope reaches them")
         return 0
 
     if not repo_root.is_dir():
-        result = {"reports": [], "skipped": [], "trust": {"status": "none", "reasons": [], "caveats": []},
+        result = {"scope_digest": None if scope is None else scope_digest(scope),
+                  "reports": [], "skipped": [], "trust": {"status": "none", "reasons": [], "caveats": []},
                   "findings": [], "out_of_scope": [],
                   "counts": {"in_scope": 0, "out_of_scope": 0, "stale": 0, "stale_unknown": 0,
                              "reports": 0, "skipped": 0}}
@@ -633,7 +829,10 @@ def main(argv=None) -> int:
         result = ingest(repo_root, scope, args.include_ingested)
 
     if args.json:
-        print(json.dumps(result, indent=2, ensure_ascii=False))
+        # a lone surrogate (`json.loads` of a `\ud800` escape) cannot be printed as UTF-8;
+        # write it back as the same JSON escape
+        out = json.dumps(result, indent=2, ensure_ascii=False)
+        print(re.sub(r"[\ud800-\udfff]", lambda m: f"\\u{ord(m.group()):04x}", out))
     else:
         c = result["counts"]
         print(f"claude-security ingest: {c['in_scope']} in-scope, {c['out_of_scope']} out-of-scope, "

@@ -564,12 +564,20 @@ class TestCorrectedClaims:
         assert "the `PLAN_TEXT[<TASK_ID>]` verbatim, followed by the Prompt Template" not in body
         assert "constructs this prompt as `PLAN_TEXT[<TASK_ID>]` verbatim" not in body
 
-    def test_auto_build_states_why_verbatim_is_wrong_there(self):
+    def test_auto_build_reviewer_prompt_is_a_copy_of_the_file(self):
+        """Phase 344 (`Q-316`) retired the fact this test used to pin, "`/auto-build` has
+        no file": the planner now writes `plan.md` before 6b, so 7b copies a file the way
+        `/claim-task` does. What must survive is the instruction against a silent
+        abridgement, and the two-way harm that justifies it: round 1 showed the copy does
+        not remove the risk, because the orchestrator still generates the prompt."""
         sec = section(AUTO_BUILD.read_text(), "### Step 7b: Adversarial-Reviewer Agent Prompt")
-        assert states(sec, "`/auto-build` has no file"), (
-            "the section does not assert the fact the whole correction rests on"
+        assert "contents of `<CLAIM_DIR>/plan.md` verbatim" in sec, (
+            "the reviewer prompt is no longer built from the file the planner wrote"
         )
-        assert "retype" in sec, "the mechanism is not named"
+        assert states(sec, "Emit the file in full"), (
+            "the instruction against a silent abridgement is gone -- a copy of a file is "
+            "still generated text, and the measured harm was an abridgement (round 1)"
+        )
         assert "bidirectional" in sec, (
             "only one direction of the harm is stated — a dropped clause "
             "manufactures a phantom finding, a smoothed one hides a real finding, "
@@ -712,10 +720,12 @@ class TestReasonsArePinned:
 # 4. What the round found — every one of these had NO guard when it was found
 # ─────────────────────────────────────────────────────────────────────────────
 def _extract_claim_dir_gate() -> str:
-    """The shipped `CLAIM_DIR=` + `case` + `mkdir` block from /auto-build 6d."""
+    """The shipped `CLAIM_DIR=` + `case` + `mkdir` block — /auto-build 6d's until Phase
+    344 moved it to 6a, where the planner's `plan.md` needs the directory first. Lifted to
+    the end of the `mkdir` line, so the `echo` of the path runs too."""
     body = AUTO_BUILD.read_text()
     start = body.index('CLAIM_DIR="sysop/runtime/claim/')
-    end = body.index('mkdir -p "$CLAIM_DIR"', start) + len('mkdir -p "$CLAIM_DIR"')
+    end = body.index("\n", body.index('mkdir "$CLAIM_DIR"', start))
     return body[start:end]
 
 
@@ -754,7 +764,7 @@ class TestTheClassificationDirGate:
     def test_the_gate_tests_the_variable_the_mkdir_uses(self):
         block = _extract_claim_dir_gate()
         assert 'case "$CLAIM_DIR"' in block, "the gate does not test the built path"
-        assert 'mkdir -p "$CLAIM_DIR"' in block, "the mkdir does not use the tested path"
+        assert 'mkdir "$CLAIM_DIR"' in block, "the mkdir does not use the tested path"
 
     @pytest.mark.parametrize(
         "task_id,cycle,expect_created",

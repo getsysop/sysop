@@ -1272,8 +1272,9 @@ def test_ingest_mark_reports_a_marker_it_could_not_write(tmp_path, capsys, break
         if hasattr(os, "geteuid") and os.geteuid() == 0:
             pytest.skip("root writes into a mode-000 directory")
         marker.parent.chmod(0o555)
+    (tmp_path / "CLAUDE-SECURITY-20260901-000000").mkdir()   # a mark names a real report dir
     try:
-        rc = ing.main(["--root", str(tmp_path), "--mark", "CLAUDE-SECURITY-20260901-000000", "--json"])
+        rc = ing.main(["--root", str(tmp_path), "--mark", "CLAUDE-SECURITY-20260901-000000", "--full", "--json"])
     finally:
         marker.parent.chmod(0o755)
     cap = capsys.readouterr()
@@ -1284,9 +1285,10 @@ def test_ingest_mark_reports_a_marker_it_could_not_write(tmp_path, capsys, break
 
 def test_ingest_mark_still_marks(tmp_path, capsys):
     """Control."""
-    assert ing.main(["--root", str(tmp_path), "--mark", "CLAUDE-SECURITY-x", "--json"]) == 0
-    assert json.loads(capsys.readouterr().out) == {"marked": ["CLAUDE-SECURITY-x"]}
-    assert ing.read_marker(tmp_path) == {"CLAUDE-SECURITY-x"}
+    (tmp_path / "CLAUDE-SECURITY-20260901-000001").mkdir()
+    assert ing.main(["--root", str(tmp_path), "--mark", "CLAUDE-SECURITY-20260901-000001", "--full", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out) == {"marked": ["CLAUDE-SECURITY-20260901-000001"], "deferred": {}}
+    assert ing.read_marker(tmp_path) == {"CLAUDE-SECURITY-20260901-000001"}
 
 
 def test_grep_position_check_names_a_file_it_could_not_read(tmp_path, capsys):
@@ -1370,7 +1372,8 @@ def test_ingest_mark_refuses_a_marker_it_cannot_read_back(tmp_path, capsys):
     marker.parent.mkdir(parents=True, exist_ok=True)
     marker.write_bytes(b"CLAUDE-SECURITY-old\n" + BAD)
     before = marker.read_bytes()
-    rc = ing.main(["--root", str(tmp_path), "--mark", "CLAUDE-SECURITY-new", "--json"])
+    (tmp_path / "CLAUDE-SECURITY-20260901-000002").mkdir()
+    rc = ing.main(["--root", str(tmp_path), "--mark", "CLAUDE-SECURITY-20260901-000002", "--full", "--json"])
     cap = capsys.readouterr()
     assert rc == 1 and cap.out == "", (rc, cap.out, cap.err)
     assert "the marker cannot be read" in cap.err and "UnicodeDecodeError" in cap.err, cap.err
@@ -1386,7 +1389,8 @@ def test_ingest_mark_checks_the_mark_reads_back_after_the_append(tmp_path, capsy
         calls["n"] += 1
         return real(p) if calls["n"] == 1 else (None, "UnicodeDecodeError: injected")
     monkeypatch.setattr(ing, "_marker_entries", flaky)
-    rc = ing.main(["--root", str(tmp_path), "--mark", "CLAUDE-SECURITY-new", "--json"])
+    (tmp_path / "CLAUDE-SECURITY-20260901-000002").mkdir()
+    rc = ing.main(["--root", str(tmp_path), "--mark", "CLAUDE-SECURITY-20260901-000002", "--full", "--json"])
     cap = capsys.readouterr()
     assert rc == 1 and "does not read back" in cap.err and cap.out == "", (rc, cap.err)
 
