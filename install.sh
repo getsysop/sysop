@@ -3966,7 +3966,7 @@ EOF
 # original four: Phase 143 added pending-rounds/, 149 round-receipts/, and
 # 159b split parked/ out of auto-build/.
 #   sysop/runtime/subagent-envelopes/  in-flight SubagentStop envelope JSON (Phase 37)
-#   sysop/runtime/auto-build/          /auto-build per-worktree plan + review scratch
+#   sysop/runtime/auto-build/          /auto-build per-worktree park-verdict scratch (review.md)
 #   sysop/runtime/parked/              parked-task plan + adversarial-verdict archive (Phase 65a, renamed Phase 159b)
 #   sysop/runtime/pending-docs/        deferred documentation drafts (/document-work Step 3)
 #   sysop/runtime/locks/               in-progress task locks (claim_task.sh; Phase 32)
@@ -5137,7 +5137,7 @@ migrate_runtime_dirs() {
 # gitignored (untracked), so this is a plain mv — same class as Phase 133.
 #
 # NOTE the sibling that does NOT move: sysop/runtime/auto-build/ survives as
-# /auto-build's per-worktree plan.md/review.md scratch home. Only parked/
+# /auto-build's per-worktree review.md scratch home. Only parked/
 # comes out.
 PARK_OLD_REL="sysop/runtime/auto-build/parked"
 PARK_NEW_REL="sysop/runtime/parked"

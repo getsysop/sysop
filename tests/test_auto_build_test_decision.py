@@ -238,7 +238,12 @@ def test_the_plan_skeleton_orders_the_section_before_implementation_steps() -> N
     # bullet's own `## Test decision` mention. Deleting the section from the skeleton
     # left this test GREEN, satisfied by an incidental occurrence. Found by this phase's
     # own battery (M03).
-    skeleton = slice_between(text, "<task summary>", "\n```\n````", "auto-build plan skeleton")
+    # Phase 344: the skeleton is now the file the planner writes, one plain fence with
+    # no outer four-backtick wrapper, so it ends where the `### Final message` heading starts.
+    # A compiled pattern, because a literal anchor is read whitespace-tolerantly and that
+    # tolerance cannot span the blank line between the fence and the heading.
+    skeleton = slice_between(text, "<task summary>", re.compile(r"\n```\n\n### Final message"),
+                             "auto-build plan skeleton")
     assert len(skeleton) < 600, (
         f"the plan skeleton slice is {len(skeleton)} characters, which is not a skeleton "
         "-- an anchor has moved and this slice now spans unrelated prose, where an "

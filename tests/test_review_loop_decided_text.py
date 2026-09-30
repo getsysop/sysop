@@ -98,7 +98,7 @@ PINS = {
     "codebase-review 5b mapping": "3aaa6eed58591db4",
     "security-audit 5b mapping": "bcf1282a246654c6",
     "security-audit 5b own line": "a45fffaa2b5b853e",
-    "security-audit 3c trust arms": "699f150190df2aae",
+    "security-audit 3c trust arms": "564ac7d4a4fc3ffa",
     "security-audit step 6 ingested": "c0820d029cad71c1",
     "contribute-convention step 2": "38b38d03c5b3b048",
     "contribute-convention step 3": "85e907512ed49854",

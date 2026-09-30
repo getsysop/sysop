@@ -274,10 +274,10 @@ class Discrepancy:
 
 def _read_locks(main_root: Path, unreadable: list | None = None) -> list[Lock]:
     locks_dir = main_root / "sysop/runtime/locks"
-    if not locks_dir.is_dir():
-        return []
+    # Listed by `_list_locks_dir` (end of module), which names a listing that fails.
+    names = _list_locks_dir(locks_dir, unreadable)
     out: list[Lock] = []
-    for p in sorted(locks_dir.glob("*.lock")):
+    for p in sorted(locks_dir / n for n in names if n.endswith(".lock")):
         if p.name == ".gitkeep":
             continue
         raw, exc = _load_lock_file(p)
@@ -1042,6 +1042,9 @@ def _park_markers(main_root: Path, claim_id: str) -> list[Path]:
         return []
 
 
+_CLAIM_TASK_RUN_ID = re.compile(r"\d{8}T\d{6}Z-[0-9a-f]{8}")
+
+
 def _newest_claim_run(main_root: Path, claim_id: str) -> Path | None:
     """The most recent per-run artifact directory for a claim, or None.
 
@@ -1049,6 +1052,16 @@ def _newest_claim_run(main_root: Path, claim_id: str) -> Path | None:
     lexical sort IS chronological. Deliberately not mtime: a clone, a checkout
     or a copy resets mtime, and this directory is gitignored precisely so it is
     the kind of thing that gets rebuilt.
+
+    **Only that shape is a run, and only when it is the NEWEST directory.**
+    `/auto-build` writes `claim/<id>/<UTC stamp>/` too, with no hex half (6d since
+    Phase 236, and 6a for every task since Phase 344). It is not a `/claim-task`
+    run: `--resume` there finds no `planner-integrity.md`, re-plans, and drops the
+    blocker the human was asked about. And when an `/auto-build` cycle is newer
+    than an old `/claim-task` run (a claim released and later taken by
+    `/auto-build`; nothing removes claim directories mid-lifecycle), the old run
+    is not the live claim either, so a filter that skipped non-runs and returned
+    the next one down named a stale run (Phase 344 round 2).
     """
     d = main_root / "sysop" / "runtime" / "claim" / claim_id
     if not d.is_dir():
@@ -1057,7 +1070,7 @@ def _newest_claim_run(main_root: Path, claim_id: str) -> Path | None:
         runs = sorted((p for p in d.iterdir() if p.is_dir()), reverse=True)
     except OSError:
         return None
-    return runs[0] if runs else None
+    return runs[0] if runs and _CLAIM_TASK_RUN_ID.fullmatch(runs[0].name) else None
 
 
 def _classification_verdict(run: Path) -> str:
@@ -1146,7 +1159,7 @@ def _park_stamps(path: Path, name: str) -> list[datetime]:
     direction the other is right in: mtime is refreshed by a copy or a restore
     of `sysop/runtime/`, which reads every park as the latest event (the
     conservative error); the name's stamp is the run's START, which for a
-    `planner committed during 7a` park precedes the commits it parked on — but
+    `planner-integrity VIOLATED in 7a` park precedes the commits it parked on — but
     a run that started AFTER the newest commit cannot have parked before it,
     so a name stamp newer than the commit keeps the park even when a restore
     has put the mtime before it (Phase 252's round, execute lens).
@@ -1231,8 +1244,9 @@ def _claim_stall(
                 f"/claim-task {claim_id} --resume {run.name}"
             )
         else:
-            # An /auto-build park has no claim/<id>/ run directory at all. Do
-            # not print a --resume line naming a run that does not exist.
+            # An /auto-build park has no /claim-task run: its claim/<id>/ cycle
+            # directory (Phase 344) is not one, and `_newest_claim_run` skips it.
+            # Do not print a --resume line naming a run that does not exist.
             action = (
                 f"read sysop/runtime/parked/{newest.name} — it records why "
                 f"{claim_id} stopped and what it is waiting on"
@@ -1316,10 +1330,11 @@ def _classify_task(
     # `Lock(started="")`, which short-circuits the stale check and hid it.
     #
     # `Q-362`: the probe is no longer gated on `not commits`. Two shipped park
-    # sites guarantee commits (`planner-integrity.md` = `VIOLATED` is DEFINED
-    # as the planner having committed; an executor `STATUS: BLOCKED` parks
-    # after the executor ran), and gating the probe on their absence classified
-    # both as `in progress`. The gate lives in the arms below now, where the
+    # sites can leave commits (`planner-integrity.md` = `VIOLATED` is recorded
+    # when HEAD moved or left the task branch during 7a, usually a planner
+    # commit; an executor `STATUS: BLOCKED` parks after the executor ran), and
+    # gating the probe on their absence classified both as `in progress`. The
+    # gate lives in the arms below now, where the
     # commit count and the park evidence are read TOGETHER — and the batch
     # path (`_classify_review_batches`) applies the same three-way rule, which
     # is what keeps the two paths from disagreeing about what a park means.
@@ -1978,9 +1993,10 @@ def _classify_review_batches(
         # park is. Until Phase 252 the probe was gated on `not commits` on
         # both paths, on the false premise that a park is "by construction the
         # state where nothing has been produced"; `claim-task/SKILL.md` parks
-        # on `planner-integrity.md` = `VIOLATED`, whose definition is that the
-        # planner COMMITTED, and again on an executor `STATUS: BLOCKED` after
-        # the executor ran. Phase 248's round reproduced the result: marker +
+        # on `planner-integrity.md` = `VIOLATED`, recorded when HEAD moved or left
+        # the task branch (usually a planner commit), and on an executor
+        # `STATUS: BLOCKED` after the executor ran. Phase 248's round reproduced
+        # the result: marker +
         # lock + one commit read `in progress — continue work; 0 of N tasks
         # have Doc-Work trailers yet`, verbatim the string `Q-317` was filed
         # about, and Phase 248 declined to widen one path alone.
@@ -3147,6 +3163,22 @@ def main() -> int:
     # rather than failing a strict stdout (`Q-612`).
     sys.stdout.write(re.sub("[\ud800-\udfff]", lambda m: "\\u%04x" % ord(m.group()), text))
     return 0
+
+
+
+def _list_locks_dir(locks_dir: Path, unreadable: list | None) -> list[str]:
+    """The names in the locks directory. An absent directory holds no claims; one that
+    exists and cannot be listed is a gating input the survey could not read. `glob`
+    answered `[]` for both, so every live claim's worktree read as an orphan whose
+    removal the survey then suggested (Phase 339's round 2)."""
+    try:
+        return os.listdir(locks_dir)
+    except (FileNotFoundError, NotADirectoryError):
+        return []
+    except OSError as exc:
+        _unreadable_input(locks_dir, exc, "no lock could be listed, so every claim is "
+                          "unknown and no worktree can be called an orphan", unreadable)
+        return []
 
 
 if __name__ == "__main__":

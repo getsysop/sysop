@@ -249,3 +249,29 @@ def test_overlay_fields_survives_a_hand_authored_file(tmp_path):
     )
     assert registry_drift.overlay_fields(reg) == {}            # nothing usable
 
+
+
+def test_every_filed_divergence_names_a_real_check_and_field():
+    """ACCEPTED entries have always been held to a shipped check; FILED entries were
+    held only to a compared field (`test_every_field_the_filed_dict_keys_on_is_actually_
+    compared`), so a renamed check left its suppression pointing at nothing with every
+    test green (Phase 340's round, guards lens)."""
+    shipped = registry_drift.sysop_checks()
+    for (cid, field), reason in registry_drift.FILED_DIVERGENCES.items():
+        assert cid in shipped, f"filed divergence names an unknown check: {cid}"
+        assert field in registry_drift.COMPARED_FIELDS, f"{cid}.{field} is not compared"
+        assert len(reason) > 40, f"{cid}.{field} needs a real reason, got {reason!r}"
+
+
+@requires_upstream
+def test_every_suppressed_divergence_still_diverges():
+    """A suppression outlives the difference it explained when the two sides converge:
+    nothing reds, because a matching field is never compared against the list. Under an
+    umbrella queue entry that carries several rows, the entry's tick never comes either
+    (Phase 340's round, guards lens). So each suppressed field must still differ."""
+    ours = registry_drift.sysop_checks()
+    theirs = registry_drift.upstream_checks(_upstream())
+    live = {(cid, field) for cid, field, *_ in registry_drift.divergences(ours, theirs, {})}
+    stale = sorted(set(registry_drift.ACCEPTED_DIVERGENCES) | set(registry_drift.FILED_DIVERGENCES))
+    stale = [k for k in stale if k[0] in theirs and k not in live]
+    assert not stale, f"suppressed but no longer divergent — remove the entry: {stale}"

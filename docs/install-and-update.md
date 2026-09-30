@@ -189,7 +189,7 @@ sysop/
     ├── postgres/                      # populated (convention_map, security_map,
     │                                  #   checks.yml.fragment, 2 semgrep rules)
     ├── nextjs-react/                  # populated (convention_map, security_map,
-    │                                  #   checks.yml.fragment, 4 semgrep rules)
+    │                                  #   checks.yml.fragment, 5 semgrep rules)
     ├── llm/                           # populated (convention_map, security_map,
     │                                  #   checks.yml.fragment, 1 semgrep rule)
     ├── beancount/                     # populated (convention_map, security_map;

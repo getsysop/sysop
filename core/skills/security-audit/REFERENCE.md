@@ -199,3 +199,39 @@ it, so the runner then writes `(none — write no file)` in the placeholder. The
 heredocs only, which is the fail-safe direction: it can still compute, and it cannot collide with a
 sibling. Seeding a rule was not done here, because it would widen the permission surface of every
 install to buy a scratch file that a heredoc already replaces.
+
+## Step 7 — why the claude-security mark names its scope, and carries a digest
+
+Step 3c buckets an ingested report's findings by the round's scope file and promises the
+out-of-scope ones come back on a later round whose scope reaches them, or the next `--full` round.
+Until Phase 338 the mark after the round recorded the report whole, and a recorded report was never
+read again, so on every scoped round those findings were counted in the summary and then lost.
+The mark now records only the findings the round folded; the report is offered again
+carrying the rest, and goes whole once every finding it emits is recorded.
+
+**The scope flag is required, not defaulted.** A mark with neither `--scope-file` nor `--full` is
+refused, because the old default — the whole report — is the defect.
+
+**Why a digest and not just the scope file.** `sysop/runtime/audit-scope.txt` is a fixed name.
+A concurrent round can rewrite it between Step 3c's ingest and Step 7's mark, and the mark would then
+record the other round's in-scope findings as folded: a finding this round never filed would be
+hidden for good. The ingest prints `scope_digest`, and a scoped mark refuses when the file no longer
+matches it; the report is then offered again without anything that mark would have recorded,
+which re-files rather than loses. The digest
+also keeps an older script from taking a scoped mark: before Phase 338 the script ignored
+`--scope-file` beside `--mark` and recorded the report whole, and it does not know
+`--scope-digest`, so argparse exits 2 before anything is written. The plugin and bash-installer
+paths update independently, so a consumer can hold the new skill and the old script. That pairing
+never lands a mark (a scoped round has no digest to pass, and the old script does not know
+`--full` either), so every report is offered whole each round and Step 4 re-files every fixed
+finding as a possible regression, the cost that ruled out re-folding whole reports. The skill
+tells the runner to name the update rather than fall back to a bare mark, because the bare mark is
+the defect.
+
+**Why the mark runs after the commit.** A recorded finding is never offered again, so its task
+must already be durable. A mark before the commit that then fails loses the finding.
+
+**Why "never `--full` when 3c passed `--scope-file`" is keyed to the ingest and not to the round's
+name.** Step 1 allows `--full --scope <area>`, and Step 3c decides by the round's mode, so the two
+readings can differ on such a round. The mark must declare the scope the ingest actually bucketed
+with — whether Step 3c passed a scope file — whatever the round is called.

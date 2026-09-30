@@ -195,9 +195,9 @@ CITATION_ANCHORS = {
     # citation pointed at -- so the prose named the wrong site for BOTH -- stayed GREEN.
     # The anchor kept line-precision and lost site-discrimination. This one is a
     # sentence only Step 7f's copy carries.
-    ("core/skills/review-close/SKILL.md", "claim-task/SKILL.md:1325"):
+    ("core/skills/review-close/SKILL.md", "claim-task/SKILL.md:1420"):
         'emits `fence + "markdown"` below',
-    ("core/skills/review-close/SKILL.md", "claim-task/SKILL.md:1928"):
+    ("core/skills/review-close/SKILL.md", "claim-task/SKILL.md:2023"):
         "and not line.strip().strip(mark[0])",
     ("core/skills/auto-fix/SKILL.md", "archive_review_tasks.py:175"):
         "Merged|Complete",

@@ -64,7 +64,7 @@ respective read-then-``rm -f`` steps) are unaffected — but "byte-identical" is
 true of the filename only, and saying it of the behaviour would be false. This
 exists for the orchestrator reshape (specified in tools/CLAIM_TASK_ORCHESTRATOR_SPEC.md,
 maintainer-side and not in the public tree), where one claim spawns a planner, a
-reviewer and an executor.
+reviewer and an executor, and since Phase 345 an answers executor.
 
 Plus the reviewer's REVIEW_REPORT YAML at the TOP of its response
 (see _shared/adversarial-review.md § The reviewer-executor variant is retired). The hook
@@ -77,8 +77,8 @@ content in your final message" instruction.
 Cleanup, and the two parents differ. /auto-build Phase 6e deletes the JSON file
 after consuming it. **/claim-task Step 8 does NOT, since Phase 171** — deleting
 the envelope at the moment it became evidence is why a review that ran and a
-review that was skipped left identical traces (internal tracker #220). It keeps all
-three, and instead /claim-task Step 7-pre MOVES any envelope left over from a
+review that was skipped left identical traces (internal tracker #220). It keeps them
+all, and instead /claim-task Step 7-pre MOVES any envelope left over from a
 previous run of the same claim into that run's artifact directory before
 spawning, since the filename below carries no run component. That move runs on a
 FRESH claim only -- a --resume adopts an existing run and deliberately leaves the

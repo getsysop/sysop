@@ -90,7 +90,6 @@ def live_prose(text: str, start: str, end: str, name: str) -> str:
     return "\n".join(out)
 
 
-
 def require_maintainer_side(p: Path) -> str:
     """Read a mirror-excluded file, or skip.
 
@@ -298,13 +297,14 @@ def test_the_questions_shape_carries_what_the_orchestrator_needs() -> None:
         assert re.search(r"(?m)^[-*+] " + re.escape(field), shape), f"the questions.md shape lost {field!r}"
 
 
-def test_claim_task_step_8_reports_the_filed_questions() -> None:
-    """Step 8 reports; it does not ask-and-fix (Wade's call after round 2, Phase 323).
+def test_claim_task_step_8_reports_then_asks_a_human() -> None:
+    """Step 8 reports the executor's questions, then asks them on option A or a resume.
 
-    Two rounds disqualified in-branch ask-and-fix for `/claim-task`: first the orchestrator
-    was told to edit files, then a follow-up executor could report a failed fix as success.
-    So the executor files the task with the question in it, and Step 8 puts the question in
-    front of the human. The in-branch version is `Q-593`.
+    Phase 323 shipped report-only after two rounds disqualified in-branch ask-and-fix: first
+    the orchestrator was told to edit files, then a follow-up executor could report a failed
+    fix as success. `Q-593` recorded what a build must carry, and Phase 345 built it as Steps
+    8b and 8c on Wade's answers of 2026-09-29. The orchestrator still never fixes; it asks,
+    records and spawns.
     """
     text = read(CLAIM)
     step = slice_between(
@@ -315,12 +315,52 @@ def test_claim_task_step_8_reports_the_filed_questions() -> None:
         ("filed on the branch as a task carrying the question", "where the finding went"),
         ("`filed as:` id", "the task id the human answers on"),
         ("Do not answer or fix them yourself; this skill never implements.", "the orchestrator boundary"),
+        ("on option A, or on any `--resume`", "who is asked"),
+        ("**On a fresh option-B run, do not ask**", "option B staying unattended"),
+        ("/claim-task <CLAIM_ID> --resume <RUN_ID>", "the command that asks under option B"),
     ]:
         assert carries(step, needle), f"claim-task Step 8's report lost {why} ({needle!r})"
-    for gone in ("answers.md", "spawn the executor again", "AskUserQuestion"):
-        assert gone not in step, f"claim-task Step 8 carries {gone!r}, the ask-and-fix shape round 2 disqualified"
     at = text.index("**Then report the questions the executor filed.**")
     assert text.index("**If that printed `MISSING` or `TEMPLATE`, stop and say so") < at < text.index("## Claim complete: <CLAIM_ID>")
+
+    s8c = text[text.index("### Step 8c: Spawn the answers executor"):]
+    for needle, why in [
+        ("**verbatim from START to END**", "the full Step 7e prompt, not an inline one"),
+        ("`answers` for `<ENVELOPE_PHASE>`", "its own envelope phase"),
+        ("never `exec.json`, which is the first executor's", "not reading the first executor's result"),
+        ("re-run Step 8's stranded-body check and its test-decision read-back", "the read-back after it commits"),
+        ("Handle it as `FAILED`", "a success claim the branch contradicts"),
+        ("**Do not rewrite `classification.md`.**", "a BLOCKED park that does not re-run the first executor"),
+        ("**No auto-retry.**", "no retry on failure"),
+        ("**do not spawn again.**", "a recorded spawn is read, not repeated (round 1)"),
+        ("**write nothing to `questions.md`**", "the answers run is not asked again (round 1)"),
+        ("records the spawn in `answers-started.md`, and prints the branch tip", "the start record, named where it is made (round 2, X08)"),
+    ]:
+        assert carries(s8c, needle), f"claim-task Step 8c lost {why} ({needle!r})"
+    s8b = slice_between(text, "### Step 8b: Ask the executor's questions", "### Step 8c", "claim-task Step 8b")
+    for needle, why in [
+        ("**List first:**", "the listing decides whether to ask (round 1)"),
+        ("**On `ASK=no`, do not ask.**", "a final record stops the ask (round 1)"),
+        ("Build the menu from the listing, not from reading the file", "one parse for the menu and the record"),
+        ("**If the record exits non-zero, print the answers you collected and stop**", "answers are never silently lost"),
+        ("**A result that says the human may be away**", "a timed-out menu is not an answer (round 2)"),
+        ("**is not an answer**, even when it names an option", "a pre-highlighted Fix is not a decision"),
+        ("After a record, run Step 8c, whatever the count. After `ASK=no`, do not:", "8c runs only after a record (round 2, X02)"),
+        ("If it exits non-zero, report its error and do not ask.", "the listing's failure arm (round 2)"),
+    ]:
+        assert carries(s8b, needle), f"claim-task Step 8b lost {why} ({needle!r})"
+    # Guards lens, R20: after 8c the tip is the answers commit, and amending the executor's
+    # commit would rewrite below it.
+    assert carries(text, "**amend** the branch's tip commit (the executor's, or Step 8c's)")
+    s7pre = slice_between(text, "### Step 7-pre", "### Step 7a", "claim-task Step 7-pre")
+    rows = ["| `answers-outcome.md` reads `answers_status: BLOCKED` | **Step 8b** |",
+            "| `answers-outcome.md` present | **Step 8** |",
+            "| `answers.md` present | **Step 8c** |",
+            "| `outcome.md` reads `executor_status: EXECUTED` and `questions.md` holds a `## ` entry |",
+            "| `outcome.md` present | **Step 8** |"]
+    at = [s7pre.find(r) for r in rows]
+    assert -1 not in at, f"Step 7-pre lost an answers row: {[r for r, i in zip(rows, at) if i < 0]}"
+    assert at == sorted(at), "Step 7-pre's answers rows are out of order; the table is first-match"
 
 
 def test_document_work_commits_what_step_3_fixes() -> None:
@@ -2320,6 +2360,14 @@ def _pin_liveness(path: Path, text: str, at: int, fenced_ok: bool) -> str | None
 
 WORKFLOW_HTML = REPO_ROOT / "docs" / "workflow.html"
 
+def _pin_quoted(phrase: str) -> re.Pattern:
+    """An anchor for a phrase inside a blockquote: its words may re-wrap onto a new `> `
+    line, which `anchor()` refuses on purpose (its docstring: a site that needs it says so).
+    The phrase carries no `>`; `_pin_span` restores the quote prefix as the line's lead."""
+    gap = r"(?:[ \t]*\n[ \t]{0,3}(?:>[ \t]?)+[ \t]*|[ \t]+)"
+    return re.compile(gap.join(re.escape(word) for word in phrase.split()))
+
+
 # label: (path, start, end, maintainer_side)
 PINNED_SPANS = {
     # Anchors here carry no list marker: `_pin_span` restores a marker lead and drops a
@@ -2328,6 +2376,18 @@ PINNED_SPANS = {
     "auto-build rule block": (BUILD, RULE_BLOCKS["auto-build"][1], RULE_BLOCKS["auto-build"][2], False),
     "document-work rule block": (DOCWORK, RULE_BLOCKS["document-work"][1], RULE_BLOCKS["document-work"][2], False),
     "claim-task Step 8 report": (CLAIM, "**Then report the questions the executor filed.**", "\n\nThen:\n", False),
+    # Phase 345 (`Q-593`): Step 8's ask, on Wade's four answers of 2026-09-29.
+    "claim-task Step 8 ask gate": (CLAIM, "**Then ask them: run Step 8b", "\n\nThen:\n", False),
+    "claim-task Step 8b ask": (CLAIM, "Step 8 sends a run here on option A", "Then run the block again with one pair", False),
+    "claim-task Step 8b leave rule": (CLAIM, "Then run the block again with one pair", "**If the record exits non-zero", False),
+    "claim-task Step 8c spawn arms": (CLAIM, "**`SPAWN=no`**: go back to Step 8's report.", "**START OF ANSWERS ADDENDUM**", False),
+    "claim-task Step 8c addendum": (CLAIM, "**START OF ANSWERS ADDENDUM**", "**END OF ANSWERS ADDENDUM**", False),
+    "claim-task Step 8c outcomes": (CLAIM, "**`EXECUTED`**: re-run Step 8's", "Every arm but `BLOCKED` then returns", False),
+    # Round 1 of Phase 345 (guards lens): every prose site outside a pin walked.
+    "claim-task Step 8c read": (CLAIM, "When it returns, read `sysop/runtime/subagent-envelopes/<CLAIM_ID>.answers.json`", "Then record the outcome:", False),
+    "claim-task 7-pre answers rows": (CLAIM, "| `classification.md` reads `verdict: BLOCKED` | **7c** |", "| `plan-only.md` present |", False),
+    "claim-task auto-mode chaining": (CLAIM, "**Auto-mode chaining.**", "**On `STATUS: BLOCKED`**", False),
+    "claim-task 7c park callers": (CLAIM, "**If any finding is `blocker` — park. Do not spawn the executor.**", "supplies its own `<PARK_REASON>`:", False),
     "claim-task hard constraints": (CLAIM, "Do **NOT** invoke the Agent tool — this run is a leaf", "### Required final-message format", False),
     "claim-task record item": (CLAIM, "**Persist the `## Test decision`**", "**Post-fix convention verification", False),
     "claim-task stranded probe": (CLAIM, "# The pathspec stays exactly `tasks/`.", "**An untracked body is not `STRANDED`", False),
@@ -2379,6 +2439,22 @@ PINNED_SPANS = {
     "adversarial-review scratch bullet": (REPO_ROOT / "core" / "skills" / "_shared" / "adversarial-review.md",
                                           "**Give each concurrent reviewer its own `TMPDIR`.**",
                                           "**Why this is a rule here and not a caveat below.**", False),
+    # Phase 337 (`Q-569` + `Q-578`), Wade's pick of 2026-09-27: where §6's entries end, the
+    # rotation dedupe's join key, where a missing class heading is judged, and item 5's
+    # post-write check with its exit contract. The check's code is inside its span, so a change
+    # to what it compares moves the pin as a change to the prose does. Its round reversed the
+    # rule from OUTSIDE the first spans (the §6 writer, the Rotation check line, item 7's
+    # commit, Step 8's rows), so the spans now run from the §6 writer to the contract's end, and
+    # item 7 and Step 8's documentation rows have their own.
+    "review-close 4c rotation boundary": (CLOSE, "**PROJECT_STATUS.md §6**: Generate a one-line entry",
+                                          _pin_quoted("**The changelog contract — one file, one grammar"), False),
+    "review-close 4c changelog contract": (CLOSE, _pin_quoted("**The changelog contract — one file, one grammar"),
+                                           _pin_quoted("**Why the second condition.**"), False),
+    "review-close 4c post-write check": (CLOSE, "**Check what the writes above did, before the pending-docs are deleted.**",
+                                         "**Stage, then commit**: `docs: consolidate", False),
+    "review-close 4c stage and commit": (CLOSE, "**Stage, then commit**: `docs: consolidate",
+                                         "### 4d. Land on", False),
+    "review-close Step 8 documentation rows": (CLOSE, "Documentation written:", "✓ UI_Iterations.md:", False),
 }
 # Phase 333 (`Q-588`): Wade's 2026-09-25 menu decisions on the two review skills' reviewer
 # placement -- a denied `git worktree add` falls back to no isolation, and a refused removal is
@@ -2408,14 +2484,96 @@ for _skill, _path in REVIEW_SKILL_PATHS.items():
         f"{_skill} pre-flight stop and worktree note": (
             _path, "If any are missing, stop with", "If `$ARGUMENTS` contains `--skip-permission-guard`", False),
     })
+# Phase 338 (`Q-581`, Wade's menu answer 2026-09-27: record the folded set). A mark names the
+# round's scope, and records only the in-scope findings, so a deferred finding comes back. Its
+# round walked meaning-changing sentences past pins that began at the new text: one line placed
+# above the Step 7 block, and the out-of-scope bullet above the pointer. So each pin now runs
+# from the step's heading (or the result bullets' first line) to the next heading.
+PINNED_SPANS.update({
+    "security-audit 3c mark pointer": (
+        REVIEW_SKILL_PATHS["security-audit"], "**`findings` (in-scope)**",
+        "## Step 4: Deduplicate and Organize", False),
+    "security-audit Step 7 mark": (
+        REVIEW_SKILL_PATHS["security-audit"], "## Step 7: Commit Generated Tasks",
+        "## Step 8: Convention Candidate Extraction", False),
+    "security-audit Step 4 marker sentence": (
+        REVIEW_SKILL_PATHS["security-audit"],
+        "**Ingested findings (Step 3c) dedup against prior-round *closed* tasks too",
+        "**Rejected / won't-fix / false-positive**", False),
+})
+
+# Phase 339 (`Q-613`): the collision grade `unknown` and its rank, between `possible` and
+# `likely` (the maintainer's call). These skill sentences are read by the model, so no
+# execution test sees them; the code paths they describe are run by
+# `tests/test_overlap_unknown_e2e.py`.
+ROADMAP = REPO_ROOT / "core" / "skills" / "roadmap" / "SKILL.md"
+PINNED_SPANS.update({
+    "auto-build Step 1 inflight grades": (
+        BUILD, "the `inflight=<verdict>` field is its collision risk against work building",
+        "The list is already sorted **unblocker-first", False),
+    "auto-build Step 4 overlap records": (
+        BUILD, "Build each line from a `# overlap` record", "This is **advisory, not a veto**", False),
+    "roadmap 2b none and unknown": (
+        ROADMAP, "A `none` verdict means *no declared overlap*",
+        "If `scope_overlap.py` is missing or its permission rule absent", False),
+    "roadmap collision marker": (
+        ROADMAP, "**Collision marker (only under `--in-flight`, from Step 2b):**", "**Group by kind**", False),
+    "roadmap Run-it clear": (
+        ROADMAP, "The 💥 marker warns; it never removes the task", "## Design notes", False),
+    "claim-task Step 2 verdicts": (
+        CLAIM, "prints a note naming that task's workspace, and grades that task `unknown`",
+        "The primitive is **non-blocking by construction**", False),
+    "roadmap 2b fields": (
+        ROADMAP, "Read the JSON `max_verdict`", "Cache the result per task id", False),
+    "WORKFLOW overlap advisory": (
+        WORKFLOW, "**\"Is this task safe to claim right now?\"**", "**Running more in parallel", False),
+    "WORKFLOW scope_overlap row": (
+        WORKFLOW, "| `scope_overlap.py <TASK_ID>` |", "| `security_partition.py` |", False),
+})
+
+# Phase 344 (`Q-571` + `Q-316`, on Wade's menu answers of 2026-09-28): where /auto-build's
+# planner puts its plan, and where the executor puts the plan it revised. Both replaced
+# channels a spawned agent could not use -- a message before the hand-back, and
+# `ExitPlanMode`.
+PINNED_SPANS.update({
+    "auto-build planner writes plan.md": (
+        BUILD, "### Write the plan to disk", "The file's contents, with no enclosing fence:", False),
+    "auto-build item 2 revised plan": (
+        BUILD, "**Write the revised plan to `<CLAIM_DIR>/revised-plan.md`**", "**Implement** per the revised plan.", False),
+    # Round 1 (lens 1) deleted "Hold the printed absolute path" and "On `File exists`,
+    # re-run" from 6a, and handed 6b the path instead of the contents, with every guard green.
+    "auto-build 6a mint": (
+        BUILD, "**First, mint each task's artifact directory**", "**Then capture each task's pre-plan HEAD.**", False),
+    "auto-build 6b reviewer prompt": (
+        BUILD, "`prompt`: the **Adversarial-Reviewer Agent Prompt** in Step 7b", "When each reviewer returns", False),
+    # Round 2 (lens 4): the Step 8 note's "does not change the status" and /sitrep's
+    # auto-build-park sentence were each reversible with every guard green.
+    "auto-build revised-plan check": (
+        BUILD, "**Then check that `<CLAIM_DIR>/revised-plan.md` exists.**",
+        "If the queue still has unstarted batch tasks", False),
+    "sitrep auto-build park row": (
+        REPO_ROOT / "core" / "skills" / "sitrep" / "SKILL.md",
+        "**Rows `6a`, `6b`, `6d` and `6e` withhold the `--resume` line",
+        "**Rows `6a`–`6f` report a stall; they never assert one from absence.**", False),
+})
 
 PIN_HASHES = {
     # Regenerate with:  .venv/bin/python3 -c "import sys; sys.path.insert(0,'tests'); import test_fix_in_branch_tier as T; T._print_pins()"
     # and review the diff of the SPAN you changed, not just this table.
-    "claim-task rule block": "be3cc02ba829778b",
+    "claim-task rule block": "b6ea7f067199d99b",
     "auto-build rule block": "d158bf6def0a688e",
     "document-work rule block": "d03794dec1f817ef",
-    "claim-task Step 8 report": "ae30f94842ed74eb",
+    "claim-task Step 8 report": "40d99c73aa92f74a",
+    "claim-task Step 8 ask gate": "884b01ecfbe029a5",
+    "claim-task Step 8b ask": "4475c2fd3cb2243e",
+    "claim-task Step 8b leave rule": "5f7feff76f531df8",
+    "claim-task Step 8c spawn arms": "6ef7060e43dcf156",
+    "claim-task Step 8c addendum": "1a18693dfb996527",
+    "claim-task Step 8c outcomes": "a7d4c3561e1b6fa7",
+    "claim-task Step 8c read": "9ffd642981cb354f",
+    "claim-task 7-pre answers rows": "310136f6d39a3cad",
+    "claim-task auto-mode chaining": "2dcd5e7be292f6e9",
+    "claim-task 7c park callers": "5e4bbedfb452df98",
     "claim-task hard constraints": "9e52400a383bee4e",
     "claim-task record item": "d3c36f3acc130de6",
     "claim-task stranded probe": "564f368b066357bc",
@@ -2427,19 +2585,20 @@ PIN_HASHES = {
     "WORKFLOW 2-also bullet": "89f3643416d5bc37",
     "monograph tier-3 paragraph": "331943fca9321557",
     "auto-build hard constraints": "828ad2d5914aad26",
-    "review-close 2-also arm": "4115d21469ae0260",
+    "review-close 2-also arm": "c2368edf9fe4dd3f",
     # Phase 335: the two stage-extract blocks write into a minted, printed `$STAGES` directory
     # instead of fixed names in the shared temp dir (a concurrent close overwrote them silently).
     # The decided resolution rules in this span are unchanged.
     "review-close shared-append section": "4cb287cb9c4e3b4c",
-    "schema Also fixed": "40c65b1e595183b0",
+    "schema Also fixed": "2e6f37f3c52e459d",
     "tasks README ledger": "53f05416e72bcf25",
     "add-task dedup": "96ed49b800bae922",
     "WORKFLOW step 10 rule": "c60fe97f1e01053a",
-    "GUIDE rule paragraph": "51fc3e7f1e69a5ce",
+    "GUIDE rule paragraph": "0e9bb740132f779a",
     "auto-judge reconciliation": "744be3a99d184d53",
     "auto-fix reconciliation": "5a90677d023da92a",
-    "monograph addendum": "57bd01419188cd6b",
+    # Phase 346: the addendum now says /claim-task asks the executor's questions (Phase 345).
+    "monograph addendum": "94c1135be6dc894c",
     "CLAUDE.md conventions": "79ce7ef50a1345c0",
     "review-close 2b NOTES block": "287334bc6bb8aa70",
     "review-close 2b notes collect": "04bf180090c9b32c",
@@ -2467,6 +2626,37 @@ PIN_HASHES = {
     "adversarial-review scratch bullet": "a2884d2317529826",
     "codebase-review containment rule": "7c45848ad743f777",
     "security-audit containment rule": "7c45848ad743f777",
+    # Phase 337 (`Q-569` + `Q-578`).
+    "review-close 4c rotation boundary": "4a4c414ceb762e67",
+    "review-close 4c changelog contract": "109f2a2414840e98",
+    "review-close 4c post-write check": "f225e3c03d794ccd",
+    "review-close 4c stage and commit": "302852b51480be6b",
+    "review-close Step 8 documentation rows": "f8835c6c78626835",
+    # Phase 338 (`Q-581`).
+    "security-audit 3c mark pointer": "f44401cfa8b22c23",
+    "security-audit Step 7 mark": "c7ed61435177e009",
+    "security-audit Step 4 marker sentence": "35c188ed10ab07ea",
+    # Phase 339 (`Q-613`).
+    "auto-build Step 1 inflight grades": "3ef12b767dccfb14",
+    "auto-build Step 4 overlap records": "2cec7d6b3e66887f",
+    "roadmap 2b none and unknown": "5b3990756eb0b6f0",
+    "roadmap collision marker": "732cf9853e27e66e",
+    "roadmap Run-it clear": "eed08cd451c7a8a5",
+    # Round 1 (guards lens): the claim-task span starts one clause earlier, at the
+    # unresolved-workspace grade, and the roadmap fields instruction gains its own pin.
+    # Round 2 (record lens): that clause still stated the first-cut rule; it now keeps a
+    # grade only for an exact-path (`likely`) match.
+    "claim-task Step 2 verdicts": "36ba948fd24cecfe",
+    "roadmap 2b fields": "cc42b69a5f7520ab",
+    "WORKFLOW overlap advisory": "8ade8b7f99a7fd1a",
+    "WORKFLOW scope_overlap row": "96575e76334bcf8f",
+    # Phase 346: "sees your final message" -> "sees only the report you hand back" (Phase 344's channel).
+    "auto-build planner writes plan.md": "9069a8d5f97b6606",
+    "auto-build item 2 revised plan": "dc6b545ee1a22ef9",
+    "auto-build 6a mint": "b5e67fa3d95f6ace",
+    "auto-build 6b reviewer prompt": "f0e1f3582b322044",
+    "auto-build revised-plan check": "f0d538b22fb1a02f",
+    "sitrep auto-build park row": "723000be52698959",
 }
 
 
@@ -2498,7 +2688,9 @@ def test_the_decided_text_is_pinned(label: str) -> None:
         f"{label} changed (hash {got}, pinned {PIN_HASHES[label]}). This text states the "
         "fix-by-default rule Wade decided on 2026-09-23, or its close-time extension (Phase 328, "
         "2026-09-24), or -- for the review-skill spans -- his reviewer-placement decisions (Phase "
-        "333, 2026-09-25). The hash covers the span's words, its block structure, its first line's "
+        "333, 2026-09-25), or Step 4c's rotation and changelog contracts (Phase 337, 2026-09-27), or "
+        "the collision grade `unknown` and its rank (Phase 339, 2026-09-27), or where /auto-build's plan and "
+        "revised plan are written (Phase 344, 2026-09-28), or /claim-task's ask-and-fix (Phase 345, 2026-09-29). The hash covers the span's words, its block structure, its first line's "
         "indentation and the fence it sits in; a re-wrap or a list-marker swap keeps it. If the "
         "edit is a deliberate change to that rule, update the pin in the same commit "
         "(`_print_pins()`) and say so in the phase record; if it is not, it is the widening or "
@@ -2509,7 +2701,7 @@ def test_the_decided_text_is_pinned(label: str) -> None:
 # The pinned spans that belong inside a fence: a prompt or report template the runner
 # copies. Every other span must be live prose. Checked both ways by `_pin_liveness`.
 FENCED_PINS = {"claim-task stranded probe", "review-close 2b NOTES block", "review-close Step 8 close notes",
-               "review-close 2b write clause"}
+               "review-close 2b write clause", "review-close Step 8 documentation rows"}
 
 
 @pytest.mark.parametrize("label", sorted(PINNED_SPANS))
@@ -2535,14 +2727,6 @@ def _anchor_count(text: str, start) -> int:
     from _prose_guard_helpers import anchor as _anchor
     pattern = start if hasattr(start, "finditer") else _anchor(start)
     return len(list(pattern.finditer(text)))
-
-
-def _pin_quoted(phrase: str) -> re.Pattern:
-    """An anchor for a phrase inside a blockquote: its words may re-wrap onto a new `> `
-    line, which `anchor()` refuses on purpose (its docstring: a site that needs it says so).
-    The phrase carries no `>`; `_pin_span` restores the quote prefix as the line's lead."""
-    gap = r"(?:[ \t]*\n[ \t]{0,3}(?:>[ \t]?)+[ \t]*|[ \t]+)"
-    return re.compile(gap.join(re.escape(word) for word in phrase.split()))
 
 
 def _anchored_spans():

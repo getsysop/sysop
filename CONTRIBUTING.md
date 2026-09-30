@@ -55,7 +55,7 @@ gives you a channel built for exactly this:
 Sysop ships **no runtime dependencies** — it's a meta-repo, not an installable package. The only deps are for its own test suite:
 
 ```bash
-pip install -r requirements-dev.txt   # pytest + pyyaml
+pip install -r requirements-dev.txt   # every pin is needed; see its comments
 pytest -v                             # full suite (CI runs this on Python 3.13)
 ```
 

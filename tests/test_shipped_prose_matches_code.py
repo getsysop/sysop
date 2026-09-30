@@ -109,5 +109,5 @@ def test_adversarial_reviews_phase_326_clauses_hold() -> None:
             "lens, and keep your own files out of it:") in text
     receipt = text[text.index("## Envelope receipt"):text.index("See `/claim-task` SKILL.md § Step 8")]
     assert "subagent-envelopes/<TASK_ID>[.<phase>].json" in receipt
-    assert "`<CLAIM_ID>.plan.json`, `.review.json` and `.exec.json`, never at the bare path" in receipt
+    assert "`<CLAIM_ID>.plan.json`, `.review.json`, `.exec.json` and `.answers.json`, never at the bare path" in receipt
     assert "subagent-envelopes/<TASK_ID>.json`" not in receipt

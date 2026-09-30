@@ -156,8 +156,8 @@ _EFFORT_ORDER = {"Low": 0, "Medium": 1, "High": 2}
 # (Phase 103, Leg A enrichment). Mirrors scope_overlap.py's _VERDICT_RANK, kept
 # as a local copy so the default /next-task path imports nothing extra (the
 # primitive is imported lazily, only when --avoid-inflight is passed). Higher =
-# more collision risk = sorted later.
-_OVERLAP_RANK = {"none": 0, "possible": 1, "likely": 2}
+# more collision risk = sorted later (`unknown`: an input it could not read).
+_OVERLAP_RANK = {"none": 0, "possible": 1, "unknown": 2, "likely": 3}
 
 # Fenced-block detection. A task's remediation text routinely quotes the
 # tracker's own shapes, and outside a fence those are structure while inside
@@ -449,14 +449,14 @@ def list_locks(project_root: Path | None = None) -> set[str]:
     if project_root is None:
         project_root = _REPO_ROOT
     locks_dir = _resolve_canonical_locks_dir(project_root)
-    if not locks_dir.is_dir():
+    try:
+        names = os.listdir(locks_dir)  # `glob` answers [] for a directory it cannot list
+    except (FileNotFoundError, NotADirectoryError):
         return set()
-    out: set[str] = set()
-    for p in glob.glob(str(locks_dir / "*.lock")):
-        name = os.path.basename(p)
-        if name.endswith(".lock"):
-            out.add(name[: -len(".lock")])
-    return out
+    except OSError as e:  # every claimed task would read as free, and be offered (Phase 339)
+        print(f"ERROR: could not list {_sanitize_log(str(locks_dir))} ({type(e).__name__}); cannot tell which tasks are claimed.", file=sys.stderr)
+        raise SystemExit(1)
+    return {n[: -len(".lock")] for n in names if n.endswith(".lock")}
 
 
 def pick_next_task(
@@ -478,18 +478,18 @@ def pick_next_task(
       remains.
 
     ``overlap_fn`` (Phase 103, ``--avoid-inflight``) is an optional
-    ``task_id -> collision_rank`` callable (0=clear, 1=possible, 2=likely
-    overlap with work in flight). When provided, avoidance is applied in two
-    tiers: a **``likely``** (exact-path) overlap is the **primary** key — the
-    caller opted in to avoid in-flight collisions, and an exact-path match is a
-    near-certain conflict, so it outranks even unblocker-first; a **``possible``**
-    (same-dir/glob) overlap is only a **secondary** nudge applied *after*
-    unblocker-first, so a foundational task isn't buried for a weak same-dir
-    guess. A clear task still wins at equal standing. When ``None`` (the default,
+    ``task_id -> _OVERLAP_RANK`` callable. When provided, avoidance is applied
+    in two tiers: a **``likely``** (exact-path) overlap is the **primary** key —
+    the caller opted in to avoid in-flight collisions, and an exact-path match
+    is a near-certain conflict, so it outranks even unblocker-first; a
+    **``possible``** (same-dir/glob) overlap and, behind it, an **``unknown``**
+    one (an input that could not be read) are only a **secondary** nudge applied
+    *after* unblocker-first, so a foundational task isn't buried for a guess.
+    A clear task still wins at equal standing. When ``None`` (the default,
     and every path but the opt-in flag), the sort is unchanged. The callable is
     invoked once per candidate; the caller memoizes the underlying git reads
     (see ``main``). Contrast ``/auto-build``, where the same signal is a *purely
-    secondary* nudge (the full 0/1/2 rank, always after unblocker-first) — that
+    secondary* nudge (the full rank, always after unblocker-first) — that
     path is always-on, so it must never bury a foundational unblocker; here the
     explicit flag lets an exact-path conflict take precedence.
     """
@@ -557,18 +557,18 @@ def pick_next_task(
 
     def avoid_inflight_key(t: dict[str, Any]) -> tuple[int, int, int, int, str]:
         tid = str(t.get("id", ""))
-        rank = overlap_rank.get(tid, 0)  # 0=none, 1=possible, 2=likely
+        rank = overlap_rank.get(tid, 0)  # _OVERLAP_RANK: none < possible < unknown < likely
         # Two-tier avoidance. A `likely` overlap is an *exact-path* match — a
         # near-certain conflict — so it's the PRIMARY key: steer around it even
         # ahead of an unblocker. A `possible` overlap is same-directory/glob — a
         # guess on a guess (the candidate's own scope is inferred) — so it's only
         # a SECONDARY nudge applied *after* unblocker-first, so a foundational
-        # task is never buried for a weak same-dir hit. Both still lose to a
-        # clear task at equal standing. (sort_key = (-unlock, effort, id).)
-        likely = 1 if rank >= 2 else 0
-        possible = 1 if rank == 1 else 0
+        # task is never buried for a weak same-dir hit; `unknown` sorts behind it,
+        # still secondary. All lose to a clear task. (sort_key = (-unlock, effort, id).)
+        likely = 1 if rank >= _OVERLAP_RANK["likely"] else 0
+        secondary = 0 if likely else rank
         unlock_key, effort_key, id_key = sort_key(t)
-        return (likely, unlock_key, possible, effort_key, id_key)
+        return (likely, unlock_key, secondary, effort_key, id_key)
 
     key = avoid_inflight_key if overlap_fn is not None else sort_key
     agent_pool.sort(key=key)
@@ -1154,7 +1154,7 @@ def _build_avoid_inflight(
     """Wire the scope-overlap primitive for ``--avoid-inflight`` (Phase 103).
 
     Returns ``(overlap_fn, note_for)``: ``overlap_fn(tid)`` yields a collision
-    rank (0/1/2) for ``pick_next_task``'s sort, and ``note_for(tid)`` a one-line
+    rank (``_OVERLAP_RANK``) for ``pick_next_task``'s sort, and ``note_for(tid)`` a one-line
     advisory for ``format_task_output``. Both share a per-workspace cache of the
     (expensive) git reads and a per-task assessment cache, so ranking N
     candidates costs at most one ``git diff`` per in-flight worktree.
@@ -1196,16 +1196,16 @@ def _build_avoid_inflight(
 
     def note_for(tid: str) -> str:
         a = _assess(tid)
-        if a.in_flight_count == 0:
+        if a.in_flight_count == 0 and not a.overlaps:
             return "no work in flight — nothing to collide with"
         if not a.overlaps:
             return f"none detected ({a.in_flight_count} task(s) in flight)"
         top = a.overlaps[0]
-        label = "likely conflict" if top.verdict == "likely" else "possible overlap"
-        shared = ", ".join(top.evidence[:3])
-        if len(top.evidence) > 3:
-            shared += f", +{len(top.evidence) - 3} more"
         extra = f" (+{len(a.overlaps) - 1} more in flight)" if len(a.overlaps) > 1 else ""
+        if top.verdict == "unknown":
+            return f"⚠ overlap unknown with {top.task_id} — {_sanitize_log(top.reason, 300)}{extra}"
+        label = "likely conflict" if top.verdict == "likely" else "possible overlap"
+        shared = ", ".join(top.evidence[:3]) + (f", +{len(top.evidence) - 3} more" if len(top.evidence) > 3 else "")
         return f"⚠ {label} with {top.task_id} at /review-close — shared: {shared}{extra}"
 
     return overlap_fn, note_for

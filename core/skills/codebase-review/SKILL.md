@@ -543,7 +543,7 @@ These universal checks apply to every file regardless of convention_map section:
 
 **Architectural Drift:**
 - Bypassed helpers: raw `ROW_NUMBER()` instead of `_latest_obs_sql()`
-- Wrong engine imports: using `admin_engine` or `writer_engine` for reads
+- Wrong engine for reads: `admin_engine` or `writer_engine` used for a SELECT
 - Missing auth middleware on new endpoints
 - Missing rate limiting on new endpoints
 - Direct DB access outside `tools.py`

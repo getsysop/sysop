@@ -184,8 +184,8 @@ git worktree prune
 # and `sysop/runtime/` is gitignored by construction: it is the first of the three
 # entries `install.sh`'s `ensure_runtime_gitignore` appends (see that function; the
 # others are `.claude/review_index.json` and `sysop/**/__pycache__/`). So the park record
-# `/auto-build` writes inside the worktree — `sysop/runtime/auto-build/plan.md`
-# and `review.md` — was invisible to all of them. A parked task's branch carries
+# `/auto-build` writes inside the worktree — `sysop/runtime/auto-build/review.md`,
+# and before Phase 344 `plan.md` beside it — was invisible to all of them. A parked task's branch carries
 # no commit, which makes it an ancestor of main, which classifies MERGED: the
 # record was removed by `--clean`, with its deliberately non-force
 # `git worktree remove`, without any refusal at all (Q-023, reproduced end to end).
@@ -430,8 +430,8 @@ if [[ "$ACTION" == "--force" ]]; then
     # and folding them together would make one of them unreportable.
     #
     # Do NOT upgrade "may exist" to a promise. `/auto-build` writes the
-    # project-root mirror in Phase 6d, but the Phase 6a plan-violation park
-    # writes `review.md` and then skips 6b-6e outright, so that path leaves no
+    # project-root mirror in Phase 6d, but a Phase 6a park (a planner commit or a
+    # missing plan) writes `review.md` and then skips 6b-6e outright, so that path leaves no
     # mirror and the in-worktree copy is the only record that the run ever
     # existed. `--force` cannot tell the two parks apart, so it must not claim
     # a survivor it has not seen.
@@ -443,7 +443,7 @@ if [[ "$ACTION" == "--force" ]]; then
     # branch's documentation to a directory that could not contain it.
     if [[ -n "$(worktree_runtime_artifacts "$wt_path")" ]]; then
       echo "   ⚠️  Also holds sysop/runtime/ artifacts — the in-worktree copy will be LOST."
-      echo "      A parked task's plan.md/review.md: a mirror may exist under"
+      echo "      A parked task's review.md: a mirror may exist under"
       echo "      sysop/runtime/parked/ at the project root — not every park writes one."
       echo "      A pending-doc: NOT mirrored anywhere until /review-close Step 3b"
       echo "      collects it at merge time. Check the worktree before you confirm."

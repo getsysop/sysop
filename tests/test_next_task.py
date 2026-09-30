@@ -428,20 +428,24 @@ def test_pick_next_task_user_action_pool_is_unblocker_sorted() -> None:
 # overlap_fn is injected here (a plain tid->rank callable), so these tests lock
 # the *ranking* contract without any git repo or scope_overlap import — the
 # primitive itself is covered by tests/test_scope_overlap.py. The main() wiring
-# that builds the real overlap_fn is hand-verified on a scratch repo (Phase 74
-# precedent for the heredoc-adjacent surfaces).
+# that builds the real overlap_fn is run end to end by
+# tests/test_overlap_unknown_e2e.py (Phase 339). Ranks come from the table, never
+# a literal: the scale grew a fourth grade in Phase 339, and a literal `2` then
+# silently meant `unknown` rather than `likely`.
+
+_R = nt._OVERLAP_RANK
 
 
 def test_pick_next_task_avoid_inflight_likely_prefers_clear_task() -> None:
     # Two Low leaves, equal unlock (0). FEAT-A has a LIKELY (exact-path) overlap
-    # (rank 2), FEAT-B is clear (0). Default order (id tie-break) picks FEAT-A;
+    # FEAT-B is clear. Default order (id tie-break) picks FEAT-A;
     # --avoid-inflight must flip to FEAT-B because `likely` is the primary key.
     data = _phase6_data([_t("FEAT-A", "Low"), _t("FEAT-B", "Low")])
     default_sel, _ = nt.pick_next_task(data, locks=set(), focus_phase_number=6)
     assert default_sel is not None and default_sel["id"] == "FEAT-A"
     sel, _ = nt.pick_next_task(
         data, locks=set(), focus_phase_number=6,
-        overlap_fn=lambda tid: 2 if tid == "FEAT-A" else 0,
+        overlap_fn=lambda tid: _R["likely"] if tid == "FEAT-A" else 0,
     )
     assert sel is not None and sel["id"] == "FEAT-B"
 
@@ -449,7 +453,7 @@ def test_pick_next_task_avoid_inflight_likely_prefers_clear_task() -> None:
 def test_pick_next_task_avoid_inflight_likely_outranks_unblocker() -> None:
     # The deliberate asymmetry vs /auto-build: under the explicit flag, a LIKELY
     # (exact-path) overlap is PRIMARY — it beats even a foundational unblocker.
-    # TECH-HARD unblocks two (unlock=2) but collides likely (rank 2); FEAT-EASY
+    # TECH-HARD unblocks two (unlock=2) but collides likely; FEAT-EASY
     # is clear. Default picks the unblocker; the flag picks the clear leaf.
     data = _phase6_data(
         [
@@ -463,7 +467,7 @@ def test_pick_next_task_avoid_inflight_likely_outranks_unblocker() -> None:
     assert default_sel is not None and default_sel["id"] == "TECH-HARD"
     sel, _ = nt.pick_next_task(
         data, locks=set(), focus_phase_number=6,
-        overlap_fn=lambda tid: 2 if tid == "TECH-HARD" else 0,
+        overlap_fn=lambda tid: _R["likely"] if tid == "TECH-HARD" else 0,
     )
     assert sel is not None and sel["id"] == "FEAT-EASY"
 
@@ -471,7 +475,7 @@ def test_pick_next_task_avoid_inflight_likely_outranks_unblocker() -> None:
 def test_pick_next_task_avoid_inflight_possible_does_not_bury_unblocker() -> None:
     # The two-tier refinement: a POSSIBLE (same-dir/glob) overlap is only a
     # SECONDARY nudge — a weak guess must not bury a foundational task. TECH-HARD
-    # unblocks two (unlock=2) with a `possible` overlap (rank 1); FEAT-EASY is a
+    # unblocks two (unlock=2) with a `possible` overlap; FEAT-EASY is a
     # clear leaf (unlock 0). The unblocker still wins — a naive "all overlap is
     # primary" implementation would wrongly pick FEAT-EASY here.
     data = _phase6_data(
@@ -484,25 +488,25 @@ def test_pick_next_task_avoid_inflight_possible_does_not_bury_unblocker() -> Non
     )
     sel, _ = nt.pick_next_task(
         data, locks=set(), focus_phase_number=6,
-        overlap_fn=lambda tid: 1 if tid == "TECH-HARD" else 0,
+        overlap_fn=lambda tid: _R["possible"] if tid == "TECH-HARD" else 0,
     )
     assert sel is not None and sel["id"] == "TECH-HARD"
 
 
 def test_pick_next_task_avoid_inflight_clear_beats_possible_at_equal_unlock() -> None:
     # `possible` still nudges as a secondary tie-break: at equal unlock (0), a
-    # clear task beats a possible-overlap one. FEAT-A possible (rank 1), FEAT-B
+    # clear task beats a possible-overlap one. FEAT-A possible, FEAT-B
     # clear — FEAT-B wins despite the id tie-break favoring FEAT-A by default.
     data = _phase6_data([_t("FEAT-A", "Low"), _t("FEAT-B", "Low")])
     sel, _ = nt.pick_next_task(
         data, locks=set(), focus_phase_number=6,
-        overlap_fn=lambda tid: 1 if tid == "FEAT-A" else 0,
+        overlap_fn=lambda tid: _R["possible"] if tid == "FEAT-A" else 0,
     )
     assert sel is not None and sel["id"] == "FEAT-B"
 
 
 def test_pick_next_task_avoid_inflight_uniform_tier_falls_through_to_unblocker() -> None:
-    # When every candidate sits in the same overlap tier (all `likely`, rank 2),
+    # When every candidate sits in the same overlap tier (all `likely`),
     # the collision key is constant and the base unblocker-first key decides:
     # TECH-HARD (unlock=2) leads the clear-of-unlocks leaf.
     data = _phase6_data(
@@ -514,9 +518,81 @@ def test_pick_next_task_avoid_inflight_uniform_tier_falls_through_to_unblocker()
         ]
     )
     sel, _ = nt.pick_next_task(
-        data, locks=set(), focus_phase_number=6, overlap_fn=lambda tid: 2
+        data, locks=set(), focus_phase_number=6, overlap_fn=lambda tid: _R["likely"]
     )
     assert sel is not None and sel["id"] == "TECH-HARD"
+
+
+def test_overlap_rank_table_matches_the_primitive() -> None:
+    """next_task keeps a copy of scope_overlap's table so the default path imports
+    nothing extra. The copy must agree, order included."""
+    import scope_overlap as so
+
+    assert nt._OVERLAP_RANK == so._VERDICT_RANK
+    assert _R["none"] < _R["possible"] < _R["unknown"] < _R["likely"]
+
+
+def _hard_and_easy() -> dict:
+    return _phase6_data(
+        [
+            _t("TECH-HARD", "High"),
+            _t("FEAT-EASY", "Low"),
+            _t("DEP-1", "Low", depends_on=["TECH-HARD"]),
+            _t("DEP-2", "Low", depends_on=["TECH-HARD"]),
+        ]
+    )
+
+
+def test_pick_next_task_avoid_inflight_unknown_does_not_bury_unblocker() -> None:
+    # `unknown` is secondary (after unblocker-first), like `possible`.
+    sel, _ = nt.pick_next_task(
+        _hard_and_easy(), locks=set(), focus_phase_number=6,
+        overlap_fn=lambda tid: _R["unknown"] if tid == "TECH-HARD" else 0,
+    )
+    assert sel is not None and sel["id"] == "TECH-HARD"
+
+
+def test_pick_next_task_avoid_inflight_clear_beats_unknown_at_equal_unlock() -> None:
+    # Q-613's reproduction: an unreadable-bodied task was chosen over a readable
+    # one, because its unreadable scope graded `none`. FEAT-A sorts first by id.
+    data = _phase6_data([_t("FEAT-A", "Low"), _t("FEAT-B", "Low")])
+    sel, _ = nt.pick_next_task(
+        data, locks=set(), focus_phase_number=6,
+        overlap_fn=lambda tid: _R["unknown"] if tid == "FEAT-A" else 0,
+    )
+    assert sel is not None and sel["id"] == "FEAT-B"
+
+
+def test_pick_next_task_avoid_inflight_overlap_outranks_effort() -> None:
+    # The secondary overlap key sits before effort: a clear High task beats a
+    # possible (or unknown) Low one at equal unlock (round 1, guards lens n03).
+    data = _phase6_data([_t("FEAT-A", "Low"), _t("FEAT-B", "High")])
+    for grade in ("possible", "unknown"):
+        sel, _ = nt.pick_next_task(
+            data, locks=set(), focus_phase_number=6,
+            overlap_fn=lambda tid, g=grade: _R[g] if tid == "FEAT-A" else 0,
+        )
+        assert sel is not None and sel["id"] == "FEAT-B", grade
+
+
+def test_pick_next_task_avoid_inflight_possible_beats_unknown() -> None:
+    data = _phase6_data([_t("FEAT-A", "Low"), _t("FEAT-B", "Low")])
+    ranks = {"FEAT-A": _R["unknown"], "FEAT-B": _R["possible"]}
+    sel, _ = nt.pick_next_task(
+        data, locks=set(), focus_phase_number=6, overlap_fn=lambda tid: ranks[tid]
+    )
+    assert sel is not None and sel["id"] == "FEAT-B"
+
+
+def test_pick_next_task_avoid_inflight_unknown_beats_likely() -> None:
+    # `likely` stays the primary key, so it loses to an `unknown` even when the
+    # `likely` task is the bigger unblocker.
+    ranks = {"TECH-HARD": _R["likely"], "FEAT-EASY": _R["unknown"]}
+    sel, _ = nt.pick_next_task(
+        _hard_and_easy(), locks=set(), focus_phase_number=6,
+        overlap_fn=lambda tid: ranks.get(tid, 0),
+    )
+    assert sel is not None and sel["id"] == "FEAT-EASY"
 
 
 def test_pick_next_task_no_overlap_fn_is_inert() -> None:

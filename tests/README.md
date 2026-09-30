@@ -50,6 +50,10 @@ optional accelerant: with `-n auto` in `addopts`, pytest exits 4 on
 spreading that CPU over cores rather than from reclaiming idle; the large *system*
 half is the thousands of real subprocesses the suite drives by design.
 
+**`markdown-it-py` is a hard dependency too** (Phase 341): `test_commonmark_code_blocks.py`
+imports it at module level, so without it collection fails. Install the whole of
+`requirements-dev.txt`, not a hand-picked subset.
+
 **Writing a test that writes into this repo is the one thing `-n` cannot
 tolerate.** Write under `tmp_path`. If a test genuinely needs a git repo on
 disk, build one in `tmp_path` and strip git's discovery vars before shelling out

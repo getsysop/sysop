@@ -2155,7 +2155,7 @@ def test_the_skill_states_why_staleness_is_not_decided_at_step_4c():
     # sweeps up Step 4-pre's own prose, which supplies a rebase/squash co-occurrence all by
     # itself — so deleting the mechanism from THIS paragraph left the guard green.
     start = body.index("**Why staleness is decided here and not at Step 4c")
-    window = body[start:body.index("\n   b. ", start)]
+    window = body[start:body.index("\n - b. ", start)]
     assert len(window) < 12000, f"window is {len(window)} chars — it has slipped its bound"
     assert states(window, "Step 4a item 2 rebases each approved branch")
     assert states(window, "live on the shapes that rarely fire and inert on the one that always does")

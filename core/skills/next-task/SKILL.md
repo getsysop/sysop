@@ -27,7 +27,7 @@ implementation moved (Phase 45a, 2026-05-27, gdp commit `e9b53c4e` backport).
 ## Exit codes
 
 - **0** — success, including the "no tasks found" / "no pending review batches" paths.
-- **1** — schema invariant violation (e.g., `current_focus` count != 1, `schema_version` below the supported minimum, body path escapes `tasks/`). Print stderr verbatim — do not reinterpret.
+- **1** — schema invariant violation (e.g., `current_focus` count != 1, `schema_version` below the supported minimum, body path escapes `tasks/`), or a locks directory that exists and cannot be listed, since no claimed task could then be told from a free one. Print stderr verbatim — do not reinterpret.
 - **2** — unexpected crash. The script wraps `main()` in a top-level safety net that prints `ERROR: next_task.py crashed: <sanitized>` to stderr.
 
 ## Why `model: haiku` is still in the frontmatter

@@ -96,6 +96,10 @@ jobs:
   # without one; the mean over 8 is the honest statistic and it carries the
   # decision on its own. This file ships to the public mirror, so the
   # correction is not cosmetic.
+  #
+  # A PINNED LABEL IS EVENTUALLY RETIRED, AND NOTHING BUMPS IT. The label carries
+  # a review date in `tests/test_ci_runner_image.py`, which fails on that date
+  # with the bump instructions (`Q-556`, Phase 342).
   shard:
     runs-on: ubuntu-24.04-arm
     strategy:

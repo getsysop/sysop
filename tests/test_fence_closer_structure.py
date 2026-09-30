@@ -35,7 +35,7 @@ SKILLS = (
     REPO_ROOT / "core" / "skills" / "claim-task" / "SKILL.md",
     REPO_ROOT / "core" / "skills" / "auto-build" / "SKILL.md",
 )
-EXPECTED_BLOCKS = 3  # Step 7f's writer, Step 8's verifier, /auto-build item 1-record
+EXPECTED_BLOCKS = 4  # Step 7f's writer, Step 8's verifier, Step 8b's questions reader (Phase 345), /auto-build item 1-record
 
 
 def _fence_payloads() -> list[tuple[str, int, str]]:
@@ -56,7 +56,7 @@ def _fence_payloads() -> list[tuple[str, int, str]]:
     return found
 
 
-def test_the_population_is_the_three_shipped_blocks():
+def test_the_population_is_the_four_shipped_blocks():
     """Vacuity control. Every assertion below iterates this list; an extractor that
     silently returns fewer makes the whole module green over an unmeasured tree."""
     found = _fence_payloads()
