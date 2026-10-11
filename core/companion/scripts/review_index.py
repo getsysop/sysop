@@ -858,32 +858,85 @@ def describe_near_misses(near_misses, filename):
 
     Returns a list of lines. Callers decide the stream and the exit code; what
     they must not do is invent a second phrasing for the same fact.
+
+    **Each line is tagged with what the batch parsers DO at it, because since
+    `Q-375` widened the population that differs by line** (`Q-391`, Phase 368).
+    The text this replaced said "/sitrep and the archiver do not see them at
+    all; /next-task DOES … and will offer one as a claimable batch" — true of
+    the narrow `### Batch <N>` population it was written for, and false after
+    the widening on both counts: the archiver now reports every line here (and
+    refuses on the bounding subset, Phase 256), and `next_task.py` parses none
+    of the four added shapes. So the report states the split by behaviour
+    rather than by tool, derived from the code and measured at Phase 368 by
+    driving `parse_review_tasks`, `next_task.parse_review_batches` and
+    `sitrep_survey._read_review_batches` over one tracker per shape:
+
+      * a line `_BATCH_HEADER_ANY_RE` matches ENDS the batch above it in all
+        three (their shared boundary twin), and a `## ` line ends it too, as
+        every `## ` section heading does in all three;
+      * any other line — `#### Batch 4`, `###Batch 4`, `### BATCH 4` — ends
+        NOTHING, so the batch above it absorbs its `> **Branch:**`, scope and
+        tasks: measured, batch 1 came back carrying `review/batch-2` and both
+        tasks in all three parsers. That is the harm the boundary twin was
+        added to stop for `### Batch` lines (Phase 191), and the report is the
+        one place it is visible.
+
+    The tag is computed with this module's own closers, which the other two
+    parsers duplicate; the archiver's differ (its `H3_HEADER_RE` also ends a
+    batch at `### BATCH 4`), which is why the paragraph names it separately.
     """
     lines = [
         f"WARNING: {filename} has {len(near_misses)} batch header(s) that do "
         f"not match the canonical shape:"
     ]
     for lineno, _num, text in near_misses:
-        lines.append(f"         :{lineno} — {text}")
+        if _BATCH_HEADER_ANY_RE.match(text) or text.startswith("## "):
+            effect = "ends the batch above it"
+        else:
+            effect = "ends nothing: the batch above it absorbs what follows"
+        lines.append(f"         :{lineno} — {text}   [{effect}]")
     lines.append(
         "         The canonical shape is: ### Batch <N> — <Title> `<Status>` "
         "(em-dash, backticked status)."
     )
     lines.append(
-        "         The readers disagree about these lines, which is the point: "
-        "/sitrep and the"
+        "         No parser that lists, claims or closes batches reads one of "
+        "these lines as the batch it"
     )
     lines.append(
-        "         archiver do not see them at all; /next-task DOES (it tolerates "
-        "an ASCII hyphen)"
+        "         names, with one exception: the parser that tolerates an ASCII "
+        "hyphen lists a"
     )
     lines.append(
-        "         and will offer one as a claimable batch that batch_work.sh "
-        "then refuses;"
+        "         `### Batch <N>` line that still has a dash and a backticked "
+        "status, as a batch the"
     )
     lines.append(
-        "         close_batch.sh closes them via its grep fallback. Nothing "
-        "counts them consistently."
+        "         claim then cannot take. What each line does instead is tagged "
+        "above. A line that"
+    )
+    lines.append(
+        "         ends nothing is not a boundary to any of them, so the branch, "
+        "scope and tasks under"
+    )
+    lines.append(
+        "         it are read as the batch above's. Two readers REPORT rather "
+        "than bound: the"
+    )
+    lines.append(
+        "         archiver refuses to run while a `### Batch <N>` line is listed "
+        "here, or one that ends"
+    )
+    lines.append(
+        "         nothing sits inside a batch it would archive; it warns about the "
+        "rest, and"
+    )
+    lines.append(
+        "         --check-headers lists them all. A close can still "
+        "close a `### Batch <N> `"
+    )
+    lines.append(
+        "         line through its range fallback."
     )
     return lines
 

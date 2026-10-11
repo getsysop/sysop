@@ -514,3 +514,101 @@ def test_the_verdict_prints_after_the_rows_when_streams_are_merged(tmp_path):
     assert rows_at < verdict_at, (
         "the verdict printed before the rows it summarises:\n" + merged
     )
+
+
+# === Q-391: the near-miss report says what the parsers DO, per line ========
+#
+# `describe_near_misses` told the operator "/sitrep and the archiver do not see
+# them at all; /next-task DOES … and will offer one as a claimable batch". Both
+# clauses were true of the narrow `### Batch <N>` population and false after
+# `Q-375` widened it: the archiver reports every line, and `next_task.py` parses
+# none of the four added shapes. Phase 368 tags each line with what the batch
+# parsers do at it instead. The defect is text, so these assert the text — but
+# against the parsers' real behaviour, not a wording, so a reword is free and a
+# tag that stops being true is not.
+
+import sys as _sys  # noqa: E402
+
+import pytest  # noqa: E402
+
+_Q391_SHAPES = {
+    "ascii-hyphen": "### Batch 2 - Two `Pending`",
+    "tab": "###\tBatch 2 — Two `Pending`",
+    "no-status": "### Batch 2 — Two",
+    "h2": "## Batch 2 — Two `Pending`",
+    "h4": "#### Batch 2 — Two `Pending`",
+    "no-space": "###Batch 2 — Two `Pending`",
+    "upper-case": "### BATCH 2 — Two `Pending`",
+}
+
+
+def _q391_tracker(header):
+    return (
+        "# Review Tasks\n\n## Round 1 (2026-01-01) — r\n\n"
+        "### Batch 1 — One `Pending`\n\n> **Branch:** `review/batch-1`\n\n"
+        "- [ ] **TASK-1**: one\n\n"
+        f"{header}\n\n> **Branch:** `review/batch-2`\n\n- [ ] **TASK-2**: two\n"
+    )
+
+
+@pytest.mark.parametrize("shape", sorted(_Q391_SHAPES))
+def test_each_near_miss_tag_matches_what_the_parsers_do(shape, tmp_path):
+    """Drive all three batch parsers over the shape; the tag must agree."""
+    scripts = str(Path(__file__).resolve().parents[1] / "core/companion/scripts")
+    if scripts not in _sys.path:
+        _sys.path.insert(0, scripts)
+    import next_task
+    import sitrep_survey
+
+    header = _Q391_SHAPES[shape]
+    text = _q391_tracker(header)
+    path = tmp_path / "review_tasks.md"
+    path.write_text(text, encoding="utf-8")
+    lines = text.splitlines()
+
+    near = ri.near_miss_batch_headers(lines)
+    assert [n[2] for n in near] == [header.rstrip()], near
+    report = ri.describe_near_misses(near, "review_tasks.md")
+    tagged = [ln for ln in report if header in ln]
+    assert len(tagged) == 1, report
+
+    # What each parser does to batch 1 at this line: absorb the next branch, or not.
+    absorbed = {
+        "review_index": ri.parse_review_tasks(str(path))["batches"]["1"]["branch"],
+        "next_task": next(b for b in next_task.parse_review_batches(text)
+                          if b["number"] == 1)["branch"],
+        "sitrep_survey": next(b for b in sitrep_survey._read_review_batches(tmp_path)
+                              if b["number"] == 1)["branch"],
+    }
+    assert len(set(absorbed.values())) == 1, (
+        f"the parsers disagree, so no single tag can be true: {absorbed}")
+    swallowed = absorbed["review_index"] == "review/batch-2"
+
+    if swallowed:
+        assert "ends nothing" in tagged[0], (
+            f"batch 1 absorbs the {shape!r} line's metadata in every parser, but "
+            f"the report says otherwise:\n{tagged[0]}")
+    else:
+        assert "ends the batch above it" in tagged[0], (
+            f"every parser ends batch 1 at the {shape!r} line, but the report "
+            f"says otherwise:\n{tagged[0]}")
+
+
+def test_both_kinds_of_line_occur_so_the_tag_test_is_not_vacuous(tmp_path):
+    kinds = set()
+    for header in _Q391_SHAPES.values():
+        rep = ri.describe_near_misses(
+            ri.near_miss_batch_headers(_q391_tracker(header).splitlines()), "r.md")
+        kinds |= {"nothing" for ln in rep if "ends nothing" in ln}
+        kinds |= {"above" for ln in rep if "ends the batch above it" in ln}
+    assert kinds == {"nothing", "above"}
+
+
+def test_the_stale_q391_clauses_are_gone():
+    """The two clauses `Q-391` filed, by their own words."""
+    text = "\n".join(ri.describe_near_misses(
+        [(5, "2", "### Batch 2 - Hyphen `Pending`")], "review_tasks.md"))
+    assert "do not see them at all" not in text
+    assert "will offer one as a claimable batch" not in text
+    # ...and the split it was asked to state is stated, by behaviour.
+    assert "REPORT" in text and "bound" in text

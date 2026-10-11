@@ -58,7 +58,7 @@ tasks:
 | `body` | path | yes (open/in_progress/deferred) | Path to the per-task body file. Must exist and resolve (via `realpath`) under the `tasks/` base directory. **Canonical shape:** `open/<TASK-ID>.md` — relative to `tasks/`, without the `tasks/` prefix (e.g. `open/FEAT-0001.md`, NOT `tasks/open/FEAT-0001.md`). The validator and `/review-close` Step 4c's segment-based rename also accept the `tasks/`-prefixed shape for backward compatibility with hand-migrated indexes — both shapes round-trip safely through the workflow. |
 | `on_hold_until` | string \| null | no | Free-form reason or date (e.g., `"Stripe API v2 GA"`). When non-null, `/next-task` skips this task. |
 | `whitelist` | list[TASK-ID] | no | Task IDs whose mention in the body should NOT trigger the `/document-work` follow-up-stub check. Mirrors the existing `whitelist:` frontmatter bypass. |
-| `manual_smoke` | bool | no | `true` when this task requires a documented pre-merge manual smoke (UI flow, side-effect-bearing command, LLM round-trip) that automated verification can't cover. `/review-close` Step 3c halts and prompts the human before Step 4. The procedure text lives in the task body under a heading matching `manual smoke` / `smoke required` (case-insensitive). See "Manual smoke" below. |
+| `manual_smoke` | bool | no | `true` when this task requires a documented pre-merge manual smoke (UI flow, side-effect-bearing command, LLM round-trip) that automated verification can't cover. `/review-close` Step 3c halts and prompts the human before Step 4. The procedure text lives in the task body under a procedure heading (`manual smoke`, `operator action`, `before merge` and the rest of the set in "Manual smoke" below, case-insensitive). |
 | `solo` | bool | no | `true` when the task mutates state shared **outside** the filesystem view — a global lockfile, a singleton registry, a live schema, a shared fixture corpus — so it must not run concurrently with anything, even a task whose paths are disjoint. `/auto-build` Step 2 solo invariant `d.` batches it alone. Independent of `blast_radius`, which grades surface area. See "Solo" below. |
 | `archive_summary` | path | yes (done, no per-task body) | When a `done` task has no per-task `.md` (collapsed phase summary), this points at `tasks/archive/_phase_<N>.md`. |
 | `completed_date` | string (ISO date) | yes (done) | `YYYY-MM-DD`. Used by daily-summary tooling. |
@@ -93,9 +93,14 @@ At `schema_version: 1`, `blast_radius` is **optional** (validator accepts absenc
 
 Some features can't be fully verified by automated tests — UI flows that need a browser, commands with external side effects, LLM round-trips whose output a human must eyeball. `manual_smoke: true` declares that this task's `/review-close` cycle must halt before merge so the human can run, confirm or waive the procedure, or find it unrunnable as specified.
 
-**Where the procedure lives.** Author the smoke steps in the task body file (`tasks/open/<TASK-ID>.md`) under a heading whose text contains any of `manual smoke`, `smoke required`, `smoke test`, `manual verification` / `manual verify` / `manual test` / `manual check` / `manual step`, `operator action`, `human action`, `requires a human`, `before merge` / `before merging`, or `prior to merge` (case-insensitive — `## Manual smoke required`, `### Manual smoke`, `## Smoke required before review-close`, `## OPERATOR ACTION REQUIRED BEFORE MERGE` all match). `/review-close` Step 3c also scans `sysop/runtime/pending-docs/*.md` bodies for the same pattern, so a hotfix branch with no `tasks/index.yml` entry can still declare a smoke by including the heading in its pending-doc.
+**Where the procedure lives.** Author the smoke steps in the task body file (`tasks/open/<TASK-ID>.md`) under a heading whose text contains any of `manual smoke`, `smoke required`, `smoke test`, `manual verification` / `manual verify` / `manual test` / `manual check` / `manual step`, `operator action`, `human action`, `requires a human`, `before merge` / `before merging`, or `prior to merge` (case-insensitive — `## Manual smoke required`, `### Manual smoke`, `## Smoke required before review-close`, `## OPERATOR ACTION REQUIRED BEFORE MERGE` all match). `/review-close` Step 3c also scans `sysop/runtime/pending-docs/*.md` bodies for the same pattern, so a hotfix branch with no `tasks/index.yml` entry can still declare a smoke by including the heading in its pending-doc. It reads the body of every task an approved branch links for the pattern too, as that body will merge, so a procedure written here is asked even when `manual_smoke:` was never set; the flag is what makes a *missing* procedure a signal. A `#` line inside a fenced code block does not end the procedure's section.
 
-> **The phrase list was widened in Phase 218 and is still a phrase list.** The original two phrases scored a procedure headed `OPERATOR ACTION REQUIRED BEFORE MERGE` as *no smoke needed*, and the close proceeded without ever prompting — the one gate whose miss is a human never being asked. Do not rely on the list: **the structural declarations below are heading-independent and cannot be missed by phrasing.** `## User ops (do these first)` is deliberately *not* in the list, and see "User ops" below for why: those steps gate the *work*, so by close time they are already done, and `user_action: true` is a large routine class that would train the operator to waive wholesale. A step that must happen before *merge* is `manual_smoke:`, not that heading.
+> **The phrase list was widened in Phase 218 and is still a phrase list.** The original two phrases scored a procedure headed `OPERATOR ACTION REQUIRED BEFORE MERGE` as *no smoke needed*, and the close proceeded without ever prompting — the one gate whose miss is a human never being asked. Do not rely on the list: **the structural declarations below are heading-independent and cannot be missed by phrasing.** `## User ops (do these first)` is deliberately *not* in the list, and see "User ops" below for why: `user_action: true` is a large routine class that would train the operator to waive wholesale. (Those steps usually come before the work, but that is a convention, not a guarantee.) A step that must happen before *merge* is `manual_smoke:`, not that heading.
+
+**A procedure that can only run after the merge is not a manual smoke** (`Q-313`). A smoke against a
+deploy-on-push staging URL cannot pass Step 3c, which runs before the merge: the agent cannot drive it,
+and the human can only waive it. Put it under `## After merge` (below) and leave `manual_smoke:` unset.
+Keep that section's headings free of this list's phrases, or Step 3c still asks it before the merge.
 
 **The heading-independent declarations** (Phase 218). Two ways to declare a smoke that no phrase list can miss:
 
@@ -104,9 +109,9 @@ Some features can't be fully verified by automated tests — UI flows that need 
 
 **Validator behavior** (warn-only): when `manual_smoke: true`, the validator warns (does NOT block) if the body file lacks a smoke-matching heading. This keeps task authoring fluid — a stub task can be filed with `manual_smoke: true` before the procedure is fully written, and the validator surfaces the gap without halting commits. The actual merge-gate lives in `/review-close` Step 3c.
 
-**Skill behavior** (`/review-close` Step 3c, Phase 35, 2026-05-22; widened Phase 218): scans `sysop/runtime/pending-docs/*.md` bodies for a matching heading, honours a pending-doc's own `manual_smoke: true` frontmatter, AND cross-checks `tasks/index.yml` for any task carrying `manual_smoke: true` that this close covers. **Task linkage has two sources, because pending-doc frontmatter alone was not one:** a task ID named in a pending-doc's `roadmap_ids:` (or legacy `task_ids:`), **or** a lock under `sysop/runtime/locks/` whose `branch:` is one of this run's approved branches. Before Phase 218 only the first existed, so a task that declared `manual_smoke: true` and authored its procedure under the sanctioned heading was still scored `NO_SMOKE_REQUIRED` when no pending doc named it — the fully compliant author was the one the gate did not protect. A task's body is read at the tip of the approved branch that claims it, so the procedure shown is the one merging, and every signal names what it was read from. A doc that Step 4c is holding back on an outstanding `user_action`, and whose branch is not merging in this run, links no task, but its own headings still signal. An answer the human gives (confirmed, or unrunnable) is recorded in the pending doc that carries the signal, and a later close that does not merge that doc's branch reports it rather than asking again, until the section's text changes. Any signal fires the gate. For each signal the skill calls `AskUserQuestion` with four options: (a) agent drives the smoke end-to-end via available MCP tools; (b) human confirms they already ran it; (c) unrunnable as specified, which files the blocking defect as a task and lets the human continue or stop the close; (d) skip with waiver (logged in Step 8 report). Waivers don't block merge. An agent-drive failure that a re-run can fix halts the close; one that no re-run can fix becomes (c).
+**Skill behavior** (`/review-close` Step 3c, Phase 35, 2026-05-22; widened Phase 218): scans `sysop/runtime/pending-docs/*.md` bodies for a matching heading, honours a pending-doc's own `manual_smoke: true` frontmatter, AND cross-checks `tasks/index.yml` for any task carrying `manual_smoke: true` that this close covers, set in the local index, in `origin/<default branch>`'s (fetched first), or in the approved branch's own index at its tip. It reads the body of every task an approved branch links for a matching heading, flag or no flag. **Task linkage has two sources, because pending-doc frontmatter alone was not one:** a task ID named in a pending-doc's `roadmap_ids:` (or legacy `task_ids:`), **or** a lock under `sysop/runtime/locks/` whose `branch:` is one of this run's approved branches. Before Phase 218 only the first existed, so a task that declared `manual_smoke: true` and authored its procedure under the sanctioned heading was still scored `NO_SMOKE_REQUIRED` when no pending doc named it — the fully compliant author was the one the gate did not protect. A task's body is read as it will merge into the default branch, so the procedure shown is the one merging, and every signal names what it was read from. A doc that Step 4c is holding back, and whose branch is not merging in this run, links no task — held on its own `hold:`, or on an outstanding `user_action` (set locally and still set on `origin/<default branch>` and on every approved branch's tip that carries the task: for this read, any of those can release it and none can add it) — but its own headings still signal. An answer the human gives (confirmed, or unrunnable) is recorded in the pending doc that carries the signal, and a later close that does not merge that doc's branch reports it rather than asking again, until the section's text changes. Any signal fires the gate. For each signal the skill calls `AskUserQuestion` with four options: (a) agent drives the smoke end-to-end via available MCP tools; (b) human confirms they already ran it; (c) unrunnable as specified, which files the blocking defect as a task and lets the human continue or stop the close; (d) skip with waiver (logged in Step 8 report). Waivers don't block merge. An agent-drive failure that a re-run can fix halts the close; one that no re-run can fix becomes (c). A procedure the agent ran to a FAIL verdict halts the close by default; the human may instead hold just that branch, or waive, which files the FAIL as a task and records the output for the report and, under `pr`, the PR.
 
-Field is purely optional. Tasks without `manual_smoke:` and pending-docs without the heading proceed through Step 3c without any prompt.
+Field is purely optional. A task no index declares is asked only when an approved branch links it and its body (read as it will merge, at that branch's tip when the merge cannot be read, or the working tree when the tip cannot be read) carries a matching heading; such a task without one, and a pending-doc without the heading, proceed through Step 3c without any prompt.
 
 ### Plan
 
@@ -218,6 +223,16 @@ HARD RULE in Step 6**, and Step 8 reports it under both `Held-back docs:` and `R
 a later `/review-close`, after the human performs the step and clears the flag with
 `python3 sysop/scripts/clear_user_action.py <TASK_ID>` — which is what that script has always been for.
 
+**A second input to the same hold, and the one to use for "not finished" (`Q-625`, Phase 353).**
+`user_action` means *a human must act before an agent can take this task*, and it gets cleared for
+that reason, which also released the close-path hold. So the pending doc carries its own field:
+`/document-work` writes `hold: "<what is still to be done>"` into the doc's frontmatter when the merge
+does not finish a task the doc names, and Step 1c holds the doc on `hold:` **or** a truthy
+`user_action`. Clearing `user_action` does not release a doc that carries `hold:`; removing the
+`hold:` does, with `python3 sysop/scripts/pending_doc_hold.py clear <TASK_ID>`, once no task it names
+still has `user_action` set. That is not the `user_action_done:`
+companion refused above: `hold:` is a different fact, kept on the pending doc rather than the task.
+
 **Why the WHOLE doc waits rather than just the status flip, because the narrower design is the one you
 would reach for first.** It was built and it strands the task: Step 4c's step 6 deletes the pending-docs
 that step consolidated, and the pending-doc is the only carrier of `roadmap_ids` into the round-trip — so
@@ -242,8 +257,8 @@ the heading as the common case, not as a property this schema enforces.
 routine class**, and firing a halt on all of it would train the operator to waive wholesale. That reason
 is timing-independent and is the whole of it. **A step that must happen before *merge* is `manual_smoke:`,
 not this** — different field, different timing, and a task can legitimately carry both. If your step must
-happen *after* the merge, note that Sysop currently has nowhere to declare that; do not reach for this
-heading to express it.
+happen *after* the merge, put it under `## After merge` (below); do not reach for this heading to
+express it.
 
 > **This section exists because four shipped sites asserted the opposite** (Phase 235, `Q-235`).
 > This file's § *Manual smoke* note, `/review-close` Step 3c's prose and its heredoc comment, and
@@ -259,6 +274,29 @@ heading to express it.
 > unchanged** — only the false half of its justification is retired, because a false reason in the
 > document that records a decision is how the next reader re-derives the decision wrongly.
 
+
+### After merge
+
+**Optional** (`Q-313`). Steps a human runs **once the work has merged**: rotate a credential after
+the new code is live, run a backfill against production, flip a feature flag, or run a smoke that
+needs the deployed build. Author them in the task body under `## After merge`.
+
+**What `/review-close` does with it.** Step 2d reads the section from the body at the branch's tip,
+and Step 8's report prints it, verbatim, under the task's ID, for each branch the close merged. It
+checks nothing and halts on nothing: by then the merge has happened and there is nothing left to
+stop. The report is the reminder. Only a task an approved branch claims is read, so a hand-cut
+branch, a review batch or a pending doc's own body is not. It is printed once, by the close
+that merges the branch, or in a stuck close's report when its PR did not merge.
+
+**Not `manual_smoke:`, and not `## User ops (do these first)`.** `manual_smoke:` halts the close
+*before* the merge, and `## User ops` steps usually come first (a convention, not a guarantee — see
+"User ops"), so neither is the place for a step that must wait for the merge. Keep this section's headings free of the § *Manual smoke* phrase list (`smoke test`,
+`manual check` and the rest), including any sub-heading: Step 3c reads every heading in the body,
+and one that matches is asked before the merge.
+
+**If the task must not be marked `done` until a step here passes**, its pending doc carries a
+`hold:` (`/document-work`'s `hold:` paragraph, `Q-625`). The close then merges the code and leaves
+the task `in_progress` until `python3 sysop/scripts/pending_doc_hold.py clear <TASK_ID>` releases it.
 
 ### Solo
 
@@ -343,8 +381,13 @@ Conventional section layout:
  "Test decision" on purpose — the fenced plan contains its own "## Test decision" line, so a
  first-match heading reader must meet the real section first. See "Plan" below.>
 
+## After merge
+<optional; steps a human runs once the work has merged. /review-close Step 8 prints them; nothing
+ checks them. AFTER "Plan": its reader skips fences, so it need not come first, and /claim-task
+ option C reinserts "Test decision" and "Plan" above it. See "After merge" above.>
+
 ## User ops (do these first)
-<only present when index.yml has user_action: true>
+<written when index.yml has user_action: true, and kept after the flag is cleared>
 
 ## Surfaced by
 <optional prose narrative — formal cross-references live in index.yml surfaced_by:>
@@ -363,7 +406,7 @@ Conventional section layout:
 9. **`in_progress` requires a lock** — `<main-repo-root>/sysop/runtime/locks/<TASK-ID>.lock` must exist. The lock lives under the **main** repo root (resolved via `git rev-parse --git-common-dir`) so a single canonical location is visible from any worktree (Phase 32, 2026-05-22 — closes BeanRider ISSUE-0028 / 0030 / 0032 / 0013). `claim_task.sh --lock` writes the lock there regardless of cwd; the validator resolves the same path. Catches stale state where `/claim-task` was invoked without `--lock` or the lock was hand-deleted. **Warn-only half:** a lock past its `expires:` whose `plan_summary` is still the seeded placeholder `(update with a one-line description of the work)`, whose `notes:` is empty, and which has no park record under `sysop/runtime/parked/<ID>__*.md` is warned about (the lock of any `in_progress` task, and any `BATCH-<N>.lock`); a missing or unparseable `expires:` is silent. It warns rather than blocks because `sysop/runtime/` is gitignored and CI may seed stub locks. To park a claim on purpose, write why in `plan_summary` or `notes` and extend `expires:`.
 10. **Status-field consistency** — `done` without `completed_date` is a **warning** (imported history is backfilled from git blame), and a malformed one is an error; `done` without `body` requires `archive_summary`; `done` with `body` rejects `open/` or `deferred/` path segments (catches the silent half-migration from ISSUE-0009 when Step 4c's status flip wrote but the rename skipped); `blast_radius` is required on `open`/`in_progress` at `schema_version >= 2`, and its enum is enforced whenever the field is present at any version; etc. (See tables above.)
 11. **Secret-pattern scan** — warn (not block) on long hex strings, `sk-`-prefixed tokens, AWS-style access keys in any `tasks/**/*.md` body. False-positive prone, so non-blocking.
-12. **Manual-smoke documentation (warn-only)** — when `manual_smoke: true`, the body should contain a heading whose text matches `manual\s+smoke|smoke\s+required` (case-insensitive). Warn-not-block: keeps task authoring fluid; the actual merge gate lives in `/review-close` Step 3c (Phase 35, 2026-05-22).
+12. **Manual-smoke documentation (warn-only)** — when `manual_smoke: true`, the body should contain a heading from the set "Manual smoke" above lists (`manual smoke`, `operator action`, `before merge` and the rest, case-insensitive), the pattern `/review-close` Step 3c reads. Warn-not-block: keeps task authoring fluid; the actual merge gate lives in `/review-close` Step 3c (Phase 35, 2026-05-22).
 
 > **There is no 14th, and there used to be a 13th.** A warn-only test-decision
 > check shipped here from Phase 58b until Phase 234 retired it: it read the body

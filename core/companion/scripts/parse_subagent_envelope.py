@@ -511,6 +511,11 @@ def _reclaim_stale_diagnostics(envelopes_dir: str) -> int:
     it is a diagnostic in every way that matters to a reader — but it means the
     property is about the NAME, not about whether an envelope parsed. Measured
     2026-09-19: 0 of 6,780 live diagnostics carry that shape.
+
+    **A diagnostic's orphaned `_write_json` temp is swept too** (`Q-554`),
+    under the same age cutoff. The cutoff is what makes that safe, not
+    decoration: this sweep runs before the run's own write, but a CONCURRENT
+    hook's temp can be in flight, and it is seconds old.
     """
     cutoff = time.time() - DIAGNOSTIC_RETENTION_DAYS * 86400
     removed = 0
@@ -522,7 +527,24 @@ def _reclaim_stale_diagnostics(envelopes_dir: str) -> int:
         # Re-checked here rather than delegated to a glob pattern: the prefix
         # IS the safety property, so it is asserted at the point of deletion
         # where a later edit cannot widen it from a distance.
-        if not (name.startswith("_unparseable_") and name.endswith(".json")):
+        #
+        # The second arm is a diagnostic's orphaned temp (`Q-554`). `mkstemp`
+        # names it `<basename>.<8 random>.tmp`, so a hook killed between
+        # `mkstemp` and `os.replace` left `_unparseable_<s>_<a>.json.<8>.tmp`:
+        # the prefix, not the `.json` suffix, so it was never reclaimed. It
+        # matches that exact shape and nothing looser — `_unparseable_`, the
+        # sanitizer's alphabet, `.json.`, then `tempfile`'s 8 characters from
+        # `[a-z0-9_]` — because it widens a DELETION predicate. Deliberately not
+        # an envelope's temp (`<TASK_ID>.json.<8>.tmp`): the `_unparseable_`
+        # name stays the whole safety property. Should CPython change the random
+        # part, this arm matches nothing and the leak resumes; it cannot start
+        # matching something else.
+        if not (
+            (name.startswith("_unparseable_") and name.endswith(".json"))
+            or re.fullmatch(
+                r"_unparseable_[A-Za-z0-9._-]+\.json\.[a-z0-9_]{8}\.tmp", name
+            )
+        ):
             continue
         path = os.path.join(envelopes_dir, name)
         try:

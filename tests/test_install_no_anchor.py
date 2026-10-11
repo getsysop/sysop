@@ -99,6 +99,8 @@ def test_no_anchor_update_force_proceeds_and_labels_summary(tmp_path, anchor):
     combined = r.stdout + r.stderr
     assert r.returncode == 0, f"--force no-anchor update should proceed:\n{combined}"
     assert "was:  (unknown — lock had no anchor)" in combined, combined
+    # Phase 370 moved `now:` into each branch; pin it on this one too (its round, lens 2).
+    assert re.search(r"^\s*now:\s+[0-9a-f]{12}$", combined, re.M), combined
 
 
 def _nongit_source(tmp_path):

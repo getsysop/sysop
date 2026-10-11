@@ -506,11 +506,12 @@ INHERITED_PRECONDITIONS = (
     "Invariant 9",
     "will actually flip to `done`",
     # 3, second half — Step 4c has THREE filters, not two. Its step 1c refuses to route a
-    #     doc at all when any id it names carries a truthy `user_action`, so a doc 1c holds
-    #     yields no flip and the arm's premise is false. The round's execution lens built
-    #     the fixture, drove all three preconditions true against a held task, and watched
-    #     the arm fire on a doc Step 4c would never route.
-    "step 1c's `user_action` hold",
+    #     doc at all when it carries `hold:` or any id it names carries a truthy
+    #     `user_action` (Phase 353 added the first), so a doc 1c holds yields no flip and
+    #     the arm's premise is false. The round's execution lens built the fixture, drove
+    #     all three preconditions true against a held task, and watched the arm fire on a
+    #     doc Step 4c would never route.
+    "step 1c's hold (`hold:` or `user_action`)",
 )
 
 #: The two sentences that make a CONTINUE past a failing gate honest. Neither is a
@@ -1110,7 +1111,7 @@ MUTATIONS: list[tuple[str, Callable[[str], str]]] = [
     # prose rather than straight into the fence) and broke a full-sentence pin
     # that was only ever asserting the `4a-post` reference. Pin the property.
     ("R7 strip 4b's lead-in reference to the gate", _sub(
-        "and `4a-post` reported green, but **before** doc consolidation",
+        "and `4a-post` reported green, or continued under item 4's `INHERITED:` or `PRE-EXISTING:`, but **before** doc consolidation",
         "but **before** doc consolidation")),
     # ---- the round's findings: each survived the first version's whole battery ----
     ("W1 restore Step 4a's route past the gate", _sub(
@@ -1157,7 +1158,11 @@ MUTATIONS: list[tuple[str, Callable[[str], str]]] = [
         "                                        continued because 4a-post item 4's three\n"
         "                                        preconditions all held. Never folded into \"ran N\n"
         "                                        commands\" either — that would report a failing\n"
-        "                                        command as a passing one.>\n",
+        "                                        command as a passing one.\n"
+        "                                      | PRE-EXISTING: <command> — <N> test IDs also fail on\n"
+        "                                        origin/<default branch>; proceeded on the human's\n"
+        "                                        answer. A FAILED command, never folded into \"ran N\n"
+        "                                        commands\".>\n",
         "")),
     # ---- the round's survivors. 49 of its 63 mutations lived against the first version;
     # these are the ones that named a distinct bypass rather than a variant of one. ----
@@ -1176,8 +1181,8 @@ MUTATIONS: list[tuple[str, Callable[[str], str]]] = [
     ("H25 reorder by prepending an instruction", _sub(
         "1. **Re-resolve the command list**", "**Run Step 4b first, then come back here.**\n\n1. **Re-resolve the command list**")),
     ("H49 let a failure not stop the close", _sub(
-        "4. **On failure, stop — unless the failure is one this close inherited and is about to repair.",
-        "4. **On failure, note it and continue.** Unless the failure is one this close inherited and is about to repair.")),
+        "4. **On failure, stop — unless the failure is one this close inherited and is about to repair,",
+        "4. **On failure, note it and continue.** Unless the failure is one this close inherited and is about to repair,")),
     ("H51 reintroduce the Step 3c coupling in Step 3 instead", _sub(
         "**The item-5 stop is about the run",
         "If Step 3 was skipped (doc-only diff), skip Step 3c too.\n\n**The item-5 stop is about the run")),

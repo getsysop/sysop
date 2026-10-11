@@ -11,8 +11,8 @@
 # script's defaults read the WORKING TREE, which is the false green this hook
 # was fixed for. Do not trim them.
 #
-# WHY: skills pin a ROLE (reasoning / convention-gate / mechanical /
-# quick), not a model
+# WHY: skills pin a ROLE, not a model
+# (reasoning / planner / plan-review / executor / convention-gate / mechanical / quick)
 # name; served_models.yml maps each role to a model. When a model is
 # sunset you repoint the role in one place — but a stale role mapping, an
 # undefined role, or a missing marker fails ONLY when the skill is next

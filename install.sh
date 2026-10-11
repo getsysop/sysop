@@ -92,9 +92,12 @@ LOOP_EXCLUDE_SKILLS="intake add-task claim-task auto-build auto-fix auto-judge n
 LOOP_EXCLUDE_SHARED="decomposition-rubric guided-mode main-push-guard plan-review-preference ui-verify"
 # Companion scripts excluded from loop mode (lifecycle-coupled). Kept: run_checks*
 # (+ run_checks/ dir), _log.py, review_index.py, archive_review_tasks.py,
-# install_hooks.sh, sysop-update.sh, and the model-role set (_model_roles.py,
-# resolve/check/migrate_skill_model.py — mode-agnostic; operate on shipped skills).
-LOOP_EXCLUDE_SCRIPTS="_git_lib.sh default_branch.sh backfill_completed_dates.py batch_work.sh claim_task.sh clear_user_action.py cleanup_worktrees.sh close_batch.sh next_task.py parse_subagent_envelope.py permission_denied_hook.py pr_dependabot.py scope_overlap.py sitrep_survey.py validate_tasks.py"
+# install_hooks.sh, sysop-update.sh, the model-role set (_model_roles.py,
+# resolve/check/migrate_skill_model.py — mode-agnostic; operate on shipped skills),
+# _git_lib.sh (Phase 368, `Q-376`: the pre-merge-commit hook, armed in both
+# modes, sources it to resolve the protected branch) and default_branch.sh (the
+# command that hook's fallback warning tells the operator to run).
+LOOP_EXCLUDE_SCRIPTS="backfill_completed_dates.py batch_work.sh claim_task.sh clear_user_action.py cleanup_worktrees.sh close_batch.sh close_run.py ignored_refs.py next_task.py parse_subagent_envelope.py pending_doc_hold.py permission_denied_hook.py pr_dependabot.py scope_overlap.py sitrep_survey.py validate_tasks.py"
 # Phase 111: --ref pins the install/update source to a git tag/rev (a reviewed
 # release) instead of the source clone's live HEAD. REF_WORKTREE holds the
 # materialised-rev worktree; SYSOP_SRC_CLONE holds the original clone (needed to
@@ -229,6 +232,11 @@ declare -A SUBSTITUTION_USAGE_COUNT=()
 # fuller rationale lived at PHASE_24_HANDOFF.md § 4.5, deleted as spent by Phase
 # 194; recover from git history if the reasoning is ever needed again.
 DIVERGENCE_SHADOW=""
+# The divergence check's temporary worktree of the Sysop source, and the repo it
+# belongs to: set while it exists, so the EXIT trap removes it on any early exit.
+DIVERGENCE_WORKTREE=""
+DIVERGENCE_WORKTREE_REPO=""
+DIVERGENCE_STDERR_TMP=""
 OLD_COMMIT=""
 PRESERVED_PATHS=()
 declare -A ACCEPT_UPSTREAM=()
@@ -496,18 +504,36 @@ do_or_say() {
   fi
 }
 
-# Unified EXIT-trap cleanup for the two temp resources the installer may create:
-# the Phase 8/24b divergence shadow (a temp dir) and the Phase 111 --ref pin
-# worktree. Each is guarded so it fires only if set. Set once as the EXIT trap in
-# main(); a single trap avoids the two sites clobbering each other's trap.
+# The target's working-tree state as one string: the porcelain status plus a digest
+# of the tracked diff (a file already ` M` that is rewritten keeps its status line).
+# Empty when either read fails, which callers treat as "unknown".
+_target_tree_state() {
+  local st dg
+  st="$(git -C "$TARGET" status --porcelain 2>/dev/null)" || return 0
+  dg="$(git -C "$TARGET" diff HEAD --binary 2>/dev/null | git hash-object --stdin 2>/dev/null)" || return 0
+  [[ -n "$dg" ]] || return 0
+  printf '%s\n%s' "$dg" "$st"
+}
+
+# Unified EXIT-trap cleanup for the temp resources the installer may create: the
+# Phase 8/24b divergence shadow and its worktree of the Sysop source (and that
+# check's stderr capture), the two settings temps, the Codex probe dir, and the
+# Phase 111 --ref pin worktree. Each is guarded so it fires only if set. Set once
+# as the EXIT trap in main(); a single trap avoids sites clobbering each other's.
 _cleanup_install_temp() {
   [[ -n "$DIVERGENCE_SHADOW" ]] && rm -rf "$DIVERGENCE_SHADOW"
+  [[ -n "$DIVERGENCE_STDERR_TMP" ]] && rm -f "$DIVERGENCE_STDERR_TMP"
   [[ -n "$LOOP_SETTINGS_TMP" ]] && rm -f "$LOOP_SETTINGS_TMP"
   [[ -n "$BRANCH_SETTINGS_TMP" ]] && rm -f "$BRANCH_SETTINGS_TMP"
   # Phase 142: the Codex symlink probe writes a dir INSIDE the target (it must
   # test the consumer's filesystem, not /tmp's). A mid-probe crash would
   # otherwise strand it and trip the next install's dirty-tree check.
   [[ -n "$CODEX_PROBE_TMP" ]] && rm -rf "$CODEX_PROBE_TMP"
+  # The divergence worktree is registered against the clone, so order does not matter;
+  # it goes first anyway, while the --ref worktree it was added from still exists.
+  if [[ -n "$DIVERGENCE_WORKTREE" ]] && [[ -n "$DIVERGENCE_WORKTREE_REPO" ]]; then
+    git -C "$DIVERGENCE_WORKTREE_REPO" worktree remove --force "$DIVERGENCE_WORKTREE" >/dev/null 2>&1 || true
+  fi
   if [[ -n "$REF_WORKTREE" ]] && [[ -n "$SYSOP_SRC_CLONE" ]]; then
     git -C "$SYSOP_SRC_CLONE" worktree remove --force "$REF_WORKTREE" >/dev/null 2>&1 || true
   fi
@@ -1622,7 +1648,15 @@ reconstruct_old_install() {
   # `git worktree add` wants a non-existing path it can create.
   rmdir "$tmp_worktree"
 
+  # Registered in the source repo, so a leak outlives this run: the EXIT trap takes
+  # it on a signal or an unbound variable before the removal below (not errexit: this
+  # function runs as an `if` condition, where `set -e` is off). Set BEFORE the add —
+  # a signal that lands while `git worktree add` runs ends the script before the
+  # next statement, and removing a path that was never created is harmless.
+  DIVERGENCE_WORKTREE="$tmp_worktree"; DIVERGENCE_WORKTREE_REPO="${SYSOP_SRC_CLONE:-$REPO_ROOT}"
   if ! git -C "$REPO_ROOT" worktree add --detach --quiet "$tmp_worktree" "$old_commit" 2>/dev/null; then
+    # Kept registered with the trap: a git that registered the worktree and still
+    # failed would otherwise leak it, and removing a path never created is harmless.
     note "divergence detection: failed to materialise Sysop at ${old_commit:0:12} — skipping" >&2
     return 1
   fi
@@ -1656,7 +1690,7 @@ reconstruct_old_install() {
     # recognise --no-arm-hooks). --force allows it to run against an empty/
     # dirty repo; --no-arm-hooks skips hook installation (harmless against
     # the shadow but pointless); --yes skips prompts.
-    local old_stderr; old_stderr="$(mktemp)"
+    local old_stderr; old_stderr="$(mktemp)"; DIVERGENCE_STDERR_TMP="$old_stderr"
     if ! bash "$tmp_worktree/install.sh" "$shadow" \
            --packs "$packs_csv" \
            --force --no-arm-hooks --yes \
@@ -1678,10 +1712,18 @@ reconstruct_old_install() {
         rc=1
       fi
     fi
-    rm -f "$old_stderr"
+    rm -f "$old_stderr"; DIVERGENCE_STDERR_TMP=""
   fi
 
-  git -C "$REPO_ROOT" worktree remove --force "$tmp_worktree" >/dev/null 2>&1 || true
+  # Loud, not `|| true`: a failed removal leaves a registered worktree in the Sysop
+  # source's `git worktree list`, and nothing else would ever say so.
+  if ! git -C "$REPO_ROOT" worktree remove --force "$tmp_worktree" >/dev/null 2>&1; then
+    note "divergence detection: could not remove its temporary worktree $tmp_worktree" >&2
+    # The clone, not $REPO_ROOT: under --ref that is a temp worktree the EXIT trap
+    # deletes, so a remedy naming it could not run (Phase 370's round).
+    note "  remove it by hand: git -C ${SYSOP_SRC_CLONE:-$REPO_ROOT} worktree remove --force $tmp_worktree" >&2
+  fi
+  DIVERGENCE_WORKTREE=""; DIVERGENCE_WORKTREE_REPO=""
   return $rc
 }
 
@@ -1870,7 +1912,7 @@ import sys, yaml
 try:
     with open(sys.argv[1]) as f:
         data = yaml.safe_load(f) or {}
-except (OSError, UnicodeDecodeError) as e:
+except Exception as e:
     sys.exit(f"{sys.argv[1]}: could not be read ({type(e).__name__}: {e})")
 subs = data.get('substitutions') if isinstance(data, dict) else None
 if subs is None:
@@ -1943,7 +1985,7 @@ subs_path, dst_path = sys.argv[1], sys.argv[2]
 try:
     with open(subs_path) as f:
         data = yaml.safe_load(f) or {}
-except (OSError, UnicodeDecodeError) as e:
+except Exception as e:
     sys.exit(f"{subs_path}: could not be read ({type(e).__name__}: {e})")
 subs = data.get('substitutions') if isinstance(data, dict) else None
 if not isinstance(subs, dict):
@@ -2162,7 +2204,7 @@ base_path, proj_path = sys.argv[1], sys.argv[2]
 def load(p):
     try:
         with open(p) as f: return yaml.safe_load(f) or {}
-    except (OSError, UnicodeDecodeError) as e:
+    except Exception as e:
         sys.exit(f"{p}: could not be read ({type(e).__name__}: {e})")
 base, proj = load(base_path), load(proj_path)
 base_ids = {c['id'] for c in (base.get('checks') or []) if isinstance(c, dict) and 'id' in c}
@@ -2260,7 +2302,7 @@ new_text = ''.join(keep)
 try:
     parsed = yaml.safe_load(new_text) or {}
     ids = {c.get('id') for c in (parsed.get('checks') or []) if isinstance(c, dict)}
-except yaml.YAMLError:
+except Exception:  # not only YAMLError: `2026-09-31` raises ValueError (Q-621)
     sys.exit(3)
 if target & ids:
     sys.exit(3)
@@ -2288,7 +2330,7 @@ base_path, proj_path = sys.argv[1], sys.argv[2]
 def load(p):
     try:
         with open(p) as f: return yaml.safe_load(f) or {}
-    except (OSError, UnicodeDecodeError) as e:
+    except Exception as e:
         sys.exit(f"{p}: could not be read ({type(e).__name__}: {e})")
 base, proj = load(base_path), load(proj_path)
 base_checks = [c for c in (base.get('checks') or []) if isinstance(c, dict)]
@@ -3098,6 +3140,9 @@ LOOP_ALLOW = {
     "Bash(bash sysop/scripts/run_checks.sh)",
     "Bash(bash sysop/scripts/run_checks.sh:*)",
     "Bash(bash sysop/scripts/install_hooks.sh)",
+    # Phase 368: loop mode arms the pre-merge-commit hook and ships the resolver it sources, and
+    # the hook's fallback warning — like four shipped skills — tells the operator to run this.
+    "Bash(bash sysop/scripts/default_branch.sh)",
     # The post-install footer tells every consumer, in both modes, to run `bash
     # sysop/scripts/self_check.sh`, and until Phase 184 no rule of any shape covered it — so the
     # first thing a fresh loop-mode install prescribed was also the first prompt it hit.
@@ -3185,13 +3230,13 @@ install_permissions() {
     # would violate the dry-run contract, and the copy note would render the
     # raw /tmp path).
     if [[ "$DRY_RUN" -eq 1 ]]; then
-      note "would write $(rel "$dst") (loop allow-subset: 26 rules, no hooks)"
+      note "would write $(rel "$dst") (loop allow-subset: 27 rules, no hooks)"
       record_managed_path "$dst"
       record "permissions: would write $(rel "$dst") (loop allow-subset)"
       return 0
     fi
     # Fail CLOSED: if the filter can't be built, do NOT fall back to the full
-    # master — that would over-grant the 80-rule allow-list AND re-add the hooks
+    # master — that would over-grant the 84-rule allow-list AND re-add the hooks
     # block referencing scripts loop mode never installs (broken at runtime).
     # Skip settings.json instead (the consumer sees more permission prompts, but
     # no over-grant and no dangling hooks); the loud error keeps it visible.
@@ -3225,8 +3270,13 @@ install_permissions() {
     # `L7`: --dry-run warned here and the apply path was silent, so a consumer who
     # previewed and then applied lost the warning at exactly the moment it took effect.
     note "could not resolve this repo's default branch — the reset grant keeps 'origin/main'"
-    note "  Fix with 'git remote set-head origin --auto'. Until then /review-close stops at"
-    note "  its first step, which resolves the same name and refuses rather than guessing."
+    # The explicit form, not `set-head --auto`: `--auto` fails on a bare origin whose
+    # HEAD names an unpushed branch (`_git_lib.sh` measured it). And a name refused
+    # as unsafe (`Q-383`) needs a rename, which no re-declaration fixes.
+    note "  Fix with 'git remote set-head origin <branch>' (push the branch first if origin"
+    note "  lacks it: set-head needs origin/<branch>), or rename a default branch whose name"
+    note "  the resolver refused as unsafe. Until then /review-close stops at its first step,"
+    note "  which resolves the same name and refuses rather than guessing."
   fi
 
   # The permissions merge below is a deliberate set-union, so it preserves rules the
@@ -3570,7 +3620,7 @@ _preview_skill_models() {
 }
 
 # Phase 69: resolve the skills tree's role markers to concrete models. Skills
-# ship pinning a ROLE (reasoning/mechanical/quick); this rewrites each marked
+# ship pinning a ROLE (the set is `roles:` in served_models.yml); this rewrites each marked
 # `model:` value to whatever served_models.yml (+ the consumer's never-overwritten
 # served_models.local.yml) maps that role to. Runs AFTER install_skills (tree
 # present), install_companion_scripts (resolver present), and install_served_models
@@ -3972,6 +4022,7 @@ EOF
 #   sysop/runtime/locks/               in-progress task locks (claim_task.sh; Phase 32)
 #   sysop/runtime/pending-rounds/      open review-round markers (Phase 143)
 #   sysop/runtime/round-receipts/      closed rounds' Tier-0 coverage ledgers (Phase 149)
+#   sysop/runtime/close/               /review-close --prepare run directories (Phase 363)
 # The guarantee must hold: /review-close Step 2a derives its `dirty` verdict
 # from `git status --porcelain`, so an un-ignored lock or pending-doc makes a
 # clean branch read dirty → auto-SKIP → the close silently refuses (Phase 99.1
@@ -4581,11 +4632,11 @@ _ns_migrate_settings() {
   [[ "$DRY_RUN" -eq 1 ]] && return 0
   local template="$REPO_ROOT/core/companion/.claude/settings.json"
   [[ -f "$template" ]] || return 0
-  local old_src=""
+  local old_src="" _gs=""
   if [[ -n "$DIVERGENCE_SHADOW" && -f "$DIVERGENCE_SHADOW/.claude/settings.json" ]]; then
     old_src="$DIVERGENCE_SHADOW/.claude/settings.json"
   elif [[ -n "$OLD_COMMIT" && "$OLD_COMMIT" != "unknown" ]]; then
-    local _gs; _gs="$(mktemp)"
+    _gs="$(mktemp)"
     if git -C "$REPO_ROOT" show "${OLD_COMMIT}:core/companion/.claude/settings.json" >"$_gs" 2>/dev/null; then
       old_src="$_gs"
     else
@@ -4674,6 +4725,8 @@ with open(target_path, "w") as f:
     f.write("\n")
 PY
   done
+  # The old template's temp copy was never removed once read (Phase 370's round).
+  if [[ -n "$_gs" ]]; then rm -f "$_gs"; fi
 }
 
 # Append-only archival records. A flat scripts/ reference inside one of these is a
@@ -5672,6 +5725,11 @@ main() {
       note "snapshot commit: ${snapshot_hash:0:12}"
     fi
   fi
+  # The target's state before this update writes anything, for the closing line:
+  # an update tolerates unrelated dirt, so a dirty tree afterwards does not mean the
+  # update changed it.
+  local pre_update_state=""
+  [[ "$UPDATE_MODE" -eq 1 ]] && pre_update_state="$(_target_tree_state)"
 
   # Update mode (Phase 8 + Phase 24b): pre-overwrite divergence detection.
   # Reconstruct what Sysop's OLD checkout would have produced, then diff
@@ -5973,10 +6031,28 @@ main() {
     # `was:` that reads as "nothing to report".
     if [[ -z "$old_commit" ]] || [[ "$old_commit" == "unknown" ]]; then
       say "  was:  (unknown — lock had no anchor)"
+      say "  now:  ${new_commit:0:12}"
+    elif [[ "$old_commit" == "$new_commit" ]]; then
+      # `Q-034`: two identical SHAs were the only tell that this update was a
+      # no-op, and nothing asks the reader to compare them. The likeliest cause
+      # is a re-clone with $SYSOP_SRC still at the old one, so the line names the
+      # clone actually read: ${SYSOP_SRC_CLONE:-…}, because under --ref $REPO_ROOT
+      # is a temp worktree the EXIT trap deletes. Not "nothing copied": every
+      # managed file was still re-copied, and a dirty source still lands (above).
+      say "  already at ${new_commit:0:12} — the Sysop source has not moved since the last install/update"
+      # The commit has not moved; its working tree may have. Say so here too, or this
+      # line contradicts the dirty-source warning above (Phase 370's round, lens 1).
+      [[ "$SOURCE_DIRTY" -eq 1 ]] && note "its uncommitted changes WERE copied — see the dirty-source warning above"
+      note "source read: ${SYSOP_SRC_CLONE:-$REPO_ROOT}"
+      if [[ -n "$REF_OVERRIDE" ]]; then
+        note "--ref $REF_OVERRIDE names the commit already installed"
+      else
+        note "to take newer Sysop, update that clone or point \$SYSOP_SRC at a newer one"
+      fi
     else
       say "  was:  ${old_commit:0:12}"
+      say "  now:  ${new_commit:0:12}"
     fi
-    say "  now:  ${new_commit:0:12}"
     if [[ "$MIGRATION_MODE" -eq 1 ]]; then
       say ""
       say "▶ Namespace migration — commit this as ONE change, in this order:"
@@ -5990,7 +6066,19 @@ main() {
       note "Consumer files still naming old scripts/ paths were listed above — fix them by hand."
     fi
     say ""
-    say "The update is uncommitted — review and commit intentionally."
+    # A no-op update leaves the target as it found it (Phase 148), and "uncommitted"
+    # then reads as "something happened". Compare against the state captured before
+    # the update wrote anything; when either read fails, keep the "uncommitted" line.
+    local post_update_state; post_update_state="$(_target_tree_state)"
+    if [[ -n "$pre_update_state" ]] && [[ "$post_update_state" == "$pre_update_state" ]]; then
+      if [[ -z "$(git -C "$TARGET" status --porcelain 2>/dev/null)" ]]; then
+        say "The update changed nothing in $TARGET — there is nothing to commit."
+      else
+        say "The update changed nothing in $TARGET — its uncommitted changes were there before it ran."
+      fi
+    else
+      say "The update is uncommitted — review and commit intentionally."
+    fi
     if (( ${#DIVERGED_PATHS[@]} > 0 )); then
       note "⚠  ${#DIVERGED_PATHS[@]} managed path(s) had committed local edits — see warning block above"
     fi

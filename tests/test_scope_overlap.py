@@ -303,6 +303,10 @@ def test_run_git_porcelain_parses_rename_to_new_path(monkeypatch):
 
 def test_worktree_changed_paths_unions_committed_and_uncommitted(monkeypatch, tmp_path):
     ws = str(tmp_path)  # must be a real dir for the isdir guard
+    # The base is stubbed like its siblings': with `subprocess.run` faked below, the
+    # resolver's own git probes return this porcelain line, and until `Q-383` it
+    # accepted `?? src/api/new.py` as a branch name. It now refuses it, correctly.
+    monkeypatch.setattr(so, "_resolve_default_branch_for", lambda c: "main")
 
     def fake_run(cmd, **kw):
         if "diff" in cmd:  # git -C ws diff --name-only main...HEAD
@@ -1252,13 +1256,28 @@ def test_a_likely_that_carries_a_reason_prints_it(tmp_path):
 
 
 def test_a_nul_in_a_workspace_path_is_unknown_not_a_crash(tmp_path):
-    """F3: `os.stat` raises ValueError on an embedded NUL, a legal YAML escape; the
-    first cut of `_absent_or_inaccessible` caught only OSError and ended the run."""
+    """F3: `os.stat` raises ValueError on an embedded NUL; the first cut of
+    `_absent_or_inaccessible` caught only OSError and ended the run.
+
+    Phase 347 changed how a NUL can reach the workspace. `workspace:` is now read as
+    its line reads, as `/review-close` reads it, so the YAML escape `"/tmp/a\\0b"` is
+    that literal text — a path that does not exist, graded like any stale lock. A raw
+    NUL byte, which YAML refuses, makes the lock unreadable: `unknown`, not a crash.
+    The ValueError arm itself is pinned directly, since the workspace no longer
+    reaches it."""
+    assert so._absent_or_inaccessible("/tmp/a\0b") == "could not be checked (ValueError)"
     repo = _unknown_repo(tmp_path, lock=_lock("TECH-B").replace(
-        "status:", 'workspace: "/tmp/a\\0b"\nstatus:'))
+        "status:", "workspace: /tmp/a\0b\nstatus:"))
     o = _only(so.assess("FEAT-CAND", index_path=repo / "tasks/index.yml",
                         base_tasks_dir=repo / "tasks", project_root=repo))
-    assert o.verdict == "unknown" and "could not be checked (ValueError)" in o.reason, o
+    assert o.verdict == "unknown" and "its lock could not be read" in o.reason, o
+    escaped = tmp_path / "escaped"
+    escaped.mkdir()
+    repo = _unknown_repo(escaped, lock=_lock("TECH-B").replace(
+        "status:", 'workspace: "/tmp/a\\0b"\nstatus:'))
+    a = so.assess("FEAT-CAND", index_path=repo / "tasks/index.yml",
+                  base_tasks_dir=repo / "tasks", project_root=repo)
+    assert a.overlaps == [] and a.max_verdict == "none", a
 
 
 def test_the_reader_ignores_a_hooks_git_dir(monkeypatch, tmp_path):

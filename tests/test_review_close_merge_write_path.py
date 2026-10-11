@@ -82,7 +82,12 @@ def test_the_rebase_continue_is_never_prescribed_bare(skill: str):
         r"(?<!core\.editor=true )(?<!a bare `)git rebase --continue", skill
     )
     assert not bare, f"{len(bare)} bare `git rebase --continue` site(s) are back"
-    assert len(anchor("git -c core.editor=true rebase --continue").findall(skill)) >= 3
+    # Phase 352 (`Q-637`): the published arm is a merge, so the gate names each arm's
+    # continue and one generic sentence says "either arm's `--continue`". The rebase form
+    # keeps its permission rule and the gate; the merge form has its rule, the gate and the
+    # published arm's stale-status route.
+    assert len(anchor("git -c core.editor=true rebase --continue").findall(skill)) >= 2
+    assert len(anchor("git -c core.editor=true merge --continue").findall(skill)) >= 3
 
 
 def test_the_exact_allow_rule_exists_because_a_prefix_rule_cannot_cover_it():

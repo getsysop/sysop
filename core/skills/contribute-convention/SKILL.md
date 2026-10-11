@@ -529,17 +529,35 @@ For each selected pack group, in order:
    worst case, **executing** approved *text* as a shell command. This is the
    exact hazard `/report-issues` Step 4 fixed. So:
 
-   - Write the exact rendered body (identical to Step 6) to a temporary file
-     **outside the repo** (e.g. `"${TMPDIR:-/tmp}/sysop-pack-<pack>.md"`) using the `Write`
-     tool — never echo it through the shell.
+   - **Resolve the body file's path first, in a call of its own:**
+     ```bash
+     echo "${TMPDIR:-/tmp}/sysop-pack-<pack>.md"
+     ```
+     The printed line is `<body file>`. Use it, character for character, both
+     as the path you `Write` and as the path `gh` reads below. Never give either
+     of them the `${TMPDIR:-/tmp}` expression instead: `Write` expands nothing
+     and the shell does, so the two name different files wherever `TMPDIR` is
+     set — every macOS shell — and `gh` reads a missing file, or a stale one
+     from an earlier run, in place of the body the human approved. If the call
+     is denied, or the printed line does not begin with `/` (a relative
+     `TMPDIR`), stop and say so; do not pick a path of your own.
+   - Write the exact rendered body (identical to Step 6) to `<body file>` using
+     the `Write` tool — never pass the body through the shell. If `Write`
+     refuses because a file is already there (an earlier run left it), `Read`
+     that file, then `Write` again: what `gh` files must be the body you just
+     wrote.
    - Keep the `--title` a plain one-line summary and pass it **single-quoted**;
      if the title contains a backtick, `$`, or a single quote, render a clean
      equivalent (the full text still rides in the body file).
    - Then:
      ```bash
-     gh issue create --repo <target> --title '<title>' --label enhancement --body-file "${TMPDIR:-/tmp}/sysop-pack-<pack>.md"
+     gh issue create --repo <target> --title '<title>' --label enhancement --body-file '<body file>'
      ```
-   - Delete the temp file after the call returns (success or failure).
+   - After the call returns (success or failure), remove the file with
+     `rm -f '<body file>'`. Nothing depends on it: the next run rewrites the
+     file before `gh` reads it, so a leftover is never what gets filed. No
+     `rm` rule is seeded, so under `dontAsk` this call is denied — leave the
+     file and carry on.
 
    `gh issue create` prints the new issue URL — capture it. If the call fails
    (auth lapse, network), **do not** annotate the overlay; record the failure

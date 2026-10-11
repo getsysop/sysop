@@ -23,8 +23,11 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import re
+import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -918,3 +921,972 @@ def test_blind_ok_is_an_explicit_per_row_escape(mb, pytree, capsys):
     out = capsys.readouterr().out
     assert "BLIND CONTROLS" not in out, out
     assert rc == 0, out
+
+
+# --------------------------------------------------------------------------------------
+# Killer-first (Phase 347, `Q-618`)
+#
+# Phase 345's battery ran eight modules for every row, about 30 s a row, and its three runs
+# cost about three hours; no phase from 329 on used this module. A defect row now runs its
+# `killer=` column first and stops at its first RED. The guarantees pinned here are the
+# ones a speedup could quietly break: a column that did not run is never read as green,
+# controls and declared-equivalents still run every column, and a verdict is the same in
+# both modes. The columns are shell commands that append their name to a log OUTSIDE the
+# tree, so the order and the count of calls are observed rather than inferred.
+# --------------------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def calls(tmp_path_factory):
+    return tmp_path_factory.mktemp("calls") / "log"
+
+
+def _col(mb, name, log, predicate):
+    """A column that logs its call, then is green exactly when `predicate` (bash) holds."""
+    return mb.Verifier(name, argv=["bash", "-c", f"echo {name} >> '{log}'; {predicate}"])
+
+
+# Green on the pristine subject; red once the late grep loses its `i`.
+LATE_INTACT = f"grep -qF \"{LATE_GREP}\" subject.sh"
+LATE_BROKEN = LATE_GREP.replace("-rniE", "-rnE")
+
+
+def _logged(log):
+    return log.read_text(encoding="utf-8").split() if log.exists() else []
+
+
+def test_a_defect_row_runs_its_killer_first_and_stops_at_the_first_red(mb, tree, calls, capsys):
+    battery = _battery(mb, tree, [
+        mb.Mutation("K1", "what it matches on", old=LATE_GREP, new=LATE_BROKEN,
+                    killer="fast"),
+    ], verifiers=[_col(mb, "slow", calls, LATE_INTACT), _col(mb, "fast", calls, LATE_INTACT)])
+    rc = battery.main([])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    # baseline runs both, in declared order; the row runs `fast` only; the restore check
+    # runs both again.
+    assert _logged(calls) == ["slow", "fast", "fast", "slow", "fast"], _logged(calls)
+    assert battery.rows[0].results == {"fast": "red", "slow": "NOT RUN"}
+    assert battery.rows[0].verdict == "killed by fast (1 not run)"
+    assert "1/1 killed" in out
+
+
+def test_without_a_killer_the_declared_order_runs_until_the_first_red(mb, tree, calls):
+    battery = _battery(mb, tree, [
+        mb.Mutation("K2", "what it matches on", old=LATE_GREP, new=LATE_BROKEN),
+    ], verifiers=[_col(mb, "blind", calls, "true"), _col(mb, "sees", calls, LATE_INTACT),
+                  _col(mb, "later", calls, LATE_INTACT)])
+    battery.main([])
+    assert battery.rows[0].results == {"blind": "green", "sees": "red", "later": "NOT RUN"}
+    assert battery.rows[0].verdict == "killed by sees (1 not run)"
+
+
+def test_a_column_that_did_not_run_is_never_reported_green(mb, tree, calls, capsys):
+    """NOT RUN is printed as such, and a row that stopped early is in no 'only by' count:
+    reading its skipped columns as green would credit the killer with a unique kill."""
+    _battery(mb, tree, [
+        mb.Mutation("K3", "what it matches on", old=LATE_GREP, new=LATE_BROKEN,
+                    killer="a"),
+    ], verifiers=[_col(mb, "a", calls, LATE_INTACT), _col(mb, "b", calls, LATE_INTACT)]).main([])
+    out = capsys.readouterr().out
+    row = next(line for line in out.splitlines() if line.startswith("K3 "))
+    assert "NOT RUN" in row and "green" not in row, row
+    assert "a: killed 1, of which 0 only by a" in out
+    assert "1 row(s) stopped at their first red column" in out
+
+
+def test_all_columns_runs_every_column_and_attributes_the_kill(mb, tree, calls, capsys):
+    battery = _battery(mb, tree, [
+        mb.Mutation("K4", "what it matches on", old=LATE_GREP, new=LATE_BROKEN,
+                    killer="a"),
+    ], verifiers=[_col(mb, "a", calls, LATE_INTACT), _col(mb, "b", calls, LATE_INTACT)])
+    battery.main(["--all-columns"])
+    out = capsys.readouterr().out
+    assert battery.rows[0].results == {"a": "red", "b": "red"}
+    assert battery.rows[0].verdict == "killed"
+    assert "stopped at their first red" not in out
+
+
+def test_a_control_runs_every_column_even_after_a_red(mb, tree, calls):
+    """A control is scored on its reds, so a column it skipped is a false kill it never
+    had the chance to report."""
+    battery = _battery(mb, tree, [
+        mb.Mutation("N1", "over-strictness", kind="control", old=LATE_GREP, new=LATE_BROKEN,
+                    killer="a"),
+    ], verifiers=[_col(mb, "a", calls, LATE_INTACT), _col(mb, "b", calls, LATE_INTACT)])
+    battery.main([])
+    assert battery.rows[0].results == {"a": "red", "b": "red"}
+    assert battery.rows[0].verdict == "FALSE-KILL"
+
+
+def test_a_declared_equivalent_runs_every_column_even_after_a_red(mb, tree, calls):
+    battery = _battery(mb, tree, [
+        mb.Mutation("E1", "vacuity", kind="equivalent", old=LATE_GREP, new=LATE_BROKEN,
+                    killer="a"),
+    ], verifiers=[_col(mb, "a", calls, LATE_INTACT), _col(mb, "b", calls, LATE_INTACT)])
+    battery.main([])
+    assert battery.rows[0].results == {"a": "red", "b": "red"}
+    assert battery.rows[0].verdict == "EQUIVALENT-KILLED"
+
+
+def test_a_partial_kill_is_flagged_only_when_a_column_that_ran_stayed_green(mb, tree, calls, capsys):
+    """Phase 347's round blanked the `<<<` flag and every test stayed green. With every
+    column run, a kill one column missed is flagged; a killer-first stop is not, because
+    its skipped columns say nothing either way."""
+    cols = [_col(mb, "sees", calls, LATE_INTACT), _col(mb, "blind", calls, "true")]
+    _battery(mb, tree, [mb.Mutation("F1", "what it matches on", old=LATE_GREP, new=LATE_BROKEN)],
+             verifiers=cols).main(["--all-columns"])
+    row = next(ln for ln in capsys.readouterr().out.splitlines() if ln.startswith("F1 "))
+    assert "killed by sees" in row and row.rstrip().endswith("<<<"), row
+    _battery(mb, tree, [mb.Mutation("F2", "what it matches on", old=LATE_GREP, new=LATE_BROKEN)],
+             verifiers=cols).main([])
+    row = next(ln for ln in capsys.readouterr().out.splitlines() if ln.startswith("F2 "))
+    assert "killed by sees" in row and "<<<" not in row, row
+
+
+def test_the_off_list_warning_reads_the_attacks_field(mb, tree, capsys):
+    """`attacks=` carries the assumption class; `group=` is a report grouping. `Q-299`
+    proposed reading `group=`, which would flag every correctly-classed row."""
+    _battery(mb, tree, [mb.Mutation("W1", "what it accepts", group="x", old=LATE_GREP,
+                                    new=LATE_BROKEN)]).main([])
+    assert "assumption class rule 1 does not list" not in capsys.readouterr().out
+    _battery(mb, tree, [mb.Mutation("W2", "the grep loses its i", group="what it accepts",
+                                    old=LATE_GREP, new=LATE_BROKEN)]).main([])
+    out = capsys.readouterr().out
+    assert "1 row(s) name an assumption class rule 1 does not list" in out, out
+    assert "the grep loses its i" in out
+
+
+def test_the_usage_example_names_a_listed_class(mb):
+    """A battery copied from the docstring should not trip the off-list warning."""
+    m = re.search(r'Mutation\("A01", "([^"]+)"', mb.__doc__)
+    assert m and m.group(1) in mb.ASSUMPTION_CLASSES, m and m.group(1)
+
+
+def test_a_verdict_is_the_same_killer_first_and_all_columns(mb, tree, calls):
+    """The speedup must not move a verdict. One row of each outcome, both modes."""
+    def rows():
+        return [
+            mb.Mutation("V1", "what it matches on", old=LATE_GREP, new=LATE_BROKEN,
+                        killer="b"),
+            mb.Mutation("V2", "where it looks", old="set -euo pipefail",
+                        new="set -uo pipefail", killer="b"),
+            mb.Mutation("V3", "over-strictness", kind="control",
+                        old='hard "Gate A — the early one"', new='hard "Gate A — the first"'),
+            mb.Mutation("V4", "over-strictness", kind="control",
+                        old='echo "GATE GREEN"', new='echo "GATE"'),
+        ]
+    cols = [_col(mb, "a", calls, LATE_INTACT),
+            _col(mb, "b", calls, 'grep -q "GATE GREEN" subject.sh')]
+    fast = _battery(mb, tree, rows(), verifiers=cols)
+    fast.main([])
+    full = _battery(mb, tree, rows(), verifiers=cols)
+    full.main(["--all-columns"])
+
+    def kind(verdict):
+        return "killed" if verdict.startswith("killed") else verdict
+    assert [kind(r.verdict) for r in fast.rows] == [kind(r.verdict) for r in full.rows] == [
+        "killed", "SURVIVOR", "control ok", "FALSE-KILL"]
+
+
+def test_a_setup_failure_does_not_stop_the_row(mb, tree, calls):
+    """Only a RED stops a row. A column that measured nothing is not a kill, so the columns
+    after it still run and the report shows what they found."""
+    battery = _battery(mb, tree, [
+        mb.Mutation("SF", "what it matches on", old=LATE_GREP, new=LATE_BROKEN),
+    ], verifiers=[
+        mb.Verifier("dies", argv=["bash", "-c",
+                                  f"{LATE_INTACT} || kill -9 $$"]),
+        _col(mb, "sees", calls, LATE_INTACT),
+    ])
+    battery.main([])
+    assert battery.rows[0].results == {"dies": "SETUP-FAIL", "sees": "red"}
+    assert battery.rows[0].verdict == "SETUP-FAIL"
+
+
+def test_an_impossible_partial_verdict_is_incomplete_not_green(mb):
+    """`_stops_early` exempts controls, and a defect row stops only on a red. If either
+    ever fails, the verdict must not be a green one over columns that never ran."""
+    control = mb.Mutation("C", "over-strictness", kind="control", old="a", new="b")
+    defect = mb.Mutation("D", "vacuity", old="a", new="b")
+    assert mb.Battery._verdict(control, {"a": "green", "b": "NOT RUN"}) == "INCOMPLETE"
+    assert mb.Battery._verdict(defect, {"a": "green", "b": "NOT RUN"}) == "INCOMPLETE"
+    assert mb.Battery._verdict(defect, {"a": "green", "b": "green"}) == "SURVIVOR"
+
+
+def test_an_incomplete_row_fails_the_battery(mb, tree, calls, capsys, monkeypatch):
+    battery = _battery(mb, tree, [
+        mb.Mutation("N2", "over-strictness", kind="control", old=LATE_GREP, new=LATE_BROKEN),
+    ], verifiers=[_col(mb, "a", calls, LATE_INTACT), _col(mb, "b", calls, LATE_INTACT)])
+    monkeypatch.setattr(battery, "_stops_early", lambda _m: True)
+    rc = battery.main([])
+    out = capsys.readouterr().out
+    assert rc == 2, out
+    assert "INCOMPLETE" in out
+
+
+def test_a_killer_or_verifier_name_the_row_cannot_run_is_refused_at_construction(mb, tree):
+    cols = [mb.Verifier("a", argv=["true"]), mb.Verifier("b", argv=["true"])]
+    with pytest.raises(ValueError, match="killer 'zz'"):
+        _battery(mb, tree, [mb.Mutation("X", "vacuity", old="a", new="b", killer="zz")],
+                 verifiers=cols)
+    with pytest.raises(ValueError, match="killer 'b'"):
+        _battery(mb, tree, [mb.Mutation("X", "vacuity", old="a", new="b", killer="b",
+                                        verifiers=["a"])], verifiers=cols)
+    with pytest.raises(ValueError, match="unknown verifier"):
+        _battery(mb, tree, [mb.Mutation("X", "vacuity", old="a", new="b",
+                                        verifiers=["zz"])], verifiers=cols)
+    with pytest.raises(ValueError, match="duplicate verifier name"):
+        _battery(mb, tree, [], verifiers=[mb.Verifier("a", argv=["true"]),
+                                          mb.Verifier("a", argv=["true"])])
+
+
+# --------------------------------------------------------------------------------------
+# Per-column pytest flags. `addopts` carries `-n auto`, so every call used to spawn a full
+# xdist pool — 2.9 s for a module whose tests take 0.05 s.
+# --------------------------------------------------------------------------------------
+
+
+def test_pytest_args_reach_the_call_and_the_battery_default_applies(mb, tree, capsys):
+    """`-k` is the observable flag: deselecting the only test that sees the mutation turns
+    a kill into a survivor, which is what reaching pytest looks like from outside."""
+    row = [mb.Mutation("P1", "what it matches on", old=LATE_GREP, new=LATE_BROKEN)]
+    per_column = _battery(mb, tree, row, verifiers=[
+        mb.Verifier("g", modules=["test_guard.py"], pytest_args=("-k", "announces"))])
+    per_column.main([])
+    assert per_column.rows[0].verdict == "SURVIVOR"
+    default = _battery(mb, tree, list(row), verifiers=[mb.Verifier("g", modules=["test_guard.py"])],
+                       pytest_args=("-k", "announces"))
+    default.main([])
+    assert default.rows[0].verdict == "SURVIVOR"
+    override = _battery(mb, tree, list(row), pytest_args=("-k", "announces"), verifiers=[
+        mb.Verifier("g", modules=["test_guard.py"], pytest_args=())])
+    override.main([])
+    assert override.rows[0].verdict == "killed"
+    capsys.readouterr()
+
+
+def test_pytest_args_are_refused_on_an_argv_verifier(mb):
+    with pytest.raises(ValueError, match="modules only"):
+        mb.Verifier("x", argv=["true"], pytest_args=("-n", "0"))
+
+
+# --------------------------------------------------------------------------------------
+# Multi-edit rows (`also=`). Phase 345's battery defined one and, until its round noticed,
+# never ran it; 336 and 345 hand-rolled the shape because this module had none.
+# --------------------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def second(tree):
+    path = tree / "second.sh"
+    path.write_text("echo second\n", encoding="utf-8")
+    return path
+
+
+# Red only while BOTH edits are in the tree: the kill is the proof they were applied together.
+BOTH = "! { grep -q MUT_ONE subject.sh && grep -q MUT_TWO second.sh; }"
+
+
+def test_a_multi_edit_row_applies_every_edit_and_restores_every_file(mb, tree, second, calls):
+    before = {p.name: p.read_bytes() for p in (tree / "subject.sh", second)}
+    battery = _battery(mb, tree, [
+        mb.Mutation("ME1", "where it looks", old='echo "GATE GREEN"',
+                    new='echo "GATE GREEN MUT_ONE"',
+                    also=[mb.Edit("echo second", "echo MUT_TWO", target=second)]),
+    ], verifiers=[_col(mb, "both", calls, BOTH)])
+    rc = battery.main([])
+    assert battery.rows[0].verdict == "killed", battery.rows[0]
+    assert rc == 0
+    assert {p.name: p.read_bytes() for p in (tree / "subject.sh", second)} == before
+
+
+def test_a_multi_edit_row_restores_every_file_before_the_next_row(mb, tree, second, calls):
+    """The end-of-run restore puts everything back, so a row that leaves an `also` file
+    mutated is invisible to a check made after the run. The NEXT row sees it: here the
+    second row is a survivor only if `second.sh` is intact when it runs."""
+    battery = _battery(mb, tree, [
+        mb.Mutation("MR1", "where it looks", old='echo "GATE GREEN"', new='echo "MUT_ONE"',
+                    also=[mb.Edit("echo second", "echo MUT_TWO", target=second)]),
+        mb.Mutation("MR2", "where it looks", old="set -euo pipefail", new="set -uo pipefail"),
+    ], verifiers=[_col(mb, "intact", calls, "! grep -q MUT_TWO second.sh")])
+    battery.main([])
+    assert battery.rows[0].verdict == "killed"
+    assert battery.rows[1].verdict == "SURVIVOR", (
+        "the first row's second file was still mutated when the next row ran")
+
+
+def test_two_edits_to_one_file_compose(mb, tree, calls):
+    """The second edit anchors on text only the first edit produced."""
+    battery = _battery(mb, tree, [
+        mb.Mutation("ME2", "where it looks", old='echo "GATE GREEN"', new='echo "STEP_ONE"',
+                    also=[mb.Edit('echo "STEP_ONE"', 'echo "STEP_TWO"')]),
+    ], verifiers=[_col(mb, "g", calls, "! grep -q STEP_TWO subject.sh")])
+    battery.main([])
+    assert battery.rows[0].verdict == "killed", battery.rows[0].detail
+
+
+def test_a_stale_later_edit_makes_the_row_stale_and_writes_nothing(mb, tree, second, calls,
+                                                                   capsys):
+    before = {p.name: p.read_bytes() for p in (tree / "subject.sh", second)}
+    battery = _battery(mb, tree, [
+        mb.Mutation("ME3", "where it looks", old='echo "GATE GREEN"', new='echo "X"',
+                    also=[mb.Edit("not in the file", "y", target=second)]),
+    ], verifiers=[_col(mb, "g", calls, "true")])
+    rc = battery.main([])
+    out = capsys.readouterr().out
+    assert rc == 2, out
+    assert battery.rows[0].status == "ANCHOR-STALE"
+    assert "edit 2 of 2 (second.sh)" in battery.rows[0].detail
+    # Only the baseline and the restore check ran the column; the row never did.
+    assert _logged(calls) == ["g", "g"]
+    assert {p.name: p.read_bytes() for p in (tree / "subject.sh", second)} == before
+
+
+def test_a_multi_edit_row_that_changes_nothing_is_a_noop(mb, tree, calls, capsys):
+    battery = _battery(mb, tree, [
+        mb.Mutation("ME4", "where it looks", old='echo "GATE GREEN"', new='echo "X"',
+                    also=[mb.Edit('echo "X"', 'echo "GATE GREEN"')]),
+    ], verifiers=[_col(mb, "g", calls, "true")])
+    battery.main([])
+    assert battery.rows[0].status == "NO-OP(text)"
+    capsys.readouterr()
+
+
+def test_every_also_target_is_snapshotted(mb, tree, second):
+    battery = _battery(mb, tree, [
+        mb.Mutation("ME5", "where it looks", old='echo "GATE GREEN"', new='echo "X"',
+                    also=[mb.Edit("echo second", "echo third", target=second)]),
+    ])
+    battery._snapshot()
+    assert set(battery._originals) == {tree / "subject.sh", second}
+
+
+def test_an_also_entry_must_be_an_edit(mb):
+    with pytest.raises(ValueError, match="must be an Edit"):
+        mb.Mutation("ME6", "vacuity", old="a", new="b", also=[("x", "y")])
+
+
+def test_a_multi_edit_control_is_blind_only_when_every_file_is(mb, pytree, calls, capsys):
+    """BLIND-CONTROL over a row that edits a comment in one `.py` file and real code in
+    another is not blind: the second edit is one the verifier can see."""
+    other = pytree / "other.py"
+    other.write_text("VALUE = 1  # note\n", encoding="utf-8")
+    blind = _pybattery(mb, pytree, [
+        mb.Mutation("MB1", "over-strictness", kind="control",
+                    old="# a leading comment", new="# reworded",
+                    also=[mb.Edit("# note", "# changed", target=other)]),
+    ])
+    assert blind.main([]) == 2
+    assert blind.rows[0].status == "BLIND-CONTROL"
+    seen = _pybattery(mb, pytree, [
+        mb.Mutation("MB2", "over-strictness", kind="control",
+                    old="# a leading comment", new="# reworded",
+                    also=[mb.Edit("VALUE = 1", "VALUE = 2", target=other)]),
+    ])
+    seen.main([])
+    assert seen.rows[0].status == "", seen.rows[0].detail
+    capsys.readouterr()
+
+
+# --------------------------------------------------------------------------------------
+# A signal mid-row restores every file the row touched. Driven for real: the battery runs
+# in a subprocess, its column blocks while the mutation is in the tree, and the test sends
+# the signal. Phase 345's round killed a hand-roll with SIGTERM and left a mutation applied;
+# Phase 347's round left one applied with SIGHUP, which the runner did not handle.
+# --------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("signum", [signal.SIGTERM, signal.SIGINT, signal.SIGHUP, signal.SIGQUIT],
+                         ids=["SIGTERM", "SIGINT", "SIGHUP", "SIGQUIT"])
+def test_a_signal_mid_row_restores_every_file_of_a_multi_edit_row(mb, tree, second, signum):
+    flag = tree.parent / f"{tree.name}-inside-the-row"
+    before = {p.name: p.read_bytes() for p in (tree / "subject.sh", second)}
+    runner = tree.parent / f"{tree.name}-runner.py"
+    block = f"grep -q MUT_ONE subject.sh || exit 0; touch '{flag}'; exec sleep 60"
+    runner.write_text(
+        "import sys\n"
+        f"sys.path.insert(0, {str(SCRIPT.parent)!r})\n"
+        "from mutation_battery import Battery, Edit, Mutation, Verifier\n"
+        "from pathlib import Path\n"
+        f"ROOT = Path({str(tree)!r})\n"
+        "b = Battery(root=ROOT, default_target=ROOT / 'subject.sh',\n"
+        f"            verifiers=[Verifier('block', argv=['bash', '-c', {block!r}])],\n"
+        "            mutations=[Mutation('S1', 'what it accepts', old='echo \"GATE GREEN\"',\n"
+        "                                new='echo MUT_ONE',\n"
+        f"                                also=[Edit('echo second', 'echo MUT_TWO', target=ROOT / 'second.sh')])])\n"
+        "sys.exit(b.main([]))\n",
+        encoding="utf-8")
+    proc = subprocess.Popen([sys.executable, str(runner)], stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True)
+    try:
+        for _ in range(600):
+            if flag.exists() or proc.poll() is not None:
+                break
+            time.sleep(0.05)
+        assert flag.exists(), f"the row never reached its column: {proc.communicate()}"
+        assert b"MUT_TWO" in second.read_bytes(), "the second edit was not in the tree"
+        proc.send_signal(signum)
+        proc.wait(timeout=30)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+    assert proc.returncode == 128 + signum, proc.returncode
+    assert {p.name: p.read_bytes() for p in (tree / "subject.sh", second)} == before
+
+
+# --------------------------------------------------------------------------------------
+# Row selection, the anchors-only check, progress, and the JSON record
+# --------------------------------------------------------------------------------------
+
+
+def test_row_ids_select_rows_and_an_unknown_id_is_refused(mb, tree, capsys):
+    battery = _battery(mb, tree, [
+        mb.Mutation("I1", "what it matches on", old=LATE_GREP, new=LATE_BROKEN),
+        mb.Mutation("I2", "where it looks", old="set -euo pipefail", new="set -uo pipefail"),
+    ])
+    assert battery.main(["I2", "--list"]) == 0
+    out = capsys.readouterr().out
+    assert "I2" in out and "I1" not in out
+    assert battery.main(["I3"]) == 2
+    assert "unknown row id(s): I3" in capsys.readouterr().err
+
+
+def test_check_resolves_anchors_runs_no_verifier_and_writes_nothing(mb, tree, calls, capsys):
+    before = (tree / "subject.sh").read_bytes()
+    good = _battery(mb, tree, [
+        mb.Mutation("G1", "what it matches on", old=LATE_GREP, new=LATE_BROKEN),
+    ], verifiers=[_col(mb, "g", calls, "true")])
+    assert good.main(["--check"]) == 0
+    bad = _battery(mb, tree, [
+        mb.Mutation("G2", "what it matches on", old="not there", new="x"),
+        mb.Mutation("G3", "what it matches on", old="grep -rniE", new="grep -rnE"),
+    ], verifiers=[_col(mb, "g", calls, "true")])
+    assert bad.main(["--check"]) == 2
+    out = capsys.readouterr().out
+    assert "ANCHORED" in out and "ANCHOR-STALE" in out and "ANCHOR-AMBIGUOUS" in out
+    assert _logged(calls) == []
+    assert (tree / "subject.sh").read_bytes() == before
+
+
+def test_each_row_prints_a_progress_line_and_the_json_records_not_run_and_seconds(
+        mb, tree, calls, capsys, tmp_path_factory):
+    out_json = tmp_path_factory.mktemp("json") / "r.json"
+    _battery(mb, tree, [
+        mb.Mutation("J1", "what it matches on", old=LATE_GREP, new=LATE_BROKEN, killer="a"),
+    ], verifiers=[_col(mb, "a", calls, LATE_INTACT), _col(mb, "b", calls, LATE_INTACT)]).main(
+        ["--json", str(out_json)])
+    assert "[1/1] J1  killed by a (1 not run)" in capsys.readouterr().out
+    row = json.loads(out_json.read_text(encoding="utf-8"))[0]
+    assert row["results"] == {"a": "red", "b": "NOT RUN"}
+    assert isinstance(row["seconds"], float)
+
+
+def test_two_spellings_of_one_file_are_one_snapshot(mb, tree, calls):
+    """Phase 347's round (lens 1): a row whose own edit and an `also` edit reached one file
+    through different spellings (`sub/../subject.sh`) kept only the later write, so the row
+    ran half-applied while `--check` said ANCHORED. Both edits must land."""
+    (tree / "sub").mkdir()
+    both = f"grep -qF 'echo MUT_TWO' subject.sh && ! grep -qF \"{LATE_GREP}\" subject.sh"
+    battery = _battery(mb, tree, [
+        mb.Mutation("P1", "what it matches on", old=LATE_GREP, new=LATE_BROKEN,
+                    also=[mb.Edit('echo "GATE GREEN"', "echo MUT_TWO", target="sub/../subject.sh")]),
+    ], verifiers=[_col(mb, "both", calls, f"! ( {both} )")])
+    battery.main([])
+    assert battery.rows[0].results == {"both": "red"}, battery.rows[0].results
+
+
+# --------------------------------------------------------------------------------------
+# Ignored runtime state (Phase 370, `Q-657`). `git status --porcelain` cannot see an
+# ignored path, so Phase 368's round left `sysop/runtime/tracker.write.lock` behind and the
+# runner reported clean. Every fixture here is a real repo whose `.gitignore` ignores the
+# runtime dir — the configuration the porcelain diff is blind in.
+# --------------------------------------------------------------------------------------
+
+
+def _repo(tree):
+    """`tree` as a committed git toplevel, `sysop/runtime/` ignored and already present."""
+    (tree / ".gitignore").write_text("sysop/runtime/\nbuild/\n", encoding="utf-8")
+    (tree / "sysop" / "runtime").mkdir(parents=True)
+    _git(tree, "init", "-q", "-b", "main")
+    _git(tree, "add", "-A")
+    _git(tree, "commit", "-q", "-m", "fixture")
+    return tree
+
+
+def _guard_that_leaves(tree, write_when_mutated):
+    """Replace the guard with one that runs `write_when_mutated` (Python, `R` = root) only
+    while the late grep has lost its `i` — i.e. only under the mutation."""
+    body = "\n".join("        " + line for line in write_when_mutated.splitlines())
+    (tree / "test_guard.py").write_text(
+        "from pathlib import Path\n"
+        "R = Path(__file__).resolve().parent\n\n\n"
+        "def test_guard():\n"
+        "    text = (R / 'subject.sh').read_text()\n"
+        f"    if {LATE_BROKEN!r} in text:\n"
+        f"{body}\n"
+        f"    assert {LATE_GREP!r} in text\n",
+        encoding="utf-8")
+    _git(tree, "add", "-A")
+    _git(tree, "commit", "-q", "-m", "guard")
+
+
+LEAK_LOCK = "(R / 'sysop/runtime/tracker.write.lock').write_text('pid 1 batch_work.sh\\n')"
+
+
+def test_an_ignored_runtime_file_a_row_leaves_is_collateral_and_stops_the_run(mb, tree, capsys):
+    _repo(tree)
+    _guard_that_leaves(tree, LEAK_LOCK)
+    battery = _battery(mb, tree, [
+        mb.Mutation("IG1", "what it matches on", old=LATE_GREP, new=LATE_BROKEN),
+        mb.Mutation("IG2", "what it matches on", old=EARLY_GREP,
+                    new=EARLY_GREP.replace("-rniE", "-rnE")),
+    ])
+    rc = battery.main([])
+    out, err = capsys.readouterr()
+    lock = tree / "sysop/runtime/tracker.write.lock"
+    assert "COLLATERAL DAMAGE (ignored path)" in err, err
+    assert "sysop/runtime/tracker.write.lock" in err
+    assert rc == 2, out
+    # Stopped, not continued: the row after it never ran, and the summary says so.
+    assert [r.mutation.id for r in battery.rows] == ["IG1"]
+    assert "1 selected row(s) after it were not run" in out
+    # The leaking row keeps its own verdict and names what it left.
+    assert battery.rows[0].verdict == "killed"
+    assert "tracker.write.lock" in battery.rows[0].detail
+    # Refused, not removed: the lock is still there, and the remedy is printed, not run.
+    assert lock.is_file()
+    assert f"rm -f {lock}" in err
+
+
+def test_a_rewritten_pre_existing_runtime_file_is_collateral(mb, tree, capsys):
+    """A row that rewrites a runtime file already present is as much a stray as one that
+    creates it — the digest, not the name list, is the snapshot. Two levels down, where the
+    real claim locks live (`sysop/runtime/locks/`), so the walk must recurse."""
+    _repo(tree)
+    (tree / "sysop/runtime/locks").mkdir()
+    (tree / "sysop/runtime/locks/FEAT-1.lock").write_text("before\n", encoding="utf-8")
+    _guard_that_leaves(tree, "(R / 'sysop/runtime/locks/FEAT-1.lock').write_text('after\\n')")
+    rc = _battery(mb, tree, [
+        mb.Mutation("IG3", "what it matches on", old=LATE_GREP, new=LATE_BROKEN),
+    ]).main([])
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "changed     sysop/runtime/locks/FEAT-1.lock" in err, err
+    # Not offered for deletion: it predates the run (Phase 370's round, lens 1).
+    assert "rm -f" not in err, err
+    assert "restore by hand" in err and "FEAT-1.lock" in err.split("restore by hand", 1)[1], err
+
+
+def test_a_runtime_file_a_row_deletes_is_collateral(mb, tree, capsys):
+    _repo(tree)
+    (tree / "sysop/runtime/park.md").write_text("parked\n", encoding="utf-8")
+    _guard_that_leaves(tree, "(R / 'sysop/runtime/park.md').unlink()")
+    rc = _battery(mb, tree, [
+        mb.Mutation("IG4", "what it matches on", old=LATE_GREP, new=LATE_BROKEN),
+    ]).main([])
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "disappeared sysop/runtime/park.md" in err, err
+
+
+def test_an_empty_directory_a_row_leaves_is_collateral(mb, tree, capsys):
+    """A mkdir-style lock is a directory with nothing in it, which a file listing (and
+    `git ls-files`) cannot show. The walk records directories for that reason."""
+    _repo(tree)
+    _guard_that_leaves(tree, "(R / 'sysop/runtime/claim/FEAT-1.lock').mkdir(parents=True)")
+    rc = _battery(mb, tree, [
+        mb.Mutation("IG8", "what it matches on", old=LATE_GREP, new=LATE_BROKEN),
+    ]).main([])
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "appeared    sysop/runtime/claim/FEAT-1.lock" in err, err
+
+
+def test_the_stated_noise_and_ignored_paths_outside_the_roots_do_not_trip_it(mb, tree, capsys):
+    """The control, and the reason a bare `--ignored` diff was ruled out: bytecode and
+    pytest caches under a watched root, and ignored debris outside every watched root,
+    must not read as collateral."""
+    _repo(tree)
+    _guard_that_leaves(tree, "\n".join([
+        "(R / 'sysop/runtime/__pycache__').mkdir(exist_ok=True)",
+        "(R / 'sysop/runtime/__pycache__/m.cpython-312.pyc').write_bytes(b'x')",
+        "(R / 'sysop/runtime/stray.pyc').write_bytes(b'x')",
+        "(R / 'sysop/runtime/.pytest_cache').mkdir(exist_ok=True)",
+        "(R / 'sysop/runtime/.DS_Store').write_bytes(b'finder')",
+        "(R / 'build').mkdir(exist_ok=True)",
+        "(R / 'build/out.bin').write_bytes(b'x')",
+    ]))
+    rc = _battery(mb, tree, [
+        mb.Mutation("IG5", "what it matches on", old=LATE_GREP, new=LATE_BROKEN),
+    ]).main([])
+    out, err = capsys.readouterr()
+    assert "COLLATERAL" not in err, err
+    assert rc == 0, out + err
+
+
+def test_runtime_state_left_by_the_baseline_aborts_before_any_row(mb, tree, capsys):
+    """A verifier that writes runtime state on the UNMUTATED tree would have every row
+    blamed for it; the baseline is checked on its own and refuses first."""
+    _repo(tree)
+    (tree / "test_guard.py").write_text(
+        (tree / "test_guard.py").read_text(encoding="utf-8")
+        + "\n\ndef test_writes_runtime():\n"
+          "    (ROOT / 'sysop/runtime/always.lock').write_text('x')\n",
+        encoding="utf-8")
+    battery = _battery(mb, tree, [
+        mb.Mutation("IG6", "what it matches on", old=LATE_GREP, new=LATE_BROKEN),
+    ])
+    rc = battery.run(battery.mutations)
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "the baseline run, with no mutation applied," in err, err
+    assert battery.rows == []
+
+
+def test_the_ignored_root_check_works_off_git_too(mb, tree, capsys):
+    """Walked on the filesystem, not asked of git, so a non-repo root is covered."""
+    _guard_that_leaves_nogit = (
+        "from pathlib import Path\nR = Path(__file__).resolve().parent\n\n\n"
+        "def test_guard():\n"
+        "    text = (R / 'subject.sh').read_text()\n"
+        f"    if {LATE_BROKEN!r} in text:\n"
+        "        (R / 'sysop/runtime').mkdir(parents=True, exist_ok=True)\n"
+        f"        {LEAK_LOCK}\n"
+        f"    assert {LATE_GREP!r} in text\n")
+    (tree / "test_guard.py").write_text(_guard_that_leaves_nogit, encoding="utf-8")
+    rc = _battery(mb, tree, [
+        mb.Mutation("IG7", "what it matches on", old=LATE_GREP, new=LATE_BROKEN),
+    ]).main([])
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "appeared    sysop/runtime/tracker.write.lock" in err, err
+
+
+# --------------------------------------------------------------------------------------
+# SIGKILL recovery (Phase 370, `Q-204`). SIGKILL runs no handler, `finally` or `atexit`, so
+# the row's mutation stays in the tree — and the next run SNAPSHOTTED it as the original:
+# measured at 12e8285, a successor whose rows did not anchor on the mutated line exited 0
+# and wrote the mutant back as its "restore". Driven with a real SIGKILL of a child run.
+# --------------------------------------------------------------------------------------
+
+MUTANT_LINE = "echo MUT_KILLED"
+
+
+def _kill_mid_row(tree):
+    """Run a one-row battery in a child, SIGKILL it while its mutation is applied, and
+    kill the column's orphaned `sleep` by pid. Returns the subject's pre-run bytes."""
+    subject = tree / "subject.sh"
+    before = subject.read_bytes()
+    flag = tree.parent / f"{tree.name}-inside"
+    pidfile = tree.parent / f"{tree.name}-sleep.pid"
+    runner = tree.parent / f"{tree.name}-killed-runner.py"
+    block = (f"grep -q '{MUTANT_LINE}' subject.sh || exit 0; echo $$ > '{pidfile}'; "
+             f"touch '{flag}'; exec sleep 60")
+    runner.write_text(
+        "import sys\n"
+        f"sys.path.insert(0, {str(SCRIPT.parent)!r})\n"
+        "from mutation_battery import Battery, Mutation, Verifier\n"
+        "from pathlib import Path\n"
+        f"ROOT = Path({str(tree)!r})\n"
+        "b = Battery(root=ROOT, default_target=ROOT / 'subject.sh',\n"
+        f"            verifiers=[Verifier('block', argv=['bash', '-c', {block!r}])],\n"
+        "            mutations=[Mutation('KILLED', 'what it accepts',\n"
+        f"                                old='echo \"GATE GREEN\"', new={MUTANT_LINE!r})])\n"
+        "sys.exit(b.main([]))\n",
+        encoding="utf-8")
+    proc = subprocess.Popen([sys.executable, str(runner)], stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True)
+    try:
+        for _ in range(600):
+            if flag.exists() or proc.poll() is not None:
+                break
+            time.sleep(0.05)
+        assert flag.exists(), f"the row never reached its column: {proc.communicate()}"
+        proc.send_signal(signal.SIGKILL)
+        proc.wait(timeout=30)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+        if pidfile.exists():
+            try:
+                os.kill(int(pidfile.read_text().strip()), signal.SIGKILL)
+            except (ProcessLookupError, ValueError):
+                pass
+    assert proc.returncode == -signal.SIGKILL
+    # The premise: nothing in the child could restore, so the mutant is in the tree.
+    assert MUTANT_LINE.encode() in subject.read_bytes()
+    return before
+
+
+def _record(mb, tree):
+    battery = _battery(mb, tree, [])
+    state = battery._state_dir()
+    assert state is not None
+    return state / "record.json"
+
+
+# Blind to the killed row's line: green on the pristine subject AND on the mutant, so
+# only recovery — not the already-red abort — can put the original back.
+def _blind_successor(mb, tree, calls):
+    return _battery(mb, tree, [
+        mb.Mutation("NEXT", "what it matches on", old=LATE_GREP, new=LATE_BROKEN),
+    ], verifiers=[_col(mb, "late", calls, LATE_INTACT)])
+
+
+def test_a_sigkilled_run_is_recovered_before_the_next_run_snapshots(mb, tree, calls, capsys):
+    _repo(tree)
+    before = _kill_mid_row(tree)
+    assert _record(mb, tree).is_file(), "the row wrote no record before its mutation"
+    battery = _blind_successor(mb, tree, calls)
+    rc = battery.main([])
+    out, err = capsys.readouterr()
+    assert "RECOVERED:" in err and "row KILLED" in err, err
+    assert (tree / "subject.sh").read_bytes() == before, "the mutant was adopted"
+    assert rc == 0, out + err
+    assert battery.rows[0].verdict == "killed"
+    assert not _record(mb, tree).exists()
+
+
+def test_a_file_changed_since_the_kill_is_refused_and_nothing_is_written(mb, tree, calls, capsys):
+    _repo(tree)
+    _kill_mid_row(tree)
+    edited = b"the author's work since the kill\n"
+    (tree / "subject.sh").write_bytes(edited)
+    battery = _blind_successor(mb, tree, calls)
+    rc = battery.main([])
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "RECOVERY REFUSED" in err and "neither" in err, err
+    assert (tree / "subject.sh").read_bytes() == edited
+    record = _record(mb, tree)
+    assert record.is_file(), "the refusal discarded the only account of the mutant"
+    assert f"rm -f {record}" in err
+    saved = re.search(r"take the original:\s+cp (\S+) ", err)
+    assert saved and Path(saved.group(1)).read_bytes().count(b'echo "GATE GREEN"') == 1
+    assert _logged(calls) == [], "a refused run still ran a verifier"
+
+
+def test_a_record_whose_file_is_already_original_is_cleared_without_a_write(mb, tree, calls,
+                                                                           capsys):
+    """Killed before the write, or after the restore but before the record went: the file
+    is the original and there is nothing to restore."""
+    _repo(tree)
+    before = _kill_mid_row(tree)
+    (tree / "subject.sh").write_bytes(before)
+    rc = _blind_successor(mb, tree, calls).main([])
+    out, err = capsys.readouterr()
+    assert rc == 0, out + err
+    assert "RECOVERED" not in err and "REFUSED" not in err
+    assert not _record(mb, tree).exists()
+
+
+def test_check_refuses_while_a_killed_runs_record_exists_and_writes_nothing(mb, tree, calls,
+                                                                          capsys):
+    _repo(tree)
+    _kill_mid_row(tree)
+    mutant = (tree / "subject.sh").read_bytes()
+    rc = _blind_successor(mb, tree, calls).main(["--check"])
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "killed during row KILLED" in err, err
+    assert (tree / "subject.sh").read_bytes() == mutant
+    assert _record(mb, tree).is_file()
+
+
+def test_the_already_red_abort_still_catches_a_mutant_no_record_describes(mb, tree, capsys):
+    """The guard that surfaced the original incident must survive the record: with the
+    record gone, a verifier that sees the mutant still refuses to score on it."""
+    _repo(tree)
+    _kill_mid_row(tree)
+    _record(mb, tree).unlink()
+    rc = _battery(mb, tree, [
+        mb.Mutation("AB", "what it matches on", old=LATE_GREP, new=LATE_BROKEN),
+    ]).main([])
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "is already red" in err, err
+    assert MUTANT_LINE.encode() in (tree / "subject.sh").read_bytes()
+
+
+def test_a_live_battery_on_the_same_tree_is_refused_not_recovered(mb, tree, calls, capsys):
+    """A record held by a RUNNING battery is not a dead one's: restoring under it would
+    unmutate a row mid-score. The lock tells them apart, without `kill -0`'s pid reuse."""
+    _repo(tree)
+    battery = _blind_successor(mb, tree, calls)
+    assert battery._claim_state() == ""
+    try:
+        rival = _blind_successor(mb, tree, calls)
+        rc = rival.main([])
+        err = capsys.readouterr().err
+        assert rc == 2
+        assert "another mutation battery is running on this tree" in err, err
+        assert f"pid {os.getpid()}" in err
+        assert _logged(calls) == []
+    finally:
+        battery._release_state()
+    assert _blind_successor(mb, tree, calls).main([]) == 0
+
+
+def test_a_clean_run_leaves_no_record_and_no_saved_originals(mb, tree, calls):
+    _repo(tree)
+    battery = _blind_successor(mb, tree, calls)
+    state = battery._state_dir()
+    assert battery.main([]) == 0
+    assert not (state / "record.json").exists()
+    assert not list(state.glob("original-*"))
+    assert battery._lock_fd is None
+
+
+def test_a_root_that_is_not_its_repos_toplevel_keeps_no_record(mb, tree):
+    """A fixture nested in some checkout must not write into that checkout's git dir."""
+    _repo(tree)
+    nested = tree / "nested"
+    nested.mkdir()
+    assert mb.Battery(root=nested, verifiers=[mb.Verifier("v", argv=["true"])],
+                      mutations=[])._state_dir() is None
+
+
+def test_the_record_is_written_before_the_mutation_reaches_the_tree(mb, tree, calls):
+    """The ordering a SIGKILL test cannot time: at the moment the record is written, the
+    target must still be the original — a record written after the mutation leaves a window
+    in which a kill leaves a mutant and no record of it."""
+    _repo(tree)
+    original = (tree / "subject.sh").read_text(encoding="utf-8")
+    battery = _blind_successor(mb, tree, calls)
+    seen = []
+    real_arm = battery._arm
+
+    def arm(row_id, changed):
+        seen.append((tree / "subject.sh").read_text(encoding="utf-8"))
+        real_arm(row_id, changed)
+        seen.append(json.loads(battery._record_path().read_text(encoding="utf-8")))
+
+    battery._arm = arm
+    assert battery.main([]) == 0
+    assert seen[0] == original, "the mutation reached the tree before its record"
+    assert seen[1]["row"] == "NEXT"
+    assert [Path(f["path"]).name for f in seen[1]["files"]] == ["subject.sh"]
+
+
+def test_a_damaged_saved_original_is_refused_not_restored(mb, tree, calls, capsys):
+    """The saved bytes are checked against the digest recorded with them before they are
+    written back: restoring a truncated original would trade one wrong file for another."""
+    _repo(tree)
+    _kill_mid_row(tree)
+    mutant = (tree / "subject.sh").read_bytes()
+    record = _record(mb, tree)
+    saved = record.parent / json.loads(record.read_text(encoding="utf-8"))["files"][0]["original"]
+    saved.write_bytes(saved.read_bytes()[:10])
+    rc = _blind_successor(mb, tree, calls).main([])
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "missing or damaged" in err, err
+    assert (tree / "subject.sh").read_bytes() == mutant
+    assert record.is_file()
+
+
+def test_an_unreadable_record_is_refused_not_read_as_no_record(mb, tree, calls, capsys):
+    """A record that cannot be parsed still says a battery died mid-row; proceeding as if
+    there were none would snapshot whatever that battery left."""
+    _repo(tree)
+    _kill_mid_row(tree)
+    mutant = (tree / "subject.sh").read_bytes()
+    record = _record(mb, tree)
+    record.write_text('{"files": [{"path": 1}]}', encoding="utf-8")
+    rc = _blind_successor(mb, tree, calls).main([])
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "is unreadable" in err, err
+    assert (tree / "subject.sh").read_bytes() == mutant
+    assert _logged(calls) == []
+
+
+def test_a_caught_signal_on_a_git_root_leaves_no_record_and_no_saved_originals(mb, tree):
+    """The handled-signal path with a real state dir (the parametrized signal test above
+    runs on a non-git tree, where no record exists): SIGTERM restores, and the exit path
+    must clear the record and the saved originals rather than strand them."""
+    _repo(tree)
+    subject = tree / "subject.sh"
+    before = subject.read_bytes()
+    flag = tree.parent / f"{tree.name}-inside-term"
+    runner = tree.parent / f"{tree.name}-term-runner.py"
+    block = f"grep -q '{MUTANT_LINE}' subject.sh || exit 0; touch '{flag}'; exec sleep 60"
+    runner.write_text(
+        "import sys\n"
+        f"sys.path.insert(0, {str(SCRIPT.parent)!r})\n"
+        "from mutation_battery import Battery, Mutation, Verifier\n"
+        "from pathlib import Path\n"
+        f"ROOT = Path({str(tree)!r})\n"
+        "b = Battery(root=ROOT, default_target=ROOT / 'subject.sh',\n"
+        f"            verifiers=[Verifier('block', argv=['bash', '-c', {block!r}])],\n"
+        "            mutations=[Mutation('TERM', 'what it accepts',\n"
+        f"                                old='echo \"GATE GREEN\"', new={MUTANT_LINE!r})])\n"
+        "sys.exit(b.main([]))\n",
+        encoding="utf-8")
+    proc = subprocess.Popen([sys.executable, str(runner)], stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True)
+    try:
+        for _ in range(600):
+            if flag.exists() or proc.poll() is not None:
+                break
+            time.sleep(0.05)
+        assert flag.exists(), f"the row never reached its column: {proc.communicate()}"
+        assert _record(mb, tree).is_file()
+        proc.send_signal(signal.SIGTERM)
+        proc.wait(timeout=30)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+    assert proc.returncode == 128 + signal.SIGTERM, proc.returncode
+    assert subject.read_bytes() == before
+    record = _record(mb, tree)
+    assert not record.exists()
+    assert not list(record.parent.glob("original-*"))
+
+
+def test_a_failed_restore_keeps_the_record(mb, tree, capsys):
+    """A restore that fails leaves the mutant in the tree, and the record is then the only
+    account of it: discarding it anyway lets the next run snapshot the mutant as the
+    original — `Q-204` reopened on the restore-failure path (Phase 370's round, lens 2:
+    an unconditional discard survived every test)."""
+    _repo(tree)
+    subject = tree / "subject.sh"
+    # The column makes the subject unwritable while the row's mutant is applied, so both
+    # the row's own restore and the end-of-run restore fail for real.
+    battery = _battery(mb, tree, [
+        mb.Mutation("RF", "what it accepts", old=LATE_GREP, new=LATE_BROKEN),
+    ], verifiers=[mb.Verifier("lock-it", argv=[
+        # `-rnE` is the mutant's flag set (the original's is `-rniE`); LATE_BROKEN itself
+        # carries single quotes, so it cannot go inside this one.
+        "/bin/bash", "-c", f"if grep -qF -- 'grep -rnE' '{subject}'; then chmod 444 '{subject}'; fi"])])
+    state = battery._state_dir()
+    try:
+        with pytest.raises(PermissionError):
+            battery.main([])
+        assert "RESTORE FAILED" in capsys.readouterr().err
+        assert (state / "record.json").is_file(), "the record was discarded with the mutant applied"
+        assert LATE_BROKEN.encode() in subject.read_bytes(), "the premise: the mutant is still applied"
+    finally:
+        subject.chmod(0o644)
+
+
+def test_watch_ignored_overrides_the_watched_roots(mb, tree, capsys):
+    """The override is honoured both ways: a named root is watched, and the default one is
+    then not (Phase 370's round, lens 2: ignoring the parameter survived every test)."""
+    _repo(tree)
+    (tree / ".gitignore").write_text("sysop/runtime/\nbuild/\nstate/\n", encoding="utf-8")
+    (tree / "state").mkdir()
+    _git(tree, "add", "-A")
+    _git(tree, "commit", "-q", "-m", "state ignored")
+    _guard_that_leaves(tree, "(R / 'state/claim.lock').write_text('x\\n')\n" + LEAK_LOCK)
+    battery = _battery(mb, tree, [
+        mb.Mutation("WO", "what it matches on", old=LATE_GREP, new=LATE_BROKEN),
+    ], watch_ignored=("state",))
+    rc = battery.main([])
+    err = capsys.readouterr().err
+    assert rc == 2 and "state/claim.lock" in err, err
+    assert "sysop/runtime/tracker.write.lock" not in err, err

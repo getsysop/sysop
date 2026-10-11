@@ -2,15 +2,16 @@
 name: auto-fix
 description: Automatically fix mechanical review batches — claims, fixes, verifies, and pushes via isolated agents
 argument-hint: "[concurrency] [--batches <selector>] [--merge]"
+model: sonnet
 ---
-<!-- sysop:model-roles inline=reasoning -->
+<!-- sysop:model-roles frontmatter=mechanical inline=reasoning -->
 
 Automatically process pending review batches that have prescriptive, mechanical fixes. Reads the `Flag:` tags written by `/triage` (the sole writer — see `triage/SKILL.md` § Writer-side contract) and claims + fixes only the unflagged (auto) batches via isolated agents. If any pending batch lacks a `> **Triaged:**` record, invokes `/triage` first as a prereq.
 
 Two-pass workflow:
 - **Default mode (pass 1)**: processes only **non-overlapping** auto batches, in parallel. Pushes branches.
 - **`--merge` mode (pass 2)**: processes only **overlapping** auto batches, sequentially. Pushes branches.
-- Both passes can run concurrently. Run `/review-close` after both complete to merge all branches through the Opus convention gate, staging verification, and push.
+- Both passes can run concurrently. Run `/review-close` after both complete to merge all branches through the convention gate, staging verification, and push.
 
 > **Helper names** referenced in this skill (e.g., `_sanitize_log`, `useAbortableFetch`, `getDisplayError`, `redact_api_keys`, `shared_cli.py`) are placeholders — substitute the equivalent helpers from your project's `convention_map.md`. Worked examples may also reference specific batch numbers, file paths, or env-var names from the originating project; treat those as illustrations, not literal requirements.
 
@@ -36,7 +37,7 @@ If `$ARGUMENTS` contains `--skip-permission-guard`, print a one-line warning and
 Parse `$ARGUMENTS`:
 
 - **Bare integer** (e.g., `4`) → concurrency cap (max parallel agents). Default: 4. Only affects the default (non-merge) path. All eligible batches are processed regardless — the cap controls how many agents run simultaneously.
-- **`--merge`** → process only overlapping batches, sequentially. Fixes and pushes each branch without merging to main. Run `/review-close` afterward to merge all branches through the Opus convention gate. Concurrency cap is ignored (sequential execution).
+- **`--merge`** → process only overlapping batches, sequentially. Fixes and pushes each branch without merging to main. Run `/review-close` afterward to merge all branches through the convention gate. Concurrency cap is ignored (sequential execution).
 - **`--batches <selector>`** → narrow this run to the named batches. The selector is comma-separated bare integers and inclusive `<lo>-<hi>` ranges: `--batches 563-584`, `--batches 563,570,580-584`. Applied at Step 1d — after the pool is selected and before Step 4's lane split — so it can only ever narrow what the pool already holds. Omitted, nothing is narrowed. **It is a flag rather than a bare argument on purpose:** a bare integer is already this skill's concurrency cap, so `/auto-fix 563` would set a 563-way cap, and nothing in the invocation would say which of the two was meant. That is the one thing `/auto-build`'s positional task-ID grammar (`auto-build:40`) cannot be copied on — its bare integer and its `^[A-Z]`-shaped IDs are structurally disjoint, and two integers are not.
 
 For an assess-only preview without claiming or fixing, run `/triage --dry-run` directly (Phase 44 extracted the classifier; the old `/auto-fix --dry-run` no longer exists).
@@ -213,12 +214,12 @@ Process batches one at a time — **sequentially** claim, fix, and push:
 3. After the agent reports (PASS or FAIL), claim and process the next eligible batch
 4. Repeat until all eligible batches are processed
 
-Each batch is pushed to origin but NOT merged to main. All merging is deferred to `/review-close`, which runs the Opus convention gate, staging verification, and doc consolidation.
+Each batch is pushed to origin but NOT merged to main. All merging is deferred to `/review-close`, which runs the convention gate, staging verification, and doc consolidation.
 
 **For each batch**, use the **Agent tool** to spawn a subagent:
 - `description`: `"Fix review batch <N>"`
 - Do **NOT** set `isolation: "worktree"` — the agent must work in the existing worktree created by `batch_work.sh`
-- Set `model: "sonnet"` <!-- sysop:role=mechanical --> — the **mechanical** role (`.claude/served_models.yml`). These fix agents apply prescriptive, mechanical changes, so they are pinned to the cheap tier, not the reasoning tier (Opus is reserved for adversarial review — the verification pass below and `/review-close`'s convention gate). The sibling scan (Step 1b of the agent prompt) and post-fix convention verification (Step 5) are scoped checks of the just-edited files, not broad adversarial review. A consumer who wants a different tier here remaps `mechanical` in `.claude/served_models.local.yml` — **to one of `opus`/`sonnet`/`haiku`/`fable`, not to `inherit`.** This pin is *inline*: its value is handed to the Agent tool's `model` parameter, which is a closed enum, so `inherit` (and `best`, and a full model id) is rejected at spawn time and would break this very agent. Cost-follows-session is not available for an inline pin.
+- Set `model: "sonnet"` <!-- sysop:role=mechanical --> — the **mechanical** role (`.claude/served_models.yml`). These fix agents apply prescriptive, mechanical changes, so they are pinned to the cheap tier, not the reasoning tier (the reasoning tier is kept for adversarial review — the verification pass below; `/review-close`'s convention gate has a role of its own, `convention-gate`). The sibling scan (Step 1b of the agent prompt) and post-fix convention verification (Step 5) are scoped checks of the just-edited files, not broad adversarial review. A consumer who wants a different tier here remaps `mechanical` in `.claude/served_models.local.yml` — **to one of `opus`/`sonnet`/`haiku`/`fable`, not to `inherit`.** This pin is *inline*: its value is handed to the Agent tool's `model` parameter, which is a closed enum, so `inherit` (and `best`, and a full model id) is rejected at spawn time and would break this very agent. Cost-follows-session is not available for an inline pin.
 
 Pass this prompt to the agent, filling in all placeholders:
 
@@ -387,13 +388,13 @@ For each agent (parallel or sequential), read its response. Extract:
 
 If an agent reports `STATUS: FAIL`, note the batch as **failed** and continue. `STATUS: PASS` beside `VERIFY: FAIL` is a malformed report — § 4 re-verifies after its one fix attempt, so a passing status cannot honestly ride a failed verify; treat the batch as **failed** (fail-closed) and name the inconsistency in Step 5's Failed table. If it reports `VERIFY: TIMEOUT`, the batch is **unverified, not failed** (Phase 222, Q-283): the verify command was killed and returned no verdict — the same fact the agent instruction in § 3 states, three sections up — so recording it as failed would be a statement about the code made from a measurement that never ran. Note it as **unverified** and continue; it gets its own Step 5 table, and closing it requires a verify re-run first.
 
-### 4d. Opus Verification Pass (for every PASS batch — `STATUS: PASS` *and* `VERIFY: PASS`)
+### 4d. Verification Pass on the reasoning role (for every PASS batch — `STATUS: PASS` *and* `VERIFY: PASS`)
 
 A `VERIFY: TIMEOUT` batch is excluded even when its `STATUS` says PASS: this pass certifies a verified diff, and there is no verified diff to certify — re-run verify first (Step 4c's unverified disposition), then send it through here.
 
-Sonnet's sibling-scan (Step 1b of the agent prompt) and post-fix convention check (Step 5) are weaker than Opus's on the same prompts — prior runs have shown Sonnet-missed siblings (`fix(batch-449): ExportEngine setTimeout`) and cross-convention regressions (`fix: truncate before redact_api_keys`) that only Opus catches reliably. This pass is the scoped safety net.
+On the default mapping (Sonnet fixes, Opus verifies), Sonnet's sibling-scan (Step 1b of the agent prompt) and post-fix convention check (Step 5) measured weaker than Opus's on the same prompts — prior runs have shown Sonnet-missed siblings (`fix(batch-449): ExportEngine setTimeout`) and cross-convention regressions (`fix: truncate before redact_api_keys`) that only Opus catches reliably. This pass is the scoped safety net.
 
-For each batch that reported `STATUS: PASS` **and** `VERIFY: PASS` (a `VERIFY: TIMEOUT` batch is unverified and skips this pass — see 4c), spawn an **Opus** subagent to re-review the branch's committed diff. Run these in parallel across batches (single message, multiple Agent tool calls — same rolling-window refill used in Step 4b).
+For each batch that reported `STATUS: PASS` **and** `VERIFY: PASS` (a `VERIFY: TIMEOUT` batch is unverified and skips this pass — see 4c), spawn a **reasoning-role** subagent to re-review the branch's committed diff. Run these in parallel across batches (single message, multiple Agent tool calls — same rolling-window refill used in Step 4b).
 
 Use the Agent tool with:
 - `subagent_type`: `"general-purpose"`
@@ -407,11 +408,11 @@ Agent prompt:
 
 **START OF VERIFICATION PROMPT**
 
-You are reviewing **Batch <N> — "<TITLE>"** after a Sonnet fix pass. Your scope is narrow: catch the three things Sonnet underperforms on.
+You are reviewing **Batch <N> — "<TITLE>"** after a fix pass on the cheaper mechanical tier. Your scope is narrow: catch the three things that tier underperforms on.
 
 **Working directory:** `<WORKTREE_PATH>`
 **Branch:** `<BRANCH>`
-**Sonnet's report:** <PASTE THE SONNET AGENT'S FULL REPORT FROM STEP 4c>
+**The fix agent's report:** <PASTE THE FIX AGENT'S FULL REPORT FROM STEP 4c>
 
 ## Step 1: Load the diff
 
@@ -423,12 +424,12 @@ Read the diff in full. Note which files changed and what convention each change 
 
 ## Step 2: Three checks
 
-### Check A — Sibling violations Sonnet missed
+### Check A — Sibling violations the fix agent missed
 
-Sonnet's Step 1b scan is supposed to find sibling instances of the same anti-pattern in each modified file. It often misses them. For each file you see in the diff:
+The fix agent's Step 1b scan is supposed to find sibling instances of the same anti-pattern in each modified file. It often misses them. For each file you see in the diff:
 1. Open the full file with Read
-2. For each convention Sonnet enforced, search the rest of the file for the same anti-pattern at a different location
-3. List each sibling Sonnet missed
+2. For each convention the fix agent enforced, search the rest of the file for the same anti-pattern at a different location
+3. List each sibling the fix agent missed
 
 Example pattern from Batch 449: Sonnet fixed a Timer-cleanup violation in `DesignControls.tsx` but missed the identical `setTimeout` in `ExportEngine.tsx`.
 
@@ -444,9 +445,9 @@ Fixes can introduce secondary violations. Scan each added/modified line against 
 
 Example pattern from prior runs: Sonnet added `_sanitize_log(str(e))` but forgot the `[:500]` truncation, creating an unbounded-regex surface that Opus later fixed.
 
-### Check C — False-positive tasks Sonnet executed anyway
+### Check C — False-positive tasks the fix agent executed anyway
 
-Sonnet applies prescriptions literally even when the prescription is wrong. Signals:
+The fix agent applies prescriptions literally even when the prescription is wrong. Signals:
 - A "gate" at a layer that cannot physically enforce it (e.g., FastAPI `Depends()` can't gate body parse)
 - A cap that duplicates an already-existing bound (SQL `LIMIT`, Pydantic `max_length`)
 - A fix that targets a symptom the change doesn't actually address
@@ -456,10 +457,10 @@ Example from Batch 416: TASK-2245 (route-layer point cap) and TASK-2250 (FastAPI
 
 ## Step 3: Apply corrections (if any found)
 
-For each issue, fix it directly in the worktree. Do **NOT** amend or force-push Sonnet's commit — make a new commit on top:
+For each issue, fix it directly in the worktree. Do **NOT** amend or force-push the fix agent's commit — make a new commit on top:
 
 - **Sibling / Regression**: fix and commit with `git commit -m "fix(batch-<N>): <what you caught> (opus verify)"`
-- **False-positive**: revert Sonnet's change for that task in a new commit. Also update `<WORKTREE_PATH>/review_tasks.md`: **leave the task's `[ ]` checkbox unchanged** and append `  > Dropped: <one-sentence reason>` under the task line. `close_batch.sh` will flip `[ ]` → `[x]` at merge time alongside the other tasks — leaving the checkbox here keeps Grand Total counts accurate. Commit both edits together: `git commit -m "revert(batch-<N>): drop TASK-NNN — <short reason> (opus verify)"`
+- **False-positive**: revert the fix agent's change for that task in a new commit. Also update `<WORKTREE_PATH>/review_tasks.md`: **leave the task's `[ ]` checkbox unchanged** and append `  > Dropped: <one-sentence reason>` under the task line. `close_batch.sh` will flip `[ ]` → `[x]` at merge time alongside the other tasks — leaving the checkbox here keeps Grand Total counts accurate. Commit both edits together: `git commit -m "revert(batch-<N>): drop TASK-NNN — <short reason> (opus verify)"`
 
 Push each commit:
 
@@ -481,16 +482,16 @@ DROPPED_TASKS:
 - TASK-NNN — <reason>
 CORRECTIONS:
 - <file:line> — <check A/B/C>: <one-sentence description>
-NOTES: <any notable observations about the Sonnet pass, or "none">
+NOTES: <any notable observations about the fix pass, or "none">
 ```
 
 **END OF VERIFICATION PROMPT**
 
 ---
 
-**Collect verification results.** If any batch returned `CORRECTIONS_APPLIED`, note the counts — they appear in the final summary (Step 5). Sonnet's STATUS remains PASS unless the Opus pass itself failed to run; Opus corrections are additive, not remedial.
+**Collect verification results.** If any batch returned `CORRECTIONS_APPLIED`, note the counts — they appear in the final summary (Step 5). The fix agent's STATUS remains PASS unless the verification pass itself failed to run; its corrections are additive, not remedial.
 
-If an Opus verify agent itself fails (e.g., crashes, returns malformed output), log the batch as `VERIFY_INCOMPLETE` and continue — the branch was pushed by Sonnet and `/review-close`'s convention gate will run again as a backstop.
+If a verify agent itself fails (e.g., crashes, returns malformed output), log the batch as `VERIFY_INCOMPLETE` and continue — the branch was pushed by the fix agent and `/review-close`'s convention gate will run again as a backstop.
 
 ### 4e. Create Pending Docs (on success only)
 
@@ -503,7 +504,7 @@ Use the Write tool to create `<WORKTREE_PATH>/sysop/runtime/pending-docs/<saniti
 
 ```yaml
 ---
-branch: <branch-name>
+branch: "<branch-name>"
 branch_tip: <full SHA — `git -C <WORKTREE_PATH> rev-parse HEAD`, run NOW>
 date: YYYY-MM-DD
 type: infrastructure
@@ -515,7 +516,7 @@ summary: "Batch <N> complete: <Title>. <Scope>."
 
 > **`branch_tip:` is stamped LAST, after this branch's final commit (`Q-471`).** `/review-close` Step 3b compares it against the branch tip and **refuses to collect** a doc that later commits have overtaken, because Step 4c routes `summary:` into the durable record in the same commit that flips the task to `done`. Read it with `git -C <WORKTREE_PATH> rev-parse HEAD` — from the worktree, not from the main checkout, whose `HEAD` is a different branch. **Anything committed to this branch after the stamp stops the next close at exit 6**, so if a later step here commits, it must re-stamp. Omitting the field is not a silent opt-out either — it prints `PENDING-DOC STALENESS UNKNOWN:` on every close of every batch this skill produces, which is a gate exempting the whole review-batch path while looking armed.
 
-> **Why 4e is the right place, stated correctly.** An earlier version of this note said *"Sonnet pushed this branch before Step 4 ran and 4e commits nothing"* — and both clauses were false. Sonnet's push is at **4b**, inside Step 4, and **4d commits twice and pushes** (the `fix(batch-<N>) … (opus verify)` and `revert(batch-<N>)` commits) between that push and this step. The stamped value is still right, but for the other reason: 4e is simply the LAST step, so `HEAD` here is after everything 4d did. The operative rule above — re-stamp if a later step commits — is triggered by a step the old note claimed did not exist.
+> **Why 4e is the right place, stated correctly.** An earlier version of this note said *"Sonnet pushed this branch before Step 4 ran and 4e commits nothing"* — and both clauses were false. The fix agent's push is at **4b**, inside Step 4, and **4d commits twice and pushes** (the `fix(batch-<N>) … (opus verify)` and `revert(batch-<N>)` commits) between that push and this step. The stamped value is still right, but for the other reason: 4e is simply the LAST step, so `HEAD` here is after everything 4d did. The operative rule above — re-stamp if a later step commits — is triggered by a step the old note claimed did not exist.
 
 This file is **untracked** (gitignored). It will be copied to main by `/review-close` Step 3b before the worktree is removed.
 
@@ -528,8 +529,8 @@ After all batches are processed, print:
 ```
 ## Auto-Fix Complete
 
-### Processed (Sonnet fix + Opus verify)
-| Batch | Title | Sonnet | Verify | Opus Verdict | Siblings+ | Regress+ | Drops |
+### Processed (fix + verify)
+| Batch | Title | Fix | Verify | Verify Verdict | Siblings+ | Regress+ | Drops |
 |-------|-------|--------|--------|--------------|-----------|----------|-------|
 | 198   | Scripts: shared_cli.py Migration | PASS 5/5 | PASS | CLEAN | 0 | 0 | 0 |
 | 200   | Tests: Mock Cleanup | PASS 6/6 | PASS | CORRECTIONS_APPLIED | 1 | 0 | 0 |
@@ -557,7 +558,7 @@ After all batches are processed, print:
 |-------|-------|-------|
 | (none) | | |
 
-### Opus-Verify Incomplete (backstopped by /review-close)
+### Verify Incomplete (backstopped by /review-close)
 | Batch | Title | Reason |
 |-------|-------|--------|
 | (none) | | |
@@ -570,6 +571,6 @@ Next steps:
   </if>
   <if --merge>
   1. Run /auto-judge and /auto-judge --merge if any flagged batches remain
-  2. Run /review-close to merge all branches (Opus convention gate + staging verify)
+  2. Run /review-close to merge all branches (convention gate + staging verify)
   </if>
 ```

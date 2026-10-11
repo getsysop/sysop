@@ -1020,3 +1020,85 @@ def test_a_non_utf8_body_does_not_kill_the_manual_smoke_check(tmp_path):
         report = vt.validate(tasks_dir)
 
     assert report is not None, "validate() returned nothing for a non-UTF-8 smoke body"
+
+
+# ── Q-059 — `--path` does not exempt a tree from the lock check ──────────
+#
+# `main()`'s comment used to say that under `--path` "the sysop/runtime/locks/
+# check would not apply". It always applied: `--path` sets only `base_dir`, and
+# the locks dir is resolved from `base_dir.parent` — through git-common-dir to
+# the MAIN repo's locks inside any checkout, beside the tree outside one. These
+# pin that, through the CLI a consumer would actually reach for.
+
+import sys as _sys  # noqa: E402
+
+_VALIDATOR = REPO_ROOT / "core" / "companion" / "scripts" / "validate_tasks.py"
+_GIT_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE")
+
+
+def _clean_env():
+    return {k: v for k, v in os.environ.items() if k not in _GIT_VARS}
+
+
+def _cli_path(tasks_dir: Path):
+    return subprocess.run([_sys.executable, str(_VALIDATOR), "--path", str(tasks_dir)],
+                          capture_output=True, text=True, env=_clean_env(), timeout=60)
+
+
+def _lock_at(root: Path):
+    locks = root / "sysop/runtime/locks"
+    locks.mkdir(parents=True, exist_ok=True)
+    (locks / "FEAT-LOCKED.lock").write_text("lock\n", encoding="utf-8")
+
+
+def _git_init(root: Path):
+    root.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q", "-b", "main", str(root)], check=True,
+                   capture_output=True, env=_clean_env())
+
+
+def test_path_inside_a_repo_still_runs_the_lock_check_against_the_main_repo(tmp_path):
+    """A staged tree kept inside the repo, with a lock BESIDE it but none in the
+    main repo: still fails, because the lookup went through git, not beside
+    `--path`. The exemption the comment claimed would have passed it."""
+    repo = tmp_path / "repo"
+    _git_init(repo)
+    staging = repo / "staging"
+    _make_tasks_tree(staging)
+    _lock_at(staging)  # a decoy where an exemption-by-proximity would look
+    r = _cli_path(staging / "tasks")
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "lock file missing" in r.stdout
+    assert str((repo / "sysop/runtime/locks").resolve()) in r.stdout
+
+
+def test_path_inside_a_repo_passes_on_the_main_repos_real_lock(tmp_path):
+    repo = tmp_path / "repo"
+    _git_init(repo)
+    _lock_at(repo)
+    staging = repo / "staging"
+    _make_tasks_tree(staging)
+    r = _cli_path(staging / "tasks")
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_path_outside_any_repo_checks_beside_the_tree(tmp_path):
+    """Outside a repo the lookup falls back beside the tree — it does not skip.
+    That is why the pre-commit example copies the real locks into its export."""
+    bare = tmp_path / "export"
+    _make_tasks_tree(bare)
+    r = _cli_path(bare / "tasks")
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "lock file missing" in r.stdout
+    _lock_at(bare)
+    r = _cli_path(bare / "tasks")
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_the_comment_no_longer_claims_the_exemption():
+    """The defect was a sentence; pin that it does not come back verbatim."""
+    src = _VALIDATOR.read_text(encoding="utf-8")
+    assert "check would not apply" not in src
+    assert "migration script" not in src, (
+        "no task-migration script ships with Sysop; the --path caller is the "
+        "pre-commit example's staged-tree export")

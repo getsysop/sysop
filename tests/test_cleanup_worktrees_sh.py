@@ -28,13 +28,31 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "core/companion/scripts/cleanup_worktrees.sh"
 
 
+# git's discovery variables outrank `cwd`, and git exports them into every hook —
+# so a suite run from a pre-push hook would otherwise aim each fixture command at
+# the invoking repository (BeanRider ISSUE-0048; `tests/test_git_env_hermeticity.py`).
+_GIT_DISCOVERY_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE")
+
+
+def _env(**extra):
+    env = {k: v for k, v in os.environ.items() if k not in _GIT_DISCOVERY_VARS}
+    env.update(extra)
+    return env
+
+
+def _grun(argv, **kw):
+    """`subprocess.run` for a git command, with the discovery variables stripped."""
+    kw.setdefault("env", _env())
+    return subprocess.run(argv, **kw)
+
+
 def _git(cwd, *args):
-    subprocess.run(["git", *args], cwd=str(cwd), check=True, capture_output=True)
+    _grun(["git", *args], cwd=str(cwd), check=True, capture_output=True)
 
 
 def _repo(root):
     root.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["git", "-c", "init.defaultBranch=main", "init", "-q", str(root)],
+    _grun(["git", "-c", "init.defaultBranch=main", "init", "-q", str(root)],
                    check=True, capture_output=True)
     _git(root, "config", "user.email", "test@test")
     _git(root, "config", "user.name", "test")
@@ -94,10 +112,10 @@ def _pending_doc(wt):
     return d
 
 
-def _run(cwd, *args):
+def _run(cwd, *args, env=None):
     return subprocess.run(
         ["bash", str(SCRIPT), *args],
-        cwd=str(cwd), capture_output=True, text=True,
+        cwd=str(cwd), capture_output=True, text=True, env=env or _env(),
     )
 
 
@@ -179,20 +197,22 @@ class TestCleanRemovesMerged:
         assert "Removed 1 worktree(s)" in r.stdout
         assert not wt.exists()
         # Branch deleted with safe -d (it was an ancestor of main).
-        got = subprocess.run(["git", "show-ref", "--verify", "refs/heads/feat/merged"],
+        got = _grun(["git", "show-ref", "--verify", "refs/heads/feat/merged"],
                              cwd=str(repo), capture_output=True)
         assert got.returncode != 0, "merged branch was not deleted"
 
 
 class TestForcePreservesUnmergedBranch:
     """`--force` removes the worktree but must delete its branch with the *safe*
-    `-d` (L216) — so an *unmerged* branch (commits not in main) survives rather
+    `-d` (the `--force` loop's `git branch -d`) — so an *unmerged* branch (commits not in main) survives rather
     than being force-dropped. The existing MERGED tests can't catch a `-d`→`-D`
     refactor because for an ancestor branch `-d` and `-D` behave identically;
     only a genuinely-unmerged branch distinguishes them. `--force` (not `--clean`)
     is the reachable path: a clean-but-unmerged worktree classifies ACTIVE and
     `--clean` skips it before the branch-delete, whereas `--force` deletes every
-    non-main worktree's branch regardless of class."""
+    non-main worktree's branch regardless of class. (`--clean`'s own `-d` IS
+    reachable with a branch `-d` refuses — two ways, both in
+    `TestCleanBranchDeleteIsTheSafeOne`, Q-311.)"""
 
     def test_force_keeps_unmerged_branch(self, tmp_path):
         repo = _repo(tmp_path / "repo")
@@ -210,8 +230,8 @@ class TestForcePreservesUnmergedBranch:
         assert not wt.exists(), "worktree was not removed"
         assert "not deleted (not fully merged)" in r.stdout
         # Load-bearing: the unmerged branch — and its commit — survive.
-        # `-d`→`-D` at L216 would force-delete it and redden this.
-        got = subprocess.run(["git", "show-ref", "--verify", "refs/heads/feat/unmerged"],
+        # `-d`→`-D` in the `--force` loop would force-delete it and redden this.
+        got = _grun(["git", "show-ref", "--verify", "refs/heads/feat/unmerged"],
                              cwd=str(repo), capture_output=True)
         assert got.returncode == 0, "unmerged branch was force-deleted — commits lost"
 
@@ -281,7 +301,7 @@ class TestNoPathOperand:
         shutil.rmtree(wt)  # now a prunable STALE entry
 
         def listed():
-            out = subprocess.run(["git", "worktree", "list", "--porcelain"],
+            out = _grun(["git", "worktree", "list", "--porcelain"],
                                  cwd=str(repo), capture_output=True, text=True).stdout
             return "wt-gone" in out
 
@@ -387,7 +407,7 @@ class TestForceNamesTheLossItCauses:
             "instead of `git status` reintroduces the false alarm"
         )
         # Proof the work really did survive: the unmerged branch is still there.
-        got = subprocess.run(["git", "show-ref", "--verify", "refs/heads/feat/committed"],
+        got = _grun(["git", "show-ref", "--verify", "refs/heads/feat/committed"],
                              cwd=str(repo), capture_output=True)
         assert got.returncode == 0
 
@@ -423,7 +443,7 @@ class TestRuntimeArtifactsAreNotSilentlyDestroyed:
         # this test would pass for the wrong reason.
         for probe in (["status", "--porcelain"],
                       ["ls-files", "--others", "--exclude-standard"]):
-            got = subprocess.run(["git", *probe], cwd=str(wt),
+            got = _grun(["git", *probe], cwd=str(wt),
                                  capture_output=True, text=True)
             # The returncode check is load-bearing, not defensive. Both probes exit
             # 128 with EMPTY stdout when git fails (a non-repo cwd, a corrupt
@@ -641,7 +661,7 @@ class TestForceFailureAccounting:
             "worktree still exists. The `continue` exists to skip this."
         )
         assert "Deleted branch" not in r.stdout
-        got = subprocess.run(["git", "show-ref", "--verify", "refs/heads/feat/locked"],
+        got = _grun(["git", "show-ref", "--verify", "refs/heads/feat/locked"],
                              cwd=str(repo), capture_output=True)
         assert got.returncode == 0, "branch deleted for a worktree that was never removed"
 
@@ -743,7 +763,7 @@ class TestCleanRemovalIsNonForce:
 
     def _run_shimmed(self, repo, tmp_path, *args):
         d, log = self._shim(tmp_path)
-        env = dict(os.environ, PATH=f"{d}:{os.environ['PATH']}")
+        env = _env(PATH=f"{d}:{os.environ['PATH']}")
         r = subprocess.run(["bash", str(SCRIPT), *args], cwd=str(repo),
                            capture_output=True, text=True, env=env)
         calls = log.read_text().splitlines() if log.exists() else []
@@ -859,7 +879,7 @@ class TestClassifierRobustness:
         merged = tmp_path / "aaa-merged"
         _add_worktree(repo, merged, "feat/merged")
         detached = tmp_path / "zzz-detached"
-        head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(repo),
+        head = _grun(["git", "rev-parse", "HEAD"], cwd=str(repo),
                               capture_output=True, text=True).stdout.strip()
         _git(repo, "worktree", "add", "-q", "--detach", str(detached), head)
         (detached / "work.txt").write_text("detached work\n")
@@ -1104,3 +1124,355 @@ class TestProbeScopeBothEnds:
             "a nested vendor/**/sysop/runtime/ protected the worktree — the pathspec "
             "is no longer anchored at the repo root"
         )
+
+
+def _ref(repo, branch):
+    """The SHA a local branch points at, or None when the branch does not exist."""
+    got = _grun(["git", "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"],
+                cwd=str(repo), capture_output=True, text=True)
+    return got.stdout.strip() if got.returncode == 0 else None
+
+
+def _listed_paths(repo):
+    """Every worktree path git still has registered, read NUL-separated so a path
+    holding a newline comes back whole."""
+    out = _grun(["git", "worktree", "list", "--porcelain", "-z"], cwd=str(repo),
+                capture_output=True, check=True).stdout.decode()
+    return [f[len("worktree "):] for f in out.split("\0") if f.startswith("worktree ")]
+
+
+class TestCleanBranchDeleteIsTheSafeOne:
+    """Q-311 (a) — `--clean`'s `git branch -d` is load-bearing, and `-d`→`-D`
+    survived every test in this module.
+
+    **Why nothing caught it.** `--clean` reaches the delete only for a MERGED
+    worktree, whose branch is by definition an ancestor of the default branch,
+    and for such a branch `-d` and `-D` usually agree. They part in two places,
+    and each test below takes one:
+
+    * **The commit that arrives after classification** — the data-loss case.
+      Every worktree is classified before any is removed, so a session that
+      commits on the branch in between (§ 4.4's concurrent sessions) leaves a
+      clean worktree whose non-force removal succeeds and a branch that is no
+      longer merged. `-d` refuses and the commit survives; `-D` deletes the only
+      ref to it. `TestCleanRemovalIsNonForce` documents the same window and pins
+      its argv rather than racing it; this test stages the commit
+      deterministically instead, from a `git` shim that commits in the worktree
+      immediately before passing `worktree remove` through to the real git.
+    * **`-d`'s own definition of merged** — merged into HEAD (or the branch's
+      upstream), not into the default branch. With the primary checked out on
+      another branch, a MERGED worktree's branch is one `-d` refuses. No commit
+      is at risk here (it is on `main`); what is pinned is that the script
+      keeps git's refusal rather than overriding it.
+    """
+
+    @staticmethod
+    def _committing_shim(tmp_path):
+        d = tmp_path / "shimbin"
+        d.mkdir()
+        sha_log = tmp_path / "injected.sha"
+        real = shutil.which("git")
+        (d / "git").write_text(
+            "#!/usr/bin/env bash\n"
+            '# `--clean` calls `git worktree remove <path>`: path is $3.\n'
+            'if [[ "$1" == "worktree" && "$2" == "remove" && "$3" != "--force" ]]; then\n'
+            f'  "{real}" -C "$3" commit -q --allow-empty -m "concurrent session" || exit 97\n'
+            f'  "{real}" -C "$3" rev-parse HEAD >> "{sha_log}"\n'
+            "fi\n"
+            f'exec "{real}" "$@"\n'
+        )
+        (d / "git").chmod(0o755)
+        return d, sha_log
+
+    def test_a_commit_landing_after_classification_survives_clean(self, tmp_path):
+        repo = _repo(tmp_path / "repo")
+        wt = tmp_path / "wt-raced"
+        _add_worktree(repo, wt, "feat/raced")  # tip == main tip → MERGED
+        d, sha_log = self._committing_shim(tmp_path)
+
+        r = _run(repo, "--clean", env=_env(PATH=f"{d}:{os.environ['PATH']}"))
+
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert sha_log.is_file(), "the shim never saw `git worktree remove` — no commit was staged"
+        injected = sha_log.read_text().split()
+        assert len(injected) == 1, f"expected one staged commit: {injected}"
+        assert "Removing MERGED worktree" in r.stdout
+        assert not wt.exists(), "precondition: the clean worktree's removal should succeed"
+        assert _ref(repo, "feat/raced") == injected[0], (
+            "the branch no longer points at the commit made after classification — "
+            "`git branch -d` became `-D` and deleted the only ref to it"
+        )
+        assert "not deleted" in r.stdout, r.stdout
+
+    def test_a_branch_merged_into_main_but_not_into_head_is_kept(self, tmp_path):
+        repo = _repo(tmp_path / "repo")
+        _git(repo, "branch", "other")  # the seed commit, behind what main will be
+        wt = tmp_path / "wt-merged-elsewhere"
+        _add_worktree(repo, wt, "feat/landed")
+        _git(wt, "commit", "-q", "--allow-empty", "-m", "landed on main")
+        _git(repo, "merge", "-q", "--ff-only", "feat/landed")
+        _git(repo, "checkout", "-q", "other")  # the primary is not on main
+
+        r = _run(repo, "--clean")
+
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert "Removing MERGED worktree" in r.stdout, r.stdout
+        assert not wt.exists()
+        assert _ref(repo, "feat/landed") is not None, (
+            "a branch `git branch -d` refuses (not merged into HEAD) was deleted — "
+            "the delete is overriding git's refusal"
+        )
+        assert "Branch 'feat/landed' not deleted" in r.stdout, r.stdout
+
+
+class TestNewlineInWorktreePath:
+    """Q-307 (a) — `git worktree list --porcelain` without `-z` does not quote a
+    newline inside a path (measured on git 2.50.1), so the line parser split it.
+
+    The entry called that fail-safe, and for a lone newline path it was: the
+    truncated path did not exist, the worktree classified STALE, and `--clean`
+    exited 1 on `is not a working tree` with nothing removed. It was not
+    fail-safe when the truncated prefix is ANOTHER worktree's path — then that
+    worktree was classified with this record's merged branch and removed in its
+    place (`test_a_truncated_path_never_removes_the_worktree_it_names`, measured
+    against the pre-fix script).
+    """
+
+    @staticmethod
+    def _newline_wt(tmp_path, repo, branch="feat/nl", stem="wt-new"):
+        wt = tmp_path / f"{stem}\nline"
+        _add_worktree(repo, wt, branch)
+        assert str(wt) in _listed_paths(repo), "precondition: git registered the newline path"
+        return wt
+
+    def test_a_merged_newline_path_worktree_is_reclaimed(self, tmp_path):
+        repo = _repo(tmp_path / "repo")
+        wt = self._newline_wt(tmp_path, repo)
+
+        r = _run(repo, "--clean")
+
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert "Removing MERGED worktree" in r.stdout, (
+            f"the newline path did not classify MERGED (pre-fix: STALE): {r.stdout}"
+        )
+        assert "Removed 1 worktree(s), skipped 0 active, 0 failed." in r.stdout
+        assert not wt.exists()
+        assert str(wt) not in _listed_paths(repo)
+        assert _ref(repo, "feat/nl") is None, "the merged branch was not deleted"
+
+    def test_a_newline_path_park_record_is_still_protected(self, tmp_path):
+        """The whole path reaches the content probes, not a truncation of it."""
+        repo = _repo(tmp_path / "repo")
+        _ignore(repo, "sysop/runtime/")
+        wt = self._newline_wt(tmp_path, repo)
+        rec = _park_record(wt)
+
+        r = _run(repo, "--clean")
+
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert "Skipping ACTIVE" in r.stdout, r.stdout
+        assert (rec / "review.md").is_file()
+
+    def test_a_truncated_path_never_removes_the_worktree_it_names(self, tmp_path):
+        repo = _repo(tmp_path / "repo")
+        _ignore(repo, "scratch/")
+        inflight = tmp_path / "wt"
+        _add_worktree(repo, inflight, "feat/inflight")
+        _git(inflight, "commit", "-q", "--allow-empty", "-m", "in-flight, unmerged")
+        (inflight / "scratch").mkdir()
+        (inflight / "scratch" / "notes.txt").write_text("ignored, but real\n")
+        # `…/wt\nx` truncates to `…/wt` — the in-flight worktree's own path.
+        self._newline_wt(tmp_path, repo, branch="feat/nl", stem="wt")
+
+        r = _run(repo, "--clean")
+
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert inflight.is_dir(), (
+            "the in-flight worktree was removed in place of the newline-path one: "
+            "its path was the newline record's truncation, classified with that "
+            "record's merged branch"
+        )
+        assert (inflight / "scratch" / "notes.txt").is_file()
+        assert str(inflight) in _listed_paths(repo)
+
+    def test_run_from_inside_a_newline_path_worktree_finds_the_primary(self, tmp_path):
+        """The primary probe reads the same list; from inside a linked worktree it
+        is the one that decides what is MAIN."""
+        repo = _repo(tmp_path / "repo")
+        wt = self._newline_wt(tmp_path, repo)
+
+        r = _run(wt)
+
+        assert r.returncode == 0, r.stdout + r.stderr
+        rows = [ln for ln in r.stdout.splitlines() if "│" in ln and ("MAIN" in ln or "MERGED" in ln
+                                                                      or "STALE" in ln or "ACTIVE" in ln)]
+        main_rows = [ln for ln in rows if "MAIN" in ln]
+        assert len(main_rows) == 1 and str(repo)[-20:] in main_rows[0], r.stdout
+        assert not any("STALE" in ln for ln in rows), r.stdout
+        # Shown as `?`, so the table row is not split across two lines.
+        assert any("wt-new?line" in ln and "MERGED" in ln for ln in rows), r.stdout
+
+
+    def test_a_newline_in_the_primary_checkouts_own_path(self, tmp_path):
+        """Run from a linked worktree, the script finds the primary as the list's
+        FIRST record. Pre-fix that read truncated a newline in the primary's own
+        path and the run refused: `Resolved primary checkout '…' is not a
+        directory`. Fail-closed, but every mode was dead from every linked
+        worktree of such a checkout."""
+        repo = _repo(tmp_path / "re\npo")
+        linked = tmp_path / "wt-linked"
+        _add_worktree(repo, linked, "feat/linked")
+
+        r = _run(linked)
+
+        assert r.returncode == 0, r.stdout + r.stderr
+        main_rows = [ln for ln in r.stdout.splitlines() if "MAIN" in ln and "│" in ln]
+        assert len(main_rows) == 1 and "re?po" in main_rows[0], r.stdout
+        assert any("MERGED" in ln and "wt-linked" in ln for ln in r.stdout.splitlines()), r.stdout
+
+
+class TestWorktreeListWithoutNulOutput:
+    """`git worktree list -z` arrived in git 2.36, and this repo states no minimum
+    git version — so the script probes `-z` and, on an older git, falls back to
+    today's newline parse. Simulated with a shim that refuses `-z` the way an
+    older git refuses an unknown switch (usage, exit 129)."""
+
+    @staticmethod
+    def _old_git_shim(tmp_path):
+        d = tmp_path / "oldgit"
+        d.mkdir()
+        log = tmp_path / "z-attempts.log"
+        real = shutil.which("git")
+        (d / "git").write_text(
+            "#!/usr/bin/env bash\n"
+            'is_list=0; has_z=0\n'
+            'for a in "$@"; do\n'
+            '  [[ "$a" == "list" ]] && is_list=1\n'
+            '  [[ "$a" == "-z" ]] && has_z=1\n'
+            'done\n'
+            'if [[ "$is_list" == 1 && "$has_z" == 1 && " $* " == *" worktree "* ]]; then\n'
+            f'  printf "%s\\n" "$*" >> "{log}"\n'
+            '  echo "error: unknown switch \\`z\'" >&2\n'
+            "  exit 129\n"
+            "fi\n"
+            f'exec "{real}" "$@"\n'
+        )
+        (d / "git").chmod(0o755)
+        return d, log
+
+    def test_an_older_git_still_classifies_and_cleans(self, tmp_path):
+        repo = _repo(tmp_path / "repo")
+        merged = tmp_path / "wt-merged"
+        _add_worktree(repo, merged, "feat/merged")
+        active = tmp_path / "wt-active"
+        _add_worktree(repo, active, "feat/active")
+        (active / "scratch.txt").write_text("uncommitted\n")
+        d, log = self._old_git_shim(tmp_path)
+
+        r = _run(repo, "--clean", env=_env(PATH=f"{d}:{os.environ['PATH']}"))
+
+        # The positive half: without it, a script that never tries `-z` passes.
+        assert log.is_file() and log.read_text().strip(), "the script never tried `-z`"
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert "Removed 1 worktree(s), skipped 1 active, 0 failed." in r.stdout, r.stdout
+        assert not merged.exists() and (active / "scratch.txt").is_file()
+
+    def test_an_older_git_keeps_the_pre_fix_newline_behaviour(self, tmp_path):
+        """Without `-z` there is no way to read a newline path, so the fallback is
+        exactly today's parse — which fails safe for a lone newline path: the
+        truncation names nothing, and the removal of it is refused."""
+        repo = _repo(tmp_path / "repo")
+        wt = TestNewlineInWorktreePath._newline_wt(tmp_path, repo)
+        d, _log = self._old_git_shim(tmp_path)
+
+        r = _run(repo, "--clean", env=_env(PATH=f"{d}:{os.environ['PATH']}"))
+
+        assert r.returncode == 1, r.stdout + r.stderr
+        assert "Removing STALE worktree" in r.stdout, r.stdout
+        assert wt.is_dir()
+
+
+class TestNestedWorktree:
+    """Found while closing Q-311: a worktree nested in another's gitignored
+    directory is invisible to every content probe — git sees an ignored
+    directory, not a repository. `--clean` classified the parent MERGED and
+    removed it, taking the child's working tree with it, uncommitted work
+    included, while printing `Skipping ACTIVE worktree` for the child (the
+    child was classified before anything was removed).
+
+    Every assertion here is independent of the order `git worktree list` prints
+    the two in: that is the order of `.git/worktrees/` as the filesystem returns
+    it, which is hash order on ext4.
+    """
+
+    @staticmethod
+    def _nested(tmp_path, repo):
+        _ignore(repo, "nest/")
+        parent = tmp_path / "wt-parent"
+        _add_worktree(repo, parent, "feat/parent")  # clean, merged → MERGED on its own
+        child = parent / "nest" / "wt-child"
+        _add_worktree(repo, child, "feat/child")
+        (child / "uncommitted.txt").write_text("the child's work\n")
+        return parent, child
+
+    def test_clean_keeps_a_parent_that_holds_another_worktree(self, tmp_path):
+        repo = _repo(tmp_path / "repo")
+        parent, child = self._nested(tmp_path, repo)
+
+        r = _run(repo, "--clean")
+
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert (child / "uncommitted.txt").is_file(), (
+            "the nested worktree's uncommitted work was destroyed by removing its parent"
+        )
+        assert parent.is_dir()
+        assert "Removed 0 worktree(s), skipped 2 active, 0 failed." in r.stdout, r.stdout
+        assert f"It contains another worktree ({child})" in r.stdout, r.stdout
+        assert str(child) in _listed_paths(repo)
+
+    def test_force_names_the_nested_loss_whichever_is_removed_first(self, tmp_path):
+        """`--force` removes both by design. Either order must name the child's
+        uncommitted work: its own UNCOMMITTED WORK line when it goes first, the
+        parent's nested line when the parent goes first (the child's own line is
+        then computed against a directory already gone, and is silent)."""
+        repo = _repo(tmp_path / "repo")
+        parent, child = self._nested(tmp_path, repo)
+
+        r = _run(repo, "--force")
+
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert not parent.exists() and not child.exists()
+        named = (f"Contains another worktree ({child})" in r.stdout
+                 or any("UNCOMMITTED WORK" in ln and str(child) in ln
+                        for ln in r.stdout.splitlines()))
+        assert named, f"the nested worktree's uncommitted work was lost unnamed:\n{r.stdout}"
+
+    def test_a_sibling_sharing_a_name_prefix_is_not_nested(self, tmp_path):
+        """`wt-a` does not contain `wt-ab`: containment is by path component."""
+        repo = _repo(tmp_path / "repo")
+        a = tmp_path / "wt-a"
+        ab = tmp_path / "wt-ab"
+        _add_worktree(repo, a, "feat/a")
+        _add_worktree(repo, ab, "feat/ab")
+
+        r = _run(repo, "--clean")
+
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert "Removed 2 worktree(s), skipped 0 active, 0 failed." in r.stdout, r.stdout
+        assert not a.exists() and not ab.exists()
+
+    def test_a_nested_entry_whose_directory_is_gone_protects_nothing(self, tmp_path):
+        """A registered child with no directory has nothing a parent's removal can
+        take. (Locked, or the opening prune would have reaped it before the list
+        is read.)"""
+        repo = _repo(tmp_path / "repo")
+        parent, child = self._nested(tmp_path, repo)
+        _git(repo, "worktree", "lock", str(child))
+        shutil.rmtree(child)
+
+        r = _run(repo, "--clean")
+
+        assert not parent.exists(), (
+            f"a nested entry with no directory kept its parent alive:\n{r.stdout}"
+        )
+        assert "Removing MERGED worktree: " + str(parent) in r.stdout, r.stdout

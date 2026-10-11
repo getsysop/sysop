@@ -2,8 +2,10 @@
 """Validate tasks/index.yml and per-task body files against the schema.
 
 Enforces every invariant documented in tasks/schema.md. Designed to run in
-pre-commit and from the migration script (via --path) for atomic-staging
-validation.
+pre-commit, and via --path against a tasks/ tree other than the repo's own —
+`git-hooks/examples/pre-commit-tasks-validate.example` points it at an export of
+the STAGED tree. --path changes which tree is validated, not which invariants
+apply: the in-progress lock check (Invariant 9) still runs (see main()).
 
 Usage:
     python sysop/scripts/validate_tasks.py
@@ -200,7 +202,7 @@ _AWS_ACCESS_KEY_RE = re.compile(r"\bAKIA[0-9A-Z]{16}\b")
 # alternation in a capturing group, because it uses `m.group(1)` to measure heading
 # depth, and this one has no such consumer. Change the phrase list in both, together.
 _MANUAL_SMOKE_HEADING_RE = re.compile(
-    r"^#{1,6}\s+.*("
+    r"^ {0,3}#{1,6}[ \t]+.*("
     r"manual\s+smoke"
     r"|smoke\s+(?:required|test)"
     r"|manual\s+(?:verification|verify|test|check|step)"
@@ -232,7 +234,8 @@ def _git_discovery_env() -> dict[str, str]:
     `GIT_DIR`/`GIT_WORK_TREE`/`GIT_COMMON_DIR`/`GIT_INDEX_FILE` take precedence
     over `git -C`, and git exports them into every hook — stripping them makes
     `-C` authoritative so a probe against a tmpdir resolves there, not the
-    invoking repo. Duplicated verbatim in next_task.py and scope_overlap.py
+    invoking repo. Duplicated verbatim in next_task.py and scope_overlap.py, and
+    in archive_review_tasks.py since Phase 368
     (same zero-dependency-duplicate rationale as _resolve_canonical_locks_dir).
     """
     return {
@@ -360,7 +363,7 @@ def validate(base_dir: Path, project_root: Path | None = None) -> Report:
     except OSError as e:
         report.error(str(index_path), f"Cannot read: {_sanitize_log(str(e)[:500])}")
         return report
-    except ValueError as e:
+    except Exception as e:  # ValueError for `2026-02-31`; KeyError, TypeError, … (`Q-621`)
         report.error(str(index_path), f"YAML value error: {_sanitize_log(str(e)[:500])}")
         return report
 
@@ -674,6 +677,30 @@ def _has_text(value: object) -> bool:
     return False
 
 
+def _load_lock_yaml(text: str) -> object:
+    """`yaml.safe_load` of a lock, tolerating a `workspace:`, `branch:` or `agent:`
+    value that contains `: `. The lock writers emit those values unquoted, and a
+    `: ` in one is invalid YAML that hid every other field.
+    On a parse error, each such line's value is re-read as a single-quoted scalar of
+    the line's text. `sitrep_survey.load_lock_text` also reads those fields as their lines;
+    this script reads none of them, so its standalone copy is the fallback alone."""
+    try:
+        return yaml.safe_load(text)
+    except Exception:  # not only YAMLError (`Q-621`); a retry that fails re-raises
+        out = []
+        for line in text.splitlines(keepends=True):
+            body = line.splitlines()[0]
+            key, sep, value = body.partition(":")
+            if sep and key in ("workspace", "branch", "agent"):
+                quoted = value.strip().replace("'", "''")
+                line = f"{key}: '{quoted}'{line[len(body):]}"
+            out.append(line)
+        quoted_text = "".join(out)
+        if quoted_text == text:
+            raise
+        return yaml.safe_load(quoted_text)
+
+
 def _check_expired_placeholder_lock(lock_path: Path, claim_id: str, report: Report) -> None:
     """Warn when a lock is past `expires:` AND nothing says why it is still held.
 
@@ -696,8 +723,8 @@ def _check_expired_placeholder_lock(lock_path: Path, claim_id: str, report: Repo
     stub or hand-edited lock must not crash or fail validation.
     """
     try:
-        raw = yaml.safe_load(lock_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, yaml.YAMLError, ValueError):
+        raw = _load_lock_yaml(lock_path.read_text(encoding="utf-8"))
+    except Exception:  # PyYAML raises KeyError, TypeError, … too (`Q-621`)
         return
     if not isinstance(raw, dict):
         return
@@ -886,8 +913,8 @@ def _check_manual_smoke(
     if not _MANUAL_SMOKE_HEADING_RE.search(text):
         report.warn(
             loc,
-            "manual_smoke: true but body lacks a heading matching "
-            "'manual smoke' or 'smoke required' (case-insensitive). "
+            "manual_smoke: true but body lacks a procedure heading "
+            "('manual smoke', 'operator action', 'before merge', ...; case-insensitive). "
             "Add the procedure under '## Manual smoke required' (or similar). "
             "See tasks/schema.md § Manual smoke.",
         )
@@ -1770,8 +1797,9 @@ def main(argv: list[str] | None = None) -> int:
         "--path",
         type=str,
         default=None,
-        help="Path to a tasks/ directory (default: <repo>/tasks). Used by the "
-        "migration script for atomic-staging validation.",
+        help="Path to a tasks/ directory (default: <repo>/tasks), e.g. an "
+        "export of the staged tree. Every invariant still applies, including "
+        "the in-progress lock check.",
     )
     parser.add_argument(
         "--quiet",
@@ -1793,9 +1821,21 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ERROR: tasks directory not found: {base_dir}")
         return 2
 
-    # By convention, project_root is the parent of tasks/, but when --path is
-    # used for atomic staging, the sysop/runtime/locks/ check would not apply (the staged
-    # tree has no lock state). We still try to resolve relative to the parent.
+    # project_root is the parent of tasks/, under --path as without it. --path
+    # does NOT exempt a tree from the in-progress lock check (Invariant 9), and
+    # an earlier version of this comment said it did (`Q-059`). The locks dir is
+    # resolved from project_root by `_resolve_canonical_locks_dir`:
+    #
+    #   * inside any checkout of a repo, through `git rev-parse
+    #     --git-common-dir` to the MAIN repo's `sysop/runtime/locks/` — so a
+    #     staged tree kept inside the repo is checked against the real locks;
+    #   * outside every repo, `<project_root>/sysop/runtime/locks/` — beside the
+    #     tree, where a bare export has none, so every in_progress task fails.
+    #
+    # Sysop's pre-commit example (`git-hooks/examples/pre-commit-tasks-validate.example`)
+    # handles the second case by copying the real locks in beside its export.
+    # A caller that wants the gate without lock state (CI, where the locks are
+    # gitignored runtime) gets no escape hatch here, and must not read one in.
     project_root = base_dir.parent
 
     try:

@@ -13,6 +13,7 @@ block is also EXECUTED, against the fence body that reproduces `Q-468`.
 from __future__ import annotations
 
 import pathlib
+import re
 import subprocess
 
 import pytest
@@ -302,3 +303,81 @@ def test_no_pinned_decision_is_quoted_only_to_be_repudiated(label: str, needle: 
         "A pinned decision quoted only to be overturned is not a pinned decision. If the "
         "design genuinely changed, that is a round's subject, not an edit."
     )
+
+
+def test_the_failed_verdict_names_where_its_notes_come_from():
+    """`Q-491`: the `Notes` source was stranded in a fragment from Phase 281 (`3bb3c40`) on.
+
+    Phase 281 inserted the `NOT ON BRANCH` clause between *"status becomes `FAILED`"* and
+    its own tail, so the tail read *"… not just the exit code.** with the printed line as its
+    `Notes`, and **the batch continues**"* -- a clause attached to nothing. Every row above
+    stayed green through it, because both of their needles survived the split. This row reads
+    the sentence the `FAILED` needle sits in, which is where the orchestrator looks for what
+    to write into the row it is about to fill.
+    """
+    step = _refill_step()
+    sentence = _sentence_with(step, "this task's Step 8 status becomes `FAILED`")
+    # The `Notes` source may sit in its own sentence (Phase 370's round: pinning it inside
+    # the `FAILED` sentence reddened a correct rewrite); the stranded shape is the
+    # detector's job below. What must hold is that the step names it at all.
+    flat = " ".join(step.split())
+    assert re.search(r"printed lines? (?:as|is|are) (?:its|the) `Notes`|`Notes` (?:are|is) the printed lines?",
+                     flat), (
+        "`/auto-build` item `1‑record` no longer says what goes in a `FAILED` task's `Notes`, so "
+        "the one arm that hands the human a failure hands them nothing to act on")
+    # And `NOT ON BRANCH` fails the task too: drop the clause and an exit-0 `NOT ON BRANCH`
+    # reads as executed (Phase 370's round, lens 2 — it survived every test).
+    assert "`NOT ON BRANCH`" in sentence and "failure" in sentence, (
+        f"the `FAILED` sentence no longer makes `NOT ON BRANCH` a failure:\n\n  {sentence.strip()[:400]}")
+
+
+def _prose_sentence_openers_in_lowercase(text: str) -> list[str]:
+    """Sentences in `text`'s prose (fences dropped) that open on a lowercase word.
+
+    A lowercase opener after a full stop is how a clause stranded by an insertion reads, which
+    is the shape `Q-491` had. Fences are dropped because a code block's line starts are not
+    sentences.
+    """
+    prose, fenced = [], False
+    for line in text.splitlines():
+        if line.lstrip().startswith(("```", "~~~")):
+            fenced = not fenced
+            continue
+        if not fenced:
+            prose.append(line)
+    joined = "\n".join(prose)
+    # An abbreviation's full stop ends no sentence: "(e.g. never committed)" is ordinary
+    # prose, and reddened this detector (Phase 370's round, lens 2).
+    return [joined[max(0, m.start() - 50):m.end() + 30]
+            for m in re.finditer(r"(?<!\be\.g)(?<!\bi\.e)(?<!\betc)(?<!\bvs)[.!?]\**\s+\**[a-z]\w*", joined)]
+
+
+def test_no_sentence_in_the_record_step_opens_on_a_stranded_clause():
+    found = _prose_sentence_openers_in_lowercase(_refill_step())
+    assert found == [], (
+        "`/auto-build` item `1‑record` has a sentence opening on a lowercase word -- the "
+        "shape a clause takes when an insertion strands it from its subject (`Q-491`):\n  "
+        + "\n  ".join(repr(f) for f in found)
+    )
+
+
+def test_the_stranded_clause_detector_sees_the_q491_shape():
+    """Detection floor: the exact pre-fix text must be flagged, and the fixed text must not."""
+    before = ("**Read the printed line, not just the exit code.** with the printed line as its "
+              "`Notes`, and **the batch continues** — go on to item 2.")
+    after = ("**Read the printed line, not just the exit code.** Whichever fired, "
+             "**the batch continues** — go on to item 2.")
+    assert _prose_sentence_openers_in_lowercase(before), "the Q-491 shape walked through"
+    assert _prose_sentence_openers_in_lowercase(after) == []
+
+
+def test_an_unreadable_record_fails_the_task():
+    """`Q-661` (Wade's answer, Phase 371): the record block's `UNREADABLE` arm exits 0, and
+    until this phase the step never said what it means, so as written the task passed as
+    executed on a record nobody could read. It fails the task, like `NOT ON BRANCH`."""
+    flat = " ".join(_refill_step().split())
+    m = re.search(r"\*\*`UNREADABLE` \(also exit 0\) fails the task the same way\*\*([^.]*)", flat)
+    assert m, "`/auto-build` item `1‑record` no longer says `UNREADABLE` fails the task"
+    # The source, not just the token: "leaving its `Notes` empty" kept the token (Phase 371's round).
+    assert re.search(r"\bits printed lines as the `Notes`", m.group(1)), (
+        "the `UNREADABLE` arm no longer names its own printed lines as its `Notes`")

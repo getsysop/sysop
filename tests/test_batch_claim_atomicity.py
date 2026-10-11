@@ -722,8 +722,16 @@ class TestTheArchiverGateIsNarrowerThanTheReport:
     def test_a_widened_shape_warns_and_says_it_is_not_blocking(self, tmp_path):
         r = self._archive(tmp_path, "## Batch 4 — Title `Pending`\n\n- [ ] **T**: c\n")
         assert r.returncode == 0, r.stderr
-        assert "bound nothing" in r.stderr
-        assert "NOT blocked" in r.stderr
+        # Phase 368: "bound nothing" was the falsehood this pinned. A `## `
+        # heading ends the open batch in the archiver like any section heading,
+        # so the warning now tags what each line does instead.
+        assert "open no batch" in r.stderr
+        assert "[ends the batch above it]" in r.stderr
+        # Since `Q-656` (Phase 368) the advisory says archiving IS refused when a
+        # line that ends nothing sits inside a batch this run archives, and is not
+        # blocked otherwise; a `## ` line ends its batch, so this run proceeds.
+        assert "otherwise it is not blocked" in r.stderr
+        assert "sit inside a batch this run would archive" not in r.stderr
 
     def test_the_refusal_lists_only_the_lines_it_is_refusing_over(self, tmp_path):
         """A message that names lines it is not gating on sends the operator to

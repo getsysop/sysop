@@ -413,9 +413,23 @@ Only under `--execute`, with ≥1 consented entry.
    and, worst case, **executing** approved *text* as a shell command. This is the
    exact hazard `/report-issues` Step 4 fixed. So:
 
-   - Write the exact assembled body to a temporary file **outside the repo**
-     (e.g. `"${TMPDIR:-/tmp}/sysop-wins-<date>.md"`) using the `Write` tool — never echo
-     it through the shell. It must be **byte-identical** to what you print next.
+   - **Resolve the body file's path first, in a call of its own:**
+     ```bash
+     echo "${TMPDIR:-/tmp}/sysop-wins-<date>.md"
+     ```
+     The printed line is `<body file>`. Use it, character for character, both
+     as the path you `Write` and as the path `gh` reads below. Never give either
+     of them the `${TMPDIR:-/tmp}` expression instead: `Write` expands nothing
+     and the shell does, so the two name different files wherever `TMPDIR` is
+     set — every macOS shell — and `gh` reads a missing file, or a stale one
+     from an earlier run, in place of the body the human approved. If the call
+     is denied, or the printed line does not begin with `/` (a relative
+     `TMPDIR`), stop and say so; do not pick a path of your own.
+   - Write the exact assembled body to `<body file>` using the `Write` tool —
+     never pass the body through the shell. It must be **byte-identical** to
+     what you print next. If `Write` refuses because a file is already there
+     (an earlier run left it), `Read` that file, then `Write` again: what `gh`
+     posts must be the body you just wrote.
    - Print the final body once — `Posting this comment to <thread url>:` followed
      by the body — so the human sees the exact consented payload immediately
      before it goes out.
@@ -428,7 +442,7 @@ Only under `--execute`, with ≥1 consented entry.
      ```bash
      gh api graphql \
        -f discussionId='<discussionId>' \
-       -F body=@"${TMPDIR:-/tmp}/sysop-wins-<date>.md" \
+       -F body=@'<body file>' \
        -f query='mutation($discussionId:ID!,$body:String!){
          addDiscussionComment(input:{discussionId:$discussionId,body:$body}){
            comment{ url }
@@ -436,7 +450,11 @@ Only under `--execute`, with ≥1 consented entry.
        }'
      ```
 
-   - Delete the temp file after the call returns (success or failure).
+   - After the call returns (success or failure), remove the file with
+     `rm -f '<body file>'`. Nothing depends on it: the next run rewrites the
+     file before `gh` reads it, so a leftover is never what gets posted. No
+     `rm` rule is seeded, so under `dontAsk` this call is denied — leave the
+     file and carry on.
 
    Capture the returned `comment.url`. If the post fails (auth lapse, scope,
    network), **do not** edit the log; record the failure and stop — every

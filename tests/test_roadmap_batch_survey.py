@@ -442,6 +442,46 @@ def test_the_skill_lists_exactly_the_batch_states_the_survey_can_emit():
     )
 
 
+def test_the_state_enum_bullet_itself_lists_exactly_the_survey_states():
+    """The test above accepts a backticked state ANYWHERE in the file, so an entry
+    deleted from the payload's `state` enum stays green while its actuator row still
+    names it (Phase 347's batch battery, row C4, survived for exactly that reason).
+    This one reads the enum bullet alone."""
+    m = re.search(r"^- \*\*`state`\*\* — one of (.*?)\.\s", _read(ROADMAP), re.M)
+    assert m, "roadmap/SKILL.md lost the payload's `state` enum bullet"
+    listed = set(re.findall(r"`([^`]+)`", m.group(1)))
+    survey = _survey_batch_states()
+    assert listed == survey, (
+        f"missing from the enum: {sorted(survey - listed)}; "
+        f"in the enum but never emitted: {sorted(listed - survey)}"
+    )
+
+
+# Emitted batch states that key no row of § Batch actuators, and why. Any other state must
+# key one: a runner holding a state with no row falls back on a neighbour's actuator, and for
+# `pending doc stale` that neighbour is the `/review-close` the state exists to withhold.
+_NO_ACTUATOR_ROW = {
+    "pending (not claimed)": "routed by the triaged/flagged/untriaged rows, not by state",
+    "in progress": "work under way; nothing to actuate",
+    "empty batch": "nothing to actuate; next_action names the tracker to fix",
+}
+
+
+def test_every_emitted_batch_state_keys_an_actuator_row_or_a_stated_exemption():
+    """Phase 347's round (lens 3) deleted the `pending doc stale` actuator row and every
+    column stayed green: the enum tests read the enum, not the table."""
+    text = _read(ROADMAP)
+    start = text.index("**Batch actuators")
+    rows = re.findall(r"^\| ([^|]+?) \|", text[start:text.index("\n\n", text.index("|", start))],
+                      re.M)
+    keyed = {r.replace("`", "").strip() for r in rows}
+    survey = _survey_batch_states()
+    assert set(_NO_ACTUATOR_ROW) <= survey, "an exemption names a state the survey no longer emits"
+    missing = survey - keyed - set(_NO_ACTUATOR_ROW)
+    assert not missing, f"batch states with no § Batch actuators row and no stated exemption: {sorted(missing)}"
+    assert not (set(_NO_ACTUATOR_ROW) & keyed), "an exempted state now has a row; drop its exemption"
+
+
 # ── the design calls the round found unguarded ────────────────────
 
 

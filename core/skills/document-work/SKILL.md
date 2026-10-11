@@ -1,7 +1,9 @@
 ---
 name: document-work
 description: Commit, document, and prepare completed work for review
+model: opus
 ---
+<!-- sysop:model-roles frontmatter=reasoning -->
 
 The "I'm done" skill. Commits code changes, writes documentation to the right files, and prepares everything for `/review-close`.
 
@@ -16,6 +18,7 @@ Read `.claude/settings.json` (and `.claude/settings.local.json` if present — a
 - `Bash(git push -u origin:*)`
 - `Bash(git push origin:*)`
 - `Bash(python3 -:*)` — required by Step 3b's heredoc'd follow-up-stub check (shipped in Phase 16.1)
+- `Bash(python3 sysop/scripts/pending_doc_hold.py:*)` — Step 3 step 2b's `guard`
 
 If any are missing, stop with the `_shared/permission-guard.md` § Algorithm step 5 message (one-line reason: "pushes the documented branch upstream as the final step before `/review-close`, after Step 3b's `python3` heredoc verifies named follow-up task IDs resolve in `tasks/index.yml`"). Do not proceed — unless the guard's step 3 mode check applies.
 
@@ -142,12 +145,13 @@ If there are no uncommitted changes, apply the trailer-placement rule above to t
 Instead of modifying shared documentation files directly (which causes merge conflicts when parallel branches merge), write a structured file to `sysop/runtime/pending-docs/`. The `/review-close` skill will consolidate these into the shared docs after merging.
 
 1. Create the `sysop/runtime/pending-docs/` directory if it doesn't exist: `mkdir -p sysop/runtime/pending-docs`
-2. Sanitize the branch name for the filename (replace `/` with `-`)
-3. Write `sysop/runtime/pending-docs/<sanitized-branch-name>.md` with YAML frontmatter:
+2. Sanitize the branch name for the filename (replace `/` with `-`)\
+2b. **Choose the file, and carry any hold.** Run `python3 sysop/scripts/pending_doc_hold.py guard sysop/runtime/pending-docs/<sanitized-branch-name>.md`. **Write the path its `WRITE:` line names**, here and wherever the steps below say `<pending-doc path>`. It is the base name unless a close is holding that doc; then it is a `<name>--<n>.md` beside it, and the held doc is left alone. **On a `CARRY HOLD: <reason>` line, put `hold: "<reason>"` in the new doc**, writing any `"` in it as `\"`, and joining it with this doc's own reason into one value when there is one: the main checkout's copy of this doc is held, and Step 3b's collect refuses a doc that would drop the hold. Leave it out only when the human says that step is done, and then they clear main's copy first (`python3 sysop/scripts/pending_doc_hold.py clear <file name>`). **Any non-zero exit: stop and show the error.**
+3. Write `<pending-doc path>` (step 2b) with this YAML frontmatter, keeping `branch:` quoted and writing any `"` in the name as `\"` (unquoted, a name like `1234` or `2026-09-01` reads as a number or a date, and `/review-close` cannot match the doc to its branch):
 
 ```yaml
 ---
-branch: <branch-name>
+branch: "<branch-name>"
 branch_tip: <full 40-char SHA — `git rev-parse HEAD`, run NOW>
 date: <YYYY-MM-DD>
 type: <feature|bugfix|ui-iteration|infrastructure|adhoc>
@@ -164,6 +168,8 @@ summary: "<one-sentence description of the work, including key files affected>"
 > **Full SHA, unabbreviated, and unquoted is fine** — a hex string parses as a YAML string and carries none of the shapes the `summary:` note below warns about. The reader validates it as an object name before handing it to git and reports anything else as unknown-not-stale, so a hand-mangled value degrades to the pre-`Q-471` behaviour rather than halting; that is a fallback, not a licence to omit the field.
 
 > **`summary:` is quoted, and the quotes are load-bearing — do not drop them.** This value is free-form prose written per-branch, and the shapes this workflow's own conventions invite are exactly the ones that break bare YAML. **Every one of the following shapes breaks unquoted, and each is exercised by `tests/test_pending_doc_integrity.py`** — the list is the claim, because a bare ratio over an unshipped corpus is a number a reader cannot check: a conventional-commit prefix (`fix: handle the rollback case`) and any other `": "` raise `ScannerError`; a leading `[` (`[FEAT-0001] add the guard`) raises `ParserError`; a leading `*` raises `ScannerError`. The quiet one is worse than the loud ones — a summary that cites an issue by number (`resolves` followed by a `#`-prefixed number) parses **successfully** and yields just the word `resolves`, because `#` opens a YAML comment, and that truncated summary is what lands in `PROJECT_STATUS.md`. `/auto-fix` and `/auto-judge` already quote this field (their templates emit a `:` and had to); this template is the one a human drives, and it was the one left bare. If the summary itself contains a double quote, escape it (`\"`) or switch the value to single quotes — do not solve it by removing the quoting.
+
+**`hold:` — only when this merge does not finish the task (`Q-625`).** If a step outside this branch must still happen before a task in `roadmap_ids` may be marked `done` (a rollout, a check that can only run after deploy, a human step the body lists), add one line to the frontmatter: `hold: "<what is still to be done>"`, quoted like `summary:`. `/review-close` then merges the code and holds this doc, so the task stays `in_progress` until the human finishes the step and runs `python3 sysop/scripts/pending_doc_hold.py clear <TASK_ID>`. Omit the key otherwise, and never write it empty. **Do not use `user_action` for this:** that flag decides whether an agent may take the task, and it gets cleared for that reason. Never write `held_since:` either; `/review-close` stamps it.
 
 **Two ID namespaces — each independently optional.** `roadmap_ids` and `review_task_ids` capture distinct lifecycles and have different consumers; either or both may be `[]`.
 
@@ -293,7 +299,20 @@ try:
 except UnicodeDecodeError as e:
     print(f"ERROR: the current branch name is not UTF-8 ({e})", file=sys.stderr)
     sys.exit(2)
+# The doc Step 3 step 2b chose: `guard` names it again, since the doc it wrote is the
+# unstamped candidate (a held one is never chosen). Without the script nothing can have
+# written a sibling, so the base name is the doc.
 pending_path = f"sysop/runtime/pending-docs/{branch.replace('/', '-')}.md"
+_g, _hold = None, os.path.join("sysop", "scripts", "pending_doc_hold.py")
+if os.path.exists(_hold):
+    _g = subprocess.run([sys.executable, _hold, "guard", pending_path],
+                        capture_output=True, text=True, errors="replace")
+    pending_path = next((ln[len("WRITE: "):] for ln in _g.stdout.splitlines()
+                         if ln.startswith("WRITE: ")), "")
+if _g is not None and (_g.returncode != 0 or not pending_path):
+    print(f"ERROR: pending_doc_hold.py guard failed ({_g.returncode}): {_g.stderr.strip()}",
+          file=sys.stderr)
+    sys.exit(2)
 try:
     with open(pending_path, encoding="utf-8") as f:
         raw = f.read()
@@ -304,11 +323,16 @@ except (OSError, UnicodeDecodeError) as e:
 # Split YAML frontmatter from body
 fm = {}
 body = raw
-if raw.startswith("---\n"):
-    end = raw.find("\n---\n", 4)
-    if end != -1:
-        fm = yaml.safe_load(raw[4:end]) or {}
-        body = raw[end + 5 :]
+m = re.match(r"\ufeff?---\n(.*?)\n---(?:\n|$)", raw, re.DOTALL)   # /review-close Step 3b's reader
+if m:
+    try:
+        fm = yaml.safe_load(m.group(1)) or {}
+        if not isinstance(fm, dict):
+            raise ValueError(f"frontmatter is a {type(fm).__name__}, not a mapping")
+    except Exception as e:
+        print(f"ERROR: {pending_path} could not be parsed ({type(e).__name__}: {e})", file=sys.stderr)
+        sys.exit(2)
+    body = raw[m.end():]
 
 # Skip if no tasks/ system
 if not os.path.exists("tasks/index.yml"):
@@ -318,7 +342,9 @@ if not os.path.exists("tasks/index.yml"):
 try:
     with open("tasks/index.yml", encoding="utf-8") as f:
         idx = yaml.safe_load(f) or {}
-except (OSError, UnicodeDecodeError) as e:
+    if not isinstance(idx, dict) or not isinstance(idx.get("tasks") or [], list):
+        raise ValueError("the index is not a mapping whose tasks: is a list")
+except Exception as e:
     print(f"ERROR: tasks/index.yml could not be read ({type(e).__name__}: {e})", file=sys.stderr)
     sys.exit(2)
 tasks_by_id = {t["id"]: t for t in (idx.get("tasks") or []) if isinstance(t, dict) and t.get("id")}
@@ -379,7 +405,7 @@ print(f"Follow-up check: {len(found)} task IDs named, all resolved")
 PY
 ```
 
-A non-zero exit is the hard-fail; block Step 4 until the consumer files the missing stubs (or bypasses them via one of the two whitelist paths below). Exit 2 is not a missing stub: PyYAML is absent, the branch name is not UTF-8, or the pending doc or `tasks/index.yml` could not be read, and stderr names which.
+A non-zero exit is the hard-fail; block Step 4 until the consumer files the missing stubs (or bypasses them via one of the two whitelist paths below). Exit 2 is not a missing stub: PyYAML is absent, the branch name is not UTF-8, or the pending doc or `tasks/index.yml` could not be read or parsed, and stderr names which.
 
 **Why this gate:** prevents the recurring drift where pending-docs prose claims "filed as TECH-X" but TECH-X never makes it into `tasks/index.yml`. The failure mode is invisible without the gate — the close-out commit lands clean, the follow-up disappears into prose, and `/next-task` never surfaces it.
 
@@ -401,7 +427,7 @@ Both bypass paths are visible in code review and intentional. `review_task_ids:`
 
 **Interactive invocation (default):** the pending docs file is untracked (gitignored). No docs commit is needed.
 
-1. Verify `sysop/runtime/pending-docs/<sanitized-branch-name>.md` exists
+1. Verify `<pending-doc path>` (Step 3 step 2b) exists
 2. Display its full contents to the user for review
 3. Have the user confirm the proposed entries look correct before proceeding
 
@@ -432,7 +458,7 @@ Work committed and ready for review.
 
 Code commit:    <hash> <message>
 Branch:         <branch name>
-Pending docs:   sysop/runtime/pending-docs/<sanitized-branch-name>.md
+Pending docs:   <pending-doc path>
 Type:           <type>
 Roadmap IDs:    <roadmap_ids or "none">       (consumed by /review-close Step 4c)
 Review tasks:   <review_task_ids or "none">   (documentary only)

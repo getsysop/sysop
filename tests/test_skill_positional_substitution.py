@@ -329,7 +329,8 @@ def test_the_numstat_normalisation_reproduces_awks_plus_zero(tree):
     assert _run(script + '\n[ "$DELETED" -gt "$ADDED" ] || echo CMP_OK\n', tree).strip().endswith("CMP_OK")
 
 
-@pytest.mark.parametrize("argument_string", ["", "--dry-run", "a b c"])
+@pytest.mark.parametrize("argument_string", ["", "--dry-run", "--prepare",
+                                             "--resume 20261007T000000Z-abcd", "a b c"])
 def test_review_close_worktree_classifier_survives_substitution(argument_string, tree):
     """Step 1a's branch→worktree table — the ISSUE-0016 silent-data-loss guard's input.
 
@@ -408,7 +409,7 @@ def test_step3c_worktree_lookup_finds_the_right_worktree(tmp_path):
         "invocation's argument words before bash sees them (internal tracker #360)"
     )
 
-    for argument_string in ("", "--dry-run", "a b c"):
+    for argument_string in ("", "--dry-run", "--prepare", "--resume 20261007T000000Z-abcd", "a b c"):
         script = '_b="task/FEAT-1"\n' + substitute(lookup, argument_string) + '\necho "[$_wt]"\n'
         assert _run(script, root).strip() == f"[{wt.resolve()}]", (
             f"Step 3c resolved the wrong worktree under {argument_string!r}"

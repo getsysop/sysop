@@ -222,9 +222,10 @@ def run(task_id: str, dry_run: bool = False, root: Path | None = None) -> int:
     try:
         with open(index_path, encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
-    except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
+    except Exception as exc:
         # `UnicodeDecodeError` is a `ValueError`, not an `OSError`: one stray
-        # byte in the index was a traceback here until Phase 333.
+        # byte in the index was a traceback here until Phase 333. PyYAML raises
+        # more than `YAMLError` too (`ValueError` for `2026-09-31`; `Q-621`).
         print(f"ERROR: could not load {index_path}: "
               f"{exc.__class__.__name__}: {exc}. Nothing was changed.",
               file=sys.stderr)

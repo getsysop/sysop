@@ -644,7 +644,7 @@ def test_review_close_carries_the_also_fixed_arm() -> None:
 @pytest.mark.parametrize(
     "label,needle",
     [
-        ("paths are in the diff", "Every path a line names is in the diff"),
+        ("paths are in the diff", "A line that names paths names at least one in the diff"),
         ("never-list is checked", "No line concerns a never-list item without a recorded approval"),
         ("the set is reviewable", "The fixes are reviewable here"),
     ],
@@ -2392,6 +2392,10 @@ PINNED_SPANS = {
     "claim-task record item": (CLAIM, "**Persist the `## Test decision`**", "**Post-fix convention verification", False),
     "claim-task stranded probe": (CLAIM, "# The pathspec stays exactly `tasks/`.", "**An untracked body is not `STRANDED`", False),
     "auto-build record item": (BUILD, "3\u2011record. **Persist the `## Test decision`**", "**Post-fix convention verification", False),
+    # Phase 371 (`Q-661`): Wade's answer of 2026-10-10, an `UNREADABLE` record fails the task.
+    # Its round's guard lens walked 14 of 21 defect rows past the guards, each an edit to this paragraph.
+    "auto-build 1-record outcomes": (BUILD, "**On `MISSING` or `TEMPLATE` (exit 1), this task's Step 8 status becomes `FAILED`**",
+                                     "**Do not write the record yourself from `PLAN_TEXT[<TASK_ID>]`.**", False),
     "document-work carve-out": (DOCWORK, "**Do NOT** modify `PROJECT_STATUS.md`", "**Before filing one, fix it if you can", False),
     "add-task never-does": (ADDTASK, "## What this skill never does", "## Permissions", False),
     "tasks README skills table": (TASKS_README, "| Skill | Reads | Writes |", "## Rules", False),
@@ -2400,7 +2404,9 @@ PINNED_SPANS = {
     "WORKFLOW 2-also bullet": (WORKFLOW, "Verify any **`## Also fixed` record**", "Verify the recorded **test decision**", False),
     "monograph tier-3 paragraph": (WORKFLOW_HTML, "Tier 3 then needed a bar of its own", "</p>", False),
     "auto-build hard constraints": (BUILD, "Do **NOT** invoke the Agent tool — the orchestrator has already done", "### Required final-message format", False),
-    "review-close 2-also arm": (CLOSE, "**2\u2011also. The `## Also fixed` arm.**", "**3. On a clean match", False),
+    # Phase 357's round (lens B) reversed check 1 and the `2‑after` read from items 3 and 4,
+    # past the old end anchor, with every guard green; the span now runs to the next step.
+    "review-close 2-also arm": (CLOSE, "**2\u2011also. The `## Also fixed` arm.**", "### 2e. Claim-Artifact Report", False),
     "review-close shared-append section": (CLOSE, "Three tracked files are appended to across branches",
                                            "**Resolve `tasks/index.yml` from the merge stages, structurally.**", False),
     "schema Also fixed": (SCHEMA, "### Also fixed", "### User ops", False),
@@ -2439,6 +2445,11 @@ PINNED_SPANS = {
     "adversarial-review scratch bullet": (REPO_ROOT / "core" / "skills" / "_shared" / "adversarial-review.md",
                                           "**Give each concurrent reviewer its own `TMPDIR`.**",
                                           "**Why this is a rule here and not a caveat below.**", False),
+    # Phase 347 (`Q-618`), on Wade's answer of 2026-09-30: keep the rule to the spawner, pin it.
+    # Its round deleted and inverted it with every column green.
+    "adversarial-review heavy-job rule": (REPO_ROOT / "core" / "skills" / "_shared" / "adversarial-review.md",
+                                          "**While any lens is running tests or a mutation battery",
+                                          "**Reviewers must not mutate the working tree**", False),
     # Phase 337 (`Q-569` + `Q-578`), Wade's pick of 2026-09-27: where §6's entries end, the
     # rotation dedupe's join key, where a missing class heading is judged, and item 5's
     # post-write check with its exit contract. The check's code is inside its span, so a change
@@ -2557,6 +2568,166 @@ PINNED_SPANS.update({
         "**Rows `6a`–`6f` report a stall; they never assert one from absence.**", False),
 })
 
+# Phase 348 (`Q-621` + `Q-605`): what "will not parse" means to the runner that writes Step 4c's
+# parse, and the reason the doc template quotes `branch:`. Nothing else reads either sentence.
+PINNED_SPANS.update({
+    "review-close 4c arm 3 parse failure": (
+        CLOSE, "\"Will not parse\" is any exception `yaml.safe_load` raises",
+        "Move it to `sysop/runtime/pending-docs/quarantine/<name>.md`", False),
+    "document-work branch quoting": (
+        DOCWORK, "with this YAML frontmatter, keeping `branch:` quoted", "```yaml", False),
+    # Round 2: the gate's new exit had no instruction telling the runner to stop on it.
+    "review-close 3c non-zero exit stops": (
+        CLOSE, "**If the block exits non-zero, stop the close and show its stderr**",
+        "If the output's first line is `NO_SMOKE_REQUIRED`", False),
+})
+
+# Phase 356 (`Q-635`): a named task ID lifts the current-focus filter, and only that filter
+# (Wade, 2026-09-30). The Step 1 paragraph states the scope, and the span runs on through the
+# "Subset vs. lane shift" note to the heredoc fence; the Step 4 sentence is the only
+# instruction that carries the heredoc's `lane=` marker to the human.
+PINNED_SPANS.update({
+    "auto-build Step 1 named subset": (
+        BUILD, "**Explicit-subset restriction (optional):**", "```bash", False),
+    "auto-build Step 4 out-of-lane cell": (
+        BUILD, "Write a task whose Step 1 row carries", "For an imported-provenance task whose fields", False),
+    # Round 1 (execution lens): six of eight prose mutations walked through, the Step 0 bullet
+    # reversed to "lifts every eligibility filter" among them, and all three doc restatements.
+    "auto-build Step 0 subset bullet": (
+        BUILD, "**Task IDs** — any token matching the schema ID grammar", "**`--dry-run`**", False),
+    "auto-build Step 1 launch-lane filter": (
+        BUILD, "**Launch-lane filter:**", "**Explicit-subset restriction (optional):**", False),
+    "auto-build Step 1 lane field": (
+        BUILD, "The last field, `lane=`, is `focus` or", "On a subset run, also carry every `EXCLUDED`", False),
+    "WORKFLOW auto-build subset": (
+        WORKFLOW, "An explicit task-ID argument list (`/auto-build FEAT-A TECH-B`", "**Apply batch-sizing rule**", False),
+    "WORKFLOW_GUIDE auto-build subset": (
+        GUIDE, "Pass explicit task IDs — `/auto-build FEAT-A TECH-B`", "It then pre-claims each task", False),
+    "roadmap Run-it out-of-lane": (
+        ROADMAP, "The line is a handoff, not a guarantee", "Where a recorded decision in `tasks/decisions.md`", False),
+    "auto-build usage subset": (
+        BUILD, "TASK-ID ... — restrict the batch to an explicit task subset", "--dry-run — preview batch", False),
+    "auto-build zero candidates message": (
+        BUILD, "No claimable tasks in the current-focus phase (`<active_phase>`)", "If zero candidates remain **with** a subset", False),
+})
+
+# Phase 357, on Wade's rulings of 2026-09-30: `Q-630` (check 1 halts only when none of a line's
+# paths is in the diff), `Q-631` (`4a-post`'s `pr` ask on a pre-existing failure, and the
+# WORKFLOW note that a gate must not depend on local credentials), `Q-313` (`## After merge`,
+# reported at Step 8 and gated nowhere) and `Q-118` (/sitrep names failed tasks, routes none).
+SITREP = REPO_ROOT / "core" / "skills" / "sitrep" / "SKILL.md"
+PINNED_SPANS.update({
+    # Round (lens B): the ask arm's neighbours took "proceed without asking" with every guard
+    # green, so the span runs from the fix-arm pin's end to item 5.
+    "review-close 4a-post pre-existing ask": (
+        CLOSE, "   **The inherited-failure arm fires", "**Confirm the gate left the tree clean**", False),
+    "review-close Step 8 verification row": (
+        CLOSE, "Verification:  pre-merge <ran", "Unverified surfaces:", False),
+    "review-close Step 8 after-merge row": (
+        CLOSE, "Also fixed:     <N branches carrying a section", "Close notes:   <N collected", False),
+    "WORKFLOW local-credentials note": (
+        WORKFLOW, "**A gate must not depend on local credentials", "**A gate that scans a commit range", False),
+    "schema After merge": (SCHEMA, "### After merge\n", "### Solo", False),
+    "schema manual smoke after-merge rule": (
+        SCHEMA, "**A procedure that can only run after the merge is not a manual smoke**",
+        "**The heading-independent declarations**", False),
+    "add-task manual_smoke field": (ADDTASK, "**`manual_smoke`**", "**`solo`**", False),
+    "schema template After merge": (SCHEMA, "<optional; steps a human runs once the work has merged.", "## User ops (do these first)", False),
+    "schema User ops after-merge pointer": (
+        SCHEMA, "**Why the pre-merge smoke gate ignores this heading.**",
+        _pin_quoted("**This section exists because four shipped sites asserted the opposite**"), False),
+    "sitrep failed-in-merged section": (
+        SITREP, "**`FAILED IN MERGED BATCHES` is a report section", "The `/clear` nudge fires", False),
+})
+
+# Phase 361, on Wade's menu answer of 2026-10-06 (GDP's autopilot brief, Ask 1): what
+# `/auto-build --unattended` waives and what it does not, the halt marker that stops the next
+# unattended run, and the agent name passed to `claim_task.sh`. Model-read prose; the name's
+# validation is executed by `tests/test_claim_task_sh.py::TestAgentName`.
+PINNED_SPANS.update({
+    "auto-build Step 0 unattended bullets": (
+        BUILD, "**`--dry-run`** → select batch", "Unrecognized argument → print usage", False),
+    "auto-build usage unattended": (
+        BUILD, "Usage: /auto-build [N]", "**Read the halt marker before anything else.**", False),
+    "auto-build Step 0 halt marker": (
+        BUILD, "**Read the halt marker before anything else.**", "## Step 1: Read Queue", False),
+    "auto-build Step 4 unattended": (
+        BUILD, "Ask the human: \"proceed?\"", "## Step 5: Sequential Pre-Claim", False),
+    "auto-build 5.2 agent name": (
+        BUILD, "# 5.2 — create worktree + lock.", "# 5.3 — validate schema invariants", False),
+    "auto-build Step 5 unattended abort": (
+        BUILD, "**Unattended abort.**", "## Step 6: Per-Task Plan", False),
+    # Round (guards lens): the halt marker fires on Step 5's aborts and STOPs, and
+    # the texts that define them sat outside every pin; so did the Step 4 heading.
+    "auto-build Step 4 heading": (
+        BUILD, "## Step 4: Confirm with Human", "Print the batch composition table:", False),
+    "auto-build 5.4 stop": (
+        BUILD, "# 5.4 — commit the claim", "bash sysop/scripts/claim_task.sh --commit-claim", False),
+    "auto-build Step 5 abort handling": (
+        BUILD, "**Abort handling:**", "**Unattended abort.**", False),
+    # Round 2 (guards lens): six meaning reversals landed just outside the spans
+    # above, in sentences this phase added or now relies on, and the new /sitrep row
+    # was read by nothing.
+    "auto-build frontmatter hint": (BUILD, "argument-hint: ", "model: ", False),
+    "auto-build Step 2 overlap is soft": (
+        BUILD, "**In-flight overlap is a soft signal", "**Imported-provenance re-estimate:**", False),
+    "auto-build Step 4 overlap advisory": (
+        BUILD, "This is **advisory, not a veto**", "When Step 1 emitted no `# overlap` lines", False),
+    "auto-build Done criteria": (
+        BUILD, "## Done (v1 success criteria)", "Phase-6d `blocker` classification parks", False),
+    "sitrep halt-marker discrepancy row": (
+        SITREP, "| Unattended auto-build halted |", "| Input unreadable |", False),
+    "auto-build Step 8 unattended": (
+        BUILD, "**Under `--unattended`, print Step 4's output first, unchanged:**",
+        "## Done (v1 success criteria)", False),
+})
+
+# Phase 362 (Wade's menu answer, 2026-10-07): a `--dry-run` close runs Steps 1, 2, 3 and 3c and
+# only Step 3b's read-only step 0. The closing paragraph used to say "Steps 1-3 only", which
+# includes Step 3b's collect and worktree removal, and no Step 3b write had an arm of its own.
+# Round 1 (guards lens) walked contrary sentences past spans that covered only the arm, so 1b's
+# span runs to Step 1c and the closing paragraph's to the end of the file. Round 2 found 3b's
+# widened span (through step 0's heredoc) and a frontmatter pin false-killing legal edits to code
+# comments and the description, so 3b's span stops at step 0's heading and the frontmatter pin is
+# gone. A contrary sentence added outside every span still passes: no span covers the whole file.
+PINNED_SPANS.update({
+    "review-close 1b dry-run arm": (
+        CLOSE, "**Under `--dry-run`, commit nothing in this step:**",
+        "### 1c. Drain Archive State Before Rebasing", False),
+    "review-close 3a dry-run arm": (
+        CLOSE, "**A line left unanswered makes the verdict SKIP",
+        'python3 - "<workspace>" "<path>" "<commit or copy>"', False),
+    "review-close 3b dry-run arm": (
+        CLOSE, "**Under `--dry-run`, run step 0 only, which writes nothing:**",
+        "**0. Locate the branch's workspace**", False),
+    "review-close 3c dry-run answers": (
+        CLOSE, "Ask signals one at a time;", "**3. Halt rules.**", False),
+    "review-close dry-run paragraph": (
+        CLOSE, "If `$ARGUMENTS` contains `--dry-run`, run Steps 1, 2, 3 and 3c", re.compile(r"\Z"), False),
+})
+
+# Phase 363 (`Q-603` + `Q-651` + `Q-652`, on Wade's answers of 2026-10-07): the `--prepare` /
+# `--resume` section before Step 1, Step 6's check for commits made after Step 4d's push, and
+# 4d-1's integration-shape recovery. The per-step `--prepare` arms are not pinned here: each sits
+# just outside a span another phase decided, and `tests/test_review_close_prepare_resume.py`
+# asserts each is present inside its own step.
+PINNED_SPANS.update({
+    "review-close prepare/resume section": (
+        CLOSE, "## `--prepare` and `--resume <run-id>` (`Q-603`)",
+        "## `--request-review` and `--land <run-id>` (`Q-411`)", False),
+    # Phase 365: the Step 4d split (`Q-411`), on Wade's 2026-10-08 rulings (spec § 8).
+    "review-close request-review/land section": (
+        CLOSE, "## `--request-review` and `--land <run-id>` (`Q-411`)", "## Step 1: Gather State", False),
+    "review-close awaiting stop": (
+        CLOSE, "## A close waiting for its second reader", "## `--prepare` and `--resume <run-id>` (`Q-603`)", False),
+    "review-close step 6 pushed-from gate": (
+        CLOSE, "**Then check for commits made after Step 4d's push**",
+        "**Narrower", False),
+    "review-close 4d-1 integration recovery": (
+        CLOSE, "Leave the integration branch, the feature branches and every remaining worktree",
+        "**In the PR-reuse shape the recovery is different", False),
+})
+
 PIN_HASHES = {
     # Regenerate with:  .venv/bin/python3 -c "import sys; sys.path.insert(0,'tests'); import test_fix_in_branch_tier as T; T._print_pins()"
     # and review the diff of the SPAN you changed, not just this table.
@@ -2567,9 +2738,9 @@ PIN_HASHES = {
     "claim-task Step 8 ask gate": "884b01ecfbe029a5",
     "claim-task Step 8b ask": "4475c2fd3cb2243e",
     "claim-task Step 8b leave rule": "5f7feff76f531df8",
-    "claim-task Step 8c spawn arms": "6ef7060e43dcf156",
+    "claim-task Step 8c spawn arms": "9d92371be4e732b2",  # Phase 349: own executor pin
     "claim-task Step 8c addendum": "1a18693dfb996527",
-    "claim-task Step 8c outcomes": "a7d4c3561e1b6fa7",
+    "claim-task Step 8c outcomes": "67b25db455bb8aa5",  # Phase 352: the FAILED listing reads past the recorded PR heads (`Q-623`)
     "claim-task Step 8c read": "9ffd642981cb354f",
     "claim-task 7-pre answers rows": "310136f6d39a3cad",
     "claim-task auto-mode chaining": "2dcd5e7be292f6e9",
@@ -2578,18 +2749,19 @@ PIN_HASHES = {
     "claim-task record item": "d3c36f3acc130de6",
     "claim-task stranded probe": "564f368b066357bc",
     "auto-build record item": "90b9df8ae8854ee5",
+    "auto-build 1-record outcomes": "080a55742a2cb528",
     "document-work carve-out": "ede14c90a84147d1",
     "add-task never-does": "3616d9ee9d839111",
-    "tasks README skills table": "bada255480a1b612",
+    "tasks README skills table": "3a5ec8261a453bca",  # Phase 373: names the waived smoke FAIL /review-close files since Phase 351
     "review-close REFERENCE ledger note": "c3e9d55be1fac172",
-    "WORKFLOW 2-also bullet": "89f3643416d5bc37",
+    "WORKFLOW 2-also bullet": "c4c68ab45c8b2fa9",  # Phase 357: check 1 halts only when no path is in the diff (`Q-630`)
     "monograph tier-3 paragraph": "331943fca9321557",
     "auto-build hard constraints": "828ad2d5914aad26",
-    "review-close 2-also arm": "c2368edf9fe4dd3f",
+    "review-close 2-also arm": "5a69ab33d7f082b6",  # Phase 360: a landed branch's `## After merge` is not reprinted (Wade, 2026-10-06)
     # Phase 335: the two stage-extract blocks write into a minted, printed `$STAGES` directory
     # instead of fixed names in the shared temp dir (a concurrent close overwrote them silently).
     # The decided resolution rules in this span are unchanged.
-    "review-close shared-append section": "4cb287cb9c4e3b4c",
+    "review-close shared-append section": "bd39cf1f43c24d12",  # Phase 352: the `status:` STOP gains the recorded-head exception (`Q-623`)
     "schema Also fixed": "2e6f37f3c52e459d",
     "tasks README ledger": "53f05416e72bcf25",
     "add-task dedup": "96ed49b800bae922",
@@ -2606,8 +2778,8 @@ PIN_HASHES = {
     # also prints both paths, and its containment check asks git for the pin's toplevel.
     # The decided fix-at-close rule in this span is unchanged.
     "review-close 4a-fix step": "b7a90b5c0a950ed4",
-    "review-close 4a-post fix arm": "3b18633ad2827724",
-    "review-close 4d filing pointer": "f0f1ea34763e4ec8",
+    "review-close 4a-post fix arm": "4e0ef306f83f6df8",  # Phase 357: the lead names the `pr` ask (`Q-631`)
+    "review-close 4d filing pointer": "ccb63686d22e0f86",
     "review-close 4a PR-reuse lead": "14bbe3f08cf3eca3",
     "review-close Step 8 close notes": "d2508bea347f6163",
     "review-close 2b twin substitutions": "a2da6151437f458e",
@@ -2624,6 +2796,7 @@ PIN_HASHES = {
     "review-close 2b write clause": "e9b16c8af664fa35",
     "review-close 2b twin spawn": "351c44f304d6933b",
     "adversarial-review scratch bullet": "a2884d2317529826",
+    "adversarial-review heavy-job rule": "c4bf50fdd2108d78",
     "codebase-review containment rule": "7c45848ad743f777",
     "security-audit containment rule": "7c45848ad743f777",
     # Phase 337 (`Q-569` + `Q-578`).
@@ -2631,7 +2804,7 @@ PIN_HASHES = {
     "review-close 4c changelog contract": "109f2a2414840e98",
     "review-close 4c post-write check": "f225e3c03d794ccd",
     "review-close 4c stage and commit": "302852b51480be6b",
-    "review-close Step 8 documentation rows": "f8835c6c78626835",
+    "review-close Step 8 documentation rows": "52720c110cf22447",  # Phase 353: the `HELD_BY_HOLD` row and four-row partition (`Q-625`)
     # Phase 338 (`Q-581`).
     "security-audit 3c mark pointer": "f44401cfa8b22c23",
     "security-audit Step 7 mark": "c7ed61435177e009",
@@ -2657,6 +2830,55 @@ PIN_HASHES = {
     "auto-build 6b reviewer prompt": "f0e1f3582b322044",
     "auto-build revised-plan check": "f0d538b22fb1a02f",
     "sitrep auto-build park row": "723000be52698959",
+    "review-close 4c arm 3 parse failure": "d1cc0bfcde53a6ee",
+    "document-work branch quoting": "5146973d93880b89",
+    "review-close 3c non-zero exit stops": "3d38926254d50fa7",  # Phase 351: exit 3 for an unsubstituted <default branch>
+    "auto-build Step 1 named subset": "34cc78f8bd09e67c",  # covers the "Subset vs. lane shift" note too; re-hashed by Phase 361
+    "auto-build Step 4 out-of-lane cell": "a6f32bb52c06f0d0",  # round 1: the span runs on through the Unlocks sentence
+    "auto-build Step 0 subset bullet": "e18d04b93f2395a4",
+    "auto-build Step 1 launch-lane filter": "8361a15f9c122fc3",
+    "auto-build Step 1 lane field": "7afdb74b7608dba4",
+    "WORKFLOW auto-build subset": "b308a30efea9474f",
+    "WORKFLOW_GUIDE auto-build subset": "da17be4e5426626c",
+    "roadmap Run-it out-of-lane": "d7efccd74885fa65",
+    "auto-build usage subset": "6313ceddd3e38c55",
+    "auto-build zero candidates message": "8b5a52df3e6cfcf0",
+    # Phase 357.
+    "review-close 4a-post pre-existing ask": "db72245b6b7c4209",
+    "review-close Step 8 verification row": "af4356e5598a8b0b",
+    "review-close Step 8 after-merge row": "527e2607edc45cef",  # Phase 360: a landed branch's `## After merge` is printed once (Wade, 2026-10-06)
+    "WORKFLOW local-credentials note": "cd830c74563561af",
+    "schema After merge": "30dccde5d8cbf1be",  # Phase 373: drops the "User ops are done by close time" universal its own § User ops refuses; the decided rule is unchanged
+    "schema manual smoke after-merge rule": "ae2973dfa1f8cf77",
+    "add-task manual_smoke field": "4d23921ec199c05a",
+    "sitrep failed-in-merged section": "641b926112b6d7b9",
+    "schema template After merge": "4026cf596c8b692e",
+    "schema User ops after-merge pointer": "6e0ae2f9cabdf15a",
+    "auto-build Step 0 unattended bullets": "69d3fd58de4e8fcf",  # Phase 373: only an abort that leaves the claim unverified writes the marker and ends the run, as Step 5's *Unattended abort* rules (Wade, 2026-10-07)
+    "auto-build usage unattended": "2bf44b5571edf2dd",  # Phase 373: the same correction in the usage text
+    "auto-build Step 0 halt marker": "69ad9b300e361d9a",
+    "auto-build Step 4 unattended": "16c3492fd6df1c9c",
+    "auto-build 5.2 agent name": "a4e608f1095cefc3",
+    "auto-build Step 5 unattended abort": "4340a6706162a50a",
+    "auto-build Step 8 unattended": "9ccf7a84b853f410",
+    "auto-build Step 4 heading": "5b2c94715e769bf8",
+    "auto-build 5.4 stop": "4200fddaad40613e",
+    "auto-build Step 5 abort handling": "ef6a8060f63f914d",
+    "auto-build frontmatter hint": "7b1322502caee8b2",
+    "auto-build Step 2 overlap is soft": "0959e4723f4f8a34",
+    "auto-build Step 4 overlap advisory": "76ab1223f8dd437d",
+    "auto-build Done criteria": "5e5e0d94d7e179ce",
+    "sitrep halt-marker discrepancy row": "0814bad7fcfab680",
+    "review-close 1b dry-run arm": "e57c9d626a3506fd",
+    "review-close 3a dry-run arm": "5bf8459040c21c2e",
+    "review-close 3b dry-run arm": "77382d1b0f57d28d",
+    "review-close 3c dry-run answers": "efccfe1e28837152",
+    "review-close dry-run paragraph": "abc23e5b294c3dfb",
+    "review-close prepare/resume section": "e58f2bc7183b4415",  # Phase 363: `--prepare` / `--resume` (`Q-603`); rounds 1 and 2 reordered and narrowed the resume; Phase 365 narrowed the span to its own section and re-pinned its flag-combination sentence
+    "review-close request-review/land section": "54062c4699396c94",  # Phase 365: the Step 4d split (`Q-411`), Wade's 2026-10-08 rulings; Phase 366 added the --agent selection and the stop on --unattended (spec § 9, ruling (t))
+    "review-close awaiting stop": "8785cc0159216adc",  # Phase 365: every mode but --land stops on a waiting hand-off
+    "review-close step 6 pushed-from gate": "2e013b4c5495efdf",  # Phase 363: no reset over a commit made after the push (`Q-651`)
+    "review-close 4d-1 integration recovery": "3a55351ebc9e6267",  # Phase 363: recover on the stuck branch, never re-run (`Q-652`)
 }
 
 
@@ -2690,7 +2912,7 @@ def test_the_decided_text_is_pinned(label: str) -> None:
         "2026-09-24), or -- for the review-skill spans -- his reviewer-placement decisions (Phase "
         "333, 2026-09-25), or Step 4c's rotation and changelog contracts (Phase 337, 2026-09-27), or "
         "the collision grade `unknown` and its rank (Phase 339, 2026-09-27), or where /auto-build's plan and "
-        "revised plan are written (Phase 344, 2026-09-28), or /claim-task's ask-and-fix (Phase 345, 2026-09-29). The hash covers the span's words, its block structure, its first line's "
+        "revised plan are written (Phase 344, 2026-09-28), or /claim-task's ask-and-fix (Phase 345, 2026-09-29), or the scope of /auto-build's named-task lane lift (Phase 356, 2026-09-30), or check 1's notes, the `pr` pre-existing-failure ask, `## After merge` and /sitrep's failed-task section (Phase 357, ruled 2026-09-30), or what /auto-build --unattended waives and its halt marker (Phase 361, 2026-10-06), or what a /review-close --dry-run runs (Phase 362, 2026-10-07), or the Step 4d split (Phase 365, 2026-10-08), or the --agent selection and the unattended land left off (Phase 366, 2026-10-08), or that an UNREADABLE record fails an /auto-build task (Phase 371, 2026-10-10). The hash covers the span's words, its block structure, its first line's "
         "indentation and the fence it sits in; a re-wrap or a list-marker swap keeps it. If the "
         "edit is a deliberate change to that rule, update the pin in the same commit "
         "(`_print_pins()`) and say so in the phase record; if it is not, it is the widening or "
@@ -2700,8 +2922,10 @@ def test_the_decided_text_is_pinned(label: str) -> None:
 
 # The pinned spans that belong inside a fence: a prompt or report template the runner
 # copies. Every other span must be live prose. Checked both ways by `_pin_liveness`.
-FENCED_PINS = {"claim-task stranded probe", "review-close 2b NOTES block", "review-close Step 8 close notes",
-               "review-close 2b write clause", "review-close Step 8 documentation rows"}
+FENCED_PINS = {"auto-build usage subset", "auto-build usage unattended", "auto-build 5.2 agent name", "auto-build 5.4 stop", "auto-build zero candidates message", "claim-task stranded probe", "review-close 2b NOTES block", "review-close Step 8 close notes",
+               "review-close 2b write clause", "review-close Step 8 documentation rows",
+               "review-close Step 8 verification row", "review-close Step 8 after-merge row",
+               "schema template After merge"}
 
 
 @pytest.mark.parametrize("label", sorted(PINNED_SPANS))

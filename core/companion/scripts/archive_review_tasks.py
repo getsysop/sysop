@@ -1035,6 +1035,460 @@ def update_review_tasks(lines, rounds_to_remove, new_archived_total,
     return lines
 
 
+# Imported here rather than at the top of the module, on purpose: skills and
+# tests cite this file by line number (`tests/test_intra_repo_citations.py`
+# checks each anchor still sits where it is cited), and five import lines at the
+# top would have moved every one of those citations at once.
+import contextlib  # noqa: E402
+import signal  # noqa: E402
+import subprocess  # noqa: E402
+import time  # noqa: E402
+from datetime import datetime, timezone  # noqa: E402
+
+
+# ── The tracker write mutex (`Q-398`, Phase 368) ─────────────────────────────
+#
+# This script is the third writer of `review_tasks.md`, beside `batch_work.sh`
+# (claim, release) and `close_batch.sh` (close), and until Phase 368 it was the
+# only one that did not take the tracker mutex those two take through
+# `_git_lib.sh`'s `tracker_lock_acquire` (Phase 258, `Q-387`). A mutex one
+# writer skips is not a mutex: an archive run racing a close could rewrite the
+# tracker from a copy read before the close's status flip, and the flip would
+# be gone with every command reporting success.
+#
+# It is the SAME mutex, not a Python one beside it, and every detail below is
+# there so a bash holder and this script exclude each other:
+#
+#   * the same path — `dirname(<locks dir>)/tracker.write.lock`, where the locks
+#     dir comes from `git rev-parse --git-common-dir`, exactly as the bash
+#     writers' `resolve_locks_dir` derives it. `_git_lib.sh` § tracker_lock_acquire
+#     says why it is anchored on the LOCKS dir and not on a repo root: the two
+#     disagree under `--separate-git-dir` and inside a submodule, and a mutex
+#     whose holders compute different paths excludes nothing;
+#   * an exclusive create (`O_CREAT | O_EXCL`, the primitive behind bash's
+#     `set -C`), so whichever side creates the file first holds it;
+#   * the same four holder keys in the same order, so each side's refusal can
+#     print the other's holder, and bash's release — which unlinks only a file
+#     carrying its own `holder_pid` — never removes ours, nor ours its.
+#
+# Where it differs from the bash helper, on purpose:
+#
+#   * It is resolved from the TRACKER'S OWN DIRECTORY, not the caller's CWD —
+#     this script already resolves `review_tasks.md` from its install location
+#     rather than CWD (see `_REPO_ROOT`), and the mutex has to guard the file
+#     actually being written. In an install the two are the same checkout.
+#   * Outside a git repository the locks dir falls back to
+#     `<tracker dir>/sysop/runtime/locks`, as `validate_tasks.py`'s resolver
+#     does, where the bash helper refuses on an empty locks dir. The bash
+#     writers cannot run outside a repository at all, so there is no rival to
+#     exclude there; refusing would only stop an archive that is safe.
+#
+# Not broken automatically when stale, for `_git_lib.sh`'s reason: a PID check
+# is unsound across containers, and breaking a live lock is the lost update this
+# exists to prevent. The wait and the refusal text follow the bash helper's.
+
+_TRACKER_LOCK_NAME = "tracker.write.lock"
+_TRACKER_LOCK_DEFAULT_WAIT = 120
+
+
+def _git_discovery_env():
+    """`os.environ` minus git's discovery vars (BeanRider ISSUE-0048).
+
+    Duplicated from `validate_tasks.py` (which says why the copies are not
+    shared): `GIT_DIR`/`GIT_WORK_TREE`/`GIT_COMMON_DIR`/`GIT_INDEX_FILE` take
+    precedence over `git -C`, and git exports them into every hook, so leaving
+    them inherited would resolve the mutex against whatever repository invoked
+    this script rather than the tracker's own.
+    """
+    return {
+        k: v
+        for k, v in os.environ.items()
+        if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE")
+    }
+
+
+def _resolve_canonical_locks_dir(project_root):
+    """The canonical `sysop/runtime/locks/` for `project_root` (Phase 32).
+
+    Duplicated from `validate_tasks._resolve_canonical_locks_dir`: the MAIN
+    repo's locks dir via `git rev-parse --git-common-dir`, so a call from any
+    worktree agrees with the bash writers, and `project_root/sysop/runtime/locks`
+    when git cannot answer (no repository, no `git`, a timeout).
+    """
+    project_root = Path(project_root)
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(project_root), "rev-parse", "--git-common-dir"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+            env=_git_discovery_env(),
+        )
+    except (FileNotFoundError, subprocess.SubprocessError, UnicodeDecodeError):
+        return project_root / "sysop/runtime/locks"
+    if result.returncode != 0:
+        return project_root / "sysop/runtime/locks"
+    raw = result.stdout.strip()
+    if not raw:
+        return project_root / "sysop/runtime/locks"
+    common_dir = Path(raw)
+    if not common_dir.is_absolute():
+        common_dir = (project_root / common_dir).resolve()
+    return common_dir.parent / "sysop/runtime/locks"
+
+
+def _tracker_lock_wait():
+    """`SYSOP_TRACKER_LOCK_WAIT`, or the 120 s default (see the block comment)."""
+    raw = os.environ.get("SYSOP_TRACKER_LOCK_WAIT", "")
+    if raw == "":
+        return _TRACKER_LOCK_DEFAULT_WAIT
+    # The bash helper's rule, character for character (Phase 368's round): ASCII
+    # digits only, at most six of them, else the default. `int()` alone accepted
+    # ` 5`, `+3` and `-5`, which bash reads as the default, and a 20-digit value
+    # waited forever in both.
+    if re.fullmatch(r"[0-9]{1,6}", raw):
+        return int(raw)
+    print(
+        f"Note: SYSOP_TRACKER_LOCK_WAIT={_sanitize_log(raw)!r} is not a whole number "
+        f"of seconds from 0 to 999999; waiting the default {_TRACKER_LOCK_DEFAULT_WAIT}s.",
+        file=sys.stderr,
+    )
+    return _TRACKER_LOCK_DEFAULT_WAIT
+
+
+def _holder_text(lock_file):
+    """The holder record, indented for display. Display only — never parsed."""
+    try:
+        with open(lock_file, "r", encoding="utf-8", errors="replace") as fh:
+            body = fh.read()
+    except OSError:
+        return "     (unreadable)"
+    return "\n".join("     " + _sanitize_log(ln) for ln in body.splitlines()) or "     (empty)"
+
+
+def _tracker_lock_acquire(locks_dir, what, consequences="nothing was written"):
+    """Take the tracker mutex; return its path, or None after printing why not.
+
+    Python twin of `_git_lib.sh`'s `tracker_lock_acquire` — see the block
+    comment above for what must stay identical and what differs.
+    """
+    if not locks_dir:
+        print("❌ Could not resolve the runtime directory — refusing to serialize "
+              "the tracker write.", file=sys.stderr)
+        print(f"   Refusing {what} — {consequences}.", file=sys.stderr)
+        return None
+    runtime_dir = os.path.dirname(str(locks_dir))
+    lock_file = os.path.join(runtime_dir, _TRACKER_LOCK_NAME)
+
+    # A non-regular file here (a directory, a fifo) can never be acquired, and
+    # the `rm -f` remedy below cannot remove a directory — so it gets its own
+    # diagnosis with a remedy that works, as in the bash helper.
+    if os.path.exists(lock_file) and not os.path.isfile(lock_file):
+        print(f"❌ {lock_file} exists but is NOT a regular file.", file=sys.stderr)
+        print(f"   Refusing {what} — {consequences}.", file=sys.stderr)
+        print("   The tracker mutex must be a regular file. Inspect and remove it:",
+              file=sys.stderr)
+        print(f"     rm -rf {lock_file}      # -rf, not -f: -f alone cannot remove "
+              f"a directory", file=sys.stderr)
+        return None
+
+    max_wait = _tracker_lock_wait()
+    try:
+        os.makedirs(runtime_dir, exist_ok=True)
+    except OSError:
+        print(f"❌ Could not create {runtime_dir} — refusing to serialize the "
+              f"tracker write.", file=sys.stderr)
+        print(f"   Proceeding without the lock is what {what} must not do: two "
+              f"concurrent writers of the same tracker file strand one of them. "
+              f"{consequences}.", file=sys.stderr)
+        return None
+
+    waited = 0
+    notified = False
+    while True:
+        try:
+            fd = os.open(lock_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+        except FileExistsError:
+            # Discriminate before naming a cause: EEXIST on a path that does not
+            # EXIST is a dangling symlink, so the write failed and no rival
+            # holds anything. Reporting a rival there sends the operator hunting
+            # for a process that is not there.
+            if not os.path.exists(lock_file):
+                _report_lock_write_failed(lock_file, runtime_dir, what, consequences)
+                return None
+        except OSError:
+            _report_lock_write_failed(lock_file, runtime_dir, what, consequences)
+            return None
+        else:
+            # We created it, so it is ours to remove if the record cannot be
+            # written — an empty lock carries no `holder_pid` and no release
+            # would ever clear it. `since:` is stamped at the attempt that
+            # succeeded, as the bash helper stamps it, not when the wait began:
+            # it is what an operator reads to judge whether a lock is stale.
+            try:
+                record = (
+                    f"holder_pid: {os.getpid()}\n"
+                    f"holder: {os.path.basename(__file__)}\n"
+                    f"what: {what}\n"
+                    f"since: {datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}\n"
+                ).encode("utf-8")
+                with os.fdopen(fd, "wb") as fh:
+                    fh.write(record)
+            except BaseException as exc:
+                _unlink_quietly(lock_file)
+                if isinstance(exc, OSError):
+                    _report_lock_write_failed(lock_file, runtime_dir, what, consequences)
+                    return None
+                raise
+            return lock_file
+
+        if waited >= max_wait:
+            break
+        if not notified and waited >= 3:
+            print(f"⏳ Waiting for the tracker lock ({what})…", file=sys.stderr)
+            print(_holder_text(lock_file), file=sys.stderr)
+            notified = True
+        time.sleep(1)
+        waited += 1
+
+    # The phrase "locked by another Sysop process" is the one the bash helper
+    # prints, and `tests/test_tracker_write_mutex.py` asserts it — keep it.
+    print(f"❌ The tracker is locked by another Sysop process; waited {max_wait}s.",
+          file=sys.stderr)
+    print(f"   Refusing {what} — {consequences}.", file=sys.stderr)
+    print("   The holder:", file=sys.stderr)
+    print(_holder_text(lock_file), file=sys.stderr)
+    print("", file=sys.stderr)
+    print("   If that process is gone, the lock is stale and safe to remove by hand.",
+          file=sys.stderr)
+    print("   CHECK FIRST — a claim's critical section includes a network 'git pull', "
+          "so a", file=sys.stderr)
+    print("   live holder on a slow remote can legitimately hold it this long. It is "
+          "NOT", file=sys.stderr)
+    print("   removed automatically, because breaking it blind is the same lost-update "
+          "this", file=sys.stderr)
+    print("   lock exists to prevent.", file=sys.stderr)
+    print(f"     rm -f {lock_file}", file=sys.stderr)
+    return None
+
+
+def _report_lock_write_failed(lock_file, runtime_dir, what, consequences):
+    print(f"❌ Could not write the tracker lock {lock_file} — no rival holder;",
+          file=sys.stderr)
+    print(f"   the write itself failed. Check that {runtime_dir} is writable and",
+          file=sys.stderr)
+    print("   that the filesystem is not full or read-only.", file=sys.stderr)
+    print(f"   Refusing {what} — {consequences}.", file=sys.stderr)
+
+
+def _tracker_lock_release(lock_file):
+    """Unlink the mutex only if it is still OURS.
+
+    The bash release's rule: a refusal invites a hand `rm -f`, a third process
+    can then take the free path, and an unconditional unlink here would delete
+    THAT holder's lock and leave it running unprotected. Read as bytes and
+    matched as a whole line, so no decode can fail and `holder_pid: 12` never
+    matches `holder_pid: 123`.
+    """
+    if not lock_file:
+        return
+    try:
+        with open(lock_file, "rb") as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        return
+    if f"holder_pid: {os.getpid()}".encode("ascii") in lines:
+        _unlink_quietly(lock_file)
+
+
+def _exit_on_signal(signum, _frame):
+    # SystemExit, so every `finally` between here and the top of the stack runs
+    # — including the one that releases the mutex. SIGINT needs no handler: its
+    # default already raises KeyboardInterrupt.
+    raise SystemExit(128 + signum)
+
+
+@contextlib.contextmanager
+def _holding_tracker_lock(tracker_path, what, consequences):
+    """Hold the tracker mutex for the body of a `with`; exit 1 if refused.
+
+    SIGTERM and SIGHUP are turned into `SystemExit` while it is held: Python's
+    default action for both terminates WITHOUT unwinding, so the `finally`
+    below would never run and the mutex — which nothing breaks automatically —
+    would wedge every later claim and close. SIGHUP is the terminal closing;
+    the bash claim path leaked its mutex on exactly that signal until a
+    reviewer measured it (see `tests/test_tracker_write_mutex.py`
+    `TestTheSignalTrapsExist`). The previous handlers are restored on the way
+    out, so an in-process caller is left as it was found.
+    """
+    tracker_dir = os.path.dirname(os.path.realpath(tracker_path))
+    locks_dir = _resolve_canonical_locks_dir(tracker_dir)
+    previous = {}
+    for name in ("SIGTERM", "SIGHUP"):
+        sig = getattr(signal, name, None)
+        if sig is None:
+            continue
+        try:
+            previous[sig] = signal.signal(sig, _exit_on_signal)
+        except (ValueError, OSError):  # not the main thread: cannot install
+            pass
+    lock_file = None
+    try:
+        lock_file = _tracker_lock_acquire(str(locks_dir), what, consequences)
+        if lock_file is None:
+            sys.exit(1)
+        yield lock_file
+    finally:
+        _tracker_lock_release(lock_file)
+        for sig, handler in previous.items():
+            try:
+                signal.signal(sig, handler)
+            except (ValueError, OSError):
+                pass
+
+
+def _archive_under_lock(review_raw, review_lines, rounds, total_tasks,
+                        completed_tasks, all_batch_numbers):
+    """The write half of `main()`, run while the tracker mutex is held.
+
+    Refuses, having written nothing, unless `review_tasks.md` still holds the
+    bytes `main()` read — see the comment at the call site for why the check is
+    here and the prompt is not inside the lock.
+    """
+    try:
+        with open(REVIEW_FILE, "rb") as f:
+            current_raw = f.read()
+    except OSError as exc:
+        print(f"Error: could not re-read {REVIEW_FILE} under the tracker lock "
+              f"({_sanitize_log(exc, max_len=200)}). Nothing was written.",
+              file=sys.stderr)
+        sys.exit(1)
+    if current_raw != review_raw:
+        print(
+            f"Error: refusing to archive — {os.path.basename(REVIEW_FILE)} changed "
+            f"after it was read for this run (another writer got in while the "
+            f"prompt was open). Neither file was written.",
+            file=sys.stderr,
+        )
+        print(
+            "       Archiving from the earlier read would put back the copy read "
+            "before that edit and lose it. Re-run to archive from the current file.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    # Read archive file (only need it now, after confirmation)
+    try:
+        with open(ARCHIVE_FILE, "r", encoding="utf-8", errors="replace") as f:
+            archive_lines = f.read().splitlines()
+    except FileNotFoundError:
+        print(f"Error: {ARCHIVE_FILE} not found")
+        sys.exit(1)
+
+    # Find insertion point in archive
+    insertion_idx = find_archive_insertion_point(archive_lines)
+    if insertion_idx is None:
+        print(f"Error: Could not find '{ARCHIVE_GRAND_TOTAL_HEADER}' in {ARCHIVE_FILE}")
+        sys.exit(1)
+
+    # Build the archive block
+    archive_block = build_archive_block(rounds)
+
+    # Build new grand total row(s)
+    new_rows = build_grand_total_row(rounds)
+
+    # Insert archive block above Grand Total header.
+    # Typical structure before insertion:
+    #   </details>       (end of previous round)
+    #                    (blank)
+    #   ---              (separator)
+    #                    (blank)
+    #   ## Grand Total   <-- insertion_idx
+    #
+    # We replace the "---\n\n" before Grand Total with our content + separator.
+    sep_start = insertion_idx
+    if insertion_idx >= 1 and archive_lines[insertion_idx - 1].strip() == "":
+        sep_start = insertion_idx - 1
+    if sep_start >= 1 and archive_lines[sep_start - 1].strip() == "---":
+        sep_start = sep_start - 1
+
+    archive_lines[sep_start:insertion_idx] = (
+        ["---", ""] + archive_block + ["---", ""]
+    )
+
+    # Find and update the Archive Total row (shifted by insertion)
+    old_total, new_total = update_archive_total(
+        archive_lines, total_tasks, completed_tasks
+    )
+    if old_total is None:
+        print("Warning: Could not find Archive Total row to update")
+
+    # Insert new grand total row(s) just above the Archive Total row
+    for i, line in enumerate(archive_lines):
+        if ARCHIVE_TOTAL_RE.match(line):
+            for j, row in enumerate(new_rows):
+                archive_lines.insert(i + j, row)
+            break
+
+    # Also collect existing batch numbers from archive reference for the update
+    existing_batch_numbers = []
+    for line in archive_lines:
+        for m in re.finditer(r"Batch (\d+)", line):
+            existing_batch_numbers.append(int(m.group(1)))
+    combined_batch_numbers = sorted(set(all_batch_numbers + existing_batch_numbers))
+
+    # Build the new review_tasks.md content BEFORE either write so both atomic
+    # rewrites happen back-to-back. _atomic_write_pair writes both tmp files
+    # first, then issues the two os.replace calls in sequence — shrinking the
+    # crash window between the archive and review writes from
+    # "write + fsync + replace + write + fsync + replace" down to just
+    # "replace + replace". A crash mid-flow would otherwise leave task state
+    # split (the archive has the new rows AND review still has the un-archived
+    # ones). See CLAUDE.md § Data integrity.
+    review_lines = update_review_tasks(
+        review_lines, rounds, new_total, total_tasks, combined_batch_numbers
+    )
+    _atomic_write_pair(
+        ARCHIVE_FILE, "\n".join(archive_lines) + "\n",
+        REVIEW_FILE, "\n".join(review_lines) + "\n",
+    )
+    # Guard the (None, None) sentinel from update_archive_total — when the
+    # Archive Total row is missing or malformed the f-string would otherwise
+    # emit literal "None -> None tasks".
+    if old_total is not None and new_total is not None:
+        print(f"Updated {ARCHIVE_FILE} ({old_total} -> {new_total} tasks)")
+    else:
+        print(f"Updated {ARCHIVE_FILE} (Archive Total row not updated)")
+    print(f"Updated {REVIEW_FILE} (removed {total_tasks} archived tasks)")
+
+    # Rebuild shadow JSON index after Markdown mutation. Best-effort and
+    # non-fatal *by design* — it runs AFTER the durable atomic writes above,
+    # and the shadow index auto-rebuilds on the next read, so no failure here
+    # may crash a run whose file writes already succeeded. The broad catch is
+    # deliberate: `review_index` resolves the markdown via a git-root walk-up
+    # while this script resolves it via parents[2] (parent of sysop/), so an environmental
+    # mismatch can raise a non-ImportError (e.g. FileNotFoundError) that must
+    # still degrade to a printed note, not a traceback. A persistent failure
+    # is visible in the note (not silent) and investigable.
+    try:
+        from review_index import rebuild_index
+        rebuild_index()
+        print("Rebuilt review_index.json")
+    except Exception as e:
+        print(
+            f"Non-fatal: index rebuild failed "
+            f"({_sanitize_log(e, max_len=200)!r}) — will auto-rebuild on next read"
+        )
+
+
+def _near_miss_ends_a_batch(text):
+    """Whether a near-miss header line ends the open batch, by this module's own
+    closers in ``parse_archivable_batches``: every ``## `` heading and every
+    level-3 heading. ``####`` and ``###Batch`` end nothing. (Phase 368.)"""
+    return text.startswith("## ") or bool(H3_HEADER_RE.match(text))
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Archive merged/complete review batches"
@@ -1045,13 +1499,16 @@ def main():
     )
     args = parser.parse_args()
 
-    # Read review_tasks.md
+    # Read review_tasks.md. The raw bytes are kept: after the confirmation
+    # prompt, the write re-reads the file under the tracker mutex and refuses
+    # unless it is byte-identical to this read (`Q-398` — see the write site).
     try:
-        with open(REVIEW_FILE, "r", encoding="utf-8", errors="replace") as f:
-            review_lines = f.read().splitlines()
+        with open(REVIEW_FILE, "rb") as f:
+            review_raw = f.read()
     except FileNotFoundError:
         print(f"Error: {REVIEW_FILE} not found")
         sys.exit(1)
+    review_lines = review_raw.decode("utf-8", errors="replace").splitlines()
 
     # Q-240: refuse before ANYTHING is parsed, counted, previewed or prompted.
     # The whole parse is untrustworthy in this state, so a refusal placed after
@@ -1141,9 +1598,11 @@ def main():
     #   1. The stated harm below — "invisible to the status test but VISIBLE to
     #      its batch counter, so archiving would relocate the batches around it"
     #      — is true only of a line `ANY_BATCH_HEADER_RE` matches. The four added
-    #      shapes do NOT bound (the boundary twin was deliberately left alone),
-    #      so they cannot truncate a predecessor and the sentence would have
-    #      been false for four of the five populations it covered.
+    #      shapes are not counted (the boundary twin was deliberately left
+    #      alone), so the sentence would have been false for four of the five
+    #      populations it covered. (This said they "do NOT bound" until Phase
+    #      368: `## Batch 4` does end the open batch, as every `## ` heading
+    #      does — see the advisory's per-line tag below.)
     #   2. It made an ordinary prose heading a hard whole-run blocker.
     #      `## Batch 1 retrospective` matches the widened population, and an
     #      operator note under that heading would have refused every archive
@@ -1154,19 +1613,39 @@ def main():
     # false refusal, and it keeps this message true of everything it prints.
     blocking = [(ln, txt) for ln, txt in near if ANY_BATCH_HEADER_RE.match(txt)]
     advisory = [(ln, txt) for ln, txt in near if not ANY_BATCH_HEADER_RE.match(txt)]
+    #
+    # **What an advisory line does is tagged per line, and "they relocate
+    # nothing" was false** (Phase 368, found while fixing `Q-391`'s twin text in
+    # `review_index.describe_near_misses`). This warning used to say the lines
+    # "bound nothing" and so "relocate nothing". Measured on a `Merged` batch 1
+    # followed by `#### Batch 2 — Two \`Pending\`` and an open TASK-2: the run
+    # archived TASK-2 as batch 1's — `####` ends no batch here (`H3_HEADER_RE`
+    # wants whitespace after `###`), so batch 1's span ran on over it — while
+    # this message told the operator nothing would move. And `## Batch 4` does
+    # bound: every `## ` heading ends the open batch (the closers in
+    # `parse_archivable_batches`). So each line is tagged with this module's own
+    # closers, and the paragraph says what an absorbing line costs. Not blocking
+    # stays the gate's call (Phase 256); the `unfinished` warning still names
+    # an open task swept up this way before the prompt.
     if advisory:
         print(
             f"WARNING: {os.path.basename(REVIEW_FILE)} has {len(advisory)} line(s) "
-            f"that look like a batch header but bound nothing — no reader will "
-            f"see the batch:",
+            f"that look like a batch header but open no batch — no reader will "
+            f"see the batch they name:",
             file=sys.stderr,
         )
         for lineno, text in advisory:
-            print(f"         :{lineno} — {_sanitize_log(text)}", file=sys.stderr)
+            if _near_miss_ends_a_batch(text):
+                effect = "ends the batch above it"
+            else:
+                effect = "ends nothing: read as part of the batch above it"
+            print(f"         :{lineno} — {_sanitize_log(text)}   [{effect}]",
+                  file=sys.stderr)
         print(
-            "         Archiving is NOT blocked by these: they are invisible to "
-            "the batch counter too, so they relocate nothing. Fix them if a "
-            "batch was intended.",
+            "         None is counted as a batch. A line that ends nothing is read "
+            "as part of the batch above it, so archiving is refused below while "
+            "that batch is one this run would archive; otherwise it is not "
+            "blocked. Fix them if a batch was intended.",
             file=sys.stderr,
         )
     if blocking:
@@ -1203,6 +1682,45 @@ def main():
     if not rounds:
         print("No merged/complete batches to archive.")
         sys.exit(0)
+
+    # ── Q-656: refuse when an absorbing near-miss sits inside a batch this run
+    # archives (Wade, Phase 368) ──────────────────────────────────────────────
+    #
+    # A line that ends nothing (`#### Batch 2 …`, `###Batch 2 …`) leaves the batch
+    # above it open, so that batch's span runs on over it and the tasks under it are
+    # archived as that batch's — measured: an open TASK-2 under `#### Batch 2 …
+    # \`Pending\`` moved into the archive as Merged batch 1's. The advisory above
+    # names the line; this stops the move. Scoped to an ARCHIVABLE batch's span, not
+    # the whole run, for the reason the advisory is not blocking: a `####` prose
+    # heading under a Pending batch costs nothing here, and Phase 256's round
+    # measured a whole-run refusal on a heading as the false refusal to avoid.
+    # Placed after the parse because the span is the parse's answer, and before the
+    # summary, the `--dry-run` branch and the prompt, like the two refusals above.
+    absorbed = []
+    for lineno, text in advisory:
+        if _near_miss_ends_a_batch(text):
+            continue
+        idx = lineno - 1
+        if any(b["start_line"] <= idx < b["end_line"]
+               for r in rounds for b in r["batches"]):
+            absorbed.append((lineno, text))
+    if absorbed:
+        print(
+            f"Error: refusing to archive — {len(absorbed)} line(s) that look like a "
+            f"batch header sit inside a batch this run would archive, and end nothing:",
+            file=sys.stderr,
+        )
+        for lineno, text in absorbed:
+            print(f"         :{lineno} — {_sanitize_log(text)}", file=sys.stderr)
+        print(
+            "       The batch above each runs on over it, so the tasks under it would "
+            "move into the archive as that batch's. If a batch was intended, write "
+            "the canonical header: ### Batch <N> — <Title> `<Status>`. If it is a "
+            "note, give it a heading that does not read `Batch <N>`. Then re-run. "
+            "Nothing was written.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     # Summarize what we found
     total_tasks = 0
@@ -1361,108 +1879,39 @@ def main():
         print("Aborted.")
         sys.exit(0)
 
-    # Read archive file (only need it now, after confirmation)
-    try:
-        with open(ARCHIVE_FILE, "r", encoding="utf-8", errors="replace") as f:
-            archive_lines = f.read().splitlines()
-    except FileNotFoundError:
-        print(f"Error: {ARCHIVE_FILE} not found")
-        sys.exit(1)
-
-    # Find insertion point in archive
-    insertion_idx = find_archive_insertion_point(archive_lines)
-    if insertion_idx is None:
-        print(f"Error: Could not find '{ARCHIVE_GRAND_TOTAL_HEADER}' in {ARCHIVE_FILE}")
-        sys.exit(1)
-
-    # Build the archive block
-    archive_block = build_archive_block(rounds)
-
-    # Build new grand total row(s)
-    new_rows = build_grand_total_row(rounds)
-
-    # Insert archive block above Grand Total header.
-    # Typical structure before insertion:
-    #   </details>       (end of previous round)
-    #                    (blank)
-    #   ---              (separator)
-    #                    (blank)
-    #   ## Grand Total   <-- insertion_idx
+    # ── Q-398: the write runs under the tracker mutex ─────────────────────
     #
-    # We replace the "---\n\n" before Grand Total with our content + separator.
-    sep_start = insertion_idx
-    if insertion_idx >= 1 and archive_lines[insertion_idx - 1].strip() == "":
-        sep_start = insertion_idx - 1
-    if sep_start >= 1 and archive_lines[sep_start - 1].strip() == "---":
-        sep_start = sep_start - 1
-
-    archive_lines[sep_start:insertion_idx] = (
-        ["---", ""] + archive_block + ["---", ""]
-    )
-
-    # Find and update the Archive Total row (shifted by insertion)
-    old_total, new_total = update_archive_total(
-        archive_lines, total_tasks, completed_tasks
-    )
-    if old_total is None:
-        print("Warning: Could not find Archive Total row to update")
-
-    # Insert new grand total row(s) just above the Archive Total row
-    for i, line in enumerate(archive_lines):
-        if ARCHIVE_TOTAL_RE.match(line):
-            for j, row in enumerate(new_rows):
-                archive_lines.insert(i + j, row)
-            break
-
-    # Also collect existing batch numbers from archive reference for the update
-    existing_batch_numbers = []
-    for line in archive_lines:
-        for m in re.finditer(r"Batch (\d+)", line):
-            existing_batch_numbers.append(int(m.group(1)))
-    combined_batch_numbers = sorted(set(all_batch_numbers + existing_batch_numbers))
-
-    # Build the new review_tasks.md content BEFORE either write so both atomic
-    # rewrites happen back-to-back. _atomic_write_pair writes both tmp files
-    # first, then issues the two os.replace calls in sequence — shrinking the
-    # crash window between the archive and review writes from
-    # "write + fsync + replace + write + fsync + replace" down to just
-    # "replace + replace". A crash mid-flow would otherwise leave task state
-    # split (the archive has the new rows AND review still has the un-archived
-    # ones). See CLAUDE.md § Data integrity.
-    review_lines = update_review_tasks(
-        review_lines, rounds, new_total, total_tasks, combined_batch_numbers
-    )
-    _atomic_write_pair(
-        ARCHIVE_FILE, "\n".join(archive_lines) + "\n",
-        REVIEW_FILE, "\n".join(review_lines) + "\n",
-    )
-    # Guard the (None, None) sentinel from update_archive_total — when the
-    # Archive Total row is missing or malformed the f-string would otherwise
-    # emit literal "None -> None tasks".
-    if old_total is not None and new_total is not None:
-        print(f"Updated {ARCHIVE_FILE} ({old_total} -> {new_total} tasks)")
-    else:
-        print(f"Updated {ARCHIVE_FILE} (Archive Total row not updated)")
-    print(f"Updated {REVIEW_FILE} (removed {total_tasks} archived tasks)")
-
-    # Rebuild shadow JSON index after Markdown mutation. Best-effort and
-    # non-fatal *by design* — it runs AFTER the durable atomic writes above,
-    # and the shadow index auto-rebuilds on the next read, so no failure here
-    # may crash a run whose file writes already succeeded. The broad catch is
-    # deliberate: `review_index` resolves the markdown via a git-root walk-up
-    # while this script resolves it via parents[2] (parent of sysop/), so an environmental
-    # mismatch can raise a non-ImportError (e.g. FileNotFoundError) that must
-    # still degrade to a printed note, not a traceback. A persistent failure
-    # is visible in the note (not silent) and investigable.
-    try:
-        from review_index import rebuild_index
-        rebuild_index()
-        print("Rebuilt review_index.json")
-    except Exception as e:
-        print(
-            f"Non-fatal: index rebuild failed "
-            f"({_sanitize_log(e, max_len=200)!r}) — will auto-rebuild on next read"
-        )
+    # The CRITICAL SECTION is "re-read, compare, write", and it deliberately
+    # does NOT include the confirmation prompt above. Holding the mutex across
+    # `input()` would let an operator sitting at the prompt block every claim
+    # and close for as long as they sit there — and after 120 s those would
+    # refuse, printing an `rm -f` remedy for a lock whose holder is alive. So the
+    # preview, the refusals and the prompt all run on the unlocked first read,
+    # and the write takes the mutex and then re-reads `review_tasks.md`:
+    #
+    #   * byte-identical — nothing wrote the tracker since the read the decision
+    #     was made from, and nothing can until the mutex is released, so the
+    #     already-computed archive is exactly what a fully locked run would have
+    #     produced;
+    #   * different — another writer got in while the prompt was open. Writing
+    #     now would put back the copy read before its edit, which is the lost
+    #     update this lock exists to prevent, so it refuses having written
+    #     nothing and the operator re-runs against the current file.
+    #
+    # A lock taken only around `_atomic_write_pair` would not be enough: the
+    # rewrite is computed from the first read, so an edit landing between that
+    # read and the lock would still be overwritten — serialized, and lost.
+    #
+    # `--dry-run` returned above and never reaches this: a preview writes
+    # nothing and must not take a write mutex (`close_batch.sh` holds the same
+    # rule, pinned by `TestDryRunDoesNotTakeTheWriteMutex`).
+    with _holding_tracker_lock(
+        REVIEW_FILE,
+        "this archive run",
+        "neither review_tasks.md nor review_tasks_archive.md was written",
+    ):
+        _archive_under_lock(review_raw, review_lines, rounds, total_tasks,
+                            completed_tasks, all_batch_numbers)
 
     print("\nDone! Review the changes with: git diff")
 

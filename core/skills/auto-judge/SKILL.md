@@ -1,12 +1,12 @@
 ---
 name: auto-judge
-description: Automatically process flagged review batches with Opus judgment — claims, fixes or drops via isolated Opus agents, then pushes
+description: Automatically process flagged review batches with reasoning-tier judgment — claims, fixes or drops via isolated agents, then pushes
 argument-hint: "[concurrency] [--batches <selector>] [--dry-run] [--merge]"
 model: opus
 ---
 <!-- sysop:model-roles frontmatter=reasoning inline=reasoning -->
 
-Automatically process pending review batches that `/triage` flagged for judgment. Claims flagged batches via isolated Opus subagents that can **FIX**, **DROP**, or **FAIL** each task after adversarial re-reading. If any pending batch lacks a `> **Triaged:**` record, invokes `/triage` first as a prereq.
+Automatically process pending review batches that `/triage` flagged for judgment. Claims flagged batches via isolated reasoning-role subagents that can **FIX**, **DROP**, or **FAIL** each task after adversarial re-reading. If any pending batch lacks a `> **Triaged:**` record, invokes `/triage` first as a prereq.
 
 **The `Triaged:` task list decides where the money goes.** A `flag` verdict may name the specific tasks that need judgment — `> **Triaged:** 2026-08-03 flag [TASK-1124]`. When it does, only those tasks get adversarial re-reading; the rest of the batch is mechanical and gets a prescriptive fix in the same worktree. When it does not, the whole batch is judged, as before. Without this, one judgment task in a 50-task batch put 49 mechanical ones through the expensive lane.
 
@@ -21,7 +21,7 @@ Two-pass workflow mirrors `/auto-fix`:
 
 ## Pre-flight: Permission Guard
 
-Before parsing arguments, verify `.claude/settings.json` (with `.claude/settings.local.json`, if present) carries the allow-rules this skill depends on. Same failure mode as `/auto-fix`: under `dontAsk` mode a missing rule is auto-denied with no prompt, halting Opus subagents mid-fix.
+Before parsing arguments, verify `.claude/settings.json` (with `.claude/settings.local.json`, if present) carries the allow-rules this skill depends on. Same failure mode as `/auto-fix`: under `dontAsk` mode a missing rule is auto-denied with no prompt, halting its subagents mid-fix.
 
 Read `.claude/settings.json` (and `.claude/settings.local.json` if present — allow-rules union across the two) and confirm `permissions.allow` contains:
 
@@ -32,7 +32,7 @@ Read `.claude/settings.json` (and `.claude/settings.local.json` if present — a
 - `Bash(git push --force-with-lease:*)` _(used only when a subagent amends a commit and re-pushes — conditional path; consumers can omit from settings.json if they don't run amend-based fixes)_
 - `Bash(bash sysop/scripts/batch_work.sh:*)`
 
-If any are missing, stop with the `_shared/permission-guard.md` § Algorithm step 5 message (one-line reason: "spawns isolated Opus subagents that judge flagged tasks, fix or drop them, and push the resulting branches"). Do not proceed — unless the guard's step 3 mode check applies.
+If any are missing, stop with the `_shared/permission-guard.md` § Algorithm step 5 message (one-line reason: "spawns isolated reasoning-role subagents that judge flagged tasks, fix or drop them, and push the resulting branches"). Do not proceed — unless the guard's step 3 mode check applies.
 
 If `$ARGUMENTS` contains `--skip-permission-guard`, print a one-line warning and continue.
 
@@ -40,7 +40,7 @@ If `$ARGUMENTS` contains `--skip-permission-guard`, print a one-line warning and
 
 Parse `$ARGUMENTS`:
 
-- **Bare integer** (e.g., `2`) → concurrency cap. Default: **2** (Opus costs more than Sonnet — be conservative). Only affects the default path.
+- **Bare integer** (e.g., `2`) → concurrency cap. Default: **2** (the reasoning tier costs more than the mechanical one — be conservative). Only affects the default path.
 - **`--dry-run`** → report without claiming or fixing. Stops after Step 3.
 - **`--merge`** → process only overlapping batches, sequentially. Concurrency cap ignored.
 - **`--batches <selector>`** → narrow this run to the named batches. The selector is comma-separated bare integers and inclusive `<lo>-<hi>` ranges: `--batches 563-584`, `--batches 563,570,580-584`. Applied at Step 1d — after the pool is selected and before Step 4's lane split — so it can only ever narrow what the pool already holds. Omitted, nothing is narrowed. **It is a flag rather than a bare argument on purpose:** a bare integer is already this skill's concurrency cap, so `/auto-judge 563` would set a 563-way cap, and nothing in the invocation would say which of the two was meant. That is the one thing `/auto-build`'s positional task-ID grammar (`auto-build:40`) cannot be copied on — its bare integer and its `^[A-Z]`-shaped IDs are structurally disjoint, and two integers are not.
@@ -50,7 +50,7 @@ Parse `$ARGUMENTS`:
 
 Run the index pass from Step 1a and check whether any batch with status **`Pending`** lacks a `> **Triaged:**` record. If any such batch exists, invoke `/triage` via the Skill tool and wait for it to complete. `/triage` will commit any uncommitted `review_tasks.md` additions from `/codebase-review` or `/security-audit`, classify each pending batch as auto or flag, and write the resulting `Triaged:` (and `Flag:`) lines as a single `docs:` commit. After `/triage` returns, re-run the index pass so Step 1 sees the freshly written records.
 
-**Key the check on `Triaged:`, not on `Flag:`.** A `Flag:` tag with no `Triaged:` sibling records no verdict, so treating its presence as "already triaged" routes an unread batch straight into the Opus lane on the strength of a tag nobody can attribute.
+**Key the check on `Triaged:`, not on `Flag:`.** A `Flag:` tag with no `Triaged:` sibling records no verdict, so treating its presence as "already triaged" routes an unread batch straight into the judgment lane on the strength of a tag nobody can attribute.
 
 If every pending batch already carries a `Triaged:` record (or no pending batches exist), skip this step — the queue is already triaged.
 
@@ -146,13 +146,13 @@ Print a classification table:
 <if no --merge>
 Processing: <N> parallel batches (concurrency: <cap>)
 Deferred:  <M> overlapping batches (run /auto-judge --merge)
-Estimated: <N> Opus agent runs
+Estimated: <N> reasoning-role agent runs
 </if>
 
 <if --merge>
 Processing: <N> overlapping batches (sequential)
 Skipped:   <M> non-overlapping batches
-Estimated: <N> Opus agent runs
+Estimated: <N> reasoning-role agent runs
 </if>
 
 Judgment set: <J> of <T> tasks across these batches (the rest are fixed
@@ -169,7 +169,7 @@ If no eligible batches for the current mode, report and stop:
 
 If `--dry-run`, **stop here**.
 
-Otherwise, ask: "Proceed with <N> flagged batches? (Opus: ~$X per batch)"
+Otherwise, ask: "Proceed with <N> flagged batches? (reasoning role: ~$X per batch)"
 
 Wait for confirmation. Do not proceed without it.
 
@@ -210,15 +210,15 @@ Parse the output for the **Worktree path** (`Path:`) and **Branch name** (`Branc
 
 ---
 
-**Without `--merge`**: claim ALL eligible batches sequentially (each claim commits on the default branch), collect worktree paths into a queue, then spawn Opus fix agents in a rolling window:
+**Without `--merge`**: claim ALL eligible batches sequentially (each claim commits on the default branch), collect worktree paths into a queue, then spawn reasoning-role fix agents in a rolling window:
 
 1. **Initial fill**: spawn agents for the first `<cap>` claimed batches in a single message with parallel Agent tool calls. Sub-agents have run in the background by default since Claude Code 2.1.198, and `run_in_background` <!-- skill-audit-ok: run_in_background --> is **not** a parameter of the `Agent` tool — its schema is closed, so a compliant call raises `InputValidationError`, and a rejected tool call is itself an invitation to proceed without the step (`Q-031`).
 2. **Refill on completion**: when a background agent's completion notification arrives, collect its result. If the queue has unstarted batches, spawn one new agent for the next queued batch. Keep the pool full until the queue drains.
 3. **Finish**: when the queue is empty and all in-flight agents complete, proceed to Step 4c.
 
-**With `--merge`**: claim → spawn **one** Opus fix agent and spawn nothing else until it reports → after report, claim the next. Sequential — and that sequencing is orchestrator discipline, not a flag: there is no parameter that makes a sub-agent run in the foreground, so it rests on waiting for the completion notification. Each batch pushes but does NOT merge; `/review-close` handles merging.
+**With `--merge`**: claim → spawn **one** reasoning-role fix agent and spawn nothing else until it reports → after report, claim the next. Sequential — and that sequencing is orchestrator discipline, not a flag: there is no parameter that makes a sub-agent run in the foreground, so it rests on waiting for the completion notification. Each batch pushes but does NOT merge; `/review-close` handles merging.
 
-**For each batch**, use the **Agent tool** to spawn an Opus subagent:
+**For each batch**, use the **Agent tool** to spawn a reasoning-role subagent:
 - `subagent_type`: `"general-purpose"`
 - `model`: `"opus"` — the **reasoning** role, set explicitly, per `.claude/served_models.yml`. The whole point of this skill is reasoning-tier judgment.
 - `description`: `"Judge review batch <N>"`
@@ -230,7 +230,7 @@ Pass this prompt, filling in all placeholders including the **category-specific 
 
 **START OF AGENT PROMPT**
 
-You are processing **Batch <N> — "<TITLE>"**. `/triage` flagged this batch as containing tasks that need judgment. Your job is to use Opus judgment to FIX, DROP, or FAIL the tasks that need it, and to apply the prescribed fix to the ones that do not.
+You are processing **Batch <N> — "<TITLE>"**. `/triage` flagged this batch as containing tasks that need judgment. Your job is to use careful judgment to FIX, DROP, or FAIL the tasks that need it, and to apply the prescribed fix to the ones that do not.
 
 **Working directory:** `<WORKTREE_PATH>`
 **Branch:** `<BRANCH>`
@@ -329,7 +329,7 @@ For each task, decide FIX / DROP / FAIL:
 
 ### 2. Sibling scan (after all FIX verdicts)
 
-For each file you edited, scan the rest of the file for sibling violations of the same convention you just enforced. Fix them in the same commit. This is expected Opus behavior — do not skip this step.
+For each file you edited, scan the rest of the file for sibling violations of the same convention you just enforced. Fix them in the same commit. This is expected of this pass — do not skip this step.
 
 ### 3. Commit all changes
 
@@ -414,7 +414,7 @@ If STATUS is PASS and commits were pushed, create a pending-docs file in the wor
 
 ```yaml
 ---
-branch: <branch-name>
+branch: "<branch-name>"
 branch_tip: <full SHA — `git -C <WORKTREE_PATH> rev-parse HEAD`, run NOW>
 date: YYYY-MM-DD
 type: infrastructure
@@ -463,7 +463,7 @@ Next steps:
   3. For any FAILED tasks above, use /claim-task <N> to finish manually
   </if>
   <if --merge>
-  1. Run /review-close to merge all branches (Opus convention gate + staging verify)
+  1. Run /review-close to merge all branches (convention gate + staging verify)
   2. For any FAILED tasks above, use /claim-task <N> to finish manually
   </if>
 ```

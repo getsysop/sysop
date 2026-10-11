@@ -61,6 +61,8 @@ FATAL = [
     "next_task.py",
     "backfill_completed_dates.py",
     "clear_user_action.py",
+    # Phase 353 (`Q-625`): Step 4c 1c's hold test runs it as bare `python3`.
+    "pending_doc_hold.py",
 ]
 # The one whose resolution is deliberately non-fatal: every yaml use in it is a
 # local import on a documented degrade path.
@@ -253,6 +255,9 @@ _RESOLVED = {
     # A `--help` arm would pass with the resolution deleted, which is the trap
     # the backfill arm above already records.
     "clear_user_action.py": (0, "would set FEAT-UA user_action: true"),
+    # Phase 353. A `hold:` reason read back out of a doc's frontmatter is output
+    # only a successful YAML parse can produce.
+    "pending_doc_hold.py": (0, "HELD: hd.md — branch feat/hd; hold: rollout pending"),
 }
 
 
@@ -347,6 +352,26 @@ class TestItActuallyResolves:
     def test_clear_user_action_still_fails_loudly_with_no_venv(
             self, consumer, yamlless_python):
         r = _run(consumer / "sysop/scripts/clear_user_action.py", "FEAT-A",
+                 cwd=consumer, py=yamlless_python)
+        assert r.returncode == 2, (r.returncode, r.stdout, r.stderr)
+        assert "requires PyYAML" in r.stderr
+        assert "python3 -m venv .venv" in r.stderr
+
+    def test_pending_doc_hold_resolves(self, consumer, yamlless_python):
+        """Phase 353: `/review-close` Step 4c 1c runs `check --stamp` as bare
+        `python3`. Without `--stamp` here, so the proof writes nothing."""
+        _fake_venv(consumer)
+        pd = consumer / "sysop" / "runtime" / "pending-docs"
+        pd.mkdir(parents=True)
+        (pd / "hd.md").write_text('---\nbranch: "feat/hd"\nroadmap_ids: [FEAT-A]\n'
+                                  'hold: "rollout pending"\n---\n')
+        r = _run(consumer / "sysop/scripts/pending_doc_hold.py", "check",
+                 cwd=consumer, py=yamlless_python)
+        _assert_resolved("pending_doc_hold.py", r)
+
+    def test_pending_doc_hold_still_fails_loudly_with_no_venv(
+            self, consumer, yamlless_python):
+        r = _run(consumer / "sysop/scripts/pending_doc_hold.py", "check",
                  cwd=consumer, py=yamlless_python)
         assert r.returncode == 2, (r.returncode, r.stdout, r.stderr)
         assert "requires PyYAML" in r.stderr

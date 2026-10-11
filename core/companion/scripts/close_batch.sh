@@ -43,8 +43,12 @@ REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || {
 # Resolved QUIETLY here because this script has one path that does not need
 # the answer: an explicit `--merge-target` is authoritative for the verify
 # arm. The sites that DO need it fail loudly below, with the diagnostic.
-source "$(dirname "${BASH_SOURCE[0]}")/_git_lib.sh" || {
-  echo "❌ _git_lib.sh is missing beside close_batch.sh — it ships with every install." >&2
+_SYSOP_GIT_LIB="$(dirname "${BASH_SOURCE[0]}")/_git_lib.sh"
+# `-f`/`-r` before `source` (Phase 368): under `set -e`, bash 3.2 (macOS's
+# /bin/bash) exits on a failed `source` of a missing or unreadable file before the
+# `||` arm runs, so the remedy below printed only on bash 4+.
+{ [[ -f "$_SYSOP_GIT_LIB" && -r "$_SYSOP_GIT_LIB" ]] && source "$_SYSOP_GIT_LIB"; } || {
+  echo "❌ _git_lib.sh is missing or unreadable beside close_batch.sh — it ships with every install." >&2
   echo "   Restore the scripts directory: bash sysop/scripts/sysop-update.sh" >&2
   exit 1
 }
@@ -701,8 +705,8 @@ rebuild_index() {
 # returns the `.git` DIRECTORY — the repo root is its dirname — and answers
 # with the relative `.git` from a main checkout, which needs absolutising.
 # Deliberate duplicate of the resolution in batch_work.sh / claim_task.sh /
-# next_task.py / validate_tasks.py / scope_overlap.py, each of which names the
-# others: these files are delivered independently, so a sourced helper missing
+# next_task.py / validate_tasks.py / scope_overlap.py (and, since Phase 368,
+# archive_review_tasks.py's tracker-mutex twin), each of which names the others: these files are delivered independently, so a sourced helper missing
 # from a partial install would be a worse failure than the duplication.
 resolve_main_root() {
   local common_dir
@@ -1050,8 +1054,9 @@ for BATCH_NUM in "${BATCH_NUMS[@]}"; do
         echo "       to see the error this run discarded."
       fi
       echo "       What is NOT sound is that the readers disagree about this header --"
-      echo "       /sitrep and the archiver cannot see it, /next-task offers it, and"
-      echo "       batch_work.sh refuses to claim it. Fix the header."
+      echo "       /sitrep cannot see it, the archiver will not run while it is there,"
+      echo "       /next-task lists it only if it still has a dash and a backticked status,"
+      echo "       and batch_work.sh refuses to claim it. Fix the header."
       echo "       This batch WILL still be closed. List every such header with:"
       echo "         python3 sysop/scripts/review_index.py --check-headers"
       ;;

@@ -222,6 +222,19 @@ through to `OK` and the gate opens.
 342, whose first round replaced the first cut's named base with the captured tip and whose
 second added the pre-plan HEAD and branch conditions.
 
+## Step 7e item 5b — the ignored-file check reports and files nothing (`Q-633`, Phase 354)
+
+A gate that reads the working tree passes on an ignored file the commit will not carry. The
+executor is the first actor that can see it, so it runs the check and quotes each hit in its
+final message. It does not file a task or a `questions.md` entry (Wade, 2026-10-02): only option
+A reaches Step 8b before the close, so on option B a filed task merged as open after
+`/review-close` Step 2a step 3a had already answered the same question. The close is the single
+asker; Step 8 prints the executor's quoted lines so an attended run sees them early. It does not commit the file or edit `.gitignore` either, because an ignore can be
+deliberate (a secret, a large corpus) and committing past it is the human's call.
+
+Why the script reads only files a file pattern ignores, and skips prose, is in
+`review-close/REFERENCE.md` § *Step 2a — provenance*; the same script serves both.
+
 ## Steps 8b and 8c — the ask, and why the answers run is a spawn of its own
 
 **The rule.** When the executor files a finding only a human's answer can unblock, it lists it in
@@ -329,3 +342,15 @@ only when present because a 7a skip writes no `pre-plan.md`, and the files writt
 **Provenance.** `Q-593`, filed by Phase 323 after two disqualified builds; built by Phase 345 on
 Wade's four answers of 2026-09-29: undo the filing, cite the answers file, park and re-ask on
 `BLOCKED`, and ask on option A and resumes only.
+
+## Steps 7f, 8 and 8c — the commit counts read past the recorded PR heads
+
+Option C's empty-branch check (Step 7f) and the `FAILED` / `MALFORMED` listings (Steps 8 and 8c)
+count commits on the branch that the default branch lacks. Under `§ Merge policy: pr`, a branch cut
+before an earlier `/review-close` squash still carries that close's claim flips as ancestors, and
+a squash leaves nothing ancestry can match them to, so the counts read them as the branch's work:
+option C stopped short of a `--delete-branch` release, and a failure listing showed commits that
+are already in `main` as content. `/review-close` Step 4d records each merged PR's head as
+`refs/sysop/merged-pr-heads/<PR>` (Phase 352, `Q-623`), and each count passes
+`--not --glob='refs/sysop/merged-pr-heads/*'`, which matches nothing when no head is recorded.
+The rationale for the record itself is in `review-close/REFERENCE.md` § *Step 4a — provenance*.

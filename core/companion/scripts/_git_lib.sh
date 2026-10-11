@@ -64,6 +64,14 @@
 #      Sysop-side setting for this: git already owns the answer, and a second
 #      place to declare the same fact is a second place for it to be wrong.
 #
+# Every name a step above would print first passes `_default_branch_name_ok`,
+# and one that fails is a REFUSAL (`Q-383`, Phase 368). The answer is
+# substituted unquoted into git commands — by skill bodies (`git fetch origin
+# <default branch>`) and, through `default_branch.sh`, by agents — and git
+# accepts `main;touch${IFS}/tmp/x` as a ref name: Phase 254's round pointed
+# `origin/HEAD` at one and the next command ran the payload. Validating here is
+# one site; quoting every substitution is N, and the N includes prose.
+#
 # The Python twin is `sitrep_survey.resolve_default_branch()`, kept to the
 # same steps and pinned to this one by `tests/test_default_branch_resolution.py`
 # (behavioural, over fixture repos — not a source-text pin).
@@ -72,6 +80,64 @@
 # of a repository, so any checkout of the repo gives the same answer; callers
 # pass the checkout they already resolved (`$REPO_ROOT` or `$MAIN_ROOT`) so the
 # probe is anchored rather than CWD-relative.
+
+# `_default_branch_name_ok <name>` — the allowed set is `[A-Za-z0-9._/-]+`
+# (Wade's ruling on `Q-383`), with one tightening: no leading `-`. `git branch`
+# and `git check-ref-format --branch` both refuse `-foo`, but `git update-ref
+# refs/heads/-foo` creates it, so only a crafted repository has one — and at
+# `git merge-base <default branch> HEAD` it would be read as an option.
+#
+# The set is ENUMERATED, not written as `[A-Za-z]`: a bracket range is
+# collation-dependent. Measured on macOS: under `LC_ALL=en_US.UTF-8`, bash 3.2's
+# `case maîn in *[!A-Za-z0-9._/-]*)` does NOT match — the range admits `î` — so
+# the range form would accept `maîn`; bash 5.3 refuses it. An explicit list
+# matches exactly the characters it lists, in every locale and every bash.
+_default_branch_name_ok() {
+  case "$1" in
+    ""|-*) return 1 ;;
+    *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._/-]*) return 1 ;;
+  esac
+  return 0
+}
+
+# `_default_branch_q <string>` — a name rendered for a diagnostic. `%q` makes it
+# inert if copied into a shell, and under the C locale it writes every non-ASCII
+# byte as an octal escape (`maîn` → `$'ma\303\256n'`), so a crafted name cannot
+# put raw bytes on the operator's terminal — a C1 control or a bidi override is a
+# legal ref-name byte sequence. A safe name renders unchanged (`main` → `main`).
+#
+# `LC_ALL=C` is ASSIGNED inside a subshell, not written as a prefix: measured,
+# bash 3.2's `LC_ALL=C printf '%q'` prefix form leaves the locale alone for the
+# builtin and prints `maîn` raw, while the assignment takes effect in 3.2 and 5.
+# The subshell keeps the assignment from leaking into the caller.
+_default_branch_q() {
+  (
+    LC_ALL=C
+    printf '%q' "$1"
+  )
+}
+
+# `_emit_default_branch <name>` — print the answer, or refuse it. Every success
+# exit of `resolve_default_branch` goes through here, the literal `main`/`master`
+# included, so no arm can be added that prints an unchecked name.
+_emit_default_branch() {
+  if _default_branch_name_ok "$1"; then
+    printf '%s\n' "$1"
+    return 0
+  fi
+  echo "❌ Refusing this repository's default branch name: $(_default_branch_q "$1")" >&2
+  echo "   A default-branch name must match [A-Za-z0-9._/-]+ and not start with '-'. Sysop" >&2
+  echo "   substitutes it unquoted into git commands, so any other character (a shell" >&2
+  echo "   metacharacter, a space, '+', '@', ',', a non-ASCII letter) could run as a command." >&2
+  echo "   If the repository is yours, rename the branch:  git branch -m <current> <new>" >&2
+  echo "   and, if a remote names it, publish the new name, make it the default on the host," >&2
+  echo "   then re-declare it (set-head needs origin/<new>, which only the push creates):" >&2
+  echo "     git push -u origin <new>  &&  git remote set-head origin <new>" >&2
+  echo "   If its refs come from someone else (a third-party clone), this refusal is the" >&2
+  echo "   protection: do not work around it." >&2
+  return 1
+}
+
 resolve_default_branch() {
   local dir="${1:-.}" remote="" remote_head="" name="" have_main=0 have_master=0 n_remotes=0
 
@@ -95,13 +161,20 @@ resolve_default_branch() {
   if [[ -n "$remote_head" ]]; then
     name="${remote_head#"${remote}"/}"
     if git -C "$dir" show-ref --verify --quiet "refs/heads/${name}" 2>/dev/null; then
-      printf '%s\n' "$name"
-      return 0
+      _emit_default_branch "$name"
+      return
     fi
     if git -C "$dir" show-ref --verify --quiet "refs/remotes/${remote}/${name}" 2>/dev/null; then
+      # The remedy below is a command the operator is told to copy. A name that
+      # would be refused once created must be refused HERE, or the diagnostic
+      # itself hands over the payload (`git branch main;touch… origin/main;touch…`).
+      if ! _default_branch_name_ok "$name"; then
+        _emit_default_branch "$name"
+        return
+      fi
       echo "❌ Cannot resolve this repository's default branch." >&2
-      echo "   ${remote}/HEAD names '${name}' and ${remote}/${name} exists, but this checkout has no local branch '${name}'." >&2
-      echo "   Create it and re-run:  git branch ${name} ${remote}/${name}" >&2
+      echo "   $(_default_branch_q "$remote")/HEAD names '${name}' and $(_default_branch_q "$remote")/${name} exists, but this checkout has no local branch '${name}'." >&2
+      echo "   Create it and re-run:  git branch ${name} $(_default_branch_q "$remote")/${name}" >&2
       return 1
     fi
   fi
@@ -110,25 +183,25 @@ resolve_default_branch() {
   git -C "$dir" show-ref --verify --quiet refs/heads/master 2>/dev/null && have_master=1
   if [[ $((have_main + have_master)) -eq 1 ]]; then
     if [[ "$have_main" -eq 1 ]]; then
-      printf '%s\n' main
+      _emit_default_branch main
     else
-      printf '%s\n' master
+      _emit_default_branch master
     fi
-    return 0
+    return
   fi
 
   if [[ $((have_main + have_master)) -eq 0 ]] \
      && ! git -C "$dir" rev-parse --verify --quiet HEAD >/dev/null 2>&1; then
     name="$(git -C "$dir" symbolic-ref --quiet --short HEAD 2>/dev/null)" || name=""
     if [[ -n "$name" ]]; then
-      printf '%s\n' "$name"
-      return 0
+      _emit_default_branch "$name"
+      return
     fi
   fi
 
   echo "❌ Cannot resolve this repository's default branch." >&2
   if [[ -n "$remote_head" ]]; then
-    echo "   ${remote}/HEAD names '${name}', but neither a local nor a remote-tracking branch '${name}' exists (stale)." >&2
+    echo "   $(_default_branch_q "$remote")/HEAD names '$(_default_branch_q "$name")', but neither a local nor a remote-tracking branch of that name exists (stale)." >&2
   elif [[ "$have_main" -eq 1 && "$have_master" -eq 1 ]]; then
     echo "   Both 'main' and 'master' exist locally and no remote HEAD breaks the tie." >&2
   else
@@ -180,9 +253,11 @@ require_default_branch() {
 # reached a commit. The corruption vector is the shared worktree, so the fix has
 # to serialize the whole critical section, not just the commit.
 #
-# WHY HERE. Both writers of `review_tasks.md` — `batch_work.sh` (the claim) and
-# `close_batch.sh` (the close) — already source this file, and a mutex that only
-# one of two writers acquires is not a mutex. Phase 251 established this file as
+# WHY HERE. The bash writers of `review_tasks.md` — `batch_work.sh` (the claim)
+# and `close_batch.sh` (the close) — already source this file, and a mutex that
+# only some writers acquire is not a mutex. The third writer,
+# `archive_review_tasks.py`, carries a Python twin of this pair (Phase 368, `Q-398`)
+# that takes the same file by the same rules. Phase 251 established this file as
 # the one sourced helper for exactly this reason (see the header).
 #
 # WHY `set -C`. `flock` does not exist on macOS and this tree has a hard bash 3.2
@@ -291,6 +366,13 @@ tracker_lock_acquire() {
   fi
   local waited=0 holder=""
   local max_wait="${SYSOP_TRACKER_LOCK_WAIT:-120}"
+  # A non-integer override means the default, not zero: `[ x -lt abc ]` errors,
+  # and the loop below then refused a FREE lock as held (Phase 368). The Python
+  # twin in `archive_review_tasks.py` reads the variable the same way.
+  case "$max_wait" in ''|*[!0-9]*) max_wait=120 ;; esac
+  # More than six digits overflows `[ -ge ]` (an error every second, so the wait
+  # never ended) and is no wait anyone means; the Python twin applies both rules.
+  [ "${#max_wait}" -le 6 ] || max_wait=120
   local notified=0
 
   if ! mkdir -p "$runtime_dir" 2>/dev/null; then
@@ -302,7 +384,10 @@ tracker_lock_acquire() {
 
   # Whole seconds, because `sleep 0.2` is not portable to every /bin/sh this
   # tree targets and the wait only has to outlast a millisecond-scale section.
-  while [ "$waited" -lt "$max_wait" ]; do
+  # At least one attempt, whatever the wait: with `SYSOP_TRACKER_LOCK_WAIT=0` a
+  # `while waited < max_wait` loop made none and refused a free lock, printing an
+  # `rm -f` remedy for a file that did not exist (Phase 368).
+  while :; do
     if ( set -C; printf '%s\n' \
            "holder_pid: $$" \
            "holder: ${0##*/}" \
@@ -325,6 +410,7 @@ tracker_lock_acquire() {
       sed 's/^/     /' "$lock_file" >&2 2>/dev/null || true
       notified=1
     fi
+    [ "$waited" -ge "$max_wait" ] && break
     sleep 1
     waited=$(( waited + 1 ))
   done

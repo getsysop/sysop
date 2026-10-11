@@ -2,7 +2,9 @@
 name: triage
 description: Classify pending review batches as auto (mechanical) or flag (judgment) and persist a dated, task-granular verdict to review_tasks.md. Idempotent. Prerequisite for /auto-fix and /auto-judge.
 argument-hint: "[--dry-run]"
+model: opus
 ---
+<!-- sysop:model-roles frontmatter=reasoning -->
 
 A standalone classifier for review batches. Reads `review_tasks.md`, classifies every pending batch lacking a `> **Triaged:**` record as **auto** (prescriptive, mechanical) or **flag** (requires human judgment), writes that record — plus a `> **Flag:**` reason on flagged batches — and prints a classification table.
 
@@ -129,7 +131,7 @@ For each candidate batch, read every task description (from Step 1b's scoped rea
 - **Specific file:line locations**
 - **A known pattern to follow**: references a canonical example, existing helper, or specific function
 
-**Important:** When a *task* is borderline, treat it as needing judgment. A false judgment call costs one Opus read of one task. A false auto produces a bad fix that wastes review time.
+**Important:** When a *task* is borderline, treat it as needing judgment. A false judgment call costs one reasoning-tier read of one task. A false auto produces a bad fix that wastes review time.
 
 ### Batch verdict
 

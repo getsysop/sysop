@@ -148,6 +148,52 @@ class TestTheVerdictMatchesTheShippedWriter:
         r = _exec(script, repo, "task/feat-1")
         assert f"verdict: {verdict}" in r.stdout, r.stdout
 
+    def test_the_auto_build_verdict_line_is_read_whole(self, script, repo):
+        """Internal tracker #772: `/auto-build` Phase 6d is the second writer, and its line is
+        unfenced prose. The fallback kept one word and reported `ALL`. The line
+        is read from the shipped template, so a reworded template is tested."""
+        tmpl = (REPO_ROOT / "core/skills/auto-build/SKILL.md").read_text(
+            encoding="utf-8")
+        line = next(l.strip() for l in tmpl.splitlines()
+                    if l.strip().lstrip("*").lower().startswith("verdict:"))
+        _lock(repo, "FEAT-1", "task/feat-1")
+        d = _run(repo, "FEAT-1", run_id="20260930T120000Z")
+        (d / "classification.md").write_text(
+            "# FEAT-1 — adversarial classification\n\n"
+            + line.replace("<N>", "3") + "\n")
+        r = _exec(script, repo, "task/feat-1")
+        assert "verdict: ALL FIXABLE\n" in r.stdout, r.stdout
+
+    @pytest.mark.parametrize("line, want", [
+        # One word, except the one two-word verdict a Sysop writer emits
+        # (`/auto-build` Phase 6d's `ALL FIXABLE`), however it is punctuated.
+        ("Verdict: PROCEED — Some reason", "PROCEED"),
+        ("**verdict:** BLOCKED (see below)", "BLOCKED"),
+        ("Verdict: BLOCKED Pending review", "BLOCKED"),
+        ("Verdict: BLOCKED CI (red)", "BLOCKED"),
+        ("Verdict: BLOCKED SQL INJECTION (high)", "BLOCKED"),
+        ("Verdict: PROCEED OK.", "PROCEED"),
+        ("Verdict: PROCEED N/A", "PROCEED"),
+        ("Verdict: PROCEED\nFIXABLE on the next line", "PROCEED"),
+        ("Verdict: ALL FIXABLE: 3 findings", "ALL FIXABLE"),
+        ("Verdict: **ALL FIXABLE** (3)", "ALL FIXABLE"),
+        ("Verdict: ALL FIXABLE \u2013 proceeding", "ALL FIXABLE"),
+        ("Verdict: ALL\tFIXABLE!", "ALL FIXABLE"),
+        ("Verdict: ALL FIXABLE 3 findings", "ALL FIXABLE"),
+        ("Verdict: ALL FIXABLES", "ALL"),
+        ("verdict: proceed", "proceed"),
+        ("verdict: all fixable", "all fixable"),
+        ("Verdict: BLOCKED PENDING (review)", "BLOCKED"),
+    ])
+    def test_the_line_fallback_stops_at_the_caps_run(self, script, repo, line, want):
+        _lock(repo, "FEAT-1", "task/feat-1")
+        d = _run(repo, "FEAT-1")
+        (d / "classification.md").write_text(line + "\n")
+        r = _exec(script, repo, "task/feat-1")
+        # The verdict is the report's last line, so a value that ran onto the
+        # next line of the file shows up as a stray last line.
+        assert r.stdout.rstrip("\n").splitlines()[-1] == f"      verdict: {want}", r.stdout
+
     def test_a_run_with_no_classification_says_so(self, script, repo):
         _lock(repo, "FEAT-1", "task/feat-1")
         _run(repo, "FEAT-1")

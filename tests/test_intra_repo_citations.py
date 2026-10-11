@@ -58,7 +58,7 @@ the one thing a sweep cannot infer.
 
 WHAT THIS CANNOT DO.
 
-* **Prose citation forms are invisible.** `document-work/SKILL.md:392` cites
+* **Prose citation forms are invisible.** `document-work/SKILL.md:401` cites
   "`tasks/schema.md` line 60" in words; the sweep's regex wants `file:NN`. The
   registry cannot pin what the sweep cannot find, and widening the regex to
   natural language is the judgement this module declines to make.
@@ -195,9 +195,9 @@ CITATION_ANCHORS = {
     # citation pointed at -- so the prose named the wrong site for BOTH -- stayed GREEN.
     # The anchor kept line-precision and lost site-discrimination. This one is a
     # sentence only Step 7f's copy carries.
-    ("core/skills/review-close/SKILL.md", "claim-task/SKILL.md:1420"):
+    ("core/skills/review-close/SKILL.md", "claim-task/SKILL.md:1422"):
         'emits `fence + "markdown"` below',
-    ("core/skills/review-close/SKILL.md", "claim-task/SKILL.md:2023"):
+    ("core/skills/review-close/SKILL.md", "claim-task/SKILL.md:2025"):
         "and not line.strip().strip(mark[0])",
     ("core/skills/auto-fix/SKILL.md", "archive_review_tasks.py:175"):
         "Merged|Complete",

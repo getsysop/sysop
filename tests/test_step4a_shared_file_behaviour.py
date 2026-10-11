@@ -278,6 +278,134 @@ def test_prescribed_union_resolution_produces_a_valid_index(
     assert {t["id"] for t in final["tasks"]} == {"FEAT-SEED", "FEAT-AAAA", "FEAT-BBBB"}
 
 
+@pytest.fixture
+def removal_conflict(tmp_path: Path) -> Path:
+    """Internal tracker #766: one replayed commit appends FEAT-AAAA AND withdraws FEAT-OLD, while a
+    sibling that appended FEAT-BBBB has already landed."""
+    repo = tmp_path / "r"
+    _init(repo)
+    _file_a_followup(repo, "FEAT-OLD", "To be withdrawn")
+    _git(repo, "checkout", "-q", "-b", "feat/FEAT-BBBB", "main")
+    _file_a_followup(repo, "FEAT-BBBB", "Beta follow-up")
+    _git(repo, "checkout", "-q", "-b", "feat/FEAT-AAAA", "main")
+    idx = repo / "tasks/index.yml"
+    old = _entry("FEAT-OLD", "To be withdrawn")
+    assert old in idx.read_text()
+    idx.write_text(idx.read_text().replace(old, "") + _entry("FEAT-AAAA", "Alpha follow-up"))
+    (repo / "tasks/open/FEAT-OLD.md").unlink()
+    (repo / "tasks/open/FEAT-AAAA.md").write_text("# FEAT-AAAA\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "file FEAT-AAAA, withdraw FEAT-OLD")
+    assert _validate(repo).returncode == 0, "the branch itself must be valid"
+    _git(repo, "checkout", "-q", "main")
+    _git(repo, "merge", "-q", "--ff-only", "feat/FEAT-BBBB")
+    _git(repo, "checkout", "-q", "feat/FEAT-AAAA")
+    r = _git(repo, "rebase", "main")
+    assert r.returncode != 0
+    assert "tasks/index.yml" in _git(repo, "ls-files", "-u").stdout
+    return repo
+
+
+def _stage_ids(repo: Path, n: int) -> list:
+    doc = yaml.safe_load(_git(repo, "show", f":{n}:tasks/index.yml").stdout)
+    return [t["id"] for t in doc["tasks"]]
+
+
+def test_union_by_id_resurrects_a_removed_entry(removal_conflict: Path) -> None:
+    """The gap the REMOVED bullet closes: the withdrawn id comes back, and the
+    only signal is a missing-body error the runner could 'fix' by recreating it."""
+    repo = removal_conflict
+    assert "FEAT-OLD" in _stage_ids(repo, 1) and "FEAT-OLD" not in _stage_ids(repo, 3)
+    ours = yaml.safe_load(_git(repo, "show", ":2:tasks/index.yml").stdout)
+    theirs = yaml.safe_load(_git(repo, "show", ":3:tasks/index.yml").stdout)
+    have = {t["id"] for t in ours["tasks"]}
+    union = ours["tasks"] + [t for t in theirs["tasks"] if t["id"] not in have]
+    assert "FEAT-OLD" in [t["id"] for t in union]
+    (repo / "tasks/index.yml").write_text(yaml.safe_dump({**ours, "tasks": union}, sort_keys=False))
+    r = _validate(repo)
+    assert r.returncode == 1
+    assert "(FEAT-OLD): body file does not exist" in r.stdout + r.stderr
+
+
+def test_applying_the_removal_resolves_clean(removal_conflict: Path) -> None:
+    repo = removal_conflict
+    s1, s3 = set(_stage_ids(repo, 1)), set(_stage_ids(repo, 3))
+    removed = s1 - s3
+    assert removed == {"FEAT-OLD"}
+    ours = yaml.safe_load(_git(repo, "show", ":2:tasks/index.yml").stdout)
+    theirs = yaml.safe_load(_git(repo, "show", ":3:tasks/index.yml").stdout)
+    have = {t["id"] for t in ours["tasks"]}
+    kept = [t for t in ours["tasks"] if t["id"] not in removed]
+    resolved = kept + [t for t in theirs["tasks"] if t["id"] not in have]
+    (repo / "tasks/index.yml").write_text(yaml.safe_dump({**ours, "tasks": resolved}, sort_keys=False))
+    r = _validate(repo)
+    assert r.returncode == 0, r.stdout + r.stderr
+    _git(repo, "add", "tasks/index.yml")
+    cont = subprocess.run(["git", "rebase", "--continue"], cwd=repo, capture_output=True,
+                          text=True, env={"GIT_EDITOR": "true", "PATH": "/usr/bin:/bin:/usr/local/bin"})
+    assert cont.returncode == 0, cont.stderr
+    final = yaml.safe_load((repo / "tasks/index.yml").read_text())
+    assert {t["id"] for t in final["tasks"]} == {"FEAT-SEED", "FEAT-AAAA", "FEAT-BBBB"}
+
+
+def test_the_recipe_prescribes_the_removal() -> None:
+    text = SKILL.read_text(encoding="utf-8")
+    start = text.index("**Union-by-id alone is not sufficient")
+    recipe = text[start:text.index("Then, **stage the resolved file and gate it**", start)]
+    removed = next(ln for ln in recipe.splitlines() if ln.startswith("- **The branch REMOVED an entry**"))
+    assert "Delete that entry from the base too; if the target removed it as well, there is nothing to do." in removed
+    assert ("If the target changed the entry or its body file (`tasks/open/<ID>.md`, which then "
+            "conflicts modify/delete) since stage 1, both sides edited it: abort and 4a-SKIP.") in removed
+    assert "do not recreate the body" in removed
+    target = next(ln for ln in recipe.splitlines() if ln.startswith("- **The TARGET removed an entry the branch kept**"))
+    assert "an id in stage 1 and stage 3 that stage 2 no longer carries" in target
+    assert "do not append it, or the target's removal is undone" in target
+    assert ("If the branch changed the entry or its body file (which then conflicts modify/delete) "
+            "since stage 1, abort and 4a-SKIP.") in target
+
+
+@pytest.fixture
+def target_removal_conflict(tmp_path: Path) -> Path:
+    """The mirror of internal tracker #766: the landed sibling withdrew FEAT-OLD
+    and filed FEAT-BBBB; the replayed branch only filed FEAT-AAAA."""
+    repo = tmp_path / "r"
+    _init(repo)
+    _file_a_followup(repo, "FEAT-OLD", "To be withdrawn")
+    _git(repo, "checkout", "-q", "-b", "feat/FEAT-AAAA", "main")
+    _file_a_followup(repo, "FEAT-AAAA", "Alpha follow-up")
+    _git(repo, "checkout", "-q", "-b", "feat/FEAT-BBBB", "main")
+    idx = repo / "tasks/index.yml"
+    idx.write_text(idx.read_text().replace(_entry("FEAT-OLD", "To be withdrawn"), "")
+                   + _entry("FEAT-BBBB", "Beta follow-up"))
+    (repo / "tasks/open/FEAT-OLD.md").unlink()
+    (repo / "tasks/open/FEAT-BBBB.md").write_text("# FEAT-BBBB\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "file FEAT-BBBB, withdraw FEAT-OLD")
+    _git(repo, "checkout", "-q", "main")
+    _git(repo, "merge", "-q", "--ff-only", "feat/FEAT-BBBB")
+    _git(repo, "checkout", "-q", "feat/FEAT-AAAA")
+    assert _git(repo, "rebase", "main").returncode != 0
+    assert "tasks/index.yml" in _git(repo, "ls-files", "-u").stdout
+    return repo
+
+
+def test_a_target_side_removal_is_not_new(target_removal_conflict: Path) -> None:
+    repo = target_removal_conflict
+    s1, s2, s3 = (set(_stage_ids(repo, n)) for n in (1, 2, 3))
+    assert "FEAT-OLD" in s1 & s3 and "FEAT-OLD" not in s2
+    ours = yaml.safe_load(_git(repo, "show", ":2:tasks/index.yml").stdout)
+    theirs = yaml.safe_load(_git(repo, "show", ":3:tasks/index.yml").stdout)
+    naive = [t["id"] for t in theirs["tasks"] if t["id"] not in s2]
+    assert "FEAT-OLD" in naive, "plain union-by-id would append the target's removal back"
+    new = [t for t in theirs["tasks"] if t["id"] not in s2 and t["id"] not in s1]
+    (repo / "tasks/index.yml").write_text(
+        yaml.safe_dump({**ours, "tasks": ours["tasks"] + new}, sort_keys=False))
+    r = _validate(repo)
+    assert r.returncode == 0, r.stdout + r.stderr
+    final = yaml.safe_load((repo / "tasks/index.yml").read_text())
+    assert {t["id"] for t in final["tasks"]} == {"FEAT-SEED", "FEAT-AAAA", "FEAT-BBBB"}
+
+
 # ---------------------------------------------------------------------------
 # FACT 3/4 — the containment test: valid pre-squash, INVALID post-squash
 # ---------------------------------------------------------------------------

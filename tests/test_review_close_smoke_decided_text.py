@@ -49,22 +49,30 @@ SPANS: dict[str, tuple[Path, object, object, bool]] = {
     "step 8 pre-scan": (CLOSE, "pre-scan <clean | clean, but not every check",
                         "| ran via the consumer's list", True),
     "schema skill behavior": (SCHEMA, "**Skill behavior** (`/review-close` Step 3c", "\n\n", False),
+    # Phase 351 (`Q-627`): where a waived smoke FAIL's output is recorded, per Step 4d shape.
+    "4d smoke FAIL in the PR": (CLOSE, "**When Step 3c recorded a `failed-waived` signal, the PR carries its output.**",
+                                "\n\n", False),
+    "schema where the procedure lives": (SCHEMA, "**Where the procedure lives.**", "\n\n", False),
+    "schema field optional": (SCHEMA, "Field is purely optional.", "\n\n", False),
 }
 
 PINS = {
     # Regenerate with:  .venv/bin/python3 -c "import sys; sys.path.insert(0,'tests'); import test_review_close_smoke_decided_text as T; T._print_pins()"
-    "3c output contract": "2dd2a14660579a39",
-    "3c options": "9022a45b7926f32a",
-    "3c halt rules": "74bd2d12112979b5",
-    "3c record": "257fec96033c498d",
-    "3c refusal": "d5d42a639763dde9",
-    "3c intro": "8a9df11a5daf57a3",
+    "3c output contract": "2faaf3a736e20eed",  # Phase 359: a body is read as it will merge, a fenced `#` ends no section (`Q-638`, `Q-639`)
+    "3c options": "ba2da511271bc6a2",  # Phase 362: under --dry-run, three options, record and file nothing, a halt ends the dry run. Before it, Phase 351
+    "3c halt rules": "8a879fd16ccde20d",  # Phase 351
+    "3c record": "ce2aa85658229f8a",  # Phase 351
+    "3c refusal": "9c6bb6aa4c00b52c",  # Phase 357: the new-project note points a post-merge procedure at `## After merge` (`Q-313`)
+    "3c intro": "2076398e30e5eafa",  # Phase 351
     "3c step-1 output": "c59c69994350f6ba",
     "3c linkage": "04a0fa5c5e862fda",
     "4a-post exit 0": "59cb35e6d31276bc",
-    "step 8 manual smoke": "4fc5300eebcf6176",
+    "step 8 manual smoke": "545e8631e8b51a5d",  # Phase 359: names the MERGE NOT READ: line
     "step 8 pre-scan": "c94d934f525d174f",
-    "schema skill behavior": "a1b984728c161bff",
+    "schema skill behavior": "ab4001f1e68204b7",  # Phase 373: a held doc links no task on its own `hold:` too, and any approved tip can release a hold (Phases 351, 353); the read is unchanged
+    "4d smoke FAIL in the PR": "6f11ec8c51347c94",  # Phase 351
+    "schema where the procedure lives": "254b50e1ff5af121",  # Phase 359: a body is read as it will merge, a fenced `#` ends no section (`Q-638`, `Q-639`)
+    "schema field optional": "4a70efd8916ede15",  # Phase 359: a body is read as it will merge, a fenced `#` ends no section (`Q-638`, `Q-639`)
 }
 
 

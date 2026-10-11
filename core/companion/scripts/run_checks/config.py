@@ -53,7 +53,7 @@ def parse_checks_yml(path):
     with open(path, encoding="utf-8", errors="replace") as f:
         try:
             data = yaml.safe_load(f)
-        except yaml.YAMLError as e:
+        except Exception as e:  # not only YAMLError: `2026-09-31` raises ValueError (`Q-621`)
             raise ValueError(
                 f"checks.yml YAML parse error: {_sanitize_log(str(e))}"
             ) from None

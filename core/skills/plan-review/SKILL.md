@@ -58,7 +58,7 @@ per-file/directory conventions and risks from `.claude/convention_map.md` +
 and re-run `/plan-review`.
 ```
 
-…and stop without spawning the sub-agent (do not proceed to Step 3). This saves an Opus invocation when the structural defect is unambiguous.
+…and stop without spawning the sub-agent (do not proceed to Step 3). This saves a `plan-review`-role invocation when the structural defect is unambiguous.
 
 ## Step 3: Spawn Adversarial Review Sub-Agent
 
@@ -188,6 +188,6 @@ If the user rejects the plan, do not execute. Ask what they want changed and rev
 ## Notes
 
 - **Complementary to `/claim-task`.** `/claim-task` runs the same adversarial review automatically at Step 7b, in an independent sub-agent that did not write the plan; the orchestrator classifies its findings at Step 7c (see `claim-task/SKILL.md` § Step 7 and `_shared/adversarial-review.md` § "The reviewer-executor variant is retired"). Use `/plan-review` only for plans NOT produced by `/claim-task` — otherwise you are paying for two adversarial passes on the same plan.
-- **Token cost.** Each invocation spawns a fresh opus sub-agent. Re-running on the same plan after edits is valid but costs tokens. Do not re-run speculatively.
+- **Token cost.** Each invocation spawns a fresh sub-agent on the `plan-review` role. Re-running on the same plan after edits is valid but costs tokens. Do not re-run speculatively.
 - **No size gate.** The skill does not gate on plan size — tiny plans still trigger the full adversarial pass. Skip invoking the skill for trivial changes rather than adding a complexity threshold, which would reopen the gap we are trying to close.
 - **Do not dismiss findings silently.** Every finding must be either incorporated or explicitly rejected with rationale in the revised plan. Silent dismissal defeats the purpose of the review. **On the 5b halt path there is no revised plan to hold either**, so this rule takes its other form: the blockers appear in the Blocked block, and any `fixable` findings alongside them stay live in Step 4's verbatim print until the re-run. They are deferred, not dismissed — and a re-run re-derives them, so do not treat the halt as having disposed of them.

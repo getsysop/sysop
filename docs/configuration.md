@@ -6,11 +6,13 @@ Everything the installer writes sorts into three tiers on `--update` (update mec
 
 Your project's `CLAUDE.md` is always in context, and every Sysop skill honors it. A section like `## Guided mode` (WORKFLOW.md § 6.1) changes how every skill handles decision gates without touching a single skill file — and the same pattern works for any standing per-project rule ("when running `/review-close`, also check the staging deploy"). This is the sanctioned way to change how a skill *behaves*, and it survives every update because `CLAUDE.md` is yours.
 
-Several sections are read as structured input rather than prose. Five are pure configuration — all optional, each consumed by a named skill (four by the lifecycle, one by the give-back family):
+Several sections are read as structured input rather than prose. Seven are pure configuration — all optional, each consumed by a named skill (six by the lifecycle, one by the give-back family):
 
 | Section | Effect |
 |---|---|
 | `## Merge policy` | `direct` (default) or `pr` — how `/review-close` lands work on `main`. Use `pr` when `main` is push-protected. |
+| `## Second reader` | Who reviews a `/review-close --request-review` close's PR before `--land` merges it: a GitHub login, a `format` (`codex` or `approval`), the `request` comment that asks, a `timeout`, and for Codex the `blocking` severities. Only those two flags read it, and they need `## Merge policy: pr`. |
+| `## Unattended close class` | Which branches `/review-close --request-review --agent <name>` closes: `allow:` and `exclude:` path globs and a `blast_radius:` ceiling. `CLAUDE.md`, `.claude/`, `sysop/` and `.github/workflows/` are always excluded, as are `manual_smoke`, `solo` and held tasks. A human still lands the result; merging with no human is not enabled. |
 | `## Plan review` | `always`, `never`, or `ask` (default) — how much you are in the loop on a `/claim-task` claim. `always` puts a human gate between the adversarial plan review and implementation; `never` runs it unattended. The plan is adversarially reviewed either way; this only changes what happens after. `--review-plan` / `--no-review-plan` / `--plan-only` override it per run. |
 | `## Sysop upstream repo` | A bare `owner/name` slug naming where the give-back skills (`/report-issues`, `/contribute-convention`, `/share-wins`) file. Default is the **public** `getsysop/sysop`; set it if your friction log or convention overlay carries anything that shouldn't land in a public repo. `--repo` stays the per-run override. |
 | `## Post-deploy verification` | A smoke command `/review-close` runs *after* the merge lands — a Playwright run against staging, a curl on a health endpoint, a synthetic monitor check. Absent → the step is a no-op. |
@@ -111,14 +113,14 @@ The substitutions file is consumer-authored, NOT in `managed_paths`, and `--upda
 
 ## Models
 
-Skills pin *roles* (`reasoning` / `convention-gate` / `mechanical` / `quick`), and `.claude/served_models.yml` maps each role to a model — `reasoning` → Opus by default. To swap the model behind a role — say, run all the deep-reasoning skills on Claude Fable 5 — one key in `.claude/served_models.local.yml` is enough:
+Every skill pins a *role* (`reasoning` / `planner` / `plan-review` / `executor` / `convention-gate` / `mechanical` / `quick`), and `.claude/served_models.yml` maps each role to a model — `reasoning` → Opus by default, and the four roles named after a job follow it. To swap the model behind a role — say, run all the deep-reasoning skills on Claude Fable 5 — one key in `.claude/served_models.local.yml` is enough:
 
 ```yaml
 roles:
   reasoning: fable
 ```
 
-**Map `reasoning`, `mechanical` and `convention-gate` to one of `opus` / `sonnet` / `haiku` / `fable`.** Those three roles govern *inline* pins — values a skill body hands to the Agent tool's `model` parameter, which is a closed enum. Mapping any of them to `best`, `inherit`, `opusplan`, a full model id, or a provider-specific id breaks every agent spawn in the skills that role governs, and it breaks them mid-skill at spawn time rather than at install. Adding the value to `served:` does not rescue it: `served:` is Sysop's sunset allowlist, not the harness's enum. `check_skill_models.py` fails loudly on this, and `.claude/served_models.yml` carries an `inline_models:` list you can extend if your harness accepts more. A *frontmatter*-only role (today that is `quick`) is not so constrained — it accepts anything `/model` accepts.
+**Map every role except `quick` — `reasoning`, `mechanical`, `convention-gate`, `planner`, `plan-review`, `executor` — to one of `opus` / `sonnet` / `haiku` / `fable`, or to the name of another role.** Those roles govern *inline* pins — values a skill body hands to the Agent tool's `model` parameter, which is a closed enum. Mapping any of them to `best`, `inherit`, `opusplan`, a full model id, or a provider-specific id breaks every agent spawn in the skills that role governs, and it breaks them mid-skill at spawn time rather than at install. Adding the value to `served:` does not rescue it: `served:` is Sysop's sunset allowlist, not the harness's enum. `check_skill_models.py` fails loudly on this, and `.claude/served_models.yml` carries an `inline_models:` list you can extend if your harness accepts more. A *frontmatter*-only role (today that is `quick`) is not so constrained — it accepts anything `/model` accepts.
 
 For a value outside the default lists, extend `served:` too, or `check_skill_models.py` fails:
 
@@ -131,25 +133,38 @@ served:
 
 ### Spending less
 
-There is no cheap lever hiding in the default map. `mechanical` already resolves to Sonnet and `quick` to Haiku — they are not the expensive part — and they barely govern anything: on a full install they carry 2 of the 34 pins in the skills tree; 2 are `convention-gate` and the other 30 are `reasoning`. **On a loop-mode install they carry none at all**, because loop mode does not ship `/auto-fix` or `/next-task`, which are the only skills that use them; all 8 pins a loop install carries are `reasoning`.
+There is no cheap lever hiding in the default map. `mechanical` and `quick` already resolve to Sonnet and Haiku — they are not the expensive part — and they govern little: on a full install they carry 4 of the 40 pins in the skills tree (`/next-task`, `/sitrep`, and `/auto-fix`'s orchestrator and fix agents — though an `/auto-fix` run that first invokes `/triage`, which pins `reasoning`, finishes that turn on the reasoning model); 2 are `convention-gate`, 9 are the three roles split out for planning, plan review and execution, and the other 25 are `reasoning`. **On a loop-mode install they carry none at all**, because loop mode ships none of those skills; the 8 pins a loop install carries all resolve through `reasoning` — 7 on it directly, and 1, the shared plan-review contract, on a role that follows it.
 
-Either way the only lever with real money behind it is `reasoning` itself — which is also the role that runs adversarial review, judging, and execution. Sysop ships it conservative on purpose and does not recommend a blanket downgrade.
+Either way the money is in `reasoning` and the roles that follow it — and on the one consumer with per-phase spend recorded, it is concentrated in *execution*, not review — 63.7% of it, against 21.8% for planning and 14.5% for review. That is why `executor` is a role of its own. It governs only the agent that implements an already-reviewed plan (`/claim-task` Step 7e and its answers re-run, `/auto-build` Phase 6e), so you can move execution without moving the planner, the plan reviewer, or `/review-close`'s gates. The evidence below covers only Low and Medium tasks. The consumer that ran it plans to keep High and architectural tasks on the reasoning tier, which one `executor` key cannot express: it moves every executor spawn:
 
-If you want the trade anyway, take it explicitly:
+```yaml
+roles:
+  executor: sonnet   # implements a plan a reasoning-tier reviewer already checked
+```
+
+**Set that model's effort as well.** A role picks a model, not an effort, and the Agent tool has no effort parameter. Save a level for the executor's model under `modelSettings` in your Claude Code settings: the consumer that ran the A/B below measured each executor running at its own model's saved level, and at the model's default — `medium` for Sonnet 5.5 — when none was saved, while the docs say a subagent's effort defaults to the session's. Save one rather than rely on either. A saved level is read at session start, so save it before the session that runs the executor, and read the level off the transcript rather than assuming it:
+
+```json
+"modelSettings": { "claude-sonnet-5-5": { "effortLevel": "high" } }
+```
+
+One consumer's A/B of Sonnet 5.5 against Opus 5.5 in the executor seat, on two tasks with adversarially reviewed plans, found the same design at every call site for about two-fifths of Opus's tokens-at-list-price at `high` effort (about a third at `medium`), assuming both arms had the same input/output mix. At `medium` it departed from the reviewed plan once, on the cross-module task, by leaving a required typecheck red, and `high` closed that. The Opus control was still better on smaller points of that task. Two tasks is a smoke test, not a measurement, so the default stays on `reasoning`. One interaction is unmeasured: `/auto-build`'s executor ends by invoking `/document-work`, which pins `reasoning`, and whether that skill's frontmatter pin applies inside a spawned executor has not been checked — if it does, the executor's documentation step runs on the reasoning model.
+
+Sysop ships `reasoning` conservative on purpose and does not recommend a blanket downgrade. If you want that trade anyway, take it explicitly — it moves planning, plan review, judging and the audits along with execution:
 
 ```yaml
 roles:
   reasoning: sonnet   # cheaper, and shallower where it matters most
 ```
 
-Worth knowing before you do: on the one consumer with per-phase spend recorded, the money is concentrated in *execution*, not review — 63.7% of it, against 21.8% for planning and 14.5% for review. Downgrading `reasoning` moves all three at once, so it buys most of its savings from the phase you are least likely to want cheaper. **The role is the unit you can configure**, and one spawn was split onto a role of its own for exactly this reason. `convention-gate` governs two spawns — `/review-close` Step 2b's convention agent, which runs on every target of every close (the security twin beside it is gated on a security-map glob and skips most targets on a stock install), and the `4a-fix` re-check of the close's own fix commit, which runs only on a close that fixed a note — so you can move it without moving the security twin beside it or anything else on `reasoning`:
+**The role is the unit you can configure**, and four roles were split out of `reasoning` for exactly this reason: `executor` above, `planner` and `plan-review` beside it, and `convention-gate`. `convention-gate` governs two spawns — `/review-close` Step 2b's convention agent, which runs on every target of every close (the security twin beside it is gated on a security-map glob and skips most targets on a stock install), and the `4a-fix` re-check of the close's own fix commit, which runs only on a close that fixed a note — so you can move it without moving the security twin beside it or anything else on `reasoning`:
 
 ```yaml
 roles:
   convention-gate: sonnet   # the 2b convention agent and the 4a-fix re-check
 ```
 
-Finer still exists in the skill files themselves — a trailing `<!-- sysop:role=… -->` marker overrides the role for a single pin, which is how `/auto-fix` runs its fix agents on the mechanical tier while its verification pass stays on reasoning. But that marker lives in managed skill text, so reaching a pin that has *no* named role means forking the skill and giving up upstream updates to it. Naming a role, as `convention-gate` does, is what turns a marker into a knob you can reach from `served_models.local.yml`.
+Finer still exists in the skill files themselves — a trailing `<!-- sysop:role=… -->` marker overrides the role for a single pin, which is how `/auto-fix` runs its fix agents on the mechanical tier while its verification pass stays on reasoning. But that marker lives in managed skill text, so reaching a pin that has *no* named role means forking the skill and giving up upstream updates to it. Naming a role, as `convention-gate` and `executor` do, is what turns a marker into a knob you can reach from `served_models.local.yml`.
 
 That split comes from one project over one window, running the stock mapping, and its `fix` and `verify` rows recorded no spend at all — a gap in what that project logged, not a free phase. Read it as a rough shape, not a budget.
 

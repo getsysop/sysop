@@ -284,6 +284,7 @@ See [`WORKFLOW.md`](../core/companion/docs/WORKFLOW.md) §6.1 "Protecting `main`
 When it finishes, that change is shipped. **You just ran the whole loop.**
 
 > Want to see the review reasoning without merging? `/review-close --dry-run` previews.
+> To pay for the review once and answer its questions later, `/review-close --prepare` runs the review, records its questions and stops before anything merges; `/review-close --resume <run-id>` asks them in one pass and finishes the close.
 
 ## What just happened — and where to go next
 

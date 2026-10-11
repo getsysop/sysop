@@ -169,6 +169,42 @@ def test_outside_a_git_repository_it_refuses_rather_than_guessing(tmp_path):
     assert "Not inside a git repository" in r.stderr
 
 
+def test_a_bare_repository_resolves_and_is_not_called_outside_a_repository(tmp_path):
+    """`Q-383`'s rider. A bare repository has no top level, so the old
+    `--show-toplevel` gate reported "Not inside a git repository" — false: the
+    library resolves a bare repo fine. Both the operand form and running from
+    inside the bare directory must answer."""
+    src = _repo(tmp_path / "bare-src", "master")
+    script = _installed(src)
+    bare = tmp_path / "bare.git"
+    subprocess.run(["git", "clone", "-q", "--bare", str(src), str(bare)], check=True,
+                   capture_output=True)
+    # The operand form runs from a repository whose own answer DIFFERS (`main`) and
+    # from a directory that is no repository at all, so a fallback to the working
+    # directory cannot pass by agreeing with it (the round's lens 2, `B01`).
+    other = _repo(tmp_path / "other", "main")
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    for r in (_run(other, str(bare), script=script), _run(plain, str(bare), script=script),
+              _run(bare, script=script)):
+        assert "Not inside a git repository" not in r.stderr, r.stderr
+        assert (r.returncode, r.stdout) == (0, "master\n"), r.stderr
+
+
+def test_a_name_with_shell_metacharacters_is_refused_not_printed(tmp_path):
+    """`Q-383`. The round's reproduction: a branch git accepts, named by
+    `origin/HEAD`, printed at exit 0 and executed by the next unquoted
+    substitution. The payload here is inert (`true`) and is never substituted."""
+    repo = _repo(tmp_path / "unsafe", "main")
+    _git(repo, "branch", "dev;true")
+    _git(repo, "update-ref", "refs/remotes/origin/dev;true", "dev;true")
+    _git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/dev;true")
+    r = _run(repo, script=_installed(repo))
+    assert (r.returncode, r.stdout) == (1, ""), r.stdout
+    assert "Refusing this repository's default branch name: dev\\;true" in r.stderr, r.stderr
+    assert "The skill step that asked for the default branch" in r.stderr, r.stderr
+
+
 # ---------------------------------------------------------------------------
 # 3. Operands, and the missing-library failure
 # ---------------------------------------------------------------------------

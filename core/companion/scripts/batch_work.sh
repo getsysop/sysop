@@ -108,7 +108,8 @@ resolve_main_root() {
 #
 # `resolve_main_root` is left exactly as it is: it resolves the LOCK directory,
 # and that path is duplicated verbatim in claim_task.sh, close_batch.sh,
-# next_task.py, validate_tasks.py and scope_overlap.py. Changing it here alone
+# next_task.py, validate_tasks.py, scope_overlap.py and (Phase 368)
+# archive_review_tasks.py. Changing it here alone
 # would put two scripts' locks in different places in precisely the layouts where
 # both are currently wrong-but-agreeing, which is worse than wrong-and-agreeing.
 # That is a real pre-existing defect and it is filed rather than fixed here.
@@ -149,8 +150,12 @@ fi
 # primitive (origin/HEAD, else exactly one of main/master, else refuse); the
 # quiet probe is enough for `--list`, and the arms that need the name require
 # it loudly at their own site.
-source "$(dirname "${BASH_SOURCE[0]}")/_git_lib.sh" || {
-  echo "❌ _git_lib.sh is missing beside batch_work.sh — it ships with every install." >&2
+_SYSOP_GIT_LIB="$(dirname "${BASH_SOURCE[0]}")/_git_lib.sh"
+# `-f`/`-r` before `source` (Phase 368): under `set -e`, bash 3.2 (macOS's
+# /bin/bash) exits on a failed `source` of a missing or unreadable file before the
+# `||` arm runs, so the remedy below printed only on bash 4+.
+{ [[ -f "$_SYSOP_GIT_LIB" && -r "$_SYSOP_GIT_LIB" ]] && source "$_SYSOP_GIT_LIB"; } || {
+  echo "❌ _git_lib.sh is missing or unreadable beside batch_work.sh — it ships with every install." >&2
   echo "   Restore the scripts directory: bash sysop/scripts/sysop-update.sh" >&2
   exit 1
 }

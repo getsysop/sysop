@@ -44,7 +44,7 @@ What lands is deliberately less than the full install:
   until your project fills them in), and a CI workflow template in `sysop/scripts/ci/`.
 - **A permission allow-list** (`.claude/settings.json`) scoped to what these skills actually
   run, and `.claude/sysop.lock` recording `"mode": "loop"` so future updates re-apply the same shape.
-- **`CLAUDE.md` stubs** for the three sections the audit skills read — `## Scope mapping`,
+- **`CLAUDE.md` stubs** for three of the sections the audit skills read — `## Scope mapping`,
   `## Map coverage exclusions`, `## Security-critical always-include files` — appended only if
   your `CLAUDE.md` doesn't already have them (your existing content is never rewritten).
 

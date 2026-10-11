@@ -9,11 +9,13 @@ into every hook. Left inherited, the probe resolved tmpdir fixtures against the
 Invariant 9 inside the pre-push pytest gate and ``git push`` died from every
 ``/claim-task`` worktree.
 
-The helper is duplicated verbatim across all three scripts (a deliberate
-zero-dependency choice — each must import from a minimal environment). BeanRider's
-own fix reached only ``validate_tasks.py``; the parametrization here keeps the
-three copies in lockstep so a future one-site fix can't silently re-open the bug
-in the other two.
+The helper is duplicated across four scripts (a deliberate zero-dependency
+choice — each must import from a minimal environment): verbatim in the first three,
+and in ``archive_review_tasks.py`` — added by Phase 368 (``Q-398``) to resolve the
+tracker mutex — without the type hints and with one extra arm that routes a
+non-UTF-8 ``git`` output into the same fallback as a failed call. BeanRider's own fix
+reached only ``validate_tasks.py``; the parametrization here keeps the copies in
+lockstep so a future one-site fix can't silently re-open the bug in the others.
 """
 from __future__ import annotations
 
@@ -24,11 +26,12 @@ from pathlib import Path
 
 import pytest
 
+import archive_review_tasks
 import next_task
 import scope_overlap
 import validate_tasks
 
-MODULES = [validate_tasks, next_task, scope_overlap]
+MODULES = [validate_tasks, next_task, scope_overlap, archive_review_tasks]
 MODULE_IDS = [m.__name__ for m in MODULES]
 
 _GIT_DISCOVERY_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE")

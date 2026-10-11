@@ -1357,3 +1357,134 @@ def test_the_per_batch_breakdown_sums_to_the_total_it_is_printed_with(
     )
     # And the open one is named as open, not silently folded into the count.
     assert "(1 open)" in out, out
+
+
+# === Phase 368: the advisory near-miss warning tags what each line does ====
+#
+# The warning said these lines "bound nothing" and so "relocate nothing". Both
+# were false for some shapes: `## Batch 4` ends the open batch like any `## `
+# heading, and `#### Batch 4` ends nothing, so the batch above it runs on over
+# it and its tasks are archived as that batch's. The tag is checked against what
+# a real run does, not against a wording.
+
+_ADVISORY_SHAPES = {
+    "h2": "## Batch 2 — Two `Pending`",
+    "h4": "#### Batch 2 — Two `Pending`",
+    "no-space": "###Batch 2 — Two `Pending`",
+    "upper-case": "### BATCH 2 — Two `Pending`",
+    # The round's lens 2 (`Q03`): a level-3 marker followed by a TAB is a heading to
+    # `H3_HEADER_RE`, which a `startswith("### ")` reading would miss.
+    "tab-upper": "###\tBATCH 2 — Two `Pending`",
+}
+
+
+_ARCHIVE_SEED = (
+    "# Review Tasks Archive\n\n## Grand Total (Archived)\n\n"
+    "| Round | Total | Done | Deferred | Status |\n"
+    "|-------|-------|------|----------|--------|\n"
+    "| **Archive Total** | **200** | **200** | **0** | |\n")
+
+
+def _run_archiver(tmp_path, tracker, *args):
+    import subprocess
+
+    script = _installed_script(tmp_path)
+    (tmp_path / "review_tasks.md").write_text(tracker, encoding="utf-8")
+    (tmp_path / "review_tasks_archive.md").write_text(_ARCHIVE_SEED, encoding="utf-8")
+    return subprocess.run([sys.executable, str(script), *args], input="y\n",
+                          capture_output=True, text=True,
+                          env={**os.environ, "SYSOP_TRACKER_LOCK_WAIT": "1"})
+
+
+def _absorbing_tracker(header, first_status="Merged"):
+    return ("# Review Tasks\n\n## Round 2 (2026-07-27) — r\n\n"
+            f"### Batch 1 — One `{first_status}`\n\n- [x] **TASK-1**: done\n\n"
+            f"{header}\n\n- [ ] **TASK-2**: pending work\n\n## Statistics\n\ntext\n")
+
+
+@pytest.mark.parametrize("shape", sorted(_ADVISORY_SHAPES))
+def test_the_advisory_tag_matches_the_parse_and_an_absorbing_line_refuses(shape, tmp_path):
+    """The tag is checked against the parse, not a wording: a line tagged "ends
+    nothing" is one whose task `parse_archivable_batches` puts in batch 1's span.
+    And since `Q-656` (Phase 368, Wade's ruling) the run refuses on that line
+    rather than archiving TASK-2 as batch 1's, writing nothing."""
+    header = _ADVISORY_SHAPES[shape]
+    tracker = _absorbing_tracker(header)
+    rounds = art.parse_archivable_batches(tracker.splitlines(keepends=True))
+    absorbed_by_parse = any("TASK-2" in "".join(b["lines"])
+                            for r in rounds for b in r["batches"])
+
+    r = _run_archiver(tmp_path, tracker)
+    assert "refusing to archive — review_tasks.md has" not in r.stderr, (
+        "an advisory shape became the whole-run header blocker:\n" + r.stderr)
+    tagged = [ln for ln in r.stderr.splitlines() if header in ln and "   [" in ln]
+    assert len(tagged) == 1, r.stderr
+    archive = (tmp_path / "review_tasks_archive.md").read_text()
+    if absorbed_by_parse:
+        # The full tag, not a prefix: its tail said "archived with the batch above
+        # it" after `Q-656` made that never true (the round's lenses 2 and 3).
+        assert "[ends nothing: read as part of the batch above it]" in tagged[0], tagged[0]
+        assert r.returncode == 1, r.stdout + r.stderr
+        assert "sit inside a batch this run would archive" in r.stderr, r.stderr
+        assert archive == _ARCHIVE_SEED and \
+            (tmp_path / "review_tasks.md").read_text() == tracker, "a refusal wrote"
+    else:
+        assert "[ends the batch above it]" in tagged[0], tagged[0]
+        # The exit code is not this test's: a bounding line can orphan TASK-2 and
+        # trip the separate orphan refusal. What it pins is that `Q-656`'s refusal
+        # stays out of the way and TASK-2 is not archived as batch 1's.
+        assert "sit inside a batch this run would archive" not in r.stderr, r.stderr
+        assert "TASK-2" not in archive
+        assert "TASK-2" in (tmp_path / "review_tasks.md").read_text()
+
+
+def test_an_absorbing_line_under_a_batch_this_run_keeps_does_not_refuse(tmp_path):
+    """Scoped to an ARCHIVABLE batch's span (Phase 256's round measured a
+    whole-run refusal on a heading as the false refusal to avoid): under a
+    Pending batch the line costs nothing, and the Merged batch beside it archives."""
+    tracker = ("# Review Tasks\n\n## Round 2 (2026-07-27) — r\n\n"
+               "### Batch 1 — One `Merged`\n\n- [x] **TASK-1**: done\n\n"
+               "### Batch 2 — Two `Pending`\n\n- [ ] **TASK-2**: open\n\n"
+               "#### Batch 3 notes\n\n- [ ] **TASK-3**: open\n\n## Statistics\n\ntext\n")
+    r = _run_archiver(tmp_path, tracker)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "sit inside a batch this run would archive" not in r.stderr
+    archive = (tmp_path / "review_tasks_archive.md").read_text()
+    assert "TASK-1" in archive and "TASK-3" not in archive
+
+
+def test_an_absorbing_line_just_before_an_archivable_batch_is_not_inside_it(tmp_path):
+    """The span edges, both ways (the round's lens 2, `Q02`: an off-by-one in
+    the line-to-index step survived). A `####` line closing a Pending batch sits
+    one line above a Merged one; it is not in that batch's span and must not
+    refuse. And one that is the LAST line of a Merged batch's span must."""
+    before = ("# Review Tasks\n\n## Round 2 (2026-07-27) — r\n\n"
+              "### Batch 1 — One `Pending`\n\n- [ ] **TASK-1**: open\n"
+              "#### Batch 2 notes\n"
+              "### Batch 3 — Three `Merged`\n\n- [x] **TASK-3**: done\n\n## Statistics\n\ntext\n")
+    r = _run_archiver(tmp_path, before)
+    assert r.returncode == 0 and "sit inside a batch this run would archive" not in r.stderr, r.stderr
+    last = ("# Review Tasks\n\n## Round 2 (2026-07-27) — r\n\n"
+            "### Batch 1 — One `Merged`\n\n- [x] **TASK-1**: done\n"
+            "#### Batch 2 notes\n"
+            "### Batch 3 — Three `Pending`\n\n- [ ] **TASK-3**: open\n\n## Statistics\n\ntext\n")
+    sub = tmp_path / "last"
+    sub.mkdir()
+    r = _run_archiver(sub, last)
+    assert r.returncode == 1 and "sit inside a batch this run would archive" in r.stderr, r.stderr
+
+
+def test_an_absorbing_line_refuses_the_dry_run_too(tmp_path):
+    """Before the preview, like the header and fence refusals: a preview whose
+    counts include an absorbed task is the report an operator would act on."""
+    tracker = _absorbing_tracker(_ADVISORY_SHAPES["h4"])
+    r = _run_archiver(tmp_path, tracker, "--dry-run")
+    assert r.returncode == 1 and "sit inside a batch this run would archive" in r.stderr
+
+
+def test_the_advisory_tags_are_not_all_one_kind(tmp_path):
+    """Non-vacuity for the test above: both outcomes really occur."""
+    near = art.near_miss_batch_headers(list(_ADVISORY_SHAPES.values()))
+    absorbing = [t for _, t in near
+                 if not (t.startswith("## ") or art.H3_HEADER_RE.match(t))]
+    assert absorbing and len(absorbing) < len(near), near

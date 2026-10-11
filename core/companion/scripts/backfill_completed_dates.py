@@ -259,7 +259,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         with open(index_path, encoding="utf-8", errors="replace") as f:
             data = yaml.safe_load(f)
-    except (OSError, yaml.YAMLError) as e:
+    except Exception as e:  # OSError, or any parse failure: not only YAMLError (`Q-621`)
         print(f"ERROR: cannot read {index_path.name}: {_sanitize_log(e)}", file=sys.stderr)
         return 1
 

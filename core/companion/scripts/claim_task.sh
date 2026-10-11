@@ -102,8 +102,12 @@ done
 # submodules. The `git-common-dir` derivation below is the same one this file
 # already uses twice for `sysop/runtime/locks/`, and the same one `batch_work.sh`
 # and `close_batch.sh` reach through their own `resolve_main_root`.
-source "$(dirname "${BASH_SOURCE[0]}")/_git_lib.sh" || {
-  echo "❌ _git_lib.sh is missing beside claim_task.sh — it ships with every install." >&2
+_SYSOP_GIT_LIB="$(dirname "${BASH_SOURCE[0]}")/_git_lib.sh"
+# `-f`/`-r` before `source` (Phase 368): under `set -e`, bash 3.2 (macOS's
+# /bin/bash) exits on a failed `source` of a missing or unreadable file before the
+# `||` arm runs, so the remedy below printed only on bash 4+.
+{ [[ -f "$_SYSOP_GIT_LIB" && -r "$_SYSOP_GIT_LIB" ]] && source "$_SYSOP_GIT_LIB"; } || {
+  echo "❌ _git_lib.sh is missing or unreadable beside claim_task.sh — it ships with every install." >&2
   echo "   Restore the scripts directory: bash sysop/scripts/sysop-update.sh" >&2
   exit 1
 }
@@ -467,7 +471,7 @@ rel = os.path.relpath(index_path, main_root)
 try:
     with open(index_path, encoding="utf-8") as f:
         data = yaml.safe_load(f)
-except (OSError, UnicodeDecodeError) as e:
+except Exception as e:
     print(f"ERROR: {rel} could not be read ({type(e).__name__}: {e})")
     sys.exit(1)
 
@@ -704,7 +708,7 @@ import os, sys, yaml
 try:
     with open(os.environ["INDEX_PATH"], encoding="utf-8") as fh:
         yaml.safe_load(fh)
-except (OSError, UnicodeDecodeError, yaml.YAMLError) as e:
+except Exception as e:  # not only YAMLError: `2026-09-31` raises ValueError (Q-621)
     print(f"{type(e).__name__}: {e}")
     sys.exit(1)
 PY
@@ -797,7 +801,7 @@ index_path = os.environ["INDEX_PATH"]
 try:
     with open(index_path, encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
-except (OSError, UnicodeDecodeError) as e:
+except Exception as e:
     print(f"ERROR: tasks/index.yml could not be read ({type(e).__name__}: {e})")
     sys.exit(1)
 
@@ -895,6 +899,19 @@ fi
 TASK_ID="${1:?Usage: claim_task.sh [--branch|--clone|--lock] <TASK_ID> <BRANCH_NAME> [AGENT_NAME]}"
 BRANCH_NAME="${2:?Usage: claim_task.sh [--branch|--clone|--lock] <TASK_ID> <BRANCH_NAME> [AGENT_NAME]}"
 AGENT_NAME="${3:-anonymous}"
+# The name is written into the lock as `agent: <name>`, so a consumer can tell its
+# own claims from a human's (`/auto-build --agent`, Phase 361; `sitrep_survey.py
+# --json` carries it as `tasks[].agent`). A newline would add fields to the lock,
+# `: ` or `#` would change the key's value for a YAML reader, and a space can be
+# trimmed by one reader and kept by another. One token, refused before any write.
+# A YAML reader still retypes some legal tokens (`null`, `No`, `007`); the shipped
+# readers line-read the field once the lock parses, and a consumer should
+# compare `tasks[].agent`.
+_AGENT_NAME_RE='^[A-Za-z0-9][A-Za-z0-9._@+-]{0,63}$'
+if [[ ! "$AGENT_NAME" =~ $_AGENT_NAME_RE ]]; then
+  echo "❌ AGENT_NAME must be one token of letters, digits and . _ @ + - (at most 64, starting with a letter or digit); got: $(printf '%q' "$AGENT_NAME")" >&2
+  exit 1
+fi
 
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || {
   echo "❌ Not inside a git repository." >&2
