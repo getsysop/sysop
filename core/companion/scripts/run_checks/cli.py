@@ -43,6 +43,8 @@ from .baseline import (
     legacy_entries,
     load_baseline,
     migrate_baseline,
+    unmatched_entries,
+    unregistered_entries,
     write_baseline,
 )
 from .config import parse_checks_yml
@@ -131,7 +133,12 @@ def _pending_rounds_note(repo_root, stale_seconds=2 * 3600):
     train consumers to tune the signal out.
 
     Never raises. A probe that breaks the pre-scan would be a worse defect than
-    the silence it reports on.
+    the silence it reports on. A timeout, though, is not answered with the
+    ``None`` a probe that looked and found nothing returns (`Q-278`):
+    accounting.py holds a timeout to be ``failed``, so it returns a note saying
+    the check did not run. Not the repo_root fallback the non-git branch takes —
+    from a worktree that reads the wrong tree and answers "none" with
+    confidence. Other OSErrors still return ``None``.
     """
     try:
         result = subprocess.run(
@@ -169,6 +176,15 @@ def _pending_rounds_note(repo_root, stale_seconds=2 * 3600):
             f"    ⚠ {len(stale)} review round(s) started and never completed: "
             f"{shown}{more}\n"
             "      their findings are absent or partial — re-run the skill; "
+            "markers live in sysop/runtime/pending-rounds/"
+        )
+    except subprocess.TimeoutExpired:
+        # Ahead of the arm below, which would otherwise take it: TimeoutExpired
+        # IS a SubprocessError.
+        return (
+            "    ⚠ review-round probe did not run: `git rev-parse "
+            "--git-common-dir` timed out\n"
+            "      never-completed rounds, if any, are not reported this run; "
             "markers live in sysop/runtime/pending-rounds/"
         )
     except (OSError, subprocess.SubprocessError):
@@ -240,8 +256,28 @@ def main():
             # silently produces a relative path that breaks file lookups.
             if result.returncode != 0 or not repo_root:
                 repo_root = os.getcwd()
-        except (FileNotFoundError, subprocess.TimeoutExpired):
+        except FileNotFoundError:
+            # No git binary: the same answer as "not a git repo" above.
             repo_root = os.getcwd()
+        except subprocess.TimeoutExpired:
+            # NOT the cwd fallback (`Q-278`). A timeout means git is present and
+            # did not answer, so the root is unknown rather than absent — and
+            # cwd is only right by luck. Wrong when cwd is a subdirectory (a loud
+            # `checks.yml not found`); worse when cwd is a DIFFERENT configured
+            # root, which ran that project's checks instead and reported
+            # `0 failed`. (Reachable on a direct `python -m run_checks` only:
+            # run_checks.sh always passes --repo-root.) accounting.py holds a
+            # timeout to be `failed`; no RunReport exists yet to record that in,
+            # so this refuses instead, exit 1 as for the missing registry below.
+            print(
+                "Error: `git rev-parse --show-toplevel` timed out, so the "
+                "repository root is unknown.\n"
+                "   Not falling back to the current directory: it may be a "
+                "different project's root.\n"
+                "   Re-run with --repo-root <path>.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
     checks_file = os.path.join(repo_root, ".claude", "checks.yml")
     if not os.path.exists(checks_file):
@@ -379,6 +415,23 @@ def main():
             file=sys.stderr,
         )
 
+    # Entries of ANY arity whose check ran to completion and produced no finding
+    # with their key. The legacy warning above names only two-field
+    # entries, so an identity-bearing entry whose finding moved stopped
+    # suppressing with nothing said: the finding re-fired as new every run until
+    # someone read the file. Warning only — this changes no exit code.
+    unmatched = unmatched_entries(baseline, all_findings, report.executed_ids(),
+                                  repo_root)
+    if unmatched:
+        _print_unmatched(unmatched, {(wid, wfl) for wid, wfl, _m in report.waived()})
+    # And entries naming a check this checks.yml no longer defines: they can
+    # never match, and the report above cannot see them (an undefined check
+    # never executes). Read against every defined check, not this --mode's.
+    unregistered = unregistered_entries(
+        baseline, [c.get("id", "") for c in all_checks])
+    if unregistered:
+        _print_unregistered(unregistered)
+
     # Accounting summary block to stderr — keeps stdout clean for grep/wc
     # piping. Reports checks *executed* vs *skipped* vs *failed*, not just
     # selected, so a stage that skipped its precondition or crashed is visible
@@ -487,6 +540,60 @@ def main():
                 file=sys.stderr,
             )
         sys.exit(1)
+
+
+def _print_unmatched(unmatched, waived_anchors=frozenset()):
+    """Print the stale-entry warning for `unmatched_entries`' result, to stderr.
+
+    Its own text, not the legacy warning's: the remedy differs. A legacy entry
+    is converted; one of these is re-anchored from `--print-keys` (the finding
+    it excused, if it still exists, is in this run's findings under a new key) or
+    removed. Entries whose anchor file is absent are listed apart, because that
+    is either a moved file or a checkout that does not hold it.
+    """
+    def _shown(entries):
+        more = f" (+{len(entries) - 5} more)" if len(entries) > 5 else ""
+        return ", ".join(entries[:5]) + more
+
+    # A finding an inline `no-check:` marker now waives never reaches the findings or
+    # `--print-keys`, so the re-anchor hint cannot apply to its entry: say so.
+    waived = [e for e, _p in unmatched
+              if tuple(e.split("|")[:2]) in waived_anchors]
+    absent = [e for e, present in unmatched if not present and e not in waived]
+    present = [e for e, here in unmatched if here and e not in waived]
+    noun = "entry" if len(unmatched) == 1 else "entries"
+    lines = [f"\n⚠ {len(unmatched)} baseline {noun} matched no finding this run "
+             "— re-anchor or remove:"]
+    if present:
+        lines.append(f"  {_shown(present)}")
+    if absent:
+        lines.append(f"  anchor file not in this checkout: {_shown(absent)}")
+    if waived:
+        lines.append("  waived inline by a no-check marker on the same line — remove the "
+                     f"entry: {_shown(waived)}")
+    lines.append(
+        "  Each one's check ran and found nothing with the entry's key, so the entry "
+        "suppresses\n  nothing. If its finding moved, it is among this run's findings "
+        "under a new key;\n  print every current key with:\n"
+        "    bash sysop/scripts/run_checks.sh --print-keys\n"
+        "  and replace the entry's line with the new key, keeping your comment. If "
+        "the code\n  is unchanged, the check may have skipped the file (grep drops a "
+        "binary file,\n  semgrep a file over its size limit): check that before "
+        "removing the entry.")
+    print("\n".join(lines), file=sys.stderr)
+
+
+def _print_unregistered(entries):
+    """Print the warning for `unregistered_entries`' result, to stderr."""
+    more = f" (+{len(entries) - 5} more)" if len(entries) > 5 else ""
+    noun, verb = (("entry names", "it suppresses") if len(entries) == 1
+                  else ("entries name", "they suppress"))
+    print(
+        f"\n⚠ {len(entries)} baseline {noun} a check this checks.yml does not "
+        f"define — {verb} nothing:\n  {', '.join(entries[:5])}{more}\n"
+        "  If the check was renamed, re-anchor the entry from --print-keys; if it "
+        "was removed,\n  delete the entry.",
+        file=sys.stderr)
 
 
 def _run_all_stages(repo_root, classified, report):

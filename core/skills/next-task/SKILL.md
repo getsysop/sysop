@@ -32,7 +32,7 @@ implementation moved (Phase 45a, 2026-05-27, gdp commit `e9b53c4e` backport).
 
 ## Why `model: haiku` is still in the frontmatter
 
-The body is a single Bash call that the harness wraps in a haiku turn to print
+The body is a single Bash call that the harness wraps in a turn on the skill's pinned model (the `quick` role) to print
 stdout back to the user. The LLM is no longer involved in selection logic
 (that's now in `sysop/scripts/next_task.py`), but the skill envelope still follows the
 same model-frontmatter pattern every read-only lifecycle skill uses. Removing it

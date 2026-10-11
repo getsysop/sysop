@@ -277,6 +277,75 @@ class TestTheMutexPrimitive:
             "exit 0")
         assert r.returncode == 0, r.stdout + r.stderr
 
+    @pytest.mark.parametrize("wait", ["0", "abc", ""])
+    def test_a_free_mutex_is_taken_whatever_the_wait_override(self, tmp_path, wait):
+        """Phase 368: `while waited < max_wait` made NO attempt at a wait of 0, and
+        `[ 0 -lt abc ]` errored, so both refused a FREE lock as "locked by another
+        Sysop process" and offered `rm -f` for a file that did not exist. At least
+        one attempt is made, and a non-integer reads as the default."""
+        locks = tmp_path / "sysop" / "runtime" / "locks"
+        locks.mkdir(parents=True)
+        r = self._probe(
+            tmp_path,
+            f'tracker_lock_acquire "{locks}" "x" || exit 1\n'
+            f'test -f "{locks.parent}/tracker.write.lock" || exit 2\n'
+            "tracker_lock_release\nexit 0", wait=wait)
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert "integer expected" not in r.stderr, r.stderr
+
+    def test_a_held_mutex_at_a_zero_wait_still_refuses(self, tmp_path):
+        """The one attempt a zero wait makes must not be read as a free lock."""
+        locks = tmp_path / "sysop" / "runtime" / "locks"
+        locks.mkdir(parents=True)
+        (locks.parent / "tracker.write.lock").write_text("holder_pid: 424242\nholder: rival.sh\n")
+        r = self._probe(tmp_path, f'tracker_lock_acquire "{locks}" "x"', wait="0")
+        assert r.returncode == 1 and "locked by another Sysop process" in r.stderr
+
+    @pytest.mark.parametrize("wait", ["abc", "-5", "1234567", "99999999999999999999"])
+    def test_a_non_integer_wait_against_a_held_mutex_waits_rather_than_erroring(
+            self, tmp_path, wait):
+        """Read as the 120s default: the run is still waiting, quietly, after 4s.
+        Unsanitized, the loop's bound test errors every second (`integer
+        expected`) and, never true, never ends the wait at all — for a non-digit,
+        and (the round's lens 1) for a value too long for `[ -ge ]`."""
+        locks = tmp_path / "sysop" / "runtime" / "locks"
+        locks.mkdir(parents=True)
+        (locks.parent / "tracker.write.lock").write_text("holder_pid: 424242\nholder: rival.sh\n")
+        env = dict(os.environ, SYSOP_TRACKER_LOCK_WAIT=wait)
+        p = subprocess.Popen(
+            ["bash", "-c", f'source "{GIT_LIB}" || exit 99\ntracker_lock_acquire "{locks}" "x"'],
+            cwd=str(tmp_path), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+        try:
+            p.wait(timeout=4.5)
+            out, err = p.communicate()
+            pytest.fail(f"returned {p.returncode} within 4.5s of a 120s default: {err}")
+        except subprocess.TimeoutExpired:
+            p.kill()
+            out, err = p.communicate()
+        assert "Waiting for the tracker lock" in err, err
+        assert "integer expected" not in err, err
+
+    @pytest.mark.parametrize("wait,want", [("abc", "120"), ("-5", "120"), (" 5", "120"),
+                                           ("1234567", "120"), ("3", "3")])
+    def test_the_wait_actually_waited_is_the_one_the_rule_reads(self, tmp_path, wait, want):
+        """With `sleep` stubbed to return at once, the refusal reports the wait it
+        used, so a non-integer read as 5 cannot pass for the 120s default (the
+        round's lens 2, `G12`; the 4.5s horizon above cannot tell them apart)."""
+        locks = tmp_path / "sysop" / "runtime" / "locks"
+        locks.mkdir(parents=True)
+        (locks.parent / "tracker.write.lock").write_text("holder_pid: 424242\nholder: rival.sh\n")
+        shim = tmp_path / "shim"
+        shim.mkdir()
+        (shim / "sleep").write_text("#!/bin/sh\nexit 0\n")
+        (shim / "sleep").chmod(0o755)
+        env = dict(os.environ, SYSOP_TRACKER_LOCK_WAIT=wait,
+                   PATH=f"{shim}{os.pathsep}{os.environ.get('PATH', '')}")
+        r = subprocess.run(["bash", "-c", f'source "{GIT_LIB}" || exit 99\n'
+                            f'tracker_lock_acquire "{locks}" "x"'],
+                           cwd=str(tmp_path), capture_output=True, text=True, env=env, timeout=60)
+        assert r.returncode == 1, r.stderr
+        assert f"waited {want}s." in r.stderr, r.stderr
+
     def test_release_without_acquire_is_a_no_op(self, tmp_path):
         """The EXIT trap in `close_batch.sh` fires on every path, including ones
         that never reached the acquire."""

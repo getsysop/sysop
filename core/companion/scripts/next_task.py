@@ -371,9 +371,9 @@ def load_index(index_path: Path | None = None) -> dict[str, Any]:
     try:
         with open(index_path, "r", encoding="utf-8") as fh:
             data = yaml.safe_load(fh)
-    except (yaml.YAMLError, OSError, UnicodeDecodeError) as e:
+    except Exception as e:  # any parse failure, not only YAMLError (`Q-621`)
         print(
-            f"ERROR: {'YAML parse error in' if isinstance(e, yaml.YAMLError) else 'cannot read'}"
+            f"ERROR: {'cannot read' if isinstance(e, (OSError, UnicodeDecodeError)) else 'YAML parse error in'}"
             f" {index_path}: {_sanitize_log(str(e)[:500])}", file=sys.stderr,
         )
         raise SystemExit(1)
@@ -504,7 +504,8 @@ def pick_next_task(
     # scoped because the claimable pool is phase-scoped: only a same-phase
     # dependent becoming ready enlarges the next pool. Sorting high-unlock
     # tasks first is unblocker-first ordering — do the foundational task now so
-    # more work becomes claimable next (mirrors /auto-build Step 1).
+    # more work becomes claimable next (mirrors /auto-build Step 1 without a
+    # task-ID subset; a subset also counts named dependents there).
     unlock_count: dict[str, int] = {}
     for t in tasks:
         if not isinstance(t, dict):

@@ -16,6 +16,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "core/companion/scripts/claim_task.sh"
 VALIDATE = REPO_ROOT / "core/companion/scripts/validate_tasks.py"
@@ -444,6 +446,81 @@ class TestLockSchema:
         assert m, "no expires line"
         assert re.match(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$", m.group(1)), \
             f"expires not ISO-8601: {m.group(1)!r}"
+
+
+class TestAgentName:
+    """Phase 361: the agent name lands in the lock as `agent: <name>`, and
+    `/auto-build --agent` exists so a later reader can tell its own claims from
+    a human's by equality. A name that adds a line, changes the YAML, or can be
+    trimmed differently by two readers is refused before anything is written."""
+
+    @pytest.mark.parametrize("name", [
+        "auto\nbranch: evil",   # a newline adds a field to the lock
+        "a: b",                  # `: ` re-keys the value for a YAML reader
+        "x #y",                  # `#` starts a YAML comment
+        "two words",             # a space one reader trims and another keeps
+        "-lead",                 # must start with a letter or digit
+        "a" * 65,                # over the 64-character bound
+        "<AGENT_NAME>",          # an unsubstituted skill placeholder
+        # Phase 361 round (guards lens): each refused character on its own, with
+        # no space beside it, or widening the class for one of them walks through.
+        "a:b", "a#b", "a=b", "a\tb", "a\rb", 'a"b', "a'b", "a$b", "a\\b",
+        "a\nb", "a/b", "a,b", "a;b",  # a lone newline adds a lock line
+        "_lead", ".lead",        # the first character is a letter or digit
+        "café", "\uff21",        # a non-ASCII letter, a fullwidth A
+    ])
+    def test_a_bad_name_is_refused_before_any_write(self, tmp_path, name):
+        repo = _repo(tmp_path / "repo")
+        r = _run(repo, "--branch", "--lock", "T-1", "feat/x", name)
+        assert r.returncode != 0
+        assert "AGENT_NAME must be one token" in r.stderr
+        assert not (repo / "sysop/runtime/locks" / "T-1.lock").exists()
+        branches = subprocess.run(
+            ["git", "branch", "--list", "feat/x"], cwd=str(repo),
+            capture_output=True, text=True, check=True,
+            env={**os.environ, **_GIT_ISOLATION},
+        ).stdout.strip()
+        assert branches == "", "the branch was created before the refusal"
+
+    @pytest.mark.parametrize("name", ["autopilot", "Agent-7", "a.b_c@d+e-f", "7" * 64])
+    def test_a_good_name_is_written_verbatim(self, tmp_path, name):
+        repo = _repo(tmp_path / "repo")
+        r = _run(repo, "--branch", "--lock", "T-1", "feat/x", name)
+        assert r.returncode == 0, r.stderr
+        lock = (repo / "sysop/runtime/locks" / "T-1.lock").read_text()
+        assert f"\nagent: {name}\n" in lock
+
+    @pytest.mark.parametrize("name", ["two words", "a:b", "<AGENT_NAME>"])
+    def test_the_default_worktree_mode_refuses_before_any_write(self, tmp_path, name):
+        """`/auto-build` Step 5.2 runs `--lock` with no mode flag, which is the
+        worktree mode: nothing above exercised it."""
+        repo = _repo(tmp_path / "repo")
+        r = _run(repo, "--lock", "T-1", "feat/x", name)
+        assert r.returncode != 0
+        assert "AGENT_NAME must be one token" in r.stderr
+        assert not (repo / "sysop/runtime/locks" / "T-1.lock").exists()
+        assert not (tmp_path / "repo-t-1").exists(), "the worktree was created first"
+        wt = subprocess.run(
+            ["git", "worktree", "list", "--porcelain"], cwd=str(repo),
+            capture_output=True, text=True, check=True,
+            env={**os.environ, **_GIT_ISOLATION},
+        ).stdout
+        assert wt.count("worktree ") == 1, wt
+
+    def test_the_default_worktree_mode_writes_the_name(self, tmp_path):
+        repo = _repo(tmp_path / "repo")
+        r = _run(repo, "--lock", "T-1", "feat/x", "autopilot")
+        assert r.returncode == 0, r.stderr
+        lock = (repo / "sysop/runtime/locks" / "T-1.lock").read_text()
+        assert "\nagent: autopilot\n" in lock
+        assert (tmp_path / "repo-t-1").is_dir()
+
+    def test_the_default_still_passes_its_own_check(self, tmp_path):
+        repo = _repo(tmp_path / "repo")
+        r = _run(repo, "--branch", "--lock", "T-1", "feat/x")
+        assert r.returncode == 0, r.stderr
+        lock = (repo / "sysop/runtime/locks" / "T-1.lock").read_text()
+        assert "\nagent: anonymous\n" in lock
 
 
 class TestWorktreeMode:

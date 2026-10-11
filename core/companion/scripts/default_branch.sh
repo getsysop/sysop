@@ -39,6 +39,10 @@
 #             LOCAL branch name and never a remote-qualified ref, exit 0.
 #   failure → nothing on stdout, the library's diagnostic (which names the git
 #             command that settles it) on stderr, exit 1.
+#   refusal → a failure, for a name outside `[A-Za-z0-9._/-]+` or starting with
+#             `-` (`Q-383`): git accepts `main;touch${IFS}x` as a ref name, and
+#             the substitution sites are unquoted, so such a name is never
+#             printed — the diagnostic shows it escaped and says why.
 #
 # Empty stdout on failure is deliberate — an empty operand is never a WRONG
 # branch, so nothing here can silently compare against a branch that is not
@@ -79,13 +83,26 @@ esac
 # and a skill that runs this from a task worktree should not have to know that.
 # Anchoring to the caller's own root rather than `.` means a fence that has
 # `cd`'d into a subdirectory still resolves.
-REPO_ROOT="$(git -C "${1:-.}" rev-parse --show-toplevel 2>/dev/null)" || {
+#
+# A BARE repository has no top level, so `--show-toplevel` fails there — and
+# this used to report that as "Not inside a git repository", which is false:
+# the library resolves a bare repo correctly (`Q-383`'s rider). `--git-dir`
+# answers for both shapes, so it is the gate; the bare repo is then probed
+# through its operand, which is what every `git -C` in the library does anyway.
+if ! git -C "${1:-.}" rev-parse --git-dir >/dev/null 2>&1; then
   echo "❌ Not inside a git repository: ${1:-$PWD}" >&2
   exit 1
-}
+fi
+# An empty answer at exit 0 (older gits, in a bare repo) takes the same fallback.
+REPO_ROOT="$(git -C "${1:-.}" rev-parse --show-toplevel 2>/dev/null)" || true
+[[ -n "$REPO_ROOT" ]] || REPO_ROOT="${1:-.}"
 
-source "$(dirname "${BASH_SOURCE[0]}")/_git_lib.sh" || {
-  echo "❌ _git_lib.sh is missing beside default_branch.sh — it ships with every install." >&2
+_SYSOP_GIT_LIB="$(dirname "${BASH_SOURCE[0]}")/_git_lib.sh"
+# `-f`/`-r` before `source` (Phase 368): under `set -e`, bash 3.2 (macOS's
+# /bin/bash) exits on a failed `source` of a missing or unreadable file before the
+# `||` arm runs, so the remedy below printed only on bash 4+.
+{ [[ -f "$_SYSOP_GIT_LIB" && -r "$_SYSOP_GIT_LIB" ]] && source "$_SYSOP_GIT_LIB"; } || {
+  echo "❌ _git_lib.sh is missing or unreadable beside default_branch.sh — it ships with every install." >&2
   echo "   Restore the scripts directory: bash sysop/scripts/sysop-update.sh" >&2
   exit 1
 }

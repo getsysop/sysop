@@ -1362,6 +1362,21 @@ def test_every_state_the_classifier_emits_is_documented_in_the_skill():
             f"escape the table check"
         )
         emitted.add(module_consts[ident])
+    # Phase 361 (round, claims lens): a state passed as a KEYWORD to
+    # `TaskState(...)` — `state=_LOCK_UNREADABLE_STATE` — matched neither form
+    # above, so deleting that row from the table left this test green.
+    for tok in re.findall(r'\bstate=([A-Za-z_][A-Za-z0-9_]*|"[^"]*")\s*,', body):
+        if tok in ("state", "stall_state"):
+            continue  # the variable assigned above, or `_claim_stall`'s, resolved below
+        if tok.startswith('"'):
+            emitted.add(tok.strip('"'))
+            continue
+        assert tok in module_consts, (
+            f"_classify_task passes state={tok}, which is not a module-level string "
+            f"constant — this guard cannot resolve it"
+        )
+        emitted.add(module_consts[tok])
+    assert "lock unreadable" in emitted, "the keyword-argument form is not being read"
 
     # **Phase 237: the extraction went blind and this is the repair, not a second
     # guard.** `_claim_stall` returns its state through a module constant, so
@@ -1416,8 +1431,9 @@ def test_every_state_the_classifier_emits_is_documented_in_the_skill():
     # Phase 252 extended this deliberately: `_PARKED_WIP_STATE` is assigned by
     # `_classify_task` itself (the park-with-commits arm, `Q-362`), and it is
     # resolved above through the module's string constants — so it is pinned
-    # here by name, not admitted by a pattern.
-    assert indirect == {"stall_state", "_PARKED_WIP_STATE"}, (
+    # here by name, not admitted by a pattern. Phase 352 extended it the same way
+    # for `_MERGED_STATE` (`Q-623` / `Q-546`, a branch a previous close squash-merged).
+    assert indirect == {"stall_state", "_PARKED_WIP_STATE", "_MERGED_STATE"}, (
         f"unexpected identifier-fed `state =` assignments in _classify_task: "
         f"{sorted(indirect)}. Each one hides its state from this guard's literal "
         f"extraction — route it through _claim_stall, resolve it through a "
@@ -1441,6 +1457,13 @@ def test_every_state_the_classifier_emits_is_documented_in_the_skill():
         for i in re.findall(r'state = ([A-Z_][A-Z0-9_]*)', body)
         if i in module_consts
     }
+    # ...and of the keyword form (Phase 361), unanchored, constants and literals.
+    loose |= {
+        module_consts[i]
+        for i in re.findall(r'state=(_[A-Z][A-Z0-9_]*)', body)
+        if i in module_consts
+    }
+    loose |= set(re.findall(r'state="([^"]+)"', body))
     loose.discard("unknown")
     assert emitted == loose, (
         f"the two extractions disagree — the anchored one is missing "
@@ -1458,6 +1481,21 @@ def test_every_state_the_classifier_emits_is_documented_in_the_skill():
     assert not missing, (
         "these states are emitted by sitrep_survey.py but absent from the "
         "/sitrep skill's state table:\n" + "\n".join(f"  {m}" for m in missing)
+    )
+    # Phase 361 (round, guards lens): the substring check above passed a state
+    # renamed to a PREFIX of its row (`merged, close pending` -> `merged, close`),
+    # and it never looked the other way. `sitrep_survey.py --json` now tells a
+    # consumer `tasks[].state` takes exactly this table's values, so compare the
+    # first column as a set, both ways.
+    cells = set()
+    for row in skill[t_start:t_end].splitlines()[2:]:
+        if not row.startswith("|"):
+            continue
+        cells.add(row.split("|")[1].strip().replace("**", "").replace("`", "").lower())
+    assert len(cells) >= 10, f"state-table first column parsed to {sorted(cells)}"
+    assert emitted == cells, (
+        f"emitted but not a table row: {sorted(emitted - cells)}; "
+        f"a table row nothing emits: {sorted(cells - emitted)}"
     )
 
 
@@ -1607,7 +1645,7 @@ def test_run_survey_wires_the_resolver_to_the_classifier(tmp_path, monkeypatch):
     monkeypatch.setattr(ss, "_read_index", lambda root, unreadable=None: {"FEAT-1": {"status": "in_progress"}})
     monkeypatch.setattr(ss, "_read_review_batches", lambda root, unreadable=None: [])
     monkeypatch.setattr(ss, "_commits_unpushed", lambda b, r: 0)
-    monkeypatch.setattr(ss, "_worktree_dirty", lambda p: False)
+    monkeypatch.setattr(ss, "_worktree_dirty", lambda p, *rest: False)
     monkeypatch.setattr(ss, "_find_discrepancies", lambda *a, **k: [])
     monkeypatch.setattr(ss, "_open_roadmap_ids", lambda idx: [], raising=False)
     monkeypatch.setattr(ss, "_read_locks", lambda root, unreadable=None: [
@@ -1639,7 +1677,7 @@ def test_run_survey_lock_loop_skips_only_review_batch_locks(tmp_path, monkeypatc
     monkeypatch.setattr(ss, "_read_index", lambda root, unreadable=None: index)
     monkeypatch.setattr(ss, "_read_review_batches", lambda root, unreadable=None: [])
     monkeypatch.setattr(ss, "_commits_unpushed", lambda b, r: 0)
-    monkeypatch.setattr(ss, "_worktree_dirty", lambda p: False)
+    monkeypatch.setattr(ss, "_worktree_dirty", lambda p, *rest: False)
     monkeypatch.setattr(ss, "_find_discrepancies", lambda *a, **k: [])
     monkeypatch.setattr(ss, "_open_roadmap_ids", lambda idx: [], raising=False)
     monkeypatch.setattr(ss, "_commits_ahead_of_main", lambda b, r: [])

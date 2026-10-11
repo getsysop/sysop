@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # ──────────────────────────────────────────────────────────────
 # pre-merge-commit — Runs before a merge completes on the
-# protected branch (default: main). If tests or builds fail,
-# the merge is BLOCKED.
+# protected branch (default: the repository's default branch,
+# resolved — see PROTECTED_BRANCH below). If tests or builds
+# fail, the merge is BLOCKED.
 #
 # Bypass (not recommended): git merge --no-verify
 #
@@ -10,7 +11,9 @@
 # and frontend-build commands based on the conventions in
 # CLAUDE.md and convention_map.md.
 # See core/companion/git-hooks/examples/pre-merge-commit-python.example
-# for a worked example (Python web service + Next.js frontend).
+# for a worked example (Python web service + Next.js frontend). It is kept
+# verbatim and still hard-codes `main`: copy its checks, not its branch line —
+# the resolution block below is what gates a `master`-default repository.
 #
 # SECURITY: this hook intentionally does NOT source .env (or any
 # other secret file). Sourcing .env (a) exports every variable
@@ -23,15 +26,55 @@
 # ──────────────────────────────────────────────────────────────
 set -euo pipefail
 
-# Adjust to your project's protected branch name if not "main".
-PROTECTED_BRANCH="main"
+# The protected branch. Set it here, or export SYSOP_PROTECTED_BRANCH, to gate a
+# branch other than the repository's default; either one, when non-empty, wins.
+PROTECTED_BRANCH=""
+
+# Left empty, it is the repository's DEFAULT branch, resolved by the same
+# library the lifecycle scripts use (`Q-376`). This line used to be the literal
+# "main", so on a `master`-default repository the gate exited 0 on every merge —
+# a no-op nothing announced, which stays invisible until the day a check below
+# is uncommented and never runs.
+#
+# The library is found from the REPO ROOT, not from this file's directory:
+# `install_hooks.sh` copies this hook into `$(git rev-parse --git-path hooks)`
+# (`.git/hooks/`), so a `dirname`-relative path would name `.git/_git_lib.sh`.
+# Every failure below degrades to the literal "main" WITH a warning, never to a
+# blocked merge: a hook that cannot tell which branch it guards must not stop a
+# merge for that reason alone. The library is loaded and asked only inside
+# SUBSHELLS: `if ! source` stops `set -e`, but not a fatal error raised while the
+# file loads — an unbound variable under this hook's `set -u`, or a syntax error
+# on bash 3.2 — which killed the hook and blocked the merge (Phase 368's round).
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || REPO_ROOT=""
+[[ -n "$PROTECTED_BRANCH" ]] || PROTECTED_BRANCH="${SYSOP_PROTECTED_BRANCH:-}"
+if [[ -z "$PROTECTED_BRANCH" ]]; then
+  _lib="${REPO_ROOT:-.}/sysop/scripts/_git_lib.sh"
+  _why=""
+  # shellcheck disable=SC1090
+  if [[ -z "$REPO_ROOT" || ! -f "$_lib" ]]; then
+    _why="sysop/scripts/_git_lib.sh is not in this checkout"
+  elif ! ( source "$_lib" ) >/dev/null 2>&1; then
+    _why="sysop/scripts/_git_lib.sh could not be sourced"
+  elif ! PROTECTED_BRANCH="$( (source "$_lib" >/dev/null 2>&1 \
+                                && resolve_default_branch "$REPO_ROOT") 2>/dev/null )" \
+       || [[ -z "$PROTECTED_BRANCH" ]]; then
+    PROTECTED_BRANCH=""
+    _why="the default branch could not be resolved (run: bash sysop/scripts/default_branch.sh — it says why)"
+  fi
+  if [[ -z "$PROTECTED_BRANCH" ]]; then
+    PROTECTED_BRANCH="main"
+    echo "⚠️  pre-merge-commit: ${_why}; gating 'main'." >&2
+    echo "   To choose the branch, set PROTECTED_BRANCH in this hook or export SYSOP_PROTECTED_BRANCH." >&2
+  fi
+  unset _lib _why
+fi
 
 TARGET_BRANCH=$(git rev-parse --abbrev-ref HEAD)
 if [[ "$TARGET_BRANCH" != "$PROTECTED_BRANCH" ]]; then
   exit 0
 fi
 
-REPO_ROOT="$(git rev-parse --show-toplevel)"
+[[ -n "$REPO_ROOT" ]] || REPO_ROOT="$(git rev-parse --show-toplevel)"
 CHANGED=$(git diff --cached --name-only 2>/dev/null || git diff HEAD~1 --name-only 2>/dev/null || echo "")
 if [[ -z "$CHANGED" ]]; then
   exit 0

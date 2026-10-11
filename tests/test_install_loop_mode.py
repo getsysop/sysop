@@ -17,7 +17,7 @@ at. Two layers:
      than silently leaking into (or dropping out of) the "smallest install".
 
   2. End-to-end — a real `--mode loop` install must ship *exactly* the loop
-     bundle and nothing lifecycle, write the 26-rule hookless settings.json,
+     bundle and nothing lifecycle, write the 27-rule hookless settings.json,
      leave a clean root footprint, record `mode: loop`, and satisfy the full
      mode/update state machine (preserve on --update, additive loop→full
      upgrade, rejected full→loop downgrade).
@@ -65,29 +65,33 @@ LOOP_SCRIPTS = {
     "migrate_skill_model.py", "resolve_skill_models.py", "review_index.py",
     "run_checks_impl.py", "run_checks.sh", "security_partition.py",
     "self_check.sh", "sysop-update.sh",
+    # Phase 368 (`Q-376`): the shipped `pre-merge-commit` hook, armed in both
+    # modes, sources `_git_lib.sh` to resolve the protected branch, and its
+    # fallback warning tells the operator to run `default_branch.sh`.
+    "_git_lib.sh", "default_branch.sh",
 }
 EXCLUDED_SCRIPTS = {
-    # Phase 252 (`Q-365`): the shared bash primitive sourced by batch_work.sh,
-    # close_batch.sh and cleanup_worktrees.sh — all three lifecycle, so it
-    # ships with them and not without them.
-    "_git_lib.sh",
-    # Phase 254 (`Q-377`): the skill-facing entry point for that same library.
-    # Excluded for the library's reason and one of its own — it sources
-    # `_git_lib.sh` from beside itself, so shipping it without the library
-    # would install a script whose only behaviour is to fail loudly. No
-    # loop-mode skill has a branch-name site to resolve.
-    "default_branch.sh",
     "backfill_completed_dates.py", "batch_work.sh", "claim_task.sh",
     # Phase 237: a `tasks/index.yml` writer, so it is lifecycle. Loop mode
     # installs no task queue at all, which is what makes this a classification
     # rather than a judgement call.
     "clear_user_action.py",
     "cleanup_worktrees.sh", "close_batch.sh", "next_task.py",
-    "parse_subagent_envelope.py", "permission_denied_hook.py",
+    "parse_subagent_envelope.py",
+    # Phase 353 (`Q-625`): Step 4c 1c's hold test, a pending-doc writer. Loop
+    # mode installs no `/review-close` and no pending docs.
+    "pending_doc_hold.py",
+    # Phase 354 (`Q-633`): the executors' and `/review-close`'s ignored-file
+    # check. Loop mode installs none of the three.
+    "ignored_refs.py",
+    # Phase 363 (`Q-603`): `/review-close --prepare`/`--resume`'s run directory.
+    # Loop mode installs no `/review-close`.
+    "close_run.py",
+    "permission_denied_hook.py",
     "pr_dependabot.py", "scope_overlap.py", "sitrep_survey.py",
     "validate_tasks.py",
 }
-LOOP_ALLOW_COUNT = 26
+LOOP_ALLOW_COUNT = 27
 # The exact loop-mode allow-list (LOOP_ONLY_SPEC § "Leg 1 findings"). Asserting
 # the *set*, not just the count, is what stops a wrong-but-same-size permission set
 # (e.g. a dropped `gh release create` swapped in for a loop rule) shipping green.
@@ -105,6 +109,8 @@ EXPECTED_LOOP_ALLOW = {
     "Bash(bash sysop/scripts/run_checks.sh)",
     "Bash(bash sysop/scripts/run_checks.sh:*)",
     "Bash(bash sysop/scripts/install_hooks.sh)",
+    # Phase 368: the armed hook's fallback warning names it, and loop mode now ships it.
+    "Bash(bash sysop/scripts/default_branch.sh)",
     # Phase 184: self_check.sh ships in BOTH modes and the installer's own
     # post-install footer prescribes it, so a loop-mode consumer met a
     # permission prompt on the first thing the install told them to run.

@@ -24,7 +24,7 @@ Source of truth for the project's task queue. Replaces the single-file `product_
 | `/claim-task <ID>` | `index.yml`, body | flips `status: open → in_progress` in `index.yml`; creates `sysop/runtime/locks/<ID>.lock`; its executor writes the branch's `## Test decision` / `## Also fixed` records |
 | `/auto-build` | `index.yml`, bodies, `sysop/runtime/locks/*.lock` | the batch equivalent of `/claim-task`: claims each task in the batch and its executors write the same branch records |
 | `/document-work` | `index.yml`, body | verifies referenced IDs exist; may file a new follow-up entry + body, or write `## Also fixed` — the two carve-outs to its own do-not-modify rule |
-| `/review-close` | `index.yml`, body | sets `status: done` + `completed_date`; `git mv` body to `archive/`; files or extends entries by `/add-task`'s route (reviewer notes `4a-fix` did not fix, and a smoke check answered "unrunnable as specified") |
+| `/review-close` | `index.yml`, body | sets `status: done` + `completed_date`; `git mv` body to `archive/`; files or extends entries by `/add-task`'s route (reviewer notes `4a-fix` did not fix, a smoke check answered "unrunnable as specified", and a smoke FAIL waived at merge) |
 | `/release` | `index.yml` (done tasks since last tag → highlights), git history | writes a `CHANGELOG.md` entry (uncommitted) + creates/pushes an annotated tag; optional GitHub Release. Write-side, human-gated, dry-run by default; never rewrites a version manifest |
 
 ## Rules

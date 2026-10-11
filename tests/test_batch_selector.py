@@ -141,10 +141,12 @@ def test_the_narrowing_is_stated_before_the_lane_split_that_consumes_it(skill):
 def test_the_selector_narrows_and_is_licensed_to_do_nothing_else(skill):
     """Intersection, plus a forbidden-licence check rather than a phrase check.
 
-    `/auto-build`'s equivalent invariant is stated at `auto-build:59` — "never a
-    bypass". The failure this guards is not the word going missing; it is a
-    sentence beside it that gives the selector authority to include a batch the
-    pool rejected.
+    `/auto-build`'s subset no longer matches this: since Phase 356 (`Q-635`) a
+    named task ID lifts the current-focus filter, and only that one. The
+    siblings have no current-focus filter, so the invariant here is unchanged.
+    The failure this guards is not the word going missing; it is a sentence
+    beside it that gives the selector authority to include a batch the pool
+    rejected.
     """
     block = _block_1d(skill)
     text = "\n".join(block)

@@ -30,15 +30,41 @@
 #              key of your own wins over that. A literal `opus` here would instead
 #              have silently RAISED this pin back to opus, on update, for exactly
 #              the consumers who had chosen the cheap lever.
+# planner    — the plan-only agent: /claim-task Step 7a, /auto-build Phase 6a.
+# plan-review
+#            — the adversarial reviewer of that plan: /claim-task Step 7b,
+#              /auto-build Phase 6b, and `_shared/adversarial-review.md`'s caller
+#              contract, which /plan-review also follows.
+# executor   — the agent that implements a reviewed plan: /claim-task Step 7e,
+#              /auto-build Phase 6e.
 #
-# Skills that carry no pin (and no marker) inherit the session model. That is
-# deliberate — roles govern pinned skills only; an un-pinned skill rides whatever
-# model the human picked for the session.
+#              These three were one `reasoning` pin until Phase 349, so moving
+#              execution moved review with it. Each names `reasoning` and follows
+#              it, exactly as `convention-gate` does, so a default install is
+#              unchanged. The one a consumer is likely to move is `executor`: it
+#              is where the spend concentrates, and it works from a plan that was
+#              already adversarially reviewed. A cheaper executor is also a
+#              different model from the reasoning-tier code review at
+#              /review-close — the independence `_shared/adversarial-review.md`
+#              asks for. Set its effort too — see "Effort" below.
+#
+# Every skill carries a pin. Four were un-pinned and rode the session model until
+# Phase 349 — /document-work and /triage (now `reasoning`), /sitrep (`quick`) and
+# /auto-fix's orchestrator (`mechanical`) — which on a session running a model
+# priced above `reasoning` made checklist work the most expensive work in the tree.
+# /triage is `reasoning`, not a cheaper tier, because /auto-judge invokes it mid-turn
+# and a skill's frontmatter model holds for the rest of that turn (per the Claude Code
+# docs; not measured here). The cost runs the other way for /auto-fix, which also
+# invokes it: after an untriaged batch, /auto-fix's orchestrator finishes that turn on
+# the reasoning model (its fix agents keep their own `mechanical` pin).
 roles:
   reasoning:  opus
   mechanical: sonnet
   quick:      haiku
   convention-gate: reasoning   # follows `reasoning` unless you override it
+  planner:         reasoning
+  plan-review:     reasoning
+  executor:        reasoning
 
 # ── served ────────────────────────────────────────────────────────────────────
 # The models the roles above are allowed to resolve to. sysop/scripts/check_skill_models.py
@@ -66,8 +92,10 @@ served:
 #     parameter, which is a CLOSED ENUM. `best`, `inherit`, and full model ids
 #     are each rejected with InputValidationError at spawn time (verified by
 #     making the calls, 2026-08-21). The failure lands mid-skill, at spawn time,
-#     in every skill the role governs — 15 inline pins today, 12 of them on the
-#     `reasoning` role, 2 on `convention-gate` and 1 on `mechanical`.
+#     in every skill the role governs — 17 inline pins today, 5 of them on the
+#     `reasoning` role, 9 on the three roles that follow it (`planner`,
+#     `plan-review`, `executor`), 2 on `convention-gate` and 1 on `mechanical`.
+#     `check_skill_models.py --list` prints the live set.
 #
 # check_skill_models.py fails (exit 1) when a role governing an inline pin
 # resolves to a value not listed here. If your harness accepts more, extend this
@@ -90,8 +118,10 @@ inline_models:
 #     roles:
 #       reasoning: fable
 #
-# `reasoning`, `convention-gate` and `mechanical` all govern inline pins, so map them to
-# one of the four aliases above — or, for `convention-gate`, to the name of another role.
+# Every role except `quick` governs inline pins, so map each of them —
+# `reasoning`, `mechanical`, `convention-gate`, `planner`, `plan-review`, `executor` —
+# to one of the four aliases above, or to the name of another role (as the defaults
+# for the last four do).
 # Mapping any of them to `best`, `inherit`, `opusplan`, a full model id, or a
 # provider-specific id BREAKS every agent spawn in the skills that role governs — adding
 # the value to `served:` does not help, because `served:` is Sysop's sunset allowlist and
@@ -108,6 +138,26 @@ inline_models:
 #       - inherit                    # list EVERY non-default value you map a role to —
 #                                    #   check_skill_models.py requires each role to
 #                                    #   resolve to a served entry, with no exemptions.
+#
+# Effort. A role picks a MODEL, not a reasoning effort, and the Agent tool has no
+# effort parameter. Save a level for the model under `modelSettings` in your Claude
+# Code settings: one consumer measured each spawned executor running at its own
+# model's saved level (and at the model's default, `medium` for Sonnet 5.5, when none
+# was saved), while the docs say a subagent's effort defaults to the session's — so
+# save one rather than rely on either, and read the level off the transcript. Moving
+# `executor` to a cheaper model is two settings, not one — and a saved effort level
+# is read at session start:
+#
+#     roles:
+#       executor: sonnet             # in served_models.local.yml
+#
+#     "modelSettings": { "claude-sonnet-5-5": { "effortLevel": "high" } }
+#                                    # in ~/.claude/settings.json, or the project's
+#
+# One consumer's A/B of Sonnet 5.5 against Opus 5.5 as executor, on two reviewed
+# plans (a Low and a Medium task), found the same design at every site at about
+# two-fifths of the tokens-at-list-price at `high` (a third at `medium`) — and one
+# departure from the plan at `medium`, on the cross-module task, that `high` closed.
 #
 # The local file is never overwritten and layers on top (local keys win).
 #

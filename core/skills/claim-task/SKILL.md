@@ -33,6 +33,7 @@ Read `.claude/settings.json` (and `.claude/settings.local.json` if present — a
 - `Bash(python3 -:*)` — Step 1's `--resume` validation, Step 2's `tasks/index.yml` lookup, Step 4a's yaml-round-trip status flip, Step 7a's pre-plan record and post-plan integrity check, **and every write the orchestrator makes at Steps 7-pre, 7c and its park path** (all are `python3 - <<'PY'` heredocs, single simple commands, so one rule covers them). This is deliberate: routing the orchestrator's reads and writes through an interpreter it is already permitted to run means the reshape adds **no** new permission surface, and it does not depend on the auto-classifier's treatment of bare `mkdir` / `cp` / `test`. It also survives this skill's `disallowed-tools: Edit, Write, NotebookEdit` frontmatter, which a `Write`-tool artifact write would not.
 - `Bash(python3 sysop/scripts/validate_tasks.py)` / `Bash(python3 sysop/scripts/validate_tasks.py:*)` and the `.venv/bin/python3 sysop/scripts/validate_tasks.py` / `.venv/bin/python3 sysop/scripts/validate_tasks.py:*` venv variants — Step 4c post-claim validator. Bare `python3` is the command word the step prescribes: the script self-resolves venv PyYAML via its own `sys.path` bootstrap (Phase 182), so one form serves every consumer. The `.venv/bin/python3` rules stay only so a hand-typed venv invocation is not denied.
 - `Bash(python3 sysop/scripts/scope_overlap.py:*)` (and the `.venv/bin/python3` variant) — Step 2's non-blocking overlap advisory. The `git -C <worktree> diff` it shells out to needs **no** separate rule (it's a subprocess of the permitted python call, and read-only `git` auto-passes per `_shared/permission-guard.md` § Notes). This rule is **not** load-bearing — a missing rule (or any non-zero exit) just means the advisory is skipped; the claim still proceeds.
+- `Bash(python3 sysop/scripts/ignored_refs.py:*)` — Step 7e item 5b's ignored-file check, run by the executor in its worktree.
 - `Bash(git add tasks/index.yml)` — Step 7d's human gate and Step 7f's Option C stage the index directly. It is **not** Step 4d's rule any more: Phase 261 moved that commit inside `claim_task.sh --commit-claim`, which stages and commits under the script rule above.
 
 If any are missing, stop with the `_shared/permission-guard.md` § Algorithm step 5 message (one-line reason: "creates an isolated worktree and a feature branch for the claimed task; queries + updates `tasks/index.yml` via heredoc'd python; runs the schema validator before committing the claim"). Do not proceed — unless the guard's step 3 mode check applies.
@@ -229,7 +230,7 @@ if not index_path.exists():
 try:
     with index_path.open(encoding="utf-8") as f:
         data = yaml.safe_load(f)
-except (OSError, UnicodeDecodeError) as e:
+except Exception as e:
     print(f"ERROR: tasks/index.yml could not be read ({type(e).__name__}: {e})", file=sys.stderr)
     sys.exit(2)
 
@@ -271,7 +272,7 @@ PY
 
 Hard-fail (exit and report) if the script exits non-zero. Surface the stderr message verbatim. **Exit-code contract** (typed so the parent can branch without re-parsing stderr):
 
-- `2` — `tasks/index.yml` itself missing (consumer not bootstrapped, or wrong cwd), or present but unreadable (a permission error or a byte that is not UTF-8; stderr names which).
+- `2` — `tasks/index.yml` itself missing (consumer not bootstrapped, or wrong cwd), or present but unreadable (a permission error, a byte that is not UTF-8, or YAML that does not parse; stderr names which).
 - `3` — task ID not found. The user mistyped the ID, or the task lives in `deferred/` / `archive/`. Suggest `/next-task` to find a claimable one.
 - `4` — status is neither `open` nor `in_progress` (i.e. `done` / `deferred` / unknown). The task is closed; stop. `in_progress` no longer exits here — the `--entry-state` gate above already separated `resumable` (no lock) from `held` (lock present), and re-deciding it in this heredoc would just make the resume path unreachable.
 - `5` / `6` — `body:` field missing or the body file doesn't exist on disk. The index entry is broken — `validate_tasks.py` will reject it; fix the entry before re-claiming.
@@ -378,7 +379,7 @@ index_path = Path("tasks/index.yml")
 try:
     with index_path.open(encoding="utf-8") as f:
         data = yaml.safe_load(f)
-except (OSError, UnicodeDecodeError) as e:
+except Exception as e:
     print(f"ERROR: tasks/index.yml could not be read ({type(e).__name__}: {e}). "
           "Nothing was changed.", file=sys.stderr)
     sys.exit(1)
@@ -806,7 +807,7 @@ Spawning planner for <CLAIM_ID> — plan only, no implementation. 3–10 minutes
 Spawn with the `Agent` tool:
 
 - `subagent_type`: `"general-purpose"`
-- `model`: `"opus"`
+- `model`: `"opus"` <!-- sysop:role=planner -->
 - Do **NOT** set `isolation: "worktree"` — the worktree pre-exists from Step 4; the planner `cd`s into it.
 - Do **NOT** pass `run_in_background`. <!-- skill-audit-ok: run_in_background --> It is **not** a parameter of the `Agent` tool and its schema is closed, so a compliant call raises `InputValidationError` — and a rejected tool call is itself an invitation to proceed without the step. Sub-agents have run in the background by default since Claude Code 2.1.198.
 - `description`: `"Plan <CLAIM_ID>"`
@@ -931,7 +932,7 @@ On `VIOLATED`, **do not proceed to 7b.** HEAD moved or left the task branch duri
 
 **Always.** Review is never inherited, never skipped, and never merged into another agent's job. A reviewer that did not write the plan is the property the collapsed reviewer-executor shape conceded, and recovering it is most of the point of this reshape.
 
-Same agent parameters as 7a, with `description`: `"Adversarial plan review <CLAIM_ID>"`.
+Same agent parameters as 7a except `model`: `"opus"` <!-- sysop:role=plan-review -->, with `description`: `"Adversarial plan review <CLAIM_ID>"`.
 
 `prompt`: the **contents of `<ARTIFACT_DIR>/plan.md` verbatim**, followed by the **Prompt Template** block copied verbatim from `.claude/skills/_shared/adversarial-review.md`, followed by the two paragraphs below. No other wrapper text — the shared template supplies the framing, and duplicating it here would fork it.
 
@@ -1222,7 +1223,7 @@ Three outcomes:
 
 Inputs: the (possibly revised) plan artifact, the review artifact, and your classification.
 
-Same agent parameters as 7a, with `description`: `"Execute <CLAIM_ID>"`, and `exec` substituted for `<ENVELOPE_PHASE>`.
+Same agent parameters as 7a except `model`: `"opus"` <!-- sysop:role=executor -->, with `description`: `"Execute <CLAIM_ID>"`, and `exec` substituted for `<ENVELOPE_PHASE>`.
 
 ---
 
@@ -1272,7 +1273,8 @@ Read your three inputs from disk rather than from this prompt: `<ARTIFACT_DIR>/p
 
    **This check is deliberately shallow, and you should know its limit.** `grep` cannot tell a heading in the body from one inside a fenced block, so on a body carrying a `## Plan` section — whose fence contains its own `## Test decision` line — it can report a hit that is not the record. It is here because it is nearly free and it catches the common miss while the file is still open. **The authority is the orchestrator's Step 8 read-back**, which is fence-aware and reads the branch tip. So a hit here is encouragement, not proof; a *miss* here is conclusive and you must fix it before committing.
 4. **Post-fix convention verification — BOTH maps** (`Q-352`). `git diff --name-only <default branch>...HEAD`; for each changed file look up its section in **`.claude/convention_map.md` and `.claude/security_map.md`** (with their `.project.md` overlays where present) and scan the **new/changed lines** — not just the original task locations — against those conventions. **The security map was missing here and the omission had reach:** Step 5 above has the *planner* read both maps into `## Constraints & Risks`, so this step read half of what the plan was written against, and after it nothing else read the security map before `main` — the plan reviewer routes against neither, and `/review-close` Step 2b routed against the convention map alone until its own security twin was added. This step and that twin now close the chain from both ends, and they are not redundant: this one sees **this branch in its own worktree**, that one sees the **assembled** result. Common regressions: `fetch()` without `encodeURIComponent()` on dynamic path segments; `str(e)` exposed to API responses; moved code that dropped `_sanitize_log()` wrappers; `useCallback` with incomplete dependency arrays; SELECT queries on a write-only engine. Fix regressions before committing.
-5. **Run the consumer's pre-merge verification gates.** `<project>/CLAUDE.md § Pre-merge verification` may carry `### Always` (full-tree commands) and `### Ratchet (changed files only)`. Run the commands under each subsection present. If both are absent, skip — `/review-close` will run any project-side verification at merge time (its `4a-post` step, on the merged tree). Note the division of labour: this run verifies **this branch in its own worktree** — so when the consumer ships no `## Pre-merge verification` section and this step skips, *nothing* verifies the branch in isolation; `4a-post` verifies the **assembled** result and cannot substitute for it. **One thing does still run in that case**: `4a-post` runs the Sysop pre-scan itself whether or not the consumer declared it (`Q-353`), so the promoted checks reach the merge even for a project with no declared list — on the assembled tree, which is still not this branch alone. Treat a non-zero exit like an implementation finding — fix the cause, do not silence it without a justified inline `# type: ignore[...]` or `// eslint-disable-next-line <rule> -- <reason>`.
+5. **Run the consumer's pre-merge verification gates.** `<project>/CLAUDE.md § Pre-merge verification` may carry `### Always` (full-tree commands) and `### Ratchet (changed files only)`. Run the commands under each subsection present. If both are absent, skip — `/review-close` will run any project-side verification at merge time (its `4a-post` step, on the merged tree). Note the division of labour: this run verifies **this branch in its own worktree** — so when the consumer ships no `## Pre-merge verification` section and this step skips, *nothing* verifies the branch in isolation; `4a-post` verifies the **assembled** result and cannot substitute for it. **One thing does still run in that case**: `4a-post` runs the Sysop pre-scan itself whether or not the consumer declared it (`Q-353`), so the promoted checks reach the merge even for a project with no declared list — on the assembled tree, which is still not this branch alone. Treat a non-zero exit like an implementation finding — fix the cause, do not silence it without a justified inline `# type: ignore[...]` or `// eslint-disable-next-line <rule> -- <reason>`.\
+5b. **Check for gitignored files your work reads (`Q-633`).** From `<WORKTREE_PATH>`, run `python3 sysop/scripts/ignored_refs.py . <default branch>`. **Exit 0**: go on. **Exit 1**: quote every `IGNORED-REF:` line in your final message, and do not commit the file, edit `.gitignore` or file a task for it. **Any other exit** means the script failed: put its error in your final message and go on.
 6. **Post-fix UI verification.** If the diff touches any `frontend/` files, run `.claude/skills/_shared/ui-verify.md`. Hard-fail on console errors and 5xx responses; warn on console warnings; skip cleanly with an explicit note if the dev server is not running, and surface that note verbatim in your final message.
 7. **Commit** — a SINGLE commit on the worktree branch, conventional message derived from the task title plus `<CLAIM_ID>`, with a `Doc-Work: <CLAIM_ID>` trailer on the final line of the body, separated by one blank line. That trailer is the deterministic marker `/sitrep` consumes to classify the branch as ready for `/review-close`.
 
@@ -1760,10 +1762,10 @@ delete (`claim_task.sh` runs `git branch -D`) and a force delete of a branch car
 data loss:
 
 ```bash
-git rev-list --count <default branch>..<BRANCH_NAME>
+git rev-list --count <default branch>..<BRANCH_NAME> --not --glob='refs/sysop/merged-pr-heads/*'
 ```
 
-**Expect `0`.** Option C never commits to the branch — the planner is forbidden to, and 7a's
+**Expect `0`.** See `REFERENCE.md` § *Steps 7f, 8 and 8c — the commit counts read past the recorded PR heads*. Option C never commits to the branch — the planner is forbidden to, and 7a's
 integrity check parks the claim if it did, so this step is unreachable with planner commits on
 it. A non-zero count therefore means something happened that this path does not model: **release
 without `--delete-branch`, report the count and the branch name, and stop.**
@@ -1847,7 +1849,7 @@ Read the envelope in this order — first hit wins; never go past a clean hit:
 
 **Do not delete the envelopes here.** Deleting after consumption is why a review that *did* run left no durable trace: the envelope was the one artifact no agent could forge, and it was removed at the moment it became evidence. The whole artifact set — `<ARTIFACT_DIR>` and the envelopes — persists.
 
-**What cleans it up — the close, and only the close.** Both claim kinds are covered, by two different owners because the close path has no single list carrying both. A **roadmap** claim is cleaned by `/review-close` Step 4c, which removes the lock, any park marker, and this whole `sysop/runtime/claim/<CLAIM_ID>/` directory when the task closes. A **batch** claim is cleaned by `close_batch.sh`'s `remove_claim_artifacts()`, which removes the same two things for `BATCH-<N>` — sited there because Step 4c's id list is built from `roadmap_ids` only and no batch id can reach it. Both are gated on the close having actually landed on `main`: under `pr` policy the close commits on an integration branch while `main` still reads the work open, and removing a park verdict before the merge lands would destroy the one record of why the work stopped. **Nothing removes any of it mid-lifecycle** — that is the property this reshape exists to hold, since the failure it removes is an artifact that vanished, not one that accumulated. Step 7-pre's move-aside touches the *envelope mailbox* only, to keep a previous run's envelopes from being read as this run's.
+**What cleans it up — the close, and only the close.** Both claim kinds are covered, by two different owners because the close path has no single list carrying both. A **roadmap** claim is cleaned by `/review-close` Step 4c, which removes the lock, any park marker, and this whole `sysop/runtime/claim/<CLAIM_ID>/` directory when the task closes. A **batch** claim is cleaned by `close_batch.sh`'s `remove_claim_artifacts()`, which removes the same two things for `BATCH-<N>` — sited there because Step 4c's id list is built from `roadmap_ids` only and no batch id can reach it. Only the batch half waits for the close to land on `main`. Under `pr` policy Step 4c runs on the integration branch before the PR merges, so a roadmap claim's lock, park marker and claim directory are already gone if the merge never lands. `/review-close` Step 6's *Lock-as-real-time-signal invariant* covers the lock and the park marker, not the claim directory. **Nothing removes any of it mid-lifecycle** — that is the property this reshape exists to hold, since the failure it removes is an artifact that vanished, not one that accumulated. Step 7-pre's move-aside touches the *envelope mailbox* only, to keep a previous run's envelopes from being read as this run's.
 
 **What reads it, said as plainly as the cleanup above — and what that does not buy.** All three of part B's legs now ship: close-time cleanup (leg 3), `/review-close` **Step 2e**'s per-branch artifact report (leg 1), and `/sitrep`'s **park + awaiting-approval** classification (leg 2). So the artifact set is created, read and reaped. **Both readers report and neither rejects**, which is the deliberate shape and not a gap to be closed later: an absent artifact set is surfaced where a human is already looking, and nothing is blocked on it. A blocked run is therefore conspicuous rather than impossible — do not describe either reader as a gate, and do not read "part B shipped" as "a skipped review is now prevented."
 
@@ -2069,6 +2071,8 @@ PY
 
 **If that printed `MISSING` or `TEMPLATE`, stop and say so — do not run `/document-work`.** Nothing else about the branch is wrong: the work is committed and the worktree is still checked out at `<WORKTREE_PATH>`, so the repair is to write the section into the **worktree** copy and **amend** the branch's tip commit (the executor's, or Step 8c's), then re-run the block. Report which of the two fired and what the plan's recorded decision text was, so the record is restored rather than reinvented. **Do not compose it yourself from the diff** — 7a decided it and 7b scrutinised the `Z`; writing a fresh one here substitutes an unreviewed judgment for a reviewed one, which is the substitution Step 2d exists to catch. `NOT ON BRANCH` and `UNREADABLE` are different in kind and do **not** block: neither asserts anything about the record, so both report and exit 0.
 
+**Then print any `IGNORED-REF:` lines the executor quoted (Step 7e item 5b) under the report below.**
+
 **Then report the questions the executor filed.** If `<ARTIFACT_DIR>/questions.md` holds `## ` entries, each is a finding the executor could fix only with an answer from the human, filed on the branch as a task carrying the question (Step 7e item 2b). Print every entry's finding, question, recommendation and `filed as:` id under the report below. Do not answer or fix them yourself; this skill never implements. An absent or empty file means there were none, and Steps 8b and 8c do not run.
 
 **Then ask them: run Step 8b, and 8c after it, before the report below — on option A, or on any `--resume`.** On option A a human is at the gate, and a `--resume` is a human. **On a fresh option-B run, do not ask**, because B runs unattended: the findings stay filed, and the report prints `To answer them in this branch: /claim-task <CLAIM_ID> --resume <RUN_ID>` under the questions.
@@ -2099,7 +2103,7 @@ worktree and NOT pushed. Run `/document-work` next. Do NOT merge to main —
 
 **The rewrite is not bookkeeping — without it the resume is a no-op that re-runs the executor.** `classification.md` still reads `verdict: PROCEED` at this point, because it had to for 7e to have been spawned at all. Leaving it there sends 7-pre's routing table to its last row, which re-spawns the executor with byte-identical inputs and gives the human's answer nowhere to land — so the one runtime path that actually produces a blocker question would never reach the row written for it.
 
-**On `STATUS: FAILED`** — print the `ERROR` verbatim, run `git log --oneline <default branch>..HEAD` and `git status --short` in the worktree and surface both. If substantive work landed despite the failure, let the human decide whether to recover or discard. **Do not auto-retry.**
+**On `STATUS: FAILED`** — print the `ERROR` verbatim, run `git log --oneline <default branch>..HEAD --not --glob='refs/sysop/merged-pr-heads/*'` and `git status --short` in the worktree and surface both. If substantive work landed despite the failure, let the human decide whether to recover or discard. **Do not auto-retry.**
 
 **On a malformed envelope** — print `Executor returned with a malformed envelope — treating as FAILED`, surface its prose body (which likely contains the implementation output), and check for an `_unparseable_*.json` diagnostic. Do not auto-retry.
 
@@ -2407,7 +2411,7 @@ PY
 
 - **`SPAWN=no`**: go back to Step 8's report.
 - **`SPAWNED_BEFORE`**: **do not spawn again.** Hold `TIP_BEFORE`, read the envelope below, and record it. If there is no envelope, record `MALFORMED`.
-- **`SPAWN=yes`**: hold `TIP_BEFORE` in context, and spawn one executor with the Step 7e executor prompt, **verbatim from START to END**, every placeholder substituted as 7e substitutes it except `answers` for `<ENVELOPE_PHASE>`, and the addendum below inserted after the prompt's first paragraph, its placeholders substituted too. Same agent parameters as 7a, with `description`: `"Answers <CLAIM_ID>"`.
+- **`SPAWN=yes`**: hold `TIP_BEFORE` in context, and spawn one executor with the Step 7e executor prompt, **verbatim from START to END**, every placeholder substituted as 7e substitutes it except `answers` for `<ENVELOPE_PHASE>`, and the addendum below inserted after the prompt's first paragraph, its placeholders substituted too. Same agent parameters as 7a except `model`: `"opus"` <!-- sysop:role=executor -->, with `description`: `"Answers <CLAIM_ID>"`.
 
 **START OF ANSWERS ADDENDUM**
 
@@ -2481,6 +2485,6 @@ PY
 - **`EXECUTED`**: re-run Step 8's stranded-body check and its test-decision read-back against the new tip, with their halts. Then print, under Step 8's report, each answered entry's decision and any task the answers run filed with a question. **If `/document-work` already ran on this branch**, say to re-run it: its pending doc's `branch_tip:` predates this commit, and `/review-close` Step 3b refuses a stale doc.
 - **`NO_COMMIT` or `REWRITTEN`** (the block exits 1): the executor reported success and the branch says otherwise. Handle it as `FAILED`.
 - **`BLOCKED`**: park per Step 7c with the `BLOCKER_QUESTION:` as the reason, and tell the human to resume with `/claim-task <CLAIM_ID> --resume <RUN_ID>`; Step 7-pre routes that resume to 8b. **Do not rewrite `classification.md`.** A `BLOCKED` there would send the resume to 7c and re-run the first executor over committed work.
-- **`FAILED` or `MALFORMED`**: as Step 8, surface the `ERROR`, then `git log --oneline <default branch>..HEAD` and `git status --short` in the worktree. **No auto-retry.** The filings stay wherever the executor left them, and the human decides. A retry is theirs to start: moving `answers-outcome.md` and `answers-started.md` aside and resuming routes the run to 8c, which spawns from the current tip.
+- **`FAILED` or `MALFORMED`**: as Step 8, surface the `ERROR`, then `git log --oneline <default branch>..HEAD --not --glob='refs/sysop/merged-pr-heads/*'` and `git status --short` in the worktree. **No auto-retry.** The filings stay wherever the executor left them, and the human decides. A retry is theirs to start: moving `answers-outcome.md` and `answers-started.md` aside and resuming routes the run to 8c, which spawns from the current tip.
 
 Every arm but `BLOCKED` then returns to Step 8's report.

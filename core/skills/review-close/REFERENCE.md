@@ -339,6 +339,529 @@ by demonstration, not by argument.
 
 ---
 
+## `--prepare` and `--resume` — provenance
+
+### Why a prepare stops at the end of Step 3c (`Q-603`, Phase 363)
+
+GDP measured Steps 1–3 at about USD 37–46 for one target and 326 calls for six (internal tracker #730), and
+`--dry-run` keeps none of it, so a scheduled preview paid for every Step 2b agent twice. The
+design is `tools/UNATTENDED_CLOSE_SPEC.md` (maintainer-side, not in the public mirror), and its § 1 records Wade's five answers of
+2026-10-07. The boundary is his answer (c). Step 3b asks nothing but holds the not-reversible
+writes before Step 4 that matter (the collect's composite overwrite of a doc in main, and
+`git worktree remove`), and Step 3c's answers decide what 3b does to each branch ("Hold just this
+branch" exists because an approved branch's worktree is removed at 3b). A prepare that ran 3b
+would act before the answers that should steer it.
+
+### Why a prepare records instead of asking, and what each park is
+
+A question that closes on its own is a park, never an answer
+(`_shared/plan-review-preference.md` § D). The park at each site is the spec's § 3.5: Step 2a
+step 3a's unanswered line already makes the verdict SKIP; Step 2d's park is "Hold for fix"; a
+Step 3c signal with a `BRANCH:` line holds that branch; and a Step 3c signal with no branch halts
+the resume, because there is nothing narrower to hold.
+
+**Two sites the spec listed are not recorded** (round 1, semantics lens). Step 1b's "warrants
+manual judgment" remark offers no options and the attended text falls through to the single-file
+commit, so a prepare follows the text as written. Step 3's two asks are "what should run?", which
+has no options, and a silently denied command's `!` relay, where the step forbids
+`AskUserQuestion`; a prepare leaves Step 3 not run, with the reason, and the resume runs it
+attended. A branch with a
+pending Step 2a 3a or Step 2d question still goes through Steps 2b–2e, 3 and 3c, because the
+point of a prepare is to have paid for that review once; the answer then decides its verdict.
+
+**Every stop not named as recordable halts the prepare** (inside Wade's answer (b)): a prepare
+has no instruction to record at an exit the text gives none for. The spec's § 3.3 lists the nine
+such sites before the boundary. A `VERDICT: BLOCKED` is the one stop his answer narrowed: under
+`--prepare` it stops its branch, and the attended close keeps the whole-close stop. **On the
+unpushed-main group it still halts the prepare** (round 1, semantics lens): the group's commits
+are on local `<default branch>`, which every integration branch is cut from, so there is no branch
+to hold and the blocked commits would merge.
+
+### Why a script owns the run directory
+
+The runner's memory is the thing a prepare must not depend on, and prose that says "write the
+state down" can be skipped silently. `close_run.py` gives the run fixed file names, prints each
+branch's state path, and refuses `finish` while a branch has no state file, so a prepare that
+forgot to write cannot be resumed. The staleness check is code for the same reason: a branch
+tip, a lock's bytes or a pending doc's bytes either moved or did not, and a runner comparing
+them by eye is the failure the check replaces.
+
+### What the staleness table is, and which parts are Wade's
+
+Wade's answer (a) gave three rows: a branch's tip, lock or doc re-runs that branch from Step 2a;
+the default branch re-runs Steps 3 and 3c; the conventions or maps re-run Step 2b. The rest is
+this phase's:
+
+- **`held_since:`** needs no row of its own: it is in the pending doc, whose bytes are hashed.
+- **A pending doc is hashed without its `smoke_answers:` block.** The resume records Step 3c's
+  answers into that block (its item 5) before its second `check` (item 6), and the recorder rewrites only
+  that block, so hashing it would re-run from Step 2a every branch whose smoke the human answered:
+  the Step 2b cost a prepare exists to save. The block is dropped by the recorder's own line rule.
+  The author-side pass found this re-reading the resume order against `close_run.py`.
+- **The recorded PR heads** (`refs/sysop/merged-pr-heads/*`) are keyed by PR, not by branch, so a
+  change re-runs every branch from Step 2a, where step 0b decides which landed.
+- **Worktree dirtiness** is not in the manifest. The resume runs Step 1 in full, and Step 1a's
+  class feeds Step 2a step 0 directly, so the resume's items 2 and 6 say what a changed class does.
+- **`core.hooksPath`** is reported and re-runs nothing. It changes which hooks run on the close's
+  own commits, not what any step reviewed.
+- **A branch merged or deleted since the prepare is dropped** (Wade, 2026-10-07, Phase 363's
+  opening menu), not a reason to refuse the resume. "Merged" means its recorded tip reached local
+  or `origin`'s default branch after `begin`; a tip that was already there at `begin` is a branch
+  Step 2a step 0b found landed, and stays in the run so Step 4 and Step 6 finish it.
+- **A different default branch refuses the resume.** Every comparison in Steps 1 to 3c was
+  against the recorded one, so nothing recorded would mean what it says.
+
+The default branch moving keeps a branch's Step 2b verdicts because 2b reviews `git diff
+<default>...<branch>`, anchored on the merge-base, which the default branch moving does not
+change. **The unpushed-main group is the exception** (round 2, execution lens): its diff is
+`origin/<default>...HEAD`, so a commit on local `<default branch>` since the prepare (a claim flip
+during an overnight build, or the resume's own Step 1b save) is unreviewed, and `RERUN 3` naming
+local `<default branch>` re-runs 2b for the group. Steps 3 and 3c read the default branch directly.
+
+`finish` re-reads `origin/<default branch>` because Step 3c fetches it after `begin`; comparing
+the resume against `begin`'s value would re-run Steps 3 and 3c on every resume.
+
+### Why the resume runs Step 1 and a first check before asking anything
+
+The spec's § 3.4 order was load, ask, apply, check, re-run, Step 3b, and did not place Step 1. The
+first build put Step 1 after the answers on a false reason (that a Step 2a 3a "Commit it" answer in
+a `--clone` workspace needs Step 1-pre; that answer is offered only for a linked worktree). Round
+1's semantics lens then showed the order defeating Wade's ruling: answers applied before `check`
+had committed to, or driven a smoke for, a branch another close had already merged, and the 3a
+commit moved its tip, so `check` printed `RERUN`, not `GONE`. So the resume runs Step 1 (1-pre and
+1b move what `check` reads), checks, drops each `GONE` branch, and only then asks and applies; a
+second check after applying catches the tips the 3a answers moved, which is the spec's reason for
+applying before checking.
+
+### Why answers are marked `applied`, and a re-run reuses an outcome
+
+The resume can halt after applying (a Step 3c question with no branch left unanswered), and
+`load` then accepts the run again. Without a mark, the second resume re-applied every answer:
+a second 3a commit exits non-zero, which the step reads as SKIP; a smoke is driven twice; an
+unrunnable defect is filed twice (round 1, semantics lens). The same hazard sits inside one
+resume: a step re-run after an answer was applied raises the same question again, and taking the
+*answer* rather than its *outcome* would drive the smoke again. Step 3c exists for procedures that
+act outside the repository.
+
+### Why answers given in the resume are not asked again by a re-run Step 3c
+
+Step 3c re-asks a merging doc's recorded smoke answer by design (Step 3c — provenance, *Why a held
+doc links no task*), so a resume that recorded an answer at item 5 and then re-ran Step 3c would
+ask the same question twice in one session. The `KEY:` line is a hash of the section's text, so
+an unchanged section keeps its answer and a changed one is asked again.
+
+**Spec § 3.6's carrier re-pointing is not built.** It assumed the resume records Step 3c's answers
+after Step 3b has removed the worktree a `KEY:` line names. The resume records them at item 5,
+before Step 3b, so the worktree path is still there.
+
+### Why `consume`, and why Step 2b's files are copied
+
+A second resume of the same run after Step 3b has removed worktrees would act on state that no
+longer exists, so `consume` marks the run used and `load` and `check` refuse it after that. Step
+2b's `2b-conventions.md` and `2b-security.md` have fixed names and are removed and rewritten
+whenever a Step 2b takes its write-once arm (not on the paste arm), so a dry run or another close between prepare and resume would leave `4a-fix` with
+another run's conventions; the copies in `2b/` go back when Step 2b did not run during the resume.
+
+### Why the allow-rule is required only under the two flags
+
+`Bash(python3 sysop/scripts/close_run.py:*)` is seeded by `install.sh`, but a consumer whose skill
+copies are newer than their `settings.json` would otherwise have every ordinary close refused by
+the guard for a rule only a prepare or a resume uses.
+
+## The Step 4d split — provenance
+
+### What was ruled, and by whom (`Q-411`, Phase 365)
+
+Wade ruled at Phase 365's opening menu (2026-10-08): build the Step 4d split first, attended,
+with the `## Unattended close class`, the `--agent` ownership filter and the unattended
+dispositions of the 76 Step-4-on stops left for later phases; `pr` policy only; a second reader
+the consumer configures in its own section, with the Codex format verified before the parser was
+written; and GDP's deploy question (a merge to its default branch deploys a service that shares
+code with the API) gated on a human check, not on this build. The design it executes is
+`tools/UNATTENDED_CLOSE_SPEC.md` § 4 and § 8 (maintainer-side, not in the public mirror).
+
+### Why every other close stops on `AWAITING`
+
+A second close during the gap would cut a new integration branch from local `<default branch>`,
+which still carries the first close's unpushed commits (claim flips, Step 1b's save), and open a
+second PR holding the same work. `close_run.py reader`, `begin`, `load` and a second `hand-off` refuse too,
+so a `--request-review`, a `--prepare`, a `--resume` and a second hand-off are stopped even by a
+runner that skips the prose check. **An ordinary close is stopped only by the prose**: it runs no `close_run.py`
+command before Step 4d, and the one script every close runs first, `default_branch.sh`, is run
+by other skills too, so it cannot refuse on a close's marker.
+
+### Why Step 4c keeps the locks under `--request-review`
+
+Step 4c removes each closed task's lock before the PR merges. In an attended close that window is
+minutes. Across a hand-off it lasts until `--land`, and for that whole time the task is
+`in_progress` on `<default branch>` with no lock: `validate_tasks.py` Invariant 9 fails on the
+default branch, so every claim path's validator and the shipped `pre-commit-tasks-validate`
+example refuse, and `/claim-task` reads the task as `resumable`. Keeping the lock until
+`close_run.py landed` keeps the default branch valid. The `done` flip on the integration branch
+with a lock still on disk is not an error: Invariant 9 reads `in_progress` tasks only. Parked
+markers and claim artifacts are still removed at 4c, as in an attended close.
+
+### Why half A takes the pushed-from SHA as an argument
+
+Step 6's reset gate (`Q-651`) needs local `<default branch>`'s SHA at the push. `hand-off` could
+read it itself, but a claim committed between the push and `hand-off` would then be recorded as
+pushed, and Step 6's `rev-list` would not list it, so the reset would drop it. The runner passes
+what line 2b printed, and `hand-off` checks it is the merge base of local `<default branch>` and the
+pushed head (round 1: an ancestor check passed any older SHA, which Step 6 would then read as
+commits made after the push).
+
+### Why the main checkout goes back to `<default branch>` at the end of half A
+
+Half A stops with the primary checkout on `merge/review-close-*`. Left there for the gap, every
+`/claim-task` and `/auto-build` run would meet `_shared/main-push-guard.md` Rule A's assertion.
+Half B never reads HEAD: it merges the recorded PR number with `--match-head-commit` on the
+recorded head, under both shapes, so a push to the branch during the gap refuses the merge
+instead of landing unread code.
+
+### What the Codex reader was built from
+
+GDP's own PRs carry no Codex review yet (its 200 most recent PRs had no reviews, and its
+`OPS-CODEX-PR-REVIEW-MANUAL-MODE` task, which connects the app, was still open), so the format
+was read off public PRs reviewed by `chatgpt-codex-connector[bot]`, on 2026-10-03 and 2026-10-08:
+
+- **Findings** are one PR review, state `COMMENTED`, whose `commit_id` is the reviewed head and
+  whose body names `**Reviewed commit:**`; each finding is an inline comment on that review
+  starting with an image badge whose alt text is `P<n> Badge`. **P2 badges occur**, so the
+  OpenAI page's "Codex flags only P0 and P1 issues" is not what the app does; `blocking`
+  defaults to `P0 P1` and the rest are reported and merge.
+- **A clean result** posts no review. The app reacts `+1` on the PR, and on newer installs
+  edits a summary comment (`<!-- codex-pull-request-review-summary -->`) whose table row shows
+  `Completed` and the 7-character commit.
+- **A review can lag the head.** One sampled PR's review named a commit the PR had already moved
+  past.
+- **A usage limit** is an issue comment, not a review.
+
+So the reader binds every verdict to the recorded head: a review counts only when its
+`commit_id` is that head; the newest summary comment is read before any review is, and a
+`Running` row waits while one it cannot parse parks; a summary whose every row is `Completed` on
+that head, with no review of it, is the only clean result; a `+1` never merges, because a reaction
+names no commit and under the PR-reuse shape a review of an earlier head can finish after the
+request (round 1, record lens); a review of another commit submitted after the request is that
+lagging review, so it is reported and the reader waits for the head's own (round 2: parking on
+it cost a re-request every time). A finding with no readable badge, a review with no
+finding, and the usage-limit comment park. **Why the summary is a clean signal by itself
+(round 1, both execution and semantics lenses):** a reaction is one per user and content, so a
+`+1` from an earlier clean review is never re-created, and a re-request after a fix, or a
+PR-reuse close of a PR Codex already passed, could otherwise only time out. **An install whose
+app posts no summary comment never lands a clean result**: it waits, parks on the timeout, and a
+human merges. That is the price of binding the verdict to the head, and it is stated rather than
+bought back with the `+1`. Half B also re-reads the PR's base (round 1: `--match-head-commit`
+pins the head only, so a base edited to another branch would have merged there), and a PR found
+already merged at another head is reported as merged outside the gate, then cleaned up, because
+it has landed either way. The
+request is posted with `gh api -f`, never `-F`: `-F body=@codex review` would read a file named
+`codex review`.
+
+**Unverified:** that a `@codex review` comment triggers a review in manual mode (every sampled
+review was triggered by the PR opening). GDP's first manual review settles it; until then a
+missing review times out and parks, which is the safe failure.
+
+### What `abandon` leaves (round 1)
+
+`abandon` refuses an open PR (close it or land it) and a merged one (`--land` finishes that,
+reporting a merge of another head, whatever the record's request status: round 2 found a failed
+or interrupted request on a hand-merged PR left every command refusing). On a PR closed unmerged it removes `AWAITING` and nothing
+else. The integration branch still holds Step 4c's `done` flips and consolidation, the tasks are
+`in_progress` on `<default branch>` with their kept locks, and their pending docs are gone,
+because Step 4c consumed them: the state Step 4d-1 leaves for a stuck PR, which a later ordinary
+close does not pick up. The way back is to reopen the PR before abandoning, not after.
+
+### Why one hand-off is recorded at a time
+
+`hand-off` takes `sysop/runtime/close/.hand-off.lock` with `O_EXCL` around its check-and-record
+(round 1 ran two concurrently and both recorded, each posting a request). A hand-off killed
+inside it leaves the file; the refusal names it.
+
+### Why the timeout defaults to 20 minutes
+
+It is the default GDP's task states, "to be set from measurement". Nothing in Sysop measured it.
+
+## The unattended close class and the `--agent` selection — provenance
+
+### What was ruled, and by whom (`Q-411`, Phase 366)
+
+Wade ruled at Phase 366's opening menus (2026-10-08), each the recommended option, to build the
+land half of `Q-411` first: a consumer `## Unattended close class` (an allow list, exclusions and
+a `blast_radius` ceiling; `manual_smoke`, `solo` and held tasks always excluded; the governing
+files always excluded; the close's own bookkeeping paths the consumer's to allow, with a
+warning), an `--agent` ownership filter at selection, and `--land --unattended`, merging with no
+human under `pr` policy and a `## Second reader`, re-checking the class at land, parking durably.
+**After the phase's third adversarial round he narrowed it: the class, the selection and the
+durable park ship; the unattended land does not.** `close_run.py land-check --unattended`
+refuses, and this skill stops on `--unattended`. The design record is
+`tools/UNATTENDED_CLOSE_SPEC.md` § 9 (maintainer-side, not in the public mirror).
+
+### Why the unattended land is not enabled
+
+Each of three rounds found a way for a PR, or the agent that made it, to shape what the gate
+trusts, and each round's sharpest finding was in the previous round's fix: a branch clearing its
+own task's `manual_smoke` in the index the class must admit; a stale base hiding a revert; a
+diff base that was the PR's recorded base rather than the tip; task fields read at local
+`<default branch>`, which the agent's own unpushed commits write; a symlink routing an edit to
+`CLAUDE.md` or `.claude/` around the fixed exclusions. A gate that reasons on the client about
+content the merger can shape has had an open hole after every round, so it is off until a
+redesign whose trust does not rest there (for example GitHub-side rulesets or code owners on the
+governing paths). The mechanism stays in `close_run.py` behind `UNATTENDED_LAND_ENABLED`, with
+its tests, for that redesign to start from.
+
+### Why CLAUDE.md, .claude/**, sysop/** and .github/workflows/** are always excluded
+
+These hold the class itself, the second reader, the merge policy, the permission allow-list, the
+skills, the scripts that compute verdicts, and CI. A merge that changes one changes the rules for
+every later merge the class admits, so it needs a human however the consumer writes the class.
+They match without regard to case, as consumer exclusions do (a case-insensitive filesystem
+writes `.CLAUDE/x` into `.claude/`), and `X/**` matches `X` itself. **What it costs, measured:**
+of GDP's 200 most recent `review-close: consolidate` PRs (2026-07-12 UTC to 2026-10-08), 66
+touched one of these paths: `CLAUDE.md` in 40, the convention and security maps in 33,
+`.github/workflows/` in 22, `checks.yml` or `checks.project.yml` in 16, `sysop/` in 1. The close
+commits none of them into the PR, so they came with the merged branches or local
+`<default branch>`'s unpushed commits; a squash does not say which. Selection sets aside a
+branch that touches one, so the rest of such a close can still go to its second reader.
+
+### Why the close's own paths are the consumer's to allow, and why `class` warns
+
+A close commits `tasks/index.yml`, task bodies moved from `tasks/open/` to `tasks/archive/`,
+`PROJECT_STATUS.md`, the changelog and the review-task files itself (Steps 1b, 4b and 4c).
+Exempting a fixed set would also exempt a feature branch's edits to those files, so the allow
+list is the whole truth, and `class` and `eligible` print a `WARN:` for each close-written path
+the class refuses. Root files are checked in the case the repository tracks them, because Step
+4c writes the changelog at the tracked case, and one consumer tracks it in lower case.
+
+### Why a park is durable
+
+A `PARKED` record, written by `close_run.py park`, keeps a hand-off for a human: `/sitrep` reports
+its tasks as `land parked`, routed to a human, not to `--land`. A human clears it with
+`re-request` (after a fix), `unpark` (to read again unchanged, refused when no review was
+requested) or an attended `--land` that merges.
+
+### Why selection does not blame one branch for an unreadable shared doc
+
+The main checkout's `sysop/runtime/pending-docs/` holds every branch's docs. A doc there that
+does not parse has no readable `branch:`, so `eligible` cannot say whose it is, and setting every
+branch aside for it would stop the whole close on one file. Step 4c 1c reports it as
+`UNREADABLE:`. A branch's own workspace holds only that branch's docs, so an unreadable doc there
+sets that branch aside.
+
+## Step 6 and 4d-1 — provenance
+
+### Why Step 6 checks for commits made after Step 4d's push (`Q-651`, Phase 363)
+
+`gh pr merge --delete-branch` returns HEAD to the default branch, and `claim_task.sh
+--commit-claim` commits only while HEAD is there (`claim_task.sh`'s Rule A check), so a concurrent
+claim during Step 5's wait lands on local `<default branch>`. The squash does not contain it, the
+tracked-tree gate prints `CLEAN`, and the reset drops it: reproduced on a pure-git fixture before
+the fix. Before `gh pr merge`, HEAD is on the integration or approved branch from Step 4-pre on,
+so no claim can commit there; the SHA printed at the push is therefore the last one this cycle
+owns. **`^origin/<default branch>` is load-bearing** (round 1, semantics lens): whenever `gh`'s
+fast-forward succeeds — the PR-reuse shape when local `main` held nothing the branch lacked, or the
+integration shape with no local-only commits — local `main` *is* the squash, and a bare
+`<sha>..<default branch>` names the squash itself on every such close. The rebase it offers replays exactly the late commits; a commit
+already upstream is dropped by `git rebase` as already applied. Q-411's Half A must record the SHA
+durably, because the gap there is a whole review wait.
+
+### Why a stuck integration-shape PR is recovered on its branch (`Q-652`, Phase 363)
+
+By the time a PR is stuck, Step 4c has deleted the pending docs it consolidated (item 6) and
+unlinked their locks (item 4's heredoc). Neither is in any commit, and Step 4c's index flips, body
+moves and doc entries exist only in its commit on the integration branch. A re-run cuts a new
+integration branch from local `<default branch>`, re-approves the same branches, and Step 3b's
+exit 8 does not refuse them, because its discriminator is the lock (*Why a claimed branch with no
+document is refused*). The replacement PR would merge without Step 4c's work, and the old 4d-1
+text then told the operator to delete the only branch carrying it. 4a-post's placement note was
+the true sentence. The recovery runs `4a-post`'s command list on the fix commit because nothing
+else in the close reviews it: the PR's required checks are otherwise its only gate. The PR-reuse
+shape is unaffected: its branch carries the 4c commit.
+
+## Step 1-pre — provenance
+
+### Why the close brings a clone's commits across itself (`Q-645`, Phase 355)
+
+`claim_task.sh --clone` publishes the branch and clones `origin`, so the work happens in a
+separate repository with its own object store. Step 4a merges *this* repository's
+`refs/heads/<branch>`, which nothing in the close moved: measured before the fix, the clone's
+`feat/cl` at one ordinary commit past the claim and the main repository's `feat/cl` still at the
+claim commit. Step 2a reviewed an empty diff and Step 4c could mark the task done over work that
+never merged. The only branch fetch in the skill (Step 4-pre's) lands in `FETCH_HEAD` and moves
+no branch.
+
+Wade chose (2026-10-04) to have the close sync the branch rather than require the claimant to
+push. The rejected option was for `--clone` claims to push and for Step 2a to refuse a branch
+whose local ref is behind `origin/<branch>`. The sync asks nothing new of a claimant whose
+history only grows. One whose history was rewritten after a close synced it (an amend, a rebase
+onto a newer default branch) meets `REFUSED` and step 0a's remedy, because the close cannot tell
+a deliberate rewrite from lost work.
+
+**No allow rule was added.** The heredoc binds the seeded `Bash(python3 -:*)`; its `git fetch` from
+the clone path, which no seeded `git fetch origin:*` rule would cover, runs inside it as a
+subprocess the permission layer never sees, as Step 4c's `git add` and `git mv` do.
+
+**The source is the clone directory, not `origin`.** Nothing in a clone pushes after
+`claim_task.sh` publishes the branch, so `origin/<branch>` sits at the claim commit too, and a
+fetch from `origin` would be inert on the ordinary close.
+
+**Fast-forward only, in both directions.** The fetch's refspec has no `+`, so git itself refuses a
+non-fast-forward and a branch checked out in one of this repository's worktrees; the heredoc
+classifies first so the line names the reason. A stale lock whose clone is gone no longer hides a
+live lock on the same branch (round 1 measured both sort orders). A branch here that holds commits the clone lacks is `REFUSED` whether or not it
+also holds the clone's tip. Round 1 first passed that case as `BEHIND`: after `git reset --hard
+HEAD~1` in the clone, the commit the claimant had dropped stayed on this branch and would have
+merged.
+
+**A dirty clone is SKIPped.** Step 1a's `dirty` class never saw a clone, because `git worktree
+list` does not list one, and that cost nothing while the clone's commits could not merge. Once
+they can, a half-committed clone would merge its committed half, which is the merge the
+ISSUE-0016 guard exists to stop. The state read is every worktree *of the clone* whose state is the
+branch's: one standing on it, one rebasing or bisecting it (the operation records the branch), and
+one detached at or past its tip. Round 2 measured the root-only read syncing over a linked
+worktree of the clone that held the branch with edits, and with a conflicted rebase; round 3
+measured round 2's "any detached worktree" rule reporting a look-around checkout of the default
+branch as `DIRTY`, which no remedy could clear. A worktree whose directory is gone is skipped. In each such worktree an
+operation in progress is `DIRTY` by itself (rebase, `am`, merge, cherry-pick, revert, bisect, and
+the `sequencer` a multi-commit cherry-pick or revert leaves behind with a clean tree, which round 2
+measured syncing with half the picks applied); so is a detached `HEAD` that continues past the branch's tip,
+whose commits would otherwise be left out of what merges. Round 1 measured the first cut, which read
+only a clone standing on the branch, syncing a clone mid-rebase. Step 1a's ISSUE-0043 downgrade
+applies: an untracked symlink whose target this repository ignores (a `.venv` link) is not dirt.
+
+**A clone that lost the work falls back to `origin`** (Wade, 2026-10-04, after round 2; it is the
+"or `origin/<branch>` after the clone pushes" half of the original answer). When the lock's clone
+is missing, is no longer a repository of its own, or no longer holds the branch, the same
+fast-forward runs against `origin`'s branch, and the line names `origin` and why. `GONE` and `NO
+BRANCH` mean neither holds it. `origin` behind this repository is `CURRENT`, not a refusal:
+nothing in a clone pushes, so after a sync `origin` is behind as a matter of course, and round 3
+measured the first fallback refusing every later close once the clone was gone, with a remedy
+(fetch from `origin`, forced) that discarded the synced work. Whether `origin` holds the branch is
+read with `ls-remote`, not from the wording of a fetch error. Round 2 found the first cut's remedy ("fetch from `origin` and
+re-run") looping: `GONE` was decided by the lock and the directory alone, so bringing the work
+across by hand could never clear it. Pushing to `origin` now clears it, because the close reads
+`origin` itself. A directory re-created inside an enclosing repository is not mistaken for that
+repository: a clone must be its own top level, compared by file identity rather than spelling
+(round 3 measured a string comparison reading a live clone as missing when the lock's case
+differed from the disk's, which silently reopened `Q-645`).
+
+**Two locks recording clones for one branch are refused.** The close cannot tell which holds the
+work; the first cut took whichever sorted first.
+
+**Locks only** (Wade, 2026-10-04, after round 2). Round 1 added a scan of sibling directories to
+catch a `--clone` claim made without `--lock`; it synced an ordinary personal clone of the same
+project, and its replacement (report it as `UNCLAIMED` and SKIP) could not be cleared by its own
+remedy, SKIPped a branch whenever any old checkout or released clone kept the name, and skipped the
+dirt check once a human brought a clone across. `/claim-task` always passes `--lock`, so a lockless
+`--clone` is a hand-typed invocation; the close sees only this repository's branch for it, as it
+did before this phase, and Step 1-pre says so. Step 2a step 3a has the same gap: it finds no
+workspace for such a claim, and no file is lost, because a clone is never removed.
+
+**The examined commit is the one that lands.** The commit the checks read is fetched by id into
+`refs/sysop/clone-sync/<branch>`, and the branch moves to it by a compare-and-swap `update-ref`, not
+by a second fetch from the clone: round 3 measured a commit landing between two fetches and the line
+reporting `REFUSED` over a branch that had moved. A branch checked out in one of this repository's
+worktrees is refused before the update, since `update-ref` does not refuse it the way `fetch` does.
+The fetch does not recurse into submodules (round 2 measured one that moved the branch and then
+exited 1 on an unreachable submodule) and times out. Every ref left under the private namespace by
+an interrupted run is deleted first; round 3 measured one blocking the fetch for good. Under
+`--dry-run` nothing is fetched: round 3 measured the origin arm moving `refs/remotes/origin/<b>` and
+writing `FETCH_HEAD`. Lines print as they are produced, so a crash after a sync leaves the record of
+what moved.
+
+**`ignored_refs.py` compares the clone's `refs/heads/<branch>`,** the ref the sync fetched, not
+its `HEAD`. Round 1 measured the `HEAD` read refusing a finished clone that had stepped back onto
+the default branch on every run, with a remedy (re-run the close) that could not help.
+
+## Step 2a — provenance
+
+Editor-addressed history for `### 2a. Feature Branches`. Nothing here binds the runner.
+
+### Why step 3a asks about gitignored files the branch reads (`Q-633`, Phase 354)
+
+A consumer close received a branch with every executor gate green whose code imported three
+JSON fixtures a blanket `*.json` rule had kept out of every commit. The gates that read the
+working tree (the test runner, the build) found the files; the merge would not have carried
+them, and the merged tree would have failed its build and CI. A review lens caught it by reading
+the tree. Nothing in the path asked whether a file the diff depends on was committed, and
+`git status --porcelain` does not list ignored files, so Step 1a classified the worktree clean.
+
+**Ask, not halt** (Wade, 2026-09-30): gates legitimately create ignored files, and an ignore can
+be deliberate, so a hit is a question rather than a verdict. The reporter's alternative, "files
+newer than the claim base", is unusable for the same reason: a gate run makes every output file
+newer than the base.
+
+**This step is the only asker** (Wade, 2026-10-02). The executors quote their hits and file
+nothing. The first build had them file a task through the "an answer would make it fixable"
+route, but only `/claim-task` option A ever asks that question before the close; on option B and
+`/auto-build` the filed task merged as open after this step had answered it, and a later
+`/auto-build` could implement the task's other fix against the human's answer.
+
+**Only files a file pattern ignores** (Wade, 2026-10-01). A directory a pattern ignores as a
+whole is one entry in `git ls-files --directory`, and the script does not read inside it. Every
+false hit measured on one consumer's live claim worktrees was inside such a directory (a
+lockfile naming `node_modules/...`, a test naming `tests/__pycache__`). The check reads the
+consumer's resolver configuration where Wade ruled it should (2026-10-04, `Q-644`): a quoted token
+through the `compilerOptions.paths` of the nearest `tsconfig.json`/`jsconfig.json` that declares
+them, and a root-absolute URL through the `public/` directory beside the nearest `next.config.*`.
+What it still cannot see: an import from a directory ignored as a whole, a config's `extends`, a
+config under another name (`tsconfig.app.json`, reached by `references`), a bundler alias map, and
+a name built at run time (`importlib`, a template literal, `import.meta.glob`). Its summary line
+names the first and the last. Step 3b step 0b's preservation does not depend on the check, so none
+of these loses a file; they merge without one. Prose (`.md`, `.rst`, `.adoc`) and
+`*ignore` files are not read: over 40 commits of the same consumer's history, an early matcher
+that read them reported 25 hits, 24 of them from `.md` files naming a tool, cache or
+environment path. Those figures, and "nothing on the four live claim worktrees", came from
+intermediate matchers; the shipped matcher measured 9 hits over the consumer's last 40 commits
+and 20 over the last 200, measured read-only on that consumer.
+
+**A directory reference needs a string literal or a glob.** `Path(__file__).parent / "fixtures"`
+and `path.join(__dirname, "fixtures")` read every file in a directory beside them, and the
+round showed the first build missing them while step 0b deleted the only copies. Resolving every
+mention of a directory reported every ignored file under `frontend/` and `data/` on the same
+consumer, from task text, comments and regexes. So a directory counts only inside a string
+literal, beside the referencing file or, for two or more components, from the root, where test
+runners stand (`Path("tests/fixtures")`); and a glob counts only for the files its pattern
+matches, `/`-aware, beside the file or from the root.
+
+**Four answers, and which is recommended** (Wade, 2026-10-02). `Commit it to the branch` is
+right for a fixture or data file and wrong for a secret, and the file name cannot tell them
+apart: the reporting consumer's `*.json` rule sits in the secrets section of its `.gitignore`, beside the
+fixtures it also caught. So `Keep it ignored` is the default recommendation. It copies the file
+into the main checkout, the branch merges without it, nothing is committed and nothing is lost;
+the copy says `ALREADY` when the main checkout holds it (a symlinked `.env` included) and refuses
+to overwrite a differing file or follow a link into the worktree. `Commit` is recommended only
+for a path with a component containing `fixture`, `testdata` or `test_data`, or `__snapshots__`
+(Wade, 2026-10-04: the consumer's own fixture directories are named like `<name>_fixtures/` and
+`fixtures_<name>/`), and never offered for a symlink. Where `Commit` is not offered, such a path
+gets `Reject`, the answer that carries the commit-it-yourself instruction.
+
+**An unanswered line SKIPs the branch, in every shape.** The round-2 lenses showed "keep the
+worktree" protecting nothing when the main checkout held an identical copy, and nothing at all
+for a clone or a `--branch` claim, so an unanswered hit merged: the reported defect, with no
+answer recorded. The SKIP is what the ask promised. A check that did not run is asked once
+(`Hold` or `Merge without the check`), and an away result holds.
+
+**Commit and copy go through a heredoc.** `git -C <workspace> add` and `git -C … commit` bind no
+allow rule (`-C` is not a wrapper the matcher strips), so under `dontAsk` the recommended answer
+would be denied. The heredoc runs under `Bash(python3 -:*)`, and its commit names the path, so
+nothing else staged in the worktree rides along.
+
+**Each workspace shape answers differently.** A `--clone` workspace is a separate repository: a
+commit the close made there would never reach this repository's branch, which is what Step 4a
+merges. So the human commits it in the clone and re-runs the close, whose Step 1-pre brings this
+repository's branch to it, and the check refuses a clone whose tip is not this repository's
+branch: reading the clone's tip had reported a file committed only there as clean. The script compares a clone with the
+caller's main checkout, because the clone's own common dir is itself; from the main working tree
+it takes that tree's top level, which holds under `--separate-git-dir` and in a submodule, where
+the common dir's parent is somewhere else. A `--branch` claim's workspace is the main checkout,
+which may be on the default branch at close time, so the check reads the branch's commits
+(`--branch`) rather than whatever is checked out.
+
+**The commit answer costs a re-run when the doc carries `branch_tip:`, and the step says so.**
+The close commits the file onto the branch, which moves the tip past the doc's `branch_tip:`, so
+Step 3b's collect exits 6 and SKIPs the branch; a doc without the key is collected as it is. That is the staleness gate doing its job: a doc must describe the tip that
+merges.
+
 ## Step 2b — provenance
 
 Editor-addressed history for `### 2b. Prevention Convention Check`. Nothing here binds the agent
@@ -990,6 +1513,59 @@ already held, because an overwritten document sat in the same "collected" list a
 one. Deciding before writing makes that class impossible rather than handled, which is why the
 property is stated in the runner as a guarantee rather than as an implementation note.
 
+### Why every frontmatter parse catches `Exception` (`Q-621`, Phase 348)
+
+`yaml.safe_load` raises more than `yaml.YAMLError`. An impossible date (`date: 2026-09-31`)
+raises `ValueError`, `!!bool abc` raises `KeyError`, `!!timestamp abc` raises `AttributeError`,
+and a deeply nested flow sequence raises `RecursionError`. Its constructors call `int()`,
+`float()`, `datetime()` and dict lookups, so the set is open-ended, and a tuple of the ones
+measured today would go stale. The handlers here grew one member at a time: `RecursionError`
+was added after a neighbour doc exited 1 with empty stdout on the half that deletes, and an
+impossible date then did the same in the collect and the rollback. `date:` is typed by an agent
+in every doc template, so one slipped character reached it. Each handler now takes its
+existing unreadable-doc arm for any exception the parse raises. `tests/test_yaml_parse_failures.py`
+fails on a shipped handler that catches `YAMLError` without the rest.
+
+**Why the collect names the reason, and the templates quote `branch:` (`Q-605`).** A branch
+that YAML reads as a non-string (`1234` is an int, `2026-09-01` a date, `true` a bool) made
+`branch_of` answer None, and the collect refused its own doc as a collision that "claims
+None". Coercing in the reader is lossy (`0123` reads as 83, `true` as `True`). Step 3c's own
+reader already coerces with `str()`, so on a non-string value it and this step disagree; only a
+quoted value makes every reader agree, so the writers quote it, and `WHY` carries the reason
+into the collision and exit-8 lines. The reason is for the report only:
+nothing decides on it.
+
+### Why Step 3b step 0b preserves every only-copy ignored file (`Q-633`, Phase 354)
+
+An unforced `git worktree remove` refuses on modified or untracked files and deletes ignored
+ones without a word (`tests/test_ignored_refs.py` measures it). Wade's ruling of 2026-09-30 was
+to refuse the remove for a worktree holding an ignored file the branch reads. The first build
+did that through the reference matcher, and both review rounds then found references it missed
+while the remove deleted the only copy: a directory beside the file, a root-relative
+`Path("tests/fixtures")`, a scoped alias, a template literal. A matcher over every consumer's
+code is never complete, so on Wade's answer of 2026-10-02 the guard stopped depending on it:
+step 0b copies **every** ignored file the main checkout has no identical copy of, referenced or
+not, to `sysop/runtime/preserved/<branch>/`, then the remove goes ahead. It never SKIPs for
+this; only a copy that cannot be made SKIPs the branch.
+
+**What it copies, and what it does not.** Only files a file pattern ignores, as the check reads;
+a directory ignored as a whole (an install, a cache) is not copied, so a unique file inside one
+is still lost. Symlinks are skipped, because removing one removes the link. A file the main
+checkout holds byte for byte is skipped. Gate outputs (a `tsbuildinfo`, a log) are copied too,
+and Step 8 lists them; that is the price of not guessing.
+
+**The destination must be gitignored in the main checkout,** or every preserved file would show
+up there as untracked work; the script checks with `git check-ignore` there and refuses
+otherwise. A re-run (a branch SKIPped at exit 6 and closed again) skips a file already preserved
+at the destination or in any earlier timestamped run, and puts a differing one, or one whose path
+is blocked by a file or a link, under a fresh UTC timestamp, so nothing preserved is overwritten.
+A main-checkout file that is a link, or resolves into the worktree, is not a copy: one that did
+was skipped and then deleted with the worktree.
+
+**Before the collect, not before the remove.** A failure after item 1 would leave a collected
+doc for a branch that will not merge, and the rollback exists for that case with all of its own
+failure routes. Failing first leaves nothing to undo.
+
 ---
 
 ## Step 3c — provenance
@@ -1022,7 +1598,7 @@ not be what is merging.
 ### Why a held doc links no task, and why its own headings still signal (`Q-528`, Phase 330)
 
 Step 4c 1c keeps a doc in main's `pending-docs/` for as long as its task's `user_action` is
-outstanding, deliberately, because the doc carries `roadmap_ids` into the round-trip. That can take
+outstanding (or, since Phase 353, its own `hold:` is set), deliberately, because the doc carries `roadmap_ids` into the round-trip. That can take
 many closes. The gate scanned the directory without knowing about the hold, so it re-fired every
 close on work that had merged earlier. Two reports reached it by different routes:
 
@@ -1041,7 +1617,7 @@ close on work that had merged earlier. Two reports reached it by different route
   a later close reports `PREVIOUSLY ANSWERED:` instead of asking again.
 
 **"Not merging this run" is the discriminator, and it is not 1c's predicate.** 1c holds any doc
-naming a task with a truthy `user_action`, whatever its branch. The gate needs a narrower fact: a
+naming a task with a truthy `user_action`, or carrying `hold:`, whatever its branch. The gate needs a narrower fact: a
 doc in main's `pending-docs/` whose `branch:` is neither approved this run nor the branch HEAD is
 on at Step 3c. The second clause is load-bearing. A `branch: <default branch>` doc can never be
 approved, and its work lands with this close. Round 1 of Phase 330 found the first cut
@@ -1061,9 +1637,16 @@ approved branch re-claims is merging, and taking an earlier held doc as its carr
 answer silence the ask. A claimed task now takes its carrier only from a merging doc.
 
 **The limit, stated:** a held `branch: <default branch>` doc is always treated as merging, so it is
-asked on every close and its recorded answers are never read. That is the safe direction, and
-telling a landed default-branch doc from a local one across `direct` and `pr` needs a design
-decision (`Q-610`).
+asked on every close and its recorded answers are never read. That is the safe direction. **Phase
+353 built two discriminators and its rounds refused both, and Wade closed `Q-610` by
+disposition on 2026-10-06 (Phase 360): the limit stands.** (b), a
+`held_since:` stamp from 1c, dropped the held task's links even when new commits for it sat on local
+`main`, so a procedure nobody had answered went unasked (round 1, lenses A and C). Adding "and
+`HEAD` has nothing `origin/<default branch>` lacks" was safe but inert: `/claim-task` commits each
+claim flip to local `main` and does not push it, so `HEAD` is ahead of origin on almost every close
+(round 2, lenses A and C, reproduced). On Wade's answer Step 3c went back to not reading the stamp.
+A third design would need a fact that separates this doc's landed work from commits landing now,
+under both policies, that claim flips do not move.
 
 **Why the record lives in the doc and not in a sidecar under `sysop/runtime/`.** It dies with the
 doc, and it travels with it. When the human performs the step and a later close consolidates the doc, the answers go with
@@ -1105,6 +1688,160 @@ The entry's first draft cited a "§ Report-and-exit integrity" rule in this skil
 exists (`Q-332` records that false-citation class). What is true is that could-not-measure is a
 state of its own all over this skill (`4a-post`'s timeout arm, Step 3b's staleness-unknown), and
 Step 3c was where it was not applied.
+
+### Why an undeclared task's body is read (`Q-624`, Phase 351)
+
+Step 3c's prose already promised a heading is read "in the body of a task this close covers", and
+the heredoc read a task body only when the index set `manual_smoke: true`. A consumer measured the
+gap on one close: two of three real asks were procedures written under `## Manual smoke required`
+in task bodies whose authors had not set the flag. Over that consumer's history a verifier counted
+five real unprompted body-only asks against three false positives.
+
+**The scope is the approved branch, and the missing-procedure signals stay flagged-only.** An
+undeclared body is read only when an approved branch links the task, as it will merge (Phase 359,
+below). A doc on an unmerging branch, or a held doc, links no undeclared
+task. The flag still does what only it can: it turns a body with no procedure heading, an
+unreadable body, or no `body:` into a signal. Reading undeclared bodies for those would ask about
+every task that merges.
+
+**A flag set on the branch counts.** Step 3c read the default branch's index only, so a branch
+that set `manual_smoke: true` on its own task was invisible for the same reason. The reporter's
+alternative, a `/document-work` flag in the index, was inert for that reason. The branch's index is
+read at its tip for the tasks that branch links, and only for those. A stale branch, forked before
+the default branch cleared a flag, still declares the task: that costs one extra ask, never a
+missed one.
+
+### Why a body is read as it merges, and why a fenced `#` ends no section (`Q-638`, `Q-639`, Phase 359)
+
+**The tip is not the text that merges when the default branch changed the body after the fork.**
+Phase 351's round reproduced it: an undeclared task, a branch that edits its body elsewhere, and a
+`## Manual smoke required` the default branch added later. The tip lacked the heading, so the gate
+printed `NO_SMOKE_REQUIRED`, while a test merge carried it. A union of the tip, working-tree and
+origin bodies was refused: it re-asks a procedure the branch retired, which is `Q-568`, the defect
+Phase 330 fixed. The read is the merge result.
+
+**`git merge-file`, not `git merge-tree --write-tree`** (Wade, 2026-10-06). The entry proposed the
+second, which needs git 2.38 or later and would have given Sysop a stated git floor for one read.
+`merge-file -p` and `-L` date from 2007, and the git 2.35 manual already documents `--ours` and `--theirs`. **It is not identical to git's own
+merge.** `merge-file` aligns with git's default diff (myers), and `ort` uses histogram. Phase 359's
+round fuzzed 400 random bodies and found one that `merge-tree` called a conflict and `merge-file`
+merged clean; `merge-file --diff-algorithm` would close that, but it arrived in git 2.44. Step 4a's
+local-only arm also replays commits one at a time rather than merging endpoints. Both are rare,
+and both differ in where a hunk lands, not in whether a heading is present on either side.
+
+**Which targets.** Under `direct`, Step 4a merges onto local `<default branch>` and Rule B rebases
+onto `origin/<default branch>` before the push. Under `pr`, Step 4-pre cuts the integration branch
+from local `<default branch>` and then merges `origin/<default branch>` into it. So origin's text
+lands under both policies whenever origin holds work the local branch lacks, **diverged included**:
+local `main` normally carries unpushed claim flips, which makes diverged the common `pr` state.
+The gate reads both merges and scans each, unless one branch already contains the other. It reads
+local `<default branch>`, not `HEAD`, because Step 4-pre checks the default branch out first.
+
+**A conflicted body: each side is resolved on its own** (Wade, 2026-10-06, "scan both sides"; the
+mechanism is the round's). The first build scanned `merge-file`'s marker text. The round showed that
+text is not markdown: a fence opener from one side paired with a closer after the hunk and hid the
+other side's heading, and under `merge.conflictStyle=diff3` the markers carry the base, which
+re-asked a procedure both sides had removed. `--ours` and `--theirs` each give one coherent side,
+with no markers, whatever the consumer's conflict style. It can still re-ask a procedure the branch
+retired inside a region the target also changed, which is the gate's loud direction.
+
+**A merge that cannot be read falls back to the tip, and says so outside the signal.** That covers a
+`--clone` workspace whose objects lack the target (the normal state under `--dry-run`, because Step
+1-pre only dry-runs), a blob `git show` cannot read, a binary body, and no resolvable target. A
+non-UTF-8 body is decoded with replacement and merged, as a pending doc is (round 2). The `READ:`
+line exists only on a signal, so an undeclared task with no signal needed the `MERGE NOT READ:`
+header line, or the fallback would be silent. **A body the target moved or deleted is read at the tip.**
+A per-path read cannot follow Step 4c's archive move, which is a rename, and reading it as a deletion
+emptied the body. **A target that left the body alone contributes nothing** when another target's merge was
+read: that merge already holds the tip's changes, and the tip beside it would re-ask the older text.
+A failed target still keeps the tip, because the other merge can drop a heading the failed one carries.
+
+**A fenced `#` line ends no section; it can still start one** (Wade, 2026-10-06, after round 2).
+The measured defect was the cut: over 1,272 consumer `.md` files a fenced `# comment` had been
+ending three real procedures early, at 30 of 97, 78 of 133 and 24 of 61 lines. Section ends are now
+found on a copy whose closed fences are blanked, by `_fence_state`'s rule (Phase 281); a fence still
+open at the end of the file fences nothing. **A misread fence there can only lengthen a section,
+never hide a heading,** because starts are matched on the real text.
+
+**Why starts are not fence-aware, though Wade's first answer said they should be.** Round 1 built
+that: a fenced `#` neither started nor ended a section. Its lens found real CommonMark headings
+the repo's fence rule hid (between indented or tab-indented look-alikes, around an HTML comment
+holding a fence line, after a fence-shaped frontmatter line, after an unclosed list-item fence). A
+more conservative rule then went in, and round 2's two lenses each found it hiding headings again:
+a top-level fence indented 1–3 spaces with a column-0 line inside it, an HTML comment opener in the middle of
+a line, and a leading `---` thematic break. Every rule short of a CommonMark parser had a shape that
+hid a heading in the gate's silent direction, and the gate ships with PyYAML as its only
+dependency. So the start half of `Q-639` stays as it was before this phase: a fenced line that
+matches the heading pattern signals, and costs one ask with a waive option. The one fenced match
+in the consumers' trees today is in a flagged task whose body carries the real heading unfenced.
+`validate_tasks.py` stays fence-blind too, which keeps its documented lockstep with the gate.
+
+**The heading regexes take `[ \t]+` after the `#`s, not `\s+`, and allow up to 3 spaces before
+them.** `\s+` let a bare `#` line reach the next line's prose and read it as a heading, and a
+column-0 anchor never saw a heading indented 1–3 spaces, which CommonMark renders (round 2, lens D). That changes the `KEY:` hash of a section holding a
+bare `#` line, as lengthening changes the hash of a section with a fenced `#`; a recorded answer on
+either is asked once more, the loud direction.
+
+The phrase-breadth false positives the same entry measured (`### 3. Add a smoke test reproducing
+the race`) are not fence-related and are unchanged.
+
+### Why `origin/<default branch>`'s index is read beside the working tree (`Q-626`, Phase 351)
+
+Under `pr`, Step 3c read local `<default branch>`'s index while Step 4c reads the integration
+branch, after Step 4-pre has merged `origin/<default branch>` into it. A consumer's local main was
+seven commits behind, and one upstream commit had cleared `user_action` on two tasks. Step 3c still
+read both as held. It asked the smoke for one anyway, and reported the other, a `manual_smoke`
+task, as linked only by a held doc, so it was never asked. Step 4c then consolidated both.
+
+**Running Step 3c after Step 4-pre, the reporter's remedy, is not available:** Step 3c precedes
+Step 3b, which precedes Step 4. So the gate fetches and reads origin's index beside the working
+tree. **Each index can only add asks.** A task is declared if it is flagged on any index read. It
+is held only when it is held locally and, where origin carries it, on origin too: origin can
+release a hold but never add one, and a task origin does not carry yet is judged locally. The rule
+is the same under `direct`, where Step 4c reads local `<default branch>`. There, origin releasing a
+hold that Step 4c keeps costs extra asks: one per declared task the released doc names, because
+a doc is held on any one of its ids. An approved branch's index releases a hold the same way, since
+Step 4c reads the merged index; a branch that clears another task's `user_action` was otherwise a
+silent consolidation (round 1).
+
+A failed fetch reads the last-fetched ref and says so. An unresolvable ref is reported as
+`ORIGIN INDEX: not read`, and the hold falls back to the working tree, which is the pre-351
+behaviour. A consumer with no `origin` remote gets no line: there is no upstream index to
+disagree with. An origin index that does not parse stops the gate. Phase 348 settled that an
+input the gate cannot use stops it, and this is that input.
+
+### Why a FAIL verdict is its own outcome (`Q-627`, Phase 351)
+
+The "I'll drive" arm classified a failed attempt only by why it did not finish: transient (halt
+and re-run) or cannot be completed as written (unrunnable). A consumer's procedure ran and exited
+3, its own code for a measured regression. That is neither, and the closer improvised a menu.
+"Cannot be completed as written" followed by "Continue the close" would have merged a measured
+FAIL recorded as `unrunnable`.
+
+**Wade's ruling (2026-09-30):** a FAIL halts by default and asks once among halt, hold just that
+branch, and waive with the output recorded verbatim for Step 8 and the PR. `failed-held` and
+`failed-waived` are their own states in Step 8's tally. The entry stays § Medium because merging a
+FAIL took a human choosing "cannot be completed" and then "continue".
+
+**"Hold just this branch" is Step 2d's demotion, not a literal 4a-SKIP.** The ruling said
+"4a-SKIP it", but Step 3c runs before Step 3b. A branch still approved at Step 3b has its worktree
+removed and its pending doc collected into main, which the 4a-SKIP handling assumes has happened.
+A branch held for a failed smoke wants neither. Step 2d's "Hold for fix" already demotes approved
+to rejected before Step 3b, with no downstream special-casing: Steps 3b and 4 skip it, and Step 6
+keeps its worktree, lock and branch. The hold reuses that.
+
+**Why the output goes into the PR.** A waived FAIL merges known-failing work, and the PR is what a
+later reader of the default branch's history finds. Under the PR-reuse shape no PR is created, so
+the record is a comment on the reused PR. Editing its body would overwrite its author's text.
+
+**Why a waived FAIL is also filed as a task (Wade, 2026-10-01).** Under `direct`, the default,
+there is no PR, so round 1 found the output living only in Step 8's report. Filing it by the
+unrunnable defect's route gives it a durable record under both policies, through Step 4d's
+existing filing commit. A close that halts files nothing: a waive is not recorded against the
+signal's key, so the next close asks it again.
+
+**"Hold just this branch" needs a `BRANCH:` line.** A signal from a doc on no approved branch, or a
+task no approved branch claims, has no branch to demote, so only halt and waive are offered.
 
 ## Step 4-pre — provenance
 
@@ -1239,8 +1976,232 @@ committer dates, so the identical-SHA false negative cannot make it pass vacuous
 
 ## Step 4a — provenance
 
-Editor-addressed history for Step 4a's shared-append-files section. Nothing here binds the
-agent running the skill.
+Editor-addressed history for Step 4a, its shared-append-files section, and the recorded PR heads
+the close's readers share. Nothing here binds the agent running the skill.
+
+### Squash provenance: why each `pr` close records its PR head (`Q-623`, Phase 352)
+
+Under `pr`, `/claim-task` and `batch_work.sh` commit claim flips to local `<default branch>`, and a
+branch cut before the next close's squash carries them as ancestors. Once the squash lands they
+are on `origin/<default branch>` as content but are ancestors of neither ref, and a squash changes
+patch-ids, so `git cherry` prints `+` for them. Two upstream reports measured the two ends:
+`/sitrep` counted them as commits ahead (internal tracker #769), and Step 4a's rebase replayed one into a `status:`
+conflict on a task the earlier close had moved to `done` (internal tracker #780). Phase 352 reproduced both on a
+local fixture, and both legs are pinned in `tests/test_squash_provenance.py`.
+
+**The reporters' content predicate was refused before it was built.** It dropped index-only
+commits whose entries `main` carries at the same or a later `status:`. That also drops a branch's
+own non-status index edits (reproduced with a `user_action` flip), "later" is undefined once a
+release reopens a task, and it ignores `review_tasks.md`. Wade's ruling (2026-09-30) was to decide
+by provenance instead. Step 4-pre cuts the integration branch from local `<default branch>`, so
+the merged PR's head contains every local-only commit the close carried, the claim flips
+included.
+
+**Why a ref, and why written by `git fetch`.** A SHA written to a file goes dangling: after
+`gh pr merge --delete-branch` and Step 6's reset, the integration tip is reachable from nothing,
+and `git gc` prunes it, after which `git log --not <sha>` is `fatal: bad revision`. A ref under
+`refs/sysop/` keeps the head and its history alive. `git fetch origin
+"refs/pull/<PR>/head:refs/sysop/merged-pr-heads/<PR>"` writes exactly the PR's `headRefOid`. It
+makes the object present even when the head was pushed from elsewhere, it is idempotent, and it
+binds the already-seeded `Bash(git fetch origin:*)`. No new allow-rule was needed. The refs are
+per clone, which is the problem's own scope: the claim flips exist only in the clone that
+committed them.
+
+**Why Step 4a picks one head, and when it refuses to.** `git rebase --onto <target> <head>
+<branch>` replays `<head>..<branch>`. That is the right set only when every commit it replays
+is one a plain rebase would replay too. A branch that merged `<default branch>` after the squash
+also carries the squash commit, which the head lacks and the target has, so `--onto` would replay
+it. The heredoc takes the head holding the most of the branch's commits and prints `not usable`
+when that head is of this shape; the arm then runs as before. Round 1 changed it to skip such a
+head and take a usable runner-up, and round 2 reproduced why that was worse: the stale commits the
+skipped head held are then replayed, the conflict they cause reads as two actors, and nothing
+reports the head that was passed over. `not usable` stops at the same conflict with a true
+reason. A branch is normally cut before exactly one close, so one head
+applies. A `review_tasks.md` batch header or statistics conflict on the published arm takes the
+same test, because `batch_work.sh` commits its claim to `<default branch>` the same way. A merge
+conflict continues with `git -c core.editor=true merge --continue`, never `rebase --continue`,
+which exits 128 there (`Q-637`, closed by this phase because its new route made it reachable).
+
+**The published arm cannot rebase** (Step 4a item 2), so the ruling's second half covers it. On a
+`status:` conflict, `git diff <head>...<branch>` shows only what the branch changed after leaving
+the head's history. If that does not touch the conflicted line, the branch's side is a stale flip,
+and the target's side wins. A branch that moved the status itself still stops, which keeps the
+two-actor STOP.
+
+**Readers, swept by class rather than by the filing's sites.** The filing named `/sitrep`. The
+same ancestry-only count sat in Step 1a's `ahead` (an unstarted claim cut before the squash read
+`AHEAD` instead of `clean-merged`), Step 2a step 1's listing, and `/claim-task` option C's
+empty-branch check (a false stop before a `--delete-branch` release); round 1 added `/claim-task`'s
+two `FAILED` listings. Each now passes
+`--not --glob='refs/sysop/merged-pr-heads/*'`, which matches nothing when no head is recorded.
+`cleanup_worktrees.sh`'s `MERGED` arm was left alone: it reads a squash-merged worktree as
+`ACTIVE`, which reclaims nothing, and widening it would reclaim unstarted claims, whose tips the
+heads also contain.
+
+### A landed branch stays approved (`Q-546`, Phase 352)
+
+`Q-546` was filed as unfixable because its parent's constraint (4) required the merged state to be
+recorded rather than derived, and nothing recorded it. The recorded heads are that record. Step
+2a step 0b's heredoc asks for a held doc naming the branch, a recorded head containing it, and no
+live tip past that head; all three mean every commit on it was in a merged PR.
+
+**It is not a new verdict class, and that is deliberate.** Phase 307's three disqualified cuts
+established constraints (5) and (6). Excluding the branch from Step 4a stalls its task forever,
+and a new class must then be routed into every actor that keys on `approved`. A landed branch
+keeps the `approve` verdict, so Step 3b, Step 3c, Step 4-pre's cardinality and Step 4a see it
+unchanged. Only the review is skipped: steps 1–3, the Step 2b agent (the measured ~460k-token
+cost) and Step 2d. Step 4a item 1 then prints `REPLAY 0`, and neither arm merges the branch:
+Step 4c 1b's recorded-head test scores it merged, which is what lifts constraint (5), and Step 6
+deletes it as a merged branch.
+
+**Why neither arm merges it, rather than letting `--onto` no-op.** The local-only `--onto` would
+replay nothing, but the published arm's `--no-ff` merge would put the branch's old task body
+against the newer one the squash landed: `Q-547`'s population (b), the same task at two ages, as
+an `add/add` conflict. Not merging removes that population, and (c), for every branch a recorded
+head fully contains. `Q-547`'s other populations do not involve a landed branch and are untouched. The re-stamp trap (Step 4a rewrites the ref)
+does not bite, because the check reads the head, which nothing rewrites.
+
+**A held doc is the discriminator, not the worktree.** Containment is not enough: a recorded head
+contains the tip of anything cut from local `<default branch>` before that close. That covers an
+unstarted claim in every workspace mode and any long-lived branch that is an ancestor of `main`.
+The first cut used "no linked worktree", and its round broke it three ways (reproduced). A
+`--clone` claim is never a linked worktree, and its work lives in the clone and on
+`origin/<branch>` while the primary's ref stays at the cut point. `cleanup_worktrees.sh --force`
+removes every non-main worktree, an active claim's included. And a branch no claim produced, `production` say, has none.
+Each was approved as landed, merged under neither arm, and deleted by Step 6, the clone's
+pushed work with it. Step 6's HARD RULE is the only reason a close leaves a merged branch alive, so
+the test is that rule's own evidence: a pending doc in the main checkout's
+`sysop/runtime/pending-docs/` naming the branch. Two more conditions close the clone case: no live
+tip may sit past the head (the lock's recorded workspace ref, `origin/<branch>`), and a workspace
+on the branch with uncommitted work is live. `/sitrep` applies the same three conditions before its
+park, stale and `planning` arms. The order matters: with the heads excluded a held task reads 0
+commits ahead, and the stale arm would have advised removing the lock of a task waiting on its
+human step.
+
+**The `direct` arm (`Q-646`, Phase 360).** A `direct` close records no PR head, so until Phase
+360 the follow-up close of a held branch it had merged printed `NOT LANDED — no recorded PR head
+contains it` and reviewed the branch in full. After Step 4a's rebase and `--ff-only` merge, both
+`<default branch>..<branch>` and `<default branch>...<branch>` are empty, so Step 2d read the
+`test-proves` record against a diff touching no test file, and `## Also fixed` check 1 found every
+named path outside it and recommended *Hold for fix*. Phase 358 had just made `/sitrep` route such
+a branch here as `merged, close pending`, so the routed path met the false halts. When no recorded
+head contains the branch, step 0b now lands it when three things hold: its local tip is an ancestor
+of local `<default branch>`, it is not the default branch, and a doc naming it carries
+`held_since:`. Step 4c 1c writes that stamp on a held doc whose branch `HEAD` (or a recorded PR
+head) already contains, so it records that a close held the doc with the branch inside it. It does
+not record that the close merged the branch: a branch with no commits of its own is contained
+trivially, so its held doc is stamped at its first close (round 2, lenses D and E).
+
+**Why the stamp, and why the local branch only (round 1, on Wade's answer).** The first build asked
+`/sitrep`'s `_merged_into_default` question unchanged: a held doc, and ancestry of the local default
+branch or `origin`'s. Lens C showed a doc in the main checkout's pending-docs is not proof a close
+held it: `/document-work` on a `--branch` claim writes there directly, so a branch at the default
+branch's tip with zero commits landed on its first close. The stamp excludes a doc no close has held:
+that one, and a doc a close collected but never held because it stopped after Step 4a merged, whose
+branch is reviewed in full as before (`Q-648`). What it does not exclude, round 2 showed: the same
+zero-commit doc, once a close has held it, lands at the next close, and the PR arm takes no stamp at
+all. The cost is bounded: Step 4c 1b routes an unheld zero-commit doc and closes its task whatever
+step 0b says, so landing it skips only a review of an empty diff. Wade kept the stamp on that
+reading (2026-10-06); a record written when Step 4a actually merges a branch is `Q-648`'s. Lenses A and C
+showed the `origin/<default branch>` container was refused downstream: with local `main` behind it,
+Step 4c 1b's `rev-list --count <branch> ^HEAD` was non-zero, so the doc did not route, and Step 6's
+safe `-d` refused the branch. The arm now uses the ref both of those test against. `/sitrep`'s twin
+keeps both refs and needs no stamp: it only routes, and the close's full review is the loud
+direction.
+
+**The lock workspace's status read.** The PR arm's lock loop already refused a workspace on the
+branch with uncommitted work, with a bare `git status --porcelain`. The first build said 0b left
+dirtiness to step 0; all three lenses showed that read was still there, and that it refuses a
+`--clone` workspace whose only change is an untracked `.venv` symlink to an ignored target
+(BeanRider ISSUE-0043). Step 1-pre's `noise()` downgrades that shape, so step 0a does not SKIP the
+branch, and a clone is the one workspace a close never removes. The loop now applies the same
+`noise()` test, and `/sitrep`'s `_live_work_past` mirrors it. 0b still leaves a linked worktree and
+the primary to step 0, whose Step 1a classifier carries the same downgrade. Both arms now read the
+branch's tip from `refs/heads/<branch>` before asking which recorded head contains it: a tag of the
+same name otherwise resolved first and landed a branch with unmerged work (round 1, lens A,
+pre-existing since Phase 352).
+
+`origin/<branch>` is still read live with `ls-remote`, where `/sitrep` reads it as last fetched.
+Neither arm merges the branch: rebasing an ancestor only moves its ref to the target's tip. Step
+6's `direct` list deletes it with the safe `-d`, which passes because the tip is an ancestor of the
+local default branch.
+
+**What a landed branch still meets.** It counts toward Step 4-pre's condition 1, deliberately, so
+a close holding one plus a single approved branch with its own PR takes the integration-branch
+shape rather than reuse; reuse can never fire on the landed branch itself, because condition 5
+fails. 4a-post does not count it among branches still approved, because it merged nothing this
+run, and counting it would stop a close whose only approved branch is landed.
+
+**Heads are recorded only from Phase 352 on, and only on an in-run `MERGED` verdict.** A PR merged
+by hand after a stuck-PR stop, or by an earlier close, has no head until someone runs Step 4d's
+record command for it, which 4d-1 says.
+
+**A reverted squash makes its head lie.** A recorded head means "these commits are in `main`",
+which holds only until someone reverts the squash. Then `--onto` skips the reverted commits, Step
+2a approves a held branch as landed, and Step 4c 1b closes its task with the work gone (round 2,
+reproduced). Wade's ruling (2026-10-01): an operator rule, not a check. Step 4d tells the operator
+to delete a PR's ref when its squash is reverted, and automatic detection is filed as `Q-641`.
+
+**Round 2's patches to the landed path.** The landed check reads frontmatter with the same `fm_re`
+Steps 3b, 3c and 4c use, so a BOM or a branch name containing `---` reads the same in the close
+and in `/sitrep`. It reads `origin/<branch>` with `git ls-remote`, because nothing in the close
+fetches feature branches. A stale remote-tracking ref let a lockless clone's pushed work read as
+landed and be deleted by Step 6. A failed `ls-remote` is NOT LANDED. A `REPLAY 0` branch Step 2a
+did not approve as landed is 4a-SKIP rather than merged under neither arm, and 4c 1b's head test
+does not route a 4a-SKIP's doc. The first cut trusted containment at every step after 0b, so a
+reviewer approving a NOT LANDED clone reached Step 6's remote deletion anyway. On the published
+arm, the structural recipe reads what the branch changed from `git diff <head>...<branch>`. Stage
+1 is the pre-squash merge base, so read from it every stale flip looks like a branch edit the
+recipe tells the operator to re-apply. The resolution is per line, not per hunk, because a hunk
+can hold the branch's own line beside the stale one. `/sitrep`'s stale arm does not fire for a
+task whose doc is held, whether or not the landed test passes.
+
+**Why the `merge --continue` rule exists.** Step 4a merges a published branch `--no-ff`, and a
+conflict there cannot be continued with `rebase --continue`, which exits 128
+(`no rebase in progress`). The rule is exact for the same reason the rebase one is: `-c` is not a
+wrapper the matcher strips. A PR merged outside the run (4d-1) needs its head recorded because
+otherwise the next close cannot tell that PR's claim flips from a branch's own work.
+
+### A held doc's branch and the reuse shape (`Q-642`, Phase 360)
+
+`gh pr merge --delete-branch` deletes the merged PR's head branch on the remote and, once `gh` has
+moved `HEAD` off it, locally too. Under the integration-branch shape that head is the integration
+branch, which no pending doc names. Under the PR-reuse shape it is the approved branch itself, and
+Step 4c 1c can hold that branch's doc on an outstanding `hold:` or `user_action`. Step 6's HARD
+RULE keeps a held doc's branch because the next close's step 1b resolves the doc's `branch:`; with
+the flag, the branch is already gone before Step 6 runs, and the next close stops on 1b's *"If the
+ref no longer resolves, stop and ask"*. Dropping the flag on that one shape leaves both copies for
+the close that consolidates the doc, whose step 0b approves the branch as landed and whose Step 6
+then deletes it. A repository configured to delete head branches on merge removes the remote copy
+regardless; step 1b and step 0b read the local ref, and 0b's `ls-remote` finds nothing to compare.
+
+### A check that never started (`Q-632`, Phase 360)
+
+GitHub completes an Actions job it refused to start (internal tracker #782: an exhausted Actions
+budget, three times in one consumer) as `status: completed`, `conclusion: failure`, `steps: []`, with an
+empty `runner_name`, and `gh pr checks` renders it `fail` like a job that ran and found something.
+The only statement of the cause is a check-run annotation. So 4d-1's advice to fix the failing
+check sent the operator to fix code that was never measured, and in the reported case the refused
+job was a secret scan, which read as a leak. The test pairs the empty `steps` with the `failure`
+conclusion because a `skipped` job also records none. It reads the job named by the check's link
+(`…/actions/runs/<run>/job/<job>`) rather than listing the run's jobs, because a job's id is its
+check run's id (verified on this repository's own CI), so one call answers for the check in hand.
+`gh pr checks --json` exits 0 when a check has failed, where the plain form exits 1 (measured on
+two public PRs with failing checks), so the listing needs no `|| echo` tail.
+`gh run rerun` is not seeded as an allow-rule, so the re-run is the human's `!` command. Re-running
+the whole close meets the same refusal: a new PR under the integration-branch shape, the same PR
+under reuse.
+
+### A landed branch's `## After merge` is printed once (Phase 360)
+
+Step 2d's loop excludes a branch Step 2a approved as landed, and `2‑also` and `2‑after` share its
+reach. Phase 357 had added a `landed by PR #<N>` label to Step 8's `After merge:` line that no step
+could produce. On Wade's answer (2026-10-06) the label went, rather than the reach widening: the
+close that merged the branch printed its steps, and printing them again at the follow-up close
+invites running a migration or a deploy twice. A stuck-PR stop prints them in its report, since
+that close did not see the merge (round 1, lens C). A `direct` close that stopped after Step 4a merged
+and before Step 8 printed nothing; its doc is unstamped, so the next close reviews the branch in
+full, over an empty diff (`Q-648`).
 
 ### The retired notes ledger's conflict bullet (Phase 323)
 
@@ -1425,6 +2386,67 @@ nothing is indistinguishable from one that passed. The `INHERITED:` token on Ste
 same reason `ran nothing` and `TIMEOUT` are not: each names a different state of the gate, and a
 report that loses which one occurred is the equivalence this whole step exists to remove.
 
+### Step 2d check 1's notes, and the bound they leave (`Q-630`)
+
+Check 1 halts only when a line names paths and none of them is in the diff (Wade, 2026-09-30); a
+line with one path in the diff reports its others as notes. Read literally, the ruling ("halt
+only when no path in the line is in the diff") would also halt on a line that names no path at
+all, which check 1 had always passed, so that line stays outside the check. The cost is a
+narrower screen: a fabricated path written beside a real one now reaches the human as a note, not
+a halt.
+
+### Why item 4 also asks on a `pr` close's pre-existing failure, and why that is not the general form (`Q-631`)
+
+**The case.** A consumer's close merged work, and two tests failed at `4a-post`. They failed only
+because a local `.env` let an unmocked call reach a live service: they failed identically on
+`origin/<default branch>`, passed in a worktree with no `.env`, and CI was green. The arm above could not fire,
+because its condition 1 requires zero approved branches, so item 4 stopped. Every later close that
+merged anything would have stopped the same way until someone repaired the tests out of band.
+
+**What Wade ruled (2026-09-30), and how it differs from what Phase 318 refused.** Phase 318 refused
+the general form, which re-runs the failing command on the default branch and, if it reproduces,
+classifies the failure inherited and **continues**. That form widens the one gate whose green means
+something, for every defect already on the default branch, with no one asked. The arm shipped here
+continues on nothing by itself. It establishes a fact and **asks**, once per close, and only an
+answer moves the close forward. It is also narrower in three ways:
+
+- **`pr` only.** Under `pr` the merged work reaches the default branch through a pull request, so
+  whatever checks the consumer requires on that pull request run before it lands. Under `direct`,
+  this gate is the last thing between the work and the pushed `main`.
+- **Test IDs, not output.** The comparison is between two sets of named failing tests. A command
+  that names no individual tests cannot be compared without guessing, so it stops. A failure that
+  matches on output alone, such as the same exit code from a build, is not this arm's case.
+- **Same environment.** A detached worktree carries no untracked file, so a probe run there drops
+  the `.env` that caused the failure. On the reported case that probe *passes*, the sets differ,
+  and the arm would never fire on the case it was ruled for. So the probe links the failing run's
+  local files in at the same relative paths, and a probe that cannot be given them establishes
+  nothing.
+
+**Two ways the probe could agree for the wrong reason, both found by Phase 357's round and both
+reproduced.** First, a run that stops at the first failure (`pytest -x`, `--maxfail`) reports only
+the pre-existing failure it meets first; the regression behind it never runs, and the probe on the
+default branch reports the same single ID. So the run must have run every test. Second, the
+dependency tree. Linking the checkout's `.venv` into the probe makes the command run, but an
+editable install (`pip install -e .`) points that interpreter at *this checkout's* `src/`, so the
+probe on `origin/<default branch>` imports the merged code and fails identically. Linking only files does not
+cure it either: the same interpreter named by absolute path still follows the editable install. So
+the probe must show where the code under test loads from, and a path outside the probe stops the
+arm. On a project that tests through an editable install the arm is therefore usually inert. It
+fails closed, which is the right direction for a gate whose job is to refuse.
+
+**Known bound: the same set, not a subset.** If the work fixes one of two pre-existing failures,
+the merged tree fails a strict subset of what the default branch fails. The sets differ, so the arm
+stops. That is the conservative reading of "identical", and it is the ruling's word. A later case
+that needs the subset form is a new decision, not a reading of this one.
+
+**Why `PRE-EXISTING:` and not `INHERITED:`.** `INHERITED:` means the three preconditions above held
+and the close continued without asking. This token means a command failed, the default branch fails
+the same tests, and a human chose to proceed. Folding the two would lose whether anyone was asked.
+
+**The other half of the ruling is in `WORKFLOW.md` § 6.1:** a pre-merge gate should not depend on
+local credentials. The ask is relief for a gate that already does; the template note is what stops a
+consumer writing one.
+
 ### Why the Exit 0 arm keys on the printed counts and marker (`Q-609`, Phase 330)
 
 `--fail-on-blocking` fails on a `failed` blocking stage and on a new blocking finding, nothing else.
@@ -1546,6 +2568,91 @@ reaching for — a legacy-format doc predating worktree-per-branch — is covere
 bytes to a quarantine directory costs nothing that consolidating an unroutable doc would have
 preserved.
 
+### Why `hold:` is a second field, and why a command now runs the test (`Q-625`, Phase 353)
+
+Until Phase 353, 1c held a doc only while a named task's `user_action` was truthy. That flag has
+two readers with two meanings. `/roadmap`, `/next-task` and `/auto-build` read it as *a human must
+act before an agent can take this task*; 1c read it as *the deliverable is not finished, do not
+close it*. A consumer reported three cases. In the first, the flag was cleared to clean up the
+roadmap view. In the other two, the task simply reached the close with the flag false while its
+body said the work was unfinished. Each time, the only thing between the doc and a false `done` was
+1b failing to resolve a branch ref, or a closer who happened to read the task body.
+
+`tasks/schema.md` § *User ops* had recorded "one field, not two" for `user_action` against a
+`user_action_done:` companion. **`hold:` does not contradict that decision:** that argument was
+about encoding one fact as two booleans on the task. `hold:` is a different fact, *this merge does
+not finish the task*, and it lives on a different record: the pending doc, which is the thing 1c
+holds. It is written by `/document-work` when the branch is documented and removed by
+`pending_doc_hold.py clear`, after the shape of `clear_user_action.py`; no step of the close path
+removes it. 1c holds on either field.
+
+**Rejected:** inferring the hold from a body section still marked incomplete (`## User ops`, a
+rollout list). That is not a mechanical test, because it asks the closer to judge prose, and the closer reading
+the body was the safeguard that failed in two of the three reports.
+
+**Why the test became a command.** With two inputs, one in the doc and one in the index, a prose
+test is two judgments per doc at two sites (1b's short-circuit and 1c). It also needed a write:
+`held_since:` (below). `pending_doc_hold.py check --stamp` puts the test, the shim, the
+truthiness and the stamp in one place, and exits non-zero when it cannot read the index, because
+then no hold can be decided. The round-trip heredoc is handed ids, not docs, so the runner tells
+the closer to take its ids from `ROUTE:` docs only. As built, its defence-in-depth arm read
+`user_action` alone, so a `hold:` had only that prose gate (lens A). The heredoc now reads the
+pending docs itself and reports an id that a doc with `hold:` names as `HELD_BY_HOLD`, not closed.
+
+**`held_since:`.** 1c stamps each held doc whose branch merged, the first time it holds it, as the
+doc's first frontmatter line, because a line appended after a trailing block scalar would become
+part of that scalar's value. One reader acts on it: `pending_doc_hold.py guard`, which never chooses
+a stamped doc as the file `/document-work` writes. Step 3c read it too, for `Q-610`, until round 2
+(§ *Step 3c — provenance*). The stamp is a date and not a SHA; nothing compares it. **The hold does
+not depend on it, but `guard`'s protection does:** a held doc the stamp could not be written to (a
+stray byte, mixed line endings, a flow-mapping frontmatter) is chosen and replaced like any
+unstamped doc. 1c reports the `NOT STAMPED:` note on Step 8's row so the doc can be repaired. No
+shipped writer produces those shapes.
+
+**Why `/document-work` writes a second doc beside a stamped one (Wade's answers, 2026-10-01).**
+`/document-work` writes `<sanitized-branch>.md`, so on the default branch every run writes the same
+`main.md`. A held `main.md` is the only carrier of its tasks into the close that will finish them,
+and replacing it lost them with nothing reporting it. That was already true of a `user_action` hold
+from Phase 241 on. The first answer was to refuse the write. Round 1 showed the cost: while any
+`main.md` was held, no work on `main` could be documented, including the fix for the held task
+itself. On the second answer, `guard` names the file to write: the base name, or the existing
+unstamped `<name>--<n>.md` of the same branch, or a new one. Re-running `/document-work` rewrites
+the unstamped one; that is the ordinary re-stamp of a doc no close has held. A `<stem>--<n>.md` of
+another branch (a name `feat/x` and `feat-x--2` both sanitise to) is not a sibling. **Round 2 found
+the second doc could write a false `Complete`:** a sibling naming the held doc's task routed, and
+its PROJECT_STATUS entry said the task was complete while the round-trip held it. On Wade's answer a
+hold became per task (above), so that sibling waits with the held doc. Every `/review-close` reader
+globs `*.md`. `/sitrep`'s `_pending_doc_for` and `/auto-build`'s envelope recovery look up the base
+name; both are reached only for a claimed branch, whose doc lives in its workspace, where a sibling
+is never written.
+
+**Why the collect refuses a doc that drops a hold (`Q-625`, round 1's lenses A and C).** Step 3b's
+collect replaces main's copy of a same-branch doc with the workspace's, by design (the stale twin).
+For a held feature branch that is claimed again and re-documented, that dropped the `hold:`, and
+Step 4c then closed the task: a regression, because a `user_action` hold lived in the index and
+survived the same replacement. Two parts close it. `guard` prints `CARRY HOLD:` when the main
+checkout's same-named copy carries `hold:`, and `/document-work` writes it into the new doc. The
+collect refuses (exit 3) when main's copy carries `hold:` and the incoming doc does not, so a doc
+written any other way cannot drop it either. **A `--clone` workspace is its own repository**, so
+`guard` cannot see the main checkout from it and prints no `CARRY HOLD:` (round 2). The refusal
+names main's reason and says to add that line to the incoming doc, which works for every workspace
+shape; its first wording, "re-run `/document-work`, which carries it", looped for a clone. The
+collect checks that the incoming doc carries a hold, not that it carries the same reason; a changed
+reason passes.
+
+**What 1c's runner text used to argue, now that a command applies it.** The `task_ids` fallback
+is not optional: a legacy doc keyed on `task_ids` that the gate skipped would be routed and
+consolidated, and only the round-trip's defence-in-depth arm would then hold the task — the
+stranding path, reached through the gate that exists to close it. The same is why 1b's
+short-circuit reads both namespaces: keyed to one, it would resolve a ref for exactly that legacy
+doc. Truthiness, and not `== true`, because the two gates must agree, and a malformed non-bool
+value is where an equality test and a truthiness test diverge: an equality reading routes the doc,
+the round-trip then holds the task, and the doc is deleted underneath it. The round-trip heredoc's
+comment records why truthiness is the right bias. **A hold is per task (round 2):** a hold set on
+one doc and read per doc let a second doc naming the same task route and write that task's
+`Complete` while the task was held; `user_action` and the round-trip's `HELD_BY_HOLD` arm were
+already per task, so `check` now holds every doc that shares an id with a held doc.
+
 ### The cost of holding the whole doc, stated rather than discovered later
 
 When 1c holds a doc, the code merged this run and its `PROJECT_STATUS.md` / `CHANGELOG.md` entry
@@ -1567,10 +2674,11 @@ than a mapping — a single prose line between the delimiters — is truthy, so 
 not catch it and `.get()` raises `AttributeError`.
 
 **This file carried two divergent pending-doc readers, one defensive with code and one
-prescriptive with none.** Step 3c's shipped reader now handles all four by skipping —
-`if not fm_m: continue`, `except yaml.YAMLError: continue`, `if not isinstance(fm, dict):
-continue`, and `errors="replace"` on all four reads in that heredoc — and it did
-not before the phase that wrote arm 3: a reviewer ran it and watched a non-mapping frontmatter and
+prescriptive with none.** Step 3c's shipped reader skips three of the four — `if not m: return
+{}`, `if not isinstance(fm, dict)`, and `errors="replace"` on all four reads in that heredoc —
+and since Phase 348 it **stops the gate on the fourth**, a frontmatter that will not parse,
+naming the doc: a skipped doc carrying `manual_smoke` let the close merge unasked. It did not
+handle any of them before the phase that wrote arm 3: a reviewer ran it and watched a non-mapping frontmatter and
 a non-UTF-8 doc each kill the close with a traceback at a step that runs *before* this one, which
 would have left arm 3 unreachable for those shapes. Arm 3 is what makes the two readers agree —
 except that quarantining beats Step 3c's silent skip, because a skipped doc is invisible and a

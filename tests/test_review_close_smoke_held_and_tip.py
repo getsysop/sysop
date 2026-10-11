@@ -694,7 +694,7 @@ def test_an_inherited_git_dir_does_not_redirect_the_tip_read(tmp_path):
     decoy.mkdir()
     _git(decoy, "init", "-q")
     env = dict(os.environ, GIT_DIR=str(decoy / ".git"))
-    r = subprocess.run([sys.executable, "-c", SMOKE_SRC, "", "feat/x"], capture_output=True,
+    r = subprocess.run([sys.executable, "-c", SMOKE_SRC, "", "feat/x", "main"], capture_output=True,
                        text=True, cwd=str(repo), env=env, timeout=30)
     assert "CURRENT" in r.stdout and "STALE" not in r.stdout, r.stdout + r.stderr
 
@@ -829,4 +829,4 @@ def test_the_recorder_refuses_mixed_line_endings(tmp_path):
 def test_the_heredoc_source_is_the_one_under_test():
     """Guard the extraction: the recorder this module runs is the one step 4 prescribes."""
     assert "REFUSING" in RECORDER_SRC and "smoke_answers" in RECORDER_SRC
-    assert "def emit(src, read, carrier, sec):" in SMOKE_SRC
+    assert "def emit(src, read, carrier, sec, branch=None):" in SMOKE_SRC

@@ -868,6 +868,33 @@ def test_both_core_maps_cover_the_vendor_script_surface():
         )
 
 
+def test_the_two_core_shell_headers_name_the_same_globs():
+    """Parity by equality, not by one shared prefix (`Q-069`, re-checked by Phase 370).
+
+    The row above passes as long as each map names *some* `sysop/scripts/` glob, so
+    dropping `sysop/scripts/hooks/*` from one map alone leaves both of its checks green
+    while the two hooks a full install ships (`sysop/scripts/hooks/pre-commit`,
+    `pre-merge-commit`) attach to the conventions but not to the OWASP rules, or the
+    reverse. The two sections cover one surface from two angles, so they name it alike.
+    """
+    def shell_globs(name: str) -> set[str]:
+        text = (_ROOT / "core" / "companion" / name).read_text(encoding="utf-8")
+        shell = [h for h in _HEADER.findall(text) if "scripts/" in h]
+        assert len(shell) == 1, f"{name}: expected one shell-scripts header, found {shell}"
+        return set(_GLOB.findall(shell[0]))
+
+    conv, sec = shell_globs("convention_map.md"), shell_globs("security_map.md")
+    # Equality alone cannot see a glob dropped from BOTH maps (Phase 370's round): then the
+    # hooks are scanned by neither. Name the surface the installer ships.
+    shipped = {"sysop/scripts/*.sh", "sysop/scripts/hooks/*"}
+    assert shipped <= conv, f"convention_map.md's shell header lost {sorted(shipped - conv)}"
+    assert conv == sec, (
+        "the two core maps' shell-scripts headers name different globs, so part of that "
+        f"surface is scanned under one map's rules only: convention-only {sorted(conv - sec)}, "
+        f"security-only {sorted(sec - conv)}"
+    )
+
+
 def test_placeholder_script_globs_are_not_flagged():
     """Negative control: `<scripts dir>/` is the consumer's dir and must stay exempt.
 

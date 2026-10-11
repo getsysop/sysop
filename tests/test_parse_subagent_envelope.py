@@ -1821,6 +1821,147 @@ def test_the_retention_value_is_exactly_the_one_the_docs_publish():
 
 
 # ---------------------------------------------------------------------------
+# A diagnostic's orphaned `_write_json` temp (`Q-554`, Phase 370)
+#
+# `mkstemp` names the temp `<basename>.<8 random>.tmp`, so a hook killed
+# between `mkstemp` and `os.replace` leaves `_unparseable_<s>_<a>.json.<8>.tmp`
+# — the sweep's prefix, not its `.json` suffix — and nothing reclaimed it.
+# The new arm widens a DELETION predicate, so it carries the same kind of
+# coverage the main predicate has: age floor, inclusive boundary, a near-miss
+# list with one counterexample per plausible widening, the envelope near-miss,
+# the symlink, and the `main()` path.
+# ---------------------------------------------------------------------------
+
+def _killed_write(target):
+    """Leave a REAL orphan: run `_write_json` in a child whose `os.replace` exits
+    the process, which is a hook killed between `mkstemp` and `os.replace`.
+
+    Produced by the shipped writer rather than spelled by hand, so the test
+    tracks the temp name `_write_json` actually mints — if CPython's random part
+    ever changed shape, this reddens instead of the arm silently going dead.
+    """
+    import sys as _sys
+    script_dir = os.path.dirname(pse.__file__)
+    code = (
+        "import os, sys\n"
+        "sys.path.insert(0, sys.argv[1])\n"
+        "import parse_subagent_envelope as p\n"
+        "os.replace = lambda a, b: os._exit(9)\n"
+        "p._write_json(sys.argv[2], {'x': 1})\n"
+    )
+    res = subprocess.run([_sys.executable, "-c", code, script_dir, str(target)],
+                         capture_output=True, text=True)
+    assert res.returncode == 9, res.stdout + res.stderr
+    d = Path(target).parent
+    temps = [p for p in d.iterdir() if p.name.startswith(Path(target).name + ".")]
+    assert len(temps) == 1 and temps[0].name.endswith(".tmp"), [p.name for p in temps]
+    assert not Path(target).exists()
+    return temps[0]
+
+
+def test_a_stale_orphaned_diagnostic_temp_is_reclaimed(tmp_path):
+    d = _diag_dir(tmp_path)
+    orphan = _killed_write(d / "_unparseable_sess_agent.json")
+    _age(orphan, pse.DIAGNOSTIC_RETENTION_DAYS + 1)
+    assert pse._reclaim_stale_diagnostics(str(d)) == 1
+    assert not orphan.exists()
+
+
+def test_a_fresh_orphaned_diagnostic_temp_is_kept(tmp_path):
+    """A CONCURRENT hook's temp is in flight and seconds old. The sweep runs
+    before this run's own write, so only the age floor protects that one."""
+    d = _diag_dir(tmp_path)
+    orphan = _killed_write(d / "_unparseable_sess_agent.json")
+    assert pse._reclaim_stale_diagnostics(str(d)) == 0
+    assert orphan.exists()
+
+
+def test_an_orphaned_temp_exactly_at_the_cutoff_is_kept(tmp_path, monkeypatch):
+    d = _diag_dir(tmp_path)
+    at = _killed_write(d / "_unparseable_at_cutoff.json")
+    under = _killed_write(d / "_unparseable_just_under.json")
+    now = 1_700_000_000.0
+    monkeypatch.setattr(pse.time, "time", lambda: now)
+    cutoff = now - pse.DIAGNOSTIC_RETENTION_DAYS * 86400
+    pse.os.utime(at, (cutoff, cutoff))
+    pse.os.utime(under, (cutoff - 1, cutoff - 1))
+    assert pse._reclaim_stale_diagnostics(str(d)) == 1
+    assert at.exists()
+    assert not under.exists()
+
+
+def test_an_envelope_temp_is_never_reclaimed_at_any_age(tmp_path):
+    """The new arm stays inside the `_unparseable_` name. An envelope's orphaned
+    temp is dead too, but the sweep's whole safety property is that name."""
+    d = _diag_dir(tmp_path)
+    keep = [_killed_write(d / "FEAT-0123.json"),
+            _killed_write(d / "FEAT-0124.exec.json")]
+    for p in keep:
+        _age(p, 365)
+    assert pse._reclaim_stale_diagnostics(str(d)) == 0
+    for p in keep:
+        assert p.exists(), p.name
+
+
+def test_only_the_exact_orphan_temp_shape_is_a_candidate(tmp_path):
+    """One counterexample per plausible widening of the new arm's pattern."""
+    d = _diag_dir(tmp_path)
+    keep = [
+        "_unparseable_x.json.tmp",             # no random part
+        "_unparseable_x.abcdefgh.tmp",         # `.json` dropped
+        "_unparseable_x.json.abcdefg.tmp",     # 7, not 8
+        "_unparseable_x.json.abcdefghi.tmp",   # 9, not 8
+        "_unparseable_x.json.abcd-fgh.tmp",    # `-` is not in tempfile's alphabet
+        "_unparseable_x.json.ABCDEFGH.tmp",    # nor are capitals
+        "_unparseable_x.json.abcdefgh.tmp.bak",  # anchored at the end
+        "_unparseable_x.json.abcdefgh.tmpx",
+        "_unparseable_x.json.abcdefgh.TMP",
+        "_unparseable_x_json_abcdefgh.tmp",    # the dots are literal
+        "_unparseable_x.json.abcdefgh_tmp",
+        "x_unparseable_x.json.abcdefgh.tmp",   # anchored at the start
+        "_UNPARSEABLE_x.json.abcdefgh.tmp",
+        "_unparseablex.json.abcdefgh.tmp",
+        "_unparseable_.json.abcdefgh.tmp",     # empty session/agent part
+        "_unparseable_a b.json.abcdefgh.tmp",  # outside the sanitizer's alphabet
+    ]
+    for n in keep:
+        f = d / n
+        f.write_text("x", encoding="utf-8")
+        _age(f, 365)
+    assert pse._reclaim_stale_diagnostics(str(d)) == 0
+    for n in keep:
+        assert (d / n).exists(), n
+
+
+def test_an_orphan_temp_named_symlink_loses_its_name_not_its_target(tmp_path):
+    d = _diag_dir(tmp_path)
+    envelope = d / "FEAT-0001.json"
+    envelope.write_text('{"task_id": "FEAT-0001"}', encoding="utf-8")
+    _age(envelope, 365)
+    link = d / "_unparseable_l_a.json.abcdefgh.tmp"
+    link.symlink_to(envelope)
+    assert pse._reclaim_stale_diagnostics(str(d)) == 1
+    assert not link.is_symlink()
+    assert envelope.read_text(encoding="utf-8") == '{"task_id": "FEAT-0001"}'
+
+
+def test_main_reclaims_a_prior_orphan_temp_on_its_way_through(monkeypatch, tmp_path):
+    monkeypatch.setattr(pse, "_main_repo_root", lambda cwd: str(tmp_path))
+    d = _diag_dir(tmp_path)
+    orphan = _killed_write(d / "_unparseable_old_old.json")
+    _age(orphan, pse.DIAGNOSTIC_RETENTION_DAYS + 1)
+    rc = _run_main_with_stdin(monkeypatch, {
+        "last_assistant_message": "I finished. No envelope here.",
+        "session_id": "sess-y",
+        "agent_id": "agent-y",
+        "cwd": str(tmp_path),
+    })
+    assert rc == 0
+    assert (d / "_unparseable_sess-y_agent-y.json").exists()
+    assert not orphan.exists()
+
+
+# ---------------------------------------------------------------------------
 # Phase 319 — the handback envelope (`Q-552`)
 #
 # An agent that hands its envelope back through the harness's handback tool

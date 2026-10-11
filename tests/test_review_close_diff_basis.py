@@ -314,7 +314,7 @@ def test_the_three_legal_two_dot_ranges_are_still_present_and_still_legal():
         "Step 1c's `$base..<default branch>` is only correct because `base` is a merge-base "
         "— if that assignment goes, the allowlist entry becomes a hole"
     )
-    assert "`git log <default branch>..<branch> --oneline`" in rc, (
+    assert "`git log <default branch>..<branch> --not --glob='refs/sysop/merged-pr-heads/*' --oneline`" in rc, (
         "Step 2a's commit listing must keep TWO dots — three-dot `git log` lists main's "
         "commits as though they were the branch's"
     )
@@ -661,7 +661,10 @@ def test_2b_targets_exclude_branches_step_2a_skipped():
     """A SKIP'd branch is not merging this run; a BLOCKED verdict on it would halt the
     close over work already declared out of scope."""
     block = _step_2b(REVIEW_CLOSE.read_text())
-    assert "**SKIP — paused work present** is *not* a target" in block
+    # Phase 354 widened it to every Step 2a SKIP: an unanswered ignored file is one too, and
+    # Phase 355 added step 0a's clone that was not brought across.
+    assert ("classified **SKIP** (paused work present, clone not brought across, or an ignored "
+            "file unanswered) is *not* a target") in block
 
 
 def test_the_unpushed_main_group_has_a_retrieval_command_not_just_a_predicate():
@@ -689,7 +692,7 @@ def test_workflow_spec_records_all_three_fixes():
     line = next(
         ln
         for ln in (DOCS_DIR / "WORKFLOW.md").read_text().splitlines()
-        if "Spawn an Opus adversarial sub-agent per branch" in ln
+        if "Spawn an adversarial sub-agent per branch" in ln  # "an Opus" until Phase 349 (#761)
     )
     assert "isolated in its own worktree" in line
     assert "merge-base-relative" in line

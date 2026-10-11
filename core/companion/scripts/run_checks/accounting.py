@@ -292,6 +292,18 @@ class RunReport:
         """
         return {cid for cid in self._order if self.status_of(cid) == DEGRADED}
 
+    def executed_ids(self):
+        """Check ids whose final state is ``executed`` — a zero from them is real.
+
+        The one set whose silence is evidence. ``render``'s "executed with 0
+        findings" line asks it per check; the stale-entry report
+        (`baseline.unmatched_entries`) asks it per baseline entry. Both read it
+        here so the two can never disagree about which checks ran. A
+        ``degraded`` check is deliberately absent: it may simply not have
+        reached the file an entry names.
+        """
+        return {cid for cid in self._order if self.status_of(cid) == EXECUTED}
+
     def render(self, findings, *, mode, baseline_matched=0, new_blocking=0):
         """Render the multi-line summary block (spec §3).
 
@@ -378,10 +390,10 @@ class RunReport:
         # produce an unreadable enumerated line); tool-stage ids are enumerated
         # so a per-check zero is distinguishable from a never-ran check.
         zero_by_stage = {}
+        executed = self.executed_ids()
         for cid in self._order:
-            rec = self._records.get(cid)
-            if rec and rec.status == EXECUTED and cid not in ids_with_findings:
-                zero_by_stage.setdefault(rec.stage, []).append(cid)
+            if cid in executed and cid not in ids_with_findings:
+                zero_by_stage.setdefault(self._records[cid].stage, []).append(cid)
         for stage, ids in zero_by_stage.items():
             noun = "check" if len(ids) == 1 else "checks"
             if stage == "grep":

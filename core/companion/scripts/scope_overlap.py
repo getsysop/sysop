@@ -357,7 +357,7 @@ def _load_index_soft(index_path: Path) -> dict[str, Any] | None:
     try:
         with open(index_path, "r", encoding="utf-8") as fh:
             data = yaml.safe_load(fh)
-    except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
+    except Exception as exc:  # any read or parse failure, not only YAMLError (`Q-621`)
         _warn_unreadable(index_path, exc, "no candidate scope can be inferred")
         return None
     return data if isinstance(data, dict) else None
@@ -531,17 +531,21 @@ def _parse_lock_file(path: Path, notes: list | None = None) -> dict[str, Any]:
     failure, carrying ``.unreadable`` to say why. Follows
     ``sitrep_survey.py:_load_lock_file``: an empty file or a YAML list or scalar
     parses to no fields and is unreadable, while a mapping (even ``{}``) is a
-    readable lock."""
+    readable lock. Parsed by ``sitrep_survey.load_lock_text``, so ``workspace:``
+    and ``branch:`` are read as their lines read."""
     out = _LockFields()
     try:
-        import yaml
+        import yaml  # noqa: F401  (availability probe: the parse is sitrep_survey's)
     except ImportError:
         out.unreadable = "its lock could not be parsed (PyYAML unavailable)"
         return out
+    survey = _survey_module()
+    if survey is None:
+        out.unreadable = "its lock could not be parsed (sitrep_survey.py could not be imported)"
+        return out
     try:
-        with path.open(encoding="utf-8") as f:
-            data = yaml.safe_load(f)
-    except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
+        data = survey.load_lock_text(path.read_text(encoding="utf-8"))
+    except Exception as exc:  # PyYAML raises KeyError, TypeError, … too (`Q-621`)
         _warn_unreadable(path, exc, "this in-flight claim's lock fields are unknown",
                          notes)
         out.unreadable = f"its lock could not be read ({type(exc).__name__})"
@@ -693,6 +697,18 @@ def _resolve_default_branch_for(checkout: str) -> str:
     """
     if not checkout:
         return ""
+    survey = _survey_module()
+    if survey is None:
+        return ""
+    try:
+        return survey.resolve_default_branch(Path(checkout)) or ""
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def _survey_module():
+    """``sitrep_survey``, imported under the guard `_resolve_default_branch_for`
+    describes, or None when it cannot be imported."""
     _scripts = str(Path(__file__).resolve().parent)
     _added = _scripts not in sys.path
     if _added:
@@ -704,10 +720,10 @@ def _resolve_default_branch_for(checkout: str) -> str:
         # unwrite the message. `/claim-task` Step 2 surfaces this tool's output verbatim,
         # so that text reached the operator naming a script they never invoked.
         sys.stderr = io.StringIO()
-        from sitrep_survey import resolve_default_branch
-        return resolve_default_branch(Path(checkout)) or ""
-    except (ImportError, SystemExit, OSError, subprocess.SubprocessError):
-        return ""
+        import sitrep_survey
+        return sitrep_survey
+    except (ImportError, SystemExit):
+        return None
     finally:
         sys.stderr = _stderr
         if _added and _scripts in sys.path:

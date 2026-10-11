@@ -10,8 +10,38 @@ Never mutates state. Read-only by design.
 
 Usage:
     python3 sysop/scripts/sitrep_survey.py             # text report
-    python3 sysop/scripts/sitrep_survey.py --json      # JSON output (reserved)
+    python3 sysop/scripts/sitrep_survey.py --json      # JSON output (contract below)
     python3 sysop/scripts/sitrep_survey.py --stale-days 14
+
+JSON contract (`--json`, `schema_version` 1). A consumer may rely on these keys:
+
+    top level         schema_version, timestamp, main_root, head_short,
+                      stale_days, tasks, review_batches, discrepancies,
+                      open_roadmap_ids, failed_in_merged_batches,
+                      recommended_next, suggested_order
+    tasks[]           task_id, state, state_marker, branch, worktree,
+                      commits_ahead, unpushed, has_lock, has_index_entry,
+                      index_status, dirty, doc_work_ids, pending_doc,
+                      next_action, notes, agent
+    review_batches[]  batch_number, title, md_status, branch, has_lock,
+                      has_branch, has_flag, flag_reason, has_triage_record,
+                      triaged_verdict, triaged_tasks, total_tasks,
+                      doc_worked_tasks, state, next_action, notes
+    discrepancies[]   kind, detail, suggestion
+    failed_in_merged_batches[]  batch_number, task
+    recommended_next  null, or: command, reason, clear_nudge, detail_lines
+
+`tasks[].state` takes the values in the first column of `/sitrep`'s state
+table, lowercased and without markup, and `review_batches[].state` the values
+in `/roadmap` Step 2a; tests compare both with what this file emits, as sets.
+`tasks[].agent` is the lock's `agent:` (`claim_task.sh`'s third argument), ""
+when there is no lock or it is unreadable (state `lock unreadable`): compare
+it, not a YAML read of the lock. The `/auto-build --unattended` halt marker
+reports as `discrepancies[].kind` `unattended auto-build halted`; other kinds
+carry no promise. Keys and state values may be ADDED without a version change,
+so give a reader a default arm. Removing or renaming a key, renaming a state,
+or changing a value's type bumps `schema_version`. `next_action` and `notes`
+are prose for a human: never key on their wording.
 """
 
 from __future__ import annotations
@@ -21,6 +51,7 @@ import glob
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -141,13 +172,22 @@ SUBJECT_TASK_RE = re.compile(r"\(([A-Z][A-Z0-9]*-[A-Z0-9][A-Z0-9-]+)\)\s*$")
 # ── Subprocess helpers ───────────────────────────────────────────
 
 
-def _git(args: list[str], cwd: str | None = None, check: bool = False) -> str:
+def _git(args: list[str], cwd: str | None = None, check: bool = False,
+         hermetic: bool = False) -> str:
     """Run a git command, return stdout (stripped). On non-zero exit, return ''.
 
     Decoded with ``os.fsdecode``, not ``text=True`` (`Q-612`): git prints ref
     names and commit messages as raw bytes, so a non-UTF-8 packed ref or a commit
     object written without an encoding header ended the whole survey. The decode
-    round-trips, so a name handed back to git still names the same ref."""
+    round-trips, so a name handed back to git still names the same ref.
+
+    ``hermetic`` strips git's discovery variables, so ``cwd`` decides the
+    repository. Pass it for a read that must run in a workspace other than the
+    one the survey was invoked from: an inherited ``GIT_DIR`` overrides ``cwd``."""
+    env = None
+    if hermetic:
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE")}
     try:
         r = subprocess.run(
             ["git", *args],
@@ -155,6 +195,7 @@ def _git(args: list[str], cwd: str | None = None, check: bool = False) -> str:
             check=check,
             capture_output=True,
             timeout=15,
+            env=env,
         )
         if r.returncode != 0:
             return ""
@@ -224,6 +265,7 @@ class TaskState:
     pending_doc: bool = False
     next_action: str = ""
     notes: list[str] = field(default_factory=list)
+    agent: str = ""  # the lock's `agent:` (Phase 361); "" with no lock
 
 
 @dataclass
@@ -346,6 +388,67 @@ def _unreadable_input(path: Path, exc: BaseException, consequence: str,
         unreadable.append(entry)
 
 
+# The lock fields the writers interpolate unquoted from free input (`agent:` is
+# `claim_task.sh`'s third argument), read as the line readers read them
+# (`claim_task.sh`'s awk, `/review-close`'s `line.partition(":")`) — the reading the
+# writers mean. YAML cut a path at ` #`, typed a branch named `0123`, `true` or
+# `2026-09-01`, and raised on a value holding `: `.
+LINE_READ_LOCK_KEYS = ("workspace", "branch", "agent")
+
+
+def _line_read_lock_fields(text: str) -> dict[str, str]:
+    """Each `LINE_READ_LOCK_KEYS` field as `/review-close` reads it: the FIRST line
+    whose text before its first `:` is exactly the key, the rest `.strip()`ped."""
+    out: dict[str, str] = {}
+    for line in text.splitlines():
+        key, sep, value = line.partition(":")
+        if sep and key in LINE_READ_LOCK_KEYS and key not in out:
+            out[key] = value.strip()
+    return out
+
+
+def _quote_line_read_lock_fields(text: str) -> str:
+    """`text` with every `LINE_READ_LOCK_KEYS` line's value rewritten as a YAML
+    single-quoted scalar of its line reading (`'` doubled), so YAML reads the same
+    string. Line breaks are kept, so a later parse error names the same line."""
+    out = []
+    for line in text.splitlines(keepends=True):
+        body = line.splitlines()[0]
+        key, sep, value = body.partition(":")
+        if sep and key in LINE_READ_LOCK_KEYS:
+            quoted = value.strip().replace("'", "''")
+            line = f"{key}: '{quoted}'{line[len(body):]}"
+        out.append(line)
+    return "".join(out)
+
+
+def load_lock_text(text: str) -> Any:
+    """A lock file's text parsed as YAML, with each `LINE_READ_LOCK_KEYS` field read
+    as its line reads. Raises whatever `yaml.safe_load` raises, which is not only
+    `yaml.YAMLError` (`ValueError` for `2026-09-31`, `RecursionError`; `Q-621`).
+
+    Public for `scope_overlap.py`, which imports it rather than carry a second copy.
+    A value containing `: ` is not valid YAML and made the whole lock unreadable, so
+    a lock that fails to parse is parsed again with each such line's value as a
+    single-quoted scalar; a lock that parses is parsed exactly as before. A mapping
+    then takes each key's line reading, and loses a key no exact line carries."""
+    try:
+        data = yaml.safe_load(text)
+    except Exception:
+        quoted = _quote_line_read_lock_fields(text)
+        if quoted == text:
+            raise
+        data = yaml.safe_load(quoted)
+    if isinstance(data, dict):
+        fields = _line_read_lock_fields(text)
+        for key in LINE_READ_LOCK_KEYS:
+            if key in fields:
+                data[key] = fields[key]
+            else:
+                data.pop(key, None)
+    return data
+
+
 def _load_lock_file(path: Path) -> tuple[dict[str, Any], BaseException | None]:
     """(fields, None), or ({}, the exception) when the lock cannot be read or parsed.
 
@@ -354,9 +457,8 @@ def _load_lock_file(path: Path) -> tuple[dict[str, Any], BaseException | None]:
     was taken off. A MAPPING without `branch:` is a readable lock and stays
     `claimed, no branch`."""
     try:
-        with path.open(encoding="utf-8") as f:
-            data = yaml.safe_load(f)
-    except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
+        data = load_lock_text(path.read_text(encoding="utf-8"))
+    except Exception as exc:  # PyYAML raises KeyError, TypeError, … too (`Q-621`)
         return {}, exc
     if not isinstance(data, dict):
         return {}, ValueError(f"parsed to no fields ({type(data).__name__})")
@@ -420,7 +522,7 @@ def _read_index(main_root: Path, unreadable: list | None = None) -> dict[str, di
     try:
         with p.open(encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
-    except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
+    except Exception as exc:  # any read or parse failure, not only YAMLError (`Q-621`)
         _unreadable_input(p, exc, "the survey read the task index as EMPTY, so every "
                           "task state in this report is unreliable", unreadable)
         return {}
@@ -504,6 +606,83 @@ def _fenced_mask(lines):
 
 _TASK_LINE_RE = re.compile(r"^- \[( |/|x)\] \*\*(TASK-\d+)\*\*:")
 
+# `Q-118`: a task `close_batch.sh` left open because its block carries a FAIL
+# annotation. The three patterns and the walk below mirror close_batch.sh's
+# CLOSE_AWK (`is_open_task`, `is_failed`, `is_continuation`) so that this
+# reader counts exactly the tasks that script held. That is why an unbolded
+# `- [ ] task` counts here although `_TASK_LINE_RE` above would not see it.
+_OPEN_TASK_RE = re.compile(r"^- \[[ /]\]")
+_FAILED_ANNOTATION_RE = re.compile(r"^\s*>\s*[*_]*failed[*_]*\s*:", re.IGNORECASE)
+_OPEN_TASK_LABEL_RE = re.compile(
+    r"^- \[[ /]\][ \t]*(?:\*\*(?P<bold>[^*\n]+)\*\*|(?P<plain>[^\n]+))"
+)
+
+
+def _read_near_miss_failed(main_root: Path) -> list[tuple[int, str]]:
+    """`_near_miss_failed` over `review_tasks.md`. An unreadable file yields
+    nothing here: `_read_review_batches` already reports it."""
+    try:
+        text = (main_root / "review_tasks.md").read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return []
+    lines = text.split("\n")  # not splitlines(): awk splits on \n alone
+    return _near_miss_failed(lines, _fenced_mask(lines))
+
+
+def _near_miss_failed(lines, fenced):
+    """``(number, label)`` for the failed tasks of a `Merged` batch whose header
+    the strict pattern rejects (an ASCII hyphen, trailing whitespace).
+
+    ``close_batch.sh`` still closes such a batch, through the fallback in its
+    ``find_batch_range``: the header is ``^### Batch <N> ``, the status is the
+    header's last backtick token, and the range ends before the next unfenced
+    line starting ``##``. This mirrors that, so a task it held there is named.
+    """
+    out = []
+    for i, line in enumerate(lines):
+        if fenced[i] or _BATCH_HEADER_RE.match(line):
+            continue
+        m = re.match(r"^### Batch (\d+) ", line)
+        status = re.search(r"`([^`]+)`\s*$", line)
+        if not m or not status or status.group(1).strip() != "Merged":
+            continue
+        end = next((j for j in range(i + 1, len(lines))
+                    if lines[j].startswith("##") and not fenced[j]), len(lines))
+        out.extend((int(m.group(1)), task)
+                   for task in _failed_open_tasks(lines, fenced, i + 1, end))
+    return out
+
+
+def _failed_open_tasks(lines, fenced, start, end):
+    """Labels of the open tasks in ``lines[start:end]`` whose block carries a
+    ``> Failed:`` annotation, as close_batch.sh's CLOSE_AWK decides it.
+
+    A task owns its line plus every indented, non-blank line under it; an
+    annotation is tested before the block-end test, so a column-0 one directly
+    under the task counts. Only the task line must sit in the range and outside
+    a fence, so a block may run past ``end``, as it can in close_batch.sh.
+    """
+    out = []
+    pend = None
+    for i in range(start, len(lines)):
+        line = lines[i]
+        if pend is not None:
+            if _FAILED_ANNOTATION_RE.match(line):
+                if not fenced[pend]:
+                    m = _OPEN_TASK_LABEL_RE.match(lines[pend])
+                    label = (m.group("bold") or m.group("plain")) if m else lines[pend]
+                    out.append(label.strip()[:60])
+                pend = None
+                continue
+            if line[:1].isspace() and line.strip():
+                continue
+            pend = None
+        if i >= end:
+            break
+        if _OPEN_TASK_RE.match(line):
+            pend = i
+    return out
+
 
 def _warn_on_duplicate_batch_numbers(batches, source: str) -> None:
     """Surface same-numbered batches on stderr, and continue (Q-227).
@@ -586,14 +765,18 @@ def _read_review_batches(main_root: Path, unreadable: list | None = None) -> lis
         # operator was told to keep working on a finished batch.
         if line.startswith("## "):
             if current is not None:
+                current["line_end"] = idx
                 out.append(current)
                 current = None
             continue
         m = _BATCH_HEADER_RE.match(line)
         if m:
             if current is not None:
+                current["line_end"] = idx
                 out.append(current)
             current = {
+                "line_start": idx,
+                "line_end": len(lines),
                 "number": int(m.group(1)),
                 "title": m.group(2).strip(),
                 "status": m.group(3).strip(),
@@ -614,6 +797,7 @@ def _read_review_batches(main_root: Path, unreadable: list | None = None) -> lis
         # added to stop.
         if _BATCH_HEADER_ANY_RE.match(line):
             if current is not None:
+                current["line_end"] = idx
                 out.append(current)
                 current = None
             continue
@@ -638,6 +822,12 @@ def _read_review_batches(main_root: Path, unreadable: list | None = None) -> lis
             current["tasks"].append({"checkbox": mt.group(1), "id": mt.group(2)})
     if current is not None:
         out.append(current)
+    plain = [ln.rstrip("\n") for ln in lines]
+    for b in out:
+        b["failed_open"] = (
+            _failed_open_tasks(plain, fenced, b["line_start"], b["line_end"])
+            if b["status"] == "Merged" else []
+        )
     _warn_on_duplicate_batch_numbers(out, "review_tasks.md")
     return out
 
@@ -669,12 +859,23 @@ def _commits_ahead_of_main(branch: str, main_root: Path) -> list[Commit]:
     local ref alone, a branch cut from the remote tip reads other people's
     commits as its own. No resolvable default branch yields `[]`, and
     `run_survey` reports that as a discrepancy (`Q-365`).
+
+    **And every recorded PR head (`Q-623`).** Under `pr` policy a branch cut
+    before an earlier close's squash still carries that close's claim flips as
+    ancestors, and after the squash they are reachable from neither ref above:
+    a squash rewrites them into one commit, so ancestry cannot see they landed.
+    `/review-close` Step 4d records each merged PR's head as
+    `refs/sysop/merged-pr-heads/<PR>`, and that head contains every local-only
+    commit the close carried. Excluding it is what stops an unstarted claim
+    reading `in progress` and a dead one never reading `stale`. With no head
+    recorded the glob matches nothing and the count is unchanged.
     """
     bases = _default_branch_refs(main_root)
     if not bases:
         return []
     raw = _git(
-        ["log", "--pretty=format:%H%x1f%s%x1f%aI%x1f%B%x1e", branch, "--not", *bases],
+        ["log", "--pretty=format:%H%x1f%s%x1f%aI%x1f%B%x1e", branch, "--not", *bases,
+         f"--glob={MERGED_PR_HEADS_GLOB}"],
         cwd=str(main_root),
     )
     if not raw:
@@ -706,7 +907,248 @@ def _commits_ahead_of_main(branch: str, main_root: Path) -> list[Commit]:
     return out
 
 
-def resolve_default_branch(main_root: Path) -> str:
+#: Where `/review-close` Step 4d records each merged PR's head under `pr` policy
+#: (`Q-623`). One ref per PR, named by its number.
+MERGED_PR_HEADS = "refs/sysop/merged-pr-heads/"
+MERGED_PR_HEADS_GLOB = MERGED_PR_HEADS + "*"
+
+
+def _containing_heads(branch: str, main_root: Path) -> list[str]:
+    """Every recorded PR head ref that contains `branch`'s tip, lowest PR first.
+
+    The tip is read from `refs/heads/<branch>`: a bare name resolves a same-named tag
+    first, which landed a branch with unmerged work (Phase 360, round 1, lens A)."""
+    if not branch:
+        return []
+    tip = _git(["rev-parse", "--verify", "--quiet", f"refs/heads/{branch}^{{commit}}"],
+               cwd=str(main_root))
+    if not tip:
+        return []
+    out = _git(["for-each-ref", "--contains", tip, "--format=%(refname)",
+                MERGED_PR_HEADS], cwd=str(main_root))
+    refs = [r for r in out.splitlines() if r.startswith(MERGED_PR_HEADS)]
+    return sorted(refs, key=lambda r: (len(r), r))
+
+
+def _landed_by(branch: str, main_root: Path) -> str:
+    """The number of a recorded PR whose head contains `branch`'s tip, or "".
+
+    Containment alone is not "merged": a recorded head contains the tip of every
+    branch its close merged, and ALSO of anything cut from the local default
+    branch before that close — an unstarted claim in any workspace mode, and any
+    branch that is an ancestor of `main`. `_landed_claim` adds what does decide it.
+    """
+    heads = _containing_heads(branch, main_root)
+    return heads[0][len(MERGED_PR_HEADS):] if heads else ""
+
+
+def _held_docs(main_root: Path, branch: str) -> list[tuple[str, dict]]:
+    """(name, frontmatter) of each pending doc in the main checkout's
+    `sysop/runtime/pending-docs/` whose frontmatter `branch:` is `branch` — the
+    held docs Step 6 keeps a merged branch alive for. Unparseable docs are
+    skipped: they name nobody."""
+    out: list[tuple[str, dict]] = []
+    pd = main_root / "sysop" / "runtime" / "pending-docs"
+    try:
+        docs = sorted(pd.glob("*.md")) if pd.is_dir() else []
+    except OSError:
+        return out
+    for doc in docs:
+        try:
+            # `errors="replace"`, as Steps 3c and 4c read it: a stray byte must not hide a
+            # held doc (and its `hold:`) that the close still holds.
+            m = _PENDING_DOC_FM_RE.match(doc.read_text(encoding="utf-8", errors="replace"))
+            fm = yaml.safe_load(m.group(1)) if m else None
+        except Exception:  # noqa: BLE001 — a doc that cannot be read names no branch
+            continue
+        if isinstance(fm, dict) and str(fm.get("branch") or "") == branch:
+            out.append((doc.name, fm))
+    return out
+
+
+def _held_doc_names(main_root: Path, branch: str) -> list[str]:
+    return [name for name, _ in _held_docs(main_root, branch)]
+
+
+def _doc_holds(main_root: Path, branch: str) -> list[str]:
+    """The `hold:` reasons (`Q-625`) of the held docs naming `branch`.
+
+    Truthy, as `/review-close` Step 4c 1c reads the field
+    (`pending_doc_hold.py`): a malformed value still holds."""
+    return [str(fm["hold"]).strip() or "(no reason given)"
+            for _, fm in _held_docs(main_root, branch) if fm.get("hold")]
+
+
+def _landed_claim(main_root: Path, branch: str, lock: "Lock | None",
+                  worktree: "Worktree | None", dirty: bool) -> str:
+    """The PR number that landed this claim's branch, or "" (`Q-623` / `Q-546`).
+
+    Three conditions, each closing a population containment alone admits:
+
+    1. **A held doc names the branch** in the main checkout's pending-docs. That
+       is the only reason a close leaves a merged branch alive (Step 6's HARD
+       RULE), and it excludes an unstarted claim, whatever its workspace mode,
+       and every branch no claim produced.
+    2. **A recorded head contains the branch's tip.**
+    3. **No live tip has moved past that head.** A `--clone` claim's work lives
+       in its own clone and may be pushed to `origin/<branch>` while the
+       primary's ref stays at the cut point, so the lock's workspace ref, the
+       remote-tracking ref and a linked worktree are each checked, and a dirty
+       workspace on the branch is live work (`_live_work_past`, shared with
+       `_merged_into_default`, the `direct` twin).
+    """
+    if not branch or not _held_doc_names(main_root, branch):
+        return ""
+    heads = _containing_heads(branch, main_root)
+    if not heads:
+        return ""
+    if _live_work_past(main_root, branch, lock, worktree, dirty, heads):
+        return ""
+    return heads[0][len(MERGED_PR_HEADS):]
+
+
+def _merged_into_default(main_root: Path, branch: str, lock: "Lock | None",
+                         worktree: "Worktree | None", dirty: bool) -> str:
+    """The default-branch ref a `direct` close merged this claim's branch into, or "" (`Q-643`).
+
+    `_landed_claim`'s twin for the policy that records no PR head. `/review-close` Step 4a
+    merges onto `main` itself — rebase-then-`--ff-only` for a local-only branch, `--no-ff` for
+    a published one — so the branch's tip becomes an ancestor of the default branch. A squash
+    breaks ancestry, so this does not fire after a squash-merged `pr` close. A PR merged with
+    a merge commit (or before Phase 352 recorded heads) does leave the tip an ancestor, and
+    reads merged here too, which is right: its work is on the default branch. No policy read
+    is needed.
+
+    Its conditions are `_landed_claim`'s, with ancestry in place of the recorded head:
+
+    1. **A pending doc names the branch.** Ancestry alone admits every branch no claim
+       produced. A doc does not exclude a claim with 0 commits whose `/document-work` wrote it into
+       the main checkout's pending-docs: that reads merged here and is reviewed by the close, whose
+       step 0b also asks for the `held_since:` stamp (Phase 360).
+    2. **The local branch's tip is an ancestor of the local default branch or of its
+       remote-tracking ref** (`_default_branch_refs`): a close whose push has not happened yet
+       has merged it into the local ref only. Read from `refs/heads/<branch>`, because a bare
+       name resolves a same-named tag first. No resolvable default branch is no verdict.
+    3. **The branch is not the default branch itself.** `/document-work` may write
+       `branch: main`, and a held doc can name it; it is an ancestor of itself.
+    4. **No live tip has moved past it, and no workspace on it is dirty** (`_live_work_past`).
+
+    Returns the first containing ref in `_default_branch_refs` order — the local branch first.
+    """
+    if not branch or not _held_doc_names(main_root, branch):
+        return ""
+    if branch == resolve_default_branch(main_root):
+        return ""
+    tip = _git(["rev-parse", "--verify", "--quiet", f"refs/heads/{branch}^{{commit}}"],
+               cwd=str(main_root))
+    if not tip:
+        return ""
+    bases = [ref for ref in _default_branch_refs(main_root) if _is_ancestor(tip, ref, main_root)]
+    if not bases:
+        return ""
+    if _live_work_past(main_root, branch, lock, worktree, dirty, bases):
+        return ""
+    return bases[0]
+
+
+def _live_work_past(main_root: Path, branch: str, lock: "Lock | None",
+                    worktree: "Worktree | None", dirty: bool, containers: list[str]) -> bool:
+    """Whether work on `branch` lives somewhere `containers` (refs that contain the branch's
+    local tip) do not reach: a dirty workspace on the branch, or a tip past every container.
+
+    The tips checked are the lock's workspace ref (a `--clone` claim's work lives in its own
+    clone, while the primary's ref stays at the cut point) and `origin/<branch>` as last
+    fetched. The dirty workspaces are a linked worktree, the lock's workspace, and the primary
+    checkout when its HEAD is on the branch — a `--branch` claim works in the primary itself,
+    so its lock's workspace is skipped as the main checkout and no worktree is linked.
+    """
+    if worktree is not None and dirty:
+        return True
+    tips: list[str] = []
+    if lock is not None and lock.workspace:
+        ws = Path(lock.workspace)
+        try:
+            is_dir = ws.is_dir()
+        except (OSError, ValueError):
+            is_dir = False
+        if is_dir and not _same_dir(ws, main_root):
+            tip = _git(["rev-parse", "--verify", "--quiet", f"refs/heads/{branch}^{{commit}}"],
+                       cwd=str(ws), hermetic=True)
+            if tip:
+                tips.append(tip)
+            on_branch = _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=str(ws), hermetic=True)
+            status = _git(["status", "--porcelain"], cwd=str(ws), hermetic=True).splitlines()
+            if on_branch == branch and [ln for ln in status
+                                        if not (ln.startswith("?? ") and _ignored_symlink(ws, ln[3:], main_root))]:
+                return True
+    # Tracked changes only in the primary: an untracked scratch file is ordinary in a live
+    # repository, which is why `/review-close` Step 6 gates the primary on
+    # `git diff --quiet HEAD --` and not on `status --porcelain`.
+    if (_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=str(main_root)) == branch
+            and _git(["status", "--porcelain", "--untracked-files=no"], cwd=str(main_root))):
+        return True
+    remote = _default_remote(main_root) or "origin"
+    rtip = _git(["rev-parse", "--verify", "--quiet", f"refs/remotes/{remote}/{branch}^{{commit}}"],
+                cwd=str(main_root))
+    if rtip:
+        tips.append(rtip)
+    return any(not any(_is_ancestor(tip, c, main_root) for c in containers) for tip in tips)
+
+
+def _ignored_symlink(where: Path, entry: str, main_root: Path) -> bool:
+    """An untracked symlink whose target the repository ignores (BeanRider ISSUE-0043): not
+    live work. `/review-close` Step 1-pre's `noise()` and step 0b read the same shape."""
+    p = os.path.join(str(where), entry)
+    if not os.path.islink(p):
+        return False
+    target = os.path.normpath(os.path.join(os.path.dirname(p), os.readlink(p)))
+    try:
+        r = subprocess.run(["git", "check-ignore", "-q", target], cwd=str(main_root),
+                           capture_output=True, timeout=15)
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return False
+    return r.returncode == 0
+
+
+def _is_ancestor(a: str, b: str, main_root: Path) -> bool:
+    try:
+        r = subprocess.run(["git", "merge-base", "--is-ancestor", a, b], cwd=str(main_root),
+                           capture_output=True, timeout=15)
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return False
+    return r.returncode == 0
+
+
+def _same_dir(a: Path, b: Path) -> bool:
+    try:
+        return a.resolve() == b.resolve()
+    except (OSError, ValueError):
+        return False
+
+
+# `Q-383` (Phase 368): the name `resolve_default_branch` may return. The bash twin's
+# `_default_branch_name_ok` enumerates the same set; Python's `[A-Za-z]` is a code-point
+# range, not a collation one, so it is locale-proof as written. Not `\w`, which matches
+# non-ASCII letters. A non-UTF-8 ref name decodes (`os.fsdecode`) to lone surrogates,
+# which fall outside the class and are refused like any other non-ASCII byte.
+_DEFAULT_BRANCH_NAME = re.compile(r"[A-Za-z0-9._/][A-Za-z0-9._/-]*")
+
+
+def _default_branch_name_ok(name: str) -> bool:
+    return bool(_DEFAULT_BRANCH_NAME.fullmatch(name))
+
+
+def _quote_refused_name(name: str) -> str:
+    """A refused name rendered for a report: every character outside printable ASCII
+    (including a lone surrogate, which is what a non-UTF-8 ref decodes to) as a `\\uNNNN`
+    escape, then shell-quoted, so it is inert if copied into a shell and puts no raw
+    bytes on a terminal — the counterpart of the bash twin's `printf %q` under the C
+    locale. Not `ascii()`, whose double-quoted form for a name containing `'` leaves
+    `$(…)` live in a shell."""
+    return shlex.quote("".join(c if " " <= c <= "~" else f"\\u{ord(c):04x}" for c in name))
+
+
+def resolve_default_branch(main_root: Path, refused: list[str] | None = None) -> str:
     """The repository's default branch NAME — `main`, `master`, `develop` … — or "".
 
     The Python twin of `_git_lib.sh`'s `resolve_default_branch`, kept to the
@@ -735,15 +1177,34 @@ def resolve_default_branch(main_root: Path) -> str:
        one `HEAD` symbolically names.
     4. Otherwise "". Nothing here guesses; the caller reports the gap.
 
+    Every name a step would return must match `[A-Za-z0-9._/-]+` and not start with `-`,
+    or the answer is "" (`Q-383`) — the same refusal, at the same points, as the bash
+    twin: a name git accepts (`main;touch${IFS}x`) reaches unquoted shell substitutions
+    downstream. A refused name is appended to `refused` when the caller passes a list,
+    so the survey can say *why* there is no answer instead of reporting the generic gap,
+    whose remedy (`git remote set-head`) does not fix it.
+
     Until Phase 252 the only resolver here was `_resolve_main_ref`, whose body
     tried `origin/main` then `main` and whose docstring promised a third
     fallback ("then HEAD on the main worktree") that did not exist. On a
     `master`-default repo it returned "", every claim read 0 commits ahead,
     and that satisfied the park gate — silently.
     """
+    return _default_branch_ladder(main_root, refused)
+
+
+def _default_branch_ladder(main_root: Path, refused: list[str] | None = None) -> str:
+    """`resolve_default_branch`'s body, under a name nothing stubs (see `run_survey`)."""
     def _local(name: str) -> bool:
         return bool(_git(["rev-parse", "--verify", "--quiet", f"refs/heads/{name}"],
                          cwd=str(main_root)))
+
+    def _emit(name: str) -> str:
+        if _default_branch_name_ok(name):
+            return name
+        if refused is not None:
+            refused.append(name)
+        return ""
 
     remote = _default_remote(main_root)
     head = _git(["symbolic-ref", "--quiet", "--short", f"refs/remotes/{remote}/HEAD"],
@@ -752,18 +1213,22 @@ def resolve_default_branch(main_root: Path) -> str:
         prefix = f"{remote}/"
         name = head[len(prefix):] if head.startswith(prefix) else head
         if name and _local(name):
-            return name
+            return _emit(name)
         if name and _git(["rev-parse", "--verify", "--quiet", f"refs/remotes/{remote}/{name}"],
                          cwd=str(main_root)):
+            # The bash twin refuses here too, before its "create it" remedy — that
+            # remedy is a command naming the branch, so it must not carry this one.
+            if not _default_branch_name_ok(name) and refused is not None:
+                refused.append(name)
             return ""
     have = [n for n in ("main", "master") if _local(n)]
     if len(have) == 1:
-        return have[0]
+        return _emit(have[0])
     if not have and not _git(["rev-parse", "--verify", "--quiet", "HEAD"],
                              cwd=str(main_root)):
         unborn = _git(["symbolic-ref", "--quiet", "--short", "HEAD"], cwd=str(main_root))
         if unborn:
-            return unborn
+            return _emit(unborn)
     return ""
 
 
@@ -848,9 +1313,16 @@ def _commits_unpushed(branch: str, main_root: Path) -> int:
         return 0
 
 
-def _worktree_dirty(worktree_path: Path) -> bool:
+def _worktree_dirty(worktree_path: Path, main_root: "Path | None" = None) -> bool:
+    """Uncommitted changes in a worktree. With `main_root`, an untracked symlink to a target
+    the repository ignores (BeanRider ISSUE-0043) is not one, as `/review-close` Step 1a and
+    Step 1-pre read it (Phase 360, round 2, lens D)."""
     raw = _git(["-c", "core.quotePath=true", "status", "--porcelain"], cwd=str(worktree_path))
-    return bool(raw.strip())
+    lines = raw.splitlines()
+    if main_root is not None:
+        lines = [ln for ln in lines
+                 if not (ln.startswith("?? ") and _ignored_symlink(worktree_path, ln[3:], main_root))]
+    return any(ln.strip() for ln in lines)
 
 
 # ── Classification ───────────────────────────────────────────────
@@ -980,6 +1452,86 @@ def _pending_doc_for(
     return None
 
 
+# `/review-close` Step 3b's `fm_re` and `SHA_RE`, which `_pending_doc_drift` must match.
+_PENDING_DOC_FM_RE = re.compile(r"^\ufeff?---\n(.*?)\n---", re.DOTALL)
+_BRANCH_TIP_RE = re.compile(r"[0-9a-fA-F]{7,64}\Z")
+
+
+@dataclass
+class DocDrift:
+    """What `_pending_doc_drift` measured. `commits` is None when staleness is unknown,
+    and `why` then says why; otherwise `tip` is the doc's `branch_tip:`."""
+    commits: int | None
+    tip: str = ""
+    why: str = ""
+
+
+def _pending_doc_drift(doc: Path, branch: str) -> DocDrift:
+    """How many commits landed on `branch` after `doc`'s `branch_tip:`.
+
+    `/review-close` Step 3b's `tip_of()` + `staleness()`, decision for decision: every
+    frontmatter shape it reports as `PENDING-DOC STALENESS UNKNOWN` is unknown here, so
+    the survey never calls a doc stale that the close would collect. The count runs in
+    the workspace the doc was found in — `staleness(where=...)` does the same — because
+    a `--clone` claim's commits exist only in the clone. One `rev-list`, read-only."""
+    try:
+        m = _PENDING_DOC_FM_RE.match(doc.read_text(encoding="utf-8", errors="replace"))
+    except OSError as exc:
+        return DocDrift(None, why=f"the pending-doc could not be read ({type(exc).__name__})")
+    fm = None
+    if m:
+        try:
+            fm = yaml.safe_load(m.group(1))
+        except Exception:
+            fm = None  # not only YAMLError: `2026-09-31` raises ValueError, `!!bool x` KeyError
+    if not isinstance(fm, dict) or "branch_tip" not in fm:
+        return DocDrift(None, why="the pending-doc has no readable `branch_tip:`")
+    tip = fm["branch_tip"]
+    if not isinstance(tip, str) or not tip.strip():
+        return DocDrift(None, why="`branch_tip:` is not a string (a bare hex value "
+                                  "reads as a YAML number)")
+    tip = tip.strip()
+    if "<" in tip:
+        return DocDrift(None, why=f"`branch_tip:` is an unsubstituted placeholder ({tip!r})")
+    if not _BRANCH_TIP_RE.match(tip):
+        return DocDrift(None, why=f"`branch_tip: {tip!r}` is not an object name")
+    parents = doc.parents
+    where = parents[3] if len(parents) > 3 else Path(".")  # <ws>/sysop/runtime/pending-docs/
+    counted = _git(["rev-list", "--count", f"{tip}..{branch}"], cwd=str(where),
+                   hermetic=True)
+    try:
+        return DocDrift(int(counted.strip()), tip=tip)
+    except ValueError:
+        return DocDrift(None, tip=tip,
+                        why=f"`branch_tip` {tip[:12]} does not resolve in {_printable(where)}")
+
+
+
+def _measured_drift(doc: Path, branch: str, main_root: Path | None, lock: Lock | None,
+                    worktree: Worktree | None, notes: list[str]) -> DocDrift:
+    """`_pending_doc_drift`, only where `/review-close` measures the doc, noting why not.
+
+    The close's Step 0 resolves the branch's workspace, and Step 3b's collect runs there: on
+    the docs in that workspace, and on this branch's doc held in the main checkout. With no
+    workspace of the branch's own (a `--branch` claim, or a worktree removed with its branch
+    kept) the collect never runs, so the close does not refuse the doc, and calling it stale
+    would name a refusal that does not happen."""
+    here = doc.parents[3] if len(doc.parents) > 3 else None
+    if main_root is not None and here is not None and _same_dir(here, main_root):
+        own = ([worktree.path] if worktree is not None and not worktree.is_main else []) + (
+            [Path(lock.workspace)] if lock is not None and lock.workspace else [])
+        if not any(p.is_dir() and not _same_dir(p, main_root) for p in own):
+            notes.append("pending-doc staleness not measured: the doc is in the main checkout "
+                         "and the branch has no workspace of its own, so /review-close does not "
+                         "run its Step 3b collect on it")
+            return DocDrift(None, why="not measured by the close")
+    drift = _pending_doc_drift(doc, branch)
+    if drift.commits is None:
+        notes.append(f"pending-doc staleness unknown: {drift.why} — "
+                     "/review-close collects it without comparing")
+    return drift
+
+
 # ── Park + awaiting-approval probe (Phase 237, Q-030 leg (a)) ────
 #
 # `/sitrep` was park-blind. A parked claim and an unstarted one both classified
@@ -1018,6 +1570,86 @@ _PARKED_STATE = "parked"
 # re-resume live work.
 _PARKED_WIP_STATE = "parked, work in progress"
 _AWAITING_STATE = "awaiting approval"
+# `Q-623` / `Q-546`: a claim whose branch a previous `pr` close already
+# squash-merged — its tip is contained in a recorded PR head and it has no
+# worktree. `Q-643`: or one a previous `direct` close merged — its tip is an
+# ancestor of the default branch. The task is still open only because its
+# pending-doc was held (Step 4c 1c, on `user_action` or its own `hold:`); a
+# close finishes it. One state for both policies: what the human does next is
+# the same, so the routing row and `/roadmap`'s enum need no second entry.
+_MERGED_STATE = "merged, close pending"
+#: A task whose lock a `/review-close --request-review` hand-off kept (`Q-411`, Phase 365): its
+#: close is done up to an open PR, and only `--land` finishes it.
+_AWAITING_LAND_STATE = "awaiting --land"
+#: The same, when an unattended land parked it (`Q-411`, Phase 366): `PARKED` sits beside the
+#: marker, and only a human moves it on, so the route is not `--land`.
+_PARKED_LAND_STATE = "land parked"
+
+
+_HANDOFF_PENDING = ("awaiting", "request-failed", "requesting")
+
+
+def _handoff_markers(main_root: Path) -> list[tuple[str, dict | None]]:
+    """(run id, record or None when unreadable) for every `AWAITING` marker, the file every
+    other close stops on."""
+    out: list[tuple[str, dict | None]] = []
+    for marker in sorted((main_root / "sysop" / "runtime" / "close").glob("*/AWAITING")):
+        try:
+            rec = json.loads((marker.parent / "handoff.json").read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, ValueError):
+            rec = None
+        out.append((marker.parent.name, rec if isinstance(rec, dict) else None))
+    return out
+
+
+def _land_park(main_root: Path, run_id: str) -> str:
+    """The first reason line of a hand-off's `PARKED`, `"(unreadable)"` when it cannot be
+    read, or "" when the hand-off is not parked."""
+    p = main_root / "sysop" / "runtime" / "close" / run_id / "PARKED"
+    if not p.exists():
+        return ""
+    try:
+        rec = json.loads(p.read_text(encoding="utf-8"))
+        lines = rec.get("lines") if isinstance(rec, dict) else None
+        return f"{rec.get('code')}: {lines[0]}" if isinstance(lines, list) and lines else "(unreadable)"
+    except (OSError, UnicodeDecodeError, ValueError):
+        return "(unreadable)"
+
+
+def _handoff_route(main_root: Path, run_id: str, parked: bool) -> str:
+    """The command that moves a hand-off on: the attended `--land` (the unattended land is not
+    enabled, `Q-411`), or `re-request` for any hand-off whose review was not requested, parked
+    or not, since a land would only park it."""
+    try:
+        rec = json.loads((main_root / "sysop" / "runtime" / "close" / run_id / "handoff.json")
+                         .read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError):
+        rec = {}
+    rec = rec if isinstance(rec, dict) else {}
+    land = f"/review-close --land {run_id}"
+    if rec.get("status") != "awaiting":
+        # No review was requested (round 2: an unparked failed request was routed to a land that
+        # is certain to park).
+        return (f"a human: no review was requested for hand-off {run_id}; run close_run.py "
+                f"re-request {run_id} <default branch>")
+    if not parked:
+        return land
+    return (f"a human: read sysop/runtime/close/{run_id}/PARKED, then fix and run close_run.py "
+            f"re-request {run_id} <default branch>, or close_run.py unpark {run_id}, or "
+            f"/review-close --land {run_id}")
+
+
+def _awaiting_land(main_root: Path) -> dict[str, str]:
+    """Task id -> run id for every lock a sealed, unfinished hand-off kept. A marker this does
+    not map is reported by `_find_discrepancies` instead."""
+    out: dict[str, str] = {}
+    for run_id, rec in _handoff_markers(main_root):
+        if rec is None or rec.get("status") not in _HANDOFF_PENDING or not rec.get("sealed"):
+            continue
+        for tid in rec.get("kept_locks") or []:
+            if isinstance(tid, str):
+                out.setdefault(tid, run_id)
+    return out
 # A lock whose file cannot be read or parsed. Its fields are unknown, so no
 # field-keyed arm may classify it: an empty `branch` read as `claimed, no
 # branch` routed a possibly-live claim to `--release` (Phase 333, round 2).
@@ -1077,9 +1709,11 @@ def _classification_verdict(run: Path) -> str:
     """The verdict recorded in a run's classification.md, upper-cased.
 
     **Parse the fenced body; do not scan for a line prefix.** `/claim-task`
-    Step 7c — the only writer of this file in the tree — emits
-    `json.dumps(report, indent=2)` inside a ```yaml fence, so the verdict on
-    disk is `  "verdict": "PROCEED"`. The first cut of this function scanned for
+    Step 7c emits `json.dumps(report, indent=2)` inside a ```yaml fence, so the
+    verdict on disk is `  "verdict": "PROCEED"`. The other writer, `/auto-build`
+    Phase 6d, writes an unfenced `Verdict: ALL FIXABLE …` line, but in a cycle
+    directory `_newest_claim_run` never returns, and the fallback's first word
+    is enough for the comparisons made here (`BLOCKED`, `PROCEED`). The first cut of this function scanned for
     a line *beginning* `verdict:` and therefore matched **nothing the shipped
     writer produces**, which made `awaiting approval` unreachable in production
     — with its own tests green, because every fixture hand-typed a flat
@@ -1296,6 +1930,11 @@ def _classify_task(
     phase40_cutoff: datetime,
     pending_doc: Path | None = None,
     main_root: Path | None = None,
+    landed_pr: str = "",
+    held_doc: bool = False,
+    merged_ref: str = "",
+    awaiting_land: str = "",
+    land_parked: str = "",
 ) -> TaskState:
     state = "unknown"
     marker = ""
@@ -1308,6 +1947,7 @@ def _classify_task(
     if lock is not None and lock.unreadable:
         return TaskState(
             task_id=task_id,
+            agent=(lock.agent if lock is not None else ""),
             state=_LOCK_UNREADABLE_STATE,
             branch=branch,
             worktree=str(worktree.path) if worktree else "",
@@ -1319,6 +1959,105 @@ def _classify_task(
             doc_work_ids=doc_work_ids,
             next_action=_lock_unreadable_action(task_id, lock.path, lock.unreadable),
             notes=[f"lock {lock.path} could not be read: {lock.unreadable}"],
+        )
+
+    # A lock a waiting `--request-review` hand-off kept (`Q-411`, Phase 365): the close ran to
+    # an open PR, so the trailer, the consumed pending doc and the live branch read as
+    # "docs pending" while the only next step is `--land`.
+    if awaiting_land and land_parked:
+        return TaskState(
+            task_id=task_id,
+            state=_PARKED_LAND_STATE,
+            branch=branch,
+            has_lock=lock is not None,
+            has_index_entry=index_entry is not None,
+            index_status=str((index_entry or {}).get("status", "")),
+            agent=(lock.agent if lock is not None else ""),
+            next_action=(_handoff_route(main_root, awaiting_land, True) if main_root else
+                         f"a human: read sysop/runtime/close/{awaiting_land}/PARKED"),
+            notes=[f"an unattended land parked it ({land_parked}); every /review-close stops "
+                   f"on its AWAITING marker until it lands or is abandoned"],
+        )
+    if awaiting_land:
+        return TaskState(
+            task_id=task_id,
+            state=_AWAITING_LAND_STATE,
+            branch=branch,
+            has_lock=lock is not None,
+            has_index_entry=index_entry is not None,
+            index_status=str((index_entry or {}).get("status", "")),
+            agent=(lock.agent if lock is not None else ""),
+            next_action=(_handoff_route(main_root, awaiting_land, False) if main_root
+                         else f"/review-close --land {awaiting_land}"),
+            notes=[f"its close is waiting on a second reader; the lock is kept until "
+                   f"--land {awaiting_land} merges the PR"],
+        )
+
+    # `Q-623` / `Q-546`: a branch a previous close squash-merged. Before the
+    # stall probe, the stale check and the 0-commit arm, because with the
+    # recorded heads excluded it has 0 commits ahead: the stale arm would advise
+    # removing the lock of a task waiting on its human step. `landed_pr` comes
+    # from `_landed_claim`, which requires a held doc and no live tip past the head;
+    # `merged_ref` from `_merged_into_default`, its `direct` twin (`Q-643`).
+    if (landed_pr or merged_ref) and branch:
+        state = _MERGED_STATE
+        held = bool((index_entry or {}).get("user_action"))
+        holds = _doc_holds(main_root, branch) if main_root is not None else []
+        steps = []
+        if held:
+            steps.append(
+                f"do {task_id}'s outstanding user step (its body's `## User ops`), "
+                f"then python3 sysop/scripts/clear_user_action.py {task_id}"
+            )
+        if holds:
+            steps.append(
+                f"finish what its pending doc's `hold:` names, then "
+                f"python3 sysop/scripts/pending_doc_hold.py clear {task_id}"
+            )
+        next_action = (f"{'; '.join(steps)} and /review-close" if steps
+                       else f"/review-close {task_id}")
+        if landed_pr:
+            notes = [
+                f"branch {branch} is contained in recorded PR #{landed_pr}'s head — "
+                "a previous close squash-merged it; a close consolidates its "
+                "pending-doc and flips the task to done"
+            ]
+        else:
+            # Ancestry cannot tell a branch a close merged from one that never moved past
+            # its cut point, so the note states the fact and not a history.
+            notes = [
+                f"branch {branch} is an ancestor of {merged_ref} and a held pending-doc "
+                "names it — a close consolidates the doc and flips the task to done"
+            ]
+            if main_root is not None and "/" not in merged_ref:
+                remote_ref = f"{_default_remote(main_root) or 'origin'}/{merged_ref}"
+                if (_git(["rev-parse", "--verify", "--quiet", remote_ref], cwd=str(main_root))
+                        and not _is_ancestor(f"refs/heads/{branch}", remote_ref, main_root)):
+                    notes.append(f"its tip is on local {merged_ref} but not yet on "
+                                 f"{remote_ref} — local {merged_ref} has not been pushed")
+        if held:
+            notes.append("user_action is set, so the close holds the doc until it is cleared")
+        for reason in holds:
+            notes.append(f"its pending doc carries `hold: {reason}`, so the close holds "
+                         "the doc until that is cleared")
+        if pending_doc is None:
+            notes.append(
+                "no pending-doc found for the branch — the close has nothing to "
+                "consolidate for it; look in sysop/runtime/pending-docs/"
+            )
+        return TaskState(
+            task_id=task_id,
+            agent=(lock.agent if lock is not None else ""),
+            state=state,
+            branch=branch,
+            commits_ahead=0,
+            has_lock=bool(lock),
+            has_index_entry=bool(index_entry),
+            index_status=str((index_entry or {}).get("status", "")),
+            doc_work_ids=doc_work_ids,
+            pending_doc=pending_doc is not None,
+            next_action=next_action,
+            notes=notes,
         )
 
     # **The stall probe runs BEFORE the stale check, and the order is the whole
@@ -1350,7 +2089,13 @@ def _classify_task(
         try:
             started = datetime.fromisoformat(lock.started.replace("Z", "+00:00"))
             age = datetime.now(timezone.utc) - started
-            if age > timedelta(days=stale_days) and not commits:
+            # A held doc (`/review-close` Step 4c 1c) keeps a merged branch alive on
+            # purpose; with the recorded heads excluded it reads 0 commits ahead, so
+            # the remove-the-lock advice below would be destructive (Phase 352 round 2).
+            if age > timedelta(days=stale_days) and not commits and held_doc:
+                notes.append("lock age is past --stale-days, but a pending doc naming this "
+                             "branch is held in sysop/runtime/pending-docs/ — not stale")
+            elif age > timedelta(days=stale_days) and not commits:
                 state = "stale"
                 marker = ""
                 next_action = (
@@ -1360,6 +2105,7 @@ def _classify_task(
                 notes.append(f"lock age {age.days}d; no commits ahead of the default branch")
                 return TaskState(
                     task_id=task_id,
+                    agent=(lock.agent if lock is not None else ""),
                     state=state,
                     state_marker=marker,
                     branch=branch,
@@ -1393,6 +2139,7 @@ def _classify_task(
         notes.extend(stall_notes)
         return TaskState(
             task_id=task_id,
+            agent=(lock.agent if lock is not None else ""),
             state=state,
             state_marker=marker,
             branch="",
@@ -1485,8 +2232,19 @@ def _classify_task(
             "it does not by itself mean documentation has been written"
         )
     elif task_id and task_id in doc_work_ids:
-        # Doc-Work trailer present for this task_id — distinguish pushed vs not
-        if unpushed == 0:
+        # Doc-Work trailer and a pending-doc. A doc that predates commits on
+        # the branch is refused by /review-close Step 3b as stale (exit 6), and
+        # /document-work re-stamps its `branch_tip:`. Staleness unknown keeps the
+        # close routing, as the close itself does.
+        drift = _measured_drift(pending_doc, branch, main_root, lock, worktree, notes)
+        if drift.commits:
+            state = "pending doc stale"
+            next_action = f"/document-work {task_id}"
+            notes.append(
+                f"{drift.commits} commit(s) landed on {branch} after the pending-doc's "
+                f"branch_tip {drift.tip[:12]} — /review-close would refuse the doc as stale"
+            )
+        elif unpushed == 0:
             state = "ready for /review-close"
             next_action = f"/review-close {task_id}"
         else:
@@ -1517,6 +2275,7 @@ def _classify_task(
 
     return TaskState(
         task_id=task_id,
+        agent=(lock.agent if lock is not None else ""),
         state=state,
         state_marker=marker,
         branch=branch,
@@ -1559,6 +2318,23 @@ def _find_discrepancies(
     unreadable: list | None = None,
 ) -> list[Discrepancy]:
     out: list[Discrepancy] = []
+
+    # A hand-off no task state carries (`Q-411`): every close stops on its marker regardless.
+    for run_id, rec in _handoff_markers(main_root):
+        if rec is None:
+            why = "its handoff.json cannot be read"
+        elif rec.get("status") not in _HANDOFF_PENDING:
+            why = f"its record reads {rec.get('status')!r}"
+        elif not rec.get("sealed"):
+            why = "it was never sealed (no report.md)"
+        elif not rec.get("kept_locks"):
+            why = "it kept no task lock"
+        else:
+            continue
+        out.append(Discrepancy(
+            kind="hand-off waiting",
+            detail=f"sysop/runtime/close/{run_id}/AWAITING stops every /review-close, and {why}",
+            suggestion=f"/review-close --land {run_id}, or close_run.py abandon {run_id} once its PR is closed"))
 
     lock_ids = {l.task_id for l in locks}
     wt_branches = {w.branch for w in worktrees if not w.is_main}
@@ -1628,8 +2404,9 @@ def _find_discrepancies(
                         "matching lock or index entry"
                     ),
                     suggestion=(
-                        f"{caveat}investigate uncommitted work, then "
-                        f"git worktree remove {w.path}"
+                        f"{caveat}investigate uncommitted and ignored work "
+                        f"(git -C {w.path} status --ignored; the remove deletes "
+                        f"ignored files without asking), then git worktree remove {w.path}"
                     ),
                 )
             )
@@ -1661,10 +2438,11 @@ def _find_discrepancies(
         )
 
     # Index drift: tasks[].status == in_progress but no lock
+    held_by_handoff = _awaiting_land(main_root)
     for tid, t in index.items():
         if t.get("status") != "in_progress":
             continue
-        if tid in lock_ids:
+        if tid in lock_ids or tid in held_by_handoff:  # a hand-off's task is routed above
             continue
         out.append(
             Discrepancy(
@@ -1713,6 +2491,27 @@ def _find_discrepancies(
                     ),
                 )
             )
+
+    # Phase 361: `/auto-build --unattended` writes this marker when a Step 5
+    # abort left a claim it could not verify, and every later unattended run
+    # stops while it exists. Nothing else reads it, so without this line a
+    # scheduled loop would stop with no machine-readable signal.
+    halt = main_root / "sysop" / "runtime" / "auto-build-halt.md"
+    if halt.exists():
+        out.append(
+            Discrepancy(
+                kind="unattended auto-build halted",
+                detail=(
+                    "sysop/runtime/auto-build-halt.md: an unattended "
+                    "/auto-build left a claim it could not verify, and every "
+                    "later unattended run stops until the file is gone"
+                ),
+                suggestion=(
+                    "read it, reconcile the tasks it names (finish the claim, "
+                    "or claim_task.sh --release <TASK_ID>), then delete it"
+                ),
+            )
+        )
 
     out.extend(_round_coverage_discrepancies(main_root))
     return out
@@ -2122,6 +2921,18 @@ def _classify_review_batches(
             state = stall_state
             next_action = stall_action
             notes.extend(stall_notes)
+        elif done == total and (drift := _batch_doc_drift(
+                branch, lock_by_branch.get(branch), worktrees, main_root, notes)):
+            # The task path's `pending doc stale`, for a batch branch whose doc predates
+            # later commits (Step 3b refuses it). Only a batch whose tasks all carry trailers
+            # gets here: `/document-work` emits them, `/auto-fix` and `/auto-judge` do not.
+            state = "pending doc stale"
+            next_action = (f"/document-work on {branch} (re-stamps the pending-doc's "
+                           f"branch_tip), then /review-close (batch {b['number']})")
+            notes.append(
+                f"{drift.commits} commit(s) landed on {branch} after the pending-doc's "
+                f"branch_tip {drift.tip[:12]} — /review-close would refuse the doc as stale"
+            )
         elif done == total:
             state = "ready for /review-close"
             next_action = f"/review-close (batch {b['number']})"
@@ -2160,6 +2971,18 @@ def _classify_review_batches(
     return out
 
 
+def _batch_doc_drift(branch: str, lock: Lock | None, worktrees: list[Worktree],
+                     main_root: Path, notes: list[str]) -> DocDrift | None:
+    """The batch branch's pending-doc drift when it is STALE, else None — noting in
+    `notes` when staleness is unknown, as the task path does."""
+    worktree = next((w for w in worktrees if w.branch == branch and not w.is_main), None)
+    doc = _pending_doc_for(main_root, branch, lock, worktree)
+    if doc is None:
+        return None
+    drift = _measured_drift(doc, branch, main_root, lock, worktree, notes)
+    return drift if drift.commits else None
+
+
 # ── Survey orchestration ─────────────────────────────────────────
 
 
@@ -2185,12 +3008,23 @@ class Survey:
     # read. Non-empty → RECOMMENDED NEXT routes to the repair first and the
     # idle arm cannot fire: a survey over an unread input is not a survey.
     unreadable_inputs: list[tuple[str, str, str, str]] = field(default_factory=list)
+    # `Q-118`: (batch number, task) for every task close_batch.sh left open in a
+    # `Merged` batch because it carries `> Failed:`. Reported, never routed:
+    # /next-task and the cascade read Pending batches only, so this is the one
+    # place such a task is named before an archive run moves it.
+    failed_in_merged_batches: list[tuple[int, str]] = field(default_factory=list)
 
 
 def run_survey(stale_days: int = DEFAULT_STALE_DAYS) -> Survey:
     main_root = _resolve_main_repo_root()
     head_short = _git(["rev-parse", "--short", "HEAD"], cwd=str(main_root))
     default_branch = resolve_default_branch(main_root)
+    # Why there is no answer, asked only when there is none. Through the ladder
+    # itself, not the public name: tests replace `resolve_default_branch` with a
+    # one-argument stub, and the stub's "" must still reach the generic report.
+    refused_default: list[str] = []
+    if not default_branch:
+        _default_branch_ladder(main_root, refused_default)
 
     unreadable: list = []
     locks = _read_locks(main_root, unreadable)
@@ -2213,6 +3047,7 @@ def run_survey(stale_days: int = DEFAULT_STALE_DAYS) -> Survey:
         f"BATCH-{b['number']}" for b in review_batches_raw
         if b.get("status") in ("Pending", "In Progress")
     }
+    awaiting_land = _awaiting_land(main_root)
 
     for lock in locks:
         task_id = lock.task_id
@@ -2227,6 +3062,14 @@ def run_survey(stale_days: int = DEFAULT_STALE_DAYS) -> Survey:
         seen_task_ids.add(task_id)
         index_entry = index.get(task_id)
         branch = lock.branch or (index_entry or {}).get("branch", "")
+        if task_id in awaiting_land:
+            classified.append(_classify_task(
+                task_id=task_id, lock=lock, worktree=None, branch=branch,
+                index_entry=index_entry, commits=[], unpushed=0, dirty=False,
+                stale_days=stale_days, phase40_cutoff=phase40_cutoff,
+                main_root=main_root, awaiting_land=awaiting_land[task_id],
+                land_parked=_land_park(main_root, awaiting_land[task_id])))
+            continue
         worktree = next(
             (w for w in worktrees if w.branch == branch and not w.is_main), None
         )
@@ -2243,10 +3086,11 @@ def run_survey(stale_days: int = DEFAULT_STALE_DAYS) -> Survey:
         elif unpushed == -1:
             unpushed = 0
         dirty = (
-            _worktree_dirty(worktree.path)
+            _worktree_dirty(worktree.path, main_root)
             if worktree and worktree.path.is_dir()
             else False
         )
+        landed_pr = _landed_claim(main_root, branch, lock, worktree, dirty)
         classified.append(
             _classify_task(
                 task_id=task_id,
@@ -2263,8 +3107,27 @@ def run_survey(stale_days: int = DEFAULT_STALE_DAYS) -> Survey:
                     main_root, branch, lock, worktree
                 ),
                 main_root=main_root,
+                landed_pr=landed_pr,
+                held_doc=bool(branch and _held_doc_names(main_root, branch)),
+                merged_ref="" if landed_pr else _merged_into_default(
+                    main_root, branch, lock, worktree, dirty),
             )
         )
+
+    # A hand-off's task whose kept lock is gone (Phase 366 round 1): the hand-off still holds
+    # `AWAITING`, which stops every close, so the task must stay visible and routed.
+    for task_id, run_id in sorted(awaiting_land.items()):
+        if task_id in seen_task_ids:
+            continue
+        index_entry = index.get(task_id)
+        t = _classify_task(
+            task_id=task_id, lock=None, worktree=None,
+            branch=str((index_entry or {}).get("branch", "")), index_entry=index_entry,
+            commits=[], unpushed=0, dirty=False, stale_days=stale_days,
+            phase40_cutoff=phase40_cutoff, main_root=main_root, awaiting_land=run_id,
+            land_parked=_land_park(main_root, run_id))
+        t.notes.append("its lock, which the hand-off kept, is gone from sysop/runtime/locks/")
+        classified.append(t)
 
     # Index entries with in_progress status but no lock — surface as drift via
     # discrepancies; do NOT add to classified (the discrepancy carries the
@@ -2277,7 +3140,29 @@ def run_survey(stale_days: int = DEFAULT_STALE_DAYS) -> Survey:
     discrepancies = _find_discrepancies(
         locks, worktrees, index, main_root, unreadable
     )
-    if not default_branch:
+    if not default_branch and refused_default:
+        # `Q-383`: a name exists but is refused. The generic line below would be
+        # false here ("no remote HEAD … identifies"), and its remedy does not fix
+        # it. The name is shown through `_quote_refused_name`, never raw.
+        discrepancies.insert(0, Discrepancy(
+            kind="default branch unresolved",
+            detail=(
+                f"the default branch name {_quote_refused_name(refused_default[0])} is refused: a "
+                "default-branch name must match [A-Za-z0-9._/-]+ and not start with "
+                "'-', because it is substituted unquoted into git commands — so "
+                "every claim above reads 0 commits ahead and its state cannot be "
+                "trusted"
+            ),
+            suggestion=(
+                "if the repository is yours, rename the branch (git branch -m "
+                "<current> <new>) and, if a remote names it, publish it, make it "
+                "the host's default, then re-declare it (git push -u origin <new> "
+                "&& git remote set-head origin <new>); if its refs "
+                "come from someone else, the refusal is the protection — do not "
+                "work around it (sysop/scripts/_git_lib.sh)"
+            ),
+        ))
+    elif not default_branch:
         # `Q-365`: with no resolvable default branch every claim above read 0
         # commits ahead — which satisfied the park gate and the `planning`
         # arm alike — and nothing said so. Report it FIRST: every state in
@@ -2329,6 +3214,11 @@ def run_survey(stale_days: int = DEFAULT_STALE_DAYS) -> Survey:
         stale_days=stale_days,
         open_roadmap_ids=open_roadmap_ids,
         unreadable_inputs=list(unreadable),
+        failed_in_merged_batches=[
+            (b["number"], task)
+            for b in review_batches_raw
+            for task in b.get("failed_open", [])
+        ] + _read_near_miss_failed(main_root),
     )
 
 
@@ -2390,6 +3280,19 @@ def render_text(s: Survey) -> str:
             # counted and `render_text` was the fifth.
             for note in rb.notes:
                 lines.append(f"               · {note}")
+        lines.append("")
+
+    # `Q-118`. Printed only when non-empty; never routed (see the field).
+    if s.failed_in_merged_batches:
+        lines.append(
+            f"FAILED IN MERGED BATCHES ({len(s.failed_in_merged_batches)})"
+        )
+        for number, task in s.failed_in_merged_batches:
+            lines.append(f"  Batch {number:<6} {task}")
+        lines.append(
+            "               ↳ no other reader routes these back: finish, re-file or "
+            "/add-task each before an archive run moves it out of review_tasks.md"
+        )
         lines.append("")
 
     # Discrepancies
@@ -2464,7 +3367,8 @@ def _recommended_next(s: Survey) -> Recommendation | None:
     Priority order: unreadable input → lock unreadable (task, batch) →
     review-close (task) → review-close (batch) → unpushed doc-work →
     /triage if any pending batch lacks a Triaged: record → /auto-fix and/or /auto-judge →
-    code committed, docs pending → continue in-progress (task, then batch) →
+    code committed, docs pending → pending doc stale (task, then batch) →
+    continue in-progress (task, then batch) →
     parked with work in progress → parked → awaiting approval (task, then the
     three batch twins) → claimed, no branch (task, batch) → empty batch →
     resume planning → stale → /roadmap (deep queue) or /auto-build (shallow) → idle.
@@ -2513,6 +3417,28 @@ def _recommended_next(s: Survey) -> Recommendation | None:
             detail_lines=list(rb.notes),
         )
 
+    # P0d (`Q-411`, Phase 365): a close handed off to a second reader, waiting on `--land`. Ahead
+    # of every close row: any other /review-close stops on the hand-off's `AWAITING` marker.
+    awaiting = [t for t in s.tasks if t.state == _AWAITING_LAND_STATE]
+    if awaiting:
+        t = awaiting[0]
+        more = f" ({len(awaiting) - 1} more task(s))" if len(awaiting) > 1 else ""
+        return Recommendation(
+            command=t.next_action,
+            reason=f"{t.task_id}'s close is waiting on its second reader's review{more}",
+            detail_lines=list(t.notes),
+        )
+    # P0e (`Q-411`, Phase 366): the same hand-off, parked by an unattended land: a human moves it.
+    parked_land = [t for t in s.tasks if t.state == _PARKED_LAND_STATE]
+    if parked_land:
+        t = parked_land[0]
+        more = f" ({len(parked_land) - 1} more task(s))" if len(parked_land) > 1 else ""
+        return Recommendation(
+            command=t.next_action,
+            reason=f"{t.task_id}'s unattended land parked and needs a human{more}",
+            detail_lines=list(t.notes),
+        )
+
     # P1: tasks ready for /review-close
     ready_tasks = [t for t in s.tasks if t.state == "ready for /review-close"]
     if ready_tasks:
@@ -2526,7 +3452,7 @@ def _recommended_next(s: Survey) -> Recommendation | None:
             ),
         )
 
-    # P2: review batches with all tasks Doc-Work'd — or header status
+    # P2: review batches `ready for /review-close` (Doc-Work'd, doc not stale) — or header status
     # `Review Ready`, the one live status that needs a human (Phase 222,
     # Q-014). The header arm comes first: it is the batch's own explicit
     # declaration, and such a batch never enters s.review_batches (the
@@ -2562,6 +3488,22 @@ def _recommended_next(s: Survey) -> Recommendation | None:
                 f"{t.task_id} has Doc-Work trailer with unpushed commits; "
                 f"/review-close pushes and merges"
             ),
+        )
+
+    # P3b (`Q-623` / `Q-546`): a branch a previous close merged —
+    # squash-merged under `pr`, merged onto the default branch under `direct` —
+    # whose task waits on a close, or on its human step first.
+    merged = [t for t in s.tasks if t.state == _MERGED_STATE]
+    if merged:
+        t = merged[0]
+        more = f" ({len(merged) - 1} more)" if len(merged) > 1 else ""
+        return Recommendation(
+            command=t.next_action,
+            reason=(
+                f"{t.task_id}'s branch was merged by a previous close; "
+                f"the task is not done until a close consolidates its doc{more}"
+            ),
+            detail_lines=list(t.notes),
         )
 
     # P4: pending unclaimed batches — route via the Triaged: verdict record
@@ -2626,7 +3568,7 @@ def _recommended_next(s: Survey) -> Recommendation | None:
         if n_flag > 0:
             return Recommendation(
                 command="/auto-judge",
-                reason=f"{n_flag} flagged batch(es) need Opus judgment",
+                reason=f"{n_flag} flagged batch(es) need reasoning-tier judgment",
                 clear_nudge=True,
             )
         # n_auto > 0, n_flag == 0
@@ -2666,6 +3608,33 @@ def _recommended_next(s: Survey) -> Recommendation | None:
                 "pass, the pending-doc Step 4c consolidates, and the "
                 "follow-up-stub check"
             ],
+        )
+
+    # P4f: documented, then committed to again. The same move as P4e, and
+    # ranked right after it rather than above it so P4e keeps its label: the two are
+    # one human action, and which comes first is arbitrary.
+    stale_docs = [t for t in s.tasks if t.state == "pending doc stale"]
+    if stale_docs:
+        t = stale_docs[0]
+        return Recommendation(
+            command=f"/document-work {t.task_id}",
+            reason=(
+                f"{t.task_id}'s pending-doc predates commits on its branch — "
+                f"/review-close refuses a stale doc; /document-work re-stamps "
+                f"its branch_tip"
+            ),
+            detail_lines=list(t.notes),
+        )
+    stale_doc_batches = [rb for rb in s.review_batches if rb.state == "pending doc stale"]
+    if stale_doc_batches:
+        rb = stale_doc_batches[0]
+        return Recommendation(
+            command=rb.next_action,
+            reason=(
+                f"Batch {rb.batch_number}'s pending-doc predates commits on "
+                f"{rb.branch} — /review-close refuses a stale doc"
+            ),
+            detail_lines=list(rb.notes),
         )
 
     # P5: in-progress tasks (single-task work)
@@ -2941,6 +3910,13 @@ def _suggested_order(s: Survey) -> list[str]:
     for rb in s.review_batches:
         if rb.state == _LOCK_UNREADABLE_STATE:
             out.append(f"batch {rb.batch_number}: {rb.next_action}")
+    # 0. Waiting on `--land` (`Q-411`), matching `_recommended_next`'s P0d.
+    for ts in s.tasks:
+        if ts.state == _AWAITING_LAND_STATE:
+            out.append(f"{ts.task_id}: close waiting on its second reader — {ts.next_action}")
+    for ts in s.tasks:
+        if ts.state == _PARKED_LAND_STATE:
+            out.append(f"{ts.task_id}: unattended land parked — {ts.next_action}")
     # 1. Ready for /review-close
     for ts in s.tasks:
         if ts.state == "ready for /review-close":
@@ -2952,6 +3928,11 @@ def _suggested_order(s: Survey) -> list[str]:
     for ts in s.tasks:
         if ts.state == "doc-work done, unpushed":
             out.append(f"/review-close {ts.task_id}")
+    # 2a. Merged by a previous close, task still open (`Q-623`). After
+    # the close tiers, matching `_recommended_next`'s P3b.
+    for ts in s.tasks:
+        if ts.state == _MERGED_STATE:
+            out.append(f"{ts.task_id}: merged by a previous close — {ts.next_action}")
     # 2b. Code committed, docs pending (Q-019). Between the close tiers and
     # in-progress, matching `_recommended_next`'s P4e placement: this task is
     # further along than an in-progress one and not yet closable.
@@ -2966,6 +3947,13 @@ def _suggested_order(s: Survey) -> list[str]:
     for ts in s.tasks:
         if ts.state == "code committed, docs pending":
             out.append(f"/document-work {ts.task_id} (trailer present, no pending-doc)")
+    for ts in s.tasks:
+        if ts.state == "pending doc stale":
+            out.append(f"/document-work {ts.task_id} (pending-doc is stale — commits "
+                       "landed after its branch_tip)")
+    for rb in s.review_batches:
+        if rb.state == "pending doc stale":
+            out.append(f"Batch {rb.batch_number}'s pending-doc is stale — {rb.next_action}")
     # 2c. Pending unclaimed batches — the ordered-list twin of P4a–4d, which
     # routes them by their `Triaged:` record; the classifier's `next_action`
     # already carries that routing as prose.
@@ -3044,7 +4032,9 @@ def _suggested_order(s: Survey) -> list[str]:
     return out
 
 
-# ── JSON rendering (reserved) ────────────────────────────────────
+# ── JSON rendering (the contract is in the module docstring) ─────
+
+JSON_SCHEMA_VERSION = 1
 
 
 def render_json(s: Survey) -> str:
@@ -3072,6 +4062,7 @@ def render_json(s: Survey) -> str:
             "pending_doc": t.pending_doc,
             "next_action": t.next_action,
             "notes": t.notes,
+            "agent": t.agent,
         }
 
     def _rb(r: ReviewBatchState) -> dict[str, Any]:
@@ -3114,6 +4105,7 @@ def render_json(s: Survey) -> str:
     return (
         json.dumps(
             {
+                "schema_version": JSON_SCHEMA_VERSION,
                 "timestamp": s.timestamp.isoformat(),
                 "main_root": str(s.main_root),
                 "head_short": s.head_short,
@@ -3122,6 +4114,10 @@ def render_json(s: Survey) -> str:
                 "review_batches": [_rb(r) for r in s.review_batches],
                 "discrepancies": [_d(d) for d in s.discrepancies],
                 "open_roadmap_ids": s.open_roadmap_ids,
+                "failed_in_merged_batches": [
+                    {"batch_number": n, "task": task}
+                    for n, task in s.failed_in_merged_batches
+                ],
                 "recommended_next": rec_json,
                 "suggested_order": _suggested_order(s),
             },
@@ -3142,7 +4138,7 @@ def main() -> int:
     p.add_argument(
         "--json",
         action="store_true",
-        help="Emit JSON instead of the text report (reserved)",
+        help="Emit JSON instead of the text report (a stable contract; see the module docstring)",
     )
     p.add_argument(
         "--stale-days",

@@ -55,7 +55,12 @@ def load_baseline(path):
     keys = set()
     with open(path, encoding="utf-8", errors="replace") as f:
         for raw in f:
-            line = raw.strip()
+            # A byte-order mark (an editor's UTF-8-with-BOM save) is not part of
+            # the first entry. Kept, it became `\ufeffcheck|path:line|...` — a key
+            # no finding can produce, so the first accepted entry silently
+            # suppressed nothing; on a comment line it turned the comment into
+            # an entry. `migrate_baseline` already strips it for the same reason.
+            line = raw.lstrip("\ufeff").strip()
             if not line or line.startswith("#"):
                 continue
             keys.add(line)
@@ -157,6 +162,103 @@ def legacy_entries(baseline, all_findings):
             continue
         out.append(entry)
     return sorted(out)
+
+
+def _anchor_path(file_line):
+    """The file a key's ``file_line`` names: ``path`` from ``path:N``, else as-is.
+
+    File-level keys (`invert_file_check`) carry a bare path, and a path may
+    itself hold a colon, so only a trailing all-digit field is a line number —
+    the same split `_source_line` makes.
+    """
+    path, sep, tail = str(file_line).rpartition(":")
+    return path if sep and path and tail.isdigit() else str(file_line)
+
+
+def unmatched_entries(baseline, all_findings, executed_ids, repo_root):
+    """Return ``[(entry, anchor_present), ...]`` for entries that matched nothing.
+
+    `legacy_entries` reports only a TWO-field entry, so an
+    identity-bearing entry whose finding moved — re-anchored by an inserted
+    line, a renamed file, a reworded statement — silently stopped suppressing
+    and nothing said so: the finding re-fired as new on every run until a human
+    read the file. This names an entry of any arity whose key no finding of
+    this run produced, under three conditions:
+
+    * **its check's final state is ``executed``** (`RunReport.executed_ids`).
+      A ``skipped``, ``failed``, ``unroutable`` or ``degraded`` check produced
+      nothing it can be judged by, and a check outside this ``--mode`` has no
+      state at all, so none of those can yield a false report. (``degraded``
+      is the subtle one: it ran and emitted real findings, but over less than
+      its inputs, so an entry it did not match may be in the part it missed.)
+    * **it is not a legacy two-field entry** — `legacy_entries` already names
+      those, with the converter as remedy; naming one twice would give it two
+      contradictory remedies.
+    * **it is not a coverage entry** — coverage never suppresses (see
+      `_is_coverage`) and reports changed lines only, so any coverage entry
+      would read as stale on every run whatever its state.
+
+    Entries that do not split into two or three fields are left to
+    `--migrate-baseline`, which names them as unrepresentable.
+
+    ``anchor_present`` is False when the anchor file is not in this checkout —
+    the clearest dead case, and reported, not skipped. It is reported apart
+    because absence is ambiguous in one way: a check with several `paths:` runs
+    when ANY of them resolves (`grep.py`), so an anchor under a path absent from
+    this checkout was never scanned. `migrate_baseline` refuses to DELETE such
+    an entry on that ground (`kept-unscanned`); a warning deletes nothing, and
+    saying the file is absent lets the reader tell a renamed file from a
+    narrower checkout.
+
+    Not a gate: the caller prints a warning and nothing here reaches the exit
+    code. pip-audit's anchor is synthesized (the first requirements file, else
+    `pyproject.toml`), so renaming the manifest moves every pip-audit key and
+    lands its old entries here, absent — which is the truth.
+    """
+    current = {finding_key(c, fl, ident) for c, fl, _msg, ident in all_findings}
+    executed = set(executed_ids)
+    legacy = set(legacy_entries(baseline, all_findings))
+    out = []
+    for entry in sorted(baseline):
+        parts = entry.split("|")
+        if len(parts) not in (2, 3):
+            continue
+        check_id = parts[0]
+        if (check_id not in executed or _is_coverage(check_id)
+                or entry in legacy or entry in current):
+            continue
+        anchor = _anchor_path(parts[1])
+        out.append((entry, bool(anchor)
+                    and os.path.exists(os.path.join(repo_root, anchor))))
+    return out
+
+
+def unregistered_entries(baseline, registered_ids):
+    """Return the sorted entries whose check id names no check in this checks.yml.
+
+    The same silent class as `unmatched_entries`, from a different cause: the
+    check was renamed or removed (a pack uninstalled, an id edited), so no
+    finding can ever carry the entry's key again, and it suppresses nothing.
+    `unmatched_entries` cannot see it — a check that is not defined never
+    reaches ``executed`` — and `--migrate-baseline` holds it as ``kept-2field``
+    or ``kept-3field`` like any other. Registry membership does not depend on
+    ``--mode`` or on a stage's availability, so this needs none of
+    `unmatched_entries`' conditions: ``registered_ids`` is every check the file
+    defines, before mode filtering.
+
+    Coverage entries and entries that do not split into two or three fields
+    are skipped, as `unmatched_entries` skips them.
+    """
+    registered = set(registered_ids)
+    out = []
+    for entry in sorted(baseline):
+        parts = entry.split("|")
+        if len(parts) not in (2, 3):
+            continue
+        if parts[0] in registered or _is_coverage(parts[0]):
+            continue
+        out.append(entry)
+    return out
 
 
 def _is_coverage(check_id):

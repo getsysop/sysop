@@ -76,9 +76,13 @@ def test_the_published_pin_counts_match_the_census():
     assert f"carry {c['cheap_tier_pins']} of the {c['total']} pins" in doc, (
         f"derived cheap-tier pins = {c['cheap_tier_pins']} of {c['total']}"
     )
+    split = sum(c["by_role"].get(r, 0) for r in ("planner", "plan-review", "executor"))
+    assert f"{split} are the three roles split out for planning, plan review and execution" in doc, (
+        f"derived planner + plan-review + executor pins = {split}"
+    )
 
 
-def test_the_cheap_tier_really_is_two_pins():
+def test_the_cheap_tier_is_small_and_the_census_partitions():
     """The claim that carries the recommendation: there is no cheap lever hiding
     in the default map, because the cheap roles govern almost nothing.
 
@@ -91,7 +95,12 @@ def test_the_cheap_tier_really_is_two_pins():
     two-tier claim the docs make is still asserted, as its own line.
     """
     c = _load(CENSUS, "phase223_role_census").census()
-    assert c["cheap_tier_pins"] == 2
+    # Two until Phase 349 pinned `/sitrep` (quick) and `/auto-fix`'s orchestrator
+    # (mechanical); `/triage` went to `reasoning` (it is invoked mid-turn by
+    # `/auto-judge`). Still a small share of the tree: the lever the page points at
+    # is `executor`, not these.
+    assert c["cheap_tier_pins"] == 4
+    assert c["cheap_tier_pins"] * 4 < c["total"], c
     assert sum(c["by_role"].values()) == c["total"], (
         f"the census does not partition: {c['by_role']} sums to "
         f"{sum(c['by_role'].values())}, total is {c['total']}"
@@ -100,8 +109,11 @@ def test_the_cheap_tier_really_is_two_pins():
     # the docs must constrain — naming them, so an unexplained one is visible.
     other = {r: n for r, n in c["by_role"].items()
              if r not in ("reasoning", "mechanical", "quick")}
-    # Two since Phase 328: Step 2b's convention agent and the 4a-fix re-check.
-    assert other == {"convention-gate": 2}, (
+    # convention-gate: Step 2b's convention agent and the 4a-fix re-check (Phase
+    # 328). planner / plan-review / executor: the Phase 349 split of the three
+    # `/claim-task` + `/auto-build` spawns, the shared plan-review contract, and
+    # `/claim-task` 8c's answers executor.
+    assert other == {"convention-gate": 2, "planner": 2, "plan-review": 4, "executor": 3}, (
         f"a role outside the documented tiers governs pins: {other}. Widen "
         f"docs/configuration.md's mapping sentence before widening this."
     )
@@ -118,8 +130,13 @@ def test_the_loop_mode_counts_are_derived_and_published():
     loop = mod.census("loop")
     doc = _doc()
     assert loop["cheap_tier_pins"] == 0
-    assert loop["by_role"] == {"reasoning": loop["total"]}
-    assert f"all {loop['total']} pins a loop install carries are `reasoning`" in doc
+    # Loop mode ships `_shared/adversarial-review.md` (the plan-review contract)
+    # but none of the skills that spawn on it, so its one non-`reasoning` pin is
+    # carried and inert — and resolves through `reasoning` anyway.
+    assert loop["by_role"] == {"reasoning": loop["total"] - 1, "plan-review": 1}, loop
+    assert set(loop["by_model"]) == {"opus"}, loop
+    assert (f"the {loop['total']} pins a loop install carries all resolve through "
+            f"`reasoning` — {loop['by_role']['reasoning']} on it directly") in doc
     assert "On a loop-mode install they carry none at all" in doc
     _assert_no_retraction(doc)
     # The exclusion list is parsed from install.sh, not restated in the census.
@@ -132,8 +149,11 @@ def test_inline_governing_roles_are_the_ones_the_docs_constrain():
     `mechanical` because those govern inline pins. If a future pin puts a third
     role inline, that sentence is silently wrong and this goes red."""
     c = _load(CENSUS, "phase223_role_census").census()
-    assert c["inline_governing_roles"] == ["convention-gate", "mechanical", "reasoning"]
-    assert "Map `reasoning`, `mechanical` and `convention-gate` to one of" in _doc()
+    assert c["inline_governing_roles"] == [
+        "convention-gate", "executor", "mechanical", "plan-review", "planner", "reasoning",
+    ]
+    assert ("Map every role except `quick` — `reasoning`, `mechanical`, `convention-gate`, "
+            "`planner`, `plan-review`, `executor` — to one of") in _doc()
 
 
 # ── the spend split ───────────────────────────────────────────────────────────
@@ -234,7 +254,8 @@ def test_the_doc_does_not_re_advertise_the_broken_values():
     doc = _doc()
 
     sentence = _re.search(
-        r"\*\*Map `reasoning`, `mechanical` and `convention-gate` to one of ([^*]+)\.\*\*", doc
+        r"\*\*Map every role except `quick` — [^*]+? — to one of ([^*]+?), or to the name of "
+        r"another role\.\*\*", doc
     )
     assert sentence, "the mapping constraint sentence is gone from the public page"
     advertised = set(_re.findall(r"`([^`]+)`", sentence.group(1)))

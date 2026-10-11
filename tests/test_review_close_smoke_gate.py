@@ -35,7 +35,7 @@ def _extract_smoke_heredoc() -> str:
     """
     text = SKILL.read_text(encoding="utf-8")
     m = re.search(
-        r'python3 - "\$SMOKE_WORKTREE_DIRS" "\$APPROVED_BRANCHES" <<\'EOF\'\n', text
+        r'python3 - "\$SMOKE_WORKTREE_DIRS" "\$APPROVED_BRANCHES" "<default branch>" <<\'EOF\'\n', text
     )
     assert m, "could not locate the Step 3c smoke-gate heredoc opener in SKILL.md"
     start = m.end()
@@ -46,14 +46,16 @@ def _extract_smoke_heredoc() -> str:
 SMOKE_SRC = _extract_smoke_heredoc()
 
 
-def _run(repo: Path, worktree_dirs: list[Path], branches: list[str] | None = None) -> str:
+def _run(repo: Path, worktree_dirs: list[Path], branches: list[str] | None = None,
+         default_branch: str = "main") -> str:
     # Phase 126: repo root is CWD, worktree-dir list is argv[1] (was REPO_ROOT /
     # SMOKE_WORKTREE_DIRS env vars). `cwd=repo` mirrors "run the heredoc from the repo root".
     # Phase 218: argv[2] is this run's approved branch names, one per line.
+    # Phase 351: argv[3] is the resolved default branch, whose origin index the gate reads.
     smoke_arg = "\n".join(str(d) for d in worktree_dirs)
     branch_arg = "\n".join(branches or [])
     r = subprocess.run(
-        [sys.executable, "-c", SMOKE_SRC, smoke_arg, branch_arg],
+        [sys.executable, "-c", SMOKE_SRC, smoke_arg, branch_arg, default_branch],
         capture_output=True,
         text=True,
         cwd=str(repo),
@@ -473,8 +475,9 @@ def test_declared_task_with_no_body_key_fires_a_named_signal(tmp_path):
 
 
 def test_undeclared_task_with_a_smoke_heading_in_its_body_stays_silent(tmp_path):
-    """Only `manual_smoke: true` opts a task body into the scan. A body that happens to
-    carry the phrase is not a declaration, or every task body becomes a prompt."""
+    """An undeclared task's body is read only when an APPROVED branch links it (Phase 351,
+    `Q-624`; `test_review_close_smoke_index_reads.py` has that side). Here no branch is
+    approved, so a doc naming the task is not a reason to read its body."""
     main = _seed(tmp_path, index_yml=_idx(manual_smoke=False), pending={"a.md": _doc()},
                  bodies={"FEAT-X.md": "# X\n\n## Manual smoke required\n1. Go.\n"})
     assert _signals(_run(main, [])) == 0
@@ -568,7 +571,7 @@ def test_validator_and_skill_share_one_heading_pattern():
     block = SMOKE_SRC[SMOKE_SRC.index("heading_re = re.compile("):
                       SMOKE_SRC.index("fm_re = re.compile(")]
     branches = [m.group(1) for m in _re.finditer(r"r'\|?([^']+)'", block)
-                if m.group(1) not in ("^(#{1,6})\\s+.*(", ")")]
+                if m.group(1) not in ("^ {0,3}(#{1,6})[ \\t]+.*(", ")")]
     alternatives = []
     for branch in branches:
         g = _re.search(r"\(\?:([^)]*)\)", branch)

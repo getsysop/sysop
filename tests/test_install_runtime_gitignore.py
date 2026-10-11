@@ -8,6 +8,7 @@ four live under one vendor-namespaced home, covered by a single ignore entry:
   sysop/runtime/auto-build/          parked-task plan + adversarial-verdict archive (Phase 65a)
   sysop/runtime/pending-docs/        deferred documentation drafts (/document-work Step 3)
   sysop/runtime/locks/               in-progress task locks (claim_task.sh; Phase 32)
+  sysop/runtime/close/               /review-close --prepare run directories (Phase 363)
 
 The helper stays an idempotent, update-safe append-if-missing (a consumer-owned
 .gitignore is never rewritten — only missing entries appended).

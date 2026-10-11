@@ -862,8 +862,10 @@ def test_the_gates_that_flip_durable_state_keep_their_polarity():
     text = _skill()
     step1c = " ".join(text[text.index("1c. **Hold back any pending-doc"):
                            text.index("2. **If none found**")].split())
-    assert ("**If any of those ids has a truthy `user_action`, do not route this doc "
-            "at all this run**") in step1c, (
+    # Phase 353 moved the predicate into `pending_doc_hold.py`, where its polarity is
+    # executed (`tests/test_pending_doc_hold.py`: a doc naming one held and one unheld task
+    # holds). What the prose still owns is what the runner does with a `HELD:` line.
+    assert "**For each `HELD:` line, do not route this doc at all this run**" in step1c, (
         "Step 1c's condition lost its polarity. Inverting `any` to `all` narrows the "
         "hold to docs where EVERY task is held; inverting the value fires it on every "
         "task that needs no human step. Both were walked by the round."

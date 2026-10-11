@@ -82,6 +82,19 @@ USES = [
     "    imported = pd.read_sql(q, writer_engine)",
     "    if not (writer_engine := create_engine(WRITER_URL)):",
     "    if (admin_engine := make_admin()) is None: raise RuntimeError('unset')",
+    # Q-636: an `or` of null tests is dropped, so each of these keeps one operand, or the body,
+    # that is not a null test, and must stay reported.
+    "    if not db or run(writer_engine):",
+    "    if not db or not writer_engine.connect():",
+    "    if a or not db.writer_engine: writer_engine.connect()",
+    "    if not db or (writer_engine := make()):",
+    "    if not db or not getattr(db, 'writer_engine', writer_engine.connect()):",
+    "    if x is None or db.writer_engine == engine:",
+    "    if not db or pd.read_sql(q, writer_engine) is None:",
+    # A name ending in `or` is not an `or`: without the arm's word boundary, `executor(` read
+    # as `execut` + `or(` and the whole call became a dropped null test.
+    "    if not executor(writer_engine):",
+    "    if not db or vendor(writer_engine):",
 ]
 # Lines that must NOT be reported: a guard alone on its line, a comment, an import.
 DROPPED = [
@@ -108,6 +121,17 @@ DROPPED = [
     "    # writer_engine is used below",
     "from db_config import writer_engine",
     "import writer_engine",
+    # Q-636: an `or` of null tests, the compound missing-writer-engine-guard accepts.
+    "    if not db or not db.writer_engine:",
+    "    if db_config.reader_engine is None or db_config.writer_engine is None:",
+    "    if not db.writer_engine or not db.reader_engine:",
+    "    if a is None or b is None or db.writer_engine is None:",
+    "    if not a or not db.writer_engine or not c.rows:",
+    "    if (not db) or (not db.writer_engine):",
+    "    elif x is not None or writer_engine is None:",
+    "    if not db or not getattr(db, 'writer_engine', None): return []",
+    "    if getattr(db, \"writer_engine\") is None or data is None:",
+    "    if not db or not db.writer_engine:  # dev without write credentials",
 ]
 # Reported on purpose, and named as reported in the check's notes: the noise a
 # line-oriented pattern cannot tell from a use without losing uses.
@@ -115,9 +139,17 @@ STILL_REPORTED = [
     '    logger.warning("writer_engine unavailable")',
     '    """Uses writer_engine (app_writer role)."""',
     "    x = 1  # falls back to reader or writer_engine",
-    "    if db_config.reader_engine is None or db_config.writer_engine is None:",
+    # Q-636: not null guards, though each names the engine in its test.
+    "    if not a and not db.writer_engine:",
+    "    if dry_run() or not db.writer_engine:",
+    "    if not writer_engine.url:",
+    "    if not db or not db.writer_engine.url:",
+    "    if not writer_engine.url or not db:",
     "    if db.writer_engine == engine:",
     "    if writer_engine is not engine: engine.dispose()",
+    # Phase 358 round (lens A, C07): an `or` operand compared to anything but None.
+    "    if a or db.writer_engine is engine:",
+    "    if not db or writer_engine is not engine:",
     "    iface.writer_engine: Engine = create_engine(url)",
 ]
 
@@ -165,6 +197,38 @@ def test_the_two_engine_checks_no_longer_contradict_each_other(tmp_path):
     assert _flagged(tmp_path, "missing-writer-engine-guard", guarded) == {guarded[2]}
 
 
+NEGATIVE_FIXTURE = (REPO_ROOT / "packs" / "postgres" / "companion" / "semgrep" / "fixtures"
+                    / "missing_writer_engine_guard_negative.py")
+
+
+def test_every_guard_the_semgrep_rule_accepts_is_not_a_finding_here(tmp_path):
+    """`Q-636`: the semgrep rule's negative fixture is the list of guards it accepts, one per
+    guard pattern, and `tests/test_semgrep_fixture_proofs.py` proves it reports none of them.
+    This runs the regex check over the same file, so the two checks agree on what a guard is
+    without either test restating it. Until `Q-636` the rule did not accept `is None`, getattr
+    or an `or`, and this check did not drop the `or` (`if not db or not db.writer_engine:`).
+
+    Needs no semgrep, so it also runs where the fixture proof skips. The calls are asserted
+    too, so a run that reported nothing at all cannot pass."""
+    src = tmp_path / "api" / "routes" / "mod.py"
+    src.parent.mkdir(parents=True)
+    src.write_text(NEGATIVE_FIXTURE.read_text(encoding="utf-8"), encoding="utf-8")
+    check = _pack_check("wrong-engine")
+    check.update(paths=["api/"], exclude=[])
+    lines = src.read_text(encoding="utf-8").split("\n")
+    flagged = {int(h[1].rsplit(":", 1)[1]) for h in run_check(check, str(tmp_path))}
+    guards = {i for i, ln in enumerate(lines, 1)
+              if ln.lstrip().startswith(("if ", "if(", "elif "))
+              and ("writer_engine" in ln or "admin_engine" in ln)}
+    calls = {i for i, ln in enumerate(lines, 1)
+             if "writer_engine." in ln and not ln.lstrip().startswith(("#", "if ", "if("))}
+    # Exact, not a floor: a floor below the real count lets cases vanish silently. Update it
+    # deliberately when a guard case is added to or removed from the fixture.
+    assert len(guards) == 46, f"the fixture's guard cases changed: {len(guards)}"
+    assert not flagged & guards, [lines[i - 1] for i in sorted(flagged & guards)]
+    assert calls <= flagged, [lines[i - 1] for i in sorted(calls - flagged)]
+
+
 def test_the_shipped_check_parses_as_a_consumer_parses_it():
     """`_flagged` overrides `paths` and `exclude` to point at its fixture, so the shipped
     scope is otherwise unjudged, and a scalar `include:` passes `run_check` while
@@ -203,6 +267,15 @@ _TIMING_LINES = [
     # The body lookahead: `(?!(.|\\s)*ENGINE)` is exponential in the whitespace after the colon.
     "    if not writer_engine:" + " " * 20000 + "x",
     "    if not getattr(db, 'writer_engine'):" + " " * 20000 + "x",
+    # Q-636's `or` arm: a long chain with no colon, a long run of spaces after `or`, a long
+    # operand, a long chain of parenthesized operands, and a long qualifier inside an `or`.
+    "    if not writer_engine" + " or not writer_engine" * 5000,
+    "    if not a or" + " " * 20000 + "x",
+    "    if " + "(not writer_engine) or " * 3000,
+    "    if a or " + "b" * 20000,
+    "    if not a or not " + "a." * 5000 + "writer_engin:",
+    "    if a or " + "x is None or " * 3000 + "writer_engine",
+    "    if not a or" + " (" * 10000 + "x",
 ]
 
 

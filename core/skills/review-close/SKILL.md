@@ -1,7 +1,7 @@
 ---
 name: review-close
 description: Senior review — review pending work, push to origin, verify staging, clean up
-argument-hint: "[--dry-run]"
+argument-hint: "[--dry-run | --prepare | --resume <run-id> | --request-review [--agent <name>] | --land <run-id>]"
 model: opus
 ---
 <!-- sysop:model-roles frontmatter=reasoning inline=reasoning -->
@@ -65,7 +65,7 @@ Before doing anything, verify `.claude/settings.json` (with `.claude/settings.lo
 Read `.claude/settings.json` (and `.claude/settings.local.json` if present) and confirm `permissions.allow` satisfies every rule below:
 
 - `Bash(git checkout:*)`
-- `Bash(git fetch origin:*)` — the `_shared/main-push-guard.md` Rule B safe-push sequence fetches `origin/<default branch>` before the Step 4d push, so this is required under **both** merge policies, not just `pr`
+- `Bash(git fetch origin:*)` — the `_shared/main-push-guard.md` Rule B safe-push sequence fetches `origin/<default branch>` before the Step 4d push, so this is required under **both** merge policies, not just `pr`; under `pr`, Step 4d's record of the merged PR's head (`refs/pull/<PR>/head`) binds it too
 - `Bash(git rebase:*)`
 - `Bash(git rebase --abort)`
 - `Bash(git -c core.editor=true rebase --continue)` — **exact match, and it has to be exact.** Step 4a's conflict route continues a rebase, and a bare `git rebase --continue` opens an editor: with none configured git falls back to `vi`, which in this harness **hangs until the tool timeout** and, when stdin is closed instead, exits 1 leaving the rebase mid-replay — a state Step 4a has no arm for. `-c core.editor=true` is the fix for the case that bites — no editor configured, or one configured through `EDITOR` — though **not** for an ambient `GIT_EDITOR`, which outranks `core.editor` and is measured to win; an autonomous close does not set one. It needs its own rule: `-c` is not one of the wrappers the Bash matcher strips, so `Bash(git rebase:*)` does **not** cover `git -c … rebase` ([permissions reference](https://code.claude.com/docs/en/permissions.md#process-wrappers)). An env-var prefix (`GIT_EDITOR=true git rebase …`) binds no allow rule either — allow rules do not match past an assignment
@@ -79,10 +79,14 @@ Read `.claude/settings.json` (and `.claude/settings.local.json` if present) and 
 - `Bash(bash sysop/scripts/close_batch.sh:*)`
 - `Bash(bash sysop/scripts/run_checks.sh)`
 - `Bash(bash sysop/scripts/run_checks.sh:*)`
-- `Bash(python3 -:*)` — Step 3c's smoke-gate detection heredoc **and** Step 4c's yaml-round-trip status flip + git mv + the `git add` of the index it rewrote (those git calls run *inside* the heredoc via `subprocess`, so they bind no Bash rule of their own). Both are single `python3 - <<` commands (literal `python3` command word, no PATH prefix or `&&` compound) so this one rule matches; venv PyYAML is resolved by an in-heredoc `sys.path` bootstrap, not a `.venv/bin/python3` invocation or an env prefix (BeanRider ISSUE-0049; Sysop Phase 126 — a `.venv/bin/python3` command word or a `VAR=… python3` prefix would each bind to no rule)
+- `Bash(python3 -:*)` — Step 1-pre, Step 3c's smoke-gate detection heredoc, Step 4a item 1's recorded-head check, **and** Step 4c's yaml-round-trip status flip + git mv + the `git add` of the index it rewrote (those git calls run *inside* the heredoc via `subprocess`, so they bind no Bash rule of their own). Each is a single `python3 - <<` command (literal `python3` command word, no PATH prefix or `&&` compound) so this one rule matches; venv PyYAML is resolved by an in-heredoc `sys.path` bootstrap, not a `.venv/bin/python3` invocation or an env prefix (BeanRider ISSUE-0049; Sysop Phase 126 — a `.venv/bin/python3` command word or a `VAR=… python3` prefix would each bind to no rule)
 - `Bash(python3 sysop/scripts/validate_tasks.py)` — Step 4c's final-guard validator run (bare `python3`; the script self-resolves venv PyYAML via its own `sys.path` bootstrap, so this one form serves both venv-only and non-venv consumers — Sysop Phase 126)
 - `Bash(python3 sysop/scripts/validate_tasks.py:*)` — same with `--quiet` / `--path`
 - `Bash(python3 sysop/scripts/review_index.py:*)` — Step 4b's batch-set derivation (`--list`). Bare `python3`, for the same reason as the validator above: the script self-resolves venv PyYAML, so one form serves venv and non-venv consumers. **The command word is load-bearing** — this step prescribed `bash …review_index.py --list` until Phase 241, which binds no rule *and* cannot run: bash lexes the module's docstring as one quoted word and exits 2 with an empty stdout, indistinguishable from a batch-free cycle.
+- `Bash(python3 sysop/scripts/pending_doc_hold.py:*)` — Step 4c 1b's and 1c's hold test (`check`, `check --stamp`).
+- `Bash(python3 sysop/scripts/ignored_refs.py:*)` — Step 2a step 3a's and Step 3b step 0b's ignored-file check.
+
+- `Bash(git -c core.editor=true merge --continue)` — exact match: the published arm's twin of the `rebase --continue` rule above.
 
 **Deliberate non-entries.** (One of them stopped being one — see the end of this paragraph.) Step 3b's pending-docs collect and its rollback used to run as `mkdir -p … && cp …` and a `for … rm -f … done` loop, which bound **no** allow-rule at all: the compound splits into `mkdir` + `cp` command words (Phase 126 matcher facts) and neither is in the seeded set, nor are `rm`, `mv` or `cmp`. **Phase 210 rebuilt both as `python3 - <<'PY'` heredocs, so they now bind `Bash(python3 -:*)`, which the default seed already carries.** The permission surface got smaller, not larger — one existing rule replaced four ruleless command words — and the change was driven by correctness rather than permissions: a provenance check is not expressible in that compound. **If some other part of this step ever *does* halt on a denial, nothing rescues it automatically — ask the user for the escape yourself.** The Phase 36 `PermissionDenied` hook matches a push to `origin` of one of the two branch names it **hard-codes** (`main` or `master` — *not* the resolved default branch, so on a consumer whose default is neither, no push matches), a `--delete` push of any branch, and `git commit` on a protected branch; a denied `mkdir` or `cp` falls through its matcher loop and it emits **nothing**, so the denial arrives with no guidance attached. Relay the literal `!`-prefixed command — **the `python3 -` heredoc as written, never the retired `mkdir -p … && cp …`**, which has no provenance check and is the form this step removed for the user to type at the next prompt, the same route Step 3 uses for a denied verification command, and never `AskUserQuestion`. Step 3b itself forbids proceeding to the worktree remove with the docs uncollected.
 
@@ -96,7 +100,7 @@ Read `.claude/settings.json` (and `.claude/settings.local.json` if present) and 
 - `Bash(gh pr list:*)` — Step 4-pre's PR-reuse probe (`gh pr list --head … --base <default branch> --state open`)
 - `Bash(gh pr create:*)` — open the integration PR against `main` (integration-branch shape only; the PR-reuse shape never calls it)
 - `Bash(gh pr checks:*)` — wait on the PR's required checks
-- `Bash(gh api:*)` — Step 4d command 4b's check-run count on the PR head (`repos/{owner}/{repo}/commits/<sha>/check-runs`), and the ruleset lookup its could-not-measure note points at. Read-only, but `gh api` can POST, so the rule is a deliberate grant rather than an inference from the verb
+- `Bash(gh api:*)` — the ruleset lookup (`repos/{owner}/{repo}/rulesets`) that Step 4d command 4b's could-not-measure note points at. Command 4b itself is `gh pr view`. It also POSTs Step 4d's waived-smoke-FAIL comment under the PR-reuse shape. Step 4d-1 reads a failing check's Actions job and its annotations with it. `gh api` can write, so the rule is a deliberate grant rather than an inference from the verb
 - `Bash(gh pr view:*)` — read the PR's merge state
 - `Bash(gh pr merge:*)` — squash-merge the integration PR (non-`--auto`)
 
@@ -108,9 +112,419 @@ Every rule named above ships in the installer's seeded allow-list, so a consumer
 
 If `$ARGUMENTS` contains `--skip-permission-guard`, print a one-line warning and continue.
 
+## A close waiting for its second reader
+
+**Unless `$ARGUMENTS` contains `--land`**, look for `sysop/runtime/close/*/AWAITING` in the main checkout with your file tool. If one exists, stop: a `--request-review` close has an open PR that has not merged yet. Report the directory name as the run id and give the two ways on: `/review-close --land <run-id>` (it also finishes a PR merged by hand), or, once the PR has been closed unmerged, `python3 sysop/scripts/close_run.py abandon "<run-id>"`.
+
+## `--prepare` and `--resume <run-id>` (`Q-603`)
+
+**Read this section only when `$ARGUMENTS` contains `--prepare` or `--resume`.** The flags combine only as `--resume <run-id> --request-review`. Any other pair of `--dry-run`, `--prepare`, `--resume`, `--request-review` and `--land`: stop and say so. Both also require `Bash(python3 sysop/scripts/close_run.py:*)` in the allow-list the guard above read, unless `--skip-permission-guard` skipped the guard. If it is missing, stop as the guard does.
+
+### Under `--prepare`
+
+A prepare runs Steps 1, 2, 3 and 3c for real, asks the human nothing, records the questions it can in a run directory instead (Step 3's are left for the resume), and stops before Step 3b. Step 1b commits, Step 2b spawns its reviewers and Step 3c fetches, as on any close. Nothing from Step 3b on runs.
+
+1. **Open the run** after Step 1 and before Step 2a, from the main checkout's top level. Name every branch Step 2a will consider (agent worktree branches excluded), each quoted, or none when there is none:
+
+   ```bash
+   python3 sysop/scripts/close_run.py begin "<default branch>" "<branch>" "<branch>"
+   ```
+
+   It prints `RUN: <run-id>`, `DIR: <run directory>` and one `STATE <branch>: <file>` line per branch. On a non-zero exit, stop the prepare and show its stderr.
+
+2. **Ask nothing; record instead.** Where Step 2a step 3a, Step 2d or Step 3c says to ask, append the question to `<DIR>/questions.md` in this shape, numbering from `Q1`, and carry on:
+
+   ```
+   ## Q<n> · <step> · <branch, or close>
+   <the question, with every line the step says to show, verbatim>
+   Options: <each option the step offers, verbatim, separated by " | ">
+   If unanswered: <the park, from the list below>
+   ```
+
+   The parks: Step 2a step 3a → the verdict **SKIP — ignored file unanswered**; Step 2d → **Hold for fix**; a Step 3c signal with a `BRANCH:` line → **Hold just this branch**; a Step 3c signal without one → the resume halts before Step 3b.
+   - **Step 2a step 3a and Step 2d:** carry the branch on through Steps 2b–2e, 3 and 3c as approved, with its verdict marked `pending Q<n>`. Step 3a commits and copies nothing.
+   - **Step 3:** item 5's ask, or a silently denied command, records no question. Write why in `<DIR>/close.md` and leave Step 3 not run; the resume runs it attended.
+   - **Step 3c:** record each signal as its own question, with its `SOURCE:`, `READ:`, `KEY:`, `BRANCH:` and `NOT MERGING:` lines and its four options. Record nothing with the recorder, and drive nothing.
+
+3. **A `VERDICT: BLOCKED` from Step 2b on a branch stops that branch, not the prepare.** Write its violations, with their `file:line` citations, into the branch's state, keep the branch out of Steps 2d, 3 and 3c, and go on with the others. A `VERDICT: BLOCKED` on the unpushed-main group halts the prepare (item 4).
+
+4. **Every other stop halts the prepare:** any halt, failure or refusal the text gives in Steps 1 to 3c, and any exit it gives no instruction for. Write the step and the reason to `<DIR>/halted.md`, report them with the run id, and stop.
+
+5. **Write the state as you go.** Each branch's `STATE` file holds Step 1a's class and any Step 1-pre line; Step 2a's verdict, its reason and any step 0, 0a or 0b line; Step 2b's verdicts and `NOTES:` from both fleets, or why a fleet skipped; Step 2d's tally; Step 2e's report; and the numbers of its pending questions. `<DIR>/close.md` holds Step 1's other lines, Step 2b's verdicts and `NOTES:` for the unpushed-main group, Step 2c's result, Step 3's `Verification:` line or why it did not run, Step 3c's output verbatim (its first line, the carried lines and every signal block), and every Step 8 row these steps produced. Write `questions.md` even when it holds no question.
+
+6. **Finish** at the end of Step 3c:
+
+   ```bash
+   python3 sysop/scripts/close_run.py finish "<run-id>"
+   ```
+
+   Exit 1 names each missing file: write it, then run `finish` again. Then report the run id, each branch's verdict, the `QUESTIONS:` count, every `MOVED DURING PREPARE:` line and the `RESUME:` line, and stop.
+
+### Under `--resume <run-id>`
+
+Run the default-branch resolve and the permission guard above first. Then, in this order. **On any non-zero exit from `close_run.py`, stop and show its stderr.**
+
+1. **Load the run:**
+
+   ```bash
+   python3 sysop/scripts/close_run.py load "<run-id>" "<default branch>"
+   ```
+
+2. **Run Step 1 in full**, attended. A branch Step 1a now classifies `dirty`, or that Step 1-pre does not bring across, is SKIP as Step 2a steps 0 and 0a say.
+
+3. **Check what moved.** When the repository has an `origin`, fetch its default branch first, then check:
+
+   ```bash
+   git fetch origin "<default branch>"
+   python3 sysop/scripts/close_run.py check "<run-id>" "<default branch>"
+   ```
+
+   Act now only on these lines:
+   - `GONE <branch>: …` — drop the branch: its recorded state and questions no longer apply. Name it on Step 8's `Resumed:` row with the line's reason.
+   - `RERUN <branch>: …` or `RERUN ALL: …` — set aside that branch's recorded questions, or every branch's; item 6 re-runs those branches and asks afresh.
+   - `RERUN 3: …` — set aside the recorded Step 3c questions; item 6 re-runs Step 3c.
+
+4. **Ask the recorded questions** not set aside in item 3, except a gone or SKIP branch's, from `<DIR>/questions.md` in one pass, at most four to an `AskUserQuestion` call, each with its options verbatim. Skip any question `<DIR>/answers.md` already answers. As each answer is given, append `## Q<n>` and the option chosen to `answers.md`. A question that closes without an answer takes its `If unanswered:` line: that is a park, never an answer.
+
+5. **Apply each answer `answers.md` does not mark `applied`**, as its step prescribes: Step 2a step 3a's commit or copy, Step 2d's holds and waivers, and Step 3c's. Record a Step 3c "Already ran it manually" or "Unrunnable as specified" with Step 3c's recorder; "I'll drive the smoke" means drive it now. A drive's FAIL and could-not-finish asks, and an "Unrunnable as specified" answer's Continue-or-Stop ask, are asked live. After applying an answer, append `applied` under it.
+
+   **Every answer given live, in this item or item 6, also goes in `answers.md`:** as a line `live: <the ask> → <the option>, applied` under the `## Q<n>` it followed, or under a new `## L<n> · <step> · <branch, or close>` heading. A question that closed without an answer is not written, so a later resume asks it again.
+
+6. **Check again**, with item 3's command, and act on every line:
+   - `GONE <branch>: …` — as in item 3.
+   - `RERUN <branch>: …` — run Steps 2a to 2e for that branch, unless item 3 dropped it.
+   - `RERUN ALL: …` — run Steps 2a to 2e for every branch item 3 did not drop.
+   - `RERUN 2b: …` — run Step 2b for every target.
+   - `RERUN 3: …` — run Steps 3 and 3c. When the line names local `<default branch>`, also run Step 2b for the unpushed-main group.
+   - `NOTE: …` — report it on Step 8's `Resumed:` row.
+   - `CURRENT` — nothing moved.
+   - A branch the prepare SKIP'd as dirty or not brought across that item 2 no longer marks — run Steps 2a to 2e for it.
+
+   If anything re-ran from Step 2a or Step 2b, run Steps 3 and 3c too. Run Step 3 as well when the prepare left it not run. **A question a re-run raises that `answers.md` already answers** (the same step, branch and text, or for Step 3c the same `KEY:`) **takes that answer's outcome: never apply or drive it twice.** Ask any new question live. A re-run Step 2b's `VERDICT: BLOCKED` stops the close, as in an attended close. A branch that re-ran nothing keeps its recorded verdict, `NOTES:`, tally and report, changed only by the answers item 5 applied.
+
+7. **Run Step 3b onward as an attended close**, on the recorded and re-run state: the approved set without held, rejected, BLOCKED, SKIP and gone branches; Step 2b's `NOTES:` for `4a-fix`; Step 3c's tally for Step 8. If a Step 3c question without a `BRANCH:` line is still unanswered, halt here. Immediately before Step 3b, run:
+
+   ```bash
+   python3 sysop/scripts/close_run.py consume "<run-id>" --restore-2b
+   ```
+
+   Leave out `--restore-2b` when Step 2b ran for any target during this resume.
+
+## `--request-review` and `--land <run-id>` (`Q-411`)
+
+**Read this section only when `$ARGUMENTS` contains `--request-review` or `--land`.** `--request-review` runs alone or with `--resume <run-id>`; `--land` runs alone. Any other combination with `--dry-run`, `--prepare` or `--resume`: stop and say so. `--agent <name>` goes only with `--request-review`; any other use: stop and say so. **`--unattended` is not enabled** (`Q-411`): stop and say so, and land the hand-off attended with `--land <run-id>`. Both need `§ Merge policy: pr` (Step 4-pre reads it; read it now) and `Bash(python3 sysop/scripts/close_run.py:*)` in the allow-list the guard above read, unless `--skip-permission-guard` skipped the guard. If either is missing, stop. **On any non-zero exit from `close_run.py` not named below, stop and show its stderr.**
+
+The close is split at Step 4d. Half A (`--request-review`) opens the PR, asks the reviewer `## Second reader` names in the project's `CLAUDE.md` for a review, records what half B needs, and stops. Half B (`--land`) reads that reviewer's verdict on the recorded head and merges or parks.
+
+### Under `--request-review`
+
+1. **Before Step 1**, confirm the second reader parses:
+
+   ```bash
+   python3 sysop/scripts/close_run.py reader
+   ```
+
+   With `--agent <name>`, confirm the unattended class parses too, and report each `WARN:` line it prints:
+
+   ```bash
+   python3 sysop/scripts/close_run.py class
+   ```
+
+2. **With `--agent <name>`, select after Step 1** (under `--resume`, after its item 2). Name every branch Step 2a will consider (agent worktree branches excluded), each quoted:
+
+   ```bash
+   python3 sysop/scripts/close_run.py eligible "<default branch>" "<name>" "<branch>" "<branch>"
+   ```
+
+   Each `OUT` branch's verdict is **SKIP — outside the unattended class**, with its line as the reason, for the rest of the run, a re-run of Steps 2a to 2e included. Treat it as Step 2a step 0a's SKIP: not reviewed or merged, and left as it is, excluded from Steps 3b, 4 and 6. If no branch is `IN`, stop: there is nothing to land unattended. Report any `NOTE:` line: those commits of local `<default branch>` ride the PR, outside the class.
+
+3. **Run the close as usual through Step 4c** (or the `--resume` path through Step 4c), with one change: run Step 4c item 4's `tasks/index.yml` heredoc as `python3 - --keep-locks <<'PY'`. It prints `LOCKS_KEPT:` beside the other rows; those locks stay until half B's merge. **If half A stops anywhere after this and before `hand-off` prints `RUN:`**, report the `LOCKS_KEPT:` ids with the stop: they stay on disk until the PR merges, and are removed by hand (`sysop/runtime/locks/<ID>.lock`) once it has.
+
+4. **At Step 4d**, run the filing commit and the `pr` policy's Step 1 for your shape as written (push, print local `<default branch>`'s SHA, and `gh pr create` under the integration-branch shape). Do not run its Step 2. Take the PR number from `gh pr create`'s URL, or from the Step 4-pre probe under the PR-reuse shape, and the SHA from line 2b, then:
+
+   ```bash
+   python3 sysop/scripts/close_run.py hand-off "<default branch>" "<branch you pushed>" "<PR>" "<SHA 2b printed>"
+   ```
+
+   Add `--keep-branch` as a fifth argument when the PR-reuse note on a held doc's branch would drop `--delete-branch`. With `--agent <name>`, add `--agent "<name>"` last. **Exit 2** means nothing was recorded or requested: fix what its reason names and run `hand-off` again, or report the reason and the PR URL and stop. **Exit 1 after a `RUN:` line** means the request comment failed: go on with items 5 and 6, report it, and once `gh` works run `python3 sysop/scripts/close_run.py re-request "<run-id>" "<default branch>"`.
+
+5. **Write `<DIR>/report.md`** with your file tool: a `## Step 6` heading with one line each for `Merged:`, `Held-doc branches:`, `SKIP:`, `4a-SKIP:` (each followed by branch names, or `(none)`) and `Kept locks:` (the `LOCKS_KEPT:` ids, or `(none)`); then a `## Step 8` heading with every Step 8 row this close has produced so far, including each `## After merge` section Step 2d carried. Then:
+
+   ```bash
+   python3 sysop/scripts/close_run.py seal "<run-id>"
+   ```
+
+   Exit 1 names what `report.md` lacks: add it and run `seal` again.
+
+6. **Return the main checkout to `<default branch>`**: `git checkout <default branch>`. Do not run Steps 5 or 6. Run Step 7. Step 8 reports the PR URL, the run id, the `LAND:` line, and the rows in `report.md`, with `Locks cleaned:` reading `kept until --land: <ids>` and `Pushed:` and `Squash provenance:` reading `at --land`.
+
+### Under `--land <run-id>`
+
+Run the default-branch resolve and the permission guard above first. Do not run Steps 1 to 4c, or Step 4d before its Step 2: half A ran them. Then:
+
+1. **Read the verdict:**
+
+   ```bash
+   python3 sysop/scripts/close_run.py land-check "<run-id>" "<default branch>"
+   ```
+
+   It prints `PR:`, `BRANCH:`, `SHAPE:`, `HEAD:`, `PUSHED FROM:`, `KEEP BRANCH:`, `REPORT:`, one `READER:` line per thing it read, and a `VERDICT:`.
+   - **Exit 5, `VERDICT: WAIT`** — the reviewer has not answered and the timeout has not passed. Report the `READER:` lines and stop; run `--land` again later.
+   - **Exit 4, `VERDICT: PARK`** — nothing merges. Report the `READER:` lines and stop, leaving the PR, branches and locks in place. To go on, `git checkout "<branch>"` with `BRANCH:`'s name; if a `READER:` line says the PR's head moved, first bring that push in with `git fetch origin "<branch>"` and `git merge --ff-only "origin/<branch>"`. Commit any fix there, run `CLAUDE.md`'s `## Pre-merge verification` commands on it as `4a-post` does, push with `git push origin "<branch>"`, then `git checkout <default branch>` and run `python3 sysop/scripts/close_run.py re-request "<run-id>" "<default branch>"`; run `--land` again later. To give up instead, close the PR on GitHub and run `python3 sysop/scripts/close_run.py abandon "<run-id>"`, then report its `BRANCH:` and `LOCKS_KEPT:` lines.
+   - **Exit 0, `VERDICT: ALREADY MERGED`** — skip to Step 4d's command 6.
+   - **Exit 0, `VERDICT: MERGE`** — go on.
+
+2. **Merge, with Step 4d's Step 2 commands**, substituting `PR:`'s number for `"<PR>"` and never re-deriving it from HEAD: command 4, command 4b (and its note on a `0`), then command 5: its `gh pr view` line as written, and its merge as `gh pr merge "<PR>" --squash --delete-branch --match-head-commit "<HEAD>"`, with `HEAD:`'s SHA and without `--delete-branch` when `KEEP BRANCH: yes`. Then command 6. A state other than `MERGED` is Step 4d-1's stuck PR; recover on `BRANCH:` as item 1's park says, not by re-running `/review-close`.
+
+3. **On `MERGED`**, record the head with Step 4d's record command, then:
+
+   ```bash
+   python3 sysop/scripts/close_run.py landed "<run-id>"
+   ```
+
+   It removes the kept locks and the `AWAITING` marker, and prints `LOCKS_REMOVED:` and `LOCKS_ALREADY_ABSENT:` for Step 8's `Locks cleaned:` row.
+
+4. **Run Steps 5, 6, 7 and 8** from `report.md`: Step 6 uses its lists and `PUSHED FROM:` as the SHA Step 4d printed, and when `SHAPE:` is the integration branch deletes `BRANCH:` by that name. Step 8 is `report.md`'s rows plus this run's.
+
 ## Step 1: Gather State
 
-Run these in parallel:
+### 1-pre. Bring `--clone` claims' commits across (`Q-645`)
+
+**Run this first**, from the main checkout's top level, with `dry-run` under `--dry-run` and `apply` otherwise:
+
+```bash
+python3 - "<default branch>" "<apply or dry-run>" <<'PY'
+import os, subprocess, sys
+from pathlib import Path
+default, mode = sys.argv[1], sys.argv[2]
+if not default.strip() or default.startswith("<") or mode not in ("apply", "dry-run"):
+    print("ERROR: substitute the default branch, and apply or dry-run"); sys.exit(3)
+env = {k: v for k, v in os.environ.items()
+       if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE")}
+def git(*a, where=".", timeout=None):
+    try:
+        r = subprocess.run(["git", "-C", str(where), *a], capture_output=True, env=env, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return 124, "", f"timed out after {timeout}s"
+    return r.returncode, os.fsdecode(r.stdout).strip(), os.fsdecode(r.stderr).strip()
+def last(err, rc):
+    return (err.splitlines() or [f"exit {rc}"])[-1]
+def common(where):
+    rc, out, _ = git("rev-parse", "--git-common-dir", where=where)
+    return os.path.realpath(os.path.join(str(where), out)) if rc == 0 and out else None
+def is_top(where):
+    rc, out, _ = git("rev-parse", "--show-toplevel", where=where)
+    try:
+        return rc == 0 and bool(out) and os.path.samefile(out, where)
+    except OSError:
+        return False
+def identity(where):
+    r = subprocess.run(["bash", "-c", 'source "$GIT_LIB" && origin_identity "$CLONE_DIR"'],
+                       capture_output=True, env=dict(env, GIT_LIB=LIB, CLONE_DIR=str(where)))
+    return os.fsdecode(r.stdout).strip() if r.returncode == 0 else None
+def rev(ref, where="."):
+    rc, out, _ = git("rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}", where=where)
+    return out if rc == 0 else ""
+def holds(where, older, newer):
+    return git("merge-base", "--is-ancestor", older, newer, where=where)[0] == 0
+rc, gd, err = git("rev-parse", "--absolute-git-dir")
+ours_common = common(".")
+LIB = os.path.join("sysop", "scripts", "_git_lib.sh")
+if rc or os.path.realpath(gd) != ours_common or not Path(LIB).is_file():
+    print("ERROR: run this from the main checkout's top level"); sys.exit(3)
+repo = Path.cwd().resolve()
+our_id = identity(".")
+if not our_id:
+    print("CLONE SYNC: no origin remote, so no --clone workspace can exist"); sys.exit(0)
+PRIVATE = "refs/sysop/clone-sync/"
+for ref in git("for-each-ref", "--format=%(refname)", PRIVATE)[1].splitlines():
+    git("update-ref", "-d", ref)        # left by an interrupted run
+checked_out, cur = {}, None
+for line in git("worktree", "list", "--porcelain")[1].splitlines():
+    if line.startswith("worktree "):
+        cur = line[len("worktree "):]
+    elif line.startswith("branch refs/heads/"):
+        checked_out[line[len("branch refs/heads/"):]] = cur
+
+claimed, gone = {}, {}
+locks = repo / "sysop" / "runtime" / "locks"
+for lk in sorted(locks.glob("*.lock")) if locks.is_dir() else []:
+    if not lk.is_file():
+        continue
+    try:
+        text = lk.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        print(f"ERROR: cannot read {lk}: {exc}"); sys.exit(4)
+    f = {}
+    for line in text.splitlines():
+        k, sep, v = line.partition(":")
+        if sep and k not in f:
+            f[k] = v.strip()
+    b, w = f.get("branch") or "", f.get("workspace") or ""
+    if not b or not w or b == default:
+        continue
+    ws = (Path(w) if Path(w).is_absolute() else repo / w).resolve()
+    if ws.is_dir() and is_top(ws):
+        if common(ws) != ours_common:
+            claimed.setdefault(b, set()).add(ws)
+    elif f.get("mode", "clone") == "clone":
+        gone.setdefault(b, ws)
+
+counts = {}
+def say(word, b, where, text):
+    counts[word] = counts.get(word, 0) + 1
+    print(f"{word:<8} {b}  ({where})  — {text}", flush=True)
+
+def holders(ws, b, theirs):
+    """The clone's worktrees to read: on <b>, rebasing or bisecting <b>, or detached at or past its tip."""
+    out, cur = [], None
+    for line in git("worktree", "list", "--porcelain", where=ws)[1].splitlines() + [""]:
+        if line.startswith("worktree "):
+            cur = {"path": line[len("worktree "):]}
+        elif cur is not None and line.startswith("branch "):
+            cur["branch"] = line[len("branch "):]
+        elif cur is not None and line.startswith("HEAD "):
+            cur["head"] = line[len("HEAD "):]
+        elif not line and cur is not None:
+            w, head = cur["path"], cur.get("head", "")
+            if not os.path.isdir(w):
+                pass
+            elif cur.get("branch") == f"refs/heads/{b}":
+                out.append((w, None))
+            elif "branch" not in cur:
+                names = []
+                for n in ("rebase-merge/head-name", "rebase-apply/head-name", "BISECT_START"):
+                    try:
+                        names.append(Path(w, git("rev-parse", "--git-path", n, where=w)[1]).read_text(
+                            encoding="utf-8", errors="replace").strip())
+                    except OSError:
+                        pass
+                if f"refs/heads/{b}" in names or b in names:
+                    out.append((w, None))
+                elif head and holds(w, theirs, head):
+                    out.append((w, head if head != theirs else None))
+            cur = None
+    return out
+
+def noise(where, entry):
+    """An untracked symlink whose target this repository ignores."""
+    p = os.path.join(where, entry)
+    if not os.path.islink(p):
+        return False
+    target = os.path.normpath(os.path.join(os.path.dirname(p), os.readlink(p)))
+    return git("check-ignore", "-q", target)[0] == 0
+
+def unsettled(ws, b, theirs):
+    for w, detached in holders(ws, b, theirs):
+        busy = [n for n in ("rebase-merge", "rebase-apply", "MERGE_HEAD", "CHERRY_PICK_HEAD",
+                            "REVERT_HEAD", "BISECT_LOG", "sequencer")
+                if os.path.exists(os.path.join(w, git("rev-parse", "--git-path", n, where=w)[1]))]
+        if busy:
+            return "DIRTY", f"an operation is in progress in {w} ({busy[0]})"
+        rc, st, err = git("status", "--porcelain", where=w)
+        if rc:
+            return "REFUSED", f"git status failed in {w}: {err}"
+        st = [ln for ln in st.splitlines() if not (ln.startswith("?? ") and noise(w, ln[3:]))]
+        if st:
+            return "DIRTY", f"{len(st)} pending changes in {w}"
+        if detached:
+            return "DIRTY", f"a detached HEAD in {w} continues {b} past {theirs[:12]}"
+    return None
+
+def land(b, where, theirs, src):
+    """Fast-forward refs/heads/<b> to <theirs>, whose objects are already here."""
+    ours = rev(f"refs/heads/{b}")
+    if theirs == ours:
+        say("CURRENT", b, where, f"already at {ours[:12]}"); return
+    if ours and not holds(".", ours, theirs):
+        if src == "origin" and holds(".", theirs, ours):
+            say("CURRENT", b, where, f"this repository's {ours[:12]} already holds origin's {theirs[:12]}")
+        else:
+            say("REFUSED", b, where, f"not a fast-forward: this repository's {ours[:12]} has commits "
+                                     f"{theirs[:12]} lacks")
+        return
+    n = git("rev-list", "--count", f"{ours}..{theirs}" if ours else theirs)[1]
+    if b in checked_out:
+        say("REFUSED", b, where, f"{b} is checked out at {checked_out[b]}"); return
+    rc, _, err = git("update-ref", "-m", "review-close Step 1-pre", f"refs/heads/{b}", theirs,
+                     ours or "0" * len(theirs))
+    if rc:
+        say("REFUSED", b, where, f"{b} moved while it was read: {last(err, rc)}"); return
+    say("SYNCED", b, where, f"{ours[:12] or 'absent'} -> {theirs[:12]}, {n} commits")
+
+def from_origin(b, where, why):
+    rc, out, err = git("ls-remote", "--heads", "origin", f"refs/heads/{b}", timeout=120)
+    if rc:
+        say("REFUSED", b, where, f"{why}, and origin could not be read: {last(err, rc)}"); return
+    if not out:
+        say("GONE" if why.startswith("the clone is") else "NO BRANCH", b, where,
+            f"{why}, and origin has no {b} either"); return
+    tip, ours = out.split()[0], rev(f"refs/heads/{b}")
+    where = f"origin, because {why}"
+    if mode == "dry-run":
+        if tip == ours or (ours and git("cat-file", "-e", tip)[0] == 0 and holds(".", tip, ours)):
+            say("CURRENT", b, where, f"this repository's {ours[:12]} holds origin's {tip[:12]}")
+        else:
+            say("WOULD SYNC", b, where, f"origin's {b} is at {tip[:12]}; a dry run does not fetch, "
+                                        f"so whether it fast-forwards {ours[:12] or 'absent'} is unchecked")
+        return
+    rc, _, err = git("fetch", "--no-tags", "--no-recurse-submodules", "--quiet", "origin",
+                     f"+refs/heads/{b}:{PRIVATE}{b}", timeout=600)
+    if rc:
+        say("REFUSED", b, where, f"origin could not be fetched: {last(err, rc)}")
+    else:
+        land(b, where, rev(f"{PRIVATE}{b}"), "origin")
+    git("update-ref", "-d", f"{PRIVATE}{b}")
+
+for b in sorted(set(claimed) | set(gone)):
+    if len(claimed.get(b, ())) > 1:
+        say("REFUSED", b, ", ".join(sorted(map(str, claimed[b]))),
+            "two locks record clones for this branch"); continue
+    if b not in claimed:
+        from_origin(b, gone[b], "the clone is missing or is not a repository"); continue
+    ws = next(iter(claimed[b]))
+    if identity(ws) != our_id:
+        say("REFUSED", b, ws, "its origin is not this repository's origin"); continue
+    theirs = rev(f"refs/heads/{b}", ws)
+    if not theirs:
+        from_origin(b, ws, f"the clone has no {b}"); continue
+    why = unsettled(ws, b, theirs)
+    if why:
+        say(why[0], b, ws, why[1]); continue
+    if mode == "dry-run":
+        ours = rev(f"refs/heads/{b}")
+        if theirs == ours:
+            say("CURRENT", b, ws, f"already at {ours[:12]}")
+        elif ours and not holds(ws, ours, theirs):
+            say("REFUSED", b, ws, f"not a fast-forward: this repository's {ours[:12]} has commits "
+                                  f"{theirs[:12]} lacks")
+        else:
+            n = git("rev-list", "--count", f"{ours}..{theirs}" if ours else theirs, where=ws)[1]
+            say("WOULD SYNC", b, ws, f"{ours[:12] or 'absent'} -> {theirs[:12]}, {n} commits")
+        continue
+    rc, _, err = git("fetch", "--no-tags", "--no-recurse-submodules", "--quiet", str(ws),
+                     f"+{theirs}:{PRIVATE}{b}", timeout=600)
+    if rc:
+        say("REFUSED", b, ws, f"could not read the clone: {last(err, rc)}")
+    else:
+        land(b, ws, rev(f"{PRIVATE}{b}"), str(ws))
+    git("update-ref", "-d", f"{PRIVATE}{b}")
+
+summary = ", ".join(f"{k.lower()} {v}" for k, v in sorted(counts.items()))
+print(f"CLONE SYNC: {sum(counts.values())} line(s)" + (f" — {summary}" if summary else ""))
+PY
+```
+
+Carry every line it prints, and its `CLONE SYNC:` summary, to Step 8's `Clone sync:`.
+
+- `SYNCED` (`WOULD SYNC` under `dry-run`, which fetches nothing): this repository's `<branch>` moved, fast-forward only, to the clone's tip, or to `origin`'s when the clone or its branch is gone (the line names the source). `CURRENT`: nothing to bring across.
+- `DIRTY`, `REFUSED`, `NO BRANCH` or `GONE`: Step 2a step 0a SKIPs the branch.
+
+It reads only clones a lock records; a `--clone` claim made without `--lock` is not seen.
+
+**Exit 3**: a placeholder, or not run from the main checkout's top level; fix it and re-run. **Any other non-zero exit**: stop and report the error; each line printed before it stands.
+
+Then run these in parallel:
 - `git branch -a` — all local and remote branches
 - `git log --oneline origin/<default branch>..HEAD` — unpushed commits on main (if on main)
 - `git branch --list | grep -v <default branch>` — local feature branches
@@ -166,10 +580,9 @@ primary_claimed=$(grep -lxF "workspace: $main_root" \
 
 # Parsed with case/parameter-expansion rather than awk: a bare `$<N>` in a skill body is
 # replaced by the invocation's (N+1)th argument word before bash sees it (internal tracker #360).
-# The substitution is 0-based, so `$<2>` needs a THIRD argument word — and this skill's whole
-# argument surface is one optional word (`argument-hint: "[--dry-run]"` above), so index 2 is
-# always out of range and stays literal. The awk form was never broken here; it is avoided
-# because a wider argument surface would reach it. The site that DID substitute was Step 3c's
+# The substitution is 0-based, so `$<2>` needs a THIRD argument word, and
+# `--resume <run-id> --skip-permission-guard` supplies one, so an awk `$<2>` here would be
+# rewritten. The awk form was never broken here before that surface existed. The site that DID substitute was Step 3c's
 # `$<0>` — the first word, which `--dry-run` replaces — emptying the worktree path and silently
 # defeating the manual-smoke gate (BR ISSUE-0008).
 git worktree list --porcelain | while IFS= read -r _line; do
@@ -196,7 +609,7 @@ done | while IFS=$'\t' read -r wt_path branch; do
   fi
 
   porcelain=$(git -C "$wt_path" status --porcelain)
-  ahead=$(git log --oneline "<default branch>..$branch" 2>/dev/null | wc -l | tr -d ' ')
+  ahead=$(git log --oneline "<default branch>..$branch" --not --glob='refs/sysop/merged-pr-heads/*' 2>/dev/null | wc -l | tr -d ' ')
 
   # Downgrade non-work noise before classifying. An untracked symlink whose target
   # is gitignored in the main repo — e.g. a `.venv` symlink into the main repo's own
@@ -220,8 +633,8 @@ done | while IFS=$'\t' read -r wt_path branch; do
         # an absolute target is used as-is; a broken/out-of-repo one falls through empty
         # and is conservatively kept (classified dirty — never silently removed).
         case "$target" in
-          /*) : ;;
-          *)  target=$(cd "$wt_path/$(dirname "$entry")" 2>/dev/null && cd "$(dirname "$target")" 2>/dev/null && printf '%s/%s' "$PWD" "$(basename "$target")") ;;
+          (/*) : ;;
+          (*)  target=$(cd "$wt_path/$(dirname "$entry")" 2>/dev/null && cd "$(dirname "$target")" 2>/dev/null && printf '%s/%s' "$PWD" "$(basename "$target")") ;;
         esac
         git -C "$main_root" check-ignore -q "$target" 2>/dev/null && continue
       fi
@@ -242,7 +655,7 @@ done
 
 The three classes are:
 
-- **`clean-merged`** — tip is an ancestor of main AND `git status --porcelain` is empty. Either a never-touched claim branch or an already-merged-but-not-cleaned-up branch. Safe to remove in Step 6.
+- **`clean-merged`** — tip has no commit that main and the recorded PR heads (`refs/sysop/merged-pr-heads/*`) lack, AND `git status --porcelain` is empty. Either a never-touched claim branch or an already-merged-but-not-cleaned-up branch. Safe to remove in Step 6.
 - **`clean-ahead`** — tip has commits ahead of main AND `git status --porcelain` is empty. Normal review path; proceed to Step 2a's commit-based inspection.
 - **`dirty`** — after the symlink downgrade above, the *significant* set (`git status --porcelain` minus the downgraded lines) is still non-empty. **Paused mid-implementation work.** Step 2a will produce an automatic SKIP verdict for this branch and Step 6 must refuse to touch the worktree. Two classes of noise are already excluded so they don't false-positive into `dirty`: gitignored `sysop/runtime/locks/` and `sysop/runtime/pending-docs/` never appear in `--porcelain` without `--ignored` (this assumes the branch's checked-out `.gitignore` carries the installer's `sysop/runtime/` append — a worktree honors only *committed* ignore rules, so a branch cut before that append was committed will show `?? sysop/runtime/` until it's rebased/merged in; the installer's migration output says to commit the append before claiming); and an untracked symlink whose target is gitignored in the main repo (a `.venv`-into-the-main-venv tooling convenience) is downgraded out of the significant set (BeanRider ISSUE-0043). Everything with reviewable content — modified tracked files, real untracked files, and any symlink whose target is not provably ignored — stays significant, so the silent-data-loss guard is unweakened.
 
@@ -277,6 +690,8 @@ case "$DELETED" in ''|*[!0-9]*) DELETED=0 ;; esac
 # Consult <project>/CLAUDE.md § Key Files for the consumer-specific path if non-default.
 git status --porcelain | grep -qE '(^\?\? |^ M | M )review_tasks_archive\.md( |$)' && SIBLING_DIRTY=1 || SIBLING_DIRTY=0
 ```
+
+**Under `--dry-run`, commit nothing in this step:** report which commit below would be made, and continue.
 
 **Branch on the result:**
 
@@ -343,16 +758,201 @@ For every non-main local branch — excluding any **agent worktree branch** (a b
 
 0. **Worktree-state pre-check (Step 1a result).** If Step 1a classified this branch's worktree as `dirty`, the verdict is **SKIP — paused work present**. Do NOT inspect the diff and do NOT propose approve/reject — uncommitted worktree changes mean the branch is mid-implementation, not in a reviewable state. Report the dirty file count and the recommendation: *"`<N>` pending changes in `<worktree-path>`. Commit-as-WIP, stash, or leave alone — re-run `/review-close` after the user decides. This branch is excluded from Step 3b (worktree removal), Step 4 (merge), and Step 6 (cleanup) for this run."* Then continue to the next branch. A SKIP'd branch is distinct from both `approve` and `reject`: it is not merged, but its worktree, lock, and branch are all preserved untouched.
 
-1. `git log <default branch>..<branch> --oneline` — what commits are on it
+0a. **Clone pre-check (Step 1-pre result).** If Step 1-pre printed `DIRTY`, `REFUSED`, `NO BRANCH` or `GONE` for this branch, the verdict is **SKIP — clone not brought across**: not reviewed or merged, and its clone, lock and branch are left as they are, excluded from Steps 3b, 4 and 6. Report the line and its remedy, then continue to the next branch:
+   - `DIRTY`: commit, stash or discard in the worktree the line names, or finish the operation in progress; for a detached `HEAD` that continues `<branch>`, move those commits onto `<branch>` or check `<branch>` out there. Then re-run the close. A new commit makes a pending doc carrying `branch_tip:` stale: re-run `/document-work` in the clone first.
+   - `REFUSED` with *not a fast-forward*: decide which history to keep. To keep the source's, run `git fetch --no-tags <clone path, or origin> +refs/heads/<branch>:refs/heads/<branch>` from the main checkout; to keep this repository's, bring the clone's `<branch>` to it, or, when the line names `origin`, push it there. Then re-run the close. Any other `REFUSED`: fix the cause the line names, then re-run.
+   - `NO BRANCH` or `GONE`: neither the clone nor `origin` holds `<branch>`. If the work is elsewhere, push it to `origin`'s `<branch>` and re-run. If it reached `<default branch>` another way, or was abandoned, release the claim (`claim_task.sh --release <TASK_ID>`) and record the task's outcome by hand.
+
+   Under `--dry-run`, a branch Step 1-pre printed `WOULD SYNC` for is not reviewed: report *not reviewed: a dry run does not bring a clone's commits across*.
+
+0b. **Landed check.** Ask whether a previous close already landed this branch. Run it from the repo root, with the branch and the default branch written out:
+   ```bash
+   python3 - "<branch>" "<default branch>" <<'PY'
+   import os, subprocess, sys
+   from pathlib import Path
+   try:
+       import yaml
+   except ImportError:  # PyYAML lives only in the project venv (BeanRider ISSUE-0049)
+       import glob, os, subprocess
+       _sites = []
+       try:
+           _r = subprocess.run(
+               ["git", "rev-parse", "--git-common-dir"],
+               capture_output=True, text=True, timeout=5,
+               env={_k: _v for _k, _v in os.environ.items()
+                    if _k not in ("GIT_DIR", "GIT_WORK_TREE",
+                                  "GIT_COMMON_DIR", "GIT_INDEX_FILE")},
+           )
+           _g = _r.stdout.strip()
+       except (OSError, subprocess.SubprocessError):
+           _g = ""
+       for _root in ([os.path.dirname(os.path.abspath(_g))] if _g else []) + ["."]:
+           for _layout in (".venv", "venv"):
+               _sites += glob.glob(os.path.join(_root, _layout, "lib/python*/site-packages"))
+       sys.path[:0] = _sites
+       import yaml
+   branch, default = sys.argv[1], sys.argv[2]
+   if not branch.strip() or not default.strip() or "<" in branch + default:
+       print("UNSUBSTITUTED or empty operand — write the branch and the default branch out. STOP.")
+       sys.exit(3)
+   def git(*args, cwd=None):
+       r = subprocess.run(["git", *args], capture_output=True, cwd=cwd)
+       return r.returncode, os.fsdecode(r.stdout).strip()
+   import re
+   fm_re = re.compile(r"^\ufeff?---\n(.*?)\n---", re.DOTALL)
+   held, stamped = [], False
+   for doc in sorted(Path("sysop/runtime/pending-docs").glob("*.md")):
+       try:
+           m = fm_re.match(doc.read_text(encoding="utf-8"))
+           fm = yaml.safe_load(m.group(1)) if m else None
+       except Exception:
+           continue
+       if isinstance(fm, dict) and str(fm.get("branch") or "") == branch:
+           held.append(doc.name)
+           stamped = stamped or bool(fm.get("held_since"))
+   if not held:
+       print("NOT LANDED — no pending doc in sysop/runtime/pending-docs/ names it")
+       sys.exit(0)
+   rc, own = git("rev-parse", "--verify", "--quiet", f"refs/heads/{branch}^{{commit}}")
+   if rc != 0:
+       print(f"NOT LANDED — no local branch {branch}")
+       sys.exit(0)
+   rc, out = git("for-each-ref", "--contains", own, "--format=%(refname)",
+                 "refs/sysop/merged-pr-heads/")
+   heads = sorted(out.split(), key=lambda r: (len(r), r)) if rc == 0 else []
+   if heads:
+       containers = heads
+       via, past = f"PR #{heads[0].rsplit('/', 1)[1]}", "past every recorded head"
+   elif branch == default or git("merge-base", "--is-ancestor", own, f"refs/heads/{default}")[0]:
+       print(f"NOT LANDED — no recorded PR head contains it, and {default} does not")
+       sys.exit(0)
+   elif not stamped:
+       print(f"NOT LANDED — {default} contains it, but no doc naming it carries held_since:")
+       sys.exit(0)
+   else:
+       containers = [f"refs/heads/{default}"]
+       via, past = f"in {default}", f"past {default}"
+   def noise(where, entry):
+       """An untracked symlink whose target this repository ignores, as Step 1-pre reads it."""
+       p = os.path.join(where, entry)
+       if not os.path.islink(p):
+           return False
+       target = os.path.normpath(os.path.join(os.path.dirname(p), os.readlink(p)))
+       return git("check-ignore", "-q", target)[0] == 0
+   tips = []
+   for lk in sorted(Path("sysop/runtime/locks").glob("*.lock")):
+       if not lk.is_file():
+           continue
+       fields = {}
+       for line in lk.read_text(encoding="utf-8", errors="replace").splitlines():
+           k, sep, v = line.partition(":")
+           if sep and k not in fields:
+               fields[k] = v.strip()
+       ws = fields.get("workspace") or ""
+       if fields.get("branch") != branch or not ws or not Path(ws).is_dir():
+           continue
+       if Path(ws).resolve() == Path.cwd().resolve():
+           continue
+       rc, tip = git("rev-parse", "--verify", "--quiet", f"refs/heads/{branch}", cwd=ws)
+       if rc == 0:
+           tips.append((f"workspace {ws}", tip))
+       st = git("status", "--porcelain", cwd=ws)[1].splitlines()
+       if (git("rev-parse", "--abbrev-ref", "HEAD", cwd=ws)[1] == branch
+               and [ln for ln in st if not (ln.startswith("?? ") and noise(ws, ln[3:]))]):
+           print(f"NOT LANDED — workspace {ws} has uncommitted work on it")
+           sys.exit(0)
+   rc, out = git("ls-remote", "origin", f"refs/heads/{branch}")
+   if rc != 0:
+       print("NOT LANDED — could not read origin's copy of it (git ls-remote failed)")
+       sys.exit(0)
+   if out:
+       tips.append((f"origin/{branch}", out.split()[0]))
+   for label, tip in tips:
+       if not any(git("merge-base", "--is-ancestor", tip, c)[0] == 0 for c in containers):
+           print(f"NOT LANDED — {label} is at {tip[:12]}, {past}")
+           sys.exit(0)
+   print(f"LANDED: {via} — held doc {', '.join(held)}")
+   PY
+   ```
+   **`LANDED: PR #<N>`** means every commit on the branch was in PR #<N>, which a previous close squash-merged, and the doc that close held is still here. The verdict is **approve — landed by PR #<N>**: skip steps 1–3, and Step 2b and Step 2d do not target it. Every later step handles it as approved; Step 4a item 1 prints `REPLAY 0`, so it is not merged again. Carry it to Step 8's `Squash provenance:` line. **`LANDED: in <ref>`** means no recorded head contains the branch but its tip is already in `<ref>`, the local default branch, and a doc naming it carries `held_since:`, which Step 4c 1c writes when a close holds a doc whose branch `HEAD` already contains (`Q-646`). The verdict is **approve — landed in `<ref>`**, handled as one landed by a PR is, except that Step 4a item 1 prints `RECORDED HEAD: none` for it and its Step 8 line is `Branches:`, not `Squash provenance:`. **`NOT LANDED — <reason>`**: review it as steps 1–4 say. **Exit 3**: a placeholder; write the branch and the default branch out.
+   See `REFERENCE.md` § *A landed branch stays approved*.
+
+1. `git log <default branch>..<branch> --not --glob='refs/sysop/merged-pr-heads/*' --oneline` — what commits are on it, without the claim flips a recorded PR head already landed
 2. `git diff <default branch>...<branch> --stat` — scope of changes
 3. Read the diff. Check for correctness, security issues, and alignment with the task body — path from `tasks/index.yml`'s `body:` field for each task ID the branch claims (a claim does **not** move the body, and there is no `tasks/in_progress/` directory in any shipped layout, so it stays where it was written — normally the file `tasks/open/<TASK_ID>.md`, which `body:` records canonically as `open/<TASK_ID>.md`, relative to `tasks/` — until Step 4c's archive move). Read it **at the branch tip**, per Step 2d's revision note: a branch edits its own body, and the working tree is still `main`.
+
+   **Under `--prepare`, ask nothing in step 3a below and do not run its commit-or-copy block:** record each `IGNORED-REF:` line, and the error ask after that block, as a question (*`--prepare` and `--resume <run-id>`* above, item 2), and carry the branch on with its verdict marked `pending Q<n>`.
+
+3a. **Gitignored files the branch reads (`Q-633`).** Not for a branch Step 2a step 0b found landed. Find the branch's workspace: the path Step 1a or Step 1-pre printed for it, or, for a branch neither listed, the `workspace:` of the lock naming it (a `--branch` claim, whose workspace is the main checkout). With neither, or when that path is not a directory, there is nothing to list; say so and go on. Otherwise run from the repo root:
+   ```bash
+   python3 sysop/scripts/ignored_refs.py "<workspace>" "<default branch>" --branch "<branch>"
+   ```
+   **Exit 0**: go on. **Exit 1**: ask about each `IGNORED-REF:` line with `AskUserQuestion`, at most four to a call, showing the line. Options:
+   - `Commit it to the branch`: only when the workspace is a linked worktree. Run the block below with `commit`. When the branch's pending doc carries `branch_tip:`, the new commit makes it stale, so Step 3b's collect exits 6 and SKIPs the branch this run; Step 8 says to re-run `/document-work` on it and then the close.
+   - `Keep it ignored: copy it to the main checkout`: run the block below with `copy`. The branch merges without the file.
+   - `Not needed: merge without it`.
+   - `Reject the branch`: the verdict is **reject**, with the line as the reason. For a `--clone` workspace, add: commit it in the clone with `git add -f` (and, when its pending doc carries `branch_tip:`, re-run `/document-work` there), then re-run the close; Step 1-pre brings the commit across. For a `--branch` workspace: check out `<branch>` in the main checkout, `git add -f` and commit it, check out the default branch again, then re-run the close.
+
+   Mark `Commit it to the branch` (Recommended) when it is offered and a component of the path contains `fixture`, `testdata` or `test_data`, or is `__snapshots__`, in any case; for such a path where `Commit` is not offered, mark `Reject the branch` (Recommended); otherwise mark `Keep it ignored` (Recommended).
+
+   **A line left unanswered makes the verdict SKIP — ignored file unanswered**, whatever the workspace's shape: not merged, and its worktree, lock and branch left as step 0's SKIP leaves them. A line is unanswered when the result says the human may be away, or when the block below exits non-zero; on `REFUSED` (exit 5), ask that line again with only `Not needed` and `Reject`.
+
+   **Under `--dry-run`, do not run the block below:** report each answer and the commit or copy it would make.
+
+   ```bash
+   python3 - "<workspace>" "<path>" "<commit or copy>" <<'PY'
+   import filecmp, os, re, shutil, subprocess, sys
+   from pathlib import Path
+   ws, rel, action = sys.argv[1], sys.argv[2], sys.argv[3]
+   if (any(re.fullmatch(r"<[a-z][a-z -]*>", a) for a in (ws, rel, action))
+           or action not in ("commit", "copy")):
+       print("ERROR: placeholder not substituted"); sys.exit(3)
+   env = {k: v for k, v in os.environ.items()
+          if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE")}
+   def git(*a, where=ws):
+       r = subprocess.run(["git", "-C", where, *a], capture_output=True, text=True, env=env)
+       if r.returncode:
+           print("FAILED: git {}: {}".format(" ".join(a), r.stderr.strip())); sys.exit(4)
+       return r.stdout.strip()
+   src = Path(ws) / rel
+   try:
+       if action == "commit":
+           if src.is_symlink():
+               print("FAILED: {} is a symlink; it is not committed".format(rel)); sys.exit(4)
+           git("add", "-f", "--", rel)
+           git("commit", "-m", "fix: commit {}, which the branch reads".format(rel), "--", rel)
+           print("COMMITTED: {} at {}".format(rel, git("rev-parse", "--short", "HEAD")))
+       else:
+           here = os.getcwd()
+           if (os.path.realpath(git("rev-parse", "--absolute-git-dir", where=here))
+                   != os.path.realpath(git("rev-parse", "--git-common-dir", where=here))):
+               print("FAILED: run this from the main checkout"); sys.exit(4)
+           dst = Path(git("rev-parse", "--show-toplevel", where=here)) / rel
+           real, base = os.path.realpath(dst), os.path.realpath(ws)
+           inside = real == base or real.startswith(base + os.sep)
+           if dst.exists() and not inside and filecmp.cmp(src, dst, shallow=False):
+               print("ALREADY: {} is in the main checkout".format(rel)); sys.exit(0)
+           if os.path.lexists(dst):
+               print("REFUSED: {} exists in the main checkout and is not the same file".format(dst))
+               sys.exit(5)
+           dst.parent.mkdir(parents=True, exist_ok=True)
+           shutil.copy2(src, dst)
+           print("COPIED: {} -> {}".format(rel, dst))
+   except OSError as exc:
+       print("FAILED: {}".format(exc)); sys.exit(4)
+   PY
+   ```
+
+   Looping over the paths? Name the loop variable `entry`, never `path`: in zsh `path` is tied to `$PATH`.
+
+   **Exit 3, or any other exit**, from the check: it did not run. Ask once, showing its error: `Hold the branch` (Recommended) or `Merge without the check`. `Hold`, or an away result, makes the verdict SKIP as above. Print the error under Step 8's `Ignored references:`.
 4. Verdict: **approve** (merge to main) or **reject** (report reason, leave branch)
 
 > **Three dots on every `git diff` in Step 2 — 2a, 2b and 2d (internal tracker #241).** `git diff <default branch>..<branch>` compares the two *tips*, so everything `main` gained after the branch was cut renders as though the branch **deleted** it. That is not a rare condition: `/review-close` manufactures it, because Step 1b commits `review_tasks.md` to `main` before any branch is inspected. `git diff <default branch>...<branch>` diffs against the merge-base and shows exactly what the branch contributed. A false BLOCK costs a human round-trip; a **false APPROVE** — real hunks buried under phantom deletions — is the worse direction and gets likelier the staler the branch is. **`git log <default branch>..<branch>` keeps two dots**: for `log`, two-dot already means "commits on the branch and not on `main`," which is what step 1 wants. The rule is per-command, not a blanket search-and-replace.
 
 ### 2b. Prevention Convention Check
 
-**Targets.** One agent per **approved-or-rejected** feature branch, plus **one for the unpushed-main commits as a group** if there are any. A branch Step 2a classified **SKIP — paused work present** is *not* a target: it is not merging this run, and a `VERDICT: BLOCKED` on it would halt the close over work already declared out of scope. These calls can be parallelized — launch one agent per target simultaneously.
+**Targets.** One agent per **approved-or-rejected** feature branch, plus **one for the unpushed-main commits as a group** if there are any. A branch Step 2a classified **SKIP** (paused work present, clone not brought across, or an ignored file unanswered) is *not* a target: it is not merging this run, and a `VERDICT: BLOCKED` on it would halt the close over work already declared out of scope. Nor is a branch Step 2a approved as landed (step 0b: **landed by PR #N** or **landed in `<ref>`**). These calls can be parallelized — launch one agent per target simultaneously.
 
 Each target has a **diff basis**, used identically by step 0's predicate and step 1's retrieval:
 
@@ -702,6 +1302,8 @@ Step 2a still reads the diff either way. If every target skips, Step 2b is a cle
 
    **It carries the same `VERDICT: BLOCKED` authority, and that is an escalation stated rather than slipped in.** A security lens can now stop a close. The alternative — advisory only — was considered and refused: a gate that reports a routed security violation and merges anyway is the state this entry was filed about, one report louder. Step 4 already treats *any* `BLOCKED` as a stop, so no new disposition is needed; what is new is which agents can raise one.
 
+   **Under `--prepare`, a `VERDICT: BLOCKED` in item 4 below stops only its branch, and on the unpushed-main group halts the prepare** (*`--prepare` and `--resume <run-id>`* above, item 3).
+
 4. Collect all verdicts **and every `NOTES:` line**, **from both fleets**. Keep the notes with their target: Step 4 `4a-fix` acts on them once the approved branches have merged, and a note on a target that does not merge this run is reported, not acted on. If **any** subagent returns `VERDICT: BLOCKED`, list every violation with its file:line citation and **stop** — do not proceed to Step 3 until violations are fixed or explicitly waived by the user. A target skipped at step 0 has **no verdict** — report it as `skipped (doc-only)`, never as `APPROVED`; an agent that was never spawned has approved nothing. **The same rule binds step 3b's gate**: a target with no security-map glob match has no security verdict, and reporting it as approved would claim a review that never ran.
 
 5. **Record outcomes for Step 8.** Tally `<N checked, N skipped (doc-only)>` for the `Conventions:` line, and `<N checked, N skipped (no map match)>` for the `Security map:` line, in the final report. **Two tallies, because they answer different questions and one number cannot carry both** — a close where every target skipped the security twin and every target passed the convention check would otherwise read identically to one where both ran. Without them a skip is invisible in the artifact the human reads, the same gap Step 2d's `N doc-only` tally closes for test decisions.
@@ -772,7 +1374,7 @@ See `REFERENCE.md` § *Step 2d — provenance*.
 
 This is the sibling of Step 3c's manual-smoke gate — a per-task body convention, enforced here and nowhere else since Phase 234 — and reuses the same shape: a deterministic classification (like Step 1a's worktree verdict) plus an `AskUserQuestion` halt on mismatch (like Step 3c).
 
-For each **approved** feature branch (Step 2a verdict), for each task ID it claims (path resolved exactly as in Step 2a step 3 — `tasks/index.yml`'s `body:` per claimed ID):
+For each **approved** feature branch (Step 2a verdict) except one approved as landed (Step 2a step 0b), for each task ID it claims (path resolved exactly as in Step 2a step 3 — `tasks/index.yml`'s `body:` per claimed ID):
 
 > **Read the record at the branch tip — not out of the working tree.** Both writing paths *decide* the test decision at plan time, and on both the **executor writes it into the body during implementation, inside the worktree** — `/claim-task` at Step 7e Sequence item 3, `/auto-build` at Step 7c Sequence item 3‑record — so the section is committed on the feature branch and nowhere else. Step 2d runs at Step 2; nothing merges until Step 3b/4a. `HEAD` is still `main`, so the working tree's copy of the body is whatever `main` has — and for a task claimed this cycle that copy carries **no test-decision heading at all**, because every shipped body-author is told not to write one (`intake/SKILL.md:111`, `add-task/SKILL.md:64`, `onboard/SKILL.md:95`; the schema's placeholder is a template, not something a real body normally holds). Reading *that* copy therefore classifies the record `missing` for every task on every branch on every run, and each `missing` fires the halt below. **Nothing spares one** — step 0's doc-only skip does not, because a `missing` classification is not the `no-test` its second conjunct requires, so a doc-only branch halts here too. A gate that only ever reports the state of a revision it is not gating. Resolve the *path* from `main`'s `tasks/index.yml` — correct, because a claim does not move the body and Step 4c's archive move runs after this step — and read the *content* from the revision under review:
 >
@@ -798,6 +1400,8 @@ For each **approved** feature branch (Step 2a verdict), for each task ID it clai
 > ```
 >
 > **Getting that prefix wrong is not a cosmetic slip** — it produces `fatal: path … does not exist`, which is exactly the `unreadable` signature below, so a mis-resolved path halts the close wearing a diagnosis that blames the branch. Check the recorded `body:` value before concluding anything from **that** fatal — and read the signature first, because the advice is wrong for the others: `ambiguous argument` and `invalid object name` **cannot** be produced by a prefix mistake, so re-checking `body:` there sends you looking in the one place the fault is not. This is the object-database read Step 2b's prompt already prescribes, and it is the same revision `git diff <default branch>...<branch>` reports — both halves of this gate must come from one revision, or the comparison is between two different trees. `WORKFLOW_GUIDE.md` § Merge Process already says to read "**the branch's** `## Test decision`" back against the diff, so the branch-tip read restores the spec rather than inventing a rule; `WORKFLOW.md` § 2.8 ("each approved branch's task body") scopes *whose* body rather than *which revision*, so it is consistent with that reading without compelling it.
+
+**Under `--prepare`, ask nothing in item 3 below:** record each discrepancy as a question (*`--prepare` and `--resume <run-id>`* above, item 2), and carry the branch on with its verdict marked `pending Q<n>`.
 
 **0. Per-branch doc-only skip.** If this branch's diff (`git diff <default branch>...<branch>` — three dots, per Step 2a's note) touches no code files (the same code-file set Step 3 uses — `.py` / `.ts` / `.tsx` / `.js` / `.jsx` / `.sql` / `.sh` / `.kt` / `.swift` / `.go` / `.rs`), **and** *that task's* recorded decision is a `no-test`, skip verification for it with a one-line note (`2d: <branch>/<task id> — doc-only diff, no-test record`). **The two conjuncts have different granularity, and the skip takes the narrower one.** The diff test is per *branch*; the record is per *task*, and this gate iterates the tasks a branch claims. So a doc-only branch claiming two tasks skips only the task whose record is a `no-test` — the other is verified, which is the point: a record naming a test must not be silenced because a sibling task's record said none was needed. **Resolve step 1's read before deciding this** — the second conjunct is a fact about the record, so the classification has to exist before the skip can be evaluated, and reading it is one `git show` this gate runs either way. What this skip saves is step 2's verification, not the read; a step 0 that fired before the record was classified would be deciding on the extension test alone, which is the defect. An `unreadable` or `missing` classification is **not** a `no-test` and does not earn the skip — those have their own arms below. **A record that names a test is verified whatever the extensions say** — checking that the named test is present costs one read and is exactly as meaningful on a semgrep rule or a `checks.yml` entry as on a `.py` file. The extension test cannot carry this skip alone, because it calls semgrep rules, `checks.yml`, CI workflows and served-model config documentation, and a branch changes behaviour through any of them; Sysop's own `coverage-*` `blocking: true` flip (Phase 61b) had that shape. Step 2b's skip carries a second conjunct too — a different predicate (no rule in `## Prevention Conventions`, in a sibling CLAUDE.md section, or in either convention map governs the touched types), the same reason: the extension test is evidence about file names, and neither gate is about file names.
 
@@ -847,7 +1451,7 @@ ls "$(git rev-parse --git-common-dir)/../sysop/runtime/locks/<TASK_ID>.lock" >/d
 ```
 
 - **Lock present → the record was owed.** Do **not** offer *record not owed* for this task. `/claim-task` Step 7e writes the record and re-reads its own write in the worktree before committing, and the orchestrator then re-checks the same fact **at the branch tip** at Step 8 — the revision this gate reads. (Two different reads: 7e greps the worktree copy, Step 8 reads the branch. Attributing the branch-tip read to 7e, as the first draft of this sentence did, would tell a reader the worktree grep already proves what only the Step 8 arm proves.) So a missing record here is a real miss, not an unowed one, and waiving it as *not owed* would launder exactly the failure that read-back exists to surface.
-- **Lock absent → cannot tell, and that is the honest answer.** `sysop/runtime/` is gitignored, so a fresh clone, a rebuilt worktree or a `--resume` after a break all legitimately carry nothing; a non-Claude harness never wrote one; and the branch may not come from `/claim-task` at all. Offer all four options and let the human decide. **Never render absence as "the orchestrator did not run"** — this is the same three-valued rule Step 2e states in full, for the same reason.
+- **Lock absent → cannot tell, and that is the honest answer.** `sysop/runtime/` is gitignored, so a fresh clone, a rebuilt worktree or a `/claim-task --resume` after a break all legitimately carry nothing; a non-Claude harness never wrote one; and the branch may not come from `/claim-task` at all. Offer all four options and let the human decide. **Never render absence as "the orchestrator did not run"** — this is the same three-valued rule Step 2e states in full, for the same reason.
 
 > **Why the lock and not the run directory, stated as the argument it actually is.** A *retrospective* survey cannot settle this, and an earlier version of this note claimed it had. Over 476 archived tasks in a live consumer, run-directory presence looks like a strong signal (29/29 carried the record against a 15% base rate); it is confounded (all 29 closed in one month whose base rate was already 71%) and it is useless retrospectively, because every one of the 378 tasks missing a record is in the run-directory-absent bucket. **But the same test is worse for the lock, not better**: Step 4c removes both, and among those 476 tasks **0 locks survive against 29 run directories**. So the corpus disqualifies run directories as a *retrospective* proxy — which is all `Q-368`'s retraction ever claimed — and says nothing about either artifact at gate time, where neither has been reaped yet.
 >
@@ -858,7 +1462,7 @@ See `REFERENCE.md` § *Step 2d — provenance*.
 
 **This arm runs for every claimed task on every approved branch, including a task item 0 skipped.** It is inside Step 2d's loop, so its reach is that loop's: a branch claiming no roadmap task id — a review-batch branch, which holds a `BATCH-<N>.lock` rather than a `tasks/index.yml` claim, or a hand-cut branch — never enters it and is not covered here. Said plainly rather than left implied, because an earlier draft of this sentence claimed *every branch* and Step 2d cannot deliver that. Item 0's doc-only skip is scoped to *test-decision verification* — it exists because a docs branch carrying a `no test because Z` needs no test hunt. Carrying that skip across to this arm would silence it on precisely the branches most likely to trip it: a doc correction is the archetypal in-branch fix, so doc-only branches are where `## Also fixed` is *most* expected, not least. If item 0 skipped this branch, read the body anyway for this arm alone.
 
-Once the body is in hand, this arm re-reads nothing. Find **every** section under a heading matching `also\s+fixed` (case-insensitive) — a **search, not an equality test**: `## Also fixed (PR 1)` is a real heading in a live consumer corpus and must match. **Two sections in one body is a reachable shape, so do not stop at the first match.** Each section ends at the next heading of the **same or shallower** depth, so a `#### ` sub-heading inside one belongs to it rather than terminating it. **Count three things as headings, because two of them are easy to miss and both fail in the over-counting direction**: an ATX heading indented by up to three spaces is still a heading (four or more is a code block), and a **setext** heading — a line of text underlined by `===` (depth 1) or `---` (depth 2) — is one too. A terminator model anchored to a column-0 `#` sees neither, so the section over-runs into the next one and the tally reports its entries as well. The error a first-match reader makes is an **undercount**, and that is the damaging direction. **Skip fenced content when you look** — a plan that discusses this very rule will quote the heading, and a fence-blind reader then reports check-1 findings against paths the branch legitimately never touched, a fabricated finding, which is the worst outcome this skill has. A fence opens on ``` or `~~~` and closes on a marker using the **same character**, **at least as long** as the opener, **and carrying no info string** — take only headings outside one. **Stated here in full rather than by reference to another skill**, because a rule held only by pointing at another skill's code moves when that code does. All of `/claim-task`'s walkers now delegate the closer decision to one `fence_closes` predicate per block, cited at two lines that cannot be swapped for one another — `claim-task/SKILL.md:1420` and `claim-task/SKILL.md:2023`; an opener may carry an info string, a closer may not.
+Once the body is in hand, this arm re-reads nothing. Find **every** section under a heading matching `also\s+fixed` (case-insensitive) — a **search, not an equality test**: `## Also fixed (PR 1)` is a real heading in a live consumer corpus and must match. **Two sections in one body is a reachable shape, so do not stop at the first match.** Each section ends at the next heading of the **same or shallower** depth, so a `#### ` sub-heading inside one belongs to it rather than terminating it. **Count three things as headings, because two of them are easy to miss and both fail in the over-counting direction**: an ATX heading indented by up to three spaces is still a heading (four or more is a code block), and a **setext** heading — a line of text underlined by `===` (depth 1) or `---` (depth 2) — is one too. A terminator model anchored to a column-0 `#` sees neither, so the section over-runs into the next one and the tally reports its entries as well. The error a first-match reader makes is an **undercount**, and that is the damaging direction. **Skip fenced content when you look** — a plan that discusses this very rule will quote the heading, and a fence-blind reader then reports check-1 findings against paths the branch legitimately never touched, a fabricated finding, which is the worst outcome this skill has. A fence opens on ``` or `~~~` and closes on a marker using the **same character**, **at least as long** as the opener, **and carrying no info string** — take only headings outside one. **Stated here in full rather than by reference to another skill**, because a rule held only by pointing at another skill's code moves when that code does. All of `/claim-task`'s walkers now delegate the closer decision to one `fence_closes` predicate per block, cited at two lines that cannot be swapped for one another — `claim-task/SKILL.md:1422` and `claim-task/SKILL.md:2025`; an opener may carry an info string, a closer may not.
 See `REFERENCE.md` § *Step 2d — provenance*.
 
 **Why the info-string clause is load-bearing.** A ```` ```json ```` line *inside* a ```` ``` ```` fence is content, not a closer — a reader that accepts it as one believes it has left the fence while it is still inside, and then reads the fence's remaining lines as real sections, the fabricated-finding outcome this paragraph exists to prevent.
@@ -868,13 +1472,15 @@ See `REFERENCE.md` § *Step 2d — provenance*.
 
 - **No section anywhere → done. Absence is never a finding here**, and this arm never halts on it. The section is optional by design (`tasks/schema.md` § *Also fixed*): most branches carry no adjacent fix, and a branch that fixed nothing extra is the normal case, not an omission. This is the opposite of the test-decision arm above, where `missing` *is* the finding — do not carry the halt across.
 - **One or more sections → check three things**, all against `git diff --name-only <default branch>...<branch>` (three dots, per Step 2a's note), which you already have. **Run all three over each section you found and report the union** — a finding in the second section is a finding, and the numbers item 4 asks for are sums across the sections rather than the first one's:
-  1. **Every path a line names is in the diff.** A line naming a path the branch does not touch is a record of something that did not happen — a fabricated or copy-pasted entry — and the human reads the record. **Know this check's reach before you rely on it:** it compares against the *whole* branch diff, so it catches a line naming a file the branch never touched and nothing narrower. A fabricated line naming a file the task itself changed passes it trivially. That is a real bound, not a quibble — the check is a cheap screen against copy-paste, not a proof the fix happened. The `answers:` path in an approval suffix is not a path the line names: it is a gitignored run artifact that is never in the diff, and check 2 reads it. A path inside the quoted question still is.
+  1. **A line that names paths names at least one in the diff** (`Q-630`). A line whose named paths are **all** outside the diff is a record of something that did not happen — a fabricated or copy-pasted entry — and the human reads the record: that is a finding. A line with **at least one** path in the diff may name others outside it, which is how a fix cites where the defect showed (its call sites, a reproduction): report each outside path as a note, `also-fixed note — <TASK-ID>: <path> named, not in the diff`, carry it to Step 8, and **do not halt on it**. A line naming no path at all is outside this check. **Know this check's reach before you rely on it:** it compares against the *whole* branch diff, so it catches a line none of whose paths the branch touched and nothing narrower. A fabricated line naming a file the task itself changed passes it trivially. That is a real bound, not a quibble — the check is a cheap screen against copy-paste, not a proof the fix happened. The `answers:` path in an approval suffix is not a path the line names: it is a gitignored run artifact that is never in the diff, and check 2 reads it. A path inside the quoted question still is.
   2. **No line concerns a never-list item without a recorded approval.** Migrations, auth or payment logic, or anything that writes to production. These are fixed in-branch only on the human's answer, and the line then ends `(approved: <YYYY-MM-DD>, "<the question as asked>")`. A line concerning one without that suffix means the rule was exceeded, whether or not the fix itself is correct. `/claim-task`'s answers run writes the suffix with `, answers: <path>` before the closing parenthesis: open that path in the main checkout, and if it exists and neither it nor an archived `answers.<n>.md` beside it records the line's question with `decision: fix`, that is a finding. An absent file, reaped by an earlier close or on another machine, is a note and not a finding.
   3. **The fixes are reviewable here.** The rule admits fixes of any size and in any module, as long as this close can read them. **Judge the summed set**, never each section's alone: the bound is per *branch*, so two sections that are each readable can still add up to a branch that is not. A branch whose fixes you cannot review properly in this close is a finding, even when each fix looks right.
 
 **Judge checks 2 and 3 against today's rule.** Every earlier bound was narrower, with a longer never-list and a size limit, so a section written under one cannot fail them. A pre-Phase-323 section that breached its own older bound, such as a fix to a prompt body, passes today by that decision.
 
 A finding on any of the three joins item 3's halt with the reason `also-fixed record — <detail>`, and takes the same four dispositions. **Prefer "Hold for fix" over "Waive" on check 1 specifically**: a false line in the record is cheap to delete and expensive to leave, because every later reader treats it as evidence the fix was reviewed.
+
+**2‑after. The `## After merge` read (`Q-313`).** From the same body, take every section whose heading text **begins** with `(?:after|post)[\s-]+merg(?:e|ing)` (case-insensitive), so `## After merge`, `## After-merge steps` and `## Post-merge steps` all match and `## Rollback if staging breaks after merging` does not. Find and bound each section exactly as the `2‑also` arm finds its sections, fences skipped. It has the same reach: claimed tasks on approved branches, including a task item 0 skipped. Check nothing and halt on nothing. Absence is the normal case. Carry each section verbatim, with its task ID and branch, to Step 8's `After merge:` line. A branch Step 2a approved as landed is not read.
 
 **3. On a clean match, pass silently** (carry a `verified` note for Step 8). **On any discrepancy, missing record, or unreadable body, halt and ask** via `AskUserQuestion` (one task at a time, mirroring Step 3c). Present the recorded decision text verbatim, the task ID, **the revision you read it from**, what the diff shows, and **the ownership-probe verdict**. Options (single-select) — three always, plus a fourth only when the ownership probe said `CANNOT TELL`:
 
@@ -885,7 +1491,7 @@ A finding on any of the three joins item 3's halt with the reason `also-fixed re
 
 Waivers, "record holds" and "record not owed" do not block. Only "hold for fix" changes the verdict, and it does so by reusing the existing **reject** disposition — no edits to Steps 3b/4/6 are needed.
 
-**4. Record outcomes for Step 8.** Tally per task: `verified`, `waived`, `not owed`, `held for fix` (now rejected), `unreadable`, or `skipped (doc-only)`. Tally the `## Also fixed` arm separately into its **own `Also fixed:` line** in the Step 8 report — `<N branches carrying a section, N lines total, N findings>` — never folded into the `Test decisions:` line, whose six fields answer a different question. **`N lines total` sums every section found, and a branch carrying two sections still counts once in the first field.** **A line is a list ITEM, not a physical line**. Count an item for each list marker at the section's top level — `-`, `*`, `+`, or `1.` — and **do not count its continuation lines or its nested sub-items**, which belong to the entry above them. A section that **records no entries** contributes **zero** — so do not read the rule as requiring a `_(none)_` marker to be the section's whole content; it is the absence of list items that makes the count zero. This drives the "Test decisions" line in the final report. **`waived` and `not owed` are counted separately and must not be merged back into one number** — that conflation is the whole reason the fourth disposition exists.
+**4. Record outcomes for Step 8.** Tally per task: `verified`, `waived`, `not owed`, `held for fix` (now rejected), `unreadable`, or `skipped (doc-only)`. Tally the `## Also fixed` arm separately into its **own `Also fixed:` line** in the Step 8 report — `<N branches carrying a section, N lines total, N findings, N notes>` — never folded into the `Test decisions:` line, whose six fields answer a different question. **`N lines total` sums every section found, and a branch carrying two sections still counts once in the first field.** **A line is a list ITEM, not a physical line**. Count an item for each list marker at the section's top level — `-`, `*`, `+`, or `1.` — and **do not count its continuation lines or its nested sub-items**, which belong to the entry above them. A section that **records no entries** contributes **zero** — so do not read the rule as requiring a `_(none)_` marker to be the section's whole content; it is the absence of list items that makes the count zero. This drives the "Test decisions" line in the final report. **`waived` and `not owed` are counted separately and must not be merged back into one number** — that conflation is the whole reason the fourth disposition exists.
 See `REFERENCE.md` § *Step 2d — provenance*.
 
 If the approved-branch set is empty (only unpushed main commits this cycle), Step 2d is a no-op — unpushed main commits don't carry `/claim-task` test-decision records. Skip cleanly.
@@ -900,7 +1506,7 @@ If the approved-branch set is empty (only unpushed main commits this cycle), Ste
 
 > **Report unknown. Never report "did not run".** Absence of these files is **not** evidence that the pipeline was skipped, and a report that says otherwise accuses honest consumers:
 >
-> - `sysop/runtime/` is **gitignored**, so a fresh clone, a rebuilt worktree and a `--resume` after an overnight break all legitimately carry nothing.
+> - `sysop/runtime/` is **gitignored**, so a fresh clone, a rebuilt worktree and a `/claim-task --resume` after an overnight break all legitimately carry nothing.
 > - The envelope is written by the `SubagentStop` hook, which is **Claude Code only** — a Codex or other-harness consumer never produces one, however correctly the claim ran.
 > - A branch may not come from `/claim-task` at all (a hotfix, an `--adopt`, a hand-cut branch).
 >
@@ -972,9 +1578,10 @@ NAMES = ["plan.md", "planner-integrity.md", "review.md",
 
 
 def verdict_of(path):
-    """Parse the FENCED body. Step 7c writes `json.dumps(...)` inside a yaml
-    fence, so the line on disk is `  "verdict": "PROCEED"` — a scan for a line
-    beginning `verdict:` matches nothing the shipped writer produces."""
+    """Parse the FENCED body first. `/claim-task` Step 7c writes `json.dumps(...)`
+    inside a yaml fence, so its line on disk is `  "verdict": "PROCEED"`. The
+    line fallback reads that line too, and `/auto-build` Phase 6d's unfenced
+    one, whose one two-word verdict is `ALL FIXABLE`."""
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
@@ -992,9 +1599,9 @@ def verdict_of(path):
                 return doc["verdict"].strip()
         except Exception:
             pass
-    m = re.search(r'^[\s>*_-]*"?verdict"?:[\s*_"]*([A-Za-z_]+)',
+    m = re.search(r'^[\s>*_-]*"?verdict"?:[\s*_"]*([A-Za-z_]+(?:[ \t]+FIXABLE\b)?)',
                   text, re.MULTILINE | re.IGNORECASE)
-    return m.group(1) if m else ""
+    return " ".join(m.group(1).split()) if m else ""
 
 
 for branch in branches:
@@ -1132,6 +1739,8 @@ Now discover the project's verification commands. Resolve in this order — stop
 
 If any command fails, report the failure and **stop**. Do not push with failing checks. Stopping *here* is free — nothing has been merged, no worktree has been removed, no lock has been dropped — so fix the failure and re-run `/review-close` from the top. (`4a-post` has a stop of its own, and it is not free in the same way; its recovery is stated there per policy.)
 
+**Under `--prepare`:** a failing command halts the prepare (*`--prepare` and `--resume <run-id>`* above, item 4). Item 5's ask and a silently denied command leave Step 3 not run, with the reason in the run directory, and the resume runs it (*`--prepare` and `--resume <run-id>`* above, item 2).
+
 **Venv-aware invocation** (the consumer's own tooling — **not** `sysop/scripts/*.py`, which resolve venv PyYAML themselves and are always invoked with a bare `python3`; see WORKFLOW.md § 6.1). If a verification command fails with `exit 127` (command not found) or `ModuleNotFoundError` and the project has a `.venv/` directory at the repo root, re-run with `.venv/bin/<cmd>` (for explicit binaries like `.venv/bin/pytest`) or `PATH=.venv/bin:$PATH <cmd>` (for shell pipelines or tools that re-exec). Same pattern as Step 4d's pre-push hook venv prefix. The canonical fix is consumer-side — the project's `<project>/CLAUDE.md § Pre-merge verification` commands should be authored with `.venv/bin/` prefixes when they depend on venv-installed tools (see WORKFLOW.md § 6.1 venv-aware-invocation paragraph) — but the prefix-on-rerun pattern unblocks the cycle when the consumer's command list hasn't been venv-ified yet.
 
 **Boy-scout escalation (ratchet consequence).** A `### Ratchet` snippet invokes the project's lint/typecheck tool against the changed-file list, so if a file in the diff carries pre-existing findings — warnings or type errors not introduced in this review pass — the tool will report them and the gate will fail. That's intentional and not a Sysop-side rule: touching a file means cleaning it. Full-tree backlog cleanups stay as separate project-side tasks (e.g. `TECH-LINT-BACKLOG-FIX`, `TECH-TYPECHECK-BACKLOG-FIX` entries in `tasks/index.yml`), so the ratchet doesn't impose a clean-everything-first dependency on consumers with existing backlogs.
@@ -1142,13 +1751,15 @@ If any command fails, report the failure and **stop**. Do not push with failing 
 
 ## Step 3c: Manual Smoke Gate (BeanRider ISSUE-0008, Phase 35)
 
-Some features can't be verified by automated checks — UI flows that need a browser, commands with external side effects, LLM round-trips whose output a human must eyeball. The contract: a task in `tasks/index.yml` may carry `manual_smoke: true`, and/or a `sysop/runtime/pending-docs/*.md` body may contain a heading matching `manual smoke` / `smoke required` (case-insensitive). Either signal halts this step until the human runs, confirms or waives the procedure, or finds it unrunnable as specified.
+Some features can't be verified by automated checks — UI flows that need a browser, commands with external side effects, LLM round-trips whose output a human must eyeball. The contract: a task in `tasks/index.yml` may carry `manual_smoke: true`, and a `sysop/runtime/pending-docs/*.md` body, or the body of a task an approved branch links, may contain a procedure heading (`manual smoke`, `operator action`, `before merge` and the rest of step 1's set, case-insensitive). Any signal halts this step until the human runs, confirms or waives the procedure, or finds it unrunnable as specified.
 
 **Run step 1's detection first, on every cycle, and let it decide.** A `manual_smoke: true` task or a `smoke required` heading is a human saying *ask me*, and no diff-shape test can see one: the extension list cannot tell a docs commit from a task implemented in a `docker-compose.yml`, a feature-flag `.json`, a k8s manifest or a `.env.example`, all doc-only by that list. So — **no signal → proceed to Step 3b; any signal → run the gate, whatever the diff's extensions say.**
 
 **Skip Step 3c only when the whole *run* is doc-only — not when Step 3's pre-merge pass was.** Those are different claims, and keying the smoke gate to the second would disable it on nearly every cycle: Step 3's list is main's local-only commits, which are the claim flips and the `review_tasks.md` save, so it doc-only-skips while the approved branches carry real code. **With detection first, that rule is residual rather than operative** — a run with no signal has nothing to skip, and a run with one is not entitled to — so do not compute per-branch diffs to evaluate it. It stays stated because the coupling it forbids is the regression this step nearly shipped, not because it decides anything. A smoke gate over a change nobody flagged is incoherent — but this is the gate whose miss is a human never being asked, so the doc-only test must never overrule an explicit ask.
 
-**The cost, stated rather than discovered:** detection now runs on cycles that previously skipped it, so step 1's heredoc executes on a docs-only close too. That is the trade — one read, against a human never being asked — and it is why the heredoc's failure modes are loud: an unsubstituted `APPROVED_BRANCHES` exits 3 and an unreachable PyYAML exits 2, both stopping the close rather than reporting no signal. PyYAML is a declared hard dependency (Phase 136), so the second is a broken install surfacing, not a new requirement.
+**The cost, stated rather than discovered:** detection now runs on cycles that used to skip it, so step 1's heredoc runs on a docs-only close too. That is the trade — a fetch and reads, against a human never being asked — and it is why the heredoc's failure modes are loud: an unsubstituted `APPROVED_BRANCHES` exits 3 and an unreachable PyYAML exits 2, both stopping the close instead of reporting no signal. PyYAML is a declared hard dependency (Phase 136), so the second is a broken install surfacing, not a new requirement.
+
+**Under `--prepare`, run step 1 as written and ask nothing from step 2 on:** record each signal as a question (*`--prepare` and `--resume <run-id>`* above, item 2), record nothing with the recorder, drive nothing, and go to the prepare's `finish` (item 6).
 
 **1. Detect signals.** The gate reads pending-docs from **main's `sysop/runtime/pending-docs/` and each approved branch's worktree** — a `/claim-task` worktree authors its pending-doc there, and it is not copied to main until Step 3b (merge time). Reading the worktrees *in place* keeps the gate honest without collecting docs early: collecting before the merge would widen the window in which main's `sysop/runtime/pending-docs/` holds a doc for work that did not land, and a branch SKIP'd at Step 3b (worktree remove-refusal, ISSUE-0016) or a whole-run halt could then leave a stray doc that a later Step 4c consolidates for unmerged work, marking its task `done` with the code never merged (BeanRider ISSUE-0050). **The old form of this sentence claimed an invariant that no longer holds and never fully did** — it read *"everything in main's `sysop/runtime/pending-docs/` belongs to a just-merged branch"*, which its own next clause then contradicted by naming two ways a stray doc gets there. Step 4c step 1b now **enforces** what this sentence used to assert, by testing each doc's branch against the merge target rather than trusting its presence; so the directory may legitimately hold a held-back doc between runs, and nothing downstream may assume otherwise. List this run's approved branches (the same set Step 3b merges), then run the heredoc from the repo root. Its first line is either `NO_SMOKE_REQUIRED` (proceed to Step 3b) or `SMOKE_REQUIRED: N signal(s)`, with one `---SIGNAL---` block per signal after any info lines:
 
@@ -1184,8 +1795,8 @@ while IFS= read -r _b; do
   # was enough to break this and print NO_SMOKE_REQUIRED over an unscanned worktree
   # (internal tracker #360). Parameter expansion has no such collision.
   # The `case` reads from a HEREDOC, not from a pipe inside `$( )`. bash 3.2 — which is
-  # what stock macOS ships as /bin/bash — cannot parse a `case` nested inside a
-  # `while` inside command substitution: it dies with `syntax error near unexpected token
+  # what stock macOS ships as /bin/bash — reads a bare `case` pattern's `)` inside
+  # command substitution as its close (`(pat)` parses): it dies with `syntax error near unexpected token
   # ';;'` at parse time, so the whole Step 3c block never runs and the gate is never
   # reached. Found by executing this preamble under /bin/bash while building the Step 3b
   # sibling below (Phase 218). The heredoc form parses on 3.2 and also keeps the loop in
@@ -1210,7 +1821,7 @@ BR_LIST
 # the repo root is CWD (this heredoc runs from the repo root; the venv bootstrap no
 # longer depends on that — it resolves the main checkout via `git rev-parse
 # --git-common-dir` and falls back to CWD), so the command line carries no env prefix.
-python3 - "$SMOKE_WORKTREE_DIRS" "$APPROVED_BRANCHES" <<'EOF'
+python3 - "$SMOKE_WORKTREE_DIRS" "$APPROVED_BRANCHES" "<default branch>" <<'EOF'
 import hashlib, os, re, subprocess, sys
 from pathlib import Path
 try:
@@ -1243,12 +1854,18 @@ repo = Path.cwd().resolve()
 main_pd = repo / "sysop/runtime/pending-docs"
 _GIT_ENV = {_k: _v for _k, _v in os.environ.items()
             if _k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE")}
+_GIT_ENV["GIT_TERMINAL_PROMPT"] = "0"
+default_branch = (sys.argv[3] if len(sys.argv) > 3 else "").strip()
+if not default_branch or "<" in default_branch:
+    print("ERROR: pass the name `bash sysop/scripts/default_branch.sh` printed as the third "
+          "argument, then re-run Step 3c", file=sys.stderr)
+    sys.exit(3)
 
-def git(*args):
+def git(*args, timeout=15):
     """(returncode, stdout, first stderr line). Never raises: the gate runs before the merge."""
     try:
         r = subprocess.run(["git"] + list(args), cwd=str(repo), capture_output=True,
-                           text=True, timeout=15, env=_GIT_ENV)
+                           text=True, timeout=timeout, env=_GIT_ENV)
     except (OSError, subprocess.SubprocessError, UnicodeDecodeError) as e:
         return 1, "", str(e)
     return r.returncode, r.stdout, (r.stderr.strip().splitlines() or [""])[0]
@@ -1347,7 +1964,7 @@ search_dirs.append(repo / "sysop/runtime/pending-docs")
 # earlier form also claimed POST-merge timing, which nothing in the tree supports).
 # A step that must precede the MERGE is `manual_smoke:`, detected by sources 2 and 3.
 heading_re = re.compile(
-    r'^(#{1,6})\s+.*('
+    r'^ {0,3}(#{1,6})[ \t]+.*('
     r'manual\s+smoke'
     r'|smoke\s+(?:required|test)'
     r'|manual\s+(?:verification|verify|test|check|step)'
@@ -1361,11 +1978,31 @@ heading_re = re.compile(
 )
 fm_re = re.compile('^\\ufeff?---\\n(.*?)\\n---', re.DOTALL)   # a BOM must not hide the frontmatter
 
+_fence_line = re.compile(r'^(\s*)(`{3,}|~{3,})(.*)$')
+
+def unfenced(text):
+    """`text` with every line of each closed fence blanked to spaces; offsets still index `text`.
+    Used only to find where a section ends. A fence still open at the end of the file fences nothing."""
+    lines = text.split("\n")
+    out, opener, start = list(lines), None, 0
+    for i, line in enumerate(lines):
+        m = _fence_line.match(line.rstrip("\r"))
+        if opener is None:
+            if m and not (m.group(2)[0] == "`" and "`" in m.group(3)):
+                opener, start = m.group(2), i
+        elif (m and m.group(2)[0] == opener[0] and len(m.group(2)) >= len(opener)
+              and not m.group(3).strip()):
+            for j in range(start, i + 1):
+                out[j] = " " * len(lines[j])
+            opener = None
+    return "\n".join(out)
+
 def extract_sections(text):
+    masked = unfenced(text)
     for m in heading_re.finditer(text):
         start, depth = m.start(), len(m.group(1))
         end = len(text)
-        for nm in re.finditer(r'^(#{1,6})\s+', text[m.end():], re.MULTILINE):
+        for nm in re.finditer(r'^ {0,3}(#{1,6})[ \t]+', masked[m.end():], re.MULTILINE):
             if len(nm.group(1)) <= depth:
                 end = m.end() + nm.start(); break
         yield text[start:end].rstrip()
@@ -1425,22 +2062,76 @@ def read_fm(md):
         return {}
     try:
         fm = yaml.safe_load(m.group(1))
-    except yaml.YAMLError:
-        return {}
+    except Exception as e:
+        sys.exit(f"ERROR: {md} does not parse ({type(e).__name__}: {e}); fix it or move it to "
+                 f"sysop/runtime/pending-docs/quarantine/, then re-run Step 3c")
     return fm if isinstance(fm, dict) else {}
 
 fms = {md: read_fm(md) for md in pending_files}
 
+def load_index(text, where):
+    try:
+        idx = yaml.safe_load(text) or {}
+    except Exception as e:
+        sys.exit(f"ERROR: {where} does not parse ({type(e).__name__}: {e}); fix it, then re-run Step 3c")
+    if not isinstance(idx, dict):
+        sys.exit(f"ERROR: {where} is a {type(idx).__name__}, not a mapping; fix it, then re-run Step 3c")
+    if not isinstance(idx.get("tasks") or [], list):
+        sys.exit(f"ERROR: {where}'s tasks: is a {type(idx.get('tasks')).__name__}, not a list; fix it, then re-run Step 3c")
+    return {t["id"]: t for t in (idx.get("tasks") or []) if isinstance(t, dict) and isinstance(t.get("id"), str) and t["id"]}
+
 index_path = repo / "tasks" / "index.yml"
 tasks = {}
 if index_path.is_file():
-    try:
-        idx = yaml.safe_load(index_path.read_text(encoding="utf-8", errors="replace")) or {}
-    except yaml.YAMLError:
-        idx = {}
-    if not isinstance(idx, dict):
-        idx = {}
-    tasks = {t["id"]: t for t in (idx.get("tasks") or []) if isinstance(t, dict) and t.get("id")}
+    tasks = load_index(index_path.read_text(encoding="utf-8", errors="replace"), "tasks/index.yml")
+origin_tasks, origin_note = None, None
+if index_path.is_file() and git("remote", "get-url", "origin")[0] == 0:
+    oref = f"refs/remotes/origin/{default_branch}"
+    frc, _, ferr = git("fetch", "--quiet", "origin", f"+refs/heads/{default_branch}:{oref}", timeout=60)
+    rc, osha, _ = git("rev-parse", "--verify", "--quiet", oref + "^{commit}")
+    rc2, shown, err2 = git("show", f"{oref}:tasks/index.yml") if rc == 0 else (1, "", "")
+    if rc != 0 or rc2 != 0:
+        origin_note = (f"ORIGIN INDEX: not read — "
+                       + (f"origin/{default_branch} does not resolve" if rc != 0 else err2)
+                       + (f"; fetch failed: {ferr}" if frc else "")
+                       + "; a hold is judged from the working tree alone")
+    else:
+        origin_tasks = load_index(shown, f"origin/{default_branch}:tasks/index.yml")
+        if frc:
+            origin_note = (f"ORIGIN INDEX: fetch failed ({ferr}); read the last-fetched "
+                           f"origin/{default_branch}@{osha.strip()[:12]}, which may be behind")
+_tip_cache = {}
+tip_notes = []
+
+def tip_tasks(rev):
+    """The approved branch's own tasks/index.yml at its tip; {} when it cannot be read."""
+    if rev not in _tip_cache:
+        ws = branch_ws.get(rev)
+        at = ["-C", str(ws)] if ws else []
+        rc, shown, err = git(*at, "show", f"{rev}:tasks/index.yml")
+        _tip_cache[rev] = load_index(shown, f"{rev}:tasks/index.yml") if rc == 0 else {}
+        if rc != 0 and git(*at, "cat-file", "-e", f"{rev}:tasks/index.yml")[0] == 0:
+            tip_notes.append(f"BRANCH INDEX: not read — `{rev}:tasks/index.yml`: {err}; "
+                             "a flag or hold change set only there is not seen")
+    return _tip_cache[rev]
+
+def indexes(rev=None):
+    return [tasks, origin_tasks or {}] + ([tip_tasks(rev)] if rev else [])
+
+def flagged(tid, rev=None):
+    """`manual_smoke` on the working tree, origin/<default branch>, or the branch's own tip."""
+    return any(truthy(ix.get(tid, {}).get("manual_smoke")) for ix in indexes(rev))
+
+def entry_of(tid, rev=None):
+    return next((ix[tid] for ix in indexes(rev) if tid in ix), {})
+
+def held(t):
+    """Held on the working tree, and on origin/<default branch> and every approved branch's tip
+    that carries the task: either can release a hold, never add one."""
+    if not tasks.get(t, {}).get("user_action"):
+        return False
+    others = [origin_tasks or {}] + [tip_tasks(b) for b in sorted(approved)]
+    return all(bool(ix[t].get("user_action")) for ix in others if t in ix)
 approved = {b.strip() for b in (sys.argv[2] if len(sys.argv) > 2 else "").splitlines() if b.strip()}
 rc, out, _ = git("rev-parse", "--abbrev-ref", "HEAD")
 rc2, out2, _ = git("rev-parse", "--short=12", "HEAD")
@@ -1467,7 +2158,20 @@ def held_ids(md, fm):
     for a doc that is not merging this run."""
     if not not_merging(md, fm):
         return []
-    return [t for t in doc_ids(fm) if tasks.get(t, {}).get("user_action")]
+    return [t for t in doc_ids(fm) if held(t)]
+
+def doc_hold(fm):
+    """The doc's own `hold:` (`Q-625`), read as pending_doc_hold.py reads it: truthy."""
+    v = fm.get("hold")
+    return (str(v).strip() or "(no reason given)") if v else ""
+
+def held_reasons(md, fm):
+    """Why Step 4c 1c holds a doc that is not merging this run; [] for any other doc."""
+    if not not_merging(md, fm):
+        return []
+    hid = held_ids(md, fm)
+    return (([f"user_action outstanding: {', '.join(hid)}"] if hid else [])
+            + ([f"hold: {doc_hold(fm)}"] if doc_hold(fm) else []))
 
 def not_merging_note(fm, hid):
     b = branch_of(fm)
@@ -1478,7 +2182,12 @@ def not_merging_note(fm, hid):
         where_b = f"branch `{b}` is already in HEAD"
     else:
         where_b = f"branch `{b}` has {out.strip()} commit(s) not in HEAD"
-    why = (f"held by Step 4c 1c (user_action outstanding: {', '.join(hid)})" if hid
+    released = [t for t in doc_ids(fm) if tasks.get(t, {}).get("user_action") and not held(t)]
+    since = f", held since {fm['held_since']}" if fm.get("held_since") else ""
+    why = (f"held by Step 4c 1c ({'; '.join(hid)}){since}" if hid
+           else f"not held here: user_action is set locally but not on origin/{default_branch} "
+                f"or an approved branch that carries the task ({', '.join(released)}); "
+                "Step 4c may still hold it" if released
            else "not held")
     return f"{why}; not merging in this run; {where_b}"
 
@@ -1499,15 +2208,119 @@ def answered_in(md, k):
             return a
     return None
 
-signals = []     # (source, read, held note or None, carrier doc label or None, key or None, text)
+_targets, _target_notes = [], []
+
+def merge_targets():
+    """[(sha, label)] the body lands on: local <default branch>, and origin/<default branch>
+    unless the local branch already holds it; origin alone when the local branch is behind it.
+    Falls back to HEAD, with a note, when the local branch does not resolve."""
+    if not _targets:
+        def at(ref):
+            rc, out, _ = git("rev-parse", "--verify", "--quiet", ref + "^{commit}")
+            return out.strip() if rc == 0 else ""
+        loc, org, hd = (at(f"refs/heads/{default_branch}"),
+                        at(f"refs/remotes/origin/{default_branch}"), at("HEAD"))
+        local = (loc, f"{default_branch}@{loc[:12]}") if loc else ((hd, worktree_rev) if hd else None)
+        if not loc:
+            _target_notes.append(f"`{default_branch}` does not resolve here, so "
+                                 + (f"HEAD ({worktree_rev}) stands in for it" if hd else "neither does HEAD"))
+        origin = (org, f"origin/{default_branch}@{org[:12]}") if org else None
+        if local and origin and origin[0] != local[0]:
+            if git("merge-base", "--is-ancestor", local[0], origin[0])[0] == 0:
+                _targets.append(origin)
+            elif git("merge-base", "--is-ancestor", origin[0], local[0])[0] == 0:
+                _targets.append(local)
+            else:
+                _targets.extend([local, origin])
+        elif local or origin:
+            _targets.append(local or origin)
+    return _targets
+
+def blob_text(loc, ref):
+    """(text or None when absent, error or ""). Decoded with replacement, as pending docs are."""
+    try:
+        r = subprocess.run(["git", *loc, "show", ref], cwd=str(repo), capture_output=True,
+                           timeout=15, env=_GIT_ENV)
+    except (OSError, subprocess.SubprocessError) as e:
+        return None, str(e)
+    if r.returncode == 0:
+        return r.stdout.decode("utf-8", errors="replace"), ""
+    exists = git(*loc, "cat-file", "-e", ref)[0] == 0
+    return None, (r.stderr.decode("utf-8", errors="replace").strip().splitlines() or ["?"])[0] if exists else ""
+
+def merged_body(at, rev, sha, body_git, tip_text):
+    """(texts, READ label, note or None): the body as it will merge, one text per side of a
+    conflict, each by `git merge-file --ours`/`--theirs` so neither carries conflict markers.
+    A target whose merge cannot be read leaves the tip in the texts and is named in the note."""
+    import tempfile
+    tip = f"{rev}@{sha[:12]}"
+    texts, merged, conflicts, failed, unread = [], [], [], [], []
+    targets = merge_targets()
+    if not targets:
+        failed.append("no merge target resolves")
+    for h, lab in targets:
+        for loc in ([at, []] if at else [[]]):
+            rc, base, e = git(*loc, "merge-base", h, sha)
+            if rc == 0:
+                break
+        else:
+            failed.append(f"its merge with {lab} could not be read ({e or 'no merge base'})")
+            unread.append(lab); continue
+        (target_text, te), (base_text, be) = blob_text(loc, f"{h}:{body_git}"), blob_text(loc, f"{base.strip()}:{body_git}")
+        why = (f"`{h[:12]}:{body_git}` could not be read ({te})" if te else
+               f"`{base.strip()[:12]}:{body_git}` could not be read ({be})" if be else
+               f"{lab} moved or deleted `{body_git}`" if target_text is None and base_text is not None else "")
+        if why:
+            failed.append(why); unread.append(lab); continue
+        target_text, base_text = target_text or "", base_text or ""
+        if target_text in (tip_text, base_text):
+            continue
+        with tempfile.TemporaryDirectory() as td:
+            paths = []
+            for name, body in (("target", target_text), ("base", base_text), ("branch", tip_text)):
+                fp = os.path.join(td, name)
+                with open(fp, "w", encoding="utf-8", newline="") as fh:
+                    fh.write(body)
+                paths.append(fp)
+            runs = [git("merge-file", "-p", *flag, *paths) for flag in ([], ["--ours"], ["--theirs"])]
+        rc = runs[0][0]
+        if not 0 <= rc < 128 or any(r[0] != 0 for r in runs[1:]):
+            e = next((r[2] for r in runs if r[2]), "").replace(td + os.sep, "")
+            failed.append(f"merging it with {lab} failed ({e or f'exit {rc}'})")
+            unread.append(lab); continue
+        if rc == 0:
+            texts.append(runs[0][1]); merged.append(lab)
+        else:
+            texts += [runs[1][1], runs[2][1]]; conflicts.append(f"{lab} ({rc} hunk(s))")
+    lost = " and ".join(unread) if unread and (merged or conflicts) else "the merge target"
+    note = "; ".join(_target_notes + failed) or None
+    if note and failed:
+        note += f"; a procedure heading {lost} added is not seen"
+    if failed or not texts:
+        texts.append(tip_text)
+    texts = list(dict.fromkeys(texts))
+    head = f"{tip} merged with {' and '.join(merged)} —" if merged else f"{tip} —"
+    segs = []
+    if conflicts:
+        segs.append(f"this body CONFLICTS with {', '.join(conflicts)}; each side's version is scanned")
+    if failed:
+        segs.append(f"the branch tip, read as is: {'; '.join(failed)}; a heading {lost} added is not seen")
+    if not segs:
+        return texts, (f"{head} the text that is merging; the merge target changed this body" if merged
+                       else f"{tip} — the branch tip, the text that is merging"), note
+    return texts, f"{head} {'and ' if merged else ''}{'; and '.join(segs)}", note
+
+signals = []     # (source, read, held note or None, carrier doc label or None, key or None, text, approved branch or None)
 answered = []    # (source, first line, decision, date, key, carrier doc label)
 not_in_run = []
 
-def emit(src, read, carrier, sec):
+def emit(src, read, carrier, sec, branch=None):
     """One signal. A signal carried by a pending doc gets a KEY naming that doc; an answer
     recorded there is honoured only while the doc is not merging."""
+    if branch is None and carrier is not None and branch_of(fms[carrier]) in approved:
+        branch = branch_of(fms[carrier])
     if carrier is None:
-        signals.append((src, read, None, None, None, sec))
+        signals.append((src, read, None, None, None, sec, branch))
         return
     k = key_of(sec)
     fm = fms[carrier]
@@ -1517,10 +2330,10 @@ def emit(src, read, carrier, sec):
             answered.append((src, sec.strip().splitlines()[0], a.get("decision"),
                              a.get("date", "?"), k, label(carrier)))
             return
-        note = not_merging_note(fm, held_ids(carrier, fm))
+        note = not_merging_note(fm, held_reasons(carrier, fm))
     else:
         note = None
-    signals.append((src, read, note, label(carrier), k, sec))
+    signals.append((src, read, note, label(carrier), k, sec, branch))
 
 # (a) pending-doc body scan
 for md in pending_files:
@@ -1548,20 +2361,25 @@ for md in pending_files:
 # source: it records `branch:`, so a claimed task is linked to this run's approved
 # branches by fact rather than by a doc that may be absent or malformed.
 smoke_ids = {}   # task id -> the approved branch it merges on, or None
+declared = set() # task ids with `manual_smoke: true` on an index read for that link
 carriers = {}    # task id -> every pending doc naming it, in scan order
 held_links = {}  # a HELD doc links nothing: its task is not merging in this close
-# source 1 — pending-doc frontmatter
+# source 1 — pending-doc frontmatter. An undeclared task is linked only by an approved branch.
 for md in pending_files:
     fm = fms[md]
-    hid = held_ids(md, fm)
+    hid = held_reasons(md, fm)
     b = branch_of(fm)
+    on = b if b in approved else None
     for tid in doc_ids(fm):
-        if not truthy(tasks.get(tid, {}).get("manual_smoke")):
+        dec = flagged(tid, on)
+        if not dec and not on:
             continue
         carriers.setdefault(tid, []).append(md)
+        if dec:
+            declared.add(tid)
         if hid:
             held_links.setdefault(tid, md)
-        elif b in approved:
+        elif on:
             smoke_ids[tid] = smoke_ids.get(tid) or b
         else:
             smoke_ids.setdefault(tid, None)
@@ -1577,17 +2395,19 @@ if approved:
                     lock_branch = line[len("branch:"):].strip(); break
             if lock_branch and lock_branch in approved:
                 tid = lk.name[:-len(".lock")]
-                if truthy(tasks.get(tid, {}).get("manual_smoke")):
-                    smoke_ids[tid] = lock_branch
+                smoke_ids[tid] = lock_branch
+                if flagged(tid, lock_branch):
+                    declared.add(tid)
 for tid in sorted(set(held_links) - set(smoke_ids)):
     not_in_run.append(f"NOT IN THIS RUN: tasks/index.yml § {tid} — linked only by held doc "
                       f"{label(held_links[tid])}, so its body's procedure is not asked")
 
 seen_lc = "\n".join(s[5] for s in signals).lower()
 for tid in sorted(smoke_ids):
-    body_rel = tasks[tid].get("body", "")
-    src = f"tasks/index.yml § {tid}"
     rev = smoke_ids[tid]
+    dec = tid in declared
+    body_rel = str(entry_of(tid, rev).get("body") or "")
+    src = f"tasks/index.yml § {tid}"
     # A task an approved branch claims is merging, so its answers live only in a merging doc.
     docs = carriers.get(tid, [])
     carrier = (next((d for d in docs if not not_merging(d, fms[d])), None) if rev
@@ -1596,54 +2416,69 @@ for tid in sorted(smoke_ids):
     # procedure heading, is a signal — not silence. The declaration is the ask;
     # a missing procedure makes the ask louder, not absent.
     if not body_rel:
-        emit(src, "nothing — no `body:` recorded", carrier,
-             "(manual_smoke: true, but the task has no `body:` — "
-             "ask the human what the procedure is)")
+        if dec:
+            emit(src, "nothing — no `body:` recorded", carrier,
+                 "(manual_smoke: true, but the task has no `body:` — "
+                 "ask the human what the procedure is)", rev)
         continue
     body_git = body_rel if body_rel.startswith("tasks/") else "tasks/" + body_rel
     body_path = repo / body_git
-    # The path comes from main's index; the content from the approved branch's tip, read
-    # in that branch's workspace when one is known.
-    text, read, tip_err = None, None, ""
+    # The path comes from the first index carrying the task; the content from the approved
+    # branch's tip, read in that branch's workspace when one is known.
+    texts, read, tip_err = None, None, ""
     if rev:
         ws = branch_ws.get(rev)
         at = ["-C", str(ws)] if ws else []
         rc, sha, tip_err = git(*at, "rev-parse", "--verify", "--quiet", rev + "^{commit}")
         rc2, shown, err2 = git(*at, "show", f"{rev}:{body_git}")
         if rc == 0 and rc2 == 0:
-            text = shown
-            read = f"{rev}@{sha.strip()[:12]} — the branch tip, the text that is merging"
+            texts, read, mnote = merged_body(at, rev, sha.strip(), body_git, shown)
+            if mnote:
+                tip_notes.append(f"MERGE NOT READ: tasks/index.yml § {tid} at `{rev}`: {mnote}")
         else:
             tip_err = err2 or tip_err or "ref does not resolve"
-    if text is None and body_path.is_file():
-        text = body_path.read_text(encoding="utf-8", errors="replace")
+    if texts is None and body_path.is_file():
+        texts = [body_path.read_text(encoding="utf-8", errors="replace")]
         read = f"working tree ({worktree_rev})" + (
             f" — could NOT be read at `{rev}` ({tip_err}), so this may not be the text "
             "that is merging" if rev else " — no approved branch in this run claims this task")
-    if text is None:
-        emit(src, f"nothing — `{body_git}` not found", carrier,
-             f"(manual_smoke: true, but its body `{body_rel}` is not "
-             f"readable from here — ask the human what the procedure is)")
+    if (rev and not dec and not (read or "").startswith(f"{rev}@")
+            and git(*(["-C", str(branch_ws[rev])] if rev in branch_ws else []),
+                    "cat-file", "-e", f"{rev}:{body_git}")[0] == 0):
+        tip_notes.append(f"BODY NOT READ: tasks/index.yml § {tid} at `{rev}` ({tip_err}); "
+                         "a procedure heading there is not seen")
+    if texts is None:
+        if dec:
+            emit(src, f"nothing — `{body_git}` not found", carrier,
+                 f"(manual_smoke: true, but its body `{body_rel}` is not "
+                 f"readable from here — ask the human what the procedure is)", rev)
         continue
-    found = False
-    for sec in extract_sections(text):
+    found, shown_here = False, set()
+    for sec in (x for t in texts for x in extract_sections(t)):
         found = True
-        if sec.lower() in seen_lc: continue
-        emit(src, read, carrier, sec)
-    if not found:
+        if sec.lower() in seen_lc or sec in shown_here: continue
+        shown_here.add(sec)
+        emit(src, read, carrier, sec, rev)
+    if not found and dec:
         emit(src, read, carrier,
              "(manual_smoke: true, but no procedure heading matched in "
-             f"`{body_rel}` — ask the human what the procedure is)")
+             f"`{body_rel}` — ask the human what the procedure is)", rev)
 
 print("NO_SMOKE_REQUIRED" if not signals else f"SMOKE_REQUIRED: {len(signals)} signal(s)")
 for src, first, decision, date, k, doc in answered:
     print(f"PREVIOUSLY ANSWERED: {src} — {decision} on {date} (key {k}, recorded in {doc}): {first}")
 for line in not_in_run:
     print(line)
-for src, read, note, carrier, k, sec in signals:
+if origin_note:
+    print(origin_note)
+for line in tip_notes:
+    print(line)
+for src, read, note, carrier, k, sec, branch in signals:
     print("---SIGNAL---")
     print(f"SOURCE: {src}")
     print(f"READ: {read}")
+    if branch:
+        print(f"BRANCH: {branch}")
     if note:
         print(f"NOT MERGING: {note}")
     if carrier:
@@ -1652,21 +2487,28 @@ for src, read, note, carrier, k, sec in signals:
 EOF
 ```
 
-If the output's first line is `NO_SMOKE_REQUIRED`, continue to Step 3b. Otherwise, parse the signal blocks and proceed to step 2. **The first line alone decides.** The lines between it and the first `---SIGNAL---` are never signals, so carry them to Step 8. `PREVIOUSLY ANSWERED:` is a section the human already answered, in a doc whose branch is not merging this run. `NOT IN THIS RUN:` is a `manual_smoke` task linked only by a doc Step 4c 1c is holding back.
+**If the block exits non-zero, stop the close and show its stderr**, which names the input it could not use (a `tasks/index.yml` or pending doc that does not parse, or an index of the wrong shape, exits 1; an unsubstituted `<default branch>` exits 3): an empty stdout is not zero signals. If the output's first line is `NO_SMOKE_REQUIRED`, continue to Step 3b. Otherwise, parse the signal blocks and proceed to step 2. **The first line alone decides.** The lines between it and the first `---SIGNAL---` are never signals, so carry them to Step 8. `PREVIOUSLY ANSWERED:` is a section the human already answered, in a doc whose branch is not merging this run. `NOT IN THIS RUN:` is a `manual_smoke` task linked only by a doc Step 4c 1c is holding back. `ORIGIN INDEX:` says `origin/<default branch>`'s index was not read, or was read from a ref the fetch could not refresh. `BRANCH INDEX:` and `BODY NOT READ:` name an approved branch's index, or a linked task's body, that exists at the tip and could not be read there. `MERGE NOT READ:` names a linked task whose merge could not be read, and why; its body was read at the tip, so a heading the default branch added to it is not seen. It also names a default branch that does not resolve, where `HEAD` stood in as the merge target.
 
-Each block's `READ:` line names what its text was read from. **A task body is read at the tip of the approved branch that claims it**, so it is the text that is merging. A `working tree` label means no approved branch claims the task, or the tip read failed and the line says why. A `NOT MERGING:` line marks a doc in main's `pending-docs/` whose branch is neither approved nor the branch HEAD is on, and says whether Step 4c 1c is holding it. A `KEY:` line is a hash of the section's text and names the doc its answer is recorded in.
+**Which task bodies are read, and which indexes.** Every task an approved branch links, by an approved doc's `roadmap_ids:` or a lock on an approved branch, has its body scanned for a procedure heading, with or without `manual_smoke:`. Only a declared task also signals a missing heading, body or `body:`. A task is declared when `manual_smoke: true` is set in the local `tasks/index.yml`, in `origin/<default branch>`'s, which the block fetches first, or in the approved branch's own index at its tip. A task is held only when its `user_action` is set locally and, where origin carries the task, on origin too. A doc is also held when its own frontmatter carries `hold:` (`Q-625`). With a local index and an `origin` remote, no `ORIGIN INDEX:` line means origin's index was read. The fetch runs under `--dry-run` too, and moves only `refs/remotes/origin/<default branch>`.
 
-**2. For each signal, call `AskUserQuestion`.** Present the section text verbatim with its `SOURCE:`, `READ:` and any `NOT MERGING:` line. Four options (single-select):
+Each block's `READ:` line names what its text was read from. **A task body is read as it will merge**: the tip of the approved branch that claims it, three-way merged with local `<default branch>`, and with `origin/<default branch>` unless the local branch already contains it. A label ending `the branch tip, the text that is merging` means no target changed the body. `merged with` names the targets that changed it after the fork. `CONFLICTS` means each side of the conflict was read on its own and both were scanned. `the branch tip, read as is:` means a merge could not be read, says why, and comes with a `MERGE NOT READ:` line. A `working tree` label means no approved branch claims the task, or the tip read failed and the line says why. A `#` line inside a closed fenced code block does not end a section, so a procedure is shown whole; a fenced line that matches the heading pattern still signals. A `NOT MERGING:` line marks a doc in main's `pending-docs/` whose branch is neither approved nor the branch HEAD is on, and says whether Step 4c 1c is holding it. A `KEY:` line is a hash of the section's text and names the doc its answer is recorded in. A `BRANCH:` line names the approved branch the signal's work merges on; a signal without one is on no approved branch.
+
+**2. For each signal, call `AskUserQuestion`.** Present the section text verbatim with its `SOURCE:`, `READ:` and any `NOT MERGING:` or `BRANCH:` line. Four options (single-select):
 
 - **"I'll drive the smoke"** — agent attempts to run the procedure using available MCP tools (chrome-devtools-mcp, playwright, project-specific CLI tooling). The agent reads the section's step list, drives it, and reports the outcome.
 - **"Already ran it manually — proceed"** — human confirms they ran the smoke; record as confirmed.
 - **"Unrunnable as specified"** — the procedure cannot be completed as written, so no re-run can help: an input the job cannot reach, or a step the environment rejects. Record the reason. Step 3 files the blocking defect.
 - **"Skip with waiver"** — record as waived, with the source label, for Step 8's report.
 
-Ask signals one at a time; track per-signal decisions in a structured tally (source → decision, and the reason for an unrunnable one). **Record each "Already ran it manually" or "Unrunnable as specified" answer to a signal with a `KEY:` line at once**, with step 4's recorder, before the next signal and before any halt below. Under `--dry-run`, record nothing.
+Ask signals one at a time; track per-signal decisions in a structured tally (source → decision, and the reason for an unrunnable one). **Record each "Already ran it manually" or "Unrunnable as specified" answer to a signal with a `KEY:` line at once**, with step 4's recorder, before the next signal and before any halt below. Under `--dry-run`, offer only the other three options, record nothing and file nothing, and report the signals and each answer; a halt below ends the dry run at Step 8's report.
 
 **3. Halt rules.**
-- If the human picks "I'll drive" and the agent's attempt fails, **ask whether a re-run can succeed**, with `AskUserQuestion` and two options. **"Transient — halt and re-run"** covers an MCP tool not available, a credential, or a flaky command: **halt this run**. Do not proceed to Step 4. Surface what failed; the next `/review-close` invocation re-runs Step 3c. **"Cannot be completed as written"** makes the signal "Unrunnable as specified", with what failed as its reason.
+- If the human picks "I'll drive", the procedure either passed (record the signal `driven`), ran to a FAIL verdict, or could not finish.
+- **Ran, verdict FAIL** — the procedure ran and a step failed: a check it states failed, or a step exited non-zero. When you cannot tell a failed step from something outside the procedure stopping it, take this arm. A re-run will not change a verdict, so do not ask whether one can succeed. Show the output and ask once, with `AskUserQuestion`:
+  - **"Halt the close"** (recommended, first): halt as for a transient failure below.
+  - **"Hold just this branch"**, offered only when the signal has a `BRANCH:` line: demote that branch from approved to rejected for this run, as Step 2d's "Hold for fix" does, with the reason `smoke FAIL — <the failing step>`. Skip the remaining signals on that branch and continue with the rest. Record the signal `failed-held`, with the signals skipped on that branch.
+  - **"Waive — merge with the FAIL recorded"**: record the signal `failed-waived`, with the procedure's output verbatim, and file it as a task as for an unrunnable defect below, its body naming the failing step and carrying the redacted output; file it at the start of Step 4d. Step 8 reports it, and under `pr` Step 4d also puts it in the PR.
+- **Could not finish** — something outside the procedure stopped it. **Ask whether a re-run can succeed**, with `AskUserQuestion` and two options. **"Transient — halt and re-run"** covers an MCP tool not available, a credential, or a network or infrastructure error: **halt this run**. Do not proceed to Step 4. Before any halt in this step, file each unrunnable defect a "Continue the close" answer deferred to Step 4d, by the **Stop** path below; its answer is already recorded, so a later close will not ask it again. Surface what failed; the next `/review-close` invocation re-runs Step 3c. **"Cannot be completed as written"** makes the signal "Unrunnable as specified", with what failed as its reason. A procedure that ran to a FAIL takes the FAIL arm above, never this one.
 - **"Unrunnable as specified" is neither a waiver nor a halt.** File the blocking defect as a task by `/add-task` Steps 2, 3 and 5.1–5.3: `status: open`, `surfaced_by:` the task ids the signal's source names: the `§ <id>` of an index signal, or the doc's `roadmap_ids` (`[]` when it names none), and a body saying which part of the procedure cannot run and why. Then ask with `AskUserQuestion`: **"Continue the close"** or **"Stop the close"**.
   - **Continue:** file it at the start of Step 4d. A close that stops before Step 4d names it on Step 8's `Manual smoke:` line, unfiled.
   - **Stop:** file it now, then halt as for a transient failure. `HEAD` is the default branch before Step 4, so check that first, in its own call:
@@ -1687,7 +2529,7 @@ Ask signals one at a time; track per-signal decisions in a structured tally (sou
 - Waivers do NOT halt; they accumulate for Step 8.
 - "Already ran it manually" is trusted at face value — the entire point of the gate is letting the human assert "yes, I did the thing."
 
-**4. Record outcomes for Step 8.** The tally drives the "Manual smoke" line in the final report (e.g., `Manual smoke: 1 confirmed, 1 unrunnable (FIX-CSV-UNREACHABLE filed), 1 waived (sysop/runtime/pending-docs/feat-foo.md)`). **An unrunnable signal is its own state, never counted as waived.**
+**4. Record outcomes for Step 8.** The tally drives the "Manual smoke" line in the final report (e.g., `Manual smoke: 1 confirmed, 1 unrunnable (FIX-CSV-UNREACHABLE filed), 1 failed-held (feat/export), 1 waived (sysop/runtime/pending-docs/feat-foo.md)`). **An unrunnable, `failed-held` or `failed-waived` signal is its own state, never counted as waived.**
 
 **The recorder step 2 runs.** Pass it the doc the `KEY:` line names, in main or in a workspace, and the key's 16 hex. **Never record a waiver.** Under `--dry-run`, record nothing and file nothing; list what would be recorded and filed.
 
@@ -1742,7 +2584,7 @@ text = raw.replace("\r\n", "\n")
 m = re.match('^\\ufeff?---\\n(.*?)\\n---', text, re.DOTALL)
 try:
     fm = yaml.safe_load(m.group(1)) if m else None
-except yaml.YAMLError:
+except Exception:
     fm = None
 if not isinstance(fm, dict):
     sys.exit(f"REFUSING: {doc.name} has no frontmatter mapping to record into")
@@ -1766,7 +2608,7 @@ new_fm = "\n".join([yaml.safe_dump({"smoke_answers": entries}, sort_keys=False,
                                    width=120).rstrip("\n")] + kept)
 try:
     check = yaml.safe_load(new_fm)
-except yaml.YAMLError:
+except Exception:
     check = None
 if not isinstance(check, dict) or check.pop("smoke_answers", None) != entries or check != fm:
     sys.exit(f"REFUSING: rewriting {doc.name} would change another frontmatter key — record it by hand")
@@ -1785,13 +2627,17 @@ EOF
 
 A `REFUSING:` line records nothing and changes nothing. Report it on Step 8's `Manual smoke:` line; the next close asks that section again.
 
-> **For new projects:** declare `manual_smoke: true` on `tasks/index.yml` entries whose verification needs a human (browser flow, side-effect-bearing command, LLM round-trip). Author the procedure under a `## Manual smoke required` heading in the task body file. The validator warns (not blocks) when the field is set but the heading is missing — see `tasks/schema.md § Manual smoke`.
+> **For new projects:** declare `manual_smoke: true` on `tasks/index.yml` entries whose verification needs a human (browser flow, side-effect-bearing command, LLM round-trip). Author the procedure under a `## Manual smoke required` heading in the task body file. The validator warns (not blocks) when the field is set but the heading is missing — see `tasks/schema.md § Manual smoke`. A procedure that can only run after the merge goes under `## After merge` instead, which Step 8 reports and nothing gates (`tasks/schema.md § After merge`).
 
 ## Step 3b: Prepare Worktrees for Merge
 
 Feature branches created by `/claim-task` or `batch_work.sh` usually live in worktrees. Branches checked out in a worktree cannot be checked out from main, so worktrees for **approved** branches must be removed before merging.
 
 > **A worktree is one workspace shape, not the only one — and the collect is not conditional on it (internal tracker `Q-238`).** `claim_task.sh --clone` produces a **full clone**, which `git worktree list` never lists. Until Phase 218 the pending-doc collect below was nested under *"if a worktree exists"*, so a clone workspace fell through to *"the branch is already free for checkout"*: its pending-doc was never collected, Step 4c never consolidated it, its `roadmap_ids` never flipped to `done`, and its body was never archived. Nothing was lost — the clone directory persists — and nothing said so, which is why it is a silent-incompletion defect rather than a data-loss one. **The remove is worktree-only; the collect is not.** Removal is what needs a worktree. Collecting a doc needs a *directory*.
+
+**Under `--prepare`, do not start this step:** the prepare ends at Step 3c (*`--prepare` and `--resume <run-id>`* above, item 6).
+
+**Under `--dry-run`, run step 0 only, which writes nothing:** report each approved branch's workspace and shape, and that steps 0b–2 did not run. Then go to Step 8's report; Steps 4 through 7 do not run.
 
 For each approved feature branch:
 
@@ -1917,7 +2763,13 @@ print(f"workspace={ws or '<none>'} shape={shape or '<none>'}")
 PY
 ```
 
-**If `WS` is empty**, there is nothing to collect and nothing to remove — the branch is already free for checkout. Say which of the two reasons applies (the `main-checkout` shape — a fixed enum value Step 0 prints verbatim, never a branch name — or no workspace found at all); they are not the same fact and a later step that has to reconstruct what happened cannot tell them apart from silence. **Then apply the collect's exit-8 test by hand (`Q-594`), since the collect does not run here:** if a lock in `sysop/runtime/locks/` other than a review batch's `BATCH-<N>.lock` has this branch as its first column-0 `branch:` value, and no doc in main's `sysop/runtime/pending-docs/` carries `branch: <this branch>` in its frontmatter, SKIP the branch exactly as exit 8's row says. If a doc there does claim the branch, list each claimed id that no such doc names in `roadmap_ids` (or `task_ids`) under Step 8's `Open claims:`.
+**If `WS` is empty**, there is nothing to collect and nothing to remove — the branch is already free for checkout. Say which of the two reasons applies (the `main-checkout` shape — a fixed enum value Step 0 prints verbatim, never a branch name — or no workspace found at all); they are not the same fact and a later step that has to reconstruct what happened cannot tell them apart from silence. **Then apply the collect's exit-8 test by hand (`Q-594`), since the collect does not run here:** if a lock in `sysop/runtime/locks/` other than a review batch's `BATCH-<N>.lock` has this branch as its first column-0 `branch:` value, and no doc in main's `sysop/runtime/pending-docs/` carries (parsed as YAML, so quoted or bare) `branch: <this branch>` in its frontmatter, SKIP the branch exactly as exit 8's row says. If a doc there does claim the branch, list each claimed id that no such doc names in `roadmap_ids` (or `task_ids`) under Step 8's `Open claims:`.
+
+**0b. Only when `SHAPE=worktree`: preserve the ignored files only this worktree holds (`Q-633`).** Run from the repo root, with `<sanitized branch>` the branch name with every `/` replaced by `-`:
+```bash
+python3 sysop/scripts/ignored_refs.py "<worktree-path>" --preserve "sysop/runtime/preserved/<sanitized branch>"
+```
+**Exit 0**: go on to step 1. **Any other exit**: SKIP this branch (worktree, lock and branch intact) and do not run step 1, so nothing is collected and there is nothing to roll back. Print each `PRESERVED:` line and the `PRESERVE:` summary, or the error, under Step 8's `Ignored references:`.
 
 **1. Collect this branch's pending-docs from the workspace step 0 resolved, whatever its shape** — worktree, clone, or discovered. Step 0 *prints* `workspace=… shape=…`; it does not export them, and the heredoc below takes the path as a quoted positional argument. **Substitute the printed values by hand** — `WS` and `SHAPE` are names for the two things step 0 told you, not shell variables that survive into this block. (Every fenced block in this skill is independent: nothing set in one reaches the next.)
  - a. **Collect pending-docs**: bring each `sysop/runtime/pending-docs/*.md` from the worktree into main's `sysop/runtime/pending-docs/` (these are untracked files that would be lost when the worktree is removed). **The copy is provenance-checked, because the destination is keyed by basename and a basename is not unique to a branch.**
@@ -1964,7 +2816,7 @@ PY
       # live review round's candidates onto main, where Step 4c consolidates and deletes
       # them. Never collect it.
       NOT_A_BRANCH_DOC = {'convention-candidates.md'}
-      fm_re = re.compile(r'^---\n(.*?)\n---', re.DOTALL)
+      fm_re = re.compile(r'^\ufeff?---\n(.*?)\n---', re.DOTALL)
 
       # A wrong or unsubstituted <worktree-path> must be LOUD. The retired `cp` form
       # exited 1 on a bad path; a bare glob over a missing dir yields nothing and would
@@ -2012,6 +2864,7 @@ PY
                 f'collect here and nothing to remove.')
           sys.exit(4)
 
+      WHY = {}
       def branch_of(p):
           """This doc's `branch:`, read with the SAME parser Steps 3c and 4c use.
 
@@ -2034,25 +2887,40 @@ PY
           # `is_file()` follows symlinks, so a valid link to a real doc still reads and a
           # dangling one returns the sentinel.
           if not p.is_file():
+              WHY[p] = ' — it is not a regular file'
               return None
           try:
               m = fm_re.match(p.read_text(encoding='utf-8', errors='replace'))
-          except OSError:
+          except OSError as e:
+              WHY[p] = f' — it could not be read ({type(e).__name__})'
               return None
           if not m:
+              WHY[p] = ' — it has no frontmatter block at the top'
               return None
           try:
               fm = yaml.safe_load(m.group(1))
-          except (yaml.YAMLError, RecursionError):
-              # `RecursionError` is NOT a `YAMLError`. A deeply nested flow sequence in a
-              # doc this step merely walks past raised it straight through this handler:
-              # exit 1, empty stdout, on the half that deletes — the same shape this page
-              # already fixed for `live.mkdir`. Measured on a neighbour doc.
+          except Exception as e:
+              WHY[p] = f' — its frontmatter does not parse ({type(e).__name__}: {str(e).split(chr(10))[0]})'
               return None
           if not isinstance(fm, dict):
+              WHY[p] = f' — its frontmatter is a {type(fm).__name__}, not a mapping'
               return None
           b = fm.get('branch')
-          return b.strip() if isinstance(b, str) and b.strip() else None
+          if isinstance(b, str) and b.strip():
+              return b.strip()
+          WHY[p] = (f' — `branch:` is a YAML {type(b).__name__}: quote it, or re-run /document-work'
+                    if b is not None and not isinstance(b, str) else ' — it has no `branch:` value')
+          return None
+
+      def hold_of(p):
+          """The doc's `hold:` (`Q-625`), read truthy as Step 4c 1c reads it; "" when it has none."""
+          try:
+              m = fm_re.match(p.read_text(encoding='utf-8', errors='replace'))
+              fm = yaml.safe_load(m.group(1)) if m else None
+          except Exception:
+              return ''
+          v = fm.get('hold') if isinstance(fm, dict) else None
+          return (str(v).strip() or '(no reason given)') if v else ''
 
       def _git(*args, where=None):
           """Read-only git in `where` (default: the WORKSPACE), hermetic, and it FAILS OPEN
@@ -2070,8 +2938,8 @@ PY
           `-C wt`, not the CWD, and that is the whole coverage argument. A `--clone`
           workspace is a **separate repository** (`claim_task.sh --clone` publishes the
           branch and clones `origin`), so its commits live in its own object store; measured
-          from the main checkout, a clone-shape doc's `branch_tip` does not resolve and every
-          clone-shape close would take the unknown arm — armed-looking and dead for that
+          from the main checkout, a clone-shape doc's `branch_tip` did not resolve, and every
+          clone-shape close took the unknown arm — armed-looking and dead for that
           whole population. Run from the workspace, the objects are always there: a linked
           worktree shares the primary's store, and a clone has its own. The branch this asks
           about is the branch the DOC describes, which is the one the workspace holds.
@@ -2126,11 +2994,7 @@ PY
               return None
           try:
               fm = yaml.safe_load(m.group(1))
-          except (yaml.YAMLError, RecursionError):
-              # `RecursionError` is NOT a `YAMLError`. A deeply nested flow sequence in a
-              # doc this step merely walks past raised it straight through this handler:
-              # exit 1, empty stdout, on the half that deletes — the same shape this page
-              # already fixed for `live.mkdir`. Measured on a neighbour doc.
+          except Exception:
               return None
           if not isinstance(fm, dict):
               return None
@@ -2255,7 +3119,8 @@ PY
                 f'refusing. Step 4c closes only the ids a doc names, so merging it would '
                 f'leave the claim open. Nothing collected, main untouched, worktree left in '
                 f'place. Run /document-work on this branch, then re-run the close; if the '
-                f'branch delivers only part of the claim, leave that id out of `roadmap_ids`.')
+                f'branch delivers only part of the claim, leave that id out of `roadmap_ids`.'
+                + ''.join(f' Unreadable: {d.name}{w}.' for d, w in WHY.items()))
           sys.exit(8)
 
       def report_open_claims(doc_paths):
@@ -2266,7 +3131,7 @@ PY
               try:
                   m = fm_re.match(d.read_text(encoding='utf-8', errors='replace'))
                   fm = yaml.safe_load(m.group(1)) if m else None
-              except (OSError, yaml.YAMLError, RecursionError):
+              except Exception:
                   fm = None
               if isinstance(fm, dict):
                   ids = fm.get('roadmap_ids') or fm.get('task_ids') or []   # Phase 23a shim
@@ -2383,7 +3248,7 @@ PY
           src_b = branch_of(src)
           if src_b != branch:
               collisions.append(f'{src.name} (worktree doc claims {src_b!r}, '
-                                f'processing {branch!r})')
+                                f'processing {branch!r}){WHY.get(src, "")}')
               continue
 
           # STALENESS (`Q-471`). `branch_tip` is free-form frontmatter, and an unvalidated value
@@ -2398,7 +3263,14 @@ PY
               # branch's record is untouchable, however this branch's doc is labelled.
               if dst_b != branch:
                   collisions.append(f'{src.name} (main copy belongs to {dst_b!r}, '
-                                    f'processing {branch!r})')
+                                    f'processing {branch!r}){WHY.get(dst, "")}')
+              # `Q-625`: never replace main's held copy with a doc that drops its `hold:`.
+              elif hold_of(dst) and not hold_of(src):
+                  collisions.append(f'{src.name} (main copy carries `hold: {hold_of(dst)}` and '
+                                    f'the incoming doc does not; add that `hold:` line to the '
+                                    f'incoming doc, or, if its step is done, clear main\'s copy '
+                                    f'with `python3 sysop/scripts/pending_doc_hold.py clear '
+                                    f'{src.name}`, then re-run)')
       for u in unknown_tip:
           print(f'PENDING-DOC STALENESS UNKNOWN: {u}')
 
@@ -2547,7 +3419,7 @@ PY
 
       | exit | meaning | state of main | what to do |
       |---|---|---|---|
-      | **3** | a collision — some doc does not belong to this branch | **untouched**; stage 1 writes nothing, so there is no partial work and nothing to undo | SKIP this branch (worktree, lock and branch intact). **Do not run the rollback** — it has nothing to undo. Resolve by correcting the mis-labelled doc, then re-run |
+      | **3** | a collision — some doc does not belong to this branch, **or** main's copy of this branch's doc carries `hold:` and the incoming one does not (`Q-625`) | **untouched**; stage 1 writes nothing, so there is no partial work and nothing to undo | SKIP this branch (worktree, lock and branch intact). **Do not run the rollback** — it has nothing to undo. Resolve by correcting the mis-labelled doc, or for a dropped `hold:` as the line says: add main's `hold:` to the incoming doc, or clear main's copy if its step is done, then re-run |
       | **4** | unusable `<worktree-path>` or `<branch name>` — a placeholder left unsubstituted, an empty branch, or a path that does not exist. **Plus three conditional arms.** (i) A path that exists, has **no `.git`**, and has no `pending-docs/` inside it — the `.git` test is asked *only* there, because where the docs are present they must be collected whatever else is true of the path, so a non-checkout directory that does contain `pending-docs/` collects normally and does not reach this exit. (ii) **(`Q-478`)** A path whose `pending-docs/` **resolves to the one this close is writing into** — the primary checkout, which step 0 reports with the `main-checkout` shape and an empty workspace, and which step 1 then skips. The two directories being the same is the hazard, so that is what is compared; `wt` against the repo root would be a proxy for it and would miss an operator standing in a worktree. (iii) A path that cannot be **resolved at all**, which makes (ii) unanswerable — refused rather than guessed, because the fall-through leads to a step that deletes. *(This row said "two" while the code had three, and the omitted one was the phase's own addition — found by its round's record lens.)* | **untouched**; nothing ran | fix the invocation and re-run. Never proceed to (b) |
       | **5** | stage 2 failed **and its own undo also failed** — the rarest arm on this page and the only one that leaves work half-done. Reaching it needs two faults: a write that fails, then a second failure restoring what was displaced | **MAY BE PARTIALLY WRITTEN** — the only exit on this page that can be. The discriminator is *"the undo raised"*, not *"main changed"*: a destination this step cannot write is usually one it cannot restore either, so main can be byte-identical here (measured). Compare against the preserved copies rather than assuming damage; they are deliberately **not** cleaned up | SKIP this branch. **Restore by hand** from the preserved directory the failure names — the `PENDING-DOC UNDO FAILED:` lines say exactly which files are stuck and why. **Do not run the rollback**: it deletes by *provenance*, so it would remove records this run never wrote on top of a main that is already half-written. Then fix the underlying cause and re-run |
       | **6** | this branch's doc is **stale** — commits landed on the branch after `/document-work` stamped its `branch_tip:` | **nothing was WRITTEN** — stage 1 decides before it copies, same as 3 — but do not read that as "main is as you want it": on the `Q-470` route there was nothing to collect and **main is holding the stale doc**, which is the whole reason this arm refuses. The distinction is the one `Q-483` turned on | SKIP this branch (worktree, lock and branch intact). **Re-run `/document-work` on this branch** — that re-stamps `branch_tip:` — then re-run the close. **Do not run the rollback**; there is nothing to undo |
@@ -2596,7 +3468,7 @@ PY
       >
       > **One shape is out of reach and saying so is the point.** The **`main-checkout`** shape never runs this heredoc (step 1 above says so: nothing to collect), so a doc authored in the primary checkout for the primary checkout is never staleness-tested. The exposure is narrower — the work and the doc share one checkout, so nothing landed between them that the author did not see — but it is not zero, and no reader should infer coverage from this gate's existence.
       >
-      > **`clone` is NOT the second one, and an earlier draft of this gate made it so.** The measurement was first written against the runner's CWD, the main checkout — where a `--clone` workspace's commits do not exist, because a clone is a separate repository with its own object store. Measured: a genuinely stale clone-shape doc reported `STALENESS UNKNOWN` and collected, on every clone-shape close, forever. `-C wt` is what fixes it, and it is the reason the helper takes the workspace rather than inheriting the CWD every other part of this heredoc uses.
+      > **`clone` is NOT the second one, and an earlier draft of this gate made it so.** The measurement was first written against the runner's CWD, the main checkout — where a `--clone` workspace's commits need not exist, because a clone is a separate repository with its own object store. Measured: a genuinely stale clone-shape doc reported `STALENESS UNKNOWN` and collected, on every clone-shape close, forever. `-C wt` is what fixes it, and it is the reason the helper takes the workspace rather than inheriting the CWD every other part of this heredoc uses.
 
       **Why refuse rather than preserve-and-continue.** An earlier draft of this phase moved main's copy into a `sysop/runtime/pending-docs/superseded/` subdirectory and carried on. Its own review round disqualified that: **nothing in the shipped tree reads that directory.** Step 4c step 1 is a non-recursive `ls …/*.md`, so a parked doc is never consolidated — its branch's `roadmap_ids` never flip, its body is never archived, its lock never drops — and the phase had shipped, as the steady-state result of an ordinary collision, the exact end state the rollback note below condemns. Preserving bytes where no reader looks is not preservation. Refusing keeps both records in the two places a reader already checks.
 
@@ -2621,6 +3493,7 @@ PY
           /*) : ;;
           *)  target=$(cd "<worktree-path>/$(dirname "$entry")" 2>/dev/null && cd "$(dirname "$target")" 2>/dev/null && printf '%s/%s' "$PWD" "$(basename "$target")") ;;
         esac
+        # Looping over worktrees? Write `rm -f -- "${wt:?}/${entry:?}"`: Claude Code refuses `"$wt/$entry"`.
         git -C "$main_root" check-ignore -q "$target" 2>/dev/null && rm -f "<worktree-path>/$entry"
       done
       git worktree remove <worktree-path>             # unforced
@@ -2659,7 +3532,7 @@ PY
       branch = sys.argv[2]
       live   = Path('sysop/runtime/pending-docs')
       NOT_A_BRANCH_DOC = {'convention-candidates.md'}   # never collected, so never rolled back
-      fm_re = re.compile(r'^---\n(.*?)\n---', re.DOTALL)
+      fm_re = re.compile(r'^\ufeff?---\n(.*?)\n---', re.DOTALL)
 
       src_dir = wt / 'sysop' / 'runtime' / 'pending-docs'
 
@@ -2704,6 +3577,7 @@ PY
                 f'there is nothing to undo.')
           sys.exit(4)
 
+      WHY = {}
       def branch_of(p):
           """Identical to the collect's reader — same regex, same `yaml.safe_load`.
 
@@ -2719,25 +3593,30 @@ PY
           # `is_file()` follows symlinks, so a valid link to a real doc still reads and a
           # dangling one returns the sentinel.
           if not p.is_file():
+              WHY[p] = ' — it is not a regular file'
               return None
           try:
               m = fm_re.match(p.read_text(encoding='utf-8', errors='replace'))
-          except OSError:
+          except OSError as e:
+              WHY[p] = f' — it could not be read ({type(e).__name__})'
               return None
           if not m:
+              WHY[p] = ' — it has no frontmatter block at the top'
               return None
           try:
               fm = yaml.safe_load(m.group(1))
-          except (yaml.YAMLError, RecursionError):
-              # `RecursionError` is NOT a `YAMLError`. A deeply nested flow sequence in a
-              # doc this step merely walks past raised it straight through this handler:
-              # exit 1, empty stdout, on the half that deletes — the same shape this page
-              # already fixed for `live.mkdir`. Measured on a neighbour doc.
+          except Exception as e:
+              WHY[p] = f' — its frontmatter does not parse ({type(e).__name__}: {str(e).split(chr(10))[0]})'
               return None
           if not isinstance(fm, dict):
+              WHY[p] = f' — its frontmatter is a {type(fm).__name__}, not a mapping'
               return None
           b = fm.get('branch')
-          return b.strip() if isinstance(b, str) and b.strip() else None
+          if isinstance(b, str) and b.strip():
+              return b.strip()
+          WHY[p] = (f' — `branch:` is a YAML {type(b).__name__}: quote it, or re-run /document-work'
+                    if b is not None and not isinstance(b, str) else ' — it has no `branch:` value')
+          return None
 
       # POPULATION — `Q-482`. The worktree's docs were only ever a NAME source: every
       # unlink below is gated on MAIN's own copy claiming this branch, so `src_dir`
@@ -2792,8 +3671,8 @@ PY
           # copy claims this branch — the copy step (a) just made. Comparing the two docs
           # to each other is what let a worktree carrying a foreign-branch doc delete
           # another branch's only surviving record.
-          if branch_of(dst) != branch:
-              left.append(f'{name} (main copy claims {branch_of(dst)!r}, processing {branch!r})')
+          if (dst_b := branch_of(dst)) != branch:
+              left.append(f'{name} (main copy claims {dst_b!r}, processing {branch!r}){WHY.get(dst, "")}')
               continue
           # THE UNLINK IS CONDITIONAL ON ANOTHER COPY SURVIVING, and that condition is the
           # unlink's OWN stated property (`re-collected on a later run`) rather than a new
@@ -2888,7 +3767,7 @@ PY
 
    **Do not run `git worktree remove` on a shape that is not a worktree**, and do not treat its failure as the ISSUE-0016 remove-refusal: that guard's whole meaning is "a worktree carries an uncommitted file," and a clone failing the command carries no such claim. Misreading it downgrades an otherwise clean branch to SKIP for a reason that does not exist.
 
-For **SKIP'd** branches (Step 2a verdict, dirty worktree), do nothing here — the worktree stays.
+For **SKIP'd** branches (any Step 2a SKIP verdict), do nothing here — the worktree stays.
 For **rejected** branches, leave worktrees in place (cleaned up in Step 6).
 
 ## Step 4: Merge & Land on Main
@@ -3075,24 +3954,83 @@ For each approved feature branch (oldest first), merge it into the **merge targe
    git rev-parse --verify --quiet "refs/remotes/origin/<branch>" || echo "(local-only)"
    ```
    A stale remote-tracking ref (pushed once, since deleted on the remote) also prints a SHA and so takes the published arm. That is the safe direction: the published arm's only cost is one throwaway ref.
+
+   **Then ask whether a recorded PR head contains any of its commits** (`pr` policy; Step 4d records each close's PR head). Write the branch and the merge target out:
+   ```bash
+   python3 - "<branch>" "<merge target>" <<'PY'
+   import os, subprocess, sys
+   branch, target = sys.argv[1], sys.argv[2]
+   if not branch or not target or "<" in branch + target:
+       print("UNSUBSTITUTED or empty operand — write the branch and the merge target out. STOP.")
+       sys.exit(3)
+   def git(*args):
+       r = subprocess.run(["git", *args], capture_output=True)
+       if r.returncode != 0:
+           print(f"git {' '.join(args)} failed: {os.fsdecode(r.stderr).strip()} — STOP.")
+           sys.exit(3)
+       return os.fsdecode(r.stdout).split()
+   heads = git("for-each-ref", "--format=%(refname)", "refs/sysop/merged-pr-heads/")
+   own = git("rev-list", branch, "^" + target)
+   best, skip = "", []
+   for head in heads:
+       rest = set(git("rev-list", branch, "^" + target, "^" + head))
+       stale = [c for c in own if c not in rest]
+       if len(stale) > len(skip):
+           best, skip = head, stale
+   if not best:
+       print("RECORDED HEAD: none")
+       sys.exit(0)
+   replay = git("rev-list", branch, "^" + best)
+   extra = set(replay) - set(own)
+   if extra:
+       print(f"RECORDED HEAD: not usable — {best} lacks {len(extra)} commit(s) the merge "
+             "target already has, and --onto would replay them")
+       sys.exit(0)
+   print(f"RECORDED HEAD: {best}")
+   print(f"SKIP {len(skip)} commit(s) PR #{best.rsplit('/', 1)[1]}'s head contains:")
+   for sha in reversed(skip):
+       out = subprocess.run(["git", "log", "-1", "--format=%h %s", sha], capture_output=True)
+       print("  " + os.fsdecode(out.stdout).strip())
+   print(f"REPLAY {len(replay)} commit(s)")
+   PY
+   ```
+   - **A branch Step 2a approved as landed in `<ref>`** (step 0b, `Q-646`) — its tip is already in `<ref>`, and item 1 prints `RECORDED HEAD: none` for it. Merge it under neither arm of item 2. Record it `merged — already in <ref>` for Steps 4c, 6 and 8.
+   - **`RECORDED HEAD: none`** — take item 2's arm as written.
+   - **`RECORDED HEAD: <ref>` and `REPLAY` above 0** — item 2 uses the ref. Carry the `SKIP` lines to Step 8's `Squash provenance:` line.
+   - **`RECORDED HEAD: <ref>` and `REPLAY 0 commit(s)`**, on a branch Step 2a approved as **landed by PR #<N>** — every commit on it is already in that PR's squash. Merge it under neither arm of item 2; record it `merged — PR #<N>` for Steps 4c, 6 and 8.
+   - **`REPLAY 0 commit(s)` on a branch Step 2a reviewed** (step 0b printed `NOT LANDED`) — its local ref holds nothing new, and step 0b found a reason not to call it landed. Merge it under neither arm and record it **4a-SKIP**, with step 0b's reason, per *When a branch really is skipped* below.
+   - **`RECORDED HEAD: not usable`** — the head holding the most of the branch's commits lacks commits the branch carries and the target already has (the branch merged `<default branch>`, or a branch cut after that squash). Take item 2's arm as written, and put the line on Step 8.
+   - **Exit 3** — a placeholder or a `git` failure. Nothing has moved; fix it and re-run.
+   See `REFERENCE.md` § *Squash provenance: why each `pr` close records its PR head*.
+
 2. **Merge — rebase-then-ff when the branch is local-only, `--no-ff` when it is published.** **If either path below conflicts, go to item 4 before running anything else** — item 4 routes the conflict and nothing between here and there knows one happened. Stated at the command rather than only at item 4: in written order an operator meets the merge first, which is the shape Phase 218's round caught one step over, where the rule sat 81 lines past the command it governed.
    - **Local-only** (the common case: `/claim-task` branches are usually never pushed under `pr` policy) — rebase, then fast-forward, exactly as before:
      `git checkout <branch> && git rebase "<merge target>"`, then
      `git checkout "<merge target>" && git merge --ff-only <branch>`
+
+     **When item 1 printed `RECORDED HEAD: <ref>`, rebase with `--onto` instead**, which replays only the commits that head does not contain:
+     `git rebase --onto "<merge target>" "<ref>" <branch>`, then the same `git checkout "<merge target>" && git merge --ff-only <branch>`.
+     A `status:` conflict that still appears is two actors: STOP, per item 4.
+
    - **Published** — **do not rebase it at all.** Check out the merge target and take the branch with a merge commit:
      `git checkout "<merge target>" && git merge --no-ff -m "merge <branch> (published — not rebased)" <branch>`
+
+     **When item 1 printed `RECORDED HEAD: <ref>` and the merge stops on a `status:` conflict in `tasks/index.yml`, or on a batch header or statistics conflict in `review_tasks.md`**, run the test on that file:
+     `git diff "<ref>"..."<branch>" -- <that file>`
+     If that diff does not change the conflicted line, the branch's side came from a claim commit the recorded head contains: resolve that line, not the whole hunk (a hunk can hold the branch's own lines beside it), to the merge target's side, and put `<branch>: <task id or batch> — target's side (PR #<N>'s head)` on Step 8. Then apply that file's resolution below, reading what the branch changed from this diff rather than from stage 1, which predates the claim commits: for `tasks/index.yml`, the structural recipe and its validator gate. Continue with `git -c core.editor=true merge --continue`. If it does change it, two actors moved the status: report both values and STOP.
+
      Rebasing a published branch rewrites history the remote already has: measured, a branch sitting at `0 0` against `origin/<branch>` comes out **1 behind, 2 ahead** with a new tip, after which `origin/<branch>` is an ancestor of nothing this close merges and every PR tracking it points at abandoned commits. `--no-ff` leaves `<branch>` exactly where it was — measured `0 0` after the merge — while putting its **actual commits** on the merge target.
      **`-m` is not optional.** `git merge` decides whether to open an editor from whether stdin is a terminal, so the same command is silent in one context and blocks in another; `-m` removes the question. This is the same editor hazard the non-interactive `--continue` form below exists for, in a second verb.
      **Do not "simplify" this arm back to a rebase, in place or through a throwaway ref** — both were tried, both are measured above, and both cost more than the merge commit does. **The cost, stated:** the merge target gains a merge commit instead of a linear replay. Under `pr` that costs nothing on `main` — the integration branch is squash-merged, so its internal shape is discarded. Under `direct` the merge commit lands on `main`, which is a real departure from this step's ff-only history and is the price of not rewriting a published branch.
      **Why not rebase through a throwaway ref.** That was tried and **withdrawn by this phase's own review round**, which measured what it broke: the branch's own commits never become ancestors of the merge target, so Step 4c's merged-branch filter reads `rev-list --count <branch> ^HEAD` = **2** and classifies a successfully merged branch `NOT-MERGED` — holding back its pending-doc, never flipping its task to `done`, never dropping its lock — and Step 6's `git branch -d` then **refuses** on a branch the same step forbids `-D` for. `--no-ff` scores `0` on that filter and deletes cleanly, verified side by side on one fixture.
 3. **A published branch's own PR does not survive this close, and nothing in it says so out loud.** The branch's commits reach the merge target, but `main` is written by a **squash** of the merge target, so GitHub never marks that PR merged. Step 6 then deletes the branch — `git push origin --delete <branch>`, which it runs for every branch this step merged — and deleting a PR's head branch **closes that PR as unmerged**. So the end state is a closed-not-merged PR for work that did in fact ship, with no comment explaining it. **Before Step 6 runs, comment on that PR pointing at this close's integration PR**, and carry the branch and PR number to Step 8's `Superseded PRs:` row either way. (Under the Step 4-pre reuse shape none of this arises: that shape merges the branch's own PR.)
-4. If the merge conflicts, **route by which file conflicted** — do not abort reflexively. A conflict in one of the **Sysop-written shared append files** below is the expected multi-branch shape, not a reason to skip: resolve it per the next section — and for `tasks/index.yml`, its `validate_tasks.py` gate must pass before you `git -c core.editor=true rebase --continue`. Abort-and-skip (`git rebase --abort`, report the conflict, downgrade the branch to **4a-SKIP** per *When a branch really is skipped* below) is for conflicts you cannot resolve confidently — genuine code overlap you are not equipped to adjudicate, or a shared-file resolution the validator rejects. **The two arms abort differently, and the published one is the gentler.** Local-only: `git rebase --abort` returns the branch to its pre-rebase tip. Published: there is no rebase to abort — `git merge --abort` restores the *merge target*, and `<branch>` was never touched at any point, so nothing about it needs undoing. Either way the branch and its lock stay intact for the next cycle.
+4. If the merge conflicts, **route by which file conflicted** — do not abort reflexively. A conflict in one of the **Sysop-written shared append files** below is the expected multi-branch shape, not a reason to skip: resolve it per the next section — and for `tasks/index.yml`, its `validate_tasks.py` gate must pass before you continue, with the command the gate names for your arm. Abort-and-skip (`git rebase --abort`, report the conflict, downgrade the branch to **4a-SKIP** per *When a branch really is skipped* below) is for conflicts you cannot resolve confidently — genuine code overlap you are not equipped to adjudicate, or a shared-file resolution the validator rejects. **The two arms abort differently, and the published one is the gentler.** Local-only: `git rebase --abort` returns the branch to its pre-rebase tip. Published: there is no rebase to abort — `git merge --abort` restores the *merge target*, and `<branch>` was never touched at any point, so nothing about it needs undoing. Either way the branch and its lock stay intact for the next cycle.
 
 #### Sysop-written shared append files — the conflicts this skill causes itself
 
 Three tracked files are appended to across branches as a matter of workflow, so a conflict in them is prescribed rather than exceptional — the first two by *every* branch, `tasks/notes.md` only by a branch that edited a consumer's existing ledger. **Never resolve the first two by stripping the `<<<<<<<`/`=======`/`>>>>>>>` markers and keeping both sides**; `tasks/notes.md` is the one exception and its bullet states the two properties that make it one. For an indented list marker-stripping is exactly the resolution that corrupts silently — verified by repro, not reasoned:
 
-- **`tasks/index.yml`** — **a conflict on a `status:` line is the one shape here that is NOT an append collision: two actors moved the same task's status, so report both values and STOP rather than resolving it. Everything below is about the append case.** `/document-work` **requires** a branch that surfaces a follow-up to file it here: its otherwise-blanket "do NOT modify `tasks/index.yml`" rule carries one explicit carve-out, *"Filing a NEW follow-up task entry (id + body file under `tasks/open/`) IS allowed and is required when the work surfaces a follow-up that Step 3b would otherwise hard-fail on."* `/add-task` appends here too. So two branches filing follow-ups in one cycle collide deterministically — this is a conflict Sysop's own workflow prescribes, not an edge case. Git splits the entry into **two separate hunks** — the `id:` line and the `body:` line — and leaves every field the two entries share (`title` when identical, `phase`, `status`, `effort`, `blast_radius`, `user_action`, `depends_on`, `surfaced_by`) *outside* the markers as common context. Strip the markers and you get one entry holding **`id:` alone** while the next entry absorbs the whole shared field block plus a duplicate `body:` key. `yaml.safe_load` accepts it, the ids stay unique, and the damage is invisible to a diff read.
+- **`tasks/index.yml`** — **a conflict on a `status:` line is the one shape here that is NOT an append collision: two actors moved the same task's status, so report both values and STOP rather than resolving it** — unless item 2's published arm traced the branch's side to a recorded PR head, which resolves it to the target's side. **Everything below is about the append case.** `/document-work` **requires** a branch that surfaces a follow-up to file it here: its otherwise-blanket "do NOT modify `tasks/index.yml`" rule carries one explicit carve-out, *"Filing a NEW follow-up task entry (id + body file under `tasks/open/`) IS allowed and is required when the work surfaces a follow-up that Step 3b would otherwise hard-fail on."* `/add-task` appends here too. So two branches filing follow-ups in one cycle collide deterministically — this is a conflict Sysop's own workflow prescribes, not an edge case. Git splits the entry into **two separate hunks** — the `id:` line and the `body:` line — and leaves every field the two entries share (`title` when identical, `phase`, `status`, `effort`, `blast_radius`, `user_action`, `depends_on`, `surfaced_by`) *outside* the markers as common context. Strip the markers and you get one entry holding **`id:` alone** while the next entry absorbs the whole shared field block plus a duplicate `body:` key. `yaml.safe_load` accepts it, the ids stay unique, and the damage is invisible to a diff read.
 - **`review_tasks.md`** — see the paragraph below, which predates this section and still governs.
 - **`tasks/notes.md`** — the retired notes ledger (`tasks/README.md` § *The notes ledger*). **This is the one of the three where keeping both sides IS the resolution**, and that is a property of its shape rather than a relaxation: it is a flat list of independent one-line entries with no nesting, so a union has nothing to splice wrongly. Order carries no meaning — do not reorder to make the diff tidy, and do not merge two lines that look similar; they were written by different branches about different work. **Two properties make the union safe, and BOTH must hold — check them, do not assume them.** **(1) The file is flat**: one line per note, no sub-bullets, no sections, no line continued across two lines. A nested list is the `tasks/index.yml` corruption above in a file with no validator behind it. **(2) Neither side DELETED a line.** A delete is not structure and leaves the file perfectly flat, so property (1) does not catch it — and this workflow *creates* deletes: `/add-task` Step 2 promotes a note by filing it as a task and removing its line. Union a promotion against another branch's append and **the promoted note comes back**, now duplicating a filed task. Verify with the merge stages before you union — same numbering as `tasks/index.yml` above, stage 2 is the merge target and stage 3 is the branch being replayed:
 
@@ -3119,9 +4057,11 @@ git show :3:tasks/index.yml > "$STAGES/theirs.yml"   # this branch — has its o
 
 Take the merge target's file as the base and append only the entries whose `id` it does not already carry, copying each new entry's block **verbatim** from stage 3. Do not hand-retype fields and do not reorder the target's existing entries.
 
-**Union-by-id alone is not sufficient, and both gaps lose work with the validator green.** Before you apply it, diff stage 3 against **stage 1** (the merge base — present on a content conflict) and classify what the branch actually did:
+**Union-by-id alone is not sufficient, and each gap below can lose work with the validator green.** Before you apply it, diff stage 3 against **stage 1** (the replayed commit's parent during a rebase, the merge base during a merge — present on a content conflict) and classify what the branch actually did:
 
 - **The branch MODIFIED an existing entry** (a retriage, a `status`/`effort`/`blast_radius` change, a `deferred` move, an `/onboard` import rewriting the backlog). Union-by-id **discards that change wholesale** — the id is already present, so stage 3's version is never applied — and the result validates clean, because the merge target's file is internally consistent on its own. Re-apply each modified entry's fields onto the base by hand, or abort and 4a-SKIP. **Do not assume this cannot happen** because `/document-work` and `/add-task` are append-only: a task whose *subject* is the backlog legitimately rewrites entries on its branch.
+- **The branch REMOVED an entry** — an id in stage 1 that stage 3 no longer carries (a withdrawn task, an `/onboard` dedup). Union-by-id keeps the target's copy, so the removal is undone. Delete that entry from the base too; if the target removed it as well, there is nothing to do. If the target changed the entry or its body file (`tasks/open/<ID>.md`, which then conflicts modify/delete) since stage 1, both sides edited it: abort and 4a-SKIP. A `body file does not exist` error naming an id stage 3 dropped is this shape; do not recreate the body.
+- **The TARGET removed an entry the branch kept** — an id in stage 1 and stage 3 that stage 2 no longer carries. It is not new: do not append it, or the target's removal is undone. If the branch changed the entry or its body file (which then conflicts modify/delete) since stage 1, abort and 4a-SKIP.
 - **Both sides added the SAME id** — the deterministic outcome when two branches auto-number from the same base. Union-by-id keeps one and **silently annihilates the other's task**. Renumber the incoming entry to the next free id, and **resolve its body file too**: `tasks/open/<ID>.md` conflicts `add/add` in this shape, and neither `validate_tasks.py` nor the shipped `pre-commit` scans for conflict markers, so staging it commits `<<<<<<<` into the task body with every gate green. Grep the branch for references to the old id before continuing.
 - **The branch edited anything outside `tasks:`** — `phases:`, `schema_version:`, a sprint note. Taking the target's file as the base drops those too. A new phase plus a task filed into it surfaces as `task 'phase' N does not match any phases[].number`; **do not "fix" that by retyping the task's `phase:`**, which validates green while discarding the phase and silently reassigning the task.
 
@@ -3131,7 +4071,7 @@ Then, **stage the resolved file and gate it**:
 git add tasks/index.yml
 ```
 
-**before `git -c core.editor=true rebase --continue`**:
+**before you continue — `git -c core.editor=true rebase --continue` on the local-only arm, `git -c core.editor=true merge --continue` on the published arm**:
 
 ```bash
 python3 sysop/scripts/validate_tasks.py
@@ -3141,7 +4081,7 @@ python3 sysop/scripts/validate_tasks.py
 
 **Read the exit code — `1` and `2` mean different things and take different actions.** `validate_tasks.py` returns **1** for schema errors (your resolution is wrong: fix it, or abort and 4a-SKIP the branch) and **2** for environment failures — missing PyYAML, a missing `tasks/` directory, an unreadable script. A `2` says nothing about the resolution, so **do not abort on it**: fix the environment (the script self-resolves venv PyYAML via its own `sys.path` bootstrap, but a `python3` with neither will exit 2 and say so) and re-run. Aborting on a `2` discards a correct resolution and downgrades an approved branch over a missing dependency.
 
-**What this gate does and does not cover.** It validates `tasks/index.yml` only — `validate_tasks.py` has no knowledge of `review_tasks.md` whatsoever. A `review_tasks.md` conflict is resolved by reading both sides per the paragraph below and has **no automated gate**; do not let this step's green stand in for it. (Git does enforce one thing for free: `git -c core.editor=true rebase --continue` refuses while *any* conflicted path is unresolved, so a half-resolved commit is not reachable even though the two files are documented separately.)
+**What this gate does and does not cover.** It validates `tasks/index.yml` only — `validate_tasks.py` has no knowledge of `review_tasks.md` whatsoever. A `review_tasks.md` conflict is resolved by reading both sides per the paragraph below and has **no automated gate**; do not let this step's green stand in for it. (Git does enforce one thing for free: either arm's `--continue` refuses while *any* conflicted path is unresolved, so a half-resolved commit is not reachable even though the two files are documented separately.)
 
 Write the stage extracts into the fresh directory each block makes and prints (`STAGES=`), not the repo root and never a fixed name in the shared temp directory, which a concurrent close would overwrite — and delete them when the resolution is written. Nothing in the shipped flow stages untracked files, so a repo-root scratch file is not committed; but Step 1a deliberately skips the primary checkout, so one left behind is never surfaced and persists indefinitely. `${TMPDIR:-/tmp}` is the house convention (Phase 153 — `TMPDIR` is unset on most Linux shells, so the fallback is required and a drift guard enforces it) and removes the question.
 
@@ -3260,7 +4200,7 @@ Under `--dry-run` this step does not run, and Step 8 lists the notes collected.
 
    `HEAD` is the merge target now, so this is the assembled diff: every approved branch's contribution, plus — under `pr` policy's integration-branch shape — the local-only `main` commits the integration branch carries by being cut from local `<default branch>`. **Under `direct` it can be a superset**, and deliberately so: Step 4-pre is a bare `git checkout <default branch>` with no fetch, so `origin/<default branch>` may be stale and the range then also covers whatever landed upstream since your last fetch. That errs toward verifying more, which is the safe direction; do not "fix" it with a fetch here, because refreshing the base mid-close is Rule B's job at Step 4d and doing it early would silently change the tree you are about to gate. It is also what makes the consumer's `### Ratchet` snippets correct for the first time — each one filters `git diff --name-only origin/<default branch>...HEAD` on its own, and only on this tree does that command name the work being shipped. `NO_ORIGIN_MAIN` here means the same thing it means at Step 3: gate nothing, skip nothing, run the full list.
 
-   **An empty list here is not automatically a pass and not automatically a contradiction — the discriminator is how many branches are still approved after Step 3b, so read that count first.** Unlike at Step 3, an empty list at this point *can* mean something did not land; whether it does depends on whether anything was owed. **Take the count after Step 3b, not after Step 2a** — Step 2d can demote an approved branch to rejected and Step 3b can downgrade one to SKIP, which is the same stage Step 4-pre condition 1 insists on and for the same reason. A branch Step 4a aborted-and-skipped is **still approved**, and still stops.
+   **An empty list here is not automatically a pass and not automatically a contradiction — the discriminator is how many branches are still approved after Step 3b, so read that count first.** Do not count a branch Step 4a item 1 recorded `merged — PR #<N>` or `merged — already in <ref>`: it merged nothing this run. Unlike at Step 3, an empty list at this point *can* mean something did not land; whether it does depends on whether anything was owed. **Take the count after Step 3b, not after Step 2a** — Step 2d can demote an approved branch to rejected and Step 3b can downgrade one to SKIP, which is the same stage Step 4-pre condition 1 insists on and for the same reason. A branch Step 4a aborted-and-skipped is **still approved**, and still stops.
 
    - **One or more still approved after Step 3b**, including the Step 4-pre PR-reuse shape where the merge target *is* the one approved branch: **stop.** An empty list says the merge target holds nothing `origin/<default branch>` does not already have, while this close approved work that should be in it. Something did not land: a rebase left the branch a no-op, a `--ff-only` merge was skipped after a conflict, or `HEAD` is not the merge target you think it is. Report it and reconcile before Step 4b — do not let a gate that executed nothing report green over a close that merged nothing.
    - **Zero still approved after Step 3b** — the docs-consolidation cycle: **expected, and not a contradiction.** Step 4a's loop ran over an empty set, so nothing was owed. Continue to item 3, which still runs the consumer's declared `### Always` list. Record `changed-file list empty — zero approved branches` on Step 8's `Verification:` line beside whatever item 3 reports; **that note is not `ran nothing`**, which is reserved for a run that executed zero commands.
@@ -3299,18 +4239,27 @@ Under `--dry-run` this step does not run, and Step 8 lists the notes collected.
 
    **`NO_ORIGIN_MAIN` does not reach this step** — also contrary to the filing, which asked for that rule to be inherited. It governs a **range**, and this scan takes none: it reads the working tree and the baseline file. There is nothing here for an uncomputable diff scope to narrow, so there is nothing to fail open.
 
-4. **On failure, stop — unless the failure is one this close inherited and is about to repair. Test that first, and stop on anything you cannot establish.**
+4. **On failure, stop — unless the failure is one this close inherited and is about to repair, or, under `pr`, a test failure the default branch reproduces and the human answers for. Test those first, and stop on anything you cannot establish.**
 
    **If `4a-fix` kept a fix commit, test it before anything below** — on this step's first run only, while `HEAD` is still `<fix-sha>` and `git diff --quiet HEAD --` succeeds. Drop it with `4a-fix` item 5's check and drop, route its notes to item 6's filing, and re-run this step once from item 1. Green now means the fix was the failure: record `dropped after 4a-post failed` for Step 8's `Close notes:` line, and the re-run's green is this step's result. Still failing means the fix was not the failure: restore it with `git cherry-pick <fix-sha>`, take its notes back from item 6, and let the arms below decide. On a later run, such as Rule B's, or over a dirty tree, the arms below decide at once.
 
    **The inherited-failure arm fires only when all three hold.** It is scoped to one error on purpose; no other failure reaches it.
    1. **This close has zero branches still approved after Step 3b**, so it cannot have introduced the failure. One or more — including the Step 4-pre PR-reuse shape — means stop. Same count, same stage, as step 2 above.
    2. **The failing command fails the same way on `origin/<default branch>`.** If `git rev-list --left-right --count origin/<default branch>...HEAD` reports zero on both sides, the two trees are identical and this is already established. Otherwise re-run the command against that ref in a **throwaway detached worktree** — `git worktree add --detach "${TMPDIR:-/tmp}/sysop-base-probe" origin/<default branch>` — and remove it afterwards. **Do not `git checkout` to reach it:** that moves `HEAD` in the middle of Step 4, which the branch guard and `_shared/main-push-guard.md` Rule A exist to prevent. If the range cannot be computed at all (`NO_ORIGIN_MAIN`, an unsubstituted placeholder, exit 128), you have not established this — **stop**.
-   3. **The failure is `validate_tasks.py` Invariant 9** (`status=in_progress but lock file missing`) **for a task id this close's Step 4c will actually flip to `done`** — the id appears in the `roadmap_ids:` (or legacy `task_ids:`) frontmatter of a pending-doc that survives **all three** of Step 4c's filters: step 1's glob, step 1b's merged-branch filter, **and step 1c's `user_action` hold**. **Step 1c is the one most easily missed and it is decisive** — it refuses to route the doc *at all* this run when any id it names has a truthy `user_action`, and a doc naming one held task and one unheld task holds **both**. A doc 1c holds produces no flip, so the premise of this arm is false. **If you cannot name a doc that clears all three, stop.** Step 6's *Lock-as-real-time-signal invariant* classifies this one error as an expected transient that clears when the `done` flip lands, and Step 4c is what lands it.
+   3. **The failure is `validate_tasks.py` Invariant 9** (`status=in_progress but lock file missing`) **for a task id this close's Step 4c will actually flip to `done`** — the id appears in the `roadmap_ids:` (or legacy `task_ids:`) frontmatter of a pending-doc that survives **all three** of Step 4c's filters: step 1's glob, step 1b's merged-branch filter, **and step 1c's hold (`hold:` or `user_action`)**. **Step 1c is the one most easily missed and it is decisive** — it refuses to route the doc *at all* this run when the doc carries `hold:` or any id it names has a truthy `user_action`, and a doc naming one held task and one unheld task holds **both**. A doc 1c holds produces no flip, so the premise of this arm is false. **If you cannot name a doc that clears all three, stop.** Step 6's *Lock-as-real-time-signal invariant* classifies this one error as an expected transient that clears when the `done` flip lands, and Step 4c is what lands it.
 
    **When the arm fires, report it and keep going to item 5** — `INHERITED: <command> — fails on origin/<default branch> too; <TASK-ID> is in this close's Step 4c set` on Step 8's `Verification:` line, **beside** the executed-command count, never instead of it. **Never silently:** a gate that walks past a failure without saying so reads exactly like one that passed. Re-run the command after Step 4c's flip and report that result as the gate for the tree actually pushed.
 
    **What this arm does not cover, stated so nobody reads it as more than it is.** It lives at `4a-post` only. Step 3 runs the same resolved list against `main` and its failure stop is unconditional, so a close whose *Step 3* diff touches code dies one gate earlier on the identical inherited failure with no relief here. That is a live shape — the "only unpushed main commits this cycle" category with any code file in it — and closing it is a separate decision about Step 3, not something this arm reaches.
+
+   **The pre-existing-failure ask (`Q-631`) asks; it never continues on its own.** Ask only when all five hold:
+   1. **The merge policy is `pr`.** Under `direct`, stop.
+   2. **The failing command names the tests that failed, and ran them all.** Read the failing tests' IDs from its output (a pytest node ID, a test file and name). A command that names none, such as a lint, a build or a bare exit code, cannot be compared: stop. Nor can a run that stopped early, because its failures are only the first ones it met: stop when the command carries `-x`, `--exitfirst`, `--maxfail`, `--failfast` or `--bail`, when its output says `stopping after`, `Interrupted` or reports a collection error, or when a failure names no test, such as a coverage threshold.
+   3. **The same set of failing test IDs fails on `origin/<default branch>`, in the same environment.** Run the same command, from the same shell, in a throwaway detached worktree: `git worktree add --detach "${TMPDIR:-/tmp}/sysop-base-probe" origin/<default branch>`. First symlink into it, at the same relative paths, the untracked files the failing run read from this checkout, such as a `.env` or a local config. A worktree carries no untracked file, so without them the probe is a different environment. Link files, never a directory: a linked `.venv` or `node_modules` can load the code under test from this checkout. Name a tool that lives in this checkout's dependency tree by its absolute path instead. Same set means no ID fails on one side only. Remove the probe afterwards with `git worktree remove --force`: a linked file the repository does not ignore blocks a plain remove, and removing a link leaves its target alone. If you cannot tell which local files the command read, or cannot link them, you have not established this: stop. If `git worktree add` refuses because the probe path exists or is still registered, which a close that stopped between add and remove leaves behind, run `git worktree remove --force` on it, or `git worktree prune` when the directory is gone, and add again; this holds for the arm above's probe too.
+   4. **The probe ran the default branch's code.** Before comparing, show from inside the probe where the code under test loads from. For Python, run the same interpreter there: `<interpreter> -c 'import <package>; print(<package>.__file__)'`. A path outside the probe, such as this checkout's `src/` through an editable install, means the probe tested the merged code: stop. If you cannot show it, stop.
+   5. **The human answers.** Ask once for the whole close, with `AskUserQuestion`. Name each failing command, its failing IDs, and that they fail identically on `origin/<default branch>`. Offer **"Proceed — the failures are pre-existing (Recommended)"** and **"Stop the close"**. With nobody to answer, as in an unattended run, stop. Never proceed without the answer.
+
+   **On "Proceed"**, report `PRE-EXISTING: <command> — <N> test IDs also fail on origin/<default branch>; proceeded on the human's answer` on Step 8's `Verification:` line, beside the executed-command count and never instead of it. Then continue to item 5. **On "Stop"**, stop as below.
 
    **On every other failure, stop.** Nothing has been pushed, `close_batch.sh` has not run, and no pending-doc has been consumed. Report the failing command with its output. Recovery is per merge policy:
    - **`pr`** — the merges are on the merge target, unpushed. Fix the failure, then re-run `/review-close`: a `pr` run cuts a fresh integration branch every time, so the abandoned one costs a `git branch -D` and nothing else. Under the PR-reuse shape there is no branch to abandon — the extra commits simply stay local until a later run pushes them.
@@ -3332,7 +4281,7 @@ Under `--dry-run` this step does not run, and Step 8 lists the notes collected.
 
 ### 4b. Close Merged Batches
 
-After all branches are merged and `4a-post` reported green, but **before** doc consolidation.
+After all branches are merged and `4a-post` reported green, or continued under item 4's `INHERITED:` or `PRE-EXISTING:`, but **before** doc consolidation.
 
 **Determine the batch set first — this step never said where `<N1> <N2> <N3>` come from.** The set is the review batches whose branches step 5 actually merged this run, and **the source is `review_tasks.md`**, read through `python3 sysop/scripts/review_index.py --list` — which prints every batch with its status and its branch, tab-separated. Intersect that branch column with the branches step 5 merged.
 
@@ -3417,23 +4366,31 @@ After all branches are merged but **before** pushing:
 
 1b. **Drop any pending-doc whose branch did not actually merge — this gate decides task state, so it must not run on an unmerged branch's doc.** Step 3b copies each approved branch's pending-doc into main's `sysop/runtime/pending-docs/` *before* the merge is attempted (that ordering is deliberate — it is what stops `git worktree remove` from destroying the doc). So a branch that is approved, has its doc collected, and then **fails to merge at Step 4a** leaves a doc here that this step would otherwise consolidate — routing its content to the shared docs, flipping its `roadmap_ids` to `status: done`, `git mv`-ing the body to `archive/`, and dropping the task's lock and parked markers, **with the code never merged**. Step 3b's own rollback (its step 2b) covers only the case where *it* skips a branch, and says so; nothing covered a 4a-SKIP until this filter.
 
-   > **Before resolving anything, apply 1c's hold test to the doc in front of you.** If any of its ids carries a truthy `user_action`, 1c holds the whole doc — leave-in-place, route nothing — and **that outcome does not depend on what 1b returns**. Resolving the ref is then pure downside: the only thing it can add is 1b's *"stop and ask — do not guess in either direction"*, a halt on a branch reference for a doc that was never going to be routed.
+   > **Before resolving anything, run 1c's hold test without `--stamp`** (`python3 sysop/scripts/pending_doc_hold.py check`) and read the doc's line. A `HELD:` line means 1c holds the whole doc — leave-in-place, route nothing — and **that outcome does not depend on what 1b returns**. Resolving the ref is then pure downside: the only thing it can add is 1b's *"stop and ask — do not guess in either direction"*, a halt on a branch reference for a doc that was never going to be routed.
    >
    > **It short-circuits 1b's REF RESOLUTION, not 1c.** A doc this test holds still goes through 1c below, which is what records the hold and puts it on Step 8's `Held-back docs:` row.
    >
-   > **Read the ids the way 1c reads them:** `roadmap_ids`, falling back to `task_ids`. A short-circuit keyed to only one of the two namespaces would resolve a ref for exactly the legacy doc 1c is most worried about.
+   > **The command reads the ids the way 1c reads them:** `roadmap_ids`, falling back to `task_ids`.
    >
    > **Ordering, not deletion.** 1b still runs, unchanged, for every doc 1c does not hold; the population reaching its *ref resolution* is the only thing that changes.
    > See `REFERENCE.md` § *Step 4c — provenance*.
 
-   For each file found in step 1, read its `branch:` frontmatter value and keep it only if that branch is contained in the merge target:
+   For each file found in step 1, read its `branch:` frontmatter value (parsed as YAML, so without the quotes the templates write) and keep it only if that branch is contained in the merge target:
 
    ```bash
    git rev-list --count "<branch from frontmatter>" "^HEAD"
    ```
 
-   **`0` means merged; any non-zero count is the branch's unmerged commits.** `HEAD` is the merge target here. A **rebased-then-ff-merged** branch is fully contained in it, and a **`--no-ff`-merged** branch scores `0` too — its commits go onto the merge target unchanged, so `^HEAD` reaches them. Both shapes are contained. The one shape that is **not** is a rebase onto a throwaway ref, where the branch's own commits never join the target and a perfectly merged branch scores `2`. **This test is valid only pre-squash.** It is an ancestry test, and a squash breaks ancestry, so it must not be reused after the PR merges.
+   **`0` means merged. A non-zero count is not yet a verdict**: ask the recorded PR heads and the fallback below first. `HEAD` is the merge target here. A **rebased-then-ff-merged** branch is fully contained in it, and a **`--no-ff`-merged** branch scores `0` too — its commits go onto the merge target unchanged, so `^HEAD` reaches them. Both shapes are contained. The one shape that is **not** is a rebase onto a throwaway ref, where the branch's own commits never join the target and a perfectly merged branch scores `2`. **This test is valid only pre-squash.** It is an ancestry test, and a squash breaks ancestry, so it must not be reused after the PR merges.
    See `REFERENCE.md` § *Step 4c — provenance*.
+
+   **On a non-zero count, ask the recorded PR heads before the `git cherry` fallback** — a branch a previous `pr` close squash-merged scores non-zero on both. Resolve the ref first, as the fallback below says, then:
+
+   ```bash
+   git for-each-ref --contains "<branch from frontmatter>" --format='%(refname)' refs/sysop/merged-pr-heads/
+   ```
+
+   A printed `refs/sysop/merged-pr-heads/<N>` means **merged** (by PR #<N>): route the doc, unless Step 4a recorded this branch 4a-SKIP, whose doc stays held. Nothing printed: go on to the fallback.
 
    > **It is an ancestry test, so a CHERRY-PICK breaks it.** Cherry-picking rewrites commits, so the tip is not an ancestor even when the content is fully applied. A rebase + `merge --ff-only` and a `--no-ff` merge both score `0`.
    >
@@ -3464,9 +4421,17 @@ After all branches are merged but **before** pushing:
    > **If you are reading this having already hit the stop**, the doc's content is almost certainly in `main` already — verify with `git log --oneline --all --grep` on its summary before deciding, and do not consolidate on the assumption alone. The `git cherry` fallback above is what prevents the hold-back in the first place. **A doc with no `branch:` at all is quarantined, per the rule above.**
    > See `REFERENCE.md` § *Step 4c — provenance*.
 
-1c. **Hold back any pending-doc naming a task whose human step is still outstanding (`Q-327`).** This test is applied twice and the two are one mechanism. **1b short-circuits its ref resolution on it** (see 1b's first blockquote — `Q-474`), so a held doc is spared 1b's stop-and-ask. **This pass runs over every doc regardless**, because it is the one that records the hold and reports it. A doc the short-circuit spared is still held, still reported, still left in place — the short-circuit removes a ref lookup, never a record. Read each doc's ids and look each one up in `tasks/index.yml`. **Read `roadmap_ids`, falling back to `task_ids`** — the same Phase-23a compat shim step 3 applies (`pending.get('roadmap_ids') or pending.get('task_ids') or []`), and it is not optional here: a legacy doc keyed on `task_ids` that this gate skipped would be routed and consolidated, and only the round-trip's defence-in-depth arm would then hold the task — which is the stranding path, reached through the gate that exists to close it. **If any of those ids has a truthy `user_action`, do not route this doc at all this run** — truthy, **not** `== true`, matching the round-trip's predicate exactly. The two gates must agree, and a malformed non-bool value is precisely where an equality test and a truthiness test diverge: an equality reading routes the doc, the round-trip then holds the task, and the doc is deleted underneath it. The heredoc records why truthiness is the right bias; this gate inherits that reasoning rather than restating it — leave the file in `sysop/runtime/pending-docs/`, exactly as 1b leaves an unmerged branch's doc, and report it under Step 8's `Held-back docs:` with the reason `user_action outstanding: <TASK_ID>`.
+1c. **Hold back any pending-doc whose deliverable is not finished: one whose own frontmatter carries `hold:` (`Q-625`), or one naming a task whose human step is still outstanding (`Q-327`).** This test is applied twice and the two are one mechanism. **1b short-circuits its ref resolution on it** (see 1b's first blockquote — `Q-474`), so a held doc is spared 1b's stop-and-ask. **This pass runs over every doc regardless**, because it is the one that records the hold and reports it. A doc the short-circuit spared is still held, still reported, still left in place — the short-circuit removes a ref lookup, never a record. Run the test; it also stamps each held doc whose branch is merged and that it has not stamped before:
 
-   **Why the WHOLE doc waits, and not just the status flip.** The first cut of this fix did the narrower thing the filing proposed — route the doc entries as normal, hold only the three mutations that assert completion — and it **stranded the task**. The path is worth writing down because nothing about it is obvious: step 6 deletes the pending-docs *this step consolidated*, a routed doc is consolidated, and the pending-doc is the **only** carrier of `roadmap_ids` into this round-trip. So the doc would be gone, the task would sit `in_progress` with its lock held and its body under `open/`, and nothing would ever close it — `clear_user_action.py` flips the flag and says so in its own output (*"status is `in_progress`, so the automated frontier … still will not pick it up"*), and a later `/review-close` has no doc naming the task. **A silent permanent stall, arriving from a fix for a silent false close.** Holding the doc keeps the carrier alive: the human performs the step, clears the flag, and the next `/review-close` consolidates the doc and closes the task through the ordinary path, with no duplicated `CHANGELOG` entry. **The doc is only half the carrier, and the other half is the branch** — the doc's `branch:` is what step 1b resolves, and Step 6 deletes merged feature branches under both policies, so a held doc whose branch was cleaned up does not resume: it **halts** the next close on step 1b's stop-and-ask. Step 6 therefore carries a HARD RULE excluding those branches; that rule and this hold are one mechanism and neither works alone.
+   ```bash
+   python3 sysop/scripts/pending_doc_hold.py check --stamp
+   ```
+
+   It reads each doc's `hold:` and looks each of its ids up in `tasks/index.yml`. **Read `roadmap_ids`, falling back to `task_ids`** — the same Phase-23a compat shim step 3 applies. Both fields are read truthy, **not** `== true`, matching the round-trip's predicate exactly, so the two gates agree. A hold is per task: a doc naming an id that a held doc names is held too (`shares <ids> with a held doc`). **For each `HELD:` line, do not route this doc at all this run** — leave the file in `sysop/runtime/pending-docs/`, exactly as 1b leaves an unmerged branch's doc, and report it under Step 8's `Held-back docs:` with the reasons the line prints (`user_action outstanding: <TASK_ID>`, `hold: <reason>`, `shares <ids> with a held doc`) and its `held since` date. `ROUTE:` docs go on to step 2, and an `UNREADABLE:` doc is step 3's quarantine case. **If the command exits non-zero, stop the close:** it could not decide the holds (1: `tasks/index.yml` could not be read, or no git repository; 2: no PyYAML, or a usage error). A `NOT STAMPED:` note still holds its doc; put it on the Step 8 row, because `/document-work` does not protect an unstamped held doc from being replaced.
+
+   **`held_since:` is this step's only write to a held doc. Never remove `hold:` here.** `/document-work` writes it, and the human removes it with `python3 sysop/scripts/pending_doc_hold.py clear <TASK_ID>`.
+
+   **Why the WHOLE doc waits, and not just the status flip.** The first cut of this fix did the narrower thing the filing proposed — route the doc entries as normal, hold only the three mutations that assert completion — and it **stranded the task**. The path is worth writing down because nothing about it is obvious: step 6 deletes the pending-docs *this step consolidated*, a routed doc is consolidated, and the pending-doc is the **only** carrier of `roadmap_ids` into this round-trip. So the doc would be gone, the task would sit `in_progress` with its lock held and its body under `open/`, and nothing would ever close it — `clear_user_action.py` flips the flag and says so in its own output (*"status is `in_progress`, so the automated frontier … still will not pick it up"*), and a later `/review-close` has no doc naming the task. **A silent permanent stall, arriving from a fix for a silent false close.** Holding the doc keeps the carrier alive: the human performs the step, clears the flag or the `hold:`, and the next `/review-close` consolidates the doc and closes the task through the ordinary path, with no duplicated `CHANGELOG` entry. **The doc is only half the carrier, and the other half is the branch** — the doc's `branch:` is what step 1b resolves, and Step 6 deletes merged feature branches under both policies, so a held doc whose branch was cleaned up does not resume: it **halts** the next close on step 1b's stop-and-ask. Step 6 therefore carries a HARD RULE excluding those branches; that rule and this hold are one mechanism and neither works alone.
 
 
    **Granularity is the whole doc, deliberately.** A pending-doc naming two tasks, one held and one not, holds **both**. Splitting it would mean routing half a doc and re-routing the other half later, which is the duplication this ordering exists to avoid; the conservative direction is the one that cannot write a false `Complete`. Say so in the Step 8 row — name the held task *and* the siblings waiting on it — so the operator can see the whole doc is waiting on one human step.
@@ -3476,11 +4441,11 @@ After all branches are merged but **before** pushing:
 3. **If pending-docs files found**: parse each file's YAML frontmatter and extract:
    - `branch`, `date`, `type`, `roadmap_ids`, `review_task_ids`, `summary`
 
-   **Format detection — three arms, and the third one is not optional.** Use the same reader Step 3c already ships (`fm_re = re.compile(r'^---\n(.*?)\n---', re.DOTALL)`), not a `startswith('---')` test:
+   **Format detection — three arms, and the third one is not optional.** Use the same reader Step 3c already ships (`fm_re = re.compile('^\\ufeff?---\\n(.*?)\\n---', re.DOTALL)`), not a `startswith('---')` test:
 
    1. **Frontmatter matches and `yaml.safe_load` returns a mapping** → parse it. The normal path.
    2. **No frontmatter match** → the legacy 5-section markdown format (`## Classification`, `## PROJECT_STATUS Entry`, etc.).
-   3. **Frontmatter matches but will not parse, or parses to something that is not a mapping** → **quarantine the file and carry on.** Move it to `sysop/runtime/pending-docs/quarantine/<name>.md` — **create the directory first** (`mkdir -p sysop/runtime/pending-docs/quarantine`; nothing else in the tree creates it, so an `mv` alone fails on the first firing), report it on Step 8's `Quarantined docs:` row, and continue with the next file. Do **not** route it (it has no `type`, so the routing table does nothing), do **not** delete it (its bytes are the only record of what shipped), and do **not** leave it in place (it would be re-encountered on every future close).
+   3. **Frontmatter matches but will not parse, or parses to something that is not a mapping** → **quarantine the file and carry on.** "Will not parse" is any exception `yaml.safe_load` raises, not only `yaml.YAMLError`: `date: 2026-09-31` raises `ValueError`, so catch `Exception`. Move it to `sysop/runtime/pending-docs/quarantine/<name>.md` — **create the directory first** (`mkdir -p sysop/runtime/pending-docs/quarantine`; nothing else in the tree creates it, so an `mv` alone fails on the first firing), report it on Step 8's `Quarantined docs:` row, and continue with the next file. Do **not** route it (it has no `type`, so the routing table does nothing), do **not** delete it (its bytes are the only record of what shipped), and do **not** leave it in place (it would be re-encountered on every future close).
 
    > **`or {}` does not protect against a non-mapping — do not rely on it.** `yaml.safe_load("work in progress")` returns the truthy string `"work in progress"`, so `fm or {}` yields the string and `.get()` raises. Test `isinstance(fm, dict)` explicitly.
    > See `REFERENCE.md` § *Step 4c — provenance*.
@@ -3508,7 +4473,7 @@ After all branches are merged but **before** pushing:
    | infrastructure | Yes | — | — | if populated |
    | adhoc | Yes | — | — | if populated |
 
-   The Roadmap column is **informational only** — `if populated` means the `tasks/index.yml` round-trip below runs unconditionally for every ID in `roadmap_ids`, regardless of `type`. This is intentional: the round-trip is mechanical (status flip + body move + lock/parked-marker cleanup), driven by data presence, not by type. **One condition was added by Phase 241 and it is not a type test either — it is a field test.** A task whose `user_action` is `true` is HELD: its doc entries route exactly as this table says, and the three mutations that assert completion do not run. `type` still governs nothing here; `user_action` governs whether the close may claim the task is finished. See the hold comment in the heredoc below for why the smoke gate is not a backstop for it. A pending-doc with `roadmap_ids: []` simply skips the round-trip naturally. (BeanRider ISSUE-0034: tracked-bug close-outs use `type: bugfix` with a populated `roadmap_ids: [BUG-NNNN]` and need the round-trip; the prior `—` reading would have left the BUG entry stuck `in_progress` with the body orphaned under `open/`.)
+   The Roadmap column is **informational only** — `if populated` means the `tasks/index.yml` round-trip below runs unconditionally for every ID in `roadmap_ids`, regardless of `type`. This is intentional: the round-trip is mechanical (status flip + body move + lock/parked-marker cleanup), driven by data presence, not by type. **One condition was added by Phase 241 and it is not a type test either — it is a field test.** A task whose `user_action` is `true` is HELD: its doc entries route exactly as this table says, and the three mutations that assert completion do not run. `type` still governs nothing here; `user_action` governs whether the close may claim the task is finished. Take the ids from step 1c's `ROUTE:` docs, never from a `HELD:` one. The heredoc also reads the pending docs and does not close an id a doc with `hold:` names (`HELD_BY_HOLD`). See the hold comment in the heredoc below for why the smoke gate is not a backstop for it. A pending-doc with `roadmap_ids: []` simply skips the round-trip naturally. (BeanRider ISSUE-0034: tracked-bug close-outs use `type: bugfix` with a populated `roadmap_ids: [BUG-NNNN]` and need the round-trip; the prior `—` reading would have left the BUG entry stuck `in_progress` with the body orphaned under `open/`.)
 
    For each entry, generate the doc content from `type` + `summary` + `roadmap_ids` + `review_task_ids` + `date`:
 
@@ -3538,12 +4503,14 @@ After all branches are merged but **before** pushing:
 
    **tasks/index.yml**: For each ID in `roadmap_ids` (NOT `review_task_ids` — those are documentary, see the note above), round-trip the index through `yaml.safe_load` to set `status: done` + `completed_date: <today's ISO date>` on the entry, then `git mv` the body file from its current location under `open/` or `deferred/` to the corresponding location under `archive/` and update the entry's `body:` field. The heredoc below is prefix-agnostic — it handles both canonical (`body: open/<TASK_ID>.md`) and `tasks/`-prefixed (`body: tasks/open/<TASK_ID>.md`) shapes by locating the `open` / `deferred` path segment and swapping it for `archive`. It also tolerates pending-docs authored before Phase 23a (compat shim — see the **Phase 23a compat shim** block in step 3 above). After all IDs are processed, run the validator (`python3 sysop/scripts/validate_tasks.py` — a single command matching `Bash(python3 sysop/scripts/validate_tasks.py:*)`; Sysop Phase 126 dropped the shared `PATH` prefix this line used to ride on and gave `validate_tasks.py` its own `sys.path` PyYAML bootstrap, so bare `python3` resolves `yaml` for both venv-only and non-venv consumers — BeanRider ISSUE-0049) — if it exits non-zero, abort the close. The schema invariants for `done` status require: a valid `completed_date`, either a `body:` or an `archive_summary:`, and (ISSUE-0009) the body path must NOT contain an `open/` or `deferred/` segment (a half-migrated state where the status flip wrote but the rename silently no-op'd). Fix any failure before pushing.
 
+   Under `--request-review`, run it as `python3 - --keep-locks <<'PY'`.
+
    ```bash
    # `python3` command word + in-heredoc PyYAML bootstrap (BeanRider ISSUE-0049; Sysop
    # Phase 126) so `Bash(python3 -:*)` matches as a single simple command — no PATH prefix,
    # no `&&` compound, no `.venv/bin/python3` (none of which match that rule).
    python3 - <<'PY'
-   import datetime, os, shutil, subprocess, sys, tempfile
+   import datetime, os, re, shutil, subprocess, sys, tempfile
    try:
        import yaml
    except ImportError:  # PyYAML lives only in the project venv (BeanRider ISSUE-0049)
@@ -3567,19 +4534,40 @@ After all branches are merged but **before** pushing:
        import yaml
    from pathlib import Path
    today = datetime.date.today().isoformat()
-   # Populate from this round's pending-doc roadmap_ids (with the Phase 23a
-   # compat shim applied at parse time — see step 3 above).
+   # Populate from the roadmap_ids of step 1c's ROUTE: docs only, never a HELD: one
+   # (with the Phase 23a compat shim applied at parse time — see step 3 above).
    # review_task_ids are NOT processed here — they're documentary only.
    ids = ["<ROADMAP_ID_1>", "<ROADMAP_ID_2>"]
    p = Path('tasks/index.yml')
    try:
        d = yaml.safe_load(p.read_text(encoding='utf-8'))
-   except (OSError, UnicodeDecodeError) as e:
+   except Exception as e:
        sys.exit(f"ERROR: tasks/index.yml could not be read ({type(e).__name__}: {e}); nothing was changed")
    closed = []
    held = []
+   # DEFENCE IN DEPTH for a doc's own `hold:` (`Q-625`), as the `user_action` arm below is
+   # for that flag: an id named by a pending doc that still carries `hold:` is not closed,
+   # whatever the hand-substituted list says. Truthy, as step 1c reads it.
+   held_doc, doc_held = [], set()
+   for _pd in sorted(Path('sysop/runtime/pending-docs').glob('*.md')):
+       if _pd.name == 'convention-candidates.md':
+           continue
+       try:
+           _m = re.match(r'\ufeff?---\n(.*?)\n---',
+                         _pd.read_text(encoding='utf-8', errors='replace').replace('\r\n', '\n'),
+                         re.DOTALL)
+           _fm = yaml.safe_load(_m.group(1)) if _m else None
+       except Exception:
+           continue
+       if isinstance(_fm, dict) and _fm.get('hold'):
+           _v = _fm.get('roadmap_ids') or _fm.get('task_ids') or []
+           doc_held.update([_v] if isinstance(_v, str) else
+                           [str(x) for x in _v] if isinstance(_v, (list, tuple)) else [str(_v)])
    for t in d.get('tasks', []):
        if t['id'] not in ids:
+           continue
+       if t['id'] in doc_held:
+           held_doc.append(t['id'])
            continue
        # HOLD a task whose human step is still outstanding (`Q-327`). `user_action` is
        # Sysop's OWN schema field — validate_tasks.py requires it as a bool on every
@@ -3726,6 +4714,7 @@ After all branches are merged but **before** pushing:
    # Keyed on the task id, not the body shape, so archive_summary and flat-layout
    # closes — which `continue` past the move above — are still cleaned up.
    locks_removed, locks_absent, markers_removed = [], [], []
+   locks_kept, KEEP_LOCKS = [], sys.argv[1:] == ['--keep-locks']
    artifacts_removed, artifacts_failed = [], []
    for tid in closed:
        # Drop the per-task lock file (BeanRider ISSUE-0035). The lock's lifecycle
@@ -3742,15 +4731,18 @@ After all branches are merged but **before** pushing:
        # `exists()` alone follows symlinks, so a DANGLING lock symlink reports
        # 'already absent' while the unlink below really does remove it — a row
        # that claims to report what this code did, reporting the opposite.
-       (locks_removed if (lock.exists() or lock.is_symlink()) else locks_absent).append(tid)
-       lock.unlink(missing_ok=True)
+       if KEEP_LOCKS:
+           (locks_kept if (lock.exists() or lock.is_symlink()) else locks_absent).append(tid)
+       else:
+           (locks_removed if (lock.exists() or lock.is_symlink()) else locks_absent).append(tid)
+           lock.unlink(missing_ok=True)
        # Also drop any parked marker(s) for the task. /auto-build Phase 6d mirrors a
        # parked task's plan + verdict to the durable project-root archive
        # sysop/runtime/parked/<TASK_ID>__<TS>.md; the close path historically
        # never removed them, so markers for done tasks accumulated — the parked/ dir a
        # human lists when hunting resumable work over-reports a done task as still
        # parked. Same timing + working-tree-only semantics as the lock above (see the
-       # `pr`-policy invariant note in Step 4-pre for why pre-merge death is accepted).
+       # `pr`-policy invariant note in Step 6 for why pre-merge death is accepted).
        # A task that never parked has no markers, and Path.glob on a missing parked/
        # dir yields nothing — both no-op cleanly.
        for marker in Path('sysop/runtime/parked').glob(f'{tid}__*.md'):
@@ -3818,8 +4810,12 @@ After all branches are merged but **before** pushing:
    # instead of an outstanding human step. `closed`, `held` and NOT_IN_INDEX partition
    # `ids`; no id may appear in two rows or in none.
    print('HELD_USER_ACTION: ' + (' '.join(held) or '(none)'))
-   print('NOT_IN_INDEX: ' + (' '.join(t for t in ids if t not in closed and t not in held) or '(none)'))
+   print('HELD_BY_HOLD: ' + (' '.join(held_doc) or '(none)'))
+   print('NOT_IN_INDEX: ' + (' '.join(t for t in ids if t not in closed and t not in held
+                                       and t not in held_doc) or '(none)'))
    print('LOCKS_REMOVED: ' + (' '.join(locks_removed) or '(none)'))
+   if KEEP_LOCKS:
+       print('LOCKS_KEPT: ' + (' '.join(locks_kept) or '(none)'))
    print('LOCKS_ALREADY_ABSENT: ' + (' '.join(locks_absent) or '(none)'))
    print('PARKED_MARKERS_REMOVED: ' + (' '.join(sorted(markers_removed)) or '(none)'))
    print('CLAIM_ARTIFACTS_REMOVED: ' + (' '.join(sorted(artifacts_removed)) or '(none)'))
@@ -4059,7 +5055,7 @@ After all branches are merged but **before** pushing:
 
 ### 4d. Land on `main`
 
-**First, file the notes `4a-fix` routed to a task**, with its item 6, in their own commit. Step 3c's "Unrunnable as specified" defects go in the same commit, by the same route. With no notes, commit those defects on their own as `docs: review-close file unrunnable smoke — <N> task(s)`. Every close that lands reaches this line, including one whose Step 4c made no commit. A close that stops earlier lists the notes on Step 8's `Close notes:` line and the defects on its `Manual smoke:` line, unfiled.
+**First, file the notes `4a-fix` routed to a task**, with its item 6, in their own commit. Step 3c's "Unrunnable as specified" defects and waived FAILs go in the same commit, by the same route. With no notes, commit those on their own as `docs: review-close file smoke tasks — <N> task(s)`. Every close that lands reaches this line, including one whose Step 4c made no commit. A close that stops earlier lists the notes on Step 8's `Close notes:` line and the defects on its `Manual smoke:` line, unfiled.
 
 How the assembled work reaches `main` depends on the merge policy from Step 4-pre.
 
@@ -4094,6 +5090,8 @@ esac
 #    (the -u sits between push and origin), and upstream tracking isn't needed — `gh pr
 #    create --head` works off the pushed ref and Step 6 force-deletes the branch.
 git push origin "$INTEGRATION_BRANCH"
+# 2b. print local <default branch>'s SHA; carry it to Step 6 as PUSHED FROM (`Q-651`).
+git rev-parse "<default branch>"
 # 3. open the PR against main. Run it BARE — `gh pr create` prints the new PR's URL to
 #    stdout and its last path segment is the number Step 2 needs. Do NOT capture it: an
 #    allow-rule does not match past an assignment, so `PR_REF="$(gh pr create …)"` routes
@@ -4105,6 +5103,8 @@ gh pr create --base <default branch> --head "$INTEGRATION_BRANCH" \
   --body "Automated /review-close integration PR: feature merges + batch close + doc consolidation. Squash-merges once required checks are green."
 ```
 
+**When Step 3c recorded a `failed-waived` signal, the PR carries its output.** Write `sysop/runtime/review-close-pr-body.md` fresh with your file tool: the `--body` sentence above (not under the PR-reuse shape), then a `## Manual smoke FAIL waived` section per signal, giving its `SOURCE:`, the failing step, and the procedure's output in a fence longer than any backtick run inside it. Redact credentials, tokens and personal data first; Step 8 keeps the full output. GitHub refuses a body over 65,536 characters, so keep the output's last lines within that and say how many were cut. Run the `gh pr create` above with `--body-file sysop/runtime/review-close-pr-body.md` in place of `--body "…"`. Under the PR-reuse shape, post the file as a comment once the push below succeeds: `gh api "repos/{owner}/{repo}/issues/<PR number>/comments" -F body=@sysop/runtime/review-close-pr-body.md`. If the post fails, stop before Step 2 merges and report it.
+
 *PR-reuse shape:* no branch is created and no PR is opened — the Step 4b/4c commits are appended to the branch the existing PR already tracks.
 ```bash
 # 1. assert HEAD against the LITERAL branch name Step 2a approved (Rule A). There is no
@@ -4112,8 +5112,12 @@ gh pr create --base <default branch> --head "$INTEGRATION_BRANCH" \
 test "$(git rev-parse --abbrev-ref HEAD)" = "<approved branch name>" || { echo "HEAD is not the approved branch — STOP, reconcile via git reflog"; exit 1; }
 # 2. push the new commits onto the PR's head branch (fast-forward; NEVER --force, per Rule C)
 git push origin "<approved branch name>"
+# 2b. print local <default branch>'s SHA; carry it to Step 6 as PUSHED FROM (`Q-651`).
+git rev-parse "<default branch>"
 # 3. no `gh pr create` — Step 2 below merges the PR number the Step 4-pre probe printed.
 ```
+
+**Under `--request-review`, stop here** and go on at that section's item 4: Step 2 runs in `--land`.
 
 **Step 2 — wait for checks, merge, then gate on PR *state*.** Identical for both shapes, except where noted.
 
@@ -4146,7 +5150,8 @@ gh pr checks "<PR>" --watch --fail-fast || echo "checks reported non-zero — no
 #     a union of CheckRun AND StatusContext — so this counts GitHub Actions and the Status API
 #     alike, and resolves the PR head itself rather than making you transcribe a SHA.
 gh pr view "<PR>" --json statusCheckRollup --jq '.statusCheckRollup | length'
-# 5. confirm mergeability, then squash-merge (blocks until landed; deletes the remote branch)
+# 5. confirm mergeability, then squash-merge (blocks until landed; deletes the remote branch).
+#    PR-reuse shape with a held doc naming the reused branch: drop --delete-branch (below).
 gh pr view "<PR>" --json state,mergeStateStatus --jq '{state, mergeStateStatus}'
 gh pr merge "<PR>" --squash --delete-branch
 # 6. THE VERDICT. Run this as its own command, after the merge, always — the merge command's
@@ -4168,6 +5173,8 @@ gh pr view "<PR>" --json state,mergedAt --jq '{state, mergedAt}'
 
 > Here `$(git rev-parse --abbrev-ref HEAD)` is safe and non-tautological: HEAD was already asserted against a non-HEAD-derived value in Step 1 of this same block, so by this line it is *known* to be the right branch. It is a lookup key, not a guard.
 >
+> **PR-reuse shape only — keep a held doc's branch (`Q-642`).** When Step 4c step 1c printed a `HELD:` line whose `branch` is the reused branch, run command 5's merge as `gh pr merge "<PR>" --squash`, without `--delete-branch`, so Step 6's HARD RULE can keep the branch. The integration-branch shape always keeps `--delete-branch`. See `REFERENCE.md` § *A held doc's branch and the reuse shape*.
+>
 > **PR-reuse shape only — pin the head commit.** The integration-branch shape merges a branch it just created under a unique timestamped name that nothing else writes to. A reused branch is a long-lived branch someone else may push to between your push and your merge, so pass `--match-head-commit "$(git rev-parse HEAD)"` on the merge and let it refuse rather than squash-merging content you never verified. (Requires a reasonably current `gh`; if your `gh` rejects the flag, re-read `gh pr view --json headRefOid` and compare by hand before merging.)
 
 > **A `fatal:` from `gh pr merge --delete-branch` does NOT mean the merge failed (internal tracker #208).** `--delete-branch` deletes the **local** branch as well as the remote one, so after the remote squash lands, `gh` switches the local checkout to the base branch and tries to fast-forward it. **In the integration-branch shape that fast-forward cannot succeed:** the squash commit's parent is the pre-squash `origin/<default branch>`, not local `<default branch>`, so local `<default branch>`'s commits are still not ancestors of it and `origin/<default branch>` is not a descendant of local `main` after the squash. `gh` reports it as:
@@ -4185,16 +5192,34 @@ gh pr view "<PR>" --json state,mergedAt --jq '{state, mergedAt}'
 
 ##### 4d-1. Stuck-PR handling (report + STOP, never force-merge)
 
-**The trigger is PR state, never the merge command's exit status or stderr.** The PR is **not merged** if the post-merge `gh pr view "<PR>" --json state` (command 6 above) reports anything other than `MERGED`. Typical causes: a required check failed (`gh pr checks` reported a failing check) or `gh pr view` shows `mergeStateStatus: BLOCKED`/`DIRTY`. **A third cause is not a stuck PR at all and is handled before the merge, not here: command 4b reported `total_count: 0`.** That is the could-not-measure state, this sub-step never sees it — by construction, since it classifies a merge that already ran — and it is the one arm of the three where nothing has landed and nothing needs unwinding. **Do not re-route a `0` into this section's recovery advice**: there is no failing check to fix, no `BLOCKED`/`DIRTY` state to rebase out of, and re-running `/review-close` inherits the condition rather than clearing it. Stop at command 4b and follow its note. Do **not** key this branch on `gh pr merge` "refusing" — under `pr` policy that command routinely prints `fatal: Not possible to fast-forward, aborting.` *after a merge that succeeded* (see the note above, internal tracker #208), and reading that as a refusal strands branches, worktrees, and `sysop/runtime/locks/` behind a close-out that actually landed. When `state` is genuinely not `MERGED`:
+**The trigger is PR state, never the merge command's exit status or stderr.** The PR is **not merged** if the post-merge `gh pr view "<PR>" --json state` (command 6 above) reports anything other than `MERGED`. Typical causes: a required check failed (`gh pr checks` reported a failing check) or `gh pr view` shows `mergeStateStatus: BLOCKED`/`DIRTY`. **A third cause is not a stuck PR at all and is handled before the merge, not here: command 4b printed `0`.** That is the could-not-measure state, this sub-step never sees it — by construction, since it classifies a merge that already ran — and it is the one arm of the three where nothing has landed and nothing needs unwinding. **Do not re-route a `0` into this section's recovery advice**: there is no failing check to fix, no `BLOCKED`/`DIRTY` state to rebase out of, and re-running `/review-close` inherits the condition rather than clearing it. Stop at command 4b and follow its note. Do **not** key this branch on `gh pr merge` "refusing" — under `pr` policy that command routinely prints `fatal: Not possible to fast-forward, aborting.` *after a merge that succeeded* (see the note above, internal tracker #208), and reading that as a refusal strands branches, worktrees, and `sysop/runtime/locks/` behind a close-out that actually landed. When `state` is genuinely not `MERGED`:
 
-- **Report** the PR URL and the failing check name(s), then **STOP** — do not force-merge, do not fall back to a direct `git push origin <default branch>`, do not loop. Authority to merge belongs to the PR's required checks, not this skill.
-- Leave the integration branch, the feature branches, the worktrees, and the `sysop/runtime/locks/` **in place**. **Skip Step 6 entirely** this run — its cleanup is gated on a confirmed merge (see Step 6's merge-policy gate). The human (or a follow-up `/review-close`) fixes the check and re-runs.
-- Re-running is safe and idempotent **in the integration-branch shape**: the next `pr`-policy run cuts a **new** integration branch from local `<default branch>`, which still carries the same unpushed commits, so nothing is double-applied. The stuck branch is left orphaned but harmless — delete it by hand (`git branch -D <branch>` + `git push origin --delete <branch>`) once its replacement merges.
+- **First ask whether each failing check ever ran (`Q-632`).** A job GitHub refused to start, as on an exhausted Actions budget, shows as `fail` too. List the failing checks and their links:
+  ```bash
+  gh pr checks "<PR>" --json name,bucket,link --jq '.[] | select(.bucket == "fail") | "\(.name)\t\(.link)"'
+  ```
+  A link ending `/actions/runs/<run id>/job/<job id>` is an Actions job. For each one, write its job id out and run both commands (a job's id is also its check run's id):
+  ```bash
+  gh api "repos/{owner}/{repo}/actions/jobs/<job id>" --jq 'if .status == "completed" and .conclusion == "failure" and (.steps | type) == "array" and (.steps | length) == 0 then "NEVER STARTED: \(.name) (run \(.run_id))" else "RAN: \(.name) — \(.conclusion), \(.steps | length) step(s)" end'
+  gh api "repos/{owner}/{repo}/check-runs/<job id>/annotations" --jq '.[].message'
+  ```
+  **`NEVER STARTED`** is *could not measure*, like command 4b's `0`: **change no code for it.** Report the check as never started, with its annotation, and give the remedy: the human clears the cause the annotation names (only the account owner can raise an Actions budget), types `! gh run rerun <run id> --failed` (no seeded rule matches it), and resumes at command 4 when the re-run finishes. Do not re-run `/review-close` before the cause clears; its checks meet the same refusal. **`RAN`**, a probe that errors, and a failing check with any other link (a Status API context, a third-party app) are reported as failing checks, as below. When both kinds fail, report both: the re-run clears only the never-started ones, and the rest are fixed as below before command 4 is resumed. See `REFERENCE.md` § *A check that never started*.
+- **Report** the PR URL and the failing check name(s), and each `## After merge` section Step 2d carried, under `<TASK-ID> (<branch>, after PR #<N> merges):`, then **STOP** — do not force-merge, do not fall back to a direct `git push origin <default branch>`, do not loop. Authority to merge belongs to the PR's required checks, not this skill.
+- Leave the integration branch, the feature branches and every remaining worktree and lock **in place**. Step 3b has already removed the approved branches' worktrees, and Step 4c the locks and pending docs it consolidated. **Skip Step 6 entirely** this run — its cleanup is gated on a confirmed merge (see Step 6's merge-policy gate).
+- **In the integration-branch shape, recover on the stuck branch; do not re-run `/review-close`** (`Q-652`): a re-run merges the same branches without Step 4c's work. Check out the integration branch. To fix a check, commit the fix there, run `4a-post`'s resolved command list on it, and only when that passes push it with `git push origin "<integration branch>"`; for a check that only needs re-running, re-run it. Then resume at command 4. Put the `PUSHED FROM` SHA in this stop's report: Step 6 needs it.
 - **In the PR-reuse shape the recovery is different, and the sentence above does not apply.** There is no integration branch to orphan and no new one to cut: the stuck PR is the consumer's own, still open, now carrying the Step 4b/4c commits, and a re-run's probe finds that same PR again and lands on it again. That re-run is still safe — `close_batch.sh` is idempotent (its `sed` substitutions no-op on already-`Merged` batches) and Step 4c finds no pending-docs the second time because the first run deleted them, so it skips consolidation rather than double-applying it. What it is *not* is self-healing: re-running cannot clear a red required check. Fix the check, then re-run; or if the branch has become unmergeable (`BEHIND`/`DIRTY`), rebase it onto `origin/<default branch>` and push, which makes reuse condition 5 hold again. If you would rather stop reusing it, delete nothing — just let the next run fail condition 5 or close the PR by hand, and the integration-branch shape takes over.
 
-On a confirmed merge — `gh pr view "<PR>" --json state` reports `MERGED`, whatever the merge command's exit status or stderr said — continue to Step 5, then Step 6 cleanup.
+- **A PR merged outside this run** — by hand after this stop, or by a close from before Step 4d recorded heads — gets its head recorded with Step 4d's record command, run from the primary checkout with that PR's number. Its tasks' `## After merge` steps are in the stuck close's report, and no later close prints them.
 
-**If a `gh pr` command is silently denied** (auto-mode classifier), **no hook will surface the escape for you — construct and relay it yourself.** The Phase 36 `PermissionDenied` hook matches three `git` shapes only (protected-branch push, `--delete` push, protected-branch commit); a `gh` command runs the matcher loop like any other and every matcher returns no match, so a denied `gh pr list` / `create` / `checks` / `view` / `merge` produces a bare denial with nothing attached. **This is the `pr`-policy mainline, not an edge case** — under `§ Merge policy: pr` every close runs through `gh pr`. Ask the user to type the literal `!`-prefixed command at the next prompt (`! gh pr merge "<PR>" --squash --delete-branch`, and so on per command), exactly as Step 3 does for a denied verification command. It is *not* the same pattern as the `direct`-policy push above: that one is hook-covered and this one is not. Do **NOT** use `AskUserQuestion`.
+On a confirmed merge — `gh pr view "<PR>" --json state` reports `MERGED`, whatever the merge command's exit status or stderr said — **record the head of that PR**, the `<PR>` command 6 reported `MERGED`, under both shapes, then continue to Step 5 and Step 6 cleanup:
+
+```bash
+git fetch origin "refs/pull/<PR>/head:refs/sysop/merged-pr-heads/<PR>"; echo "--- record exit (0 = recorded): $?"
+```
+
+A non-zero exit records nothing. Put `not recorded — <its first error line>` on Step 8's `Squash provenance:` line and continue: the merge has landed, so do not stop. **If that PR's squash is ever reverted on `<default branch>`, delete its ref** (`git update-ref -d refs/sysop/merged-pr-heads/<PR>`): a recorded head reads as landed until it is removed, and Step 4a would skip the reverted commits. See `REFERENCE.md` § *Squash provenance: why each `pr` close records its PR head*.
+
+**If a `gh pr` command is silently denied** (auto-mode classifier), **no hook will surface the escape for you — construct and relay it yourself.** The Phase 36 `PermissionDenied` hook matches three `git` shapes only (protected-branch push, `--delete` push, protected-branch commit); a `gh` command runs the matcher loop like any other and every matcher returns no match, so a denied `gh pr list` / `create` / `checks` / `view` / `merge` produces a bare denial with nothing attached. **This is the `pr`-policy mainline, not an edge case** — under `§ Merge policy: pr` every close runs through `gh pr`. Ask the user to type the literal `!`-prefixed command at the next prompt (`! gh pr merge "<PR>" --squash --delete-branch`, without `--delete-branch` when the note above dropped it, and so on per command), exactly as Step 3 does for a denied verification command. It is *not* the same pattern as the `direct`-policy push above: that one is hook-covered and this one is not. Do **NOT** use `AskUserQuestion`.
 
 ## Step 5: Verify Staging Deployment
 
@@ -4225,7 +5250,14 @@ Skip this step only if the pushed changes are docs/config only with no code or s
   git diff --quiet HEAD -- && echo "CLEAN — safe to reset" || echo "DIRTY — STOP, see below"
   ```
 
-  **If that printed `DIRTY`, do not run the reset.** Report the file list (`git status --porcelain --untracked-files=no`) and ask the user to commit or stash. **Resume at this gate, not at the top of the skill** — the PR has already merged by this point, so nothing before Step 6 may be repeated: re-run `git diff --quiet HEAD --`, and continue from the reset when it reports `CLEAN`. (Do not re-enter at Step 4-pre. Its PR-reuse probe requires `origin/<default branch>..<default branch>` to be empty, which is false here by construction — local `main` still carries the pre-merge commits the reset exists to discard.) **Do not stash on their behalf** — a stash this skill creates is consumed by no later step, so it converts a visible refusal into work parked where nobody looks. Two reasons the gate belongs *here* rather than at Step 1: Step 1a's `dirty` classifier never covers this checkout (it excludes the primary checkout by path identity, whatever branch that checkout holds), and Step 5's staging-deploy wait is a long idle window — exactly when a human is most likely to have edits open, so a Step 1 reading would already be stale.
+  **If that printed `DIRTY`, do not run the reset.** Report the file list (`git status --porcelain --untracked-files=no`) and ask the user to commit or stash. **Resume at this gate, not at the top of the skill** — the PR has already merged by this point, so nothing before Step 6 may be repeated: re-run `git diff --quiet HEAD --`, and continue from the commits-after-push check below when it reports `CLEAN`. (Do not re-enter at Step 4-pre. Its PR-reuse probe requires `origin/<default branch>..<default branch>` to be empty, which is false here by construction — local `main` still carries the pre-merge commits the reset exists to discard.) **Do not stash on their behalf** — a stash this skill creates is consumed by no later step, so it converts a visible refusal into work parked where nobody looks. Two reasons the gate belongs *here* rather than at Step 1: Step 1a's `dirty` classifier never covers this checkout (it excludes the primary checkout by path identity, whatever branch that checkout holds), and Step 5's staging-deploy wait is a long idle window — exactly when a human is most likely to have edits open, so a Step 1 reading would already be stale.
+
+  **Then check for commits made after Step 4d's push**, with the `PUSHED FROM` SHA Step 4d printed:
+  ```bash
+  git rev-list "<PUSHED FROM>..<default branch>" ^"origin/<default branch>"
+  ```
+
+  **If it printed any SHA, do not run the reset.** Show `git log --oneline "<PUSHED FROM>..<default branch>" ^"origin/<default branch>"` and stop: those commits reached local `<default branch>` after the push, so the squash does not contain them and the reset would drop them. Ask the user to replay them onto the merged base with `git rebase --onto "origin/<default branch>" "<PUSHED FROM>" "<default branch>"`. That rebase is the re-sync: after it, skip the reset and continue with the cleanup below it. If Step 4d's SHA was not carried, stop and say so; do not reset.
 
   > **Narrower than the shipped convention, deliberately.** Both shipped maps name `git reset --hard` by name: `convention_map.md` § *Destructive command gating* requires it "be preceded by an explicit 'ask the user to confirm' instruction in the skill text", and `security_map.md` § *Confirmation gates on destructive operations* requires "an explicit confirmation step in the skill text". This gate confirms *conditionally* — it refuses only when the reset would actually destroy something — because the reset is either a no-op or a load-bearing re-sync (see the both-shapes note below), so an unconditional prompt would land on every close of the dominant `pr` path and buy nothing in the clean case. The conventions' purpose is met; their literal reading is not. Stated rather than silently narrowed.
 
@@ -4252,11 +5284,11 @@ Skip this step only if the pushed changes are docs/config only with no code or s
 
 > **Lock-as-real-time-signal invariant (`pr` policy).** Step 4c removes each closed task's `sysop/runtime/locks/<TASK-ID>.lock` from disk on the integration branch, before the PR merges — so there is a brief window where, on `main`, the task is still `in_progress` (the `done` flip rides the unmerged PR) with no lock. This does **not** reopen the task for the autonomous paths: `/auto-build` and `next_task` only ever claim `status: open` tasks, so neither can pick it up. **Amended by Phase 159b — the unqualified form of this sentence ("an `in_progress` task is never claimable regardless of its lock") is no longer true.** `/claim-task` gained a third entry state, and `in_progress` + no lock is exactly its `resumable` signature — which this window manufactures for a task that is *finished*. That is why `resumable` **stops and asks** instead of continuing: an explicitly-named `/claim-task <TASK_ID>` during this window would otherwise re-claim already-reviewed work. The other visible effects are a transient `/sitrep` "in_progress without lock" drift flag and a `validate_tasks.py` Invariant 9 error during the in-flight (or stuck-PR) window, both of which clear when the PR merges and the `done` flip lands. No action needed beyond not re-claiming. The same pre-merge timing applies to the task's **parked marker(s)** (`sysop/runtime/parked/<TASK-ID>__*.md`, removed by the same Step 4c cleanup) — with one honest asymmetry: a lock is trivially recreatable (`claim_task.sh --lock`), but a marker's content (the park's plan + adversarial verdict, never committed) is not. Accepted anyway: by the time Step 4c runs, the park was already resolved — the resume that produced this close consumed the verdict — so a stuck PR needs the *code* recoverable (the integration + feature branches Step 4d-1 leaves in place), not the historical park record. A consumer who wants park history durably should copy `parked/` entries somewhere tracked before closing.
 
-**HARD RULE — do not delete a branch whose pending-doc Step 4c step 1c held back (`Q-327`).** This applies under **both** policies below and is checked before either list is built. A `user_action` hold keeps the doc so a later run can consolidate it; that doc carries a `branch:` field, and step 1b resolves it with `git rev-list --count "<branch>" "^HEAD"`. **Delete the branch and the next close does not resume — it halts**, on step 1b's *"If the ref no longer resolves, stop and ask — do not guess in either direction"*, which is the same self-inflicted stop the cherry-pick blockquote above step 1c already describes. The carrier is the doc **and** the branch; holding one without the other converts a deliberate hold into a hard stop on every subsequent close.
+**HARD RULE — do not delete a branch whose pending-doc Step 4c step 1c held back (`Q-327`).** This applies under **both** policies below and is checked before either list is built. A 1c hold (`hold:` or `user_action`) keeps the doc so a later run can consolidate it; that doc carries a `branch:` field, and step 1b resolves it with `git rev-list --count "<branch>" "^HEAD"`. **Delete the branch and the next close does not resume — it halts**, on step 1b's *"If the ref no longer resolves, stop and ask — do not guess in either direction"*, which is the same self-inflicted stop the cherry-pick blockquote above step 1c already describes. The carrier is the doc **and** the branch; holding one without the other converts a deliberate hold into a hard stop on every subsequent close.
 
 So: before cleaning up, list the `branch:` values of every doc still in `sysop/runtime/pending-docs/` and **exclude those branches from both lists below**. Report them in Step 8's `Remaining:` as retained-for-a-held-doc, with the task id waiting on them, so an operator does not read them as leaked. They are deleted by the close that finally consolidates the doc — the ordinary path, one run later. This is the same principle Step 4d-1 already applies when a PR is stuck (*"Leave the integration branch, the feature branches, the worktrees, and the `sysop/runtime/locks/` in place. Skip Step 6 entirely"*): cleanup is gated on the work being finished, and a held task's work is not.
 
-**`direct` policy — per-branch cleanup.** For each merged feature branch (worktrees already removed in Step 3b):
+**`direct` policy — per-branch cleanup.** For each merged feature branch (worktrees already removed in Step 3b), one Step 4a recorded `merged — already in <ref>` included:
 1. Delete the **remote** branch first: `git push origin --delete <branch>` (if it exists remotely).
 2. Delete the **local** branch: `git branch -d <branch>`.
 
@@ -4264,7 +5296,7 @@ So: before cleaning up, list the `branch:` values of every doc still in `sysop/r
 
 **If `git push origin --delete <branch>` is silently denied** (BeanRider ISSUE-0033, classifier hard-codes destructive-flag protection on `--delete`/`--force` regardless of allow-rule glob), the Phase 36 `PermissionDenied` hook surfaces the `! git push origin --delete <branch>` escape command — with the venv-prefix variant when a `.venv/` directory is present. Follow the hook's guidance and relay to the user. The subsequent `git branch -d <branch>` runs in-band without classifier interference (local-only, no remote contact). Do **NOT** use `AskUserQuestion`.
 
-**`pr` policy — per-branch cleanup** (only after the PR merged; the local-`main` re-sync and, in the integration-branch shape, the integration-branch drop are already done in the merge-policy gate above). Each **merged** feature branch reached `main` through a **squash** — in the integration-branch shape by being rebased onto the integration branch and ff-merged before that branch's PR squashed, and in the PR-reuse shape by being the PR's own head. Either way the branch is provably contained in the squash commit but is **not** an ancestor of it, so `git branch -d` would refuse with "not fully merged." Force-delete here; the content is safely in `main`:
+**`pr` policy — per-branch cleanup** (only after the PR merged; the local-`main` re-sync and, in the integration-branch shape, the integration-branch drop are already done in the merge-policy gate above). Each **merged** feature branch reached `main` through a **squash** — in the integration-branch shape by being rebased onto the integration branch and ff-merged before that branch's PR squashed, and in the PR-reuse shape by being the PR's own head. Either way the branch is provably contained in the squash commit but is **not** an ancestor of it, so `git branch -d` would refuse with "not fully merged." Force-delete here; the content is safely in `main`. A branch Step 4a recorded `merged — PR #<N>` (item 1's `REPLAY 0`) or `merged — already in <ref>` is on this list too:
 
 > **`-D` is licensed by containment, and a 4a-SKIP'd branch breaks that licence — check merge status, do not iterate "approved".** This list previously read *"each **approved** feature branch"* and asserted that it *"reached `main` through a squash"*. A branch that Step 4a aborted-and-skipped is still approved, is not Step 2a `dirty`-SKIP'd, and is not rejected — so it fell through every carve-out below and was force-deleted with its work in no squash and nowhere else. Its worktree was already removed at Step 3b, so `-D` was the last reference to it. **`direct` never had this hole** because its list iterates *merged* branches and safe `-d` refuses on an unmerged one; the bypass is what removed the backstop here, which is why the guard has to be explicit rather than inherited.
 >
@@ -4273,11 +5305,11 @@ So: before cleaning up, list the `branch:` values of every doc still in `sysop/r
 1. Delete the **local** branch: `git branch -D <branch>` (the safe `-d` check is meaningless against a squash — the branch's commits are in the merged PR).
 2. Delete the **remote** branch **only if it was pushed and still exists**: `git push origin --delete <branch>`. Feature branches created by `/claim-task` are usually local-only under `pr` policy (the integration branch is the only thing pushed), so skip this when the branch has no remote tracking ref. **Record every deletion that does not succeed, here, as it happens** — branch name and the error — and carry the list to Step 8's `Remaining:` remote-branch row. That row had no producer at all until Phase 219, so it was answered from intent or left blank, and a branch left behind on the remote is exactly the thing nobody notices without a row naming it.
 
-**Under the PR-reuse shape both of the above are usually already done for you.** The reused branch *was* the PR's head, so `gh pr merge --delete-branch` deleted it remotely, and it deletes the local branch too once `gh` has switched HEAD off it. Verify rather than assume — `git branch --list <branch>` and `git ls-remote --heads origin <branch>` — and run only the deletions that are still outstanding. A `git push origin --delete` against an already-deleted remote branch fails with `remote ref does not exist`; that is cleanup noise, not an error worth halting on.
+**Under the PR-reuse shape both of the above are usually already done for you.** The reused branch *was* the PR's head, so `gh pr merge --delete-branch` deleted it remotely, and it deletes the local branch too once `gh` has switched HEAD off it. The exception is a reused branch a held doc names: Step 4d merged without `--delete-branch`, and the HARD RULE above keeps it, so delete neither copy. Verify rather than assume — `git branch --list <branch>` and `git ls-remote --heads origin <branch>` — and run only the deletions that are still outstanding. A `git push origin --delete` against an already-deleted remote branch fails with `remote ref does not exist`; that is cleanup noise, not an error worth halting on.
 
-For each **SKIP'd** branch (Step 2a verdict — Step 1a classified the worktree as `dirty`):
-1. Leave the worktree, the `sysop/runtime/locks/<TASK_ID>.lock` file, and the branch fully in place — do NOT touch anything.
-2. Carry the SKIP entry into Step 8's report so the user sees the paused-work list with its file count and worktree path.
+For each **SKIP'd** branch (Step 2a verdict — Step 1a classified the worktree as `dirty`, or step 0a's clone pre-check):
+1. Leave the worktree or clone, the `sysop/runtime/locks/<TASK_ID>.lock` file, and the branch fully in place — do NOT touch anything.
+2. Carry the SKIP entry into Step 8's report so the user sees the paused-work list with its file count and worktree path, or step 0a's Step 1-pre line and remedy.
 
 For each **4a-SKIP'd** branch (approved, but Step 4a could not merge it):
 1. Leave the branch and its `sysop/runtime/locks/<TASK_ID>.lock` fully in place under **both** policies — do NOT delete it, and do NOT force-delete it. Its work is in no squash and its worktree is already gone (Step 3b removed it before the merge was attempted), so the branch ref is the only thing holding the commits.
@@ -4334,19 +5366,25 @@ Summarize what was done:
 ```
 Review Complete.
 
+Resumed:       <under `--resume` only: the run id; each `GONE` line from `close_run.py check`;
+               what re-ran and the line that made it; each `NOTE:` line>
 Pushed:        <under `direct`: the SHA Step 4d confirmed. Under `pr`: the squash-merge
                SHA and its PR number — "<N> commits" is not a quantity that exists on
                that path, where `main` gains exactly one commit however many merged.>
-Branches:      <merged list> (or "none")
+Branches:      <merged list, each branch Step 4a recorded `merged — already in <ref>` as
+               `<branch> — landed in <ref>`> (or "none")
 Batches:       <the batch set Step 4b determined, and what it did — "closed N1, N2"
                / "none this cycle — 4b skipped" / "N closed, M failed — still open">.
                Never blank: a skipped Step 4b used to leave no trace anywhere in this
                report, so a close that silently never reached it read exactly like one
                that had no batches to close.
 Docs:          Consolidated <N> pending-docs files (or "none" / "legacy docs: commits")
-Manual smoke:  <N confirmed, N driven, N unrunnable (<filed task ids>), N waived> (or "none required")
-               <and each PREVIOUSLY ANSWERED: and NOT IN THIS RUN: line Step 3c printed.
-                An unrunnable signal is never counted as waived.>
+Manual smoke:  <N confirmed, N driven, N unrunnable (<filed task ids>), N failed-held (<branches,
+                each with the signals skipped on it>),
+                N failed-waived (<filed task ids>), N waived> (or "none required")
+               <and each PREVIOUSLY ANSWERED:, NOT IN THIS RUN:, ORIGIN INDEX:, BRANCH INDEX:,
+                BODY NOT READ: and MERGE NOT READ: line Step 3c printed, and each failed-waived signal's output, verbatim. Unrunnable,
+                failed-held and failed-waived are never counted as waived.>
 Verification:  pre-merge <ran | skipped: doc-only | skipped: no changed-file list>;
                merged-tree (4a-post) <ran on <merge target>: N commands
                                       | ran nothing: why | not reached: why
@@ -4359,7 +5397,11 @@ Verification:  pre-merge <ran | skipped: doc-only | skipped: no changed-file lis
                                         continued because 4a-post item 4's three
                                         preconditions all held. Never folded into "ran N
                                         commands" either — that would report a failing
-                                        command as a passing one.>
+                                        command as a passing one.
+                                      | PRE-EXISTING: <command> — <N> test IDs also fail on
+                                        origin/<default branch>; proceeded on the human's
+                                        answer. A FAILED command, never folded into "ran N
+                                        commands".>
                <and, on a zero-approved-branch cycle whose changed-file list came back
                 empty, `changed-file list empty — zero approved branches` — a fact about
                 SCOPE, never a substitute for the execution arm above.>
@@ -4384,7 +5426,14 @@ Security map:  <N checked, N skipped (no map match)> (or "none to check") — St
                target passed the convention check would otherwise read exactly
                like one where both fleets ran and both approved.
 Test decisions: <N verified, N waived, N not-owed, N held-for-fix, N unreadable, N doc-only> (or "none to verify")
-Also fixed:     <N branches carrying a section, N lines total across ALL its sections, N findings> (or "none")
+Also fixed:     <N branches carrying a section, N lines total across ALL its sections, N findings,
+                N notes> (or "none") <and each check-1 `also-fixed note —` line, verbatim>
+After merge:   <for each branch this close merged, each `## After merge` section Step 2d's
+               `2‑after` read carried, verbatim, under `<TASK-ID> (<branch>):`> (or "none").
+               Nothing for a branch that did not merge, whose PR this close did not see
+               merge, or that Step 2a approved as landed.
+               Steps a human runs now that the work has landed. Nothing checked them, and
+               this close did not run them.
 Close notes:   <N collected: N fixed at close (<fix-sha>), N filed (<ids>), N dropped,
                N not acted on (target did not merge)> (or "none") — Step 4 `4a-fix`.
                re-check <APPROVED | BLOCKED — dropped | not run: nothing fixed>
@@ -4401,6 +5450,12 @@ Superseded PRs: <branch #PR, …> (or "none") — published branches whose own P
                close bypassed by merging through the integration branch. Still open,
                still pointing at valid commits, no longer the path to `main`. From
                Step 4a item 4; GitHub does not close these, a human does.
+Squash provenance: <`pr` only: "recorded PR #N" | "not recorded — <error>"; each branch
+               Step 2a approved as landed (`<branch> — PR #N`); each branch Step 4a
+               printed `SKIP` lines for, rebased with `--onto` or merged on the published
+               arm, and those lines; each line the published arm resolved to the
+               target's side; each `not usable` line; each record made by hand>
+               (or "none")
 Locks cleaned: <the `LOCKS_REMOVED` ids Step 4c printed> (or "none")
                <and, when non-empty, `already absent: <LOCKS_ALREADY_ABSENT ids>`>
 Parked markers: <the `PARKED_MARKERS_REMOVED` filenames Step 4c printed> (or "none")
@@ -4422,17 +5477,21 @@ Documentation written:
   ✓ tasks/index.yml:      <the `CLOSED_IDS` Step 4c printed>  (if any — status flipped to done, body moved to archive/)
                           <and, when non-empty, `not in index: <NOT_IN_INDEX ids>` — ids this close was
                            asked to close and could not find. Never omit this line by choosing the other row.>
-                          <and, when non-empty, `held (user_action): <HELD_USER_ACTION ids>` — see Remaining.
-                           These three rows PARTITION the ids this close was asked to flip; if they do not
+                          <and, when non-empty, `held (user_action): <HELD_USER_ACTION ids>` and
+                           `held (hold:): <HELD_BY_HOLD ids>` — see Remaining. Any id on either row means
+                           step 1c was skipped or its ids were pasted from a HELD: doc: an anomaly.
+                           These four rows PARTITION the ids this close was asked to flip; if they do not
                            add up, the heredoc did not finish and the rows above are incomplete.>
   ✓ UI_Iterations.md:     <N> rows            (if any)
 
 Pending-doc collisions: <N> (or "none")
-  - <filename> — main's copy authored by <branch>, worktree's by <branch>. NOTHING was
+  - <filename> — the reason the collision line printed: main's copy authored by <branch>,
+     worktree's by <branch>; or main's copy carries `hold:` and the worktree's does not. NOTHING was
      collected for the worktree's branch and main's copy was not touched; the branch is
      SKIP'd with its worktree, lock and branch intact. Both docs are still where their
-     authors left them. Resolve by renaming one, then re-run; until then neither
-     branch's task closes.
+     authors left them. Resolve by renaming one (for a dropped `hold:`, by adding it to the
+     worktree's doc or clearing main's copy), then re-run; until then neither branch's task
+     closes.
 
 Stale pending-docs: <N> (or "none")
   - <filename> (<branch>) — <N> commit(s) landed after `branch_tip: <short SHA>`; the
@@ -4448,6 +5507,19 @@ Undocumented claims: <N> (or "none")
      the close.
      A branch with no workspace gets this row from the hand-applied test in Step 3b's
      `If WS is empty` paragraph, not from the collect.
+
+Clone sync:    <Step 1-pre's lines and its CLONE SYNC: summary, which reads `0 line(s)` when
+               no lock records a clone>
+
+Ignored references: <N> (or "none")
+  - <branch> — <path> (<file>:<line>), and the answer: committed to the branch at Step 2a
+     step 3a (when its doc carries `branch_tip:`, re-run /document-work on it, then the
+     close), kept ignored (copied to the main
+     checkout), merged without it, the branch rejected, or unanswered (SKIP'd). A check that
+     did not run: its error, and whether the human held the branch or merged without it.
+  - <branch> — Step 3b step 0b's PRESERVED: lines and PRESERVE: summary (the files copied to
+     sysop/runtime/preserved/<sanitized branch>/ before the worktree was removed), or its
+     error and the SKIP it caused.
 
 Claims unreadable: <N> (or "none")
   - <branch> — the collect printed `PENDING-DOC CLAIMS UNREADABLE:` for <the locks
@@ -4490,13 +5562,15 @@ Held-back docs: <N> (or "none")
      - 1b (unmerged): add `rev-list <count>, git cherry <count> unapplied`. Non-zero is the
        reason. (A doc can be held back WITHOUT a 4a-SKIP — a cherry-picked branch, including
        the `branch: main` doc under `pr` policy, merges fine and still scores non-zero.)
-     - 1c (`user_action outstanding: <TASK_ID>`): the branch MERGED, so `rev-list` is `0` and
-       printing it here reads as "merged fine" beside "held" — omit it. The evidence is the
-       task's flag. Add `branch retained by Step 6` so the two halves of the carrier are
-       reported together.
+     - 1c (`user_action outstanding: <TASK_ID>`, `hold: <reason>`, `shares <ids> with a held
+       doc`, `held since <date>`): the evidence is the reasons the hold test printed, not
+       `rev-list`, so omit the counts. A `NOT STAMPED:` note goes on the row too: `/document-work`
+       does not protect an unstamped held doc. Add `branch retained by Step 6` so the two halves
+       of the carrier are reported together.
 
 Remaining:
-  - <any SKIP'd branches — paused work; include file count + worktree path + recommendation>
+  - <any SKIP'd branches — paused work; include file count + worktree path + recommendation,
+     or, for step 0a's clone pre-check, the Step 1-pre line + its remedy>
   - <any 4a-SKIP'd branches — approved but did NOT merge; name the conflicting file, and say
      the branch + lock are intact, its pending-doc was held back from consolidation, and its
      task was NOT flipped to done>
@@ -4514,8 +5588,13 @@ Remaining:
      close, and step 6 is about to delete that doc. Fix the id list.
      Either way the task closes on a later `/review-close`, after the human performs the step
      and clears the flag with `python3 sysop/scripts/clear_user_action.py <TASK_ID>`; the
-     flag-clear alone closes nothing, and `clear_user_action.py` says so in its own output.
-     **The invariant to check is the ordinary arm's:** every `user_action` hold must show a
+     flag-clear alone closes nothing, and `clear_user_action.py` says so in its own output.>
+  - <any docs HELD on `hold:` — same ordinary arm, same evidence, but the reason is the doc's
+     own: name what `hold: <reason>` says is unfinished. The task closes on a later
+     `/review-close` after the human finishes it and runs
+     `python3 sysop/scripts/pending_doc_hold.py clear <TASK_ID>`. A doc held for both reasons
+     needs both clears.
+     **The invariant to check is the ordinary arm's:** every hold must show a
      `Held-back docs:` row AND a retained branch. A hold with neither is a stranded task —
      its carrier is gone and no later run can close it. Do NOT report these under
      "Documentation written" as closed.>
@@ -4528,4 +5607,6 @@ Remaining:
      that left branches behind.>
 ```
 
-If `$ARGUMENTS` contains `--dry-run`, perform Steps 1-3 only and report what *would* be done without making changes. **`4a-post` cannot run under `--dry-run`** — it needs the merges — so report the resolved command list and say the merged-tree gate did not run. Do not let Step 3's green stand in for it; that substitution is the defect the two-pass split exists to remove.
+If `$ARGUMENTS` contains `--prepare` or `--resume`, the section *`--prepare` and `--resume <run-id>`* above says which steps run.
+
+If `$ARGUMENTS` contains `--dry-run`, run Steps 1, 2, 3 and 3c, run only step 0 of Step 3b, and report what *would* be done. Step 1b commits nothing, Step 2a step 3a neither commits nor copies, Step 3c records, files and drives nothing, and no step from Step 3b step 0b onward runs. A dry run still sweeps 1-pre's stale `refs/sysop/clone-sync/*` refs; runs all of Step 2b, which writes its runtime files, adds and removes its pinned checkouts, spawns its reviewers (whose harness can rewrite `core.hooksPath`, which 2b restores) and runs its HARD RULE cleanup; and fetches `origin/<default branch>` in Step 3c. **`4a-post` cannot run under `--dry-run`** — it needs the merges — so report the resolved command list and say the merged-tree gate did not run. Do not let Step 3's green stand in for it; that substitution is the defect the two-pass split exists to remove.

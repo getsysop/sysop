@@ -160,16 +160,20 @@ Use today's date for the entry: a plain `date +%Y-%m-%d` is portable on both BSD
 
 2. **Write the changelog entry (uncommitted).** Prepend the Step 7 entry to `CHANGELOG.md` (create the file with a Keep-a-Changelog header if absent — and if the project already tracks its changelog under a different case, e.g. `changelog.md`, write to that existing tracked path instead of creating a second name: the two are the *same file* on a case-insensitive filesystem, and `/review-close` Step 4c follows the identical rule) using `Edit`/`Write`. **"Prepend" means the newest version section's slot, not byte 0:** insert the entry directly below the `## [Unreleased]` section when one exists, otherwise directly below the title block — never above the title block, which a literal top-of-file paste would produce. If Step 7 folded an `## [Unreleased]` section into the entry — or the section exists but is empty — remove it in the same edit; a fold moved its content into the version heading, and an empty section above a fresh release entry is dead scaffolding `/review-close` will recreate at its next write. **Leave it uncommitted** — same contract as every other Sysop write-side skill (`/review-close` aside): the human reviews and commits it through their normal flow. This matters under `pr` merge policy, where `main` is protected and a changelog commit must ride a PR, not a direct push — so `/release` does not try to commit it. The tag (next) marks the *shipped code*; the changelog documents it and lands via the human's merge policy.
 
-3. **Re-assert the branch/tip, then create the annotated tag.** The Step 8.1 version-confirmation pause is exactly the window `_shared/main-push-guard.md` Rule A warns about — a concurrent Sysop loop (`/auto-build` batch, another `/claim-task`) or a manual `git checkout` can move `HEAD` in the shared primary worktree while you wait, so the Step 2 guarantee is stale by now. Re-assert at the write site, and pass the tag **message as a file, never inline**: the release summary carries backticks, `$`, and quotes **by design** (Step 7), so `git tag -a … -m "<summary>"` would let bash run substitutions or execute approved text — the same hazard Step 9 and `/report-issues` avoid with a file. Write the Step 7 summary to a temp file outside the repo via `Write`, then run as one block:
+3. **Re-assert the branch/tip, then create the annotated tag.** The Step 8.1 version-confirmation pause is exactly the window `_shared/main-push-guard.md` Rule A warns about — a concurrent Sysop loop (`/auto-build` batch, another `/claim-task`) or a manual `git checkout` can move `HEAD` in the shared primary worktree while you wait, so the Step 2 guarantee is stale by now. Re-assert at the write site, and pass the tag **message as a file, never inline**: the release summary carries backticks, `$`, and quotes **by design** (Step 7), so `git tag -a … -m "<summary>"` would let bash run substitutions or execute approved text — the same hazard Step 9 and `/report-issues` avoid with a file. First resolve the message file's path, in a call of its own:
+   ```bash
+   echo "${TMPDIR:-/tmp}/sysop-tag-<version>.md"
+   ```
+   The printed line is `<tag message file>`: `Write` the Step 7 summary to exactly that path (if `Write` refuses because an earlier run left a file there, `Read` it, then `Write` again), and give `git tag` the same printed line below — never the `${TMPDIR:-/tmp}` expression, which the shell expands and `Write` does not, so the two name different files wherever `TMPDIR` is set. If the call is denied or the printed line does not begin with `/`, stop and say so. Then run as one block:
    ```bash
    # Rule A + tip check at the actual write site. Resolve <default branch> with
    # `bash sysop/scripts/default_branch.sh` (run bare) and substitute it — or use the
    # project's release branch if its CLAUDE.md names one. Never the literal `main` (Q-377).
    test "$(git rev-parse --abbrev-ref HEAD)" = "<default branch>" || { echo "HEAD moved off <default branch> since Step 2 — STOP"; exit 1; }
    git merge-base --is-ancestor HEAD origin/<default branch> || { echo "HEAD advanced to unpushed work — run /review-close first, then re-run"; exit 1; }
-   git tag -a "<prefix><new version>" -F "${TMPDIR:-/tmp}/sysop-tag-<version>.md"
+   git tag -a "<prefix><new version>" -F '<tag message file>'
    ```
-   Delete the temp file after the call returns. If the tag already exists (`git rev-parse --verify "<tag>"` succeeds), **stop** — do not overwrite an existing release tag; tell the human to pick a different version or delete the old tag deliberately.
+   After the call returns, remove the file with `rm -f '<tag message file>'`; no `rm` rule is seeded, so where it is denied, leave the file — the next run rewrites it before `git tag` reads it. If the tag already exists (`git rev-parse --verify "<tag>"` succeeds), **stop** — do not overwrite an existing release tag; tell the human to pick a different version or delete the old tag deliberately.
 
 4. **Push the tag** (confirm once before this outward step):
    ```bash
@@ -181,12 +185,12 @@ Use today's date for the entry: a plain `date +%Y-%m-%d` is portable on both BSD
 
 Requires `--execute` and `gh`. Confirm `gh auth status` first (if not logged in, tell the human to run `! gh auth login` and stop — never authenticate on their behalf). Then, after a final confirmation (this is the one action that creates a public, outward-facing artifact):
 
-1. Write the Step 7 release notes to a temp file **outside the repo** (e.g. `"${TMPDIR:-/tmp}/sysop-release-<version>.md"`) via `Write` — never echo release notes through the shell (they contain backticks, `$`, and quotes by design; inlining risks shell substitution altering or executing the approved text, the same hazard `/report-issues` fixed).
+1. Resolve the notes file's path, in a call of its own — `echo "${TMPDIR:-/tmp}/sysop-release-<version>.md"` — and call the printed line `<notes file>`. `Write` the Step 7 release notes to exactly that path (if `Write` refuses because an earlier run left a file there, `Read` it, then `Write` again) — never pass release notes through the shell (they contain backticks, `$`, and quotes by design; inlining risks shell substitution altering or executing the approved text, the same hazard `/report-issues` fixed). If the call is denied or the printed line does not begin with `/`, stop and say so.
 2. Create the release against the **current repo** (gh uses the current directory's default remote — this is *your own* repo, unlike `/report-issues`/`/contribute-convention` which target upstream):
    ```bash
-   gh release create "<prefix><new version>" --title "<prefix><new version>" --notes-file "${TMPDIR:-/tmp}/sysop-release-<version>.md"
+   gh release create "<prefix><new version>" --title "<prefix><new version>" --notes-file '<notes file>'
    ```
-   Add `--latest` for a normal release; add `--prerelease` if the version carries a pre-release suffix (`-rc.1`, `-beta`). Delete the temp file after the call returns (success or failure).
+   Add `--latest` for a normal release; add `--prerelease` if the version carries a pre-release suffix (`-rc.1`, `-beta`). After the call returns (success or failure), remove the file with `rm -f '<notes file>'`; no `rm` rule is seeded, so where it is denied, leave the file — the next run rewrites it before `gh` reads it.
 3. If `gh release create` fails (auth lapse, tag not yet on origin, network), surface it plainly; the tag and changelog already exist locally, so the human can retry `gh release create` by hand.
 
 ## Step 10 — Report

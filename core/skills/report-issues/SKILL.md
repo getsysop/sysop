@@ -339,13 +339,27 @@ For each selected entry, in order:
    shown-equals-filed promise) and, worst case, **executing** approved *text* as
    a shell command. So:
 
-   - Write the exact rendered body (identical to what Step 2 printed) to a
-     temporary file **outside the repo** (e.g. `"${TMPDIR:-/tmp}/sysop-issue-<id>.md"`)
-     using the `Write` tool — never echo it through the shell. Keep the
-     `:-/tmp` fallback: macOS sets `TMPDIR`, most Linux shells do not, and a bare
-     `"$TMPDIR/…"` collapses to `/sysop-issue-<id>.md` — an unwritable root path,
-     so the filing fails on the consumers least likely to have `TMPDIR` set
-     (Phase 153). Every Sysop skill that stages a body file uses this form.
+   - **Resolve the body file's path first, in a call of its own:**
+     ```bash
+     echo "${TMPDIR:-/tmp}/sysop-issue-<id>.md"
+     ```
+     The printed line is `<body file>`. Use it, character for character, both
+     as the path you `Write` and as the path `gh` reads below. Never give either
+     of them the `${TMPDIR:-/tmp}` expression instead: `Write` expands nothing
+     and the shell does, so the two name different files wherever `TMPDIR` is
+     set — every macOS shell — and `gh` reads a missing file, or a stale one
+     from an earlier run, in place of the body the human approved. If the call
+     is denied, or the printed line does not begin with `/` (a relative
+     `TMPDIR`), stop and say so; do not pick a path of your own. Keep the
+     `:-/tmp` fallback: macOS sets `TMPDIR`, most Linux shells do not, and a
+     bare `"$TMPDIR/…"` collapses to `/sysop-issue-<id>.md` — an unwritable
+     root path (Phase 153). Every Sysop skill that stages a body file uses this
+     form.
+   - Write the exact rendered body (identical to what Step 2 printed) to
+     `<body file>` using the `Write` tool — never pass the body through the
+     shell. If `Write` refuses because a file is already there (an earlier run
+     left it), `Read` that file, then `Write` again: what `gh` files must be
+     the body you just wrote.
    - Keep the `--title` a plain one-line summary and pass it **single-quoted**;
      if the source title contains a backtick, `$`, or a single quote, render a
      clean equivalent for the title (the full original text still rides in the
@@ -353,9 +367,13 @@ For each selected entry, in order:
      redaction.
    - Then:
      ```bash
-     gh issue create --repo <target> --title '<title>' --label bug --body-file "${TMPDIR:-/tmp}/sysop-issue-<id>.md"
+     gh issue create --repo <target> --title '<title>' --label bug --body-file '<body file>'
      ```
-   - Delete the temp file after the call returns (success or failure).
+   - After the call returns (success or failure), remove the file with
+     `rm -f '<body file>'`. Nothing depends on it: the next run rewrites the
+     file before `gh` reads it, so a leftover is never what gets filed. No
+     `rm` rule is seeded, so under `dontAsk` this call is denied — leave the
+     file and carry on.
 
    `gh issue create` prints the new issue URL — capture it. If the call fails
    (auth lapse, missing label, network), **do not** edit the log entry; record

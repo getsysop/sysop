@@ -20,6 +20,7 @@ Two layers:
 * the three scripts, end to end, on a `master` repo, plus the loud-failure
   arms: an undecidable repo, and a script hand-copied without its library.
 """
+import os
 import shutil
 import subprocess
 import sys
@@ -140,6 +141,44 @@ def _shapes(tmp_path):
     # A TAG named `main` on a master repo must not read as the branch.
     tagged = _repo(tmp_path / "tagged", "master"); _git(tagged, "tag", "main")
     out.append(("master repo with a tag named main", tagged, "master"))
+    out.extend(_unsafe_shapes(tmp_path))
+    return out
+
+
+# `Q-383` (Phase 368): names git accepts as refs that the resolver must refuse.
+# Each payload is INERT if it ever runs (`true`), because the defect being pinned
+# is that a substitution site executes it. Every shape is built so the pre-fix
+# resolver ANSWERED it (prints the name, exit 0) — a shape the ladder already
+# refused for another reason would pin nothing.
+_UNSAFE = "dev;true"
+_NON_ASCII = "ma\u00een"  # maîn
+
+
+def _unsafe_shapes(tmp_path):
+    out = []
+    # Step 1, local branch present — AND a local `main`, so a resolver that
+    # skipped the remote's declaration and fell through to step 2 would answer
+    # `main`. The remote declared a default; substituting another is the defect
+    # `_git_lib.sh` exists to replace, so the answer is a refusal, not `main`.
+    r = _repo(tmp_path / "unsafe_head"); _git(r, "branch", _UNSAFE); _set_origin_head(r, _UNSAFE)
+    out.append(("origin/HEAD -> 'dev;true' (local), local main too", r, ""))
+    r = _repo(tmp_path / "non_ascii_head"); _git(r, "branch", _NON_ASCII); _set_origin_head(r, _NON_ASCII)
+    out.append(("origin/HEAD -> non-ASCII 'ma\u00een' (local), local main too", r, ""))
+    # Step 3, unborn: HEAD symbolically names a branch with a payload.
+    r = _repo(tmp_path / "unsafe_unborn", "x$(true)", commit=False)
+    out.append(("unborn, HEAD -> 'x$(true)'", r, ""))
+    # A leading `-`: `git branch` refuses it, `update-ref` does not.
+    r = _repo(tmp_path / "dash_head", "master")
+    _git(r, "update-ref", "refs/heads/-dash", "HEAD")
+    _git(r, "update-ref", "refs/remotes/origin/-dash", "HEAD")  # not `_set_origin_head`: `-dash` would parse as an option
+    _git(r, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/-dash")
+    out.append(("origin/HEAD -> '-dash' (local, via update-ref)", r, ""))
+    # The refusal is at the DECISION points only: a STALE declaration of an
+    # unsafe name (neither local nor remote-tracking) still falls through to
+    # step 2, exactly as a stale safe one does.
+    r = _repo(tmp_path / "unsafe_stale", "master")
+    _git(r, "symbolic-ref", "refs/remotes/origin/HEAD", f"refs/remotes/origin/{_UNSAFE}")  # dangling
+    out.append(("stale origin/HEAD -> 'dev;true', local master", r, "master"))
     return out
 
 
@@ -168,8 +207,21 @@ def test_bash_and_python_resolve_every_shape_identically(tmp_path, bash):
 
 def test_the_shape_matrix_is_not_vacuous(tmp_path):
     shapes = _shapes(tmp_path)
-    assert len(shapes) >= 14
+    assert len(shapes) >= 19
     assert {e for _, _, e in shapes} >= {"main", "master", "develop", "trunk", ""}
+
+
+def test_every_unsafe_shape_is_one_git_lets_exist(tmp_path):
+    """Non-vacuity for the `Q-383` rows: each must hold the ref it claims (a fixture
+    git silently refused to create would make its refusal row pass for the wrong
+    reason), and git itself must accept the name as a ref — the premise of the
+    entry is that the allowlist refuses names git does NOT."""
+    for label, repo, _ in _unsafe_shapes(tmp_path):
+        head = _git(repo, "symbolic-ref", "--quiet", "--short", "HEAD", check=False).stdout.strip()
+        rhead = _git(repo, "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD", check=False).stdout.strip()
+        named = rhead.rsplit("refs/remotes/origin/", 1)[-1] if rhead else head
+        assert named and named not in ("main", "master"), (label, head, rhead)
+        assert _git(repo, "check-ref-format", f"refs/heads/{named}", check=False).returncode == 0, (label, named)
 
 
 @pytest.mark.parametrize("bash", _BASHES)
@@ -199,6 +251,173 @@ def test_a_refusal_names_the_reason_and_the_git_command(tmp_path, bash):
     rc, name, err = _bash_resolve(bash, tmp_path / "bm")
     assert rc == 1 and "origin/develop exists" in err, err
     assert "git branch develop origin/develop" in err, err
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# `Q-383` — the refusal itself: what it prints, under which locale
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _refusal_line(err):
+    lines = [ln for ln in err.splitlines() if "Refusing this repository's default branch name:" in ln]
+    assert len(lines) == 1, err
+    return lines[0].split("default branch name:", 1)[1].strip()
+
+
+@pytest.mark.parametrize("bash", _BASHES)
+def test_a_refused_name_is_named_escaped_with_the_allowed_set_and_the_remedy(tmp_path, bash):
+    """Empty stdout and exit 1 are the contract `default_branch.sh` states; the
+    diagnostic must also name the offender — escaped, so the line is inert if
+    copied into a shell — and say what is allowed and what to do."""
+    expect = {
+        "origin/HEAD -> 'dev;true' (local), local main too": "dev\\;true",
+        "unborn, HEAD -> 'x$(true)'": "x\\$\\(true\\)",
+        "origin/HEAD -> '-dash' (local, via update-ref)": "-dash",
+    }
+    shapes = {lbl: repo for lbl, repo, _ in _unsafe_shapes(tmp_path)}
+    for label, rendered in expect.items():
+        rc, name, err = _bash_resolve(bash, shapes[label])
+        assert (rc, name) == (1, ""), (label, rc, name, err)
+        assert _refusal_line(err) == rendered, (label, err)
+        assert "[A-Za-z0-9._/-]+" in err and "not start with '-'" in err, err
+        assert "git branch -m <current> <new>" in err, err
+        # Phase 368's round: `set-head` alone fails (`Not a valid ref`) until the
+        # push creates origin/<new>, so the push must sit between the two.
+        assert "git push -u origin <new>  &&  git remote set-head origin <new>" in err, err
+
+
+@pytest.mark.parametrize("bash", _BASHES)
+def test_the_remote_only_arm_refuses_before_its_create_it_remedy(tmp_path, bash):
+    """The arm for "the remote has it, the checkout lacks it" prints a command to
+    copy — `git branch <name> origin/<name>`. With an unsafe name that command IS
+    the payload, so the arm must refuse first and never print it."""
+    r = _repo(tmp_path / "remote_only")
+    _git(r, "update-ref", f"refs/remotes/origin/{_UNSAFE}", "HEAD")
+    _git(r, "symbolic-ref", "refs/remotes/origin/HEAD", f"refs/remotes/origin/{_UNSAFE}")
+    rc, name, err = _bash_resolve(bash, r)
+    assert (rc, name) == (1, ""), err
+    assert _refusal_line(err) == "dev\\;true", err
+    assert "Create it and re-run" not in err and _UNSAFE not in err, err
+    refused = []
+    assert ss.resolve_default_branch(r, refused) == "" and refused == [_UNSAFE]
+
+
+@pytest.mark.parametrize("bash", _BASHES)
+def test_the_stale_declaration_message_escapes_an_unsafe_name(tmp_path, bash):
+    """The one diagnostic that prints a name the ladder did NOT decide on: a stale
+    `origin/HEAD` with no main/master fallback. The name came from the remote, so
+    it is shown escaped — the refusal's rule applies to every place a crafted name
+    reaches the operator, not only to stdout."""
+    r = _repo(tmp_path / "stale_unsafe", "trunk")
+    _git(r, "symbolic-ref", "refs/remotes/origin/HEAD", f"refs/remotes/origin/{_UNSAFE}")  # dangling
+    rc, name, err = _bash_resolve(bash, r)
+    assert (rc, name) == (1, ""), err
+    assert "origin/HEAD names 'dev\\;true'" in err and "(stale)" in err, err
+    assert _UNSAFE not in err, err
+    assert ss.resolve_default_branch(r) == ""
+
+
+def _utf8_locale():
+    out = subprocess.run(["locale", "-a"], capture_output=True, text=True).stdout.split()
+    for pref in ("en_US.UTF-8", "en_US.utf8", "C.UTF-8", "C.utf8"):
+        if pref in out:
+            return pref
+    return next((loc for loc in out if loc.lower().endswith(("utf-8", "utf8"))), "")
+
+
+def test_a_utf8_locale_is_available_for_the_locale_tests():
+    """Without one, the test below would exercise the C locale only — where a
+    bracket range is ASCII anyway and the defect it pins cannot occur."""
+    assert _utf8_locale(), "no UTF-8 locale in `locale -a`"
+
+
+@pytest.mark.parametrize("bash", _BASHES)
+def test_a_non_ascii_name_is_refused_under_a_utf8_locale(tmp_path, bash):
+    """The locale half of the ruling. Measured on macOS: under a UTF-8 locale
+    bash 3.2's `[A-Za-z]` bracket range matches `î`, so a range-written allowlist
+    would ACCEPT `maîn` under the very locale an operator's shell runs in. The
+    diagnostic's rendering of the name must be ASCII — no raw bytes reach the
+    terminal — whatever bash renders it."""
+    loc = _utf8_locale()
+    repo = next(r for lbl, r, _ in _unsafe_shapes(tmp_path) if "non-ASCII" in lbl)
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env.update(LC_ALL=loc, LANG=loc)
+    r = subprocess.run([bash, "-c", 'source "$1"; resolve_default_branch "$2"', "_", str(LIB), str(repo)],
+                       capture_output=True, env=env)
+    err = r.stderr.decode("utf-8", "replace")
+    assert (r.returncode, r.stdout) == (1, b""), (loc, err)
+    assert "setlocale" not in err, f"{loc} did not load in {bash}: {err}"
+    rendered = _refusal_line(err)
+    assert rendered.isascii() and "303" in rendered, rendered   # î is \303\256
+    assert ss.resolve_default_branch(repo) == ""
+
+
+def test_the_survey_names_a_refused_branch_rather_than_the_generic_gap(tmp_path, monkeypatch):
+    """The generic discrepancy says no remote HEAD identifies the branch, and its
+    remedy is `git remote set-head` — both false for a refused name, and the
+    remedy fixes nothing. The refused name is shown shell-quoted."""
+    repo = next(r for lbl, r, _ in _unsafe_shapes(tmp_path) if "'dev;true'" in lbl and "local" in lbl)
+    monkeypatch.chdir(repo)
+    d = ss.run_survey().discrepancies[0]
+    assert d.kind == "default branch unresolved", d
+    assert "'dev;true' is refused" in d.detail and "[A-Za-z0-9._/-]+" in d.detail, d.detail
+    assert "git branch -m" in d.suggestion and "set-head origin <branch>" not in d.suggestion, d
+
+
+def test_a_safe_remote_only_name_is_not_recorded_as_refused(tmp_path, monkeypatch):
+    """The round's lens 2 (`S04`): the remote-only arm fails for a SAFE name too
+    (`origin/HEAD` names `develop`, which exists only as `origin/develop`). It must
+    not be recorded as refused, or `/sitrep` would swap the generic remedy for a
+    false "the default branch name develop is refused"."""
+    repo = _repo(tmp_path / "r", "main")
+    _git(repo, "update-ref", "refs/remotes/origin/develop", "HEAD")
+    _git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/develop")
+    refused = []
+    assert ss.resolve_default_branch(repo, refused) == "" and refused == [], refused
+    monkeypatch.chdir(repo)
+    kinds = [(d.kind, d.detail) for d in ss.run_survey().discrepancies]
+    assert any(k == "default branch unresolved" for k, _ in kinds), kinds
+    assert not any("is refused" in det for _, det in kinds), kinds
+
+
+@pytest.mark.parametrize("bash", _BASHES)
+def test_a_remote_name_is_escaped_in_the_copyable_remedy(tmp_path, bash):
+    """The round's lens 2 (`G10`): git accepts a remote named `o$(true)`, and the
+    remote-only arm prints a `git branch` command the operator is told to copy.
+    The remote is escaped there and in the line above it; printed raw it would
+    run as a command substitution when pasted. The payload here is inert."""
+    repo = _repo(tmp_path / "r", "main")
+    _git(repo, "remote", "add", "o$(true)", str(tmp_path / "nowhere"))
+    _git(repo, "update-ref", "refs/remotes/o$(true)/develop", "HEAD")
+    _git(repo, "symbolic-ref", "refs/remotes/o$(true)/HEAD", "refs/remotes/o$(true)/develop")
+    rc, name, err = _bash_resolve(bash, repo)
+    assert (rc, name) == (1, ""), err
+    assert "git branch develop o\\$\\(true\\)/develop" in err, err
+    assert "o$(true)" not in err, err
+
+
+def test_the_survey_quotes_a_refused_name_inert_and_ascii():
+    for raw, shown in (("dev;true", "'dev;true'"), ("ma\u00een", "'ma\\u00een'"),
+                       ("a'b$(x)", "'a'\"'\"'b$(x)'"), ("x\udcc3", "'x\\udcc3'")):
+        assert ss._quote_refused_name(raw) == shown, (raw, ss._quote_refused_name(raw))
+
+
+def test_the_python_allowlist_matches_the_ruling():
+    ok = ("main", "master", "release/1.2_x-y", "a.b", "trunk-2")
+    bad = ("", "-dash", "dev;true", "x y", "rel+ase", "u@x", "re,l", "ma\u00een", "x\udcc3", "a\nb")
+    assert all(ss._default_branch_name_ok(n) for n in ok)
+    assert not any(ss._default_branch_name_ok(n) for n in bad), [n for n in bad if ss._default_branch_name_ok(n)]
+
+
+@pytest.mark.parametrize("bash", _BASHES)
+def test_the_bash_allowlist_matches_the_ruling(bash):
+    """Driven directly, so a name no fixture can create (`+`, `@`, `,`, a space)
+    is still pinned. The same table as the Python twin's."""
+    ok = ["main", "master", "release/1.2_x-y", "a.b", "trunk-2"]
+    bad = ["", "-dash", "dev;true", "x y", "rel+ase", "u@x", "re,l", "ma\u00een"]
+    script = ('source "$1"; shift; for n in "$@"; do '
+              'if _default_branch_name_ok "$n"; then echo ok; else echo no; fi; done')
+    r = subprocess.run([bash, "-c", script, "_", str(LIB), *ok, *bad], capture_output=True, text=True)
+    assert r.stdout.split() == ["ok"] * len(ok) + ["no"] * len(bad), r.stdout
 
 
 @pytest.mark.parametrize("bash", _BASHES)
@@ -625,8 +844,17 @@ class TestCleanupWorktreesOnMaster:
 # The library is the one thing a hand-copied script can lose — and it says so
 # ─────────────────────────────────────────────────────────────────────────────
 
-@pytest.mark.parametrize("script", ["close_batch.sh", "batch_work.sh", "cleanup_worktrees.sh"])
-def test_a_script_copied_without_its_library_fails_loud_and_names_the_remedy(tmp_path, script):
+# Every bash in `_BASHES` (Phase 368): under `set -e`, bash 3.2 exits on a failed
+# `source` before an `||` arm runs, so on macOS's /bin/bash the remedy never printed.
+# `unreadable` (the round's lens 1): bash 5 printed "missing" for a library that is
+# present but unreadable, and bash 3.2 printed only `Permission denied`.
+@pytest.mark.parametrize("state", ["missing", "unreadable"])
+@pytest.mark.parametrize("bash", _BASHES)
+@pytest.mark.parametrize("script", ["close_batch.sh", "batch_work.sh", "cleanup_worktrees.sh",
+                                    "claim_task.sh", "default_branch.sh"])
+def test_a_script_copied_without_its_library_fails_loud_and_names_the_remedy(tmp_path, script, bash, state):
+    if state == "unreadable" and hasattr(os, "geteuid") and os.geteuid() == 0:
+        pytest.skip("root reads a mode-000 file")
     repo = _repo(tmp_path / "repo", "master")
     (repo / "review_tasks.md").write_text(_TASKS)
     sd = repo / "sysop" / "scripts"
@@ -634,13 +862,16 @@ def test_a_script_copied_without_its_library_fails_loud_and_names_the_remedy(tmp
     for name in (script, "review_index.py", "_log.py"):
         shutil.copy(SCRIPTS / name, sd / name)
     _git(repo, "add", "-A"); _git(repo, "commit", "-qm", "partial install")
+    if state == "unreadable":
+        shutil.copy(LIB, sd / "_git_lib.sh")
+        (sd / "_git_lib.sh").chmod(0)
 
-    r = subprocess.run(["bash", str(sd / script), "--list"] if script == "batch_work.sh"
-                       else ["bash", str(sd / script)], cwd=str(repo),
+    args = {"batch_work.sh": ["--list"], "claim_task.sh": ["TASK-1", "feat/x"]}.get(script, [])
+    r = subprocess.run([bash, str(sd / script), *args], cwd=str(repo),
                        capture_output=True, text=True)
 
     assert r.returncode == 1, r.stdout + r.stderr
-    assert f"_git_lib.sh is missing beside {script}" in r.stderr, r.stderr
+    assert f"_git_lib.sh is missing or unreadable beside {script}" in r.stderr, r.stderr
     assert "sysop-update.sh" in r.stderr, r.stderr
     assert "`Pending`" in (repo / "review_tasks.md").read_text()
 
@@ -649,9 +880,11 @@ def test_every_sourcing_script_sources_from_its_own_directory():
     """The sourcing line must resolve the library beside the SCRIPT, not the
     CWD — the installed layout is `sysop/scripts/`, and every prescribed
     invocation runs from the repo root."""
-    for name in ("close_batch.sh", "batch_work.sh", "cleanup_worktrees.sh"):
+    for name in ("close_batch.sh", "batch_work.sh", "cleanup_worktrees.sh",
+                 "claim_task.sh", "default_branch.sh"):
         text = (SCRIPTS / name).read_text(encoding="utf-8")
-        assert 'source "$(dirname "${BASH_SOURCE[0]}")/_git_lib.sh" || {' in text, name
+        assert '_SYSOP_GIT_LIB="$(dirname "${BASH_SOURCE[0]}")/_git_lib.sh"' in text, name
+        assert '{ [[ -f "$_SYSOP_GIT_LIB" && -r "$_SYSOP_GIT_LIB" ]] && source "$_SYSOP_GIT_LIB"; } || {' in text, name
         import re
         assert not re.search(r"^resolve_main_root\(\)", LIB.read_text(), re.M), (
             "the lock-dir resolver stays duplicate-and-pin on purpose; the "

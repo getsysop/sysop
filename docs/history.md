@@ -141,7 +141,7 @@ that it's a working log written for the project's own continuity, not an introdu
   re-accretion. What replaced the campaign is narrower than a continuation of it. A standing review
   question — does this paragraph tell the agent what to do, or tell an editor why the rule exists? —
   now routes the second kind to the sibling file as it is written, which is prevention rather than
-  relocation. The one phase to exercise it since the freeze was an ordinary defect fix, and it added
+  relocation. The first phase to exercise it after the freeze was an ordinary defect fix, and it added
   three sections of freshly authored rationale rather than moving any: the runner grew by about
   1,900 bytes in that phase and the editor-facing mass the guard measures fell by thirty-one
   characters. The push is over; what survives it only keeps new rationale out of the runner in the
@@ -159,6 +159,27 @@ that it's a working log written for the project's own continuity, not an introdu
   oscillating verdict, then a permanent stall, then a rule true of one section and false of six —
   and reverted on the maintainer's call, with the record and one new finding as the only things
   that shipped.
+- **Oct 2026** — At the turn of the month the single reasoning role split into planner,
+  plan-review and executor, so a project can move execution to a cheaper model without moving
+  review, and every skill now names its role. The month so far has gone into taking the human
+  out of the close, and finding where that has to stop. A consumer running the lifecycle from an
+  autopilot asked for three things: a build loop that does not stop to ask, a status report a
+  script can read, and a close that can merge with nobody watching. The first two shipped in a
+  day. The close came apart into pieces that each shipped on their own — a preparing run that
+  asks nothing and writes its questions down, a resume that takes the answers and re-runs only
+  what went stale, and a split at the merge, so that one run opens the pull request and asks a
+  second reviewer and a later run merges exactly the head that reviewer read. The last piece,
+  merging with no human at all, was built and then switched off: three review rounds each found a
+  way past the gate, mostly in the previous round's fix, because the gate ran on the agent's own
+  machine and read state the agent could shape. The redesign moves the trust onto GitHub — code
+  owners, a check signed by a dedicated app, and auto-merge as the agent's only lever — and before
+  any of it was built, the eight GitHub behaviours it rests on that the documentation does not
+  settle were run against a scratch repository. None broke the design; three changed it.
+  Underneath, the close path kept being found doing less than it said: a smoke-test gate that read
+  only the task bodies that declared a smoke test, a required check that never started reported
+  as one that failed, and gitignored files a branch depended on that removing its worktree would have deleted when
+  the worktree held the only copy. Each was fixed where it was found, and the review rounds again
+  found defects in the fixes, which is what they are there for.
 
 Where to go next: [the monograph](./workflow.html) for why it's built this way,
 [one rule, end to end](./one-rule.md) for the evidence trail behind a single rule, and

@@ -27,8 +27,8 @@
 #            git-common-dir, so it is the same worktree no matter which one
 #            this script is run from.
 #   MERGED — branch is ancestor of the default branch (safe to remove)
-#   ACTIVE — has uncommitted changes, or holds sysop/runtime/ artifacts
-#            (skipped by --clean)
+#   ACTIVE — has uncommitted changes, holds sysop/runtime/ artifacts, or
+#            contains another worktree's directory (skipped by --clean)
 #   STALE  — directory missing (pruned automatically)
 # ──────────────────────────────────────────────────────────────
 set -euo pipefail
@@ -59,9 +59,9 @@ REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || {
 #
 # Resolution, and why it is deliberately NOT the
 # `dirname "$(git rev-parse --git-common-dir)"` idiom five sibling SHELL scripts use
-# for the LOCK path (batch_work, claim_task, close_batch, run_checks, self_check —
-# eight shipped Python scripts resolve it the same way, so the whole-tree figure is
-# thirteen; install_hooks.sh names the idiom only to reject it, since
+# for the LOCK path (batch_work, claim_task, close_batch, run_checks, self_check;
+# shipped Python scripts use it too — `git grep -l -e --git-common-dir --
+# 'core/companion/scripts/*.py'` lists them; install_hooks.sh names the idiom only to reject it, since
 # `--git-common-dir`/hooks ignores core.hooksPath, which is why Q-307 said six):
 # that arithmetic is correct only when the git dir is literally
 # `<root>/.git`. Measured in this phase's own review round — inside a submodule it
@@ -88,6 +88,44 @@ REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || {
 # the same reason — cited by NAME, not by line: the line numbers moved when
 # Phase 261 added `--commit-claim`, and a pinned range is a citation that goes
 # stale on any edit above it.
+#
+# ── Reading `git worktree list` ───────────────────────────────
+# Both readers of the list — the primary probe just below and the collection
+# loop further down — read it through `worktree_list_nul`, which prints one
+# porcelain line per NUL-terminated field. Plain `--porcelain` is newline-
+# separated and does NOT quote a newline inside a path (measured on git 2.50.1),
+# so a worktree at `…/wt\nx` was read as the path `…/wt`: it classified STALE,
+# and `--clean` exited 1 on `fatal: '…/wt' is not a working tree`. That failed
+# safe — nothing was removed — but it also never reclaimed the worktree, and a
+# truncated path that happens to name ANOTHER worktree is classified and removed
+# as if it were this record's.
+#
+# `-z` is the fix git itself shipped for this (2.36 release notes: porcelain
+# "did not c-quote pathnames … with unsafe bytes correctly", worked around "by
+# introducing NUL terminated output format with -z"). This repo states no
+# minimum git version (`_git_lib.sh` says so where it avoids
+# `--absolute-git-dir`), so `-z` is probed once rather than assumed, and an
+# older git gets today's newline parse translated into the same NUL stream —
+# its exact pre-fix behaviour, newline paths included, through one parser. The
+# probe is a separate call because a NUL-separated answer cannot be captured in
+# a shell variable: command substitution drops the NULs.
+#
+# The trailing `printf '\0'` is the flush the collection loop's `echo ""` used to
+# be: it guarantees the last record is followed by an empty field, which is what
+# closes a record.
+WT_LIST_NUL=0
+if git -C "$REPO_ROOT" worktree list --porcelain -z >/dev/null 2>&1; then
+  WT_LIST_NUL=1
+fi
+worktree_list_nul() {
+  if [[ "$WT_LIST_NUL" == 1 ]]; then
+    git -C "$1" worktree list --porcelain -z
+  else
+    git -C "$1" worktree list --porcelain | tr '\n' '\0'
+  fi
+  printf '\0'
+}
+
 MAIN_ROOT="$REPO_ROOT"
 _git_dir="$(git -C "$REPO_ROOT" rev-parse --git-dir 2>/dev/null)" || _git_dir=""
 _common_dir="$(git -C "$REPO_ROOT" rev-parse --git-common-dir 2>/dev/null)" || _common_dir=""
@@ -100,10 +138,21 @@ fi
 # absolutising is needed — which also keeps this off `--path-format`, a flag older
 # git does not have.
 if [[ "$_git_dir" != "$_common_dir" ]]; then
-  _primary="$(git -C "$REPO_ROOT" worktree list --porcelain 2>/dev/null \
-              | awk '/^worktree /{print substr($0, 10); exit}')"
-  _primary_bare="$(git -C "$REPO_ROOT" worktree list --porcelain 2>/dev/null \
-              | awk '/^worktree /{n++} n==1 && $0=="bare"{print "bare"; exit}')"
+  # The first record only: its `worktree` line, and whether it is marked `bare`.
+  _primary=""
+  _primary_bare=""
+  _records=0
+  while IFS= read -r -d '' _field; do
+    if [[ "$_field" =~ ^worktree[[:space:]]+(.*) ]]; then
+      _records=$((_records + 1))
+      if [[ $_records -gt 1 ]]; then
+        break
+      fi
+      _primary="${BASH_REMATCH[1]}"
+    elif [[ "$_field" == "bare" ]]; then
+      _primary_bare="bare"
+    fi
+  done < <(worktree_list_nul "$REPO_ROOT" 2>/dev/null)
   if [[ -z "$_primary" ]]; then
     echo "❌ git worktree list named no worktree — refusing to guess which checkout" >&2
     echo "   must never be removed." >&2
@@ -125,8 +174,12 @@ fi
 # the primary-checkout probe above: the listing's MERGED/ACTIVE column is the
 # same predicate the removal modes act on, and a listing that cannot compute
 # it would print a verdict it does not have.
-source "$(dirname "${BASH_SOURCE[0]}")/_git_lib.sh" || {
-  echo "❌ _git_lib.sh is missing beside cleanup_worktrees.sh — it ships with every install." >&2
+_SYSOP_GIT_LIB="$(dirname "${BASH_SOURCE[0]}")/_git_lib.sh"
+# `-f`/`-r` before `source` (Phase 368): under `set -e`, bash 3.2 (macOS's
+# /bin/bash) exits on a failed `source` of a missing or unreadable file before the
+# `||` arm runs, so the remedy below printed only on bash 4+.
+{ [[ -f "$_SYSOP_GIT_LIB" && -r "$_SYSOP_GIT_LIB" ]] && source "$_SYSOP_GIT_LIB"; } || {
+  echo "❌ _git_lib.sh is missing or unreadable beside cleanup_worktrees.sh — it ships with every install." >&2
   echo "   Restore the scripts directory: bash sysop/scripts/sysop-update.sh" >&2
   exit 1
 }
@@ -172,11 +225,12 @@ fi
 git worktree prune
 
 # ── Parse worktree list ───────────────────────────────────────
-# git worktree list --porcelain gives structured output:
+# git worktree list --porcelain gives structured output, one field per line
+# (per NUL-terminated field as `worktree_list_nul` delivers it):
 #   worktree /path
 #   HEAD <sha>
 #   branch refs/heads/<name>
-#   (blank line)
+#   (empty field — ends the record)
 
 # ── Helper: Sysop runtime artifacts held INSIDE a worktree ────
 # Every other probe in this script — `status --porcelain` below, `ls-files
@@ -221,6 +275,38 @@ note_if_invocation_worktree() {
   [[ "$wt_path" == "$REPO_ROOT" ]] || return 0
   echo "   ℹ️  That was the worktree you invoked from — this shell's directory is"
   echo "      now gone. cd ${MAIN_ROOT} (or anywhere) before running more commands."
+}
+
+# ── Helper: another registered worktree INSIDE this one ───────
+# `git worktree remove` deletes the whole directory, and a worktree nested in
+# another's gitignored subdirectory (`git worktree add <A>/.claude/worktrees/x`
+# is the natural way to get one) is invisible to every content probe here —
+# git sees an ignored directory, not a repository. Before this arm, `--clean`
+# classified the parent MERGED, removed it, and took the child's working tree
+# with it, uncommitted work included — while printing `Skipping ACTIVE
+# worktree` for that same child, because the child was classified before
+# anything was removed (reproduced end to end). Checked against the list git
+# itself printed, so both sides are spelled the same way: git records a
+# worktree's resolved path, so a child added through a symlink is still seen
+# under its real parent (measured). Prints the first nested path found whose
+# directory still exists; one already removed earlier in the loop has nothing
+# left to lose. **Its reach is the registered list, not the disk** (the round's
+# lens 1): a nested worktree whose `.git` file was deleted is pruned by the
+# opening `git worktree prune`, so it is not in `WT_PATHS`, its parent can
+# classify MERGED, and `--clean` removes the directory with the child's files in
+# it — where a top-level worktree in the same state is pruned and left on disk.
+# Reaching it means someone deleted a `.git` file by hand; it is stated, not
+# probed, because walking every directory for orphaned work is the all-ignored-
+# content scope the runtime probe above rejects.
+worktree_nested_worktree() {
+  local wt_path="$1" other
+  for other in "${WT_PATHS[@]}"; do
+    if [[ "$other" == "$wt_path"/* && -d "$other" ]]; then
+      printf '%s\n' "$other"
+      return 0
+    fi
+  done
+  return 0
 }
 
 classify_worktree() {
@@ -271,6 +357,14 @@ classify_worktree() {
     return
   fi
 
+  # Holds another registered worktree? Removing this one would delete that one's
+  # directory too, whatever that one's own class — see the helper. Before MERGED
+  # for the same reason as the arm above.
+  if [[ -n "$(worktree_nested_worktree "$wt_path")" ]]; then
+    echo "ACTIVE"
+    return
+  fi
+
   # Branch merged into the default branch?
   if [[ -n "$wt_branch" ]] && git merge-base --is-ancestor "$wt_branch" "$main_branch" 2>/dev/null; then
     echo "MERGED"
@@ -288,20 +382,25 @@ declare -a WT_CLASSES=()
 current_path=""
 current_branch=""
 
-while IFS= read -r line; do
+# Two passes: collect every record, THEN classify. The nested-worktree arm needs
+# the whole list, and a record classified mid-parse could only see the ones
+# before it.
+while IFS= read -r -d '' line; do
   if [[ "$line" =~ ^worktree[[:space:]]+(.*) ]]; then
     current_path="${BASH_REMATCH[1]}"
   elif [[ "$line" =~ ^branch[[:space:]]+refs/heads/(.*) ]]; then
     current_branch="${BASH_REMATCH[1]}"
   elif [[ -z "$line" && -n "$current_path" ]]; then
-    classification=$(classify_worktree "$current_path" "$current_branch")
     WT_PATHS+=("$current_path")
     WT_BRANCHES+=("$current_branch")
-    WT_CLASSES+=("$classification")
     current_path=""
     current_branch=""
   fi
-done < <(git worktree list --porcelain; echo "")
+done < <(worktree_list_nul "$MAIN_ROOT")
+
+for i in "${!WT_PATHS[@]}"; do
+  WT_CLASSES+=("$(classify_worktree "${WT_PATHS[$i]}" "${WT_BRANCHES[$i]}")")
+done
 
 # ── Mode: list (default) ─────────────────────────────────────
 if [[ "$ACTION" == "list" ]]; then
@@ -324,8 +423,10 @@ if [[ "$ACTION" == "list" ]]; then
       *)      icon="❓" ;;
     esac
 
-    # Shorten path for display
+    # Shorten path for display. A newline in a path (legal, and parsed whole
+    # since Phase 368) would split the table row, so it is shown as `?` here only.
     display_path="${wt_path/$HOME/~}"
+    display_path="${display_path//$'\n'/?}"
     printf "│ %s%-5s │ %-26s │ %-26s │\n" "$icon" "$wt_class" "${wt_branch:0:26}" "${display_path: -26}"
   done
 
@@ -352,6 +453,10 @@ if [[ "$ACTION" == "--clean" ]]; then
 
     if [[ "$wt_class" == "ACTIVE" ]]; then
       echo "⏭️  Skipping ACTIVE worktree: ${wt_path} (${wt_branch})"
+      nested="$(worktree_nested_worktree "$wt_path")"
+      if [[ -n "$nested" ]]; then
+        echo "   ℹ️  It contains another worktree (${nested}); removing it would delete that one too."
+      fi
       SKIPPED=$((SKIPPED + 1))
       continue
     fi
@@ -381,6 +486,18 @@ if [[ "$ACTION" == "--clean" ]]; then
     fi
   done
 
+  # This closing prune has NO deterministic observer, and a mutation run measured that
+  # deleting it fails nothing — so this says why it stays rather than leaving the
+  # next reader to infer coverage. Every admin entry the loop could leave behind
+  # is ACTIVE (directory intact), locked (prune skips locked entries), or a
+  # corrupt-pointer STALE whose removal failed (directory and `.git` file intact,
+  # so not prunable); and `git worktree remove` on an already-missing directory
+  # exits 0 and clears its own entry (measured), so a removal leaves nothing to
+  # prune either. The one single-process route to a prunable leftover — a
+  # worktree nested in a removed one's directory — is closed by the nested arm in
+  # `classify_worktree`. What remains is a directory deleted by another process
+  # mid-run, which § 4.4's concurrent sessions make possible and no test here can
+  # stage. Cheap, idempotent, and it leaves the admin DB as `list` would show it.
   git worktree prune
   echo ""
   echo "Done. Removed ${REMOVED} worktree(s), skipped ${SKIPPED} active, ${FAILED} failed."
@@ -448,6 +565,14 @@ if [[ "$ACTION" == "--force" ]]; then
       echo "      A pending-doc: NOT mirrored anywhere until /review-close Step 3b"
       echo "      collects it at merge time. Check the worktree before you confirm."
     fi
+    # A worktree nested inside this one goes with it, before its own turn in this
+    # loop comes — so its own UNCOMMITTED WORK line, computed then against a
+    # directory already gone, would never print. Name it here instead.
+    nested="$(worktree_nested_worktree "$wt_path")"
+    if [[ -n "$nested" ]]; then
+      echo "   ⚠️  Contains another worktree (${nested}) — its directory, and any"
+      echo "      uncommitted work in it, will be LOST with this one."
+    fi
     if git worktree remove --force "$wt_path"; then
       REMOVED=$((REMOVED + 1))
       note_if_invocation_worktree "$wt_path"
@@ -464,6 +589,11 @@ if [[ "$ACTION" == "--force" ]]; then
     fi
   done
 
+  # Defence for a directory deleted by another process mid-run; see the matching
+  # prune closing `--clean` for why nothing in the loop itself leaves one. Here
+  # the nested arm does not apply (`--force` ignores the class), but a nested
+  # worktree whose directory went with its parent still gets its own turn, and
+  # `git worktree remove --force` on a missing directory exits 0 and clears it.
   git worktree prune
   echo ""
   echo "Done. Force-removed ${REMOVED} worktree(s), ${FAILED} failed."

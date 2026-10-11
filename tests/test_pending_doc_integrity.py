@@ -1586,7 +1586,7 @@ def test_step3c_survives_the_shapes_that_used_to_kill_the_close():
 
     text = SKILL.read_text(encoding="utf-8")
     m = _re.search(
-        r"\npython3 - \"\$SMOKE_WORKTREE_DIRS\" \"\$APPROVED_BRANCHES\" <<'EOF'\n(.*?)\nEOF\n",
+        r"\npython3 - \"\$SMOKE_WORKTREE_DIRS\" \"\$APPROVED_BRANCHES\" \"<default branch>\" <<'EOF'\n(.*?)\nEOF\n",
         text, _re.DOTALL)
     assert m, "could not locate Step 3c's smoke-gate heredoc"
     src = m.group(1)
@@ -1612,7 +1612,7 @@ def test_step3c_survives_the_shapes_that_used_to_kill_the_close():
         (lk / "TASK-0001.lock").write_bytes(b"branch: feat/x\nnotes: \xe9\n")
         (lk / "damaged.lock").write_text("not a lock at all\n", encoding="utf-8")
 
-        r = _sp.run([sys.executable, str(d / "script.py"), "", "feat/x"],
+        r = _sp.run([sys.executable, str(d / "script.py"), "", "feat/x", "main"],
                     cwd=d, capture_output=True, text=True)
 
     assert r.returncode == 0, (
@@ -2174,7 +2174,8 @@ def test_step_1b_short_circuits_on_1c_s_hold_before_resolving_any_ref():
     body = SKILL.read_text(encoding="utf-8")
     one_b = body[body.index("1b. **Drop any pending-doc"):body.index("1c. **Hold back")]
     one_c = body[body.index("1c. **Hold back"):]
-    assert states(one_b, "Before resolving anything, apply 1c's hold test")
+    # Phase 353: 1c's test became a command, and 1b runs it rather than restating it.
+    assert states(one_b, "Before resolving anything, run 1c's hold test")
     assert states(one_b, "Resolving the ref is then pure downside"), (
         "a raw `in` on `pure downside` passes on `is NOT pure downside` — the phrase must "
         "be asserted, not merely present"

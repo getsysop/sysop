@@ -63,7 +63,8 @@ _ROLE_CLAUSE_RE = re.compile(r"\b(frontmatter|inline)=([a-z][a-z0-9_-]*)")
 # line is treated as an operative pin and rewritten. Do not write a non-pin
 # `model: "..."` in prose in a file that carries an `inline=` default — it would
 # be rewritten under an override. In practice these skills only ever quote a
-# model as a real pin (all 23 detected pins are operative); a future author who
+# model as a real pin (every pin `check_skill_models.py --list` prints is
+# operative); a future author who
 # needs a literal `model: "..."` example in such a file should phrase it without
 # the `model:`-prefixed quoted form.
 _FM_PIN_RE = re.compile(r'^(\s*model:\s*)(["\']?)([^"\'\s#]+)(["\']?)(\s*)$')
@@ -84,8 +85,9 @@ _INLINE_PIN_RE = re.compile(r'(model[`:\s]*["\'])([^"\']+)(["\'])')
 # Passing `best`, `inherit`, or a full model id (`claude-opus-5`) each returns
 # `InputValidationError` — verified 2026-08-21 against Claude Code by making the
 # calls, not by reading the schema. The failure lands mid-skill at spawn time, in
-# every skill the remapped role governs: 14 inline pins today, 12 of them on the
-# `reasoning` role, which covers the adversarial-review, judging and audit spawns.
+# every skill the remapped role governs — `check_skill_models.py --list` prints
+# the live set; `reasoning` and the roles that follow it cover the planning,
+# adversarial-review, execution, judging and audit spawns.
 #
 # This default is what a consumer's harness accepts today. It is deliberately
 # overridable — a harness that accepts more takes `inline_models:` in
@@ -314,6 +316,10 @@ def _load_yaml_mapping(path: Path) -> dict:
         # the shape this phase says it closed, on a config that parses fine.
         # Found by this phase's own execution lens.
         raise ConfigShapeError(f"{path}: cannot be read — {exc}") from exc
+    except Exception as exc:
+        # `Q-621`: PyYAML's constructors raise more than `YAMLError` — `ValueError`
+        # for `2026-09-31`, `KeyError` for `!!bool abc`, and others. Still not valid YAML.
+        raise ConfigShapeError(f"{path}: not valid YAML — {exc}") from exc
     if data is None:
         return {}
     if not isinstance(data, dict):

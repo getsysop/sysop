@@ -1535,7 +1535,7 @@ def test_a_missing_authoring_row_is_reported():
 # — the `Q-495` class, one line above the constant the campaign moves most often. The live
 # values are what `test_the_ratchet_constants_describe_this_tree` compares against; a comment
 # restating them is a second copy nothing checks. Round finding, guards lens.
-EDITOR_MIXED_CEILING = 105_968
+EDITOR_MIXED_CEILING = 104_857
 
 # How far the ceiling may sit ABOVE the measured value before the guard demands it be
 # lowered. Without this the ratchet is one-directional in the wrong way: the thinning

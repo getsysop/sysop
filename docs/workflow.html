@@ -847,8 +847,8 @@
     <div class="hero-grid">
       <aside class="hero-margin rise">
         <span class="line">Vol. <span class="accent">I</span></span>
-        <span class="line">Issue 346</span>
-        <span class="line">2026.09.29</span>
+        <span class="line">Issue 373</span>
+        <span class="line">2026.10.10</span>
         <span class="line" style="margin-top:22px">An essay on</span>
         <span class="line">software workflow</span>
       </aside>
@@ -871,7 +871,7 @@
             <div class="hero-stat-label">Skills</div>
           </div>
           <div class="hero-stat">
-            <div class="hero-stat-fig">346</div>
+            <div class="hero-stat-fig">373</div>
             <div class="hero-stat-label">Phases shipped through</div>
           </div>
           <div class="hero-stat">
@@ -1294,7 +1294,7 @@
           </div>
           <div class="entry">
             <dt>Maintain<span class="model-tag opus">opus + parallel agents</span></dt>
-            <dd>Periodic <code>/codebase-review</code> and <code>/security-audit</code> generate batches in <code>review_tasks.md</code>. <code>/auto-fix</code> handles mechanical fixes <em>in parallel</em> (default 4 agents); <code>/auto-judge</code> handles flagged batches with Opus judgment. Both accept a <code>--merge</code> flag that runs overlapping batches <em>sequentially</em> — same-file work waits its turn so the second batch sees the first batch's fixes already in place. <code>/pr-dependabot</code> (§ III) handles dependency upkeep on the same cadence, and <code>/test-audit</code> assesses the standing health of the test suite itself — coverage the diff-scoped gates never look at, and existing tests worth retiring.</dd>
+            <dd>Periodic <code>/codebase-review</code> and <code>/security-audit</code> generate batches in <code>review_tasks.md</code>. <code>/auto-fix</code> handles mechanical fixes <em>in parallel</em> (default 4 agents); <code>/auto-judge</code> handles flagged batches with reasoning-tier judgment. Both accept a <code>--merge</code> flag that runs overlapping batches <em>sequentially</em> — same-file work waits its turn so the second batch sees the first batch's fixes already in place. <code>/pr-dependabot</code> (§ III) handles dependency upkeep on the same cadence, and <code>/test-audit</code> assesses the standing health of the test suite itself — coverage the diff-scoped gates never look at, and existing tests worth retiring.</dd>
           </div>
           <div class="entry">
             <dt>Report &amp; release<span class="model-tag">read-side · person-gated tag</span></dt>
@@ -1360,7 +1360,7 @@
               <g class="node" transform="translate(480,140)">
                 <rect width="170" height="100" rx="2" class="fill-primary"/>
                 <text x="85" y="34" class="code">/document-work</text>
-                <text x="85" y="54" class="small">model · inherits</text>
+                <text x="85" y="54" class="small">role · reasoning (opus)</text>
                 <text x="85" y="80" class="smallserif">commit + pending-doc</text>
               </g>
               <g class="node" transform="translate(700,140)">
@@ -1408,7 +1408,7 @@
           </div>
           <figcaption>
             <span class="fig-num">Fig. 2</span>
-            <span class="fig-cap">The single-task lifecycle. Solid arrows: skill handoff. Dashed: filesystem coordination. Pinned skills declare <em>roles</em> — reasoning, convention-gate, mechanical, quick — not models (Phase 69); the parenthesized model is the default mapping, remappable per project (§ VI). Un-pinned skills (like <code>/document-work</code>) inherit the session model.</span>
+            <span class="fig-cap">The single-task lifecycle. Solid arrows: skill handoff. Dashed: filesystem coordination. Skills declare <em>roles</em> — reasoning, planner, plan-review, executor, convention-gate, mechanical, quick — not models (Phase 69); the parenthesized model is the default mapping, remappable per project (§ VI). Since Phase 349 every skill carries one (a pinned model that is unavailable still falls back to the session model).</span>
           </figcaption>
         </figure>
 
@@ -1422,12 +1422,12 @@
             <dd>Adjudicates the claim before it creates anything — <code>--entry-state</code> answers <code>claimable</code> / <code>resumable</code> / <code>held</code> / <code>closed</code> / <code>absent</code>, and <code>resumable</code> <em>stops and asks</em> rather than resuming (Phase 159b). Then creates lock + worktree and <em>orchestrates</em> — it never implements, never enters plan mode, and holds no <code>Edit</code> tool: a planner writes the plan, an independent reviewer that did not write it looks for what is wrong, the orchestrator classifies those findings itself, and an executor implements, verifies and commits. Three cold contexts, four when the human answers an executor's question <em>fix</em> (Phase 345), and a file left behind at each seam in <code>sysop/runtime/claim/&lt;id&gt;/&lt;run&gt;/</code> — the pre-plan SHAs, the plan, the planner's integrity check, the review, the classification, the outcome, the executor's questions and the human's answers, and on option C a marker recording that the plan was written back and the claim released — so a review that ran and a review that was skipped stop producing identical evidence (Phase 171). The reviewed plan itself goes somewhere else on purpose: into the <em>task body</em> in the main checkout, the one write in the skill that is deliberately not a worktree write. Those files are not just a record: <code>--resume</code> reads the stage to re-enter off <em>them</em>, which is why the set grew past the three the reshape first specified. <strong>How much you are in the loop is settled before anything is claimed</strong> — <code>## Plan review</code> in your <code>CLAUDE.md</code>, or the <code>--review-plan</code> / <code>--no-review-plan</code> / <code>--plan-only</code> flags — and resolves to one of three options: <strong>A</strong> puts a human gate between the review and the executor, <strong>B</strong> runs straight through, and <strong>C</strong> (<code>--plan-only</code>, Phase 238) stops after the review, writes the reviewed plan and its sealed verdict back into the task body, and releases the claim — the review <em>is</em> the deliverable there, since nothing is implemented. The reviewer runs on all three; only what follows differs. C is roadmap-only and refused up front for a review batch, which has no body file to persist a plan into. A run that cannot finish <em>parks</em> rather than unwinding: a marker under <code>sysop/runtime/parked/</code> names the reason, the branch, and the <code>--resume &lt;RUN_ID&gt;</code> line that re-enters it — and the stage to re-enter is read off the artifacts on disk rather than remembered, which is what lets the <em>same</em> claimant pick the run back up. <strong>A run whose record never reached the branch does not hand off</strong> (Phase&nbsp;249): at Step&nbsp;8 a deterministic probe reads the <em>branch tip</em> — not the worktree, and not the main checkout, both of which can hold a <code>## Test decision</code> the branch does not — and halts the claim before <code>/document-work</code> when the record is missing or still the schema template. The remedy is to write the decision 7a already made; composing a fresh one from the diff is forbidden there, because that substitutes an unreviewed judgment for a reviewed one. The arm that matters is the <em>orchestrator's</em>: the failure being closed is an executor skipping a sequence item, and the remedy for that cannot be another sequence item in the same prompt for the same agent.</dd>
           </div>
           <div class="entry">
-            <dt>/document-work<span class="model-tag">inherits · narration</span></dt>
-            <dd>Boy-scout simplify pass, follow-up-stub <em>HARD-FAIL</em> gate, then writes <code>sysop/runtime/pending-docs/&lt;branch&gt;.md</code> for senior review. The doc's frontmatter records the <code>branch_tip:</code> it was written against, stamped <em>last</em>, after the branch's final commit (Phase&nbsp;282) &mdash; which is what lets the close path tell a current narration from one the branch has since moved past.</dd>
+            <dt>/document-work<span class="model-tag opus">opus · narration</span></dt>
+            <dd>Boy-scout simplify pass, follow-up-stub <em>HARD-FAIL</em> gate, then writes <code>sysop/runtime/pending-docs/&lt;branch&gt;.md</code> for senior review (or a numbered file beside it while a close is holding that one back). The doc's frontmatter records the <code>branch_tip:</code> it was written against, stamped <em>last</em>, after the branch's final commit (Phase&nbsp;282) &mdash; which is what lets the close path tell a current narration from one the branch has since moved past.</dd>
           </div>
           <div class="entry">
             <dt>/review-close<span class="model-tag opus">opus · gate</span></dt>
-            <dd>Worktree-state classification; project pre-merge gates, run twice on two trees — a cheap fail-fast before the merges and the authoritative one <em>after</em> them, on the assembled result, because a gate that runs before the merge can only ever describe the tree it stood on (Phase 170) — including a <em>crown-jewel coverage gate</em> (Phase 61) that fails the merge when a critical path loses test coverage, with no baseline escape hatch; a verify-the-record check (Phase 59) that reads back the task's <code>## Test decision</code> and confirms it against the actual diff; the manual-smoke gate; the merge; archive the task; clean up branches. <em>How</em> it merges is the project's call — <code>§ Merge policy</code> in your <code>CLAUDE.md</code> selects <code>direct</code> (push <code>main</code>) or <code>pr</code>, which never writes <code>main</code> <em>directly</em> — work routes through an integration branch and one squash PR, making GitHub the sole serialized writer (Phase 63; PR-state-as-verdict and PR reuse, Phase 151). It also <em>reports</em> what each claim left behind (Step 2e, Phase 237): for every branch under review it prints which of <code>plan.md</code>, <code>planner-integrity.md</code>, <code>review.md</code>, <code>classification.md</code> and <code>outcome.md</code> exist, plus any hook envelopes, resolving the branch to a claim id from the <em>lock</em> rather than the branch name. <strong>Five, not the three the pipeline first shipped</strong> — <code>planner-integrity.md</code> and <code>outcome.md</code> are what answer <em>was the plan re-gated?</em> and <em>did the executor already run?</em> <strong>Step 7-pre's resume table routes on nine</strong>, and four of them are the gap worth knowing about: option C's marker, which tells a re-entry the run is finished, and the three that record the executor's questions and the human's answers (Phase 345). Step 2e reports none of the four. That report never moves a verdict — a rejecting form of it was built and disqualified by its own round — and an absent artifact renders as <em>unknown</em>, never as &ldquo;did not run&rdquo;, because <code>sysop/runtime/</code> is gitignored and the hook is Claude Code only. At close it reaps them (Phase 236): Step 4c removes a roadmap claim's artifact directory, lock and park marker; <code>close_batch.sh</code>'s <code>remove_claim_artifacts()</code> does the batch half, sited there because Step 4c's id list is built from <code>roadmap_ids</code> alone and no batch id ever reaches it. Both are gated on the close having landed on <code>main</code>, so a <code>pr</code>-policy close sitting on an integration branch defers rather than destroys. <strong>The promoted checks now run here too</strong> (Phase&nbsp;247). Until then the <code>checks.yml</code> registry, the Semgrep rules, the language-server and coverage stages ran at <em>audit</em> time and nowhere else — which is after the branch that violated one had already merged, so the violation surfaced on the next review round as a new-vs-baseline finding. The pre-scan runs at <code>4a-post</code> against the assembled merge target, <em>in addition</em> to whatever your <code>## Pre-merge verification</code> section names rather than as one more source in a chain that stops at the first match — offering it as a fourth source would have made it invisible to exactly the consumers whose <code>CLAUDE.md</code> an <code>--update</code> preserves. It de-duplicates on whether a resolved command actually <em>reaches</em> the pre-scan — directly or through a project wrapper of your own — and deliberately <em>not</em> on whether the command mentions <code>run_checks.sh</code>, because the one consumer already enforcing these checks at its merge gate does it through a wrapper, which a name match would miss while charging you a second whole-tree scan. A flagless invocation does not de-duplicate at all: without <code>--fail-on-blocking</code> the scan reports and never refuses. Flags never enter the decision otherwise — a consumer who narrowed the scan did it on purpose. <strong>The merge gate names the ref it is landing in</strong> (Phase&nbsp;248): <code>close_batch.sh --merge-target &lt;ref&gt;</code>, with the operand-free default read from <code>§ Merge policy</code> — <code>main</code> under <code>direct</code>, and under <code>pr</code> deliberately unresolved, so a hand-run without the flag is refused in a message that names the flag rather than guessing at a target. Identity is compared by resolved <em>ref name</em>, not SHA: an <code>--ff-only</code> merge legitimately leaves target and branch sharing a SHA, which is why a SHA test refused correctly-merged work on the dominant single-branch shape. Two Phase&nbsp;249 corrections ride along: the worktree classification identifies the primary checkout by device and inode against <code>--git-common-dir</code> rather than by asking which worktree is on <code>main</code> — the same worktree only while the primary happens to be on <code>main</code> — and the verify-the-record check gains a fourth disposition, <em>record not owed</em>, which is <em>withheld</em> whenever a claim lock says the record <em>was</em> owed — the lock is what stops the new disposition becoming a quieter waiver for exactly the misses the Step&nbsp;8 read-back exists to surface. A lock is written by a script rather than an agent, so it survives a run that failed to follow the orchestration; its absence stays <em>cannot tell</em> rather than proof, because a release removes locks too, and only then is the disposition offered at all.</dd>
+            <dd>Worktree-state classification; project pre-merge gates, run twice on two trees — a cheap fail-fast before the merges and the authoritative one <em>after</em> them, on the assembled result, because a gate that runs before the merge can only ever describe the tree it stood on (Phase 170) — including a <em>crown-jewel coverage gate</em> (Phase 61) that fails the merge when a critical path loses test coverage, with no baseline escape hatch; a verify-the-record check (Phase 59) that reads back the task's <code>## Test decision</code> and confirms it against the actual diff; the manual-smoke gate; the merge; archive the task; clean up branches. <em>How</em> it merges is the project's call — <code>§ Merge policy</code> in your <code>CLAUDE.md</code> selects <code>direct</code> (push <code>main</code>) or <code>pr</code>, which never writes <code>main</code> <em>directly</em> — work routes through an integration branch and one squash PR, making GitHub the sole serialized writer (Phase 63; PR-state-as-verdict and PR reuse, Phase 151). It also <em>reports</em> what each claim left behind (Step 2e, Phase 237): for every branch under review it prints which of <code>plan.md</code>, <code>planner-integrity.md</code>, <code>review.md</code>, <code>classification.md</code> and <code>outcome.md</code> exist, plus any hook envelopes, resolving the branch to a claim id from the <em>lock</em> rather than the branch name. <strong>Five, not the three the pipeline first shipped</strong> — <code>planner-integrity.md</code> and <code>outcome.md</code> are what answer <em>was the plan re-gated?</em> and <em>did the executor already run?</em> <strong>Step 7-pre's resume table routes on nine</strong>, and four of them are the gap worth knowing about: option C's marker, which tells a re-entry the run is finished, and the three that record the executor's questions and the human's answers (Phase 345). Step 2e reports none of the four. That report never moves a verdict — a rejecting form of it was built and disqualified by its own round — and an absent artifact renders as <em>unknown</em>, never as &ldquo;did not run&rdquo;, because <code>sysop/runtime/</code> is gitignored and the hook is Claude Code only. At close it reaps them (Phase 236): Step 4c removes a roadmap claim's artifact directory, lock and park marker; <code>close_batch.sh</code>'s <code>remove_claim_artifacts()</code> does the batch half, sited there because Step 4c's id list is built from <code>roadmap_ids</code> alone and no batch id ever reaches it. Only the batch half waits for the close to land on <code>main</code>: under the <code>pr</code> policy Step 4c runs on the integration branch before the PR merges, so a roadmap claim's directory and park marker are already gone if that merge never lands, and its lock too unless the close is a <code>--request-review</code> hand-off, which keeps locks until it lands. <strong>The promoted checks now run here too</strong> (Phase&nbsp;247). Until then the <code>checks.yml</code> registry, the Semgrep rules, the language-server and coverage stages ran at <em>audit</em> time and nowhere else — which is after the branch that violated one had already merged, so the violation surfaced on the next review round as a new-vs-baseline finding. The pre-scan runs at <code>4a-post</code> against the assembled merge target, <em>in addition</em> to whatever your <code>## Pre-merge verification</code> section names rather than as one more source in a chain that stops at the first match — offering it as a fourth source would have made it invisible to exactly the consumers whose <code>CLAUDE.md</code> an <code>--update</code> preserves. It de-duplicates on whether a resolved command actually <em>reaches</em> the pre-scan — directly or through a project wrapper of your own — and deliberately <em>not</em> on whether the command mentions <code>run_checks.sh</code>, because the one consumer already enforcing these checks at its merge gate does it through a wrapper, which a name match would miss while charging you a second whole-tree scan. A flagless invocation does not de-duplicate at all: without <code>--fail-on-blocking</code> the scan reports and never refuses. Flags never enter the decision otherwise — a consumer who narrowed the scan did it on purpose. <strong>The merge gate names the ref it is landing in</strong> (Phase&nbsp;248): <code>close_batch.sh --merge-target &lt;ref&gt;</code>, with the operand-free default read from <code>§ Merge policy</code> — <code>main</code> under <code>direct</code>, and under <code>pr</code> deliberately unresolved, so a hand-run without the flag is refused in a message that names the flag rather than guessing at a target. Identity is compared by resolved <em>ref name</em>, not SHA: an <code>--ff-only</code> merge legitimately leaves target and branch sharing a SHA, which is why a SHA test refused correctly-merged work on the dominant single-branch shape. Two Phase&nbsp;249 corrections ride along: the worktree classification identifies the primary checkout by device and inode against <code>--git-common-dir</code> rather than by asking which worktree is on <code>main</code> — the same worktree only while the primary happens to be on <code>main</code> — and the verify-the-record check gains a fourth disposition, <em>record not owed</em>, which is <em>withheld</em> whenever a claim lock says the record <em>was</em> owed — the lock is what stops the new disposition becoming a quieter waiver for exactly the misses the Step&nbsp;8 read-back exists to surface. A lock is written by a script rather than an agent, so it survives a run that failed to follow the orchestration; its absence stays <em>cannot tell</em> rather than proof, because a release removes locks too, and only then is the disposition offered at all.</dd>
           </div>
         </dl>
 
@@ -1554,6 +1554,45 @@
           <span class="muted">A recovery path is code that runs on the worst day, and it is the least-exercised code
           in any system. All three of these were written down as remedies before any of them was run.</span>
         </p>
+        <p>
+          <strong>Addendum (2026-10-10) &mdash; closing with nobody at the keyboard.</strong> A consumer running the
+          lifecycle from an autopilot asked for the last human step to come out of the loop, and most of it now has.
+          <code>/auto-build --unattended</code> claims and builds without its confirmation prompt. An abort while claiming
+          stops the claiming; if it leaves the claim state unverified it also ends the run and writes a halt marker,
+          after which no unattended run claims anything until a human has reconciled it, and otherwise the tasks
+          already claimed go on to build. <code>--agent &lt;name&gt;</code> writes an owner into each lock, and <code>/sitrep --json</code>
+          is a versioned contract a script can read. On the close side, <code>/review-close --prepare</code> runs the
+          gather, review and pre-merge checks for real, asks nothing, writes its questions into a run directory, and
+          stops short of collecting or merging anything; <code>--resume &lt;run-id&gt;</code> takes the answers, checks
+          what has changed since, and re-runs only what went stale. The close is also split where it merges:
+          <code>--request-review</code> opens the pull request, asks the reviewer named under
+          <code>## Second reader</code> for a verdict, and stops; <code>--land &lt;run-id&gt;</code> reads that verdict on
+          the head it recorded and then merges exactly that head, waits, or parks. With <code>--agent</code>, the request
+          half closes only the branches that agent owns and that fall inside a declared
+          <code>## Unattended close class</code> &mdash; allowed paths, a blast-radius ceiling, no manual-smoke, solo or
+          human-action flag &mdash; and sets the rest aside for a person.
+        </p>
+        <p>
+          The last step, landing with no human at all, was built and is switched off. Three review rounds on it each
+          found a way past the gate, mostly in the previous round's fix. The pattern is the one this page keeps
+          returning to: the gate ran on the agent's own machine and read state the agent could shape, so every patch to
+          it was one more thing to route around. The redesign, not yet built, moves the trust to the server. The autopilot acts as its
+          own GitHub identity; code owners require the human's review on every path outside the class; a check signed by
+          a dedicated GitHub App decides what paths cannot; and the agent's only power over the merge is to enable
+          auto-merge, which GitHub will not complete until both are satisfied. The split is stated plainly: the server
+          enforces the paths and the merge result against an agent that is compromised, while the task flags and the
+          reviewer's verdict still bind only an agent that is honest.
+        </p>
+        <p class="muted">
+          Eight GitHub behaviours the design rests on were not settled by the documentation, so they were run against a
+          scratch repository before anything was built. None broke the design; three changed it. A setting that requires
+          the last push to be approved by someone else refuses an unapproved merge even at an approval count of zero, so
+          it stays off. GitHub's squash merge does not detect directory renames and ignores a repository's <code>merge=union</code>
+          attribute, so the gate's local simulation of the merge will be configured to do the same &mdash; otherwise it
+          would certify a tree GitHub never produces. And a collaborator with write access can edit the app's review comments,
+          so the gate will read a comment's edit history rather than its current text. The build comes next, and its own
+          round re-runs the experiments, because GitHub can change any of them.
+        </p>
 
 
         <h3>Adjacent skills</h3>
@@ -1567,8 +1606,8 @@
             <dd>Adversarial pass on an ad-hoc plan from conversation or a file. Uses the same prompt template as <code>/claim-task</code> Step 7 (<code>_shared/adversarial-review.md</code>); surfaces findings, presents a revised plan for approval before any execution — unless a finding classifies <code>blocker</code>, which halts instead: no revised plan, no <code>ExitPlanMode</code>, the question goes to the human (Phase 176). Phase 58a added a source-verification dimension: external SDK or framework calls with no in-repo precedent get flagged <code>unverified</code> rather than trusted on faith. Phase 140 added decompose-before-reject — the same rule &sect; III applies at review merges, here at its source: refuting one clause of a compound finding never rejects the finding, and a High or security rejection owes a second independent pass. Where the shape can't spawn one (an executor leaf, which must not nest; a consumer agent that doesn't nest at all), the rejection is never silently absorbed — the per-clause rationale is sealed into the plan for the next independent reader.</dd>
           </div>
           <div class="entry">
-            <dt>/sitrep<span class="model-tag">inherits · orientation</span></dt>
-            <dd>Read-only survey across worktrees, locks, branches, the index, and pending review batches. Reports lifecycle position per task — queued, claimed, in-progress, code committed with docs pending, parked, awaiting approval, documented, awaiting close — and recommends a single next move. The <em>parked</em> and <em>awaiting approval</em> states arrived with Phase 237 and are what stops a stalled claim and an unstarted one producing identical evidence; they are reached on the roadmap path only, so a parked review batch is still classified by the separate batch vocabulary. Phase 40 introduced the <code>Doc-Work:</code> git trailer that lets it classify documented vs undocumented branches without grepping prose. Phase 54 hardened the read-only intent with a <code>disallowed-tools</code> guard (Claude Code 2.1.152) on both <code>/sitrep</code> and <code>/next-task</code> — partial by design, as both skill files state: it covers the dedicated write tools (<code>Edit</code>, <code>Write</code>, <code>NotebookEdit</code>) while <code>Bash</code> stays allowed for the survey commands, and non-Claude-Code harnesses ignore the key.</dd>
+            <dt>/sitrep<span class="model-tag haiku">haiku · orientation</span></dt>
+            <dd>Read-only survey across worktrees, locks, branches, the index, and pending review batches. Reports lifecycle position per task — queued, claimed, in-progress, code committed with docs pending, parked, awaiting approval, documented, awaiting close — and recommends a single next move. The <em>parked</em> and <em>awaiting approval</em> states arrived with Phase 237 and are what stops a stalled claim and an unstarted one producing identical evidence; review batches have their own vocabulary but share these two states and <em>parked, work in progress</em> since Phases 248 and 252. Later states cover what the close leaves in between: a pending doc the branch has moved past (Phase 347), a branch merged with its close still to run (Phase 352), and a <code>--request-review</code> hand-off <em>awaiting <code>--land</code></em> or parked for a human (Phases 365–366). Phase 40 introduced the <code>Doc-Work:</code> git trailer that lets it classify documented vs undocumented branches without grepping prose. Phase 54 hardened the read-only intent with a <code>disallowed-tools</code> guard (Claude Code 2.1.152) on both <code>/sitrep</code> and <code>/next-task</code> — partial by design, as both skill files state: it covers the dedicated write tools (<code>Edit</code>, <code>Write</code>, <code>NotebookEdit</code>) while <code>Bash</code> stays allowed for the survey commands, and non-Claude-Code harnesses ignore the key.</dd>
           </div>
         </dl>
       </div>
@@ -1978,7 +2017,7 @@
               <g class="node">
                 <rect x="740" y="200" width="220" height="80" rx="2" class="fill-accent"/>
                 <text x="850" y="232" class="code">/auto-judge</text>
-                <text x="850" y="258" class="smallserif">parallel · opus judgment</text>
+                <text x="850" y="258" class="smallserif">parallel · reasoning judgment</text>
               </g>
 
               <path d="M 280 120 Q 340 130 400 160" class="arrow" marker-end="url(#ah3)"/>
@@ -2011,7 +2050,7 @@
             <dd>Phase 80 — the standing counterpart to the diff-scoped coverage gate. Crown-jewel-first assessment of the whole test suite: modules that never show up in a diff but carry no tests, covered-but-hollow tests a coverage number can't see, and existing tests worth retiring (provably dead, redundant, brittle). Two signals decide what gets audited hardest — the <code>critical_path</code> globs behind the coverage gate, and any surface <code>security_map.md</code> calls out (Phase 137 — the rubric had cited that second signal since Phase 80 while the skill never opened the file; it is worth what your localized sections are worth, since a fresh install's app-layer sections are still placeholder globs). Every recommendation carries the same <code>[verified]</code>/<code>[reported]</code> provenance marker the two review skills use — it is universal, not a fan-out artifact. Read-only by contract: it ranks recommendations and offers to route the accepted ones to <code>/intake</code>, and it never writes a test or claims a task. The frontmatter behind that removes the dedicated write tools, and only when a harness <em>invokes</em> the skill — never on a path-based invocation, which is the only option off Claude Code — and never <code>Bash</code>. So even at its strongest the guard is partial, and the contract carries the rest.</dd>
           </div>
           <div class="entry">
-            <dt>/triage<span class="model-tag">inherits · classifier</span></dt>
+            <dt>/triage<span class="model-tag opus">opus · classifier</span></dt>
             <dd>Phase 44 split this out of <code>/auto-fix</code>: read each pending batch, classify as <em>auto</em> (fully mechanical) or <em>flag</em> (needs judgment), persist the verdict back into <code>review_tasks.md</code>. Two keys, deliberately kept separate (Phase 181): <code>Flag:</code> is the <em>pool</em> predicate the drainers select on, and <code>Triaged:</code> is the verdict record — when the decision was made, which way it went, and which tasks it covered. Deliberately not <em>who</em>: the shipped contract says the line records when a decision was made, not which program made it, so hand-editing it is ordinary rather than an exception. Re-running is safe because the second key says a run happened; presence of the first never did, which is the whole reason there are two. Prerequisite for the two drainers below.</dd>
           </div>
           <div class="entry">
@@ -2020,7 +2059,7 @@
           </div>
           <div class="entry">
             <dt>/auto-judge<span class="model-tag opus">opus · judgment</span></dt>
-            <dd>Drains the <em>flag</em> pool. Same parallel + <code>--merge</code> shape, but each sub-agent is Opus and can FIX, DROP, or FAIL a task after adversarial re-reading. A FAIL now writes an indented <code>&gt; Failed:</code> line under the task and <code>close_batch.sh</code> leaves that task open — until Phase 157 a FAIL existed only as terminal output that died with the session, and the close checked the box anyway. The two drainers run concurrently against disjoint pools.</dd>
+            <dd>Drains the <em>flag</em> pool. Same parallel + <code>--merge</code> shape, but each sub-agent runs on the reasoning role and can FIX, DROP, or FAIL a task after adversarial re-reading. A FAIL now writes an indented <code>&gt; Failed:</code> line under the task and <code>close_batch.sh</code> leaves that task open — until Phase 157 a FAIL existed only as terminal output that died with the session, and the close checked the box anyway. The two drainers run concurrently against disjoint pools.</dd>
           </div>
         </dl>
 
@@ -3362,10 +3401,10 @@
 
         <h3>Model roles, not model pins</h3>
         <p class="muted">
-          Since Phase 69, skills that pin a model declare a <em>role</em> — <code>reasoning</code>, <code>convention-gate</code>, <code>mechanical</code>, or
-          <code>quick</code> — rather than a model id (skills without a pin simply inherit the session model). Install resolves roles through
+          Since Phase 69, skills that pin a model declare a <em>role</em> — <code>reasoning</code>, <code>planner</code>, <code>plan-review</code>, <code>executor</code>, <code>convention-gate</code>, <code>mechanical</code>, or
+          <code>quick</code> — rather than a model id (since Phase 349 every skill pins one; a pinned model that is unavailable falls back to the session model). Install resolves roles through
           <code>.claude/served_models.yml</code> (default mapping: <code>reasoning</code> → opus, <code>mechanical</code> → sonnet,
-          <code>quick</code> → haiku, with <code>convention-gate</code> following <code>reasoning</code> until you separate them);
+          <code>quick</code> → haiku, with <code>convention-gate</code>, <code>planner</code>, <code>plan-review</code> and <code>executor</code> following <code>reasoning</code> until you separate them — <code>executor</code> is the one that moves execution without moving review);
           a consumer remaps any role in
           <code>served_models.local.yml</code>, which is never overwritten and layered on top — so an upstream model
           sunset and a local preference both survive the next update. A <em>valid</em> preference, at least: since
@@ -3456,6 +3495,9 @@
 │   │   ├── auto-build/            <span class="cm"># /auto-build per-worktree park-verdict scratch</span>
 │   │   ├── claim/                 <span class="cm"># Phase 171 · &lt;CLAIM_ID&gt;/&lt;RUN_ID&gt;/ · one file per orchestration seam</span>
 │   │   ├── parked/                <span class="cm"># why a claim stopped — /auto-build archives plan + verdict, /claim-task a --resume pointer (Phase 65a; 159b moved it out of auto-build/)</span>
+│   │   ├── preserved/             <span class="cm"># Phase 354 · gitignored files only a worktree held, copied out before /review-close removes it</span>
+│   │   ├── close/                 <span class="cm"># Phases 363–366 · one run directory per --prepare / --request-review close</span>
+│   │   ├── auto-build-halt.md     <span class="cm"># Phase 361 · an unattended run stopped on a claim it could not verify · a human deletes it</span>
 │   │   └── subagent-envelopes/    <span class="cm"># Phase 37 · SubagentStop hook writes JSON here · Phase 159a keys it per stage</span>
 │   └── SYSOP_ISSUES.md            <span class="cm"># friction log · seeded once, project-owned · /report-issues files upstream</span></pre>
         </div>
@@ -3473,7 +3515,7 @@
       <aside class="col-rule">Colophon</aside>
       <div>
         <p class="col-body">
-          A monograph on <em>Sysop</em>, as of <em>Phase 346</em> · 2026-09-29, with dated addenda where the record
+          A monograph on <em>Sysop</em>, as of <em>Phase 373</em> · 2026-10-10, with dated addenda where the record
           moved after the snapshot. Phase numbers throughout are iterations
           of the workflow's own development — each one planned, adversarially reviewed, and shipped through the process it
           extends; <a href="https://github.com/getsysop/sysop/blob/main/PHASE_LOG.md">PHASE_LOG.md</a> carries one entry per phase. Set in the reader's native serif —
@@ -3514,7 +3556,7 @@
             <ul>
               <li>Extracted from <em>gdp-query-system</em></li>
               <li>First consumer · BeanRider</li>
-              <li>Phase 346 · 2026-09-29</li>
+              <li>Phase 373 · 2026-10-10</li>
             </ul>
           </div>
           <div>

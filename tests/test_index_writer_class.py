@@ -90,7 +90,12 @@ INDEX_READERS = {
     "core/companion/scripts/backfill_completed_dates.py",
     "core/companion/scripts/claim_task.sh",
     "core/companion/scripts/clear_user_action.py",
+    # Phase 366: the unattended land reads a task's flags and blast_radius at a commit
+    # (`git cat-file -p <commit>:tasks/index.yml`); never writes the index.
+    "core/companion/scripts/close_run.py",
     "core/companion/scripts/next_task.py",
+    # Phase 353: reads `user_action` for Step 4c 1c's hold test; never writes the index.
+    "core/companion/scripts/pending_doc_hold.py",
     "core/companion/scripts/scope_overlap.py",
     "core/companion/scripts/sitrep_survey.py",
     "core/companion/scripts/validate_tasks.py",
