@@ -883,7 +883,9 @@ def _stale_source_tree(tmp_path):
         'help="skills directory to scan, managed or otherwise (default: .claude/skills/)"',
     )
     checker.write_text(aged)
-    assert "--managed-only" not in checker.read_text(), "the flag survived aging"
+    # The REGISTRATION, as `_age_vendored_checker` asserts: since Phase 398 the checker's own
+    # `--defaults` text names the flag, which `--help` (what the probe reads) never prints.
+    assert 'add_argument("--managed-only"' not in checker.read_text(), "the flag survived aging"
     assert "managed" in checker.read_text(), (
         "the decoy is gone: a substring-matching probe would be indistinguishable "
         "from an exact one against this fixture"
@@ -1603,3 +1605,51 @@ def test_the_capability_probe_leaves_no_bytecode_in_the_consumer_tree(tmp_path):
     assert not (root / "sysop/scripts/__pycache__").exists(), (
         "the install created __pycache__ in the consumer's vendor dir"
     )
+
+
+# ── Phase 381 round, lens 1: preserved vendored copies that predate per-role efforts ──
+
+def test_a_checker_that_cannot_start_is_named_as_such(tmp_path):
+    """A consumer-modified `_model_roles.py` missing a name the newer checker imports
+    (`EffortConfigError`, added by Phase 381) makes the checker die at import. The gate
+    used to report that as "does not accept --managed-only"; it now names the import."""
+    root = _make_consumer(tmp_path / "consumer")
+    _run_install(root, "--packs", "python", "--no-arm-hooks")
+    lib = root / "sysop/scripts/_model_roles.py"
+    text = lib.read_text()
+    assert text.count("class EffortConfigError(") == 1
+    lib.write_text(text.replace("class EffortConfigError(", "class _RenamedEffortError("))
+
+    result = _run_install(root, "--update", "--no-arm-hooks")
+
+    assert "could not start" in result.stdout and "EffortConfigError" in result.stdout, (
+        _model_role_block(result.stdout))
+    assert "does not accept --managed-only" not in result.stdout
+
+
+def test_a_resolver_that_predates_efforts_says_they_were_not_applied(tmp_path):
+    """A preserved consumer-modified resolver from before Phase 381 applies the models and
+    leaves the effort segments as shipped, at exit 0. Its summary has no `effort(s)` count,
+    and the install now warns that the efforts were not applied."""
+    root = _make_consumer(tmp_path / "consumer")
+    _run_install(root, "--packs", "python", "--no-arm-hooks")
+    resolver = root / "sysop/scripts/resolve_skill_models.py"
+    text = resolver.read_text()
+    old_summary = '    print(f"{mode}: {total} pin(s) and {effort_total} effort(s) across {files_changed} file(s) "\n'
+    assert text.count(old_summary) == 1, "the summary line moved; re-anchor this fixture"
+    resolver.write_text(text.replace(
+        old_summary, '    print(f"{mode}: {total} pin(s) across {files_changed} file(s) "\n'))
+    (root / ".claude/served_models.local.yml").write_text("efforts:\n  executor: none\n")
+
+    result = _run_install(root, "--update", "--no-arm-hooks")
+
+    assert "predates per-role efforts" in result.stdout, _model_role_block(result.stdout)
+    assert "efforts not applied" in result.stdout
+
+
+def test_a_current_resolver_does_not_warn_about_efforts(tmp_path):
+    """Control for the test above: the shipped resolver's summary carries the count."""
+    root = _make_consumer(tmp_path / "consumer")
+    result = _run_install(root, "--packs", "python", "--no-arm-hooks")
+    assert "predates per-role efforts" not in result.stdout
+    assert "effort(s)" in result.stdout, _model_role_block(result.stdout)

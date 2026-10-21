@@ -23,6 +23,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from skill_runner_text import text_of
 
 REPO = Path(__file__).resolve().parent.parent
 TESTS = REPO / "tests"
@@ -529,7 +530,7 @@ def _env_with_python3(tmp_path: Path) -> dict:
 
 
 def test_step_4c_1c_runs_its_command_as_written(tmp_path):
-    text = CLOSE.read_text(encoding="utf-8")
+    text = text_of(CLOSE)
     start = text.index("1c. **Hold back any pending-doc")
     step = text[start:text.index("2. **If none found**", start)]
     cmds = [ln.strip() for ln in step.splitlines() if ln.strip().startswith("python3 sysop/")]
@@ -546,7 +547,7 @@ def test_step_4c_1c_runs_its_command_as_written(tmp_path):
 def test_the_clear_command_runs_as_written_from_a_linked_worktree(tmp_path, path):
     """Every shipped `clear <TASK_ID>` prescription, substituted and run from a worktree:
     the held docs live in the main checkout, and a human may be standing anywhere."""
-    text = path.read_text(encoding="utf-8")
+    text = text_of(path)
     found = re.findall(r"python3 sysop/scripts/pending_doc_hold\.py clear <TASK_ID>", text)
     assert found, f"{path.name} no longer prescribes the clear"
     # Every occurrence, not the first (lens B, round 1); each is the same literal, so one
@@ -773,7 +774,7 @@ PINS = {
     # Regenerate with:  .venv/bin/python3 -c "import sys; sys.path.insert(0,'tests'); import test_pending_doc_hold as T; T._print_pins()"
     "4c 1b runs the hold test": "2eaa42885664950e",
     "4c 1c hold test": "f6b792ae8b942183",
-    "4c round-trip ids from ROUTE": "c51cc46bb2d4d3ff",
+    "4c round-trip ids from ROUTE": "93ba5b8498acf8f3",  # Phase 386: the heredoc it names became a shipped script (`Q-409` P3)
     "step 8 hold bullet": "4bfc5f1ff0b2551b",
     "document-work hold": "5b1e796ff4d4fbf3",
     "schema hold": "41ae29c8f864c59f",
@@ -791,7 +792,7 @@ PINS = {
 
 def _located(label: str) -> tuple[str, str, int]:
     path, start, end, _ = SPANS[label]
-    text = path.read_text(encoding="utf-8")
+    text = text_of(path)
     span = slice_between(text, start, end, label)
     return text, span, text.index(span)
 
@@ -820,7 +821,7 @@ def test_the_decided_text_is_pinned(label: str) -> None:
 @pytest.mark.parametrize("label", sorted(SPANS))
 def test_every_span_start_anchor_is_unique(label: str) -> None:
     path, start, _, _ = SPANS[label]
-    assert _anchor_count(path.read_text(encoding="utf-8"), start) == 1, label
+    assert _anchor_count(text_of(path), start) == 1, label
 
 
 @pytest.mark.parametrize("label", sorted(SPANS))

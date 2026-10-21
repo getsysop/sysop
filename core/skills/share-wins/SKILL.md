@@ -76,8 +76,17 @@ visibility probe degrades per `_shared/upstream-repo.md` § B rather than
 halting. The skill's own read queries *are* `gh api graphql` calls (resolving the
 repo/thread), but they share that command with the write mutation, so the single
 `Bash(gh api graphql:*)` rule above already covers them — there is no separate
-read-only rule to add. Editing `sysop/SYSOP_ISSUES.md` uses the `Edit` tool, not
-Bash, so it needs no allow-rule.
+read-only rule to add. Editing `sysop/SYSOP_ISSUES.md` uses the `Edit` tool and staging the
+body uses `Write`. Under `dontAsk` both are denied unless a rule covers the
+path, so the template seeds `Edit(/sysop/SYSOP_ISSUES.md)` and
+`Edit(/sysop/runtime/giveback/**)` (an `Edit` rule admits `Write` too). They
+are not required rules, because a mode that prompts asks for a missing one.
+If either is missing and the run is under `dontAsk`, stop before Step 4 and
+name it: the post would be denied, or would go out unrecorded. The run is
+under `dontAsk` when `permissions.defaultMode` says so in
+`.claude/settings.local.json` or, failing that, `.claude/settings.json`, or
+when any call this run has been denied with a message naming don't-ask mode. Neither rule binds unless Claude Code was started at
+the project root.
 
 If `$ARGUMENTS` contains `--skip-permission-guard`, print a one-line warning and
 continue.
@@ -415,16 +424,18 @@ Only under `--execute`, with ≥1 consented entry.
 
    - **Resolve the body file's path first, in a call of its own:**
      ```bash
-     echo "${TMPDIR:-/tmp}/sysop-wins-<date>.md"
+     echo "$(git rev-parse --show-toplevel)/$(git rev-parse --show-prefix)sysop/runtime/giveback/sysop-wins-<date>.md"
      ```
      The printed line is `<body file>`. Use it, character for character, both
-     as the path you `Write` and as the path `gh` reads below. Never give either
-     of them the `${TMPDIR:-/tmp}` expression instead: `Write` expands nothing
-     and the shell does, so the two name different files wherever `TMPDIR` is
-     set — every macOS shell — and `gh` reads a missing file, or a stale one
-     from an earlier run, in place of the body the human approved. If the call
-     is denied, or the printed line does not begin with `/` (a relative
-     `TMPDIR`), stop and say so; do not pick a path of your own.
+     as the path you `Write` and as the path `gh` reads below. Never give
+     either of them the `$(…)` expression instead: `Write` expands nothing and
+     the shell does, so the two would name different files. Stage nowhere
+     else: the seeded `Edit(/sysop/runtime/giveback/**)` rule admits this
+     directory, and under `dontAsk` a `Write` anywhere else is denied. If the
+     call is denied, or the printed line is not the project root (the
+     directory Claude Code was started in) followed by
+     `/sysop/runtime/giveback/`, or it contains a `'`, stop and say so. Do not
+     pick a path of your own.
    - Write the exact assembled body to `<body file>` using the `Write` tool —
      never pass the body through the shell. It must be **byte-identical** to
      what you print next. If `Write` refuses because a file is already there

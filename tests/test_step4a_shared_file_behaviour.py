@@ -36,6 +36,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from skill_runner_text import text_of
 
 REPO = Path(__file__).resolve().parent.parent
 VALIDATOR = REPO / "core" / "companion" / "scripts" / "validate_tasks.py"
@@ -197,7 +198,7 @@ def test_validator_rejects_the_marker_strip_union_with_the_quoted_errors(
 
     quoted = "task 'phase' must be int or float, got NoneType"
     assert quoted in out, "the error SKILL.md quotes must be what the script emits"
-    assert quoted in SKILL.read_text(encoding="utf-8"), (
+    assert quoted in text_of(SKILL), (
         "SKILL.md no longer quotes the error this test pins — one of them drifted"
     )
 
@@ -349,7 +350,7 @@ def test_applying_the_removal_resolves_clean(removal_conflict: Path) -> None:
 
 
 def test_the_recipe_prescribes_the_removal() -> None:
-    text = SKILL.read_text(encoding="utf-8")
+    text = text_of(SKILL)
     start = text.index("**Union-by-id alone is not sufficient")
     recipe = text[start:text.index("Then, **stage the resolved file and gate it**", start)]
     removed = next(ln for ln in recipe.splitlines() if ln.startswith("- **The branch REMOVED an entry**"))
@@ -592,7 +593,7 @@ def test_containment_is_invalid_after_a_squash_so_step6_must_not_use_it(
     # the section explains at length WHY the check is wrong, and naming it there
     # is correct prose. A guard that reds on its own rationale is the
     # over-strictness failure mode, not a catch.
-    body = SKILL.read_text(encoding="utf-8")
+    body = text_of(SKILL)
     i = body.index("**`pr` policy — per-branch cleanup**")
     j = body.index("For each **SKIP'd** branch", i)
     prescriptive = "\n".join(
@@ -641,7 +642,7 @@ def test_the_caret_operand_must_be_quoted_because_zsh_globs_it(tmp_path: Path) -
     )
 
     # And the shipped prose must use the quoted form.
-    body = SKILL.read_text(encoding="utf-8")
+    body = text_of(SKILL)
     assert '"^HEAD"' in body, "the shipped command must quote the ^ operand"
     assert 'count "<branch from frontmatter>" ^HEAD' not in body, (
         "an unquoted ^HEAD operand is back in the shipped command"

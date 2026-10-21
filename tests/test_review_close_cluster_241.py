@@ -36,7 +36,9 @@ import textwrap
 from pathlib import Path
 
 import pytest
+from _shipped_scripts import invocation, script  # noqa: E402
 import yaml
+from skill_runner_text import text_of
 
 _MISSING = object()  # sentinel: the `user_action` key absent, not present-and-falsy
 
@@ -49,7 +51,7 @@ REVIEW_INDEX = REPO_ROOT / "core/companion/scripts/review_index.py"
 
 
 def _skill() -> str:
-    return SKILL.read_text(encoding="utf-8")
+    return text_of(SKILL)
 
 
 def _paragraph_containing(text: str, needle: str) -> str:
@@ -237,7 +239,7 @@ def test_the_class_sweep_actually_sees_the_sites_it_claims_to_cover():
     phase itself added. Without this, the sweep can silently narrow again and
     still read as coverage — which is what it did.
     """
-    skill = SKILL.read_text(encoding="utf-8")
+    skill = text_of(SKILL)
     regions = _fenced_shell_regions(skill)
     for probe, why in (
         ('gh pr view "<PR>" --json statusCheckRollup', "the command THIS PHASE added"),
@@ -370,7 +372,7 @@ def test_the_batch_reader_arm_enumerates_only_reachable_exit_codes():
     """`--list` refuses nothing; 3/5/6 sit behind other flags."""
     text = _skill()
     para = _paragraph_containing(text, "Exactly two exit codes are reachable")
-    assert "`--list` itself refuses\nnothing" in para or "`--list` itself refuses nothing" in " ".join(para.split()), (
+    assert "`--list` itself refuses only a deleted tracker" in " ".join(para.split()), (
         "the arm no longer says --list refuses nothing, and the unreachable exit "
         "codes 3/5/6 read as live arms again"
     )
@@ -458,12 +460,9 @@ def test_the_gh_api_rule_is_seeded_and_asserted():
 
 
 def _round_trip_body() -> str:
-    """The shipped Step 4c `tasks/index.yml` heredoc, verbatim and dedented."""
-    text = _skill()
-    fence = _fence_containing(text, "closed.append(t['id'])")
-    m = re.search(r"python3 - <<'PY'\n(.*?)\n\s*PY\b", fence, re.S)
-    assert m, "the Step 4c round-trip is no longer a `python3 - <<'PY'` heredoc"
-    return textwrap.dedent(m.group(1))
+    """The shipped Step 4c `tasks/index.yml` program: a script since Phase 386 (`Q-409` P3)."""
+    assert invocation(_skill(), "close_index.py"), "Step 4c no longer runs close_index.py"
+    return script("close_index.py").read_text(encoding="utf-8")
 
 
 def _run_round_trip(tmp_path: Path, tasks: list[dict], ids: list[str]) -> tuple[subprocess.CompletedProcess, dict]:
@@ -504,12 +503,9 @@ def _run_round_trip(tmp_path: Path, tasks: list[dict], ids: list[str]) -> tuple[
     subprocess.run(["git", "-C", str(tmp_path), "add", "-A"], check=True)
     subprocess.run(["git", "-C", str(tmp_path), "commit", "-qm", "seed"], check=True)
 
-    body = _round_trip_body()
-    id_literal = ", ".join(f'"{i}"' for i in ids)
-    body = re.sub(r'ids = \[[^\]]*\]', f"ids = [{id_literal}]", body, count=1)
-    assert "<ROADMAP_ID" not in body, "placeholder substitution failed"
-    script = f"python3 - <<'PY'\n{body}\nPY\n"
-    r = subprocess.run(["bash", "-c", script], cwd=tmp_path, capture_output=True, text=True)
+    _round_trip_body()
+    r = subprocess.run(["python3", str(script("close_index.py")), *ids], cwd=tmp_path,
+                       capture_output=True, text=True)
     written = yaml.safe_load(index.read_text(encoding="utf-8"))
     return r, written
 
@@ -740,16 +736,17 @@ def test_the_heredoc_hold_is_declared_defence_in_depth_not_the_primary_gate():
     """Both arms must exist, and the record must say which is which.
 
     The heredoc arm alone routes the doc first, so on its own it is the stranding
-    bug. Step 1c alone is skippable — the id list is a hand-substituted literal.
+    bug. Step 1c alone is skippable — the id list is written out by hand. The arm lives
+    in `close_index.py` since Phase 386.
     """
-    fence = _fence_containing(_skill(), "THIS IS DEFENCE IN DEPTH")
+    fence = _round_trip_body()
     para = fence[fence.index("THIS IS DEFENCE IN DEPTH"):fence.index("if t.get('user_action')")]
     # The comment is line-wrapped inside a `#`-prefixed block, so compare on the
     # normalised text rather than the raw slice — otherwise this check is really a
     # check about where the author broke the line.
     flat = " ".join(para.replace("#", " ").split())
     assert "Step 1c above holds the whole pending-doc back" in flat
-    assert re.search(r"\bby hand\b", flat, re.I) and "literal" in flat, (
+    assert re.search(r"\bby hand\b", flat, re.I) and "arguments" in flat, (
         "the arm no longer says why a second gate is needed — without the reason "
         "it reads as redundant and gets deleted"
     )

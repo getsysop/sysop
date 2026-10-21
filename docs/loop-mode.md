@@ -1,6 +1,6 @@
 # Loop mode — the convention loop on its own
 
-Sysop's full install is a workflow: planning, a task queue, isolated worktrees, a single human
+Sysop's full install is a workflow: planning, a task queue, isolated worktrees, a human
 merge gate. **Loop mode is the front door.** `--mode loop` installs only the convention loop —
 the review and audit skills, the convention and security maps, and the compiled checks — into a
 repo where you keep your own planning, branching, and merge workflow. It's the recommended
@@ -201,8 +201,24 @@ and the `tasks/` scaffold are added; nothing the loop has learned is touched. Th
 commit what it added — `git add .claude/ sysop/ tasks/ .gitignore; git add .agents/ 2>/dev/null; git commit -m "chore: grow
 Sysop to full mode"` — worktree builds only see committed files.
 [getting-started.md](./getting-started.md) walks the full workflow from there; you've already
-installed, so skip its step 1 and start at step 2 (`/intake`). The reverse direction
-(full → loop) is a fresh reinstall, not an update.
+installed, so skip its step 1 and start at step 2 (`/intake`).
+
+**The reverse direction (full → loop) has no `--update` path yet.** Today it is a fresh
+`--mode loop` install, and a fresh install overwrites every managed path it ships — including one
+you edited (the `--update` path preserves consumer edits; a fresh install does not), so re-apply
+such edits from `git diff` afterwards. Before it: commit, then remove the full-mode-only paths
+listed under `managed_paths` in `.claude/sysop.lock` — the lifecycle skills and scripts, the
+workflow docs under `sysop/docs/`, the `tasks/` scaffold (`tasks/schema.md`, `tasks/README.md`, the
+`.gitkeep`s), and the Codex link for each removed skill; a loop install's own lock, made in a scratch
+directory with `--mode loop`, is the complete list to diff against. Replace `.claude/settings.json`'s
+allow list and `hooks` block with the loop template's (the installer's settings merge never removes a
+rule or a hook, so the full-mode hooks would keep pointing at deleted scripts). Keep `.claude/*.project.*`,
+`substitutions.project.yml`, `served_models.local.yml` and `settings.local.json`: the installer never
+writes them. `sysop/SYSOP_ISSUES.md` and `tasks/index.yml` it seeds once and never rewrites. If you
+armed the close-gate CI workflow, remove it too — loop mode does not ship `close_gate.py`. This
+sequence has been run once, on a clean fixture, by a review of this page; not on a live consumer.
+Full mode fits a project that closes branches in batches; a project closing one branch at a time
+pays a close's whole fixed cost per branch, which loop mode does not have.
 
 ## Has this actually been run?
 

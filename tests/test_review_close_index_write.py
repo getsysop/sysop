@@ -36,42 +36,36 @@ import sys
 from pathlib import Path
 
 import pytest
+from skill_runner_text import text_of
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SKILL = REPO_ROOT / "core/skills/review-close/SKILL.md"
 
-ANCHOR = "   p = Path('tasks/index.yml')"
+ANCHOR = "\np = Path('tasks/index.yml')\n"
+SCRIPT = REPO_ROOT / "core/companion/scripts/close_index.py"
 FIXED_NAME = "index.yml.tmp"  # what `target.with_suffix(suffix + '.tmp')` produced
 
 
 def _step4c_body() -> str:
-    """Step 4c's heredoc'd Python, verbatim and runnable (indent stripped)."""
-    text = SKILL.read_text(encoding="utf-8")
-    found = text.count(ANCHOR)
+    """Step 4c item 4's program: `close_index.py` since Phase 386 (`Q-409` P3), which takes
+    the roadmap ids as arguments where the heredoc took a hand-edited literal."""
+    assert "python3 sysop/scripts/close_index.py " in text_of(SKILL), "Step 4c no longer runs close_index.py"
+    body = SCRIPT.read_text(encoding="utf-8")
+    found = body.count(ANCHOR)
     assert found == 1, (
         f"Step 4c's index-write anchor matched {found} times, not once; this "
         f"extractor keys on {ANCHOR!r} and a second copy makes the slice ambiguous"
     )
-    i = text.index(ANCHOR)
-    start = text.index("\n", text.rindex("python3 - <<'PY'", 0, i)) + 1
-    end = text.index("\n   PY\n", start)
-    return "\n".join(
-        line[3:] if line.startswith("   ") else line
-        for line in text[start:end].splitlines()
-    )
+    return body
 
 
-def _runnable(ids: list[str]) -> str:
-    """The shipped block with its one hand-substituted literal filled in.
-
-    `ids = ["<ROADMAP_ID_1>", "<ROADMAP_ID_2>"]` is a placeholder the operator
-    replaces by hand — substituting it is running the block as documented, not
-    modifying it. Nothing else is touched.
-    """
-    body = _step4c_body()
-    placeholder = 'ids = ["<ROADMAP_ID_1>", "<ROADMAP_ID_2>"]'
-    assert placeholder in body, "Step 4c's id placeholder changed shape"
-    return body.replace(placeholder, f"ids = {ids!r}")
+def _runner(preamble: str = "") -> list[str]:
+    """`python3 close_index.py`, optionally with `preamble` run first in the same process."""
+    if not preamble:
+        return [sys.executable, str(SCRIPT)]
+    return [sys.executable, "-c", preamble + (
+        f"import runpy, sys\nsys.argv[0] = {str(SCRIPT)!r}\n"
+        f"runpy.run_path({str(SCRIPT)!r}, run_name='__main__')\n")]
 
 
 def _index(*task_ids: str) -> str:
@@ -117,8 +111,7 @@ def repo(tmp_path: Path) -> Path:
 
 def _run(root: Path, ids: list[str]) -> subprocess.CompletedProcess:
     return subprocess.run(
-        [sys.executable, "-"],
-        input=_runnable(ids),
+        [*_runner(), *ids],
         cwd=str(root), capture_output=True, text=True, timeout=60,
     )
 
@@ -233,7 +226,7 @@ def test_the_tempfile_is_created_in_the_targets_own_directory(repo: Path, tmp_pa
         "_t.mkstemp = _spy\n"
     )
     r = subprocess.run(
-        [sys.executable, "-"], input=preamble + _runnable(["TECH-0001"]),
+        [*_runner(preamble), "TECH-0001"],
         cwd=str(repo), capture_output=True, text=True, timeout=60,
     )
     assert r.returncode == 0, f"stdout:\n{r.stdout}\nstderr:\n{r.stderr}"

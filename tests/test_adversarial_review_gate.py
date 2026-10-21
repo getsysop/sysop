@@ -30,8 +30,11 @@ from pathlib import Path
 from typing import Callable, Iterable
 
 import pytest
+from skill_runner_text import runner_texts
+from skill_runner_text import text_of
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+SKILLS_DIR = REPO_ROOT / "core" / "skills"
 PARTIAL = REPO_ROOT / "core" / "skills" / "_shared" / "adversarial-review.md"
 CLAUDE_MD = REPO_ROOT / "CLAUDE.md"
 
@@ -132,6 +135,12 @@ _HEDGES = (
 # Blanket escape hatches. A per-phase recorded skip is the sanctioned exit; a standing rule
 # that pre-authorises skipping a whole CLASS of phase is not, because the classes people
 # reach for ("docs-only", "small diff") are exactly where an unchallenged claim ships.
+# ONE class is ruled (`Q-677`, Wade, 2026-10-12): a docs-only or record-only phase gets the
+# guards and the author's re-read and no round, as the governor's own tier, recorded per
+# phase. That tier is the maintainer's decision written into the governor, not a session's
+# exemption, and the phrases below still refuse every other class and every other wording
+# of a standing skip — "docs-only phases are exempt" included, since the ruled tier is not
+# phrased as an exemption.
 _BLANKET_EXEMPTIONS = (
     r"are exempt",
     r"is exempt",
@@ -210,7 +219,13 @@ def gate_problems(gate: str) -> list[str]:
     # because the two token requirements above never read what the sentence SAYS. The
     # gate's restatement of the governor's numbers is content, so its content is pinned.
     for name, pat in {
-        "gate-two-lenses": r"two lenses default",
+        "gate-two-lenses": r"two lenses for behaviour across sites",
+        # Lens 3 (G1-G4): the gate restates each tier, so each is pinned in its ruled words.
+        "gate-docs-tier": r"no round for a docs-only or record-only phase \(the guards and the author's re-read\)",
+        "gate-docs-tier-scope": r"a docs-only or record-only phase, where no shipped file's behaviour or checks change,",
+        "gate-one-site-tier": r"the author battery plus one execution lens for one-site fixes with executable tests",
+        "gate-third-is-wade": r"a third only on Wade's call",
+        "gate-suite-beside": r"So start the suite as the lenses spawn and finish it before the round closes\.",
         "gate-one-round": r"one round default",
         "gate-no-self-spawn": r"never spawned on the session'?s own judgment",
         "gate-skip-row": r"a recorded skip appends one too",
@@ -952,14 +967,14 @@ def test_dropping_every_tagged_class_reproduces_the_stripped_rendering(path):
     dropped, duplicated or re-ordered ordinary prose fails here rather than silently
     regenerating a pin around it.
     """
-    raw = path.read_text(encoding="utf-8")
+    raw = text_of(path)
     assert _flat(_without(_tagged(raw), TAG_CLASSES)) == _flat(_prose_only(raw))
 
 
 @pytest.mark.parametrize("path", TAGGED_FILES, ids=lambda p: p.name)
 def test_the_guarded_files_carry_no_nesting_the_resolver_cannot_model(path):
     """Refused loudly rather than mis-rendered — the one thing the resolver will not guess."""
-    assert _unhandled_nesting(path.read_text(encoding="utf-8")) == []
+    assert _unhandled_nesting(text_of(path)) == []
 
 
 @pytest.mark.parametrize("path", TAGGED_FILES, ids=lambda p: p.name)
@@ -970,7 +985,7 @@ def test_no_guarded_file_contains_a_tag_marker_of_its_own(path):
     `[[fence]]` in the runner could split a region, close one early, or make an anchor look
     wrapped. Absent today in both files; asserted so it stays that way.
     """
-    raw = path.read_text(encoding="utf-8")
+    raw = text_of(path)
     for marker in ALL_TAG_MARKERS:
         assert marker not in raw, f"{path.name} contains the literal marker {marker}"
 
@@ -1107,7 +1122,7 @@ def test_the_tagged_population_is_both_guarded_files():
     assert names == ["SKILL.md", "adversarial-review.md"], names
     for path in TAGGED_FILES:
         assert path.is_file(), f"{path} does not exist — the check reads nothing"
-        assert _wrapper_spans(path.read_text(encoding="utf-8")), (
+        assert _wrapper_spans(text_of(path)), (
             f"{path.name} has no wrapped regions at all — a file this module reads for its "
             "rendering must have something to render"
         )
@@ -1313,7 +1328,7 @@ def test_the_indent_floor_is_far_from_the_shipped_files():
     assert INDENT_CODE_FLOOR == 4, "CommonMark's indented-code-block rule is four spaces"
     assert 0.25 <= INDENT_NEUTERED_RATIO <= 0.75
     for entry in TAGGED_FILES:
-        assert not _indent_neutered(entry.read_text(encoding="utf-8")), entry.name
+        assert not _indent_neutered(text_of(entry)), entry.name
     assert not _indent_neutered(_author_pass_section())
     # A list-heavy region must not trip it: 68 of the 69 deep-indented lines in
     # `review-close/SKILL.md` are list continuations, which is why no general detector is
@@ -2562,9 +2577,9 @@ def test_the_procedure_does_not_contradict_the_skills_that_consume_it():
     worktree' against seven 'Do NOT set isolation' instructions in four skills."""
     section = _multi_reviewer_section()
     forbidding = []
-    for skill in sorted((REPO_ROOT / "core" / "skills").rglob("SKILL.md")):
-        if re.search(r'Do\s+\*{0,2}NOT\*{0,2}\s+(?:set|use)\s+`?isolation', skill.read_text(encoding="utf-8"), re.I):
-            forbidding.append(skill.parent.name)
+    for name, text in runner_texts(SKILLS_DIR).items():
+        if re.search(r'Do\s+\*{0,2}NOT\*{0,2}\s+(?:set|use)\s+`?isolation', text, re.I):
+            forbidding.append(name)
     assert forbidding, "no skill forbids isolation any more — the carve-out may be stale"
     for name in forbidding:
         assert f"/{name}" in section, (
@@ -2798,7 +2813,7 @@ def _governor_section() -> str:
 #       print(repr(G._block_canon(G._flat(G._governor_section()))))"
 #
 GOVERNOR_VERBATIM = (
-    '### How many reviewers, how many rounds — the governor A convention that says "several reviewers" ratchets. In this project\'s log the count was never chosen — it crept from 1 to a mode of 2, then 3, with excursions to 4, and the *round* count crept the same way, one phase running three rounds of three; each step taken under local pressure to be thorough and none of them decided. The rules above say what a round must do; this subsection names the numbers, the stopping condition, and who may exceed them. **Scope.** This subsection sizes an *ad-hoc review round over built work* — a phase-close round, a maintainer\'s round on a finished change. It does not govern flows whose reviewer count is fixed by their own design: a per-plan reviewer inside an orchestrator (`/claim-task` Step 7b, `/auto-build` Phase 6b) is one by construction, and a fan-out sized by its own skill\'s dispatch rule stays with its skill — `/review-close` Step 2b\'s one agent per branch, `/security-audit`\'s per-OWASP-category agents, `/codebase-review`\'s per-map-section grouping, `/test-audit`\'s declared solo-or-dispatch choice recorded in its Tier-0 ledger, a maintainer\'s standing audit brief. And § *Compound findings — decompose before rejecting* below — with its twin leg in `_shared/fanout-evidence.md` § Adjudication — mandates a second, independent pass when a High-severity rejection needs re-adjudication; that is a per-finding pass, not a round, and nothing here caps it. A harness with no reviewer-spawning at all runs the author-side pass as the most it has — its § *What this pass cannot do* says exactly that — and records a solo round with its reason, never the two-lens default read as satisfied. **Default: two reviewers on distinct lenses. Escalate to a third lens when the change ships behaviour *and* a record making numeric claims.** Both terms are defined: *ships behaviour* means the change alters what a shipped file does or checks — code, guards, tests — and prose alone does not qualify, however much of it there is; *a record making numeric claims* means the change\'s own record asserts counts or measurements a reviewer could falsify. When in doubt whether the condition holds, it does not — stay at two and record the call. The default is not a claim that extra lenses find nothing — measured on one four-lens round, overlap was ~15% and each lens produced its sharpest finding alone (the same measurement § *Before you spawn anyone* cites below), so the third lens on a qualifying change is bought deliberately, not tolerated; the evidence *for* two is the same round\'s split, in which about half the findings were author-side sloppiness the § *Before you spawn anyone* pass now owns. It is a claim about who decides: the condition licenses the third lens, and everything past that licence — **a third lens without the condition, and anything beyond three, is the maintainer\'s decision, made outside the session that wants it**, with the round yield so far in hand (each round\'s reviewer count, findings by severity, and dispositions — from a round ledger where the project keeps one, from the round records where it does not). **One round is the default, and it ends when every verified finding is dispositioned** — fixed with the fix verified by the caller, filed as latent (below), or surfaced to the human as a `blocker` (the Classification Rubric\'s halt arm; a round holding an open blocker has not ended, it is waiting). What warrants a second round is one thing: the fixes themselves produced substantial new material no fresh reader has seen — a mechanism replaced, a guard module rewritten wholesale rather than patched. Verifying a bounded fix is the caller\'s job, not a new round\'s. **A session that wants a round beyond the second surfaces that to the human, with what the rounds so far have found; it does not spawn one on its own judgment.** **Fix-now is not the only honest disposition for a verified finding.** A finding can be real and *latent*: **no live path reaches it today — demonstrated, not asserted.** The record names the condition that would have to become true for the path to go live, and the evidence that no shipped surface produces that condition now. "Conceptually possible but unobserved" is not the test — every pre-consumer defect is unobserved — and a finding whose path is live today is never latent, whatever its fix costs. Disposition: record it where the project parks demand-gated work — its review queue or issue log, a place another reader will meet it, never a note only this session reads — with the reason it is latent and the trigger that would revisit it. **A latent filing does not count toward warranting a further round**, and the latency claim is itself adjudicated like any finding: the caller verifies the no-live-path demonstration by reading it, not by presuming it. Filing is not dismissal — a filed finding gets another reader, which is more than a dismissal ever gets — and it is not a way to dodge a fix: the finding must first be verified real, and the record must say why it is latent rather than that it was inconvenient. What this tier prevents is the loop where confirmed-but-latent findings spawn fixes, the fixes spawn verification, and the marginal product becomes guards on guards rather than defects a consumer could meet. '
+    '### How many reviewers, how many rounds — the governor A convention that says "several reviewers" ratchets. In this project\'s log the count was never chosen — it crept from 1 to a mode of 2, then 3, with excursions to 4, and the *round* count crept the same way, one phase running three rounds of three; each step taken under local pressure to be thorough and none of them decided. The rules above say what a round must do; this subsection names the numbers, the stopping condition, and who may exceed them. **Scope.** This subsection sizes an *ad-hoc review round over built work* — a phase-close round, a maintainer\'s round on a finished change. It does not govern flows whose reviewer count is fixed by their own design: a per-plan reviewer inside an orchestrator (`/claim-task` Step 7b, `/auto-build` Phase 6b) is one by construction, and a fan-out sized by its own skill\'s dispatch rule stays with its skill — `/review-close` Step 2b\'s one agent per branch, `/security-audit`\'s per-OWASP-category agents, `/codebase-review`\'s per-map-section grouping, `/test-audit`\'s declared solo-or-dispatch choice recorded in its Tier-0 ledger, a maintainer\'s standing audit brief. And § *Compound findings — decompose before rejecting* below — with its twin leg in `_shared/fanout-evidence.md` § Adjudication — mandates a second, independent pass when a High-severity rejection needs re-adjudication; that is a per-finding pass, not a round, and nothing here caps it. A harness with no reviewer-spawning at all runs the author-side pass as the most it has — its § *What this pass cannot do* says exactly that — and records a solo round with its reason, never the two-lens default read as satisfied. **Size the round by the kind of change.** - *Docs-only or record-only* — no shipped file\'s behaviour or checks change: the project\'s guards and the author\'s own re-read, and no round. **What this gives up:** a false claim already written into the record, which no guard sees and only a reader catches. So the author re-reads the record for that one class before calling the change done. - *One-site fixes with executable tests*, every number the change\'s record asserts printed by a committed script re-run in the same edit: § *Before you spawn anyone*\'s author-side pass and its battery, and one lens, on execution (run what the change prescribes, break what it claims). It gives up the same reader, for the same class, and the author-side pass reads the record for it. - *Behaviour across sites, or in a shared file*: two reviewers on distinct lenses. Prose alone does not put a change here, however much of it there is. - When in doubt which tier holds, take the next one up and record the call. The two-lens tier is not a claim that extra lenses find nothing — measured on one four-lens round, overlap was ~15% and each lens produced its sharpest finding alone (the same measurement § *Before you spawn anyone* cites below), so a third lens is bought deliberately, not tolerated; the evidence *for* two is the same round\'s split, in which about half the findings were author-side sloppiness the § *Before you spawn anyone* pass now owns. It is a claim about who decides: **a third lens, and anything beyond three, is the maintainer\'s decision, made outside the session that wants it**, with the round yield so far in hand (each round\'s reviewer count, findings by severity, and dispositions — from a round ledger where the project keeps one, from the round records where it does not). **One round is the default, and it ends when every verified finding is dispositioned** — fixed with the fix verified by the caller, filed as latent (below), or surfaced to the human as a `blocker` (the Classification Rubric\'s halt arm; a round holding an open blocker has not ended, it is waiting). What warrants a second round is one thing: the fixes themselves produced substantial new material no fresh reader has seen — a mechanism replaced, a guard module rewritten wholesale rather than patched. Verifying a bounded fix is the caller\'s job, not a new round\'s. **A session that wants a round beyond the second surfaces that to the human, with what the rounds so far have found; it does not spawn one on its own judgment.** **Fix-now is not the only honest disposition for a verified finding.** A finding can be real and *latent*: **no live path reaches it today — demonstrated, not asserted.** The record names the condition that would have to become true for the path to go live, and the evidence that no shipped surface produces that condition now. "Conceptually possible but unobserved" is not the test — every pre-consumer defect is unobserved — and a finding whose path is live today is never latent, whatever its fix costs. Disposition: record it where the project parks demand-gated work — its review queue or issue log, a place another reader will meet it, never a note only this session reads — with the reason it is latent and the trigger that would revisit it. **A latent filing does not count toward warranting a further round**, and the latency claim is itself adjudicated like any finding: the caller verifies the no-live-path demonstration by reading it, not by presuming it. Filing is not dismissal — a filed finding gets another reader, which is more than a dismissal ever gets — and it is not a way to dodge a fix: the finding must first be verified real, and the record must say why it is latent rather than that it was inconvenient. What this tier prevents is the loop where confirmed-but-latent findings spawn fixes, the fixes spawn verification, and the marginal product becomes guards on guards rather than defects a consumer could meet. '
 )
 
 # Contradiction screen, wired into `section_problems` the same way as RULE_3_FORBIDDEN and
@@ -2853,6 +2868,21 @@ GOVERNOR_FORBIDDEN: list[tuple[str, str]] = [
      "converts a clean pass into an obligation to spawn more rounds"),
     (r"buys (?:the phase )?another (?:full )?(?:review )?round",
      "converts a High-severity rejection's per-finding second pass into a full round"),
+    # Phase 381 (`Q-677`): the narrow tier is ONE lens, never none. Its author battery
+    # planted "A narrow change may skip the round entirely." outside the governor and every
+    # governor-scoped guard stayed green (G03).
+    (r"skips? (?:the|its|a) (?:review )?round|"
+     r"(?:narrow|small|one-site|low-risk) (?:change|phase|fix)(?:es|s)? (?:may|can|need not|needs no) "
+     r"(?:skip|omit|run without|go without|be exempt)",
+     "turns the one-site tier's lens into none — only a docs-only or record-only change runs "
+     "no round, and that is the governor's tier, not a session's skip"),
+    # Lens 3's survivors (G7-G10), kept as the blocklist's permanent regressions.
+    (r"runs? without an? (?:lens|round|review(?:er)?)",
+     "the no-modal form of a skip: 'a narrow change runs without a round'"),
+    (r"(?:lens|round|review(?:er)?) is optional",
+     "makes the one-site tier's execution lens optional"),
+    (r"add a third lens (?:when|if)|a third lens (?:when|if) (?:the|it)",
+     "makes the third lens the session's call — it is the maintainer's"),
 ]
 
 
@@ -2865,15 +2895,25 @@ def governor_problems(section: str) -> list[str]:
     flat = _flat(section)
     problems = []
     required = {
-        "default-two": r"default: two reviewers on distinct lenses",
-        "escalation-condition": r"ships behaviour \*and\* a record making numeric claims",
+        # `Q-677` (Phase 381, Wade's ruling of 2026-10-12): the count is sized by the kind of
+        # change — docs-only none, one-site one execution lens, multi-site or shared-file two,
+        # and a third only on the maintainer's call.
+        "tiered-count": r"size the round by the kind of change",
+        "docs-tier": r"\*docs-only or record-only\* — no shipped file's behaviour or checks change",
+        "docs-tier-no-round": r"the author's own re-read, and no round",
+        "one-site-tier": r"\*one-site fixes with executable tests\*",
+        "one-site-one-lens": r"and one lens, on execution",
+        "default-two": r"\*behaviour across sites, or in a shared file\*: two reviewers on distinct lenses",
+        # The two lower tiers give up the record reader; these say what that costs.
+        "narrow-cost-named": r"which no guard sees and only a reader catches",
+        "narrow-record-read-first": r"re-reads the record for that one class",
+        "numbers-from-a-script": r"printed by a committed script re-run in the same edit",
         # The round's rule-soundness lens showed the first version's terms were undefined
         # and the bare "beyond three" clause read as making a third lens self-authorizable.
-        "condition-terms-defined": r"prose alone does not qualify",
-        "condition-falsifiable": r"counts or measurements a reviewer could falsify",
-        "condition-in-doubt-fails": r"when in doubt whether the condition holds, it does not",
+        "condition-terms-defined": r"prose alone does not put a change here",
+        "condition-in-doubt-fails": r"when in doubt which tier holds, take the next one up",
         "beyond-licence-maintainer": r"anything beyond three, is the maintainer'.?s decision",
-        "third-without-condition": r"a third lens without the condition",
+        "third-without-condition": r"a third lens, and anything beyond three, is the maintainer",
         "outside-the-session": r"outside the session that wants it",
         "one-round-default": r"one round is the default",
         "round-ends-dispositioned": r"ends when every verified finding is dispositioned",
@@ -2953,8 +2993,8 @@ def test_the_governor_pin_catches_edits_of_every_size():
     by a required pattern or a forbidden screen. Mirrors the AUTHOR_PASS pin tests."""
     section = _block_canon(_flat(_governor_section()))
     assert section == GOVERNOR_VERBATIM, "the shipped governor does not match its own pin"
-    tiny = section.replace("stay at two and record the call",
-                           "stay at two and record the call, or three if pressed", 1)
+    tiny = section.replace("take the next one up and record the call",
+                           "take the next one up and record the call, or three if pressed", 1)
     assert tiny != section and tiny != GOVERNOR_VERBATIM, "a small softening is not caught"
 
 
@@ -2962,8 +3002,8 @@ def test_the_governor_pin_check_is_reachable():
     """And the check FUNCTION must report the mismatch — this is what goes red if the
     comparison inside `governor_problems` is deleted, which no other test isolates."""
     mutated = PARTIAL.read_text(encoding="utf-8").replace(
-        "stay at two and record the call",
-        "stay at two and record the call, or three if pressed", 1)
+        "take the next one up and record the call",
+        "take the next one up and record the call, or three if pressed", 1)
     problems = governor_problems(_governor_slice(mutated))
     assert any("verbatim pin" in p for p in problems), problems
 
@@ -2983,7 +3023,11 @@ def test_the_mirror_sites_track_the_governor():
         "summarizes every other rule of the section and now silently omits the numbered one"
     )
     summary = _flat(" ".join(lines))
-    assert re.search(r"two lenses default", summary, re.I), "the WORKFLOW summary lost the count default"
+    assert re.search(r"two lenses for behaviour across sites", summary, re.I), "the WORKFLOW summary lost the count default"
+    # Lens 3 (G5, G6): the mirror's two lower tiers, in their ruled words.
+    for tier in ("no round for a docs-only or record-only change (the guards and the author's re-read)",
+                 "the author battery plus one execution lens for one-site fixes with executable tests"):
+        assert tier in summary, f"the WORKFLOW summary lost or reworded a tier: {tier!r}"
     assert re.search(r"maintainer'.?s call", summary, re.I), "the WORKFLOW summary lost the beyond-cap owner"
     offending = [pat for pat, _ in GOVERNOR_FORBIDDEN if re.search(pat, summary, re.I)]
     assert offending == [], f"the WORKFLOW governor summary contradicts the governor: {offending}"
@@ -3011,10 +3055,10 @@ GOVERNOR_MUTATIONS: list[tuple[str, Callable[[str], str]]] = [
     ("G1 delete the governor outright",
      lambda t: t[:_at(t, GOVERNOR_START)] + t[_at(t, AUTHOR_PASS_START):]),
     ("G2 unbound the count", _sub(
-        "**Default: two reviewers on distinct lenses. Escalate to a third lens when the change ships behaviour *and* a record making numeric claims.**",
+        "**Size the round by the kind of change.**",
         "Run as many lenses as the change seems to want.")),
     ("G3 hand the beyond-three decision to the session", _sub(
-        "**a third lens without the condition, and anything beyond three, is the maintainer's decision, made outside the session that wants it**",
+        "**a third lens, and anything beyond three, is the maintainer's decision, made outside the session that wants it**",
         "a fourth lens is reasonable whenever the change feels risky")),
     ("G4 loop-forever termination", _sub(
         "**One round is the default, and it ends when every verified finding is dispositioned**",
@@ -3036,9 +3080,15 @@ GOVERNOR_MUTATIONS: list[tuple[str, Callable[[str], str]]] = [
         "## Running more than one reviewer\n",
         "## Running more than one reviewer\n\n" + GOVERNOR_START
         + "\n\nUse your judgment on counts and rounds.\n")),
-    ("G10 weaken the escalation conjunction to a disjunction", _sub(
-        "ships behaviour *and* a record making numeric claims",
-        "ships behaviour *or* a record making numeric claims")),
+    ("G10 the multi-site tier drops to one lens", _sub(
+        "*Behaviour across sites, or in a shared file*: two reviewers on distinct lenses.",
+        "*Behaviour across sites, or in a shared file*: one reviewer.")),
+    ("G12 the docs tier admits a behaviour change", _sub(
+        "*Docs-only or record-only* — no shipped file's behaviour or checks change:",
+        "*Docs-only or record-only*, or any change its author judges low-risk:")),
+    ("G13 drop the cost the narrow tier pays", _sub(
+        "**What this gives up:** a false claim already written into the record, which no guard sees and only a reader catches. ",
+        "")),
     ("G11 drop verified-real from the latent tier", _sub(
         "the finding must first be verified real, and the record must say why it is latent",
         "the record must say why it is latent")),
@@ -3058,8 +3108,8 @@ def test_governor_innocent_reformats_stay_green():
     """Same negative control as the author-pass table: content edits red, formatting green."""
     shipped = PARTIAL.read_text(encoding="utf-8")
     reformats = {
-        "rewrap the default sentence": lambda t: re.sub(
-            r"(two reviewers on distinct lenses\.)(\s+)(Escalate)",
+        "rewrap the tier sentence": lambda t: re.sub(
+            r"(Prose alone does not put a change here,)(\s+)(however)",
             lambda m: m.group(1) + (" " if "\n" in m.group(2) else "\n") + m.group(3),
             t, count=1),
         "rewrap the latent tier": lambda t: re.sub(

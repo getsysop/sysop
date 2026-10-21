@@ -10,6 +10,8 @@ Read `tasks/index.yml`, pick a batch of N independent claimable tasks under a co
 
 This skill does NOT merge anything. It batches the front of the pipeline (claim + plan + execute) up to the point where the human re-engages.
 
+Run it in the main conversation, never through an Agent call — its per-task waits can outlive a subagent's prompt cache.
+
 > **Helper names** referenced in this skill (e.g., `_sanitize_log`, `useAbortableFetch`, `getDisplayError`, `redact_api_keys`, `shared_cli.py`) are placeholders — substitute the equivalent helpers from your project's `convention_map.md`. Worked examples may also reference specific batch numbers, file paths, or env-var names from the originating project; treat those as illustrations, not literal requirements.
 
 ## Pre-flight: Permission Guard
@@ -93,9 +95,9 @@ except ImportError:  # PyYAML lives only in the project venv (BeanRider ISSUE-00
         _r = subprocess.run(
             ["git", "rev-parse", "--git-common-dir"],
             capture_output=True, text=True, timeout=5,
-            env={_k: _v for _k, _v in os.environ.items()
+            env=dict((_k, _v) for _k, _v in os.environ.items()
                  if _k not in ("GIT_DIR", "GIT_WORK_TREE",
-                               "GIT_COMMON_DIR", "GIT_INDEX_FILE")},
+                               "GIT_COMMON_DIR", "GIT_INDEX_FILE")),
         )
         _g = _r.stdout.strip()
     except (OSError, subprocess.SubprocessError):
@@ -448,9 +450,9 @@ except ImportError:  # PyYAML lives only in the project venv (BeanRider ISSUE-00
         _r = subprocess.run(
             ["git", "rev-parse", "--git-common-dir"],
             capture_output=True, text=True, timeout=5,
-            env={_k: _v for _k, _v in os.environ.items()
+            env=dict((_k, _v) for _k, _v in os.environ.items()
                  if _k not in ("GIT_DIR", "GIT_WORK_TREE",
-                               "GIT_COMMON_DIR", "GIT_INDEX_FILE")},
+                               "GIT_COMMON_DIR", "GIT_INDEX_FILE")),
         )
         _g = _r.stdout.strip()
     except (OSError, subprocess.SubprocessError):
@@ -567,6 +569,8 @@ bash sysop/scripts/claim_task.sh --commit-claim "<TASK_ID>"
 
 Branch-name generation (matches `/claim-task` Step 3): the directory is the id's leading `^[A-Z][A-Z0-9]*` segment lowercased and the leaf is the whole id lowercased (`FEAT-X` → `feat/feat-x`, `OPS-FOO` → `ops/ops-foo`); or honour `branch:` field in `index.yml` if present.
 
+5.4's script also fast-forwards the task's worktree to the default branch, which now holds its claim (`Q-532`): 5.2 branched before that commit existed, so without it every worktree read `open` for its own task. A `⚠️` line from 5.4 means it could not, and that it still exited 0 over a committed claim.
+
 Collect `(task_id, worktree_path, branch_name)` tuples. Worktree path is `${WORKTREE_ROOT:-..}/${WORKTREE_PREFIX:-$(basename "$REPO_ROOT")}-<task-id-lowercase>/` — note **both** overrides the script honors: `WORKTREE_PREFIX` on the leaf (an earlier version of this sentence omitted it) and `WORKTREE_ROOT` (Phase 262) on the parent directory, which is why the default is written here as a defaulted `..` rather than a literal one. The path is computed by `sysop/scripts/claim_task.sh` itself, at its `WORKTREE_DIR=` assignment (cited by symbol, not line — the line number in this sentence went stale at Phase 32 and stayed wrong until Phase 163), so the orchestrator just records what the script printed rather than recomputing.
 
 **Abort handling:** if any pre-claim step fails, roll back the partial state for **that one task** (`git checkout tasks/index.yml` plus the verification below, which is the whole rollback: no `git commit` belongs here, guarded or not. Entered from 5.2 or 5.3 there is literally nothing to commit — see the note at 5.2.
@@ -628,7 +632,7 @@ Read the SHA off stdout and hold it in your own context as that task's pre-plan 
 In a **single message**, spawn `min(N, len(batch))` plan-only agents via parallel `Agent` tool calls. Each call:
 
 - `subagent_type`: `"general-purpose"`
-- `model`: `"opus"` <!-- sysop:role=planner -->
+- `model`: `"opus"`, `effort`: `"high"` <!-- sysop:role=planner -->
 - Do NOT set `isolation: "worktree"`.
 - `description`: `"Plan <TASK_ID>"`
 - `prompt`: the **Plan-Only Agent Prompt** in Step 7a, filled with `(task_id, worktree_path, branch_name, claim_dir)`.
@@ -679,7 +683,7 @@ fi
 For each task whose plan-only agent returned cleanly (no Phase-6a violation), spawn one adversarial-reviewer agent. Run these in parallel across tasks via a single message with `min(N, len(non_parked))` parallel `Agent` calls. Each call:
 
 - `subagent_type`: `"general-purpose"`
-- `model`: `"opus"` <!-- sysop:role=plan-review -->
+- `model`: `"opus"`, `effort`: `"high"` <!-- sysop:role=plan-review -->
 - `description`: `"Adversarial plan review <TASK_ID>"`
 - `prompt`: the **Adversarial-Reviewer Agent Prompt** in Step 7b — the **contents of `<CLAIM_DIR>/plan.md` verbatim**, followed by the Prompt Template block from `.claude/skills/_shared/adversarial-review.md`. See the note under Step 7b on emitting it in full.
 
@@ -781,7 +785,7 @@ For each task:
 For each non-parked task, spawn one execution agent. Run these in parallel across tasks via a single message with parallel `Agent` calls (rolling-window refill if there are more non-parked tasks than the concurrency cap). Each call:
 
 - `subagent_type`: `"general-purpose"`
-- `model`: `"opus"` <!-- sysop:role=executor -->
+- `model`: `"sonnet"`, `effort`: `"high"` <!-- sysop:role=executor -->
 - Do NOT set `isolation: "worktree"`.
 - `description`: `"Execute <TASK_ID>"`
 - `prompt`: the **Execution Agent Prompt** in Step 7c, filled with `(task_id, worktree_path, branch_name, claim_dir, plan_text, raw_findings)`.
@@ -1042,7 +1046,7 @@ The orchestrator constructs this prompt as the **contents of `<CLAIM_DIR>/plan.m
 
 > **Emit the file in full, and if you cannot, say so in the prompt rather than abbreviating silently.** Copying a long plan into a prompt is still generated text: on a measured 3-task cycle with plans of ~200–400 lines, the orchestrator abbreviated all three, and one reviewer returned a finding describing *the transcription*, not the plan. The harm is bidirectional and leaves identical evidence either way: a dropped clause manufactures a phantom finding the executor is dispatched to fix, and a smoothed one hides a real finding. A prompt that opens "the plan below is abridged" produces findings a classifier can discount. Inlining rather than handing the reviewer the path is `/claim-task`'s trade too: the reviewer cannot skip a plan it was handed.
 
-Set the same agent params as Step 7a except `model: "opus"` <!-- sysop:role=plan-review --> (`subagent_type: "general-purpose"`, `description: "Adversarial plan review <TASK_ID>"`).
+Set the same agent params as Step 7a except `model: "opus"`, `effort: "high"` <!-- sysop:role=plan-review --> (the `effort` is this line's, never 7a's: with none here, pass none) (`subagent_type: "general-purpose"`, `description: "Adversarial plan review <TASK_ID>"`).
 
 No additional wrapper text — the shared template already supplies the framing. The orchestrator stores the returned text as `RAW_FINDINGS[<TASK_ID>]`.
 

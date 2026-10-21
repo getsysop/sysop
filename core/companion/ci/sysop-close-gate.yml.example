@@ -1,0 +1,120 @@
+# Sysop close gate — the signed check behind the unattended land (`/review-close`; WORKFLOW.md
+# § Unattended close gate).
+#
+# UNARMED. This file ships as `.example` so GitHub never runs it. It is one half of a pair; the
+# other is `sysop-close-gate-relay.yml.example`. Arming both is a human's job, and only part of
+# the setup the gate needs (WORKFLOW.md § Unattended close gate lists all of it):
+#
+#   1. Register a GitHub App for the gate (checks: write, pull requests: read, contents: read),
+#      install it on this repository alone, and record its numeric id as `gate_app:` in
+#      CLAUDE.md `## Unattended close class`.
+#   2. Create the environment `sysop-close-gate` with deployment branches set to "Selected
+#      branches and tags" and exactly one branch rule naming the default branch (never
+#      "Protected branches only"). Put the app's private key in it as the secret
+#      SYSOP_GATE_APP_KEY, and its Client ID as the environment variable SYSOP_GATE_CLIENT_ID.
+#      Never put the key in a repository-level secret: every `write` user can read those.
+#   3. Copy this file and the relay to .github/workflows/ (drop `.example`), and make
+#      `sysop/close-gate` a required check pinned to the app's id.
+#
+# What this workflow may do, and why it is shaped this way (spec § 10.3 item 3):
+#   * It runs only the default branch's copy of itself (`pull_request_target`, `issue_comment`,
+#     `workflow_run` and a push to the default branch all do), and never runs what a pull
+#     request carries: the head is fetched as data, and nothing from it is checked out.
+#   * It runs only governing paths of the base (`sysop/**`) and pinned external actions: no
+#     `uses: ./`, no cache, no artifact, its one dependency hash-pinned into a venv outside the
+#     checkout, and Python always with `-I`, so nothing in the checkout is imported.
+#   * No event field is interpolated into a `run:` step; event data enters through `env:` only.
+
+name: sysop close gate
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+  issue_comment:
+    types: [created, edited, deleted]
+  push:
+    branches: [main]  # your default branch; the job's `if:` checks it again
+  workflow_run:
+    workflows: [sysop close gate relay]
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  gate:
+    # The events the gate acts on: a pull request into the default branch, a comment on a pull
+    # request, a push to the default branch, and the relay. The environment's branch rule is what
+    # keeps any other run away from the key; this only spares the runs that could not use it.
+    if: >-
+      (github.event_name == 'pull_request_target'
+        && github.event.pull_request.base.ref == github.event.repository.default_branch)
+      || (github.event_name == 'issue_comment' && github.event.issue.pull_request)
+      || (github.event_name == 'push'
+        && github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
+      || github.event_name == 'workflow_run'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: sysop-close-gate
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Refuse a gate that is not a regular file at the base
+        # The gate refuses every link at the base but the Codex links; it cannot protect its own code.
+        run: |
+          set -euo pipefail
+          for d in sysop sysop/scripts sysop/scripts/ci; do
+            if [ "$(git ls-tree -d HEAD -- "$d" | awk '{print $1}')" != 040000 ]; then
+              echo "::error::$d is not a directory at the base"; exit 1
+            fi
+          done
+          for f in close_gate.py close_run.py pending_doc_hold.py ci/close-gate-requirements.txt; do
+            case "$(git ls-tree HEAD -- "sysop/scripts/$f" | awk '{print $1}')" in
+              100644|100755) ;;
+              *) echo "::error::sysop/scripts/$f is not a regular file at the base"; exit 1 ;;
+            esac
+          done
+          # Nothing in the gate's directory may be a link: the gate imports from it.
+          links="$(git ls-tree -r HEAD -- sysop/scripts | awk '$1 == "120000" || $1 == "160000"')"
+          if [ -n "$links" ]; then
+            echo "::error::a symlink or gitlink under sysop/scripts at the base: $links"; exit 1
+          fi
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.13'
+
+      - name: Install the gate's one dependency, hash-pinned, outside the checkout
+        run: |
+          set -euo pipefail
+          python -I -m venv "$RUNNER_TEMP/gate-env"
+          "$RUNNER_TEMP/gate-env/bin/python" -I -m pip install --quiet --no-deps \
+            --only-binary :all: --require-hashes -r sysop/scripts/ci/close-gate-requirements.txt
+
+      - name: Mint the gate app's token
+        id: app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.SYSOP_GATE_CLIENT_ID }}
+          private-key: ${{ secrets.SYSOP_GATE_APP_KEY }}
+          permission-checks: write
+          permission-contents: read
+          permission-pull-requests: read
+
+      - name: Evaluate and post sysop/close-gate
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          PR: ${{ github.event.pull_request.number || github.event.issue.number }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          args=(run --repo "$REPO" --event "$EVENT" --post)
+          if [ -n "$PR" ]; then args+=(--pr "$PR"); fi
+          if [ -n "$HEAD_SHA" ]; then args+=(--head-sha "$HEAD_SHA"); fi
+          "$RUNNER_TEMP/gate-env/bin/python" -I sysop/scripts/close_gate.py "${args[@]}"

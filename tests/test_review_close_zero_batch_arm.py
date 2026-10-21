@@ -37,6 +37,7 @@ sys.path.insert(0, str(_P(__file__).resolve().parent))
 from _prose_guard_helpers import anchor, carries  # noqa: E402
 import subprocess
 from pathlib import Path
+from skill_runner_text import text_of
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SKILL = REPO_ROOT / "core/skills/review-close/SKILL.md"
@@ -44,7 +45,7 @@ CLOSE_BATCH = REPO_ROOT / "core/companion/scripts/close_batch.sh"
 
 
 def _skill() -> str:
-    return SKILL.read_text(encoding="utf-8")
+    return text_of(SKILL)
 
 
 
@@ -555,7 +556,10 @@ def test_the_monograph_states_the_artifact_set_size_the_code_ships():
     Pinned against the shipped list rather than the literal word, so renaming an
     artifact moves the guard with the code.
     """
-    names = re.search(r"NAMES = \[(.*?)\]", _skill(), re.S)
+    # Step 2e's program is `claim_artifacts.py` since Phase 387 (`Q-409` P3).
+    assert "python3 sysop/scripts/claim_artifacts.py" in _skill()
+    names = re.search(r"NAMES = \[(.*?)\]", (REPO_ROOT / "core/companion/scripts/claim_artifacts.py")
+                      .read_text(encoding="utf-8"), re.S)
     assert names, "review-close's Step 2e NAMES list is gone — re-anchor this guard"
     n = len(re.findall(r'"([a-z-]+\.md)"', names.group(1)))
     assert n >= 5, f"Step 2e's NAMES list has shrunk to {n}; re-derive this guard"

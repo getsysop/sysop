@@ -23,12 +23,15 @@ from typing import Optional
 import pytest  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _heredoc_population import heredoc_containing  # noqa: E402
+from _shipped_scripts import invoked_script_containing  # noqa: E402
+from skill_runner_text import text_of  # noqa: E402
 import test_project_status_rotation as R  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SKILL = REPO_ROOT / "core" / "skills" / "review-close" / "SKILL.md"
-CHECK = heredoc_containing(SKILL, "KEEP, TRIGGER = ")
+# Item 5's check was a heredoc until Phase 387 (`Q-409` P3); it is `close_check.py`, run as a file.
+CHECK_SCRIPT = invoked_script_containing(SKILL, "KEEP, TRIGGER = ")
+CHECK = CHECK_SCRIPT.read_text(encoding="utf-8")
 
 FURNITURE = [
     "(Older entries rotated to changelog.md)",
@@ -73,7 +76,7 @@ def _repo(tmp_path: Path, files: dict) -> Path:
 
 
 def _run(repo: Path, cwd: Optional[Path] = None, **extra: str) -> tuple[int, str]:
-    r = subprocess.run([sys.executable, "-"], input=CHECK, cwd=cwd or repo, capture_output=True,
+    r = subprocess.run([sys.executable, str(CHECK_SCRIPT)], cwd=cwd or repo, capture_output=True,
                        text=True, env={**_env(), **extra})
     assert "Traceback" not in r.stderr, r.stderr
     return r.returncode, r.stdout
@@ -105,7 +108,9 @@ def _problems(out: str) -> list[str]:
 # ── the extraction itself ───────────────────────────────────────────────────
 
 
-def test_the_check_is_extracted_from_the_skill():
+def test_the_check_is_the_script_the_skill_runs():
+    assert CHECK_SCRIPT.name == "close_check.py"
+    assert "python3 sysop/scripts/close_check.py\n" in text_of(SKILL)
     assert "def split6" in CHECK and CHECK.rstrip().endswith("sys.exit(1 if problems else 0)")
 
 
@@ -633,7 +638,7 @@ def test_a_non_utf8_locale_does_not_crash_the_report(tmp_path):
     """Round 1 (lens 1): `·`, `—` and `§` raised on an ASCII stdout, and the traceback's exit 1
     read as STOP."""
     repo = _lossy(tmp_path)
-    r = subprocess.run([sys.executable, "-"], input=CHECK.encode(), cwd=repo, capture_output=True,
+    r = subprocess.run([sys.executable, str(CHECK_SCRIPT)], cwd=repo, capture_output=True,
                        env={**_env(), "LC_ALL": "en_US.US-ASCII", "LANG": "en_US.US-ASCII",
                             "PYTHONIOENCODING": "ascii", "PYTHONUTF8": "0"})
     assert b"Traceback" not in r.stderr, r.stderr
@@ -881,7 +886,9 @@ def test_the_check_runs_after_every_write_and_before_cleanup_and_staging():
     paragraph), and keyed to no item number (a renumber is a legal edit)."""
     lines = R._lines()
     lo, hi = R._step_4c_bounds(lines)
-    code = _only_line_with(lines, "KEEP, TRIGGER = ", lo, hi)
+    # The check's invocation line: it was the heredoc's `KEEP, TRIGGER = ` line until Phase 387
+    # (`Q-409` P3) moved the program into `close_check.py`.
+    code = _only_line_with(lines, "python3 sysop/scripts/close_check.py", lo, hi)
     for writer in ("**Rotation check**:", "**CHANGELOG.md** (bugfix type only",
                    "**UI_Iterations.md** (ui-iteration type only)", "python3 sysop/scripts/validate_tasks.py ||"):
         assert _only_line_with(lines, writer, lo, hi) < code, f"{writer} runs after the check"

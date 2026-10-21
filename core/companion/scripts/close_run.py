@@ -19,8 +19,9 @@ The run lives in the MAIN checkout's `sysop/runtime/close/<run-id>/`
 
 Subcommands (each prints one line per fact, and exits 0 unless it says otherwise):
 
-    begin <default-branch> [<branch>...]
-        After Step 1, before Step 2a. No branch at all is a cycle of unpushed commits only. Creates the run and records, per branch:
+    begin <default-branch> [--agent <name>] [<branch>...]
+        After Step 1, before Step 2a. `--agent` (from `--prepare --agent`) is recorded, and
+        `finish`'s `RESUME:` line then names the unattended resume. No branch at all is a cycle of unpushed commits only. Creates the run and records, per branch:
         its tip, its lock files and pending docs (by content), and whether its tip
         was already in the default branch; and, for the run: local and origin
         `<default-branch>`, the recorded PR heads, the conventions and maps, and
@@ -34,6 +35,11 @@ Subcommands (each prints one line per fact, and exits 0 unless it says otherwise
         `MOVED DURING PREPARE:` line per input that moved since `begin`.
         Exit 1, marking nothing: a branch has no state file, or `questions.md`
         is missing.
+
+    resumable [--agent <name>]
+        Prints the newest prepare's run id, alone on stdout, when a resume can load it
+        (finished, not halted, not consumed; with `--agent`, prepared by that agent), so a
+        script can chain a night's two sessions. Exit 2 otherwise: never an older run.
 
     load <run-id> <default-branch>
         First thing at resume. Prints `DIR:`, `QUESTIONS: <n>` and `ANSWERED: <n>`.
@@ -60,7 +66,8 @@ Subcommands (each prints one line per fact, and exits 0 unless it says otherwise
     RERUN 3: <ref> moved             local or origin <default-branch>
     NOTE: core.hooksPath ...         reported, re-runs nothing
 
-`begin`, `load` and `reader` also refuse (exit 2) while a hand-off below is waiting.
+`begin`, `load` and `reader` also refuse (exit 2) while a hand-off below is waiting,
+or while an unattended close's `STOPPED` marker below stands.
 
 The Step 4d split (`/review-close --request-review` and `--land`, `Q-411`) keeps a
 hand-off in its own run directory: `handoff.json` (written here), `report.md`
@@ -101,10 +108,16 @@ abandoned. The second reader is read from CLAUDE.md `## Second reader`.
         For a PR closed unmerged: removes `AWAITING`, leaves the branch and the
         kept locks. Exit 2 on an open PR (close or land it) or a merged one (land it).
 
-The unattended land (`Q-411`, Phase 366) reads CLAUDE.md `## Unattended close
-class`: `allow:` and `exclude:` path globs and a `blast_radius:` ceiling. CLAUDE.md,
-.claude/**, sysop/** and .github/workflows/** are always excluded, as are tasks
-that are manual_smoke, solo or user_action, and a branch with a held pending doc.
+The unattended close (`Q-411`, Phases 366, 374 and 375) reads CLAUDE.md
+`## Unattended close class`: `allow:` and `exclude:` path globs and a
+`blast_radius:` ceiling, which selection and the signed gate (`close_gate.py`)
+read; `code_owner:` and `gate_app:`, which the gate and the land require; and
+`attested:`, which the land requires. The governing set is always excluded, compared folded (NFKC, then
+casefold): `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `AGENTS.override.md`,
+`.mcp.json`, `.gitmodules` and `.gitattributes` anywhere, any `.claude`, `.agents`
+or `.codex` directory, `sysop/**`, `.github/**`, `/CODEOWNERS` and
+`/docs/CODEOWNERS`; so are tasks that are manual_smoke, solo or user_action, and a
+branch with a held pending doc.
 
     class
         Validates the class and prints it, with a `WARN:` line for each path a
@@ -115,8 +128,10 @@ that are manual_smoke, solo or user_action, and a branch with a held pending doc
         Half A's selection, after Step 1: one `IN <branch>: ...` or
         `OUT <branch>: <reasons>` line per branch. A branch is IN only when one
         lock names it and reads `agent: <agent>`, its task passes the class, no
-        pending doc of its carries `hold:`, and every path it changes since its
-        merge base with <default-branch> is admitted. A `NOTE:` line names paths
+        pending doc of its carries `hold:`, and it merges cleanly onto local
+        <default-branch> with every path the merge result changes admitted and no
+        symlink or gitlink among them (the merge result GitHub's squash would
+        make, as the gate reads it; git 2.40 or newer). A `NOTE:` line names paths
         local <default-branch>'s unpushed commits add that the class refuses.
 
     hand-off ... --agent <name>
@@ -124,22 +139,68 @@ that are manual_smoke, solo or user_action, and a branch with a held pending doc
         valid class.
 
     land-check <run-id> <default-branch> --unattended <agent>
-        NOT ENABLED: refuses (exit 2) until `Q-411`'s redesign; see UNATTENDED_LAND_ENABLED.
-        Half B with no human. Refuses (exit 2) a hand-off made without --agent, or
-        by another agent. A `PARKED` hand-off prints its park and exits 4 without
-        reading GitHub. Otherwise re-checks the PR, then the class against the PR
-        (every path between origin/<default-branch> and the recorded head, the kept
-        tasks at the head, their locks' owner, no held-doc branch in report.md), then
-        the reviewer, then the PR's check count. Any park writes `PARKED` (exit 4).
-        A check count of 0 waits (exit 5) for the hand-off's timeout, counted from
-        the first land that found the reviewer clean, then parks.
+        Half B with no human (Phase 375). Refuses (exit 2) a hand-off made without
+        --agent, or by another agent. A `PARKED` hand-off prints its park and exits
+        4 without reading GitHub. Otherwise re-checks the PR; reads the class at the
+        default branch's live tip; checks the kept locks' owner and that report.md
+        names no held-doc branch; checks Step 6's two local conditions; then the
+        server setup with the token `gh` holds (not the code owner, role `write`,
+        the rulesets' code-owner review, stale-review dismissal and strict check
+        pinning `sysop/close-gate` to `gate_app:`, `current_user_can_bypass: never`
+        on each, the gate environment's one branch rule) and the class's
+        `attested:` date. Then every registered check must have passed, the gate's
+        among them: a failed one parks, a pending or absent one waits (exit 5) for
+        the hand-off's timeout, then parks. Then it turns on auto-merge (`gh pr
+        merge --auto --squash --match-head-commit`), which merges at once when
+        GitHub's rules pass: `VERDICT: ALREADY MERGED` (exit 0), or `VERDICT: ARMED`
+        (exit 5) while GitHub waits. Paths, task fields and the reader's verdict are
+        the gate's, not this command's. Any park writes `PARKED` (exit 4), and turns
+        auto-merge off first when it is on.
 
     park <run-id> <code> <reason>
         The runner's own parks under --unattended (a denied command, a stuck PR).
+        Turns off auto-merge the unattended land turned on.
 
     unpark <run-id>
         A human clears a park without a new request. `re-request`, `landed` and
-        `abandon` clear it too.
+        `abandon` clear it too. `unpark` and `re-request` turn off auto-merge the
+        unattended land turned on, so the next land re-checks before arming again.
+
+Half A with no human (`Q-664`, Phase 380) is `--prepare --agent <name>`, then
+`--resume <run-id> --request-review --agent <name> --unattended`. A park of that close
+before Step 4-pre is recorded in the run's `halted.md` and blocks nothing. From Step 4-pre
+on it is durable, and so are three Step 3b exits that leave main's pending docs part-written:
+
+    stop <run-id> <step> <reason>
+        Writes `STOPPED` in the run directory, naming the step, the reason (the
+        recovery included) and the `LOCKS_KEPT:` ids the runner passes as
+        `--locks-kept <id>...` after the reason. `begin`, `load`, `reader`,
+        `hand-off` and the unattended land refuse while one stands, so no close
+        runs until a human clears it. The run directory need not hold a run: the
+        marker is written whatever the run's state, since a stop that refused would
+        leave the close unguarded.
+
+    clear <run-id>
+        A human removes a `STOPPED` marker once its recovery is done, and the
+        marker is kept beside it as `STOPPED.cleared-<stamp>`.
+
+A branch park is keyed to the branch's head:
+
+    hold <run-id> <branch> <reason>
+        Records `holds/<branch>.json` with the branch's current tip, for a
+        `VERDICT: BLOCKED` or a branch question nobody answered. Exit 2: no such
+        branch.
+
+    unhold <branch> [<note>]
+        A human clears a hold; the record, with the note, is kept as
+        `holds/<branch>.json.cleared-<stamp>`. Exit 2: the branch is not held.
+
+    eligible <default-branch> <agent> --held [<branch>...]   (`--held` anywhere after <agent>)
+        As `eligible`, and a held branch whose tip is the held head prints
+        `OUT <branch>: held at <sha>: <reason>`. A hold whose branch moved, was
+        merged into <default-branch> or is gone is removed, with a `NOTE:` line.
+        Only the unattended close passes `--held`: an attended close does not read
+        holds.
 
 Exit 3 everywhere: a usage error. Exit 1: git or the filesystem failed; the
 message names what. A pending doc's frontmatter is read with PyYAML through
@@ -159,6 +220,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import unicodedata
 from pathlib import Path
 from urllib.parse import quote
 
@@ -462,14 +524,17 @@ def compare(root: Path, manifest: dict, *, include_origin: bool = True) -> list[
     return lines
 
 
-def cmd_begin(root: Path, default: str, branches: list[str]) -> int:
+def cmd_begin(root: Path, default: str, branches: list[str], agent: str = "") -> int:
     if not default or default.startswith("<"):
-        print("usage: close_run.py begin <default-branch> [<branch>...]", file=sys.stderr)
+        print("usage: close_run.py begin <default-branch> [--agent <name>] [<branch>...]", file=sys.stderr)
         return 3
     if not ref_sha(root, "refs/heads/" + default):
         raise Fail(f"default branch {default!r} does not resolve")
     if awaiting(root):
         raise Refuse(f"a hand-off is waiting for its second reader: {', '.join(awaiting(root))}")
+    refuse_if_stopped(root)
+    if agent and not AGENT.fullmatch(agent):
+        raise Refuse(f"not an agent name: {agent!r}")
     for b in branches:
         if b.startswith("<") or not ref_sha(root, "refs/heads/" + b):
             raise Fail(f"branch {b!r} does not exist")
@@ -485,6 +550,8 @@ def cmd_begin(root: Path, default: str, branches: list[str]) -> int:
         "branches": {b: branch_inputs(root, default, b, wts) for b in sorted(set(branches))},
         "run": run_inputs(root, default),
     }
+    if agent:
+        manifest["agent"] = agent  # `--prepare --agent`: the night's unattended resume follows
     write_json(run / "manifest.json", manifest)
     print(f"RUN: {run_id}")
     print(f"DIR: {run}")
@@ -516,7 +583,29 @@ def cmd_finish(root: Path, run_id: str) -> int:
     manifest["finished"] = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     write_json(run / "manifest.json", manifest)
     print(f"QUESTIONS: {count_questions(run / 'questions.md')}")
-    print(f"RESUME: /review-close --resume {run_id}")
+    agent = manifest.get("agent")
+    tail = f" --request-review --agent {agent} --unattended" if isinstance(agent, str) and AGENT.fullmatch(agent) else ""
+    print(f"RESUME: /review-close --resume {run_id}{tail}")
+    return 0
+
+
+def cmd_resumable(root: Path, agent: str = "") -> int:
+    """The newest prepare's run, when a resume can load it: finished, not halted, not
+    consumed, and with `--agent`, prepared by that agent. Prints its id alone, so a script can
+    chain an unattended night's two sessions. Never an older run: when tonight's prepare halted,
+    the run before it may be a human's prepare waiting for answers. Exit 2 otherwise."""
+    if agent and not AGENT.fullmatch(agent):
+        raise Refuse(f"not an agent name: {agent!r}")
+    d = runs_dir(root)
+    runs = sorted((r for r in (d.iterdir() if d.is_dir() else [])
+                   if RUN_ID.fullmatch(r.name) and (r / "manifest.json").exists()), reverse=True)
+    if not runs:
+        raise Refuse("no prepared run")
+    run, manifest = open_run(root, runs[0].name)
+    resumable(run, manifest)
+    if agent and manifest.get("agent") != agent:
+        raise Refuse(f"run {run.name} was not prepared with --agent {agent}")
+    print(run.name)
     return 0
 
 
@@ -525,6 +614,7 @@ def cmd_load(root: Path, run_id: str, default: str) -> int:
     resumable(run, manifest)
     if awaiting(root):
         raise Refuse(f"a hand-off is waiting for its second reader: {', '.join(awaiting(root))}")
+    refuse_if_stopped(root)
     print(f"DIR: {run}")
     print(f"QUESTIONS: {count_questions(run / 'questions.md')}")
     print(f"ANSWERED: {count_questions(run / 'answers.md')}")
@@ -668,9 +758,10 @@ def section_pairs(root: Path, title: str, keys: tuple, repeatable: tuple = (),
     return pairs
 
 
-def read_second_reader(root: Path) -> dict:
-    """`## Second reader` in the project's CLAUDE.md, as `key: value` lines."""
-    cfg: dict[str, str] = dict(section_pairs(root, "Second reader", READER_KEYS))
+def read_second_reader(root: Path, rev: str = "") -> dict:
+    """`## Second reader` in the project's CLAUDE.md (the working tree's, or <rev>'s), as
+    `key: value` lines."""
+    cfg: dict[str, str] = dict(section_pairs(root, "Second reader", READER_KEYS, rev=rev))
     for key in ("reviewer", "format", "request"):
         if not cfg.get(key):
             raise Refuse(f"`## Second reader`: {key} is required")
@@ -743,6 +834,20 @@ def awaiting(root: Path) -> list[str]:
     return sorted(p.parent.name for p in d.glob("*/AWAITING")) if d.is_dir() else []
 
 
+def stopped(root: Path) -> list[str]:
+    """Run ids whose unattended close stopped durably (`Q-664`): a human clears each."""
+    d = runs_dir(root)
+    return sorted(p.parent.name for p in d.glob("*/STOPPED")) if d.is_dir() else []
+
+
+def refuse_if_stopped(root: Path) -> None:
+    ids = stopped(root)
+    if ids:
+        raise Refuse(f"an unattended close stopped and waits for a human: {', '.join(ids)}; "
+                     f"read sysop/runtime/close/{ids[0]}/STOPPED, recover as it says, then run "
+                     f"`close_run.py clear {ids[0]}`")
+
+
 def open_handoff(root: Path, run_id: str, default: str = "") -> tuple[Path, dict]:
     if not re.fullmatch(r"[0-9]{8}T[0-9]{6}Z-[0-9a-f]{4}", run_id):
         raise Refuse(f"not a run id: {run_id!r}")
@@ -811,6 +916,7 @@ def check_pr_for_request(root: Path, pr: str, default: str, branch: str, head: s
 def cmd_reader(root: Path) -> int:
     if awaiting(root):
         raise Refuse(f"a hand-off is waiting for its second reader: {', '.join(awaiting(root))}")
+    refuse_if_stopped(root)
     cfg = read_second_reader(root)
     for k in READER_KEYS:
         if k in cfg:
@@ -843,6 +949,7 @@ def _hand_off(root: Path, default: str, branch: str, pr: str, pushed_from: str,
     pending = awaiting(root)
     if pending:
         raise Refuse(f"another hand-off is waiting: {', '.join(pending)}")
+    refuse_if_stopped(root)
     cfg = read_second_reader(root)
     if agent:
         read_class(root)  # an unattended hand-off needs a class to land against
@@ -924,7 +1031,7 @@ def cmd_seal(root: Path, run_id: str) -> int:
         return 1
     gone = [t for t in kept if not (root / "sysop" / "runtime" / "locks" / f"{t}.lock").is_file()]
     if gone:
-        print(f"NOT KEPT: no lock file for {' '.join(gone)} (was Step 4c's heredoc run with --keep-locks?)")
+        print(f"NOT KEPT: no lock file for {' '.join(gone)} (was Step 4c's close_index.py run with --keep-locks?)")
         return 1
     rec["kept_locks"], rec["sealed"] = kept, utcnow().strftime("%Y%m%dT%H%M%SZ")
     write_json(run / "handoff.json", rec)
@@ -1104,7 +1211,12 @@ def cmd_re_request(root: Path, run_id: str, default: str) -> int:
     old = rec["head"]
     rec.update(head=head, status="awaiting", requested_at=at, request_comment=cid)
     rec.pop("checks_waiting_since", None)
+    # An arm survives a push and merges the new head (Phase 375's P4), so a new request drops
+    # it: the next unattended land re-checks this head before arming again.
+    note = disarm(root, rec) if rec.get("armed") else ""
     write_json(run / "handoff.json", rec)
+    if note:
+        print(f"READER: {note}")
     if (run / "PARKED").exists():
         (run / "PARKED").unlink()
         print("UNPARKED: the request is new, so the park it answered is cleared")
@@ -1163,41 +1275,54 @@ def cmd_abandon(root: Path, run_id: str) -> int:
 
 
 # ---------------------------------------------------------------------------------------------
-# The unattended land (`Q-411`, Phase 366). A hand-off made with `--agent <name>` may be landed
-# by `land-check --unattended <name>`, with no human: only when the consumer's
-# `## Unattended close class` admits every task and every path the PR merges, the reviewer
-# reads clean, and checks registered. Anything else parks durably (`PARKED`), and a parked
+# The unattended land (`Q-411`, Phases 366 and 375). A hand-off made with `--agent <name>` may be
+# landed by `land-check --unattended <name>`, with no human: only when the server setup holds
+# (`setup_problems`), every registered check has passed, the gate's among them, and GitHub's own
+# rules then let auto-merge through. Anything else parks durably (`PARKED`), and a parked
 # hand-off waits for a human: `re-request`, `unpark` or an attended `--land`.
 # ---------------------------------------------------------------------------------------------
 
 CLASS_TITLE = "Unattended close class"
-CLASS_KEYS = ("allow", "exclude", "blast_radius")
+CLASS_KEYS = ("allow", "exclude", "blast_radius", "code_owner", "gate_app", "attested")
 BLAST_ORDER = ("single-file", "single-module", "cross-module", "architectural")
-# The files that govern an unattended merge: the class, the reader and the merge policy
-# (CLAUDE.md), the permissions and skills (.claude/), the scripts that run the gate (sysop/),
-# and CI. Never configurable (Wade, 2026-10-08).
-FIXED_EXCLUDE = ("CLAUDE.md", ".claude/**", "sysop/**", ".github/workflows/**")
+# The governing set: files an agent, a reviewer or git itself reads as instructions, so an
+# unattended merge may never change one (spec § 10.3 item 2, Phase 367's round 2). Defined by
+# name, not by a path list: a basename anywhere, a directory component anywhere, or a root
+# path. Never configurable; a consumer's `exclude:` extends it (Wade, 2026-10-08).
+GOVERNING_NAMES = ("CLAUDE.md", "CLAUDE.local.md", "AGENTS.md", "AGENTS.override.md",
+                   ".mcp.json", ".gitmodules", ".gitattributes")
+GOVERNING_DIRS = (".claude", ".agents", ".codex")
+GOVERNING_ROOTS = ("sysop", ".github")
+GOVERNING_FILES = ("CODEOWNERS", "docs/CODEOWNERS")
+FIXED_EXCLUDE = (GOVERNING_NAMES + tuple(f"{d}/" for d in GOVERNING_DIRS)
+                 + tuple(f"/{r}/**" for r in GOVERNING_ROOTS) + tuple(f"/{f}" for f in GOVERNING_FILES))
+LOGIN = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}")  # a user login, not a team
+GIT_FLOOR = (2, 40)  # `--attr-source` (2.40); `merge-tree --write-tree` is 2.38
 # Paths a close commits itself (Steps 1b, 4b and 4c). The class must allow them, or every
 # land parks; `class` and `eligible` warn about each one it does not.
 CLOSE_WRITTEN = ("tasks/index.yml", "tasks/open/TASK-0001.md", "tasks/archive/TASK-0001.md",
                  "PROJECT_STATUS.md", "CHANGELOG.md", "UI_Iterations.md", "review_tasks.md",
                  "review_tasks_archive.md")
 PARK_CODES = ("ask", "relay", "hard-fail", "gate-red", "conflict", "class", "reader", "checks",
-              "pr-state", "dirty", "after-push")
+              "pr-state", "dirty", "after-push", "setup")
 AGENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._@+-]{0,63}")  # claim_task.sh's AGENT_NAME rule
-# The unattended land is built but NOT enabled (Wade, 2026-10-08, after Phase 366's third round):
-# each of three rounds found a way for a PR or the agent to shape what this gate trusts, the last
-# two (task fields read at local <default>, which the agent writes; a symlink routing an edit to
-# CLAUDE.md or .claude/ around FIXED_EXCLUDE) still open. `land-check --unattended` refuses until
-# `Q-411`'s redesign. The tests flip this in-process to keep the mechanism exercised; nothing in
-# the shipped CLI sets it.
-UNATTENDED_LAND_ENABLED = False
+# The unattended land, enabled by `Q-411`'s part B (Phase 375). Phase 366 built a client gate and
+# left it off, because each of three rounds found a way for a PR or the agent to shape what it
+# trusted. The redesign moved the trust to GitHub (spec § 10): `close_gate.py`, a signed check,
+# decides paths, task fields and the reader; this land verifies the server setup that makes the
+# check binding, then lets GitHub merge. Setting this False refuses every unattended land again.
+UNATTENDED_LAND_ENABLED = True
 
 
-def glob_regex(pat: str, icase: bool = False) -> re.Pattern:
+def glob_regex(pat: str, icase: bool = False, cover: bool = False) -> re.Pattern:
     """A repo-root-anchored path glob: `*` and `?` stay inside one segment, a `**` segment
     matches any number of segments, a trailing `/**` (or `/`) covers the directory's own path
-    too, and `icase` matches without regard to case."""
+    too, and `icase` matches without regard to case. A pattern whose last segment has no wildcard
+    also covers everything under the path it names, so a bare directory `X` reads as `X/**`
+    (Phase 366's round 3: `exclude: src/billing` excluded nothing under it). With `cover`, every
+    pattern covers what is under what it matches, the wildcard included: an exclusion must err
+    wide, and `exclude: secrets/*` must still cover `secrets/prod/key.pem` (Phase 374's round 2,
+    which caught the narrowing meant for `allow:` applied to `exclude:` too)."""
     if pat.endswith("/"):
         pat += "**"
     if not pat or pat.startswith("/") or "\\" in pat or any(c in pat for c in "[]{}!"):
@@ -1221,7 +1346,9 @@ def glob_regex(pat: str, icase: bool = False) -> re.Pattern:
                 out += ".*"
             continue
         out += "".join("[^/]*" if c == "*" else "[^/]" if c == "?" else re.escape(c) for c in seg)
-        out += "" if last else "/"
+        # Only a last segment with no wildcard names a directory that covers what is under it, as
+        # in CODEOWNERS: `src/*.py` must not admit `src/a.py/payload.sh` (Phase 374's round).
+        out += ("" if any(c in seg for c in "*?") and not cover else "(?:/.*)?") if last else "/"
     return re.compile(out + r"\Z", re.S | (re.I if icase else 0))
 
 
@@ -1229,31 +1356,84 @@ def read_class(root: Path, rev: str = "") -> dict:
     """`## Unattended close class`: `allow:` and `exclude:` (repeatable, space-separated globs)
     and `blast_radius:` (the highest blast radius that may merge unattended). Exclusions match
     without regard to case, because a case-insensitive filesystem writes `.CLAUDE/x` into
-    `.claude/`; allows match exactly, which can only refuse more."""
+    `.claude/`; allows match exactly, which can only refuse more. `code_owner:` (the human
+    whose approval is the escape hatch, and whom `CODEOWNERS` must name) and `gate_app:` (the
+    id of the GitHub App that posts the gate's check) are optional here and required by the
+    gate (`close_gate.py`). `attested:` (the date a human attested what no `write` token can
+    read: whose credentials the repository's secrets hold, and that workflows cannot approve
+    pull requests) is optional here and required by the unattended land."""
     pairs = section_pairs(root, CLASS_TITLE, CLASS_KEYS, repeatable=("allow", "exclude"), rev=rev)
-    cls: dict = {"allow": [], "exclude": [], "ceiling": ""}
+    cls: dict = {"allow": [], "exclude": [], "ceiling": "", "code_owner": "", "gate_app": "",
+                 "attested": ""}
     for key, value in pairs:
         if key == "blast_radius":
             if value not in BLAST_ORDER:
                 raise Refuse(f"`## {CLASS_TITLE}`: blast_radius must be one of "
                              f"{', '.join(BLAST_ORDER)}: {value!r}")
             cls["ceiling"] = value
+        elif key == "code_owner":
+            if not LOGIN.fullmatch(value.removeprefix("@")):
+                raise Refuse(f"`## {CLASS_TITLE}`: code_owner is not a GitHub login: {value!r}")
+            cls["code_owner"] = value.removeprefix("@")
+        elif key == "gate_app":
+            if not re.fullmatch(r"[1-9][0-9]{0,11}", value):
+                raise Refuse(f"`## {CLASS_TITLE}`: gate_app is not a GitHub App id: {value!r}")
+            cls["gate_app"] = value
+        elif key == "attested":
+            try:
+                ok = bool(re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", value)) and \
+                    datetime.date.fromisoformat(value) is not None
+            except ValueError:
+                ok = False
+            if not ok:
+                raise Refuse(f"`## {CLASS_TITLE}`: attested is not a date (YYYY-MM-DD): {value!r}")
+            cls["attested"] = value
         else:
-            cls[key] += [(p, glob_regex(p, icase=key == "exclude")) for p in value.split()]
+            # An exclusion errs wide: case-insensitive, and NFC on both sides, since APFS and
+            # HFS+ treat an NFC and an NFD spelling as one directory (Phase 374's round 3).
+            cls[key] += [(p, glob_regex(unicodedata.normalize("NFC", p) if key == "exclude" else p,
+                                        icase=key == "exclude", cover=key == "exclude"))
+                         for p in value.split()]
     if not cls["allow"]:
         raise Refuse(f"`## {CLASS_TITLE}`: allow is required (the paths that may merge unattended)")
     if not cls["ceiling"]:
         raise Refuse(f"`## {CLASS_TITLE}`: blast_radius is required")
-    cls["fixed"] = [(p, glob_regex(p, icase=True)) for p in FIXED_EXCLUDE]
     return cls
 
 
+def fold(s: str) -> str:
+    """NFKC, then casefold: `ſysop` (U+017F) and `ＣＬＡＵＤＥ.md` both reach their governing
+    spelling, the way a case-insensitive filesystem or a lenient reader can resolve them."""
+    return unicodedata.normalize("NFKC", s).casefold()
+
+
+_GOV = (frozenset(map(fold, GOVERNING_NAMES)), frozenset(map(fold, GOVERNING_DIRS)),
+        frozenset(map(fold, GOVERNING_ROOTS)), frozenset(map(fold, GOVERNING_FILES)))
+
+
+def governing(path: str) -> str:
+    """The governing rule <path> falls under, compared folded, or "". A path that only folds to
+    a governing one is governing too: the gate refuses the lookalike as well as the original."""
+    names, dirs, roots, files = _GOV
+    parts = [fold(p) for p in path.split("/")]
+    if parts[-1] in names:
+        return next(n for n in GOVERNING_NAMES if fold(n) == parts[-1])
+    for part in parts:
+        if part in dirs:
+            return next(f"{d}/" for d in GOVERNING_DIRS if fold(d) == part)
+    if parts[0] in roots:
+        return next(f"/{r}/**" for r in GOVERNING_ROOTS if fold(r) == parts[0])
+    if "/".join(parts) in files:
+        return next(f"/{f}" for f in GOVERNING_FILES if fold(f) == "/".join(parts))
+    return ""
+
+
 def path_problem(cls: dict, path: str) -> str:
-    for pat, rx in cls["fixed"]:
-        if rx.match(path):
-            return f"{path} (always excluded: {pat})"
+    rule = governing(path)
+    if rule:
+        return f"{path} (always excluded: {rule})"
     for pat, rx in cls["exclude"]:
-        if rx.match(path):
+        if rx.match(path) or rx.match(unicodedata.normalize("NFC", path)):
             return f"{path} (excluded: {pat})"
     if not any(rx.match(path) for _, rx in cls["allow"]):
         return f"{path} (not allowed)"
@@ -1285,6 +1465,9 @@ def print_class(cls: dict, root: Path | None = None) -> None:
     print(f"EXCLUDE: {' '.join(p for p, _ in cls['exclude']) or '(none)'}")
     print(f"ALWAYS EXCLUDED: {' '.join(FIXED_EXCLUDE)}")
     print(f"BLAST_RADIUS: {cls['ceiling']}")
+    print(f"CODE_OWNER: {cls['code_owner'] or '(none; the gate requires one)'}")
+    print(f"GATE_APP: {cls['gate_app'] or '(none; the gate requires one)'}")
+    print(f"ATTESTED: {cls['attested'] or '(none; the unattended land requires one)'}")
     for w in class_warnings(cls, root):
         print(w)
 
@@ -1342,6 +1525,122 @@ def diff_paths(root: Path, base: str, tip: str) -> list[str]:
     return [p for p in out.split("\0") if p]
 
 
+# GitHub's squash, as `git merge-tree` reproduces it (spec § 10.3 item 3, § 10.7 (8)). GitHub
+# does not detect directory renames and ignores `.gitattributes` merge drivers, so renames stay
+# file-level and attributes come from the empty tree. The rest of git's merge configuration is
+# fixed: `merge_tree` reads no global, system or repository config at all, and these pins sit on
+# top of git's defaults. The scratch `GIT_DIR` already reads no tree's `.gitattributes` (its HEAD
+# is unborn), and the allowlisted environment drops a caller's `GIT_ATTR_SOURCE`, whose
+# `merge=union` made a conflicting merge clean (measured, Phase 374's battery); the empty
+# `--attr-source` stays as § 10.3 specifies it. It replaces only the attribute source, though:
+# a user's attributes file (`core.attributesFile`, or
+# `~/.config/git/attributes` when that is unset) and the system one still apply, and a
+# `merge=union` line in either made a conflicting merge clean (measured, Phase 374), so both are
+# switched off.
+MERGE_PINS = ("-c", "merge.directoryRenames=false", "-c", "merge.renames=true",
+              "-c", "merge.renormalize=false", "-c", "core.ignorecase=false",
+              "-c", f"core.attributesFile={os.devnull}")
+LINK_MODES = ("120000", "160000")  # a symlink, a gitlink
+
+
+MERGE_ENV_KEEP = ("PATH", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR", "SYSTEMROOT")
+
+
+def merge_env() -> dict:
+    """The merge's whole environment, built from an allowlist. A denylist let a caller's
+    `GIT_COMMON_DIR` bring the repository's config and `info/attributes` back into the scratch
+    `GIT_DIR`, and `GIT_GRAFT_FILE` rewrite the history it merges (Phase 374's round 3)."""
+    env = {k: os.environ[k] for k in MERGE_ENV_KEEP if k in os.environ}
+    env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull, GIT_ATTR_NOSYSTEM="1",
+               GIT_NO_REPLACE_OBJECTS="1")
+    return env
+
+
+def pinned_git_env() -> dict:
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith("GIT_CONFIG") and k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")}
+    env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull, GIT_ATTR_NOSYSTEM="1")
+    return env
+
+
+def git_version(root: Path) -> tuple[int, int]:
+    _, out = git(root, "version")
+    m = re.search(r"(\d+)\.(\d+)", out)
+    return (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+
+
+def merge_tree(root: Path, tip: str, head: str) -> tuple[str, str]:
+    """("", tree) for GitHub's squash of <head> onto <tip>, or (why, "") when the merge does not
+    complete cleanly: a non-zero `merge-tree` exit is never read as a tree.
+
+    The merge runs in a throwaway, empty `GIT_DIR` whose object store is the repository's own
+    (`GIT_OBJECT_DIRECTORY`), so nothing configured in the repository reaches it: not
+    `merge.renameLimit` or `core.autocrlf` with `merge.renormalize` (each changed the result,
+    Phase 374's round 2), and not `$GIT_DIR/info/attributes`, which no setting switches off. The
+    global and system config are dropped too, and its environment is an allowlist (`merge_env`),
+    so the merge is git's defaults plus `MERGE_PINS`. The merged tree is written into the repository's store, where the callers
+    read it."""
+    have = git_version(root)
+    if have < GIT_FLOOR:
+        raise Fail(f"git {have[0]}.{have[1]} is older than {GIT_FLOOR[0]}.{GIT_FLOOR[1]}, which the "
+                   "merge result needs (`--attr-source`); install a newer git")
+    _, a = git(root, "rev-parse", "--verify", "--end-of-options", f"{tip}^{{commit}}")
+    _, b = git(root, "rev-parse", "--verify", "--end-of-options", f"{head}^{{commit}}")
+    _, objects = git(root, "rev-parse", "--path-format=absolute", "--git-path", "objects")
+    _, fmt = git(root, "rev-parse", "--show-object-format")
+    _, empty = git(root, "hash-object", "-t", "tree", os.devnull)
+    env = merge_env()
+    with tempfile.TemporaryDirectory(prefix="sysop-merge-") as tmp:
+        bare = Path(tmp) / "repo.git"
+        init = subprocess.run(["git", "init", "-q", "--bare", f"--object-format={fmt.strip()}",
+                               "--template=", str(bare)], capture_output=True, env=env)
+        if init.returncode != 0:
+            raise Fail(f"cannot create the scratch repository for the merge: {os.fsdecode(init.stderr).strip()}")
+        env.update(GIT_DIR=str(bare), GIT_OBJECT_DIRECTORY=objects.strip())
+        p = subprocess.run(["git", f"--attr-source={empty.strip()}", *MERGE_PINS,
+                            "merge-tree", "--write-tree", "--no-messages", a.strip(), b.strip()],
+                           capture_output=True, env=env, cwd=tmp)
+    if p.returncode != 0:
+        why = "conflicts" if p.returncode == 1 else os.fsdecode(p.stderr).strip() or f"exit {p.returncode}"
+        return f"does not merge cleanly onto {tip[:10]}: {why}", ""
+    tree = os.fsdecode(p.stdout).split("\n", 1)[0].strip()
+    if not re.fullmatch(r"[0-9a-f]{40,64}", tree):
+        return f"merge-tree printed no tree: {tree!r}", ""
+    return "", tree
+
+
+def tree_entries(root: Path, tip: str, tree: str) -> list[tuple[str, str, str]]:
+    """[(old mode, new mode, path), ...] for every path changed between <tip> and <tree>, with
+    `--no-renames`, so a deletion and both sides of a rename count."""
+    _, raw = git(root, "diff-tree", "-r", "-z", "--no-renames", "--raw", tip, tree)
+    fields = raw.split("\0")
+    entries = []
+    for meta, path in zip(fields[0::2], fields[1::2]):
+        if meta:
+            old, new = meta.lstrip(":").split()[:2]
+            entries.append((old, new, path))
+    return entries
+
+
+def merge_result(root: Path, tip: str, head: str) -> tuple[str, list[tuple[str, str, str]]]:
+    """("", entries) for every path GitHub's squash of <head> onto <tip> would change, or (why, [])
+    when it does not merge cleanly. Read from the merge result, not a merge-base diff, which
+    misses a path a criss-cross history hides (Phase 367, round 1, H5)."""
+    why, tree = merge_tree(root, tip, head)
+    return (why, []) if why else ("", tree_entries(root, tip, tree))
+
+
+def merge_problems(cls: dict, entries: list[tuple[str, str, str]]) -> list[str]:
+    """The merge result against the class: no symlink or gitlink on either side of any change,
+    and every path admitted (the governing set refused, compared folded)."""
+    out = [f"{path} is a symlink or gitlink (mode {old if old in LINK_MODES else new})"
+           for old, new, path in entries if old in LINK_MODES or new in LINK_MODES]
+    bad = paths_problems(cls, [path for _, _, path in entries])
+    if bad:
+        out.append("paths outside the class: " + "; ".join(bad))
+    return out
+
+
 def paths_problems(cls: dict, paths: list[str]) -> list[str]:
     bad = [b for b in (path_problem(cls, p) for p in paths) if b]
     if len(bad) > 5:
@@ -1354,8 +1653,10 @@ def cmd_class(root: Path) -> int:
     return 0
 
 
-def cmd_eligible(root: Path, default: str, agent: str, branches: list[str]) -> int:
-    """Half A's selection: one `IN` or `OUT` line per branch. An OUT branch is set aside."""
+def cmd_eligible(root: Path, default: str, agent: str, branches: list[str],
+                 held: bool = False) -> int:
+    """Half A's selection: one `IN` or `OUT` line per branch. An OUT branch is set aside.
+    With `held`, the unattended close's: a held branch at its held head is OUT too."""
     if not AGENT.fullmatch(agent):
         raise Refuse(f"not an agent name: {agent!r}")
     cls = read_class(root)
@@ -1367,9 +1668,13 @@ def cmd_eligible(root: Path, default: str, agent: str, branches: list[str]) -> i
     wts = worktrees(root)
     default_tasks = tasks_at(root, dtip)
     for branch in branches:
+        why_held = held_out(root, default, branch) if held else ""
         tip = ref_sha(root, "refs/heads/" + branch)
         if not tip:
             print(f"OUT {branch}: no such branch")
+            continue
+        if why_held:
+            print(f"OUT {branch}: {why_held}")
             continue
         mine = [p for p in locks if lock_branch(p) == branch]
         if not mine:
@@ -1412,11 +1717,14 @@ def cmd_eligible(root: Path, default: str, agent: str, branches: list[str]) -> i
                     b = b[len("refs/heads/"):]
                 if b == branch and pending_doc_hold.doc_hold(doc.fm):
                     problems.append(f"pending doc {d.name} carries hold:")
-        _, base = git(root, "merge-base", "refs/heads/" + default, tip)
-        paths = diff_paths(root, base.strip(), tip)
-        bad = paths_problems(cls, paths)
-        if bad:
-            problems.append("paths outside the class: " + "; ".join(bad))
+        # The merge result onto local <default>, as GitHub's squash would make it, not a
+        # merge-base diff (spec § 10.8): the gate reads the same, and a criss-cross hides a
+        # governing path from the merge-base diff.
+        why, entries = merge_result(root, dtip, tip)
+        if why:
+            problems.append(why)
+        problems += merge_problems(cls, entries)
+        paths = [p for _, _, p in entries]
         if problems:
             print(f"OUT {branch}: " + "; ".join(problems))
         else:
@@ -1453,41 +1761,16 @@ def park(run: Path, rec: dict, code: str, lines: list[str]) -> None:
     write_json(run / "handoff.json", rec)
 
 
-def unattended_class_problems(root: Path, run: Path, rec: dict, agent: str, base_oid: str) -> list[str]:
-    """The class re-read against what the PR merges: every path between the default branch's
-    live tip (which the caller has checked equals local origin) and the recorded head, every
-    kept task at the pushed-from commit and at the head, its lock's owner, and no held doc.
-    The pushed-from commit is local <default>, which the agent's own unpushed commits can have
-    written (round 3): one reason this land is not enabled. The class is read from that tip's CLAUDE.md, which an unattended
-    merge can never change, not from the working tree. A stale ref is not used: an older merge
-    base can hide a branch reverting a file to its older content."""
+def handoff_problems(root: Path, run: Path, rec: dict, agent: str) -> list[str]:
+    """What only the client can read, so the gate cannot decide it (spec § 10.5): the hand-off
+    kept a task lock, each kept lock still reads this agent, and report.md names no held-doc
+    branch (`hold:` is frontmatter on a gitignored pending doc, which GitHub never sees). Paths,
+    task fields and the reader's verdict are the gate's (Phase 375, Wade: the client stops
+    deciding what the gate decides)."""
     out: list[str] = []
-    head = rec["head"]
-    origin = base_oid
-    try:
-        cls = read_class(root, rev=origin)
-    except Refuse as e:
-        return [str(e)]
-    if not ref_sha(root, head):
-        return [f"the recorded head {head} is not in this repository"]
-    _, base = git(root, "merge-base", origin, head)
-    bad = paths_problems(cls, diff_paths(root, base.strip(), head))
-    if bad:
-        out.append("paths outside the class: " + "; ".join(bad))
     if not rec["kept_locks"]:
         out.append("the hand-off kept no task lock, so no task of this agent's is in it")
-    tasks = tasks_at(root, head)
-    have_pushed = bool(ref_sha(root, rec["pushed_from"]))
-    pushed = tasks_at(root, rec["pushed_from"]) if have_pushed else None
-    if not have_pushed:
-        out.append(f"the pushed-from commit {rec['pushed_from'][:10]} is not in this repository")
-    elif tasks is None or pushed is None:
-        out.append("tasks/index.yml at the head or at the pushed-from commit cannot be read "
-                   "(a parse failure, or one id named twice)")
     for tid in rec["kept_locks"]:
-        if tasks is not None and pushed is not None:
-            out += [f"at the pushed-from commit: {p}" for p in task_problems(cls, tid, pushed.get(tid))]
-            out += [f"at the head: {p}" for p in task_problems(cls, tid, tasks.get(tid))]
         lock = root / "sysop" / "runtime" / "locks" / f"{tid}.lock"
         if not lock.is_file():
             out.append(f"{tid}'s kept lock is gone")
@@ -1504,8 +1787,151 @@ def unattended_class_problems(root: Path, run: Path, rec: dict, agent: str, base
     return out
 
 
+GATE_CHECK = "sysop/close-gate"  # the check `close_gate.py` posts, and the ruleset pins
+GATE_ENVIRONMENT = "sysop-close-gate"  # the environment the gate workflow's job names
+
+
+def setup_problems(root: Path, cls: dict, default: str) -> list[str]:
+    """§ 10.3's server setup, read with the token `gh` holds (the machine user's), before any
+    unattended merge. Each read a `write` token can make was measured at Phase 375 on the scratch
+    repository; what it cannot read (whose credentials the secrets hold, and
+    `can_approve_pull_request_reviews`, a 404) is the human's attestation. Any read that fails
+    is a problem: the land does not merge on a setup it could not see."""
+    out: list[str] = []
+    for key, why in (("code_owner", "the human whose approval is the escape hatch"),
+                     ("gate_app", "the app the ruleset pins the gate's check to"),
+                     ("attested", "the date a human attested the secrets and workflow-approval "
+                                  "settings (WORKFLOW.md § Unattended close gate)")):
+        if not cls[key]:
+            out.append(f"`## {CLASS_TITLE}` names no {key}: ({why})")
+    # A day's grace: a human east of UTC writes a date UTC has not reached yet.
+    if cls["attested"] and cls["attested"] > (utcnow() + datetime.timedelta(days=1)).strftime("%Y-%m-%d"):
+        out.append(f"`## {CLASS_TITLE}`: attested {cls['attested']} is in the future")
+
+    def read(what: str, *args: str):
+        try:
+            return gh_json(root, *args)
+        except Fail as e:
+            out.append(f"cannot read {what}: {e}")
+            return None
+
+    me = read("the token's user", "api", "user")
+    login = me.get("login") if isinstance(me, dict) else None
+    if isinstance(me, dict) and not isinstance(login, str):
+        out.append("the token's user has no login")
+    if isinstance(login, str):
+        if cls["code_owner"] and fold(login) == fold(cls["code_owner"]):
+            out.append(f"gh is authenticated as the code owner {login}: the unattended land runs "
+                       "as a separate machine user (§ 10.3 item 1)")
+        perm = read("the token's permission",
+                    "api", f"repos/{{owner}}/{{repo}}/collaborators/{login}/permission")
+        role = perm.get("role_name") if isinstance(perm, dict) else None
+        if perm is not None and role != "write":
+            out.append(f"{login}'s role on the repository is {role!r}, not 'write': an admin or "
+                       "maintainer can change the rules this land relies on")
+    try:
+        rules = gh_list(root, f"repos/{{owner}}/{{repo}}/rules/branches/{default}")
+    except Fail as e:
+        out.append(f"cannot read the rules on {default}: {e}")
+        return out
+    rules = [r for r in rules if isinstance(r, dict)]
+
+    def params(kind: str) -> list[dict]:
+        return [r["parameters"] for r in rules
+                if r.get("type") == kind and isinstance(r.get("parameters"), dict)]
+
+    pr_rules = params("pull_request")
+    if not any(p.get("require_code_owner_review") is True and p.get("dismiss_stale_reviews_on_push") is True
+               for p in pr_rules):
+        out.append(f"no ruleset on {default} requires a pull request with code-owner review and "
+                   "stale-review dismissal")
+    if any(p.get("require_last_push_approval") is True for p in pr_rules):
+        out.append(f"a ruleset on {default} requires last-push approval, which refuses every "
+                   "unattended merge (§ 10.7 (1))")
+    pinned = [c for p in params("required_status_checks")
+              if p.get("strict_required_status_checks_policy") is True
+              for c in (p.get("required_status_checks") or []) if isinstance(c, dict)]
+    if not any(c.get("context") == GATE_CHECK and str(c.get("integration_id")) == cls["gate_app"]
+               for c in pinned):
+        out.append(f"no ruleset on {default} requires {GATE_CHECK} from app {cls['gate_app'] or '?'} "
+                   "with strict status checks")
+    ids = sorted({r.get("ruleset_id") for r in rules if isinstance(r.get("ruleset_id"), int)})
+    if not ids:
+        out.append(f"no ruleset applies to {default}")
+    for rid in ids:
+        rs = read(f"ruleset {rid}", "api", f"repos/{{owner}}/{{repo}}/rulesets/{rid}")
+        can = rs.get("current_user_can_bypass") if isinstance(rs, dict) else None
+        if rs is not None and can != "never":
+            out.append(f"this token can bypass ruleset {rid} ({can!r}); anything but 'never' "
+                       "refuses (§ 10.3 item 1)")
+    env = read(f"the {GATE_ENVIRONMENT} environment",
+               "api", f"repos/{{owner}}/{{repo}}/environments/{GATE_ENVIRONMENT}")
+    if env is not None:
+        policy = env.get("deployment_branch_policy") if isinstance(env, dict) else None
+        if policy != {"protected_branches": False, "custom_branch_policies": True}:
+            out.append(f"the {GATE_ENVIRONMENT} environment is not set to selected branches "
+                       f"({policy!r}): a branch workflow could sign the gate's check")
+        else:
+            pols = read(f"the {GATE_ENVIRONMENT} environment's branch rules", "api",
+                        f"repos/{{owner}}/{{repo}}/environments/{GATE_ENVIRONMENT}/deployment-branch-policies")
+            got = [(p.get("name"), p.get("type", "branch")) for p in
+                   (pols.get("branch_policies") or [] if isinstance(pols, dict) else []) if isinstance(p, dict)]
+            if pols is not None and got != [(default, "branch")]:
+                out.append(f"the {GATE_ENVIRONMENT} environment's branch rules are {got!r}, not "
+                           f"exactly one branch rule naming {default}")
+    return out
+
+
+def gate_reading(root: Path, head: str, app: str) -> tuple[str, str]:
+    """(wait, red) for the gate's check on <head>, read from the check runs of app <app> alone:
+    a run of the same name from any other app is ignored, as the ruleset's pin ignores it. The
+    newest of the app's runs decides; an unreadable answer waits, so it parks at the timeout."""
+    try:
+        data = gh_json(root, "api", f"repos/{{owner}}/{{repo}}/commits/{head}/check-runs"
+                       f"?check_name={quote(GATE_CHECK, safe='')}&filter=all&per_page=100")
+    except Fail as e:
+        return f"cannot read {GATE_CHECK}'s check runs: {e}", ""
+    runs = data.get("check_runs") if isinstance(data, dict) else None
+    if not isinstance(runs, list):
+        return f"{GATE_CHECK}'s check runs did not read as a list", ""
+    mine = [r for r in runs if isinstance(r, dict) and isinstance(r.get("app"), dict)
+            and str(r["app"].get("id")) == app and r.get("name") == GATE_CHECK]
+    others = len([r for r in runs if isinstance(r, dict)]) - len(mine)
+    note = f" ({others} run(s) of that name from another app, ignored)" if others else ""
+    if not mine:
+        return f"no {GATE_CHECK} check from app {app} on the head yet{note}", ""
+    last = max(mine, key=lambda r: (str(r.get("started_at") or ""), r.get("id") or 0))
+    if last.get("status") != "completed":
+        return f"{GATE_CHECK} from app {app} is {last.get('status')}{note}", ""
+    if last.get("conclusion") != "success":
+        title = (last.get("output") or {}).get("title") if isinstance(last.get("output"), dict) else ""
+        return "", f"{GATE_CHECK} from app {app} concluded {last.get('conclusion')}: {title or '(no title)'}"
+    return "", ""
+
+
+def disable_auto(root: Path, pr: str) -> str:
+    try:
+        gh(root, "pr", "merge", pr, "--disable-auto")
+        return "auto-merge turned off"
+    except Fail as e:
+        return f"auto-merge could not be turned off ({e}): a human turns it off on GitHub"
+
+
+def disarm(root: Path, rec: dict) -> str:
+    """Turn auto-merge off and forget this land's arm; the record is the caller's to write. A
+    failure keeps `armed`, so the next park, unpark or re-request tries again."""
+    note = disable_auto(root, rec["pr"])
+    if note == "auto-merge turned off":
+        rec.pop("armed", None)
+    return note
+
+
+PR_FIELDS_UNATTENDED = PR_FIELDS + ",mergeStateStatus,autoMergeRequest,statusCheckRollup"
+
+
 def cmd_land_unattended(root: Path, run_id: str, default: str, agent: str) -> int:
     run, rec = open_handoff(root, run_id, default)
+    refuse_if_stopped(root)
     if rec["status"] not in ("awaiting", "request-failed", "requesting"):
         raise Refuse(f"hand-off {run_id} is {rec['status']}: nothing to land")
     if not rec.get("sealed"):
@@ -1528,10 +1954,18 @@ def cmd_land_unattended(root: Path, run_id: str, default: str, agent: str) -> in
         print(f"PARKED: {parked.get('code')} at {parked.get('at')}; a human clears it")
         for line in parked["lines"]:
             print(f"READER: {line}")
+        if rec.get("armed"):  # a park whose disarm failed: try again, or GitHub merges it
+            note = disarm(root, rec)
+            write_json(run / "handoff.json", rec)
+            print(f"READER: {note}")
         print("VERDICT: PARK")
         return 4
+    data: dict = {}
 
     def stop(code: str, lines: list[str]) -> int:
+        # An armed PR would merge while parked: the park turns auto-merge off first.
+        if data.get("autoMergeRequest") or rec.get("armed"):
+            lines = lines + [disarm(root, rec)]
         park(run, rec, code, lines)
         for line in lines:
             print(f"READER: {line}")
@@ -1539,14 +1973,34 @@ def cmd_land_unattended(root: Path, run_id: str, default: str, agent: str) -> in
         print("VERDICT: PARK")
         return 4
 
-    data = pr_view(root, rec["pr"])
-    state = data.get("state")
-    if state == "MERGED":
+    def wait(what: str) -> int:
+        """Wait on the hand-off's clock (ruling (q)), counted from the first land that waited;
+        park at the timeout, so no wait is forever (Phase 366's round 3)."""
+        since = parse_time(rec.get("checks_waiting_since"))
+        if since is None:
+            since = utcnow()
+            rec["checks_waiting_since"] = since.strftime("%Y-%m-%dT%H:%M:%SZ")
+            write_json(run / "handoff.json", rec)
+        deadline = since + datetime.timedelta(seconds=timeout_seconds(rec["timeout"]) or 0)
+        if utcnow() > deadline:
+            return stop("checks", [f"{what} at {deadline.strftime('%Y-%m-%dT%H:%M:%SZ')} (counting "
+                                   f"from {rec['checks_waiting_since']}, timeout {rec['timeout']})"])
+        print(f"READER: {what}; parks at {deadline.strftime('%Y-%m-%dT%H:%M:%SZ')}")
+        print("VERDICT: WAIT")
+        return 5
+
+    def merged(data: dict) -> int:
         if data.get("headRefOid") != rec["head"]:
-            print(f"READER: merged at {data.get('headRefOid')}, not the recorded head {rec['head']}: "
-                  "merged outside this gate, by someone, unread by the second reader")
+            print(f"MERGED ELSEWHERE: merged at {data.get('headRefOid')}, not the recorded head "
+                  f"{rec['head']}: GitHub's rules passed a head this land never checked")
         print("VERDICT: ALREADY MERGED")
         return 0
+
+    data = gh_json(root, "pr", "view", rec["pr"], "--json", PR_FIELDS_UNATTENDED)
+    data = data if isinstance(data, dict) else {}
+    state = data.get("state")
+    if state == "MERGED":
+        return merged(data)
     if rec["status"] != "awaiting":
         return stop("reader", [f"the hand-off is {rec['status']}: no review was requested"])
     problems = []
@@ -1562,10 +2016,15 @@ def cmd_land_unattended(root: Path, run_id: str, default: str, agent: str) -> in
         problems.append(f"the PR's head is {data.get('headRefOid')}, not the recorded {rec['head']}")
     if problems:
         return stop("pr-state", problems)
-    # The tip the squash lands on, as GitHub has it now. The PR's `baseRefOid` is the base as of
-    # the PR's last head update, which can lag this (round 2), and a class change a human pushes
-    # in the gap must count. Local origin must be that tip, or the diff
-    # and the class would be read at another commit.
+    auto = data.get("autoMergeRequest")
+    armed = rec.get("armed") if isinstance(rec.get("armed"), dict) else None
+    if auto and not (armed and armed.get("head") == rec["head"]):
+        who = (auto.get("enabledBy") or {}).get("login") if isinstance(auto, dict) else None
+        method = auto.get("mergeMethod") if isinstance(auto, dict) else None
+        return stop("pr-state", [f"auto-merge is on, turned on by {who or '(unknown)'} ({method or '?'}), "
+                                 "not by this land at the recorded head"])
+    # The class is read at the default branch's live tip, as GitHub has it, which an unattended
+    # merge cannot have changed (`CLAUDE.md` is governing). Local origin must be that tip.
     default = rec["default_branch"]
     ref = gh_json(root, "api", f"repos/{{owner}}/{{repo}}/git/ref/heads/{default}")
     tip = str(ref.get("object", {}).get("sha") or "") if isinstance(ref, dict) \
@@ -1574,70 +2033,101 @@ def cmd_land_unattended(root: Path, run_id: str, default: str, agent: str) -> in
         return stop("pr-state", [f"GitHub reported no tip for {default}: {tip!r}"])
     local_origin = ref_sha(root, "refs/remotes/origin/" + default)
     if local_origin != tip:
-        print(f"READER: origin/{default} here is {local_origin[:10] or 'absent'} and GitHub's is "
-              f"{tip[:10]}; fetch origin {default} and land again")
-        print("VERDICT: WAIT")
-        return 5
-    problems = unattended_class_problems(root, run, rec, agent, tip)
+        return wait(f"origin/{default} here is {local_origin[:10] or 'absent'} and GitHub's is "
+                    f"{tip[:10]}; fetch origin {default} and land again")
+    try:
+        cls = read_class(root, rev=tip)
+    except Refuse as e:
+        return stop("class", [str(e)])
+    problems = handoff_problems(root, run, rec, agent)
     if problems:
         return stop("class", ["outside the unattended class: " + p for p in problems])
-    # Step 6's two conditions, read before the merge (Wade, round 1): after it the hand-off is
+    # Step 6's two conditions, read before the merge (ruling (r)): after it the hand-off is
     # gone and a stop strands local <default>. Both are local reads.
     _, dirty = git(root, "diff", "--name-only", "HEAD", "--")
     if dirty.strip():
         return stop("dirty", ["the main checkout has uncommitted changes to tracked files, which "
                               "Step 6's reset would discard: " + ", ".join(dirty.split()[:10])])
-    local = ref_sha(root, "refs/heads/" + rec["default_branch"])
+    local = ref_sha(root, "refs/heads/" + default)
     if not local:
-        return stop("hard-fail", [f"local {rec['default_branch']} does not resolve"])
-    _, after = git(root, "rev-list", f"{rec['pushed_from']}..{local}",
-                   "^refs/remotes/origin/" + rec["default_branch"])
+        return stop("hard-fail", [f"local {default} does not resolve"])
+    if not ref_sha(root, rec["pushed_from"]):
+        return stop("hard-fail", [f"the pushed-from commit {rec['pushed_from'][:10]} is not in this repository"])
+    _, after = git(root, "rev-list", f"{rec['pushed_from']}..{local}", "^refs/remotes/origin/" + default)
     if after.split():
-        return stop("after-push", [f"local {rec['default_branch']} has {len(after.split())} commit(s) "
+        return stop("after-push", [f"local {default} has {len(after.split())} commit(s) "
                                    f"made after the push, which Step 6's reset would drop: "
                                    + ", ".join(c[:10] for c in after.split()[:10])])
-    verdict, lines = reader_verdict(
-        rec,
-        gh_list(root, f"repos/{{owner}}/{{repo}}/pulls/{rec['pr']}/reviews"),
-        gh_list(root, f"repos/{{owner}}/{{repo}}/pulls/{rec['pr']}/comments"),
-        gh_list(root, f"repos/{{owner}}/{{repo}}/issues/{rec['pr']}/comments"),
-        gh_list(root, f"repos/{{owner}}/{{repo}}/issues/{rec['pr']}/reactions"),
-        utcnow())
-    if verdict == "park":
-        return stop("reader", lines)
-    for line in lines:
-        print(f"READER: {line}")
-    if verdict == "wait":
-        print("VERDICT: WAIT")
-        return 5
-    # Checks: command 4b's count, read here so a count of 0 waits instead of stopping. The
-    # clock starts at the first land that read the reviewer clean and counted none, and runs
-    # for the hand-off's timeout: registration latency gets a whole window of its own.
-    roll = gh_json(root, "pr", "view", rec["pr"], "--json", "statusCheckRollup")
-    checks = roll.get("statusCheckRollup") if isinstance(roll, dict) else None
+    problems = setup_problems(root, cls, default)
+    if problems:
+        return stop("setup", ["the server setup: " + p for p in problems])
+    # Every registered check must pass before the merge is armed (ruling (s), kept by Wade at
+    # Phase 375): once armed, GitHub merges on the required checks alone. A count of 0, or a
+    # check still running, waits on the hand-off's clock (ruling (q)). The gate is left out of
+    # the rollup's judgement: it leaves its superseded runs `in_progress` (each run opens one
+    # before it evaluates), which `check_states` would read as running for good, and a run of
+    # its name from another app is no reading at all. `gate_reading` decides it, newest first.
+    checks = data.get("statusCheckRollup")
     checks = checks if isinstance(checks, list) else []
-    count = len(checks)
-    failed, pending = check_states(checks)
+    failed, pending = check_states([c for c in checks if not (
+        isinstance(c, dict) and GATE_CHECK in (c.get("name"), c.get("context")))])
     if failed:
         return stop("checks", [f"a check did not pass: {f}" for f in failed])
-    if count == 0 or pending:
-        since = parse_time(rec.get("checks_waiting_since"))
-        if since is None:
-            since = utcnow()
-            rec["checks_waiting_since"] = since.strftime("%Y-%m-%dT%H:%M:%SZ")
-            write_json(run / "handoff.json", rec)
-        deadline = since + datetime.timedelta(seconds=timeout_seconds(rec["timeout"]) or 0)
-        what = (f"{len(pending)} check(s) still running: {', '.join(pending[:5])}" if pending
-                else "no check registered on the PR")
-        if utcnow() > deadline:
-            return stop("checks", [f"{what} at {deadline.strftime('%Y-%m-%dT%H:%M:%SZ')} (counting "
-                                   f"from {rec['checks_waiting_since']}, timeout {rec['timeout']})"])
-        print(f"READER: {what}; parks at {deadline.strftime('%Y-%m-%dT%H:%M:%SZ')}")
-        print("VERDICT: WAIT")
-        return 5
-    print(f"CHECKS: {count}")
-    print("VERDICT: MERGE")
-    return 0
+    # The rollup names no app, and a branch workflow can post a green `sysop/close-gate` as
+    # `github-actions` (measured, Phase 375's R1), so the gate's reading is taken from its own
+    # app's check runs on the head, as the ruleset's pin takes it.
+    gate_wait, gate_red = gate_reading(root, rec["head"], cls["gate_app"])
+    if gate_red:
+        return stop("gate-red", [gate_red])
+    if not checks or pending or gate_wait:
+        return wait(f"{len(pending)} check(s) still running: {', '.join(pending[:5])}" if pending
+                    else "no check registered on the PR" if not checks
+                    else gate_wait)
+    print(f"CHECKS: {len(checks)}")
+    merge_state = data.get("mergeStateStatus")
+    if merge_state == "BEHIND":
+        return stop("pr-state", [f"the PR is behind {default}, which strict status checks refuse; "
+                                 "a human updates it and re-requests the review"])
+    if merge_state == "DIRTY":
+        return stop("conflict", [f"the PR does not merge cleanly onto {default}"])
+    if not data.get("autoMergeRequest"):
+        # `--auto` on a PR GitHub would merge now merges at once (measured, Phase 375: P2); on one
+        # still waiting it arms. `--delete-branch` is not passed: with `--auto` it deleted nothing
+        # (P3), so Step 6 deletes the branch.
+        try:
+            gh(root, "pr", "merge", rec["pr"], "--auto", "--squash", "--match-head-commit", rec["head"])
+        except Fail as e:
+            # The call can fail after GitHub turned auto-merge on (a lost reply), so read the PR
+            # again: `stop` turns off whatever it shows (lens 2, Phase 375's round 1).
+            try:
+                again = gh_json(root, "pr", "view", rec["pr"], "--json", PR_FIELDS_UNATTENDED)
+                data = again if isinstance(again, dict) else data
+            except Fail:
+                rec["armed"] = {"head": rec["head"], "at": utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                                "unconfirmed": True}
+            if data.get("state") == "MERGED":
+                return merged(data)
+            return stop("hard-fail", [f"enabling auto-merge failed: {e}"])
+        rec["armed"] = {"head": rec["head"], "at": utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")}
+        write_json(run / "handoff.json", rec)
+        data = gh_json(root, "pr", "view", rec["pr"], "--json", PR_FIELDS_UNATTENDED)
+        data = data if isinstance(data, dict) else {}
+        if data.get("state") == "MERGED":
+            return merged(data)
+        if not data.get("autoMergeRequest"):
+            return stop("hard-fail", ["gh reported auto-merge enabled, but the PR shows none and "
+                                      "is not merged"])
+    armed = rec.get("armed") if isinstance(rec.get("armed"), dict) else {}
+    since = parse_time(armed.get("at")) or utcnow()
+    deadline = since + datetime.timedelta(seconds=timeout_seconds(rec["timeout"]) or 0)
+    if utcnow() > deadline:
+        return stop("checks", [f"armed at {armed.get('at')} and not merged by "
+                               f"{deadline.strftime('%Y-%m-%dT%H:%M:%SZ')} (mergeStateStatus "
+                               f"{merge_state}): GitHub is waiting on something only a human can give"])
+    print(f"READER: auto-merge is on (mergeStateStatus {merge_state}); GitHub merges when its rules "
+          f"pass; parks at {deadline.strftime('%Y-%m-%dT%H:%M:%SZ')}")
+    print("VERDICT: ARMED")
+    return 5
 
 
 # GitHub's CheckConclusionState and StatusState, read 2026-10-08 by GraphQL introspection.
@@ -1686,8 +2176,13 @@ def cmd_park(root: Path, run_id: str, code: str, reason: str) -> int:
         raise Refuse(f"not a park code: {code!r} (one of {', '.join(PARK_CODES)})")
     if not reason.strip():
         raise Refuse("a park needs its reason")
-    park(run, rec, code, [reason.strip()])
+    lines = [reason.strip()]
+    if rec.get("armed"):
+        lines.append(disarm(root, rec))
+    park(run, rec, code, lines)
     print(f"PARKED: {run_id} ({code})")
+    for line in lines[1:]:
+        print(f"READER: {line}")
     return 0
 
 
@@ -1700,13 +2195,156 @@ def cmd_unpark(root: Path, run_id: str) -> int:
                      f"would park again; run `close_run.py re-request {run_id} <default branch>`")
     (run / "PARKED").unlink()
     rec.pop("checks_waiting_since", None)
+    note = disarm(root, rec) if rec.get("armed") else ""
     write_json(run / "handoff.json", rec)
     print(f"UNPARKED: {run_id}")
+    if note:
+        print(f"READER: {note}")
     return 0
 
 
+# ---------------------------------------------------------------------------------------------
+# Half A with no human (`Q-664`, Phase 380; spec § 13): the durable stop and the branch hold.
+# ---------------------------------------------------------------------------------------------
+
+RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[0-9a-f]{4}")
+
+
+def holds_dir(root: Path) -> Path:
+    return runs_dir(root) / "holds"
+
+
+def hold_path(root: Path, branch: str) -> Path:
+    return holds_dir(root) / (quote(branch, safe="") + ".json")
+
+
+def stamp_now() -> str:
+    return utcnow().strftime("%Y%m%dT%H%M%SZ")
+
+
+def cmd_stop(root: Path, run_id: str, step: str, reason: str, locks: list[str]) -> int:
+    if not RUN_ID.fullmatch(run_id):
+        raise Refuse(f"not a run id: {run_id!r}")
+    # Step 4c prints `LOCKS_KEPT: (none)` when it kept none. Anything else that is not a task id
+    # is recorded as given, never refused: a refusing stop would leave the close unguarded.
+    locks = [t for t in locks if t != "(none)"]
+    odd = [t for t in locks if not TASK_ID.fullmatch(t)]
+    locks = [t for t in locks if TASK_ID.fullmatch(t)]
+    run = runs_dir(root) / run_id
+    run.mkdir(parents=True, exist_ok=True)
+    rec = {"run_id": run_id, "step": step.strip(), "reason": reason.strip(),
+           "locks_kept": locks, "at": utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")}
+    if odd:
+        rec["locks_unparsed"] = odd
+    marker = run / "STOPPED"
+    if marker.exists():
+        prior = read_stopped(marker)
+        rec["earlier"] = [prior] + list(prior.pop("earlier", []) or [])
+    write_json(marker, rec)
+    print(f"STOPPED: {run_id} at {rec['step']}")
+    print(f"MARKER: {marker}")
+    return 0
+
+
+def read_stopped(marker: Path) -> dict:
+    try:
+        rec = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError):
+        rec = None
+    if not isinstance(rec, dict):
+        return {"step": "?", "reason": f"{marker} cannot be read", "locks_kept": []}
+    return rec
+
+
+def cmd_clear(root: Path, run_id: str) -> int:
+    if not RUN_ID.fullmatch(run_id):
+        raise Refuse(f"not a run id: {run_id!r}")
+    marker = runs_dir(root) / run_id / "STOPPED"
+    if not marker.exists():
+        raise Refuse(f"run {run_id} has no STOPPED marker")
+    kept = marker.with_name(f"STOPPED.cleared-{stamp_now()}")
+    n = 1
+    while kept.exists():  # two clears in one second keep both records
+        n += 1
+        kept = marker.with_name(f"STOPPED.cleared-{stamp_now()}-{n}")
+    os.replace(marker, kept)
+    print(f"CLEARED: {run_id} (kept as {kept.name})")
+    return 0
+
+
+def cmd_hold(root: Path, run_id: str, branch: str, reason: str) -> int:
+    if not RUN_ID.fullmatch(run_id):
+        raise Refuse(f"not a run id: {run_id!r}")
+    if not reason.strip():
+        raise Refuse("a hold needs its reason")
+    head = ref_sha(root, "refs/heads/" + branch) if branch and not branch.startswith("<") else ""
+    if not head:
+        raise Refuse(f"branch {branch!r} does not exist")
+    holds_dir(root).mkdir(parents=True, exist_ok=True)
+    write_json(hold_path(root, branch), {
+        "branch": branch, "head": head, "reason": reason.strip(), "run_id": run_id,
+        "at": utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")})
+    print(f"HELD: {branch} at {head[:12]}")
+    return 0
+
+
+def read_hold(p: Path) -> dict | None:
+    try:
+        rec = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError):
+        return None
+    if not isinstance(rec, dict) or not all(isinstance(rec.get(k), str)
+                                            for k in ("branch", "head", "reason")):
+        return None
+    if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", rec["head"]):
+        return None  # an empty or damaged head must hold, not read as "moved"
+    return rec
+
+
+def cmd_unhold(root: Path, branch: str, note: str) -> int:
+    p = hold_path(root, branch)
+    if not p.exists():
+        raise Refuse(f"branch {branch!r} is not held")
+    rec = read_hold(p) or {"branch": branch, "unreadable": True}
+    rec["cleared"] = {"at": utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"), "note": note.strip()}
+    kept = p.with_name(f"{p.name}.cleared-{stamp_now()}")
+    write_json(kept, rec)
+    p.unlink()
+    print(f"UNHELD: {branch}")
+    return 0
+
+
+def held_out(root: Path, default: str, branch: str) -> str:
+    """The `OUT` reason for a held branch whose tip is the held head, or "". A hold whose
+    branch moved, merged into <default> or is gone is removed here, with a `NOTE:` line."""
+    p = hold_path(root, branch)
+    if not p.exists():
+        return ""
+    rec = read_hold(p)
+    if rec is None:
+        return f"held: {p} cannot be read (a human: fix or `close_run.py unhold {branch}`)"
+    tip = ref_sha(root, "refs/heads/" + branch)
+    why = ("is gone" if not tip else
+           f"moved to {tip[:12]}" if tip != rec["head"] else
+           f"is merged into {default}" if is_ancestor(root, tip, "refs/heads/" + default) else
+           "landed in a recorded PR head" if git(root, "for-each-ref", "--contains", tip,
+                                                  "--format=%(refname)", "refs/sysop/merged-pr-heads/",
+                                                  ok=(0, 1, 129))[1].strip() else "")
+    if why:
+        p.with_name(f"{p.name}.cleared-{stamp_now()}").write_text(
+            json.dumps({**rec, "cleared": {"why": why}}, indent=2) + "\n", encoding="utf-8")
+        p.unlink()
+        print(f"NOTE: {branch}'s hold is cleared: the branch {why}")
+        return ""
+    return f"held at {rec['head'][:12]}: {rec['reason']}"
+
+
 def main(argv: list[str]) -> int:
-    usage = ("usage: close_run.py begin <default-branch> [<branch>...] | finish <run-id> | "
+    # `merge_env` ignores `refs/replace/*`; so must every other read, or the base read and the
+    # merge diverge (Phase 374's round 4, the client half of round 3's finding).
+    os.environ["GIT_NO_REPLACE_OBJECTS"] = "1"
+    usage = ("usage: close_run.py begin <default-branch> [--agent <name>] [<branch>...] | "
+             "finish <run-id> | resumable [--agent <name>] | "
              "load <run-id> <default-branch> | check <run-id> <default-branch> | "
              "consume <run-id> [--restore-2b] | reader | class | "
              "eligible <default-branch> <agent> [<branch>...] | "
@@ -1714,7 +2352,9 @@ def main(argv: list[str]) -> int:
              "[--agent <name>] | "
              "seal <run-id> | land-check <run-id> <default-branch> [--unattended <agent>] | "
              "re-request <run-id> <default-branch> | landed <run-id> | abandon <run-id> | "
-             "park <run-id> <code> <reason> | unpark <run-id>")
+             "park <run-id> <code> <reason> | unpark <run-id> | "
+             "stop <run-id> <step> <reason> [--locks-kept <id>...] | clear <run-id> | "
+             "hold <run-id> <branch> <reason> | unhold <branch> [<note>]")
     if not argv:
         print(usage, file=sys.stderr)
         return 3
@@ -1722,7 +2362,11 @@ def main(argv: list[str]) -> int:
     try:
         root = main_root()
         if cmd == "begin" and rest:
+            if rest[1:2] == ["--agent"] and len(rest) >= 3:
+                return cmd_begin(root, rest[0], rest[3:], agent=rest[2])
             return cmd_begin(root, rest[0], rest[1:])
+        if cmd == "resumable" and (not rest or (len(rest) == 2 and rest[0] == "--agent")):
+            return cmd_resumable(root, rest[1] if rest else "")
         if cmd == "finish" and len(rest) == 1:
             return cmd_finish(root, rest[0])
         if cmd in ("load", "check") and len(rest) == 2:
@@ -1733,8 +2377,9 @@ def main(argv: list[str]) -> int:
             return cmd_reader(root)
         if cmd == "class" and not rest:
             return cmd_class(root)
-        if cmd == "eligible" and len(rest) >= 2:
-            return cmd_eligible(root, rest[0], rest[1], rest[2:])
+        if cmd == "eligible" and len(rest) >= 2 and rest[2:].count("--held") <= 1:
+            names = [b for b in rest[2:] if b != "--held"]
+            return cmd_eligible(root, rest[0], rest[1], names, held="--held" in rest[2:])
         if cmd == "hand-off" and len(rest) >= 4:
             opts, keep, agent = rest[4:], False, ""
             while opts:
@@ -1751,13 +2396,21 @@ def main(argv: list[str]) -> int:
                     "unpark": cmd_unpark}[cmd](root, rest[0])
         if cmd == "land-check" and len(rest) == 4 and rest[2] == "--unattended":
             if not UNATTENDED_LAND_ENABLED:
-                raise Refuse("the unattended land is not enabled (Q-411): land this hand-off "
+                raise Refuse("the unattended land is switched off (UNATTENDED_LAND_ENABLED): land this hand-off "
                              f"attended, with /review-close --land {rest[0]}")
             return cmd_land_unattended(root, rest[0], rest[1], rest[3])
         if cmd in ("land-check", "re-request") and len(rest) == 2:
             return (cmd_land_check if cmd == "land-check" else cmd_re_request)(root, rest[0], rest[1])
         if cmd == "park" and len(rest) == 3:
             return cmd_park(root, *rest)
+        if cmd == "stop" and len(rest) >= 3 and (len(rest) == 3 or rest[3] == "--locks-kept"):
+            return cmd_stop(root, rest[0], rest[1], rest[2], rest[4:])
+        if cmd == "clear" and len(rest) == 1:
+            return cmd_clear(root, rest[0])
+        if cmd == "hold" and len(rest) == 3:
+            return cmd_hold(root, *rest)
+        if cmd == "unhold" and len(rest) in (1, 2):
+            return cmd_unhold(root, rest[0], rest[1] if len(rest) == 2 else "")
     except Refuse as e:
         print(f"REFUSED: {e}", file=sys.stderr)
         return 2

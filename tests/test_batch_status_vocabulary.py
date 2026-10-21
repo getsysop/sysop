@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from skill_runner_text import runner_texts
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SKILLS_DIR = REPO_ROOT / "core" / "skills"
@@ -157,13 +158,14 @@ def test_no_skill_knows_one_twin_without_the_other():
     both. A reader aware of only one twin is the seed of the next stranding — that is
     how all four Q-014 gaps started."""
     offenders = []
-    for f in sorted(SKILLS_DIR.glob("*/SKILL.md")):
-        text = f.read_text(encoding="utf-8")
+    # Per skill, not per file (Phase 384): a skill whose core names one twin and whose
+    # step file names the other knows both.
+    for name, text in runner_texts(SKILLS_DIR).items():
         has_live = "Review Ready" in text
         # Count terminal mentions that are NOT the substring inside "Review Ready".
         has_terminal = "Ready for Review" in text
         if has_live != has_terminal:
-            offenders.append(f"{f.parent.name} (live={has_live}, terminal={has_terminal})")
+            offenders.append(f"{name} (live={has_live}, terminal={has_terminal})")
     assert not offenders, (
         "skills aware of one batch-status twin but not the other: " + ", ".join(offenders)
     )

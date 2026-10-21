@@ -312,7 +312,10 @@ A few skills worth knowing once you're past the first loop:
 it manages: your `CLAUDE.md` prose steers how every skill behaves, and never-managed
 overlay files carry your config — project conventions (`.claude/*.project.*`) and which
 model runs which skills (`.claude/served_models.local.yml`, e.g. one line to run the
-deep-reasoning skills on Claude Fable 5 — applied on your next `sysop-update.sh` run).
+deep-reasoning skills on Claude Fable 5 — applied on your next `sysop-update.sh` run; the
+install and every update end with the table of which model and effort each role runs at,
+or a one-line pointer when they cannot render it, and
+`python3 sysop/scripts/check_skill_models.py --defaults` prints it any time).
 Direct edits to shipped skill files are the one
 thing that *doesn't* persist across `sysop-update.sh` — deliberately. The full story is
 [`docs/configuration.md`](./configuration.md).

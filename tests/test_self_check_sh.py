@@ -7,11 +7,14 @@ pattern): the script's contract is exit 0 iff the hard prereqs (git repo,
 install lock, a PyYAML-capable python3) all pass; hooks + optional scanners
 are reported but advisory.
 """
+import json
 import os
 import subprocess
 import sys
 import time
 from pathlib import Path
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 INSTALL_SH = REPO_ROOT / "install.sh"
@@ -198,6 +201,148 @@ def test_a_worktree_compares_against_the_main_checkouts_template(tmp_path):
     r = _self_check(root, cwd=wt)
     line = [ln for ln in r.stdout.splitlines() if "differs from its template" in ln]
     assert len(line) == 1 and "re-arm from the main checkout" in line[0], r.stdout
+
+
+# ── Probe 1b: every installed path is on disk (Phase 383, `Q-409` P0) ────────
+
+def test_reports_every_installed_path_present_on_a_fresh_install(tmp_path):
+    root = _consumer(tmp_path / "c")
+    assert _install(root, "--packs", "").returncode == 0
+    r = _self_check(root)
+    n = len(json.loads((root / ".claude/sysop.lock").read_text())["managed_paths"])
+    assert f"all {n} installed paths present" in r.stdout, r.stdout
+
+
+def test_a_missing_installed_path_fails_and_is_named(tmp_path):
+    root = _consumer(tmp_path / "c")
+    assert _install(root, "--packs", "").returncode == 0
+    gone = root / ".claude/skills/codebase-review/REFERENCE.md"
+    gone.unlink()
+    r = _self_check(root)
+    n = len(json.loads((root / ".claude/sysop.lock").read_text())["managed_paths"])
+    assert r.returncode == 1, r.stdout
+    assert f"1 of {n} installed paths missing" in r.stdout, r.stdout
+    assert "missing: .claude/skills/codebase-review/REFERENCE.md\n" in r.stdout, r.stdout
+    # The install is not committed here, so git cannot restore it: --update can.
+    assert "fix: bash sysop/scripts/sysop-update.sh" in r.stdout
+    assert "restore --source=HEAD" not in r.stdout
+
+
+def test_a_missing_path_the_last_commit_holds_is_restored_from_git(tmp_path):
+    """Phase 383's round: on a committed install, `--update`'s pre-update snapshot
+    commits a deleted managed file as deleted and puts it back untracked. The
+    remedy for a path HEAD still holds is a restore from git, not the update."""
+    root = _consumer(tmp_path / "c")
+    assert _install(root, "--packs", "").returncode == 0
+    _git(root, "add", "-A")
+    _git(root, "commit", "-qm", "install")
+    (root / ".claude/skills/codebase-review/REFERENCE.md").unlink()
+    r = _self_check(root)
+    assert r.returncode == 1, r.stdout
+    assert "missing: .claude/skills/codebase-review/REFERENCE.md  (in your last commit)" in r.stdout
+    assert "restore --source=HEAD --staged --worktree" in r.stdout, r.stdout
+    assert "sysop-update.sh" not in r.stdout.split("installed paths missing", 1)[1].split("✓", 1)[0]
+    line = [ln for ln in r.stdout.splitlines() if "restore --source=HEAD" in ln][0]
+    cmd = line.split("fix: ", 1)[1].split(" -- ", 1)[0]
+    subprocess.run(cmd + " -- .claude/skills/codebase-review/REFERENCE.md", shell=True,
+                   check=True, cwd=str(root), capture_output=True)
+    r = _self_check(root)
+    assert "installed paths present" in r.stdout, r.stdout
+
+
+def test_more_than_ten_missing_paths_name_ten_and_count_the_rest(tmp_path):
+    root = _consumer(tmp_path / "c")
+    assert _install(root, "--packs", "").returncode == 0
+    skills = sorted((root / ".claude/skills").glob("*/SKILL.md"))[:11]
+    assert len(skills) == 11
+    for p in skills:
+        p.unlink()
+    r = _self_check(root)
+    assert "11 of " in r.stdout, r.stdout
+    assert sum(1 for ln in r.stdout.splitlines() if "  missing: " in ln) == 10, r.stdout
+    assert "… and 1 more" in r.stdout, r.stdout
+
+
+def test_no_python3_on_path_says_the_paths_were_not_checked(tmp_path):
+    root = _consumer(tmp_path / "c")
+    assert _install(root, "--packs", "").returncode == 0
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    for d in ("/usr/bin", "/bin"):
+        for exe in Path(d).iterdir():
+            if exe.name.startswith("python") or (bindir / exe.name).exists():
+                continue
+            (bindir / exe.name).symlink_to(exe)
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+    env["PATH"] = str(bindir)
+    r = subprocess.run(["bash", str(root / "sysop/scripts/self_check.sh")], cwd=str(root),
+                       capture_output=True, text=True, env=env)
+    assert "installed paths not checked: no python3 on PATH" in r.stdout, r.stdout
+
+
+@pytest.mark.skipif(
+    subprocess.run(["/bin/bash", "-c", "echo ${BASH_VERSINFO[0]}"], capture_output=True,
+                   text=True).stdout.strip() != "3",
+    reason="needs macOS's bash 3.2 at /bin/bash; CI's /bin/bash is bash 5")
+def test_runs_under_bash_3_2(tmp_path):
+    """The script claims bash 3.2 support, and the pre-migration-hook probe died
+    there with `bad substitution: no closing ')'`: bash 3.2 reads an apostrophe in a
+    comment inside `<( … )` as an open quote. `bash -n` cannot see it (Phase 383)."""
+    root = _consumer(tmp_path / "c")
+    assert _install(root, "--packs", "").returncode == 0
+    env = dict(os.environ)
+    env["PATH"] = os.path.dirname(sys.executable) + os.pathsep + env["PATH"]
+    r = subprocess.run(["/bin/bash", str(root / "sysop/scripts/self_check.sh")], cwd=str(root),
+                       capture_output=True, text=True, env=env)
+    assert "bad substitution" not in r.stdout + r.stderr, r.stdout + r.stderr
+    assert "installed paths present" in r.stdout, r.stdout
+
+
+def test_a_worktree_reads_installed_paths_in_the_main_checkout(tmp_path):
+    """A gitignored managed path exists only in the main checkout. Read from a
+    worktree, it must not be reported missing; deleted in main, it must be."""
+    root = _consumer(tmp_path / "m")
+    (root / ".gitignore").write_text(".claude/skills/\n")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-qm", "ignore skills")
+    assert _install(root, "--packs", "").returncode == 0
+    _git(root, "add", "-A")
+    _git(root, "commit", "-qm", "install")
+    wt = tmp_path / "wt"
+    _git(root, "worktree", "add", "-q", "-b", "wtb", str(wt))
+    assert not (wt / ".claude/skills").exists()
+    r = _self_check(root, cwd=wt)
+    assert "installed paths present" in r.stdout, r.stdout
+    (root / ".claude/skills/codebase-review/SKILL.md").unlink()
+    r = _self_check(root, cwd=wt)
+    assert "missing: .claude/skills/codebase-review/SKILL.md" in r.stdout, r.stdout
+    # The lock read is main's too: a path only main's lock lists (an install
+    # updated after the worktree branched) is judged, and the worktree's own
+    # committed lock, which lacks it, is not what decides.
+    lock = root / ".claude/sysop.lock"
+    data = json.loads(lock.read_text())
+    data["managed_paths"].append(".claude/skills/only-in-main/SKILL.md")
+    lock.write_text(json.dumps(data))
+    r = _self_check(root, cwd=wt)
+    assert "missing: .claude/skills/only-in-main/SKILL.md" in r.stdout, r.stdout
+
+
+@pytest.mark.parametrize("bad", ["not a list", [".claude/sysop.lock", 1], "DELETE", "GARBAGE"],
+                         ids=["string", "non-string-entry", "no-key", "not-json"])
+def test_an_unreadable_managed_paths_list_is_reported_not_failed(tmp_path, bad):
+    root = _consumer(tmp_path / "c")
+    assert _install(root, "--packs", "").returncode == 0
+    lock = root / ".claude/sysop.lock"
+    data = json.loads(lock.read_text())
+    if bad == "DELETE":
+        del data["managed_paths"]
+    else:
+        data["managed_paths"] = bad
+    lock.write_text("{ not json" if bad == "GARBAGE" else json.dumps(data))
+    r = _self_check(root)
+    assert "could not read managed_paths" in r.stdout, r.stdout
+    assert "installed paths missing" not in r.stdout
+    assert r.returncode == 0, r.stdout
 
 
 def test_source_and_installed_copies_match():

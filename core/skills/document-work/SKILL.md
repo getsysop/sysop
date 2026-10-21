@@ -275,9 +275,9 @@ except ImportError:  # PyYAML lives only in the project venv (BeanRider ISSUE-00
         _r = subprocess.run(
             ["git", "rev-parse", "--git-common-dir"],
             capture_output=True, text=True, timeout=5,
-            env={_k: _v for _k, _v in os.environ.items()
+            env=dict((_k, _v) for _k, _v in os.environ.items()
                  if _k not in ("GIT_DIR", "GIT_WORK_TREE",
-                               "GIT_COMMON_DIR", "GIT_INDEX_FILE")},
+                               "GIT_COMMON_DIR", "GIT_INDEX_FILE")),
         )
         _g = _r.stdout.strip()
     except (OSError, subprocess.SubprocessError):

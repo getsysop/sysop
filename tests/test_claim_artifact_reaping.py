@@ -36,11 +36,14 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _prose_guard_helpers import normalize, section, states  # noqa: E402
+from skill_runner_text import text_of
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CLOSE_BATCH = REPO_ROOT / "core/companion/scripts/close_batch.sh"
 CLAIM_TASK = REPO_ROOT / "core/companion/scripts/claim_task.sh"
 REVIEW_CLOSE = REPO_ROOT / "core/skills/review-close/SKILL.md"
+# Step 4c item 4's program: the step's heredoc until Phase 386 (`Q-409` P3).
+CLOSE_INDEX = REPO_ROOT / "core/companion/scripts/close_index.py"
 CLAIM_SKILL = REPO_ROOT / "core/skills/claim-task/SKILL.md"
 AUTO_BUILD = REPO_ROOT / "core/skills/auto-build/SKILL.md"
 WORKFLOW = REPO_ROOT / "core/companion/docs/WORKFLOW.md"
@@ -99,7 +102,7 @@ def _step4c_claim_block(strip_comments: bool = True) -> str:
     and as the shell-comment case: a guard reading a whole region cannot tell an
     explanation from an instruction.
     """
-    body = REVIEW_CLOSE.read_text()
+    body = CLOSE_INDEX.read_text(encoding="utf-8")
     i = _find(body, "claim_root = Path('sysop/runtime/claim')", "Step 4c claim-cleanup block start")
     j = _find(body[i:], "# Report what this code DID", "Step 4c report block") + i
     block = body[i:j]
@@ -436,7 +439,7 @@ class TestCorrectedClaims:
         * `shutil.rmtree(claim_dir)` could be widened to `rmtree(claim_root)`,
           deleting every other claim's in-flight artifacts on every close.
         """
-        body = REVIEW_CLOSE.read_text()
+        body = CLOSE_INDEX.read_text(encoding="utf-8")
         code = _step4c_claim_block()
 
         # The import the rmtree depends on, on the actual import line.
@@ -460,8 +463,9 @@ class TestCorrectedClaims:
             printed = [ln for ln in body.splitlines()
                        if ln.lstrip().startswith("print(") and row in ln]
             assert printed, f"{row} is computed but never printed"
-        # ...and Step 8 must ask for them, outside the heredoc.
-        step8 = body[_find(body, "Locks cleaned:", "Step 8 report block"):]
+        # ...and Step 8 must ask for them, in the skill.
+        skill = text_of(REVIEW_CLOSE)
+        step8 = skill[_find(skill, "Locks cleaned:", "Step 8 report block"):]
         assert "CLAIM_ARTIFACTS_REMOVED" in step8, (
             "Step 8's report never asks for the artifact row"
         )
@@ -802,7 +806,7 @@ class TestStep4cSurvivesAFailedRemoval:
     memory, the Phase-219 failure this block claims to have fixed."""
 
     def test_the_removal_is_wrapped_and_records_the_failure(self):
-        body = REVIEW_CLOSE.read_text()
+        body = CLOSE_INDEX.read_text(encoding="utf-8")
         i = body.index("shutil.rmtree(claim_dir)")
         window = body[i - 400: i + 400]
         assert "try:" in window and "except OSError" in window, (
@@ -811,8 +815,13 @@ class TestStep4cSurvivesAFailedRemoval:
         assert "artifacts_failed" in window, "the failure is swallowed rather than recorded"
 
     def test_the_failure_row_is_printed_and_read(self):
-        body = REVIEW_CLOSE.read_text()
-        assert body.count("CLAIM_ARTIFACTS_FAILED") >= 2, (
+        # Printed by the script and asked for by Step 8. Until Phase 386 both sat in one
+        # file and a count of mentions stood in for the pair.
+        printed = [ln for ln in CLOSE_INDEX.read_text(encoding="utf-8").splitlines()
+                   if ln.lstrip().startswith("print(") and "CLAIM_ARTIFACTS_FAILED" in ln]
+        step8 = text_of(REVIEW_CLOSE)
+        step8 = step8[_find(step8, "Locks cleaned:", "Step 8 report block"):]
+        assert printed and "CLAIM_ARTIFACTS_FAILED" in step8, (
             "the failed list is computed but never printed, or printed but never "
             "asked for by Step 8 — a value that reaches nobody"
         )

@@ -169,17 +169,30 @@ that it's a working log written for the project's own continuity, not an introdu
   asks nothing and writes its questions down, a resume that takes the answers and re-runs only
   what went stale, and a split at the merge, so that one run opens the pull request and asks a
   second reviewer and a later run merges exactly the head that reviewer read. The last piece,
-  merging with no human at all, was built and then switched off: three review rounds each found a
-  way past the gate, mostly in the previous round's fix, because the gate ran on the agent's own
-  machine and read state the agent could shape. The redesign moves the trust onto GitHub — code
-  owners, a check signed by a dedicated app, and auto-merge as the agent's only lever — and before
-  any of it was built, the eight GitHub behaviours it rests on that the documentation does not
-  settle were run against a scratch repository. None broke the design; three changed it.
+  merging with no human at all, was first built on the agent's own machine and switched off:
+  three review rounds each found a way past the gate, mostly in the previous round's fix, because
+  the gate ran there and read state the agent could shape. The redesign moves the trust onto
+  GitHub — code owners, a check signed by a dedicated app, and auto-merge as the agent's only
+  lever — and before any of it was built, the eight GitHub behaviours it rests on that the
+  documentation does not settle were run against a scratch repository. None broke the design;
+  three changed it. Then it was built: the gate ships unarmed for a project to arm, and the
+  unattended land, now available to a project that arms it, checks that the server is set up before it turns on auto-merge and
+  leaves the merge to GitHub.
   Underneath, the close path kept being found doing less than it said: a smoke-test gate that read
   only the task bodies that declared a smoke test, a required check that never started reported
   as one that failed, and gitignored files a branch depended on that removing its worktree would have deleted when
   the worktree held the only copy. Each was fixed where it was found, and the review rounds again
   found defects in the fixes, which is what they are there for.
+  By the middle of the month cost had come to the front. A one-week field report on a full
+  install, and a 30-day measurement of the busiest consumer's spend that put Sysop's own process at
+  no less than 37% of it, reopened September's frozen thinning campaign in a new shape: the close's runner is
+  split, so the arms only some closes take live in step files a close loads when one is due and
+  records in a receipt, and its longest inline programs became shipped scripts. Its core is 37%
+  smaller than at the previous public snapshot, under a byte budget that replaced the old ratchet,
+  and the split continues one step per phase. The review rounds were resized by the kind of
+  change rather than by whether it shipped behaviour and numbers, a model role can now carry an effort level, and the
+  table of which model and effort each role runs at now ends every install and update that can render it, with a one-line pointer
+  otherwise.
 
 Where to go next: [the monograph](./workflow.html) for why it's built this way,
 [one rule, end to end](./one-rule.md) for the evidence trail behind a single rule, and

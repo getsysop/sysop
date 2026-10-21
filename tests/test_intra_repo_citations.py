@@ -82,6 +82,7 @@ WHAT THIS CANNOT DO.
 import re
 import subprocess
 from pathlib import Path
+from skill_runner_text import runner_key, text_of
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -173,9 +174,9 @@ CITATION_ANCHORS = {
     # from its own location, so if that ever changes, the comment's split of
     # read-side vs write-side is no longer true and the anchoring is arguing for
     # something the code does not do.
-    ("core/companion/scripts/batch_work.sh", "review_index.py:47"):
+    ("core/companion/scripts/batch_work.sh", "review_index.py:48"):
         'TASKS_FILE = os.path.join(REPO_ROOT, "review_tasks.md")',
-    ("core/companion/scripts/claim_task.sh", "self_check.sh:78-86"):
+    ("core/companion/scripts/claim_task.sh", "self_check.sh:146-151"):
         "then verify PyYAML on THAT interpreter",
     # Phase 256. `Q-375`'s design rests on this note: widening the batch-header
     # counter without its `H3_HEADER_RE` sibling leaves the counter unreachable
@@ -194,10 +195,11 @@ CITATION_ANCHORS = {
     # when both entries carried the identical clause string, swapping which line each
     # citation pointed at -- so the prose named the wrong site for BOTH -- stayed GREEN.
     # The anchor kept line-precision and lost site-discrimination. This one is a
-    # sentence only Step 7f's copy carries.
-    ("core/skills/review-close/SKILL.md", "claim-task/SKILL.md:1422"):
+    # sentence only Step 7f's copy carries. Phase 386 moved Step 7f's block into
+    # `claim_record.py`, so its citation names the script and its sibling's line moved up.
+    ("core/skills/review-close/SKILL.md", "claim_record.py:80"):
         'emits `fence + "markdown"` below',
-    ("core/skills/review-close/SKILL.md", "claim-task/SKILL.md:2025"):
+    ("core/skills/review-close/SKILL.md", "claim-task/SKILL.md:1668"):
         "and not line.strip().strip(mark[0])",
     ("core/skills/auto-fix/SKILL.md", "archive_review_tasks.py:175"):
         "Merged|Complete",
@@ -245,11 +247,11 @@ CITATION_ANCHORS = {
         "next_batch_number",
     ("core/companion/scripts/review_index.py", "security-audit/SKILL.md:188"):
         "next_batch_number",
-    ("core/skills/review-close/SKILL.md", "intake/SKILL.md:111"):
+    ("core/skills/review-close/SKILL.md", "intake/SKILL.md:121"):
         "tasks/schema.md",
     ("core/skills/review-close/SKILL.md", "add-task/SKILL.md:64"):
         "open/<TASK-ID>.md",
-    ("core/skills/review-close/SKILL.md", "onboard/SKILL.md:95"):
+    ("core/skills/review-close/SKILL.md", "onboard/SKILL.md:103"):
         "Test decision",
     ("docs/one-rule.md", "core/companion/scripts/run_checks/grep.py:300"):
         "nosemgrep: recompile-inside-def",
@@ -307,12 +309,17 @@ def _discovered_citations():
     """Sweep the acting surface. (citing_rel, citing_line, cite_text, resolved)."""
     tracked = _tracked()
     found = []
-    for rel in _scanned_files():
+    # Folded (Phase 385): a citation in a skill's step file is keyed by its `SKILL.md` and
+    # numbered in the spliced text, which is the unsplit file line for line, so a move does
+    # not change a registered `(rel, cite)` key.
+    files = dict.fromkeys(
+        runner_key(REPO_ROOT / rel).relative_to(REPO_ROOT).as_posix() for rel in _scanned_files())
+    for rel in files:
         path = REPO_ROOT / rel
         if not path.is_file():
             continue
         try:
-            lines = path.read_text(encoding="utf-8").splitlines()
+            lines = text_of(path).splitlines()
         except UnicodeDecodeError:
             continue
         for lineno, line in enumerate(lines, 1):
@@ -448,7 +455,7 @@ def test_no_registered_citation_has_gone_stale():
             vanished.append(f"  {rel} no longer cites {cite}")
             continue
         target, start, end = discovered[(rel, cite)]
-        lines = (REPO_ROOT / target).read_text(encoding="utf-8").splitlines()
+        lines = text_of(REPO_ROOT / target).splitlines()   # a cited SKILL.md, spliced
         if _staleness(anchor, start, end, lines):
             where = [
                 i + 1 for i, l in enumerate(lines) if anchor in l

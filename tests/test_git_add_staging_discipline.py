@@ -48,6 +48,7 @@ import subprocess
 from pathlib import Path
 
 from tests import shape_lib as S
+from skill_runner_text import skill_text
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SKILLS_DIR = REPO_ROOT / "core" / "skills"
@@ -540,7 +541,7 @@ def test_the_false_2devnull_tolerance_claim_is_gone():
     source repo". Both review skills must now state the real mechanism instead.
     """
     for name in ("codebase-review", "security-audit"):
-        text = (SKILLS_DIR / name / "SKILL.md").read_text(encoding="utf-8")
+        text = skill_text(SKILLS_DIR / name)   # step files too (Phase 384)
         assert "tolerates their absence" not in text, f"{name} still ships the false claim"
         assert "all-or-nothing across its pathspecs" in text, (
             f"{name} no longer explains why the per-path form is required"

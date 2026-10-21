@@ -39,8 +39,11 @@ from _prose_guard_helpers import carries, locate  # noqa: E402
 import pathlib
 
 import pytest
+from skill_runner_text import fold_steps, text_of
 
-SKILLS = sorted(pathlib.Path("core/skills").rglob("*.md"))
+# Folded (Phase 385): `EXPECTED_SITES` is keyed by file, so a skill's step files are read
+# as part of its `SKILL.md` and its sites keep their key when a step moves.
+SKILLS = fold_steps(sorted(pathlib.Path("core/skills").rglob("*.md")))
 
 # A command template an agent runs once per item, over a path-shaped placeholder.
 TEMPLATE = re.compile(r"`(git\s+(?:show|-C)\s[^`]*)`")
@@ -169,7 +172,7 @@ def _sites():
     per-item path template, and given no loop variable bound for it."""
     out = []
     for f in SKILLS:
-        lines = f.read_text().split("\n")
+        lines = text_of(f).split("\n")
         fenced = _fenced(lines)
         for i, ln in enumerate(lines):
             for tmpl in TEMPLATE.findall(ln):
@@ -205,7 +208,10 @@ def _sites():
 # that are.
 EXPECTED_SITES = {
     "core/skills/codebase-review/SKILL.md": 1,
-    "core/skills/review-close/SKILL.md": 5,
+    # 6 since Phase 387 (`Q-409` P3): moving Step 4c item 5's 157-line heredoc into a script
+    # brought item 5's `git show HEAD:<file>` within LOOKBACK of a "for each", and its section
+    # gained the naming rule.
+    "core/skills/review-close/SKILL.md": 6,
     "core/skills/security-audit/SKILL.md": 1,
 }
 
@@ -274,7 +280,7 @@ def test_no_site_revokes_the_rule_while_appearing_to_state_it():
     """
     bad = []
     for f in SKILLS:
-        lines = f.read_text().split("\n")
+        lines = text_of(f).split("\n")
         for i, ln in enumerate(lines):
             if not REMEDY.search("\n".join(lines[i : i + 3])):
                 continue
@@ -295,7 +301,7 @@ def test_the_remedy_is_stated_in_full_at_every_site():
     """
     thin = []
     for f in SKILLS:
-        lines = f.read_text().split("\n")
+        lines = text_of(f).split("\n")
         for i in range(len(lines)):
             # match over a small joined span so a wrapped remedy is still found
             span = "\n".join(lines[i : i + 3])
@@ -319,7 +325,7 @@ def test_step_2d_routes_the_silent_read_away_from_missing():
     by a distinct git fatal, the fifth produces no message at all, and the
     classification it falls through to is the one the list exists to refuse.
     """
-    body = pathlib.Path("core/skills/review-close/SKILL.md").read_text()
+    body = text_of(pathlib.Path("core/skills/review-close/SKILL.md"))
     i = body.find("### 2d. Test-Decision Verification")
     assert i > 0, "### 2d. is gone -- this guard has lost its subject"
     j = body.find("\n### ", i + 10)

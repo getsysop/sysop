@@ -32,6 +32,7 @@ import test_fix_in_branch_tier as T
 import test_review_close_smoke_decided_text as S
 import test_review_loop_decided_text as L
 from test_fix_in_branch_tier import _pin_hash, _pin_lines, _pin_liveness, _pin_norm, _pin_span
+from skill_runner_text import text_of
 
 # (module id, label) -> (path, start, end, fenced)
 SPANS: dict[tuple[str, str], tuple[Path, object, object, bool]] = {}
@@ -54,7 +55,7 @@ def _pin(key, text: str) -> str:
 def _read(path: Path) -> str:
     if not path.is_file():
         pytest.skip(f"{path.name} is absent here (maintainer-side, mirror-excluded)")
-    return path.read_text(encoding="utf-8")
+    return text_of(path)
 
 
 def _keys_in(path: Path):
@@ -162,7 +163,7 @@ def test_a_legal_edit_keeps_every_pin(path: Path, edit: str) -> None:
 
 def test_the_legal_edit_check_sees_a_real_edit() -> None:
     """Non-vacuity: a one-word rewording inside a pinned span is reported as moved."""
-    text = T.CLOSE.read_text(encoding="utf-8")
+    text = text_of(T.CLOSE)
     word = "it is the *only* thing that verifies the tree the PR will squash"
     assert text.count(word) == 1
     moved = _moved(T.CLOSE, text, text.replace(word, word.replace("*only*", "*first*")))
@@ -215,7 +216,7 @@ def _structural_mutants():
         path, *_ = SPANS[key]
         if path.suffix != ".md" or not path.is_file():
             continue
-        text = path.read_text(encoding="utf-8")
+        text = text_of(path)
         lines = text.split("\n")
         rows = _span_lines(path, text, key)
         starts = [i for i, kind in rows if kind == "start"
@@ -255,7 +256,7 @@ MUTANTS = list(_structural_mutants())
 @pytest.mark.parametrize("name,key,mutated", MUTANTS,
                          ids=[f"{k[0]}:{k[1]}:{n}" for n, k, _ in MUTANTS])
 def test_a_structural_change_moves_the_pin(name: str, key, mutated: str) -> None:
-    text = SPANS[key][0].read_text(encoding="utf-8")
+    text = text_of(SPANS[key][0])
     assert _pin(key, mutated) != _pin(key, text), f"{name} kept the {key[1]!r} pin"
 
 
@@ -324,7 +325,7 @@ def test_liveness_flags_a_stale_fenced_mark() -> None:
 
 def test_the_phase_328_measurements_move_the_pin() -> None:
     """The lens's two measured survivors, on the spans it measured them on."""
-    text = T.CLOSE.read_text(encoding="utf-8")
+    text = text_of(T.CLOSE)
     arm = ("T", "review-close 4a-post fix arm")
     needle = "\n   **If `4a-fix` kept a fix commit"
     assert text.count(needle) == 1
@@ -379,7 +380,7 @@ def test_each_module_test_fails_on_its_subject(mod: str, which: str, monkeypatch
     wrapped in a comment -- so neither can be neutered with the controls above green."""
     label, pin_test, live_test = _MODULE_TESTS[mod]
     path, start, end, _ = SPANS[mod, label]
-    text = path.read_text(encoding="utf-8")
+    text = text_of(path)
     if which == "pin":
         span = slice_between(text, start, end, label)
         words = span.split()

@@ -354,8 +354,10 @@ HEREDOCS = _skill_heredocs()
 def test_the_heredoc_population_is_not_empty():
     """A zero-length population would make every test below vacuously green — which is
     how the class hid in the first place."""
-    # 47 at Phase 334, when the population became the shared one (it read 31 before).
-    assert len(HEREDOCS) >= 47, (
+    # 47 at Phase 334, when the population became the shared one (it read 31 before). 41
+    # since Phase 387 (`Q-409` P3), which moved review-close's last eight into scripts;
+    # the shipped scripts are held to the floor by this module's script-side checks.
+    assert len(HEREDOCS) >= 41, (
         f"only {len(HEREDOCS)} skill heredocs extracted; the regex has drifted away from "
         "the shipped invocation shape and the floor checks below are testing nothing"
     )

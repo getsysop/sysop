@@ -22,39 +22,44 @@ import textwrap
 from pathlib import Path
 
 from _prose_guard_helpers import states
+from skill_runner_text import runner_files
 
 import pytest
+from skill_runner_text import text_of
+from _shipped_scripts import script as shipped_script, subcommand_body
 
 REPO = Path(__file__).resolve().parent.parent
 SKILL = REPO / "core" / "skills" / "review-close" / "SKILL.md"
 DOCWORK = REPO / "core" / "skills" / "document-work" / "SKILL.md"
 
-HEREDOC_RE = re.compile(
-    r"python3 - \"<worktree-path>\" \"<branch name>\" <<'PY'\n(.*?)\n      PY\n", re.DOTALL
+# Step 3b's collect and rollback were two heredocs until Phase 386 (`Q-409` P3); they are
+# now the two subcommands of one shipped script, which the step invokes once each.
+COLLECT_SCRIPT = "pending_doc_collect.py"
+INVOCATIONS = (
+    'python3 sysop/scripts/pending_doc_collect.py collect "<worktree-path>" "<branch name>"',
+    'python3 sysop/scripts/pending_doc_collect.py rollback "<worktree-path>" "<branch name>"',
 )
 
 
 def _heredocs() -> list[str]:
-    """The Step 3b collect and rollback bodies, dedented out of the shipped skill."""
-    bodies = HEREDOC_RE.findall(SKILL.read_text(encoding="utf-8"))
-    return [
-        "\n".join(ln[6:] if ln.startswith("      ") else ln for ln in b.split("\n"))
-        for b in bodies
-    ]
+    """The Step 3b collect and rollback programs, as the standalone text each was."""
+    text = text_of(SKILL)
+    for inv in INVOCATIONS:
+        assert text.count(inv) == 1, f"Step 3b runs {inv!r} {text.count(inv)} times, not once"
+    return [subcommand_body(COLLECT_SCRIPT, "collect"), subcommand_body(COLLECT_SCRIPT, "rollback")]
+
+
+class _Sub:
+    """One subcommand of the shipped script: `argv` is what Step 3b runs after `python3`."""
+
+    def __init__(self, sub: str):
+        self.argv = [str(shipped_script(COLLECT_SCRIPT)), sub]
 
 
 @pytest.fixture(scope="module")
-def scripts(tmp_path_factory) -> tuple[Path, Path]:
-    d = tmp_path_factory.mktemp("p210_scripts")
-    bodies = _heredocs()
-    assert len(bodies) == 2, (
-        f"expected exactly 2 worktree-path heredocs in Step 3b (collect + rollback), "
-        f"found {len(bodies)}"
-    )
-    collect, rollback = d / "collect.py", d / "rollback.py"
-    collect.write_text(bodies[0], encoding="utf-8")
-    rollback.write_text(bodies[1], encoding="utf-8")
-    return collect, rollback
+def scripts() -> tuple[_Sub, _Sub]:
+    _heredocs()  # both invocations present, both programs intact
+    return _Sub("collect"), _Sub("rollback")
 
 
 def _doc(path: Path, branch: str | None, summary: str) -> None:
@@ -67,7 +72,7 @@ def _doc(path: Path, branch: str | None, summary: str) -> None:
 
 
 def _run(
-    script: Path,
+    script: "_Sub",
     main: Path,
     wt: Path,
     branch: str = "feat/x",
@@ -88,7 +93,7 @@ def _run(
         tmpdir.mkdir(parents=True, exist_ok=True)
         env = {**os.environ, "TMPDIR": str(tmpdir)}
     return subprocess.run(
-        [sys.executable, str(script), str(wt), branch],
+        [sys.executable, *script.argv, str(wt), branch],
         cwd=main, capture_output=True, text=True, env=env,
     )
 
@@ -335,7 +340,8 @@ def _pending_doc_template_files() -> list[Path]:
     The sibling guard `test_no_shipped_file_claims_step4c_deletes_by_glob` already reads
     all three populations; this one was narrower than its neighbour for no reason.
     """
-    return sorted((REPO / "core" / "skills").rglob("SKILL.md")) + [
+    # Each skill's `SKILL.md` and its step files (Phase 384), then the two workflow docs.
+    return runner_files(REPO / "core" / "skills") + [
         REPO / "core" / "companion" / "docs" / "WORKFLOW.md",
         REPO / "core" / "companion" / "docs" / "WORKFLOW_GUIDE.md",
     ]
@@ -429,7 +435,7 @@ def test_the_quoted_template_survives_summaries_that_break_it_bare(summary):
 
 
 def test_step4c_has_a_third_arm_that_quarantines():
-    text = SKILL.read_text(encoding="utf-8")
+    text = text_of(SKILL)
     assert "Format detection — three arms" in text
     assert "pending-docs/quarantine/" in text
     # The two dispositions the third arm exists to reject, named so a revert is visible.
@@ -464,7 +470,7 @@ def test_the_contradictory_no_branch_dispositions_are_gone():
     ambiguity two agents already resolved in opposite directions, and the fix is to say so
     here rather than to loosen the count.
     """
-    text = SKILL.read_text(encoding="utf-8")
+    text = text_of(SKILL)
     assert "If `branch:` is ABSENT, quarantine the doc and carry on" in text, (
         "the replacement disposition is missing"
     )
@@ -480,7 +486,7 @@ def test_the_contradictory_no_branch_dispositions_are_gone():
 def test_that_count_pin_can_actually_fail():
     """Non-vacuity: the phrases must still be PRESENT, or the count check guards nothing
     and the correction is no longer readable."""
-    text = SKILL.read_text(encoding="utf-8")
+    text = text_of(SKILL)
     for phrase in RETIRED_DISPOSITIONS:
         assert phrase in text, (
             f"{phrase!r} vanished entirely — the correction is unreadable and "
@@ -495,13 +501,12 @@ def test_no_shipped_file_claims_step4c_deletes_by_glob():
         "core/skills/review-close/SKILL.md",
         "core/companion/docs/WORKFLOW.md",
         "core/companion/docs/WORKFLOW_GUIDE.md",
+        "core/companion/scripts/close_index.py",  # Step 4c's program, in the skill until Phase 386
     ):
         p = REPO / rel
         if not p.is_file():
             continue
-        assert "deletes each `sysop/runtime/pending-docs/*.md`" not in p.read_text(
-            encoding="utf-8"
-        ), f"{rel} still asserts a glob delete that Step 4c's cleanup step forbids"
+        assert "deletes each `sysop/runtime/pending-docs/*.md`" not in text_of(p), f"{rel} still asserts a glob delete that Step 4c's cleanup step forbids"
 
 
 def test_no_bash_write_loop_returned_to_step3b():
@@ -509,7 +514,7 @@ def test_no_bash_write_loop_returned_to_step3b():
     symlink strip) survives and is also `rm`-bearing. A future edit that
     reintroduces one would pass the staging-discipline guard if it reused a known header,
     so assert the mechanism directly."""
-    text = SKILL.read_text(encoding="utf-8")
+    text = text_of(SKILL)
     assert 'for f in "<worktree-path>"/sysop/runtime/pending-docs/*.md; do' not in text
     assert 'rm -f "sysop/runtime/pending-docs/$(basename "$f")"' not in text
 
@@ -521,14 +526,16 @@ def test_all_three_convention_candidates_exclusions_are_present():
 
     Named individually — a count would pass with the same site asserted twice.
     """
-    text = SKILL.read_text(encoding="utf-8")
-    for label, needle in (
-        ("Step 3b collect + rollback", "NOT_A_BRANCH_DOC = {'convention-candidates.md'}"),
-        ("Step 3c smoke-gate scan", 'if md.name == "convention-candidates.md":'),
-        ("Step 4c step 1", "**Exclude it by name**"),
+    # Since Phase 386 the collect, the rollback and the 3c scan are shipped scripts.
+    collect = shipped_script(COLLECT_SCRIPT).read_text(encoding="utf-8")
+    for label, needle, where in (
+        ("Step 3b collect + rollback", "NOT_A_BRANCH_DOC = set(['convention-candidates.md'])", collect),
+        ("Step 3c smoke-gate scan", 'if md.name == "convention-candidates.md":',
+         shipped_script("smoke_detect.py").read_text(encoding="utf-8")),
+        ("Step 4c step 1", "**Exclude it by name**", text_of(SKILL)),
     ):
-        assert needle in text, f"the {label} exclusion of convention-candidates.md is gone"
-    assert text.count("NOT_A_BRANCH_DOC = {'convention-candidates.md'}") == 2, (
+        assert needle in where, f"the {label} exclusion of convention-candidates.md is gone"
+    assert collect.count("NOT_A_BRANCH_DOC = set(['convention-candidates.md'])") == 2, (
         "expected the collect AND the rollback to carry the exclusion set"
     )
 
@@ -536,7 +543,7 @@ def test_all_three_convention_candidates_exclusions_are_present():
 def test_step8_carries_the_rows_the_collect_reports_into():
     """The collect's stdout is, per the skill, the collision row's only source. A reviewer
     deleted both Step 8 rows and the suite stayed green — a report with no destination."""
-    text = SKILL.read_text(encoding="utf-8")
+    text = text_of(SKILL)
     assert "Pending-doc collisions: <N>" in text
     assert "Quarantined docs: <N>" in text
 
@@ -552,7 +559,7 @@ def test_the_withdrawn_parking_mechanism_did_not_come_back():
     retired rule in one. Prose may discuss the withdrawal anywhere; what matters is that
     no code path writes there.
     """
-    text = SKILL.read_text(encoding="utf-8")
+    text = text_of(SKILL)
     for n, body in enumerate(_heredocs()):
         assert "superseded" not in body, (
             f"Step 3b heredoc #{n} writes to the withdrawn parking directory again"
@@ -918,7 +925,7 @@ def test_the_prose_count_of_non_zero_exits_matches_the_table():
     sentence sitting beside a test that derives the exit set. A count stated in prose next
     to the thing it counts is the cheapest kind of drift, and this file has paid for it.
     """
-    body = SKILL.read_text(encoding="utf-8")
+    body = text_of(SKILL)
     m = re.search(r"\*\*Any non-zero exit means do NOT proceed to \(b\)\.\*\* There are (\w+)", body)
     assert m, "the sentence that counts the non-zero exits was not found"
     words = {"two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7}
@@ -953,7 +960,7 @@ def test_no_collect_exit_prescribes_the_rollback_and_step_b_still_does():
     stated rather than inferred — these rows carry a fixed phrase, everything else in them
     may be reworded freely, and a failure here means "keep the phrase".
     """
-    body = SKILL.read_text(encoding="utf-8")
+    body = text_of(SKILL)
     table = body[body.index("| exit | meaning | state of main | what to do |"):]
     table = table[: table.index("\n\n")]
     rows = {
@@ -1117,7 +1124,7 @@ def test_the_rollback_refuses_a_placeholder_operand(scripts):
     """
     _, rollback = scripts
     r = subprocess.run(
-        [sys.executable, str(rollback), "<worktree-path>", "<branch name>"],
+        [sys.executable, *rollback.argv, "<worktree-path>", "<branch name>"],
         capture_output=True, text=True,
     )
     assert r.returncode == 4, f"the placeholder arm did not fire: {r.returncode} {r.stdout}"
@@ -1134,7 +1141,7 @@ def test_every_exit_the_rollback_can_take_has_a_row_in_its_own_exit_table():
     onto the other's.
     """
     exits = _exit_codes(_heredocs()[1])
-    body = SKILL.read_text(encoding="utf-8")
+    body = text_of(SKILL)
     header = "| exit | meaning | state of the record | what to do |"
     assert body.count(header) == 1, (
         f"the rollback's exit table header appears {body.count(header)} times; this test "
@@ -1422,7 +1429,7 @@ def test_step_3b_has_exactly_the_two_heredocs_the_tests_extract():
     assertion still holds. Count the blocks the way an operator would see them: any
     `python3 - … <<'PY'` inside Step 3b.
     """
-    body = SKILL.read_text(encoding="utf-8")
+    body = text_of(SKILL)
     start = body.index("**1. Collect this branch's pending-docs")
     # The end anchor is `## Step 4`, and the first draft of this line used `### Step 4`, which
     # does not exist in the file — so the span silently ran to EOF and the test reported a
@@ -1431,7 +1438,11 @@ def test_step_3b_has_exactly_the_two_heredocs_the_tests_extract():
     marker = "\n## Step 4: Merge & Land on Main"
     assert marker in body, "the Step 3b span's end anchor no longer exists in the skill"
     end = body.index(marker, start)
-    blocks = re.findall(r"python3 - [^\n]*<<'PY'", body[start:end])
+    # Since Phase 386 the two programs are one shipped script's subcommands, so the span
+    # holds exactly the two invocations `_heredocs()` asserts, and no heredoc at all.
+    assert re.findall(r"python3 - [^\n]*<<'PY'", body[start:end]) == []
+    blocks = re.findall(r"python3 sysop/scripts/pending_doc_collect\.py (?:collect|rollback) [^\n]*",
+                        body[start:end])
     assert len(blocks) == 2, (
         f"Step 3b has {len(blocks)} `python3 - … <<'PY'` blocks: {blocks}. The extraction the "
         f"tests use matches only the two canonical spellings, so any other one is shipped "
@@ -1451,7 +1462,7 @@ def test_every_exit_the_collect_can_take_has_a_row_in_the_exit_table():
     """
     collect = _heredocs()[0]
     exits = _exit_codes(collect)
-    body = SKILL.read_text(encoding="utf-8")
+    body = text_of(SKILL)
     table = body[body.index("| exit | meaning | state of main | what to do |"):]
     table = table[: table.index("\n\n")]
     missing = sorted(n for n in exits if f"| **{n}** |" not in table)
@@ -1584,17 +1595,14 @@ def test_step3c_survives_the_shapes_that_used_to_kill_the_close():
     import subprocess as _sp
     import tempfile as _tf
 
-    text = SKILL.read_text(encoding="utf-8")
-    m = _re.search(
-        r"\npython3 - \"\$SMOKE_WORKTREE_DIRS\" \"\$APPROVED_BRANCHES\" \"<default branch>\" <<'EOF'\n(.*?)\nEOF\n",
-        text, _re.DOTALL)
-    assert m, "could not locate Step 3c's smoke-gate heredoc"
-    src = m.group(1)
+    text = text_of(SKILL)
+    assert ('\npython3 sysop/scripts/smoke_detect.py "$SMOKE_WORKTREE_DIRS" "$APPROVED_BRANCHES" '
+            '"<default branch>"\n') in text, "could not locate Step 3c's smoke-gate invocation"
+    src = shipped_script("smoke_detect.py").read_text(encoding="utf-8")
     assert "isinstance(fm, dict)" in src, "Step 3c lost its non-mapping guard"
 
     with _tf.TemporaryDirectory() as td:
         d = Path(td)
-        (d / "script.py").write_text(src, encoding="utf-8")
         (d / "tasks").mkdir()
         (d / "tasks" / "index.yml").write_text(
             "schema_version: 1\ntasks:\n  - id: TASK-0001\n    status: open\n"
@@ -1612,7 +1620,7 @@ def test_step3c_survives_the_shapes_that_used_to_kill_the_close():
         (lk / "TASK-0001.lock").write_bytes(b"branch: feat/x\nnotes: \xe9\n")
         (lk / "damaged.lock").write_text("not a lock at all\n", encoding="utf-8")
 
-        r = _sp.run([sys.executable, str(d / "script.py"), "", "feat/x", "main"],
+        r = _sp.run([sys.executable, str(shipped_script("smoke_detect.py")), "", "feat/x", "main"],
                     cwd=d, capture_output=True, text=True)
 
     assert r.returncode == 0, (
@@ -2009,7 +2017,7 @@ def _pending_doc_templates() -> list[tuple[Path, str]]:
     Identified by what makes it one — a `branch:` key and a `summary:` key in the same
     fence — not by a hand-kept list of skills."""
     found = []
-    for skill in sorted(SKILLS_DIR.rglob("SKILL.md")):
+    for skill in runner_files(SKILLS_DIR):   # step files too (Phase 384)
         for block in _YAML_FENCE.findall(skill.read_text(encoding="utf-8")):
             if re.search(r"^branch:", block, re.M) and re.search(r"^summary:", block, re.M):
                 found.append((skill, block))
@@ -2093,7 +2101,7 @@ def test_the_stale_exit_is_in_the_disposition_table_with_its_remedy():
     """Phase 165's lesson: an exit whose row does not state the remedy gets improvised, and
     the improvisation on this step has twice been a wholesale worktree wipe. Exit 6's whole
     safety argument is that the worktree STAYS — that is what makes the remedy reachable."""
-    body = SKILL.read_text(encoding="utf-8")
+    body = text_of(SKILL)
     row = [ln for ln in body.split("\n") if ln.strip().startswith("| **6**")]
     assert len(row) == 1, f"expected exactly one exit-6 row, found {len(row)}"
     # The row must be INSIDE the table. A blank line terminates a Markdown table, and the
@@ -2150,7 +2158,7 @@ def test_the_skill_states_why_staleness_is_not_decided_at_step_4c():
     merged `--no-ff`, so a 4c gate would be live on the rare shapes and inert on the
     dominant one. That last clause is the actual argument for siting it at 3b, so it is the
     one pinned hardest."""
-    body = SKILL.read_text(encoding="utf-8")
+    body = text_of(SKILL)
     # Bounded. An unbounded `body[index("PENDING-DOC STALE"):]` runs ~1,100 lines to EOF and
     # sweeps up Step 4-pre's own prose, which supplies a rebase/squash co-occurrence all by
     # itself — so deleting the mechanism from THIS paragraph left the guard green.
@@ -2171,7 +2179,7 @@ def test_step_1b_short_circuits_on_1c_s_hold_before_resolving_any_ref():
     """`Q-474`. 1b's stop-and-ask is a halt on a branch reference for a doc that 1c was
     never going to route — resolving it is pure downside. Both sites must say so: a rule
     stated only at the step that does not act on it is the shape Phase 180 filed."""
-    body = SKILL.read_text(encoding="utf-8")
+    body = text_of(SKILL)
     one_b = body[body.index("1b. **Drop any pending-doc"):body.index("1c. **Hold back")]
     one_c = body[body.index("1c. **Hold back"):]
     # Phase 353: 1c's test became a command, and 1b runs it rather than restating it.
@@ -2195,7 +2203,7 @@ def test_the_short_circuit_did_not_delete_1b():
     """Ordering, not deletion. 1b still runs for every doc 1c does not hold, and the three
     things it decides are unchanged — a `fix` that drops them restores the silent false
     close `Q-238` closed."""
-    body = SKILL.read_text(encoding="utf-8")
+    body = text_of(SKILL)
     one_b = body[body.index("1b. **Drop any pending-doc"):body.index("1c. **Hold back")]
     assert 'git rev-list --count "<branch from frontmatter>" "^HEAD"' in one_b
     assert "git cherry HEAD" in one_b
@@ -2224,7 +2232,7 @@ def test_the_staleness_measurement_is_hermetic(scripts, tmp_path):
     env = dict(os.environ)
     env["GIT_DIR"] = str(elsewhere / ".git")
     env["GIT_WORK_TREE"] = str(elsewhere)
-    r = subprocess.run([sys.executable, str(collect), str(wt), "feat/x"],
+    r = subprocess.run([sys.executable, *collect.argv, str(wt), "feat/x"],
                        cwd=main, capture_output=True, text=True, env=env)
 
     assert r.returncode == 6, (
@@ -2396,7 +2404,7 @@ def test_an_empty_branch_name_is_still_a_loud_abort(scripts, tmp_path):
     _live(main).mkdir(parents=True)
     _doc(wt / "sysop/runtime/pending-docs/feat-x.md", "feat/x", "S")
 
-    r = subprocess.run([sys.executable, str(collect), str(wt), ""],
+    r = subprocess.run([sys.executable, *collect.argv, str(wt), ""],
                        cwd=main, capture_output=True, text=True)
 
     assert r.returncode == 4, f"an empty branch must abort loudly: {r.returncode} {r.stdout}"
@@ -2479,7 +2487,7 @@ def test_every_git_env_var_in_the_strip_list_is_actually_stripped(scripts, tmp_p
     env[var] = str(elsewhere / ".git") if var != "GIT_WORK_TREE" else str(elsewhere)
     if var == "GIT_INDEX_FILE":
         env[var] = str(elsewhere / ".git" / "index")
-    r = subprocess.run([sys.executable, str(collect), str(wt), "feat/x"],
+    r = subprocess.run([sys.executable, *collect.argv, str(wt), "feat/x"],
                        cwd=main, capture_output=True, text=True, env=env)
 
     assert r.returncode == 6, f"{var} was honoured and the drift was lost: {r.stdout}"
@@ -2490,7 +2498,7 @@ def test_step_8_carries_a_row_for_every_line_the_collect_prints():
     first cut of this phase shipped both new stdout lines with no sink at all. Derive the
     pairing rather than listing it: every `PENDING-DOC <X>:` prefix the heredoc prints must
     have a Step 8 row, and each row must say what happened to the doc."""
-    body = SKILL.read_text(encoding="utf-8")
+    body = text_of(SKILL)
     step8 = body[body.index("Pending-doc collisions: <N>"):]
     step8 = step8[:step8.index("\n## ")] if "\n## " in step8 else step8
 
@@ -2514,7 +2522,7 @@ def test_the_collect_prints_no_prefix_without_a_step_8_sink():
     """The general form of the test above: the pairing is DERIVED from the heredoc's own
     `print` statements, so a future line added with no row reddens here rather than being
     noticed when an operator misses a SKIP."""
-    body = SKILL.read_text(encoding="utf-8")
+    body = text_of(SKILL)
     collect = _heredocs()[0]
     prefixes = set(re.findall(r"'PENDING-DOC ([A-Z][A-Z ]+):", collect))
     prefixes |= set(re.findall(r'"PENDING-DOC ([A-Z][A-Z ]+):', collect))
@@ -2793,7 +2801,7 @@ def test_a_bystander_doc_cannot_crash_or_hang_the_rollback(scripts, tmp_path, sh
         os.mkfifo(bystander)
 
     r = subprocess.run(
-        [sys.executable, str(rollback), str(wt), "feat/x"],
+        [sys.executable, *rollback.argv, str(wt), "feat/x"],
         cwd=main, capture_output=True, text=True, timeout=90,
     )
 
@@ -2816,7 +2824,7 @@ def test_the_rollback_exit_8_row_names_every_line_that_can_produce_it():
     assert a number, and this pins the naming instead.
     """
     rollback = _heredocs()[1]
-    body = SKILL.read_text(encoding="utf-8")
+    body = text_of(SKILL)
     header = "| exit | meaning | state of the record | what to do |"
     table = body[body.index(header):]
     table = table[: table.index("\n\n")]
@@ -2883,13 +2891,11 @@ def test_the_rollbacks_exit_table_lives_in_the_step_it_documents():
     Deleting the table outright IS caught. Misplacing it was not — and a remedy an operator
     halting at step (b) cannot find is the same failure as a remedy that is not written.
     """
-    body = SKILL.read_text(encoding="utf-8")
+    body = text_of(SKILL)
     header = "| exit | meaning | state of the record | what to do |"
     assert body.count(header) == 1
     table_at = body.index(header)
-    # the rollback heredoc is the second `<worktree-path>` invocation in the file
-    first = body.index('python3 - "<worktree-path>" "<branch name>"')
-    rollback_at = body.index('python3 - "<worktree-path>" "<branch name>"', first + 1)
+    rollback_at = body.index(INVOCATIONS[1])
     step4_at = body.index("\n## Step 4:")
     assert rollback_at < table_at < step4_at, (
         "the rollback's exit table is not between its heredoc and the end of Step 3b — an "
@@ -3122,7 +3128,7 @@ def test_a_fifo_in_mains_pending_docs_cannot_hang_the_collect(scripts, tmp_path)
     os.mkfifo(_live(main) / "neighbour.md")
 
     r = subprocess.run(
-        [sys.executable, str(collect), str(wt), "feat/x"],
+        [sys.executable, *collect.argv, str(wt), "feat/x"],
         cwd=main, capture_output=True, text=True, timeout=60,
     )
 
@@ -3521,7 +3527,7 @@ def test_a_lock_that_is_not_a_regular_file_is_skipped_not_waited_on(scripts, tmp
     _task_lock(main, "TASK-0042", "feat/x")
 
     r = subprocess.run(
-        [sys.executable, str(collect), str(wt), "feat/x"],
+        [sys.executable, *collect.argv, str(wt), "feat/x"],
         cwd=main, capture_output=True, text=True, timeout=30,
     )
 
@@ -3530,7 +3536,7 @@ def test_a_lock_that_is_not_a_regular_file_is_skipped_not_waited_on(scripts, tmp
 
 
 def test_exit_8_is_documented_where_the_operator_looks():
-    body = SKILL.read_text(encoding="utf-8")
+    body = text_of(SKILL)
     table = body[body.index("| exit | meaning | state of main | what to do |"):]
     table = table[: table.index("\n\n")]
     row = next(ln for ln in table.split("\n") if ln.lstrip().startswith("| **8** |"))
@@ -3692,7 +3698,7 @@ def test_a_non_utf8_lock_does_not_crash_the_collect(scripts, tmp_path):
 def test_the_partial_route_keeps_its_polarity():
     """`roadmap_ids` alone is satisfied by "ADD the id to roadmap_ids", which closes the very
     task a partial merge holds open. A phrase contract, the way the rollback rows are pinned."""
-    body = SKILL.read_text(encoding="utf-8")
+    body = text_of(SKILL)
     table = body[body.index("| exit | meaning | state of main | what to do |"):]
     table = table[: table.index("\n\n")]
     row = next(ln for ln in table.split("\n") if ln.lstrip().startswith("| **8** |"))
@@ -3702,7 +3708,7 @@ def test_the_partial_route_keeps_its_polarity():
 
 def test_the_no_workspace_sentence_keeps_its_rule():
     """The only thing that applies exit 8 to the shapes the collect never runs on."""
-    body = SKILL.read_text(encoding="utf-8")
+    body = text_of(SKILL)
     ws = body[body.index("**If `WS` is empty**"):]
     ws = ws[: ws.index("\n\n")]
     for phrase in ("other than a review batch's `BATCH-<N>.lock`",
@@ -3713,12 +3719,12 @@ def test_the_no_workspace_sentence_keeps_its_rule():
 
 def test_the_exit_0_shapes_are_qualified_by_the_lock():
     """Both statements that list the collect's exit-0 shapes must say a task lock changes it."""
-    body = SKILL.read_text(encoding="utf-8")
+    body = text_of(SKILL)
     para = body[body.index("**Any non-zero exit means do NOT proceed to (b).**"):]
     para = para[: para.index("\n\n")]
     assert "the last two only while no task lock names the branch" in para
     assert "and at **8** (`Q-594`)" in para
-    assert "exits 0 — or 8, when\n      # a task lock names the branch" in body
+    assert "exits 0 — or 8, when\n# a task lock names the branch" in _heredocs()[0]
     row = next(ln for ln in body.split("\n") if ln.lstrip().startswith("| **8** |"))
     assert "`BATCH-<N>.lock`, still exit 0" in row
 
@@ -3819,7 +3825,7 @@ def test_a_stale_refusal_prints_no_open_claim(scripts, tmp_path):
 
 
 def test_the_open_claim_rows_keep_their_polarity():
-    body = SKILL.read_text(encoding="utf-8")
+    body = text_of(SKILL)
     s8 = body[body.index("\nOpen claims: <N>"):]
     s8 = s8[: s8.index("\n\n")]
     assert "List it ONLY if the branch merged; drop it if the branch was SKIP'd." in s8

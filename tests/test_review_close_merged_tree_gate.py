@@ -45,6 +45,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tests"))
 
 from _prose_guard_helpers import locate, rewrapped, states, swap  # noqa: E402
+from skill_runner_text import text_of
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SKILL = REPO_ROOT / "core" / "skills" / "review-close" / "SKILL.md"
@@ -115,7 +116,7 @@ CODE_EXT_RE = re.compile(r"(?<![\w/])`?\.(py|ts|tsx|js|jsx|sql|sh|kt|swift|go|rs
 
 
 def _text() -> str:
-    return SKILL.read_text(encoding="utf-8")
+    return text_of(SKILL)
 
 
 def _flat(text: str) -> str:
@@ -831,7 +832,7 @@ def test_main_push_guard_reruns_the_merged_tree_gate_not_step_3():
     span = ("# The base changed → RE-RUN review-close 4a-post (the merged-tree gate: the "
             "# project's § Pre-merge verification commands, run on the merge target) against "
             "# the new base before pushing. NOT Step 3 — Step 3's tree is the default branch "
-            "# before any merge, which is not the tree this rebase moved.")
+            "# before any merge, which is not the tree this merge moved.")  # Phase 379: Rule B merges, never rebases
     assert _flat(span) in flat, "Rule B's re-run instruction is not intact"
     assert "RE-RUN review-close Step 3" not in flat, "the pre-fix instruction is back"
     i = flat.index("RE-RUN review-close 4a-post")

@@ -44,6 +44,7 @@ from unittest import mock
 import pytest
 
 import permission_denied_hook as pdh
+from skill_runner_text import text_of
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 REVIEW_CLOSE = REPO_ROOT / "core" / "skills" / "review-close" / "SKILL.md"
@@ -53,7 +54,7 @@ GETTING_STARTED = REPO_ROOT / "docs" / "getting-started.md"
 
 
 def _text() -> str:
-    return REVIEW_CLOSE.read_text(encoding="utf-8")
+    return text_of(REVIEW_CLOSE)
 
 
 def _flat(text: str) -> str:

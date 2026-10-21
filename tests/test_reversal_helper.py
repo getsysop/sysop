@@ -18,6 +18,7 @@ from pathlib import Path
 import re
 
 from _reversal import REVERSAL_VOCAB, assert_no_reversal, slice_between
+from skill_runner_text import text_of
 
 CLEAN = (
     "### 4b. Close Merged Batches\n"
@@ -230,7 +231,7 @@ def _softened_skill(tmp_path, anchor: str, sentence: str, where: str, name: str)
     because a guard that scans only the head of its slice passed the one-position
     version (round: C-W03, C-W07)."""
     skill = _TESTS_DIR.parent / "core/skills/review-close/SKILL.md"
-    lines = skill.read_text(encoding="utf-8").splitlines(keepends=True)
+    lines = text_of(skill).splitlines(keepends=True)
     i = next(k for k, l in enumerate(lines) if anchor in l)
     lines.insert(i + 1 if where == "head" else i, sentence + "\n")
     out = tmp_path / name

@@ -1512,18 +1512,25 @@ def _measured_drift(doc: Path, branch: str, main_root: Path | None, lock: Lock |
     """`_pending_doc_drift`, only where `/review-close` measures the doc, noting why not.
 
     The close's Step 0 resolves the branch's workspace, and Step 3b's collect runs there: on
-    the docs in that workspace, and on this branch's doc held in the main checkout. With no
-    workspace of the branch's own (a `--branch` claim, or a worktree removed with its branch
-    kept) the collect never runs, so the close does not refuse the doc, and calling it stale
-    would name a refusal that does not happen."""
+    the docs in that workspace, and on this branch's doc held in the main checkout. A
+    `--branch` claim's workspace is the main checkout (its lock says so, or, with no lock, the
+    main checkout has the branch checked out): Step 0 reports the `main-checkout` shape, the
+    collect never runs, the close does not refuse the doc, and calling it stale would name a
+    refusal that does not happen.
+    A branch with no workspace at all (a worktree removed with its branch kept, as a close
+    that parked after Step 3b leaves it) is measured: Step 3b step 0's arm for it applies
+    exit 6's test by hand (`Q-664`)."""
     here = doc.parents[3] if len(doc.parents) > 3 else None
     if main_root is not None and here is not None and _same_dir(here, main_root):
         own = ([worktree.path] if worktree is not None and not worktree.is_main else []) + (
             [Path(lock.workspace)] if lock is not None and lock.workspace else [])
-        if not any(p.is_dir() and not _same_dir(p, main_root) for p in own):
+        in_main = any(p.is_dir() and _same_dir(p, main_root) for p in own) or _git(
+            ["symbolic-ref", "--short", "-q", "HEAD"], cwd=str(main_root), hermetic=True
+        ).strip() == branch
+        if not any(p.is_dir() and not _same_dir(p, main_root) for p in own) and in_main:
             notes.append("pending-doc staleness not measured: the doc is in the main checkout "
-                         "and the branch has no workspace of its own, so /review-close does not "
-                         "run its Step 3b collect on it")
+                         "and the branch's workspace is the main checkout, so /review-close does "
+                         "not run its Step 3b collect on it")
             return DocDrift(None, why="not measured by the close")
     drift = _pending_doc_drift(doc, branch)
     if drift.commits is None:
@@ -1617,9 +1624,10 @@ def _land_park(main_root: Path, run_id: str) -> str:
 
 
 def _handoff_route(main_root: Path, run_id: str, parked: bool) -> str:
-    """The command that moves a hand-off on: the attended `--land` (the unattended land is not
-    enabled, `Q-411`), or `re-request` for any hand-off whose review was not requested, parked
-    or not, since a land would only park it."""
+    """The command that moves a hand-off on: the unattended land for a hand-off requested with
+    `--agent` (`Q-411`, Phase 375), the attended `--land` otherwise, or `re-request` for any
+    hand-off whose review was not requested, parked or not, since a land would only park it.
+    A parked hand-off always goes to a human."""
     try:
         rec = json.loads((main_root / "sysop" / "runtime" / "close" / run_id / "handoff.json")
                          .read_text(encoding="utf-8"))
@@ -1627,6 +1635,9 @@ def _handoff_route(main_root: Path, run_id: str, parked: bool) -> str:
         rec = {}
     rec = rec if isinstance(rec, dict) else {}
     land = f"/review-close --land {run_id}"
+    owner = rec.get("unattended", {}).get("agent") if isinstance(rec.get("unattended"), dict) else None
+    if isinstance(owner, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._@+-]{0,63}", owner):
+        land += f" --unattended --agent {owner}"
     if rec.get("status") != "awaiting":
         # No review was requested (round 2: an unparked failed request was routed to a land that
         # is certain to park).
@@ -2336,6 +2347,36 @@ def _find_discrepancies(
             detail=f"sysop/runtime/close/{run_id}/AWAITING stops every /review-close, and {why}",
             suggestion=f"/review-close --land {run_id}, or close_run.py abandon {run_id} once its PR is closed"))
 
+    # An unattended close that stopped durably (`Q-664`): every close refuses until a human
+    # clears it, so it is reported whatever task state says.
+    for marker in sorted((main_root / "sysop" / "runtime" / "close").glob("*/STOPPED")):
+        try:
+            rec = json.loads(marker.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, ValueError):
+            rec = None
+        what = (f"at {rec.get('step')}: {rec.get('reason')}" if isinstance(rec, dict)
+                else "and it cannot be read")
+        out.append(Discrepancy(
+            kind="close stopped",
+            detail=f"sysop/runtime/close/{marker.parent.name}/STOPPED stops every /review-close, {what}",
+            suggestion=f"a human: recover as it says, then close_run.py clear {marker.parent.name}"))
+
+    # A branch an unattended close held (`Q-664`): later unattended runs skip it until its
+    # head moves; reported, not routed, since an attended close does not read holds.
+    for hold in sorted((main_root / "sysop" / "runtime" / "close" / "holds").glob("*.json")):
+        try:
+            rec = json.loads(hold.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, ValueError):
+            rec = None
+        if not isinstance(rec, dict):
+            from urllib.parse import unquote  # `close_run.py hold` names the file quote(branch)
+            rec = {"branch": unquote(hold.stem), "head": "?", "reason": "the hold record cannot be read"}
+        out.append(Discrepancy(
+            kind="branch held",
+            detail=f"{rec.get('branch')} is held at {str(rec.get('head'))[:12]}: {rec.get('reason')}",
+            suggestion=(f"an attended /review-close (it does not read holds), a new head, or once its "
+                        f"cause is fixed, close_run.py unhold {rec.get('branch')}")))
+
     lock_ids = {l.task_id for l in locks}
     wt_branches = {w.branch for w in worktrees if not w.is_main}
     # An unreadable lock's `branch` is unknown, so a worktree or branch that
@@ -2491,6 +2532,63 @@ def _find_discrepancies(
                     ),
                 )
             )
+
+    # Phase 388 (`Q-409` P2): an arm receipt no Step 8 checked, holding an arm that
+    # became due and was never loaded. `/review-close` opens one at Step 1; Step 8's
+    # `close_arms.py check` removes it when nothing is missing and marks it `checked`
+    # otherwise, so a survivor past a day is a close that skipped a step file or
+    # stopped before its report. Same rule as `close_arms.py unchecked`, including its
+    # record shapes: a receipt it cannot read is reported, not skipped.
+    arms_dir = main_root / "sysop" / "runtime" / "close-arms"
+    shapes = {"begin": 2, "policy": 3, "required": 3, "loaded": 4, "checked": 3}
+    if arms_dir.is_dir():
+        now = time.time()
+        for r in sorted(arms_dir.glob("*.tsv")):
+            try:
+                if (now - r.stat().st_mtime) / 3600 < 24:
+                    continue
+            except OSError:   # removed by a concurrent Step 8 since the glob
+                continue
+            try:
+                text = r.read_text(encoding="utf-8")
+                recs = [ln.split("\t") for ln in text.split("\n")]
+                if recs and recs[-1] == [""]:
+                    recs.pop()
+                if any(shapes.get(x[0]) != len(x) or not all(x) for x in recs):
+                    raise ValueError("a line of the wrong shape")
+            except FileNotFoundError:   # removed by a concurrent Step 8 since the listing
+                continue
+            except (OSError, ValueError) as e:   # UnicodeDecodeError is a ValueError
+                out.append(
+                    Discrepancy(
+                        kind="review-close arm receipt unreadable",
+                        detail=f"sysop/runtime/close-arms/{r.name}: {e}",
+                        suggestion=(
+                            "read it by hand for an arm that was due and never loaded, "
+                            "then delete it"
+                        ),
+                    )
+                )
+                continue
+            if any(x[0] == "checked" for x in recs):
+                continue
+            loaded = {x[1] for x in recs if x[0] == "loaded" and len(x) > 1}
+            due = [x[1] for x in recs if x[0] == "required" and len(x) > 1
+                   and x[1] not in loaded]
+            for arm in dict.fromkeys(due):
+                out.append(
+                    Discrepancy(
+                        kind="review-close arm never loaded",
+                        detail=(
+                            f"sysop/runtime/close-arms/{r.name}: arm {arm} became due "
+                            "and was never loaded, and no Step 8 checked the receipt"
+                        ),
+                        suggestion=(
+                            "the close skipped that step file or stopped before "
+                            "Step 8: read its report, then delete the receipt"
+                        ),
+                    )
+                )
 
     # Phase 361: `/auto-build --unattended` writes this marker when a Step 5
     # abort left a claim it could not verify, and every later unattended run
@@ -3365,7 +3463,7 @@ def _recommended_next(s: Survey) -> Recommendation | None:
     """Single top routing recommendation. See SKILL.md § Recommendation routing rules.
 
     Priority order: unreadable input → lock unreadable (task, batch) →
-    review-close (task) → review-close (batch) → unpushed doc-work →
+    a stopped close → awaiting --land → land parked → review-close (task) → review-close (batch) → unpushed doc-work →
     /triage if any pending batch lacks a Triaged: record → /auto-fix and/or /auto-judge →
     code committed, docs pending → pending doc stale (task, then batch) →
     continue in-progress (task, then batch) →
@@ -3417,7 +3515,19 @@ def _recommended_next(s: Survey) -> Recommendation | None:
             detail_lines=list(rb.notes),
         )
 
-    # P0d (`Q-411`, Phase 365): a close handed off to a second reader, waiting on `--land`. Ahead
+    # P0d (`Q-664`, Phase 380): an unattended close stopped durably. Ahead of every row that
+    # routes to /review-close, `--land` rows included: the unattended land refuses while it stands.
+    stopped = [d for d in s.discrepancies if d.kind == "close stopped"]
+    if stopped:
+        d = stopped[0]
+        more = f" ({len(stopped) - 1} more)" if len(stopped) > 1 else ""
+        return Recommendation(
+            command=d.suggestion,
+            reason=f"an unattended close stopped and every /review-close refuses until it is cleared{more}",
+            detail_lines=[d.detail],
+        )
+
+    # P0e (`Q-411`, Phase 365): a close handed off to a second reader, waiting on `--land`. Ahead
     # of every close row: any other /review-close stops on the hand-off's `AWAITING` marker.
     awaiting = [t for t in s.tasks if t.state == _AWAITING_LAND_STATE]
     if awaiting:
@@ -3428,7 +3538,7 @@ def _recommended_next(s: Survey) -> Recommendation | None:
             reason=f"{t.task_id}'s close is waiting on its second reader's review{more}",
             detail_lines=list(t.notes),
         )
-    # P0e (`Q-411`, Phase 366): the same hand-off, parked by an unattended land: a human moves it.
+    # P0f (`Q-411`, Phase 366): the same hand-off, parked by an unattended land: a human moves it.
     parked_land = [t for t in s.tasks if t.state == _PARKED_LAND_STATE]
     if parked_land:
         t = parked_land[0]

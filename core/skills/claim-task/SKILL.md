@@ -9,7 +9,7 @@ disallowed-tools: Edit, Write, NotebookEdit
 
 Claim a roadmap task or review batch, create an isolated worktree, then **orchestrate** the work: spawn a planner, spawn an independent reviewer, classify the findings yourself, optionally gate on the human, spawn an executor, then ask the human its questions and spawn a second executor for the answers. Follow these steps in order.
 
-> **This skill is an orchestrator. It never implements.** It does not enter plan mode, does not call `ExitPlanMode`, and does not edit files. Its whole body is: claim, spawn, gate, spawn, ask, spawn, report.
+> **This skill is an orchestrator. It never implements.** It does not enter plan mode, does not call `ExitPlanMode`, and does not edit files. Its whole body is: claim, spawn, gate, spawn, ask, spawn, report. **Run it in the main conversation, never through an Agent call** — its planner, reviewer and executor waits can each outlive a subagent's prompt cache.
 >
 > **What `disallowed-tools` above does and does not buy** — state this honestly rather than treating the frontmatter as a proof. It denies the `Edit` / `Write` / `NotebookEdit` tools, so the orchestrator cannot quietly become the implementer by reaching for them. It is **partial by design**: `Bash` stays allowed, so shell redirects and `sed -i` are not covered. **Non-Claude-Code harnesses ignore the key entirely**, so it does nothing for a Codex consumer. It fires only when the harness *activates* this skill — when an agent is instead told to read this `SKILL.md` and follow it (path-based invocation, the only option on some harnesses), the frontmatter never fires. And it is **turn-scoped**: the documented behaviour is that the restriction clears when the user sends their next message, so any run in which the human types anything has lost it from that point. Whether it survives a sub-agent return, an `AskUserQuestion` answer, or a nested `Skill` invocation is **not established in either direction** — probed 2026-07-31 and no documentation was found for any tool-mediated boundary, which is weaker than proof that none exists and is exactly why nothing here rests on the answer. **Nothing in this skill may depend on the guard's reach past the step that invoked it.** The durable protection against an orchestrator drifting into implementing is the split spawns and the artifact set below, not this key.
 
@@ -34,6 +34,7 @@ Read `.claude/settings.json` (and `.claude/settings.local.json` if present — a
 - `Bash(python3 sysop/scripts/validate_tasks.py)` / `Bash(python3 sysop/scripts/validate_tasks.py:*)` and the `.venv/bin/python3 sysop/scripts/validate_tasks.py` / `.venv/bin/python3 sysop/scripts/validate_tasks.py:*` venv variants — Step 4c post-claim validator. Bare `python3` is the command word the step prescribes: the script self-resolves venv PyYAML via its own `sys.path` bootstrap (Phase 182), so one form serves every consumer. The `.venv/bin/python3` rules stay only so a hand-typed venv invocation is not denied.
 - `Bash(python3 sysop/scripts/scope_overlap.py:*)` (and the `.venv/bin/python3` variant) — Step 2's non-blocking overlap advisory. The `git -C <worktree> diff` it shells out to needs **no** separate rule (it's a subprocess of the permitted python call, and read-only `git` auto-passes per `_shared/permission-guard.md` § Notes). This rule is **not** load-bearing — a missing rule (or any non-zero exit) just means the advisory is skipped; the claim still proceeds.
 - `Bash(python3 sysop/scripts/ignored_refs.py:*)` — Step 7e item 5b's ignored-file check, run by the executor in its worktree.
+- `Bash(python3 sysop/scripts/claim_record.py:*)` — Step 7f item 1's write of `## Test decision` and `## Plan` into the body file (option C).
 - `Bash(git add tasks/index.yml)` — Step 7d's human gate and Step 7f's Option C stage the index directly. It is **not** Step 4d's rule any more: Phase 261 moved that commit inside `claim_task.sh --commit-claim`, which stages and commits under the script rule above.
 
 If any are missing, stop with the `_shared/permission-guard.md` § Algorithm step 5 message (one-line reason: "creates an isolated worktree and a feature branch for the claimed task; queries + updates `tasks/index.yml` via heredoc'd python; runs the schema validator before committing the claim"). Do not proceed — unless the guard's step 3 mode check applies.
@@ -207,9 +208,9 @@ except ImportError:  # PyYAML lives only in the project venv (BeanRider ISSUE-00
         _r = subprocess.run(
             ["git", "rev-parse", "--git-common-dir"],
             capture_output=True, text=True, timeout=5,
-            env={_k: _v for _k, _v in os.environ.items()
+            env=dict((_k, _v) for _k, _v in os.environ.items()
                  if _k not in ("GIT_DIR", "GIT_WORK_TREE",
-                               "GIT_COMMON_DIR", "GIT_INDEX_FILE")},
+                               "GIT_COMMON_DIR", "GIT_INDEX_FILE")),
         )
         _g = _r.stdout.strip()
     except (OSError, subprocess.SubprocessError):
@@ -358,9 +359,9 @@ except ImportError:  # PyYAML lives only in the project venv (BeanRider ISSUE-00
         _r = subprocess.run(
             ["git", "rev-parse", "--git-common-dir"],
             capture_output=True, text=True, timeout=5,
-            env={_k: _v for _k, _v in os.environ.items()
+            env=dict((_k, _v) for _k, _v in os.environ.items()
                  if _k not in ("GIT_DIR", "GIT_WORK_TREE",
-                               "GIT_COMMON_DIR", "GIT_INDEX_FILE")},
+                               "GIT_COMMON_DIR", "GIT_INDEX_FILE")),
         )
         _g = _r.stdout.strip()
     except (OSError, subprocess.SubprocessError):
@@ -503,7 +504,7 @@ If it refuses because another writer holds the mutex, it names the holder and wr
 
 **Resume path (Step 2 entry state `resumable`): there is nothing to commit, and that is not an error.** Step 4a wrote no change, so the index already matches `HEAD`; the script reports `nothing to commit (resume path)` and exits 0. Rule A's `HEAD` assert still runs on both paths, because a resume commits nothing but every *later* step still assumes it is standing on the default branch.
 
-Run on the main checkout. The script resolves the primary checkout itself via `git-common-dir`, so it commits main-side wherever you invoke it from — but its Rule A assert reads that checkout's `HEAD`, so a primary checkout parked on a feature branch is refused rather than worked around.
+Run on the main checkout. The script resolves the primary checkout itself via `git-common-dir`, so it commits main-side wherever you invoke it from — but its Rule A assert reads that checkout's `HEAD`, so a primary checkout parked on a feature branch is refused rather than worked around. **It then fast-forwards this claim's worktree to the default branch, which now holds the claim** (`Q-532`), so every agent in Step 7 reads this task as `in_progress` there. When it cannot fast-forward (the branch already has commits on a resume, the worktree has uncommitted changes, or git would overwrite an untracked or ignored file there), it prints a `⚠️` line saying so and still exits 0: the claim is committed, and an `open` read in that worktree is the pre-claim tree, not a lost claim.
 
 ### Rollback on failure of 4b or 4c
 
@@ -807,7 +808,7 @@ Spawning planner for <CLAIM_ID> — plan only, no implementation. 3–10 minutes
 Spawn with the `Agent` tool:
 
 - `subagent_type`: `"general-purpose"`
-- `model`: `"opus"` <!-- sysop:role=planner -->
+- `model`: `"opus"`, `effort`: `"high"` <!-- sysop:role=planner -->
 - Do **NOT** set `isolation: "worktree"` — the worktree pre-exists from Step 4; the planner `cd`s into it.
 - Do **NOT** pass `run_in_background`. <!-- skill-audit-ok: run_in_background --> It is **not** a parameter of the `Agent` tool and its schema is closed, so a compliant call raises `InputValidationError` — and a rejected tool call is itself an invitation to proceed without the step. Sub-agents have run in the background by default since Claude Code 2.1.198.
 - `description`: `"Plan <CLAIM_ID>"`
@@ -823,7 +824,7 @@ The work is already claimed: worktree at `<WORKTREE_PATH>`, lock at `sysop/runti
 
 **Working directory:** `<WORKTREE_PATH>` (cd here first).
 
-**Read the task from the main checkout, not the worktree.** For a roadmap task the body is `tasks/open/<CLAIM_ID>.md` — or wherever `body:` points in `tasks/index.yml`, which is **relative to `tasks/`**, not to the repo root. A body filed by `/add-task` is deliberately left uncommitted, and the feature branch is cut at pre-claim `HEAD`, so an untracked body never entered this branch and opening it here returns ENOENT. Resolve it against the main repo root (`git rev-parse --git-common-dir`, then its parent). **If the body cannot be read, stop and report it — do not plan from the index title alone.**
+**Read the task from the main checkout, not the worktree.** For a roadmap task the body is `tasks/open/<CLAIM_ID>.md` — or wherever `body:` points in `tasks/index.yml`, which is **relative to `tasks/`**, not to the repo root. A body filed by `/add-task` is deliberately left uncommitted, and the feature branch holds only committed history (Step 4d brings it up to the claim commit, which carries `tasks/index.yml` alone), so an untracked body never entered this branch and opening it here returns ENOENT. Resolve it against the main repo root (`git rev-parse --git-common-dir`, then its parent). **If the body cannot be read, stop and report it — do not plan from the index title alone.**
 
 **Body *edits* go in the worktree copy, not the one you just read.** The rule above is about *locating* the body; it is not the write path, and reading it as one is what internal tracker #322 reported. **Nothing commits a body edit made in the main checkout.** Be precise about why, because the obvious reason is wrong: `main` *is* committed to directly here — Step 4d does it — and under `§ Merge policy: pr`, `/review-close` Step 4-pre cuts the integration branch from local `<default branch>`, so local-only `main` **commits** ride onto it. What reaches it is commits. A body edit left uncommitted in the main checkout is not one, no step stages it, and so it reaches no branch and no PR. Meanwhile `/review-close` Step 2d reads the `## Test decision` record **at the branch tip** (that step says so in as many words — *"the executor writes it into the body during implementation, inside the worktree"*), where a main-checkout edit is not. So every plan step that writes to the body must name the copy under `<WORKTREE_PATH>`.
 
@@ -932,7 +933,7 @@ On `VIOLATED`, **do not proceed to 7b.** HEAD moved or left the task branch duri
 
 **Always.** Review is never inherited, never skipped, and never merged into another agent's job. A reviewer that did not write the plan is the property the collapsed reviewer-executor shape conceded, and recovering it is most of the point of this reshape.
 
-Same agent parameters as 7a except `model`: `"opus"` <!-- sysop:role=plan-review -->, with `description`: `"Adversarial plan review <CLAIM_ID>"`.
+Same agent parameters as 7a except `model`: `"opus"`, `effort`: `"high"` <!-- sysop:role=plan-review --> (the `effort` is this line's, never 7a's: with none here, pass none), with `description`: `"Adversarial plan review <CLAIM_ID>"`.
 
 `prompt`: the **contents of `<ARTIFACT_DIR>/plan.md` verbatim**, followed by the **Prompt Template** block copied verbatim from `.claude/skills/_shared/adversarial-review.md`, followed by the two paragraphs below. No other wrapper text — the shared template supplies the framing, and duplicating it here would fork it.
 
@@ -1223,7 +1224,7 @@ Three outcomes:
 
 Inputs: the (possibly revised) plan artifact, the review artifact, and your classification.
 
-Same agent parameters as 7a except `model`: `"opus"` <!-- sysop:role=executor -->, with `description`: `"Execute <CLAIM_ID>"`, and `exec` substituted for `<ENVELOPE_PHASE>`.
+Same agent parameters as 7a except `model`: `"sonnet"`, `effort`: `"high"` <!-- sysop:role=executor --> (the `effort` is this line's, never 7a's: with none here, pass none), with `description`: `"Execute <CLAIM_ID>"`, and `exec` substituted for `<ENVELOPE_PHASE>`.
 
 ---
 
@@ -1351,365 +1352,7 @@ The tempting recovery from a failed reviewer is *"continue to the executor anywa
 # uses. The plan is read from the RUN DIRECTORY rather than passed as an argument: it is a
 # multi-kilobyte sub-agent document, and putting it through the shell is how a quoting bug
 # becomes a code-execution bug.
-python3 - <<'PY' "<CLAIM_ID>" "<RUN_ID>" "<BODY_PATH>" '<TEST_DECISION>'
-import os, sys, json, subprocess, tempfile
-from pathlib import Path
-
-claim_id, run_id, body_rel, test_decision = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
-if "<" in claim_id or "<" in run_id or "<" in body_rel:
-    print("ERROR: placeholder not substituted: {!r} {!r} {!r}".format(
-        claim_id, run_id, body_rel), file=sys.stderr)
-    sys.exit(2)
-if not test_decision.strip() or "<" in test_decision:
-    print("ERROR: <TEST_DECISION> not substituted -- the plan's Test decision is required "
-          "here, because option C has no executor to write it later", file=sys.stderr)
-    sys.exit(2)
-
-common = subprocess.run(["git", "rev-parse", "--git-common-dir"],
-                        capture_output=True, text=True, check=True).stdout.strip()
-main_root = Path(common).resolve().parent
-run_dir = main_root / "sysop" / "runtime" / "claim" / claim_id / run_id
-if not run_dir.is_dir():
-    print("ERROR: no such run directory {}".format(run_dir), file=sys.stderr)
-    sys.exit(3)
-
-plan_md = run_dir / "plan.md"
-if not plan_md.is_file():
-    print("ERROR: no plan.md in {} -- refusing to write an empty plan back".format(run_dir),
-          file=sys.stderr)
-    sys.exit(4)
-try:
-    plan_text = plan_md.read_text(encoding="utf-8").strip()
-except (OSError, UnicodeDecodeError) as e:
-    print("ERROR: {} could not be read ({}: {})".format(plan_md, type(e).__name__, e),
-          file=sys.stderr)
-    sys.exit(4)
-if not plan_text:
-    print("ERROR: plan.md is empty", file=sys.stderr)
-    sys.exit(4)
-
-# Both body forms, exactly as /review-close Step 2d resolves them. The canonical value
-# every writer emits is `open/<ID>.md` RELATIVE TO `tasks/`; assuming the other form is
-# the documented way to make this block fail on a real queue while passing on a fixture.
-body = main_root / "tasks" / body_rel
-if not body.is_file():
-    body = main_root / body_rel
-if not body.is_file():
-    print("ERROR: body not found for {!r} (tried tasks/-relative and repo-relative)".format(
-        body_rel), file=sys.stderr)
-    sys.exit(5)
-# Write THROUGH a symlink, not over it: `tmp.replace(body)` on a symlinked body would
-# swap the link for a regular file and leave the real target stale.
-body = body.resolve()
-
-# The sealed report is the reviewer's ONE unforgeable channel and it lives only in the
-# envelope. An absent one is RECORDED, never silently dropped -- a missing record and a
-# lost one must not look the same (Step 7c's transport check writes the same distinction
-# to review-transport.md).
-env_path = main_root / "sysop" / "runtime" / "subagent-envelopes" / (claim_id + ".review.json")
-sealed = None
-if env_path.is_file():
-    try:
-        sealed = json.loads(env_path.read_text(encoding="utf-8")).get("review_report_raw")
-    except ValueError:
-        sealed = None
-
-def fence_mark(line):
-    """`(char, length)` if this line is a fence marker, else None.
-
-    Reports only that the line IS a marker. Whether it *closes* an open fence is
-    `fence_closes`' question -- an opener may carry an info string (this writer
-    emits `fence + "markdown"` below), a closer may not."""
-    s = line.lstrip()
-    for ch in ("`", "~"):
-        if s.startswith(ch * 3):
-            n = 0
-            while n < len(s) and s[n] == ch:
-                n += 1
-            return ch, n
-    return None
-
-def fence_closes(line, open_mark):
-    """True only if `line` CLOSES the fence `open_mark` opened.
-
-    Three properties, not two. Same character, at least as long -- and **no info
-    string**, which is the one an opener is allowed to carry and a closer is not.
-    A ```json line nested inside a plain ``` fence satisfies the first two, so a
-    reader without the third believes it has LEFT the fence while still inside it,
-    and then reads the fence's own lines as content. That is the fabricating
-    direction, not the dropping one (`Q-468`).
-
-    The closer decision lives here, in one place, precisely because it was split
-    across two loops before and only one of them remembered it."""
-    mark = fence_mark(line)
-    return (bool(mark) and mark[0] == open_mark[0] and mark[1] >= open_mark[1]
-            and not line.strip().strip(mark[0]))
-
-def strip_sections(lines, headings, preserve=()):
-    """Drop each `## <heading>` through the line before the next `## `.
-
-    Returns `(kept, insert_at, unbalanced, saved)`. `insert_at` is where the
-    EARLIEST removed section began, so the rewrite lands back in the position it
-    held rather than at the end of the file; `None` means none of them were
-    present and the caller appends. `unbalanced` reports an unterminated fence,
-    on which the caller REFUSES -- see the note at the return.
-
-    `preserve` names headings to remove from the body but hand BACK to the
-    caller in `saved` (keyed by the lowercased canonical heading, the original
-    heading line included), so the caller can re-emit them at a mandated
-    position instead of leaving them where they fell. It exists for one
-    concrete defect (`Q-461`): the caller strips `## Test decision` and
-    `## Plan` and reinserts them as one contiguous block at `insert_at`, so a
-    body in the schema's own order -- `Test decision / Also fixed / Plan` --
-    came out `Test decision / Plan / Also fixed`, inverting the order
-    `tasks/schema.md` calls load-bearing. Two insertion points would need a
-    second fence-aware walk over `out`; preserving through THIS walk keeps the
-    fence arithmetic single-sourced, which matters in a helper that has
-    produced silent section loss twice.
-
-    `preserve` matches at `## ` by SEARCH rather than equality: a match is
-    `## <name>` or a heading beginning `## <name> `. That was forced by grepping
-    the live consumer corpus -- `## Also fixed (PR 1)` and `## Also fixed (PR 0)`
-    are real headings in one task body, and an equality test would leave each
-    where it was, i.e. still sitting after `## Plan`, while reporting nothing,
-    because this arm is silent by design. The re-emitted heading is the caller's
-    original line, so the suffix survives.
-
-    **Matching at `## ` only is a decision, not an oversight, and it was made by
-    reverting the alternative.** A first cut matched any heading level. The
-    corpus does not support it -- of 12 `Also fixed` headings, the only
-    non-`## ` one is `tasks/schema.md`'s own section header, and no task body
-    carries the shape -- and it cost three defects: hoisting a deeper heading
-    RE-PARENTS it (an edit to the consumer's content, not a move), the hoisted
-    section then landed after `## Plan` so the NEXT run consumed it as part of
-    the plan section and dropped it, and a `# Also fixed` at h1 swallowed every
-    following `## ` section into the sink. Handling a deeper heading correctly
-    means deciding whether re-parenting is acceptable, which is a design
-    question; it is filed, not fixed here.
-
-    `headings` keeps equality at `## ` for the same reason plus one more: the
-    corpus carries `### Test decision` headings that this helper therefore does
-    not strip, so the caller inserts a SECOND section and a first-match reader
-    can meet the stale one. That is pre-existing and separately filed, and must
-    not be "tidied" into this line without the double-section case being handled.
-
-    FENCE-AWARE on purpose, and it tracks fence LENGTH rather than just the
-    marker. A task body can carry ``` or ~~~ blocks whose content starts with
-    `## `, and a fence-blind slice either stops early (leaving half a section)
-    or runs to EOF (eating every section after it). Length matters because the
-    block below writes the plan inside a fence made LONGER than any backtick
-    run in it -- so a plain ``` inside that plan must NOT be read as closing
-    it. A closer must use the same character and be at least as long, and
-    carry no info string.
-    """
-    want = {"## " + h.lower() for h in headings}
-    keep = ["## " + h.lower() for h in preserve]
-    out, fence, skipping, insert_at = [], None, False, None
-    saved, sink = {}, None
-    for ln in lines:
-        mark = fence_mark(ln)
-        if fence is None:
-            if mark:
-                fence = mark
-            else:
-                low = ln.strip().lower()
-                # Equality for `headings`; search at `## ` for `preserve`.
-                key = None
-                for k in keep:
-                    if low == k or low.startswith(k + " "):
-                        key = k
-                        break
-                if low in want or key is not None:
-                    if insert_at is None:
-                        insert_at = len(out)
-                    skipping = True
-                    # `sink` is None for a stripped-and-discarded section and a list
-                    # for a preserved one, so the two share one walk without either
-                    # branch having to know about the other.
-                    sink = saved.setdefault(key, []) if key is not None else None
-                    if sink is not None:
-                        sink.append(ln)
-                    continue
-                elif skipping and ln.startswith("## "):
-                    skipping = False
-                    sink = None
-        elif fence_closes(ln, fence):
-            fence = None
-        if skipping:
-            if sink is not None:
-                sink.append(ln)
-        else:
-            out.append(ln)
-    # An UNTERMINATED fence means the body's own fencing is unbalanced, and the
-    # scan above cannot then tell a heading from fenced text -- so `skipping`
-    # never resets and every remaining section is dropped. That is silent data
-    # loss in a tracked file, so the caller refuses instead of writing.
-    # This is a BACKSTOP, not the fix: the fence arithmetic below is what stops
-    # this block producing an unbalanced body in the first place. It exists
-    # because an independent reviewer reached it with ordinary reviewer output.
-    return out, insert_at, fence is not None, saved
-
-# newline="" disables universal-newline translation, so a CRLF body is not silently
-# rewritten LF throughout -- which showed as a whole-file diff rather than the ~20 added
-# lines. Normalise for processing, restore on write.
-#
-# `open(...)` rather than `Path.read_text(..., newline="")`: `read_text` did not
-# accept `newline` until Python 3.13, and this tree's floor is 3.9
-# (`tests/test_python_floor_portability.py`). Measured on four interpreters --
-# 3.9.6, 3.11.12 and 3.12.13 all raise `read_text() got an unexpected keyword
-# argument 'newline'`; only 3.13 accepts it. So this read FATALED on the floor
-# AND on every currently-supported Python below 3.13, taking the whole option-C
-# body rewrite with it. It went unseen because the suite's venv is 3.14.
-# `open` has accepted `newline` since 3.0.
-try:
-    with open(body, encoding="utf-8", newline="") as _f:
-        raw = _f.read()
-except (OSError, UnicodeDecodeError) as e:
-    print("ERROR: {} could not be read ({}: {}) -- nothing was written".format(
-        body, type(e).__name__, e), file=sys.stderr)
-    sys.exit(5)
-crlf = "\r\n" in raw
-text = raw.replace("\r\n", "\n")
-# Replace IN PLACE, both sections, at the position the earlier of them held.
-# Appending instead would leave two `## Plan` sections on a second option-C run --
-# and Step 7a's presence test reads whichever comes first, i.e. the stale one --
-# and on the FIRST run it would push both sections below `## Surfaced by`, which
-# is not the order `tasks/schema.md` documents.
-lines, insert_at, unbalanced, saved = strip_sections(
-    text.split("\n"), ("Test decision", "Plan"), preserve=("Also fixed",))
-if unbalanced:
-    print("ERROR: {} has an unterminated code fence -- refusing to rewrite it, because a "
-          "section scan cannot tell a heading from fenced text in that state and would drop "
-          "every section after it. Fix the body's fencing and re-run.".format(body),
-          file=sys.stderr)
-    sys.exit(6)
-if insert_at is None:
-    insert_at = len(lines)
-# Normalise blank lines on BOTH sides of the insertion point, so the block below
-# supplies exactly one separator each way. Without this the rewrite is not
-# idempotent: running option C twice on the same task accretes one blank line per
-# run, which a diff shows and a reader does not. Found by running it twice.
-while insert_at > 0 and not lines[insert_at - 1].strip():
-    lines.pop(insert_at - 1)
-    insert_at -= 1
-while insert_at < len(lines) and not lines[insert_at].strip():
-    lines.pop(insert_at)
-
-# A fence longer than any run of backticks in EITHER embedded document, so an ordinary
-# ```bash block inside them cannot terminate it. Demoting their own headings instead
-# would need a fence-aware rewriter over sub-agent prose; this needs arithmetic.
-#
-# BOTH, not just the plan. An earlier cut computed this over `plan_text` alone and wrapped
-# the sealed report in a bare ```yaml -- and a reviewer quoting a fenced snippet in a
-# finding's `evidence:` field is ordinary output, not an adversarial payload. That broke
-# the wrapper, and the NEXT option-C run's strip then desynced and deleted every section
-# after it. Found by an independent reviewer running two consecutive runs on realistic
-# input; the author's own fence test covered only the plan.
-longest = 0
-for doc in (plan_text, sealed or ""):
-    run = 0
-    for ch in doc:
-        run = run + 1 if ch == "`" else 0
-        longest = max(longest, run)
-fence = "`" * max(3, longest + 1)
-
-block = [
-    "",
-    "## Test decision",
-    "",
-    test_decision.strip(),
-    "",
-]
-# `## Also fixed` is re-emitted HERE, between the two sections, because
-# `tasks/schema.md` orders it between them and this writer is the only thing that
-# can place it (`Q-461`). It was not stripped before, so it survived into `out`
-# AFTER `insert_at` was captured, and the reinserted block landed in front of it --
-# turning the schema's order into `Test decision / Plan / Also fixed`. Reached
-# independently by two reviewers and confirmed by executing the helper.
-#
-# Content is the consumer's; it is carried through unjudged. Trailing blanks are
-# dropped so the single "" below is the only separator, matching the blank-line
-# hygiene the insertion-point normalisation above establishes -- without it a
-# second option-C run accretes one blank line per run.
-# Keyed by the canonical `"## <name>"`, matching `keep` in `strip_sections`.
-# Getting this key wrong is silent data loss, not a no-op: the section is stripped
-# either way, and a lookup that misses simply fails to re-emit it. It has now been
-# wrong twice in this phase -- once in each direction, as the matching rule moved --
-# and both times the CONTENT test caught it while a heading test would not have.
-also = saved.get("## also fixed") or []
-while also and not also[-1].strip():
-    also.pop()
-if also:
-    block += also + [""]
-block += [
-    "## Plan",
-    "",
-    "_Written by `/claim-task --plan-only` (option C), run `{}`. The plan below was "
-    "adversarially reviewed before it was written here; the sealed report follows it. "
-    "A later `/claim-task {}` reads this section as a PRESENCE test, skips the planner, "
-    "and re-reviews the plan against today's `main`._".format(run_id, claim_id),
-    "",
-    fence + "markdown",
-    plan_text,
-    fence,
-    "",
-    "### Sealed review report",
-    "",
-]
-if sealed:
-    block += [fence + "yaml", sealed.strip(), fence, ""]
-else:
-    block += [
-        "_No sealed `REVIEW_REPORT:` block reached the orchestrator for this run "
-        "(`review-transport.md` in the run directory records which of `NO_ENVELOPE` or "
-        "`EMPTY_TRANSPORT` applied). The reviewer's full findings were written to "
-        "`review.md` in that directory. This absence is recorded rather than omitted: "
-        "a review whose verdict did not arrive must not read like one that had none._",
-        "",
-    ]
-
-out = "\n".join(lines[:insert_at] + block + lines[insert_at:]).rstrip() + "\n"
-if crlf:
-    out = out.replace("\n", "\r\n")
-# `mkstemp` rather than a fixed `<path>.tmp` (`Q-444`): the same collision class
-# `Q-382` closed for the claim paths and `Q-414` for the close path, on the task
-# BODY rather than on `tasks/index.yml`. Exposure is lower here -- a body is
-# written by the one session that claimed that task -- but the shape is the
-# tree's. THREE of the four elements answer a defect the conversion would
-# otherwise INTRODUCE: the mode carried across (`mkstemp` creates 0600 and would
-# silently narrow a 0644 tracked body), `dir=` the target's own directory (same
-# filesystem, so `os.replace` cannot raise `EXDEV`), and the cleanup arm (a
-# fixed-name leak self-heals on the next run, because the next run writes the
-# same path; a `mkstemp` leak does not). The fourth, `realpath`, is REDUNDANT
-# here and kept only for shape: `body = body.resolve()` already ran above, so
-# this block was never writing over a symlink. Measured: the pre-fix form left
-# the link intact and grew the real file, same as this one.
-#
-# `os.fdopen(..., newline="")` rather than `Path.write_text(..., newline="")`:
-# `write_text` did not accept `newline` until Python 3.10, and this tree's floor
-# is 3.9 (`tests/test_python_floor_portability.py`). Measured on stock macOS
-# /usr/bin/python3 3.9.6: `write_text() got an unexpected keyword argument
-# 'newline'` -- so this write FATALED on the floor interpreter, taking the whole
-# option-C plan write with it. `open`/`fdopen` have accepted `newline` since 3.0.
-real = os.path.realpath(body)
-try:
-    mode = os.stat(real).st_mode & 0o7777
-except OSError:
-    mode = 0o644
-fd, tmp = tempfile.mkstemp(dir=os.path.dirname(real),
-                           prefix=os.path.basename(real) + ".", suffix=".tmp")
-try:
-    with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
-        f.write(out)
-    os.chmod(tmp, mode)
-    os.replace(tmp, real)
-except BaseException:
-    if os.path.exists(tmp):
-        os.unlink(tmp)
-    raise
-print("wrote {} ({} bytes)".format(body, len(out)))
-print("sealed_report: " + ("present" if sealed else "ABSENT"))
-PY
+python3 sysop/scripts/claim_record.py "<CLAIM_ID>" "<RUN_ID>" "<BODY_PATH>" '<TEST_DECISION>'
 ```
 
 **Read the `sealed_report:` line and say it out loud in your final message.** `ABSENT` is not a failure and must not stop the write — Step 8's read-order contract names an unregistered hook and a failed write as supported configurations — but a human reading the task body later deserves to know the verdict reached the record through a file the reviewer wrote rather than one it could not.
@@ -2411,7 +2054,7 @@ PY
 
 - **`SPAWN=no`**: go back to Step 8's report.
 - **`SPAWNED_BEFORE`**: **do not spawn again.** Hold `TIP_BEFORE`, read the envelope below, and record it. If there is no envelope, record `MALFORMED`.
-- **`SPAWN=yes`**: hold `TIP_BEFORE` in context, and spawn one executor with the Step 7e executor prompt, **verbatim from START to END**, every placeholder substituted as 7e substitutes it except `answers` for `<ENVELOPE_PHASE>`, and the addendum below inserted after the prompt's first paragraph, its placeholders substituted too. Same agent parameters as 7a except `model`: `"opus"` <!-- sysop:role=executor -->, with `description`: `"Answers <CLAIM_ID>"`.
+- **`SPAWN=yes`**: hold `TIP_BEFORE` in context, and spawn one executor with the Step 7e executor prompt, **verbatim from START to END**, every placeholder substituted as 7e substitutes it except `answers` for `<ENVELOPE_PHASE>`, and the addendum below inserted after the prompt's first paragraph, its placeholders substituted too. Same agent parameters as 7a except `model`: `"sonnet"`, `effort`: `"high"` <!-- sysop:role=executor --> (the `effort` is this line's, never 7a's: with none here, pass none), with `description`: `"Answers <CLAIM_ID>"`.
 
 **START OF ANSWERS ADDENDUM**
 

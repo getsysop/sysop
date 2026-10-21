@@ -112,8 +112,10 @@ def test_the_cheap_tier_is_small_and_the_census_partitions():
     # convention-gate: Step 2b's convention agent and the 4a-fix re-check (Phase
     # 328). planner / plan-review / executor: the Phase 349 split of the three
     # `/claim-task` + `/auto-build` spawns, the shared plan-review contract, and
-    # `/claim-task` 8c's answers executor.
-    assert other == {"convention-gate": 2, "planner": 2, "plan-review": 4, "executor": 3}, (
+    # `/claim-task` 8c's answers executor. security-gate: Step 2b's security twin
+    # (Phase 381, `Q-669`), which until then rode the file's `reasoning` default.
+    assert other == {"convention-gate": 2, "security-gate": 1, "planner": 2,
+                     "plan-review": 4, "executor": 3}, (
         f"a role outside the documented tiers governs pins: {other}. Widen "
         f"docs/configuration.md's mapping sentence before widening this."
     )
@@ -151,9 +153,10 @@ def test_inline_governing_roles_are_the_ones_the_docs_constrain():
     c = _load(CENSUS, "phase223_role_census").census()
     assert c["inline_governing_roles"] == [
         "convention-gate", "executor", "mechanical", "plan-review", "planner", "reasoning",
+        "security-gate",
     ]
     assert ("Map every role except `quick` — `reasoning`, `mechanical`, `convention-gate`, "
-            "`planner`, `plan-review`, `executor` — to one of") in _doc()
+            "`security-gate`, `planner`, `plan-review`, `executor` — to one of") in _doc()
 
 
 # ── the spend split ───────────────────────────────────────────────────────────

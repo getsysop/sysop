@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from skill_runner_text import text_of
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -103,6 +104,6 @@ def shipped_heredocs() -> list[tuple[Path, int, str, str]]:
 
 def heredoc_containing(path: Path, needle: str) -> str:
     """The body of the ONE heredoc in `path` containing `needle`, verbatim."""
-    hits = [b for _, _, b in heredocs_in(path.read_text(encoding="utf-8")) if needle in b]
+    hits = [b for _, _, b in heredocs_in(text_of(path)) if needle in b]
     assert len(hits) == 1, f"{path.name}: {len(hits)} heredocs contain {needle!r}"
     return hits[0]

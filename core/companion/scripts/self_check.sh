@@ -6,7 +6,8 @@
 # Verifies the environment a fresh Sysop install depends on and reports one
 # line per probe (round-4 cold-read request: bash version + PyYAML + hooks in
 # a single command instead of discovery-by-failure):
-#   1. git repo + install lock (.claude/sysop.lock) + install mode
+#   1. git repo + install lock (.claude/sysop.lock) + install mode, and every
+#      path the lock lists present in the main checkout (1b, Phase 383)
 #   2. bash version (3.2+ supported; 4+ reported)
 #   3. a python3 that can `import yaml` (the validator / checks dependency),
 #      probed in run_checks.sh's order, not the installer's: the MAIN checkout's
@@ -77,6 +78,69 @@ _cd="$(git -C "$REPO_ROOT" rev-parse --git-common-dir 2>/dev/null)"
 if [[ -n "$_cd" ]]; then
   case "$_cd" in /*) : ;; *) _cd="$REPO_ROOT/$_cd" ;; esac
   MAIN_ROOT="$(cd "$_cd/.." 2>/dev/null && pwd)" || MAIN_ROOT="$REPO_ROOT"
+fi
+
+# ── 1b. every installed path is on disk ─────────────────────────────────────
+# Phase 383 (`Q-409` P0): the installer used to drop a skill's subdirectories
+# silently, so a consumer could be told to read a step file that was never
+# written and nothing reported it. This compares the lock's `managed_paths` with
+# the disk. It reads the MAIN checkout's lock and tree: a gitignored managed path
+# exists only there, never in a worktree. A missing path is a partial install,
+# which `--update` repairs, so it fails the check like a missing lock does.
+MAIN_LOCK="$MAIN_ROOT/.claude/sysop.lock"
+if [[ -f "$MAIN_LOCK" ]] && command -v python3 >/dev/null 2>&1; then
+  MP_OUT="$(python3 - "$MAIN_LOCK" "$MAIN_ROOT" <<'PY'
+import json, os, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as f:
+        data = json.load(f)
+except (OSError, ValueError):
+    data = None
+paths = data.get("managed_paths") if isinstance(data, dict) else None
+if not isinstance(paths, list) or not all(isinstance(p, str) for p in paths):
+    print("?")
+    raise SystemExit(0)
+print(len(paths))
+for p in paths:
+    if not os.path.lexists(os.path.join(sys.argv[2], p)):
+        print(p)
+PY
+)"
+  MP_TOTAL="$(printf '%s\n' "$MP_OUT" | head -1)"
+  if [[ "$MP_TOTAL" == "?" || -z "$MP_TOTAL" ]]; then
+    info "could not read managed_paths from $MAIN_LOCK — installed files not checked"
+  else
+    MP_MISSING="$(printf '%s\n' "$MP_OUT" | sed '1d' | grep -c . || true)"
+    if [[ "$MP_MISSING" -eq 0 ]]; then
+      ok "all $MP_TOTAL installed paths present"
+    else
+      bad "$MP_MISSING of $MP_TOTAL installed paths missing (the lock lists them; the disk does not have them)"
+      # A path the last commit holds is restored from git, not by an --update:
+      # the update's pre-update snapshot would commit the deletion first and
+      # leave the file back on disk untracked, so history would lack it.
+      MP_TRACKED=0
+      MP_UNTRACKED=0
+      while IFS= read -r _mp; do
+        [[ -n "$_mp" ]] || continue
+        if git -C "$MAIN_ROOT" --literal-pathspecs cat-file -e "HEAD:$_mp" 2>/dev/null; then
+          MP_TRACKED=$((MP_TRACKED + 1))
+          (( MP_TRACKED + MP_UNTRACKED <= 10 )) && info "  missing: $_mp  (in your last commit)"
+        else
+          MP_UNTRACKED=$((MP_UNTRACKED + 1))
+          (( MP_TRACKED + MP_UNTRACKED <= 10 )) && info "  missing: $_mp"
+        fi
+      done <<< "$(printf '%s\n' "$MP_OUT" | sed '1d')"
+      (( MP_MISSING > 10 )) && info "  … and $((MP_MISSING - 10)) more"
+      if (( MP_TRACKED > 0 )); then
+        info "fix: git -C \"$MAIN_ROOT\" restore --source=HEAD --staged --worktree -- <each path marked 'in your last commit'>"
+      fi
+      if (( MP_UNTRACKED > 0 )); then
+        info "fix: bash sysop/scripts/sysop-update.sh   (an --update re-writes every shipped path)"
+      fi
+    fi
+  fi
+elif [[ -f "$MAIN_LOCK" ]]; then
+  info "installed paths not checked: no python3 on PATH to read the lock"
 fi
 
 # ── 3. python3 + PyYAML ─────────────────────────────────────────────────────
@@ -194,6 +258,16 @@ fi
 # `scripts/run_checks_of_ours.sh` all failed this check. That is the same
 # false-positive class install.sh's own comment describes deleting, re-introduced
 # here and upgraded from a report line to a non-zero exit.
+# The second half below adds the directory forms, each required to be followed by
+# a non-path character or end of line. `scripts/run_checks/*` in a coverage omit
+# list or a semgrep `paths:` block names a directory that moved and carries no
+# filename to scope to; without this it is invisible, which is a recall regression
+# against the pre-Phase-309 scanner. The trailing boundary is what keeps a
+# consumer's own `scripts/hooks/pre-push` out: a CONCRETE file under a moved
+# directory matches only if it is itself a moved file.
+# This comment sits OUTSIDE the `<( … )` on purpose (Phase 383): bash 3.2 reads an
+# apostrophe in a comment inside a process substitution as an open quote, and the
+# whole probe died with "bad substitution: no closing `)'". `bash -n` cannot see it.
 VENDOR_ALT=""
 while IFS= read -r vendor_rel; do
   [[ -n "$vendor_rel" ]] || continue
@@ -204,13 +278,6 @@ done < <(
       | sed -e "s#^$REPO_ROOT/sysop/scripts/##" \
       | grep -v '^__pycache__/\|/__pycache__/'
   fi
-  # The directory forms, each required to be followed by a non-path character or
-  # end of line. `scripts/run_checks/*` in a coverage omit list or a semgrep
-  # `paths:` block names a directory that moved and carries no filename to scope
-  # to; without this it is invisible, which is a recall regression against the
-  # pre-Phase-309 scanner. The trailing boundary is what keeps a consumer's own
-  # `scripts/hooks/pre-push` out: a CONCRETE file under a moved directory matches
-  # only if it is itself a moved file.
   if [[ -d "$REPO_ROOT/sysop/scripts" ]]; then
     find "$REPO_ROOT/sysop/scripts" -mindepth 1 -type d 2>/dev/null \
       | sed -e "s#^$REPO_ROOT/sysop/scripts/##" \
@@ -387,6 +454,32 @@ else
   done < <(find "$PENDING_DIR" -maxdepth 1 -type f -name '*.pending' -mmin "+$STALE_MIN" 2>/dev/null)
   info "    an abandoned round writes no review_tasks.md entries and raises no error"
   info "    re-run the skill; delete the marker only once you have confirmed the round is dead"
+fi
+
+# Arm receipts (Phase 388, `Q-409` P2). `/review-close` opens one at Step 1 and checks it
+# at Step 8. A receipt no check read, holding an arm that became due and was never loaded,
+# is a close that skipped a step file or stopped before its report, and neither leaves any
+# other trace. Lifecycle only: loop mode installs neither the skill nor the script, so a
+# missing script is silence, not a pass.
+ARMS_PY="$MAIN_ROOT/sysop/scripts/close_arms.py"
+if [[ -f "$ARMS_PY" && -d "$MAIN_ROOT/sysop/runtime/close-arms" ]] && command -v python3 >/dev/null 2>&1; then
+  if ARMS_OUT="$(cd "$MAIN_ROOT" && python3 "$ARMS_PY" unchecked 2>&1)"; then
+    if [[ -z "$ARMS_OUT" ]]; then
+      ok "no /review-close left an arm due and unloaded"
+    else
+      if grep -q '^UNCHECKED: ' <<< "$ARMS_OUT"; then
+        bad "a /review-close left an arm due and never loaded, and no Step 8 checked it"
+      fi
+      if grep -q '^UNREADABLE: ' <<< "$ARMS_OUT"; then
+        bad "a /review-close arm receipt cannot be read, so whether an arm was skipped is unknown"
+      fi
+      while IFS= read -r ln; do info "    $ln"; done <<< "$ARMS_OUT"
+      info "    the close skipped a step file or stopped before Step 8, or its receipt is"
+      info "    damaged: read its report, then delete sysop/runtime/close-arms/<close-id>.tsv"
+    fi
+  else
+    bad "close_arms.py unchecked failed: $ARMS_OUT"
+  fi
 fi
 
 # Last completed round per skill. Read the active file AND the archive (the

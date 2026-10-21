@@ -22,6 +22,7 @@ import pytest
 from _reversal import slice_between
 from test_fix_in_branch_tier import (_anchor_count, _pin_hash, _pin_liveness, _pin_norm, _pin_quoted,
                                      _pin_span)
+from skill_runner_text import text_of
 
 REPO = Path(__file__).resolve().parents[1]
 CLOSE = REPO / "core" / "skills" / "review-close" / "SKILL.md"
@@ -35,7 +36,7 @@ SPANS: dict[str, tuple[Path, object, object, bool]] = {
     "3c options": (CLOSE, "**2. For each signal, call `AskUserQuestion`.**", "**3. Halt rules.**", False),
     "3c halt rules": (CLOSE, "**3. Halt rules.**", "**4. Record outcomes for Step 8.** The tally", False),
     "3c record": (CLOSE, "**4. Record outcomes for Step 8.** The tally",
-                  'python3 - "<the doc the KEY line names>"', False),
+                  'python3 sysop/scripts/smoke_record.py "<the doc the KEY line names>"', False),
     "3c refusal": (CLOSE, "A `REFUSING:` line records nothing and changes nothing.",
                    "## Step 3b: Prepare Worktrees for Merge", False),
     # Round 1 (lens 2): prose this phase decided, outside every span, took a contrary rule with
@@ -65,7 +66,7 @@ PINS = {
     "3c refusal": "9c6bb6aa4c00b52c",  # Phase 357: the new-project note points a post-merge procedure at `## After merge` (`Q-313`)
     "3c intro": "2076398e30e5eafa",  # Phase 351
     "3c step-1 output": "c59c69994350f6ba",
-    "3c linkage": "04a0fa5c5e862fda",
+    "3c linkage": "a1f1fea805cf330c",  # Phase 386: the heredoc it names became a shipped script (`Q-409` P3)
     "4a-post exit 0": "59cb35e6d31276bc",
     "step 8 manual smoke": "545e8631e8b51a5d",  # Phase 359: names the MERGE NOT READ: line
     "step 8 pre-scan": "c94d934f525d174f",
@@ -78,7 +79,7 @@ PINS = {
 
 def _located(label: str) -> tuple[str, str, int]:
     path, start, end, _ = SPANS[label]
-    text = path.read_text(encoding="utf-8")
+    text = text_of(path)
     span = slice_between(text, start, end, label)
     return text, span, text.index(span)
 
@@ -110,7 +111,7 @@ def test_the_decided_smoke_gate_text_is_pinned(label: str) -> None:
 @pytest.mark.parametrize("label", sorted(SPANS))
 def test_every_span_start_anchor_is_unique(label: str) -> None:
     path, start, _, _ = SPANS[label]
-    assert _anchor_count(path.read_text(encoding="utf-8"), start) == 1, label
+    assert _anchor_count(text_of(path), start) == 1, label
 
 
 @pytest.mark.parametrize("label", sorted(SPANS))

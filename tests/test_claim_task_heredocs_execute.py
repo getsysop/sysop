@@ -48,6 +48,21 @@ SKILL = REPO_ROOT / "core/skills/claim-task/SKILL.md"
 
 _FENCE_RE = re.compile(r"^\s*```(\S*)")
 _HEREDOC_OPEN_RE = re.compile(r"^python3\s+-\s+<<'PY'(?P<args>.*)$")
+# A block that became a shipped script (Phase 386, `Q-409` P3) leaves one invocation line
+# in the skill. Its key maps to the script's text, and `command` runs the script itself.
+_SCRIPT_CALL_RE = re.compile(r"^python3\s+sysop/scripts/(?P<name>[\w-]+\.py)(?P<args>.*)$")
+SCRIPTS = REPO_ROOT / "core/companion/scripts"
+# Only scripts that WERE prescribed blocks: `validate_tasks.py` and the rest are called
+# from the same fences, and are not blocks this module runs.
+MOVED_BLOCKS = ("claim_record.py",)
+
+
+def command(arg_spec: str, body: str) -> str:
+    """The shell text that runs one prescribed block with `arg_spec` as its arguments."""
+    for path in (SCRIPTS / n for n in MOVED_BLOCKS):
+        if body == path.read_text(encoding="utf-8"):
+            return f"python3 '{path}' {arg_spec}"
+    return f"python3 - <<'PY' {arg_spec}\n{body}\nPY\n"
 
 
 def _bash_blocks(text: str) -> list[str]:
@@ -99,6 +114,10 @@ def heredocs() -> dict[str, tuple[str, str]]:
                 m = _HEREDOC_OPEN_RE.match(ln.strip())
                 if m:
                     args, collecting = m.group("args").strip(), True
+                s = _SCRIPT_CALL_RE.match(ln.strip())
+                if s and s.group("name") in MOVED_BLOCKS:
+                    found.append((s.group("args").strip(),
+                                  (SCRIPTS / s.group("name")).read_text(encoding="utf-8")))
                 continue
             if ln.strip() == "PY":
                 found.append((args or "", "\n".join(body)))
@@ -132,8 +151,7 @@ def run_block(needle: str, subs: dict[str, str], cwd: Path):
     for placeholder, value in subs.items():
         arg_spec = arg_spec.replace(placeholder, value)
     assert "<" not in arg_spec, f"unsubstituted placeholder left in {arg_spec!r}"
-    script = f"python3 - <<'PY' {arg_spec}\n{body}\nPY\n"
-    return subprocess.run(["bash", "-c", script], cwd=cwd, capture_output=True, text=True)
+    return subprocess.run(["bash", "-c", command(arg_spec, body)], cwd=cwd, capture_output=True, text=True)
 
 
 @pytest.fixture
@@ -846,7 +864,7 @@ def test_the_write_back_refuses_an_unsubstituted_test_decision(repo):
                  "<BODY_PATH>": "open/TECH-0007.md"}.items():
         arg_spec = arg_spec.replace(k, v)
     before = (main / "tasks/open/TECH-0007.md").read_text()
-    r = subprocess.run(["bash", "-c", f"python3 - <<'PY' {arg_spec}\n{body}\nPY\n"],
+    r = subprocess.run(["bash", "-c", command(arg_spec, body)],
                        cwd=main, capture_output=True, text=True)
     assert r.returncode == 2, r.stdout
     assert "no executor" in r.stderr
@@ -866,7 +884,7 @@ def test_the_write_back_needs_no_pyyaml(repo, tmp_path):
     for k, v in {"<CLAIM_ID>": "TECH-0007", "<RUN_ID>": run_id,
                  "<BODY_PATH>": "open/TECH-0007.md", "<TEST_DECISION>": TD}.items():
         arg_spec = arg_spec.replace(k, v)
-    r = subprocess.run(["bash", "-c", f"python3 - <<'PY' {arg_spec}\n{body}\nPY\n"],
+    r = subprocess.run(["bash", "-c", command(arg_spec, body)],
                        cwd=main, capture_output=True, text=True,
                        env={**os.environ, "PYTHONPATH": str(stub)})
     assert r.returncode == 0, f"the plan write-back needs PyYAML: {r.stderr}"

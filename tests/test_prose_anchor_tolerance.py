@@ -26,6 +26,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from skill_runner_text import text_of
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "tests"))
@@ -207,7 +208,7 @@ def test_regex_metacharacters_in_the_phrase_are_literal():
 def test_rewrapped_moves_only_whitespace_on_the_shipped_file():
     """The invariant is asserted inside `rewrapped()`, so this pins that the assertion is
     reached on a real document rather than only on fixtures."""
-    src = SKILL.read_text(encoding="utf-8")
+    src = text_of(SKILL)
     out = rewrapped(src)
     assert out != src
     assert re.sub(r"\s+", " ", src) == re.sub(r"\s+", " ", out)
@@ -288,7 +289,7 @@ def test_locate_says_NOT_FOUND_and_AMBIGUOUS_differently():
 def test_rewrapped_is_the_enumerator_it_claims_to_be():
     """Anti-vacuity: on the shipped file it must stale raw literals in real numbers, or
     every survival guard built on it passes for the wrong reason."""
-    src = SKILL.read_text(encoding="utf-8")
+    src = text_of(SKILL)
     out = rewrapped(src)
     sample = [ln.strip() for ln in src.split("\n")
               if len(ln.strip()) > 60 and " " in ln.strip() and not ln.startswith((" ", "`", "|", ">", "#"))]
@@ -394,7 +395,7 @@ def test_rewrapped_is_idempotent():
     """At width 1 there is nothing left to move, so a second pass must be a no-op. A
     transform that keeps changing its own output is not a normal form and the survival
     guards built on it would be comparing against a moving target."""
-    src = SKILL.read_text(encoding="utf-8")
+    src = text_of(SKILL)
     once = rewrapped(src)
     assert rewrapped(once) == once
 

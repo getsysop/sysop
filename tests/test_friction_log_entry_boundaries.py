@@ -48,6 +48,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from skill_runner_text import runner_texts
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 INSTALL_SH = REPO_ROOT / "install.sh"
@@ -514,15 +515,11 @@ def test_the_population_of_readers_is_derived_and_complete():
     Derived from the tree, not from this module's constant: a third reader that
     ships without the boundary rule fails here rather than inheriting the bug.
     """
-    classifiers = sorted(
-        p.parent.name for p in SKILLS.glob("*/SKILL.md")
-        if classifies_entries(p.read_text(encoding="utf-8"))
-    )
+    texts = runner_texts(SKILLS)
+    classifiers = sorted(name for name, text in texts.items() if classifies_entries(text))
     assert classifiers == sorted(READERS), classifiers
     for skill in classifiers:
-        assert "**Entry boundaries" in (SKILLS / skill / "SKILL.md").read_text(
-            encoding="utf-8"
-        ), skill
+        assert "**Entry boundaries" in texts[skill], skill
 
 
 if __name__ == "__main__":  # pragma: no cover

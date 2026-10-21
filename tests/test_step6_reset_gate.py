@@ -17,6 +17,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from skill_runner_text import text_of
 
 REPO = Path(__file__).resolve().parent.parent
 CLOSE = REPO / "core/skills/review-close/SKILL.md"
@@ -33,7 +34,7 @@ def _sh(cwd: Path, cmd: str) -> str:
 
 
 def _text() -> str:
-    return CLOSE.read_text(encoding="utf-8")
+    return text_of(CLOSE)
 
 
 def _step(name: str, nxt: str) -> str:

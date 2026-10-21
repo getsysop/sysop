@@ -69,6 +69,7 @@ from typing import Callable
 import pytest
 
 from _reversal import assert_no_reversal, slice_between
+from skill_runner_text import text_of
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SKILL = REPO_ROOT / "core" / "skills" / "review-close" / "SKILL.md"
@@ -90,7 +91,7 @@ RESET_CMD = "git reset --hard origin/<default branch>"
 
 
 def _text() -> str:
-    return SKILL.read_text(encoding="utf-8")
+    return text_of(SKILL)
 
 
 def _flat(text: str) -> str:

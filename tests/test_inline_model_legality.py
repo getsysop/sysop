@@ -404,10 +404,15 @@ _ADVICE_ROOTS = ("core/skills", "core/companion/docs", "docs")
 # Role names are ENUMERATED here, so a role added to `served_models.yml` is
 # invisible to this arm until it is added. Phase 262 added `convention-gate`
 # and this line was one of five sites that had baked in the three-role set;
-# Phase 349 added `planner`, `plan-review` and `executor`.
+# Phase 349 added `planner`, `plan-review` and `executor`; Phase 381 `security-gate`.
 _ROLE_MAPPING = re.compile(
-    r"\b(reasoning|mechanical|quick|convention-gate|planner|plan-review|executor)\s*:\s*([A-Za-z][\w.:-]*)"
+    r"\b(reasoning|mechanical|quick|convention-gate|security-gate|planner|plan-review|executor)"
+    r"\s*:\s*([A-Za-z][\w.:-]*)"
 )
+# Phase 381 (`Q-675`): the same `role: value` shape under an `efforts:` key is an EFFORT,
+# not a model, so the line is judged against the effort levels. The key is the nearest
+# `roles:` / `efforts:` / `served:` / `inline_models:` line above it inside one fence.
+_CONFIG_KEY = re.compile(r"^\s*(roles|efforts|served|inline_models):\s*(?:#.*)?$")
 
 
 def _advice_files():
@@ -415,6 +420,49 @@ def _advice_files():
         root = _SYSOP_ROOT / rel
         if root.is_dir():
             yield from sorted(root.rglob("*.md"))
+
+
+def _mapping_offenders(text, inline_roles, model_legal, effort_legal):
+    """``[(lineno, role, value)]`` for each inline role mapped to a value its key rejects."""
+    out = []
+    key = None
+    for i, line in enumerate(text.split("\n"), 1):
+        if line.lstrip().startswith(("```", "~~~")):
+            key = None
+            continue
+        found = _CONFIG_KEY.match(line)
+        if found:
+            key = found.group(1)
+            continue
+        if line.strip() and not line[:1].isspace():
+            # A prose line ends an unfenced key's scope (lens 3, K1: an indented `efforts:`
+            # block laundered an illegal model in the next paragraph).
+            key = None
+        # A prose line that names `efforts:` itself may name either kind (lens 3, C4).
+        legal = (effort_legal if key == "efforts"
+                 else model_legal | effort_legal if "efforts:" in line else model_legal)
+        for role, value in _ROLE_MAPPING.findall(line):
+            if role not in inline_roles:
+                continue
+            if value not in legal:
+                out.append((i, role, value))
+    return out
+
+
+def test_the_mapping_scan_judges_each_key_by_its_own_enum():
+    """Control for the `efforts:` arm (Phase 381): an effort under `roles:` and a model
+    under `efforts:` are both caught, a fence closes the key, and the legal forms pass."""
+    roles, models, efforts = {"executor"}, {"sonnet", "reasoning"}, {"high", "none"}
+    text = "\n".join([
+        "```yaml", "roles:", "  executor: high", "efforts:", "  executor: sonnet", "```",
+        "```yaml", "efforts:", "  executor: none", "```",
+        "```yaml", "  executor: none", "```",
+        "```yaml", "roles:", "  executor: reasoning", "efforts:", "  executor: high", "```",
+        "    efforts:", "      executor: none", "", "Prose after it: `executor: max`.",
+        "So `executor: high` under `efforts:` is what ships.",
+    ])
+    assert [(r, v) for _, r, v in _mapping_offenders(text, roles, models, efforts)] == [
+        ("executor", "high"), ("executor", "sonnet"), ("executor", "none"), ("executor", "max")]
 
 
 def test_no_shipped_surface_prescribes_an_illegal_value_for_an_inline_role():
@@ -434,6 +482,10 @@ def test_no_shipped_surface_prescribes_an_illegal_value_for_an_inline_role():
     }
     legal = set(m.load_inline_models(_SYSOP_CONFIG, None))
     assert inline_roles and legal, "vacuity: derived nothing to check against"
+    # A role may name another role and then follows it (Phase 262's alias table), so a
+    # role name is a legal value too — `executor: reasoning` is the documented way back.
+    role_names = set(m.load_roles_config(_SYSOP_CONFIG, None)[0])
+    effort_legal = set(m.EFFORT_LEVELS) | {m.NO_EFFORT}
 
     # The guard's own POPULATION, asserted. The battery walked a mutation through
     # this check by dropping `core/skills` from the roots — which is where the
@@ -447,12 +499,12 @@ def test_no_shipped_surface_prescribes_an_illegal_value_for_an_inline_role():
     )
     assert len(swept) > 40, f"advice population collapsed to {len(swept)} files"
 
-    offenders = []
-    for path in _advice_files():
-        for i, line in enumerate(path.read_text(encoding="utf-8").split("\n"), 1):
-            for role, value in _ROLE_MAPPING.findall(line):
-                if role in inline_roles and value not in legal:
-                    offenders.append(f"{path.relative_to(_SYSOP_ROOT)}:{i}  {role}: {value}")
+    offenders = [
+        f"{path.relative_to(_SYSOP_ROOT)}:{i}  {role}: {value}"
+        for path in _advice_files()
+        for i, role, value in _mapping_offenders(
+            path.read_text(encoding="utf-8"), inline_roles, legal | role_names, effort_legal)
+    ]
     assert not offenders, (
         "a shipped surface maps an inline-governing role to a value the Agent tool's "
         "`model` enum rejects — following this advice breaks the spawn:\n  "
@@ -493,7 +545,8 @@ def test_sysop_tree_has_inline_pins_for_the_arm_to_govern():
     inline = [p for p in kinds if p.kind == "inline"]
     assert len(inline) >= 10, f"expected the inline pin population, got {len(inline)}"
     assert {p.role for p in inline} == {
-        "reasoning", "mechanical", "convention-gate", "planner", "plan-review", "executor",
+        "reasoning", "mechanical", "convention-gate", "security-gate", "planner",
+        "plan-review", "executor",
     }
 
     # Named, not just counted. The round narrowed the arm to skip `_shared/` and

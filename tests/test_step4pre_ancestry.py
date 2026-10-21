@@ -45,6 +45,7 @@ from pathlib import Path
 import pytest
 
 from shape_lib import fenced_blocks, live_command_lines
+from skill_runner_text import text_of
 
 REPO = Path(__file__).resolve().parent.parent
 SKILL = REPO / "core" / "skills" / "review-close" / "SKILL.md"
@@ -407,7 +408,7 @@ def _step4pre_text() -> str:
     `ValueError: substring not found` with no diagnosis -- a guard that fails without
     saying why.
     """
-    text = SKILL.read_text(encoding="utf-8")
+    text = text_of(SKILL)
     try:
         start = text.index("### 4-pre.")
         end = text.index("### 4a.", start)
@@ -612,8 +613,9 @@ def test_step4c_restages_the_moved_body() -> None:
     `git add -A -- dst` and on dropping the spaces after the commas, both meaning-preserving.
     Comment lines are stripped first, so a comment quoting the call cannot satisfy it.
     """
+    # Step 4c's program is `close_index.py` since Phase 386 (`Q-409` P3).
     live = "\n".join(
-        ln for ln in SKILL.read_text(encoding="utf-8").splitlines()
+        ln for ln in (Path(__file__).resolve().parents[1] / "core/companion/scripts" / "close_index.py").read_text(encoding="utf-8").splitlines()
         if not ln.lstrip().startswith("#")
     )
     mv = live.index("subprocess.run(['git', 'mv', src, dst], check=True)")

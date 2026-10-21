@@ -30,6 +30,7 @@ ff-merge they legitimately share a SHA while being different refs, and standing
 on the unmerged branch they are the same ref.
 """
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -37,6 +38,7 @@ import pytest
 
 import sitrep_survey as ss
 from _reversal import assert_no_reversal
+from skill_runner_text import text_of
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "core/companion/scripts/close_batch.sh"
@@ -417,9 +419,6 @@ def test_a_branch_already_on_main_verifies_without_a_target(tmp_path):
     # ...and a real section AFTER a fenced example still wins.
     ("# P\n\n```markdown\n## Merge policy\n\npr\n```\n\n## Merge policy\n\ndirect\n",
      "merge target: 'main' (§ Merge policy: direct)"),
-    # Anything that is not one of the two documented words falls back, loudly-by-
-    # default rather than silently to `pr`.
-    ("# P\n\n## Merge policy\n\nsquash\n", "merge target: 'main' (§ Merge policy: direct)"),
 ])
 def test_the_policy_reader_resolves_the_target(tmp_path, claude_md, expected):
     repo = _with_batch_branch(tmp_path / "repo", policy=None)
@@ -431,6 +430,40 @@ def test_the_policy_reader_resolves_the_target(tmp_path, claude_md, expected):
         assert not (repo / "CLAUDE.md").exists(), "fixture wrote a CLAUDE.md it should not have"
     r = _run(repo, "1")
     assert expected in r.stdout, f"claude_md={claude_md!r}\n{r.stdout}"
+
+
+@pytest.mark.parametrize("claude_md", [
+    "# P\n\n## Merge policy\n\nsquash\n",
+    "# P\n\n## Merge policy: pr\n",
+])
+def test_a_policy_the_reader_refuses_stops_the_run_without_a_target(tmp_path, claude_md):
+    """Phase 388: the policy is read by `close_arms.py read-policy`, the reader `/review-close`
+    uses, which refuses a word other than `direct`/`pr` and a heading written another way.
+    Without `--merge-target` there is then no target to verify against. Before, an unknown
+    word read as `direct` here while the runner might read it otherwise."""
+    repo = _with_batch_branch(tmp_path / "repo", policy=None)
+    (repo / "CLAUDE.md").write_text(claude_md)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "policy")
+    r = _run(repo, "1")
+    assert r.returncode == 1 and "--merge-target" in r.stderr, (r.stdout, r.stderr)
+    assert "Merged" not in (repo / "review_tasks.md").read_text()
+    r = _run(repo, "--merge-target", "main", "1")
+    assert "merge target: 'main' (--merge-target)" in r.stdout, r.stdout
+
+
+def test_a_missing_close_arms_names_the_update(tmp_path):
+    """Round 3 (lens E): with `close_arms.py` gone after a partial update, the stop named
+    CLAUDE.md as the cause."""
+    repo = _with_batch_branch(tmp_path / "repo", policy="direct")
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    for f in SCRIPT.parent.iterdir():
+        if f.is_file() and f.name != "close_arms.py":
+            shutil.copy2(f, scripts / f.name)
+    r = subprocess.run(["bash", str(scripts / SCRIPT.name), "1"], cwd=str(repo),
+                       capture_output=True, text=True)
+    assert r.returncode == 1 and "sysop-update.sh" in r.stderr, (r.stdout, r.stderr)
 
 
 def test_an_operand_overrides_the_policy(tmp_path):
@@ -514,10 +547,11 @@ def test_a_heading_that_merely_starts_with_the_section_name_is_not_the_section(t
     _git(repo, "add", "-A")
     _git(repo, "commit", "-qm", "policy")
     r = _run(repo, "1")
-    assert "merge target: 'main' (§ Merge policy: direct)" in r.stdout, (
-        "a heading that only starts with the section name resolved the policy\n"
-        + r.stdout
-    )
+    # Since Phase 388 the one reader refuses it (a heading starting with the words that is not
+    # exactly the section), so no target resolves at all, `pr` or `direct`.
+    assert r.returncode == 1 and "rename it" in r.stderr, (r.stdout, r.stderr)
+    assert "merge target:" not in r.stdout, (
+        "a heading that only starts with the section name resolved the policy\n" + r.stdout)
 
 
 def test_an_unresolvable_merge_target_refuses_rather_than_crashing(tmp_path):
@@ -575,7 +609,7 @@ _STEP_4B_EXTRA = (
 
 
 def _step_4b() -> str:
-    text = _SKILL.read_text(encoding="utf-8")
+    text = text_of(_SKILL)
     start = text.index("### 4b. Close Merged Batches")
     end = text.index("### 4c.", start)
     block = text[start:end]

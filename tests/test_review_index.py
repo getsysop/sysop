@@ -612,3 +612,84 @@ def test_the_stale_q391_clauses_are_gone():
     assert "will offer one as a claimable batch" not in text
     # ...and the split it was asked to state is stated, by behaviour.
     assert "REPORT" in text and "bound" in text
+
+
+# === `--list` on a missing tracker is the empty set (Phase 379) ===============
+#
+# A consumer's field report (2026-10-12): in a repo that had never run the
+# convention loop there was no `review_tasks.md`, `review_index.py --list`
+# exited 1 with `not found`, and `/review-close` Step 4b stopped every close on
+# it (three closes). The empty set is Step 4b's ordinary case, and an absent
+# tracker IS the empty set — so `--list` says so in `Q-371`'s shape and exits 0.
+# Every other mode addresses a batch and keeps the error.
+
+
+def _run_absent(root: Path, *args: str):
+    """Drive the real script in a scratch repo that has NO review_tasks.md."""
+    import shutil
+
+    subprocess.run(["git", "-c", "init.defaultBranch=main", "init", "-q", str(root)],
+                   check=True, capture_output=True)
+    scripts = root / "sysop" / "scripts"
+    scripts.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(_SCRIPT, scripts / _SCRIPT.name)
+    assert not (root / "review_tasks.md").exists()
+    return subprocess.run(
+        [sys.executable, str(scripts / _SCRIPT.name), *args],
+        cwd=str(root), capture_output=True, text=True,
+    )
+
+
+def test_list_on_a_missing_tracker_is_the_empty_set_stated(tmp_path):
+    r = _run_absent(tmp_path, "--list")
+    assert r.returncode == 0, r.stderr
+    assert r.stdout == "", "stdout must stay byte-identical for machine consumers"
+    assert "review_index --list:" in r.stderr
+    assert "absent" in r.stderr and "0 batches listed" in r.stderr, r.stderr
+
+
+def test_other_modes_still_refuse_a_missing_tracker(tmp_path):
+    """`--batch`, `--range`, `--check` address a batch or an index; absence is an error
+    there, as before — the change is scoped to the one mode whose answer can be empty."""
+    for args in (("--batch", "1"), ("--range", "1"), ("--check",)):
+        r = _run_absent(tmp_path / args[0].strip("-"), *args)
+        assert r.returncode == 1, (args, r.returncode, r.stderr)
+        assert "not found" in r.stderr, (args, r.stderr)
+
+
+def test_list_combined_with_another_mode_still_refuses_a_missing_tracker(tmp_path):
+    """Lens A, Phase 379: `--list --check-fences` must not exit 0 with the fence check never run."""
+    for args in (("--list", "--check-fences"), ("--list", "--fenced-lines"), ("--list", "--rebuild")):
+        r = _run_absent(tmp_path / "_".join(a.strip("-") for a in args), *args)
+        assert r.returncode == 1, (args, r.returncode, r.stderr)
+        assert "not found" in r.stderr, (args, r.stderr)
+
+
+def test_a_deleted_tracker_is_not_the_empty_set(tmp_path):
+    """Lens C, Phase 379: a tracker that git history shows once existed was removed, not
+    never written; `--list` exits 1 and names the last commit that had it."""
+    import shutil
+    root = tmp_path
+    subprocess.run(["git", "-c", "init.defaultBranch=main", "init", "-q", str(root)], check=True, capture_output=True)
+    (root / "review_tasks.md").write_text("# Review Tasks\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(root), "-c", "user.email=t@t", "-c", "user.name=t", "add", "review_tasks.md"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(root), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "tracker"], check=True, capture_output=True)
+    (root / "review_tasks.md").unlink()
+    scripts = root / "sysop" / "scripts"; scripts.mkdir(parents=True)
+    shutil.copy2(_SCRIPT, scripts / _SCRIPT.name)
+    r = subprocess.run([sys.executable, str(scripts / _SCRIPT.name), "--list"], cwd=str(root), capture_output=True, text=True)
+    assert r.returncode == 1, r.stderr
+    assert "git history shows it existed" in r.stderr and "STOP" in r.stderr, r.stderr
+    assert r.stdout == ""
+
+
+def test_no_repository_root_is_not_the_empty_set(tmp_path):
+    """Lens C, Phase 379: with no `.git` above the script, `_repo_root` falls back to the
+    script's own directory; calling that an empty tracker would be a silent wrong answer."""
+    import shutil
+    scripts = tmp_path / "sysop" / "scripts"; scripts.mkdir(parents=True)
+    shutil.copy2(_SCRIPT, scripts / _SCRIPT.name)
+    assert not (tmp_path / ".git").exists()
+    r = subprocess.run([sys.executable, str(scripts / _SCRIPT.name), "--list"], cwd=str(tmp_path), capture_output=True, text=True)
+    assert r.returncode == 1, r.stderr
+    assert "no repository root" in r.stderr, r.stderr

@@ -22,7 +22,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from test_review_close_smoke_gate import SMOKE_SRC, _run, _signals, _sources  # noqa: E402
+from test_review_close_smoke_gate import SMOKE_SCRIPT, SMOKE_SRC, _run, _signals, _sources  # noqa: E402
 from test_review_close_smoke_held_and_tip import (  # noqa: E402
     _ENV, _field, _git, _index, _task, _tree,
 )
@@ -48,7 +48,7 @@ def _branch(repo: Path, *, body: str | None = None, index: str | None = None,
 
 
 def _run_rc(repo: Path, branches: list[str], default: str | None = "main"):
-    args = [sys.executable, "-c", SMOKE_SRC, "", "\n".join(branches)]
+    args = [sys.executable, SMOKE_SCRIPT, "", "\n".join(branches)]
     if default is not None:
         args.append(default)
     return subprocess.run(args, capture_output=True, text=True, cwd=str(repo), env=_ENV,

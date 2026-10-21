@@ -32,6 +32,7 @@ import sys
 import textwrap
 from pathlib import Path
 from _reversal import assert_no_reversal
+from skill_runner_text import text_of
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 REVIEW_CLOSE = REPO_ROOT / "core/skills/review-close/SKILL.md"
@@ -46,18 +47,22 @@ CLAIM_TASK = REPO_ROOT / "core/skills/claim-task/SKILL.md"
 def _measurement_command():
     """Step 1's conventions-threshold measurement, lifted out of the skill.
 
-    Anchored on the `SECTIONS = [` line rather than on a comment, so rewording
-    the surrounding prose does not detach the guard from its subject. Returns the
-    dedented shell command.
+    Since Phase 387 (`Q-409` P3) the fence runs `convention_size.py` with one argument
+    per section; it used to carry a heredoc whose `SECTIONS = [` list the runner edited.
+    Anchored on the invocation and its two section arguments, so rewording the
+    surrounding prose does not detach the guard from its subject. Returns the dedented
+    shell command, pointed at this tree's script.
     """
-    text = REVIEW_CLOSE.read_text(encoding="utf-8")
+    text = text_of(REVIEW_CLOSE)
     m = re.search(
         r"```bash\n(   # Measure the WIDENED set.*?\n)   ```", text, re.S,
     )
     assert m, "step 1's widened-set measurement fence is gone"
     body = textwrap.dedent(m.group(1))
-    assert "SECTIONS = [" in body, body
-    return body
+    inv = 'python3 sysop/scripts/convention_size.py "Prevention Conventions" "Testing Patterns"'
+    assert inv in body, body
+    scripts = Path(__file__).resolve().parents[1] / "core" / "companion" / "scripts"
+    return body.replace("python3 sysop/scripts/", f"python3 {scripts}/")
 
 
 def _run_measure(tmp_path, claude_md):
@@ -115,7 +120,7 @@ def test_the_paste_and_the_prompt_agree_on_the_widened_set():
     """`Q-342`'s actual failure was a DISAGREEMENT between what step 1 measured,
     what it wrote, and what the prompt told the agent it had. All three move
     together or the guard is worthless."""
-    text = REVIEW_CLOSE.read_text(encoding="utf-8")
+    text = text_of(REVIEW_CLOSE)
     assert carries(text, "not `## Prevention Conventions` alone (`Q-342`)")
     # The prompt block is no longer named after one section...
     assert "     ## Project conventions\n" in text
@@ -129,7 +134,7 @@ def test_the_paste_and_the_prompt_agree_on_the_widened_set():
 
 def test_the_security_twin_is_a_second_fleet_with_its_own_gate():
     """`Q-352`. Five properties, each decided against a named alternative."""
-    text = REVIEW_CLOSE.read_text(encoding="utf-8")
+    text = text_of(REVIEW_CLOSE)
     m = re.search(r"^3b\. \*\*Spawn the security twin.*?(?=^4\. Collect all verdicts)",
                   text, re.M | re.S)
     assert m, "Step 2b has no security twin (step 3b)"
@@ -138,34 +143,23 @@ def test_the_security_twin_is_a_second_fleet_with_its_own_gate():
     # (a) A second agent, not a bigger prompt -- Phase 166's ~15% lens overlap.
     assert carries(step, "A second agent, not a bigger prompt")
     # (b) Glob-gated, so the doc-and-glue majority spawns nothing extra...
-    assert carries(step, "spawn only if some glob in either matches")
-    # ...and the skip is searched, never assumed.
-    assert carries(step, "searched absence and never an assumed one")
-    # (c) Its own paste file -- asserted at the WRITE TARGET, not as a presence
-    # check. The round pointed the write at `2b-conventions.md` and this stayed
-    # green, because the `rm -f` line above it still mentioned the security file:
-    # an assertion satisfied by an INCIDENTAL occurrence of its own token. That is
-    # the fourth instance of this shape in one phase, so it is asserted
-    # positionally here and the wrong filename is refused by name.
-    m = re.search(r"write them verbatim to\s+`([^`]+)`", step)
-    assert m, "step 3b no longer names a write target for the security paste"
-    assert m.group(1) == "sysop/runtime/2b-security.md", (
-        f"the security twin writes its paste to {m.group(1)!r} -- pointing it at "
-        f"the convention fleet's file lets a stale write from either arm satisfy "
-        f"the other's freshness check, which is the defect this file exists for"
+    assert carries(step, "`SPAWN` only if some glob in either security map matches")
+    # ...and the skip is searched, never assumed: the script searches, and its notes are reported.
+    assert carries(step, "Report every `WHOLE:` and `UNMATCHABLE:` line it prints under Step 8's `Security map:` line.")
+    # (c) Its own copy, cut and written by the script, never by hand (Phase 395, `Q-666`).
+    # Until then this pinned the hand write's target and its `rm -f`, because a write pointed
+    # at `2b-conventions.md` let a stale write from either arm satisfy the other's freshness
+    # check. The script now writes both files and prints a path only after writing it, so the
+    # guard moves to what the agent is handed: the `COPY:` text or path, and the `FULL:` path
+    # for the left-out sections. `test_security_map_filter.py` pins the file names.
+    assert carries(step, 'python3 sysop/scripts/security_map_filter.py "<target>" "<default branch>"')
+    assert "write them verbatim" not in step, "step 3b writes the security copy by hand again"
+    m = re.search(r"`## Project conventions` becomes `## Security map`, carrying (.*)", step)
+    assert m and "`COPY:` path" in m.group(1) and "`FULL:` path" in m.group(1) and "`OMITTED:`" in m.group(1), (
+        "the twin's prompt no longer carries its cut copy, the left-out headings and the full copy"
     )
-    # `\s+` between the flag and its operand, not a literal space (`Q-495`): an inline
-    # code span may carry a soft line break, which CommonMark renders as a space, and a
-    # re-wrap put the operand on the next line -- so the pattern stopped matching at all
-    # and the guard reported the delete as RETARGETED when nothing about it had changed.
-    rm = re.search(r"`rm -f\s+([^`]+)`", step)
-    # `Q-495`: the operand is compared whitespace-normalised. A code span may carry a soft
-    # line break -- CommonMark renders it as a space -- so a re-wrap that put the path on
-    # the next line made this read the operand as changed when only its layout had moved.
-    assert rm and re.sub(r"\s+", " ", rm.group(1)).strip() == "sysop/runtime/2b-security.md", (
-        "the loud-failure delete no longer targets the security paste file"
-    )
-    assert carries(step, "separate file from `2b-conventions.md`")
+    # An uncomputed gate is the target's BLOCKED verdict, collected at item 4; never a skip.
+    assert carries(step, "Its security verdict is `VERDICT: BLOCKED`, with the printed message as its one violation")
     # (d) The trap: a second baseline capture would invert step 2's delta.
     assert carries(step, "Do NOT capture a second baseline")
     # (e) BLOCKED authority -- the DISPOSITION, not its vocabulary. The round
@@ -205,7 +199,7 @@ def test_the_security_twin_is_a_second_fleet_with_its_own_gate():
 
 
 def _cascade_note():
-    text = REVIEW_CLOSE.read_text(encoding="utf-8")
+    text = text_of(REVIEW_CLOSE)
     i = text.index("**This skip is about step 3's agent and does not reach step 3b's**")
     return text[i:text.index("\n\n", i)]
 
@@ -229,7 +223,7 @@ def test_a_doc_only_skip_does_not_silence_the_security_lens():
     was added for: the security map routes documentation paths BY DESIGN (the llm
     pack routes `<prompts dir>/**/*.md`; `security_map.md` routes root operational
     docs to A02), so step 0's doc-only skip must not reach step 3b."""
-    text = REVIEW_CLOSE.read_text(encoding="utf-8")
+    text = text_of(REVIEW_CLOSE)
     assert "This skip is about step 3's agent and does not reach step 3b's" in text
     assert "a cascade would silence the security lens" in text
 
@@ -238,12 +232,12 @@ def test_the_two_fleets_report_on_two_lines():
     """One tally cannot carry both: a cycle where every target skipped the
     security twin and every target passed the convention check would read exactly
     like one where both fleets ran and both approved."""
-    text = REVIEW_CLOSE.read_text(encoding="utf-8")
+    text = text_of(REVIEW_CLOSE)
     # Whitespace-insensitive on the column gutter: the round showed that adding a
     # longer label to this report block and re-aligning the column turns a shipped
     # gate red over a pure reformat. The property is that the line EXISTS with its
     # dispositions, not that it sits at a particular column.
-    assert re.search(r"^Security map: +<N checked, N skipped \(no map match\)>", text, re.M)
+    assert re.search(r"^Security map: +<N checked, N reused, N skipped \(no map match\)>", text, re.M)
     assert "never folded into `Conventions:`" in text
 
 

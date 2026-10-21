@@ -67,8 +67,14 @@ rule; under `dontAsk` an unlisted one is auto-denied. They stay off the required
 list because each fails loudly on its own terms — a denied auth check reads the
 same as not-logged-in and stops the skill with a visible message, and a denied
 visibility probe degrades per `_shared/upstream-repo.md` § B rather than
-halting. Editing the overlay uses the `Edit` tool, not Bash, so it
-needs no allow-rule.
+halting. Staging the body uses `Write`, which the seeded
+`Edit(/sysop/runtime/giveback/**)` rule admits under `dontAsk`. Editing the
+overlay uses the `Edit` tool, and no rule is seeded for it: the overlay is the
+consumer's file. If the run is under `dontAsk`, stop before Step 8 and say why: that edit
+would be denied after the issue is filed, leaving the proposal unrecorded.
+The run is under `dontAsk` when `permissions.defaultMode` says so in
+`.claude/settings.local.json` or, failing that, `.claude/settings.json`, or
+when any call this run has been denied with a message naming don't-ask mode.
 
 If `$ARGUMENTS` contains `--skip-permission-guard`, print a one-line warning and
 continue.
@@ -531,16 +537,18 @@ For each selected pack group, in order:
 
    - **Resolve the body file's path first, in a call of its own:**
      ```bash
-     echo "${TMPDIR:-/tmp}/sysop-pack-<pack>.md"
+     echo "$(git rev-parse --show-toplevel)/$(git rev-parse --show-prefix)sysop/runtime/giveback/sysop-pack-<pack>.md"
      ```
      The printed line is `<body file>`. Use it, character for character, both
-     as the path you `Write` and as the path `gh` reads below. Never give either
-     of them the `${TMPDIR:-/tmp}` expression instead: `Write` expands nothing
-     and the shell does, so the two name different files wherever `TMPDIR` is
-     set — every macOS shell — and `gh` reads a missing file, or a stale one
-     from an earlier run, in place of the body the human approved. If the call
-     is denied, or the printed line does not begin with `/` (a relative
-     `TMPDIR`), stop and say so; do not pick a path of your own.
+     as the path you `Write` and as the path `gh` reads below. Never give
+     either of them the `$(…)` expression instead: `Write` expands nothing and
+     the shell does, so the two would name different files. Stage nowhere
+     else: the seeded `Edit(/sysop/runtime/giveback/**)` rule admits this
+     directory, and under `dontAsk` a `Write` anywhere else is denied. If the
+     call is denied, or the printed line is not the project root (the
+     directory Claude Code was started in) followed by
+     `/sysop/runtime/giveback/`, or it contains a `'`, stop and say so. Do not
+     pick a path of your own.
    - Write the exact rendered body (identical to Step 6) to `<body file>` using
      the `Write` tool — never pass the body through the shell. If `Write`
      refuses because a file is already there (an earlier run left it), `Read`

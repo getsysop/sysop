@@ -19,6 +19,7 @@ import argparse
 import hashlib
 import json
 import os
+import subprocess
 import re
 import sys
 from datetime import datetime, timezone
@@ -1294,6 +1295,42 @@ def main():
     args = parser.parse_args()
 
     if not os.path.isfile(TASKS_FILE):
+        other_modes = (args.check, args.batch is not None, args.range is not None,
+                       args.check_fences, args.fenced_lines,
+                       args.check_duplicates is not None, args.check_headers, args.rebuild)
+        if args.list and not any(other_modes):
+            # The empty set, stated (`Q-371`'s shape): a repo that has never run the
+            # convention loop has no tracker and no batches, and `/review-close`
+            # Step 4b keys its empty arm on this line. Exit 1 here stopped every
+            # close in such a repo (a consumer's field report, 2026-10-12). Two
+            # absences are NOT the empty set and keep exit 1: no repository root
+            # above this script (the fallback root is the script's own directory,
+            # which has no tracker by construction), and a tracker git history
+            # shows once existed (deleted or moved, not never written). The
+            # lock-without-tracker case is Step 4b's; this reader cannot see locks.
+            # Any other mode on the same command line keeps the error: it addresses
+            # a batch or the index, and an empty answer there would be silent.
+            name = os.path.basename(TASKS_FILE)
+            if not os.path.exists(os.path.join(REPO_ROOT, ".git")):
+                print(f"ERROR: {name} not found and no repository root above this script "
+                      f"(resolved {REPO_ROOT}) — refusing to call that the empty set",
+                      file=sys.stderr)
+                sys.exit(1)
+            last = subprocess.run(
+                ["git", "-C", REPO_ROOT, "log", "-1", "--format=%h", "--", name],
+                capture_output=True, text=True, check=False,
+            ).stdout.strip()
+            if last:
+                print(f"ERROR: {name} not found, but git history shows it existed (last at "
+                      f"{last}) — a deleted tracker is not the empty set; STOP",
+                      file=sys.stderr)
+                sys.exit(1)
+            print(
+                f"review_index --list: {name} absent; "
+                f"0 batches listed (no tracker — the empty set).",
+                file=sys.stderr,
+            )
+            sys.exit(0)
         print(f"ERROR: {TASKS_FILE} not found", file=sys.stderr)
         sys.exit(1)
 

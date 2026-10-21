@@ -28,6 +28,7 @@ import sys
 from pathlib import Path
 
 from tests import shape_lib as S
+from skill_runner_text import text_of
 
 
 def _read(p: Path) -> str:
@@ -228,8 +229,8 @@ def test_the_four_give_back_skills_actually_stage_a_body_file():
     """
     for name in ("report-issues", "contribute-convention", "share-wins", "release"):
         text = _read(S.SKILLS_DIR / name / "SKILL.md")
-        assert "${TMPDIR:-/tmp}/sysop-" in text, (
-            f"/{name} no longer stages its payload through a guarded temp file"
+        assert "$(git rev-parse --show-prefix)sysop/runtime/giveback/sysop-" in text, (
+            f"/{name} no longer stages its payload through a file under sysop/runtime/giveback/"
         )
 
 
@@ -290,7 +291,7 @@ def test_the_merged_tree_gate_is_present_and_wired():
         assert required in body, f"the merged-tree gate lost one of its invariants: {required}"
     # Non-vacuity: the shipped skill must actually carry the step the module gates, so an
     # emptied SECTIONS dict or a renamed step is visible from here too.
-    skill = (S.REPO_ROOT / "core" / "skills" / "review-close" / "SKILL.md").read_text(encoding="utf-8")
+    skill = text_of(S.REPO_ROOT / "core" / "skills" / "review-close" / "SKILL.md")
     assert "### 4a-post. Verify the Merged Tree" in skill, (
         "/review-close no longer has a merged-tree verification step"
     )

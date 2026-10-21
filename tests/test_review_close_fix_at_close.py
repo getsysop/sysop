@@ -29,6 +29,7 @@ from pathlib import Path
 import pytest
 
 from _prose_guard_helpers import anchor, locate, rewrapped, states, swap
+from skill_runner_text import text_of
 
 REPO = Path(__file__).resolve().parent.parent
 RC = REPO / "core/skills/review-close/SKILL.md"
@@ -42,7 +43,7 @@ VERDICT = "5. **Act on the verdict.**"
 
 
 def _rc() -> str:
-    return RC.read_text(encoding="utf-8")
+    return text_of(RC)
 
 
 def _between(text: str, start: str, end: str, what: str) -> str:
@@ -563,7 +564,7 @@ def test_every_arm_has_a_control() -> None:
 LEGAL = [
     (r"(?m)^(\s*PIN=)([\"']?)<fix-sha>\2$", r'\1"<fix-sha>"'),
     (r"(?m)^(\s*PIN=)([\"']?)<fix-sha>\2$", r"\1'<fix-sha>'"),
-    (r'(?m)^(\s*git worktree add --detach )"\$PINNED" "\$PIN"$(?=\n\s*```\n\n\s*Then spawn an Agent with:\n\s*- `subagent_type: "general-purpose"`\n\s*- `model: "opus"` \(the \*\*convention-gate\*\* role, as)', r'\1"${PINNED}" "${PIN}"'),
+    (r'(?m)^(\s*git worktree add --detach )"\$PINNED" "\$PIN"$(?=\n\s*```\n\n\s*Then spawn an Agent with:\n\s*- `subagent_type: "general-purpose"`\n\s*- `model: "sonnet"`(?:, `effort: "[a-z]+"`)? \(the \*\*convention-gate\*\* role, as)', r'\1"${PINNED}" "${PIN}"'),
     (r"(?m)^(\s*git rebase --onto )<fix-sha>~1 <fix-sha>$", r'\1"<fix-sha>~1" "<fix-sha>"'),
     (r"only when all (?:four|of these) hold:", "only when all of these hold:"),
     (r"(?m)^( {5})[-*+] (it is not a migration)", r"\1* \2"),
@@ -633,7 +634,7 @@ def test_the_role_docs_name_the_second_convention_gate_spawn() -> None:
     wf = _flat(WORKFLOW.read_text(encoding="utf-8"))
     assert "`/review-close` Step 2b's convention agent and its `4a-fix` re-check, nothing else;" in wf
     conf = (REPO / "docs/configuration.md").read_text(encoding="utf-8")
-    assert "convention-gate: sonnet   # the 2b convention agent and the 4a-fix re-check" in conf
+    assert "convention-gate: reasoning   # the 2b convention agent and the 4a-fix re-check" in conf
     assert "`convention-gate` governs two spawns" in conf
 
 

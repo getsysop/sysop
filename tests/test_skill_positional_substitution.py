@@ -44,6 +44,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from skill_runner_text import text_of
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SKILL_MD = sorted((REPO_ROOT / "core" / "skills").glob("**/*.md"))
@@ -188,7 +189,7 @@ def _fenced_block_containing(path: Path, needle: str) -> str:
     gate lines as constants, its own fixes edited them, and seven mutations silently did
     not run.
     """
-    text = path.read_text(encoding="utf-8")
+    text = text_of(path)
     blocks = re.findall(r"```bash\n(.*?)```", text, re.DOTALL)
     matching = [b for b in blocks if needle in b]
     assert len(matching) == 1, (

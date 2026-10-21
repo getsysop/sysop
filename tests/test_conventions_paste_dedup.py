@@ -18,13 +18,14 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from skill_runner_text import text_of
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SKILL = REPO_ROOT / "core" / "skills" / "review-close" / "SKILL.md"
 
 
 def _step2b() -> str:
-    text = SKILL.read_text(encoding="utf-8")
+    text = text_of(SKILL)
     a = text.index("### 2b. Prevention Convention Check")
     b = text.index("### 2c.", a)
     return text[a:b]

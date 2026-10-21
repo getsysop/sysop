@@ -20,9 +20,11 @@ from pathlib import Path as _P
 sys.path.insert(0, str(_P(__file__).resolve().parent))
 
 from _prose_guard_helpers import anchor, carries, locate  # noqa: E402
+from skill_runner_text import skill_text  # noqa: E402
 from pathlib import Path
 
 import pytest
+from skill_runner_text import text_of
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SKILL = REPO_ROOT / "core" / "skills" / "review-close" / "SKILL.md"
@@ -30,7 +32,7 @@ SKILL = REPO_ROOT / "core" / "skills" / "review-close" / "SKILL.md"
 
 @pytest.fixture(scope="module")
 def skill() -> str:
-    return SKILL.read_text(encoding="utf-8")
+    return text_of(SKILL)
 
 
 @pytest.fixture(scope="module")
@@ -106,7 +108,7 @@ def test_the_exact_allow_rule_exists_because_a_prefix_rule_cannot_cover_it():
     # The rule and the invocation must not drift apart — Phase 152 found rules seeded
     # against invocations that bind none, which is this failure with the halves swapped.
     invocation = rule[len("Bash("):-1]
-    assert invocation in SKILL.read_text(encoding="utf-8"), (
+    assert invocation in text_of(SKILL), (
         f"the seeded rule authorizes {invocation!r}, which the skill never runs"
     )
 
@@ -390,7 +392,7 @@ def test_the_superseded_pr_end_state_is_stated_accurately(flat: str):
     # Scoped to Step 8. A whole-file search passes on the Step 4a prose that merely
     # MENTIONS the row, which is how battery D11 walked through: renaming it to
     # `Superseded PRs (optional):` left the mention intact. Same shape as D16.
-    step8 = " ".join(_section(SKILL.read_text(encoding="utf-8"),
+    step8 = " ".join(_section(text_of(SKILL),
                               "## Step 8: Report", "Pending-doc collisions:").split())
     assert "Superseded PRs: <branch #PR" in step8, (
         "Step 8 has no `Superseded PRs:` row — a mention elsewhere is not the row"
@@ -539,12 +541,12 @@ def test_all_three_surfaces_name_the_unmeasured_state_the_same_way():
     """`/review-close` 4a-post, `/auto-fix` and `/auto-judge` must agree. The phase's
     original claim was that they already did; they agreed on the *token* and disagreed on
     the *disposition*, which is the half that changes what an agent does."""
-    rc = " ".join((REPO_ROOT / "core" / "skills" / "review-close" / "SKILL.md")
-                  .read_text(encoding="utf-8").split())
+    # Each skill's runner text, step files included (Phase 384): the negative check
+    # below would otherwise go green when its text moved out of the core.
+    rc = " ".join(skill_text(REPO_ROOT / "core" / "skills" / "review-close").split())
     assert "TIMEOUT:" in rc
     for name in ("auto-fix", "auto-judge"):
-        flat = " ".join((REPO_ROOT / "core" / "skills" / name / "SKILL.md")
-                        .read_text(encoding="utf-8").split())
+        flat = " ".join(skill_text(REPO_ROOT / "core" / "skills" / name).split())
         assert "VERIFY: TIMEOUT" in flat, f"/{name} lost the shared token"
         assert "treat as failure and report" not in flat, (
             f"/{name} still prescribes the conflation in its producing instructions"
@@ -582,7 +584,7 @@ def test_the_published_arm_does_not_also_bless_a_rebase(skill: str):
     """
     window = " ".join(_step4a(skill).split())
     pub = window[window.index("**Published**"):]
-    pub = pub[:pub.index("3. **A published branch's own PR")]
+    pub = pub[:pub.index("3. **Under the `pr` policy, a published branch's own PR")]
     for approving in (
         "rebasing the branch in place is fine",
         "the temp ref is optional",
@@ -619,7 +621,7 @@ def test_the_step4c_heredoc_reports_its_own_exit_status(skill: str):
     locks and markers, so a crash in the tail — a lock path that is a directory raises
     PermissionError, measured — leaves a half-done close whose five report rows silently
     vanish. The validator that runs next passes on the valid index and says nothing."""
-    assert "Step 4c heredoc exit (MUST be 0" in " ".join(skill.split()), (
+    assert "Step 4c close_index.py exit (MUST be 0" in " ".join(skill.split()), (
         "nothing checks the consolidation heredoc's exit status, so a crash after the "
         "index rewrite is indistinguishable from a clean run"
     )
@@ -638,9 +640,10 @@ def test_a_dangling_lock_symlink_is_reported_as_removed_not_absent(tmp_path):
     dangling = lock_dir / "TASK-0001.lock"
     dangling.symlink_to(tmp_path / "nowhere")
 
-    # The shipped predicate, lifted verbatim from the heredoc.
+    # The shipped predicate, lifted verbatim from Step 4c's script (its heredoc until Phase 386).
     shipped = "(locks_removed if (lock.exists() or lock.is_symlink()) else locks_absent)"
-    assert shipped in SKILL.read_text(encoding="utf-8"), (
+    assert shipped in (Path(__file__).resolve().parents[1]
+                       / "core/companion/scripts/close_index.py").read_text(encoding="utf-8"), (
         "the heredoc's lock-existence test no longer covers symlinks"
     )
     assert not dangling.exists(), "fixture is wrong — the symlink should dangle"

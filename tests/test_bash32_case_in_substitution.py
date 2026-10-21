@@ -37,6 +37,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from skill_runner_text import text_of
 
 REPO = Path(__file__).resolve().parents[1]
 STEP_1A = REPO / "core/skills/review-close/SKILL.md"
@@ -371,7 +372,7 @@ def test_a_blockquoted_fence_is_read():
 
 def test_step_1a_reverted_is_flagged():
     """The real file, with the fix undone, must be caught — not only the fixture."""
-    text = STEP_1A.read_text(encoding="utf-8")
+    text = text_of(STEP_1A)
     assert "          (/*) : ;;" in text and "          (*)  target=$(cd" in text
     reverted = text.replace("          (/*) : ;;", "          /*) : ;;", 1)
     assert any(scan(body)[0] for _, body in bash_fences(reverted))

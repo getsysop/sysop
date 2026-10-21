@@ -236,8 +236,22 @@ def _violations(include_deferred: bool = False) -> list[str]:
 # --------------------------------------------------------------------------------------
 # The invariant
 # --------------------------------------------------------------------------------------
+def _former_heredoc_violations() -> list[str]:
+    """The programs that were skill heredocs until Phase 386. They were in this population
+    as skill bodies and stay in it as scripts (its round, lens A). Named rather than every
+    shipped script: the predicate is written for skill markdown and flags prose in other
+    scripts' docstrings that a skill body would never carry."""
+    from _shipped_scripts import FORMER_HEREDOCS, script
+    out = []
+    for name in sorted({n for n, _ in FORMER_HEREDOCS}):
+        for n, line, _raw in _logical_lines(script(name).read_text(encoding="utf-8")):
+            if is_executable_default_branch_literal(line):
+                out.append(f"core/companion/scripts/{name}:{n}: {line.strip()[:120]}")
+    return out
+
+
 def test_no_skill_body_uses_the_literal_default_branch():
-    bad = _violations()
+    bad = _violations() + _former_heredoc_violations()
     assert not bad, (
         "skill site(s) hard-coding `main` as the default branch — on a `master` consumer "
         "each of these halts or silently compares the wrong refs. Substitute the "

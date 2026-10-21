@@ -63,6 +63,8 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from skill_runner_text import skill_text
+from skill_runner_text import fold_steps, text_of
 
 _ROOT = Path(__file__).resolve().parent.parent
 _SKILLS = _ROOT / "core" / "skills"
@@ -259,8 +261,10 @@ def path_expression_offenders(text: str) -> list[str]:
 def bare_only_skills() -> list[str]:
     """Skill files that name the log but never once spell the resolvable path."""
     offenders: list[str] = []
-    for path in skill_files():
-        text = path.read_text(encoding="utf-8")
+    # Per skill, not per file (Phase 385): "names the real path at least once" is a
+    # property of what the runner reads, so a skill's step files fold into its `SKILL.md`.
+    for path in fold_steps(skill_files()):
+        text = text_of(path)
         if _TOKEN not in text:
             continue
         if "sysop/" + _TOKEN not in text:
@@ -319,8 +323,8 @@ _LOG_NAMING_SKILLS = {
 def skills_naming_the_log() -> set[str]:
     return {
         p.parent.name
-        for p in skill_files()
-        if _TOKEN in p.read_text(encoding="utf-8")
+        for p in fold_steps(skill_files())
+        if _TOKEN in text_of(p)
     }
 
 
@@ -588,7 +592,7 @@ def test_the_pre_128_fallback_prose_is_not_flagged():
     there. That is correct migration guidance, not a false location claim.
     """
     for skill in ("report-issues", "share-wins", "review-close"):
-        text = (_SKILLS / skill / "SKILL.md").read_text(encoding="utf-8")
+        text = skill_text(_SKILLS / skill)   # step files too (Phase 384)
         assert "no longer at the bare repo root" in normalise(text), (
             f"{skill}: lost the pre-Phase-128 disambiguation"
         )
@@ -671,7 +675,7 @@ def test_a_reflow_of_a_fixed_sentence_stays_green():
 
 
 def _norm_skill(name: str) -> str:
-    return normalise((_SKILLS / name / "SKILL.md").read_text(encoding="utf-8"))
+    return normalise(text_of(_SKILLS / name / "SKILL.md"))
 
 
 def test_review_close_step7_pins_the_canonical_find_sentence():

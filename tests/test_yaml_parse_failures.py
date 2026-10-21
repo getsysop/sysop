@@ -29,16 +29,17 @@ import pytest
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _heredoc_population import heredoc_containing, shipped_heredocs  # noqa: E402
+from _heredoc_population import heredoc_containing, heredocs_in, shipped_heredocs  # noqa: E402
+from _shipped_scripts import invoked_script_containing  # noqa: E402
 from test_pending_doc_integrity import (  # noqa: E402
     _checkout, _live, _pending_doc_template_files, _run, _task_lock, scripts,  # noqa: F401
 )
-from test_review_close_smoke_gate import SMOKE_SRC  # noqa: E402
+from test_review_close_smoke_gate import SMOKE_SCRIPT, SMOKE_SRC  # noqa: E402
 from test_strict_decode_class import (  # noqa: E402
     _SCOPES, _handler_names, _module_constants, _shipped_scripts,
 )
 from test_strict_decode_heredocs import (  # noqa: E402
-    SKILLS, _doc_work, _install_case, _repo, _run_body,
+    SKILLS, _doc_work, _install_case, _repo, _run_body, _run_script,
 )
 
 REPO = Path(__file__).resolve().parents[1]
@@ -706,13 +707,18 @@ def _names_it(r, code: int, stream: str, exc: type) -> None:
     ("auto-build", 't["status"] = "in_progress"', ["FEAT-1"], 1, "stderr"),
     ("claim-task", "print(f\"id={match['id']}\")", ["FEAT-1"], 2, "stderr"),
     ("claim-task", "resumed = False", ["FEAT-1"], 1, "stderr"),
-    ("review-close", 'ids = ["<ROADMAP_ID_1>"', [], 1, "stderr"),
+    # Step 4c item 4's program is a shipped script since Phase 386: ids are arguments.
+    ("review-close", "ids = _args[1:] if KEEP_LOCKS else _args", ["FEAT-1"], 1, "stderr"),
 ])
 def test_an_unparseable_index_takes_the_steps_unreadable_exit(
         tmp_path, label, skill, needle, args, code, stream):
     repo = _bad_index(tmp_path / "r", label)
     before = (repo / "tasks/index.yml").read_bytes()
-    r = _run_body(heredoc_containing(SKILLS / f"{skill}/SKILL.md", needle), args, repo)
+    skill_md = SKILLS / f"{skill}/SKILL.md"
+    if any(needle in b for _ln, _op, b in heredocs_in(skill_md.read_text(encoding="utf-8"))):
+        r = _run_body(heredoc_containing(skill_md, needle), args, repo)
+    else:
+        r = _run_script(invoked_script_containing(skill_md, needle), args, repo)
     _names_it(r, code, stream, BAD_YAML[label][1])
     assert (repo / "tasks/index.yml").read_bytes() == before
 
@@ -762,7 +768,7 @@ def test_the_smoke_gate_stops_on_an_index_it_cannot_score(tmp_path, index):
     (tmp_path / "tasks").mkdir()
     (tmp_path / "tasks/index.yml").write_text(index, encoding="utf-8")
     (tmp_path / "sysop/runtime/pending-docs").mkdir(parents=True)
-    r = subprocess.run([sys.executable, "-c", SMOKE_SRC, "", "", "main"], capture_output=True,
+    r = subprocess.run([sys.executable, SMOKE_SCRIPT, "", "", "main"], capture_output=True,
                        text=True, cwd=tmp_path, timeout=30)
     assert r.returncode != 0 and "NO_SMOKE_REQUIRED" not in r.stdout, (r.returncode, r.stdout)
     assert "tasks/index.yml" in r.stderr and "Traceback" not in r.stderr, r.stderr
@@ -826,7 +832,7 @@ def test_the_smoke_gate_stops_on_a_doc_it_cannot_parse(tmp_path):
     pd.mkdir(parents=True)
     (pd / "feat-x.md").write_text('---\nbranch: "feat/x"\nmanual_smoke: true\ndate: 2026-09-31\n---\n',
                                   encoding="utf-8")
-    r = subprocess.run([sys.executable, "-c", SMOKE_SRC, "", "", "main"], capture_output=True,
+    r = subprocess.run([sys.executable, SMOKE_SCRIPT, "", "", "main"], capture_output=True,
                        text=True, cwd=tmp_path, timeout=30)
     assert r.returncode != 0 and "NO_SMOKE_REQUIRED" not in r.stdout, (r.returncode, r.stdout)
     assert "feat-x.md does not parse (ValueError" in r.stderr and "Traceback" not in r.stderr, r.stderr
@@ -835,12 +841,12 @@ def test_the_smoke_gate_stops_on_a_doc_it_cannot_parse(tmp_path):
 def test_the_smoke_recorder_refuses_an_unparseable_doc(tmp_path):
     """Round 2, lens B: the first version wrote the doc outside `pending-docs/`, so the
     recorder refused at its path check before parsing, and the test passed on the base tree."""
-    from test_review_close_smoke_held_and_tip import RECORDER_SRC
+    from test_review_close_smoke_held_and_tip import RECORDER_SCRIPT
     doc = tmp_path / "sysop/runtime/pending-docs/feat-x.md"
     doc.parent.mkdir(parents=True)
     doc.write_text('---\nbranch: "feat/x"\ndate: 2026-09-31\n---\n', encoding="utf-8")
     before = doc.read_bytes()
-    r = subprocess.run([sys.executable, "-c", RECORDER_SRC, str(doc), "0" * 16, "confirmed"],
+    r = subprocess.run([sys.executable, str(RECORDER_SCRIPT), str(doc), "0" * 16, "confirmed"],
                        capture_output=True, text=True, cwd=tmp_path, timeout=30)
     assert r.returncode != 0 and "Traceback" not in r.stderr, r.stderr
     assert "has no frontmatter mapping" in r.stderr, r.stderr
@@ -925,7 +931,7 @@ def test_the_smoke_gate_skips_a_task_whose_id_is_not_a_string(tmp_path):
     (tmp_path / "tasks").mkdir()
     (tmp_path / "tasks/index.yml").write_text("tasks:\n  - id: [a]\n", encoding="utf-8")
     (tmp_path / "sysop/runtime/pending-docs").mkdir(parents=True)
-    r = subprocess.run([sys.executable, "-c", SMOKE_SRC, "", "", "main"], capture_output=True,
+    r = subprocess.run([sys.executable, SMOKE_SCRIPT, "", "", "main"], capture_output=True,
                        text=True, cwd=tmp_path, timeout=30)
     assert r.returncode == 0 and "Traceback" not in r.stderr, (r.returncode, r.stderr)
 

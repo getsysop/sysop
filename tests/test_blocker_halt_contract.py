@@ -67,6 +67,7 @@ import re
 from pathlib import Path
 
 import pytest
+from skill_runner_text import runner_texts
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SKILLS_DIR = REPO_ROOT / "core" / "skills"
@@ -193,10 +194,11 @@ def rubric_consumers() -> list[Path]:
     is why the token is the discriminator rather than the citation.
     """
     out = []
-    for path in sorted(SKILLS_DIR.rglob("SKILL.md")):
-        text = path.read_text(encoding="utf-8")
+    # Each skill's runner text, core and step files together (Phase 384); the skill is
+    # still named by its `SKILL.md`, which is what the pins key on.
+    for name, text in runner_texts(SKILLS_DIR).items():
         if "_shared/adversarial-review.md" in text and re.search(r"\bblockers?\b", text, re.I):
-            out.append(path)
+            out.append(SKILLS_DIR / name / "SKILL.md")
     return out
 
 

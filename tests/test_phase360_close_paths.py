@@ -21,11 +21,12 @@ import sys
 from pathlib import Path
 
 import pytest
+from skill_runner_text import text_of
 
 TESTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(TESTS))
 from test_squash_provenance import (  # noqa: E402
-    INDEX, SCRIPTS, _close, _fence_with, _hold, _ws_lock, git, sh, ss)
+    INDEX, LANDED_MARKER, SCRIPTS, _close, _fence_with, _from_tree, _hold, _ws_lock, git, sh, ss)
 from test_squash_provenance import _landed  # noqa: E402
 
 REPO = TESTS.parent
@@ -314,7 +315,7 @@ def test_a_tag_named_like_the_branch_does_not_land_it(direct_closed):
 
 def test_a_placeholder_default_branch_stops(direct_closed):
     w = direct_closed
-    script = _fence_with(_close(), 'print(f"LANDED: {via} — held doc')
+    script = _from_tree(_fence_with(_close(), LANDED_MARKER))
     out = sh(w, script.replace('"<branch>"', '"B1"'))
     assert out.returncode == 3 and "STOP" in out.stdout, out
     out = sh(w, script.replace('"<branch>"', '"B1"').replace('"<default branch>"', '""'))
@@ -325,7 +326,7 @@ def test_step_4a_item_1_prints_no_recorded_head_for_it(direct_closed):
     """The arm's prose says item 1 prints `RECORDED HEAD: none` for a branch landed in a ref."""
     w = direct_closed
     _stamp(w, "B1")
-    script = _fence_with(_close(), 'print("RECORDED HEAD: none")')
+    script = _from_tree(_fence_with(_close(), 'python3 sysop/scripts/pr_head_check.py "<branch>"'))
     out = sh(w, script.replace('"<branch>"', '"B1"').replace('"<merge target>"', '"main"'))
     assert out.returncode == 0 and out.stdout.strip() == "RECORDED HEAD: none", out
 
@@ -484,7 +485,7 @@ PINS = {
     "step 8 branches": "e035237e081dc163",
     "2a direct arm prose": "87ed7af7f8b8e75f",
     "4d command 5 comment": "b515e737d1704198",
-    "4d denied escape": "43be3b5d42e97813",
+    "4d denied escape": "2fdf16c0a6a83552",  # Phase 393's round: "the `direct`-policy push above" names its step file, `steps/4d-direct.md`
     "4d-1 report carries after merge": "75ecdcd4cf8ac672",
     "WORKFLOW step 8 delete-branch": "75431f128e51c545",
 }
@@ -492,7 +493,7 @@ PINS = {
 
 def _located(label: str) -> tuple[str, str, int]:
     path, start, end, _ = SPANS[label]
-    text = path.read_text(encoding="utf-8")
+    text = text_of(path)
     span = slice_between(text, start, end, label)
     return text, span, text.index(span)
 
@@ -519,7 +520,7 @@ def test_the_decided_text_is_pinned(label: str) -> None:
 @pytest.mark.parametrize("label", sorted(SPANS))
 def test_every_span_start_anchor_is_unique(label: str) -> None:
     path, start, _, _ = SPANS[label]
-    assert _anchor_count(path.read_text(encoding="utf-8"), start) == 1, label
+    assert _anchor_count(text_of(path), start) == 1, label
 
 
 @pytest.mark.parametrize("label", sorted(SPANS))

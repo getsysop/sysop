@@ -30,6 +30,7 @@ import yaml
 import scope_overlap as so
 import sitrep_survey as ss
 import validate_tasks as vt
+from skill_runner_text import text_of
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = REPO_ROOT / "core" / "companion" / "scripts"
@@ -63,16 +64,23 @@ def test_the_partition_reader_this_module_compares_against_is_still_the_closes()
     """The reference above is only a reference while `/review-close` reads that way.
     Both loops that resolve a branch's workspace from its lock are pinned here; if
     either changes shape, this module's parity claim must be re-derived."""
-    text = REVIEW_CLOSE.read_text(encoding="utf-8")
-    for loop in (
-        '_k, _sep, _v = _line.partition(":")\n'
-        '                if _sep and _k not in _f:\n'
-        '                    _f[_k] = _v.strip()',
-        'k, sep, v = line.partition(":")\n'
-        '                if sep and k not in fields:\n'
-        '                    fields[k] = v.strip()',
+    # The first loop is Step 3c's, in `smoke_detect.py` since Phase 386 (`Q-409` P3); the
+    # second is Step 3b step 0's, in `workspace_locate.py` since Phase 387. Each is checked
+    # against the script the step still runs.
+    text = text_of(REVIEW_CLOSE)
+    assert "python3 sysop/scripts/smoke_detect.py" in text and "python3 sysop/scripts/workspace_locate.py" in text
+    scripts = Path(__file__).resolve().parents[1] / "core/companion/scripts"
+    smoke = (scripts / "smoke_detect.py").read_text(encoding="utf-8")
+    locate = (scripts / "workspace_locate.py").read_text(encoding="utf-8")
+    for loop, where in (
+        ('_k, _sep, _v = _line.partition(":")\n'
+         '                if _sep and _k not in _f:\n'
+         '                    _f[_k] = _v.strip()', smoke),
+        ('k, sep, v = line.partition(":")\n'
+         '                if sep and k not in fields:\n'
+         '                    fields[k] = v.strip()', locate),
     ):
-        assert loop in text, f"/review-close no longer reads the lock this way:\n{loop}"
+        assert loop in where, f"/review-close no longer reads the lock this way:\n{loop}"
 
 
 # ── workspace ────────────────────────────────────────────────────────────

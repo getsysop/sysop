@@ -89,6 +89,7 @@ from typing import Callable
 import pytest
 
 import parse_subagent_envelope as pse
+from skill_runner_text import text_of
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SKILL = REPO_ROOT / "core/skills/claim-task/SKILL.md"
@@ -331,7 +332,7 @@ def check_review_close_still_asserts_the_worktree_write(text: str) -> list[str]:
     a behaviour nothing implemented until this phase; if it is ever removed, claim-task's
     write rule loses the thing that makes it load-bearing rather than stylistic.
     """
-    return _review_close_failures(REVIEW_CLOSE.read_text(encoding="utf-8"))
+    return _review_close_failures(text_of(REVIEW_CLOSE))
 
 
 def check_the_transport_check_runs_after_the_reviewer_returns(text: str) -> list[str]:
@@ -930,7 +931,7 @@ def test_the_external_population_checks_are_not_vacuous():
     """The mutation table only edits `claim-task/SKILL.md`, so it cannot reach the two
     checks whose population is another file. Exercise those predicates directly."""
     shared = SHARED.read_text(encoding="utf-8")
-    rc = REVIEW_CLOSE.read_text(encoding="utf-8")
+    rc = text_of(REVIEW_CLOSE)
 
     assert _shared_partial_failures(shared) == []
     assert _shared_partial_failures("") != []

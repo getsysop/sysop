@@ -28,22 +28,29 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from test_review_close_smoke_gate import (  # noqa: E402
+from test_review_close_smoke_gate import (  SMOKE_SCRIPT, # noqa: E402
     SKILL, SMOKE_SRC, _run, _signals, _sources,
 )
+from skill_runner_text import text_of
+
+REPO_ROOT_SCRIPTS = Path(__file__).resolve().parents[1] / "core" / "companion" / "scripts"
+
+
+RECORDER_SCRIPT = REPO_ROOT_SCRIPTS / "smoke_record.py"
 
 
 def _extract_recorder() -> str:
-    text = SKILL.read_text(encoding="utf-8")
-    m = re.search(
-        r'python3 - "<the doc the KEY line names>" "<the KEY\'s 16 hex>" "<confirmed \| unrunnable>" <<\'EOF\'\n',
-        text,
-    )
-    assert m, "could not locate Step 3c's answer-recorder heredoc"
-    return text[m.end():text.index("\nEOF\n", m.end())]
+    """Step 3c's answer recorder: `smoke_record.py` since Phase 387 (`Q-409` P3). Tests that
+    plant a spy before the program prepend it to this text; every other run uses the file."""
+    text = text_of(SKILL)
+    inv = ('python3 sysop/scripts/smoke_record.py "<the doc the KEY line names>" '
+           '"<the KEY\'s 16 hex>" "<confirmed or unrunnable>"')
+    assert text.count(inv) == 1, f"Step 3c's recorder invocation count changed: {text.count(inv)}"
+    return inv
 
 
-RECORDER_SRC = _extract_recorder()
+_extract_recorder()
+RECORDER_SRC = RECORDER_SCRIPT.read_text(encoding="utf-8")
 _ENV = {k: v for k, v in os.environ.items()
         if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE")}
 
@@ -56,7 +63,7 @@ def _git(repo: Path, *args: str) -> str:
 
 
 def _record(repo: Path, doc: str, key: str, decision: str) -> subprocess.CompletedProcess:
-    return subprocess.run([sys.executable, "-c", RECORDER_SRC, doc, key, decision],
+    return subprocess.run([sys.executable, str(RECORDER_SCRIPT), doc, key, decision],
                           capture_output=True, text=True, cwd=str(repo), timeout=30)
 
 
@@ -694,7 +701,7 @@ def test_an_inherited_git_dir_does_not_redirect_the_tip_read(tmp_path):
     decoy.mkdir()
     _git(decoy, "init", "-q")
     env = dict(os.environ, GIT_DIR=str(decoy / ".git"))
-    r = subprocess.run([sys.executable, "-c", SMOKE_SRC, "", "feat/x", "main"], capture_output=True,
+    r = subprocess.run([sys.executable, SMOKE_SCRIPT, "", "feat/x", "main"], capture_output=True,
                        text=True, cwd=str(repo), env=env, timeout=30)
     assert "CURRENT" in r.stdout and "STALE" not in r.stdout, r.stdout + r.stderr
 

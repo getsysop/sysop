@@ -63,13 +63,28 @@ def write_src(skill: str) -> str:
     return _extract(skill, f"python3 - <<'PY' \"{skill}\" \"<flags>\"\n")
 
 
+CLEAR_INVOCATION = 'python3 sysop/scripts/round_receipt.py "<ROUND_MARKER path from Pre-flight>"\n'
+CLEAR_SCRIPT = Path(__file__).resolve().parents[1] / "core/companion/scripts/round_receipt.py"
+
+
+def clear_script(skill: str) -> Path:
+    """Step 5f's program: a shipped script since Phase 386 (`Q-409` P3), shared by both
+    skills. Still a single argument after Phase 149: the Tier-0 coverage line is read
+    back out of `review_tasks.md`, never passed in — model-authored prose in a shell
+    argument is a command-substitution hazard."""
+    text = SKILLS[skill].read_text(encoding="utf-8")
+    assert CLEAR_INVOCATION in text, f"{skill}: Step 5f no longer runs round_receipt.py"
+    return CLEAR_SCRIPT
+
+
 def clear_src(skill: str) -> str:
-    """Still a single argument after Phase 149: the Tier-0 coverage line is read
-    back out of `review_tasks.md`, never passed in — model-authored prose in a
-    shell argument is a command-substitution hazard."""
-    return _extract(
-        skill, "python3 - <<'PY' \"<ROUND_MARKER path from Pre-flight>\"\n"
-    )
+    return clear_script(skill).read_text(encoding="utf-8")
+
+
+def _run_script(script: Path, cwd: Path, *argv: str) -> subprocess.CompletedProcess:
+    """Run a shipped script the way the skill does: `python3 <script> <args>`."""
+    return subprocess.run([sys.executable, str(script), *argv],
+                          cwd=cwd, capture_output=True, text=True)
 
 
 # ── fixtures ────────────────────────────────────────────────────────────────
@@ -220,7 +235,7 @@ def test_round_trip_write_then_clear(tmp_path):
         root = _repo(tmp_path / f"rt-{skill}")
         w = _run(write_src(skill), root, skill, "")
         marker = _marker_path(w.stdout)
-        c = _run(clear_src(skill), root, str(marker))
+        c = _run_script(clear_script(skill), root, str(marker))
         assert c.returncode == 0, c.stderr
         assert "cleared" in c.stdout
         assert _markers(root) == []
@@ -233,7 +248,7 @@ def test_clear_refuses_on_nonce_mismatch(tmp_path):
     root = _repo(tmp_path / "mismatch")
     victim = _plant(root, "security-audit.111-1.pending", age_hours=0.1,
                     nonce="999-9")
-    r = _run(clear_src("security-audit"), root, str(victim))
+    r = _run_script(clear_script("security-audit"), root, str(victim))
     assert r.returncode == 0, r.stderr
     assert "REFUSING to remove" in r.stdout
     assert victim.exists(), "refused removal must leave the marker in place"
@@ -241,7 +256,7 @@ def test_clear_refuses_on_nonce_mismatch(tmp_path):
 
 def test_clear_is_a_noop_when_the_marker_is_already_gone(tmp_path):
     root = _repo(tmp_path / "gone")
-    r = _run(clear_src("codebase-review"), root,
+    r = _run_script(clear_script("codebase-review"), root,
              str(root / MARKER_REL / "codebase-review.1-1.pending"))
     assert r.returncode == 0, r.stderr
     assert "nothing to clear" in r.stdout
@@ -253,7 +268,7 @@ def test_clear_removes_only_the_named_marker(tmp_path):
     mine = _marker_path(w.stdout)
     other = _plant(root, "codebase-review.222-2.pending", age_hours=0.1,
                    nonce="222-2")
-    _run(clear_src("security-audit"), root, str(mine))
+    _run_script(clear_script("security-audit"), root, str(mine))
     assert not mine.exists()
     assert other.exists(), "a concurrent session's marker must survive"
 

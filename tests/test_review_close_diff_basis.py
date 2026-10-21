@@ -61,6 +61,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _prose_guard_helpers import _kinds, carries, locate, rewrapped  # noqa: E402
+from skill_runner_text import fold_steps, text_of
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SKILLS_DIR = REPO_ROOT / "core" / "skills"
@@ -248,9 +249,11 @@ def test_premise_three_dot_would_drop_uncommitted_work(stale_branch_repo, tmp_pa
 
 def test_no_unpinned_two_dot_git_diff_anywhere_in_the_shipped_tree():
     offenders = []
-    for path in _shipped_files():
+    # Folded (Phase 385): `ALLOWED_TWO_DOT` is keyed by file, so a step file is read as part
+    # of its skill's `SKILL.md` and its allowed lines keep their key when they move.
+    for path in fold_steps(_shipped_files()):
         rel = path.relative_to(REPO_ROOT).as_posix()
-        for line_no, line in _two_dot_offenders(path.read_text(errors="ignore"), rel):
+        for line_no, line in _two_dot_offenders(text_of(path, errors="ignore"), rel):
             offenders.append(f"{rel}:{line_no}: {line}")
     assert not offenders, (
         "two-dot `git diff` outside the pinned allowlist (upstream #241). Two-dot is "
@@ -308,7 +311,7 @@ def test_two_dot_scan_does_not_fire_on_correct_forms(correct):
 
 def test_the_three_legal_two_dot_ranges_are_still_present_and_still_legal():
     """A ban alone passes on a tree that deleted the correct usages too."""
-    rc = REVIEW_CLOSE.read_text()
+    rc = text_of(REVIEW_CLOSE)
     assert 'git diff --name-only "$base..<default branch>"' in rc, "Step 1c's merge-base-relative sweep"
     assert "base=$(git merge-base <default branch> \"$branch\")" in rc, (
         "Step 1c's `$base..<default branch>` is only correct because `base` is a merge-base "
@@ -323,7 +326,7 @@ def test_the_three_legal_two_dot_ranges_are_still_present_and_still_legal():
 def test_every_step_2_diff_site_uses_the_merge_base_form():
     """Enumerated, not counted: the round showed a `>= 4` threshold left two spare sites
     that could be regressed together while the count still passed."""
-    rc = REVIEW_CLOSE.read_text()
+    rc = text_of(REVIEW_CLOSE)
     for site in (
         "`git diff <default branch>...<branch> --stat` — scope of changes",            # 2a
         "| feature branch `<branch>` | `git diff <default branch>...<branch>` |",       # 2b/2d basis table
@@ -337,7 +340,7 @@ def test_every_step_2_diff_site_uses_the_merge_base_form():
 def test_the_rationale_note_still_recommends_three_dots():
     """The note is what 2b and 2d defer to ("per Step 2a's note"), so inverting it inverts
     them. The round showed it was permanently exempt from the scan and unguarded."""
-    rc = REVIEW_CLOSE.read_text()
+    rc = text_of(REVIEW_CLOSE)
     note = rc[rc.index("> **Three dots on every `git diff` in Step 2") :]
     note = note[: note.index("\n\n")]
     assert "compares the two *tips*" in note
@@ -364,7 +367,7 @@ def _prompt_fence(block: str) -> tuple[int, int]:
 
 
 def test_step_2b_sets_isolation_as_a_spawn_parameter():
-    block = _step_2b(REVIEW_CLOSE.read_text())
+    block = _step_2b(text_of(REVIEW_CLOSE))
     # `[-*+]`, not `-`: CommonMark's three unordered-list markers are interchangeable and
     # the choice between them is presentational, so pinning one made a uniform `-` -> `*`
     # reformat of the shipped file redden a guard about SPAWN PARAMETERS (`Q-495`). The
@@ -413,7 +416,7 @@ def test_the_isolation_guard_survives_a_uniform_bullet_marker_swap():
     SPAWN PARAMETERS red on a presentational reformat — measured, not hypothesised: this
     control reddened `test_step_2b_sets_isolation_as_a_spawn_parameter` at the phase's
     open, and it is a site Phase 291's four controls did not reach."""
-    shipped = REVIEW_CLOSE.read_text()
+    shipped = text_of(REVIEW_CLOSE)
     swapped = _bullets_swapped(shipped)
     # Anti-vacuity WITHOUT requiring the swap to change anything. The first cut asserted
     # `swapped != shipped`, which is red exactly when the file already uses `*` bullets —
@@ -431,8 +434,8 @@ def test_the_isolation_guard_survives_a_uniform_bullet_marker_swap():
 def test_the_doc_only_paragraph_anchors_survive_a_rewrap():
     """`_paragraph_starting` reads three markers; each must survive a re-wrap of the
     sentence it names, which is what staled the `4. ` form it used to carry."""
-    wrapped = rewrapped(REVIEW_CLOSE.read_text())
-    assert wrapped != REVIEW_CLOSE.read_text()
+    wrapped = rewrapped(text_of(REVIEW_CLOSE))
+    assert wrapped != text_of(REVIEW_CLOSE)
     for marker in ("**If the diff is doc-only**",
                    "**0. Per-target doc-only skip",
                    "**0. Per-branch doc-only skip"):
@@ -444,7 +447,7 @@ def test_step_2b_does_not_negate_isolation():
     """The round's sharpest finding: `Do NOT set \x60isolation: "worktree"\x60` — the shipped
     literal in the four sibling skills — contains the substring the old guard asserted, so
     a harmonisation sweep reversed the fix invisibly."""
-    block = _step_2b(REVIEW_CLOSE.read_text())
+    block = _step_2b(text_of(REVIEW_CLOSE))
     negations = re.findall(r"[Dd]o\s+\*{0,2}(?:NOT|not)\*{0,2}\s+set\s+`isolation", block)
     assert not negations, f"Step 2b now tells the runner NOT to isolate: {negations!r}"
     assert "<!--" not in block.split("`isolation:")[0][-200:], "isolation bullet commented out"
@@ -453,7 +456,7 @@ def test_step_2b_does_not_negate_isolation():
 def test_the_do_not_mutate_floor_is_inside_the_prompt_the_subagent_receives():
     """Outside the fence it is never sent — which is the whole point of the portable floor.
     The old guard sliced to the end of the section and passed either way."""
-    block = _step_2b(REVIEW_CLOSE.read_text())
+    block = _step_2b(text_of(REVIEW_CLOSE))
     open_at, close_at = _prompt_fence(block)
     body = block[open_at:close_at]
     marker = block.index("Do NOT mutate repository state")
@@ -477,7 +480,7 @@ def test_the_do_not_mutate_floor_is_inside_the_prompt_the_subagent_receives():
 
 def test_the_prompt_tells_the_agent_the_diff_is_merge_base_relative():
     """#241 asked for this by name beyond the command change; the round found it unguarded."""
-    block = _step_2b(REVIEW_CLOSE.read_text())
+    block = _step_2b(text_of(REVIEW_CLOSE))
     open_at, close_at = _prompt_fence(block)
     body = block[open_at:close_at]
     assert "Merge-base-relative" in body
@@ -487,7 +490,7 @@ def test_the_prompt_tells_the_agent_the_diff_is_merge_base_relative():
 def test_leaked_agent_worktrees_are_a_stated_hard_rule():
     """Isolation materializes a real branch + worktree in the shared namespace, and this
     skill enumerates every branch. Found by the round, not by the filing."""
-    block = _step_2b(REVIEW_CLOSE.read_text())
+    block = _step_2b(text_of(REVIEW_CLOSE))
     assert "HARD RULE — the agents' worktrees must be gone before Step 3b" in block
     assert "worktree-agent-" in block
     assert "git worktree list --porcelain" in block
@@ -495,7 +498,7 @@ def test_leaked_agent_worktrees_are_a_stated_hard_rule():
 
 @pytest.mark.parametrize("enumeration", ["step_1c", "step_2a"])
 def test_branch_enumerations_exclude_agent_worktree_branches(enumeration):
-    rc = REVIEW_CLOSE.read_text()
+    rc = text_of(REVIEW_CLOSE)
     if enumeration == "step_1c":
         assert "grep -v '^worktree-agent-'" in rc, (
             "Step 1c's for-each-ref sweep would warn about review agents' scratch branches"
@@ -546,7 +549,7 @@ def _paragraph_starting(text: str, marker: str) -> str:
 
 
 def test_all_three_doc_only_skips_share_one_code_file_set():
-    text = REVIEW_CLOSE.read_text()
+    text = text_of(REVIEW_CLOSE)
     sets = {
         # `Q-495`: anchored on the sentence, NOT on `4. ` in front of it. The ordinal is
         # this paragraph's position in Step 3's list and has nothing to do with the
@@ -572,13 +575,13 @@ def test_all_three_doc_only_skips_share_one_code_file_set():
 def test_the_skip_predicates_are_not_inverted(marker, predicate):
     """Inverting both (`no` → `any`) passed 32/32 against the first version, and is
     strictly worse than never having shipped the skip: every code branch skips the gate."""
-    para = _paragraph_starting(REVIEW_CLOSE.read_text(), marker)
+    para = _paragraph_starting(text_of(REVIEW_CLOSE), marker)
     assert carries(para, predicate), f"skip predicate changed or inverted: {para[:160]!r}"
     assert not re.search(r"touches \*{0,2}any\*{0,2} code files", para)
 
 
 def test_the_skip_actuator_still_skips():
-    para = _paragraph_starting(REVIEW_CLOSE.read_text(), "**0. Per-target doc-only skip")
+    para = _paragraph_starting(text_of(REVIEW_CLOSE), "**0. Per-target doc-only skip")
     assert carries(para, "skip the agent for that target")
 
 
@@ -587,7 +590,7 @@ def test_the_skip_is_gated_on_no_applicable_convention_not_on_the_extension_alon
     own maps disprove it — `.claude/skills/**/*.md`, beancount's vendor `README.md` and
     `<ledger>.beancount`, the llm pack's prompt templates all carry conventions, and the
     beancount one is explicitly not scanner-shaped."""
-    block = _step_2b(REVIEW_CLOSE.read_text())
+    block = _step_2b(text_of(REVIEW_CLOSE))
     assert "cannot violate one" not in block, "the false premise is back"
     assert carries(block, "no rule that governs the file types the diff *does* touch")
     assert "do not skip" in block, "the escape hatch must be an instruction, not a hint"
@@ -596,7 +599,7 @@ def test_the_skip_is_gated_on_no_applicable_convention_not_on_the_extension_alon
 
 
 def test_the_skip_does_not_waive_secret_scanning():
-    block = _step_2b(REVIEW_CLOSE.read_text())
+    block = _step_2b(text_of(REVIEW_CLOSE))
     para = _paragraph_starting(block, "> **Check the second condition")
     # RESTORED, and the phase that removed it was wrong about why. Phase 299 first replaced this
     # with `assert "Secret-scanning" in para`, on the claim that the pair below "REQUIRED A
@@ -633,7 +636,7 @@ def test_the_skip_does_not_waive_secret_scanning():
 
 
 def test_a_skipped_target_is_not_reported_as_approved():
-    block = _step_2b(REVIEW_CLOSE.read_text())
+    block = _step_2b(text_of(REVIEW_CLOSE))
     assert carries(block, "never as `APPROVED`")
     assert carries(block, "an agent that was never spawned has approved nothing")
 
@@ -647,7 +650,7 @@ def test_step_2b_results_have_somewhere_to_render():
     touch its subject at all. A guard keyed to an ordinal is walked through by
     any insertion above it -- and reports the wrong defect when it fires.
     """
-    rc = REVIEW_CLOSE.read_text()
+    rc = text_of(REVIEW_CLOSE)
     assert re.search(r"^\s*\d+\.\s+\*\*Record outcomes for Step 8\.\*\*",
                      _step_2b(rc), re.M), (
         "Step 2b no longer has a numbered step recording outcomes for Step 8"
@@ -660,7 +663,7 @@ def test_step_2b_results_have_somewhere_to_render():
 def test_2b_targets_exclude_branches_step_2a_skipped():
     """A SKIP'd branch is not merging this run; a BLOCKED verdict on it would halt the
     close over work already declared out of scope."""
-    block = _step_2b(REVIEW_CLOSE.read_text())
+    block = _step_2b(text_of(REVIEW_CLOSE))
     # Phase 354 widened it to every Step 2a SKIP: an unanswered ignored file is one too, and
     # Phase 355 added step 0a's clone that was not brought across.
     assert ("classified **SKIP** (paused work present, clone not brought across, or an ignored "
@@ -671,7 +674,7 @@ def test_the_unpushed_main_group_has_a_retrieval_command_not_just_a_predicate():
     """The first version specified the group's diff for the skip predicate only, then said
     "For each remaining **branch**" — reproducing, for its own new work, the exact
     fix-the-placeholder-not-the-generator error it caught for #241."""
-    block = _step_2b(REVIEW_CLOSE.read_text())
+    block = _step_2b(text_of(REVIEW_CLOSE))
     assert "| unpushed-main group | `git diff origin/<default branch>...HEAD` |" in block
     assert "**For each remaining target:**" in block, "loop header still says 'branch'"
     assert "the target's **diff basis** from the table above" in block
@@ -679,7 +682,7 @@ def test_the_unpushed_main_group_has_a_retrieval_command_not_just_a_predicate():
 
 
 def test_the_group_target_is_guarded_on_having_a_remote_and_being_on_main():
-    block = _step_2b(REVIEW_CLOSE.read_text())
+    block = _step_2b(text_of(REVIEW_CLOSE))
     assert "If the repo has no `origin` remote, or `HEAD` is not `main`" in block
 
 

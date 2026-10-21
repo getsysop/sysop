@@ -28,7 +28,17 @@ It leaves all of this **uncommitted** — see § Step 8.
 
 ## Step 0 — Orient (fresh · re-entry · adopting)
 
-Read `tasks/vision.md`, `tasks/decisions.md`, **and** `tasks/index.yml` up front — the classification keys on all three, not just the intent layer. Then branch:
+Read `tasks/vision.md`, `tasks/decisions.md`, **and** `tasks/index.yml` up front — the classification keys on all three, not just the intent layer.
+
+**On the fresh and adopting branches below, show the model defaults before anything else those branches do.** Run
+
+```bash
+python3 sysop/scripts/check_skill_models.py --defaults
+```
+
+and show its output verbatim, then one sentence: these roles set the model and effort of every agent the lifecycle spawns, and changing one is one key in `.claude/served_models.local.yml`, applied by the next `bash sysop/scripts/sysop-update.sh`. Do not retype or summarise the table; it is read from the file. If its first line says the model-role check fails, show that line and run the command it names. If the command fails otherwise, say so in one line, name the file its error names, and continue. Re-entry skips this.
+
+Then branch:
 
 - **Neither intent file exists AND the queue empty** (`index.yml` is unwritten or has `tasks: []`) → **fresh project.** You will author vision + decisions from scratch this session; proceed to Step 1. One guard: if the working tree shows an existing codebase — a light *"is there real source beyond the Sysop scaffold, or a README describing a shipped product?"* check, **not** the deferred code-reconstruction of the note below — don't assume greenfield; ask *"brand-new project, or an existing one adopting Sysop?"* first. If it's an existing project, use the **adopting** offer below to establish the intent layer grounded in what already exists — or hand off to `/onboard` when they want the systematic path (evidence archaeology and/or importing an existing roadmap/issue backlog) — *then* decompose the first slice via Step 1 onward.
 
@@ -225,7 +235,7 @@ When a re-entry supersedes a decision, **don't delete the old entry** — append
 
 ## Permissions
 
-`/intake` needs **no new permission rules.** It writes via the `Write` / `Edit` tools (file-level, not Bash-gated) and runs only `validate_tasks.py`, which the default `.claude/settings.json` already allows (bare + `.venv/bin/python3` variants). It does not commit, push, or merge. If a consumer's `settings.json` is missing the `validate_tasks.py` allow-rule, the validator step costs a prompt under the interactive modes rather than a halt, because a human is present for the whole session. (Under `dontAsk` it is auto-denied like any unlisted call; report that and continue — `/intake` writes through `Write`/`Edit`, so the validator is a check, not the deliverable.)
+`/intake` needs **no new Bash rules.** It writes via the `Write` / `Edit` tools, which need no rule in a mode that prompts or accepts edits and are denied under `dontAsk`, where no rule covers the files it writes, and runs only `validate_tasks.py`, which the default `.claude/settings.json` already allows (bare + `.venv/bin/python3` variants), and Step 0's `check_skill_models.py --defaults`, which `Bash(python3 sysop/scripts/check_skill_models.py:*)` allows. It does not commit, push, or merge. If a consumer's `settings.json` is missing the `validate_tasks.py` allow-rule, the validator step costs a prompt under the interactive modes rather than a halt, because a human is present for the whole session. (Under `dontAsk` it is auto-denied like any unlisted call; report that and continue — the validator is a check, not the deliverable. The `Write`/`Edit` calls that are the deliverable are denied there too, so `/intake` needs a mode other than `dontAsk`.)
 
 ## Two-leg done, restated
 

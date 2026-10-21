@@ -449,12 +449,15 @@ def test_transform_1_accepts_an_editor_block():
     assert "transform 1" in proc.stdout, proc.stdout
 
 
-def test_the_no_verdict_population_is_the_majority_so_its_arm_is_not_a_corner():
+def test_the_no_verdict_population_is_large_so_its_arm_is_not_a_corner():
     """The measurement that makes the `none` case above worth its line rather than tidy.
 
     Stated as an inequality, not a count: a count goes stale on the campaign's next commit, and
     the claim being pinned is that the unverdicted population is LARGE — which is why leaving its
-    arm untested was a hole rather than an omission.
+    arm untested was a hole rather than an omission. It was the majority (883 of 1,492 distinct
+    shas at `c0d5d1d6`) until Phase 387 (`Q-409` P3) moved review-close's last heredoc bodies,
+    571 distinct blocks nearly all unverdicted, into scripts: 339 of 921 then. A quarter is
+    the bound because the claim is "not a corner", not "most of the file".
     """
     keys_by_state = {}
     sys.path.insert(0, str(REPO / "tools"))
@@ -465,9 +468,9 @@ def test_the_no_verdict_population_is_the_majority_so_its_arm_is_not_a_corner():
         (REPO / "tools/reader_census/review-close.json").read_text(encoding="utf-8"))
     shas = {b.sha for b in rc.census("review-close")["blocks"]}
     unverdicted = shas - set(verdicts)
-    assert len(unverdicted) > len(shas) / 2, (
+    assert len(unverdicted) > len(shas) / 4, (
         f"{len(unverdicted):,} of {len(shas):,} distinct shas carry no verdict; the `none` arm "
-        f"was pinned because that branch governs most of the file")
+        f"was pinned because that branch governs a large share of the file")
 
 
 @pytest.mark.parametrize("args, why", [

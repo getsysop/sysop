@@ -18,53 +18,41 @@ import sys
 from pathlib import Path
 
 import pytest
+from skill_runner_text import text_of
+from _shipped_scripts import script as shipped_script, subcommand_body
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SKILL = REPO_ROOT / "core" / "skills" / "review-close" / "SKILL.md"
 
 
-def _extract(start: str, end: str, *, dedent: int = 0) -> str:
-    text = SKILL.read_text(encoding="utf-8")
-    assert text.count(start) == 1, f"anchor is not unique in SKILL.md: {start!r}"
-    i = text.index(start)
-    j = text.index(end, i)
-    body = text[i:j]
-    if dedent:
-        body = "\n".join(l[dedent:] if l.startswith(" " * dedent) else l
-                         for l in body.splitlines())
-    return body
-
-
 def _extract_discovery() -> str:
-    """Step 3b step 0's workspace-discovery heredoc, by its unique three-arg opener."""
-    text = SKILL.read_text(encoding="utf-8")
-    opener = ('python3 - "<branch name>" "$(git worktree list --porcelain)" '
-              '"${WORKTREE_PREFIX:-$(basename "$(git rev-parse --show-toplevel)")}" <<\'PY\'\n')
-    assert text.count(opener) == 1, "Step 3b discovery heredoc opener is not unique"
-    i = text.index(opener) + len(opener)
-    j = text.index("\nPY\n", i)
-    return text[i:j]
+    """Step 3b step 0's workspace discovery: `workspace_locate.py` since Phase 387 (`Q-409`
+    P3), run by one invocation line whose three arguments the step prescribes."""
+    text = text_of(SKILL)
+    inv = ('python3 sysop/scripts/workspace_locate.py "<branch name>" "$(git worktree list --porcelain)" '
+           '"${WORKTREE_PREFIX:-$(basename "$(git rev-parse --show-toplevel)")}"')
+    assert text.count(inv) == 1, f"Step 3b discovery invocation count changed: {text.count(inv)}"
+    return shipped_script("workspace_locate.py").read_text(encoding="utf-8")
 
 
+DISCOVER_ARGV = [str(shipped_script("workspace_locate.py"))]
 DISCOVER_PY = _extract_discovery()
 
 def _extract_collect() -> str:
-    """The FIRST `python3 - "<worktree-path>" "<branch name>"` heredoc in Step 3b is the
-    collect; the second is the ISSUE-0016 rollback. Anchor on order, and assert the body
-    is the collect by a marker only the collect prints — an anchor that silently picks up
-    the rollback would test the wrong mechanism and still be green."""
-    text = SKILL.read_text(encoding="utf-8")
-    opener = 'python3 - "<worktree-path>" "<branch name>" <<\'PY\'\n'
-    assert text.count(opener) == 2, f"Step 3b heredoc count changed: {text.count(opener)}"
-    i = text.index(opener) + len(opener)
-    j = text.index("\n      PY\n", i)
-    body = "\n".join(l[6:] if l.startswith(" " * 6) else l
-                     for l in text[i:j].splitlines())
+    """Step 3b's collect: `pending_doc_collect.py collect` since Phase 386 (`Q-409` P3). The
+    rollback is the script's other subcommand; assert the body is the collect by a marker
+    only the collect prints — an anchor that silently picks up the rollback would test the
+    wrong mechanism and still be green."""
+    text = text_of(SKILL)
+    inv = 'python3 sysop/scripts/pending_doc_collect.py collect "<worktree-path>" "<branch name>"'
+    assert text.count(inv) == 1, f"Step 3b collect invocation count changed: {text.count(inv)}"
+    body = subcommand_body("pending_doc_collect.py", "collect")
     assert "PENDING-DOC COLLECTED" in body, "extracted the rollback, not the collect"
     assert "ROLLED BACK" not in body, "extracted the rollback, not the collect"
     return body
 
 
+COLLECT_ARGV = [str(shipped_script("pending_doc_collect.py")), "collect"]
 COLLECT_PY = _extract_collect()
 
 
@@ -95,7 +83,7 @@ def _discover(repo: Path, branch: str, *, prefix: str | None = None) -> tuple[st
     """Run the block exactly as Step 3b prescribes: branch, worktree listing, prefix."""
     listing = subprocess.run(["git", "worktree", "list", "--porcelain"], cwd=str(repo),
                              capture_output=True, text=True, check=True).stdout
-    r = subprocess.run([sys.executable, "-c", DISCOVER_PY, branch, listing,
+    r = subprocess.run([sys.executable, *DISCOVER_ARGV, branch, listing,
                         prefix if prefix is not None else repo.name],
                        cwd=str(repo), text=True, capture_output=True, timeout=30)
     assert r.returncode == 0, f"discovery block errored ({r.returncode}):\n{r.stderr}"
@@ -107,7 +95,7 @@ def _discover(repo: Path, branch: str, *, prefix: str | None = None) -> tuple[st
 def _discover_raw(repo: Path, branch: str):
     listing = subprocess.run(["git", "worktree", "list", "--porcelain"], cwd=str(repo),
                              capture_output=True, text=True, check=True).stdout
-    return subprocess.run([sys.executable, "-c", DISCOVER_PY, branch, listing, repo.name],
+    return subprocess.run([sys.executable, *DISCOVER_ARGV, branch, listing, repo.name],
                           cwd=str(repo), text=True, capture_output=True, timeout=30)
 
 
@@ -240,7 +228,7 @@ def test_the_collect_brings_a_clone_authored_pending_doc_into_main(repo: Path):
     ws, shape = _discover(repo, "feat/z")
     assert shape == "clone"
 
-    r = subprocess.run([sys.executable, "-c", COLLECT_PY, ws, "feat/z"],
+    r = subprocess.run([sys.executable, *COLLECT_ARGV, ws, "feat/z"],
                        cwd=str(repo), capture_output=True, text=True, timeout=30)
     assert r.returncode == 0, r.stderr
     assert "PENDING-DOC COLLECTED: feat-z.md" in r.stdout, r.stdout
@@ -256,7 +244,7 @@ def test_the_collect_still_refuses_a_foreign_branch_doc_from_a_clone(repo: Path)
     pd.mkdir(parents=True, exist_ok=True)
     (pd / "other.md").write_text("---\nbranch: feat/somebody-else\n---\n# doc\n",
                                  encoding="utf-8")
-    r = subprocess.run([sys.executable, "-c", COLLECT_PY, str(clone), "feat/z"],
+    r = subprocess.run([sys.executable, *COLLECT_ARGV, str(clone), "feat/z"],
                        cwd=str(repo), capture_output=True, text=True, timeout=30)
     assert r.returncode == 3, (r.returncode, r.stdout, r.stderr)
     assert "refusing; nothing collected" in r.stdout, r.stdout
@@ -279,7 +267,7 @@ def test_step_3b_states_the_collect_is_not_conditional_on_a_worktree():
     original assertions satisfied while APPENDING `"In practice, only run item (a) when
     SHAPE is worktree"` left the whole module green. So this also refuses the
     re-conditioning phrasings, not just the absence of the unconditional one."""
-    body = SKILL.read_text(encoding="utf-8")
+    body = text_of(SKILL)
     flat = _flat(body)
     assert "**The remove is worktree-only; the collect is not.**" in flat
     assert "Collect this branch's pending-docs from the workspace step 0 resolved" in flat
@@ -304,7 +292,7 @@ def test_the_shape_gate_precedes_the_command_it_gates():
     doc back, and the operator did — collecting the doc and then deleting it, with the
     branch left unmerged. That is worse than the bug this step fixes, and every
     presence-only assertion above stayed green through it."""
-    body = SKILL.read_text(encoding="utf-8")
+    body = text_of(SKILL)
     gate = body.index("**ONLY WHEN `SHAPE=worktree`**")
     remove_cmd = body.index("git worktree remove <worktree-path>")
     collect = body.index("Collect this branch's pending-docs from the workspace step 0 resolved")
@@ -317,7 +305,7 @@ def test_the_shape_gate_precedes_the_command_it_gates():
 
 
 def test_step_3b_forbids_running_worktree_remove_on_a_non_worktree():
-    body = SKILL.read_text(encoding="utf-8")
+    body = text_of(SKILL)
     flat = _flat(body)
     assert "**Do not run `git worktree remove` on a shape that is not a worktree**" in flat
     assert "ISSUE-0016" in flat
@@ -336,7 +324,7 @@ def test_every_shape_step_0_can_emit_is_dispositioned():
     emitted |= set(_re.findall(r'= [A-Za-z_.()\[\]"\' ]+, ["\']([a-z-]+)["\']', DISCOVER_PY))
     emitted |= {"worktree", "clone", "recorded", "discovered", "main-checkout", "unresolvable"} & emitted
     assert {"worktree", "discovered", "main-checkout", "unresolvable"} <= emitted, emitted
-    body = SKILL.read_text(encoding="utf-8")
+    body = text_of(SKILL)
     disposition = body[body.index("**Step 0 emits exactly five shapes**"):
                        body.index("For **SKIP'd** branches")]
     for shape in sorted(emitted | {"clone", "recorded"}):
@@ -381,7 +369,7 @@ def test_worktree_arm_reads_the_listing_it_is_given_not_the_ambient_repo(repo: P
     between argv and cwd."""
     wt = repo.parent / "proj-wt"
     _git(repo, "worktree", "add", "-q", str(wt), "-b", "feat/wt")
-    r = subprocess.run([sys.executable, "-c", DISCOVER_PY, "feat/wt", "", repo.name],
+    r = subprocess.run([sys.executable, *DISCOVER_ARGV, "feat/wt", "", repo.name],
                        cwd=str(repo), text=True, capture_output=True, timeout=30)
     assert r.returncode == 0, r.stderr
     # Arm (i) reads argv, so an empty listing takes it out — it does NOT fall back to the

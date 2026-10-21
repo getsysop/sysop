@@ -53,11 +53,13 @@ WHAT THIS CANNOT DO.
   loop mode seeded no rule for it. `tests/test_loop_worktree_placement.py` guards that class
   (every `git worktree` subcommand a loop-shipped runner names) and says why this module was
   not widened to every `git` command.
-* **Loop mode is checked by script, not by skill.** If loop mode ships the
-  script and any shipped file prescribes it, `LOOP_ALLOW` must cover it. That
-  over-approximates: a loop-shipped script prescribed only by a lifecycle-only
-  skill would fail here wrongly. No such case exists today; if one appears, the
-  fix is to narrow this to the loop-shipped doc set, not to delete the check.
+* **Loop mode is checked by script, over the skills loop mode ships.** If loop
+  mode ships the script and a shipped file other than a loop-excluded skill
+  prescribes it, `LOOP_ALLOW` must cover it. Until Phase 398 this read every
+  prescribing file, an over-approximation this paragraph predicted; `Q-676` was
+  the first case (`check_skill_models.py --defaults`, prescribed only by
+  `/intake` and `/onboard`, which loop mode does not install), and the fix was
+  the narrowing prescribed here, not a loop rule nothing would use.
 """
 import ast
 import json
@@ -159,6 +161,15 @@ def _loop_excluded_scripts():
     m = re.search(r'^LOOP_EXCLUDE_SCRIPTS="([^"]*)"', text, re.M)
     assert m, "LOOP_EXCLUDE_SCRIPTS is no longer a quoted string in install.sh"
     return set(m.group(1).split())
+
+
+def _loop_excluded_skills():
+    text = INSTALLER.read_text(encoding="utf-8")
+    m = re.search(r'^LOOP_EXCLUDE_SKILLS="([^"]*)"', text, re.M)
+    assert m, "LOOP_EXCLUDE_SKILLS is no longer a quoted string in install.sh"
+    skills = set(m.group(1).split())
+    assert {"intake", "review-close"} <= skills, skills
+    return skills
 
 
 def _prescribing_files():
@@ -383,10 +394,15 @@ def test_loop_mode_covers_the_scripts_it_ships():
     """
     loop_rules = _loop_allow()
     excluded = _loop_excluded_scripts()
-    missing = []
+    skipped_skills = tuple(f"core/skills/{s}/" for s in _loop_excluded_skills())
+    missing, checked = [], set()
     for (word, script), sites in sorted(_fenced_invocations().items()):
         if Path(script).name in excluded:
             continue
+        sites = [s for s in sites if not s.startswith(skipped_skills)]
+        if not sites:
+            continue
+        checked.add(script)
         if not _is_covered(word, script, loop_rules):
             missing.append((word, script, sites))
     assert not missing, (
@@ -399,6 +415,9 @@ def test_loop_mode_covers_the_scripts_it_ships():
             for w, s, sites in missing
         )
     )
+    # Vacuity: the loop review skills prescribe these, so a narrowing that drops every site
+    # (or every skill) is caught here rather than passing with nothing checked.
+    assert {"sysop/scripts/round_receipt.py", "sysop/scripts/run_checks.sh"} <= checked, checked
 
 
 # --------------------------------------------------------------------------
@@ -437,6 +456,18 @@ def _carve_out_scripts():
         f"its anchor {CARVE_OUT_ANCHOR!r}. Invariant 1 derives its subjects "
         "from that sentence; re-anchor it rather than hardcoding the list."
     )
+
+
+def test_the_carve_out_names_every_bootstrapped_script():
+    """Phase 398's round 2: the sentence said "the four scripts a skill prescribes" when eight
+    carried the bootstrap, and a dropped name went unnoticed. The subjects are the scripts that
+    carry the script-anchored bootstrap, derived here from the scripts themselves."""
+    scripts_dir = REPO_ROOT / "core" / "companion" / "scripts"
+    carrying = {p.name for p in scripts_dir.glob("*.py")
+                if "_roots = []" in p.read_text(encoding="utf-8")}
+    assert len(carrying) >= 8, carrying
+    assert carrying == set(_carve_out_scripts()), (
+        sorted(carrying - set(_carve_out_scripts())), sorted(set(_carve_out_scripts()) - carrying))
 
 
 def test_the_carve_out_names_a_non_empty_list():

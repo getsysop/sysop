@@ -24,7 +24,8 @@ Dry-run by default; pass --apply to write. Paths default to the installed layout
 `--root` / `--config` to run against the Sysop source tree.
 
 Exit codes: 0 = ok (resolved or clean); 1 = a pin references an undefined /
-missing role (nothing written — fix the marker or the config); 2 = usage error.
+missing role, or the `efforts:` map is wrong (nothing written — fix the marker or the
+config); 2 = usage error, including a config that is not valid YAML or not the right shape.
 """
 from __future__ import annotations
 
@@ -40,7 +41,10 @@ from _model_roles import (  # noqa: E402  (path set above)
     REPO_ROOT,
     analyze_text,
     iter_skill_files,
+    EffortConfigError,
+    ConfigShapeError,
     RoleAliasError,
+    load_role_efforts,
     load_roles_config,
     read_skill_text,
     resolve_text,
@@ -110,11 +114,22 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         roles, _ = load_roles_config(config, local if local.is_file() else None)
+        efforts = load_role_efforts(config, local if local.is_file() else None)
     except RoleAliasError as exc:
         print(f"\u274c {exc}", file=sys.stderr)
         print("   Fix the `roles:` map so no role's value chains back to itself.",
               file=sys.stderr)
         return 1
+    except EffortConfigError as exc:
+        print(f"\u274c {exc}", file=sys.stderr)
+        print("   Fix the `efforts:` map. Nothing written.", file=sys.stderr)
+        return 1
+    except ConfigShapeError as exc:
+        # A malformed config is a USAGE error (exit 2), as `check_skill_models.py` already
+        # reports it. This script let it escape as a traceback with exit 1, the verdict code,
+        # for `roles:` before Phase 381 and for the scalar `efforts:` it added (round, lens 2).
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
 
     bad = _unresolvable(root, roles)
     if bad:
@@ -126,6 +141,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     total = 0
+    effort_total = 0
     files_changed = 0
     unreadable: list[Path] = []
     for path in iter_skill_files(root):
@@ -139,14 +155,17 @@ def main(argv: list[str] | None = None) -> int:
             # than absorbed.
             unreadable.append(path)
             continue
-        new_text, changes = resolve_text(original, roles)
+        new_text, changes = resolve_text(original, roles, efforts)
         if not changes:
             continue
         files_changed += 1
-        total += len(changes)
+        effort_total += sum(1 for c in changes if c[1] == "effort")
+        total += sum(1 for c in changes if c[1] != "effort")
         if not args.quiet:
             print(f"  {_rel(path)}")
             for lineno, kind, role, old, new in changes:
+                if kind == "effort":
+                    old, new = old or "(none)", new or "(none)"
                 print(f"    L{lineno}  {kind:11} {role}: {old} -> {new}")
         if args.apply and new_text != original:
             path.write_text(new_text, encoding="utf-8")
@@ -160,8 +179,11 @@ def main(argv: list[str] | None = None) -> int:
         )
     mode = "APPLIED" if args.apply else "DRY-RUN (no files written)"
     rolemap = ", ".join(f"{k}={v}" for k, v in sorted(roles.items()))
-    print(f"{mode}: {total} pin(s) across {files_changed} file(s) resolved [{rolemap}].")
-    if not args.apply and total:
+    effortmap = ", ".join(f"{k}={v}" for k, v in sorted(efforts.items()) if v) or "none"
+    print(f"{mode}: {total} pin(s) and {effort_total} effort(s) across {files_changed} file(s) "
+          f"resolved [{rolemap}]"
+          f" [efforts: {effortmap}].")
+    if not args.apply and (total or effort_total):
         print("Re-run with --apply to write these changes.")
     return 0
 
