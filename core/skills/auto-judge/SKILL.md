@@ -8,6 +8,8 @@ model: opus
 
 Automatically process pending review batches that `/triage` flagged for judgment. Claims flagged batches via isolated reasoning-role subagents that can **FIX**, **DROP**, or **FAIL** each task after adversarial re-reading. If any pending batch lacks a `> **Triaged:**` record, invokes `/triage` first as a prereq.
 
+Run it in the main conversation, never through an Agent call — its judgment agents' waits can outlive a subagent's prompt cache.
+
 **The `Triaged:` task list decides where the money goes.** A `flag` verdict may name the specific tasks that need judgment — `> **Triaged:** 2026-08-03 flag [TASK-1124]`. When it does, only those tasks get adversarial re-reading; the rest of the batch is mechanical and gets a prescriptive fix in the same worktree. When it does not, the whole batch is judged, as before. Without this, one judgment task in a 50-task batch put 49 mechanical ones through the expensive lane.
 
 > **Helper names** referenced in this skill (e.g., `_sanitize_log`, `useAbortableFetch`, `getDisplayError`, `redact_api_keys`, `shared_cli.py`) are placeholders — substitute the equivalent helpers from your project's `convention_map.md`. Worked examples may also reference specific batch numbers, file paths, or env-var names from the originating project; treat those as illustrations, not literal requirements.
@@ -220,7 +222,7 @@ Parse the output for the **Worktree path** (`Path:`) and **Branch name** (`Branc
 
 **For each batch**, use the **Agent tool** to spawn a reasoning-role subagent:
 - `subagent_type`: `"general-purpose"`
-- `model`: `"opus"` — the **reasoning** role, set explicitly, per `.claude/served_models.yml`. The whole point of this skill is reasoning-tier judgment.
+- `model`: `"opus"`, `effort`: `"high"` — the **reasoning** role, set explicitly, per `.claude/served_models.yml`. The whole point of this skill is reasoning-tier judgment.
 - `description`: `"Judge review batch <N>"`
 - Do **NOT** set `isolation: "worktree"` — the agent works in the existing worktree from `batch_work.sh`.
 

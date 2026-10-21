@@ -30,12 +30,14 @@ import re
 
 import pytest
 
+from _shipped_scripts import shipped_programs
+
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 SKILLS = (
     REPO_ROOT / "core" / "skills" / "claim-task" / "SKILL.md",
     REPO_ROOT / "core" / "skills" / "auto-build" / "SKILL.md",
 )
-EXPECTED_BLOCKS = 4  # Step 7f's writer, Step 8's verifier, Step 8b's questions reader (Phase 345), /auto-build item 1-record
+EXPECTED_BLOCKS = 5  # Step 7f's writer, Step 8's verifier, Step 8b's questions reader (Phase 345), /auto-build item 1-record, review-close Step 2b's security_map_filter.py (Phase 395)
 
 
 def _fence_payloads() -> list[tuple[str, int, str]]:
@@ -53,6 +55,11 @@ def _fence_payloads() -> list[tuple[str, int, str]]:
             body = "\n".join(lines[i + 1:end])
             if "def fence_closes" in body:
                 found.append((path.name + f" ({path.parent.name})", i + 1, body))
+    # Step 7f's writer is `claim_record.py` since Phase 386 (`Q-409` P3); every shipped
+    # script is read, so a later conversion is seen without being listed.
+    for label, body in shipped_programs():
+        if "def fence_closes" in body:
+            found.append((label, 1, body))
     return found
 
 

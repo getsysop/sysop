@@ -41,6 +41,7 @@ HELPER = "_prose_guard_helpers"
 
 sys.path.insert(0, str(TESTS))
 from _prose_guard_helpers import section as shipped_section  # noqa: E402
+from skill_runner_text import text_of  # noqa: E402
 
 # The text argument is an expression, not a path. Each is resolved by reading the module's
 # own constant and recorded here; an expression absent from this table sets `problem`.
@@ -60,6 +61,8 @@ _TEXT_EXPR_TO_PATH = {
     # `@module`: the module's own `SKILL` constant names the file — see `_MODULE_SKILL`.
     "SKILL.read_text()": "@module",
     "SKILL.read_text(encoding='utf-8')": "@module",
+    # Phase 385: a review-close reader reads through `text_of`, the spliced text.
+    "text_of(SKILL)": "@module",
 }
 # Expressions too generic to resolve globally: keyed by (module, expression), so the
 # resolution says WHICH module it was verified for and any other module gets a problem row.
@@ -360,7 +363,7 @@ def audit(tests_dir: Path | None = None) -> list[Row]:
                 # reader can see which site went unmeasured and where.
                 rows.append(_row(None, rel, absent=True))
                 continue
-            text = target.read_text(encoding="utf-8")
+            text = text_of(target)
             if text.count("\n" + head + "\n") != 1:
                 rows.append(_row(f"{head!r} is not unique in {rel}", rel))
                 continue

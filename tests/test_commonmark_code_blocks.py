@@ -27,6 +27,7 @@ from pathlib import Path
 import pytest
 
 from markdown_it import MarkdownIt
+from skill_runner_text import runner_key, text_of
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -94,7 +95,11 @@ def test_the_population_is_the_tracked_markdown():
     assert len(texts) >= _floor(REPO_ROOT), sorted(texts)
     for must in ("README.md", "core/skills/review-close/SKILL.md", "docs/getting-started.md"):
         assert must in texts, must
-    assert " - a. **Collect pending-docs**" in texts["core/skills/review-close/SKILL.md"]
+    # The sentinel is review-close's, wherever its runner text sits (Phase 385): each file
+    # renders on its own, so the population stays per file and the check reads them all.
+    rc = [t for rel, t in texts.items()
+          if runner_key(REPO_ROOT / rel) == REPO_ROOT / "core/skills/review-close/SKILL.md"]
+    assert any(" - a. **Collect pending-docs**" in t for t in rc)
     for rel, text in texts.items():   # an independent read: a truncated one is not the file
         assert text == (REPO_ROOT / rel).read_bytes().decode("utf-8"), rel
 
@@ -192,6 +197,9 @@ _B = "b. **ONLY WHEN `SHAPE=worktree`**"
 _STRAY = "Step 1a can now classify a worktree"
 _TAIL = "Then downgrade this branch to SKIP for this run"
 _IN_ITEM = ["bullet_list_open", "list_item_open", "paragraph_open"]
+# Phase 397 (P5) moved (b)'s tail into `steps/3b-rollback.md`, whose header is a bullet so the
+# file renders on its own: spliced, the tail sits one list deeper, still inside item (b).
+_IN_ARM = _IN_ITEM[:2] + _IN_ITEM
 
 
 def _step_3b_shape(text: str) -> tuple[list[str], dict[str, list[tuple]]]:
@@ -231,15 +239,15 @@ def _step_3b_shape(text: str) -> tuple[list[str], dict[str, list[tuple]]]:
 
 
 def test_step_3b_renders_as_its_two_sub_steps():
-    heads, where = _step_3b_shape((REPO_ROOT / _SKILL).read_text(encoding="utf-8"))
+    heads, where = _step_3b_shape(text_of(REPO_ROOT / _SKILL))
     hint = " (if Step 3b was restructured on purpose, update this test's anchors with it)"
     assert [h[:len(s)] for h, s in zip(heads, (_A, _B))] == [_A, _B] and len(heads) == 2, heads
     assert where[_STRAY] == [(1, _IN_ITEM, True)], f"{where[_STRAY]}{hint}"
-    assert where[_TAIL] == [(1, _IN_ITEM, True)], f"{where[_TAIL]}{hint}"
+    assert where[_TAIL] == [(1, _IN_ARM, True)], f"{where[_TAIL]}{hint}"
 
 
 def test_the_structure_check_sees_each_revert():
-    text = (REPO_ROOT / _SKILL).read_text(encoding="utf-8")
+    text = text_of(REPO_ROOT / _SKILL)
     b_reverted = text.replace(" - " + _B, "   " + _B, 1)
     assert b_reverted != text
     assert len(_step_3b_shape(b_reverted)[0]) == 1, "sub-step (b) folded into item (a)"

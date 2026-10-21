@@ -64,6 +64,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from skill_runner_text import runner_files, skill_of
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "core/companion/scripts/cleanup_worktrees.sh"
@@ -118,7 +119,11 @@ def probe_pathspec(text: str | None = None) -> str:
 
 
 def _runner_files():
-    files = sorted(SKILLS.glob("*/SKILL.md")) + sorted(SKILLS.glob("_shared/*.md"))
+    # Each skill's `SKILL.md` and its step files, then every `_shared/` partial at any
+    # depth, since the installer ships `_shared/` subdirectories too (Phase 384).
+    files = runner_files(SKILLS) + sorted(
+        p for p in (SKILLS / "_shared").rglob("*.md")
+        if "__pycache__" not in p.parts and not any(x.startswith(".") for x in p.parts))
     assert files, f"no runner text under {SKILLS}"
     return files
 
@@ -127,7 +132,7 @@ def derive_sites():
     """[(skill, how, path, line_no)] for every in-worktree write in the runner text."""
     sites = []
     for f in _runner_files():
-        skill = f.parent.name
+        skill = skill_of(f, SKILLS)
         for no, line in enumerate(f.read_text().splitlines(), 1):
             for how, rx in ANCHORED:
                 for m in rx.finditer(line):

@@ -61,7 +61,7 @@ Rule files live in each pack's `companion/semgrep/` directory. Each rule corresp
 |---|---|
 | `packs/python/companion/semgrep/` | `http_client_redirect.yaml`, `logger_fstring.yaml`, `recompile_inside_def.yaml` |
 | `packs/postgres/companion/semgrep/` | `missing_writer_engine_guard.yaml`, `sql_fstring.yaml` |
-| `packs/nextjs-react/companion/semgrep/` | `abort_error_setstate.yaml`, `error_display_jsx.yaml`, `missing_encode_uri.yaml`, `missing_fetch_redirect.yaml` |
+| `packs/nextjs-react/companion/semgrep/` | `abort_error_setstate.yaml`, `error_display_jsx.yaml`, `missing_encode_uri.yaml`, `missing_fetch_redirect.yaml`, `window_open_noopener.yaml` |
 | `packs/llm/companion/semgrep/` | `llm_cost_abuse.yaml` |
 
 The check ID in findings is `semgrep-<rule_id>` — `_run_semgrep()` prepends the prefix at result-mapping time.
@@ -70,4 +70,4 @@ The check ID in findings is `semgrep-<rule_id>` — `_run_semgrep()` prepends th
 
 1. After a `/codebase-review` Round, manually triage both the Semgrep findings and the regex findings for the same rule.
 2. Compute FPR = FP / (FP + TP) for each. If semgrep FPR < regex FPR **and** semgrep recall ≥ regex recall, the rule is ready to promote.
-3. Remove the `pattern:` field from the pack's `checks.yml.fragment` entry (the regex check) and set `notes:` to `"AST-backed by semgrep-<id>"`.
+3. Delete the regex check's entry from the pack's `checks.yml.fragment`; the `semgrep-<id>` entry is the check that survives. Do not keep the regex entry without its `pattern:`: an entry with no executable form is reported `unroutable` on every run, and a `notes:` line does not silence it. Point the maps' `AST-backed equivalent` notes at `semgrep-<id>`, and replace the retired id wherever `/codebase-review`'s or `/security-audit`'s skip list names it (in Sysop's own repo, `tests/test_skip_list_check_ids.py` fails on a retired id).

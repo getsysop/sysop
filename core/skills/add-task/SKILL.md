@@ -109,4 +109,4 @@ This is one conversational turn, not a review gate. The human's real sign-off is
 
 ## Permissions
 
-`/add-task` needs **no new permission rules.** It writes via the `Write` / `Edit` tools (file-level, not Bash-gated) and runs only `validate_tasks.py`, which the default `.claude/settings.json` already allows (bare + `.venv/bin/python3` variants). It does not commit, push, or merge.
+`/add-task` needs **no new Bash rules.** It writes via the `Write` / `Edit` tools, which need no rule in a mode that prompts or accepts edits and are denied under `dontAsk`, where no rule covers the files it writes, and runs only `validate_tasks.py`, which the default `.claude/settings.json` already allows (bare + `.venv/bin/python3` variants). It does not commit, push, or merge.

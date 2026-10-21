@@ -354,3 +354,41 @@ are already in `main` as content. `/review-close` Step 4d records each merged PR
 `refs/sysop/merged-pr-heads/<PR>` (Phase 352, `Q-623`), and each count passes
 `--not --glob='refs/sysop/merged-pr-heads/*'`, which matches nothing when no head is recorded.
 The rationale for the record itself is in `review-close/REFERENCE.md` § *Step 4a — provenance*.
+
+### Why the opening says to run in the main conversation (Phase 379)
+
+A consumer's one-week field report (2026-10-12, maintainer-side under `tools/`) wrapped this skill in Agent calls: 188 of its 254 agents were launched by other agents, and each orchestrator then expired its 5-minute subagent cache while waiting on its own planner, reviewer and executor, rewriting its whole context at every hand-back — about 39 USD of a 533 USD week, the report's "own child agents" (23 USD) and "background waits" (16 USD) buckets together. The main conversation's cache lasts an hour on a subscription, which is why the orchestrator belongs there. The delegated case, when it is legitimate, is `Q-672`'s: a named agent file can carry a 1-hour cache TTL where a generic Agent-tool spawn cannot.
+
+## Step 4d — the claim worktree is fast-forwarded to the claim (`Q-532`, Phase 392)
+
+**Why.** Step 4b runs `claim_task.sh --lock`, which creates the branch with `git branch <name>`
+from the primary checkout's `HEAD` before Step 4d's commit exists. Left there, the worktree is one
+claim short, and its own copy of the task index reads `open` for the task it was made for. Every Step 7
+agent works in that worktree. A consumer's plan reviewer read that, plus `origin/<default>`, as
+"the claim never landed" and filed a false HIGH; every observation it made was true.
+
+**Why not the filed reorder.** The report proposed flip → validate → commit → `--lock`. Its own
+validate step fails: `validate_tasks.py`'s invariant 9 errors on an `in_progress` task with no
+lock file. Dropping that step would commit the state the validator rejects, and any failure
+before `--lock` would leave it on the default branch, where undoing it takes a revert commit
+rather than today's uncommitted checkout.
+
+**What the step does instead, and why each skip exits 0.** `--commit-claim` reads the default
+branch's ref (never `HEAD`) before it releases the tracker mutex, and fast-forwards the worktree
+to it after, so a slow consumer `post-merge` hook never holds the tracker. `HEAD` is wrong
+because a concurrent `git checkout` in the primary checkout moves it, and round 2 of Phase 392
+merged another branch's unmerged commits into a claim worktree that way. The mutex serializes
+tracker writers only, so the tip can include a commit another writer landed; every such commit
+holds the claim too, which is all the fast-forward needs. It skips a worktree that is on another
+branch, has commits of its own, or has uncommitted tracked changes, and it merges with
+`--no-overwrite-ignore`: by default `git merge` refuses over an untracked file but overwrites an
+ignored one silently, and round 1 reproduced that loss under a success line. Round 1's own
+exact-path check missed three routes git's flag covers (a file that becomes a directory, a
+case-folded name on a case-insensitive filesystem, a symlink that becomes a directory), so the
+flag replaced it. Verified on git 2.50.1. Every skip exits 0 because the claim is committed, and
+a non-zero exit would send the runner into a rollback over it.
+
+**What it does not cover.** A skipped worktree still reads `open`, and the `⚠️` line reaches the
+runner, not the agents. `origin/<default>` reads `open` until `/review-close` pushes, which is the
+issue's second route to the same false finding. Both stay open in `Q-532`.
+

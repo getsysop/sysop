@@ -29,6 +29,7 @@ import re
 from pathlib import Path
 
 import pytest
+from skill_runner_text import text_of
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CLAUDE_MD = REPO_ROOT / "CLAUDE.md"
@@ -200,7 +201,7 @@ def test_the_reader_this_config_exists_for_still_reads_it():
     """
     reader = REPO_ROOT / "core" / "skills" / "review-close" / "SKILL.md"
     assert reader.is_file(), f"{reader} is gone; this contract's only reader moved"
-    text = reader.read_text(encoding="utf-8")
+    text = text_of(reader)
     assert "Merge policy" in text, (
         "core/skills/review-close/SKILL.md no longer mentions `Merge policy`. Either the "
         "reader was renamed — in which case this repo's `## Merge policy` section is now "

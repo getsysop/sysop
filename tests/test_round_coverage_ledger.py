@@ -52,7 +52,7 @@ RECEIPT_REL = "sysop/runtime/round-receipts"
 FULL_LINE = "Full · manifest 1477 · opened 13 · grepped 220 · workers 0, solo: no primitive"
 
 from tests.test_round_markers import (  # noqa: E402
-    _marker_path, _repo, _run, clear_src, write_src,
+    _marker_path, _repo, _run, _run_script, clear_script, clear_src, write_src,
 )
 from tests.test_python_floor_portability import INTERPRETERS  # noqa: E402
 
@@ -94,7 +94,7 @@ def _write_round(root: Path, line: str | None,
 
 def _close(root: Path, marker: Path,
            skill: str = "codebase-review") -> subprocess.CompletedProcess:
-    return _run(clear_src(skill), root, str(marker))
+    return _run_script(clear_script(skill), root, str(marker))
 
 
 def _only_receipt(root: Path) -> dict:
@@ -160,7 +160,7 @@ def test_the_coverage_line_is_never_a_shell_argument(tmp_path):
     the fix here is not to escape it but to never put it on a command line."""
     for skill, path in SKILLS.items():
         text = path.read_text(encoding="utf-8")
-        opener = "python3 - <<'PY' \"<ROUND_MARKER path from Pre-flight>\""
+        opener = 'python3 sysop/scripts/round_receipt.py "<ROUND_MARKER path from Pre-flight>"'
         at = text.index(opener)
         assert text[at + len(opener)] == "\n", (
             f"{skill}: the clear step grew a second shell argument — the "
@@ -490,8 +490,8 @@ def test_the_receipt_write_leaves_no_temp_file(tmp_path):
     minted = re.compile(
         r'fd,\s*tmp\s*=\s*\w+\.mkstemp\(\s*dir=str\(d\),\s*'
         r'prefix=dst\.name\s*\+\s*"\.",\s*suffix="\.tmp"\s*\)')
-    for skill, path in SKILLS.items():
-        src = path.read_text()
+    for skill in SKILLS:
+        src = clear_src(skill)  # the writer is Step 5f's shipped script since Phase 386
         assert minted.search(src), skill
         assert "os.replace(tmp, dst)" in src, skill
         assert 'tmp = d / (dst.name + ".tmp")' not in src, skill
@@ -508,7 +508,7 @@ def _close_with(interp: str, root: Path, marker: Path,
                 skill: str = "codebase-review", umask: int | None = None
                 ) -> subprocess.CompletedProcess:
     kw = {} if umask is None else {"umask": umask}
-    return subprocess.run([interp, "-c", clear_src(skill), str(marker)],
+    return subprocess.run([interp, str(clear_script(skill)), str(marker)],
                           cwd=root, capture_output=True, text=True, **kw)
 
 
@@ -569,14 +569,10 @@ def test_the_receipt_writer_runs_on_every_interpreter_this_machine_has(
 def test_both_skills_ship_the_identical_receipt_writer():
     """One contract, two copies. A drift between them is how a fix lands in the
     quality round and silently misses the security round (or the reverse)."""
-    def heredoc(p: Path) -> str:
-        t = p.read_text(encoding="utf-8")
-        s = t.index("python3 - <<'PY' \"<ROUND_MARKER path from Pre-flight>\"")
-        return t[s:t.index("\nPY\n", s)]
-
-    bodies = {k: heredoc(v) for k, v in SKILLS.items()}
-    assert len(set(bodies.values())) == 1, "the 5f heredocs have diverged"
-    assert "round-receipts" in next(iter(bodies.values()))
+    # Since Phase 386 both skills run one shipped script, so a drift needs a second file.
+    scripts = {k: clear_script(k) for k in SKILLS}
+    assert len(set(scripts.values())) == 1, "the 5f invocations name different scripts"
+    assert "round-receipts" in clear_src("codebase-review")
 
 
 def test_round_open_probes_the_gitignore_of_both_runtime_dirs(tmp_path):
@@ -1444,7 +1440,8 @@ def test_the_loop_mode_doc_claim_matches_what_self_check_does():
         "that declared its own thinness would be reddened for it"
     )
     install = (REPO_ROOT / "install.sh").read_text(encoding="utf-8")
-    loop_excl = install.split("LOOP_EXCLUDE_SCRIPTS", 1)[1][:400]
+    # The whole quoted value: a fixed-length slice went blind when Phase 387 grew the list.
+    loop_excl = re.search(r'^LOOP_EXCLUDE_SCRIPTS="([^"]*)"', install, re.M).group(1).split()
     assert "sitrep_survey.py" in loop_excl, (
         "loop mode now ships /sitrep — the premise of routing this check "
         "through self_check.sh has changed"

@@ -1,4 +1,5 @@
-"""`/review-close --land <run-id> --unattended <agent>` — merging with no human (`Q-411`, Phase 366).
+"""`/review-close --land <run-id> --unattended --agent <name>` — merging with no human (`Q-411`,
+Phases 366 and 375).
 
 Wade's rulings at Phase 366's opening (2026-10-08, `tools/UNATTENDED_CLOSE_SPEC.md` § 9): the
 land half first, half A stays attended; `pr` policy and `## Second reader` both required; the
@@ -7,6 +8,11 @@ PR merges; the class is an allow list, exclusions and a `blast_radius` ceiling, 
 .claude/**, sysop/** and .github/workflows/** always excluded alongside manual_smoke, solo and
 held tasks; the close's own bookkeeping paths are the consumer's to allow; a park is durable
 until a human clears it; and a check count of 0 waits for the hand-off's timeout, then parks.
+
+Wade's rulings at Phase 375 (part B, spec § 12): the client stops deciding what the signed gate
+decides (paths, task fields, the reader's verdict); it verifies the server setup with the token
+`gh` holds, requires the class's `attested:` date for what that token cannot read, keeps ruling
+(s) by turning auto-merge on only once every registered check has passed, and parks otherwise.
 """
 from __future__ import annotations
 
@@ -21,25 +27,78 @@ from pathlib import Path
 import pytest
 
 from test_step_4d_split import BOT, FAKE_GH, READER, _ENV, _finding, _g, _summary
+from skill_runner_text import text_of
 
 REPO = Path(__file__).resolve().parent.parent
 SCRIPT = REPO / "core/companion/scripts/close_run.py"
 sys.path.insert(0, str(SCRIPT.parent))
 import close_run  # noqa: E402
 
-# The split's fake `gh`, plus the one endpoint the unattended land adds: the default branch's
-# live tip (`git/ref/heads/<branch>`), served from `tip.json` when a test sets one and otherwise
-# from the fixture's own `origin/main`, which is what GitHub would report after a fetch.
+# The split's fake `gh`, plus what the unattended land adds: the default branch's live tip
+# (`git/ref/heads/<branch>`), served from `tip.json` when a test sets one and otherwise from the
+# fixture's own `origin/main`, which is what GitHub would report after a fetch; the server-setup
+# reads (Phase 375), each served from `<name>.json` over a passing default and failing when a
+# `fail_<name>` file exists; and `pr merge --auto` / `--disable-auto`. `merge_mode` holds
+# `merge` (the default: GitHub merges at once, as Phase 375's P2 measured on a green PR), `arm`
+# (auto-merge is on and GitHub waits) or `silent` (gh exits 0 and nothing changes).
+SETUP_DEFAULTS = {
+    "user": {"login": "sysop-bot"},
+    "permission": {"permission": "write", "role_name": "write"},
+    "rules": [
+        {"type": "pull_request", "ruleset_id": 11, "parameters": {
+            "require_code_owner_review": True, "dismiss_stale_reviews_on_push": True,
+            "require_last_push_approval": False, "required_approving_review_count": 0}},
+        {"type": "required_status_checks", "ruleset_id": 11, "parameters": {
+            "strict_required_status_checks_policy": True,
+            "required_status_checks": [{"context": "sysop/close-gate", "integration_id": 42}]}}],
+    "ruleset": {"id": 11, "current_user_can_bypass": "never"},
+    "environment": {"name": "sysop-close-gate", "deployment_branch_policy": {
+        "protected_branches": False, "custom_branch_policies": True}},
+    "policies": {"total_count": 1, "branch_policies": [{"name": "main", "type": "branch"}]},
+    "gate_runs": {"total_count": 1, "check_runs": [
+        {"id": 1, "name": "sysop/close-gate", "app": {"id": 42, "slug": "gate"}, "status": "completed",
+         "conclusion": "success", "started_at": "2026-10-11T00:00:00Z"}]},
+}
 FAKE_GH_LAND = FAKE_GH.replace(
     '    path = [a for a in args if a.startswith("repos/")][0]\n',
+    '    def serve(name):\n'
+    '        if os.path.exists(os.path.join(state, "fail_" + name)):\n'
+    '            print("HTTP 404: Not Found", file=sys.stderr); sys.exit(1)\n'
+    '        print(json.dumps(load(name + ".json", SETUP.get(name)))); sys.exit(0)\n'
+    '    if args[1:] == ["user"]:\n'
+    '        serve("user")\n'
     '    path = [a for a in args if a.startswith("repos/")][0]\n'
+    '    for part, name in (("/check-runs", "gate_runs"), ("/collaborators/", "permission"), ("/rules/branches/", "rules"),\n'
+    '                       ("/rulesets/", "ruleset"), ("/deployment-branch-policies", "policies"),\n'
+    '                       ("/environments/", "environment")):\n'
+    '        if part in path:\n'
+    '            if name == "ruleset" and os.path.exists(os.path.join(state, "ruleset_" + path.rsplit("/", 1)[-1] + ".json")):\n'
+    '                serve("ruleset_" + path.rsplit("/", 1)[-1])\n'
+    '            serve(name)\n'
     '    if "/git/ref/heads/" in path:\n'
     '        import subprocess\n'
     '        tip = load("tip.json", None) or subprocess.run(["git", "rev-parse", "refs/remotes/origin/main"],\n'
     '                                                      capture_output=True, text=True).stdout.strip()\n'
     '        print(json.dumps({"object": {"sha": tip}}))\n'
-    '        sys.exit(0)\n', 1)
-assert FAKE_GH_LAND != FAKE_GH
+    '        sys.exit(0)\n', 1).replace(
+    'if args[:2] == ["pr", "view"]:\n',
+    'SETUP = ' + repr(SETUP_DEFAULTS) + '\n'
+    'if args[:2] == ["pr", "merge"]:\n'
+    '    if os.path.exists(os.path.join(state, "merge_fail")):\n'
+    '        print("GraphQL: Auto merge is not allowed for this repository", file=sys.stderr); sys.exit(1)\n'
+    '    pr = load("pr.json", {})\n'
+    '    if "--disable-auto" in args:\n'
+    '        pr["autoMergeRequest"] = None\n'
+    '    else:\n'
+    '        mode = (load("merge_mode.json", "merge"))\n'
+    '        if mode == "merge":\n'
+    '            pr["state"] = "MERGED"\n'
+    '        elif mode in ("arm", "arm_then_fail"):\n'
+    '            pr["autoMergeRequest"] = {"mergeMethod": "SQUASH", "enabledAt": "2026-10-11T00:00:00Z"}\n'
+    '    json.dump(pr, open(os.path.join(state, "pr.json"), "w"))\n'
+    '    sys.exit(1 if load("merge_mode.json", "merge") == "arm_then_fail" and "--disable-auto" not in args else 0)\n'
+    'if args[:2] == ["pr", "view"]:\n', 1)
+assert FAKE_GH_LAND.count("SETUP = ") == 1 and "serve(\"user\")" in FAKE_GH_LAND
 
 AGENT = "autopilot"
 BRANCH = "merge/review-close-20261008T000000Z"
@@ -50,6 +109,9 @@ CLASS = textwrap.dedent("""\
     allow: review_tasks.md review_tasks_archive.md
     exclude: src/billing/**
     blast_radius: single-module
+    code_owner: @wade
+    gate_app: 42
+    attested: 2026-10-01
     """)
 INDEX = textwrap.dedent("""\
     schema_version: 2
@@ -74,6 +136,8 @@ INDEX = textwrap.dedent("""\
         status: in_progress
         blast_radius: single-file
     """)
+GATE = {"__typename": "CheckRun", "name": "sysop/close-gate", "status": "COMPLETED",
+        "conclusion": "SUCCESS"}
 REPORT = textwrap.dedent("""\
     ## Step 6
     Merged: feat/t1
@@ -144,8 +208,9 @@ def _pr(root: Path, **over) -> None:
           "isCrossRepository": False, "headRefName": BRANCH,
           "headRefOid": _g(root, "rev-parse", BRANCH), "baseRefName": "main",
           "baseRefOid": _g(root, "rev-parse", "origin/main"),
+          "mergeStateStatus": "CLEAN", "autoMergeRequest": None,
           "statusCheckRollup": [{"__typename": "CheckRun", "name": "pytest", "status": "COMPLETED",
-                                 "conclusion": "SUCCESS"}]}
+                                 "conclusion": "SUCCESS"}, GATE]}
     pr.update(over)
     (_state(root) / "pr.json").write_text(json.dumps(pr), encoding="utf-8")
 
@@ -325,6 +390,25 @@ def test_eligible_sees_a_rename_out_of_an_excluded_path(repo: Path) -> None:
     assert got["feat/mv"].startswith("OUT") and "src/billing/pay.py (excluded" in got["feat/mv"]
 
 
+def test_eligible_reads_the_merge_result_symlinks_conflicts_and_lookalikes_included(repo: Path) -> None:
+    """Phase 374 (spec § 10.8): selection reads the merge result GitHub's squash would make, the
+    same one the gate reads, so a symlink, a governing lookalike and a conflict are all OUT."""
+    _g(repo, "checkout", "-qb", "feat/link", "main")
+    os.symlink("a.py", repo / "src" / "link.py")
+    _g(repo, "add", "src/link.py")
+    _g(repo, "commit", "-qm", "link")
+    _g(repo, "checkout", "-q", "main")
+    _branch(repo, "feat/look", {"src/Claude.MD": "x\n"})
+    _branch(repo, "feat/clash", {"src/a.py": "a = 'branch'\n"})
+    _commit(repo, "main moves", {"src/a.py": "a = 'main'\n"})
+    for i, b in enumerate(("feat/link", "feat/look", "feat/clash")):
+        _lock(repo, "T-1", b, name=f"L-{i}")
+    got = _out_lines(_run(repo, "eligible", "main", AGENT, "feat/link", "feat/look", "feat/clash").stdout)
+    assert "src/link.py is a symlink or gitlink (mode 120000)" in got["feat/link"]
+    assert "src/Claude.MD (always excluded: CLAUDE.md)" in got["feat/look"]
+    assert "does not merge cleanly onto" in got["feat/clash"] and got["feat/clash"].startswith("OUT")
+
+
 def test_eligible_sets_aside_a_branch_whose_pending_doc_holds(repo: Path) -> None:
     _branch(repo, "feat/t1", {"src/a.py": "a = 2\n"})
     _lock(repo, "T-1", "feat/t1")
@@ -358,7 +442,9 @@ def test_eligible_refuses_without_a_class_or_with_a_bad_agent(repo: Path) -> Non
 def test_class_prints_the_class_and_its_warnings(repo: Path) -> None:
     r = _run(repo, "class")
     assert r.returncode == 0 and "BLAST_RADIUS: single-module" in r.stdout
-    assert "ALWAYS EXCLUDED: CLAUDE.md .claude/** sysop/** .github/workflows/**" in r.stdout
+    assert ("ALWAYS EXCLUDED: CLAUDE.md CLAUDE.local.md AGENTS.md AGENTS.override.md .mcp.json "
+            ".gitmodules .gitattributes .claude/ .agents/ .codex/ /sysop/** /.github/** /CODEOWNERS "
+            "/docs/CODEOWNERS") in r.stdout
     assert "WARN" not in r.stdout
 
 
@@ -394,29 +480,38 @@ def _clean(repo: Path) -> None:
     _gh_file(repo, "comments.json", [_summary("completed", _g(repo, "rev-parse", BRANCH))])
 
 
-# The unattended land is not enabled in the shipped CLI (Wade, 2026-10-08): `land-check
-# --unattended` refuses. These tests keep the mechanism exercised for `Q-411`'s redesign by
-# flipping the switch in-process, which the CLI never does.
-_ENABLED = ("import sys; sys.path.insert(0, sys.argv[1]); import close_run; "
-            "close_run.UNATTENDED_LAND_ENABLED = True; sys.exit(close_run.main(sys.argv[2:]))")
-
-
 def _land(repo: Path, run_id: str, agent: str = AGENT) -> subprocess.CompletedProcess:
+    return _run(repo, "land-check", run_id, "main", "--unattended", agent)
+
+
+def _argv(root: Path) -> list[list[str]]:
+    p = _state(root) / "calls.jsonl"
+    return [json.loads(l) for l in p.read_text().splitlines()] if p.exists() else []
+
+
+def _merges(root: Path) -> list[list[str]]:
+    return [a for a in _argv(root) if a[:2] == ["pr", "merge"]]
+
+
+def test_the_shipped_cli_runs_the_unattended_land(repo: Path) -> None:
+    """Part B (Phase 375): the shipped constant is on, and the CLI lands without a test flipping it."""
+    assert close_run.UNATTENDED_LAND_ENABLED is True
+    run_id, run = _sealed(repo)
+    r = _land(repo, run_id)
+    assert r.returncode == 0 and _verdict(r) == "ALREADY MERGED", r.stdout + r.stderr
+
+
+def test_the_switch_off_refuses_before_any_read(repo: Path) -> None:
+    run_id, run = _sealed(repo)
+    before = _calls(repo)
     env = dict(_ENV, FAKE_GH=str(_state(repo)),
                PATH=f"{repo.parent / 'bin'}{os.pathsep}{_ENV.get('PATH', '')}")
-    return subprocess.run([sys.executable, "-c", _ENABLED, str(SCRIPT.parent), "land-check", run_id,
-                           "main", "--unattended", agent], cwd=repo, capture_output=True, text=True,
-                          env=env)
-
-
-def test_the_shipped_cli_refuses_the_unattended_land(repo: Path) -> None:
-    run_id, run = _sealed(repo)
-    _clean(repo)
-    before = _calls(repo)
-    r = _run(repo, "land-check", run_id, "main", "--unattended", AGENT)
-    assert r.returncode == 2 and "not enabled" in r.stderr and f"--land {run_id}" in r.stderr
-    assert close_run.UNATTENDED_LAND_ENABLED is False
-    assert not (run / "PARKED").exists() and _calls(repo) == before  # refused before any read
+    off = ("import sys; sys.path.insert(0, sys.argv[1]); import close_run; "
+           "close_run.UNATTENDED_LAND_ENABLED = False; sys.exit(close_run.main(sys.argv[2:]))")
+    r = subprocess.run([sys.executable, "-c", off, str(SCRIPT.parent), "land-check", run_id, "main",
+                        "--unattended", AGENT], cwd=repo, capture_output=True, text=True, env=env)
+    assert r.returncode == 2 and "switched off" in r.stderr and f"--land {run_id}" in r.stderr
+    assert not (run / "PARKED").exists() and _calls(repo) == before
 
 
 def _verdict(r: subprocess.CompletedProcess) -> str:
@@ -464,23 +559,37 @@ def test_another_agents_hand_off_is_refused(repo: Path) -> None:
     assert r.returncode == 2 and "belongs to agent 'autopilot'" in r.stderr
 
 
-def test_a_clean_in_class_hand_off_merges(repo: Path) -> None:
+def test_a_clean_hand_off_turns_on_auto_merge_at_the_recorded_head(repo: Path) -> None:
     run_id, run = _sealed(repo)
-    _clean(repo)
+    head = _g(repo, "rev-parse", BRANCH)
     r = _land(repo, run_id)
-    assert r.returncode == 0 and _verdict(r) == "MERGE", r.stdout + r.stderr
-    assert "CHECKS: 1" in r.stdout and not (run / "PARKED").exists()
+    assert r.returncode == 0 and _verdict(r) == "ALREADY MERGED", r.stdout + r.stderr
+    assert "CHECKS: 2" in r.stdout and not (run / "PARKED").exists()
+    # Never --delete-branch: with --auto it deleted nothing (Phase 375's P3); Step 6 deletes.
+    assert _merges(repo) == [["pr", "merge", "7", "--auto", "--squash", "--match-head-commit", head]]
+    assert json.loads((run / "handoff.json").read_text())["armed"]["head"] == head
 
 
-def test_a_head_that_touches_an_excluded_path_parks_durably(repo: Path) -> None:
-    run_id, run = _sealed(repo, files={"src/a.py": "a = 2\n", "CLAUDE.md": "# widened\n"})
-    _clean(repo)
+def test_a_keep_branch_hand_off_arms_the_same_way(repo: Path) -> None:
+    _integration(repo)
+    r = _hand_off(repo, "--keep-branch", "--agent", AGENT)
+    run_id = re.search(r"^RUN: (\S+)", r.stdout, re.M).group(1)
+    run = Path(re.search(r"^DIR: (.+)$", r.stdout, re.M).group(1))
+    (run / "report.md").write_text(REPORT, encoding="utf-8")
+    assert _run(repo, "seal", run_id).returncode == 0
     r = _land(repo, run_id)
-    assert r.returncode == 4 and _verdict(r) == "PARK"
-    assert "CLAUDE.md (always excluded" in r.stdout and "PARKED: class" in r.stdout
-    parked = json.loads((run / "PARKED").read_text())
-    assert parked["code"] == "class"
-    assert json.loads((run / "handoff.json").read_text())["parks"][0]["code"] == "class"
+    assert _verdict(r) == "ALREADY MERGED" and "KEEP BRANCH: yes" in r.stdout
+    assert [a for a in _merges(repo) if "--delete-branch" in a] == []
+
+
+def test_a_setup_problem_parks_durably_without_arming(repo: Path) -> None:
+    run_id, run = _sealed(repo)
+    _gh_file(repo, "ruleset.json", {"id": 11, "current_user_can_bypass": "always"})
+    r = _land(repo, run_id)
+    assert r.returncode == 4 and _verdict(r) == "PARK" and "PARKED: setup" in r.stdout
+    assert "can bypass ruleset 11 ('always')" in r.stdout and _merges(repo) == []
+    assert json.loads((run / "PARKED").read_text())["code"] == "setup"
+    assert json.loads((run / "handoff.json").read_text())["parks"][0]["code"] == "setup"
     # A later unattended land reads nothing from GitHub: the park waits for a human.
     before = _calls(repo)
     r = _land(repo, run_id)
@@ -508,15 +617,6 @@ def test_a_hand_off_that_kept_no_task_lock_parks(repo: Path) -> None:
     assert _verdict(r) == "PARK" and "kept no task lock" in r.stdout
 
 
-def test_a_kept_task_above_the_ceiling_at_the_head_parks(repo: Path) -> None:
-    run_id, _ = _sealed(repo, files={"src/a.py": "a = 2\n", "tasks/index.yml": INDEX.replace(
-        "  - id: T-1\n    status: in_progress\n    blast_radius: single-file",
-        "  - id: T-1\n    status: done\n    blast_radius: architectural")})
-    _clean(repo)
-    r = _land(repo, run_id)
-    assert _verdict(r) == "PARK" and "T-1 is blast_radius architectural" in r.stdout
-
-
 def test_a_kept_lock_that_changed_owner_parks(repo: Path) -> None:
     run_id, _ = _sealed(repo)
     _lock(repo, "T-1", "feat/t1", "someone-else")
@@ -525,28 +625,38 @@ def test_a_kept_lock_that_changed_owner_parks(repo: Path) -> None:
     assert _verdict(r) == "PARK" and "T-1's lock reads agent: someone-else" in r.stdout
 
 
-def test_main_commits_riding_the_pr_are_checked_against_the_class(repo: Path) -> None:
-    _commit(repo, "a human edit on main", {"docs/notes.md": "n\n"})
-    run_id, _ = _sealed(repo)
-    _clean(repo)
-    r = _land(repo, run_id)
-    assert _verdict(r) == "PARK" and "docs/notes.md (not allowed)" in r.stdout
-
-
-def test_a_blocking_finding_parks_durably(repo: Path) -> None:
-    run_id, run = _sealed(repo)
+def test_the_land_leaves_paths_and_the_reader_to_the_gate(repo: Path) -> None:
+    """Wade's Phase 375 ruling: the client stops deciding what the signed gate decides. A head
+    touching a governing path and a blocking finding on it do not park here; the gate's own
+    failure does, and nothing is armed."""
+    run_id, run = _sealed(repo, files={"src/a.py": "a = 2\n", "CLAUDE.md": "# widened\n"})
     head = _g(repo, "rev-parse", BRANCH)
     _gh_file(repo, "reviews.json", [{"id": 1, "user": {"login": BOT}, "commit_id": head,
                                      "state": "COMMENTED", "submitted_at": "2099-01-01T00:00:00Z"}])
     _gh_file(repo, "review_comments.json", [_finding("P1")])
+    _pr(repo, statusCheckRollup=[dict(GATE, conclusion="FAILURE")])
+    _gh_file(repo, "gate_runs.json", {"check_runs": [
+        {"id": 1, "name": "sysop/close-gate", "app": {"id": 42}, "status": "completed", "conclusion": "failure",
+         "started_at": "2026-10-11T00:00:00Z", "output": {"title": "governing path"}}]})
+    before = _calls(repo)
     r = _land(repo, run_id)
-    assert _verdict(r) == "PARK" and json.loads((run / "PARKED").read_text())["code"] == "reader"
+    assert _verdict(r) == "PARK" and "concluded failure: governing path" in r.stdout and _merges(repo) == []
+    assert json.loads((run / "PARKED").read_text())["code"] == "gate-red"
+    read = [" ".join(a) for a in _argv(repo)[before:]]
+    assert not [a for a in read if "/reviews" in a or "/comments" in a or "/reactions" in a], read
 
 
-def test_no_verdict_yet_waits_without_parking(repo: Path) -> None:
+@pytest.mark.parametrize("gate", [None, dict(GATE, status="IN_PROGRESS", conclusion=None)])
+def test_no_gate_reading_yet_waits_without_parking(repo: Path, gate) -> None:
     run_id, run = _sealed(repo)
+    _pr(repo, statusCheckRollup=[c for c in [{"__typename": "CheckRun", "name": "pytest",
+                                              "status": "COMPLETED", "conclusion": "SUCCESS"}, gate] if c])
+    _gh_file(repo, "gate_runs.json", {"check_runs": [] if gate is None else [
+        {"id": 1, "name": "sysop/close-gate", "app": {"id": 42}, "status": "in_progress", "conclusion": None, "started_at": "2026-10-11T00:00:00Z"}]})
     r = _land(repo, run_id)
     assert r.returncode == 5 and _verdict(r) == "WAIT" and not (run / "PARKED").exists()
+    assert ("no sysop/close-gate check from app 42" in r.stdout) if gate is None else ("is in_progress" in r.stdout)
+    assert _merges(repo) == []
 
 
 def test_a_moved_head_parks(repo: Path) -> None:
@@ -616,18 +726,20 @@ SKILL = REPO / "core/skills/review-close/SKILL.md"
 
 
 def _section() -> str:
-    t = SKILL.read_text(encoding="utf-8")
+    t = text_of(SKILL)
     start = t.index("## `--request-review` and `--land <run-id>` (`Q-411`)")
     return t[start:t.index("## Step 1: Gather State", start)]
 
 
 def test_the_selection_commands_run_as_written(repo: Path) -> None:
-    """Phase 168 rule 3: every `close_run.py` line the `--agent` half A prescribes, run in order."""
+    """Phase 168 rule 3: every `close_run.py` line the `--agent` half A prescribes, then the
+    unattended land's own (Phase 375), run in order."""
     found = re.findall(r"(python3 sysop/scripts/close_run\.py ([\w-]+)[^`\n]*)", _section())
     cmds: dict[str, list[str]] = {}
     for line, name in found:
         cmds.setdefault(name, []).append(line.strip())
-    assert not [c for c in cmds.get("land-check", []) if "--unattended" in c], cmds["land-check"]
+    unattended = [c for c in cmds.get("land-check", []) if "--unattended" in c]
+    assert len(unattended) == 1, cmds["land-check"]
     (repo / "sysop/scripts").mkdir(parents=True)
     for name in ("close_run.py", "pending_doc_hold.py"):
         (repo / "sysop/scripts" / name).write_bytes((SCRIPT.parent / name).read_bytes())
@@ -654,13 +766,56 @@ def test_the_selection_commands_run_as_written(repo: Path) -> None:
            .replace('"<branch you pushed>"', f'"{BRANCH}"').replace('"<PR>"', '"7"')
            .replace('"<SHA 2b printed>"', f'"{_g(repo, "rev-parse", "main")}"') + f' --agent "{AGENT}"')
     assert r.returncode == 0, r.stderr
+    run_id = re.search(r"^RUN: (\S+)", r.stdout, re.M).group(1)
+    run = Path(re.search(r"^DIR: (.+)$", r.stdout, re.M).group(1))
+    (run / "report.md").write_text(REPORT, encoding="utf-8")
+    assert sh(cmds["seal"][0].replace('"<run-id>"', f'"{run_id}"')).returncode == 0
+    r = sh(unattended[0].replace('"<run-id>"', f'"{run_id}"').replace('"<default branch>"', '"main"')
+           .replace('"<name>"', f'"{AGENT}"'))
+    assert r.returncode == 0 and _verdict(r) == "ALREADY MERGED", r.stdout + r.stderr
+    landed = [c for c in cmds["landed"] if c.endswith('landed "<run-id>"')]
+    r = sh(landed[-1].replace('"<run-id>"', f'"{run_id}"'))
+    assert r.returncode == 0 and "LOCKS_REMOVED: T-1" in r.stdout, r.stdout + r.stderr
 
 
-def test_the_skill_refuses_unattended_and_names_the_attended_land() -> None:
+def _unattended() -> str:
     sec = _section()
-    assert "**`--unattended` is not enabled** (`Q-411`): stop and say so, and land the hand-off attended with `--land <run-id>`." in sec
-    assert "### Under `--land <run-id> --unattended" not in sec
-    assert "--unattended" not in SKILL.read_text(encoding="utf-8").split("\n", 5)[3]  # argument-hint
+    start = sec.index("### Under `--land <run-id> --unattended --agent <name>`")
+    return sec[start:]
+
+
+def test_the_skill_names_the_unattended_land_and_its_flags() -> None:
+    sec = _section()
+    # Since Phase 393 (`Q-409` P4b) `close_arms.py begin` refuses every other use.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "core" / "companion" / "scripts"))
+    import close_arms
+    assert {s for s in close_arms.FLAG_SETS if "--unattended" in s} == {
+        frozenset({"--land", "--agent", "--unattended"}),
+        frozenset({"--resume", "--request-review", "--agent", "--unattended"})}
+    assert "not enabled" not in sec
+    hint = text_of(SKILL).split("\n", 5)[3]
+    assert hint.startswith("argument-hint:") and "--land <run-id> [--unattended --agent <name>]" in hint
+
+
+def test_the_unattended_land_never_asks_and_never_passes_delete_branch() -> None:
+    """No human is present (Phase 366's decisions, spec § 9), and `--auto --delete-branch` deleted
+    nothing (Phase 375's P3), so item 3 deletes the branch and no merge here names the flag."""
+    u = _unattended()
+    assert "Never use `AskUserQuestion` and never relay a `!` command" in u
+    assert "--delete-branch" not in u
+    assert 'git push origin --delete "<BRANCH>"' in u and "unless `KEEP BRANCH: yes`" in u
+    assert "do not fix the branch, `re-request`, `unpark` or `abandon`" in u
+    assert "Do not run Step 5" in u and "appends nothing to `SYSOP_ISSUES.md`" in u
+    for verdict in ("`VERDICT: WAIT` or `VERDICT: ARMED`", "`VERDICT: PARK`", "`VERDICT: ALREADY MERGED`"):
+        assert verdict in u
+
+
+def test_every_land_check_exit_the_unattended_section_names_is_one_the_cli_prints() -> None:
+    src = SCRIPT.read_text(encoding="utf-8")
+    body = src[src.index("def cmd_land_unattended("):src.index("# GitHub's CheckConclusionState")]
+    printed = set(re.findall(r'print\("VERDICT: ([A-Z ]+)"\)', body))
+    named = set(re.findall(r"`VERDICT: ([A-Z ]+)`", _unattended()))
+    assert printed == named == {"WAIT", "ARMED", "PARK", "ALREADY MERGED"}, (printed, named)
 
 
 # --- /sitrep ----------------------------------------------------------------------------------
@@ -691,7 +846,7 @@ def test_sitrep_names_the_parked_state_in_both_orderings() -> None:
     order = src[src.index("def _suggested_order("):]
     assert order.index("_PARKED_LAND_STATE") < order.index("# 1. Ready for /review-close")
     doc = (REPO / "core/skills/sitrep/SKILL.md").read_text(encoding="utf-8")
-    assert "| 0e       | Any task `land parked`" in doc and "| **Land parked** |" in doc
+    assert "| 0f       | Any task `land parked`" in doc and "| **Land parked** |" in doc
 
 
 # --- round 1 (Phase 366): each finding, and each assumption an independent battery walked through
@@ -731,19 +886,6 @@ def test_a_branch_cannot_clear_its_own_tasks_flags(repo: Path) -> None:
     assert got["feat/t2"].startswith("OUT") and "at local main: T-2 is manual_smoke" in got["feat/t2"]
 
 
-def test_a_head_that_lowers_its_tasks_blast_radius_parks(repo: Path) -> None:
-    _commit(repo, "T-1 is architectural", {"tasks/index.yml": INDEX.replace(
-        "  - id: T-1\n    status: in_progress\n    blast_radius: single-file",
-        "  - id: T-1\n    status: in_progress\n    blast_radius: architectural")})
-    _g(repo, "push", "-q", "origin", "main")
-    _g(repo, "fetch", "-q", "origin")
-    run_id, _ = _sealed(repo)  # the integration head carries INDEX's single-file T-1
-    _pr(repo)
-    _clean(repo)
-    r = _land(repo, run_id)
-    assert _verdict(r) == "PARK" and "at the pushed-from commit: T-1 is blast_radius architectural" in r.stdout
-
-
 @pytest.mark.parametrize("where", ["tip", "local"])
 def test_an_index_naming_one_id_twice_is_unreadable(repo: Path, where: str) -> None:
     dup = INDEX + "  - id: T-1\n    status: in_progress\n    blast_radius: single-file\n"
@@ -763,13 +905,6 @@ def test_an_unparseable_tip_index_sets_the_branch_aside(repo: Path, text: str) -
     _lock(repo, "T-1", "feat/t1")
     got = _out_lines(_run(repo, "eligible", "main", AGENT, "feat/t1").stdout)
     assert got["feat/t1"].startswith("OUT") and "does not parse" in got["feat/t1"]
-
-
-def test_an_unparseable_head_index_parks(repo: Path) -> None:
-    run_id, _ = _sealed(repo, files={"src/a.py": "a = 2\n", "tasks/index.yml": "tasks: [unclosed\n"})
-    _clean(repo)
-    r = _land(repo, run_id)
-    assert _verdict(r) == "PARK" and "cannot be read" in r.stdout
 
 
 @pytest.mark.parametrize("owner", ["autopilot2", "Autopilot", "autopilo", '"autopilot "'])
@@ -842,38 +977,17 @@ def test_no_branch_in_needs_no_hand_off_but_selection_still_reports(repo: Path) 
     assert r.returncode == 0 and "IN " not in r.stdout
 
 
-def test_the_class_at_land_is_the_bases_not_the_working_trees(repo: Path) -> None:
-    run_id, run = _sealed(repo, files={"src/a.py": "a = 2\n", "docs/x.md": "x\n"})
-    _clean(repo)
-    assert _verdict(_land(repo, run_id)) == "PARK"
-    (repo / "CLAUDE.md").write_text((repo / "CLAUDE.md").read_text().replace(
-        "allow: src/**", "allow: ** src/**"), encoding="utf-8")  # uncommitted widening
-    assert _run(repo, "unpark", run_id).returncode == 0
-    r = _land(repo, run_id)
-    assert _verdict(r) == "PARK" and "docs/x.md (not allowed)" in r.stdout
-
-
-def test_a_revert_to_older_content_is_seen_against_the_live_tip(repo: Path) -> None:
-    """Round 1's fixture: main moves ci.yml A -> B; a branch puts it back to A. Against the old
-    base the diff is empty for ci.yml; against the tip the squash lands on it is a change. A
-    local ref behind GitHub's tip waits for a fetch rather than diffing against it."""
-    _commit(repo, "ci A", {".github/workflows/ci.yml": "A\n"})
+def test_the_class_at_land_is_the_tips_not_the_working_trees(repo: Path) -> None:
+    """The class is read at the default branch's live tip: local main has the attestation and
+    origin's tip does not, so the land parks."""
+    text = (repo / "CLAUDE.md").read_text()
+    _commit(repo, "no attestation", {"CLAUDE.md": text.replace("attested: 2026-10-01\n", "")})
     _g(repo, "push", "-q", "origin", "main")
     _g(repo, "fetch", "-q", "origin")
-    stale = _g(repo, "rev-parse", "origin/main")
-    _commit(repo, "ci B", {".github/workflows/ci.yml": "B\n"})
-    _g(repo, "push", "-q", "origin", "main")
-    _g(repo, "fetch", "-q", "origin")
-    run_id, _ = _sealed(repo, files={"src/a.py": "a = 2\n", ".github/workflows/ci.yml": "A\n"})
-    _clean(repo)
-    tip = _g(repo, "rev-parse", "origin/main")
-    _g(repo, "update-ref", "refs/remotes/origin/main", stale)  # a fetch that never happened
-    _gh_file(repo, "tip.json", tip)
+    _commit(repo, "attested locally only", {"CLAUDE.md": text})
+    run_id, run = _sealed(repo)
     r = _land(repo, run_id)
-    assert _verdict(r) == "WAIT" and "fetch origin main" in r.stdout
-    _g(repo, "update-ref", "refs/remotes/origin/main", tip)  # the fetch
-    r = _land(repo, run_id)
-    assert _verdict(r) == "PARK" and ".github/workflows/ci.yml (always excluded" in r.stdout
+    assert _verdict(r) == "PARK" and "names no attested" in r.stdout and _merges(repo) == []
 
 
 @pytest.mark.parametrize("tip", ["e" * 40, "missing-ref"])
@@ -916,7 +1030,7 @@ def test_a_symlinked_claude_md_is_followed_at_the_tip(repo: Path) -> None:
     _g(repo, "checkout", "-q", "main")
     _g(repo, "fetch", "-q", "origin")
     r = _land(repo, run_id)
-    assert _verdict(r) == "MERGE", r.stdout
+    assert _verdict(r) == "ALREADY MERGED", r.stdout
 
 
 def test_a_dirty_main_checkout_parks_before_the_merge(repo: Path) -> None:
@@ -939,17 +1053,17 @@ def test_a_commit_after_the_push_parks_before_the_merge(repo: Path) -> None:
     ({"__typename": "CheckRun", "name": "ci", "status": "COMPLETED", "conclusion": "FAILURE"}, "PARK"),
     ({"__typename": "CheckRun", "name": "ci", "status": "COMPLETED", "conclusion": "CANCELLED"}, "PARK"),
     ({"__typename": "CheckRun", "name": "ci", "status": "IN_PROGRESS", "conclusion": None}, "WAIT"),
-    ({"__typename": "CheckRun", "name": "ci", "status": "COMPLETED", "conclusion": "SKIPPED"}, "MERGE"),
+    ({"__typename": "CheckRun", "name": "ci", "status": "COMPLETED", "conclusion": "SKIPPED"}, "ALREADY MERGED"),
     ({"__typename": "StatusContext", "context": "jenkins", "state": "ERROR"}, "PARK"),
     ({"__typename": "StatusContext", "context": "jenkins", "state": "PENDING"}, "WAIT"),
-    ({"__typename": "StatusContext", "context": "jenkins", "state": "SUCCESS"}, "MERGE"),
+    ({"__typename": "StatusContext", "context": "jenkins", "state": "SUCCESS"}, "ALREADY MERGED"),
     ("garbage", "PARK"),
 ])
 def test_every_registered_check_must_pass(repo: Path, entry, verdict: str) -> None:
     run_id, run = _sealed(repo)
     _clean(repo)
     _pr(repo, statusCheckRollup=[{"__typename": "CheckRun", "name": "pytest", "status": "COMPLETED",
-                                  "conclusion": "SUCCESS"}, entry])
+                                  "conclusion": "SUCCESS"}, GATE, entry])
     r = _land(repo, run_id)
     assert _verdict(r) == verdict, r.stdout
     if verdict == "PARK":
@@ -996,15 +1110,13 @@ def test_unpark_and_re_request_reset_the_checks_clock(repo: Path) -> None:
         assert "checks_waiting_since" not in json.loads((run / "handoff.json").read_text()), cmd
 
 
-def test_a_missing_head_parks_rather_than_crashing(repo: Path) -> None:
+def test_a_missing_pushed_from_commit_parks_rather_than_crashing(repo: Path) -> None:
     run_id, run = _sealed(repo)
     rec = json.loads((run / "handoff.json").read_text())
-    rec["head"] = "d" * 40
+    rec["pushed_from"] = "d" * 40
     (run / "handoff.json").write_text(json.dumps(rec), encoding="utf-8")
-    _pr(repo, headRefOid="d" * 40)
-    _clean(repo)
     r = _land(repo, run_id)
-    assert r.returncode == 4 and "is not in this repository" in r.stdout
+    assert r.returncode == 4 and "is not in this repository" in r.stdout and _merges(repo) == []
 
 
 @pytest.mark.parametrize("state", ["unsealed", "landed"])
@@ -1036,7 +1148,7 @@ def test_sitrep_end_to_end_routes_a_parked_land_and_keeps_a_lockless_one(repo: P
     s = ss.run_survey()
     t = next(t for t in s.tasks if t.task_id == "T-1")
     assert t.state == ss._AWAITING_LAND_STATE
-    assert t.next_action == f"/review-close --land {run_id}"  # the unattended land is not enabled
+    assert t.next_action == f"/review-close --land {run_id} --unattended --agent {AGENT}"  # Phase 375
     assert _run(repo, "park", run_id, "gate-red", "PR stuck").returncode == 0
     s = ss.run_survey()
     t = next(t for t in s.tasks if t.task_id == "T-1")
@@ -1135,7 +1247,7 @@ def test_commits_a_pull_brought_in_are_not_after_the_push(repo: Path) -> None:
     _g(repo, "fetch", "-q", "origin")
     _g(repo, "merge", "-q", "--no-edit", "origin/main")
     r = _land(repo, run_id)
-    assert _verdict(r) == "MERGE", r.stdout
+    assert _verdict(r) == "ALREADY MERGED", r.stdout
 
 
 def test_a_tip_that_moved_with_unrelated_commits_does_not_park(repo: Path) -> None:
@@ -1146,7 +1258,7 @@ def test_a_tip_that_moved_with_unrelated_commits_does_not_park(repo: Path) -> No
     _g(repo, "push", "-q", "origin", "HEAD:main")
     _g(repo, "checkout", "-q", "main")
     _g(repo, "fetch", "-q", "origin")
-    assert _verdict(_land(repo, run_id)) == "MERGE"
+    assert _verdict(_land(repo, run_id)) == "ALREADY MERGED"
 
 
 def test_an_exclusion_with_a_trailing_slash_after_a_double_star_excludes(repo: Path) -> None:
@@ -1159,10 +1271,6 @@ def test_an_exclusion_with_a_trailing_slash_after_a_double_star_excludes(repo: P
     _lock(repo, "T-1", "feat/t1")
     got = _out_lines(_run(repo, "eligible", "main", AGENT, "feat/t1").stdout)
     assert got["feat/t1"].startswith("OUT") and "excluded: src/billing/**/" in got["feat/t1"]
-    run_id, _ = _sealed(repo, files={"src/billing/pay.py": "p = 3\n"})
-    _clean(repo)
-    r = _land(repo, run_id)
-    assert _verdict(r) == "PARK" and "src/billing/pay.py (excluded" in r.stdout
 
 
 @pytest.mark.parametrize("status", ["requesting", "request-failed"])
@@ -1184,3 +1292,432 @@ def test_sitrep_reports_a_lockless_hand_off_task_as_having_no_lock(repo: Path, m
     monkeypatch.chdir(repo)
     t = next(t for t in ss.run_survey().tasks if t.task_id == "T-1")
     assert t.has_lock is False
+
+
+# --- Phase 375: part B, the server setup and auto-merge ---------------------------------------
+
+def _rules(**pr_over) -> list:
+    rules = json.loads(json.dumps(SETUP_DEFAULTS["rules"]))
+    rules[0]["parameters"].update(pr_over)
+    return rules
+
+
+def _status_rules(**over) -> list:
+    rules = json.loads(json.dumps(SETUP_DEFAULTS["rules"]))
+    rules[1]["parameters"].update(over)
+    return rules
+
+
+@pytest.mark.parametrize("name,data,why", [
+    ("user", {"login": "Wade"}, "authenticated as the code owner Wade"),
+    ("user", {"id": 1}, "the token's user has no login"),
+    ("user", {"login": None}, "the token's user has no login"),
+    ("permission", {"permission": "admin", "role_name": "admin"}, "role on the repository is 'admin'"),
+    ("permission", {"permission": "write", "role_name": "maintain"}, "role on the repository is 'maintain'"),
+    ("permission", {"permission": "write"}, "role on the repository is None"),
+    ("rules", _rules(require_code_owner_review=False), "code-owner review and stale-review dismissal"),
+    ("rules", _rules(dismiss_stale_reviews_on_push=False), "code-owner review and stale-review dismissal"),
+    ("rules", _rules(require_last_push_approval=True), "last-push approval"),
+    ("rules", _status_rules(strict_required_status_checks_policy=False), "with strict status checks"),
+    ("rules", _status_rules(required_status_checks=[{"context": "sysop/close-gate", "integration_id": 15368}]),
+     "requires sysop/close-gate from app 42"),
+    ("rules", _status_rules(required_status_checks=[{"context": "sysop/close-gate"}]),
+     "requires sysop/close-gate from app 42"),
+    ("rules", _status_rules(required_status_checks=[{"context": "pytest", "integration_id": 42}]),
+     "requires sysop/close-gate from app 42"),
+    ("rules", [], "no ruleset applies to main"),
+    ("rules", [dict(SETUP_DEFAULTS["rules"][0], type="required_status_checks")],
+     "requires sysop/close-gate"),
+    ("ruleset", {"current_user_can_bypass": "pull_requests_only"}, "can bypass ruleset 11 ('pull_requests_only')"),
+    ("ruleset", {}, "can bypass ruleset 11 (None)"),
+    ("environment", {"deployment_branch_policy": None}, "not set to selected branches"),
+    ("environment", {"deployment_branch_policy": {"protected_branches": True, "custom_branch_policies": False}},
+     "not set to selected branches"),
+    ("policies", {"branch_policies": [{"name": "main", "type": "branch"}, {"name": "dev", "type": "branch"}]},
+     "not exactly one branch rule naming main"),
+    ("policies", {"branch_policies": [{"name": "main", "type": "tag"}]}, "not exactly one branch rule naming main"),
+    ("policies", {"branch_policies": [{"name": "*", "type": "branch"}]}, "not exactly one branch rule naming main"),
+    ("policies", {"branch_policies": []}, "not exactly one branch rule naming main"),
+])
+def test_each_setup_problem_parks_without_arming(repo: Path, name: str, data, why: str) -> None:
+    run_id, run = _sealed(repo)
+    _gh_file(repo, f"{name}.json", data)
+    r = _land(repo, run_id)
+    assert _verdict(r) == "PARK" and why in r.stdout, r.stdout
+    assert json.loads((run / "PARKED").read_text())["code"] == "setup" and _merges(repo) == []
+
+
+@pytest.mark.parametrize("name", ["user", "permission", "rules", "ruleset", "environment", "policies"])
+def test_a_setup_read_that_fails_parks(repo: Path, name: str) -> None:
+    """Fail closed: the land does not merge on a setup it could not see."""
+    run_id, run = _sealed(repo)
+    (_state(repo) / f"fail_{name}").write_text("", encoding="utf-8")
+    r = _land(repo, run_id)
+    assert _verdict(r) == "PARK" and "cannot read" in r.stdout, r.stdout
+    assert json.loads((run / "PARKED").read_text())["code"] == "setup" and _merges(repo) == []
+
+
+@pytest.mark.parametrize("key", ["code_owner", "gate_app", "attested"])
+def test_a_class_without_the_lands_keys_parks(repo: Path, key: str) -> None:
+    text = (repo / "CLAUDE.md").read_text()
+    line = next(l for l in text.splitlines() if l.startswith(f"{key}:"))
+    _commit(repo, f"drop {key}", {"CLAUDE.md": text.replace(line + "\n", "")})
+    _g(repo, "push", "-q", "origin", "main")
+    _g(repo, "fetch", "-q", "origin")
+    run_id, run = _sealed(repo)
+    r = _land(repo, run_id)
+    assert _verdict(r) == "PARK" and f"names no {key}" in r.stdout and _merges(repo) == []
+
+
+def test_a_future_attestation_parks(repo: Path) -> None:
+    text = (repo / "CLAUDE.md").read_text()
+    _commit(repo, "future", {"CLAUDE.md": text.replace("attested: 2026-10-01", "attested: 2999-01-01")})
+    _g(repo, "push", "-q", "origin", "main")
+    _g(repo, "fetch", "-q", "origin")
+    run_id, _ = _sealed(repo)
+    r = _land(repo, run_id)
+    assert _verdict(r) == "PARK" and "is in the future" in r.stdout and _merges(repo) == []
+
+
+@pytest.mark.parametrize("value", ["yes", "2026-13-01", "2026-02-30", "2026-10-1", "20261001", "2026-10-01T00:00"])
+def test_an_attestation_that_is_not_a_date_refuses(tmp_path: Path, value: str) -> None:
+    with pytest.raises(close_run.Refuse, match="attested is not a date"):
+        _cls(tmp_path, CLASS + f"attested: {value}\n" if "attested" not in CLASS else
+             CLASS.replace("attested: 2026-10-01", f"attested: {value}"))
+
+
+def test_the_class_prints_its_attestation(repo: Path) -> None:
+    r = _run(repo, "class")
+    assert r.returncode == 0 and "ATTESTED: 2026-10-01" in r.stdout
+
+
+def test_an_armed_pr_waits_then_parks_and_turns_auto_merge_off(repo: Path) -> None:
+    run_id, run = _sealed(repo)
+    _gh_file(repo, "merge_mode.json", "arm")
+    r = _land(repo, run_id)
+    assert r.returncode == 5 and _verdict(r) == "ARMED" and "auto-merge is on" in r.stdout
+    assert len(_merges(repo)) == 1
+    # A second land does not arm again.
+    r = _land(repo, run_id)
+    assert _verdict(r) == "ARMED" and len(_merges(repo)) == 1
+    rec = json.loads((run / "handoff.json").read_text())
+    rec["armed"]["at"] = "2000-01-01T00:00:00Z"
+    (run / "handoff.json").write_text(json.dumps(rec), encoding="utf-8")
+    r = _land(repo, run_id)
+    assert _verdict(r) == "PARK" and "auto-merge turned off" in r.stdout
+    assert _merges(repo)[-1] == ["pr", "merge", "7", "--disable-auto"]
+    assert json.loads((_state(repo) / "pr.json").read_text())["autoMergeRequest"] is None
+    assert json.loads((run / "PARKED").read_text())["code"] == "checks"
+
+
+def test_an_armed_pr_whose_head_moved_parks_and_turns_auto_merge_off(repo: Path) -> None:
+    """Phase 375's P4: auto-merge survives a push and merges the new head, so the land parks a
+    moved head rather than letting GitHub merge a head the hand-off never recorded."""
+    run_id, run = _sealed(repo)
+    _gh_file(repo, "merge_mode.json", "arm")
+    assert _verdict(_land(repo, run_id)) == "ARMED"
+    pr = json.loads((_state(repo) / "pr.json").read_text())
+    pr["headRefOid"] = "f" * 40
+    (_state(repo) / "pr.json").write_text(json.dumps(pr), encoding="utf-8")
+    r = _land(repo, run_id)
+    assert _verdict(r) == "PARK" and "auto-merge turned off" in r.stdout
+    assert json.loads((run / "PARKED").read_text())["code"] == "pr-state"
+
+
+def test_a_park_reports_when_auto_merge_cannot_be_turned_off(repo: Path) -> None:
+    run_id, run = _sealed(repo)
+    _gh_file(repo, "merge_mode.json", "arm")
+    assert _verdict(_land(repo, run_id)) == "ARMED"
+    (_state(repo) / "merge_fail").write_text("", encoding="utf-8")
+    _pr(repo, autoMergeRequest={"mergeMethod": "SQUASH"},
+        statusCheckRollup=[dict(GATE, conclusion="FAILURE")])
+    _gh_file(repo, "gate_runs.json", {"check_runs": [
+        {"id": 1, "name": "sysop/close-gate", "app": {"id": 42}, "status": "completed", "conclusion": "failure", "started_at": "x"}]})
+    r = _land(repo, run_id)
+    assert _verdict(r) == "PARK" and "could not be turned off" in r.stdout and "a human turns it off" in r.stdout
+
+
+@pytest.mark.parametrize("mode,why", [("fail", "enabling auto-merge failed"), ("silent", "shows none")])
+def test_an_arm_that_fails_or_does_nothing_parks(repo: Path, mode: str, why: str) -> None:
+    run_id, run = _sealed(repo)
+    if mode == "fail":
+        (_state(repo) / "merge_fail").write_text("", encoding="utf-8")
+    else:
+        _gh_file(repo, "merge_mode.json", "silent")
+    r = _land(repo, run_id)
+    assert _verdict(r) == "PARK" and why in r.stdout
+    assert json.loads((run / "PARKED").read_text())["code"] == "hard-fail"
+    if mode == "silent":  # lens 2's D03: the land's own arm is turned off even when the PR shows none
+        assert _merges(repo)[-1] == ["pr", "merge", "7", "--disable-auto"]
+
+
+@pytest.mark.parametrize("state,code", [("BEHIND", "pr-state"), ("DIRTY", "conflict")])
+def test_a_pr_github_cannot_merge_parks_before_arming(repo: Path, state: str, code: str) -> None:
+    run_id, run = _sealed(repo)
+    _pr(repo, mergeStateStatus=state)
+    r = _land(repo, run_id)
+    assert _verdict(r) == "PARK" and _merges(repo) == []
+    assert json.loads((run / "PARKED").read_text())["code"] == code
+
+
+def test_a_missing_gate_check_parks_at_the_timeout(repo: Path) -> None:
+    run_id, run = _sealed(repo)
+    _pr(repo, statusCheckRollup=[{"__typename": "CheckRun", "name": "pytest", "status": "COMPLETED",
+                                  "conclusion": "SUCCESS"}])
+    _gh_file(repo, "gate_runs.json", {"check_runs": []})
+    assert _verdict(_land(repo, run_id)) == "WAIT"
+    rec = json.loads((run / "handoff.json").read_text())
+    rec["checks_waiting_since"] = "2000-01-01T00:00:00Z"
+    (run / "handoff.json").write_text(json.dumps(rec), encoding="utf-8")
+    r = _land(repo, run_id)
+    assert _verdict(r) == "PARK" and "no sysop/close-gate check" in r.stdout and _merges(repo) == []
+
+
+def test_the_gate_is_read_from_its_apps_check_runs_not_the_rollups_name(repo: Path) -> None:
+    """The rollup names no app: a rollup carrying the gate's name only as a status still lands
+    when the gate app's own check run on the head is green."""
+    run_id, _ = _sealed(repo)
+    _pr(repo, statusCheckRollup=[{"__typename": "StatusContext", "context": "sysop/close-gate",
+                                  "state": "SUCCESS"}])
+    assert _verdict(_land(repo, run_id)) == "ALREADY MERGED"
+    head = _g(repo, "rev-parse", BRANCH)
+    assert any(f"commits/{head}/check-runs" in " ".join(a) for a in _argv(repo))
+
+
+def _gate_run(app=42, status="completed", conclusion="success", started="2026-10-11T00:00:00Z", rid=1,
+              title="t") -> dict:
+    return {"id": rid, "name": "sysop/close-gate", "app": {"id": app, "slug": "x"}, "status": status,
+            "conclusion": conclusion, "started_at": started, "output": {"title": title}}
+
+
+def test_a_forged_gate_from_another_app_waits_then_parks(repo: Path) -> None:
+    """Phase 375's R1: a branch workflow posted a green `sysop/close-gate` as `github-actions`,
+    and the rollup showed it green. The land does not arm on it."""
+    run_id, run = _sealed(repo)
+    _gh_file(repo, "gate_runs.json", {"check_runs": [_gate_run(app=15368)]})
+    r = _land(repo, run_id)
+    assert _verdict(r) == "WAIT" and "no sysop/close-gate check from app 42" in r.stdout
+    assert "1 run(s) of that name from another app, ignored" in r.stdout and _merges(repo) == []
+    rec = json.loads((run / "handoff.json").read_text())
+    rec["checks_waiting_since"] = "2000-01-01T00:00:00Z"
+    (run / "handoff.json").write_text(json.dumps(rec), encoding="utf-8")
+    r = _land(repo, run_id)
+    assert _verdict(r) == "PARK" and json.loads((run / "PARKED").read_text())["code"] == "checks"
+    assert _merges(repo) == []
+
+
+@pytest.mark.parametrize("runs,verdict,why", [
+    ([_gate_run(conclusion="failure", title="governing path")], "PARK", "concluded failure: governing path"),
+    ([_gate_run(status="in_progress", conclusion=None)], "WAIT", "is in_progress"),
+    # The newest of the app's runs decides, whatever an older one said.
+    ([_gate_run(rid=1, started="2026-10-11T00:00:00Z"),
+      _gate_run(rid=2, started="2026-10-11T01:00:00Z", status="in_progress", conclusion=None)], "WAIT", "is in_progress"),
+    ([_gate_run(rid=1, started="2026-10-11T00:00:00Z", conclusion="failure"),
+      _gate_run(rid=2, started="2026-10-11T01:00:00Z")], "ALREADY MERGED", ""),
+    ([_gate_run(conclusion="neutral")], "PARK", "concluded neutral"),
+    ([], "WAIT", "no sysop/close-gate check from app 42"),
+])
+def test_the_gate_apps_newest_run_decides(repo: Path, runs, verdict: str, why: str) -> None:
+    run_id, run = _sealed(repo)
+    _gh_file(repo, "gate_runs.json", {"check_runs": runs})
+    r = _land(repo, run_id)
+    assert _verdict(r) == verdict and why in r.stdout, r.stdout
+    if verdict == "PARK":
+        assert json.loads((run / "PARKED").read_text())["code"] == "gate-red" and _merges(repo) == []
+
+
+@pytest.mark.parametrize("how", ["fail", "shape"])
+def test_an_unreadable_gate_reading_waits(repo: Path, how: str) -> None:
+    run_id, _ = _sealed(repo)
+    if how == "fail":
+        (_state(repo) / "fail_gate_runs").write_text("", encoding="utf-8")
+    else:
+        _gh_file(repo, "gate_runs.json", {"check_runs": "nope"})
+    r = _land(repo, run_id)
+    assert _verdict(r) == "WAIT" and _merges(repo) == []
+
+
+def test_setup_is_read_after_the_local_conditions_and_before_any_check(repo: Path) -> None:
+    """The order the skill and spec state: PR, class, hand-off, Step 6's conditions, setup, checks."""
+    src = SCRIPT.read_text(encoding="utf-8")
+    body = src[src.index("def cmd_land_unattended("):src.index("# GitHub's CheckConclusionState")]
+    order = ["return merged(data)", 'stop("pr-state", problems)', "read_class(root, rev=tip)",
+             "handoff_problems(root, run, rec, agent)", 'stop("dirty"', 'stop("after-push"',
+             "setup_problems(root, cls, default)", "check_states([c for c in checks", '"--auto", "--squash"']
+    at = [body.index(n) for n in order]
+    assert at == sorted(at), dict(zip(order, at))
+
+
+# --- Phase 375's round 1 (lens 1) ------------------------------------------------------------
+
+def _armed(repo: Path) -> tuple[str, Path]:
+    run_id, run = _sealed(repo)
+    _gh_file(repo, "merge_mode.json", "arm")
+    assert _verdict(_land(repo, run_id)) == "ARMED"
+    return run_id, run
+
+
+def _auto(repo: Path):
+    return json.loads((_state(repo) / "pr.json").read_text()).get("autoMergeRequest")
+
+
+def test_a_park_by_command_turns_off_this_lands_auto_merge(repo: Path) -> None:
+    """Lens 1's HIGH: `close_run.py park` wrote PARKED and left auto-merge on, so GitHub could
+    merge a hand-off every reader called parked."""
+    run_id, run = _armed(repo)
+    r = _run(repo, "park", run_id, "relay", "a denied command")
+    assert r.returncode == 0 and "auto-merge turned off" in r.stdout
+    assert _auto(repo) is None and "armed" not in json.loads((run / "handoff.json").read_text())
+    assert _merges(repo)[-1] == ["pr", "merge", "7", "--disable-auto"]
+
+
+def test_a_parked_land_whose_disarm_failed_tries_again(repo: Path) -> None:
+    run_id, run = _armed(repo)
+    (_state(repo) / "merge_fail").write_text("", encoding="utf-8")
+    r = _run(repo, "park", run_id, "relay", "x")
+    assert "could not be turned off" in r.stdout and json.loads((run / "handoff.json").read_text())["armed"]
+    (_state(repo) / "merge_fail").unlink()
+    r = _land(repo, run_id)
+    assert _verdict(r) == "PARK" and "auto-merge turned off" in r.stdout and _auto(repo) is None
+    assert "armed" not in json.loads((run / "handoff.json").read_text())
+
+
+@pytest.mark.parametrize("cmd", ["unpark", "re-request"])
+def test_unpark_and_re_request_drop_the_arm(repo: Path, cmd: str) -> None:
+    """Lens 1: an arm survives a push and merges the new head (P4), so a human who pushes a fix
+    and re-requests must not inherit the arm made for the old head."""
+    run_id, run = _armed(repo)
+    if cmd == "unpark":
+        (run / "PARKED").write_text(json.dumps({"code": "relay", "at": "x", "lines": ["x"]}), encoding="utf-8")
+        args = ["unpark", run_id]
+    else:
+        args = ["re-request", run_id, "main"]
+    r = _run(repo, *args)
+    assert r.returncode == 0 and "auto-merge turned off" in r.stdout, r.stdout + r.stderr
+    assert _auto(repo) is None and "armed" not in json.loads((run / "handoff.json").read_text())
+
+
+def test_auto_merge_this_land_did_not_turn_on_parks_and_is_turned_off(repo: Path) -> None:
+    """Lens 1: a request someone else made (here a merge commit, not a squash) was read as this
+    land's arm, so its timeout restarted every run and ruling (s) never held."""
+    run_id, run = _sealed(repo)
+    _pr(repo, autoMergeRequest={"mergeMethod": "MERGE", "enabledBy": {"login": "someone-else"}})
+    r = _land(repo, run_id)
+    assert _verdict(r) == "PARK" and "turned on by someone-else (MERGE)" in r.stdout
+    assert json.loads((run / "PARKED").read_text())["code"] == "pr-state"
+    assert _auto(repo) is None and not [a for a in _merges(repo) if "--auto" in a]
+
+
+def test_a_merge_at_another_head_is_named(repo: Path) -> None:
+    run_id, _ = _sealed(repo)
+    _pr(repo, state="MERGED", headRefOid="f" * 40)
+    r = _land(repo, run_id)
+    assert _verdict(r) == "ALREADY MERGED" and f"MERGED ELSEWHERE: merged at {'f' * 40}" in r.stdout
+
+
+def test_an_attestation_dated_tomorrow_utc_is_not_the_future(repo: Path) -> None:
+    import datetime as dt
+    tomorrow = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=1)).strftime("%Y-%m-%d")
+    text = (repo / "CLAUDE.md").read_text()
+    _commit(repo, "east of UTC", {"CLAUDE.md": text.replace("attested: 2026-10-01", f"attested: {tomorrow}")})
+    _g(repo, "push", "-q", "origin", "main")
+    _g(repo, "fetch", "-q", "origin")
+    run_id, _ = _sealed(repo)
+    assert _verdict(_land(repo, run_id)) == "ALREADY MERGED"
+
+
+# --- Phase 375's round 1 (lens 3) ------------------------------------------------------------
+
+def test_the_gates_superseded_in_progress_runs_do_not_hold_the_land(repo: Path) -> None:
+    """Lens 3: each gate run opens an `in_progress` check run before it evaluates, and the
+    superseded ones stay `in_progress` (three of them, then a `success`, on Phase 375's P2 head).
+    Judged by `check_states`, that group was pending for good; the land must take the newest."""
+    run_id, _ = _sealed(repo)
+    stale = [{"__typename": "CheckRun", "name": "sysop/close-gate", "status": "IN_PROGRESS",
+              "conclusion": None, "startedAt": f"2026-10-11T0{i}:00:00Z"} for i in range(3)]
+    _pr(repo, statusCheckRollup=[{"__typename": "CheckRun", "name": "pytest", "status": "COMPLETED",
+                                  "conclusion": "SUCCESS"}, *stale, dict(GATE, startedAt="2026-10-11T05:00:00Z")])
+    _gh_file(repo, "gate_runs.json", {"check_runs": [
+        *[{"id": i, "name": "sysop/close-gate", "app": {"id": 42}, "status": "in_progress", "conclusion": None,
+           "started_at": f"2026-10-11T0{i}:00:00Z"} for i in range(3)],
+        {"id": 9, "name": "sysop/close-gate", "app": {"id": 42}, "status": "completed", "conclusion": "success", "started_at": "2026-10-11T05:00:00Z"}]})
+    assert _verdict(_land(repo, run_id)) == "ALREADY MERGED"
+
+
+def test_a_tip_not_fetched_parks_at_the_timeout(repo: Path) -> None:
+    """Lens 3: the stale-tip wait had no deadline, so a runner that never fetched waited for good."""
+    run_id, run = _sealed(repo)
+    _gh_file(repo, "tip.json", "e" * 40)
+    assert _verdict(_land(repo, run_id)) == "WAIT"
+    rec = json.loads((run / "handoff.json").read_text())
+    rec["checks_waiting_since"] = "2000-01-01T00:00:00Z"
+    (run / "handoff.json").write_text(json.dumps(rec), encoding="utf-8")
+    r = _land(repo, run_id)
+    assert _verdict(r) == "PARK" and "fetch origin main" in r.stdout and _merges(repo) == []
+
+
+# --- Phase 375's round 1 (lens 2) ------------------------------------------------------------
+
+def test_an_arm_that_fails_after_github_turned_it_on_is_turned_off(repo: Path) -> None:
+    """Lens 2: `gh pr merge --auto` can fail after the server armed (a lost reply). The park must
+    read the PR again and turn off what it shows."""
+    run_id, run = _sealed(repo)
+    _gh_file(repo, "merge_mode.json", "arm_then_fail")
+    r = _land(repo, run_id)
+    assert _verdict(r) == "PARK" and "auto-merge turned off" in r.stdout, r.stdout
+    assert _auto(repo) is None and json.loads((run / "PARKED").read_text())["code"] == "hard-fail"
+
+
+def test_a_kept_lock_that_is_gone_parks(repo: Path) -> None:
+    run_id, run = _sealed(repo)
+    (repo / "sysop/runtime/locks/T-1.lock").unlink()
+    r = _land(repo, run_id)
+    assert _verdict(r) == "PARK" and "T-1's kept lock is gone" in r.stdout and _merges(repo) == []
+
+
+def test_an_arm_recorded_at_an_older_head_is_not_this_lands(repo: Path) -> None:
+    """Lens 2's U01: a re-request whose disarm failed keeps `armed` at the old head while the
+    hand-off's head moves on; auto-merge then on is not this land's arm for this head."""
+    run_id, run = _armed(repo)
+    rec = json.loads((run / "handoff.json").read_text())
+    rec["armed"]["head"] = "a" * 40
+    (run / "handoff.json").write_text(json.dumps(rec), encoding="utf-8")
+    r = _land(repo, run_id)
+    assert _verdict(r) == "PARK" and "not by this land at the recorded head" in r.stdout
+
+
+def test_a_second_ruleset_that_can_be_bypassed_parks(repo: Path) -> None:
+    """Lens 2's C09: every ruleset on the default branch is read, not only the first."""
+    run_id, _ = _sealed(repo)
+    rules = json.loads(json.dumps(SETUP_DEFAULTS["rules"]))
+    rules[1]["ruleset_id"] = 12
+    _gh_file(repo, "rules.json", rules)
+    _gh_file(repo, "ruleset_12.json", {"id": 12, "current_user_can_bypass": "always"})
+    r = _land(repo, run_id)
+    assert _verdict(r) == "PARK" and "can bypass ruleset 12" in r.stdout and "ruleset 11" not in r.stdout
+
+
+def test_a_gate_app_run_of_another_name_is_not_the_gate(repo: Path) -> None:
+    run_id, _ = _sealed(repo)
+    _gh_file(repo, "gate_runs.json", {"check_runs": [dict(_gate_run(), name="something-else")]})
+    r = _land(repo, run_id)
+    assert _verdict(r) == "WAIT" and "no sysop/close-gate check from app 42" in r.stdout
+
+
+def test_sitrep_never_routes_a_parked_agent_hand_off_to_the_unattended_land(repo: Path) -> None:
+    """Lens 2's R03: the existing check read the fallback string, never `_handoff_route`."""
+    import sitrep_survey as ss
+    run_id, _ = _sealed(repo)
+    route = ss._handoff_route(repo, run_id, True)
+    assert route.startswith("a human:") and "--unattended" not in route
+    assert ss._handoff_route(repo, run_id, False) == f"/review-close --land {run_id} --unattended --agent {AGENT}"
+
+
+@pytest.mark.parametrize("owner", ["a b", "a;rm -rf /", "", "-x", "x" * 65])
+def test_sitrep_appends_no_agent_it_could_not_have_written(repo: Path, owner: str) -> None:
+    import sitrep_survey as ss
+    run_id, run = _sealed(repo)
+    rec = json.loads((run / "handoff.json").read_text())
+    rec["unattended"] = {"agent": owner}
+    (run / "handoff.json").write_text(json.dumps(rec), encoding="utf-8")
+    assert ss._handoff_route(repo, run_id, False) == f"/review-close --land {run_id}"

@@ -54,10 +54,21 @@ import re
 from pathlib import Path
 
 import pytest
+from skill_runner_text import runner_texts
+from _prose_guard_helpers import _fence_state
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-REVIEW_CLOSE = REPO_ROOT / "core" / "skills" / "review-close" / "SKILL.md"
 SKILLS_DIR = REPO_ROOT / "core" / "skills"
+
+
+def _shipped_corpus() -> dict[str, str]:
+    """Each skill's runner text (`SKILL.md` with its step files, Phase 384), keyed by the
+    skill's `SKILL.md` path so a step moving out of the core does not change a key, plus
+    the two workflow docs."""
+    out = {f"core/skills/{name}/SKILL.md": text for name, text in runner_texts(SKILLS_DIR).items()}
+    for doc in (WORKFLOW, WORKFLOW_GUIDE):
+        out[doc.relative_to(REPO_ROOT).as_posix()] = doc.read_text(encoding="utf-8")
+    return out
 DOCS = REPO_ROOT / "core" / "companion" / "docs"
 WORKFLOW = DOCS / "WORKFLOW.md"
 WORKFLOW_GUIDE = DOCS / "WORKFLOW_GUIDE.md"
@@ -68,7 +79,9 @@ def _flat(text: str) -> str:
 
 
 def _text() -> str:
-    return REVIEW_CLOSE.read_text(encoding="utf-8")
+    """review-close's runner text, step files included (Phase 384's round 2: two negative
+    screens read the core alone through this, and went green on a step-file defect)."""
+    return runner_texts(SKILLS_DIR)["review-close"]
 
 
 def _paragraphs(text: str) -> list[str]:
@@ -83,14 +96,23 @@ def _fence_comment_lines(text: str) -> list[str]:
     an executor reads, and a survivor planted one there: `# On a doc-only assembled diff,
     4a-post inherits item 4's skip`. Invisible to every guard.
     """
-    out = []
-    for block in re.findall(r"```.*?```", text, flags=re.S):
-        out.extend(_flat(ln) for ln in block.splitlines() if ln.lstrip().startswith("#"))
-    return out
+    lines = text.split("\n")
+    return [_flat(lines[i]) for i, fenced in _fence_state(lines)
+            if fenced and lines[i].lstrip().startswith("#")]
 
 
 def _prose_only(text: str) -> str:
-    return re.sub(r"```.*?```", " ", text, flags=re.S)
+    """The text with every fenced line blanked, fences paired by `_fence_state` (CommonMark's
+    pairing rule, except that it does not cap an opener's indent: `Q-544`).
+
+    Phase 384's round: this was `re.sub(r"```.*?```", " ", …)`. Prose that quotes fence
+    syntax inline threw the pairing off, and once past the inline fence near line 1548 of
+    `review-close/SKILL.md` the desync held to the end: 685 of its 1,125 prose lines were
+    blanked (`tools/runner_core_split/lazy_fence_blanking.py`), so six screens could not see
+    most of the skill. `_fence_comment_lines` above had the same desync. A blockquoted fence
+    (`> ```bash`) is read as prose here, which can only make a screen louder."""
+    lines = text.split("\n")
+    return "\n".join("" if fenced else lines[i] for i, fenced in _fence_state(lines))
 
 
 # ===========================================================================
@@ -172,9 +194,7 @@ def gh_coverage_claims(text: str) -> list[str]:
 
 
 def test_no_hook_paragraph_promises_coverage_for_a_gh_command():
-    corpus = sorted(SKILLS_DIR.glob("*/SKILL.md")) + [WORKFLOW, WORKFLOW_GUIDE]
-    offenders = {p.relative_to(REPO_ROOT).as_posix(): c
-                 for p in corpus if (c := gh_coverage_claims(p.read_text(encoding="utf-8")))}
+    offenders = {k: c for k, v in _shipped_corpus().items() if (c := gh_coverage_claims(v))}
     assert not offenders, f"`gh` coverage promised where the hook is git-only: {offenders}"
 
 
@@ -206,11 +226,10 @@ EXPECTED_HOOK_PARAGRAPHS = {
 
 def hook_paragraph_census() -> dict[str, int]:
     census: dict[str, int] = {}
-    targets = sorted(SKILLS_DIR.glob("*/SKILL.md")) + [WORKFLOW, WORKFLOW_GUIDE]
-    for path in targets:
-        n = sum(1 for p in _paragraphs(path.read_text(encoding="utf-8")) if HOOK_MENTION_RE.search(p))
+    for key, text in _shipped_corpus().items():
+        n = sum(1 for p in _paragraphs(text) if HOOK_MENTION_RE.search(p))
         if n:
-            census[path.relative_to(REPO_ROOT).as_posix()] = n
+            census[key] = n
     return census
 
 
@@ -280,9 +299,7 @@ def merged_gate_skip_claims(text: str) -> list[str]:
 
 
 def test_no_shipped_prose_claims_a_doc_only_diff_is_harmless():
-    corpus = {p.relative_to(REPO_ROOT).as_posix(): p.read_text(encoding="utf-8")
-              for p in sorted(SKILLS_DIR.glob("*/SKILL.md")) + [WORKFLOW, WORKFLOW_GUIDE]}
-    offenders = {k: c for k, v in corpus.items() if (c := harmlessness_claims(v))}
+    offenders = {k: c for k, v in _shipped_corpus().items() if (c := harmlessness_claims(v))}
     assert not offenders, f"harmlessness claims: {offenders}"
 
 
@@ -372,8 +389,7 @@ def generic_coverage_claims(text: str) -> list[str]:
 
 
 def _hook_corpus() -> dict[str, str]:
-    return {p.relative_to(REPO_ROOT).as_posix(): p.read_text(encoding="utf-8")
-            for p in sorted(SKILLS_DIR.glob("*/SKILL.md")) + [WORKFLOW, WORKFLOW_GUIDE]}
+    return _shipped_corpus()
 
 
 def test_no_shipped_prose_scopes_hook_coverage_by_step_number():

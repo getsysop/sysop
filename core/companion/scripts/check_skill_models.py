@@ -49,9 +49,70 @@ consumer as `REFUSED (unreadable config)` over a perfectly readable config.
 from __future__ import annotations
 
 import argparse
+import glob
 import os
+import subprocess
 import sys
 from pathlib import Path
+
+try:
+    import yaml
+except ImportError:
+    # PyYAML lives only in the project venv on PEP-668 hosts (BeanRider
+    # ISSUE-0049; internal tracker #321). Same probe as clear_user_action.py, so
+    # `/intake` and `/onboard` can run `--defaults` as bare `python3` (`Q-676`):
+    # script-anchored roots, then the main checkout via git-common-dir, then
+    # the CWD; commit a candidate only once `import yaml` succeeds from it.
+    # tests/test_venv_pyyaml_bootstrap.py pins the copies identical.
+    _roots = []
+    # `list(...)` before the slice: slicing `PurePath.parents` is 3.10+.
+    for _cand in list(Path(__file__).resolve().parents)[:3]:
+        if _cand not in _roots:
+            _roots.append(_cand)
+    try:
+        _r = subprocess.run(
+            ["git", "rev-parse", "--git-common-dir"],
+            cwd=str(Path(__file__).resolve().parent),
+            capture_output=True,
+            text=True,
+            timeout=5,
+            env={_k: _v for _k, _v in os.environ.items()
+                 if _k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR",
+                               "GIT_INDEX_FILE")},
+        )
+        if _r.returncode == 0 and _r.stdout.strip():
+            _main = (Path(__file__).resolve().parent / _r.stdout.strip()).resolve().parent
+            if _main not in _roots:
+                _roots.append(_main)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    if Path.cwd() not in _roots:
+        _roots.append(Path.cwd())
+    _hit = False
+    for _root in _roots:
+        for _layout in (".venv", "venv"):
+            for _site in glob.glob(str(_root / _layout / "lib/python*/site-packages")):
+                sys.path.insert(0, _site)
+                try:
+                    import yaml
+                except ImportError:
+                    sys.path.remove(_site)
+                    continue
+                _hit = True
+                break
+            if _hit:
+                break
+        if _hit:
+            break
+    try:
+        import yaml
+    except ImportError:
+        print(
+            "ERROR: check_skill_models.py requires PyYAML. fix: python3 -m venv .venv && "
+            ".venv/bin/pip install pyyaml   (PEP-668-safe), or activate the venv.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _model_roles import (  # noqa: E402  (path set above)
@@ -63,7 +124,9 @@ from _model_roles import (  # noqa: E402  (path set above)
     find_role_violations,
     iter_skill_files,
     load_inline_models,
+    EffortConfigError,
     RoleAliasError,
+    load_role_efforts,
     load_roles_config,
     read_skill_text,
 )
@@ -72,6 +135,101 @@ from migrate_skill_model import SKILLS_DIR  # noqa: E402
 
 def _rel(path: Path) -> str:
     return str(path.relative_to(REPO_ROOT)) if path.is_relative_to(REPO_ROOT) else str(path)
+
+
+def _print_defaults(config_path: Path, local_path: Path | None, root: Path) -> int:
+    """The role table `Q-676` puts at the front door: the installer's summary, `/intake`
+    and `/onboard`. Every value is read from the config, so it stays true when the file
+    changes.
+
+    With a skills tree at *root* holding managed pins, the table lists only the roles
+    those pins govern and every role they follow, so a loop install is not shown roles it
+    has no skill for. It judges nothing itself: before the table it reports what the check
+    mode returns for `--managed-only` over that tree, the function the update's gate calls,
+    as a fact about these files and the installed skills (three rounds of Phase 398 found each
+    re-derivation of the gate wrong). With no managed pins it says nothing was checked. Exit 1
+    when the check fails, as the check mode does, a role cycle or a bad `efforts:` included;
+    2 on a config it cannot read."""
+    # Imported here, not at the top: a consumer's preserved `_model_roles.py` from before
+    # this function existed must still let the check mode start (Phase 398's round 2).
+    try:
+        from _model_roles import describe_roles
+    except ImportError as exc:
+        print(f"error: --defaults needs a newer sysop/scripts/_model_roles.py ({exc})",
+              file=sys.stderr)
+        return 2
+    try:
+        rows, notes = describe_roles(config_path, local_path)
+        roles, served = load_roles_config(config_path, local_path)
+        inline_models = load_inline_models(config_path, local_path)
+    except ConfigShapeError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except (RoleAliasError, EffortConfigError) as exc:
+        print(f"The model-role check fails here: {exc}.")
+        print("Fix it in .claude/served_models.local.yml; until then an update applies none of that file.")
+        return 1
+    pinned: set[str] = set()
+    spawning: set[str] = set()
+    if root.is_dir():
+        for path in iter_skill_files(root):
+            text = read_skill_text(path)
+            if text and "sysop:model-roles" in text:
+                pins = [p for p in analyze_text(text) if p.role]
+                pinned |= {p.role for p in pins}
+                spawning |= {p.role for p in pins if p.kind == "inline"}
+    if pinned:
+        by_role = {r.role: r for r in rows}
+        keep, todo = set(), list(pinned)
+        while todo:
+            role = todo.pop()
+            if role in keep or role not in by_role:
+                continue
+            keep.add(role)
+            todo.append(by_role[role].value)
+        rows = [r for r in rows if r.role in keep]
+    else:
+        spawning = {r.role for r in rows}
+    failing = bool(pinned) and bool(find_role_violations(
+        root, roles, served, inline_models, managed_only=True))
+    if not pinned:
+        print(f"No Sysop skills under {root}, so the model-role check was not run.")
+    elif failing:
+        print("The model-role check fails here: `python3 sysop/scripts/check_skill_models.py")
+        print("--managed-only` says why. If it still fails after an update has copied Sysop's")
+        print("skills, the update applies none of .claude/served_models.local.yml.")
+    source = "served_models.yml" + (" + served_models.local.yml" if local_path else "")
+    print(f"Sysop model roles, as mapped by .claude/{source}:")
+    width = max([len(r.role) for r in rows] + [4])
+    mwidth = max([len(r.model) for r in rows] + [5])
+    print(f"  {'role':<{width}}  {'model':<{mwidth}}  {'effort':<7}  what it does, and why")
+    for r in rows:
+        why = r.about or "-"
+        if r.value != r.model:
+            why = f"(follows {r.value}) {why}"
+        if r.local:
+            why = f"[your override] {why}"
+        # A role with no inline pin spawns nothing, so `efforts:` sets nothing for it.
+        effort = (r.effort or "session") if r.role in spawning else "-"
+        print(f"  {r.role:<{width}}  {r.model:<{mwidth}}  {effort:<7}  {why}")
+    reval = notes.get("reevaluated")
+    if isinstance(reval, dict) and reval.get("last"):
+        nxt = f"; next {reval['next']}" if reval.get("next") else ""
+        print(f"Defaults last re-evaluated {reval['last']}{nxt}.")
+    print("Effort is what a role's spawned agents run at; 'session' runs at your session's level,")
+    print("and '-' marks a role that spawns no agent here.")
+    cost = notes.get("cost_shape")
+    if cost:
+        print(" ".join(str(cost).split()))
+    shown = [r for r in rows if r.role != "quick"] or rows
+    eg = next((r for r in shown if r.role == "executor"), shown[0])
+    alt = next((m for m in inline_models if m != eg.model and m in served), eg.model)
+    print("To change a role, add one key to .claude/served_models.local.yml, e.g.")
+    print("    roles:")
+    print(f"      {eg.role}: {alt}")
+    print("then run `bash sysop/scripts/sysop-update.sh`: the skills' model pins are rewritten")
+    print("by the update, so an edit to the file changes nothing until then.")
+    return 1 if failing else 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -90,6 +248,11 @@ def main(argv: list[str] | None = None) -> int:
                              "to judge (used by install.sh's pre-apply gate)")
     parser.add_argument("--list", action="store_true",
                         help="print every pin with its role + resolved model, then exit 0")
+    parser.add_argument("--defaults", action="store_true",
+                        help="print each role's model, effort and reason, and how to "
+                             "override one; exit 1 when the model-role check fails on "
+                             "these files and the installed skills (the skills tree "
+                             "is optional)")
     args = parser.parse_args(argv)
 
     config_path = Path(args.config)
@@ -98,6 +261,8 @@ def main(argv: list[str] | None = None) -> int:
     if not config_path.is_file():
         print(f"error: config not found: {config_path}", file=sys.stderr)
         return 2
+    if args.defaults:
+        return _print_defaults(config_path, local_path if local_path.is_file() else None, root)
     if not root.is_dir():
         print(f"error: skills directory not found: {root}", file=sys.stderr)
         return 2
@@ -116,6 +281,12 @@ def main(argv: list[str] | None = None) -> int:
                   file=sys.stderr)
             return 1
         inline_models = load_inline_models(config_path, local_or_none)
+        try:
+            efforts = load_role_efforts(config_path, local_or_none)
+        except EffortConfigError as exc:
+            print(f"\u274c {exc}", file=sys.stderr)
+            print("   Fix the `efforts:` map in served_models.local.yml.", file=sys.stderr)
+            return 1
     except ConfigShapeError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -141,6 +312,8 @@ def main(argv: list[str] | None = None) -> int:
                 else:
                     mark = "served"
                 detail = f"{r.role or '-'} -> {resolved or '?'}"
+                if r.kind == "inline" and r.role in efforts:
+                    detail += f" @ {efforts[r.role] or 'session'}"
                 print(f"  [{mark:7}] {_rel(path)}:{r.lineno}  {detail}  ({r.kind})")
         return 0
 

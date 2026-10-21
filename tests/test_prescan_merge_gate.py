@@ -27,6 +27,7 @@ import subprocess
 import sys
 from pathlib import Path
 from _reversal import assert_no_reversal
+from skill_runner_text import text_of
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 INSTALL_SH = REPO_ROOT / "install.sh"
@@ -145,7 +146,7 @@ def test_review_close_runs_the_prescan_itself_and_not_via_the_resolution_chain()
     was decided against an alternative, so an edit that reverses the decision
     reddens rather than one that rewords it.
     """
-    text = REVIEW_CLOSE.read_text(encoding="utf-8")
+    text = text_of(REVIEW_CLOSE)
     m = re.search(r"^3a\. \*\*Run the Sysop pre-scan.*?(?=^4\. \*\*On failure)", text, re.M | re.S)
     assert m, "4a-post has no pre-scan step (`3a`)"
     step = m.group(0)
@@ -229,7 +230,7 @@ sys.path.insert(0, str(REPO_ROOT / "core/companion/scripts"))
 
 
 def _exit0_arm() -> str:
-    text = REVIEW_CLOSE.read_text(encoding="utf-8")
+    text = text_of(REVIEW_CLOSE)
     i = text.index("**Exit 0** — **not automatically clean")
     return text[i:text.index("**Non-zero** —", i)]
 

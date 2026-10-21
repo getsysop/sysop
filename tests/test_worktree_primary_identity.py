@@ -35,6 +35,7 @@ from _prose_guard_helpers import carries  # noqa: E402
 import pytest
 
 from _reversal import assert_no_reversal, slice_between
+from skill_runner_text import text_of
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -65,7 +66,7 @@ def _step_1a_block() -> str:
     after `test_claim_task_step7_contracts.py` was re-pointed off the identical defect,
     with a comment explaining why. The fix did not travel to the file that copied it.
     """
-    lines = SKILL.read_text(encoding="utf-8").split("\n")
+    lines = text_of(SKILL).split("\n")
     heads = [i for i, l in enumerate(lines) if l.strip().startswith(SECTION)]
     assert len(heads) == 1, (
         f"COULD NOT LOCATE Step 1a: section heading {SECTION!r} found {len(heads)}x. "
@@ -206,7 +207,7 @@ def test_step_1a_gains_no_reversal_vocabulary():
     when this was wired, so anything that appears later is new, and an empty `exempt=`
     is the strongest form this check has.
     """
-    step = slice_between(SKILL.read_text(encoding="utf-8"),
+    step = slice_between(text_of(SKILL),
                          "### 1a. Classify Worktree State", "### 1b.", "Step 1a")
     assert_no_reversal(step, "review-close Step 1a")
 
@@ -415,7 +416,7 @@ def test_no_site_in_the_skill_still_asserts_the_branch_name_mechanism():
     wording in italics to say it was replaced; it is exempted by span, not by weakening
     the pattern.
     """
-    text = SKILL.read_text(encoding="utf-8")
+    text = text_of(SKILL)
     exempt = "until this phase both sites said *the worktree whose branch is `main`*"
     assert exempt in text, "the historical-note exemption is stale — re-point it"
     haystack = text.replace(exempt, "")
@@ -426,7 +427,7 @@ def test_no_site_in_the_skill_still_asserts_the_branch_name_mechanism():
 
 
 def test_the_skill_states_the_population_by_identity():
-    text = SKILL.read_text(encoding="utf-8")
+    text = text_of(SKILL)
     for phrase in ("excluding the **primary checkout**",
                    "it skips the **primary checkout**, matched by path identity",
                    "excludes the primary checkout by path identity",
@@ -440,7 +441,7 @@ def test_both_gitignore_owners_resolve_the_primary_not_the_callers_worktree():
     and it survived: the new module read only the Step 1a fence, and the sibling class
     guard (`test_worktree_root_resolution.py`) reads only two shell scripts, so the gap
     between them was covered by nothing."""
-    text = SKILL.read_text(encoding="utf-8")
+    text = text_of(SKILL)
     resolutions = text.count('main_root=$(cd "$(git rev-parse --git-common-dir)/.." && pwd -P)')
     assert resolutions == 2, (
         f"expected the primary resolved this way at BOTH gitignore-owner sites, found "

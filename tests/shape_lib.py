@@ -183,6 +183,7 @@ ENV_PROVIDED = frozenset({
     "ARGUMENTS",                             # substituted by the skill runner
     "CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS",  # harness
     "CLAUDE_PROJECT_DIR",                    # Claude Code hook env var
+    "CLAUDE_SKILL_DIR",                      # substituted into the skill body (Phase 388, measured)
     "GH_TOKEN", "GITHUB_TOKEN",              # gh auth
     "HOME", "LANG", "OLDPWD", "PATH", "PWD", "SHELL", "TMPDIR", "USER",  # POSIX shell
     "IFS", "RANDOM",                         # shell built-ins

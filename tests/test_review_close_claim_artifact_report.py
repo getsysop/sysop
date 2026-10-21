@@ -28,6 +28,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _prose_guard_helpers import normalize, section, states  # noqa: E402
+from skill_runner_text import text_of
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SKILL = REPO_ROOT / "core/skills/review-close/SKILL.md"
@@ -37,26 +38,23 @@ FULL_HEADING = '### 2e. Claim-Artifact Report (report, never reject — Phase 23
 
 
 def _step_2e() -> str:
-    text = SKILL.read_text(encoding="utf-8")
+    text = text_of(SKILL)
     start = text.index(STEP_HEADING)
     end = text.index("\n## Step 3: Run Verification", start)
     return text[start:end]
 
 
-def _heredoc() -> str:
-    """The Python body of Step 2e's `python3 - <<'PY'` block."""
-    m = re.search(r"python3 - <<'PY'[^\n]*\n(.*?)\nPY\n", _step_2e(), re.S)
-    assert m, "Step 2e no longer carries a `python3 - <<'PY'` block"
-    return m.group(1)
+# Step 2e's program was a `python3 - <<'PY'` heredoc until Phase 387 (`Q-409` P3); the
+# step now runs the shipped script, and these tests run it the same way.
+SCRIPT = REPO_ROOT / "core/companion/scripts/claim_artifacts.py"
+INVOCATION = ('python3 sysop/scripts/claim_artifacts.py "<branch 1>" "<branch 2>" '
+              '"<...one argument per branch under review...>"')
 
 
 @pytest.fixture(scope="module")
-def script(tmp_path_factory) -> Path:
-    body = _heredoc()
-    compile(body, "step2e", "exec")  # syntax, before anything else
-    p = tmp_path_factory.mktemp("step2e") / "step2e.py"
-    p.write_text(body, encoding="utf-8")
-    return p
+def script() -> Path:
+    assert INVOCATION in _step_2e(), "Step 2e no longer runs claim_artifacts.py as written"
+    return SCRIPT
 
 
 @pytest.fixture
@@ -135,6 +133,19 @@ class TestReportUnknownNeverDidNotRun:
         _run(repo, "FEAT-1")
         r = _exec(script, repo, "task/feat-1")
         assert "Claude Code only" in r.stdout
+
+    def test_an_envelope_that_failed_to_key_is_counted_not_called_absent(self, script, repo):
+        """A hook envelope under another name is evidence the hook ran and failed to key, so
+        the report counts it instead of saying the harness writes none (Phase 387's round:
+        this arm had no test before or after the move)."""
+        _lock(repo, "FEAT-1", "task/feat-1")
+        _run(repo, "FEAT-1")
+        (repo / "sysop/runtime/subagent-envelopes/unkeyed-1.json").write_text("{}", encoding="utf-8")
+        r = _exec(script, repo, "task/feat-1")
+        assert r.returncode == 0, r.stderr
+        assert "none matched this claim id (1 other envelope file(s)" in r.stdout
+        assert "failed to key" in r.stdout
+        assert "Claude Code only" not in r.stdout
 
 
 class TestTheVerdictMatchesTheShippedWriter:
@@ -310,7 +321,7 @@ class TestTheRulesArePinnedInProse:
     """The two rules that are decisions, not implementation details."""
 
     def test_the_step_states_it_never_changes_a_disposition(self):
-        body = normalize(section(SKILL.read_text(), FULL_HEADING))
+        body = normalize(section(text_of(SKILL), FULL_HEADING))
         assert states(body, "It never changes a branch's disposition")
 
     def test_the_step_states_the_report_unknown_rule(self):
@@ -323,7 +334,7 @@ class TestTheRulesArePinnedInProse:
         behavioural tests above, which fail if absence stops rendering as
         UNKNOWN.
         """
-        body = normalize(section(SKILL.read_text(), FULL_HEADING))
+        body = normalize(section(text_of(SKILL), FULL_HEADING))
         assert 'Report unknown. Never report "did not run"' in body
         assert "gitignored" in body and "Claude Code only" in body, (
             "the rule's two grounding reasons were dropped; without them it "
@@ -331,7 +342,7 @@ class TestTheRulesArePinnedInProse:
         )
 
     def test_the_step_still_exists_at_all(self):
-        assert STEP_HEADING in SKILL.read_text(), (
+        assert STEP_HEADING in text_of(SKILL), (
             "Step 2e was deleted — whole-section removal passed the suite "
             "before this module existed"
         )

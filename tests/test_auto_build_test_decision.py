@@ -42,6 +42,7 @@ from pathlib import Path
 import pytest
 
 from _reversal import assert_no_reversal, slice_between
+from skill_runner_text import text_of
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -544,7 +545,7 @@ def test_review_close_no_longer_lists_auto_build_as_a_non_writer() -> None:
     an incidental aside". After Phase 277 `/auto-build` writes it, and the sentence
     would otherwise tell a reader the opposite of what the tree does.
     """
-    text = read(CLOSE)
+    text = text_of(CLOSE)
     assert "`/auto-build` **1**" not in text, (
         "/review-close still counts `/auto-build` as writing the record once (an "
         "incidental aside). Phase 277 gave it a real writer at Step 7c item 3-record; "
@@ -565,7 +566,7 @@ def test_review_close_still_justifies_the_fourth_disposition() -> None:
     the whole ground for "Record not owed". A fix that deleted the enumeration would
     leave the disposition unexplained and the next author would delete it as dead.
     """
-    text = read(CLOSE)
+    text = text_of(CLOSE)
     for skill in ("`/auto-fix` writes the record **0** times", "`/auto-judge` **0**"):
         assert skill in text, (
             f"/review-close lost {skill!r} from Step 2d's premise paragraph. Those are "
@@ -729,7 +730,7 @@ def test_review_close_does_not_call_auto_build_a_non_writer_in_any_wording() -> 
     which is the whole reason Q-460 was filed.
     """
     premise = slice_between(
-        read(CLOSE),
+        text_of(CLOSE),
         "> **The premise sentence above is accurate about `/claim-task`",
         "This is the sibling of Step 3c's manual-smoke gate",
         "review-close Step 2d premise paragraph",

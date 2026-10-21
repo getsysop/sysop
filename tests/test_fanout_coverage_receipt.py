@@ -35,7 +35,7 @@ import pytest
 from tests.test_round_coverage_ledger import (  # noqa: E402
     SKILLS, _close, _open_round, _plant_receipt, _receipts, _self_check_output,
 )
-from tests.test_round_markers import _repo  # noqa: E402
+from tests.test_round_markers import _repo, clear_src  # noqa: E402
 
 LABEL = {"codebase-review": "code quality", "security-audit": "security"}
 TITLE = {"codebase-review": "Code Quality Review",
@@ -378,9 +378,10 @@ def test_a_label_naming_neither_skill_falls_back_to_the_line_text(tmp_path):
 
 
 def _selectors(skill_file: str) -> dict:
-    """The 5f heredoc's selector functions, exec'd straight out of the shipped skill."""
+    """Step 5f's selector functions, exec'd straight out of the shipped script the skill runs
+    (its heredoc until Phase 386)."""
     import re as _re
-    text = (Path(__file__).resolve().parents[1] / "core/skills" / skill_file / "SKILL.md").read_text()
+    text = clear_src(skill_file)
     src = text[text.index("# Why each selector rule exists"):text.index("\ndef parse_fanout(")]
     ns: dict = {"re": _re}
     exec(src, ns)
@@ -489,8 +490,7 @@ def test_sitrep_reads_what_the_shipped_writer_wrote(tmp_path):
 def test_the_5b_prose_names_the_token_the_writer_prints(skill):
     text = SKILLS[skill].read_text(encoding="utf-8")
     assert "nothing parses it yet" not in text
-    heredoc = text[text.index("python3 - <<'PY' \"<ROUND_MARKER"):]
-    heredoc = heredoc[:heredoc.index("\nPY\n")]
+    heredoc = clear_src(skill)  # Step 5f's script since Phase 386
     prose = text[text.index("> **Fan-out coverage ("):]
     after_fence = prose.index("```\n\n") + len("```\n\n")
     # The paragraph under the template, not the template: the template line

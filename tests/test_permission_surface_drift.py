@@ -59,7 +59,9 @@ from pathlib import Path as _P
 sys.path.insert(0, str(_P(__file__).resolve().parent))
 
 from _prose_guard_helpers import carries  # noqa: E402
+from skill_runner_text import runner_texts  # noqa: E402
 from pathlib import Path
+from skill_runner_text import text_of
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE = REPO_ROOT / "core/companion/.claude/settings.json"
@@ -298,8 +300,8 @@ def declared_required():
     and a reader keyed to two markers could not see either.
     """
     out = {}
-    for path in sorted(SKILLS_DIR.glob("*/SKILL.md")):
-        body = _preflight_body(path.read_text())
+    for name, text in runner_texts(SKILLS_DIR).items():
+        body = _preflight_body(text)
         if body is None:
             continue
         rules = []
@@ -307,14 +309,15 @@ def declared_required():
             if LIST_ITEM.match(line):
                 rules += re.findall(r"`(Bash\([^`]+\))`", line)
         if rules:
-            out[path.parent.name] = rules
+            out[name] = rules
     return out
 
 
 def mentioned_anywhere():
     rules = set()
     for path in SKILLS_DIR.rglob("*.md"):
-        rules |= set(re.findall(r"`(Bash\([^`]+\))`", path.read_text()))
+        # `Edit(...)` since Phase 377 (`Q-663`): the template seeds file-edit rules too.
+        rules |= set(re.findall(r"`((?:Bash|Edit)\([^`]+\))`", path.read_text()))
     return rules
 
 
@@ -381,7 +384,7 @@ def test_review_close_resolves_the_default_branch_before_its_permission_guard():
     getting no test failure at all. Ordering is a property prose asserts and nothing
     verifies; this asserts it.
     """
-    text = (SKILLS_DIR / "review-close" / "SKILL.md").read_text(encoding="utf-8")
+    text = text_of(SKILLS_DIR / "review-close" / "SKILL.md")
     resolve = text.find("## Resolve the default branch")
     preflight = text.find("## Pre-flight: Permission Guard")
     assert resolve != -1, "the resolve section is gone or renamed"
@@ -407,7 +410,7 @@ def test_the_resolve_section_still_says_what_it_is_for():
     a phrase count, because N disconnected phrases are satisfiable by a sentence asserting
     the opposite.
     """
-    text = (SKILLS_DIR / "review-close" / "SKILL.md").read_text(encoding="utf-8")
+    text = text_of(SKILLS_DIR / "review-close" / "SKILL.md")
     start = text.find("## Resolve the default branch")
     end = text.find("## Pre-flight: Permission Guard")
     assert 0 <= start < end, "the resolve section is missing or out of order"
@@ -576,15 +579,15 @@ def test_hard_stopping_skills_point_at_the_mode_check():
     hard-wraps `Do not\nproceed.` and escaped this test entirely until Phase
     152's review caught it."""
     offenders = []
-    for path in sorted(SKILLS_DIR.glob("*/SKILL.md")):
-        body = _preflight_body(path.read_text())
+    for name, text in runner_texts(SKILLS_DIR).items():
+        body = _preflight_body(text)
         if body is None:
             continue
         flat = " ".join(body.split())
         if "Do not proceed" not in flat:
             continue
         if MODE_CHECK_ESCAPE not in flat:
-            offenders.append(path.parent.name)
+            offenders.append(name)
     assert not offenders, (
         "skills whose pre-flight hard-stops without pointing at the guard's "
         f"bypassPermissions mode check: {offenders}"
@@ -661,8 +664,8 @@ def test_the_unbound_claim_commit_rule_stays_deleted():
     # this reading 2 of 19 rule-declaring skills, so re-declaring the rule in
     # `/review-close` or `/auto-judge` would have survived.
     offenders = [
-        path.parent.name for path in sorted(SKILLS_DIR.glob("*/SKILL.md"))
-        if "git commit -m claim" in path.read_text()
+        name for name, text in runner_texts(SKILLS_DIR).items()
+        if "git commit -m claim" in text
     ]
     assert offenders == [], (
         f"these skills declare the deleted claim-commit rule again: {offenders}"

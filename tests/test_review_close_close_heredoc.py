@@ -26,32 +26,21 @@ import datetime
 from pathlib import Path
 
 import yaml
+from skill_runner_text import text_of
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SKILL = REPO_ROOT / "core" / "skills" / "review-close" / "SKILL.md"
 
-PLACEHOLDER_IDS = 'ids = ["<ROADMAP_ID_1>", "<ROADMAP_ID_2>"]'
+SCRIPTS = REPO_ROOT / "core" / "companion" / "scripts"
+CLOSE_SCRIPT = SCRIPTS / "close_index.py"
 
 
 def _extract_close_heredoc() -> str:
-    """Pull the Step 4c tasks/index.yml close heredoc's Python body out of SKILL.md.
-
-    Anchor on the body's unique placeholder-ids line and walk back to the nearest
-    `python3 - <<'PY'` opener (robust to future heredocs being added or blocks
-    reordered — the Step 3c smoke gate uses a different `<<'EOF'` opener); the body
-    runs to the terminating `PY` line. The block sits inside a numbered markdown
-    list, so every line carries a 3-space indent — dedent before returning.
-    """
-    text = SKILL.read_text(encoding="utf-8")
-    ids_at = text.find(PLACEHOLDER_IDS)
-    assert ids_at != -1, "could not locate the Step 4c placeholder-ids anchor in SKILL.md"
-    opener = "python3 - <<'PY'\n"
-    opener_at = text.rfind(opener, 0, ids_at)
-    assert opener_at != -1, "could not locate the Step 4c heredoc opener above the ids anchor"
-    start = opener_at + len(opener)
-    end = text.find("\n   PY\n", start)
-    assert end != -1, "could not locate the Step 4c heredoc terminator"
-    return textwrap.dedent(text[start:end])
+    """Step 4c's tasks/index.yml close program: `close_index.py` since Phase 386 (`Q-409`
+    P3). It takes the roadmap ids as arguments where the heredoc took an edited literal."""
+    assert "python3 sysop/scripts/close_index.py " in text_of(SKILL), \
+        "Step 4c no longer runs close_index.py"
+    return CLOSE_SCRIPT.read_text(encoding="utf-8")
 
 
 CLOSE_SRC = _extract_close_heredoc()
@@ -121,10 +110,8 @@ def _git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProc
 
 
 def _run_close(repo: Path, ids: list[str]) -> None:
-    src = CLOSE_SRC.replace(PLACEHOLDER_IDS, f"ids = {ids!r}")
-    assert src != CLOSE_SRC, "placeholder ids line not found in the extracted heredoc"
     r = subprocess.run(
-        [sys.executable, "-c", src], capture_output=True, text=True, cwd=str(repo),
+        [sys.executable, str(CLOSE_SCRIPT), *ids], capture_output=True, text=True, cwd=str(repo),
         timeout=30, env=_git_env(),
     )
     assert r.returncode == 0, f"close heredoc errored ({r.returncode}):\n{r.stderr}"
@@ -331,14 +318,9 @@ def test_step3b_collect_has_loadbearing_mkdir():
     """
     import re as _re
 
-    text = SKILL.read_text(encoding="utf-8")
-    bodies = _re.findall(
-        r"python3 - \"<worktree-path>\" \"<branch name>\" <<'PY'\n(.*?)\n      PY\n", text, _re.DOTALL
-    )
-    assert bodies, "Step 3b's collect heredoc is gone"
-    collect_src = "\n".join(
-        ln[6:] if ln.startswith("      ") else ln for ln in bodies[0].split("\n")
-    )
+    text = text_of(SKILL)
+    assert "python3 sysop/scripts/pending_doc_collect.py collect " in text, \
+        "Step 3b's collect is gone"
     # The masking redirect that made the original failure silent must not come back.
     assert "cp <worktree>/sysop/runtime/pending-docs/*.md" not in text
 
@@ -352,10 +334,8 @@ def test_step3b_collect_has_loadbearing_mkdir():
         doc.parent.mkdir(parents=True)
         doc.write_text('---\nbranch: feat/x\nsummary: "s"\n---\n', encoding="utf-8")
 
-        script = d / "collect.py"
-        script.write_text(collect_src, encoding="utf-8")
         r = subprocess.run(
-            [sys.executable, str(script), str(wt), "feat/x"],
+            [sys.executable, str(SCRIPTS / "pending_doc_collect.py"), "collect", str(wt), "feat/x"],
             cwd=main, capture_output=True, text=True,
         )
 
@@ -371,12 +351,15 @@ def test_step3b_collect_has_loadbearing_mkdir():
 
 
 def test_final_report_template_carries_parked_markers_row():
-    text = SKILL.read_text(encoding="utf-8")
+    text = text_of(SKILL)
     # Phase 219 (`Q-237`): the row is now sourced from what Step 4c PRINTED, rather than
     # naming a shape the agent had to fill from memory. Pin the sourcing, not the shape.
     assert 'Parked markers: <the `PARKED_MARKERS_REMOVED` filenames Step 4c printed>' in text
     assert 'Locks cleaned: <the `LOCKS_REMOVED` ids Step 4c printed>' in text
-    assert "`CLOSED_IDS`" in text and "`NOT_IN_INDEX`" in text, (
+    # Pinned on Step 8's own row text. Until Phase 386 this asserted the bare backticked
+    # names, which only Step 4c's heredoc COMMENT carried for `NOT_IN_INDEX`, so a Step 8
+    # that dropped the set still passed; the comment now lives in `close_index.py`.
+    assert "<the `CLOSED_IDS` Step 4c printed>" in text and "`not in index: <NOT_IN_INDEX ids>`" in text, (
         "Step 8's tasks/index.yml row must name both emitted sets — reporting only the "
         "closed ids hides every id this close was asked for and could not find")
 
@@ -389,10 +372,8 @@ def test_final_report_template_carries_parked_markers_row():
 # ---------------------------------------------------------------------------------------
 
 def _run_close_capturing(repo: Path, ids: list[str]) -> str:
-    src = CLOSE_SRC.replace(PLACEHOLDER_IDS, f"ids = {ids!r}")
-    assert src != CLOSE_SRC, "placeholder ids line not found in the extracted heredoc"
     r = subprocess.run(
-        [sys.executable, "-c", src], capture_output=True, text=True, cwd=str(repo),
+        [sys.executable, str(CLOSE_SCRIPT), *ids], capture_output=True, text=True, cwd=str(repo),
         timeout=30, env=_git_env(),
     )
     assert r.returncode == 0, f"close heredoc errored ({r.returncode}):\n{r.stderr}"

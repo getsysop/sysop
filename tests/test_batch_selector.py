@@ -31,6 +31,7 @@ import re
 from pathlib import Path
 
 import pytest
+from skill_runner_text import runner_texts, skill_text
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SKILLS = REPO_ROOT / "core" / "skills"
@@ -223,8 +224,8 @@ def test_the_population_is_the_two_skills_that_lacked_a_selector():
     two of three.
     """
     with_cap = sorted(
-        p.parent.name for p in SKILLS.glob("*/SKILL.md")
-        if re.search(r"\u2192 (?:the )?concurrency cap", p.read_text(encoding="utf-8"))
+        name for name, text in runner_texts(SKILLS).items()
+        if re.search(r"\u2192 (?:the )?concurrency cap", text)
     )
     assert with_cap == sorted(SIBLINGS), with_cap
 
@@ -388,7 +389,7 @@ def test_neither_sibling_prescribes_a_release_flag_that_does_not_exist():
     the class rule 3 of the author-side pass exists for.
     """
     for skill in SIBLINGS:
-        text = (SKILLS / skill / "SKILL.md").read_text(encoding="utf-8")
+        text = skill_text(SKILLS / skill)   # step files too (Phase 384)
         assert "close_batch.sh --release" not in text, skill
     script = (REPO_ROOT / "core" / "companion" / "scripts" / "close_batch.sh").read_text(
         encoding="utf-8")

@@ -30,7 +30,10 @@ from pathlib import Path
 import pytest
 
 import sitrep_survey as ss
-from test_pending_doc_integrity import _heredocs
+from test_pending_doc_integrity import _heredocs, _Sub
+
+# Step 3b's collect, as the step runs it: the shipped script's subcommand (Phase 386).
+COLLECT_ARGV = _Sub("collect").argv
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = REPO_ROOT / "core" / "companion" / "scripts"
@@ -91,9 +94,7 @@ def _write_doc(ws: Path, tip_line: str | None, *, raw: str | None = None) -> Pat
 
 def _close_verdict(main: Path, wt: Path, tmp_path: Path) -> str:
     """What `/review-close` Step 3b's collect says about the doc: stale / unknown / current."""
-    collect = tmp_path / "collect.py"
-    collect.write_text(_heredocs()[0], encoding="utf-8")
-    r = subprocess.run([sys.executable, str(collect), str(wt), BRANCH], cwd=main,
+    r = subprocess.run([sys.executable, *COLLECT_ARGV, str(wt), BRANCH], cwd=main,
                        capture_output=True, text=True, env=_env())
     if "PENDING-DOC STALE:" in r.stdout:
         assert r.returncode == 6, r.stdout + r.stderr
@@ -180,9 +181,7 @@ def test_a_doc_the_close_cannot_read_is_unknown_not_stale(repo, tmp_path, raw):
     branch: the close refuses both as a COLLISION (exit 3) before any staleness read. The survey cannot see a collision; its reading must be
     the fail-open one, never `stale`."""
     doc = _write_doc(repo["wt"], None, raw=raw.format(tip=repo["doc_tip"]))
-    collect = tmp_path / "collect.py"
-    collect.write_text(_heredocs()[0], encoding="utf-8")
-    r = subprocess.run([sys.executable, str(collect), str(repo["wt"]), BRANCH],
+    r = subprocess.run([sys.executable, *COLLECT_ARGV, str(repo["wt"]), BRANCH],
                        cwd=repo["main"], capture_output=True, text=True, env=_env())
     assert r.returncode == 3 and "PENDING-DOC COLLISION" in r.stdout, r.stdout + r.stderr
     assert _sitrep_verdict(doc) == "unknown"
@@ -523,14 +522,35 @@ def test_an_impossible_date_in_a_doc_is_unknown_not_a_crash(repo):
     assert ts.state == "ready for /review-close", ts.state
 
 
-def test_a_doc_in_main_with_no_workspace_of_the_branchs_own_is_not_measured(repo):
-    """The close's Step 0 finds no workspace for a `--branch` claim or a removed worktree,
-    and its Step 3b collect never runs; the survey must not name a refusal that will not
-    happen (Phase 347's round, lens 1, MED). With a worktree of its own it is measured."""
+def test_a_branch_claims_doc_in_main_is_not_measured(repo):
+    """A `--branch` claim's workspace is the main checkout: the close's Step 0 reports the
+    `main-checkout` shape and its Step 3b collect never runs, so the survey must not name a
+    refusal that will not happen (Phase 347's round, lens 1, MED)."""
     doc = _write_doc(repo["main"], f"branch_tip: {repo['doc_tip']}")
-    ts = _classify(repo["main"], doc)
+    lock = ss.Lock(task_id="FEAT-1", path=repo["main"] / "FEAT-1.lock", branch=BRANCH,
+                   workspace=str(repo["main"]))
+    commit = ss.Commit(sha="abc", subject="feat: x",
+                       author_date=datetime(2026, 9, 1, tzinfo=timezone.utc),
+                       doc_work_ids=["FEAT-1"], subject_task_id=None)
+    ts = ss._classify_task(
+        task_id="FEAT-1", lock=lock, worktree=None, branch=BRANCH,
+        index_entry={"status": "in_progress"}, commits=[commit], unpushed=0,
+        dirty=False, stale_days=7, phase40_cutoff=CUTOFF, pending_doc=doc, main_root=repo["main"])
     assert ts.state == "ready for /review-close", ts.state
     assert any("not measured" in n for n in ts.notes), ts.notes
+
+
+def test_a_doc_in_main_whose_worktree_was_removed_is_measured(repo):
+    """Phase 380 (`Q-664`): a close that parked after Step 3b collected the doc and removed
+    the worktree leaves the branch with no workspace, and Step 3b step 0's arm for it now
+    applies exit 6's test by hand; the survey follows it. With a worktree it is measured
+    too."""
+    doc = _write_doc(repo["main"], f"branch_tip: {repo['doc_tip']}")
+    _git(repo["main"], "worktree", "remove", str(repo["wt"]))  # the branch stays
+    assert not repo["wt"].exists()
+    ts = _classify(repo["main"], doc)
+    assert ts.state == STALE, (ts.state, ts.notes)
+    assert not any("not measured" in n for n in ts.notes), ts.notes
     commit = ss.Commit(sha="abc", subject="feat: x",
                        author_date=datetime(2026, 9, 1, tzinfo=timezone.utc),
                        doc_work_ids=["FEAT-1"], subject_task_id=None)
@@ -552,3 +572,39 @@ def test_a_batch_with_tasks_still_undocumented_is_in_progress_even_with_a_stale_
     rb = ss._classify_review_batches([two], [lock], [ss.Worktree(path=repo["wt"], branch=BRANCH,
                                                                   head="")], repo["main"])[0]
     assert rb.state == "in progress", (rb.state, rb.notes)
+
+
+def test_a_lockless_branch_checked_out_in_main_is_not_measured(tmp_path):
+    """Phase 380's round (lens 3, B1): `claim_task.sh --branch` without `--lock` leaves the
+    branch checked out in the main checkout with no lock. Step 0 prints `shape=main-checkout`,
+    so the close's hand-applied exit-6 test (gated on `shape=<none>`) does not run, and the
+    survey must not call the doc stale either."""
+    main = tmp_path / "main"
+    main.mkdir()
+    _git(main, "init", "-q", "-b", "main")
+    (main / ".gitignore").write_text("sysop/runtime/\n", encoding="utf-8")
+    _commit(main, "base.txt")
+    _git(main, "checkout", "-q", "-b", BRANCH)
+    tip = _commit(main, "a.txt", "Doc-Work: FEAT-1")
+    _commit(main, "b.txt")
+    doc = _write_doc(main, f"branch_tip: {tip}")
+    ts = _classify(main, doc)
+    assert ts.state == "ready for /review-close", (ts.state, ts.notes)
+    assert any("not measured" in n for n in ts.notes), ts.notes
+
+
+def test_a_branch_claims_unresolved_workspace_is_still_the_main_checkout(repo):
+    """Phase 380's round (lens 2, S03): `claim_task.sh` writes `workspace:` unresolved, so the
+    main checkout can arrive as `<main>/../<main-name>`; it is still the main checkout."""
+    doc = _write_doc(repo["main"], f"branch_tip: {repo['doc_tip']}")
+    _git(repo["main"], "worktree", "remove", str(repo["wt"]))
+    lock = ss.Lock(task_id="FEAT-1", path=repo["main"] / "FEAT-1.lock", branch=BRANCH,
+                   workspace=str(repo["main"] / ".." / repo["main"].name))
+    commit = ss.Commit(sha="abc", subject="feat: x",
+                       author_date=datetime(2026, 9, 1, tzinfo=timezone.utc),
+                       doc_work_ids=["FEAT-1"], subject_task_id=None)
+    ts = ss._classify_task(
+        task_id="FEAT-1", lock=lock, worktree=None, branch=BRANCH,
+        index_entry={"status": "in_progress"}, commits=[commit], unpushed=0,
+        dirty=False, stale_days=7, phase40_cutoff=CUTOFF, pending_doc=doc, main_root=repo["main"])
+    assert any("not measured" in n for n in ts.notes), (ts.state, ts.notes)

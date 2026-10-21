@@ -35,6 +35,7 @@ import re
 from pathlib import Path
 
 import pytest
+from skill_runner_text import fold_steps, text_of
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -51,13 +52,21 @@ INDEX_WRITERS = {
     # --release: in_progress -> open, and --commit-claim: open -> in_progress
     # (Phase 261, `Q-397` — both now under the tracker write mutex).
     "core/companion/scripts/claim_task.sh",
-    "core/skills/review-close/SKILL.md",     # Step 4c: -> done + completed_date + body
+    # Step 4c: -> done + completed_date + body. In the skill's heredoc until Phase 386.
+    "core/companion/scripts/close_index.py",
     "core/companion/scripts/backfill_completed_dates.py",
     "core/companion/scripts/clear_user_action.py",  # Q-314: user_action true -> false
 }
 
 # `safe_dump` sites in the shipped tree that do NOT write the task index.
-NON_INDEX_DUMP_SITES = {"install.sh"}
+NON_INDEX_DUMP_SITES = {
+    "install.sh",
+    # Step 3c's answer recorder (Phase 330) writes a pending doc's frontmatter. Review-close's
+    # SKILL.md was an INDEX_WRITERS member while Step 4c's writer sat beside it; Phase 386
+    # moved that writer to `close_index.py`, and Phase 387 (`Q-409` P3) moved the recorder to
+    # `smoke_record.py`, so review-close's SKILL.md holds no dump at all.
+    "core/companion/scripts/smoke_record.py",
+}
 
 SHIPPED_ROOTS = ("core", "packs")
 
@@ -93,6 +102,19 @@ INDEX_READERS = {
     # Phase 366: the unattended land reads a task's flags and blast_radius at a commit
     # (`git cat-file -p <commit>:tasks/index.yml`); never writes the index.
     "core/companion/scripts/close_run.py",
+    # Phase 374: the close gate reads the index strictly at the base and in the merge result
+    # (`git cat-file`); never writes it.
+    "core/companion/scripts/close_gate.py",
+    # Phase 390 (`Q-409` P4): Step 4a's `conflicts` names the path only to match a conflicted
+    # file against the shared append files; it never reads or writes the index.
+    "core/companion/scripts/close_arms.py",
+    # Phase 386 (`Q-409` P3): three skill heredocs became scripts and took their index
+    # mentions with them. None asks an author to compose an entry: `close_index.py` is
+    # Step 4c's writer, `smoke_detect.py` reads `manual_smoke`, `claim_record.py` resolves
+    # a body path the way the index records it.
+    "core/companion/scripts/claim_record.py",
+    "core/companion/scripts/close_index.py",
+    "core/companion/scripts/smoke_detect.py",
     "core/companion/scripts/next_task.py",
     # Phase 353: reads `user_action` for Step 4c 1c's hold test; never writes the index.
     "core/companion/scripts/pending_doc_hold.py",
@@ -219,10 +241,14 @@ def _fenced_spans(text: str) -> list[tuple[int, int]]:
 
 def _dump_sites() -> dict[str, list[str]]:
     sites: dict[str, list[str]] = {}
-    for path in _shipped_files():
+    # Folded (Phase 385): a skill's step files count as its `SKILL.md`, so the population
+    # keeps its keys when a step moves out of the core.
+    for path in fold_steps(_shipped_files()):
         try:
-            text = path.read_text(encoding="utf-8")
+            text = text_of(path)
         except (UnicodeDecodeError, OSError):
+            if path.name == "SKILL.md":   # a dangling arm marker: loud, not a skipped skill
+                raise
             continue
         # In markdown, only a call inside a fenced code block is a writer. A prose
         # mention with parentheses (`WORKFLOW.md` has one) is documentation, and
@@ -297,7 +323,14 @@ def _kwargs_of(call: str) -> dict[str, str]:
     return out
 
 
-@pytest.mark.parametrize("writer", sorted(INDEX_WRITERS))
+# Step 3c's recorder stays under the kwargs check, where it went when Phase 386 moved review-
+# close's index writer out: a second dump added to a file already in the population is
+# otherwise invisible (the population test compares sets of files). Phase 386's round, lens B.
+# The recorder is `smoke_record.py` since Phase 387 (`Q-409` P3).
+KWARGS_CHECKED = INDEX_WRITERS | {"core/companion/scripts/smoke_record.py"}
+
+
+@pytest.mark.parametrize("writer", sorted(KWARGS_CHECKED))
 def test_every_index_writer_carries_the_canonical_kwargs(writer: str):
     calls = _dump_sites()[writer]
     assert calls, f"no safe_dump call found in {writer}"
@@ -503,10 +536,12 @@ _NAMES_INDEX = re.compile(r"\bindex\.yml\b")
 def _index_naming_files() -> set[str]:
     """Every shipped file that names `tasks/index.yml`. The universe, derived."""
     found = set()
-    for path in _shipped_files():
+    for path in fold_steps(_shipped_files()):   # Phase 385: keyed by skill, as above
         try:
-            text = path.read_text(encoding="utf-8")
+            text = text_of(path)
         except (UnicodeDecodeError, OSError):
+            if path.name == "SKILL.md":   # as above
+                raise
             continue
         if _NAMES_INDEX.search(text):
             found.add(str(path.relative_to(REPO_ROOT)))
@@ -1064,7 +1099,7 @@ def test_the_readme_names_every_writer_it_warns_about():
         "core/skills/auto-build/SKILL.md": ["`/auto-build` Step 5.1"],
         "core/companion/scripts/claim_task.sh": [
             "`claim_task.sh --release`", "`claim_task.sh --commit-claim`"],
-        "core/skills/review-close/SKILL.md": ["`/review-close` Step 4c"],
+        "core/companion/scripts/close_index.py": ["`/review-close` Step 4c"],
         "core/companion/scripts/backfill_completed_dates.py":
             ["`backfill_completed_dates.py`"],
         "core/companion/scripts/clear_user_action.py": ["`clear_user_action.py`"],
@@ -1244,11 +1279,17 @@ def test_the_loss_this_phase_fixes_is_real_and_the_fix_works():
 # --------------------------------------------------------------------------
 
 
+STEP4C_SCRIPT = REPO_ROOT / "core/companion/scripts/close_index.py"
+# Where the program proper begins: the id list, after the imports and the PyYAML bootstrap.
+_STEP4C_START = "\nids = _args[1:] if KEEP_LOCKS else _args\n"
+
+
 def _step4c_region() -> str:
-    """Step 4c's heredoc, comments INCLUDED — the roster lives in a comment."""
-    text = (REPO_ROOT / "core/skills/review-close/SKILL.md").read_text(encoding="utf-8")
-    start = text.index('   ids = ["<ROADMAP_ID_1>"')
-    return text[start:text.index("\n   PY\n", start)]
+    """Step 4c's program, comments INCLUDED — the roster lives in a comment. A shipped
+    script since Phase 386 (`Q-409` P3); it was the step's heredoc."""
+    text = STEP4C_SCRIPT.read_text(encoding="utf-8")
+    assert text.count(_STEP4C_START) == 1
+    return text[text.index(_STEP4C_START):]
 
 
 def _step4c_body() -> str:
@@ -1259,12 +1300,8 @@ def _step4c_body() -> str:
     written in a comment satisfied the atomicity check over code that truncated
     in place.
     """
-    text = (REPO_ROOT / "core/skills/review-close/SKILL.md").read_text(encoding="utf-8")
-    start = text.index('   ids = ["<ROADMAP_ID_1>"')
-    end = text.index("\n   PY\n", start)
     lines = []
-    for raw in text[start:end].splitlines():
-        line = raw[3:] if raw.startswith("   ") else raw
+    for line in _step4c_region().splitlines():
         code = line.split("#", 1)[0] if not line.lstrip().startswith("#") else ""
         lines.append(code)
     return "\n".join(lines)
@@ -1367,14 +1404,17 @@ def test_step4c_joins_the_mkstemp_roster_rather_than_standing_apart():
         # Step 4a (the index) + Step 7f (the task BODY, `Q-444`, Phase 271) + Step 8b's
         # answers record (Phase 345), which writes a run artifact, not the index, and is
         # counted because the count is per file, as review-close's recorder is below.
-        "claim-task Step 4a + Step 7f + Step 8b": (REPO_ROOT / "core/skills/claim-task/SKILL.md", 3),
+        "claim-task Step 4a + Step 8b": (REPO_ROOT / "core/skills/claim-task/SKILL.md", 2),
+        # Step 7f's body writer, a shipped script since Phase 386 (`Q-409` P3).
+        "claim_record.py (Step 7f)": (REPO_ROOT / "core/companion/scripts/claim_record.py", 1),
         "auto-build Step 5.1": (REPO_ROOT / "core/skills/auto-build/SKILL.md", 1),
         "claim_task.sh --commit-claim + --release":
             (REPO_ROOT / "core/companion/scripts/claim_task.sh", 2),
-        # Step 4c (the index) + Step 3c's answer recorder (Phase 330). The recorder writes
-        # a pending doc's frontmatter, not the index, and is counted here because the
-        # count is per file: without it, reverting Step 4c's writer would read as 1 == 1.
-        "review-close Step 4c + Step 3c recorder": (REPO_ROOT / "core/skills/review-close/SKILL.md", 2),
+        # Step 3c's answer recorder (Phase 330), which writes a pending doc's frontmatter,
+        # not the index: `smoke_record.py` since Phase 387 (`Q-409` P3). Step 4c's index
+        # writer left review-close for `close_index.py` in Phase 386.
+        "smoke_record.py (Step 3c recorder)": (REPO_ROOT / "core/companion/scripts/smoke_record.py", 1),
+        "close_index.py (Step 4c)": (REPO_ROOT / "core/companion/scripts/close_index.py", 1),
         "clear_user_action.py":
             (REPO_ROOT / "core/companion/scripts/clear_user_action.py", 1),
         # `Q-442`, Phase 271 — moved here out of `STILL_FIXED_NAME`.
@@ -1414,7 +1454,7 @@ def test_step4c_joins_the_mkstemp_roster_rather_than_standing_apart():
         )
 
     for name, (path, expected) in CONVERTED.items():
-        raw = path.read_text(encoding="utf-8")
+        raw = text_of(path)
         if path.suffix == ".md":
             # In a skill, only a call inside a fenced block is a writer. A prose sentence
             # naming `tempfile.mkstemp()` is not one, and counting it false-killed a legal
@@ -1449,8 +1489,10 @@ def test_step4c_joins_the_mkstemp_roster_rather_than_standing_apart():
 
 def test_step4c_imports_os():
     """Property, not spelling: the round false-killed on an import reorder."""
-    text = (REPO_ROOT / "core/skills/review-close/SKILL.md").read_text(encoding="utf-8")
-    header = text[text.index("python3 - <<'PY'") : text.index('   ids = ["<ROADMAP_ID_1>"')]
+    # The script's own header. Before Phase 386 this sliced from the FIRST heredoc opener in
+    # the whole skill, so an `import os` in any earlier heredoc satisfied it.
+    text = STEP4C_SCRIPT.read_text(encoding="utf-8")
+    header = text[: text.index(_STEP4C_START)]
     assert re.search(r"^\s*import\s+(\w+,\s*)*os\b|^\s*import\s+os\b", header, re.M), (
         "Step 4c's heredoc must import os"
     )

@@ -63,6 +63,8 @@ FATAL = [
     "clear_user_action.py",
     # Phase 353 (`Q-625`): Step 4c 1c's hold test runs it as bare `python3`.
     "pending_doc_hold.py",
+    # Phase 398 (`Q-676`): `/intake` and `/onboard` Step 0 run `--defaults` bare.
+    "check_skill_models.py",
 ]
 # The one whose resolution is deliberately non-fatal: every yaml use in it is a
 # local import on a documented degrade path.
@@ -200,7 +202,8 @@ def consumer(tmp_path):
     """A consumer-shaped tree: <root>/sysop/scripts/ with the real scripts."""
     root = tmp_path / "proj"
     (root / "sysop" / "scripts").mkdir(parents=True)
-    for name in [*FATAL, SOFT, "_log.py"]:
+    # check_skill_models.py imports the last two.
+    for name in [*FATAL, SOFT, "_log.py", "_model_roles.py", "migrate_skill_model.py"]:
         (root / "sysop" / "scripts" / name).write_bytes((SCRIPTS / name).read_bytes())
     subprocess.run(["git", "-c", "init.defaultBranch=main", "init", "-q", str(root)],
                    check=True, capture_output=True)
@@ -258,6 +261,8 @@ _RESOLVED = {
     # Phase 353. A `hold:` reason read back out of a doc's frontmatter is output
     # only a successful YAML parse can produce.
     "pending_doc_hold.py": (0, "HELD: hd.md — branch feat/hd; hold: rollout pending"),
+    # Phase 398. A role's `about:` line, which only a parse of the config can print.
+    "check_skill_models.py": (0, "fixture-about-from-yaml"),
 }
 
 
@@ -368,6 +373,25 @@ class TestItActuallyResolves:
         r = _run(consumer / "sysop/scripts/pending_doc_hold.py", "check",
                  cwd=consumer, py=yamlless_python)
         _assert_resolved("pending_doc_hold.py", r)
+
+    def test_check_skill_models_defaults_resolves(self, consumer, yamlless_python):
+        """Phase 398 (`Q-676`): `/intake` and `/onboard` run `--defaults` as bare `python3`."""
+        _fake_venv(consumer)
+        (consumer / ".claude").mkdir()
+        (consumer / ".claude" / "served_models.yml").write_text(
+            "roles:\n  reasoning: opus\nserved:\n  - opus\nabout:\n  reasoning: fixture-about-from-yaml\n")
+        r = _run(consumer / "sysop/scripts/check_skill_models.py", "--defaults",
+                 cwd=consumer, py=yamlless_python)
+        _assert_resolved("check_skill_models.py", r)
+
+    def test_check_skill_models_still_fails_loudly_with_no_venv(
+            self, consumer, yamlless_python):
+        (consumer / ".claude").mkdir()
+        (consumer / ".claude" / "served_models.yml").write_text("roles:\n  reasoning: opus\n")
+        r = _run(consumer / "sysop/scripts/check_skill_models.py", "--defaults",
+                 cwd=consumer, py=yamlless_python)
+        assert r.returncode == 2, (r.returncode, r.stdout, r.stderr)
+        assert "requires PyYAML" in r.stderr
 
     def test_pending_doc_hold_still_fails_loudly_with_no_venv(
             self, consumer, yamlless_python):

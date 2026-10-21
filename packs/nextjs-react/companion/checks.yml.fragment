@@ -139,22 +139,6 @@ checks:
     convention: "XSS prevention"
     used_by: [security-audit]
 
-  # ── Error display ──────────────────────────────────────────────
-
-  - id: error-display-jsx
-    name: "Raw err.message in JSX"
-    category: convention
-    severity: medium
-    paths: ["<components dir>/", "<hooks dir>/"]
-    include: ["*.tsx", "*.ts"]
-    exclude: ["*__tests__*", "*.d.ts"]
-    pattern: '(err\.message|error\.message)'
-    negative_pattern: 'getDisplayError'
-    description: "Raw error.message rendered in UI — use getDisplayError() from lib/errorMessages.ts"
-    convention: "Error display"
-    notes: "Needs LLM triage: only flag if rendered in UI, not just logged or thrown"
-    used_by: [codebase-review]
-
   # ── URL handling / fetch hygiene ───────────────────────────────
 
   - id: missing-encode-uri

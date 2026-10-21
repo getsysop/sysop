@@ -9,11 +9,13 @@ from `served_models.local.yml` without moving the security twin beside it or
 anything else on `reasoning`. Since Phase 328 the role also governs Step 4
 `4a-fix`'s re-check of the close's own fix commit, so the knob moves two pins.
 
-**The default is `opus`, so this phase ships a knob and no behaviour change.**
-That is deliberate — an upgrade must not silently downgrade anybody's review —
-and it is also what these tests must pin, because a role whose default drifted
-to `sonnet` would change every consumer's convention gate on their next
-`--update` with nothing to catch it.
+**The default was `opus` until Phase 381, and is `sonnet` since** — Wade's decision
+on `Q-669` (2026-10-12), after measured closes showed the Sonnet gate's findings
+fixed before merge. The ship-no-behaviour-change rule this module was written to
+hold is retired by that decision, not by drift, and these tests pin the new value
+so a further move is just as visible: a default that changes again changes every
+consumer's convention gate on their next `--update`. The Step 2b security twin
+moved off the file's `reasoning` default at the same time, onto `security-gate`.
 
 The consequential test is the last one: it runs the real resolver under a real
 consumer override and asserts exactly the two convention-gate pins move. Everything above it is
@@ -26,6 +28,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from skill_runner_text import fold_steps, step_files, text_of
 
 yaml = pytest.importorskip("yaml")
 
@@ -54,10 +57,10 @@ def _resolved_roles():
     return roles
 
 
-def test_the_role_exists_and_defaults_to_opus():
-    """A default install must be unchanged. If this ever RESOLVES to `sonnet`,
-    every consumer's convention gate moved on an update they did not ask for."""
-    assert _resolved_roles()["convention-gate"] == "opus"
+def test_the_role_exists_and_defaults_to_sonnet():
+    """Phase 381 moved it on Wade's decision. If this RESOLVES to anything else,
+    every consumer's convention gate moved on an update nobody ruled on."""
+    assert _resolved_roles()["convention-gate"] == "sonnet"
 
 
 def test_the_role_resolves_to_a_served_and_inline_legal_model():
@@ -78,9 +81,10 @@ def test_exactly_two_pins_in_the_tree_carry_the_marker():
     marker means somebody widened the role by copy-paste, which silently
     re-couples the security twin to a knob labelled for the convention gate.
     The next test pins WHICH two."""
-    hits = [(p.relative_to(REPO_ROOT), p.read_text().count(MARKER))
-            for p in (REPO_ROOT / "core/skills").rglob("*.md")
-            if MARKER in p.read_text()]
+    # Counted per skill (Phase 385): a step file's markers are its `SKILL.md`'s.
+    hits = [(p.relative_to(REPO_ROOT), text_of(p).count(MARKER))
+            for p in fold_steps((REPO_ROOT / "core/skills").rglob("*.md"))
+            if MARKER in text_of(p)]
     assert hits == [(SKILL.relative_to(REPO_ROOT), 2)], hits
 
 
@@ -88,23 +92,23 @@ def test_the_marker_sits_on_the_convention_spawn_not_the_security_twin():
     """The two spawns are ~120 lines apart and structurally identical. Binding
     the marker to the wrong one is the single most plausible authoring error
     here, and it would move the security agent while leaving the expensive one
-    on opus — the exact inverse of the intent.
+    on its old model — the exact inverse of the intent.
 
     **The round defeated the first version of this test with a DECOY.** It moved
     the marker onto a new bullet two lines down and gave that bullet its own
     `description: "Convention check: <target>"` — and every assertion still
     passed, because a nearby description is not identity. Through the real
     resolver, the consumer's override then rewrote the decoy while the actual
-    Step 2b spawn kept `model: "opus"`: the knob disconnected, silently, with the
+    Step 2b spawn kept its model: the knob disconnected, silently, with the
     guards green. So identity is now pinned to the SPAWN BLOCK — the marked pin
     must sit in the same bullet list as the convention agent's prompt, above the
     text only that agent's prompt contains.
     """
-    lines = SKILL.read_text().splitlines()
+    lines = text_of(SKILL).splitlines()
     marked = [i for i, l in enumerate(lines) if MARKER in l]
     assert len(marked) == 2, marked
     idx = marked[0]
-    assert 'model: "opus"' in lines[idx]
+    assert 'model: "sonnet"' in lines[idx]
 
     # The convention spawn is the block whose prompt opens with this sentence —
     # it appears once in the file and belongs to no other agent.
@@ -132,11 +136,11 @@ def test_the_second_marker_sits_on_the_4a_fix_recheck():
     same decoy shape the test above guards, applied to the second spawn. The
     re-check's prompt is Step 2b step 3's with substitutions, so identity is
     pinned to the step heading and the description, not to a prompt sentence."""
-    lines = SKILL.read_text().splitlines()
+    lines = text_of(SKILL).splitlines()
     marked = [i for i, l in enumerate(lines) if MARKER in l]
     assert len(marked) == 2, marked
     idx = marked[1]
-    assert 'model: "opus"' in lines[idx]
+    assert 'model: "sonnet"' in lines[idx]
     heads = [i for i, l in enumerate(lines) if l.startswith("### ")]
     owner = max(h for h in heads if h < idx)
     assert lines[owner].startswith("### 4a-fix."), lines[owner]
@@ -145,17 +149,20 @@ def test_the_second_marker_sits_on_the_4a_fix_recheck():
     assert "Security check" not in "\n".join(lines[owner:idx + 6])
 
 
-def test_the_security_twin_is_still_governed_by_reasoning():
-    """The twin must carry NO per-pin marker, so it inherits the file-level
-    `inline=reasoning`. If it ever gains one, the split has stopped being a
-    split."""
-    text = SKILL.read_text()
+def test_the_security_twin_is_governed_by_its_own_role():
+    """Phase 381 (`Q-669`): the twin carries `security-gate`, never `convention-gate`.
+    The convention marker on it would re-couple the two knobs; NO marker would put it
+    back on the file-level `inline=reasoning`, which is what made it immovable."""
+    text = text_of(SKILL)
     twin = [l for l in text.splitlines() if 'description: "Security check:' in l]
     assert twin, "the security spawn moved or was renamed"
-    idx = text.splitlines().index(twin[0])
-    block = "\n".join(text.splitlines()[max(0, idx - 8):idx + 2])
-    assert 'model: "opus"' in block, block
-    assert "sysop:role=" not in block, block
+    assert "<!-- sysop:role=security-gate -->" in twin[0], twin[0]
+    assert 'model: "opus"' in twin[0], twin[0]  # `security-gate: reasoning` (Phase 389)
+    assert '`effort: "high"`' in twin[0], twin[0]  # follows `reasoning`'s effort
+    assert MARKER not in twin[0], twin[0]
+    hits = [p for p in fold_steps((REPO_ROOT / "core/skills").rglob("*.md"))
+            if "<!-- sysop:role=security-gate -->" in text_of(p)]
+    assert hits == [SKILL] and text.count("<!-- sysop:role=security-gate -->") == 1
 
 
 def test_a_consumer_override_moves_the_convention_pin_and_only_it(tmp_path):
@@ -166,13 +173,12 @@ def test_a_consumer_override_moves_the_convention_pin_and_only_it(tmp_path):
     that must all agree for a one-key override to reach one pin.
     """
     skills = tmp_path / "skills"
-    (skills / "review-close").mkdir(parents=True)
-    shutil.copy(SKILL, skills / "review-close" / "SKILL.md")
+    _copy_runner(skills / "review-close")
     cfg_dir = tmp_path / "cfg"
     cfg_dir.mkdir()
     shutil.copy(CONFIG, cfg_dir / "served_models.yml")
     (cfg_dir / "served_models.local.yml").write_text(
-        "roles:\n  convention-gate: sonnet\n")
+        "roles:\n  convention-gate: haiku\n")
 
     r = subprocess.run(
         [sys.executable, str(RESOLVER), "--root", str(skills),
@@ -181,8 +187,8 @@ def test_a_consumer_override_moves_the_convention_pin_and_only_it(tmp_path):
         capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
 
-    out = (skills / "review-close" / "SKILL.md").read_text().splitlines()
-    moved = [l for l in out if 'model: "sonnet"' in l]
+    out = text_of(skills / "review-close" / "SKILL.md").splitlines()
+    moved = [l for l in out if 'model: "haiku"' in l]
     assert len(moved) == 2, moved
     for m in moved:
         assert MARKER in m
@@ -192,7 +198,7 @@ def test_a_consumer_override_moves_the_convention_pin_and_only_it(tmp_path):
     twin = [l for l in out if 'description: "Security check:' in l]
     assert len(twin) == 1, twin
     assert 'model: "opus"' in twin[0], twin[0]
-    assert 'model: "sonnet"' not in twin[0], twin[0]
+    assert 'model: "haiku"' not in twin[0], twin[0]
     assert "APPLIED: 2 pin(s)" in r.stdout, r.stdout
 
 
@@ -201,15 +207,14 @@ def test_the_default_config_is_a_no_op_for_this_role(tmp_path):
     diverge from source, which is the property `resolve_skill_models.py`
     documents for the whole tree and this role must not break."""
     skills = tmp_path / "skills"
-    (skills / "review-close").mkdir(parents=True)
-    shutil.copy(SKILL, skills / "review-close" / "SKILL.md")
-    before = (skills / "review-close" / "SKILL.md").read_bytes()
+    _copy_runner(skills / "review-close")
+    before = _runner_bytes(skills / "review-close")
     r = subprocess.run(
         [sys.executable, str(RESOLVER), "--root", str(skills),
          "--config", str(CONFIG), "--local", str(tmp_path / "absent.yml"), "--apply"],
         capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
-    assert (skills / "review-close" / "SKILL.md").read_bytes() == before
+    assert _runner_bytes(skills / "review-close") == before
 
 
 # ── Phase 262's review round, lens 1 (execution) ─────────────────────────────
@@ -219,17 +224,32 @@ def test_the_default_config_is_a_no_op_for_this_role(tmp_path):
 # change"; that was true only on the default map. The fix is that the role's
 # shipped value is the ROLE NAME `reasoning`, not a literal model.
 
+def _copy_runner(dst: Path) -> None:
+    """The skill's runner files, `SKILL.md` and its step files, into a fixture (Phase 385):
+    when a pinned spawn moves into `steps/`, the resolver rewrites it there, and a fixture
+    holding `SKILL.md` alone would have no pin to resolve. `REFERENCE.md` stays out, as the
+    installer's resolver run sees it but these tests count pins in runner text only."""
+    for src in [SKILL, *step_files(SKILL.parent)]:
+        out = dst / src.relative_to(SKILL.parent)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(src, out)
+
+
+def _runner_bytes(d: Path) -> dict[str, bytes]:
+    return {p.relative_to(d).as_posix(): p.read_bytes()
+            for p in [d / "SKILL.md", *step_files(d)]}
+
+
 def _resolve(tmp_path, local_text):
     skills = tmp_path / "skills"
-    (skills / "review-close").mkdir(parents=True)
-    shutil.copy(SKILL, skills / "review-close" / "SKILL.md")
+    _copy_runner(skills / "review-close")
     local = tmp_path / "served_models.local.yml"
     if local_text is not None:
         local.write_text(local_text)
     r = subprocess.run(
         [sys.executable, str(RESOLVER), "--root", str(skills), "--config", str(CONFIG),
          "--local", str(local), "--apply"], capture_output=True, text=True)
-    body = (skills / "review-close" / "SKILL.md").read_text().splitlines()
+    body = text_of(skills / "review-close" / "SKILL.md").splitlines()
     conv = [l for l in body if MARKER in l]
     twin = [l for l in body if 'description: "Security check:' in l]
     assert len(conv) == 2 and len(twin) == 1
@@ -242,14 +262,18 @@ def _resolve(tmp_path, local_text):
     return r, model(conv[0]), model(twin[0])
 
 
-def test_the_role_is_an_alias_not_a_literal():
-    """The shipped value must be the role NAME. A literal here is what silently
-    raised the pin back to opus for consumers who had chosen the cheap lever."""
-    raw = yaml.safe_load(CONFIG.read_text())["roles"]["convention-gate"]
-    assert raw == "reasoning", (
-        f"convention-gate ships as {raw!r}; a literal model here re-introduces "
-        "the upgrade regression the round found"
-    )
+def test_the_role_ships_as_the_ruled_literal():
+    """Phase 262 shipped the role NAME `reasoning` so the gate followed a consumer's
+    cheap lever. Phase 381 ships the literal `sonnet` for the convention gate on Wade's
+    decision: a gate that follows `reasoning` would move back to opus with it. Phase 389
+    (2026-10-19) put the security twin back on the role NAME `reasoning`, on a replay
+    that reproduced 3 of its 8 blocks on `sonnet` under a rule fixed before the run
+    (`docs/configuration.md` § Models). The upgrade regression Phase 262 closed stays
+    closed for the lever it was about (`reasoning: sonnet` still puts both gates on
+    sonnet, next tests); a consumer who wants the convention gate to follow `reasoning`
+    names it, one key."""
+    raw = yaml.safe_load(CONFIG.read_text())["roles"]
+    assert (raw["convention-gate"], raw["security-gate"]) == ("sonnet", "reasoning"), raw
 
 
 def test_a_reasoning_override_still_reaches_the_convention_pin(tmp_path):
@@ -267,15 +291,26 @@ def test_an_explicit_convention_gate_override_wins_over_reasoning(tmp_path):
     r, conv, twin = _resolve(
         tmp_path, "roles:\n  reasoning: sonnet\n  convention-gate: haiku\n")
     assert r.returncode == 0, r.stderr
-    assert (conv, twin) == ("haiku", "sonnet"), (conv, twin)
+    assert (conv, twin) == ("haiku", "sonnet"), (conv, twin)  # the twin follows `reasoning: sonnet`
 
 
-def test_the_alias_resolves_to_opus_by_default(tmp_path):
-    """Vacuity control: the two tests above could both pass with the alias
-    resolving to nothing useful. On the default map it must be opus."""
+def test_both_gates_resolve_to_sonnet_by_default(tmp_path):
+    """Vacuity control: the two tests above could both pass with the gates
+    resolving to nothing useful. On the default map the convention gate is sonnet and
+    the twin is `reasoning`'s model, opus (Phase 389)."""
     r, conv, twin = _resolve(tmp_path, None)
     assert r.returncode == 0, r.stderr
-    assert (conv, twin) == ("opus", "opus"), (conv, twin)
+    assert (conv, twin) == ("sonnet", "opus"), (conv, twin)
+
+
+def test_naming_reasoning_puts_both_gates_back_on_it(tmp_path):
+    """The documented way back, run through the resolver: with the gates named
+    after `reasoning`, a `reasoning` override reaches both, as before Phase 381."""
+    r, conv, twin = _resolve(tmp_path, (
+        "roles:\n  reasoning: fable\n"
+        "  convention-gate: reasoning\n  security-gate: reasoning\n"))
+    assert r.returncode == 0, r.stderr
+    assert (conv, twin) == ("fable", "fable"), (conv, twin)
 
 
 def test_a_misspelled_role_value_still_fails_closed(tmp_path):
@@ -291,10 +326,10 @@ def test_a_misspelled_role_value_still_fails_closed(tmp_path):
 
 def test_an_alias_cycle_is_a_named_refusal_not_a_traceback(tmp_path):
     """A cycle must not hang, and must not reach the operator as a stack trace."""
-    (tmp_path / "local.yml").write_text("roles:\n  reasoning: convention-gate\n")
+    (tmp_path / "local.yml").write_text(
+        "roles:\n  reasoning: convention-gate\n  convention-gate: reasoning\n")
     skills = tmp_path / "skills"
-    (skills / "review-close").mkdir(parents=True)
-    shutil.copy(SKILL, skills / "review-close" / "SKILL.md")
+    _copy_runner(skills / "review-close")
     r = subprocess.run(
         [sys.executable, str(RESOLVER), "--root", str(skills), "--config", str(CONFIG),
          "--local", str(tmp_path / "local.yml"), "--apply"], capture_output=True, text=True)

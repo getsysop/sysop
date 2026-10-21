@@ -2,7 +2,7 @@
 
 **You are reading this because you are about to change the skill, not run it.**
 
-`SKILL.md` is the runner. It carries procedure, commands, and a one-line reason wherever the
+`SKILL.md` and the step files it loads from `steps/` are the runner. They carry procedure, commands, and a one-line reason wherever the
 reason changes what the runner does. This file carries what the *editor* needs: what a rule
 protects, what its loss or softening would change, and where it came from.
 
@@ -11,6 +11,11 @@ something points at them — so this file costs the runner nothing and the edito
 
 Notes here anchor to **rule ids and step headings, never line numbers.**
 
+**Where a note says "the heredoc" about a step's program, read the shipped script that step
+now runs.** Phases 386 and 387 moved every Python heredoc this skill ran into
+`core/companion/scripts/`, verbatim apart from the arguments each step's invocation names; a
+note's claim that a heredoc binds `Bash(python3 -:*)` now means the script's own seeded rule.
+
 The method behind the declaration below, and the pin that enforces it, are specified in
 `tools/CONTEXT_THINNING_SPEC.md` (maintainer-side; never ships).
 
@@ -18,8 +23,8 @@ The method behind the declaration below, and the pin that enforces it, are speci
 
 ## Where new rationale goes
 
-**New rationale is authored here, not in the runner.** When you add a rule to `SKILL.md`, the
-runner gets the instruction and — only if it changes what the runner does — one line of reason.
+**New rationale is authored here, not in the runner.** When you add a rule to `SKILL.md` or a step file,
+the runner gets the instruction and — only if it changes what the runner does — one line of reason.
 The justification, what the rule's loss or softening would change, and the provenance go here.
 
 This is a rule about *where text is written*, not a size budget. A skill may grow as much as the
@@ -458,8 +463,9 @@ before Step 3b, so the worktree path is still there.
 
 A second resume of the same run after Step 3b has removed worktrees would act on state that no
 longer exists, so `consume` marks the run used and `load` and `check` refuse it after that. Step
-2b's `2b-conventions.md` and `2b-security.md` have fixed names and are removed and rewritten
-whenever a Step 2b takes its write-once arm (not on the paste arm), so a dry run or another close between prepare and resume would leave `4a-fix` with
+2b's `2b-conventions.md` and `2b-security.md` have fixed names: the first is removed and rewritten
+whenever a Step 2b takes its write-once arm (not on the paste arm), the second whenever
+`security_map_filter.py` answers `SPAWN`, so a dry run or another close between prepare and resume would leave `4a-fix` with
 another run's conventions; the copies in `2b/` go back when Step 2b did not run during the resume.
 
 ### Why the allow-rule is required only under the two flags
@@ -592,11 +598,11 @@ files always excluded; the close's own bookkeeping paths the consumer's to allow
 warning), an `--agent` ownership filter at selection, and `--land --unattended`, merging with no
 human under `pr` policy and a `## Second reader`, re-checking the class at land, parking durably.
 **After the phase's third adversarial round he narrowed it: the class, the selection and the
-durable park ship; the unattended land does not.** `close_run.py land-check --unattended`
-refuses, and this skill stops on `--unattended`. The design record is
-`tools/UNATTENDED_CLOSE_SPEC.md` § 9 (maintainer-side, not in the public mirror).
+durable park shipped; the unattended land did not**, until Phase 375 rebuilt it on the server
+side (below). The design record is `tools/UNATTENDED_CLOSE_SPEC.md` §§ 9 to 12 (maintainer-side,
+not in the public mirror).
 
-### Why the unattended land is not enabled
+### Why Phase 366's land was left off
 
 Each of three rounds found a way for a PR, or the agent that made it, to shape what the gate
 trusts, and each round's sharpest finding was in the previous round's fix: a branch clearing its
@@ -604,18 +610,62 @@ own task's `manual_smoke` in the index the class must admit; a stale base hiding
 diff base that was the PR's recorded base rather than the tip; task fields read at local
 `<default branch>`, which the agent's own unpushed commits write; a symlink routing an edit to
 `CLAUDE.md` or `.claude/` around the fixed exclusions. A gate that reasons on the client about
-content the merger can shape has had an open hole after every round, so it is off until a
-redesign whose trust does not rest there (for example GitHub-side rulesets or code owners on the
-governing paths). The mechanism stays in `close_run.py` behind `UNATTENDED_LAND_ENABLED`, with
-its tests, for that redesign to start from.
+content the merger can shape had an open hole after every round, so it stayed off until a
+redesign whose trust does not rest there.
 
-### Why CLAUDE.md, .claude/**, sysop/** and .github/workflows/** are always excluded
+### What the land decides now, and why (`Q-411` part B, Phase 375)
+
+The redesign (spec § 10) moved the trust to GitHub: a signed check, `close_gate.py`, posted by
+an app whose key a branch workflow cannot reach, decides paths, task fields and the second
+reader's verdict, and the ruleset makes that check, code-owner review and up-to-date branches
+binding. Wade ruled at Phase 375's opening, each the recommended option:
+
+- **The client stops deciding what the gate decides.** `land-check --unattended` no longer reads
+  paths, task fields or the reader. Keeping them as an early park would have kept the read at
+  local `<default branch>` that round 3 showed unsafe. What it still reads is what GitHub cannot:
+  the kept locks' owner, `report.md`'s held-doc line (`hold:` lives on a gitignored pending doc),
+  and Step 6's two local conditions.
+- **It verifies the server setup first**, with the token `gh` holds: not the code owner, role
+  `write`, a ruleset requiring code-owner review, stale-review dismissal and the gate's check
+  from `gate_app:` with strict checks, `current_user_can_bypass: never` on every ruleset on the
+  default branch, and the gate environment limited to one branch rule naming the default
+  branch. A setup it cannot read refuses. Phase 375 measured each of these reads with a `write`
+  token on a scratch repository, before the build.
+- **What that token cannot read is the human's attestation**, recorded as `attested:` in the
+  class, and the land refuses without it: whose credentials the repository's secrets hold (a
+  name shows no owner), and `can_approve_pull_request_reviews` (a 404 to `write`). The class is
+  in `CLAUDE.md`, a governing file, so no unattended merge can add the key.
+- **Ruling (s) stays: every registered check passes before auto-merge is turned on.** Once on,
+  GitHub merges on the required checks alone and would ignore a red check the ruleset does not
+  require. So the land waits for the whole rollup, and only then turns auto-merge on, which on a
+  green PR merges at once (measured). The gate's own reading is taken from its app's check runs
+  on the head, not from the rollup, which names no app: a branch workflow posted a green
+  `sysop/close-gate` as `github-actions` and the rollup showed it green (measured).
+
+**Measured at Phase 375** on a scratch repository (spec § 12, maintainer-side): `gh pr merge --auto`
+on a PR GitHub would merge now merges it at once; `--auto --delete-branch` arms and fires but
+deletes no branch, so the skill deletes it; and auto-merge survives a later push by a `write`
+user and merges the new head. So the land parks a PR whose head moved when it reads the move
+before GitHub merges (a merge at another head reads `MERGED ELSEWHERE:`), and `park`, `unpark`
+and `re-request` turn off an arm the land made, because a request for a new head must not inherit
+the old head's arm.
+A park turns off the land's own arm, and says so when it cannot (an arm someone else turns on
+while a hand-off is parked is not read, because a parked land reads nothing from GitHub): a parked PR that GitHub later merged would
+leave a hand-off no human had cleared.
+
+### Why the governing set is always excluded
 
 These hold the class itself, the second reader, the merge policy, the permission allow-list, the
 skills, the scripts that compute verdicts, and CI. A merge that changes one changes the rules for
 every later merge the class admits, so it needs a human however the consumer writes the class.
 They match without regard to case, as consumer exclusions do (a case-insensitive filesystem
-writes `.CLAUDE/x` into `.claude/`), and `X/**` matches `X` itself. **What it costs, measured:**
+writes `.CLAUDE/x` into `.claude/`), and `X/**` matches `X` itself. Phase 366 shipped four
+(`CLAUDE.md`, `.claude/**`, `sysop/**`, `.github/workflows/**`). Phase 374 widened them to the
+set spec § 10.3 item 2 defines by name. Phase 367's round 2 showed that a path list misses the
+same files elsewhere: `CLAUDE.local.md` loads from subdirectories, Codex prefers
+`AGENTS.override.md`, and git reads `.gitattributes` and `.gitmodules` as instructions. Phase 374
+also normalises with NFKC before casefolding, which adds the compatibility forms casefolding
+alone misses: `ＣＬＡＵＤＥ.md` (fullwidth) is excluded too. **What it costs, measured:**
 of GDP's 200 most recent `review-close: consolidate` PRs (2026-07-12 UTC to 2026-10-08), 66
 touched one of these paths: `CLAUDE.md` in 40, the convention and security maps in 33,
 `.github/workflows/` in 22, `checks.yml` or `checks.project.yml` in 16, `sysop/` in 1. The close
@@ -647,6 +697,57 @@ branch aside for it would stop the whole close on one file. Step 4c 1c reports i
 `UNREADABLE:`. A branch's own workspace holds only that branch's docs, so an unreadable doc there
 sets that branch aside.
 
+## Half A with no human — provenance
+
+### What was ruled, and by whom (`Q-664`, Phases 376 and 380)
+
+Wade ruled half A's stops per class at Phase 376 (`tools/UNATTENDED_CLOSE_SPEC.md` § 13, a
+maintainer-side spec that does not ship, rows (aj) to (ay)), and at Phase 380's open that the night runs headless under `dontAsk` ((az)) and
+that its first live run seeds the `Edit` rules `Q-665` will ship ((ba)). The shape is
+`--prepare --agent <name>`, then `--resume <run-id> --request-review --agent <name> --unattended`:
+the prepare already asks nothing, so the build is the resume's unattended arm.
+
+### Why one timing rule and not 77 sites
+
+The 134 half-A stops fall into ten classes, but every park of the close comes out early when it
+fires before Step 4-pre and durable from Step 4-pre on, except three Step 3b exits. So the runner
+gets that rule and the named exceptions. `tests/test_unattended_half_a_build.py` checks the 77
+ruled close-park arms, at the pin the rows were taken at, against that model of the rule; it
+reads no `SKILL.md` text, so the shipped sentence is held by its hash pin. Before Step 4-pre the
+close has merged nothing, and the next run's prepare starts over on whatever moved. From Step
+4-pre on, an integration branch exists, Step 4c has deleted the docs it consolidated and the locks
+it unlinked, and only the step's own recovery finishes the work. Step 3b's collect exit 5 and the
+rollback's exit 4 (refused) and exit 8 (a partial pass) leave main holding a collected doc for
+a branch that will not merge, and Step 4c would consolidate it on the next run ((av)).
+
+### Why the early park is `halted.md` and the durable one is `STOPPED`
+
+`close_run.py load` already refuses a run with `halted.md`, and `begin` does not read it, so an
+early park ends that run without blocking the next night's prepare. A durable park must block
+every later close, so it is a marker `begin`, `load`, `reader`, `hand-off` and the unattended land
+refuse on, beside `AWAITING`. It is not half B's `PARKED`, which needs a hand-off record: a durable
+park before `hand-off` has none, and it goes in the resumed run's directory. `stop` refuses only
+what it cannot record, because a refusing stop would leave the close unguarded.
+
+### Why a branch hold is keyed to the head, and why `unhold` replays no answer
+
+A `VERDICT: BLOCKED` or an unanswered question is about the commits it read. A new head is new
+work, so it clears the hold, and an unchanged head would park the same way every night. `unhold`
+records the human's answer but applies none: the next prepare asks the same question again, and
+with no human it holds again. An attended close asks it and acts on the answer, so that is the
+path for an answer; `unhold` is for a cause fixed outside the branch.
+
+### Why Step 3b's empty-workspace arm applies exit 6 by hand (Phase 380)
+
+The unverified sequence § 13.3 named was run through the shipped heredocs
+(`tests/test_review_close_early_park_recollect.py`): a branch collected and its worktree removed,
+then an early park. The next run finds no workspace, passes the exit-8 test, reads the branch as
+not landed, still sees the doc at Step 3c and routes it at Step 4c. One gap: the collect is the
+only reader of `branch_tip:`, and with no workspace it does not run, so a head that moved between
+the two runs merged under a stale doc. `/sitrep`'s drift reader followed the old blind spot on
+purpose and now measures that case too. A `--branch` claim's `main-checkout` shape is unchanged,
+a lockless one included: the survey reads the main checkout's branch as Step 0 does.
+
 ## Step 6 and 4d-1 — provenance
 
 ### Why Step 6 checks for commits made after Step 4d's push (`Q-651`, Phase 363)
@@ -667,7 +768,7 @@ durably, because the gap there is a whole review wait.
 ### Why a stuck integration-shape PR is recovered on its branch (`Q-652`, Phase 363)
 
 By the time a PR is stuck, Step 4c has deleted the pending docs it consolidated (item 6) and
-unlinked their locks (item 4's heredoc). Neither is in any commit, and Step 4c's index flips, body
+unlinked their locks (item 4's script, `close_index.py`). Neither is in any commit, and Step 4c's index flips, body
 moves and doc entries exist only in its commit on the integration branch. A re-run cuts a new
 integration branch from local `<default branch>`, re-approves the same branches, and Step 3b's
 exit 8 does not refuse them, because its discriminator is the lock (*Why a claimed branch with no
@@ -1025,10 +1126,14 @@ prose with no command behind it. Step 1's shipped measurement reads section head
 consumer's project instructions and has no analogue for a map file. The same filing that widened
 step 1's paste had forbidden widening a paste without measuring it, and this step introduced a new
 paste in the same edit without applying that discipline to itself. Measured afterwards:
-`.claude/security_map.md` on a fresh `--packs python` install is **12,828 characters**, above the
-10,000 threshold — so the inline arm is unreachable on a stock install and the write-once arm is
+`.claude/security_map.md` on a fresh `--packs python` install is **12,828 bytes** by the `wc -c`
+it prescribed (12,724 characters, Phase 395), above the 10,000 threshold — so the inline arm is unreachable on a stock install and the write-once arm is
 the live path. The runner is still told to measure rather than assume, because a consumer who trims
 the map can fall below.
+
+Phase 395 (`Q-666`) moved the measurement into `security_map_filter.py`, which measures the
+target's cut copy rather than the whole map, so the inline arm is reachable again for a target
+whose diff misses most of a localized map. § *Step 2b — the security copy* has the rule.
 
 ### What the Step 3b disambiguation replaced
 
@@ -1098,6 +1203,140 @@ command's `git status` delta and never reach `.claude/worktrees/` for the first.
 them is `git worktree list` — which is why they get their own line rather than riding one of the
 existing four, and why a reader who expects four commands to cover five populations is wrong about
 the third one in particular.
+
+## Step 2b — verdict reuse
+
+`Q-667`, Phase 394. A consumer's one-week field report counted unmoved branches re-checked three or
+four times in one afternoon when a close was relaunched, at 60 to 84 cents a gate agent, with about
+94% of gate passes finding nothing. Nothing keyed a verdict to its inputs, so nothing could reuse
+one. `gate_verdict.py` keys each gate's `APPROVED` to every input the review depended on:
+
+- **The target's commit and its merge-base.** The diff basis is three-dot, so those two ends fix
+  the diff. The merge-base is in the key because an unmoved tip over a moved base would review a
+  different diff (Phase 379's round, lens C).
+- **What the agent can be handed.** The convention gate hashes the whole of `CLAUDE.md`, the
+  section names, and the convention map and its overlay (the `TOTAL` 0 arm hands the map); the
+  security gate hashes the security map and its overlay, and `security_map_filter.py`, which cuts
+  the agent's copy of them (Phase 395). The sources are hashed, not the runner's
+  copy, because the paste arm has no file. They are whole files because the first build cut
+  sections as `convention_size.py` measures them, and Phase 394's round reused a verdict over
+  each shape that cut misses: a fenced `## ` line ending the cut early, a heading with trailing
+  space, the second of two same-named sections, and a section step 0 added that the runner left
+  off the command. Any edit to the file runs the gate again, which errs the same way as the step's
+  text below.
+- **The step's own text.** The whole `### 2b.` section of the installed `SKILL.md`, which holds both
+  prompts, is hashed, so a Sysop update that changes the step changes every key. It is coarser than
+  the prompt alone and errs toward running the gate.
+- **The model and the effort**, read from the role's spawn line. Phase 389's replay found `medium`
+  was not a subset of `high` on the same targets, so a verdict from one effort is not evidence for
+  another. A line with no effort (a role mapped to a model with no `efforts:` entry) runs at the
+  session's effort, which no key can see, so it is never reused. The model is the alias the spawn line names
+  (`sonnet`, `opus`), not the version it resolves to, so an alias moving to a new model does not
+  invalidate a record by itself; that is a stated residual, not a measured one. The record keeps both. It is not yet what `Q-683`'s replay instrument needs: that
+  replays blocked verdicts, and only approvals are recorded, one per gate and target.
+
+**Only `APPROVED` with `NOTES: none` is recorded.** A reused verdict spawns nobody, so it has no
+notes to hand `4a-fix`, and a close that stopped before `4a-fix` has not acted on the notes it
+collected. Recording an approval with notes would drop them on the relaunch. A `BLOCKED` is never
+reused, on Wade's 2026-10-20 answer: re-running it is how a false positive gets a second look.
+
+**`record` takes the key the lookup printed before the spawn, and refuses when the key is
+different now.** The first build recomputed the key at record time, and the round recorded a
+verdict against a security-map overlay rule appended while the agent ran: the next close reused
+it under a rule its agent never had. Promotions write the overlays, and several sessions can
+share one clone, so an input can move mid-close. Round 2 found the same gap one step earlier: the lookup
+ran after step 1 had read `CLAUDE.md` and the diff, so a move between the two was covered by no
+key. Both lookups now come before anything is read for the target.
+
+**`record` refuses an echo that is not the target's commit now.** The agent's first line is its
+pinned checkout's `HEAD`, the placement receipt Step 2b already requires, so a misplaced lens, or a
+tip that moved after the spawn, records nothing. The entry asked whether a reused verdict satisfies
+"the Tier-0 coverage ledger's placement receipt". `/review-close` has no such ledger; Phase 149's
+belongs to the loop review skills. The record exists only after a receipt matched, for the same
+commit the key names.
+
+**Where it does not help.** The `unpushed-main` group's commit moves whenever Step 1b commits to the
+default branch, so it rarely reuses. `--prepare`/`--resume` keep their own per-run state: a resume
+whose branch re-ran nothing keeps its recorded verdict and never looks up. `close_run.py` prints
+`RERUN 2b` when `CLAUDE.md` or a map changed, which are hashed inputs, so the gate whose inputs
+changed misses on every target; the other gate can still reuse. A dry run records
+too: 2b already writes runtime files then, and its verdict is a real one.
+
+## Step 2b — the security copy
+
+`Q-666`, Phase 395. The field report that filed it measured the security copy at 75 KB, read by
+every security agent on every target, while the map already routes rules by glob. The filing named
+both Step 2b copies; the convention copy holds `CLAUDE.md` sections only (step 1's set), which have
+no globs, so Wade left it whole on 2026-10-20 and the entry narrowed to the security copy. GDP's
+runtime copy of 2026-10-19, measured at Phase 394's open by cutting at every `## ` line: 70
+sections, 44 with no placeholder in the heading (99,540 characters), 25 all-placeholder (18,617),
+1 mixed. Three of the 44 name no glob in the heading at all (`Config & Infrastructure`, 32,467
+characters then, and two `Coverage ledger` sections). The map has moved since (lens B: 71 sections
+at the phase date).
+
+**The overlay is read once.** `install.sh` appends `.claude/security_map.project.md` to the
+shipped `.claude/security_map.md` (Phase 24a), so reading both files read every overlay section
+twice on an installed consumer, in the copy, the counts and the arm (the round, lens B: `2 of 18`
+for one overlay section). The script reads the overlay live and drops it from the end of the
+shipped map when it is there verbatim. An overlay edited since the last update is not, and is read
+twice, which repeats a rule and loses none.
+
+**What is dropped, on Wade's 2026-10-20 answers.** Only a section whose heading names globs, every
+one concrete, none matching a path in the diff basis. A placeholder glob (`<api module>`) cannot
+rule a path out, so a section carrying one is kept, mixed sections included. The filing's design
+question, a cross-cutting rule whose glob misses a diff that reaches its subject, was answered
+without a map marker: the agent is told which headings were left out and where the whole map is.
+
+**The gate reads leniently and the cut reads strictly** (Phase 395's round, lens A). The first
+build read globs only from `##` headings, and GDP's overlay routes 53 concrete globs in 17 `###`
+headings under `## Config & Infrastructure`, `migrations/*.sql` among them (its shipped map
+repeats them only because `install.sh` appended the overlay): a migration-only branch printed
+`SKIP`, where the by-hand gate it replaced ("some glob in either matches") would have spawned. And
+a heading the strict parse missed (a tab, an ASCII hyphen, a BOM) was kept in the copy but reached
+no gate, so its rule was never read either. So every backticked token in every heading, at any
+level, counts toward the gate; a `##` section is dropped only when its own heading parses as
+`## <globs> — <Name>`, all concrete, and no heading in it carries a placeholder or matches.
+
+**Every parse failure keeps.** A heading the strict parse cannot read is kept, and so are
+`Config & Infrastructure` and its kind. A `#` or `##` heading, ATX or setext, indented or not, ends
+the section above it, because otherwise its text rides with a dropped section; a deeper heading
+belongs to the section above it. Lines in fences and HTML comments are not headings: a commented-out
+`## ` cut a matched section short in the first build (lens A). A fence or comment that never closes
+keeps its whole map, and its gate reads every heading-shaped line in it, since a skip would read as
+a searched absence. Fences follow `claim_record.py`'s closer rule (`Q-468`): an opener may carry
+an info string and a closer may not, so a `` ```json `` line inside a plain fence does not end it;
+and a backtick run followed by another backtick on its line is an inline span, not a fence
+(CommonMark). `security_partition.py`'s section parser was not reused for the cut: it splits only
+at `## <globs> — <Name>` headings, so a no-glob heading would ride with the section above it and be
+dropped with it. Its heading pattern is reused for the strict parse, and its source is in the key.
+
+**The match is git's, against the diff.** `git diff --quiet --no-renames <base> <tip> --
+':(top,glob)<glob>'`: `**` means what the map means by it (a direct child of `api/**/*.py` matches),
+`*` does not cross a directory, a deleted file reaches its section, and a renamed file reaches the
+section of either name: git limits by the pathspec before it detects renames, so the old name is a
+deletion either way, and `--no-renames` only says so. `top` reads from the top level, since a plain
+`:(glob)` resolves against the current directory and a run from a subdirectory skipped (lens A). Braces are expanded first, and a leading `/` or `./` is dropped: git has no brace
+expansion, so `*.{ts,tsx}` matched nothing and dropped its rule, and a leading `/` is an invalid
+path. A glob git still cannot read counts as a match and is printed as `UNMATCHABLE:`, because a
+prose token in a deep heading must neither stop every close nor read as an absence. The tracked-file resolver `/security-audit` uses answers a different
+question: the primary checkout does not carry the branch's new files.
+
+**One matcher decides the gate and the cut**, on Wade's 2026-10-20 answer, so the two cannot
+disagree about what matched. The gate used to be a judgement the runner made by reading both maps.
+An exit 2 is the target's `BLOCKED` verdict rather than a skip: an uncomputed security gate is not
+a searched absence, and a skip would read as a clean one. It is a verdict, collected at item 4, so
+the other targets still run, a `--prepare` stops only its branch, and Step 4's existing stop and
+waiver apply; the first build said "stop as a `BLOCKED` does", which left open whether the close
+stopped there or at item 4 (the round, lens B).
+
+**The arm measures the cut copy** (Wade, 2026-10-20). Measured after the round: on GDP's maps the
+copies were 63,177 characters (a branch touching `requirements.txt`) to 64,366 (one touching
+`<api module>/routes/`) of a 121,485-character full copy, about half, and on a
+stock `--packs python` install 10,779 of 12,757, so neither reaches the paste; the inline arm is
+for a map that is small once cut. `2b-security.md` is still written whole, at a fixed name, because the agent is handed
+its path for the left-out sections and `close_run.py` keeps its copy for a resume. Each target's
+copy is its own file, named by a hash of the target as `gate_verdict.py` names its records, and the
+script prints a path only after writing it, so no target is handed another run's copy.
 
 ## Step 2d — provenance
 
@@ -1729,8 +1968,8 @@ merged clean; `merge-file --diff-algorithm` would close that, but it arrived in 
 local-only arm also replays commits one at a time rather than merging endpoints. Both are rare,
 and both differ in where a hunk lands, not in whether a heading is present on either side.
 
-**Which targets.** Under `direct`, Step 4a merges onto local `<default branch>` and Rule B rebases
-onto `origin/<default branch>` before the push. Under `pr`, Step 4-pre cuts the integration branch
+**Which targets.** Under `direct`, Step 4a merges onto local `<default branch>` and Rule B merges
+`origin/<default branch>` in before the push. Under `pr`, Step 4-pre cuts the integration branch
 from local `<default branch>` and then merges `origin/<default branch>` into it. So origin's text
 lands under both policies whenever origin holds work the local branch lacks, **diverged included**:
 local `main` normally carries unpushed claim flips, which makes diverged the common `pr` state.
@@ -2289,7 +2528,7 @@ and the first build's claim that it "cannot add a stop" was false:
 ### Why the re-check uses the `convention-gate` role and one agent
 
 The re-check is a convention gate over new hunks, so it takes the role the 2b convention agent
-takes (defaults to `opus`; a consumer can move it in `served_models.local.yml`, which moves both
+takes (defaults to `sonnet` since Phase 381; a consumer can move it in `served_models.local.yml`, which moves both
 pins together). The saving comes from the diff size, one small commit rather than a branch, and
 not from a cheaper model. `Q-459` as filed proposed the `mechanical` role and itself flagged that
 as undemonstrated for "is this fix safe". A cheaper model on hunks that bypassed the full gate
@@ -2855,6 +3094,25 @@ cycle goes through while the Step 4c consolidation commit hits the same wall as 
 
 The runner's paragraph is deliberately short: the `PermissionDenied` hook's `additionalContext`
 names the specific escape form, and restating it here or in the skill is how the two drift apart.
+
+### Why the runner is told to stay in the main conversation and to close in batches (Phase 379)
+
+Both sentences in the opening blockquote come from one consumer's field report (2026-10-12,
+maintainer-side, under `tools/`) and this repo's own 30-day transcript measurement on its
+production consumer (also maintainer-side). The consumer who wrote the report wrapped
+`/claim-task` and `/review-close` in Agent calls: 188 of its 254 agents were launched by other
+agents, and the orchestrators then expired their 5-minute subagent cache at every wait on a child,
+rewriting ~150k tokens each time — about 39 USD of a 533 USD week, the report's "long foreground commands or its own child agents" bucket (23 USD) plus its "background waits on runtime files" bucket (16 USD), none of
+it present on the production consumer, where no Sysop-spawned subagent is nested (six of the project's own research spawns were depth 2) and the
+orchestrator sits on the main conversation's 1-hour cache. The batch sentence: 8 of that
+consumer's 16 closes carried one branch, at 2.11 USD–17.30 USD each, against 3.57 USD for a six-PR run; the
+production consumer spreads 92 closes over 384 merges. The skill never said its cost was fixed per
+run, so a standing "close each PR as CI goes green" instruction read as reasonable. Softening
+either sentence restores the shape measured; neither changes what a well-placed run does.
+
+To stay under the editor ratchet when the item-3 `direct` arm landed in the published arm's mixed block, Phase 379 deleted three clauses of that block's provenance rather than moving them: that the rebase-in-place and throwaway-ref alternatives were both tried and both measured dearer than the merge commit, that the `--no-ff` result was verified side by side on one fixture, and that a branch left at `0 0` was measured so after the merge. They are recorded here so the deletion is not a silent loss.
+
+The same report is why Step 4c's §6 write now creates `PROJECT_STATUS.md` when it is absent (its issue 0004): the runner, finding no file, skipped the write and staged nothing, and item 6 then deleted the pending-docs that held the only copy of the routed summaries.
 
 ## Known debt
 

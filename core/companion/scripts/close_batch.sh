@@ -365,32 +365,31 @@ fi
 #                          resolver's own diagnostic. Silently assuming `main`
 #                          is the defect this replaces.
 _read_merge_policy() {
-  # `<project>/CLAUDE.md § Merge policy` — WORKFLOW.md § 6.1's template: level-2
-  # header, blank line, one bare word. Default `direct` when absent, unreadable,
-  # or carrying anything other than the two documented words.
-  #
-  # Fenced occurrences are SKIPPED. `WORKFLOW.md` ships the section as a
-  # ```markdown example, and a consumer who pastes that template into CLAUDE.md
-  # as an illustration would otherwise have the illustration read as the setting.
-  local f="${REPO_ROOT}/CLAUDE.md" word=""
-  [[ -r "$f" ]] || { echo direct; return 0; }
-  # `sub(/\r$/, "")` first: a CRLF-terminated CLAUDE.md otherwise fails the
-  # end-anchored heading match and reads `direct` for every setting (round finding).
-  word="$(awk '
-    { sub(/\r$/, "") }
-    /^[[:space:]]*(```|~~~)/ { fence = !fence; next }
-    fence  { next }
-    found && NF { print $1; exit }
-    /^## Merge policy[[:space:]]*$/ { found = 1 }
-  ' "$f" 2>/dev/null | tr "[:upper:]" "[:lower:]")" || word=""
-  case "$word" in
-    direct|pr) echo "$word" ;;
-    *)         echo direct ;;
-  esac
+  # `<project>/CLAUDE.md § Merge policy`, read by `close_arms.py read-policy`, the one
+  # reader `/review-close` Step 4-pre also uses (Phase 388). Until then this was an
+  # `awk` copy, and two review rounds found the copies disagreeing on inputs no test
+  # held, under `awk` flavours and locales no test pinned. Prints the policy; on a
+  # refusal (a word other than `direct`/`pr`, a heading written another way) or with
+  # no `python3`, prints nothing and puts the reason on stderr.
+  local here
+  here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  if ! command -v python3 &>/dev/null; then
+    echo "reading § Merge policy needs python3" >&2
+    return 1
+  fi
+  if [[ ! -f "$here/close_arms.py" ]]; then
+    echo "close_arms.py is missing beside close_batch.sh: run sysop/scripts/sysop-update.sh" >&2
+    return 1
+  fi
+  python3 "$here/close_arms.py" read-policy "$REPO_ROOT"
 }
 
-MERGE_POLICY="$(_read_merge_policy)"
 if [[ -z "$MERGE_TARGET_REF" ]]; then
+  if ! MERGE_POLICY="$(_read_merge_policy)"; then
+    echo "   close_batch.sh cannot tell where the merge should have landed — fix the" >&2
+    echo "   cause above, or pass --merge-target <ref>." >&2
+    exit 1
+  fi
   if [[ -z "$DEFAULT_BRANCH" ]]; then
     # Re-run the resolver for its diagnostic — the quiet probe above swallowed it.
     resolve_default_branch "$REPO_ROOT" >/dev/null || true

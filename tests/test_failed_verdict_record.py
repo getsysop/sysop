@@ -56,6 +56,7 @@ import re
 from pathlib import Path
 
 import pytest
+from skill_runner_text import text_of
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 AUTO_JUDGE = REPO_ROOT / "core/skills/auto-judge/SKILL.md"
@@ -380,7 +381,7 @@ def test_review_close_documents_the_exclusion():
     # Missed by the phase's first pass and caught by the round: Step 4b still
     # said the script "marks all task checkboxes `[x]`", one line under the
     # invocation, which is the doc a human reads while running it.
-    body = REVIEW_CLOSE.read_text(encoding="utf-8")
+    body = text_of(REVIEW_CLOSE)
     assert MARKER in body, (
         "review-close Step 4b no longer documents that `> Failed:` tasks are "
         "left open — it is the doc shown at the moment close_batch.sh is run"

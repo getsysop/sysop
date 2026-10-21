@@ -25,6 +25,8 @@ from pathlib import Path
 
 import pytest
 
+from _shipped_scripts import shipped_programs
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SKILLS_DIR = REPO_ROOT / "core" / "skills"
 SETTINGS = REPO_ROOT / "core" / "companion" / ".claude" / "settings.json"
@@ -49,9 +51,9 @@ BOOTSTRAP_BLOCK = '''    import glob, os, subprocess
         _r = subprocess.run(
             ["git", "rev-parse", "--git-common-dir"],
             capture_output=True, text=True, timeout=5,
-            env={_k: _v for _k, _v in os.environ.items()
+            env=dict((_k, _v) for _k, _v in os.environ.items()
                  if _k not in ("GIT_DIR", "GIT_WORK_TREE",
-                               "GIT_COMMON_DIR", "GIT_INDEX_FILE")},
+                               "GIT_COMMON_DIR", "GIT_INDEX_FILE")),
         )
         _g = _r.stdout.strip()
     except (OSError, subprocess.SubprocessError):
@@ -132,20 +134,23 @@ def test_at_least_the_known_heredocs_are_found():
     real 20-heredoc corpus: ELEVEN heredocs were invisible to every check in this
     module (derived on the pre-phase tree — six `claim-task` multi-arg openers, both
     review-skill marker openers, and three `/review-close` openers, the last three
-    carrying venv-bootstrap copies). New ones may be added, never fewer.
+    carrying venv-bootstrap copies). New ones may be added, never fewer — except by a
+    conversion to a shipped script, which lowers the floor in its own commit: Phase 387
+    (`Q-409` P3) moved review-close's last heredocs out, leaving 19 (`/review-close` now
+    carries none). A script's invocation is pinned by `test_former_heredoc_scripts.py`.
     """
-    assert len(ALL_HEREDOCS) >= 20, (
-        f"expected >=20 python3 heredocs across skills, found {len(ALL_HEREDOCS)} "
+    assert len(ALL_HEREDOCS) >= 19, (
+        f"expected >=19 python3 heredocs across skills, found {len(ALL_HEREDOCS)} "
         "(opener regex may have drifted)"
     )
 
 
-@pytest.mark.parametrize("skill", SKILL_FILES, ids=lambda p: p.parent.name)
+@pytest.mark.parametrize("skill", SKILL_FILES, ids=lambda p: p.relative_to(SKILLS_DIR).as_posix())
 def test_no_venv_bin_python3_heredoc(skill):
     """`.venv/bin/python3 - <<` matches no allow-rule and breaks non-venv consumers."""
     text = skill.read_text(encoding="utf-8")
     hits = [ln for ln in text.splitlines() if ".venv/bin/python3 - <<" in ln]
-    assert not hits, f"{skill.name}: forbidden `.venv/bin/python3 - <<` heredoc: {hits}"
+    assert not hits, f"{skill.relative_to(SKILLS_DIR).as_posix()}: forbidden `.venv/bin/python3 - <<` heredoc: {hits}"
 
 
 @pytest.mark.parametrize("skill", SKILL_FILES, ids=lambda p: p.parent.name)
@@ -208,7 +213,11 @@ def test_every_bootstrap_is_the_canonical_block_verbatim():
     first_line = BOOTSTRAP_BLOCK.splitlines()[0]
     last_line = BOOTSTRAP_BLOCK.splitlines()[-1]
     checked, offenders = 0, []
-    for rel, ln, _delim, body in ALL_HEREDOCS:
+    # The heredocs that became scripts in Phase 386 keep their bootstrap copies, so the
+    # comparison reads every shipped script too: a script is the same block one edit away
+    # from drifting, and a later conversion is seen without being listed.
+    former = [(label, 1, None, body) for label, body in shipped_programs()]
+    for rel, ln, _delim, body in ALL_HEREDOCS + former:
         if BOOTSTRAP_MARKER not in body:
             continue
         lines = body.splitlines()
@@ -222,8 +231,10 @@ def test_every_bootstrap_is_the_canonical_block_verbatim():
         if region != BOOTSTRAP_BLOCK:
             offenders.append(f"{rel}:{ln} (block differs from canonical)")
         checked += 1
-    assert checked >= 9, (
-        f"expected >=9 bootstrap copies to compare, found {checked} — "
+    # 11 since Phase 386: seven heredocs and the four script programs that were heredocs
+    # (Step 3c's detection, Step 3b's collect and rollback, Step 4c item 4). Never fewer.
+    assert checked >= 11, (
+        f"expected >=11 bootstrap copies to compare, found {checked} — "
         "the extractor or the corpus regressed"
     )
     assert not offenders, "non-canonical bootstrap copies:\n" + "\n".join(offenders)

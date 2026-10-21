@@ -26,7 +26,10 @@ from pathlib import Path
 
 import pytest
 
+from _shipped_scripts import shipped_programs  # noqa: E402
+
 from _prose_guard_helpers import locate, swap
+from skill_runner_text import runner_key, text_of
 
 REPO = Path(__file__).resolve().parent.parent
 RC = REPO / "core/skills/review-close/SKILL.md"
@@ -243,23 +246,23 @@ def partial_problems(text: str) -> list[str]:
 # --------------------------------------------------------------------------------------
 
 def test_step_2b_placement_makes_a_scratch_directory() -> None:
-    assert placement_problems(_fence(_rc_placement(_read(RC)), "git worktree add")) == []
+    assert placement_problems(_fence(_rc_placement(text_of(RC)), "git worktree add")) == []
 
 
 def test_step_2b_placement_says_the_scratch_directory_is_per_agent() -> None:
-    assert placement_prose_problems(_rc_placement(_read(RC))) == []
+    assert placement_prose_problems(_rc_placement(text_of(RC))) == []
 
 
 def test_4a_fix_placement_makes_a_scratch_directory() -> None:
-    assert placement_problems(_fence(_rc_recheck(_read(RC)), "git worktree add")) == []
+    assert placement_problems(_fence(_rc_recheck(text_of(RC)), "git worktree add")) == []
 
 
 def test_step_2b_prompt_names_the_agents_own_scratch_directory() -> None:
-    assert prompt_problems(_rc_prompt(_read(RC))) == []
+    assert prompt_problems(_rc_prompt(text_of(RC))) == []
 
 
 def test_the_security_twin_gets_its_own_scratch_directory() -> None:
-    assert twin_problems(_rc_twin_sentence(_read(RC))) == []
+    assert twin_problems(_rc_twin_sentence(text_of(RC))) == []
 
 
 @pytest.mark.parametrize("skill", sorted(FANOUT))
@@ -333,13 +336,13 @@ def repo(tmp_path: Path):
 
 def _step_2b_script() -> str:
     """Step 2b's block with its feature-branch arm chosen, as the step says to write it."""
-    block = _fence(_rc_placement(_read(RC)), "git worktree add")
+    block = _fence(_rc_placement(text_of(RC)), "git worktree add")
     lines = [l for l in block.splitlines() if not l.startswith("PIN=$(git rev-parse HEAD)")]
     return "\n".join(lines).replace("<target branch>", "feature")
 
 
 def _recheck_script(sha: str) -> str:
-    return _fence(_rc_recheck(_read(RC)), "git worktree add").replace("<fix-sha>", sha)
+    return _fence(_rc_recheck(text_of(RC)), "git worktree add").replace("<fix-sha>", sha)
 
 
 def _run(work: Path, env: dict, script: str) -> subprocess.CompletedProcess:
@@ -506,8 +509,14 @@ _FIXED_NAME_KEPT = {
 
 
 def test_no_runner_writes_a_fixed_name_under_the_shared_temp_root() -> None:
+    # An allowance is keyed by the skill's `SKILL.md` (Phase 385): a step file's kept name
+    # keeps its allowance when the step moves out of the core.
     hits = [f"{p.relative_to(REPO)}: {h}" for p in _runners()
-            for h in fixed_names(_read(p), str(p.relative_to(REPO)))]
+            for h in fixed_names(_read(p), str(runner_key(p).relative_to(REPO)))]
+    # The shipped scripts too: Phase 386 moved eight skill heredocs into them, and a fixed
+    # temp name written there is the same hazard (its round, lens A).
+    hits += [f"{label}: {h}" for label, text in shipped_programs()
+             for h in fixed_names(text, label.split(" ")[0])]
     assert hits == [], hits
 
 
@@ -570,7 +579,7 @@ def test_every_kept_fixed_name_sits_in_its_stated_context() -> None:
     overwrites silently and the allowance no longer holds. Every entry is checked, so widening
     the allow-list alone cannot pass a new fixed name (lens 5, F1)."""
     for (where, name), before in _FIXED_NAME_KEPT.items():
-        text = _read(REPO / where)
+        text = text_of(REPO / where)
         sites = [m for m in _FIXED_TEMP_NAME.finditer(text) if m.group(1) == name]
         assert sites, f"{where}: the kept name {name!r} is gone; drop its allowance"
         for m in sites:
@@ -578,7 +587,7 @@ def test_every_kept_fixed_name_sits_in_its_stated_context() -> None:
 
 
 def test_step_4a_stage_blocks_print_their_directory() -> None:
-    text = _read(RC)
+    text = text_of(RC)
     blocks = [f for f in (textwrap.dedent(m.group(1)) for m in _FENCE.finditer(text))
               if re.search(r"git show :[123]:tasks/", f)]
     assert len(blocks) == 2, f"expected the notes and index stage blocks, found {len(blocks)}"
@@ -698,7 +707,7 @@ for _skill, _path in FANOUT.items():
 @pytest.mark.parametrize("name,path,span,pred,old,new,after", CONTROLS,
                          ids=[c[0] for c in CONTROLS])
 def test_a_softening_is_caught(name, path, span, pred, old, new, after) -> None:
-    text = _read(path)
+    text = text_of(path)
     assert pred(span(text)) == [], f"{name}: the control's baseline is already red"
     mutated = swap(text, old, new, after=after)
     assert mutated != text
@@ -707,7 +716,7 @@ def test_a_softening_is_caught(name, path, span, pred, old, new, after) -> None:
 
 def test_a_consistent_rename_of_the_scratch_variable_stays_green() -> None:
     """Data flow, not spelling: `SCRATCH` -> `WORKDIR` throughout is a legal edit."""
-    block = _fence(_rc_placement(_read(RC)), "git worktree add").replace("SCRATCH", "WORKDIR")
+    block = _fence(_rc_placement(text_of(RC)), "git worktree add").replace("SCRATCH", "WORKDIR")
     assert placement_problems(block) == []
 
 
@@ -736,7 +745,7 @@ def test_the_notes_stage_block_runs_on_a_real_conflict(repo) -> None:
     _git(work, env, "checkout", "-q", "side")
     r = subprocess.run(["git", "rebase", "main"], cwd=work, env=env, capture_output=True, text=True)
     assert r.returncode != 0, "the fixture did not conflict"
-    block = [f for f in (textwrap.dedent(m.group(1)) for m in _FENCE.finditer(_read(RC)))
+    block = [f for f in (textwrap.dedent(m.group(1)) for m in _FENCE.finditer(text_of(RC)))
              if "git show :1:tasks/notes.md" in f]
     assert len(block) == 1
     first, second = _run(work, env, block[0]), _run(work, env, block[0])

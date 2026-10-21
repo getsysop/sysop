@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from skill_runner_text import text_of
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 REVIEW_CLOSE = REPO_ROOT / "core" / "skills" / "review-close" / "SKILL.md"
@@ -74,7 +75,7 @@ def test_both_writers_state_the_shared_unreleased_grammar():
     """Both writing skills must carry the Keep-a-Changelog `[Unreleased]` mechanism —
     Step 4c writes into it, `/release` folds it. Losing either half re-opens the
     two-contracts-one-file interleave."""
-    rc = REVIEW_CLOSE.read_text(encoding="utf-8")
+    rc = text_of(REVIEW_CLOSE)
     rel = RELEASE.read_text(encoding="utf-8")
     assert "## [Unreleased]" in rc and "keepachangelog.com" in rc, (
         "review-close Step 4c lost the shared Keep-a-Changelog [Unreleased] contract"
@@ -119,7 +120,7 @@ def _clause(text: str, opener: str) -> str:
 def test_step_4c_bugfix_write_targets_unreleased_not_date_headings():
     """The bugfix routing line must target `## [Unreleased]` and must not have
     reverted to the retired `### YYYY-MM-DD` date-heading grammar."""
-    rc = REVIEW_CLOSE.read_text(encoding="utf-8")
+    rc = text_of(REVIEW_CLOSE)
     line = _clause(rc, r"^\s*\*\*CHANGELOG\.md\*\* \(bugfix type only")
     # The OPERATIVE clause, not a token anywhere on the line: the round's CL-2 kept
     # `[Unreleased]` inside a negation ("not under `## [Unreleased]`") and dodged the
@@ -157,7 +158,7 @@ def test_the_rotation_files_into_unreleased_changed():
     """Closed from the Phase 222 battery's one survivor: no guard read the rotation
     line's destination, so rotating into a fresh date heading — the retired grammar,
     re-minted by the highest-volume writer — survived every other pin."""
-    rc = REVIEW_CLOSE.read_text(encoding="utf-8")
+    rc = text_of(REVIEW_CLOSE)
     line = _clause(rc, r"^\s*\*\*Rotation check\*\*:")
     assert re.search(r"under\s+`##\s+\[Unreleased\]`\s+→\s+`###\s+Changed`", line), (
         f"the rotation's operative destination clause is gone: {line}"

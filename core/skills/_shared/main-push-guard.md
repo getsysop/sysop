@@ -131,15 +131,25 @@ empty — which git rejects, loudly, but only after steps 1–3 have already run
 test "$(git rev-parse --abbrev-ref HEAD)" = "<default branch>" || { echo "not on <default branch> — STOP"; exit 1; }
 # 2. refresh the remote
 git fetch origin <default branch>
-# 3. if origin/<default branch> advanced (an autonomous auto-merge landed), integrate it FIRST
+# 3. if origin/<default branch> advanced (an autonomous auto-merge landed), integrate it FIRST —
+#    by MERGE, never by rebase. A rebase rewrites every commit Step 4a put on this branch: a
+#    published branch's PR is then never marked merged, and a local-only branch's tip stops
+#    being an ancestor, so Step 6's `git branch -d` refuses. A merge commits, so the project's
+#    commit-msg and pre-merge-commit hooks fire here: put every trailer the project requires
+#    in the ONE final -m, one per line, or drop that -m.
 if [ "$(git rev-parse origin/<default branch>)" != "$(git merge-base HEAD origin/<default branch>)" ]; then
-  echo "origin/<default branch> advanced (autonomous merge) — rebasing onto it."
-  git rebase origin/<default branch> || { git rebase --abort; \
-    echo "conflict with an auto-merged commit — STOP, reconcile manually"; exit 1; }
+  echo "origin/<default branch> advanced (autonomous merge) — merging it in."
+  git merge --no-edit -m "merge origin/<default branch> (autonomous advance)" -m "<trailers the project's commit convention requires, one per line>" origin/<default branch> || {
+    if [ -n "$(git ls-files -u)" ]; then
+      git merge --abort; echo "conflict with an auto-merged commit — STOP, reconcile manually"; exit 1
+    fi
+    [ -e "$(git rev-parse --git-dir)/MERGE_HEAD" ] && git merge --abort
+    echo "merge refused (a hook or git, not a conflict) — read its output above; STOP"; exit 1
+  }
   # The base changed → RE-RUN review-close 4a-post (the merged-tree gate: the
   # project's § Pre-merge verification commands, run on the merge target) against
   # the new base before pushing. NOT Step 3 — Step 3's tree is the default branch
-  # before any merge, which is not the tree this rebase moved.
+  # before any merge, which is not the tree this merge moved.
 fi
 # 4. push the exact verified tip — NEVER --force (Rule C)
 PUSHED_SHA="$(git rev-parse HEAD)"
@@ -156,6 +166,6 @@ git merge-base --is-ancestor "${PUSHED_SHA}" origin/<default branch> || {
 
 A non-fast-forward rejection on `main` means an **auto-merged commit** is on `origin/main`
 that your local `main` lacks. `git push --force` / `--force-with-lease` would silently
-delete it. Always fetch + rebase + re-push (Rule B) instead. The same prohibition covers
+delete it. Always fetch + merge the advance in + re-push (Rule B) instead. The same prohibition covers
 the `pr`-policy merge target, whether that is a throwaway integration branch or a reused
 PR head branch — it is the PR's source of truth; never force it.

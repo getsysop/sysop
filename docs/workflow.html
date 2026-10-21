@@ -847,8 +847,8 @@
     <div class="hero-grid">
       <aside class="hero-margin rise">
         <span class="line">Vol. <span class="accent">I</span></span>
-        <span class="line">Issue 373</span>
-        <span class="line">2026.10.10</span>
+        <span class="line">Issue 399</span>
+        <span class="line">2026.10.21</span>
         <span class="line" style="margin-top:22px">An essay on</span>
         <span class="line">software workflow</span>
       </aside>
@@ -871,7 +871,7 @@
             <div class="hero-stat-label">Skills</div>
           </div>
           <div class="hero-stat">
-            <div class="hero-stat-fig">373</div>
+            <div class="hero-stat-fig">399</div>
             <div class="hero-stat-label">Phases shipped through</div>
           </div>
           <div class="hero-stat">
@@ -1408,7 +1408,7 @@
           </div>
           <figcaption>
             <span class="fig-num">Fig. 2</span>
-            <span class="fig-cap">The single-task lifecycle. Solid arrows: skill handoff. Dashed: filesystem coordination. Skills declare <em>roles</em> — reasoning, planner, plan-review, executor, convention-gate, mechanical, quick — not models (Phase 69); the parenthesized model is the default mapping, remappable per project (§ VI). Since Phase 349 every skill carries one (a pinned model that is unavailable still falls back to the session model).</span>
+            <span class="fig-cap">The single-task lifecycle. Solid arrows: skill handoff. Dashed: filesystem coordination. Skills declare <em>roles</em> — reasoning, planner, plan-review, executor, convention-gate, security-gate, mechanical, quick — not models (Phase 69); the parenthesized model is the default mapping, remappable per project (§ VI). Since Phase 349 every skill carries one (a pinned model that is unavailable still falls back to the session model).</span>
           </figcaption>
         </figure>
 
@@ -1573,10 +1573,12 @@
           human-action flag &mdash; and sets the rest aside for a person.
         </p>
         <p>
-          The last step, landing with no human at all, was built and is switched off. Three review rounds on it each
+          The last step, landing with no human at all, was first built on the client and switched off. Three review rounds on it each
           found a way past the gate, mostly in the previous round's fix. The pattern is the one this page keeps
           returning to: the gate ran on the agent's own machine and read state the agent could shape, so every patch to
-          it was one more thing to route around. The redesign, not yet built, moves the trust to the server. The autopilot acts as its
+          it was one more thing to route around. The redesign moves the trust to the server; its gate ships unarmed for a
+          human to arm, and the land now relies on it: it checks that the server is set up, then turns on auto-merge and
+          leaves the merge to GitHub. The autopilot acts as its
           own GitHub identity; code owners require the human's review on every path outside the class; a check signed by
           a dedicated GitHub App decides what paths cannot; and the agent's only power over the merge is to enable
           auto-merge, which GitHub will not complete until both are satisfied. The split is stated plainly: the server
@@ -1588,10 +1590,10 @@
           scratch repository before anything was built. None broke the design; three changed it. A setting that requires
           the last push to be approved by someone else refuses an unapproved merge even at an approval count of zero, so
           it stays off. GitHub's squash merge does not detect directory renames and ignores a repository's <code>merge=union</code>
-          attribute, so the gate's local simulation of the merge will be configured to do the same &mdash; otherwise it
+          attribute, so the gate's local simulation of the merge is configured to do the same &mdash; otherwise it
           would certify a tree GitHub never produces. And a collaborator with write access can edit the app's review comments,
-          so the gate will read a comment's edit history rather than its current text. The build comes next, and its own
-          round re-runs the experiments, because GitHub can change any of them.
+          so the gate reads a comment's edit history rather than its current text. The land was turned on after its
+          round re-ran the experiments, because GitHub can change any of them.
         </p>
 
 
@@ -1731,7 +1733,7 @@
               <path d="M 500 164 L 500 200" class="arrow" marker-end="url(#ah2)"/>
               <path d="M 720 164 Q 800 184 810 200" class="arrow" marker-end="url(#ah2)"/>
 
-              <text x="500" y="488" class="diag-caption italic">— human runs /review-close per branch; the merge remains person-gated —</text>
+              <text x="500" y="488" class="diag-caption italic">— human runs one /review-close over the batch; the merge remains person-gated —</text>
             </svg>
           </div>
           <figcaption>
@@ -2618,9 +2620,12 @@
           somewhere a session under deadline could not quietly reinterpret.
         </p>
         <p>
-          <strong>What shipped is a governor, not a cap.</strong> Two reviewers on distinct lenses by default. A third
-          when the change ships behaviour <em>and</em> its record makes numeric claims a reviewer could falsify — both
-          terms defined, and when it is unclear whether the condition holds, it does not. Beyond that, the count is
+          <strong>What shipped is a governor, not a cap.</strong> It sizes the round by the kind of change: no round for a
+          docs-only or record-only change, the author battery plus one execution lens for a one-site fix with
+          executable tests, two lenses for behaviour across sites or in a shared file, and a third only on the
+          maintainer's call. (That is Phase 381's resizing, on the maintainer's ruling. The first version set two
+          lenses by default and a third when a change shipped behaviour <em>and</em> its record made numeric claims a
+          reviewer could falsify.) Beyond that, the count is
           the maintainer's decision, made <em>outside</em> the session that wants it and with the round yield so far in
           hand. One round is the default, and it ends when every verified finding is dispositioned; what warrants a
           second is one thing only — that the fixes themselves produced substantial new material no fresh reader has
@@ -3253,6 +3258,21 @@
           scale: it is that the push is over, and what survives it only keeps new rationale from landing in the
           runner in the first place.</span>
         </p>
+        <p>
+          <strong>Addendum (2026-10-21) &mdash; the campaign reopened, as a split.</strong> The reopen condition
+          fired from outside. A one-week field report on a full install, and a 30-day measurement of the busiest
+          consumer's spend (Sysop's own process at no less than 37% of it, spawned agents starting near 99,000 tokens of
+          context), turned the per-close cost into a number, and the campaign reopened on 2026-10-12 in a
+          different shape. The cheap lever had already been measured insufficient, so this time the runner itself
+          is split. An arm that only some closes take now lives in a step file under
+          <code>review-close/steps/</code>; a close loads it only when the arm is due, records each load in the
+          close's receipt, and checks that receipt before it reports. The longest inline programs became
+          shipped scripts. The ratchet described above was retired, and a byte budget on the runner core replaced
+          it, lowered as each step moves out. At this snapshot the core is 367,128 bytes against 579,071 at the
+          previous one, 37% smaller, with eight step files beside it. The scoping put a realistic core near
+          42,600 tokens, not the 20,000 first asked for, and the split is still moving one step per phase, so
+          the paragraph above is right about its instrument and no longer right that the push is over.
+        </p>
       </div>
     </div>
   </div>
@@ -3401,10 +3421,10 @@
 
         <h3>Model roles, not model pins</h3>
         <p class="muted">
-          Since Phase 69, skills that pin a model declare a <em>role</em> — <code>reasoning</code>, <code>planner</code>, <code>plan-review</code>, <code>executor</code>, <code>convention-gate</code>, <code>mechanical</code>, or
+          Since Phase 69, skills that pin a model declare a <em>role</em> — <code>reasoning</code>, <code>planner</code>, <code>plan-review</code>, <code>executor</code>, <code>convention-gate</code>, <code>security-gate</code>, <code>mechanical</code>, or
           <code>quick</code> — rather than a model id (since Phase 349 every skill pins one; a pinned model that is unavailable falls back to the session model). Install resolves roles through
           <code>.claude/served_models.yml</code> (default mapping: <code>reasoning</code> → opus, <code>mechanical</code> → sonnet,
-          <code>quick</code> → haiku, with <code>convention-gate</code>, <code>planner</code>, <code>plan-review</code> and <code>executor</code> following <code>reasoning</code> until you separate them — <code>executor</code> is the one that moves execution without moving review);
+          <code>quick</code> → haiku, with <code>planner</code> and <code>plan-review</code> following <code>reasoning</code> until you separate them; since Phase 381 <code>convention-gate</code> and <code>executor</code> default to sonnet; <code>security-gate</code> shipped on sonnet for five days and follows <code>reasoning</code> again since Phase 389, after a replay of eight blocked closes reproduced 3 of 8 on the cheaper model; an <code>efforts:</code> map sets a level per role, <code>high</code> for the reasoning tier, the executor and the convention gate);
           a consumer remaps any role in
           <code>served_models.local.yml</code>, which is never overwritten and layered on top — so an upstream model
           sunset and a local preference both survive the next update. A <em>valid</em> preference, at least: since
@@ -3496,7 +3516,10 @@
 │   │   ├── claim/                 <span class="cm"># Phase 171 · &lt;CLAIM_ID&gt;/&lt;RUN_ID&gt;/ · one file per orchestration seam</span>
 │   │   ├── parked/                <span class="cm"># why a claim stopped — /auto-build archives plan + verdict, /claim-task a --resume pointer (Phase 65a; 159b moved it out of auto-build/)</span>
 │   │   ├── preserved/             <span class="cm"># Phase 354 · gitignored files only a worktree held, copied out before /review-close removes it</span>
-│   │   ├── close/                 <span class="cm"># Phases 363–366 · one run directory per --prepare / --request-review close</span>
+│   │   ├── close/                 <span class="cm"># Phases 363–366 · one run directory per --prepare / --request-review close · holds/ for an unattended night (Phase 380)</span>
+│   │   ├── close-arms/            <span class="cm"># Phase 388 · one receipt per close: the step files it required and the ones that loaded</span>
+│   │   ├── gate-verdicts/         <span class="cm"># Phase 394 · a gate&rsquo;s APPROVED, reused while nothing it read has moved</span>
+│   │   ├── giveback/              <span class="cm"># Phase 377 · bodies the give-back skills stage for gh / git tag</span>
 │   │   ├── auto-build-halt.md     <span class="cm"># Phase 361 · an unattended run stopped on a claim it could not verify · a human deletes it</span>
 │   │   └── subagent-envelopes/    <span class="cm"># Phase 37 · SubagentStop hook writes JSON here · Phase 159a keys it per stage</span>
 │   └── SYSOP_ISSUES.md            <span class="cm"># friction log · seeded once, project-owned · /report-issues files upstream</span></pre>
@@ -3515,7 +3538,7 @@
       <aside class="col-rule">Colophon</aside>
       <div>
         <p class="col-body">
-          A monograph on <em>Sysop</em>, as of <em>Phase 373</em> · 2026-10-10, with dated addenda where the record
+          A monograph on <em>Sysop</em>, as of <em>Phase 399</em> · 2026-10-21, with dated addenda where the record
           moved after the snapshot. Phase numbers throughout are iterations
           of the workflow's own development — each one planned, adversarially reviewed, and shipped through the process it
           extends; <a href="https://github.com/getsysop/sysop/blob/main/PHASE_LOG.md">PHASE_LOG.md</a> carries one entry per phase. Set in the reader's native serif —
@@ -3556,7 +3579,7 @@
             <ul>
               <li>Extracted from <em>gdp-query-system</em></li>
               <li>First consumer · BeanRider</li>
-              <li>Phase 373 · 2026-10-10</li>
+              <li>Phase 399 · 2026-10-21</li>
             </ul>
           </div>
           <div>

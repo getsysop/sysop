@@ -8,6 +8,8 @@ model: sonnet
 
 Automatically process pending review batches that have prescriptive, mechanical fixes. Reads the `Flag:` tags written by `/triage` (the sole writer — see `triage/SKILL.md` § Writer-side contract) and claims + fixes only the unflagged (auto) batches via isolated agents. If any pending batch lacks a `> **Triaged:**` record, invokes `/triage` first as a prereq.
 
+Run it in the main conversation, never through an Agent call — its parallel batch agents' waits can outlive a subagent's prompt cache.
+
 Two-pass workflow:
 - **Default mode (pass 1)**: processes only **non-overlapping** auto batches, in parallel. Pushes branches.
 - **`--merge` mode (pass 2)**: processes only **overlapping** auto batches, sequentially. Pushes branches.
@@ -398,7 +400,7 @@ For each batch that reported `STATUS: PASS` **and** `VERIFY: PASS` (a `VERIFY: T
 
 Use the Agent tool with:
 - `subagent_type`: `"general-purpose"`
-- `model`: `"opus"` — the **reasoning** role, set explicitly, per `.claude/served_models.yml`. This is adversarial review, which is the reasoning tier's job.
+- `model`: `"opus"`, `effort`: `"high"` — the **reasoning** role, set explicitly, per `.claude/served_models.yml`. This is adversarial review, which is the reasoning tier's job.
 - `description`: `"Verify batch <N>"`
 - Do **NOT** set `isolation: "worktree"` — the agent works in the existing worktree.
 

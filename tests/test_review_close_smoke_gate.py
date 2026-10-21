@@ -16,31 +16,32 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _prose_guard_helpers import normalize, section, states  # noqa: E402
+from skill_runner_text import text_of
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SKILL = REPO_ROOT / "core" / "skills" / "review-close" / "SKILL.md"
 VALIDATOR = REPO_ROOT / "core" / "companion" / "scripts" / "validate_tasks.py"
 
 
-def _extract_smoke_heredoc() -> str:
-    """Pull the Step 3c detection heredoc's Python body out of SKILL.md.
+SMOKE_SCRIPT = str(REPO_ROOT / "core" / "companion" / "scripts" / "smoke_detect.py")
 
-    Anchored on the unique invocation line that passes SMOKE_WORKTREE_DIRS and
-    APPROVED_BRANCHES as quoted positional args into a `python3 - <<'EOF'` heredoc; body
-    runs to the terminating `EOF` line. (Sysop Phase 126 converted the former env-var
-    prefix to a positional arg and derives the repo root from CWD, so the runner sets
-    `cwd=` and argv, not env. Phase 218 added the second positional arg: the gate reads
-    locks for this run's approved branches, because pending-doc frontmatter was not the
-    only task linkage and treating it as the only one was a fail-open.)
+
+def _extract_smoke_heredoc() -> str:
+    """Step 3c's detection program: `smoke_detect.py` since Phase 386 (`Q-409` P3).
+
+    The step's invocation passes SMOKE_WORKTREE_DIRS and APPROVED_BRANCHES as quoted
+    positional args, then the default branch. (Sysop Phase 126 converted the former
+    env-var prefix to a positional arg and derives the repo root from CWD, so the runner
+    sets `cwd=` and argv, not env. Phase 218 added the second positional arg: the gate
+    reads locks for this run's approved branches, because pending-doc frontmatter was not
+    the only task linkage and treating it as the only one was a fail-open.)
     """
-    text = SKILL.read_text(encoding="utf-8")
-    m = re.search(
-        r'python3 - "\$SMOKE_WORKTREE_DIRS" "\$APPROVED_BRANCHES" "<default branch>" <<\'EOF\'\n', text
-    )
-    assert m, "could not locate the Step 3c smoke-gate heredoc opener in SKILL.md"
-    start = m.end()
-    end = text.index("\nEOF\n", start)
-    return text[start:end]
+    text = text_of(SKILL)
+    assert re.search(
+        r'\npython3 sysop/scripts/smoke_detect\.py "\$SMOKE_WORKTREE_DIRS" "\$APPROVED_BRANCHES" '
+        r'"<default branch>"\n', text
+    ), "could not locate the Step 3c smoke-gate invocation in SKILL.md"
+    return Path(SMOKE_SCRIPT).read_text(encoding="utf-8")
 
 
 SMOKE_SRC = _extract_smoke_heredoc()
@@ -55,7 +56,7 @@ def _run(repo: Path, worktree_dirs: list[Path], branches: list[str] | None = Non
     smoke_arg = "\n".join(str(d) for d in worktree_dirs)
     branch_arg = "\n".join(branches or [])
     r = subprocess.run(
-        [sys.executable, "-c", SMOKE_SRC, smoke_arg, branch_arg, default_branch],
+        [sys.executable, SMOKE_SCRIPT, smoke_arg, branch_arg, default_branch],
         capture_output=True,
         text=True,
         cwd=str(repo),
@@ -272,7 +273,7 @@ def test_user_ops_exclusion_is_deliberate_and_stated():
     satisfies it with the rationale deleted. Both halves are now read out of the exclusion's
     own paragraph, through `states()`, which refuses a negated occurrence.
     """
-    para = _exclusion_paragraph(SKILL.read_text(encoding="utf-8"))
+    para = _exclusion_paragraph(text_of(SKILL))
     assert states(para, "large, routine class"), (
         "the skill no longer asserts the routine-class reason in the exclusion's paragraph"
     )
@@ -404,9 +405,9 @@ def test_schema_states_the_user_ops_timing_canonically():
     )
     for citer in (
         REPO_ROOT / "core" / "companion" / "scripts" / "validate_tasks.py",
-        REPO_ROOT / "core" / "skills" / "review-close" / "SKILL.md",
+        Path(SMOKE_SCRIPT),  # Step 3c's comment, in the skill's heredoc until Phase 386
     ):
-        assert 'schema.md § "User ops"' in citer.read_text(encoding="utf-8"), (
+        assert 'schema.md § "User ops"' in text_of(citer), (
             f"{citer.name} no longer cites the section it relies on"
         )
 

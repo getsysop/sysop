@@ -20,6 +20,7 @@ import textwrap
 from pathlib import Path
 
 import pytest
+from skill_runner_text import text_of
 
 REPO = Path(__file__).resolve().parent.parent
 SCRIPT = REPO / "core/companion/scripts/close_run.py"
@@ -541,7 +542,7 @@ def test_re_request_moves_the_recorded_head_to_the_pushed_fix(repo: Path) -> Non
 # --- the skill text ------------------------------------------------------------------------------
 
 def _section() -> str:
-    t = SKILL.read_text(encoding="utf-8")
+    t = text_of(SKILL)
     i = t.index("## `--request-review` and `--land <run-id>` (`Q-411`)")
     stop = t.index("## A close waiting for its second reader")
     # The AWAITING stop prescribes `abandon` too (round 1 found it unquoted there).
@@ -557,8 +558,10 @@ def test_the_prescribed_commands_run_as_written(repo: Path) -> None:
     for line, name in found:
         cmds.setdefault(name, []).append(line.strip())
     # Phase 366 added the `--agent` selection's commands; tests/test_unattended_land.py runs those.
+    # Phase 380 (`Q-664`) added the unattended resume's parks; tests/test_unattended_half_a_build.py
+    # runs those.
     assert set(cmds) == {"reader", "hand-off", "seal", "land-check", "landed", "re-request", "abandon",
-                         "class", "eligible"}, cmds
+                         "class", "eligible", "stop", "clear", "hold", "unhold"}, cmds
     (repo / "sysop/scripts").mkdir(parents=True)
     for name in ("close_run.py", "pending_doc_hold.py"):
         (repo / "sysop/scripts" / name).write_bytes((SCRIPT.parent / name).read_bytes())
@@ -620,8 +623,9 @@ def test_the_heredoc_keeps_the_locks_only_when_told(tmp_path: Path) -> None:
     import test_review_close_close_heredoc as h
     for keep in (False, True):
         repo = h._seed_repo(tmp_path / ("keep" if keep else "plain"))
-        src = h.CLOSE_SRC.replace(h.PLACEHOLDER_IDS, "ids = ['TASK-0001', 'TASK-0002']")
-        r = subprocess.run([sys.executable, "-c", src, *(["--keep-locks"] if keep else [])],
+        # Step 4c's script since Phase 386: `--keep-locks` first, then the ids.
+        r = subprocess.run([sys.executable, str(h.CLOSE_SCRIPT), *(["--keep-locks"] if keep else []),
+                            "TASK-0001", "TASK-0002"],
                            capture_output=True, text=True, cwd=str(repo), timeout=30, env=h._git_env())
         assert r.returncode == 0, r.stderr
         lock = repo / "sysop/runtime/locks/TASK-0001.lock"
@@ -633,14 +637,15 @@ def test_the_heredoc_keeps_the_locks_only_when_told(tmp_path: Path) -> None:
 
 
 def test_the_section_tells_the_runner_to_pass_keep_locks_at_4c() -> None:
-    t = SKILL.read_text(encoding="utf-8")
+    t = text_of(SKILL)
     c4 = t[t.index("### 4c. Consolidate Pending Documentation"):t.index("### 4d.")]
-    assert "Under `--request-review`, run it as `python3 - --keep-locks <<'PY'`." in c4
-    assert "run Step 4c item 4's `tasks/index.yml` heredoc as `python3 - --keep-locks <<'PY'`" in _section()
+    assert ("Under `--request-review`, put `--keep-locks` before the ids: "
+            "`python3 sysop/scripts/close_index.py --keep-locks \"<roadmap id>\" …`.") in c4
+    assert "run Step 4c item 4's `tasks/index.yml` script with `--keep-locks` before its ids." in _section()
 
 
 def test_every_mode_but_land_stops_on_a_waiting_hand_off() -> None:
-    t = SKILL.read_text(encoding="utf-8")
+    t = text_of(SKILL)
     stop = t[t.index("## A close waiting for its second reader"):t.index("## `--prepare` and `--resume")]
     assert "**Unless `$ARGUMENTS` contains `--land`**, look for `sysop/runtime/close/*/AWAITING`" in stop
     assert t.index("## A close waiting for its second reader") < t.index("## Step 1: Gather State")

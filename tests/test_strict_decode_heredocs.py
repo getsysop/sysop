@@ -52,6 +52,7 @@ from _heredoc_population import (  # noqa: E402
     shipped_heredocs,
 )
 from test_strict_decode_class import strict_reads  # noqa: E402
+from _shipped_scripts import invoked_script_containing  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SKILLS = REPO_ROOT / "core" / "skills"
@@ -110,9 +111,12 @@ def test_the_population_holds_every_opener_shape_the_tree_uses():
     heredoc that only that shape reaches."""
     docs = shipped_heredocs()
     reads = sum(len(strict_reads(b)) for _, _, _, b in docs)
-    # 47 heredocs and 33 strict reads at Phase 334, measured by this module.
-    assert len(docs) >= 47, len(docs)
-    assert reads >= 33, reads
+    # 47 heredocs and 33 strict reads at Phase 334, measured by this module. Phase 387
+    # (`Q-409` P3) moved review-close's last eight heredocs into scripts, leaving 41
+    # heredocs and 29 strict reads; the scripts' reads are held by `test_strict_decode_class.py`'s
+    # shipped-script sweep.
+    assert len(docs) >= 41, len(docs)
+    assert reads >= 29, reads
     openers = {(f.name, o) for f, _, o, _ in docs}
     shapes = {
         "positional arg before <<": ("install.sh", 'python3 - "$manifest" <<\'PY\''),
@@ -124,11 +128,15 @@ def test_the_population_holds_every_opener_shape_the_tree_uses():
     for shape, key in shapes.items():
         assert key in openers, (shape, key)
     # List-indented in markdown, read off the raw line: the stripped opener text
-    # cannot tell an indented heredoc from a column-0 one.
+    # cannot tell an indented heredoc from a column-0 one. Every list-indented markdown
+    # heredoc was in `/review-close` until Phase 387 (`Q-409` P3) moved its last ones into
+    # scripts, so the tree has none to pin; `test_the_opener_arms`' indented case holds the
+    # shape, and this pins that none has come back unmeasured by that case's extractor.
     from _heredoc_population import population
     indented = [f for f in population() if f.suffix == ".md"
                 for m in OPENER.finditer(f.read_text(encoding="utf-8")) if m.group(1)]
-    assert indented, "no list-indented markdown heredoc in the population"
+    assert [b for _, _, b in heredocs_in("   python3 - <<'PY'\n   x = 1\n   PY\n")] == ["x = 1"]
+    assert all(f in {d for d, _, _, _ in docs} for f in indented), indented
 
 
 @pytest.mark.parametrize("text,expected", [
@@ -171,6 +179,13 @@ def _run_body(body: str, args, cwd: Path, env=None):
                               env={**os.environ, **_GIT_ISOLATION, **(env or {})})
     finally:
         script.unlink()
+
+
+def _run_script(path: Path, args, cwd: Path, env=None):
+    """A heredoc that became a shipped script (Phase 386), run as the skill runs it."""
+    return subprocess.run([sys.executable, str(path), *map(str, args)], cwd=cwd,
+                          capture_output=True, text=True,
+                          env={**os.environ, **_GIT_ISOLATION, **(env or {})})
 
 
 def _git(cwd, *args):
@@ -233,8 +248,8 @@ def _option_c(tmp_path, plan: bytes, body: bytes):
     (run / "plan.md").write_bytes(plan)
     (repo / "tasks/open").mkdir()
     (repo / "tasks/open/FEAT-1.md").write_bytes(body)
-    code = heredoc_containing(SKILLS / "claim-task/SKILL.md", "sealed_report")
-    return repo, _run_body(code, ["FEAT-1", "run1", "open/FEAT-1.md", "test X proves Y"], repo)
+    code = invoked_script_containing(SKILLS / "claim-task/SKILL.md", "sealed_report")
+    return repo, _run_script(code, ["FEAT-1", "run1", "open/FEAT-1.md", "test X proves Y"], repo)
 
 
 def test_claim_task_option_c_plan_read_exits_4(tmp_path):
@@ -254,15 +269,16 @@ def test_claim_task_option_c_body_read_exits_5_and_writes_nothing(tmp_path):
 def test_round_marker_clear_refuses_an_unreadable_marker(tmp_path, skill):
     marker = tmp_path / "round.abc123.pending"
     marker.write_bytes(b"nonce: abc123\n" + BAD)
-    body = heredoc_containing(SKILLS / f"{skill}/SKILL.md", "round-marker: REFUSING to remove")
-    r = _run_body(body, [marker], tmp_path)
+    path = invoked_script_containing(SKILLS / f"{skill}/SKILL.md", "round-marker: REFUSING to remove")
+    r = _run_script(path, [marker], tmp_path)
     assert r.returncode == 0, r.stderr
     assert "REFUSING to remove round.abc123.pending — it could not be read" in r.stdout
     assert "Traceback" not in r.stderr and marker.exists()
 
 
 def test_the_two_marker_clears_stay_identical():
-    a, b = (heredoc_containing(SKILLS / f"{s}/SKILL.md", "round-marker: REFUSING to remove")
+    # One shipped script since Phase 386, so the two skills must name the same file.
+    a, b = (invoked_script_containing(SKILLS / f"{s}/SKILL.md", "round-marker: REFUSING to remove")
             for s in ("codebase-review", "security-audit"))
     assert a == b
 
@@ -291,15 +307,16 @@ def test_document_work_3b_an_unreadable_index_is_exit_2(tmp_path):
 
 def test_review_close_section_measure_names_claude_md(tmp_path):
     (tmp_path / "CLAUDE.md").write_bytes(BAD)
-    body = heredoc_containing(SKILLS / "review-close/SKILL.md",
-                              'SECTIONS = ["Prevention Conventions", "Testing Patterns"]')
-    _refused(_run_body(body, [], tmp_path), 1, "CLAUDE.md")
+    # Step 2b's measurement became `convention_size.py` in Phase 387 (`Q-409` P3), with the
+    # sections as arguments.
+    path = invoked_script_containing(SKILLS / "review-close/SKILL.md", 'SECTIONS = sys.argv[1:]')
+    _refused(_run_script(path, ["Prevention Conventions", "Testing Patterns"], tmp_path), 1, "CLAUDE.md")
 
 
 def test_review_close_4c_round_trip_refuses_before_writing(tmp_path):
     repo = _repo(tmp_path / "r")
-    body = heredoc_containing(SKILLS / "review-close/SKILL.md", 'ids = ["<ROADMAP_ID_1>"')
-    r = _run_body(body, [], repo)
+    path = invoked_script_containing(SKILLS / "review-close/SKILL.md", "ids = _args[1:] if KEEP_LOCKS else _args")
+    r = _run_script(path, ["FEAT-1"], repo)
     _refused(r, 1, "tasks/index.yml")
     assert "nothing was changed" in r.stderr
     assert (repo / "tasks/index.yml").read_bytes() == BAD
@@ -649,9 +666,14 @@ def test_document_work_3b_a_branch_name_that_is_not_utf8_is_exit_2(tmp_path):
 
 
 def _function_from_heredoc(skill, needle, name, **globs):
-    """Exec one `def` out of a shipped heredoc, verbatim, with the globals it reads."""
+    """Exec one `def` out of a shipped heredoc, verbatim, with the globals it reads — or out
+    of the shipped script a heredoc became (Phase 386), when the needle lives there."""
     import ast as _ast
-    body = heredoc_containing(SKILLS / f"{skill}/SKILL.md", needle)
+    skill_md = SKILLS / f"{skill}/SKILL.md"
+    if any(needle in b for _, _, b in heredocs_in(skill_md.read_text(encoding="utf-8"))):
+        body = heredoc_containing(skill_md, needle)
+    else:
+        body = invoked_script_containing(skill_md, needle).read_text(encoding="utf-8")
     fn = next(n for n in _ast.walk(_ast.parse(body))
               if isinstance(n, _ast.FunctionDef) and n.name == name)
     ns = {"subprocess": subprocess, "os": os, **globs}

@@ -25,6 +25,7 @@ import re
 from pathlib import Path
 
 import pytest
+from skill_runner_text import text_of
 
 REPO = Path(__file__).resolve().parent.parent
 RC = REPO / "core/skills/review-close/SKILL.md"
@@ -38,7 +39,7 @@ PRE_EXISTING_WORKTREE_SKILLS = ("claim-task", "auto-build", "auto-fix", "auto-ju
 
 
 def _rc() -> str:
-    return RC.read_text(encoding="utf-8")
+    return text_of(RC)
 
 
 def _slice(text: str, start_pat: str, end_pat: str, what: str) -> str:
@@ -846,7 +847,10 @@ def test_the_two_standing_skills_carry_the_containment_rule_identically() -> Non
 def test_the_rollback_header_comment_does_not_prescribe_a_move() -> None:
     """`Q-492`: the stale clause an editor meets FIRST pointed at the destination
     `Q-482`'s round killed — `git worktree remove` deletes gitignored content at exit 0."""
-    text = _rc()
+    # The header comment is the rollback's, in `pending_doc_collect.py` since Phase 386:
+    # an absence read against the skill alone would pass on the stale clause.
+    text = _rc() + (Path(__file__).resolve().parents[1]
+                    / "core/companion/scripts/pending_doc_collect.py").read_text(encoding="utf-8")
     assert "otherwise MOVE main's copy back to the worktree" not in text, (
         "the section's own header comment prescribes a move the code does not do, and "
         "acting on it rebuilds a silent data-loss route"
@@ -1086,7 +1090,8 @@ def test_a_pin_collapsed_onto_HEAD_is_caught() -> None:
     checkout is created at whatever `PIN` holds, so the echo matches and the receipt
     passes while every lens reviews the default branch."""
     block = _placement_block(_rc())
-    collapsed = re.sub(r'PIN=\$\(git rev-parse "<target branch>"\)[^\n]*\n', "", block)
+    collapsed = re.sub(r'PIN=\$\(git rev-parse --verify "<target branch>\^\{commit\}"\)[^\n]*\n', "", block)
+    assert collapsed != block, "the feature-branch arm's spelling moved; re-anchor this mutation"
     assert placement_problems(collapsed), (
         "the feature-branch arm was dropped and only the `HEAD` arm remained — that is "
         "Q-490 leg (a) restored, silently, with every guard green"

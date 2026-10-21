@@ -2,9 +2,10 @@
 
 Upstream #763: `/claim-task` 7a, 7b and 7e and `/auto-build` 6a, 6b and 6e all rode one
 `reasoning` pin, and 7b/7e said "same agent parameters as 7a", so a consumer could not move
-execution to a cheaper model without moving the plan reviewer with it. Each new role names
-`reasoning` and follows it — the `convention-gate` pattern (Phase 262) — so a default install
-resolves exactly as before. Upstream #762: `/document-work`, `/sitrep`, `/triage` and
+execution to a cheaper model without moving the plan reviewer with it. Each new role named
+`reasoning` and followed it — the `convention-gate` pattern (Phase 262) — so a default install
+resolved exactly as before. Phase 381 (`Q-675`) then moved `executor` to the literal `sonnet`
+at `high` effort on Wade's ask; `planner` and `plan-review` still follow `reasoning`. Upstream #762: `/document-work`, `/sitrep`, `/triage` and
 `/auto-fix`'s orchestrator carried no frontmatter pin and rode the session model.
 
 The consequential tests are the resolver runs: they fail if a marker, a role, the resolver's
@@ -36,6 +37,7 @@ import _model_roles as m  # noqa: E402  (path set above)
 
 sys.path.insert(0, str(REPO_ROOT / "tests"))
 from _prose_guard_helpers import _fence_state  # noqa: E402  the repo's one fence rule
+from skill_runner_text import skill_text  # noqa: E402
 
 
 def _sections(lines):
@@ -75,7 +77,10 @@ def _marked(role):
 
 
 # ── the config ────────────────────────────────────────────────────────────────
-@pytest.mark.parametrize("role", NEW_ROLES)
+FOLLOWING_ROLES = ("planner", "plan-review")
+
+
+@pytest.mark.parametrize("role", FOLLOWING_ROLES)
 def test_each_new_role_names_reasoning_and_resolves_to_its_model(role):
     """Shipped as the role NAME, so it follows a consumer's `reasoning` choice. A literal
     `opus` here would silently re-raise the pin for a consumer who moved `reasoning`."""
@@ -85,14 +90,38 @@ def test_each_new_role_names_reasoning_and_resolves_to_its_model(role):
     assert roles[role] == roles["reasoning"] == "opus"
 
 
+def test_the_executor_ships_on_sonnet_at_high():
+    """Phase 381, on Wade's ask (`Q-675`): `executor` is the literal `sonnet` with
+    `efforts: {executor: high}`. Phase 389 (2026-10-19), on Wade's answer, added
+    `reasoning: high` (which `planner`, `plan-review` and `security-gate` follow) and
+    `convention-gate: high`; `mechanical` and `quick` stay at the session's level. Any
+    level beyond these three keys is a ruling nobody made."""
+    raw = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
+    assert raw["roles"]["executor"] == "sonnet", raw["roles"]
+    # An explicit `none` changes no spawn, so it may appear (lens 3, C2: an exact-map pin
+    # refused it); any other level beyond the ruled three is a ruling nobody made.
+    shipped = {r: e for r, e in (raw["efforts"] or {}).items() if e not in (None, "none")}
+    assert shipped == {"executor": "high", "reasoning": "high", "convention-gate": "high"}, (
+        raw.get("efforts"))
+    efforts = m.load_role_efforts(CONFIG, None)
+    assert {r: e for r, e in efforts.items() if e} == {
+        "executor": "high", "reasoning": "high", "convention-gate": "high",
+        "planner": "high", "plan-review": "high", "security-gate": "high"}, efforts
+
+
 def test_a_reasoning_override_still_reaches_every_split_pin(tmp_path):
-    """The follow, exercised: `reasoning: sonnet` alone must move the nine split pins."""
-    out, stdout = _resolve(tmp_path, "roles:\n  reasoning: sonnet\n")
-    for role in NEW_ROLES:
+    """The follow, exercised: `reasoning: haiku` alone must move the six following pins,
+    and must NOT move the executor's, which no longer follows it."""
+    out, stdout = _resolve(tmp_path, "roles:\n  reasoning: haiku\n")
+    for role in FOLLOWING_ROLES:
         for rel, line in _marked(role):
             moved = [l for l in (out / rel).read_text().splitlines()
                      if (mk := m._PIN_MARKER_RE.search(l)) and mk.group(1) == role]
-            assert moved and all('"sonnet"' in l and '"opus"' not in l for l in moved), (rel, moved)
+            assert moved and all('"haiku"' in l and '"opus"' not in l for l in moved), (rel, moved)
+    for rel, _line in _marked("executor"):
+        kept = [l for l in (out / rel).read_text().splitlines()
+                if (mk := m._PIN_MARKER_RE.search(l)) and mk.group(1) == "executor"]
+        assert kept and all('"sonnet"' in l and '`effort`: `"high"`' in l for l in kept), (rel, kept)
 
 
 # ── which spawn carries which role ────────────────────────────────────────────
@@ -139,8 +168,9 @@ def test_each_marker_sits_on_the_spawn_it_names(role):
     is the single most plausible error here, and it would move review with execution, the
     exact coupling this phase exists to remove."""
     found = _found(role)
+    want = m.load_roles_config(CONFIG, None)[0][role]
     for rel, _head, line, _block in found:
-        assert re.search(r'model[`:\s]*"opus"', line), f"{rel}: marker without a pin: {line}"
+        assert re.search(rf'model[`:\s]*"{want}"', line), f"{rel}: marker without a pin: {line}"
     problems = _identity_problems(found, EXPECTED[role]) + _section_problems(EXPECTED[role])
     assert not problems, (role, problems)
 
@@ -260,7 +290,8 @@ def _resolve(tmp_path, local):
 
 @pytest.mark.parametrize("role,count", [("executor", 3), ("plan-review", 4), ("planner", 2)])
 def test_a_one_key_override_moves_that_roles_pins_and_nothing_else(tmp_path, role, count):
-    out, stdout = _resolve(tmp_path, f"roles:\n  {role}: sonnet\n")
+    """`haiku`, not `sonnet`: since Phase 381 a `sonnet` override of `executor` is a no-op."""
+    out, stdout = _resolve(tmp_path, f"roles:\n  {role}: haiku\n")
     changed = []
     for path in sorted(SKILLS.rglob("*.md")):
         before = path.read_text(encoding="utf-8").splitlines()
@@ -268,7 +299,7 @@ def test_a_one_key_override_moves_that_roles_pins_and_nothing_else(tmp_path, rol
         assert len(before) == len(after)
         changed += [a for b, a in zip(before, after) if a != b]
     assert len(changed) == count, changed
-    assert all(f"<!-- sysop:role={role} -->" in l and '"sonnet"' in l for l in changed), changed
+    assert all(f"<!-- sysop:role={role} -->" in l and '"haiku"' in l for l in changed), changed
     assert f"APPLIED: {count} pin(s)" in stdout, stdout
 
 
@@ -418,7 +449,7 @@ def test_no_shipped_doc_names_the_model_behind_a_role():
     assert not offenders, "\n  ".join(offenders)
 
 
-_ROLE = r"(?:<code>|`)?(?:reasoning|planner|plan-review|executor|convention-gate|mechanical|quick)(?:</code>|`)?"
+_ROLE = r"(?:<code>|`)?(?:reasoning|planner|plan-review|executor|convention-gate|security-gate|mechanical|quick)(?:</code>|`)?"
 _SEP = r"\s*(?:/|,|·|\||\band\b|\bor\b)\s*(?:\bor\b\s*)?"
 #: A LIST of roles — three or more role names joined by separators — not a line that merely
 #: mentions several (docs/configuration.md's spend sentence names three in running prose).
@@ -468,7 +499,7 @@ def test_no_shipped_enumeration_of_the_roles_omits_the_split():
                 for run in _ROLE_LIST.finditer(para):
                     lists += "mechanical" in run.group(0)
                     s = run.group(0)
-                    if "mechanical" in s and not all(r in s for r in NEW_ROLES + ("convention-gate",)):
+                    if "mechanical" in s and not all(r in s for r in NEW_ROLES + ("convention-gate", "security-gate")):
                         offenders.append(f"{path.relative_to(REPO_ROOT)}:{n}  {s[:90]}")
     # Vacuity: the full role lists shipped today (configuration.md x2, WORKFLOW.md § 8.4, the
     # pre-commit example, served_models.yml, the monograph x2). Fewer means the scan narrowed.
@@ -477,14 +508,63 @@ def test_no_shipped_enumeration_of_the_roles_omits_the_split():
 
 
 def test_the_effort_guidance_ships_beside_the_executor_knob():
-    """A role picks a model; moving `executor` to Sonnet without its effort runs it at the
-    model default (`medium`), the cell GDP's A/B found a gap in. Both consumer surfaces say so."""
+    """Phase 381 (`Q-675`): effort is a key of its own, carried into every inline spawn.
+    Both consumer surfaces say so, show the `none` escape, and no longer carry the retired
+    caveat that no skill passes it (true until this phase) or its `modelSettings` workaround."""
     doc = (REPO_ROOT / "docs/configuration.md").read_text(encoding="utf-8")
     cfg = re.sub(r"\s*\n#\s*", " ", CONFIG.read_text(encoding="utf-8"))  # unwrap comments
     for text in (doc, cfg):
-        assert "the Agent tool has no effort parameter" in text
+        assert "no Sysop skill passes it" not in text, "the retired effort caveat is back"
+        # Wade's `Q-675` answer: `modelSettings` stays, as the fallback below 2.1.292, and the
+        # environment variable that outranks every per-spawn effort is named.
+        assert re.search(r"[Bb]elow Claude Code 2\.1\.292", text), "the pre-2.1.292 fallback is gone"
         assert re.search(r'"modelSettings"\s*:\s*\{\s*"claude-sonnet-5-5"\s*:\s*\{\s*"effortLevel"\s*:\s*"high"', text)
-    assert "**Set that model's effort as well.**" in doc
+        assert "CLAUDE_CODE_EFFORT_LEVEL" in text, "the variable that overrides every role effort is unnamed"
+        assert re.search(r"last re-evaluated (?:on )?2026-10-19", text, re.I), "the last re-evaluation date is gone"
+        assert re.search(r"efforts:\s*(?:\n?\s*#?\s*executor:\s*none|\{\s*executor:\s*none\s*\})", text), (
+            "the `none` escape is not shown")
+        assert "2027-01-14" in text, "the re-evaluation date is gone"
+    assert "**Effort is a key of its own.**" in doc
+    # Whole sentences, because lens 3 inverted each claim while keeping every token the
+    # presence pins above look for (the precedence, the fallback, "keeps", "refuses").
+    flat_doc = re.sub(r"\s+", " ", doc)
+    for sentence in (
+        "Two things outrank a role's effort: a `CLAUDE_CODE_EFFORT_LEVEL` environment variable "
+        "overrides every per-spawn `effort`, so a consumer who sets it overrides the roles "
+        "without any error, and a harness below Claude Code 2.1.292 has no per-spawn `effort` at all.",
+        "Moving `executor` to another model keeps its `high`.",
+        "`check_skill_models.py` refuses any other value, and an `efforts:` key that names no role,",
+        # Phase 389 (2026-10-19): the twin's default and its effort, decided on the replay.
+        "A missed block is silent, and the twin is a project's only deep security read of a "
+        "branch, so the default follows `reasoning`, at `reasoning`'s effort;",
+        "The shipped file sets three, all `high`: `executor`, `reasoning` (which `planner`, "
+        "`plan-review` and `security-gate` follow) and `convention-gate`; `mechanical` and "
+        "`quick` pass none.",
+        "**Updating from Phases 381–388** moves the security twin back onto `reasoning`, unless "
+        "your local file maps `security-gate` by name.",
+        # Round 1 (lens B): the one-key way back, the kind of case it was, and the escape for a
+        # plan that cannot carry `high` on the reasoning tier each deleted or reversed green.
+        "`security-gate: sonnet` is the one-key way to take the cheaper twin anyway.",
+        "The security twin was moved the same way on 2026-10-14 and **moved back on 2026-10-19, "
+        "on a measurement.**",
+        "a plan that cannot carry it sets `efforts: {reasoning: none}` in the local file,",
+    ):
+        assert sentence in flat_doc, f"a decided effort claim changed: {sentence!r}"
+    flat_cfg = re.sub(r"\s+", " ", cfg)
+    assert ("A `CLAUDE_CODE_EFFORT_LEVEL` environment variable overrides every per-spawn effort, "
+            "so setting it overrides the roles without any error.") in flat_cfg
+    assert ("A missed block is silent, so the twin's default is the reasoning model and its "
+            "effort is `reasoning`'s.") in flat_cfg, "the twin's decided default is gone from the config"
+    # Round 1 (lens B): the comment's lead sentence reversed to `sonnet` while the pinned
+    # sentence below it said the opposite, so a shipped file could self-contradict unseen.
+    assert "`security-gate` follows `reasoning` since Phase 389 (2026-10-19)" in flat_cfg
+    assert "Last re-evaluated 2026-10-19; next on 2027-01-14" in flat_cfg
+    wf = (REPO_ROOT / "core/companion/docs/WORKFLOW.md").read_text(encoding="utf-8")
+    assert "following `reasoning` again since Phase 389" in wf, (
+        "WORKFLOW.md § 8.4 no longer says where the security twin went (round 1, lens B)")
+    html = (REPO_ROOT / "docs/workflow.html").read_text(encoding="utf-8")
+    assert "follows <code>reasoning</code> again since Phase 389" in html, (
+        "the monograph no longer says where the security gate went")
 
 
 # ── a skill invoked mid-turn must not pin below its caller ───────────────────
@@ -517,7 +597,7 @@ def test_no_skill_invokes_a_cheaper_pinned_skill_mid_turn():
     an Agent-spawned executor invoking `/document-work` is outside this check."""
     pairs, offenders = [], []
     for caller in sorted(p.name for p in SKILLS.iterdir() if p.is_dir() and not p.name.startswith("_")):
-        for callee in set(_invocations((SKILLS / caller / "SKILL.md").read_text(encoding="utf-8"))):
+        for callee in set(_invocations(skill_text(SKILLS / caller))):   # step files too (Phase 384)
                 if callee == caller or not (SKILLS / callee / "SKILL.md").is_file():
                     continue
                 pairs.append((caller, callee))

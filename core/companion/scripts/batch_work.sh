@@ -82,7 +82,7 @@ resolve_main_root() {
 # So anchor the record paths here, once — and note WHICH path does what, because
 # this phase's first draft credited the wrong one. Every status READ goes through
 # `review_index.py`, which resolves `review_tasks.md` from its own file location
-# (`review_index.py:47`), so `$INDEX_SCRIPT` is what decides which record the claim
+# (`review_index.py:48`), so `$INDEX_SCRIPT` is what decides which record the claim
 # decision is made against. `$TASKS_FILE` is the WRITE side: the existence check,
 # the sed rewrite, and `--release`'s rewrite. Both must name the same checkout or
 # the script decides against one file and edits another. `$REPO_ROOT` stays as the

@@ -40,13 +40,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from tests import shape_lib as S
 from _prose_guard_helpers import carries  # noqa: E402
+from skill_runner_text import text_of
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SKILL = REPO_ROOT / "core" / "skills" / "review-close" / "SKILL.md"
 
 
 def _text() -> str:
-    return SKILL.read_text(encoding="utf-8")
+    return text_of(SKILL)
 
 
 def _section(start: str, end: str) -> str:
@@ -620,10 +621,12 @@ def test_step4c_does_not_overstate_what_the_failed_add_does():
 
 def test_heredoc_guards_the_index_write_and_the_archive_directory():
     """Both are code, exercised in tests/test_review_close_close_heredoc.py; guarded here
-    so the SKILL.md source they are extracted from keeps them."""
+    so the source they run from keeps them: Step 4c's `close_index.py` since Phase 386."""
     block = _section("### 4c. Consolidate Pending Documentation", "### 4d. Land on `main`")
-    assert "Path(dst).parent.mkdir(parents=True, exist_ok=True)" in block
-    assert "if closed:" in block
+    assert "python3 sysop/scripts/close_index.py " in block
+    code = (Path(__file__).resolve().parents[1] / "core/companion/scripts" / "close_index.py").read_text(encoding="utf-8")
+    assert "Path(dst).parent.mkdir(parents=True, exist_ok=True)" in code
+    assert "if closed:" in code
 
 
 def test_main_push_guard_covers_the_reuse_shape():

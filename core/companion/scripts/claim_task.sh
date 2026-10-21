@@ -37,7 +37,9 @@
 #                and it is the ONE mode here that commits. It re-flips if the
 #                status came back `open`, so a rival that clobbered Step 4a's
 #                uncommitted edit cannot leave the claim silently un-made
-#                (`Q-397`, Phase 261).
+#                (`Q-397`, Phase 261). After the commit it fast-forwards the
+#                claim's own worktree to the default branch, so the worktree
+#                reads its own task as in_progress (`Q-532`, Phase 392).
 #
 # Options:
 #   --lock           Also create a sysop/runtime/locks/<TASK_ID>.lock file for multi-agent
@@ -144,7 +146,7 @@ resolve_primary_root() {
 #
 #   * It PROBES rather than assuming. A blind `PATH=.venv/bin:$PATH` prepend
 #     would shadow a capable system interpreter with an incapable venv one —
-#     trading the reported failure for its mirror image. self_check.sh:78-86
+#     trading the reported failure for its mirror image. self_check.sh:146-151
 #     documents the same hazard, named from the probe side. (Phase 182 wrote
 #     this citation against :61-66 and then, in the same commit, hoisted
 #     MAIN_ROOT above probe 3 — moving the text it points at. It also said
@@ -582,7 +584,111 @@ PY
         exit 1; }
     echo "✅ Committed the claim for ${TASK_ID} on ${CC_DEFAULT_BRANCH}."
   fi
+  # The fast-forward's target: the default branch's REF, never `HEAD`. Rule A held HEAD
+  # on the default branch when it ran, but nothing holds it after: a concurrent
+  # `git checkout` in the primary checkout is exactly what Rule A exists to catch, and
+  # reading `HEAD` here merged that other branch's unmerged commits into the claim
+  # worktree under a success line (round 2, lens C). Read before the release, so in the
+  # common case it is the claim commit; the mutex serializes tracker writers only, so a
+  # commit another kind of writer lands can still be in it. Every commit on the default
+  # branch from here on holds the claim, which is all the fast-forward needs.
+  CC_TIP=$(git -C "$MAIN_REPO_ROOT" rev-parse --verify --quiet "refs/heads/${CC_DEFAULT_BRANCH}" || true)
   tracker_lock_release
+
+  # ── Bring the claim's own worktree up to the claim commit (`Q-532`) ──
+  # Both callers run `--lock` BEFORE this mode (`/claim-task` 4b then 4d,
+  # `/auto-build` 5.2 then 5.4), and `--lock` branches from the default branch as
+  # it stood then, one commit short of the claim. Left there, the worktree's own
+  # tasks/index.yml reads `open` for the task it was made for, which is where every
+  # planner, reviewer and executor runs: a reviewer read it as "the claim never
+  # landed" and filed a false HIGH. Fast-forwarding the fresh branch fixes that.
+  # The reporter's fix, flip -> validate -> commit -> `--lock`, was not taken: its own
+  # validate step fails, because validate_tasks.py's invariant 9 errors on an
+  # in_progress task with no lock, and dropping that step would commit the state the
+  # validator rejects. claim-task/REFERENCE.md § Step 4d has the rest.
+  # After the mutex: the worktree is this claim's own, and nothing here writes the
+  # index. Every arm exits 0, because the claim itself is committed; a skip is
+  # stated, never silent, since a silent skip is the state this block exists to end.
+  # Does commit $1 hold the claim: does its task index read in_progress for TASK_ID?
+  # Checked rather than assumed before either success line. Reading the ref instead of
+  # HEAD keeps the worktree off another branch, but a concurrent rewind of the default
+  # branch, or a checkout between Rule A and the commit, still leaves a tip that does not
+  # hold the claim, and the first cut printed ✅ "which holds the claim" over a worktree
+  # reading `open` (round 3, lens D). `python3` here is the PyYAML interpreter
+  # resolve_yaml_python put on PATH before the mutex.
+  claim_held_at() {  # $1=commit
+    git -C "$MAIN_REPO_ROOT" show "$1:$CC_REL" 2>/dev/null | TASK_ID="$TASK_ID" python3 -c '
+import os, sys, yaml
+try:
+    data = yaml.safe_load(sys.stdin.buffer.read().decode("utf-8")) or {}
+except Exception:
+    sys.exit(2)
+for t in (data.get("tasks") or []) if isinstance(data, dict) else []:
+    if isinstance(t, dict) and t.get("id") == os.environ["TASK_ID"]:
+        sys.exit(0 if t.get("status") == "in_progress" else 1)
+sys.exit(1)'
+  }
+
+  CC_LOCK="${CC_LOCKS_DIR}/${TASK_ID}.lock"
+  if [[ ! -f "$CC_LOCK" ]]; then
+    echo "ℹ️  No lock for ${TASK_ID}, so no claim worktree to bring up to the claim commit."
+    exit 0
+  fi
+  CC_WS=$(awk '/^workspace:/{sub(/^workspace: */, ""); print; exit}' "$CC_LOCK")
+  CC_BR=$(awk '/^branch:/{sub(/^branch: */, ""); print; exit}' "$CC_LOCK")
+  CC_MODE=$(awk '/^mode:/{sub(/^mode: */, ""); print; exit}' "$CC_LOCK")
+  if [[ "$CC_MODE" != "worktree" ]]; then
+    echo "ℹ️  ${TASK_ID} is claimed in mode '${CC_MODE:-<none recorded>}', which this step does not move: that workspace may still read 'open' for ${TASK_ID}, which is the tree from before the claim, not a lost claim."
+    exit 0
+  fi
+  # `--is-ancestor` exits 1 for "no" and 128 when it cannot compare; only 1 means
+  # the branch has commits of its own, so the two are kept apart.
+  CC_ANC="unknown"
+  if [[ -n "$CC_BR" && -n "$CC_TIP" ]]; then
+    if git -C "$MAIN_REPO_ROOT" merge-base --is-ancestor "refs/heads/${CC_BR}" "$CC_TIP" 2>/dev/null; then
+      CC_ANC="yes"
+    elif [[ $? -eq 1 ]]; then
+      CC_ANC="no"
+    fi
+  fi
+  CC_WHY=""
+  if [[ -z "$CC_WS" || ! -d "$CC_WS" ]]; then
+    CC_WHY="its workspace '${CC_WS:-<none recorded>}' does not exist"
+  elif [[ -z "$CC_BR" ]]; then
+    CC_WHY="the lock records no branch"
+  elif [[ "$(git -C "$CC_WS" branch --show-current 2>/dev/null || true)" != "$CC_BR" ]]; then
+    CC_WHY="the workspace is not on '${CC_BR}'"
+  elif [[ -z "$CC_TIP" ]]; then
+    CC_WHY="the default branch's tip could not be read after the commit"
+  elif ! claim_held_at "$CC_TIP"; then
+    CC_WHY="${CC_DEFAULT_BRANCH} at ${CC_TIP:0:12} does not read ${TASK_ID} as in_progress, so it does not hold the claim (a concurrent rewind or checkout?)"
+  elif [[ "$(git -C "$CC_WS" rev-parse HEAD 2>/dev/null || true)" == "$CC_TIP" ]]; then
+    echo "✅ ${CC_WS} is already at ${CC_DEFAULT_BRANCH} (${CC_TIP:0:12}), which holds the claim."
+    exit 0
+  elif [[ "$CC_ANC" == "no" ]]; then
+    CC_WHY="'${CC_BR}' has commits of its own, so it cannot be fast-forwarded"
+  elif [[ "$CC_ANC" != "yes" ]]; then
+    CC_WHY="git could not compare '${CC_BR}' with ${CC_TIP:0:12}"
+  elif [[ -n "$(git -C "$CC_WS" status --porcelain --untracked-files=no 2>/dev/null || echo dirty)" ]]; then
+    CC_WHY="the worktree has uncommitted changes to tracked files"
+  # `--no-overwrite-ignore` (verified on git 2.50.1): `git merge` refuses over an untracked
+  # file by default but overwrites an IGNORED one without a word, so a gitignored local
+  # file at a path the default branch has since started tracking was the only copy, and
+  # was lost under a success line (round 1, lens A). Round 1 answered with its own
+  # exact-path check, which round 2 showed missing three routes git's own check covers:
+  # a file that becomes a directory, a case-folded name on a case-insensitive
+  # filesystem, and a symlink that becomes a directory.
+  elif ! git -C "$CC_WS" merge --ff-only --no-overwrite-ignore --quiet "$CC_TIP"; then
+    CC_WHY="git refused the fast-forward (see git's message on stderr: usually an untracked or ignored file in the worktree that it would overwrite)"
+  elif [[ "$(git -C "$CC_WS" rev-parse HEAD 2>/dev/null || true)" != "$CC_TIP" ]]; then
+    CC_WHY="the fast-forward did not land on ${CC_TIP:0:12}"
+  else
+    echo "✅ Fast-forwarded ${CC_WS} to ${CC_DEFAULT_BRANCH} (${CC_TIP:0:12}), which holds the claim: its tasks/index.yml now reads in_progress for ${TASK_ID}."
+    exit 0
+  fi
+  echo "⚠️  ${CC_WS:-the claim worktree} was NOT brought up to the claim: ${CC_WHY}."
+  echo "   Its tasks/index.yml may still read 'open' for ${TASK_ID}. That is the tree from"
+  echo "   before the claim, not a lost claim: the claim is committed on ${CC_DEFAULT_BRANCH}."
   exit 0
 fi
 

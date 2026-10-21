@@ -17,13 +17,14 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from skill_runner_text import text_of
 
 REPO = Path(__file__).resolve().parent.parent
 SKILL = REPO / "core/skills/review-close/SKILL.md"
 
 
 def _lines() -> list[str]:
-    return SKILL.read_text().split("\n")
+    return text_of(SKILL).split("\n")
 
 
 def _line_of(pred, what: str) -> int:
@@ -88,7 +89,7 @@ def test_capture_and_assertion_use_the_same_untracked_mode() -> None:
     line, so an agent writing inside an already-untracked directory is
     invisible. Both ends must agree or the delta reports phantom differences.
     """
-    text = SKILL.read_text()
+    text = text_of(SKILL)
     capture = re.search(r"mkdir -p sysop/runtime && git status --porcelain(\s+-uall)?", text)
     assert capture, "baseline capture command not found"
     assert capture.group(1), "the capture must use -uall (see the collapse test below)"
@@ -103,7 +104,7 @@ def test_the_capture_clears_a_stale_baseline_first() -> None:
     The design's one safety property -- a skipped capture fails loudly -- then
     holds only on the first close ever run in the repo.
     """
-    text = SKILL.read_text()
+    text = text_of(SKILL)
     i = text.index("2b-baseline.txt")
     window = text[max(0, i - 400):i + 200]
     assert "rm -f sysop/runtime/2b-baseline.txt" in window, (
@@ -233,7 +234,7 @@ def test_git_diff_cannot_see_the_breach_this_gate_catches(repo: Path) -> None:
 def _fence_after(anchor: str) -> list[str]:
     """The commands in the first ```bash fence at/after `anchor`, blockquote
     prefixes stripped. Reads the shipped file -- never a copy of it."""
-    raw = SKILL.read_text().split("\n")
+    raw = text_of(SKILL).split("\n")
     start = next(i for i, ln in enumerate(raw) if anchor in ln)
     body, opened = [], False
     for ln in raw[start:]:
@@ -285,7 +286,7 @@ def test_the_prose_and_the_fence_agree_on_the_command_count() -> None:
     spawn it had to precede. The check stands on its own terms; the precedent
     it cited was not real.
     """
-    text = SKILL.read_text()
+    text = text_of(SKILL)
     assert "assert all five are clean" in text
     for stale in ("three", "four"):
         assert f"assert all {stale} are clean" not in text, (
@@ -346,7 +347,7 @@ def test_a_targeted_grep_for_the_camelcase_key_would_report_clean(repo: Path) ->
 
 
 def test_the_remedy_names_the_lowercased_key_trap() -> None:
-    text = SKILL.read_text()
+    text = text_of(SKILL)
     i = text.index("The fourth command's delta")
     para = text[i:i + 1400]
     assert "core.hookspath" in para, (
@@ -380,7 +381,7 @@ def test_a_missing_config_baseline_fails_loudly_rather_than_passing(repo) -> Non
         "a missing config baseline reported the config unchanged -- a skipped "
         "capture must fail loudly, not certify"
     )
-    text = SKILL.read_text()
+    text = text_of(SKILL)
     assert "third or fourth command reports `No such file or directory`" in text, (
         "the loud-failure note covers only one of the two baselines"
     )

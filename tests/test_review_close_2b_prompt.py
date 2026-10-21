@@ -11,13 +11,14 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from skill_runner_text import text_of
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SKILL = REPO_ROOT / "core" / "skills" / "review-close" / "SKILL.md"
 
 
 def _body() -> str:
-    return SKILL.read_text(encoding="utf-8")
+    return text_of(SKILL)
 
 
 def _flat(text: str) -> str:

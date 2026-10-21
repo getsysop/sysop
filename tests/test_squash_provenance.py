@@ -24,6 +24,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from skill_runner_text import text_of
 
 REPO = Path(__file__).resolve().parent.parent
 SCRIPTS = REPO / "core/companion/scripts"
@@ -347,7 +348,7 @@ IU = REPO / "docs/install-and-update.md"
 
 
 def _close() -> str:
-    return CLOSE.read_text(encoding="utf-8")
+    return text_of(CLOSE)
 
 
 def _fence_with(text: str, marker: str) -> str:
@@ -370,13 +371,20 @@ def _inline(text: str, prefix: str) -> str:
 _SH_ENV = {**_ENV, "PATH": f"{Path(sys.executable).parent}{os.pathsep}{_ENV.get('PATH', '')}"}
 
 
+def _from_tree(fence: str) -> str:
+    """A fence that runs a shipped script, pointed at this tree's copy: the fixture repos
+    have no `sysop/scripts/`. Since Phase 387 (`Q-409` P3) Step 2a's landed check and Step
+    4a's recorded-head check are scripts; the fence is still what runs, as written."""
+    return fence.replace("python3 sysop/scripts/", f"python3 {SCRIPTS}/")
+
+
 def sh(w: Path, script: str):
     return subprocess.run(["/bin/bash", "-c", script], cwd=w, env=_SH_ENV,
                           capture_output=True, text=True)
 
 
 def _heredoc(w: Path, branch: str, target: str):
-    script = _fence_with(_close(), 'print("RECORDED HEAD: none")')
+    script = _from_tree(_fence_with(_close(), 'python3 sysop/scripts/pr_head_check.py "<branch>"'))
     script = script.replace('"<branch>"', f'"{branch}"').replace('"<merge target>"', f'"{target}"')
     return sh(w, script)
 
@@ -489,11 +497,11 @@ def test_the_published_arms_stale_test_separates_a_stale_flip_from_two_actors(cl
     assert "status: deferred" in sh(w, run).stdout, "a genuine move was read as stale"
 
 
-LANDED_MARKER = 'print(f"LANDED: {via} — held doc'
+LANDED_MARKER = 'python3 sysop/scripts/feature_branch.py landed "<branch>"'
 
 
 def _landed(w: Path, branch: str, default: str = "main"):
-    script = _fence_with(_close(), LANDED_MARKER)
+    script = _from_tree(_fence_with(_close(), LANDED_MARKER))
     return sh(w, script.replace('"<branch>"', f'"{branch}"').replace('"<default branch>"', f'"{default}"'))
 
 
@@ -599,7 +607,7 @@ def test_a_held_task_is_never_called_stale(squashed, monkeypatch):
 
 def test_step_2a_landed_check_stops_on_a_placeholder(closing):
     w, _ = closing
-    script = _fence_with(_close(), LANDED_MARKER)
+    script = _from_tree(_fence_with(_close(), LANDED_MARKER))
     out = sh(w, script)
     assert out.returncode == 3 and "STOP" in out.stdout, out
 
@@ -750,7 +758,8 @@ def test_the_merge_continue_rule_is_seeded_exactly():
 # not. A deliberate change moves its pin in the same commit (`_print_pins()`).
 
 from _reversal import slice_between  # noqa: E402
-from test_fix_in_branch_tier import (_anchor_count, _pin_hash, _pin_liveness,  # noqa: E402
+from _shipped_scripts import subcommand_body  # noqa: E402
+from test_fix_in_branch_tier import (_anchor_count, _pin_hash, _pin_liveness, _pin_program,  # noqa: E402
                                      _pin_norm, _pin_span)
 
 SPANS: dict[str, tuple[Path, str, str, bool]] = {
@@ -784,12 +793,12 @@ SPANS: dict[str, tuple[Path, str, str, bool]] = {
 
 PINS = {
     # Regenerate with:  .venv/bin/python3 -c "import sys; sys.path.insert(0,'tests'); import test_squash_provenance as T; T._print_pins()"
-    "2a landed check": "f8cb37f45298ec77",
+    "2a landed check": "f42f2e0cf90c1848",  # Phase 387: the span plus feature_branch.py landed, the heredoc moved verbatim, appended fenced so its indentation counts (round 1) (Phase 380: dict(...) env-strip)
     "2b landed not a target": "b451c64d35fc19a9",
-    "4a recorded head": "9449d9ec299bcc87",
+    "4a recorded head": "3f5715eac61473cb",  # Phase 387: the span plus pr_head_check.py, the heredoc moved verbatim, appended fenced so its indentation counts (round 1)
     "4a local-only onto": "61a7db51b5eff673",
     "4a published stale status": "765d61572e171703",
-    "shared append status": "22c2d25a2d4d5aae",
+    "shared append status": "3f3a06552dbf9c66",  # Phase 390's round: the bullet sits in `steps/4a-append.md`, and its "item 2" names Step 4a
     "4c 1b recorded heads": "48a0a64ed43f5528",
     "4d record": "ff5785d875908c6f",
     "step 8 squash provenance": "a4194238cfe0281c",
@@ -805,9 +814,17 @@ PINS = {
 
 def _located(label: str) -> tuple[str, str, int]:
     path, start, end, _ = SPANS[label]
-    text = path.read_text(encoding="utf-8")
+    text = text_of(path)
     span = slice_between(text, start, end, label)
     return text, span, text.index(span)
+
+
+# Since Phase 387 (`Q-409` P3) the decided programs of these two spans are shipped scripts,
+# so each pin covers its prose span plus the program it runs.
+_PROGRAMS = {
+    "2a landed check": lambda: subcommand_body("feature_branch.py", "landed"),
+    "4a recorded head": lambda: (SCRIPTS / "pr_head_check.py").read_text(encoding="utf-8"),
+}
 
 
 def _span(label: str) -> str:
@@ -817,14 +834,19 @@ def _span(label: str) -> str:
     return span
 
 
+def _pinned(label: str) -> str:
+    """What a pin hashes: the span, plus the program a moved heredoc became (Phase 387)."""
+    return _span(label) + _pin_program(_PROGRAMS[label]()) if label in _PROGRAMS else _span(label)
+
+
 def _print_pins() -> None:
     for label in SPANS:
-        print(f'    "{label}": "{_pin_hash(_span(label))}",')
+        print(f'    "{label}": "{_pin_hash(_pinned(label))}",')
 
 
 @pytest.mark.parametrize("label", sorted(SPANS))
 def test_the_decided_text_is_pinned(label: str) -> None:
-    got = _pin_hash(_span(label))
+    got = _pin_hash(_pinned(label))
     assert label in PINS, f'{label}: no pin recorded; add "{label}": "{got}"'
     assert got == PINS[label], (
         f"{label} changed (hash {got}, pinned {PINS[label]}). Phase 352 decided this text. "
@@ -834,7 +856,7 @@ def test_the_decided_text_is_pinned(label: str) -> None:
 @pytest.mark.parametrize("label", sorted(SPANS))
 def test_every_span_start_anchor_is_unique(label: str) -> None:
     path, start, _, _ = SPANS[label]
-    assert _anchor_count(path.read_text(encoding="utf-8"), start) == 1, label
+    assert _anchor_count(text_of(path), start) == 1, label
 
 
 @pytest.mark.parametrize("label", sorted(SPANS))

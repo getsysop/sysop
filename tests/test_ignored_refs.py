@@ -22,6 +22,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from skill_runner_text import text_of
 
 REPO = Path(__file__).resolve().parent.parent
 TESTS = REPO / "tests"
@@ -992,7 +993,7 @@ def test_an_ambient_git_dir_does_not_redirect_the_check(tmp_path):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _section(path: Path, start: str, end: str) -> str:
-    text = path.read_text(encoding="utf-8")
+    text = text_of(path)
     assert text.count(start) == 1, start
     i = text.index(start)
     j = text.index(end, i)
@@ -1039,13 +1040,17 @@ def test_step_2a_command_runs_from_the_repo_root_and_names_both_files(tmp_path):
 
 def _action_block() -> str:
     sec = _section(CLOSE, *STEP_2A)
-    (block,) = re.findall(r"(?ms)^ *```bash\n( *python3 - \"<workspace>\" \"<path>\".*?\n *PY)\n *```", sec)
-    return textwrap.dedent(block)
+    (block,) = re.findall(r"(?m)^ *```bash\n *(python3 sysop/scripts/feature_branch\.py keep-ignored "
+                          r"\"<workspace>\" \"<path>\" \"<commit or copy>\")\n *```", sec)
+    return block
 
 
 def _act(root: Path, ws: Path, rel: str, action: str) -> subprocess.CompletedProcess:
+    # The fence as written, pointed at this tree's script: step 3a's commit-or-copy program
+    # was a heredoc until Phase 387 (`Q-409` P3), and not every fixture carries `sysop/scripts/`.
     cmd = (_action_block().replace("<workspace>", str(ws)).replace("<path>", rel)
-           .replace("<commit or copy>", action))
+           .replace("<commit or copy>", action)
+           .replace("python3 sysop/scripts/", f"python3 {SCRIPT.parent}/"))
     return _shell(cmd, root)
 
 
@@ -1132,7 +1137,8 @@ def test_step_2a_copy_answer_reaches_the_callers_checkout_from_a_clone(tmp_path)
 
 def test_step_2a_action_block_refuses_a_placeholder(tmp_path):
     root, wt = _fixture_shape(tmp_path)
-    cmd = _action_block().replace("<workspace>", str(wt)).replace("<path>", "app/fixtures/a.json")
+    cmd = (_action_block().replace("<workspace>", str(wt)).replace("<path>", "app/fixtures/a.json")
+           .replace("python3 sysop/scripts/", f"python3 {SCRIPT.parent}/"))
     r = _shell(cmd, root)
     assert r.returncode == 3 and "placeholder" in r.stdout, r.stdout
 
@@ -1169,7 +1175,7 @@ def test_step_3b_0b_preserves_before_the_remove(tmp_path):
 
 def test_step_3b_0b_comes_before_the_collect_and_the_remove():
     """A refusal after the collect would need the rollback; before it, nothing to undo."""
-    text = CLOSE.read_text(encoding="utf-8")
+    text = text_of(CLOSE)
     at = text.index(STEP_3B[0])
     assert at < text.index(STEP_3B[1]) < text.index("git worktree remove <worktree-path>             # unforced")
     assert text.index("## Step 3b: Prepare Worktrees for Merge") < at
@@ -1214,7 +1220,7 @@ def test_every_site_declares_the_rule_it_runs_under():
     assert rule in json.loads(SETTINGS.read_text(encoding="utf-8"))["permissions"]["allow"]
     for path, head in ((CLOSE, "## Step 1: Gather State"), (CLAIM, "## Step 1: Parse Argument"),
                        (AUTO, "## Step 0")):
-        text = path.read_text(encoding="utf-8")
+        text = text_of(path)
         guard = text[text.index("## Pre-flight: Permission Guard"):text.index(head)]
         assert f"`{rule}`" in guard, path
 
@@ -1237,7 +1243,7 @@ def test_workflow_lists_the_script():
 # ─────────────────────────────────────────────────────────────────────────────
 
 from _reversal import slice_between  # noqa: E402
-from test_fix_in_branch_tier import (_anchor_count, _pin_hash, _pin_liveness,  # noqa: E402
+from test_fix_in_branch_tier import (_anchor_count, _pin_hash, _pin_liveness, _pin_program,  # noqa: E402
                                      _pin_norm, _pin_span)
 
 SPANS = {
@@ -1250,7 +1256,7 @@ SPANS = {
 
 PINS = {
     # Regenerate with:  .venv/bin/python3 -c "import sys; sys.path.insert(0,'tests'); import test_ignored_refs as T; T._print_pins()"
-    "2a step 3a": "be0164f3740850b2",  # Phase 362: the --dry-run arm (no commit or copy). Before it, Phase 355: the --clone remedy and workspace lookup name Step 1-pre; round 2 added the branch_tip: re-run
+    "2a step 3a": "a34a6dc08bdc0e83",  # Phase 387: the span plus feature_branch.py keep-ignored, the heredoc moved verbatim (`Q-409` P3). The program is appended fenced, so its indentation counts (Phase 387's round). Phase 380: the commit-or-copy heredoc's env-strip is `dict(...)`, which dontAsk admits (`Q-664`). Phase 362: the --dry-run arm (no commit or copy). Before it, Phase 355: the --clone remedy and workspace lookup name Step 1-pre; round 2 added the branch_tip: re-run
     "3b step 0b": "e90545d34b980fb0",
     "step 8 ignored references": "374cb27c300286f9",
     "claim-task 7e item 5b": "b3946b8ea1453670",
@@ -1260,9 +1266,14 @@ PINS = {
 
 def _located(label: str) -> tuple[str, str, int]:
     path, start, end, _ = SPANS[label]
-    text = path.read_text(encoding="utf-8")
+    text = text_of(path)
     span = slice_between(text, start, end, label)
     return text, span, text.index(span)
+
+
+# Since Phase 387 (`Q-409` P3) step 3a's commit-or-copy program is a shipped script, so its
+# pin covers the span plus the program it runs.
+_PROGRAMS = {"2a step 3a": lambda: __import__("_shipped_scripts").subcommand_body("feature_branch.py", "keep-ignored")}
 
 
 def _span(label: str) -> str:
@@ -1272,14 +1283,19 @@ def _span(label: str) -> str:
     return span
 
 
+def _pinned(label: str) -> str:
+    """What a pin hashes: the span, plus the program a moved heredoc became (Phase 387)."""
+    return _span(label) + _pin_program(_PROGRAMS[label]()) if label in _PROGRAMS else _span(label)
+
+
 def _print_pins() -> None:
     for label in SPANS:
-        print(f'    "{label}": "{_pin_hash(_span(label))}",')
+        print(f'    "{label}": "{_pin_hash(_pinned(label))}",')
 
 
 @pytest.mark.parametrize("label", sorted(SPANS))
 def test_the_decided_text_is_pinned(label: str) -> None:
-    got = _pin_hash(_span(label))
+    got = _pin_hash(_pinned(label))
     assert label in PINS, f'{label}: no pin recorded; add "{label}": "{got}"'
     assert got == PINS[label], (
         f"{label} changed (hash {got}, pinned {PINS[label]}). Phase 354 decided this text. "
@@ -1289,7 +1305,7 @@ def test_the_decided_text_is_pinned(label: str) -> None:
 @pytest.mark.parametrize("label", sorted(SPANS))
 def test_every_span_start_anchor_is_unique(label: str) -> None:
     path, start, _, _ = SPANS[label]
-    assert _anchor_count(path.read_text(encoding="utf-8"), start) == 1, label
+    assert _anchor_count(text_of(path), start) == 1, label
 
 
 @pytest.mark.parametrize("label", sorted(SPANS))

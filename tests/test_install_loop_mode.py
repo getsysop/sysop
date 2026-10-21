@@ -34,6 +34,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 INSTALL_SH = REPO_ROOT / "install.sh"
 
@@ -69,8 +71,21 @@ LOOP_SCRIPTS = {
     # modes, sources `_git_lib.sh` to resolve the protected branch, and its
     # fallback warning tells the operator to run `default_branch.sh`.
     "_git_lib.sh", "default_branch.sh",
+    # Phase 386 (`Q-409` P3): the two loop review skills' Step 5f, which was a heredoc.
+    "round_receipt.py",
 }
 EXCLUDED_SCRIPTS = {
+    # Phase 386 (`Q-409` P3): heredocs of `/review-close` (1-pre, 3c, 3b, 4c) and
+    # `/claim-task` (7f) that became scripts. Loop mode installs neither skill.
+    "clone_sync.py", "smoke_detect.py", "pending_doc_collect.py", "close_index.py",
+    "claim_record.py",
+    # Phase 387: review-close's remaining always-run heredocs (2a, 2b, 2e, 3b, 3c, 4a, 4c).
+    "feature_branch.py", "convention_size.py", "claim_artifacts.py", "workspace_locate.py",
+    "smoke_record.py", "pr_head_check.py", "close_check.py",
+    # Phase 394 (`Q-667`): Step 2b's verdict reuse. Phase 395 (`Q-666`): its security copy.
+    "gate_verdict.py", "security_map_filter.py",
+    # Phase 388 (`Q-409` P2): the arm receipt behind review-close's step files.
+    "close_arms.py",
     "backfill_completed_dates.py", "batch_work.sh", "claim_task.sh",
     # Phase 237: a `tasks/index.yml` writer, so it is lifecycle. Loop mode
     # installs no task queue at all, which is what makes this a classification
@@ -87,11 +102,13 @@ EXCLUDED_SCRIPTS = {
     # Phase 363 (`Q-603`): `/review-close --prepare`/`--resume`'s run directory.
     # Loop mode installs no `/review-close`.
     "close_run.py",
+    # Phase 374 (`Q-411`): the unattended land's signed gate, which runs `close_run.py`.
+    "close_gate.py",
     "permission_denied_hook.py",
     "pr_dependabot.py", "scope_overlap.py", "sitrep_survey.py",
     "validate_tasks.py",
 }
-LOOP_ALLOW_COUNT = 27
+LOOP_ALLOW_COUNT = 30  # Phase 386: + round_receipt.py
 # The exact loop-mode allow-list (LOOP_ONLY_SPEC § "Leg 1 findings"). Asserting
 # the *set*, not just the count, is what stops a wrong-but-same-size permission set
 # (e.g. a dropped `gh release create` swapped in for a loop rule) shipping green.
@@ -131,6 +148,12 @@ EXPECTED_LOOP_ALLOW = {
     "Bash(.venv/bin/python3 sysop/scripts/ingest_security_report.py:*)",
     "Bash(python3 sysop/scripts/security_partition.py:*)",
     "Bash(.venv/bin/python3 sysop/scripts/security_partition.py:*)",
+    # Phase 386: Step 5f's receipt writer, a heredoc until then.
+    "Bash(python3 sysop/scripts/round_receipt.py:*)",
+    # Q-663 (Phase 377): /report-issues ships in loop mode; under `dontAsk` its staged body
+    # and its friction-log record are denied without these.
+    "Edit(/sysop/SYSOP_ISSUES.md)",
+    "Edit(/sysop/runtime/giveback/**)",
     "Bash(python3 -c:*)",
     "Bash(python3 -:*)",
     # Phase 152: the give-back skills' auth gate. `gh` is not in Claude Code's
@@ -227,6 +250,42 @@ def _fresh_loop(tmp_path, name="c", files=None):
     return root
 
 
+def _shared_entries(shared):
+    """What loop mode filters in `_shared/`: each `.md` file's stem and, since
+    Phase 383 (install_skills ships subdirectories), each directory's name, with
+    the installer's own skips. A directory left out of this set would reach every
+    loop install unclassified."""
+    entries = {p.stem for p in shared.glob("*.md")}
+    entries |= {
+        p.name for p in shared.iterdir()
+        if p.is_dir() and not p.is_symlink()
+        and p.name != "__pycache__" and not p.name.startswith(".")
+    }
+    return entries
+
+
+def test_shared_entries_sees_a_directory_and_skips_what_the_installer_skips(tmp_path):
+    for name in ("kept.md", "newdir/a.md", "__pycache__/x.pyc", ".dot/a.md"):
+        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / name).write_text("x\n")
+    (tmp_path / "linked").symlink_to("newdir")
+    assert _shared_entries(tmp_path) == {"kept", "newdir"}
+
+
+def test_the_drift_guard_names_an_unbucketed_shared_directory(tmp_path, monkeypatch):
+    """The helper working is not the guard using it: today `_shared/` has no
+    directory, so a guard reverted to file stems would stay green. Point it at a
+    tree that has one (Phase 383's round)."""
+    shared = tmp_path / "core/skills/_shared"
+    shared.mkdir(parents=True)
+    for stem in LOOP_SHARED_STEMS:
+        (shared / f"{stem}.md").write_text("x\n")
+    (shared / "brand-new-partials").mkdir()
+    monkeypatch.setattr(sys.modules[__name__], "REPO_ROOT", tmp_path)
+    with pytest.raises(AssertionError, match="brand-new-partials"):
+        TestClassificationComplete().test_every_source_shared_partial_is_bucketed()
+
+
 # ── Layer 1: static classification drift guard ──
 class TestClassificationComplete:
     def test_every_source_skill_is_bucketed(self):
@@ -239,7 +298,7 @@ class TestClassificationComplete:
         )
 
     def test_every_source_shared_partial_is_bucketed(self):
-        src = {p.stem for p in (REPO_ROOT / "core/skills/_shared").glob("*.md")}
+        src = _shared_entries(REPO_ROOT / "core/skills/_shared")
         unclassified = src - LOOP_SHARED_STEMS - EXCLUDED_SHARED_STEMS
         assert not unclassified, (
             f"unclassified _shared partial(s): {sorted(unclassified)} — a new "
@@ -308,6 +367,13 @@ class TestLoopBundleExact:
                 rf"(?:bash|python3?|\.venv/bin/python3)\s+sysop/scripts/{re.escape(name)}"
             )
             assert not pat.search(blob), f"loop skill invokes dropped script {name}"
+        # A loop-shipped script reaches another through `subprocess`, so no shell verb sits
+        # before the path: any `sysop/scripts/<dropped>` in one is a call that cannot resolve.
+        # Phase 386 made `round_receipt.py` the first loop script that was a skill heredoc.
+        scripts = {p.name: p.read_text() for p in (root / "sysop/scripts").rglob("*.py")}
+        for name in EXCLUDED_SCRIPTS:
+            for script, text in scripts.items():
+                assert f"sysop/scripts/{name}" not in text, f"loop script {script} names dropped {name}"
         for stem in EXCLUDED_SHARED_STEMS:
             # An include/read directive (skills say "read _shared/x.md" / "per
             # _shared/x.md"). Bare backtick mentions are prose.
@@ -397,6 +463,9 @@ class TestLoopDryRun:
         assert "'git worktree add/remove'" in flat, (
             "the loop disclosure no longer names its git worktree add/remove grants"
         )
+        assert "and file edits to sysop/SYSOP_ISSUES.md and sysop/runtime/giveback/" in flat, (
+            "the loop disclosure no longer names its two file-edit grants (Q-663)"
+        )
 
 
 class TestFullModeUnchanged:
@@ -408,6 +477,33 @@ class TestFullModeUnchanged:
         assert (root / "tasks").exists()
         assert (root / "sysop/scripts/claim_task.sh").exists()
         assert (root / ".claude/skills/review-close").is_dir()
+
+
+    def test_full_disclosure_names_the_edit_grants(self, tmp_path):
+        """Q-663 (Phase 377): Phase 131's rule, no grant applied silently, for the two
+        file-edit rules the full template seeds."""
+        root = _make_consumer(tmp_path / "fdr", files={"README.md": "# r\n"})
+        r = _run(root, "--packs", "", "--dry-run")
+        flat = " ".join(
+            " ".join(re.sub(r"^\s*•\s*", "", line).split()) for line in r.stdout.splitlines()
+        )
+        assert "pre-authorizes the agent" in flat, "not the full-mode disclosure"
+        assert "and file edits to sysop/SYSOP_ISSUES.md and sysop/runtime/giveback/" in flat
+
+    @pytest.mark.parametrize("mode", ["full", "loop"])
+    def test_the_edit_rules_reach_an_existing_settings_file(self, tmp_path, mode):
+        """Q-663 (Phase 377's round, lens 2): every installed consumer takes the merge path on
+        `--update`, not the fresh copy, and nothing checked the two rules arrive through it."""
+        root = _make_consumer(tmp_path / f"merge-{mode}", files={
+            "README.md": "# r\n",
+            ".claude/settings.json": json.dumps(
+                {"permissions": {"allow": ["Bash(make test)"]}}, indent=2) + "\n",
+        })
+        _run(root, "--packs", "", "--mode", mode)
+        allow = json.loads((root / ".claude" / "settings.json").read_text())["permissions"]["allow"]
+        assert "Bash(make test)" in allow, "the merge dropped the consumer's own rule"
+        assert {"Edit(/sysop/SYSOP_ISSUES.md)", "Edit(/sysop/runtime/giveback/**)"} <= set(allow)
+        assert len(allow) == len(set(allow)), "the merge duplicated a rule"
 
 
 class TestModeStateMachine:

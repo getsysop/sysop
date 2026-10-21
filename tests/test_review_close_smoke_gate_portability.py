@@ -23,6 +23,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from skill_runner_text import text_of
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SKILL = REPO_ROOT / "core" / "skills" / "review-close" / "SKILL.md"
@@ -36,7 +37,7 @@ def _preamble() -> str:
     it as heredoc data. That mistake produced a confidently wrong reading of this very
     block while this test was being written.
     """
-    text = SKILL.read_text(encoding="utf-8")
+    text = text_of(SKILL)
     i = text.index('SMOKE_WORKTREE_DIRS=""')
     k = text.index("done <<BR_LIST\n", i)
     j = text.index("\nBR_LIST\n", k) + len("\nBR_LIST\n")
@@ -70,9 +71,9 @@ def _step_3b_opener() -> str:
     """Step 3b step 0's invocation line — bash this phase ALSO introduced, and which the
     preamble span above does not reach. It parses on 3.2 today; nothing held it, which is
     how the defect this module exists for got in."""
-    text = SKILL.read_text(encoding="utf-8")
-    i = text.index('python3 - "<branch name>"')
-    return text[i:text.index("<<'PY'", i)] + "<<'PY'\ncat >/dev/null\nPY\n"
+    text = text_of(SKILL)
+    i = text.index('python3 sysop/scripts/workspace_locate.py "<branch name>"')
+    return text[i:text.index("\n", i) + 1]
 
 
 NEW_BASH_BLOCKS = {"step-3c-preamble": 'APPROVED_BRANCHES=""\n' + PREAMBLE,
@@ -146,7 +147,7 @@ def test_the_preamble_maps_a_branch_to_its_worktree(shell: str, tmp_path: Path):
 def test_an_unsubstituted_placeholder_still_hard_errors(shell: str):
     """The loud-failure contract predates this change and must survive it: a placeholder
     left in place must exit 3, not scan nothing and report NO_SMOKE_REQUIRED."""
-    text = SKILL.read_text(encoding="utf-8")
+    text = text_of(SKILL)
     i = text.index("APPROVED_BRANCHES='<approved-branch-1>")
     j = text.index("\nSMOKE_WORKTREE_DIRS=", i)
     r = subprocess.run([shell, "-"], input=text[i:j], capture_output=True, text=True)

@@ -33,11 +33,14 @@ What these assert, in order of what they are worth:
 from __future__ import annotations
 
 import ast
+import contextlib
 import json
+import os
 import re
 import shutil
 import subprocess
 import sys
+import warnings
 from pathlib import Path
 
 import pytest
@@ -78,6 +81,42 @@ if SCRIPT.exists():
     CENSUSED = sorted(p.stem for p in VERDICTS.glob("*.json"))
 else:  # pragma: no cover - the mirror tree
     CENSUSED = []
+
+
+#: `Q-677` (Wade, 2026-10-12): while `Q-409`'s split is scoped, the campaign's instruments REPORT
+#: rather than fail. Each live-tree check of the census's own state — a block with no verdict, a
+#: stale verdict, a spec figure the census no longer computes — runs as before, and a failure
+#: becomes a `CensusAdvisory` warning in the pytest summary. `SYSOP_CENSUS_STRICT=1` makes them
+#: fail again. The checks of the instruments THEMSELVES (the stale arm can fail, a wrong digit is
+#: reported) stay hard, so a strict run still means what it meant. Phase 388 (`Q-409` P2, Wade's
+#: answer of 2026-10-19) retired the `EDITOR_MIXED_CEILING` ratchet and its follower: the core's
+#: `wc -c` budget, `CORE_BUDGET_BYTES` in `tests/test_close_arms.py`, replaced them, as below
+#: said it would.
+STRICT_ENV = "SYSOP_CENSUS_STRICT"
+
+
+class CensusAdvisory(UserWarning):
+    """A census instrument found the tree out of step with its record; advisory under `Q-677`."""
+
+
+class advisory(contextlib.ContextDecorator):
+    """Turn an `AssertionError` into a `CensusAdvisory` warning unless `SYSOP_CENSUS_STRICT=1`.
+
+    Works as a decorator on a whole test or as a `with` block around one assert. Only
+    `AssertionError` is softened: a crash in the census itself still fails the test, because an
+    instrument that cannot run is not reporting anything.
+    """
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if exc_type is None or not issubclass(exc_type, AssertionError):
+            return False
+        if os.environ.get(STRICT_ENV) == "1":
+            return False
+        warnings.warn(CensusAdvisory(str(exc)), stacklevel=2)
+        return True
 
 
 def test_there_is_at_least_one_censused_skill():
@@ -157,6 +196,7 @@ def test_reconstruct_actually_detects_a_divergence():
 
 
 @pytest.mark.parametrize("skill", CENSUSED)
+@advisory()
 def test_every_block_carries_a_verdict(skill):
     c = census(skill)
     assert not c["unclassified"], (
@@ -168,6 +208,7 @@ def test_every_block_carries_a_verdict(skill):
 
 
 @pytest.mark.parametrize("skill", CENSUSED)
+@advisory()
 def test_no_verdict_is_stale(skill):
     c = census(skill)
     assert not c["stale"], (
@@ -370,9 +411,9 @@ def shadowed_verdict_problems(blocks, recorded) -> list[str]:
       now win, but `runner` merely restates what construction already answers, and a second
       copy of an answer is the staleness class this census is keyed by sha to avoid.
 
-    Written as a predicate the controls drive, not as inline comparisons — `editor_mass_problems`
-    below carries the record of what inline arithmetic cost when the control re-asserted its own
-    mutation instead of exercising the guard.
+    Written as a predicate the controls drive, not as inline comparisons — the retired ratchet's
+    `editor_mass_problems` (Phase 297, removed by Phase 388; `git log -S`) carried the record of
+    what inline arithmetic cost when the control re-asserted its own mutation.
     """
     problems = []
     absolute = CONSTRUCTION_RUNNER - AUTHORED_OVERRIDES_CONSTRUCTION
@@ -507,6 +548,7 @@ def test_construction_is_still_absolute_for_delimiters_and_frontmatter():
 SPEC = REPO / "tools" / "CONTEXT_THINNING_SPEC.md"
 
 
+@advisory()
 def test_the_spec_publishes_the_figures_the_census_computes():
     """§ 8.1's close-of-phase row must be what the tool prints. Filed by this phase's round.
 
@@ -561,7 +603,6 @@ def test_the_spec_publishes_the_figures_the_census_computes():
         ("editor chars", r"`editor`\s+(?:is\s+unchanged\s+at|is)\s+([\d,]{4,})", c["tally"]["editor"]["chars"]),
         ("mixed chars", r"(?<!\+)`mixed`\s+is\s+([\d,]{4,})", c["tally"]["mixed"]["chars"]),
         ("editor+mixed", r"`editor`\+`mixed`\s+is\s+\**([\d,]+)", tot),
-        ("headroom", r"([\d,]+)\s+under\s+`EDITOR_MIXED_CEILING`", EDITOR_MIXED_CEILING - tot),
     ):
         got = _n(pattern)
         assert got is not None, (
@@ -681,6 +722,7 @@ def per_section_problems(spec: str, per: dict, total: int) -> list[str]:
     return problems
 
 
+@advisory()
 def test_the_spec_publishes_the_per_section_figures():
     """§ 8.1's current-state row must be what the aggregation computes.
 
@@ -717,10 +759,15 @@ def test_a_wrong_published_digit_is_reported(group):
     **total** silently lost its case. The ids now come from `_PUBLISHED_FIGURE_GROUPS`, which is
     `range(_CURRENT_ROW.groups)`, so the next section to be taken brings its own case with it.
     """
-    spec = SPEC.read_text(encoding="utf-8")
+    per, total = _per_section_editor_mixed("review-close")
+    # From a CURRENT row, asserted clean first: under `Q-677` the published row may lag the
+    # file, and a bump over an already-wrong row is "reported" whether the arm reads the figure
+    # or not, which is a control passing by not running.
+    spec = _row_rewritten(SPEC.read_text(encoding="utf-8"),
+                          [per.get(h, 0) for h in _CAMPAIGN_SECTIONS.values()] + [total])
+    assert not per_section_problems(spec, per, total), "the rebuilt baseline is not clean"
     row = _CURRENT_ROW.search(spec)
     assert row, "no published row to mutate; the guard above says what that means"
-    per, total = _per_section_editor_mixed("review-close")
     lo, hi = row.span(group + 1)
     bumped = spec[:lo] + f"{int(row.group(group + 1).replace(',', '')) + 1:,}" + spec[hi:]
     assert per_section_problems(bumped, per, total), (
@@ -766,8 +813,8 @@ def test_every_published_figure_has_a_wrong_digit_case():
 #: only, **every** section, then stop — and `_CAMPAIGN_SECTIONS` above names the three that
 #: have been run. Nothing in this tree related the two, so the file's other fourteen
 #: editor-bearing sections were absent from every number the campaign published: § 8.1's
-#: current-state row covers three headings, and `slack_problems` derives its bound from the
-#: minimum over the same three. Phase 299 opened on a brief asserting that § 2b "closes the
+#: current-state row covers three headings, and the retired ratchet's `slack_problems` derived its
+#: bound from the minimum over the same three. Phase 299 opened on a brief asserting that § 2b "closes the
 #: campaign". It does not, and the arithmetic refuting it was already in the spec's own § 8.1
 #: table — its top three sections are 57% cumulative and its fourth row reaches 74%, so eleven
 #: sections carrying the remaining 26% are itemised nowhere. (A first version of this comment
@@ -788,7 +835,8 @@ _SECTIONS_NOT_YET_TAKEN = frozenset({
     "### 4a. Merge Approved Feature Branches",
     "### 4b. Close Merged Batches",
     "### 1a. Classify Worktree State (silent-data-loss guard, BeanRider ISSUE-0016)",
-    "#### `pr` policy",
+    # `#### `pr` policy` left in Phase 393 (`Q-409` P4b): its body is `steps/4d-pr.md`, and this
+    # census reads the core alone, so the core's stub carries no editor characters.
     "### 2e. Claim-Artifact Report (report, never reject — Phase 237, part B leg 1)",
     "### 1c. Drain Archive State Before Rebasing",
     "## Step 3: Run Verification",
@@ -800,8 +848,8 @@ def roster_problems(per: dict, taken: dict = None, not_taken=None) -> list[str]:
     """The campaign's two rosters must PARTITION the file's editor-bearing sections.
 
     A function rather than an inline assert, and with every input an argument, because the
-    control below drives it over mutated rosters — the shape `editor_mass_problems` and
-    `slack_problems` already carry in this module, for the reason recorded on each: a control
+    control below drives it over mutated rosters — the shape the retired ratchet's predicates
+    carried in this module, for the reason recorded on each: a control
     that re-does the arithmetic in its own body passes over a neutered predicate.
     """
     taken = _CAMPAIGN_SECTIONS if taken is None else taken
@@ -899,20 +947,6 @@ def test_the_literal_check_is_not_vacuous(src, expect):
     assert bool(problems) is expect, f"{src!r} -> {problems!r}"
 
 
-#: The HISTORICAL per-section shape the slack rows were written against. Bound once so the pin
-#: below reads as the bounds it is pinning rather than as five copies of a dict.
-#:
-#: **DO NOT REFRESH IT, and the name says so because the previous one did the opposite.** Phase
-#: 301 called this `_PINNED_FIXTURE_SECTIONS` and its comment called the values "live"; `2b` was
-#: already 7,807 and this says 25,804, which was its value at Phase 298's close. The round found
-#: the trap: a maintainer who believes the comment and updates `2b` to the live figure gets FIVE
-#: spurious pin failures reading "the pinned case ... is no longer in its parametrize list",
-#: which is false — the parametrize list was never touched, and `slack_problems` still passes.
-#: These are FIXTURE values. Their whole job is to be stable while the census moves; pinning them
-#: to the live census is what would make this control need editing every phase, which is the
-#: property the pin exists to avoid. The live figures live in `_per_section_editor_mixed`.
-_PINNED_FIXTURE_SECTIONS = {"3b": 24_487, "4c": 11_971, "2b": 25_804}
-
 #: How many parametrized controls this module carries. An EXACT pin, not a floor.
 #:
 #: `Q-518`, Phase 301, and this constant is the round's correction of the phase's own first fix.
@@ -927,8 +961,9 @@ _PINNED_FIXTURE_SECTIONS = {"3b": 24_487, "4c": 11_971, "2b": 25_804}
 #: controls are `ast.Name`-driven (`CENSUSED` x6, `_PUBLISHED_FIGURE_GROUPS` x1, `_PINNED_TESTS`
 #: x1 since Phase 327) and carry no inline rows, so `_CASE_PINS` cannot reach them; deleting the
 #: first seven left the predecessor red and left the first replacement silent. Raising this when a control is added is a one-line,
-#: reviewable edit — the trade `EDITOR_MIXED_CEILING` already makes in this module.
-_PARAMETRIZE_DECORATOR_COUNT = 15
+#: reviewable edit — the trade `CORE_BUDGET_BYTES` makes in `tests/test_close_arms.py`.
+#: Phase 388 removed two, the ratchet's and the slack bounds', with the ratchet.
+_PARAMETRIZE_DECORATOR_COUNT = 13
 
 #: The case rows that may not leave this module, keyed by the test they control.
 #:
@@ -983,38 +1018,18 @@ _CASE_PINS = {
         ({"A": 1, "B": 2}, {}, {"A", "B"}, False),
         ({}, {"a": "A"}, {"B"}, True),
     )),
-    # The filing's own subject. The last row is the only one that isolates the zero arm.
-    "test_the_editor_mass_ratchet_is_not_vacuous": (None, (
-        (150_192, 150_192, 5_000, False),
-        (150_193, 150_192, 5_000, True),
-        (100_000, 150_192, 5_000, True),
-        (149_000, 150_192, 5_000, False),
-        (0, 150_192, 5_000, True),
-        (0, 100, 5_000, True),
-    )),
     # The pin's own control, closing the loop its docstring describes. Columns 0 and 1 — the
     # find/replace pair is the mutation; column 2 is the prose reason and may be reworded.
     # Without this entry the control's "its rows are subject to the pin it is testing" sentence
     # is a claim the tree does not support, which is the shape this module keeps paying for.
     "test_the_case_pin_actually_bites": ((0, 1), (
-        ("\n    (0, 100, 5_000, True),\n", "\n"),
-        ('\n    (4_000, {"3b": 24_487, "4c": 11_971, "2b": 4_000}, 5_000, True),\n',
-         '\n    (4_000, {"3b": 24_487, "4c": 11_971, "2b": 4_000}, 5_000, False),\n'),
-        ("\n    (0, 100, 5_000, True),\n", "\n    (0, 100, 5_000, bool(1)),\n"),
+        ('\n    ("code", "editor", False),         # Q-511 shape (a): these are the ones that now win\n', "\n"),
+        ('\n    ("frontmatter", "editor", True),   # prohibition 7 — may not be relocated at any size\n',
+         '\n    ("frontmatter", "editor", False),   # prohibition 7 — may not be relocated at any size\n'),
+        ('\n    ("code", "editor", False),         # Q-511 shape (a): these are the ones that now win\n',
+         '\n    ("code", "editor", bool(0)),         # Q-511 shape (a): these are the ones that now win\n'),
         ("\ndef test_the_roster_partition_is_not_vacuous(per, taken, not_taken, expect):",
          "\ndef test_the_roster_partition_is_not_vacuous_RENAMED(per, taken, not_taken, expect):"),
-    )),
-    # Both bounds, the `>=` boundary, and the two rows that pin `SLACK_CEILING` itself.
-    "test_the_slack_bounds_refuse_what_they_claim_to": (None, (
-        (5_000, _PINNED_FIXTURE_SECTIONS, 5_000, False),
-        (11_970, _PINNED_FIXTURE_SECTIONS, 5_000, True),
-        (4_999, {"3b": 24_487, "4c": 4_000, "2b": 25_804}, 5_000, True),
-        (50_000, _PINNED_FIXTURE_SECTIONS, 500_000, True),
-        (4_000, {"3b": 24_487, "4c": 11_971, "2b": 4_000}, 5_000, True),
-        (100, {"3b": 24_487, "4c": 0, "2b": 25_804}, 5_000, True),
-        (100, {}, 5_000, True),
-        (5_001, _PINNED_FIXTURE_SECTIONS, None, True),
-        (5_000, _PINNED_FIXTURE_SECTIONS, None, False),
     )),
 }
 
@@ -1058,17 +1073,20 @@ def test_no_parametrized_case_list_here_can_be_silently_emptied():
 
 
 @pytest.mark.parametrize("find,replace,why", [
+    # Phase 388 retired the ratchet these rows first targeted (its rows went with it), so they
+    # target the shadowed-verdict control's pinned rows instead.
     # (1) the deletion case — the one `len(cases.elts) >= 2` cannot see, and the whole filing.
-    ("\n    (0, 100, 5_000, True),\n", "\n",
-     "a pinned row DELETED, leaving five of six — invisible to any count"),
+    ('\n    ("code", "editor", False),         # Q-511 shape (a): these are the ones that now win\n', "\n",
+     "a pinned row DELETED, leaving nine of ten — invisible to any count"),
     # (2) the in-place inversion. A count pin is satisfied by this and so is an equality pin
     # over row COUNT; only comparing the row's value sees it.
-    ('\n    (4_000, {"3b": 24_487, "4c": 11_971, "2b": 4_000}, 5_000, True),\n',
-     '\n    (4_000, {"3b": 24_487, "4c": 11_971, "2b": 4_000}, 5_000, False),\n',
-     "a pinned row INVERTED in place — the `>=` boundary flipped to expect no problem"),
+    ('\n    ("frontmatter", "editor", True),   # prohibition 7 — may not be relocated at any size\n',
+     '\n    ("frontmatter", "editor", False),   # prohibition 7 — may not be relocated at any size\n',
+     "a pinned row INVERTED in place — prohibition 7's arm flipped to expect no problem"),
     # (3) the evaluability escape. A row that stops being a literal stops being comparable, and
     # the extractor must report that as missing rather than skip it.
-    ("\n    (0, 100, 5_000, True),\n", "\n    (0, 100, 5_000, bool(1)),\n",
+    ('\n    ("code", "editor", False),         # Q-511 shape (a): these are the ones that now win\n',
+     '\n    ("code", "editor", bool(0)),         # Q-511 shape (a): these are the ones that now win\n',
      "a pinned row converted to a computed expression — `literal_eval` cannot read it"),
     # (4) the whole control going away, which the `test not in found` arm exists for.
     ("\ndef test_the_roster_partition_is_not_vacuous(per, taken, not_taken, expect):",
@@ -1202,6 +1220,17 @@ def test_a_second_published_row_is_refused():
     )
 
 
+def _row_rewritten(spec: str, values: list[int]) -> str:
+    """`spec` with the `current per-section` row's figures replaced by `values`, in order."""
+    row = _CURRENT_ROW.search(spec)
+    assert row and len(values) == len(row.groups()), "the current per-section row is gone or reshaped"
+    out, last = [], 0
+    for i, v in enumerate(values, 1):
+        out += [spec[last:row.start(i)], f"{v:,}"]
+        last = row.end(i)
+    return "".join(out) + spec[last:]
+
+
 def test_a_fully_thinned_section_has_a_green_state():
     """The state the NEXT phase produces, which the first version could not express.
 
@@ -1221,11 +1250,11 @@ def test_a_fully_thinned_section_has_a_green_state():
         pytest.skip("2b is already fully thinned or retired; nothing left for this arm to simulate")
     thinned_per = {k: v for k, v in per.items() if k != head}
     thinned_total = total - per[head]
-    spec = SPEC.read_text(encoding="utf-8")
-    row = _CURRENT_ROW.search(spec)
-    rewritten = row.group(0).replace(f"2b {per[head]:,}", "2b 0").replace(
-        f"total {total:,}", f"total {thinned_total:,}")
-    updated = spec[:row.start()] + rewritten + spec[row.end():]
+    # Built from the COMPUTED figures, not the published ones: under `Q-677` the published row
+    # may lag the file, and a simulation over a stale row fails for the staleness, not for the
+    # state it exists to certify.
+    updated = _row_rewritten(SPEC.read_text(encoding="utf-8"), [
+        thinned_per.get(h, 0) for h in _CAMPAIGN_SECTIONS.values()] + [thinned_total])
     assert not per_section_problems(updated, thinned_per, thinned_total), (
         "a fully-thinned section reported as `2b 0` is still refused — the guard has no green "
         "state for the outcome the campaign exists to produce"
@@ -1252,8 +1281,41 @@ def test_the_census_script_runs_clean_as_a_subprocess():
         [sys.executable, str(REPO / "tools" / "reader_census.py"), "--check", "--kinds"],
         capture_output=True, text=True, cwd=REPO,
     )
-    assert r.returncode == 0, f"reader_census.py --check failed:\n{r.stdout}\n{r.stderr}"
-    assert "rebuild from blocks: exact" in r.stdout, r.stdout
+    problems = _check_run_problems(r.returncode, r.stdout, r.stderr)
+    assert not problems, f"{problems}\n{r.stdout}\n{r.stderr}"
+    with advisory():
+        assert r.returncode == 0, f"reader_census.py --check reports:\n{r.stdout}\n{r.stderr}"
+
+
+def _check_run_problems(rc: int, stdout: str, stderr: str = "") -> list[str]:
+    """What makes a `--check` run a FAILURE rather than an advisory finding.
+
+    Exit 1 is `--check` reporting unclassified or stale verdicts, which is advisory under
+    `Q-677`; any other non-zero exit is the script failing to run, and a run whose rebuild is
+    not exact has stopped describing the file. Both stay hard.
+    """
+    problems = []
+    if rc not in (0, 1):
+        problems.append(f"reader_census.py --check exited {rc}: the instrument did not run")
+    # Per RUN, not per skill: with one censused skill (`review-close.json`, today) they are the
+    # same. A second censused skill could hide a diverging rebuild behind an exact one; count
+    # the "exact" lines against the censused skills when that skill is added.
+    if "rebuild from blocks: exact" not in stdout:
+        problems.append("the rebuild is not exact: the census no longer describes the file")
+    if "Traceback" in stderr:
+        # Lens 3, V3: a crash AFTER the rebuild line still exits 1, which the split above
+        # would otherwise read as an advisory.
+        problems.append("reader_census.py --check crashed: an exit 1 with a traceback is not a finding")
+    return problems
+
+
+def test_a_crashed_check_run_is_never_advisory():
+    """Control for the split above (Phase 381 battery, V06): the live run exits 0 or 1, so a
+    widened exit test passes there; only a driven crash shows it."""
+    exact = "rebuild from blocks: exact"
+    assert _check_run_problems(2, exact) and _check_run_problems(1, "Traceback")
+    assert not _check_run_problems(1, exact) and not _check_run_problems(0, exact)
+    assert _check_run_problems(1, exact, "Traceback (most recent call last):\n  boom")
 
 
 def test_check_exits_non_zero_when_something_is_unclassified(tmp_path):
@@ -1383,6 +1445,7 @@ def seven_two_problems(spec: str, computed: tuple) -> list[str]:
             for lab, p, c in zip(labels, published, computed) if p != c]
 
 
+@advisory()
 def test_the_spec_publishes_the_authoring_figures_it_computes():
     """§ 7.2's four figures must be what the tree holds — `Q-506`.
 
@@ -1499,210 +1562,6 @@ def test_a_missing_authoring_row_is_reported():
     )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# The editor-mass ratchet — `Q-504`, ratified 2026-09-15, built in Phase 297.
-#
-# The convention it enforces is written in `core/skills/review-close/REFERENCE.md`
-# § *Where new rationale goes*: new rationale is authored in the reference, not the
-# runner. Without a gate that is a convention honoured by memory, which is what
-# Phase 154 ruled is not a mechanism.
-#
-# **Absolute characters, not a share.** A share ratchet (`editor+mixed` as a percentage
-# of the file) is satisfied by adding runner text: write four kilobytes of new
-# procedure and the same rationale mass reads as a smaller fraction. The measured
-# behaviour of this file is that it grows — roughly +8 KB per touching commit across
-# the eleven that ran from Phase 275 to Phase 290 — so a share denominator is the one
-# quantity an author can move without deleting anything.
-#
-# **Not the ceiling `tools/CONTEXT_THINNING_SPEC.md` § 10 refuses.** That refusal is
-# about a per-file token budget, and it stands: Phase 168 built a character ratchet on
-# a whole file, measured it, and removed it when a 19-character softening fit under the
-# slack with every test green. This one constrains EDITOR mass only. Instructions are
-# unconstrained — a phase may add as much procedure as the work needs — so the
-# shrink-and-add bypass has nothing to trade against.
-#
-# **What it cannot do, stated rather than implied.** The ceiling is a constant in a test
-# file, so raising it is possible; what the gate buys is that raising it is a deliberate,
-# visible edit in the diff rather than a side effect of writing prose. That is the half
-# `CLAUDE.md`'s round dimension covers — a reviewer reads the phase's own diff for
-# rationale belonging in `REFERENCE.md` — and it is why `Q-504` was ratified as BOTH
-# halves. Neither alone is a mechanism: the ratchet nets out under shrink-and-add, and a
-# dimension is recall that can be skipped silently.
-#
-# The figures are NOT repeated here. A first version of this comment read "verified at
-# authoring … 37,211 `editor` + 112,981 `mixed` = 150,192", which was already wrong in all
-# three numbers by the time Phase 299 edited the line below it and left the comment standing
-# — the `Q-495` class, one line above the constant the campaign moves most often. The live
-# values are what `test_the_ratchet_constants_describe_this_tree` compares against; a comment
-# restating them is a second copy nothing checks. Round finding, guards lens.
-EDITOR_MIXED_CEILING = 104_857
-
-# How far the ceiling may sit ABOVE the measured value before the guard demands it be
-# lowered. Without this the ratchet is one-directional in the wrong way: the thinning
-# campaign relocates a section, the measured mass drops, the constant stays where it was,
-# and the phase after that silently inherits a section's worth of headroom to re-fill.
-#
-# 642, not 5,000, since `Q-513` (Phase 300). The number is derived, not chosen: it is one
-# below § 1b's 643, the smallest section in `campaign_population()`. The old 5,000 was sized
-# against "the campaign's unit of work — the sections it relocates run 24,000–29,000
-# characters", which was true of the three sections the campaign had RUN and false of the
-# fourteen § 9's scope still covers; eight of those sat below 5,000 and could each have been
-# relocated whole and banked.
-#
-# The cost is stated rather than discovered: the same comment used to promise that "an
-# ordinary edit that moves a few hundred characters does not force a constant update", and
-# at 642 that promise is gone. Most commits touching editor mass now carry a visible ceiling
-# edit. Wade accepted that trade at Phase 300's open as the honest half of shape (a).
-CEILING_FOLLOWS_WITHIN = 642
-
-
-def editor_mass_problems(total: int, ceiling: int = None, slack: int = None) -> list[str]:
-    """Both bounds as ONE predicate the tests and their controls share.
-
-    The first version put the comparisons inline in each test and gave the control its own
-    arithmetic — so the control re-asserted its own mutation instead of driving the guard,
-    and this phase's battery walked `assert total <= EDITOR_MIXED_CEILING or True` straight
-    through it (M15). That is the exact shape `test_a_wrong_published_digit_is_reported`
-    above was rewritten to avoid, made again later in the same file.
-    """
-    ceiling = EDITOR_MIXED_CEILING if ceiling is None else ceiling
-    slack = CEILING_FOLLOWS_WITHIN if slack is None else slack
-    problems = []
-    if total <= 0:
-        return ["the census computed no editor+mixed characters — the ratchet would pass by "
-                "measuring nothing, which is the shape its sibling guards exist to refuse"]
-    if total > ceiling:
-        problems.append(
-            f"`review-close/SKILL.md` carries {total:,} characters of editor-facing text "
-            f"(`editor` + `mixed`), against a ceiling of {ceiling:,} — {total - ceiling:,} "
-            "over.\n\nNew rationale is authored in `core/skills/review-close/REFERENCE.md`, "
-            "not in the runner (§ *Where new rationale goes*). The runner gets the "
-            "instruction plus a one-line reason ONLY where the reason changes what the "
-            "runner does.\n\nIf the added text really is runner material, say so by "
-            "classifying its blocks `runner` in the census verdicts — that is a claim a "
-            "reviewer reads, which is the point. Raising this ceiling is the last resort."
-        )
-    if ceiling - total > slack:
-        problems.append(
-            f"the ceiling sits {ceiling - total:,} characters above the measured {total:,} — "
-            f"more than the {slack:,} a single edit should ever open up. Editor text has been "
-            f"relocated out of the runner and the gain was not locked in: lower "
-            f"EDITOR_MIXED_CEILING to {total:,} in the same commit that removed the text."
-        )
-    return problems
-
-
-def test_review_close_editor_mass_does_not_grow():
-    """The ratchet. `editor` + `mixed` absolute characters may not exceed the ceiling."""
-    _, total = _per_section_editor_mixed("review-close")
-    assert not editor_mass_problems(total), "\n".join(editor_mass_problems(total))
-
-
-def test_the_ceiling_follows_the_campaign_down():
-    """A relocated section must be locked in, not banked as headroom.
-
-    The ratchet refuses growth. This refuses a ceiling that has drifted far above the
-    measured value — which is what happens by default every time the thinning campaign lands
-    a section and nobody edits the constant.
-    """
-    _, total = _per_section_editor_mixed("review-close")
-    drift = [p for p in editor_mass_problems(total) if "above the measured" in p]
-    assert not drift, "\n".join(drift)
-
-
-@pytest.mark.parametrize("total,ceiling,slack,expect", [
-    (150_192, 150_192, 5_000, False),          # the live shape: green
-    (150_193, 150_192, 5_000, True),           # one character over the ceiling
-    (100_000, 150_192, 5_000, True),           # a section relocated, ceiling not lowered
-    (149_000, 150_192, 5_000, False),          # ordinary drift, inside the slack
-    (0, 150_192, 5_000, True),                 # a census that measured nothing
-    # THE ZERO ARM, ISOLATED — `Q-518`, Phase 301. The row above does not pin the zero arm and
-    # `Q-515` cites it as though it does. Measured: with `if total <= 0:` neutered to
-    # `if False:`, a ceiling of 150,192 against a measured 0 is a 150,192-character gap, so the
-    # DRIFT arm answers instead and `expect=True` is satisfied either way. Here the ceiling sits
-    # inside the slack (100 - 0 < 5,000) and 0 is not over it, so no other arm can fire: neuter
-    # the zero arm and this row alone goes green-to-red. Keep the pair — the row above is the
-    # realistic shape, this one is the discriminator.
-    (0, 100, 5_000, True),
-])
-def test_the_editor_mass_ratchet_is_not_vacuous(total, ceiling, slack, expect):
-    """The negative control, driving the REAL predicate rather than re-asserting it.
-
-    The first version did its own arithmetic in the test body, so mutating the guard to
-    `assert total <= EDITOR_MIXED_CEILING or True` left it green — the control was testing a
-    copy of the rule instead of the rule. Every case here calls `editor_mass_problems`, so
-    neutering either bound reddens this.
-    """
-    problems = editor_mass_problems(total, ceiling, slack)
-    assert bool(problems) is expect, (
-        f"editor_mass_problems({total:,}, ceiling={ceiling:,}, slack={slack:,}) returned "
-        f"{problems!r}; expected {'a problem' if expect else 'none'}"
-    )
-
-
-def test_the_zero_section_arm_is_the_one_that_answers():
-    """`Q-518`, Phase 301's round (MS6) — and the row that was supposed to pin this could not.
-
-    `slack_problems` refuses a census where a section measured zero, BEFORE deriving a bound from
-    what is left. Deleting `or not all(sections.values())` left the whole suite green, because the
-    parametrize row commented *"a zero section is a decision, not a bound"* is answered by the
-    derived bound instead: with a zero section, `slack >= 0` holds for every non-negative slack,
-    so both arms return `True` and the boolean cannot discriminate.
-
-    **A first fix added a second row with a smaller slack and it survived too** — for the same
-    reason, which is that no slack makes `>= 0` false. The arm is only reachable through its
-    MESSAGE, so that is what this asserts, exactly as the drift arm's control does one predicate
-    over. The `len == 1` half is the second claim: the arm must RETURN, not append and continue.
-    """
-    problems = slack_problems(100, {"3b": 24_487, "4c": 0, "2b": 25_804}, 5_000)
-    assert len(problems) == 1, (
-        f"the zero-section arm must RETURN, not fall through into the derived bound — "
-        f"got {len(problems)}: {problems!r}")
-    assert "renamed" in problems[0] and "relocated" in problems[0], (
-        f"a zero section was answered by the wrong arm — the derived bound cannot refuse a "
-        f"census that measured nothing, it can only bound from what is left: {problems!r}")
-
-
-def test_the_ratchet_zero_arm_returns_rather_than_falling_through():
-    """`Q-518`, Phase 301's round (MS2). The sibling of the `slack_problems` fix, one predicate over.
-
-    The phase asserted *"the missing arm must RETURN, not fall through"* for `slack_problems` and
-    asserted nothing of the kind for `editor_mass_problems`' zero arm — so changing its `return`
-    to an append left the suite green. A census that measured nothing is a refusal, not a finding
-    to be listed alongside a drift complaint: the arm exists to say the measurement is void, and a
-    void measurement has no drift to report.
-
-    The ceiling here sits far above 0, so a fall-through would add the drift problem and give two.
-    """
-    problems = editor_mass_problems(0, 150_192, 5_000)
-    assert len(problems) == 1, (
-        f"the zero arm must RETURN, not fall through — got {len(problems)} problem(s): {problems!r}")
-    assert "measuring nothing" in problems[0], problems
-
-
-def test_the_follower_drift_arm_is_not_vacuous():
-    """The control `test_the_ceiling_follows_the_campaign_down` shipped without.
-
-    Phase 300's round neutered that test three ways and the suite stayed green every time:
-    `drift = []`, rewording the message its string filter selects on, and deleting the inline
-    backstop. A test whose only assertion is `assert not drift` where `drift` is a filtered list
-    is one token from inert, and nothing was driving the filter.
-
-    This drives `editor_mass_problems` directly for the drift arm, so neutering the arm, widening
-    it, or breaking the phrase the filter selects on all redden here.
-    """
-    # the arm fires: ceiling far above the measured value
-    problems = editor_mass_problems(100_000, 150_192, 5_000)
-    drift = [p for p in problems if "above the measured" in p]
-    assert drift, "the drift arm did not fire on a 50,192-character gap"
-    # and it does NOT fire inside the slack
-    assert not [p for p in editor_mass_problems(149_000, 150_192, 5_000)
-                if "above the measured" in p], "the drift arm fired inside its own slack"
-    # the boundary, which is what a 10x widening walks through
-    assert [p for p in editor_mass_problems(145_191, 150_192, 5_000) if "above the measured" in p]
-    assert not [p for p in editor_mass_problems(145_192, 150_192, 5_000) if "above the measured" in p]
-
-
 def test_the_section_map_fork_guard_is_not_vacuous():
     """`test_every_copy_of_the_campaign_section_map_agrees` has no control of its own.
 
@@ -1718,292 +1577,6 @@ def test_the_section_map_fork_guard_is_not_vacuous():
     assert TT.section_map_problems({"x": ref, "y": dict(ref)}, ref) == []
     assert TT.section_map_problems({"x": ref, "y": {"3b": "a"}}, ref), "a forked copy passed"
     assert TT.section_map_problems({"x": ref, "y": {}}, ref), "an empty copy passed"
-
-
-def test_the_ratchet_constants_describe_this_tree():
-    """The constants are wired to the live census, not to a stale copy of its numbers.
-
-    Both bounds are constants in this file, so both can be edited. What this asserts is the
-    property an edit cannot fake: the ceiling is a real measurement of THIS file, within the
-    slack the follower allows. Raising the constant to buy headroom is still possible and is
-    deliberately visible in the diff — that is what `CLAUDE.md`'s round dimension 10 reads,
-    and why `Q-504` was ratified as both halves rather than the ratchet alone.
-    """
-    _, total = _per_section_editor_mixed("review-close")
-    # Driving the REAL predicate, not a copy of it. ROUND FINDING (guards lens, LOW 8): this
-    # body did its own arithmetic, so widening `editor_mass_problems`' follower arm to
-    # `slack * 10` AND raising the ceiling to match left the whole module green — the two
-    # bounds covered for each other because neither test called the other's predicate. That is
-    # the shape three docstrings in this file already condemn, in the one test positioned as
-    # everything else's backstop.
-    assert total > 0, "the census measured nothing; every bound below is vacuous"
-    assert not editor_mass_problems(total), "\n".join(editor_mass_problems(total))
-    assert EDITOR_MIXED_CEILING <= total + CEILING_FOLLOWS_WITHIN, (
-        f"measured {total:,}, ceiling {EDITOR_MIXED_CEILING:,}, slack "
-        f"{CEILING_FOLLOWS_WITHIN:,} — the ceiling no longer describes this tree"
-    )
-
-
-#: A hard cap on the follower slack, on top of the derived bound below.
-#:
-#: WHY BOTH, and the first version of this guard had only the derived half. That half bounds the
-#: slack by the SMALLEST campaign section — and after a section is thinned, the smallest section
-#: IS the thinned remnant, so the bound loosens exactly when the campaign succeeds. Measured by
-#: Phase 298's round at that phase's own close: § 4c had just fallen to 11,971, so the derived
-#: bound alone permitted a slack of 11,970 and a ceiling 11,970 above the measured total — 2.39x
-#: what the constant's own justification allows, and about the entire mass that phase had just
-#: relocated. "A completed section cannot be banked" was the point, and the derived bound was
-#: sized by the completed section.
-#:
-#: 5,000 is the campaign's unit of work as § 9.1 states it: the sections it relocates run
-#: 24,000-29,000 characters, and the three relocations on record moved 1,317 / 7,256 / 8,939
-#: characters off the file. A slack under 5,000 forces the ceiling down on any of the last two
-#: while leaving an ordinary few-hundred-character edit alone.
-SLACK_CEILING = 5_000
-
-
-def _section_label(head: str) -> str:
-    """A short, stable id for a heading, for the bound's own error message.
-
-    `_CAMPAIGN_SECTIONS` carries ids; `_SECTIONS_NOT_YET_TAKEN` carries headings. Since `Q-513`
-    the bound reads both, so the untaken ones need a label too — printing fourteen full headings
-    in a failure message buries the one number the reader came for. Collisions are asserted
-    against, not hoped for: two sections sharing a label would silently drop one from the
-    population this bound is derived from, which is the defect `Q-513` itself was.
-    """
-    t = re.sub(r"^#+\s*", "", head).strip()
-    # `Step 3b:` and `3b.` are the same section in two spellings, and `_CAMPAIGN_SECTIONS`
-    # calls it `3b` in both cases. Deriving `Step 3b` here would put the two rosters in
-    # different vocabularies, so a heading sitting on BOTH would land under two labels and be
-    # counted twice instead of refused — found by this module's own collision control.
-    m = re.match(r"^Step\s+([0-9]+[a-z]?)\s*:", t) or re.match(r"^([0-9][0-9a-z-]*)\.\s", t)
-    return m.group(1) if m else t.split(":")[0].strip()
-
-
-def campaign_population(taken: dict | None = None, not_taken=None) -> dict:
-    """`{label: heading}` for every section § 9's ratified scope covers — taken or not.
-
-    `Q-513`, shape (a), ratified by Wade 2026-09-16. The bound below was derived from
-    `_CAMPAIGN_SECTIONS` alone — the sections the campaign had already RUN — while § 9's scope is
-    *"`review-close` only, every section, then STOP"*. Measured at Phase 299's close, that made
-    the guard's own stated job false: the slack was 5,000 and the smallest TAKEN section was
-    § 2b's 7,807, so the bound passed, while EIGHT rostered sections sat below the slack — § 1b
-    643 through § 4a 4,994. A phase taking any one of them would have relocated it whole and owed
-    no ceiling edit, which is exactly the headroom this bound exists to refuse.
-
-    Shape (b) — lowering `SLACK_CEILING` to the same number — was declined: it is the same value
-    reached by a route that leaves the reasoning in a constant, so the next phase to add a section
-    smaller than § 1b gets no signal. Shape (c) — bounding by the section the next phase will take
-    — was declined for coupling the guard to a plan rather than to the file.
-
-    The cost is real and was Wade's to accept: the honest population makes the slack 642, below
-    the *"ordinary few-hundred-character edit"* `CEILING_FOLLOWS_WITHIN`'s own comment was sized
-    to tolerate, so most commits that move editor mass now carry a visible ceiling edit.
-    """
-    named = dict(_CAMPAIGN_SECTIONS if taken is None else taken)
-    for head in (_SECTIONS_NOT_YET_TAKEN if not_taken is None else not_taken):
-        label = _section_label(head)
-        if label in named:
-            raise AssertionError(
-                f"the label {label!r} is claimed twice: {named[label]!r} and {head!r} — either "
-                f"two headings derive the same label, or one heading is on BOTH rosters. Each "
-                f"silently drops a member from the population the slack bound is derived from, "
-                f"which is `Q-513` arriving by another route.")
-        named[label] = head
-    return named
-
-
-def campaign_sections(per: dict) -> tuple[dict, list[str]]:
-    """`({label: chars}, [missing labels])` for every section in the campaign's scope.
-
-    Absence is detected by MEMBERSHIP and not by a sentinel default. The first version built the
-    dict with `per.get(head, 0)` and let `all(sections.values())` notice the zero — which Phase
-    298's round defeated in one token by changing the default to `10**9`: the renamed heading then
-    reports as the largest section in the file, the zero-detector sees nothing, and the derived
-    bound is taken from a section that no longer exists. A detector whose signal is a default
-    value is a detector a default value can switch off.
-    """
-    named = campaign_population()
-    present = {sid: per[head] for sid, head in named.items() if head in per}
-    missing = [sid for sid in named if sid not in present]
-    return present, missing
-
-
-def slack_problems(slack: int, sections: dict, cap: int = None,
-                   missing: list | None = None) -> list[str]:
-    """Both bounds on `CEILING_FOLLOWS_WITHIN` as ONE predicate the test and its control share.
-
-    The shape `editor_mass_problems` above already carries, for the reason recorded there: a
-    control that does its own arithmetic re-asserts its own mutation instead of driving the
-    guard, and Phase 297's battery walked exactly that. Phase 298 then shipped this guard's
-    predecessor with **no control at all**, and its round widened the derived bound tenfold with
-    every arm green.
-    """
-    cap = SLACK_CEILING if cap is None else cap
-    problems = []
-    if missing:
-        return [f"campaign section(s) {missing} carry no editor+mixed blocks at all — either a "
-                f"heading was renamed or the section is fully relocated. Both want a decision "
-                f"here rather than a bound derived from what is left."]
-    if not sections or not all(sections.values()):
-        return [f"a campaign section reports zero editor+mixed characters — {sections}. Either a "
-                f"heading was renamed or the section is fully relocated; both want a decision "
-                f"here rather than a bound derived from a zero."]
-    smallest = min(sections, key=sections.get)
-    if slack >= sections[smallest]:
-        problems.append(
-            f"slack {slack:,} is not smaller than § {smallest}'s {sections[smallest]:,} "
-            f"editor+mixed characters — a phase could relocate that whole section and bank it "
-            f"as headroom. Lower CEILING_FOLLOWS_WITHIN in the commit that relocates the text."
-            f"\n  per-section: {sections}")
-    if slack > cap:
-        problems.append(
-            f"slack {slack:,} exceeds the campaign's unit of work ({cap:,}). The derived bound "
-            f"below loosens as sections are thinned — it is sized by the smallest section, which "
-            f"after a relocation is the section just relocated — so this cap is what stops a "
-            f"completed section being banked as headroom.")
-    return problems
-
-
-def test_the_follower_slack_is_smaller_than_a_section():
-    """The slack's own justification, asserted rather than left in a comment.
-
-    `CEILING_FOLLOWS_WITHIN` exists so a COMPLETED SECTION cannot be banked as headroom for the
-    next phase to re-fill. That reasoning was written down and nothing held it: Phase 298's
-    battery widened the constant tenfold, to 50,000, and every arm stayed green, because the
-    constants arm compares a ceiling that already equals the measured total and a wider slack
-    changes nothing about it.
-
-    Two bounds, because the derived one alone points the wrong way as the campaign proceeds —
-    see `SLACK_CEILING`.
-
-    Since `Q-513` the population is every section § 9's scope names, not the three the campaign
-    had run. The floor is therefore read off the CENSUS as well as off the roster: a roster that
-    lost members could otherwise satisfy the bound by shrinking its own population, which is
-    exactly the shape `Q-513` was.
-    """
-    per, _ = _per_section_editor_mixed("review-close")
-    sections, missing = campaign_sections(per)
-    problems = slack_problems(CEILING_FOLLOWS_WITHIN, sections, missing=missing)
-    assert not problems, "\n".join(problems)
-
-    floor = min(per.values())
-    assert CEILING_FOLLOWS_WITHIN < floor and min(sections.values()) == floor, (
-        f"slack {CEILING_FOLLOWS_WITHIN:,} against a file floor of {floor:,} and a bound "
-        f"population whose smallest is {min(sections.values()):,} — a bound derived from a "
-        f"subset of the sections in scope is `Q-513` reopened")
-
-
-def test_a_label_collision_is_raised_rather_than_silently_dropping_a_section():
-    """The collision arm, driven — it is unreachable on the current headings, so nothing else
-    drives it, and the author battery walked `assert True or ...` straight through it.
-
-    A collision does not fail loudly on its own: the second heading overwrites the first in a
-    dict and the population quietly loses a member, which is `Q-513`'s own defect — a bound
-    derived from fewer sections than § 9's scope names — arriving by a different route.
-    """
-    taken = {"3b": "## Step 3b: Prepare Worktrees for Merge"}
-    # two DIFFERENT headings deriving one label
-    with pytest.raises(AssertionError, match="claimed twice"):
-        campaign_population(taken, ["### 3b. A different heading that labels the same"])
-    # the SAME heading on both rosters — taken and not-taken at once. An earlier cut of this
-    # arm carried `and named[label] != head`, which made exactly this case pass silently; the
-    # author battery found it by removing the inequality and staying green.
-    with pytest.raises(AssertionError, match="claimed twice"):
-        campaign_population(taken, list(taken.values()))
-    # and the non-colliding case still builds, so the arm is a discriminator not a blanket
-    ok = campaign_population(taken, ["### 1b. Preserve Uncommitted `review_tasks.md`"])
-    assert set(ok) == {"3b", "1b"}, ok
-
-
-@pytest.mark.parametrize("slack, sections, cap, expect", [
-    # (the live shape) — inside both bounds
-    (5_000, {"3b": 24_487, "4c": 11_971, "2b": 25_804}, 5_000, False),
-    # the derived bound alone would allow this; the cap refuses it. THE ROUND'S FINDING.
-    (11_970, {"3b": 24_487, "4c": 11_971, "2b": 25_804}, 5_000, True),
-    # the cap alone would allow this; the derived bound refuses it.
-    (4_999, {"3b": 24_487, "4c": 4_000, "2b": 25_804}, 5_000, True),
-    # a loosened cap is caught by the derived bound rather than sailing through
-    (50_000, {"3b": 24_487, "4c": 11_971, "2b": 25_804}, 500_000, True),
-    # EXACT EQUALITY. `>=`, not `>` — a slack equal to the smallest section still permits that
-    # section to be relocated whole and banked. Phase 299's battery flipped the operator and
-    # nothing reddened, because every other row here sits strictly one side or the other.
-    (4_000, {"3b": 24_487, "4c": 11_971, "2b": 4_000}, 5_000, True),
-    # a zero section is a decision, not a bound
-    (100, {"3b": 24_487, "4c": 0, "2b": 25_804}, 5_000, True),
-    # NOTE — the zero-section arm cannot be isolated by a boolean row at all, and the attempt is
-    # recorded because it looks like it should work. Any zero section makes the DERIVED bound fire
-    # too (`slack >= 0` for every non-negative slack), so both arms answer `True` and no `expect`
-    # value can tell them apart. It is pinned by
-    # `test_the_zero_section_arm_is_the_one_that_answers` below, on the MESSAGE — the shape
-    # `test_the_follower_drift_arm_is_not_vacuous` already uses for the same reason.
-    (100, {}, 5_000, True),
-    # THE DEFAULT CAP ITSELF. `cap=None` reads `SLACK_CEILING`, so raising that constant turns
-    # this row False and reddens the control. Without a row that omits `cap`, every case passes
-    # its own value and the module constant is pinned by nothing — the round widened it tenfold
-    # with the whole suite green.
-    (5_001, {"3b": 24_487, "4c": 11_971, "2b": 25_804}, None, True),
-    (5_000, {"3b": 24_487, "4c": 11_971, "2b": 25_804}, None, False),
-])
-
-def test_the_slack_bounds_refuse_what_they_claim_to(slack, sections, cap, expect):
-    """The control the first version of this guard did not have.
-
-    Every case calls `slack_problems`, so neutering either bound — or widening the derived one,
-    which the round did with a single `* 10` — reddens this.
-    """
-    problems = slack_problems(slack, sections, cap)
-    assert bool(problems) is expect, (
-        f"slack_problems({slack:,}, {sections}, cap={cap:,}) returned {problems!r}; "
-        f"expected {'a problem' if expect else 'none'}")
-
-
-def test_a_renamed_or_emptied_section_is_reported_rather_than_derived_around():
-    """The `missing` arm, driven — it is unreachable on a clean tree, so nothing else drives it.
-
-    Phase 298's round defeated the predecessor's zero-detector by changing a `.get` default; the
-    replacement detects absence by membership, and this is what proves the replacement is not
-    itself decorative. Both halves are exercised: `campaign_sections` must NOTICE the absence, and
-    `slack_problems` must REFUSE on it rather than bounding from what is left.
-    """
-    population = campaign_population()
-    per = {head: 20_000 for head in population.values()}
-    sections, missing = campaign_sections(per)
-    assert missing == [] and len(sections) == len(population), (sections, missing)
-
-    # Since `Q-513` the population is BOTH rosters, so the absence has to be exercised on an
-    # untaken section too — a fixture built from `_CAMPAIGN_SECTIONS` alone would have kept
-    # passing while the sections the widening added went unchecked.
-    #
-    # EVERY member, sorted — not `next(iter(frozenset))`. The first cut used exactly that, and
-    # Phase 300's round measured it exercising ONE of thirteen untaken sections, chosen by
-    # CPython's per-process `str` hash salt: three distinct headings across five bare runs, and
-    # a mutation that dropped § 1b passed under `PYTHONHASHSEED=1` and failed under `0`.
-    # `tests/conftest.py` states the rule this broke — *"a salted key is not a flaky run, it is
-    # ids that quietly go unrun"* — in this same suite.
-    for gone in [_CAMPAIGN_SECTIONS["3b"], *sorted(_SECTIONS_NOT_YET_TAKEN)]:
-        sections, missing = campaign_sections({h: v for h, v in per.items() if h != gone})
-        assert missing, f"a section absent from the census was not noticed: {gone!r}"
-        assert len(sections) == len(population) - 1, sections
-
-    # The slack here is 20,000 and not 100, and the value is the whole assertion below.
-    #
-    # `Q-518`, Phase 301. With a slack of 100 against sections of 20,000, NEITHER later arm can
-    # fire — the derived bound wants `100 >= 20,000` and the cap wants `100 > 5,000`. So
-    # `return` and `append`-then-continue produce the same single problem and the
-    # `len(problems) == 1` assertion below, whose entire subject is that difference, passed
-    # under both. At 20,000 the derived bound fires (`20,000 >= 20,000`, the `>=` this module
-    # already pins elsewhere) and so does the cap, so a fall-through yields three problems and
-    # the assertion is finally load-bearing. **The precise threshold is the CAP, not this value:**
-    # the round measured a fall-through surviving at 100 and at 5,000 and dying from 5,001 up, so
-    # anything above the cap restores the test. 20,000 is chosen to trip both later arms rather
-    # than one; a first version of this comment claimed the arm dies if the number is lowered at
-    # all, which overstates a fixture's precision and is the kind of claim a maintainer trusts.
-    problems = slack_problems(20_000, sections, cap=5_000, missing=missing)
-    assert problems and "renamed" in problems[0], problems
-    assert len(problems) == 1, (
-        "the missing arm must RETURN, not fall through — a bound derived from the sections that "
-        "remain is exactly what it exists to refuse")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2106,3 +1679,93 @@ def test_every_reference_destination_is_reachable_from_its_runner():
         "skill runners that do not point at their editor reference:\n  "
         + "\n  ".join(unreachable)
     )
+
+
+# --- `Q-677`: the advisory softening, and what it must not soften --------------------------
+
+#: Exactly these tests are advisory. A test added to the set softens a check nobody ruled on;
+#: one dropped from it is a check that fails again on every edit. Either way, edit this pin.
+_ADVISORY_TESTS = {
+    "test_every_block_carries_a_verdict",
+    "test_no_verdict_is_stale",
+    "test_the_spec_publishes_the_figures_the_census_computes",
+    "test_the_spec_publishes_the_per_section_figures",
+    "test_the_spec_publishes_the_authoring_figures_it_computes",
+}
+
+
+#: Tests that may reference `advisory` other than as a decorator: the `--check` run's
+#: exit-1 arm, and the four controls of the softening itself.
+_ADVISORY_OTHER_USERS = {
+    "test_the_census_script_runs_clean_as_a_subprocess",
+    "test_an_advisory_failure_warns_and_does_not_fail",
+    "test_strict_mode_makes_an_advisory_failure_fail",
+    "test_an_instrument_crash_is_never_softened",
+    "test_the_decorator_form_softens_and_passes_through",
+}
+
+
+def test_nothing_else_reaches_the_advisory_softening():
+    """Lens 3: a hard control softened by a `with advisory():` block (V1), or by an alias
+    `_soft = advisory` used as a decorator (V2), walked the decorator-only pin below. So
+    every reference to the name, anywhere in the module, must sit in a ruled place."""
+    tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+    owners = {}
+    for top in tree.body:
+        for node in ast.walk(top):
+            if isinstance(node, ast.Name) and node.id == "advisory":
+                owners.setdefault(getattr(top, "name", type(top).__name__), 0)
+                owners[getattr(top, "name", type(top).__name__)] += 1
+    allowed = _ADVISORY_TESTS | _ADVISORY_OTHER_USERS
+    stray = sorted(k for k in owners if k not in allowed)
+    assert not stray, f"`advisory` is referenced outside the ruled tests: {stray}"
+
+
+def test_the_advisory_set_is_exactly_the_ruled_one():
+    tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+    decorated = {
+        n.name for n in tree.body
+        if isinstance(n, ast.FunctionDef)
+        and any(ast.unparse(d).startswith("advisory") for d in n.decorator_list)
+    }
+    assert decorated == _ADVISORY_TESTS, (
+        f"advisory tests differ from the ruled set: added {sorted(decorated - _ADVISORY_TESTS)}, "
+        f"removed {sorted(_ADVISORY_TESTS - decorated)}")
+
+
+def test_an_advisory_failure_warns_and_does_not_fail(monkeypatch):
+    monkeypatch.delenv(STRICT_ENV, raising=False)
+    with pytest.warns(CensusAdvisory, match="the planted failure"):
+        with advisory():
+            assert False, "the planted failure"
+
+
+def test_strict_mode_makes_an_advisory_failure_fail(monkeypatch):
+    monkeypatch.setenv(STRICT_ENV, "1")
+    with pytest.raises(AssertionError, match="the planted failure"):
+        with advisory():
+            assert False, "the planted failure"
+
+
+def test_an_instrument_crash_is_never_softened(monkeypatch):
+    """Only an `AssertionError` is a finding. A census that raises is not reporting anything."""
+    monkeypatch.delenv(STRICT_ENV, raising=False)
+    with pytest.raises(KeyError):
+        with advisory():
+            raise KeyError("census crashed")
+
+
+def test_the_decorator_form_softens_and_passes_through(monkeypatch):
+    monkeypatch.delenv(STRICT_ENV, raising=False)
+
+    @advisory()
+    def failing():
+        assert False, "decorated failure"
+
+    @advisory()
+    def passing():
+        return "ran"
+
+    with pytest.warns(CensusAdvisory, match="decorated failure"):
+        assert failing() is None
+    assert passing() == "ran"

@@ -70,6 +70,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from skill_runner_text import text_of
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SKILL = REPO_ROOT / "core/skills/claim-task/SKILL.md"
@@ -79,6 +80,12 @@ GUIDE = REPO_ROOT / "core/companion/docs/WORKFLOW_GUIDE.md"
 GETTING_STARTED = REPO_ROOT / "docs/getting-started.md"
 SCHEMA = REPO_ROOT / "core/companion/tasks/schema.md"
 REVIEW_CLOSE = REPO_ROOT / "core/skills/review-close/SKILL.md"
+# Step 7f's write-back and Step 4c's park reaper: each step's heredoc until Phase 386
+# (`Q-409` P3), shipped scripts since.
+CLAIM_RECORD = REPO_ROOT / "core/companion/scripts/claim_record.py"
+CLOSE_INDEX = REPO_ROOT / "core/companion/scripts/close_index.py"
+_CLAIM_RECORD_CALL = re.compile(
+    r"^python3 sysop/scripts/claim_record\.py \"<CLAIM_ID>\" \"<RUN_ID>\" \"<BODY_PATH>\" '<TEST_DECISION>'$")
 
 
 # ------------------------------------------------------------------ primitives
@@ -757,7 +764,7 @@ CANONICAL_STAGES = (
 )
 
 
-def _code_problems(t: str) -> list[str]:
+def _code_problems(t: str, record: str | None = None) -> list[str]:
     """The properties that live in the prescribed heredocs, checked by parsing them."""
     p: list[str] = []
 
@@ -848,7 +855,11 @@ def _code_problems(t: str) -> list[str]:
     # This is the ONLY prescribed block in this skill that rewrites a TRACKED
     # file, so the properties below are not stylistic: a wrong one lands in the
     # consumer's task queue and is committed on `main` by the next step.
+    # Since Phase 386 the block is `claim_record.py`: the skill must still RUN it, from a
+    # live bash block, with the decision single-quoted, and the script carries the body.
     hd = heredoc_containing(t, "strip_sections")
+    if hd is None and any(_CLAIM_RECORD_CALL.match(ln.strip()) for ln in bash_text(t).splitlines()):
+        hd = ("", CLAIM_RECORD.read_text(encoding="utf-8") if record is None else record)
     if hd is None:
         p.append("Step 7f's plan write-back is gone, re-fenced or commented out")
     else:
@@ -1189,9 +1200,10 @@ def _code_problems(t: str) -> list[str]:
     return p
 
 
-def orchestrator_problems(text=None) -> list[str]:
+def orchestrator_problems(text=None, record=None) -> list[str]:
+    """`text` is the skill; `record` is Step 7f's script, read from the tree when omitted."""
     t = SKILL.read_text(encoding="utf-8") if text is None else text
-    p: list[str] = _code_problems(t)
+    p: list[str] = _code_problems(t, record)
 
     # --- The orchestrator cannot implement -------------------------------
     fms = frontmatter_blocks(t)
@@ -2081,7 +2093,7 @@ def reader_pairing_problems() -> list[str]:
     "removed by nothing" defect the filename shape exists to close.
     """
     p: list[str] = []
-    rc = REVIEW_CLOSE.read_text(encoding="utf-8")
+    rc = CLOSE_INDEX.read_text(encoding="utf-8")  # Step 4c's program since Phase 386
     if not re.search(r"parked'?\)?\.glob\(f'\{tid\}__\*\.md'\)", rc):
         p.append("/review-close Step 4c no longer globs `{tid}__*.md` under parked/ -- the park "
                  "marker filename shape was chosen to match it, and nothing else removes one")
@@ -2301,7 +2313,15 @@ def test_guards_are_not_vacuous():
                                                "import yaml\nclaim_id, run_id, body_rel"),
     }
     undetected = []
+    record = CLAIM_RECORD.read_text(encoding="utf-8")
     for name, (old, new) in deep.items():
+        # Step 7f's block is a shipped script since Phase 386, so its probe mutates the script.
+        if name == "pyyaml back in the plan write-back":
+            assert old in record, f"deep-probe anchor is stale ({name}) -- this floor proves nothing"
+            i = record.rindex(old)
+            if not orchestrator_problems(skill, record[:i] + new + record[i + len(old):]):
+                undetected.append(name)
+            continue
         assert old in skill, f"deep-probe anchor is stale ({name}) -- this floor proves nothing"
         i = skill.rindex(old)
         if not orchestrator_problems(skill[:i] + new + skill[i + len(old):]):

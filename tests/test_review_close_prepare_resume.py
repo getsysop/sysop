@@ -16,6 +16,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from skill_runner_text import text_of
 
 REPO = Path(__file__).resolve().parent.parent
 CLOSE = REPO / "core/skills/review-close/SKILL.md"
@@ -29,7 +30,7 @@ _ENV.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
 
 
 def _text() -> str:
-    return CLOSE.read_text(encoding="utf-8")
+    return text_of(CLOSE)
 
 
 def _span(start: str, end: str) -> str:
@@ -49,7 +50,9 @@ def _commands() -> dict[str, str]:
     for line, sub in found:
         assert sub not in by, f"two `{sub}` commands in the section"
         by[sub] = line.strip()
-    assert set(by) == {"begin", "finish", "load", "check", "consume"}, sorted(by)
+    # Phase 380 (`Q-664`): the prepare with `--agent` selects and holds; `eligible` runs
+    # against a class, so `test_unattended_half_a_build.py` runs it.
+    assert set(by) == {"begin", "finish", "load", "check", "consume", "eligible", "hold"}, sorted(by)
     return by
 
 
@@ -98,6 +101,11 @@ def test_the_prescribed_commands_run_as_written(repo: Path) -> None:
     def sub(cmd: str) -> str:
         return cmd.replace("<run-id>", run_id).replace("<default branch>", "main")
 
+    hold = sub(cmds["hold"]).replace('"<branch>"', '"feat/a"').replace(
+        "<first violation>", "rule 1 (a.py:1)")
+    assert "<" not in hold, hold
+    r = _sh(repo, hold)
+    assert r.returncode == 0 and r.stdout.startswith("HELD: feat/a at "), r.stdout + r.stderr
     r = _sh(repo, sub(cmds["finish"]))
     assert r.returncode == 0 and f"RESUME: /review-close --resume {run_id}" in r.stdout, r.stdout + r.stderr
     for name in ("load", "check"):
@@ -125,17 +133,17 @@ def test_the_section_names_every_line_check_prints() -> None:
 # (Y01-Y05) behind an asserted bold lead.
 @pytest.mark.parametrize("step,end,arm", [
     ('### 2a. Feature Branches', '3a. **Gitignored files the branch reads',
-     '**Under `--prepare`, ask nothing in step 3a below and do not run its commit-or-copy block:** record each `IGNORED-REF:` line, and the error ask after that block, as a question (*`--prepare` and `--resume <run-id>`* above, item 2), and carry the branch on with its verdict marked `pending Q<n>`.'),
+     '**Under `--prepare`, ask nothing in step 3a below and do not run its commit-or-copy block:** record each `IGNORED-REF:` line, and the error ask after that block, as a question (*`--prepare` and `--resume <run-id>`* (`steps/prepare-resume.md`), item 2), and carry the branch on with its verdict marked `pending Q<n>`.'),
     ('### 2b. Prevention Convention Check', '### 2c.',
-     '**Under `--prepare`, a `VERDICT: BLOCKED` in item 4 below stops only its branch, and on the unpushed-main group halts the prepare** (*`--prepare` and `--resume <run-id>`* above, item 3).'),
+     '**Under `--prepare`, a `VERDICT: BLOCKED` in item 4 below stops only its branch, and on the unpushed-main group halts the prepare** (*`--prepare` and `--resume <run-id>`* (`steps/prepare-resume.md`), item 3).'),
     ('### 2d. Test-Decision Verification', '### 2e.',
-     '**Under `--prepare`, ask nothing in item 3 below:** record each discrepancy as a question (*`--prepare` and `--resume <run-id>`* above, item 2), and carry the branch on with its verdict marked `pending Q<n>`.'),
+     '**Under `--prepare`, ask nothing in item 3 below:** record each discrepancy as a question (*`--prepare` and `--resume <run-id>`* (`steps/prepare-resume.md`), item 2), and carry the branch on with its verdict marked `pending Q<n>`.'),
     ('## Step 3: Run Verification', '## Step 3c:',
-     "**Under `--prepare`:** a failing command halts the prepare (*`--prepare` and `--resume <run-id>`* above, item 4). Item 5's ask and a silently denied command leave Step 3 not run, with the reason in the run directory, and the resume runs it (*`--prepare` and `--resume <run-id>`* above, item 2)."),
+     "**Under `--prepare`:** a failing command halts the prepare (*`--prepare` and `--resume <run-id>`* (`steps/prepare-resume.md`), item 4). Item 5's ask and a silently denied command leave Step 3 not run, with the reason in the run directory, and the resume runs it (*`--prepare` and `--resume <run-id>`* (`steps/prepare-resume.md`), item 2)."),
     ('## Step 3c: Manual Smoke Gate', '**1. Detect signals.**',
-     "**Under `--prepare`, run step 1 as written and ask nothing from step 2 on:** record each signal as a question (*`--prepare` and `--resume <run-id>`* above, item 2), record nothing with the recorder, drive nothing, and go to the prepare's `finish` (item 6)."),
+     "**Under `--prepare`, run step 1 as written and ask nothing from step 2 on:** record each signal as a question (*`--prepare` and `--resume <run-id>`* (`steps/prepare-resume.md`), item 2), record nothing with the recorder, drive nothing, and go to the prepare's `finish` (item 6)."),
     ('## Step 3b: Prepare Worktrees for Merge', '## Step 4:',
-     '**Under `--prepare`, do not start this step:** the prepare ends at Step 3c (*`--prepare` and `--resume <run-id>`* above, item 6).'),
+     '**Under `--prepare`, do not start this step:** the prepare ends at Step 3c (*`--prepare` and `--resume <run-id>`* (`steps/prepare-resume.md`), item 6).'),
 ])
 def test_each_step_that_asks_or_stops_carries_its_prepare_arm(step: str, end: str, arm: str) -> None:
     assert arm in _span(step, end), f"{step}: the `--prepare` arm moved out of its step or was removed"
@@ -143,14 +151,21 @@ def test_each_step_that_asks_or_stops_carries_its_prepare_arm(step: str, end: st
 
 def test_the_flags_are_declared_and_gated() -> None:
     t = _text()
-    assert ('argument-hint: "[--dry-run | --prepare | --resume <run-id> | --request-review '
-            '[--agent <name>] | --land <run-id>]"') in t
+    assert ('argument-hint: "[--dry-run | --prepare [--agent <name>] | --resume <run-id> '
+            '[--request-review [--agent <name> [--unattended]]] | --request-review [--agent <name>] | '
+            '--land <run-id> [--unattended --agent <name>]]"') in t
     sec = _section()
-    assert "**Read this section only when `$ARGUMENTS` contains `--prepare` or `--resume`.**" in sec
+    assert "**Load this arm when `begin` printed `ARM: prepare-resume`.**" in sec
     # Phase 365 added two flags: the one legal pair is `--resume` with `--request-review`.
-    assert ("The flags combine only as `--resume <run-id> --request-review`. Any other pair of "
-            "`--dry-run`, `--prepare`, `--resume`, `--request-review` and `--land`: stop and say so."
-            ) in sec
+    # Phase 380 (`Q-664`) added the unattended night's two shapes. Since Phase 393 (`Q-409`
+    # P4b) the combinations are `close_arms.py begin`'s refusals (`FLAG_SETS`, which
+    # `test_close_arms.py` holds equal to the argument hint), not a sentence here.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "core" / "companion" / "scripts"))
+    import close_arms
+    for combo in (("--resume", "--request-review"), ("--prepare", "--agent"),
+                  ("--resume", "--request-review", "--agent", "--unattended")):
+        assert frozenset(combo) in close_arms.FLAG_SETS, combo
+    assert "The flags combine only as" not in sec
     assert RULE.replace("Bash(", "`Bash(").replace(":*)", ":*)`") in sec
     assert RULE in json.loads(SETTINGS.read_text(encoding="utf-8"))["permissions"]["allow"]
     assert "If `$ARGUMENTS` contains `--prepare` or `--resume`, the section" in t

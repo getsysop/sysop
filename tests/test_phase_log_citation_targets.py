@@ -54,6 +54,7 @@ from tests.test_intra_repo_citations import (
     _resolve,
     _tracked,
 )
+from skill_runner_text import text_of
 
 PHASE_LOG = REPO_ROOT / "PHASE_LOG.md"
 
@@ -141,6 +142,20 @@ ALLOWED_DANGLING = {
 KNOWN_OUT_OF_RANGE = {
     ("run_checks_impl.py", 164): "pre-Phase-49 monolith; the shim is now 93 lines",
     ("run_checks_impl.py", 378): "pre-Phase-49 monolith; the shim is now 93 lines",
+    # Phase 386 (`Q-409` P3) moved the always-run heredoc bodies into shipped scripts, and
+    # each file now ends before these historical lines.
+    ("codebase-review/SKILL.md", 1123): "pre-Phase-386 line; Step 5f's body is round_receipt.py",
+    ("review-close/SKILL.md", 3813): "pre-Phase-386 line; ~2,000 heredoc lines left the file",
+    ("review-close/SKILL.md", 4038): "pre-Phase-386 line; ~2,000 heredoc lines left the file",
+    # Phase 387 (`Q-409` P3) moved review-close's last eight always-run heredocs into scripts,
+    # and the file now ends before these historical lines.
+    ("review-close/SKILL.md", 3154): "pre-Phase-387 line; review-close's last heredocs left the file",
+    ("review-close/SKILL.md", 3182): "pre-Phase-387 line; review-close's last heredocs left the file",
+    ("review-close/SKILL.md", 3233): "pre-Phase-387 line; review-close's last heredocs left the file",
+    ("review-close/SKILL.md", 3486): "pre-Phase-387 line; review-close's last heredocs left the file",
+    ("review-close/SKILL.md", 3529): "pre-Phase-387 line; review-close's last heredocs left the file",
+    ("review-close/SKILL.md", 3531): "pre-Phase-387 line; review-close's last heredocs left the file",
+    ("review-close/SKILL.md", 3580): "pre-Phase-387 line; review-close's last heredocs left the file",
 }
 
 
@@ -182,7 +197,9 @@ def out_of_range_citations(citations, tracked, pinned=KNOWN_OUT_OF_RANGE):
             continue
         rel = resolved[0]
         if rel not in lengths:
-            text = (REPO_ROOT / rel).read_text(encoding="utf-8", errors="replace")
+            # A cited `SKILL.md` is measured spliced (Phase 385): the splice is the unsplit
+            # file line for line, so a citation written before a move still lands.
+            text = text_of(REPO_ROOT / rel, errors="replace")
             lengths[rel] = len(text.splitlines())
         if start > lengths[rel] and (target, start) not in pinned:
             offenders.append((target, start, lengths[rel], lineno))
@@ -234,7 +251,8 @@ def test_the_allowlists_do_not_hide_a_path_that_exists():
         rel = resolved[0]
         lengths.setdefault(
             rel,
-            len((REPO_ROOT / rel).read_text(encoding="utf-8", errors="replace").splitlines()),
+            # Measured as the gate measures it (round 1, lens A): spliced for a `SKILL.md`.
+            len(text_of(REPO_ROOT / rel, errors="replace").splitlines()),
         )
         if start <= lengths[rel]:
             healed.append(f"{target}:{start}")

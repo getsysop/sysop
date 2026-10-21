@@ -11,13 +11,14 @@ branch.
 from __future__ import annotations
 
 from pathlib import Path
+from skill_runner_text import text_of
 
 REPO = Path(__file__).resolve().parent.parent
 CLOSE = REPO / "core/skills/review-close/SKILL.md"
 
 
 def _span(start: str, end: str) -> str:
-    t = CLOSE.read_text(encoding="utf-8")
+    t = text_of(CLOSE)
     i = t.index(start)
     return t[i:t.index(end, i)]
 
@@ -43,5 +44,7 @@ def test_4a_post_and_4c_still_state_the_facts_the_recovery_rests_on() -> None:
     post = _span("### 4a-post. Verify the Merged Tree", "### 4b.")
     assert "recoverable from a discarded branch or not at all" in post
     c4 = _span("### 4c. Consolidate Pending Documentation", "### 4d.")
-    assert "lock.unlink(missing_ok=True)" in c4
+    assert "python3 sysop/scripts/close_index.py " in c4  # Step 4c's program since Phase 386
+    assert "lock.unlink(missing_ok=True)" in (Path(__file__).resolve().parents[1]
+        / "core/companion/scripts/close_index.py").read_text(encoding="utf-8")
     assert "6. **Clean up pending-docs**: Delete the pending-docs **this step consolidated**" in c4

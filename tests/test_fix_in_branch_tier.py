@@ -39,6 +39,7 @@ from _prose_guard_helpers import carries, locate  # noqa: E402
 import pytest
 
 from _reversal import assert_no_reversal, slice_between
+from skill_runner_text import fold_steps, text_of
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -64,7 +65,7 @@ RULE_SITES = [
 
 
 def read(p: Path) -> str:
-    return p.read_text(encoding="utf-8")
+    return text_of(p)
 
 def live_prose(text: str, start: str, end: str, name: str) -> str:
     """A slice with fenced blocks and blockquotes REMOVED.
@@ -2250,6 +2251,19 @@ def _pin_hash(text: str) -> str:
 _PIN_INSIDE = "\u2026 span starts inside a paragraph"
 
 
+# A moved program is appended to its span as a fenced block, never raw: `_pin_norm` keeps a
+# fenced line whole, but reads raw program lines as paragraph continuations and folds away
+# their indentation, so a dedent that changes what the program does kept the hash (Phase
+# 387's round: 111 of close_check.py's 114 indented lines). The fence is longer than any
+# fence a program could hold, so no program line can close it.
+_PROGRAM_FENCE = "`" * 10
+
+
+def _pin_program(program: str) -> str:
+    assert _PROGRAM_FENCE not in program, "a pinned program holds the fence that wraps it"
+    return "\n\n" + _PROGRAM_FENCE + "python\n" + program.rstrip("\n") + "\n" + _PROGRAM_FENCE + "\n"
+
+
 def _pin_span(path: Path, text: str, at: int, span: str) -> str:
     """What a pin hashes: *span*, sliced from *text* at offset *at*, with the context a
     slice drops put back.
@@ -2409,6 +2423,24 @@ PINNED_SPANS = {
     "review-close 2-also arm": (CLOSE, "**2\u2011also. The `## Also fixed` arm.**", "### 2e. Claim-Artifact Report", False),
     "review-close shared-append section": (CLOSE, "Three tracked files are appended to across branches",
                                            "**Resolve `tasks/index.yml` from the merge stages, structurally.**", False),
+    # Phase 388 (`Q-409` P2): the arm receipt and its pilot arm, on Wade's answers of 2026-10-19.
+    # Phase 393 (`Q-409` P4b): `begin` moved out of Step 1-pre to its own section.
+    "review-close receipt begin": (CLOSE, "## Open the close's arm receipt",
+                                   "## `--prepare` and `--resume <run-id>` (`Q-603`)", False),
+    # Phase 393's round (lens B): the `pr` stub sat after the `4d-direct` marker, outside every
+    # span, and "Skip this arm", a wrong file and a dropped `--request-review` clause all passed;
+    # so did deleting the arm's own stop for `--request-review`, which predates the phase.
+    "review-close 4d pr stub": (CLOSE, "#### `pr` policy", "**First, record that this arm loaded**", False),
+    "review-close 4d-pr request-review stop": (CLOSE, "**Under `--request-review`, stop here**",
+                                               "**Step 2 — wait for checks, merge, then gate on PR *state*.**", False),
+    "review-close 4-pre policy command": (CLOSE, "run this from the main checkout's top level, with the close id `begin` printed written out:",
+                                          "Two values; **default `direct`**", False),
+    "review-close 4d arm and stub": (CLOSE, "How the assembled work reaches `main` depends on the merge policy from Step 4-pre. Run,",
+                                     "Once all merges and doc consolidation are complete", False),
+    "review-close 4a conflicts and stub": (CLOSE, "If the merge conflicts, **route by which file conflicted**",
+                                           "Three tracked files are appended to across branches", False),
+    "review-close Step 8 arm check": (CLOSE, "**Fill `Arms:` from the arm receipt**",
+                                      "If `$ARGUMENTS` contains `--prepare` or `--resume`, the section", False),
     "schema Also fixed": (SCHEMA, "### Also fixed", "### User ops", False),
     "tasks README ledger": (TASKS_README, "## The notes ledger (`notes.md`) — retired", "## Migrating from `product_roadmap.md`", False),
     "add-task dedup": (ADDTASK, "## Step 2 — Dedup", "## Step 3 — Draft", False),
@@ -2422,6 +2454,10 @@ PINNED_SPANS = {
     # menu answers of 2026-09-24. Its round walked 23 meaning-changing rewordings through the
     # structural predicates in `test_review_close_fix_at_close.py`; a hash sees every one.
     "review-close 4a-fix step": (CLOSE, "### 4a-fix. Fix the Close's Notes", "### 4a-post. Verify the Merged Tree", False),
+    # Phase 397 (`Q-409` P5): Step 3b's two exit arms, on Wade's answers of 2026-10-20. Each
+    # span runs from its stub's exit-0 lead through the arm spliced at its marker.
+    "review-close 3b collect-exit stub": (CLOSE, "**Exit 0: go on to (b).**", "b. **ONLY WHEN `SHAPE=worktree`**", False),
+    "review-close 3b rollback stub": (CLOSE, "**Exit 0: the worktree is removed; go on to item 2.**", "**2. Remove the workspace", False),
     "review-close 2b NOTES block": (CLOSE, "     Then, whatever the verdict:", "     Be thorough.", False),
     "review-close 2b notes collect": (CLOSE, "Collect all verdicts **and every `NOTES:` line**", "**Record outcomes for Step 8.** Tally", False),
     # Item 4's lead is inside the span on purpose: round 2 planted "a fix commit is never the
@@ -2442,13 +2478,33 @@ PINNED_SPANS = {
                                      "3b. **Spawn the security twin", False),
     "review-close 2b twin spawn": (CLOSE, "Spawn one Agent per surviving target",
                                    "The prompt is step 3's, with four substitutions", False),
+    # Phase 394 (`Q-667`): both verdict lookups, on Wade's 2026-10-20 answers (both gates), each
+    # before anything is read for the target (its round 2).
+    "review-close 2b lookup": (CLOSE, "**First, look up a recorded verdict for the target",
+                               "Read the **entire** convention-bearing set", False),
+    "review-close 2b twin lookup": (CLOSE, "**First, look up the target's security verdict",
+                                    "**Gate and copy — spawn only when the map's globs reach this target", False),
+    # Phase 395 (`Q-666`): the security copy's cut, on Wade's 2026-10-20 answers: drop only a
+    # section whose globs are all concrete and miss the diff, keep every placeholder section,
+    # hand the agent the left-out headings and the full copy; one matcher for gate and copy;
+    # the arm measures the cut copy; an uncomputed gate stops.
+    "review-close 2b twin gate and copy": (CLOSE, "**Gate and copy — spawn only when the map's globs reach this target",
+                                           "See `REFERENCE.md` § *Step 2b — the security copy*.", False),
+    # Its round 1 (lens B) inverted every restatement of the rule outside `SKILL.md` silently, and
+    # its round 2 (lens B) the rest of the section and the docstring's exit table: whole spans now.
+    "review-close REFERENCE security copy": (REPO_ROOT / "core" / "skills" / "review-close" / "REFERENCE.md",
+                                             "## Step 2b — the security copy", "## Step 2d — provenance", False),
+    "security_map_filter docstring rule": (REPO_ROOT / "core" / "companion" / "scripts" / "security_map_filter.py",
+                                           "**The gate reads leniently.**", "import hashlib", False),
+    "WORKFLOW security_map_filter row": (WORKFLOW, "| `security_map_filter.py <TARGET> <DEFAULT_BRANCH>` |",
+                                         "| `claim_artifacts.py", False),
     "adversarial-review scratch bullet": (REPO_ROOT / "core" / "skills" / "_shared" / "adversarial-review.md",
                                           "**Give each concurrent reviewer its own `TMPDIR`.**",
                                           "**Why this is a rule here and not a caveat below.**", False),
     # Phase 347 (`Q-618`), on Wade's answer of 2026-09-30: keep the rule to the spawner, pin it.
     # Its round deleted and inverted it with every column green.
     "adversarial-review heavy-job rule": (REPO_ROOT / "core" / "skills" / "_shared" / "adversarial-review.md",
-                                          "**While any lens is running tests or a mutation battery",
+                                          "**Your full suite may run beside the lenses.**",
                                           "**Reviewers must not mutate the working tree**", False),
     # Phase 337 (`Q-569` + `Q-578`), Wade's pick of 2026-09-27: where §6's entries end, the
     # rotation dedupe's join key, where a missing class heading is judged, and item 5's
@@ -2696,7 +2752,7 @@ PINNED_SPANS.update({
         "### 1c. Drain Archive State Before Rebasing", False),
     "review-close 3a dry-run arm": (
         CLOSE, "**A line left unanswered makes the verdict SKIP",
-        'python3 - "<workspace>" "<path>" "<commit or copy>"', False),
+        'python3 sysop/scripts/feature_branch.py keep-ignored "<workspace>" "<path>" "<commit or copy>"', False),
     "review-close 3b dry-run arm": (
         CLOSE, "**Under `--dry-run`, run step 0 only, which writes nothing:**",
         "**0. Locate the branch's workspace**", False),
@@ -2719,13 +2775,99 @@ PINNED_SPANS.update({
     "review-close request-review/land section": (
         CLOSE, "## `--request-review` and `--land <run-id>` (`Q-411`)", "## Step 1: Gather State", False),
     "review-close awaiting stop": (
-        CLOSE, "## A close waiting for its second reader", "## `--prepare` and `--resume <run-id>` (`Q-603`)", False),
+        CLOSE, "## A close waiting for its second reader", "## Open the close's arm receipt", False),
     "review-close step 6 pushed-from gate": (
         CLOSE, "**Then check for commits made after Step 4d's push**",
         "**Narrower", False),
     "review-close 4d-1 integration recovery": (
         CLOSE, "Leave the integration branch, the feature branches and every remaining worktree",
         "**In the PR-reuse shape the recovery is different", False),
+})
+
+# Phase 377 (`Q-663`, on Wade's rulings at Phases 374 and 377): the give-back skills stage under
+# `sysop/runtime/giveback/`, which the seeded `Edit` rule admits under `dontAsk`, and each
+# pre-flight states what `dontAsk` does to its bookkeeping edit.
+_GIVEBACK = {name: REPO_ROOT / "core" / "skills" / name / "SKILL.md"
+             for name in ("report-issues", "contribute-convention", "share-wins", "release")}
+_SKIP_GUARD = "If `$ARGUMENTS` contains `--skip-permission-guard`"
+_GH_PARA = "`gh auth status` and the `gh repo view` visibility probe are **not** listed as"
+PINNED_SPANS.update({
+    # Through the `Write` bullet (round 1, lens 2: a sentence added to it walked past a pin
+    # that ended before it).
+    "report-issues giveback staging": (
+        _GIVEBACK["report-issues"], "**Resolve the body file's path first, in a call of its own:**",
+        "Keep the `--title` a plain one-line summary", False),
+    "contribute-convention giveback staging": (
+        _GIVEBACK["contribute-convention"], "**Resolve the body file's path first, in a call of its own:**",
+        "Keep the `--title` a plain one-line summary", False),
+    "share-wins giveback staging": (
+        _GIVEBACK["share-wins"], "**Resolve the body file's path first, in a call of its own:**",
+        "Post it, binding the file", False),
+    "release tag message staging": (
+        _GIVEBACK["release"], "First resolve the message file's path, in a call of its own:",
+        "Then run as one block:", False),
+    "release notes staging": (
+        _GIVEBACK["release"], "Resolve the notes file's path, in a call of its own",
+        "Create the release against the **current repo**", False),
+    # From the paragraph's opener (round 1, lens 2: a sentence inserted before the old start).
+    "report-issues dontAsk edit rules": (_GIVEBACK["report-issues"], _GH_PARA, _SKIP_GUARD, False),
+    "share-wins dontAsk edit rules": (_GIVEBACK["share-wins"], _GH_PARA, _SKIP_GUARD, False),
+    "contribute-convention dontAsk edit rules": (
+        _GIVEBACK["contribute-convention"], _GH_PARA, _SKIP_GUARD, False),
+    "release dontAsk edit rules": (
+        _GIVEBACK["release"], "Editing `CHANGELOG.md` uses the `Edit`/`Write` tool, and no rule",
+        _SKIP_GUARD, False),
+    "release changelog denial stop": (
+        _GIVEBACK["release"], "If the write is denied, stop and say so: nothing has been tagged.",
+        "**\"Prepend\" means", False),
+})
+
+# Phase 377, round 2 (Wade's answer: pin the decided text outside the staging sites).
+_DOCS_INSTALL = REPO_ROOT / "docs" / "install-and-update.md"
+PINNED_SPANS.update({
+    "onboard dontAsk write claim": (
+        REPO_ROOT / "core" / "skills" / "onboard" / "SKILL.md", "`/onboard` needs **no new Bash rules.**",
+        re.compile(r"\Z"), False),
+    "add-task dontAsk write claim": (
+        ADDTASK, "`/add-task` needs **no new Bash rules.**", re.compile(r"\Z"), False),
+    "intake dontAsk write claim": (
+        REPO_ROOT / "core" / "skills" / "intake" / "SKILL.md", "`/intake` needs **no new Bash rules.**",
+        "## Two-leg done, restated", False),
+    "install doc dontAsk edit rules": (
+        _DOCS_INSTALL, "Under the interactive modes the same gaps cost you a prompt", "## Repo layout", False),
+    "WORKFLOW 8.6 giveback row": (
+        WORKFLOW, "| `sysop/runtime/giveback/<name>.md` |", "| `../<project>-<task-id>/` |", False),
+    "WORKFLOW 8.2a file-edit rules": (
+        WORKFLOW, "two **file-edit** rules, the template's only non-`Bash` rules",
+        "When a new skill needs a permission rule", False),
+})
+
+PINNED_SPANS.update({
+    # Phase 380 (`Q-664`): half A with no human, on Wade's rulings (spec § 13 (aj)-(ba)).
+    "review-close STOPPED gate": (
+        CLOSE, "**Unless `$ARGUMENTS` contains `--land`**, look for `sysop/runtime/close/*/STOPPED` too.",
+        "## Open the close's arm receipt", False),
+    "review-close prepare agent selection": (
+        CLOSE, "**With `--agent <name>`**, before Step 1, read `CLAUDE.md`'s `## Merge policy`",
+        "**Ask nothing; record instead.**", False),
+    "review-close prepare agent hold": (
+        CLOSE, "**With `--agent <name>`**, also hold the branch",
+        "**Every other stop halts the prepare:**", False),
+    "review-close unattended resume": (
+        CLOSE, "### Under `--resume <run-id> --request-review --agent <name> --unattended`",
+        "### Under `--land <run-id>`\n", False),
+    "review-close empty-WS exit 6": (
+        CLOSE, "**When step 0 printed `shape=<none>`, also apply the collect's exit-6 test by hand:**",
+        "**0b. Only when `SHAPE=worktree`", False),
+    "WORKFLOW half A with no human": (
+        WORKFLOW, "**Half A with no human.** *This does not run yet:*", "**Unattended close gate**", False),
+    # Phase 398 (`Q-676`): the model defaults at the front door, on Wade's answers of 2026-10-20.
+    "intake model defaults": (
+        REPO_ROOT / "core" / "skills" / "intake" / "SKILL.md",
+        "**On the fresh and adopting branches below, show the model defaults", "Then branch:", False),
+    "onboard model defaults": (
+        REPO_ROOT / "core" / "skills" / "onboard" / "SKILL.md",
+        "Before the plan, show the model defaults,", "State the plan in one short block", False),
 })
 
 PIN_HASHES = {
@@ -2738,7 +2880,7 @@ PIN_HASHES = {
     "claim-task Step 8 ask gate": "884b01ecfbe029a5",
     "claim-task Step 8b ask": "4475c2fd3cb2243e",
     "claim-task Step 8b leave rule": "5f7feff76f531df8",
-    "claim-task Step 8c spawn arms": "9d92371be4e732b2",  # Phase 349: own executor pin
+    "claim-task Step 8c spawn arms": "8547014cf8bc1d5b",  # Phase 349: own executor pin; Phase 381: it carries `effort`, never 7a's (`Q-675`)
     "claim-task Step 8c addendum": "1a18693dfb996527",
     "claim-task Step 8c outcomes": "67b25db455bb8aa5",  # Phase 352: the FAILED listing reads past the recorded PR heads (`Q-623`)
     "claim-task Step 8c read": "9ffd642981cb354f",
@@ -2757,11 +2899,18 @@ PIN_HASHES = {
     "WORKFLOW 2-also bullet": "c4c68ab45c8b2fa9",  # Phase 357: check 1 halts only when no path is in the diff (`Q-630`)
     "monograph tier-3 paragraph": "331943fca9321557",
     "auto-build hard constraints": "828ad2d5914aad26",
-    "review-close 2-also arm": "5a69ab33d7f082b6",  # Phase 360: a landed branch's `## After merge` is not reprinted (Wade, 2026-10-06)
+    "review-close 2-also arm": "3ec7cde6585e623e",  # Phase 360: a landed branch's `## After merge` is not reprinted (Wade, 2026-10-06); Phase 386: the heredoc it names became a shipped script (`Q-409` P3)
     # Phase 335: the two stage-extract blocks write into a minted, printed `$STAGES` directory
     # instead of fixed names in the shared temp dir (a concurrent close overwrote them silently).
     # The decided resolution rules in this span are unchanged.
-    "review-close shared-append section": "bd39cf1f43c24d12",  # Phase 352: the `status:` STOP gains the recorded-head exception (`Q-623`)
+    "review-close shared-append section": "e3a78f947ce6713a",  # Phase 390: moved to `steps/4a-append.md`; its round: "Step 4a item 2" and "the recipe below" for two pointers; Phase 352: the `status:` STOP gains the recorded-head exception (`Q-623`)
+    "review-close 4d pr stub": "b2fe5196a27c4240",  # Phase 393's round (lens B): the stub every `pr` close loads through, and its `--request-review` exception
+    "review-close 4d-pr request-review stop": "a75f65e31f394ad2",  # Phase 393's round (lens B): half A stops before Step 2; unpinned since before the phase
+    "review-close receipt begin": "34bdde2b7a7e9c57",  # Phase 397 (P5): the line names Step 3b's two exit arms, and Step 3b writes the close id (round 1, lens A); Phase 393's round: load every printed arm first; `--agent` needs `pr`; Phase 393 (`Q-409` P4b): its own section before the flag sections, the flags written out, the flag arms; Phase 390's round: the close id is written at 4a and 4a-fix too; Phase 388: the arm receipt opens; its round: the arm list and quoted ids; Phase 390: the list gains 4a-append and 4a-fix
+    "review-close 4-pre policy command": "5142542b69347477",  # Phase 393: the close id is `begin`'s; Phase 388: the policy is a command's; its round: a heading variant is refused
+    "review-close 4d arm and stub": "7fad0cf9cedc79ba",  # Phase 393: `pr` makes `4d-pr` due; the close id is `begin`'s; Phase 388: the trigger, the stub, the arm's first command; its round: the file checks the digest; round 2: the directory is a placeholder the stub fills
+    "review-close 4a conflicts and stub": "2e15d235a61f4bef",  # Phase 393: the close id is `begin`'s; Phase 390 (`Q-409` P4): `conflicts` decides the trigger, the stub, the arm's first command; its round: from the top level, at every stop, `CONFLICTED: none` stops
+    "review-close Step 8 arm check": "55c054efa1120463",  # Phase 393: `--land` has a receipt now; Phase 388: the check; its round: exit 2 reaches Remaining
     "schema Also fixed": "2e6f37f3c52e459d",
     "tasks README ledger": "53f05416e72bcf25",
     "add-task dedup": "96ed49b800bae922",
@@ -2773,16 +2922,16 @@ PIN_HASHES = {
     "monograph addendum": "94c1135be6dc894c",
     "CLAUDE.md conventions": "79ce7ef50a1345c0",
     "review-close 2b NOTES block": "287334bc6bb8aa70",
-    "review-close 2b notes collect": "04bf180090c9b32c",
+    "review-close 2b notes collect": "877db284b4ef037b",  # Phase 394 (`Q-667`): a `REUSE` verdict is reviewed, and item 4 records an `APPROVED` with `NOTES: none`, before a `BLOCKED` stops the close
     # Phase 335 (`Q-570`): the re-check placement gained its `SCRATCH=$(mktemp -d …)` line, which
     # also prints both paths, and its containment check asks git for the pin's toplevel.
     # The decided fix-at-close rule in this span is unchanged.
-    "review-close 4a-fix step": "b7a90b5c0a950ed4",
+    "review-close 4a-fix step": "246e25eb6ef247ff",  # Phase 393: the close id is `begin`'s; Phase 390 (`Q-409` P4): items 1-5 moved to `steps/4a-fix.md`, `notes` decides the trigger, `NOTES: none` counts 0; its round: items 6-7 stay in the core; Phase 389: the convention-gate pin carries `effort: "high"`; Phase 381: it resolves to `sonnet` (`Q-669`)
     "review-close 4a-post fix arm": "4e0ef306f83f6df8",  # Phase 357: the lead names the `pr` ask (`Q-631`)
     "review-close 4d filing pointer": "ccb63686d22e0f86",
     "review-close 4a PR-reuse lead": "14bbe3f08cf3eca3",
     "review-close Step 8 close notes": "d2508bea347f6163",
-    "review-close 2b twin substitutions": "a2da6151437f458e",
+    "review-close 2b twin substitutions": "4a2ca9ecb64cee47",  # Phase 395 (`Q-666`): the `## Security map` block carries the cut copy, the left-out headings and the full copy's path; round 1: "their headings"
     "WORKFLOW 5a item": "019ee9cc432d2c20",
     # Phase 333: the placement paragraph is identical in both review skills by decision, so its
     # pair shares one hash. The pre-flight spans differ only in each skill's own one-line reason.
@@ -2792,19 +2941,25 @@ PIN_HASHES = {
     "security-audit pre-flight stop and worktree note": "77ffb4915340c9a8",
     # Phase 335 (`Q-570`). The two containment rules are identical by decision, as the placement
     # paragraphs are, so the pair shares one hash.
-    "review-close 2b placement": "060f3f88fcf336dc",
+    "review-close 2b placement": "793fd8cb781296a2",  # Phase 379: the feature-branch pin resolves with `--verify` or stops, and `${PIN:?}` is asserted before mktemp (a consumer's issue 0009)
     "review-close 2b write clause": "e9b16c8af664fa35",
-    "review-close 2b twin spawn": "351c44f304d6933b",
+    "review-close 2b twin spawn": "cbb542be491609ae",  # Phase 389: `security-gate` follows `reasoning` (opus, `high`) after the replay; Phase 381: the twin pins `security-gate` (`Q-669`)
+    "review-close 2b lookup": "8cac45ac3740a2a2",  # Phase 394 (`Q-667`)
+    "review-close 2b twin lookup": "38521f0c4fee36b3",  # Phase 394 (`Q-667`); Phase 395 moved its end anchor, not its text
+    "review-close 2b twin gate and copy": "2cf9220f02d10a3d",  # Phase 395 (`Q-666`); round 1: `WHOLE:`/`UNMATCHABLE:` reported, exit 2 is the target's `BLOCKED` verdict; round 2: so is any other exit but 0 and 3, and where each is reported and counted
+    "review-close REFERENCE security copy": "517c87e90e1b2f97",  # Phase 395 (`Q-666`), rounds 1 and 2; Phase 399: a source-project path became `<api module>/routes/`
+    "security_map_filter docstring rule": "e4c9aeaae8481a30",  # Phase 395 (`Q-666`), round 1; round 2 widened it to the exit table
+    "WORKFLOW security_map_filter row": "4eef17b9131a31d4",  # Phase 395 (`Q-666`), round 1
     "adversarial-review scratch bullet": "a2884d2317529826",
-    "adversarial-review heavy-job rule": "c4bf50fdd2108d78",
+    "adversarial-review heavy-job rule": "66ddf2efcdc7f395",  # Phase 381: the suite runs beside the lenses (`Q-677`)
     "codebase-review containment rule": "7c45848ad743f777",
     "security-audit containment rule": "7c45848ad743f777",
     # Phase 337 (`Q-569` + `Q-578`).
-    "review-close 4c rotation boundary": "4a4c414ceb762e67",
+    "review-close 4c rotation boundary": "02bc4fc2ad7a054c",  # Phase 379: the §6 write creates an absent PROJECT_STATUS.md first (a consumer's issue 0004)
     "review-close 4c changelog contract": "109f2a2414840e98",
-    "review-close 4c post-write check": "f225e3c03d794ccd",
-    "review-close 4c stage and commit": "302852b51480be6b",
-    "review-close Step 8 documentation rows": "52720c110cf22447",  # Phase 353: the `HELD_BY_HOLD` row and four-row partition (`Q-625`)
+    "review-close 4c post-write check": "41cdedf30a80b3f7",  # Phase 387: the span plus close_check.py (appended fenced, so its indentation counts), the heredoc moved verbatim (`Q-409` P3), the zsh loop-variable rule the move brought into the zsh guard's reach, and (round 1) the stop arm for an exit 2 with no `RESULT:` line, which is the script missing; Phase 380: its env-strip is `dict(...)`, which dontAsk admits (`Q-664`); Phase 386: the heredoc it names became a shipped script (`Q-409` P3)
+    "review-close 4c stage and commit": "4fa4c78c27ec2971",  # Phase 386: the heredoc it names became a shipped script (`Q-409` P3)
+    "review-close Step 8 documentation rows": "ced4b7cc77fe12ee",  # Phase 353: the `HELD_BY_HOLD` row and four-row partition (`Q-625`); Phase 386: the heredoc it names became a shipped script (`Q-409` P3)
     # Phase 338 (`Q-581`).
     "security-audit 3c mark pointer": "f44401cfa8b22c23",
     "security-audit Step 7 mark": "c7ed61435177e009",
@@ -2874,11 +3029,40 @@ PIN_HASHES = {
     "review-close 3b dry-run arm": "77382d1b0f57d28d",
     "review-close 3c dry-run answers": "efccfe1e28837152",
     "review-close dry-run paragraph": "abc23e5b294c3dfb",
-    "review-close prepare/resume section": "e58f2bc7183b4415",  # Phase 363: `--prepare` / `--resume` (`Q-603`); rounds 1 and 2 reordered and narrowed the resume; Phase 365 narrowed the span to its own section and re-pinned its flag-combination sentence
-    "review-close request-review/land section": "54062c4699396c94",  # Phase 365: the Step 4d split (`Q-411`), Wade's 2026-10-08 rulings; Phase 366 added the --agent selection and the stop on --unattended (spec § 9, ruling (t))
-    "review-close awaiting stop": "8785cc0159216adc",  # Phase 365: every mode but --land stops on a waiting hand-off
+    "review-close prepare/resume section": "47cd3b97c5e827f0",  # Phase 393's round: no pointer into an arm a `--prepare --agent` run has not loaded; Phase 393 (`Q-409` P4b): the body is `steps/prepare-resume.md`, its flag-combination sentence is `begin`'s refusal, `--unattended` is read off the flags `begin` was given; Phase 363: `--prepare` / `--resume` (`Q-603`); rounds 1 and 2 reordered and narrowed the resume; Phase 365 narrowed the span to its own section and re-pinned its flag-combination sentence; Phase 380 added the `--agent` selection and hold (`Q-664`)
+    "review-close request-review/land section": "2b30dfa343552223",  # Phase 393's round: `4d-pr` loads with this arm; the resume is named in its file; Phase 393 (`Q-409` P4b): the body is `steps/request-review-land.md`, its flag-combination and `pr` sentences are `begin`'s refusals, `--land` loads `steps/4d-pr.md`; Phase 365: the Step 4d split (`Q-411`), Wade's 2026-10-08 rulings; Phase 366 added the --agent selection and the stop on --unattended (spec § 9, ruling (t)); Phase 375 replaced the stop with the unattended land (Wade's 2026-10-11 rulings, spec § 12); Phase 380 added the unattended resume (`Q-664`, spec § 13); Phase 386: the heredoc it names became a shipped script (`Q-409` P3)
+    "review-close awaiting stop": "d05d201fecd4a36e",  # Phase 365: every mode but --land stops on a waiting hand-off; Phase 380 added the STOPPED stop (`Q-664`)
     "review-close step 6 pushed-from gate": "2e013b4c5495efdf",  # Phase 363: no reset over a commit made after the push (`Q-651`)
     "review-close 4d-1 integration recovery": "3a55351ebc9e6267",  # Phase 363: recover on the stuck branch, never re-run (`Q-652`)
+    # Phase 377 (`Q-663`).
+    "report-issues giveback staging": "afc799fcffcf23cd",
+    "contribute-convention giveback staging": "c047cba64ed7763b",
+    "share-wins giveback staging": "8bdd22281e836e9a",
+    "release tag message staging": "23e0987ad2e9ab10",
+    "release notes staging": "94839d45f1cdd7ec",
+    "report-issues dontAsk edit rules": "146b32f293195a18",
+    "share-wins dontAsk edit rules": "1ada6b48af133d1b",
+    "contribute-convention dontAsk edit rules": "d69882aa9cb5d200",
+    "release dontAsk edit rules": "c663b700eb22e3b1",
+    "release changelog denial stop": "154f8e875ba046ed",
+    # Phase 377, round 2.
+    "onboard dontAsk write claim": "827bbfc49b02b34a",  # Phase 398: names its `--defaults` rule
+    "add-task dontAsk write claim": "8609a83b84947fff",
+    "intake dontAsk write claim": "1e290ab8caed50ea",  # Phase 398: names its `--defaults` rule
+    "install doc dontAsk edit rules": "dcffe5dfc7f07739",
+    "WORKFLOW 8.6 giveback row": "86a78bfb263816f3",
+    "WORKFLOW 8.2a file-edit rules": "1fbd4f407e918060",
+    # Phase 380 (`Q-664`): half A with no human.
+    "review-close STOPPED gate": "035f8bd75909c66d",
+    "review-close prepare agent selection": "3bfe7204ddee2e03",  # Phase 393's round: the pointer to *Under `--request-review`* dropped, since that arm is not loaded under `--prepare --agent`
+    "review-close prepare agent hold": "3c98bf9f8de83380",
+    "review-close unattended resume": "7929717918c930c3",  # Phase 393's round: the resume is named in `steps/prepare-resume.md`
+    "review-close empty-WS exit 6": "ba9840279e415ef6",  # Phase 397 (P5): exit 8's and 6's rows moved to step 1's arm, which the hand test now loads, and not under `--dry-run` (round 1, lens B)
+    "review-close 3b collect-exit stub": "3d6f6a0f9bdab971",  # Phase 397 (P5): the stub and `steps/3b-collect-exit.md`
+    "review-close 3b rollback stub": "58ed730c833b8230",  # Phase 397 (P5): the stub and `steps/3b-rollback.md`
+    "WORKFLOW half A with no human": "4bc6cc2283a23afc",  # Phase 399: the heredoc blocker is gone (Phases 386-387), the other two stand
+    "intake model defaults": "96416ecdb7275a49",  # rounds 1-3: above the branches; the check's own verdict
+    "onboard model defaults": "bf0932711b0ab498",  # rounds 1-3: skipped after /intake; the check's own verdict
 }
 
 
@@ -2897,14 +3081,36 @@ def _span(label: str) -> str:
     return span
 
 
+# Since Phase 387 (`Q-409` P3) the program inside this span is a shipped script, so its pin
+# covers the span plus the program it runs.
+_SPAN_PROGRAMS = {
+    "review-close 4c post-write check":
+        lambda: (ROOT_FOR_PROGRAMS / "core/companion/scripts/close_check.py").read_text(encoding="utf-8"),
+}
+ROOT_FOR_PROGRAMS = Path(__file__).resolve().parents[1]
+
+
+def _pinned(label: str) -> str:
+    """What a pin hashes: the span, plus the program a moved heredoc became (Phase 387)."""
+    return _span(label) + _pin_program(_SPAN_PROGRAMS[label]()) if label in _SPAN_PROGRAMS else _span(label)
+
+
+def test_a_pinned_program_keeps_its_indentation():
+    """The fenced append is what lets a moved program's pin see a dedent; the raw append
+    folded it away (Phase 387's round)."""
+    prog = "if a:\n    if b:\n        x = 1\n    y = 2\n"
+    dedented = prog.replace("    y = 2", "y = 2")
+    assert _pin_hash("span" + _pin_program(prog)) != _pin_hash("span" + _pin_program(dedented))
+
+
 def _print_pins() -> None:
     for label in PINNED_SPANS:
-        print(f'    "{label}": "{_pin_hash(_span(label))}",')
+        print(f'    "{label}": "{_pin_hash(_pinned(label))}",')
 
 
 @pytest.mark.parametrize("label", sorted(PINNED_SPANS))
 def test_the_decided_text_is_pinned(label: str) -> None:
-    got = _pin_hash(_span(label))
+    got = _pin_hash(_pinned(label))
     assert label in PIN_HASHES, f"{label}: no pin recorded; add \"{label}\": \"{got}\""
     assert got == PIN_HASHES[label], (
         f"{label} changed (hash {got}, pinned {PIN_HASHES[label]}). This text states the "
@@ -2912,7 +3118,7 @@ def test_the_decided_text_is_pinned(label: str) -> None:
         "2026-09-24), or -- for the review-skill spans -- his reviewer-placement decisions (Phase "
         "333, 2026-09-25), or Step 4c's rotation and changelog contracts (Phase 337, 2026-09-27), or "
         "the collision grade `unknown` and its rank (Phase 339, 2026-09-27), or where /auto-build's plan and "
-        "revised plan are written (Phase 344, 2026-09-28), or /claim-task's ask-and-fix (Phase 345, 2026-09-29), or the scope of /auto-build's named-task lane lift (Phase 356, 2026-09-30), or check 1's notes, the `pr` pre-existing-failure ask, `## After merge` and /sitrep's failed-task section (Phase 357, ruled 2026-09-30), or what /auto-build --unattended waives and its halt marker (Phase 361, 2026-10-06), or what a /review-close --dry-run runs (Phase 362, 2026-10-07), or the Step 4d split (Phase 365, 2026-10-08), or the --agent selection and the unattended land left off (Phase 366, 2026-10-08), or that an UNREADABLE record fails an /auto-build task (Phase 371, 2026-10-10). The hash covers the span's words, its block structure, its first line's "
+        "revised plan are written (Phase 344, 2026-09-28), or /claim-task's ask-and-fix (Phase 345, 2026-09-29), or the scope of /auto-build's named-task lane lift (Phase 356, 2026-09-30), or check 1's notes, the `pr` pre-existing-failure ask, `## After merge` and /sitrep's failed-task section (Phase 357, ruled 2026-09-30), or what /auto-build --unattended waives and its halt marker (Phase 361, 2026-10-06), or what a /review-close --dry-run runs (Phase 362, 2026-10-07), or the Step 4d split (Phase 365, 2026-10-08), or the --agent selection and the unattended land left off (Phase 366, 2026-10-08), or that an UNREADABLE record fails an /auto-build task (Phase 371, 2026-10-10), or the unattended land turned on (Phase 375, 2026-10-11), or the arm receipt and its pilot arm (Phase 388, 2026-10-19). The hash covers the span's words, its block structure, its first line's "
         "indentation and the fence it sits in; a re-wrap or a list-marker swap keeps it. If the "
         "edit is a deliberate change to that rule, update the pin in the same commit "
         "(`_print_pins()`) and say so in the phase record; if it is not, it is the widening or "
@@ -3042,8 +3248,8 @@ def test_the_ledger_is_named_only_where_it_is_retired_or_still_read() -> None:
     files = _shipped_files()
     assert len(files) > 100, f"only {len(files)} shipped files found -- the population is wrong"
     stray = []
-    for p in files:
-        text = _visible(p.read_text(encoding="utf-8", errors="replace"))
+    for p in fold_steps(files):
+        text = _visible(text_of(p, errors="replace"))
         hits = [m.start() for m in _LEDGER_RE.finditer(text)]
         if not hits:
             continue

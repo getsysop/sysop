@@ -70,6 +70,29 @@ _ROLE_CLAUSE_RE = re.compile(r"\b(frontmatter|inline)=([a-z][a-z0-9_-]*)")
 _FM_PIN_RE = re.compile(r'^(\s*model:\s*)(["\']?)([^"\'\s#]+)(["\']?)(\s*)$')
 _INLINE_PIN_RE = re.compile(r'(model[`:\s]*["\'])([^"\']+)(["\'])')
 
+# EFFORT (`Q-675`, Phase 381). The Agent tool takes a per-spawn `effort` since Claude Code
+# 2.1.292, and an inline pin may carry one: an effort segment written IMMEDIATELY after the
+# model pin, as its own code span, in the pin's style —
+#
+#     `model`: `"sonnet"`, `effort`: `"high"`       (the backticked-key style)
+#     `model: "sonnet"`, `effort: "high"`           (the one-span style)
+#
+# The segment belongs to the pin before it, so it takes that pin's role. Position is the
+# whole binding: the resolver inserts, rewrites or removes the segment there and nowhere
+# else, so an `effort:` mentioned elsewhere on the line is prose, not a pin. Frontmatter
+# pins carry no effort; a frontmatter skill runs in the main conversation at the session's
+# own level.
+_INLINE_PIN_EFFORT_RE = re.compile(
+    r'(model[`:\s]*["\'])([^"\']+)(["\'])(`?)'
+    r'(,\s*`effort(?:`:\s*`|:\s*)"([^"]*)"`)?'
+)
+
+#: The levels the Agent tool's `effort` parameter accepts — a closed enum, like `model`.
+EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+#: The value that means "pass no effort": the spawn runs at the session's level. Also what a
+#: local overlay writes to undo a shipped effort (`efforts: {executor: none}`).
+NO_EFFORT = "none"
+
 # The two pin kinds do NOT accept the same values, and Phase 223 verified the
 # asymmetry by execution rather than by reading a schema.
 #
@@ -114,6 +137,8 @@ class PinRole:
     kind: str  # "frontmatter" | "inline"
     value: str
     role: str | None
+    #: The effort segment's literal after an inline pin, or None when the pin carries none.
+    effort: str | None = None
 
 
 def parse_file_roles(text: str) -> tuple[str | None, str | None]:
@@ -155,18 +180,22 @@ def analyze_text(text: str) -> list[PinRole]:
                 continue
         pm = _PIN_MARKER_RE.search(line)
         line_role = pm.group(1) if pm else inline_default
-        for im in _INLINE_PIN_RE.finditer(line):
-            out.append(PinRole(i, "inline", im.group(2), line_role))
+        for im in _INLINE_PIN_EFFORT_RE.finditer(line):
+            out.append(PinRole(i, "inline", im.group(2), line_role, im.group(6)))
     return out
 
 
-def resolve_text(text: str, roles: dict[str, str]) -> tuple[str, list[tuple]]:
-    """Rewrite each pin's value to its role's model.
+def resolve_text(
+    text: str, roles: dict[str, str], efforts: dict[str, str | None] | None = None
+) -> tuple[str, list[tuple]]:
+    """Rewrite each pin's value to its role's model, and each inline pin's effort.
 
     Returns ``(new_text, changes)`` where changes is
-    ``[(lineno, kind, role, old_value, new_value), ...]``. Pins whose role is
-    None or absent from *roles* are left untouched (a structural error the
-    caller surfaces); pins already at the target value are skipped.
+    ``[(lineno, kind, role, old_value, new_value), ...]``; an effort change has kind
+    ``"effort"`` and ``None`` for an absent segment. Pins whose role is None or absent
+    from *roles* are left untouched (a structural error the caller surfaces); pins
+    already at the target value are skipped. With *efforts* None the effort segments
+    are left exactly as they are, which is what a caller predating `Q-675` gets.
     """
     records = analyze_text(text)
     if not records:
@@ -197,8 +226,42 @@ def resolve_text(text: str, roles: dict[str, str]) -> tuple[str, list[tuple]]:
                     return f"{m.group(1)}{_new}{m.group(3)}" if m.group(2) == _old else m.group(0)
                 new = _INLINE_PIN_RE.sub(_repl, new)
             changes.append((lineno, r.kind, r.role, r.value, target))
+        if efforts is not None:
+            new = _resolve_line_efforts(new, recs, roles, efforts, lineno, changes)
         keep_nl[lineno - 1] = new + nl
     return "".join(keep_nl), changes
+
+
+def _effort_segment(model_key: str, level: str) -> str:
+    """The effort segment in the style of the pin it follows (see `_INLINE_PIN_EFFORT_RE`)."""
+    if "`" in model_key:
+        return f', `effort`: `"{level}"`'
+    return f', `effort: "{level}"`'
+
+
+def _resolve_line_efforts(line, recs, roles, efforts, lineno, changes):
+    """Insert, rewrite or remove the effort segment after each inline pin on *line*.
+
+    Every inline pin on one line shares that line's role (a per-pin marker governs its
+    whole line), so the target is computed once from the first inline record.
+    """
+    inline = [r for r in recs if r.kind == "inline"]
+    if not inline:
+        return line
+    role = inline[0].role
+    if role is None or role not in roles:
+        return line
+    target = efforts.get(role)
+
+    def _repl(m):
+        current = m.group(6)
+        if current == target:
+            return m.group(0)
+        changes.append((lineno, "effort", role, current, target))
+        head = m.group(1) + m.group(2) + m.group(3) + m.group(4)
+        return head if target is None else head + _effort_segment(m.group(1), target)
+
+    return _INLINE_PIN_EFFORT_RE.sub(_repl, line)
 
 
 def load_roles_config(
@@ -210,15 +273,141 @@ def load_roles_config(
     the allowlist. PyYAML is required (Sysop's run_checks already depends on it).
     """
     data = _load_yaml_mapping(config_path)
-    roles = {str(k): str(v) for k, v in (data.get("roles") or {}).items()}
+    roles = {str(k): str(v) for k, v in _as_role_map(data.get("roles"), config_path).items()}
     served = [str(s) for s in (data.get("served") or [])]
     if local_path is not None and local_path.is_file():
         ldata = _load_yaml_mapping(local_path)
-        roles.update({str(k): str(v) for k, v in (ldata.get("roles") or {}).items()})
+        roles.update({str(k): str(v) for k, v in _as_role_map(ldata.get("roles"), local_path).items()})
         for s in (ldata.get("served") or []):
             if str(s) not in served:
                 served.append(str(s))
     return _resolve_role_aliases(roles), served
+
+
+class EffortConfigError(ValueError):
+    """An `efforts:` entry names no role, or a level the Agent tool does not accept.
+
+    A verdict on the mapping (exit 1), not a malformed file (exit 2) — the same split
+    `RoleAliasError` keeps. A typo'd role key is refused rather than ignored, because an
+    ignored `exectuor: high` is a spawn running at a level nobody chose.
+    """
+
+
+def load_role_efforts(
+    config_path: Path, local_path: Path | None = None
+) -> dict[str, str | None]:
+    """Return ``{role: level or None}`` for every role, from ``efforts:`` (`Q-675`).
+
+    A role with an ``efforts:`` entry takes it (``none`` means no effort argument). A role
+    without one follows the role its value names, as its model does, so
+    ``plan-review: reasoning`` runs at ``reasoning``'s effort until it is given its own.
+    A role whose value is a model, with no entry, gets None: its spawns pass no effort and
+    run at the session's level, which is what every pin did before `Q-675`. Local entries
+    win over shipped ones, key by key.
+    """
+    data = _load_yaml_mapping(config_path)
+    raw_roles = {str(k): str(v) for k, v in _as_role_map(data.get("roles"), config_path).items()}
+    efforts = _as_effort_map(data.get("efforts"), config_path)
+    if local_path is not None and local_path.is_file():
+        ldata = _load_yaml_mapping(local_path)
+        raw_roles.update({str(k): str(v) for k, v in _as_role_map(ldata.get("roles"), local_path).items()})
+        efforts.update(_as_effort_map(ldata.get("efforts"), local_path))
+    unknown = sorted(k for k in efforts if k not in raw_roles)
+    if unknown:
+        raise EffortConfigError(
+            f"`efforts:` names {', '.join(repr(k) for k in unknown)}, which "
+            f"{'is not a role' if len(unknown) == 1 else 'are not roles'} in `roles:`"
+        )
+    bad = sorted(f"{k}: {v!r}" for k, v in efforts.items()
+                 if v not in EFFORT_LEVELS and v != NO_EFFORT)
+    if bad:
+        raise EffortConfigError(
+            f"`efforts:` holds a level the Agent tool does not accept ({'; '.join(bad)}); "
+            f"use one of {', '.join(EFFORT_LEVELS)}, or `{NO_EFFORT}` for no effort argument"
+        )
+    out: dict[str, str | None] = {}
+    for role in raw_roles:
+        seen = [role]
+        current = role
+        while current not in efforts and raw_roles.get(current) in raw_roles \
+                and raw_roles[current] not in seen:
+            current = raw_roles[current]
+            seen.append(current)
+        level = efforts.get(current)
+        out[role] = None if level in (None, NO_EFFORT) else level
+    return out
+
+
+@dataclass(frozen=True)
+class RoleRow:
+    """One role as `check_skill_models.py --defaults` prints it (`Q-676`)."""
+
+    role: str
+    #: What `roles:` maps it to: a model, or the name of the role it follows.
+    value: str
+    model: str
+    #: The effort its inline spawns pass, or None for the session's level.
+    effort: str | None
+    #: True when the local overlay sets the role's model or its effort.
+    local: bool
+    about: str | None
+
+
+def describe_roles(
+    config_path: Path, local_path: Path | None = None
+) -> tuple[list[RoleRow], dict]:
+    """Return ``(rows, notes)``: every role in file order, and the file's `reevaluated:` /
+    `cost_shape:` keys. Models and efforts come from the loaders the checker and the
+    resolver use, so the table cannot disagree with what a role resolves to."""
+    roles, _served = load_roles_config(config_path, local_path)
+    efforts = load_role_efforts(config_path, local_path)
+    data = _load_yaml_mapping(config_path)
+    raw = {str(k): str(v) for k, v in _as_role_map(data.get("roles"), config_path).items()}
+    about = _as_text_map(data.get("about"))
+    local_keys: set[str] = set()
+    if local_path is not None and local_path.is_file():
+        ldata = _load_yaml_mapping(local_path)
+        lroles = {str(k): str(v) for k, v in _as_role_map(ldata.get("roles"), local_path).items()}
+        raw.update(lroles)
+        local_keys = set(lroles) | set(_as_effort_map(ldata.get("efforts"), local_path))
+    rows = [RoleRow(role, raw[role], roles[role], efforts.get(role), role in local_keys,
+                    about.get(role)) for role in raw]
+    notes = {"reevaluated": data.get("reevaluated"), "cost_shape": data.get("cost_shape")}
+    return rows, notes
+
+
+def _as_text_map(value: object) -> dict[str, str]:
+    """`about:` as ``{role: line}``. Display text only, so a malformed value prints dashes
+    rather than refusing the table."""
+    if not isinstance(value, dict):
+        return {}
+    return {str(k): " ".join(str(v).split()) for k, v in value.items() if v is not None}
+
+
+def _as_role_map(value: object, source: Path) -> dict:
+    """`roles:` as a mapping, or a shape error (exit 2). A scalar `roles: high` raised
+    `AttributeError` from `.items()` at exit 1, which `install.sh` printed as
+    `REFUSED (invalid mapping)`: a verdict made from a crash (Phase 381 round, lens 3)."""
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ConfigShapeError(
+            f"{source}: `roles:` must be a mapping of role to model, got "
+            f"{type(value).__name__} ({value!r}). Write it as:\n  roles:\n    reasoning: fable"
+        )
+    return value
+
+
+def _as_effort_map(value: object, source: Path) -> dict[str, str]:
+    """Coerce an `efforts:` value to ``{role: level}``, or refuse its shape."""
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ConfigShapeError(
+            f"{source}: `efforts:` must be a mapping of role to level, got "
+            f"{type(value).__name__} ({value!r}). Write it as:\n  efforts:\n    executor: high"
+        )
+    return {str(k): (NO_EFFORT if v is None else str(v)) for k, v in value.items()}
 
 
 # How deep a chain of role-to-role references may go. Two is enough for every
@@ -249,11 +438,13 @@ def _resolve_role_aliases(roles: dict[str, str]) -> dict[str, str]:
     expensive one — back to opus on their next `--update`, with nothing in the
     output naming it. Two keys would then be needed to buy what one key used to.
 
-    `convention-gate: reasoning` expresses the thing that is actually true: this
-    role FOLLOWS `reasoning` unless the consumer says otherwise. A local override
-    of `reasoning` flows through; a local override of `convention-gate` wins over
-    it; and the default install resolves to exactly the literals already in the
-    shipped skills, so it stays a zero-byte no-op.
+    `convention-gate: reasoning` expressed the thing that was true then: the role
+    FOLLOWED `reasoning` unless the consumer said otherwise. A local override of
+    `reasoning` flowed through; a local override of `convention-gate` won over it.
+    (Since Phase 381 the gate ships as the literal `sonnet`, on the maintainer's
+    decision, and `planner` / `plan-review` are the shipped roles that follow
+    `reasoning`.) Either way the default install resolves to exactly the literals
+    already in the shipped skills, so it stays a zero-byte no-op.
 
     Fail-closed is preserved, which is why this is an alias table and not a
     fallback: a value that is neither a role name nor a served model still
@@ -465,5 +656,15 @@ def find_role_violations(
                     f"bash-installed path, `resolve_skill_models.py --apply` rewrites "
                     f"literals from the mapping; on the plugin path the file must be "
                     f"corrected at source."
+                )))
+            # The effort segment's literal, for the same reason as the arm above: on the
+            # plugin path nothing rewrites it, and the Agent tool's `effort` is a closed
+            # enum too (`Q-675`).
+            if len(out) == before and r.kind == "inline" and r.effort is not None \
+                    and r.effort not in EFFORT_LEVELS:
+                out.append((rel, r, (
+                    f"INLINE pin carries the effort {r.effort!r}, which the Agent tool's "
+                    f"`effort` enum rejects ({', '.join(EFFORT_LEVELS)}). Remove the segment "
+                    f"to pass no effort, or set the role's level under `efforts:`."
                 )))
     return out

@@ -2,7 +2,7 @@
 
 A `--clone` workspace is its own repository, and Step 4a merges THIS repository's
 `refs/heads/<branch>`, which nothing in the close moved, so the clone's work never merged.
-Every test runs the heredoc exactly as `SKILL.md` prescribes it, against a real repository
+Every test runs the shipped script `SKILL.md` prescribes (its heredoc until Phase 386), against a real repository
 whose `origin` is a local bare repository, with clones made by the real `claim_task.sh`.
 """
 import os
@@ -12,6 +12,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from skill_runner_text import text_of
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = REPO_ROOT / "core/companion/scripts"
@@ -21,15 +22,19 @@ _ENV = {k: v for k, v in os.environ.items()
 
 
 def _section() -> str:
-    text = CLOSE.read_text(encoding="utf-8")
+    text = text_of(CLOSE)
     start = text.index("### 1-pre. Bring `--clone` claims' commits across")
     return text[start:text.index("### 1a. Classify Worktree State", start)]
 
 
+SCRIPT = SCRIPTS / "clone_sync.py"
+INVOCATION = 'python3 sysop/scripts/clone_sync.py "<default branch>" "<apply or dry-run>"'
+
+
 def _heredoc() -> str:
-    m = re.search(r"<<'PY'\n(.*?)\nPY\n```", _section(), re.S)
-    assert m, "Step 1-pre's heredoc is gone"
-    return m.group(1)
+    """The program Step 1-pre runs: a shipped script since Phase 386 (`Q-409` P3)."""
+    assert INVOCATION in _section(), "Step 1-pre no longer runs clone_sync.py"
+    return SCRIPT.read_text()
 
 
 def _g(cwd: Path, *args: str) -> str:
@@ -86,7 +91,7 @@ def _commit(d: Path, name: str = "a.txt") -> str:
 
 
 def _sync(root: Path, mode: str = "apply", default: str = "main", cwd: Path | None = None):
-    return subprocess.run(["python3", "-", default, mode], input=_heredoc(),
+    return subprocess.run(["python3", str(SCRIPT), default, mode],
                           cwd=str(cwd or root), capture_output=True, text=True, env=_ENV)
 
 
@@ -109,7 +114,7 @@ def _summary(out: str) -> str:
 
 
 def _step(start: str, end: str) -> str:
-    text = CLOSE.read_text(encoding="utf-8")
+    text = text_of(CLOSE)
     a = text.index(start)
     return text[a:text.index(end, a)]
 
@@ -411,7 +416,7 @@ def test_an_inherited_git_dir_does_not_redirect_it(tmp_path):
     work = _commit(clone)
     other = tmp_path / "elsewhere"
     _g(tmp_path, "init", "-q", str(other))
-    r = subprocess.run(["python3", "-", "main", "apply"], input=_heredoc(), cwd=str(root),
+    r = subprocess.run(["python3", str(SCRIPT), "main", "apply"], cwd=str(root),
                        capture_output=True, text=True,
                        env=dict(_ENV, GIT_DIR=str(other / ".git"), GIT_WORK_TREE=str(other)))
     assert "SYNCED" in r.stdout and _tip(root, "feat/cl") == work, r.stdout + r.stderr
@@ -813,7 +818,7 @@ SKIP_WORDS = ("DIRTY", "REFUSED", "NO BRANCH", "GONE")
 
 
 def test_step_1_pre_runs_before_step_1s_reads():
-    text = CLOSE.read_text(encoding="utf-8")
+    text = text_of(CLOSE)
     step1 = text.index("## Step 1: Gather State")
     assert step1 < text.index("### 1-pre.") < text.index("- `git branch -a`", step1)
     assert text.index("## Pre-flight: Permission Guard") < step1
@@ -835,34 +840,38 @@ def test_every_word_the_heredoc_prints_is_routed():
 
 
 def test_the_skip_reaches_steps_6_and_8():
-    text = CLOSE.read_text(encoding="utf-8")
+    text = text_of(CLOSE)
     assert "Step 1a classified the worktree as `dirty`, or step 0a's clone pre-check):" in text
     assert "or, for step 0a's clone pre-check, the Step 1-pre line + its remedy>" in text
     assert "\nClone sync:    <Step 1-pre's lines" in text
 
 
-def test_the_heredoc_binds_the_seeded_rule_and_no_positional_parameter():
+def test_the_script_binds_the_seeded_rule_and_no_positional_parameter():
     sec = _section()
-    assert "\npython3 - \"<default branch>\" \"<apply or dry-run>\" <<'PY'\n" in sec
+    assert "\n" + INVOCATION + "\n" in sec
+    settings = (REPO_ROOT / "core/companion/.claude/settings.json").read_text()
+    assert '"Bash(python3 sysop/scripts/clone_sync.py:*)"' in settings
     assert not re.search(r"\$\d", _heredoc()), "a bare $<N> is rewritten before bash sees it (#360)"
 
 
 def test_the_reject_remedy_no_longer_fetches_from_origin():
-    text = CLOSE.read_text(encoding="utf-8")
+    text = text_of(CLOSE)
     assert "push it, bring this repository's `<branch>` to that commit" not in text
     assert "then re-run the close; Step 1-pre brings the commit across." in text
 
 
 # ── the decided text ──────────────────────────────────────────────────────────
 
-from test_fix_in_branch_tier import _pin_hash, _pin_norm  # noqa: E402
+from test_fix_in_branch_tier import _pin_hash, _pin_norm, _pin_program  # noqa: E402
 
-PINS = {"1-pre": "c79376ba1588bfa8", "2a step 0a": "389c3c0fb0b60907"}
+PINS = {"1-pre": "f5018a1c56fa22b4",  # Phase 393: `begin` left the section for its own, ahead of the flag sections; Phase 390: begin names 4a-append and 4a-fix, and the close id is written at 4a and 4a-fix; Phase 386: the section plus clone_sync.py; Phase 387's round: appended fenced, so its indentation counts (Phase 380: dict(...) env-strip); Phase 388: + the `close_arms.py begin` paragraph, Phase 355's text unchanged
+         "2a step 0a": "389c3c0fb0b60907"}
 # Regenerate with:  .venv/bin/python3 -c "import sys; sys.path.insert(0,'tests'); import test_review_close_clone_sync as T; T._print_pins()"
 
 
 def _pinned(label: str) -> str:
-    return {"1-pre": _section, "2a step 0a": _step_0a}[label]()
+    # Since Phase 386 the decided program is a shipped script, so 1-pre's pin covers both.
+    return {"1-pre": lambda: _section() + _pin_program(SCRIPT.read_text()), "2a step 0a": _step_0a}[label]()
 
 
 def _print_pins() -> None:

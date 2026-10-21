@@ -97,7 +97,7 @@ LOOP_EXCLUDE_SHARED="decomposition-rubric guided-mode main-push-guard plan-revie
 # _git_lib.sh (Phase 368, `Q-376`: the pre-merge-commit hook, armed in both
 # modes, sources it to resolve the protected branch) and default_branch.sh (the
 # command that hook's fallback warning tells the operator to run).
-LOOP_EXCLUDE_SCRIPTS="backfill_completed_dates.py batch_work.sh claim_task.sh clear_user_action.py cleanup_worktrees.sh close_batch.sh close_run.py ignored_refs.py next_task.py parse_subagent_envelope.py pending_doc_hold.py permission_denied_hook.py pr_dependabot.py scope_overlap.py sitrep_survey.py validate_tasks.py"
+LOOP_EXCLUDE_SCRIPTS="backfill_completed_dates.py batch_work.sh claim_task.sh clear_user_action.py cleanup_worktrees.sh close_batch.sh close_gate.py close_run.py ignored_refs.py clone_sync.py smoke_detect.py pending_doc_collect.py close_index.py claim_record.py feature_branch.py convention_size.py gate_verdict.py security_map_filter.py claim_artifacts.py workspace_locate.py smoke_record.py pr_head_check.py close_check.py close_arms.py next_task.py parse_subagent_envelope.py pending_doc_hold.py permission_denied_hook.py pr_dependabot.py scope_overlap.py sitrep_survey.py validate_tasks.py"
 # Phase 111: --ref pins the install/update source to a git tag/rev (a reviewed
 # release) instead of the source clone's live HEAD. REF_WORKTREE holds the
 # materialised-rev worktree; SYSOP_SRC_CLONE holds the original clone (needed to
@@ -146,6 +146,11 @@ LOCK_VERSION=1
 SOURCE_DIRTY=0
 SOURCE_DIRTY_PROBED=0
 SOURCE_DIRTY_COUNT=0
+# `Q-676`: 1 once resolve_skill_models has applied the role mapping, the only state in
+# which served_models.local.yml is in effect. print_model_defaults reads it, and
+# MODEL_EFFORTS_APPLIED, 0 when a preserved resolver predates `efforts:` (Phase 398's round).
+MODEL_ROLES_APPLIED=0
+MODEL_EFFORTS_APPLIED=1
 # The source paths the installer reads. Derived from install.sh's own
 # `$REPO_ROOT/...` references, not from a mental model of them — the top-level
 # prefixes are `core/` and `packs/`, plus install.sh itself, whose uncommitted
@@ -2378,6 +2383,36 @@ install_workflow_docs() {
   record "workflow docs: sysop/docs/WORKFLOW.md, sysop/docs/WORKFLOW_GUIDE.md"
 }
 
+# Copy one skill directory into the target, subdirectories included (Phase 383,
+# `Q-409` P0). This used to copy only a skill's top-level files, so a split skill's
+# `steps/` never reached a consumer and nothing reported it. Same filters as before at
+# every depth: the glob skips dotfiles, `__pycache__/` is skipped, and a symlinked
+# directory is not followed. $3 is the skill name at the top level and empty below
+# it, so loop mode filters `_shared/`'s own entries, file stems and directory names
+# alike, against LOOP_EXCLUDE_SHARED.
+_install_skill_tree() {  # $1=source dir  $2=destination dir  $3=skill name (top level only)
+  local src="$1" dst="$2" top="$3" f b stem
+  for f in "$src"/*; do
+    b="$(basename "$f")"
+    stem="${b%.md}"
+    if [[ -d "$f" ]]; then
+      [[ -L "$f" || "$b" == "__pycache__" ]] && continue
+    elif [[ ! -f "$f" ]]; then
+      continue
+    fi
+    if [[ "$INSTALL_MODE" == "loop" && "$top" == "_shared" ]] \
+       && _loop_excludes "$stem" "$LOOP_EXCLUDE_SHARED"; then
+      continue
+    fi
+    if [[ -d "$f" ]]; then
+      _install_skill_tree "$f" "$dst/$b" ""
+    else
+      copy_file "$f" "$dst/$b"
+    fi
+  done
+  return 0
+}
+
 install_skills() {
   hdr "skills"
   local src="$REPO_ROOT/core/skills"
@@ -2393,16 +2428,7 @@ install_skills() {
     if [[ "$INSTALL_MODE" == "loop" ]] && _loop_excludes "$name" "$LOOP_EXCLUDE_SKILLS"; then
       continue
     fi
-    local f
-    for f in "$d"*; do
-      [[ -f "$f" ]] || continue
-      # Loop mode: within _shared/, ship only the five skills' partial closure.
-      if [[ "$INSTALL_MODE" == "loop" && "$name" == "_shared" ]] \
-         && _loop_excludes "$(basename "$f" .md)" "$LOOP_EXCLUDE_SHARED"; then
-        continue
-      fi
-      copy_file "$f" "$dst/$name/$(basename "$f")"
-    done
+    _install_skill_tree "${d%/}" "$dst/$name" "$name"
     skill_count=$((skill_count + 1))
   done
   local _mode_note=""; [[ "$INSTALL_MODE" == "loop" ]] && _mode_note=" (loop mode: lifecycle skills excluded)"
@@ -2790,6 +2816,10 @@ install_ci_template() {
   # preserve-consumer-edits scope that covers sysop/scripts/ + sysop/scripts/hooks/).
   for f in "$REPO_ROOT/core/companion/ci"/*; do
     [[ -f "$f" ]] || continue
+    # The close gate's files (Phase 374) run close_gate.py, which loop mode does not install.
+    if [[ "$INSTALL_MODE" == "loop" ]]; then
+      case "$(basename "$f")" in sysop-close-gate*|close-gate-*) continue ;; esac
+    fi
     copy_file "$f" "$dst/$(basename "$f")"
     copied=$((copied + 1))
   done
@@ -3163,6 +3193,9 @@ LOOP_ALLOW = {
     # script ships in both modes, so a loop consumer must not get a prompt a full one avoids.
     "Bash(python3 sysop/scripts/security_partition.py:*)",
     "Bash(.venv/bin/python3 sysop/scripts/security_partition.py:*)",
+    # Phase 386: Step 5f of both loop review skills runs this script, which was a heredoc over
+    # the ~10,000-character limit `dontAsk` denies (`Q-665`). It ships in both modes.
+    "Bash(python3 sysop/scripts/round_receipt.py:*)",
     "Bash(python3 -c:*)",
     "Bash(python3 -:*)",
     # The give-back skills' auth gate. `gh` is NOT in Claude Code's built-in
@@ -3176,6 +3209,12 @@ LOOP_ALLOW = {
     # relying on read-only auto-approval, so the primary path works under a
     # restricted permission set instead of silently degrading to the fallback.
     "Bash(gh repo view:*)",
+    # Q-663 (Phase 377): `dontAsk` denies every file write no rule covers, in-project included,
+    # and only `Edit(...)` rules admit the `Write` tool. `/report-issues` and
+    # `/contribute-convention` ship in loop mode and stage under giveback/; `/report-issues` also
+    # records the filing in the friction log.
+    "Edit(/sysop/SYSOP_ISSUES.md)",
+    "Edit(/sysop/runtime/giveback/**)",
 }
 try:
     with open(src) as f:
@@ -3212,13 +3251,16 @@ install_permissions() {
   # dry-run) so no install applies the grant silently.
   if [[ "$INSTALL_MODE" == "loop" ]]; then
     note "allow-list: a small check/read-only subset, no hooks — no push, merge, or rebase"
-    note "  grants; it does include 'git add' (the review skills stage their ledger) and"
-    note "  'git worktree add/remove' (to place review agents). Delete any rule you don't want."
+    note "  grants; it does include 'git add' (the review skills stage their ledger),"
+    note "  'git worktree add/remove' (to place review agents), and file edits to"
+    note "  sysop/SYSOP_ISSUES.md and sysop/runtime/giveback/ (the give-back skills). Delete any"
+    note "  rule you don't want."
   else
     note "allow-list: pre-authorizes the agent for Sysop's lifecycle git flow WITHOUT further"
     note "  prompts — including 'git push origin' and 'git push --force-with-lease' (the"
     note "  worktree close path), 'git add' (the review skills stage runtime-built paths),"
-    note "  and 'git branch -D' + 'git reset --hard origin/main' (the pr-policy close)."
+    note "  'git branch -D' + 'git reset --hard origin/main' (the pr-policy close), and file"
+    note "  edits to sysop/SYSOP_ISSUES.md and sysop/runtime/giveback/ (the give-back skills)."
     note "  Review .claude/settings.json and delete any rule you don't want;"
     note "  '--mode loop' ships a small check/read-only subset instead."
   fi
@@ -3230,13 +3272,13 @@ install_permissions() {
     # would violate the dry-run contract, and the copy note would render the
     # raw /tmp path).
     if [[ "$DRY_RUN" -eq 1 ]]; then
-      note "would write $(rel "$dst") (loop allow-subset: 27 rules, no hooks)"
+      note "would write $(rel "$dst") (loop allow-subset: 30 rules, no hooks)"
       record_managed_path "$dst"
       record "permissions: would write $(rel "$dst") (loop allow-subset)"
       return 0
     fi
     # Fail CLOSED: if the filter can't be built, do NOT fall back to the full
-    # master — that would over-grant the 84-rule allow-list AND re-add the hooks
+    # master — that would over-grant the 103-rule allow-list AND re-add the hooks
     # block referencing scripts loop mode never installs (broken at runtime).
     # Skip settings.json instead (the consumer sees more permission prompts, but
     # no over-grant and no dangling hooks); the loud error keeps it visible.
@@ -3461,7 +3503,17 @@ _model_role_checker_supports() {
 _check_model_roles() {
   local py="$1" checker="$2" skills="$3" config="$4" localcfg="$5"
   if ! _model_role_checker_supports "$py" "$checker" "--managed-only"; then
-    printf '%s\n' "check_skill_models.py does not accept --managed-only, so it cannot run this gate"
+    # A checker that cannot START (a preserved consumer-modified `_model_roles.py`
+    # missing a name the newer checker imports) also prints no flag. Name that cause
+    # rather than the flag (Phase 381 round, lens 1: an ImportError was reported as
+    # "does not accept --managed-only").
+    local _why
+    _why="$(PYTHONDONTWRITEBYTECODE=1 "$py" "$checker" --help 2>&1 >/dev/null | tail -1)" || true
+    if [[ -n "$_why" ]]; then
+      printf 'check_skill_models.py could not start (%s), so it cannot run this gate\n' "$_why"
+    else
+      printf '%s\n' "check_skill_models.py does not accept --managed-only, so it cannot run this gate"
+    fi
     return 3
   fi
   local out rc=0
@@ -3704,7 +3756,7 @@ resolve_skill_models() {
         # The control flow is deliberately UNCHANGED: rc 2 still declines to
         # apply. Only the claim moves. A gate that could not read its inputs is
         # not a licence to rewrite pins.
-        note "⚠ cannot evaluate the model-role mapping — the gate could not read what it needs, so nothing is claimed about your mapping. The mapping was NOT applied; your skills keep their current models:"
+        note "⚠ cannot evaluate the model-role mapping — the gate could not read what it needs, so nothing is claimed about your mapping. The mapping was NOT applied; your skills are at Sysop's shipped defaults:"
         printf '%s\n' "$_chk" | sed 's/^/    /'
         record "model-roles: not applied (gate could not read its inputs; see warning above)"
         return 0
@@ -3745,11 +3797,66 @@ resolve_skill_models() {
   # That is the failure Phase 148 closed for the lock file, one directory over.
   # Phase 212.
   if _out="$(PYTHONDONTWRITEBYTECODE=1 "$_py" "$script" --root "$skills" --config "$config" --local "$localcfg" --apply --quiet 2>&1)"; then
+    MODEL_ROLES_APPLIED=1
     record "model-roles: $(printf '%s' "$_out" | tail -1)"
+    # Phase 381 (`Q-675`): a resolver from before per-role efforts (a preserved
+    # consumer-modified copy) applies the models and leaves every effort segment as
+    # shipped, at exit 0. Its summary carries no `effort(s)` count; say so.
+    case "$(printf '%s' "$_out" | tail -1)" in
+      *"effort(s)"*) ;;
+      *)
+        MODEL_EFFORTS_APPLIED=0
+        note "⚠ $(rel "$script") predates per-role efforts, so the \`efforts:\` in served_models.yml / served_models.local.yml were NOT applied; the skills keep their shipped effort segments. Revert your edit to that file and re-run the update to apply them."
+        record "model-roles: efforts not applied (the resolver predates them; see warning above)"
+        ;;
+    esac
   else
     note "model-role resolution reported an issue (skills keep their default models):"
     printf '%s\n' "$_out" | sed 's/^/    /'
     record "model-roles: resolution skipped (see warning above)"
+  fi
+}
+
+# `Q-676`: the role -> model -> effort table, with each role's reason and the one-key
+# override, printed last in the summary of every install and update so a consumer meets
+# the defaults before the first close rather than after the bill. The update is the path
+# that matters: an installed consumer sees nothing else. The table is the checker's
+# `--defaults` output, read from served_models.yml, never written here.
+#
+# It shows the local overlay only when the resolver applied it. On a refused or skipped
+# mapping the skills keep the shipped models, and a table with the override in it would
+# contradict the warning printed under "resolve model roles". The checker is the vendored
+# copy, the one that judged the mapping. Any non-zero exit gets the one-line pointer instead,
+# and the checker's stderr never reaches the summary: a preserved copy without `--defaults` is
+# argparse's 2, and its 1 (the model-role check fails on the tree, e.g. a consumer's own marked
+# skill pinning a value the gate refuses) would repeat the warning above. No python with PyYAML
+# gets the pointer too.
+print_model_defaults() {
+  local config="$TARGET/.claude/served_models.yml"
+  local localcfg="$TARGET/.claude/served_models.local.yml"
+  [[ -f "$config" ]] || return 0
+  local _pointer="Models: .claude/served_models.yml maps each skill role to a model; to change one, add the key to .claude/served_models.local.yml and run the update."
+  local _py _checker _out _rc=0
+  if ! _py="$(pick_python_with_yaml)" || ! _checker="$(_model_role_checker_path vendored)"; then
+    say ""
+    say "$_pointer"
+    return 0
+  fi
+  local _local_arg="$localcfg"
+  [[ "$MODEL_ROLES_APPLIED" -eq 1 ]] || _local_arg="$TARGET/.claude/served_models.local.yml.not-applied"
+  _out="$(PYTHONDONTWRITEBYTECODE=1 "$_py" "$_checker" --defaults --config "$config" \
+            --local "$_local_arg" --root "$TARGET/.claude/skills" 2>/dev/null)" || _rc=$?
+  if [[ "$_rc" -ne 0 || -z "$_out" ]]; then
+    say ""
+    say "$_pointer"
+    return 0
+  fi
+  say ""
+  printf '%s\n' "$_out"
+  if [[ "$MODEL_ROLES_APPLIED" -ne 1 && -f "$localcfg" ]]; then
+    note "your served_models.local.yml is NOT in effect: the model-role step did not apply it (see its warning above); the table shows the shipped defaults."
+  elif [[ "$MODEL_EFFORTS_APPLIED" -ne 1 && -f "$localcfg" ]] && grep -q '^efforts:' "$localcfg"; then
+    note "your \`efforts:\` overrides are NOT in effect: the resolver predates them (see its warning above), so the skills keep their shipped effort segments."
   fi
 }
 
@@ -4023,6 +4130,7 @@ EOF
 #   sysop/runtime/pending-rounds/      open review-round markers (Phase 143)
 #   sysop/runtime/round-receipts/      closed rounds' Tier-0 coverage ledgers (Phase 149)
 #   sysop/runtime/close/               /review-close --prepare run directories (Phase 363)
+#   sysop/runtime/giveback/            give-back skills' staged body files (Phase 377)
 # The guarantee must hold: /review-close Step 2a derives its `dirty` verdict
 # from `git status --porcelain`, so an un-ignored lock or pending-doc makes a
 # clean branch read dirty → auto-SKIP → the close silently refuses (Phase 99.1
@@ -5521,7 +5629,9 @@ main() {
         say "  → upgrading loop → full (additive: adds lifecycle skills, scripts, and the tasks/ scaffold)"
       else
         err "Downgrade full → loop is out of scope."
-        err "  To switch to loop mode, reinstall fresh: remove .claude/ (and the lock), then re-run with --mode loop."
+        err "  To switch to loop mode, reinstall fresh: commit, remove the full-mode-only managed paths listed in .claude/sysop.lock and the lock itself"
+        err "  (keep .claude/*.project.*, substitutions.project.yml, served_models.local.yml, settings.local.json — never remove .claude/ wholesale),"
+        err "  then re-run with --mode loop. A fresh install overwrites edited managed files; see docs/loop-mode.md."
         exit 2
       fi
     else
@@ -5919,7 +6029,7 @@ main() {
   # not a non-empty candidate list (avoids announcing "obsolete files" when every
   # candidate was already moved/absent).
   if [[ "$UPDATE_MODE" -eq 1 ]]; then
-    local omp still np norm ondisk alt d
+    local omp still np norm ondisk alt d _p
     local -a to_remove=()
     for omp in "${old_managed[@]}"; do
       [[ "$omp" == ".claude/settings.json" ]] && continue
@@ -5930,6 +6040,12 @@ main() {
       # against the blast radius, not a normal path.
       case "$omp" in
         tasks/*|CLAUDE.md|.gitignore|review_tasks.md|review_tasks_archive.md|SYSOP_ISSUES.md|sysop/SYSOP_ISSUES.md) continue ;;
+      esac
+      # Same guard, for a path that leaves the target (Phase 383 round): an absolute
+      # entry or a `..` segment reached `rm -f` outside the tree, and the empty-parent
+      # walk below then climbed from there.
+      case "/$omp/" in
+        //*|*/../*) continue ;;
       esac
       norm="$omp"
       [[ "$MIGRATION_MODE" -eq 1 ]] && norm="$(_ns_old_to_new "$omp")"
@@ -5968,8 +6084,20 @@ main() {
       for d in "${to_remove[@]}"; do
         note "remove: $d"
         if [[ "$DRY_RUN" -eq 0 ]]; then
-          git -C "$TARGET" rm -f --quiet -- "$d" 2>/dev/null \
-            || rm -f -- "$TARGET/$d"
+          # --literal-pathspecs: a lock path is a file name, never a pattern; a
+          # shipped `steps/*.md` would otherwise also remove a consumer's own
+          # tracked `steps/a/mine.md` (Phase 383 round).
+          if ! git --literal-pathspecs -C "$TARGET" rm -f --quiet -- "$d" 2>/dev/null; then
+            rm -f -- "$TARGET/$d"
+            # Phase 383: `git rm` prunes the directories it empties and `rm -f`
+            # does not, so an untracked path (a gitignored `.claude/skills/`)
+            # left an empty `steps/` behind. `rmdir` refuses a non-empty
+            # directory, so this removes only what the sweep emptied.
+            _p="$(dirname "$TARGET/$d")"
+            while [[ "$_p" == "$TARGET"/* ]] && rmdir -- "$_p" 2>/dev/null; do
+              _p="$(dirname "$_p")"
+            done
+          fi
         fi
       done
     fi
@@ -6136,6 +6264,7 @@ main() {
     say "Lower-level form (advanced escape hatch):"
     note "bash ${SYSOP_SRC_CLONE:-$REPO_ROOT}/install.sh $TARGET --update    # what the shim wraps"
   fi
+  print_model_defaults
 }
 
 main "$@"

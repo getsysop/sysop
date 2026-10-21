@@ -41,6 +41,7 @@ import re
 from pathlib import Path
 
 from tests import shape_lib as S
+from skill_runner_text import text_of
 
 WORKFLOW = S.REPO_ROOT / "core" / "companion" / "docs" / "WORKFLOW.md"
 
@@ -199,6 +200,9 @@ def test_env_provided_set_is_pinned():
         "ARGUMENTS",
         "CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS",
         "CLAUDE_PROJECT_DIR",
+        # Phase 388: Claude Code substitutes `${CLAUDE_SKILL_DIR}` into the skill body, inside
+        # fences too (measured with `claude -p` on 2.1.303), as the absolute skill directory.
+        "CLAUDE_SKILL_DIR",
         "GH_TOKEN", "GITHUB_TOKEN",
         "HOME", "LANG", "OLDPWD", "PATH", "PWD", "SHELL", "TMPDIR", "USER",
         "IFS", "RANDOM",
@@ -320,7 +324,7 @@ def test_the_step_granular_guard_catches_every_phrasing_the_corpus_used():
 # --------------------------------------------------------------------------------------
 
 def _skill(name: str) -> str:
-    return _read(S.SKILLS_DIR / name / "SKILL.md")
+    return text_of(S.SKILLS_DIR / name / "SKILL.md")
 
 
 def test_auto_build_phase6a_check_compares_against_a_substituted_literal():
@@ -604,7 +608,7 @@ def test_arguments_is_never_interpolated_into_a_fence():
                 # check — and per the Phase 188 record the harness does not
                 # substitute it at all, so the fence runs with silently empty args.
                 if re.search(r"\$\{?ARGUMENTS\b", ln):
-                    offenders.append(f"{f.parent.name}/SKILL.md:{start_line + off}: {ln.strip()[:80]}")
+                    offenders.append(f"{f.relative_to(S.SKILLS_DIR).as_posix()}:{start_line + off}: {ln.strip()[:80]}")
     assert not offenders, (
         "`$ARGUMENTS` interpolated inside a code fence — textual substitution happens "
         "before bash parses, so the argument string can rewrite the command (Q-013). "

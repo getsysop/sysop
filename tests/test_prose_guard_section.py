@@ -34,6 +34,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from skill_runner_text import text_of
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -155,7 +156,7 @@ def test_a_section_ending_on_a_legal_fence_closer_does_not_raise():
 
 def test_the_2e_slice_reaches_the_end_of_its_section():
     """A phrase from 2e's LAST paragraph, which sat in the invisible 72%."""
-    body = section(SKILL.read_text(encoding="utf-8"), _2E)
+    body = section(text_of(SKILL), _2E)
     assert carries(body, _2E_TAIL_PHRASE), (
         "the 2e slice no longer reaches its closing paragraph — it is truncating again"
     )
@@ -165,7 +166,7 @@ def test_the_2e_slice_reaches_the_end_of_its_section():
 def test_the_fence_blind_slicer_would_not_reach_it():
     """Non-vacuity for the pin above: it must lie beyond where the old slicer stopped."""
     assert not carries(fence_blind_slice(
-        SKILL.read_text(encoding="utf-8"), _2E), _2E_TAIL_PHRASE), (
+        text_of(SKILL), _2E), _2E_TAIL_PHRASE), (
         "the pinned phrase moved into the first 28% — pick one from the tail again, or "
         "this pin stops distinguishing a fixed slicer from the broken one"
     )

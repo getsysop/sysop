@@ -41,6 +41,7 @@ import re
 from pathlib import Path
 
 import pytest
+from skill_runner_text import text_of
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SKILL = REPO_ROOT / "core" / "skills" / "review-close" / "SKILL.md"
@@ -56,7 +57,7 @@ ROTATION_ANCHOR = "**Rotation check**"
 
 
 def _lines():
-    return SKILL.read_text(encoding="utf-8").splitlines()
+    return text_of(SKILL).splitlines()
 
 
 def _step_4c_bounds(lines):

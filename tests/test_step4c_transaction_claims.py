@@ -29,9 +29,10 @@ to discuss one of these strings, describe it instead of quoting it.
 from __future__ import annotations
 
 from pathlib import Path
+from skill_runner_text import text_of
 
 REPO = Path(__file__).resolve().parent.parent
-SKILL = (REPO / "core/skills/review-close/SKILL.md").read_text()
+SKILL = text_of(REPO / "core/skills/review-close/SKILL.md")
 SHARED = (REPO / "core/skills/_shared/adversarial-review.md").read_text()
 WORKFLOW = (REPO / "core/companion/docs/WORKFLOW.md").read_text()
 GUIDE = (REPO / "core/companion/docs/WORKFLOW_GUIDE.md").read_text()
@@ -277,7 +278,7 @@ def test_every_primary_worktree_fanout_sends_the_containment_rule() -> None:
     fanouts = ["review-close", "codebase-review", "security-audit"]
     missing = []
     for skill in fanouts:
-        text = (REPO / f"core/skills/{skill}/SKILL.md").read_text()
+        text = text_of(REPO / f"core/skills/{skill}/SKILL.md")
         if "create new files" not in text or "Do NOT mutate repository state" not in text:
             missing.append(skill)
     assert not missing, (

@@ -10,9 +10,10 @@ runner acts on and by the stale form that must not return.
 from __future__ import annotations
 
 from pathlib import Path
+from skill_runner_text import text_of
 
 REPO = Path(__file__).resolve().parent.parent
-RC = (REPO / "core/skills/review-close/SKILL.md").read_text(encoding="utf-8")
+RC = text_of(REPO / "core/skills/review-close/SKILL.md")
 CT = (REPO / "core/skills/claim-task/SKILL.md").read_text(encoding="utf-8")
 WF = (REPO / "core/companion/docs/WORKFLOW.md").read_text(encoding="utf-8")
 
@@ -24,17 +25,18 @@ def _line_with(text: str, needle: str) -> str:
 
 
 def test_the_strip_loop_names_the_loop_safe_rm_form() -> None:
-    """Claude Code's rm check refuses `rm -f "$wt/$entry"` and no allow rule can
-    override it. The literal-placeholder form passes, so the note goes beside it,
-    as a comment, not as a `${wt:?}` the block itself would halt on (no `wt` is
-    assigned there)."""
-    rm = 'rm -f "<worktree-path>/$entry"'
+    """Claude Code's rm check refuses an unguarded variable in the path, and no allow
+    rule can override it. Phase 350 (internal tracker #778) put the loop-safe form in a
+    comment beside the literal-placeholder command, because `${wt:?}` would halt there
+    (no `wt` is assigned). A consumer then hit the refusal on the live line itself —
+    `rm -f "<worktree-path>/$entry"` — so Phase 379 guarded the one variable the line
+    does assign (`entry`, the loop variable) and kept the loop note beside it."""
+    rm = 'rm -f -- "<worktree-path>/${entry:?}"'
     lines = RC.splitlines()
     i = next(n for n, ln in enumerate(lines) if ln.rstrip().endswith(rm))
-    assert lines[i - 1].strip() == (
-        '# Looping over worktrees? Write `rm -f -- "${wt:?}/${entry:?}"`: '
-        'Claude Code refuses `"$wt/$entry"`.'), lines[i - 1]
+    assert 'Write `rm -f -- "${wt:?}/${entry:?}"`' in lines[i - 1], lines[i - 1]
     assert "${wt" not in lines[i]
+    assert 'rm -f "<worktree-path>/$entry"' not in RC, "the unguarded form is back"
 
 
 def test_the_gh_api_rule_does_not_describe_a_call_4b_no_longer_makes() -> None:
@@ -83,13 +85,16 @@ def test_only_the_batch_cleanup_waits_for_the_merge() -> None:
             "marker and claim directory are already gone if the merge never lands. `/review-close` "
             "Step 6's *Lock-as-real-time-signal invariant* covers the lock and the park marker, not "
             "the claim directory.") in CT
-    assert "invariant note in Step 4-pre for why pre-merge death" not in RC
-    assert "invariant note in Step 6 for why pre-merge death" in RC
+    # The note sits in Step 4c's program, `close_index.py` since Phase 386: an absence read
+    # against the skill alone would pass on the stale wording.
+    ci = (REPO / "core/companion/scripts/close_index.py").read_text(encoding="utf-8")
+    assert "invariant note in Step 4-pre for why pre-merge death" not in RC + ci
+    assert "invariant note in Step 6 for why pre-merge death" in ci
     assert "**Lock-as-real-time-signal invariant (`pr` policy).**" in RC
 
 
 # Round 2 found substring pins walked by ordinary edits; these are whole-text.
-_RECIPE = (REPO / "core/skills/review-close/SKILL.md").read_text(encoding="utf-8")
+_RECIPE = text_of(REPO / "core/skills/review-close/SKILL.md")
 
 
 def _exact_line(text: str, prefix: str) -> str:

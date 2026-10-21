@@ -59,6 +59,7 @@ from _prose_guard_helpers import _fence_state  # noqa: E402
 from test_permission_surface_drift import declared_required, satisfied  # noqa: E402
 from test_prescribed_command_coverage import _loop_allow, _template_rules  # noqa: E402
 from _reversal import slice_between  # noqa: E402
+from skill_runner_text import runner_texts  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
 SKILLS = REPO / "core" / "skills"
@@ -80,15 +81,16 @@ def _flat(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def _loop_skill_runners() -> dict[str, Path]:
-    """Every `SKILL.md` a loop install ships, derived from install.sh's exclude list."""
+def _loop_skill_runners() -> dict[str, str]:
+    """Each loop-shipped skill's runner text (`SKILL.md` with its step files, Phase 384),
+    derived from install.sh's exclude list."""
     m = re.search(r'^LOOP_EXCLUDE_SKILLS="([^"]*)"', INSTALLER.read_text(encoding="utf-8"), re.M)
     assert m, "LOOP_EXCLUDE_SKILLS is no longer a quoted string in install.sh"
     excluded = set(m.group(1).split())
     return {
-        p.parent.name: p
-        for p in sorted(SKILLS.glob("*/SKILL.md"))
-        if not p.parent.name.startswith("_") and p.parent.name not in excluded
+        name: text
+        for name, text in runner_texts(SKILLS).items()
+        if not name.startswith("_") and name not in excluded
     }
 
 
@@ -155,8 +157,8 @@ def test_every_loop_runner_worktree_command_has_a_loop_rule():
     rules = _loop_allow()
     missing = {
         name: gap
-        for name, path in _loop_skill_runners().items()
-        if (gap := uncovered(path.read_text(encoding="utf-8"), rules))
+        for name, text in _loop_skill_runners().items()
+        if (gap := uncovered(text, rules))
     }
     assert not missing, (
         "loop-shipped skills name `git worktree` subcommands that install.sh's LOOP_ALLOW "
@@ -168,8 +170,8 @@ def test_the_full_template_covers_them_too():
     rules = _template_rules()
     missing = {
         name: gap
-        for name, path in _loop_skill_runners().items()
-        if (gap := uncovered(path.read_text(encoding="utf-8"), rules))
+        for name, text in _loop_skill_runners().items()
+        if (gap := uncovered(text, rules))
     }
     assert not missing, f"the full-mode template does not cover: {missing}"
 
@@ -177,8 +179,8 @@ def test_the_full_template_covers_them_too():
 def test_every_loop_runner_worktree_command_is_bare():
     offenders = {
         name: bad
-        for name, path in _loop_skill_runners().items()
-        if (bad := non_bare_spellings(path.read_text(encoding="utf-8")))
+        for name, text in _loop_skill_runners().items()
+        if (bad := non_bare_spellings(text))
     }
     assert not offenders, (
         "a `worktree` command that does not begin with exactly `git worktree` binds no "

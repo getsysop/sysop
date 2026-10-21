@@ -39,6 +39,14 @@ Read `tasks/vision.md`, `tasks/decisions.md`, and `tasks/index.yml` (tolerate an
 - **Queue already populated** → Leg B runs in **append + dedup** mode (Step B4); an empty or absent `index.yml` means Leg B authors it fresh.
 - **`$ARGUMENTS`**: a file path is treated as the primary evidence document (Leg A) and/or import source (Leg B) — ask which if ambiguous. The literal `issues` pre-selects GitHub issues as the Leg B source.
 
+Before the plan, show the model defaults, unless `/intake` showed them earlier in this session. Run
+
+```bash
+python3 sysop/scripts/check_skill_models.py --defaults
+```
+
+and show its output verbatim, then one sentence: these roles set the model and effort of every agent the lifecycle spawns, and changing one is one key in `.claude/served_models.local.yml`, applied by the next `bash sysop/scripts/sysop-update.sh`. It reads Sysop's own config, not the project, so it needs no consent. Do not retype or summarise the table. If its first line says the model-role check fails, show that line and run the command it names. If the command fails otherwise, say so in one line, name the file its error names, and continue.
+
 State the plan in one short block — *"Leg A: draft vision + decisions from <evidence list>. Leg B: import <source>. Proceed?"* — and get the yes before reading anything beyond the three files above. Don't quote an item count here — you'd have to read the source to get one, which is exactly what this yes gates; counts come at B1, after consent.
 
 ## Leg A — Reconstruct the intent layer
@@ -162,4 +170,4 @@ Same two hard lines as `/intake` Step 4, plus one of its own:
 
 ## Permissions
 
-`/onboard` needs **no new permission rules.** Writes go through `Write`/`Edit` (file-level, not Bash-gated); `sysop/scripts/validate_tasks.py` has allow-rules in the default template (bare + `.venv/bin/python3`); `gh issue list` has a rule (shipped for `/report-issues`); `git log`/`ls`/glob presence checks are read-only ops that need no rules per `_shared/permission-guard.md` § Notes for skill authors. It does not commit, push, or call any external API beyond the optional, consented `gh issue list`.
+`/onboard` needs **no new Bash rules.** Writes go through `Write`/`Edit`, which need no rule in a mode that prompts or accepts edits and are denied under `dontAsk`, where no rule covers the files they write; `sysop/scripts/validate_tasks.py` has allow-rules in the default template (bare + `.venv/bin/python3`), and Step 0's `check_skill_models.py --defaults` has `Bash(python3 sysop/scripts/check_skill_models.py:*)`; `gh issue list` has a rule (shipped for `/report-issues`); `git log`/`ls`/glob presence checks are read-only ops that need no rules per `_shared/permission-guard.md` § Notes for skill authors. It does not commit, push, or call any external API beyond the optional, consented `gh issue list`.

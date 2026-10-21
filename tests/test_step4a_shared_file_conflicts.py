@@ -32,6 +32,7 @@ import re
 from pathlib import Path
 
 import pytest
+from skill_runner_text import text_of
 
 REPO = Path(__file__).resolve().parent.parent
 SKILL = REPO / "core" / "skills" / "review-close" / "SKILL.md"
@@ -71,7 +72,7 @@ def _section(text: str, start: str, end: str) -> str:
 
 @pytest.fixture(scope="module")
 def skill() -> str:
-    return SKILL.read_text(encoding="utf-8")
+    return text_of(SKILL)
 
 
 @pytest.fixture(scope="module")
